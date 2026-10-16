@@ -165,10 +165,7 @@ void MeshSocket::process_mesh_ids(const tt_fabric::ControlPlane& control_plane) 
     }
 }
 
-SocketConfig MeshSocket::populate_mesh_ids(
-    const std::shared_ptr<MeshDevice>& sender,
-    const std::shared_ptr<MeshDevice>& receiver,
-    const SocketConfig& base_config) {
+SocketConfig MeshSocket::populate_mesh_ids(MeshDevice& sender, MeshDevice& receiver, const SocketConfig& base_config) {
     auto config = base_config;
     std::optional<tt_fabric::MeshId> sender_mesh_id = std::nullopt;
     std::optional<tt_fabric::MeshId> receiver_mesh_id = std::nullopt;
@@ -177,17 +174,17 @@ SocketConfig MeshSocket::populate_mesh_ids(
         auto receiver_coord = conn.receiver_core.device_coord;
 
         if (!sender_mesh_id.has_value()) {
-            sender_mesh_id = sender->get_fabric_node_id(sender_coord).mesh_id;
+            sender_mesh_id = sender.get_fabric_node_id(sender_coord).mesh_id;
         } else {
             TT_FATAL(
-                sender_mesh_id.value() == sender->get_fabric_node_id(sender_coord).mesh_id,
+                sender_mesh_id.value() == sender.get_fabric_node_id(sender_coord).mesh_id,
                 "Expected Mesh IDs for all Sender devices to be identical.");
         }
         if (!receiver_mesh_id.has_value()) {
-            receiver_mesh_id = receiver->get_fabric_node_id(receiver_coord).mesh_id;
+            receiver_mesh_id = receiver.get_fabric_node_id(receiver_coord).mesh_id;
         } else {
             TT_FATAL(
-                receiver_mesh_id.value() == receiver->get_fabric_node_id(receiver_coord).mesh_id,
+                receiver_mesh_id.value() == receiver.get_fabric_node_id(receiver_coord).mesh_id,
                 "Expected Mesh IDs for all Receiver devices to be identical.");
         }
     }
@@ -198,9 +195,12 @@ SocketConfig MeshSocket::populate_mesh_ids(
     return config;
 }
 
-MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config) : config_(config) {
+MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config) :
+    MeshSocket(*device, config) {}
+
+MeshSocket::MeshSocket(MeshDevice& device, const SocketConfig& config) : config_(config) {
     auto context = config_.distributed_context ? config_.distributed_context : DistributedContext::get_current_world();
-    const auto& control_plane = device->impl().metal_env().get_control_plane();
+    const auto& control_plane = device.impl().metal_env().get_control_plane();
 
     TT_FATAL(!config_.socket_connection_config.empty(), "Socket connection config cannot be empty.");
     TT_FATAL(
@@ -260,7 +260,7 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
     //
     // create_socket_pair and mesh-scoped sockets are built by every co-owner, so lockstep buffers
     // remain correct there and are not checked.
-    if ((rank_scoped_socket_ || same_mesh) && mesh_is_coowned(*device)) {
+    if ((rank_scoped_socket_ || same_mesh) && mesh_is_coowned(device)) {
         const auto sender_cores = socket_endpoint_cores(config_, SocketEndpoint::SENDER).size();
         const auto receiver_cores = socket_endpoint_cores(config_, SocketEndpoint::RECEIVER).size();
         TT_FATAL(
@@ -382,9 +382,14 @@ std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
     const std::shared_ptr<MeshDevice>& sender,
     const std::shared_ptr<MeshDevice>& receiver,
     const SocketConfig& base_config) {
+    return create_socket_pair(*sender, *receiver, base_config);
+}
+
+std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
+    MeshDevice& sender, MeshDevice& receiver, const SocketConfig& base_config) {
     TT_FATAL(!base_config.socket_connection_config.empty(), "Socket connection config cannot be empty.");
     TT_FATAL(
-        &sender->impl().metal_env() == &receiver->impl().metal_env(),
+        &sender.impl().metal_env() == &receiver.impl().metal_env(),
         "create_socket_pair requires sender and receiver to share a MetalEnv; the pair is in-process and both "
         "meshes must see the same control plane.");
 
@@ -404,12 +409,12 @@ std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
     auto recv_peer_descriptor = generate_local_endpoint_descriptor(receiver_socket);
 
     write_socket_configs(
-        sender_config_buffer, send_peer_descriptor, recv_peer_descriptor, SocketEndpoint::SENDER, receiver);
+        sender_config_buffer, send_peer_descriptor, recv_peer_descriptor, SocketEndpoint::SENDER, &receiver);
     write_socket_configs(
-        recv_config_buffer, recv_peer_descriptor, send_peer_descriptor, SocketEndpoint::RECEIVER, sender);
+        recv_config_buffer, recv_peer_descriptor, send_peer_descriptor, SocketEndpoint::RECEIVER, &sender);
 
     auto fabric_node_id_map =
-        generate_fabric_node_id_map(config, sender->impl().metal_env().get_control_plane(), sender, receiver);
+        generate_fabric_node_id_map(config, sender.impl().metal_env().get_control_plane(), &sender, &receiver);
 
     sender_socket.fabric_node_id_map_ = fabric_node_id_map;
     receiver_socket.fabric_node_id_map_ = fabric_node_id_map;

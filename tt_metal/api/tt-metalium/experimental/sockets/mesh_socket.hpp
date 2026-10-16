@@ -176,8 +176,13 @@ public:
     // endpoint's mesh. Such a socket must therefore be fully per-core (see
     // socket_is_fully_per_core): its buffers then occupy L1 only on the two endpoint cores and a
     // co-owner has nothing to reserve. One needing lockstep buffers is rejected instead.
+    MeshSocket(MeshDevice& device, const SocketConfig& config);
+    // Same as above, taking the device as a shared_ptr. The socket does not extend the device's lifetime.
     MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config);
     // Sockets can only be created in sender/receiver pairs.
+    static std::pair<MeshSocket, MeshSocket> create_socket_pair(
+        MeshDevice& sender, MeshDevice& receiver, const SocketConfig& base_config);
+    // Same as above, taking the devices as shared_ptrs. The sockets do not extend the devices' lifetime.
     static std::pair<MeshSocket, MeshSocket> create_socket_pair(
         const std::shared_ptr<MeshDevice>& sender,
         const std::shared_ptr<MeshDevice>& receiver,
@@ -220,10 +225,7 @@ private:
         socket_endpoint_type_(socket_endpoint_type) {}
     void process_host_ranks(const tt::tt_fabric::ControlPlane& control_plane);
     void process_mesh_ids(const tt::tt_fabric::ControlPlane& control_plane);
-    static SocketConfig populate_mesh_ids(
-        const std::shared_ptr<MeshDevice>& sender,
-        const std::shared_ptr<MeshDevice>& receiver,
-        const SocketConfig& base_config);
+    static SocketConfig populate_mesh_ids(MeshDevice& sender, MeshDevice& receiver, const SocketConfig& base_config);
     void connect_with_peer(const std::shared_ptr<multihost::DistributedContext>& context);
 
     std::shared_ptr<MeshBuffer> data_buffer_;

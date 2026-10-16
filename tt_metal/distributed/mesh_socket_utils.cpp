@@ -286,14 +286,14 @@ std::unordered_map<CoreCoord, uint32_t> config_buffer_core_to_id(
 }
 
 std::shared_ptr<MeshBuffer> create_socket_config_buffer(
-    const std::shared_ptr<MeshDevice>& device, const SocketConfig& config, SocketEndpoint socket_endpoint) {
+    MeshDevice& device, const SocketConfig& config, SocketEndpoint socket_endpoint) {
     const auto& socket_connections = config.socket_connection_config;
     const auto& socket_mem_config = config.socket_mem_config;
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
     uint32_t config_buffer_size = 0;
     if (is_sender) {
         const auto max_num_downstreams = get_max_num_downstreams_per_core(config);
-        const SocketSenderSize sender_size(device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
+        const SocketSenderSize sender_size(device.impl().metal_env().get_hal().get_alignment(HalMemType::L1));
         config_buffer_size =
             sender_size.md_size_bytes + max_num_downstreams * (sender_size.ack_size_bytes + sender_size.enc_size_bytes);
     } else {
@@ -324,7 +324,7 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     auto sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED);
     if (socket_endpoint_uses_per_core_allocation(config, socket_endpoint)) {
         TT_FATAL(
-            device->impl().metal_env().get_rtoptions().get_allocator_mode_hybrid(),
+            device.impl().metal_env().get_rtoptions().get_allocator_mode_hybrid(),
             "Per-core socket allocation requires the device to be opened with AllocatorMode::HYBRID "
             "(set TT_METAL_ALLOCATOR_MODE_HYBRID=1 before opening the device).");
         experimental::per_core_allocation::set_per_core_allocation(sharding_args, true);
@@ -340,7 +340,7 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
 
     if (buffer_specs.sub_device_id.has_value()) {
         auto sub_device_id = buffer_specs.sub_device_id.value();
-        auto device_cores = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+        auto device_cores = device.worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
         auto device_cores_set = CoreRangeSet(device_cores);
         TT_FATAL(device_cores_set.contains(all_cores), "Socket cores must be contained in the specified sub device");
     }
@@ -349,11 +349,10 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
         .size = total_config_buffer_size,
     };
 
-    return MeshBuffer::create(mesh_buffer_specs, buffer_specs, device.get());
+    return MeshBuffer::create(mesh_buffer_specs, buffer_specs, &device);
 }
 
-std::shared_ptr<MeshBuffer> create_socket_data_buffer(
-    const std::shared_ptr<MeshDevice>& receiver, const SocketConfig& config) {
+std::shared_ptr<MeshBuffer> create_socket_data_buffer(MeshDevice& receiver, const SocketConfig& config) {
     const auto& socket_mem_config = config.socket_mem_config;
 
     uint32_t num_data_cores = 0;
@@ -376,7 +375,7 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
             receiver_cores.size());
 
         TT_FATAL(
-            receiver->impl().metal_env().get_rtoptions().get_allocator_mode_hybrid(),
+            receiver.impl().metal_env().get_rtoptions().get_allocator_mode_hybrid(),
             "Per-core socket allocation requires the device to be opened with AllocatorMode::HYBRID "
             "(set TT_METAL_ALLOCATOR_MODE_HYBRID=1 before opening the device).");
 
@@ -385,13 +384,13 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
     } else if (socket_mem_config.socket_storage_type == BufferType::DRAM) {
         // Allocate DRAM Sharded Buffer
         shard_grid =
-            CoreRange(CoreCoord(0, 0), CoreCoord(receiver->dram_grid_size().x - 1, receiver->dram_grid_size().y - 1));
-        num_data_cores = receiver->dram_grid_size().x * receiver->dram_grid_size().y;
+            CoreRange(CoreCoord(0, 0), CoreCoord(receiver.dram_grid_size().x - 1, receiver.dram_grid_size().y - 1));
+        num_data_cores = receiver.dram_grid_size().x * receiver.dram_grid_size().y;
     } else {
         // Allocate Sharded buffer on worker cores
         auto receiver_sub_device_id = socket_mem_config.receiver_sub_device.value_or(SubDeviceId{0});
-        shard_grid = receiver->worker_cores(HalProgrammableCoreType::TENSIX, receiver_sub_device_id);
-        num_data_cores = receiver->num_worker_cores(HalProgrammableCoreType::TENSIX, receiver_sub_device_id);
+        shard_grid = receiver.worker_cores(HalProgrammableCoreType::TENSIX, receiver_sub_device_id);
+        num_data_cores = receiver.num_worker_cores(HalProgrammableCoreType::TENSIX, receiver_sub_device_id);
     }
     // Allocate a shard of size fifo_size on each data core. User decides how these data-cores must be used
     const auto total_data_buffer_size = num_data_cores * socket_mem_config.fifo_size;
@@ -414,7 +413,7 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
         .size = total_data_buffer_size,
     };
 
-    return MeshBuffer::create(socket_data_mesh_buffer_specs, socket_data_buffer_specs, receiver.get());
+    return MeshBuffer::create(socket_data_mesh_buffer_specs, socket_data_buffer_specs, &receiver);
 }
 
 void write_socket_configs(
@@ -422,7 +421,7 @@ void write_socket_configs(
     const SocketPeerDescriptor& local_descriptor,
     const SocketPeerDescriptor& peer_descriptor,
     SocketEndpoint socket_endpoint,
-    const std::shared_ptr<MeshDevice>& peer_device) {
+    MeshDevice* peer_device) {
     auto* mesh_device = config_buffer->device();
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
     // The peer descriptor has already been validated to use the same socket
@@ -442,7 +441,7 @@ void write_socket_configs(
     const auto& global_bindings = control_plane.get_global_logical_bindings();
 
     auto get_fabric_node_from_coord = [&](const MeshCoordinate& device_coord,
-                                          const std::shared_ptr<MeshDevice>& peer_device,
+                                          MeshDevice* peer_device,
                                           tt_fabric::MeshId peer_mesh_id,
                                           multihost::Rank peer_rank,
                                           uint32_t connection_idx) -> tt_fabric::FabricNodeId {
@@ -837,8 +836,8 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
 std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
     const SocketConfig& config,
     const tt_fabric::ControlPlane& control_plane,
-    const std::shared_ptr<MeshDevice>& sender_device,
-    const std::shared_ptr<MeshDevice>& receiver_device,
+    MeshDevice* sender_device,
+    MeshDevice* receiver_device,
     const std::vector<uint32_t>& peer_sender_chip_ids,
     const std::vector<uint32_t>& peer_receiver_chip_ids) {
     std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> fabric_node_id_map;
@@ -847,7 +846,7 @@ std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> g
 
     auto resolve_fabric_node_id = [&](const MeshCoordinate& device_coord,
                                       tt_fabric::MeshId mesh_id,
-                                      const std::shared_ptr<MeshDevice>& device,
+                                      MeshDevice* device,
                                       multihost::Rank rank,
                                       const std::vector<uint32_t>& peer_chip_ids,
                                       uint32_t connection_idx) -> tt_fabric::FabricNodeId {

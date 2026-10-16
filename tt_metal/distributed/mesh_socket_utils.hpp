@@ -84,11 +84,10 @@ bool socket_is_fully_per_core(const SocketConfig& config);
 
 // Create send/receive socket config buffers
 std::shared_ptr<MeshBuffer> create_socket_config_buffer(
-    const std::shared_ptr<MeshDevice>& device, const SocketConfig& config, SocketEndpoint socket_endpoint);
+    MeshDevice& device, const SocketConfig& config, SocketEndpoint socket_endpoint);
 
 // Create socket data buffer on receiver
-std::shared_ptr<MeshBuffer> create_socket_data_buffer(
-    const std::shared_ptr<MeshDevice>& receiver, const SocketConfig& config);
+std::shared_ptr<MeshBuffer> create_socket_data_buffer(MeshDevice& receiver, const SocketConfig& config);
 
 // Write socket config data to allocated buffers
 void write_socket_configs(
@@ -96,7 +95,7 @@ void write_socket_configs(
     const SocketPeerDescriptor& local_descriptor,
     const SocketPeerDescriptor& peer_descriptor,
     SocketEndpoint socket_endpoint,
-    const std::shared_ptr<MeshDevice>& peer_device = nullptr);
+    MeshDevice* peer_device = nullptr);
 
 SocketPeerDescriptor generate_local_endpoint_descriptor(
     const MeshSocket& socket_endpoint, std::optional<multihost::DistributedContextId> context_id = std::nullopt);
@@ -135,8 +134,8 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
 std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
     const SocketConfig& config,
     const tt::tt_fabric::ControlPlane& control_plane,
-    const std::shared_ptr<MeshDevice>& sender_device = nullptr,
-    const std::shared_ptr<MeshDevice>& receiver_device = nullptr,
+    MeshDevice* sender_device = nullptr,
+    MeshDevice* receiver_device = nullptr,
     const std::vector<uint32_t>& peer_sender_chip_ids = {},
     const std::vector<uint32_t>& peer_receiver_chip_ids = {});
 

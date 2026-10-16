@@ -17,6 +17,15 @@ std::unique_ptr<ISocket> create_socket(
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     tt::tt_metal::distributed::multihost::Rank other_rank,
     const tt::tt_metal::distributed::SocketConfig& socket_config) {
+    return create_socket(socket_type, endpoint_socket_type, *mesh_device, other_rank, socket_config);
+}
+
+std::unique_ptr<ISocket> create_socket(
+    SocketType socket_type,
+    EndpointSocketType endpoint_socket_type,
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    tt::tt_metal::distributed::multihost::Rank other_rank,
+    const tt::tt_metal::distributed::SocketConfig& socket_config) {
     if (socket_type == SocketType::MPI) {
         return MPISocket::create(mesh_device, other_rank, socket_config);
     }

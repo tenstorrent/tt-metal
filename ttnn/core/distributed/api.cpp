@@ -63,7 +63,9 @@ std::shared_ptr<MeshDevice> open_mesh_device(
         worker_l1_size);
 }
 
-void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_device->close(); }
+void close_mesh_device(MeshDevice& mesh_device) { mesh_device.close(); }
+
+void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { close_mesh_device(*mesh_device); }
 
 std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
     if (is_cpu_tensor(tensor)) {

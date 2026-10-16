@@ -236,7 +236,11 @@ void py_module_types(nb::module_& mod) {
 void py_module(nb::module_& mod) {
     mod.def(
         "create_socket_pair",
-        &tt::tt_metal::distributed::MeshSocket::create_socket_pair,
+        static_cast<std::pair<tt::tt_metal::distributed::MeshSocket, tt::tt_metal::distributed::MeshSocket> (*)(
+            tt::tt_metal::distributed::MeshDevice&,
+            tt::tt_metal::distributed::MeshDevice&,
+            const tt::tt_metal::distributed::SocketConfig&)>(
+            &tt::tt_metal::distributed::MeshSocket::create_socket_pair),
         nb::arg("sender_mesh_device"),
         nb::arg("receiver_mesh_device"),
         nb::arg("socket_config"),

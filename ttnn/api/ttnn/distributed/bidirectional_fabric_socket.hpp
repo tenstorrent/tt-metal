@@ -35,6 +35,11 @@ public:
     const std::vector<tt::tt_metal::distributed::SocketConnection>& get_socket_connections() const;
 
     static std::unique_ptr<BidirectionalFabricSocket> create(
+        tt::tt_metal::distributed::MeshDevice& mesh_device,
+        tt::tt_metal::distributed::multihost::Rank rank,
+        const tt::tt_metal::distributed::SocketConfig& socket_config);
+    // Same as above, taking the device as a shared_ptr. The socket does not extend the device's lifetime.
+    static std::unique_ptr<BidirectionalFabricSocket> create(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
         tt::tt_metal::distributed::multihost::Rank rank,
         const tt::tt_metal::distributed::SocketConfig& socket_config);

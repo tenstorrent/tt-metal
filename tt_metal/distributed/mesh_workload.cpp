@@ -409,54 +409,50 @@ ProgramConfig& MeshWorkloadImpl::get_program_config(uint32_t index, bool using_f
     return programs_.begin()->second.impl().get_program_config(index);
 }
 
-uint32_t MeshWorkloadImpl::get_sem_base_addr(
-    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord /*logical_core*/, CoreType core_type) {
+uint32_t MeshWorkloadImpl::get_sem_base_addr(MeshDevice& mesh_device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
-    uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
-    auto& env = mesh_device->impl().metal_env();
+    uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, &mesh_device, programmable_core_type);
+    auto& env = mesh_device.impl().metal_env();
     return base_addr + get_program_config(
                            env.get_hal().get_programmable_core_type_index(programmable_core_type),
                            env.get_rtoptions().get_fast_dispatch())
                            .sem_offset;
 }
 
-uint32_t MeshWorkloadImpl::get_sem_size(
-    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
+uint32_t MeshWorkloadImpl::get_sem_size(MeshDevice& mesh_device, CoreCoord logical_core, CoreType core_type) {
     uint32_t sem_size = 0;
     uint32_t program_idx = 0;
     for (auto& [device_range, program] : programs_) {
         if (program_idx) {
-            TT_ASSERT(sem_size == program.impl().get_sem_size(mesh_device.get(), logical_core, core_type));
+            TT_ASSERT(sem_size == program.impl().get_sem_size(&mesh_device, logical_core, core_type));
         } else {
-            sem_size = program.impl().get_sem_size(mesh_device.get(), logical_core, core_type);
+            sem_size = program.impl().get_sem_size(&mesh_device, logical_core, core_type);
         }
         program_idx++;
     }
     return sem_size;
 }
 
-uint32_t MeshWorkloadImpl::get_cb_base_addr(
-    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord /*logical_core*/, CoreType core_type) {
+uint32_t MeshWorkloadImpl::get_cb_base_addr(MeshDevice& mesh_device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
-    uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
-    auto& env = mesh_device->impl().metal_env();
+    uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, &mesh_device, programmable_core_type);
+    auto& env = mesh_device.impl().metal_env();
     return base_addr + get_program_config(
                            env.get_hal().get_programmable_core_type_index(programmable_core_type),
                            env.get_rtoptions().get_fast_dispatch())
                            .cb_offset;
 }
 
-uint32_t MeshWorkloadImpl::get_cb_size(
-    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
+uint32_t MeshWorkloadImpl::get_cb_size(MeshDevice& mesh_device, CoreCoord logical_core, CoreType core_type) {
     uint32_t cb_size = 0;
     uint32_t program_idx = 0;
     for (auto& [device_range, program] : programs_) {
         if (program_idx) {
-            TT_ASSERT(cb_size == program.impl().get_cb_size(mesh_device.get(), logical_core, core_type));
+            TT_ASSERT(cb_size == program.impl().get_cb_size(&mesh_device, logical_core, core_type));
         } else {
-            cb_size = program.impl().get_cb_size(mesh_device.get(), logical_core, core_type);
+            cb_size = program.impl().get_cb_size(&mesh_device, logical_core, core_type);
         }
         program_idx++;
     }
@@ -528,24 +524,40 @@ void MeshWorkload::set_last_used_command_queue_for_testing(MeshCommandQueue* mes
 
 MeshCommandQueue* MeshWorkload::get_last_used_command_queue() const { return pimpl_->get_last_used_command_queue(); }
 
+uint32_t MeshWorkload::get_sem_base_addr(MeshDevice& mesh_device, CoreCoord logical_core, CoreType core_type) {
+    return pimpl_->get_sem_base_addr(mesh_device, logical_core, core_type);
+}
+
 uint32_t MeshWorkload::get_sem_base_addr(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
-    return pimpl_->get_sem_base_addr(mesh_device, logical_core, core_type);
+    return get_sem_base_addr(*mesh_device, logical_core, core_type);
+}
+
+uint32_t MeshWorkload::get_sem_size(MeshDevice& mesh_device, CoreCoord logical_core, CoreType core_type) {
+    return pimpl_->get_sem_size(mesh_device, logical_core, core_type);
 }
 
 uint32_t MeshWorkload::get_sem_size(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
-    return pimpl_->get_sem_size(mesh_device, logical_core, core_type);
+    return get_sem_size(*mesh_device, logical_core, core_type);
+}
+
+uint32_t MeshWorkload::get_cb_base_addr(MeshDevice& mesh_device, CoreCoord logical_core, CoreType core_type) {
+    return pimpl_->get_cb_base_addr(mesh_device, logical_core, core_type);
 }
 
 uint32_t MeshWorkload::get_cb_base_addr(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
-    return pimpl_->get_cb_base_addr(mesh_device, logical_core, core_type);
+    return get_cb_base_addr(*mesh_device, logical_core, core_type);
+}
+
+uint32_t MeshWorkload::get_cb_size(MeshDevice& mesh_device, CoreCoord logical_core, CoreType core_type) {
+    return pimpl_->get_cb_size(mesh_device, logical_core, core_type);
 }
 
 uint32_t MeshWorkload::get_cb_size(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
-    return pimpl_->get_cb_size(mesh_device, logical_core, core_type);
+    return get_cb_size(*mesh_device, logical_core, core_type);
 }
 
 }  // namespace tt::tt_metal::distributed

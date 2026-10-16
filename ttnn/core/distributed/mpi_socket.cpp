@@ -82,6 +82,13 @@ std::unique_ptr<MPISocket> MPISocket::create(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     tt::tt_metal::distributed::multihost::Rank rank,
     tt::tt_metal::distributed::SocketConfig socket_config) {
+    return create(*mesh_device, rank, socket_config);
+}
+
+std::unique_ptr<MPISocket> MPISocket::create(
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    tt::tt_metal::distributed::multihost::Rank rank,
+    tt::tt_metal::distributed::SocketConfig socket_config) {
     if (socket_config.distributed_context->rank() < rank) {
         socket_config.sender_rank = socket_config.distributed_context->rank();
         socket_config.receiver_rank = rank;

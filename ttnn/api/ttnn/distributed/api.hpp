@@ -32,6 +32,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     const std::vector<int>& physical_device_ids = {},
     size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
+void close_mesh_device(MeshDevice& mesh_device);
 void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device);
 
 // Given a multi-device tensor, returns a list of individual per-device tensors.
