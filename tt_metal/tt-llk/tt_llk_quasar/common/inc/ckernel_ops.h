@@ -12,7 +12,12 @@
 #include "../../../common/ckernel_lreg_metadata.h"
 
 #define TT_OP(opcode, params) ((opcode << 24) + params)
+#if defined(__riscv_xtttensixbh) || defined(__riscv_xtttensixwh) || defined(__riscv_xtttensixqsr)
 #define INSTRUCTION_WORD(x)   __asm__ __volatile__(".ttinsn %0" : : "n"((x))) // Swizzle 32 bits into the instruction stream.
+#else
+// Non-Tensix cores (the test infrastructure's BRISC boot code) have no .ttinsn: emit the same swizzled word.
+#define INSTRUCTION_WORD(x)   __asm__ __volatile__(".4byte %0" : : "n"((((x) >> 30) & 3) | (((x) & 0x3fffffff) << 2)))
+#endif
 
 #define TT_OP_ADDGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
     TT_OP(0x58, (((OpB_is_Const) << 23) + ((Result_GPR_Index) << 12) + ((OpB_GPR_Index) << 6) + ((OpA_GPR_Index) << 0)))
