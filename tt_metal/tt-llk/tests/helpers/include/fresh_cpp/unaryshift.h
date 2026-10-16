@@ -32,7 +32,7 @@ __attribute__((noinline)) void calculate_unary_shift_fresh_cpp(const std::uint32
         sfpi::vInt r       = 0;
         if (amt < 32u)
         {
-            r = v << amt;
+            r = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(v) << amt);
         }
         sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = r;
         sfpi::dst_reg++;
