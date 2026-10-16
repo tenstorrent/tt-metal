@@ -513,6 +513,36 @@ def test_remainder_inf_divisor(testing_dtype, device):
     assert torch.equal(output_tensor, golden), f"device {output_tensor.tolist()} vs torch {golden.tolist()}"
 
 
+# fmod(a, +-inf) is a for finite a and NaN for an infinite a (torch semantics). The kernel's
+# trunc(a * (1/b)) * b term is 0 * inf for an infinite divisor, which used to leave NaN in the
+# finite-a lanes, while the a == b special case zeroed inf/inf.
+@pytest.mark.parametrize("testing_dtype", ["bfloat16", "float32"])
+def test_fmod_inf_divisor(testing_dtype, device):
+    torch_dtype = getattr(torch, testing_dtype)
+    ttnn_dtype = getattr(ttnn, testing_dtype)
+
+    torch_input_a = torch.tensor([5.0, -5.0, 5.0, -5.0, 0.0, 2.5, _INF, -_INF, _INF, -_INF], dtype=torch_dtype)
+    torch_input_b = torch.tensor([_INF, _INF, -_INF, -_INF, _INF, -_INF, _INF, -_INF, -_INF, _INF], dtype=torch_dtype)
+
+    golden_function = ttnn.get_golden_function(ttnn.fmod)
+    golden = golden_function(torch_input_a, torch_input_b, device=device)
+    finite_a = torch.isfinite(torch_input_a)
+    assert torch.equal(torch.isnan(golden), ~finite_a)
+
+    tt_in_a = ttnn.from_torch(torch_input_a, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_in_b = ttnn.from_torch(torch_input_b, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn.fmod(tt_in_a, tt_in_b))
+
+    assert torch.equal(
+        output_tensor[finite_a], golden[finite_a]
+    ), f"device {output_tensor.tolist()} vs torch {golden.tolist()}"
+    if testing_dtype == "bfloat16":
+        # NaN is packed as inf for ttnn.bfloat16; either way the lane must not be a finite number.
+        assert not torch.isfinite(output_tensor[~finite_a]).any(), f"device {output_tensor.tolist()}"
+    else:
+        assert torch.isnan(output_tensor[~finite_a]).all(), f"device {output_tensor.tolist()}"
+
+
 def test_optional_output_tensor_remainder(device):
     torch.manual_seed(0)
 
