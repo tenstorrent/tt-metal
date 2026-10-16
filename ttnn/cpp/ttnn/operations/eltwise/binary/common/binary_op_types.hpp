@@ -55,6 +55,7 @@ enum class BinaryOpType {
     WHERE_TST,
     WHERE_TTS,
     ISCLOSE,
+    SITU_GLU,
     GEGLU_TANH,
     SILU_GLU,
 };

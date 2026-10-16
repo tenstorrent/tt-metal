@@ -45,6 +45,7 @@
 #include <umd/device/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <impl/context/metal_context.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mxfp4.hpp>
 #include <tt-metalium/tile.hpp>
@@ -925,6 +926,9 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWTinyTiles) {
 // results via ELWADDDI (not op_mmul), which reads MxFp4_2x SrcA as zero.
 // Disabled due to hang: tenstorrent/tt-metal#59923
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeReduceColumnMxFp4X2) {
+    if (MetalContext::instance().rtoptions().get_quasar_arch_variant() == "quasar_4row") {
+        GTEST_SKIP() << "MxFp4_2x register formats do not exist on the 4-row Quasar variant";
+    }
     ReduceConfig test_config = {
         .shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
         .reduce_dim = ReduceDim::H,
