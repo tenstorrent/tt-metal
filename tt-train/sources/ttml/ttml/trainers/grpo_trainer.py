@@ -842,8 +842,6 @@ class GRPOTrainer:
         self._tokenizer: Any = None
         self._optimizer: Any = None
         self._lr_scheduler: Any = None
-        self._autograd_ctx: Any = None
-        self._mesh: Any = None
         self._num_devices: int = 1
         self._fsdp_enabled: bool = False
         self._ddp_enabled: bool = False
@@ -853,11 +851,9 @@ class GRPOTrainer:
         self._dp_composer: Any = None
         self._grad_sync_world_size: int = 1
         self._completions_per_microbatch: int = 0
-        self._prompts_per_microbatch: int = 0
         self._generation_batch_prompts: int = 0
         self._prompts: List[List[int]] = []
         self._extra_dataset_columns: dict[str, list] = {}
-        self._total_optimizer_steps: int = 0
 
         # Auto-append the framework's default GRPOMonitor unless the config
         # opts out. Placed last so any user-supplied callbacks (e.g. eval)
@@ -964,7 +960,6 @@ class GRPOTrainer:
         self.model = tt_model
 
         optimizer = create_optimizer(tt_model, self.optimizer_dict)
-        base_lr = optimizer.get_lr()
         if grpo_cfg.use_clip_grad_norm:
             validate_clip_grad_norm(tt_model)
 
@@ -1117,8 +1112,6 @@ class GRPOTrainer:
         # Publish outputs onto self for the per-batch helpers.
         self._tokenizer = tokenizer
         self._optimizer = optimizer
-        self._autograd_ctx = autograd_ctx
-        self._mesh = mesh
         self._num_devices = num_devices
         self._fsdp_enabled = fsdp_enabled
         self._ddp_enabled = ddp_enabled
@@ -1128,22 +1121,20 @@ class GRPOTrainer:
         self._dp_composer = dp_composer
         self._grad_sync_world_size = grad_sync_world_size
         self._completions_per_microbatch = completions_per_microbatch
-        self._prompts_per_microbatch = prompts_per_microbatch
         self._generation_batch_prompts = generation_batch_prompts
         self._prompts = prompts
         self._extra_dataset_columns = extra_columns
-        # Total optimizer steps this run will take. Read by the LR scheduler.
-        self._total_optimizer_steps = (total_prompts // generation_batch_prompts) * self.config.num_iterations
+        total_optimizer_steps = (total_prompts // generation_batch_prompts) * grpo_cfg.num_iterations
 
         # A constant LR needs no scheduler, so none is created: constructing one, even a no-op,
         # raises for optimizers with supports_lr_scheduling=False (MuonWithAdamW).
         if grpo_cfg.lr_scheduler_type == "constant_with_warmup" and grpo_cfg.warmup_steps > 0:
             self._lr_scheduler = WarmupConstantScheduler(optimizer, grpo_cfg.warmup_steps)
         elif grpo_cfg.lr_scheduler_type == "cosine":
-            self._lr_scheduler = WarmupCosineScheduler(optimizer, grpo_cfg.warmup_steps, self._total_optimizer_steps)
+            self._lr_scheduler = WarmupCosineScheduler(optimizer, grpo_cfg.warmup_steps, total_optimizer_steps)
         elif grpo_cfg.lr_scheduler_type == "cosine_with_min_lr":
             self._lr_scheduler = WarmupCosineScheduler(
-                optimizer, grpo_cfg.warmup_steps, self._total_optimizer_steps, grpo_cfg.min_lr_rate
+                optimizer, grpo_cfg.warmup_steps, total_optimizer_steps, grpo_cfg.min_lr_rate
             )
 
     # -- phase helpers -------------------------------------------------------
