@@ -32,11 +32,13 @@ from models.common.lightweightmodule import LightweightModule
 
 
 def validate_kda_bounds(actual_start: int | None, actual_end: int | None) -> None:
-    """Validate host bounds; device-only trace metadata has the same caller contract."""
+    """Validate host bounds; device-only trace metadata has the same caller contract.
+
+    The start is 32-token aligned; the end is a prompt's real length and need not be.
+    """
     start = 0 if actual_start is None else actual_start
-    for name, value in (("actual_start", start), ("actual_end", actual_end)):
-        if value is not None and (value < 0 or value % ttnn.TILE_SIZE != 0):
-            raise ValueError(f"K3 KDA {name} must be nonnegative and 32-token aligned, got {value}")
+    if start < 0 or start % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"K3 KDA actual_start must be nonnegative and 32-token aligned, got {start}")
     if actual_end is not None and actual_end <= start:
         raise ValueError("K3 KDA requires actual_end > actual_start")
 
@@ -114,7 +116,7 @@ class K3AttnContext:
     # (#54744), and KDA stops its carries there; trace reads `metadata[2]` on device.
     actual_end: Optional[int] = None
     # The traced path's `(slot_id, actual_start, actual_end)` triple of 1-element uint32 tensors.
-    # KDA requires both bounds to be 32-token aligned on every replay. Device-only
+    # KDA requires a 32-token aligned start on every replay; the end may be unaligned. Device-only
     # values are caller preconditions; do not round real lengths or read them back.
     metadata: Optional[tuple] = None
     # Eager calls only: the KDA inputs shared by every layer of this chunk. `None` builds them per layer.

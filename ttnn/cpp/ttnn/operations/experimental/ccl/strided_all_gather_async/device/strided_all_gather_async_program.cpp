@@ -664,6 +664,7 @@ void strided_all_gather_async_minimal_default_helper(
     const size_t mux_l1_small_floor_address = ttnn::ccl::l1_small_floor_address(*mesh_device);
     // V2 places one logical channel per worker
     const tt::tt_fabric::FabricMuxV2Config mux_v2_config(
+        *mesh_device,
         static_cast<uint8_t>(num_workers_per_direction),
         static_cast<uint8_t>(num_buffers_full_size_channels),
         tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),

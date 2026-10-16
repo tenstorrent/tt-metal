@@ -16,6 +16,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -40,6 +41,7 @@ constexpr uint32_t sd = tt::CBIndex::c_10;        // [K,V]  decayed state (S*dec
 constexpr uint32_t vread = tt::CBIndex::c_11;     // [1,V]  k . S'
 constexpr uint32_t u = tt::CBIndex::c_12;         // [1,V]  beta*(v - vread)
 constexpr uint32_t kcol = tt::CBIndex::c_13;      // [K,1]  transpose(k)
+constexpr uint32_t blkidx = tt::CBIndex::c_16;    // [BH]   uint32 scratch, ring mode only
 }  // namespace cb
 
 tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::create_descriptor(
@@ -50,8 +52,12 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     const uint32_t T = attrs.T;
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
-    const uint32_t has_s0 = in.initial_state.has_value() ? 1u : 0u;
     const uint32_t per_token = attrs.output_per_token_state ? 1u : 0u;
+    const bool ring = in.initial_state_block_idx.has_value();
+    const uint32_t use_blk_idx = ring ? 1u : 0u;
+    Buffer* blk_buf = ring ? in.initial_state_block_idx->buffer() : nullptr;
+    // The [BH] index vector is one ROW_MAJOR page; the aligned page size keeps the DRAM read aligned.
+    const uint32_t blk_page_bytes = ring ? blk_buf->aligned_page_size() : 0u;
 
     const uint32_t kv = Kt * Vt;
 
@@ -93,17 +99,28 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     add_cb(cb::vread, Vt);
     add_cb(cb::u, Vt);
     add_cb(cb::kcol, Kt);
+    if (ring) {
+        const tt::DataFormat idx_fmt = datatype_to_dataformat_converter(in.initial_state_block_idx->dtype());
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = blk_page_bytes,
+            .core_ranges = cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb::blkidx),
+                .data_format = idx_fmt,
+                .page_size = blk_page_bytes}}}});
+    }
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/fused_recurrent_gated_delta_rule/device/kernels/";
     const std::vector<uint32_t> compute_ct = {Kt, Vt, per_token};
 
-    std::vector<uint32_t> reader_ct = {Kt, Vt, has_s0};
+    std::vector<uint32_t> reader_ct = {Kt, Vt, use_blk_idx};
     TensorAccessorArgs(*in.q.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.k.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.v.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.decay.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.beta.buffer()).append_to(reader_ct);
     TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(reader_ct);
+    TensorAccessorArgs(blk_buf).append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = {Kt, Vt, per_token};
     TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
@@ -151,7 +168,8 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
 
     for (uint32_t h = 0; h < BH; h++) {
         const auto& core = head_cores[h];
-        reader.emplace_runtime_args(core, {h, T, q_buf, k_buf, v_buf, decay_buf, beta_buf, s0_buf});
+        reader.emplace_runtime_args(
+            core, {h, T, q_buf, k_buf, v_buf, decay_buf, beta_buf, s0_buf, blk_buf, blk_page_bytes, BH});
         // BH is needed by the writer to place per-token state token-major (page t*BH + h).
         writer.emplace_runtime_args(core, {h, T, o_buf, st_buf, BH});
         compute.emplace_runtime_args(core, {T});

@@ -37,6 +37,8 @@ public:
     void set_requires_grad(bool requires_grad);
 
     const ttnn::Tensor &get_value(PreferredPrecision preferred_precision = PreferredPrecision::HALF) const;
+    // The only way to update the value in place; see AutocastTensor.
+    [[nodiscard]] MutableTensorView get_value_for_update(PreferredPrecision precision = PreferredPrecision::NATIVE);
     const ttnn::Tensor &get_grad() const;
     ttnn::Tensor &get_grad();
     bool get_requires_grad() const;
