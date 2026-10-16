@@ -15,6 +15,14 @@ namespace sfpu
 // packed hi/lo, intercepts in LReg4/5/6. It is a 6-entry SFPLUTFP32 FP16 table fitted for
 // sech^2 through 1 - lut^2, not the 3-entry SFPLUT this kernel used to read -- the two halves
 // must move together, since nothing in the build couples them but this register convention.
+
+// Where +-inf are moved before the lut. Any finite value past the table's last breakpoint,
+// |x| = 3.0 in tanh_derivative_init, lands on its tail pair (A=0, B=1.0) and reads back as
+// exactly 1.0, so 1 - lut^2 is exactly 0 there. That is the only thing this value relies on:
+// if the table is ever re-fitted with a breakpoint at 4.0 or beyond, this input falls inside a
+// fitted segment and the result silently stops being exactly 0. Move it with the table.
+constexpr float SATURATED_TAIL_INPUT = 4.0f;
+
 template <bool APPROXIMATION_MODE, int WITH_PRECOMPUTED_TANH, int ITERATIONS>
 inline void _calculate_tanh_derivative_(const int iterations)
 {
@@ -39,7 +47,7 @@ inline void _calculate_tanh_derivative_(const int iterations)
             // result because the six table registers leave no LReg to keep it live past the lut.
             v_if (sfpi::is_inf(val))
             {
-                val = 4.0f;
+                val = SATURATED_TAIL_INPUT;
             }
             v_endif;
 
