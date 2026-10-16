@@ -311,9 +311,19 @@ inline void require_d2h_owner(bool is_owner, const char* api) {
 
 }  // namespace
 
+namespace {
+distributed::MeshDevice& require_d2h_mesh_device(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const char* who) {
+    TT_FATAL(mesh_device != nullptr, "{}: mesh_device must not be null", who);
+    return *mesh_device;
+}
+}  // namespace
+
 D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Config cfg) :
-    mesh_device_(mesh_device), cfg_(std::move(cfg)) {
-    TT_FATAL(mesh_device_ != nullptr, "D2HStreamService: mesh_device must not be null");
+    D2HStreamService(require_d2h_mesh_device(mesh_device, "D2HStreamService"), std::move(cfg)) {}
+
+D2HStreamService::D2HStreamService(distributed::MeshDevice& mesh_device, Config cfg) :
+    mesh_device_(&mesh_device), device_alive_(mesh_device.liveness_token()), cfg_(std::move(cfg)) {
     TT_FATAL(cfg_.fifo_size_bytes > 0, "D2HStreamService: fifo_size_bytes must be > 0");
     TT_FATAL(
         tensor_enabled() || cfg_.metadata_size_bytes > 0,
@@ -358,7 +368,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         const auto& per_shard_spec = distributed_dummy.tensor_spec();
         const auto& topology = distributed_dummy.tensor_topology();
 
-        device_tensor_ = ttnn::create_device_tensor(per_shard_spec, mesh_device_.get(), topology);
+        device_tensor_ = ttnn::create_device_tensor(per_shard_spec, mesh_device_, topology);
         per_shard_spec_ = device_tensor_.tensor_spec();
 
         if (cfg_.composer_config.has_value()) {
@@ -395,7 +405,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         std::unordered_set<CoreCoord> registered;
         for (const auto& [coord, core] : service_cores_) {
             if (!mesh_claimed.contains(core) && !registered.contains(core)) {
-                svc.claim(mesh_device_.get(), {core});
+                svc.claim(mesh_device_, {core});
                 registered.insert(core);
             }
         }
@@ -465,7 +475,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
     sockets_.reserve(coords.size());
     for (const auto& coord : coords) {
         sockets_.push_back(std::make_unique<distributed::D2HSocket>(
-            mesh_device_, distributed::MeshCoreCoord(coord, service_cores_.at(coord)), cfg_.fifo_size_bytes));
+            *mesh_device_, distributed::MeshCoreCoord(coord, service_cores_.at(coord)), cfg_.fifo_size_bytes));
     }
 
     for (auto& s : sockets_) {
@@ -493,7 +503,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         const auto& worker_range = cfg_.worker_cores.value();
 
         transfer_done_sem_.emplace(ttnn::global_semaphore::create_global_semaphore(
-            mesh_device_.get(), CoreRangeSet(worker_range), /*initial_value=*/0, BufferType::L1));
+            mesh_device_, CoreRangeSet(worker_range), /*initial_value=*/0, BufferType::L1));
 
         if (cfg_.metadata_size_bytes > 0) {
             const uint32_t l1_align = hal::get_l1_alignment();
@@ -514,7 +524,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
                 .size = aligned_shard_size * static_cast<DeviceAddr>(num_workers_),
             };
             metadata_worker_buffer_ =
-                distributed::MeshBuffer::create(worker_metadata_mesh, worker_metadata_local, mesh_device_.get());
+                distributed::MeshBuffer::create(worker_metadata_mesh, worker_metadata_local, mesh_device_);
             metadata_worker_l1_addr_ = metadata_worker_buffer_->address();
         }
     } else {
@@ -621,11 +631,11 @@ D2HStreamService::D2HStreamService(
 }
 
 D2HStreamService::~D2HStreamService() {
-    // mesh_device_ is a shared_ptr, so the mesh can still be alive but already CLOSED when the last
-    // reference to this service drops. A closed mesh has cleared its command queues, released the
-    // service cores this would free, and unmapped the host FIFO window barrier() polls (untimed), so
-    // non-null is not enough to touch it -- gate on the mesh actually being open.
-    const bool device_live = mesh_device_ != nullptr && mesh_device_->is_initialized();
+    // The mesh must outlive this service, but it can still be CLOSED when the service goes away. A closed mesh
+    // has cleared its command queues, released the service cores this would free, and unmapped the host FIFO
+    // window barrier() polls (untimed), so a non-null pointer is not enough to touch it -- gate on the mesh
+    // being alive and actually open. (If the mesh was destroyed first, live_mesh_device() is null.)
+    const bool device_live = live_mesh_device() != nullptr && live_mesh_device()->is_initialized();
     try {
         stop_host_read_workers();
         if (!is_owner_) {
@@ -675,7 +685,7 @@ D2HStreamService::~D2HStreamService() {
             }
 
             if (!mesh_id_claimed_cores_.empty()) {
-                svc.release(mesh_device_.get(), mesh_id_claimed_cores_);
+                svc.release(mesh_device_, mesh_id_claimed_cores_);
                 mesh_id_claimed_cores_.clear();
             }
         }
@@ -862,7 +872,7 @@ void D2HStreamService::notify_backing_ready() {
         !cfg_.worker_cores.has_value(),
         "D2HStreamService::notify_backing_ready: workers ack write_ack directly when "
         "Config::worker_cores is set");
-    TT_FATAL(mesh_device_ != nullptr, "D2HStreamService::notify_backing_ready: mesh device unavailable");
+    TT_FATAL(live_mesh_device() != nullptr, "D2HStreamService::notify_backing_ready: mesh device unavailable");
     for (const auto& [coord, addr] : write_ack_addrs_) {
         auto* d = mesh_device_->get_device(coord);
         const CoreCoord chosen = service_cores_.at(coord);
@@ -880,7 +890,7 @@ void D2HStreamService::barrier() {
 }
 
 void D2HStreamService::signal_termination() {
-    if (mesh_device_ == nullptr) {
+    if (live_mesh_device() == nullptr) {
         return;
     }
     std::vector<uint32_t> one_word{1};
@@ -984,7 +994,7 @@ uint32_t D2HStreamService::get_slot_count() const { return slot_count_; }
 
 std::string D2HStreamService::export_descriptor(const std::string& service_id) {
     TT_FATAL(is_owner_, "D2HStreamService::export_descriptor: only owner-side services can be exported");
-    TT_FATAL(mesh_device_ != nullptr, "D2HStreamService::export_descriptor: mesh device unavailable");
+    TT_FATAL(live_mesh_device() != nullptr, "D2HStreamService::export_descriptor: mesh device unavailable");
 
     distributed::D2HStreamServiceDescriptor desc;
     if (tensor_enabled()) {

@@ -103,6 +103,9 @@ public:
         uint32_t host_push_thread_count = 0;
     };
 
+    // The service borrows `mesh_device`: it must outlive the service. (Python keeps it alive.)
+    H2DStreamService(distributed::MeshDevice& mesh_device, Config cfg);
+    // Same as above, taking the device as a shared_ptr. The service does not extend the device's lifetime.
     H2DStreamService(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Config cfg);
     ~H2DStreamService();
 
@@ -255,7 +258,12 @@ private:
     // connector services. The dtor branches on it.
     bool is_owner_ = true;
 
-    std::shared_ptr<distributed::MeshDevice> mesh_device_;
+    // Borrowed, not owned: the device must outlive this service. device_alive_ lets the destructor and the other
+    // entry points that touch the device notice that it has already been destroyed (and skip the device work)
+    // instead of dereferencing it. Null/expired for connector services, which have no device.
+    distributed::MeshDevice* mesh_device_ = nullptr;
+    std::weak_ptr<void> device_alive_;
+    distributed::MeshDevice* live_mesh_device() const { return device_alive_.expired() ? nullptr : mesh_device_; }
     Config cfg_;
 
     std::unique_ptr<ttnn::distributed::TensorToMesh> mapper_;

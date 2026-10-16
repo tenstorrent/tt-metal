@@ -34,7 +34,7 @@ void py_module_types(nb::module_& mod) {
         .def(
             "__init__",
             [](tt::tt_metal::D2HStreamService* self,
-               const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+               tt::tt_metal::distributed::MeshDevice& mesh_device,
                // None = metadata-only mode: no DRAM payload; metadata_size_bytes must be > 0.
                std::optional<tt::tt_metal::TensorSpec> global_spec,
                uint32_t fifo_size_bytes,
@@ -60,6 +60,7 @@ void py_module_types(nb::module_& mod) {
                 };
                 new (self) tt::tt_metal::D2HStreamService(mesh_device, std::move(cfg));
             },
+            nb::keep_alive<1, 2>(),  // the service borrows the device: keep it alive
             nb::arg("mesh_device"),
             nb::arg("global_spec").none(),
             nb::arg("fifo_size_bytes"),

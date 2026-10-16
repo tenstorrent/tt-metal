@@ -29,6 +29,7 @@ namespace ttnn::d2d_stream_service {
 
 namespace {
 
+using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::SocketMemoryConfig;
 using tt::tt_metal::distributed::multihost::Rank;
 using ttnn::D2DEndpointConfig;
@@ -36,7 +37,6 @@ using ttnn::D2DStreamConfig;
 using ttnn::D2DStreamService;
 using ttnn::D2DStreamServiceReceiver;
 using ttnn::D2DStreamServiceSender;
-using MeshDevicePtr = std::shared_ptr<tt::tt_metal::distributed::MeshDevice>;
 
 // Assemble a D2DStreamConfig from individual kwargs. Like the H2DStreamService ctor, the
 // config struct is never exposed to Python directly — it holds a move-only `mapper`
@@ -191,8 +191,8 @@ void py_module_types(nb::module_& mod) {
             "create_pair",
             // Single-process: both meshes live in this process, so the socket is built
             // without cross-process rendezvous. Returns (sender, receiver).
-            [](const MeshDevicePtr& sender_mesh,
-               const MeshDevicePtr& receiver_mesh,
+            [](nb::handle sender_mesh_obj,
+               nb::handle receiver_mesh_obj,
                const tt::tt_metal::TensorSpec& global_spec,
                std::unique_ptr<ttnn::distributed::TensorToMesh> mapper,
                uint32_t fifo_size_bytes,
@@ -210,9 +210,19 @@ void py_module_types(nb::module_& mod) {
                     receiver_worker_cores,
                     metadata_size_bytes,
                     share_fabric_links);
-                return D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
+                auto& sender_mesh = nb::cast<MeshDevice&>(sender_mesh_obj);
+                auto& receiver_mesh = nb::cast<MeshDevice&>(receiver_mesh_obj);
+                auto [sender, receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
+                // The endpoints borrow their meshes. A tuple cannot carry nb::keep_alive, so tie each
+                // returned handle to its mesh explicitly.
+                nb::object sender_obj = nb::cast(std::move(sender));
+                nb::object receiver_obj = nb::cast(std::move(receiver));
+                nb::detail::keep_alive(sender_obj.ptr(), sender_mesh_obj.ptr());
+                nb::detail::keep_alive(receiver_obj.ptr(), receiver_mesh_obj.ptr());
+                return nb::make_tuple(sender_obj, receiver_obj);
             },
             nb::arg("sender_mesh"),
+            nb::keep_alive<0, 1>(),  // the endpoint borrows its mesh: keep it alive
             nb::arg("receiver_mesh"),
             nb::arg("global_spec"),
             nb::arg("mapper"),
@@ -233,7 +243,7 @@ void py_module_types(nb::module_& mod) {
             // Multi-process: must run on the sender rank. The peer (receiver) is created
             // in the receiver-rank process via create_receiver; the per-endpoint
             // MeshSocket ctor does the cross-process rendezvous over the current world.
-            [](const MeshDevicePtr& sender_mesh,
+            [](MeshDevice& sender_mesh,
                const tt::tt_metal::TensorSpec& global_spec,
                std::unique_ptr<ttnn::distributed::TensorToMesh> mapper,
                uint32_t fifo_size_bytes,
@@ -260,6 +270,7 @@ void py_module_types(nb::module_& mod) {
                     .distributed_context = nullptr};
                 return D2DStreamService::create_sender(sender_mesh, std::move(cfg), endpoints);
             },
+            nb::keep_alive<0, 1>(),  // the endpoint borrows its mesh: keep it alive
             nb::arg("sender_mesh"),
             nb::arg("global_spec"),
             nb::arg("mapper"),
@@ -283,7 +294,7 @@ void py_module_types(nb::module_& mod) {
         .def_static(
             "create_receiver",
             // Multi-process: must run on the receiver rank.
-            [](const MeshDevicePtr& receiver_mesh,
+            [](MeshDevice& receiver_mesh,
                const tt::tt_metal::TensorSpec& global_spec,
                std::unique_ptr<ttnn::distributed::TensorToMesh> mapper,
                uint32_t fifo_size_bytes,

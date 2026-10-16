@@ -294,7 +294,12 @@ private:
 // so each can build the identical connection list before the handshake.
 class D2DStreamService {
 public:
-    // Single-host: caller owns both meshes.
+    // Single-host: caller owns both meshes. The returned handles borrow them: each mesh must outlive its handle.
+    static std::pair<std::unique_ptr<D2DStreamServiceSender>, std::unique_ptr<D2DStreamServiceReceiver>> create_pair(
+        tt::tt_metal::distributed::MeshDevice& sender_mesh,
+        tt::tt_metal::distributed::MeshDevice& receiver_mesh,
+        D2DStreamConfig cfg);
+    // Same as above, taking the mesh(es) as shared_ptr. The service does not extend the device's lifetime.
     static std::pair<std::unique_ptr<D2DStreamServiceSender>, std::unique_ptr<D2DStreamServiceReceiver>> create_pair(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& sender_mesh,
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& receiver_mesh,
@@ -305,12 +310,18 @@ public:
     // handshake until the peer process calls create_receiver with a matching
     // D2DEndpointConfig (subject to the handshake's timeout).
     static std::unique_ptr<D2DStreamServiceSender> create_sender(
+        tt::tt_metal::distributed::MeshDevice& sender_mesh, D2DStreamConfig cfg, const D2DEndpointConfig& endpoints);
+    // Same as above, taking the mesh(es) as shared_ptr. The service does not extend the device's lifetime.
+    static std::unique_ptr<D2DStreamServiceSender> create_sender(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& sender_mesh,
         D2DStreamConfig cfg,
         const D2DEndpointConfig& endpoints);
 
     // Multi-host receiver endpoint. Mirror of create_sender; called on the process
     // that owns `receiver_mesh` (its rank must equal endpoints.receiver_rank).
+    static std::unique_ptr<D2DStreamServiceReceiver> create_receiver(
+        tt::tt_metal::distributed::MeshDevice& receiver_mesh, D2DStreamConfig cfg, const D2DEndpointConfig& endpoints);
+    // Same as above, taking the mesh(es) as shared_ptr. The service does not extend the device's lifetime.
     static std::unique_ptr<D2DStreamServiceReceiver> create_receiver(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& receiver_mesh,
         D2DStreamConfig cfg,
@@ -328,14 +339,14 @@ private:
     // handle's private Impl. The per-shard spec, topology, and chunk plan are
     // re-derived from `backing` + `cfg` inside.
     static std::unique_ptr<D2DStreamServiceSender> finalize_sender(
-        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
+        tt::tt_metal::distributed::MeshDevice& mesh,
         tt::tt_metal::distributed::MeshSocket socket,
         std::map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::CoreCoord> service_cores,
         const std::map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::DeviceAddr>& receiver_tensor_addrs,
         const Tensor& backing,
         const D2DStreamConfig& cfg);
     static std::unique_ptr<D2DStreamServiceReceiver> finalize_receiver(
-        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
+        tt::tt_metal::distributed::MeshDevice& mesh,
         tt::tt_metal::distributed::MeshSocket socket,
         std::map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::CoreCoord> service_cores,
         const Tensor& backing,

@@ -156,13 +156,11 @@ inline WorkerSyncArgs make_worker_sync_args(
 // re-picking an already-taken core and TT_FATALing in claim(). `side` is a
 // human-readable label used in the error message only.
 inline std::map<distributed::MeshCoordinate, CoreCoord> claim_service_cores(
-    const std::shared_ptr<distributed::MeshDevice>& mesh,
-    const std::vector<distributed::MeshCoordinate>& coords,
-    const char* side) {
-    auto& svc = internal::service_core_manager(*mesh);
+    distributed::MeshDevice& mesh, const std::vector<distributed::MeshCoordinate>& coords, const char* side) {
+    auto& svc = internal::service_core_manager(mesh);
     std::map<distributed::MeshCoordinate, CoreCoord> service_cores;
     for (const auto& coord : coords) {
-        auto* d = mesh->get_device(coord);
+        auto* d = mesh.get_device(coord);
         const auto claimable = svc.get_claimable_cores(d);
         const auto already_claimed = svc.claimed_cores(d->id());
         std::optional<CoreCoord> chosen;

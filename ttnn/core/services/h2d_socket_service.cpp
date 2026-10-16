@@ -431,9 +431,19 @@ Program build_persistent_h2d_program(
 
 }  // namespace
 
+namespace {
+distributed::MeshDevice& require_h2d_mesh_device(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const char* who) {
+    TT_FATAL(mesh_device != nullptr, "{}: mesh_device must not be null", who);
+    return *mesh_device;
+}
+}  // namespace
+
 H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Config cfg) :
-    mesh_device_(mesh_device), cfg_(std::move(cfg)) {
-    TT_FATAL(mesh_device_ != nullptr, "H2DStreamService: mesh_device must not be null");
+    H2DStreamService(require_h2d_mesh_device(mesh_device, "H2DStreamService"), std::move(cfg)) {}
+
+H2DStreamService::H2DStreamService(distributed::MeshDevice& mesh_device, Config cfg) :
+    mesh_device_(&mesh_device), device_alive_(mesh_device.liveness_token()), cfg_(std::move(cfg)) {
     // fifo_size_bytes == 0 means auto (service sizes the host FIFO to a few socket pages); a non-zero
     // value is validated against the derived socket page size once the chunk plan is known, below.
     // max_socket_page_size_bytes is an OPTIONAL upper bound on the socket page: 0 means use the
@@ -457,7 +467,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     const auto& per_shard_spec = distributed_dummy.tensor_spec();
     const auto& topology = distributed_dummy.tensor_topology();
 
-    device_tensor_ = ttnn::create_device_tensor(per_shard_spec, mesh_device_.get(), topology);
+    device_tensor_ = ttnn::create_device_tensor(per_shard_spec, mesh_device_, topology);
     per_shard_spec_ = device_tensor_.tensor_spec();
 
     // Each device may resolve a different free service core; record it per coord.
@@ -552,7 +562,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     sockets_.reserve(coords.size());
     for (const auto& coord : coords) {
         sockets_.push_back(std::make_unique<distributed::H2DSocket>(
-            mesh_device_,
+            *mesh_device_,
             distributed::MeshCoreCoord(coord, service_cores_.at(coord)),
             cfg_.socket_buffer_type,
             effective_fifo_size_bytes,
@@ -584,7 +594,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         // Mesh-wide, same address on every (device, worker core). Workers poll
         // their local copy; the service kernel multicasts atomic-inc into it.
         data_ready_sem_.emplace(ttnn::global_semaphore::create_global_semaphore(
-            mesh_device_.get(),
+            mesh_device_,
             CoreRangeSet(worker_range),
             /*initial_value=*/0,
             BufferType::L1));
@@ -622,7 +632,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
             .size = aligned_shard_size * static_cast<DeviceAddr>(num_workers_),
         };
 
-        metadata_buffer_ = distributed::MeshBuffer::create(mesh_config, device_local, mesh_device_.get());
+        metadata_buffer_ = distributed::MeshBuffer::create(mesh_config, device_local, mesh_device_);
         metadata_l1_addr_ = metadata_buffer_->address();
 
         // Zero-init so trailing padding is deterministic; only the leading
@@ -815,16 +825,16 @@ H2DStreamService::~H2DStreamService() {
         drain_socket_acks();
         signal_termination();
 
-        if (mesh_device_) {
-            distributed::Finish(mesh_device_->mesh_command_queue());
+        if (auto* live_device = live_mesh_device()) {
+            distributed::Finish(live_device->mesh_command_queue());
         }
 
         // Wait for each kernel to actually return (RUN_MSG_DONE), not just for
         // dispatch to drain, or a later instance finds the service core occupied.
-        if (mesh_device_) {
-            auto& svc = tt::tt_metal::internal::service_core_manager(*mesh_device_);
+        if (auto* live_device = live_mesh_device()) {
+            auto& svc = tt::tt_metal::internal::service_core_manager(*live_device);
             for (const auto& [coord, core] : service_cores_) {
-                auto* d = mesh_device_->get_device(coord);
+                auto* d = live_device->get_device(coord);
                 svc.wait_done(d, core);
             }
 
@@ -1086,7 +1096,7 @@ void H2DStreamService::barrier() {
 }
 
 void H2DStreamService::signal_termination() {
-    if (mesh_device_ == nullptr) {
+    if (live_mesh_device() == nullptr) {
         return;
     }
     std::vector<uint32_t> one_word{1};
@@ -1187,7 +1197,7 @@ uint32_t H2DStreamService::get_slot_count() const {
 
 std::string H2DStreamService::export_descriptor(const std::string& service_id) {
     TT_FATAL(is_owner_, "H2DStreamService::export_descriptor: only owner-side services can be exported");
-    TT_FATAL(mesh_device_ != nullptr, "H2DStreamService::export_descriptor: mesh device unavailable");
+    TT_FATAL(live_mesh_device() != nullptr, "H2DStreamService::export_descriptor: mesh device unavailable");
     TT_FATAL(mapper_ != nullptr, "H2DStreamService::export_descriptor: mapper unavailable");
 
     distributed::H2DStreamServiceDescriptor desc;

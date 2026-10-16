@@ -34,7 +34,7 @@ void py_module_types(nb::module_& mod) {
         .def(
             "__init__",
             [](tt::tt_metal::H2DStreamService* self,
-               const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+               tt::tt_metal::distributed::MeshDevice& mesh_device,
                const tt::tt_metal::TensorSpec& global_spec,
                uint32_t fifo_size_bytes,
                uint32_t max_socket_page_size_bytes,
@@ -57,6 +57,7 @@ void py_module_types(nb::module_& mod) {
                 };
                 new (self) tt::tt_metal::H2DStreamService(mesh_device, std::move(cfg));
             },
+            nb::keep_alive<1, 2>(),  // the service borrows the device: keep it alive
             nb::arg("mesh_device"),
             nb::arg("global_spec"),
             nb::arg("fifo_size_bytes") = 0u,
