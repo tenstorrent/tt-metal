@@ -65,6 +65,8 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     const bool is_candidate_source = args.candidate_topk_blocks > 0;
     const bool is_partial = args.num_parts > 1;
     const bool has_row_table = tensor_args.row_table.has_value();
+    const bool has_page_table_row = tensor_args.page_table_row_tensor.has_value();
+    const bool has_kv_page_table = tensor_args.kv_page_table.has_value();
     const uint32_t page_block_size = tensor_args.key_cache.logical_shape()[-2];
     const uint32_t chunks_per_block = page_block_size / tt::constants::TILE_HEIGHT;
 
@@ -110,6 +112,8 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     const TensorParamName POOL_COUNT{"pool_count"};
     const TensorParamName PART_INDEX{"part_index"};
     const TensorParamName ROW_TABLE{"row_table"};
+    const TensorParamName PAGE_TABLE_ROW{"page_table_row"};
+    const TensorParamName KV_PAGE_TABLE{"kv_page_table"};
     const DFBSpecName ROW_TBL_DFB{"row_tbl"};
 
     const KernelSpecName READER{"reader"};
@@ -375,6 +379,27 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
 
     // ---- Kernels ----
     KernelSpec::CompilerOptions reader_compiler_options;
+    if (has_page_table_row) {
+        tensor_parameters.push_back(
+            TensorParameter{.unique_id = PAGE_TABLE_ROW, .spec = tensor_args.page_table_row_tensor->tensor_spec()});
+        if (!has_row_table) {
+            reader_tensor_bindings.push_back(
+                TensorBinding{.tensor_parameter_name = PAGE_TABLE_ROW, .accessor_name = "page_table_row"});
+            reader_compiler_options.defines.emplace("PAGE_TABLE_ROW", "1");
+        }
+        if (has_new_kv_row) {
+            writer_tensor_bindings.push_back(
+                TensorBinding{.tensor_parameter_name = PAGE_TABLE_ROW, .accessor_name = "page_table_row"});
+            writer_compiler_options.defines.emplace("PAGE_TABLE_ROW", "1");
+        }
+    }
+    if (has_kv_page_table) {
+        tensor_parameters.push_back(
+            TensorParameter{.unique_id = KV_PAGE_TABLE, .spec = tensor_args.kv_page_table->tensor_spec()});
+        writer_tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = KV_PAGE_TABLE, .accessor_name = "kv_page_table"});
+        writer_compiler_options.defines.emplace("KV_PAGE_TABLE", "1");
+    }
     if (is_partial) {
         reader_compiler_options.defines.emplace("PARTIAL_OUTPUT", "1");
     }
@@ -656,6 +681,12 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     }
     if (has_row_table) {
         run_args.tensor_args.emplace(ROW_TABLE, std::cref(tensor_args.row_table->mesh_tensor()));
+    }
+    if (has_page_table_row) {
+        run_args.tensor_args.emplace(PAGE_TABLE_ROW, std::cref(tensor_args.page_table_row_tensor->mesh_tensor()));
+    }
+    if (has_kv_page_table) {
+        run_args.tensor_args.emplace(KV_PAGE_TABLE, std::cref(tensor_args.kv_page_table->mesh_tensor()));
     }
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};

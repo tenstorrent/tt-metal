@@ -97,15 +97,35 @@ void kernel_main() {
                 const auto page_table_gen = TensorAccessor(tensor::page_table);
                 dfb_page_table.reserve_back(1);
                 uint32_t page_table_wr_ptr = dfb_page_table.get_write_ptr();
+                uint32_t page_table_row = my_batch_idx;
+#ifdef PAGE_TABLE_ROW_TENSOR
+                {
+                    // The row lands in the page-table buffer, which the row read below then overwrites.
+                    constexpr auto page_table_row_page_bytes = get_arg(args::page_table_row_page_bytes);
+                    const auto row_gen = TensorAccessor(tensor::page_table_row);
+#ifdef ARCH_QUASAR
+                    noc.async_read(row_gen, dfb_page_table, page_table_row_page_bytes, {.page_id = 0}, {});
+#else
+                    noc.async_read(
+                        row_gen,
+                        CoreLocalMem<uint32_t>(page_table_wr_ptr),
+                        page_table_row_page_bytes,
+                        {.page_id = 0},
+                        {});
+#endif
+                    noc.async_read_barrier();
+                    page_table_row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_wr_ptr)[0];
+                }
+#endif
 #ifdef ARCH_QUASAR
                 // See the index read: on Quasar the NoC needs the DFB's cached address.
-                noc.async_read(page_table_gen, dfb_page_table, page_table_stick_size, {.page_id = my_batch_idx}, {});
+                noc.async_read(page_table_gen, dfb_page_table, page_table_stick_size, {.page_id = page_table_row}, {});
 #else
                 noc.async_read(
                     page_table_gen,
                     CoreLocalMem<uint32_t>(page_table_wr_ptr),
                     page_table_stick_size,
-                    {.page_id = my_batch_idx},
+                    {.page_id = page_table_row},
                     {});
 #endif
                 noc.async_read_barrier();

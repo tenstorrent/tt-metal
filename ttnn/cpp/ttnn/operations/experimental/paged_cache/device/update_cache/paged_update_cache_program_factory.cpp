@@ -48,6 +48,7 @@ const TensorParamName UC_CACHE{"cache"};
 const TensorParamName UC_INPUT{"input"};
 const TensorParamName UC_INDEX_T{"index"};
 const TensorParamName UC_PAGE_TABLE_T{"page_table"};
+const TensorParamName UC_PAGE_TABLE_ROW_T{"page_table_row"};
 
 bool enable_fp32_dest(
     const tt_metal::distributed::MeshDevice& device, const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
@@ -141,6 +142,9 @@ Table<TensorParamName, TensorArgument> paged_update_cache_tensor_args(const Page
     }
     if (tensor_args.page_table.has_value()) {
         args.emplace(UC_PAGE_TABLE_T, tensor_args.page_table->mesh_tensor());
+    }
+    if (tensor_args.page_table_row_tensor.has_value()) {
+        args.emplace(UC_PAGE_TABLE_ROW_T, tensor_args.page_table_row_tensor->mesh_tensor());
     }
     return args;
 }
@@ -388,6 +392,9 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
 
         page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.dtype());
     }
+    const auto& page_table_row_tensor = tensor_args.page_table_row_tensor;
+    const uint32_t page_table_row_page_bytes =
+        page_table_row_tensor.has_value() ? page_table_row_tensor->buffer()->aligned_page_size() : 0;
 
     // Per-call write geometry (head_dim, Wt, Wbytes) comes from the input tensor; the
     // cache shape is only a byte budget. num_heads comes from the call view (via the
@@ -497,7 +504,8 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
     if (is_paged_cache) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = UC_PAGE_TABLE,
-            .entry_size = page_table_stick_size,
+            // The reader lands the page_table_row page here before the row itself.
+            .entry_size = std::max(page_table_stick_size, page_table_row_page_bytes),
             .num_entries = 1,
             .data_format_metadata = page_table_data_format,
         });
@@ -561,13 +569,21 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
             .accessor_name = "page_table",
         });
     }
+    KernelSpec::CompilerOptions::Defines reader_defines = optional_resource_defines;
+    if (page_table_row_tensor.has_value()) {
+        reader_defines.emplace("PAGE_TABLE_ROW_TENSOR", "1");
+        reader_tensor_bindings.push_back(TensorBinding{
+            .tensor_parameter_name = UC_PAGE_TABLE_ROW_T,
+            .accessor_name = "page_table_row",
+        });
+    }
 
     KernelSpec reader{
         .unique_id = UC_READER,
         .source =
             "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
             "reader_update_cache_interleaved_start_id.cpp",
-        .compiler_options = {.defines = optional_resource_defines},
+        .compiler_options = {.defines = std::move(reader_defines)},
         .dfb_bindings = std::move(reader_dfb_bindings),
         .semaphore_bindings =
             {
@@ -592,6 +608,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
                 {"St", St},
                 {"cache_position_modulo", cache_position_modulo},
                 {"input_is_row_major", static_cast<uint32_t>(input_is_row_major)},
+                {"page_table_row_page_bytes", page_table_row_page_bytes},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"cache_start_id", "my_batch_idx", "wait_to_start"}},
         .hw_config = create_reader_datamovement_config(),
@@ -775,6 +792,10 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
     }
     if (is_paged_cache) {
         tensor_parameters.push_back(TensorParameter{.unique_id = UC_PAGE_TABLE_T, .spec = page_table->tensor_spec()});
+    }
+    if (page_table_row_tensor.has_value()) {
+        tensor_parameters.push_back(
+            TensorParameter{.unique_id = UC_PAGE_TABLE_ROW_T, .spec = page_table_row_tensor->tensor_spec()});
     }
 
     ProgramSpec spec{

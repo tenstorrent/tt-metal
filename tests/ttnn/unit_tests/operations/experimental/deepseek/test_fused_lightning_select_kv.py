@@ -739,6 +739,122 @@ def test_pool_consumer_writes_new_kv_row(device) -> None:
     assert torch.equal(got, expected), "the consumer did not write exactly the new row into kv_cache"
 
 
+def _session_tables(num_sessions: int, blocks_per_session: int, seed: int) -> torch.Tensor:
+    """``[num_sessions, blocks_per_session]`` rows over one shuffled pool, as V4.1's shared page tables."""
+    g = torch.Generator().manual_seed(seed)
+    pool = torch.randperm(num_sessions * blocks_per_session, generator=g).to(torch.int32)
+    return pool.reshape(num_sessions, blocks_per_session)
+
+
+@pytest.mark.parametrize("session", [0, 2])
+def test_page_table_row_selects_session_row(device, session) -> None:
+    """With ``page_table_row_tensor`` the op reads row ``r`` of an ``[N, L]`` table: the same rows, the
+    same scores and the same ``new_kv_row`` write as the ``[1, L]`` table holding that row."""
+    torch.manual_seed(0)
+    heads, dim, block, k = V4_INDEX_HEADS, V4_INDEX_HEAD_DIM, 64, V4_INDEX_TOPK
+    length, num_keys, num_sessions = 4096, 4093, 3
+    tables = _session_tables(num_sessions, length // block, seed=11)
+    kv_cache = torch.randn(tables.numel(), 1, block, V4_HEAD_DIM).to(torch.bfloat16)
+    key_cache = torch.randn(tables.numel(), 1, block, dim).to(torch.bfloat16)
+    query = torch.randn(1, heads, 1, dim)
+    weights = torch.randn(1, 1, 1, heads) * dim**-0.5
+    new_row = torch.randn(1, 1, 1, V4_HEAD_DIM).to(torch.bfloat16)
+    new_index = num_keys - 1
+    cur_pos = torch.tensor([num_keys * COMPRESS_RATE - 1], dtype=torch.int32)
+
+    results = []
+    for table, row in ((tables[session : session + 1], None), (tables, session)):
+        kv_tt = _rm(kv_cache, device, ttnn.bfloat16)
+        extra = (
+            {}
+            if row is None
+            else {"page_table_row_tensor": _rm(torch.tensor([row], dtype=torch.int32), device, ttnn.int32)}
+        )
+        out, scores = ttnn.experimental.deepseek.fused_lightning_select_kv(
+            _replicated_rm_hs(query, device),
+            _tile(key_cache, device),
+            _replicated_rm_hs(weights, device),
+            kv_tt,
+            _rm(table, device, ttnn.int32),
+            _rm(cur_pos, device, ttnn.int32),
+            k,
+            new_kv_row=_rm(new_row, device, ttnn.bfloat16),
+            new_kv_row_index=_rm(torch.tensor([new_index], dtype=torch.int32), device, ttnn.int32),
+            **extra,
+        )
+        assert list(out.shape)[0] == 1, f"a row-selected step decodes one user, got {list(out.shape)}"
+        results.append((ttnn.to_torch(out), ttnn.to_torch(scores), ttnn.to_torch(kv_tt)))
+    (rows_1, scores_1, kv_1), (rows_n, scores_n, kv_n) = results
+    assert torch.equal(scores_n, scores_1), "row-selected scores differ from the one-row table's"
+    assert torch.equal(rows_n, rows_1), "row-selected rows differ from the one-row table's"
+    assert torch.equal(kv_n, kv_1), "row-selected new_kv_row landed elsewhere than the one-row table's"
+    physical = int(tables[session, new_index // block]) * block + new_index % block
+    assert torch.equal(kv_n.reshape(-1, V4_HEAD_DIM)[physical], new_row.reshape(-1)), "new_kv_row not at its block"
+
+
+def test_session_rows_through_candidate_pool(device) -> None:
+    """Two-level select of session ``r`` of an ``[N, L]`` table: the candidate source, ``build_candidate_pool``
+    and a consumer writing ``new_kv_row`` through ``kv_page_table`` all match the ``[1, L]`` table of that row."""
+    torch.manual_seed(0)
+    heads, dim, block, candidate_block_size = V4_INDEX_HEADS, V4_INDEX_HEAD_DIM, 64, 8
+    length, num_keys, topk_blocks, k, num_sessions, session = 8192, 8189, 256, V4_INDEX_TOPK, 3, 1
+    tables = _session_tables(num_sessions, length // block, seed=12)
+    kv_cache = torch.randn(tables.numel(), 1, block, V4_HEAD_DIM).to(torch.bfloat16)
+    key_cache = torch.randn(tables.numel(), 1, block, dim).to(torch.bfloat16)
+    src_query, dst_query = torch.randn(1, heads, 1, dim), torch.randn(1, heads, 1, dim)
+    weights = torch.randn(1, 1, 1, heads) * dim**-0.5
+    new_row = torch.randn(1, 1, 1, V4_HEAD_DIM).to(torch.bfloat16)
+    new_index = num_keys - 1
+    pool_blocks = topk_blocks * candidate_block_size // block
+    cur_pos = torch.tensor([num_keys * COMPRESS_RATE - 1], dtype=torch.int32)
+
+    results = []
+    for table, row in ((tables[session : session + 1], None), (tables, session)):
+        key_tt, kv_tt, table_tt = (
+            _tile(key_cache, device),
+            _rm(kv_cache, device, ttnn.bfloat16),
+            _rm(table, device, ttnn.int32),
+        )
+        row_tt = None if row is None else _rm(torch.tensor([row], dtype=torch.int32), device, ttnn.int32)
+        row_kw = {} if row is None else {"page_table_row_tensor": row_tt}
+        _, _, blocks, pool_count = ttnn.experimental.deepseek.fused_lightning_select_kv(
+            _replicated_rm_hs(src_query, device),
+            key_tt,
+            _replicated_rm_hs(weights, device),
+            kv_tt,
+            table_tt,
+            _rm(cur_pos, device, ttnn.int32),
+            k,
+            candidate_topk_blocks=topk_blocks,
+            candidate_block_size=candidate_block_size,
+            **row_kw,
+        )
+        pool_keys, pool_rows = ttnn.experimental.deepseek.build_candidate_pool(
+            blocks, pool_count, key_tt, table_tt, candidate_block_size, **row_kw
+        )
+        # Without kv_page_table a consumer's new_kv_row_index is a raw kv_cache row; with it, a logical entry.
+        consumer_kw = {} if row is None else {"page_table_row_tensor": row_tt, "kv_page_table": table_tt}
+        index = new_index if row is not None else int(table[0, new_index // block]) * block + new_index % block
+        got, _ = ttnn.experimental.deepseek.fused_lightning_select_kv(
+            _replicated_rm_hs(dst_query, device),
+            pool_keys,
+            _replicated_rm_hs(weights, device),
+            kv_tt,
+            _rm(torch.arange(pool_blocks, dtype=torch.int32).reshape(1, pool_blocks), device, ttnn.int32),
+            _rm(cur_pos, device, ttnn.int32),
+            k,
+            new_kv_row=_rm(new_row, device, ttnn.bfloat16),
+            new_kv_row_index=_rm(torch.tensor([index], dtype=torch.int32), device, ttnn.int32),
+            num_keys_tensor=pool_count,
+            row_table=pool_rows,
+            **consumer_kw,
+        )
+        results.append([ttnn.to_torch(t) for t in (blocks, pool_count, pool_keys, pool_rows, got, kv_tt)])
+    names = ("candidate blocks", "pool count", "pool keys", "pool rows", "consumer rows", "kv cache")
+    for name, one_row, row_selected in zip(names, *results):
+        assert torch.equal(row_selected, one_row), f"row-selected {name} differ from the one-row table's"
+
+
 # The V4.1 model's mesh: 8 pipeline stages of 1x4 TP submeshes.
 PARENT_MESH = (8, 4)
 TP_SIZE = 4

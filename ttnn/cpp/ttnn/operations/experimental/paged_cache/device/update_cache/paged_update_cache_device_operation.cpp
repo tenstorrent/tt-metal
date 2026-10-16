@@ -177,6 +177,7 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
 
     // Paged cache validation
     const bool paged_cache = page_table.has_value();
+    TT_FATAL(paged_cache || !tensor_args.page_table_row_tensor.has_value(), "page_table_row_tensor needs a page_table");
     if (!paged_cache) {
         if (operation_attributes.share_cache) {
             TT_FATAL(
@@ -189,6 +190,9 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
     } else {
         TT_FATAL(!operation_attributes.share_cache, "share_cache not supported with paged cache");
         TT_FATAL(update_idxs_tensor.has_value(), "Paged cache requires update_idxs tensor");
+        TT_FATAL(
+            !tensor_args.page_table_row_tensor.has_value() || !page_table.value().is_sharded(),
+            "page_table_row_tensor needs an interleaved page_table");
 
         auto page_table_val = page_table.value();
 
@@ -208,6 +212,18 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
                 "Batch size in input tensor {} should match page table shard height {}",
                 input_tensor.padded_shape()[1],
                 page_table_shard_height);
+        } else if (tensor_args.page_table_row_tensor.has_value()) {
+            const auto& row = tensor_args.page_table_row_tensor.value();
+            TT_FATAL(
+                input_tensor.padded_shape()[1] == 1,
+                "page_table_row_tensor supports one user, got batch {}",
+                input_tensor.padded_shape()[1]);
+            TT_FATAL(
+                row.storage_type() == StorageType::DEVICE && row.buffer() != nullptr &&
+                    row.dtype() == DataType::INT32 && row.layout() == Layout::ROW_MAJOR &&
+                    row.logical_shape().volume() == 1 &&
+                    row.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "page_table_row_tensor must be one INT32 row-major interleaved device value");
         } else {
             TT_FATAL(
                 page_table_val.padded_shape()[0] == input_tensor.padded_shape()[1],
@@ -405,7 +421,8 @@ ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::tensor_return_value_t
     const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
     std::optional<uint32_t> block_size_override,
     std::optional<uint32_t> num_kv_heads_override,
-    std::optional<uint32_t> cache_position_modulo) {
+    std::optional<uint32_t> cache_position_modulo,
+    const std::optional<const Tensor>& page_table_row_tensor) {
     using OperationType = ttnn::experimental::prim::PagedUpdateCacheDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
@@ -426,7 +443,9 @@ ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::tensor_return_value_t
         .input_tensor = input_tensor,
         .update_idxs_tensor =
             update_idxs_tensor.has_value() ? std::optional<Tensor>(update_idxs_tensor.value()) : std::nullopt,
-        .page_table = page_table.has_value() ? std::optional<Tensor>(page_table.value()) : std::nullopt};
+        .page_table = page_table.has_value() ? std::optional<Tensor>(page_table.value()) : std::nullopt,
+        .page_table_row_tensor =
+            page_table_row_tensor.has_value() ? std::optional<Tensor>(page_table_row_tensor.value()) : std::nullopt};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

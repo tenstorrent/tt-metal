@@ -97,13 +97,39 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             "Fill update_idx ({}) must be a multiple of TILE_HEIGHT ({})",
             args.update_idx,
             TILE_HEIGHT);
+        const uint32_t fill_rows =
+            tensor_args.input_row_offset.has_value() ? args.num_input_rows : input_tensor.padded_shape()[-2];
         TT_FATAL(
             args.update_idx <= cache_tensor.padded_shape()[-2] &&
-                input_tensor.padded_shape()[-2] <= cache_tensor.padded_shape()[-2] - args.update_idx,
-            "Fill update_idx ({}) + input tensor height ({}) must be <= cache tensor height ({})",
+                fill_rows <= cache_tensor.padded_shape()[-2] - args.update_idx,
+            "Fill update_idx ({}) + rows filled ({}) must be <= cache tensor height ({})",
             args.update_idx,
-            input_tensor.padded_shape()[-2],
+            fill_rows,
             cache_tensor.padded_shape()[-2]);
+        if (tensor_args.input_row_offset.has_value()) {
+            const auto& offset = tensor_args.input_row_offset.value();
+            TT_FATAL(
+                offset.storage_type() == StorageType::DEVICE && offset.buffer() != nullptr,
+                "fill_cache: input_row_offset_tensor must be allocated on device");
+            TT_FATAL(
+                (offset.dtype() == DataType::INT32 || offset.dtype() == DataType::UINT32) &&
+                    offset.layout() == Layout::ROW_MAJOR && offset.logical_shape().volume() == 1 &&
+                    offset.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "fill_cache: input_row_offset_tensor must be one INT32 / UINT32 row-major interleaved value");
+            TT_FATAL(
+                !input_tensor.is_sharded() && input_tensor.padded_shape()[1] == 1,
+                "fill_cache: input_row_offset_tensor needs an interleaved input with one head, got {}",
+                input_tensor.padded_shape());
+            TT_FATAL(
+                args.num_input_rows > 0 && args.num_input_rows % TILE_HEIGHT == 0 &&
+                    args.num_input_rows <= input_tensor.padded_shape()[-2],
+                "fill_cache: num_input_rows ({}) must be a positive multiple of {} and at most the input height ({})",
+                args.num_input_rows,
+                TILE_HEIGHT,
+                input_tensor.padded_shape()[-2]);
+        } else {
+            TT_FATAL(args.num_input_rows == 0, "fill_cache: num_input_rows needs input_row_offset_tensor");
+        }
     } else if (args.op_type == UpdateCacheOpType::UPDATE) {
         if (input_tensor.is_sharded()) {
             TT_FATAL(
@@ -160,7 +186,10 @@ Tensor UpdateKVCacheOperation::create_output_tensors(
 tt::tt_metal::operation::Hash UpdateKVCacheOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return tt::tt_metal::operation::hash_operation<UpdateKVCacheOperation>(
-        args.op_type, std::vector<Tensor>{tensor_args.cache, tensor_args.input});
+        args.op_type,
+        args.num_input_rows,
+        std::vector<Tensor>{tensor_args.cache, tensor_args.input},
+        tensor_args.input_row_offset);
 }
 
 Tensor update_cache(
@@ -170,15 +199,18 @@ Tensor update_cache(
     const uint32_t update_index,
     const uint32_t batch_offset,
     const UpdateCacheOpType op_type,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<Tensor>& input_row_offset,
+    uint32_t num_input_rows) {
     return ttnn::device_operation::launch<UpdateKVCacheOperation>(
         KvCacheParams{
             .batch_idx = batch_idx,
             .update_idx = update_index,
             .batch_offset = batch_offset,
             .op_type = op_type,
-            .compute_kernel_config = compute_kernel_config},
-        KvCacheInputs{.cache = cache, .input = input});
+            .compute_kernel_config = compute_kernel_config,
+            .num_input_rows = num_input_rows},
+        KvCacheInputs{.cache = cache, .input = input, .input_row_offset = input_row_offset});
 }
 
 }  // namespace ttnn::prim
