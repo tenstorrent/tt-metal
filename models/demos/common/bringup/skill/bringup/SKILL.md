@@ -151,6 +151,16 @@ event. Rules:
 - Re-arm it in the same turn you handle its result, every time: after an event (a DASHBOARD STALE / RED one too),
   after exit 2, after your own resume or relaunch. Never end a turn with a live run and no watch armed; never write
   your own grep loop.
+- Three layers, set up by every overseer session (at launch, at resume, and first thing when a new session takes
+  over a run), so no run waits on the overseer's memory (F93, owner):
+  1. the watch (below);
+  2. a 30-minute timer: `CronCreate` (cron `7,37 * * * *`, recurring) with the prompt `bringup heartbeat: check
+     <spec>: orchestrator alive, last log line recent, the running step progressing; act on a stop; re-arm the watch;
+     republish a stale dashboard`. Check `CronList` first (one per session). It fires even when no watch is armed;
+     it expires after 7 days, so a longer run re-creates it;
+  3. the stop guard: `~/.claude/settings.json` has the Stop hook `python3 ~/.claude/skills/bringup/heartbeat_stop.py`
+     (add it if missing, `{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "...", "timeout": 30}]}]}}`).
+     It refuses to let the session go idle while a run it named has no watch, or stopped without an answer.
 - Heartbeat (owner, 2026-10-16): the watch is the heartbeat; never wait longer than 30 minutes (`--timeout 1800`, its
   default). On every wake, an event or not, check the run yourself before re-arming: the orchestrator is alive, the
   log's last line is recent, the running step is making progress (not the same failure again). Never sit waiting for
