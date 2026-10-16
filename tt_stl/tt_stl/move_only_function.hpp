@@ -54,16 +54,15 @@ inline constexpr bool binds_to_temporary_v =
     false;
 #endif
 
-// The standard's is-callable-from<VT>.
 template <typename VT, typename R, typename... Args>
-concept CallableFrom = std::is_invocable_r_v<R, VT, Args...> && std::is_invocable_r_v<R, VT&, Args...> &&
-                       !binds_to_temporary_v<R, std::invoke_result_t<VT, Args...>> &&
-                       !binds_to_temporary_v<R, std::invoke_result_t<VT&, Args...>>;
+concept IsCallableFrom = std::is_invocable_r_v<R, VT, Args...> && std::is_invocable_r_v<R, VT&, Args...> &&
+                         !binds_to_temporary_v<R, std::invoke_result_t<VT, Args...>> &&
+                         !binds_to_temporary_v<R, std::invoke_result_t<VT&, Args...>>;
 
 template <typename F, typename Self, typename R, typename... Args>
 concept MoveOnlyFunctionTarget =
     !std::is_same_v<std::remove_cvref_t<F>, Self> && !is_in_place_type<std::remove_cvref_t<F>>::value &&
-    CallableFrom<std::decay_t<F>, R, Args...>;
+    IsCallableFrom<std::decay_t<F>, R, Args...>;
 
 template <typename T>
 inline constexpr bool stored_inline_v =
@@ -134,13 +133,14 @@ public:
     }
 
     template <typename T, typename... CArgs>
-        requires(std::is_constructible_v<T, CArgs...> && detail::CallableFrom<T, R, Args...>)
+        requires(std::is_constructible_v<T, CArgs...> && detail::IsCallableFrom<T, R, Args...>)
     explicit move_only_function(std::in_place_type_t<T>, CArgs&&... args) {
         emplace<T>(std::forward<CArgs>(args)...);
     }
 
     template <typename T, typename U, typename... CArgs>
-        requires(std::is_constructible_v<T, std::initializer_list<U>&, CArgs...> && detail::CallableFrom<T, R, Args...>)
+        requires(
+            std::is_constructible_v<T, std::initializer_list<U>&, CArgs...> && detail::IsCallableFrom<T, R, Args...>)
     explicit move_only_function(std::in_place_type_t<T>, std::initializer_list<U> il, CArgs&&... args) {
         emplace<T>(il, std::forward<CArgs>(args)...);
     }
