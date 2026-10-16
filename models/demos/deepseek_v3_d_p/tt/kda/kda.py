@@ -16,6 +16,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import Chronol
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CHUNK_SIZE,
     KDA_DECAY_L1_BYTES_PER_CORE,
+    KDA_DECAY_LOGITS_L1_BYTES_PER_CORE,
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
@@ -199,7 +200,7 @@ class ttKDA:
         )
         # The bounded gate's FP32 logits (4 bytes per element) between the projection and the offset add.
         self.decay_logits_memory_config = l1_when_it_fits(
-            mesh_device, self.active_seq_len_local * decay_width * 4, KDA_DECAY_L1_BYTES_PER_CORE
+            mesh_device, self.active_seq_len_local * decay_width * 4, KDA_DECAY_LOGITS_L1_BYTES_PER_CORE
         )
         # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
         # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
