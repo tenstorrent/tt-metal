@@ -28,6 +28,8 @@ diverged from the dispatch op's padding contract. A checkpoint without a correct
 bias through the same op rather than a different code path.
 """
 
+from collections import OrderedDict
+
 import torch
 from loguru import logger
 
@@ -73,6 +75,8 @@ def route_tokens_to_experts_fused(
 
 
 class TopKRouter:
+    PADDING_CONFIG_CACHE_SIZE = 512  # each entry is one tiny [sp, 2] device tensor
+
     def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None, num_tokens=None, mesh_config=None):
         """num_tokens: tokens per device per forward (forward_tokens // sp_factor). Required — the gate's
         bias is materialized at that width (see below).
@@ -148,11 +152,10 @@ class TopKRouter:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # Padding-config memo, keyed by the per-chip real-row counts (see build_padding_config). Deliberately
-        # never evicted: only a forward with pad rows populates it, and the counts depend on the entries'
-        # starts only through their offsets within the SP slab, so it does not grow with context length.
+        # Padding-config memo, keyed by the per-chip real-row counts (see build_padding_config). Ragged ends make
+        # the key space large over a long run, so it is bounded (LRU).
         self.mesh_device = mesh_device
-        self._padding_config_cache = {}
+        self._padding_config_cache = OrderedDict()
 
         # Custom compute configs can degrade routing quality; keep the default.
         self.compute_config = None
@@ -181,7 +184,11 @@ class TopKRouter:
         key = packed_real_rows(entries, sp_factor, tokens_per_chip // len(entries))
         if all(r == tokens_per_chip for r in key):
             return None  # every row is real
-        if key not in self._padding_config_cache:
+        if key in self._padding_config_cache:
+            self._padding_config_cache.move_to_end(key)
+        else:
+            if len(self._padding_config_cache) >= self.PADDING_CONFIG_CACHE_SIZE:
+                self._padding_config_cache.popitem(last=False)  # least recent: many forwards old, long finished
             rows = torch.zeros((sp_factor, 2), dtype=torch.int32)
             for c in range(sp_factor):
                 rows[c, 0] = key[c]

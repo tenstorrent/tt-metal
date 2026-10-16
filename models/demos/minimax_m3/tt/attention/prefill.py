@@ -110,12 +110,12 @@ def attention_forward(
             program_config,
             transformation_mat,
             ccl_manager,
-            entry.slot,
-            batch,
-            layer_idx,
-            entry.start,
-            indexed_rope,
-            rows,
+            user_id=entry.slot,
+            batch_size=batch,
+            layer_idx=layer_idx,
+            cached_len=entry.start,
+            indexed_rope=indexed_rope,
+            seq_len=rows,
         )
 
     entries = entries or [PrefillEntry(slot=0, start=0, end=seq_len)]
@@ -137,10 +137,10 @@ def attention_forward(
         if config.is_sparse:
             hidden_states.deallocate(True)
         # Empty entries (the tail) get zero rows; concatenating all entries keeps one concat program per forward width.
-        if len(real) < len(entries):
-            outs.append(ttnn.zeros_like(outs[0]))
-        tt_sdpa_out = ttnn.concat(outs + [outs[-1]] * (len(entries) - len(outs)), dim=2)
-        for o in outs:
+        empties = len(entries) - len(real)
+        zeros = ttnn.zeros_like(outs[0]) if empties else None
+        tt_sdpa_out = ttnn.concat(outs + [zeros] * empties, dim=2)
+        for o in outs + ([zeros] if empties else []):
             o.deallocate(True)
 
     return _output_projection(
@@ -340,12 +340,9 @@ def _attention_core(
                     kv_actual=cached_len,
                     logical_n=logical_n,
                     n_kv=config.num_kv_heads,
-                    # Ring-gather output buffer must span the FULL cache capacity: ring_joint gathers the
-                    # entire per-device cache shard (seq_local = max_seq_len/sp rows -> x sp across the ring =
-                    # max_seq_len), independent of the valid prefix (logical_n/kv_actual_isl drive causal
-                    # masking of the not-yet-written tail). Sizing it to logical_n only worked for the 2-chunk
-                    # case where the last chunk's logical_n == max_seq_len; any run with >2 chunks (e.g. 50k /
-                    # 11 chunks) fails "gather dim 2 too small: got <logical_n>, expected >= max_seq_len".
+                    # The ring-gather output buffer is sized for the full cache capacity (max_seq_len): the op
+                    # checks it against the cache shard ("gather dim 2 too small"), although it only moves the
+                    # valid prefix (logical_n / kv_actual drive that and the causal mask).
                     cache_global=kv_cache.max_seq_len,
                     head_dim=config.head_dim,
                     mesh_device=mesh_device,

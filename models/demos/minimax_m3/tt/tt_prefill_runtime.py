@@ -278,6 +278,7 @@ class TtPrefillRuntime:
 
     def make_chunk_input(self, token_ids: list, actual_start: int = 0) -> ttnn.Tensor:
         """One chunk's input for ``prefill_chunk``: ``make_forward_input`` with a single entry."""
+        assert self.config.forward_chunks == 1, "a packed runtime takes make_forward_input / prefill_forward"
         return self.make_forward_input([token_ids], [actual_start])
 
     def make_forward_input(self, chunk_tokens: list, starts: list) -> ttnn.Tensor:
@@ -386,6 +387,7 @@ class TtPrefillRuntime:
     ):
         """Prefill ONE chunk ``[actual_start, actual_end)`` into user ``slot_id``: ``prefill_forward`` with a
         single entry (forward_tokens == chunk_size). See prefill_forward for the arguments."""
+        assert self.config.forward_chunks == 1, "a packed runtime takes prefill_forward with forward_chunks entries"
         return self.prefill_forward(
             input_tensor,
             kv_cache,

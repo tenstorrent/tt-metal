@@ -511,7 +511,7 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
     last_tps = last_len / lc  # processed (padded) tokens, the historical basis of this line
     last_real = n_tokens - a_last  # real tokens in the final chunk (== last_len unless the trace is ragged)
     print(
-        f"[prefill-pcc] LAST CHUNK over {tps_iters} iters: {last_len} tok @ {a_last} cache, "
+        f"[prefill-pcc] LAST {'FORWARD' if fwd_chunks > 1 else 'CHUNK'} over {tps_iters} iters: {last_len} tok @ {a_last} cache, "
         f"median {last_tps:.1f} tok/s (processed), {last_real / lc:.1f} tok/s ({last_real} real); "
         f"wall median {lc * 1000:.1f} ms [min {min(last_times) * 1000:.1f}, max {max(last_times) * 1000:.1f}]",
         flush=True,
@@ -523,6 +523,8 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
         "trace_tokens": n_trace,
         "chunk": chunk,
         "n_chunks": n_chunks,
+        "forward_tokens": fwd_chunks * chunk,
+        "n_forwards": n_forwards,
         "capacity": capacity,
         "recompile_s": recompile_s,
         "warmup_iters": warmup_iters,
