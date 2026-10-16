@@ -134,30 +134,25 @@ them into tables and `tools/run_characterization.py` collects a campaign from
 | [docs/benchmarks/core_sync.md](docs/benchmarks/core_sync.md) | core_sync: the cross-core barrier, its executables and its release characterization |
 | [docs/benchmarks/packet_injection.md](docs/benchmarks/packet_injection.md) | packet_injection: Tensix and ERISC producers into an X280 consumer, protocol, layout, running it |
 | [docs/benchmarks/eth_credit.md](docs/benchmarks/eth_credit.md) | eth_credit: credit flow control across a direct Ethernet link |
-| [docs/results.md](docs/results.md) | where the published results of every family are |
+| [docs/results.md](docs/results.md) | the published results of every family |
 
 ## 4. Results
 
-Measured on a Blackhole p150b at X280 PLL 1750 MHz with images built by gcc 15.2. The published
-results are described in [docs/results.md](docs/results.md).
+Measured on a Blackhole p150b with the X280 at 1750 MHz, every member at 14 LIM ways, and images
+built by SFPI 7.87.0. The headline tables, as mean [min-max] over attempts, are in
+[docs/results.md](docs/results.md); the figures below are attempt means.
 
-- **p2p_latency.** Two X280 harts on one tile round-trip a 4-byte token in 140 ns (7 `mtime`
-  ticks) with a 40 ns turnaround. Across tiles every non-posted store crosses one full 12-hop
-  lap whatever the placement, 260-340 ns round trip. To a Tensix, idle-ERISC or DRISC peer the
-  X280 sees 360-420 ns.
-- **transport_bandwidth.** X280 -> Tensix u32 posted stores from registers run at 1.800 GB/s,
-  3.89 cycles per `sw`. Tensix -> X280 is Tensix-issue-bound at 17.8 ns per write through 256 B
-  (14.4 GB/s), then the X280 sink holds about 17.5 GB/s from 384 B to 16 KiB at 1750 MHz; below
-  about 1.44 GHz the sink binds at 256 B too.
-- **core_sync.** An X280 director's multicast release spreads 16 Tensix workers' exits over
-  about 122 debug-timer ticks, against about 11,600 for unicast.
-- **packet_injection.** One Tensix producer sustains about 1.38 M headers/s at one credit per
-  header. With the credit returned through a mode-1 (strict) window, which the shipped build
-  does not use, at C=8, K=16 the X280 consumer plateaus at about 4.9 M headers/s from Tensix and
-  about 4.8 M from four or more idle ERISCs, bound by X280 service. With it posted, as the shipped
-  build does, the visit cap K is the lever and C is nearly flat: at C=8, K=16 four Tensix producers run 5.76 M headers/s with no credit stall,
-  eight run 11.49 M, and all idle ERISCs 19.58 M; at C=K=1 all idle ERISCs are X280-bound at
-  about 229.5 ns per visit.
-- **eth_credit.** Each X280 forwarder moves 0.30-0.35 M packets/s across the Ethernet link,
-  flat in slot size, bound by its header write into the ERISC; 5.8 GB/s per forwarder at 16 KiB
-  slots.
+- **p2p_latency.** Round trip (`RTT`, wall p50) between two X280 harts on one tile: 100.000 ns;
+  between two X280 tiles: 240.000 ns; from an X280 to a Tensix, idle-ERISC or DRISC peer:
+  346.667 to 360.000 ns.
+- **transport_bandwidth.** X280 -> Tensix from one hart at 65536 B: 1.800 GB/s with `sw`, 3.600
+  with `sd` and 14.399 with `vse32.v`. Tensix -> X280 at 4096 B: 17.504 GB/s.
+- **pipeline_stage.** The next-hop direction-table lookup: 41.824 ns per item; the router forward
+  decision: 25.148 ns per item.
+- **core_sync.** The exits of 16 Tensix workers spread over 119.7 raw live-timer ticks under a
+  multicast release and 11559.3 under unicast.
+- **packet_injection.** Four Tensix BRISC producers: 234.095 ns per header at C=1, K=1 and 174.415
+  at C=8, K=16. Eight idle-ERISC writers at C=1, K=1: 229.575 ns per header.
+- **eth_credit.** One X280 forwarder at 4192 B slots and `BATCH` 4 moves 0.372 Mpkt/s, against
+  0.371 for its NoC hop alone and 5.180 for the Ethernet hop alone; the tabulator names the NoC
+  hop as the bound.
