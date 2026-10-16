@@ -272,6 +272,23 @@
   team: models
   budget_type: e2e
 
+- name: Qwen3.8-27B T3K model, GPQA and serving
+  # qwen38_27b_qb2 registers TTQwen38ForCausalLM for Blackhole and bundles resolve first-wins from
+  # a sorted listing, so run_ci.sh pins the class override rather than letting qb2 serve this leg.
+  # The three server legs (capacity 1, 8, 16) are the point: the decode bucket ladder is what the
+  # model is tuned around, and a single capacity would leave two of its three shapes uncovered.
+  cmd: bash models/demos/qwen38_27b_t3k/tests/run_ci.sh
+  model: qwen38-27b-t3k
+  model_family: Qwen
+  skus:
+    wh_llmbox_perf:
+      timeout: 120
+      tier: 3
+      release_ready: false
+  owner_id: U08BGTAMU1W # Marina Vasiljevic
+  team: models
+  budget_type: e2e
+
 - name: Qwen3-32B e2e tests (Galaxy)
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
