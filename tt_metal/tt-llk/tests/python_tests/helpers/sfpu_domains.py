@@ -2100,7 +2100,7 @@ def negative_zero_delivered(
 def _dest_is_32_bit(
     input_format: DataFormat, output_format: DataFormat, acc: DestAccumulation
 ) -> bool:
-    """dest_acc, or the 8-bit-exponent to Float16 combination the harness widens to 32 bits."""
+    """True for dest_acc, or for the 8 bit exponent to Float16 combination the harness widens to 32 bits."""
     return acc == DestAccumulation.Yes or is_format_combination_outlier(
         input_format, output_format, acc
     )
@@ -2112,17 +2112,9 @@ def pack_keeps_nan(
     dest_acc: Optional[Union[bool, Enum]],
     chip_arch: Optional[ChipArchitecture] = None,
 ) -> bool:
-    """Does the pack carry a NaN that is in Dest to L1 as a NaN?
+    """Whether the pack carries a Dest NaN to L1 as a NaN, from the harness's format inference.
 
-    Two ways through. A 32-bit Dest carries it into a Float16 or Float32 output; a 16-bit Dest
-    carries it only through an identity pack, where the pack source is already the output
-    format (Float16 or Float16_b) and the packer's identity path converts nothing. Everything
-    else converts, and a narrowing conversion turns a NaN into an infinity of its own sign.
-    Asked of the harness's own format inference, so this cannot drift from what the test
-    programs. A kernel that rounds its own result to bfloat16 on the SFPU loses the NaN before
-    the pack; that is the golden's business, not this function's.
-
-    dest_acc=None means the caller does not know the pipeline, so keep the assertion.
+    True for a 32 bit Dest into Float16/Float32 or a 16 bit identity pack; other packs give a signed inf. None keeps the assertion.
     """
     if dest_acc is None:
         return True
@@ -2150,13 +2142,9 @@ def wormhole_store_may_narrow_nan(
     dest_acc: Optional[Union[bool, Enum]],
     chip_arch: ChipArchitecture,
 ) -> bool:
-    """Where a golden NaN may come back from Wormhole as a NaN or as an infinity.
+    """Whether a golden NaN may read back as an infinity: Wormhole, 16 bit Dest, identity pack only.
 
-    On Wormhole an SFPU store into a 16-bit Dest keeps a NaN on some kernel paths and turns it
-    into an infinity on others (measured on n300: neg, abs, min/max, the comparisons and div's
-    explicit 0/0 keep it; exp, sin, add1 and the SFPMAD-invented results of add, mul and xlogy
-    do not), where Blackhole always keeps it. That only shows once the pack keeps a NaN, so
-    this is the 16-bit identity-pack cells on Wormhole and nothing else.
+    Measured on n300: neg, abs, min/max, compares, div 0/0 keep NaN; exp, sin, add1, SFPMAD add/mul/xlogy do not. Blackhole keeps it.
     """
     if chip_arch != ChipArchitecture.WORMHOLE or dest_acc is None:
         return False
@@ -2167,7 +2155,7 @@ def wormhole_store_may_narrow_nan(
 
 
 def accept_wormhole_narrowed_nan(golden, result, may_narrow: bool):
-    """*result* with an infinity counted as the NaN the golden has, where *may_narrow*."""
+    """Return *result* with an infinity replaced by the golden's NaN where *may_narrow* is set."""
     if not may_narrow:
         return result
     import torch
@@ -2182,14 +2170,9 @@ def nan_survives_to_l1(
     dest_acc: Optional[Union[bool, Enum]],
     chip_arch: Optional[ChipArchitecture] = None,
 ) -> bool:
-    """Does a NaN the kernel produces reach L1 still a NaN, or as a signed infinity?
+    """Whether a kernel NaN reaches L1 as a NaN: pack_keeps_nan() and not wormhole_store_may_narrow_nan().
 
-    pack_keeps_nan(), less the Wormhole cells where the SFPU store may already have narrowed
-    it (wormhole_store_may_narrow_nan). This is the question the NaN-sign gate asks: wherever
-    it is False, a NaN may arrive at the comparator as +/-inf and its sign becomes load-bearing.
-    *chip_arch* defaults to the device the harness is configured for.
-
-    This asks about the *output* leg where negative_zero_delivered() asks about the input leg.
+    Where False, a NaN may arrive as +/-inf with a meaningful sign. *chip_arch* defaults to the configured device.
     """
     if chip_arch is None:
         chip_arch = get_chip_architecture()
@@ -2265,8 +2248,7 @@ def specials_after_nan_sign_gate(
     that tensor with it (Hardmish's (-2.0, 0.0) knee, Rsqrt's 0.0 pole). Callers still skip
     when the narrowed spec comes back None, i.e. ops with nothing but cat B to drive.
 
-    *on_wormhole* is passed rather than read from the harness configuration, so both edge
-    sweeps share this one rule and decide the architecture in one place.
+    *on_wormhole* is passed in so both edge sweeps decide the architecture in one place.
 
     Not an xfail: the sign may be either, so the same hardware could satisfy or break that
     claim run to run. There is nothing to assert until the golden accepts both

@@ -140,13 +140,9 @@ _EDGE_SWEEP_CELLS = [
 
 
 def test_nan_survives_an_identity_pack_or_a_32_bit_pipeline():
-    """A NaN reaches L1 intact either because nothing converts it, or because nothing narrows it.
+    """Pins which specials_safe() cells carry a NaN to L1, since the NaN-sign gate's scope follows from it.
 
-    Pinned because the gate's whole scope follows from it. On Blackhole two of the six triples
-    specials_safe() accepts are identity packs, since a Float16_b output at dest_acc=No makes
-    the pack source Float16_b whichever format the input had, and the third is Float32->Float32
-    at dest_acc=Yes, where nothing narrows. On Wormhole the SFPU store into a 16-bit Dest
-    already turns the NaN into an infinity, so only the 32-bit pipeline carries it.
+    Blackhole: the two Float16_b identity packs and Float32 at dest_acc=Yes. Wormhole: only Float32 at dest_acc=Yes.
     """
     carrying = [c for c in _EDGE_SWEEP_CELLS if specials_safe(*c)]
     assert len(carrying) == 6, "specials_safe's verdict on this matrix moved"
@@ -260,8 +256,7 @@ def test_binary_golden_dest_format_matches_the_domains_rule():
             (DataFormat.Float32, DataFormat.Float16),
             (DataFormat.Float32, DataFormat.Float32),
         }
-        # Blackhole, where the Dest the golden derives is the only thing in the way; Wormhole's
-        # 16-bit SFPU store narrows first, which test_nan_survives_... pins separately.
+        # Blackhole only: Wormhole's 16 bit SFPU store narrows first, pinned in test_nan_survives_*.
         assert preserves == nan_survives_to_l1(
             input_format, output_format, dest_acc, ChipArchitecture.BLACKHOLE
         ), (

@@ -2750,10 +2750,8 @@ class UnarySFPUGolden:
 
         match (dst_format, data_format):
             # in the following cases, nans are preserved
-            # The two identity pairs take the packer's identity path, which performs no
-            # conversion; the 32-bit pairs have nothing to narrow. Whether a 16-bit pair really
-            # is an identity pack depends on the pack source, which pack_keeps_nan asks of
-            # the harness's format inference: a block-float input can still pack from itself.
+            # Identity pairs convert nothing and 32 bit pairs narrow nothing.
+            # pack_keeps_nan checks the pack source, since a block float input still packs from itself.
             case (DataFormat.Float16, DataFormat.Float16) if pack_keeps_nan(
                 input_format, data_format, self.dest_acc
             ):
@@ -4422,11 +4420,8 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             # operand dtype back, which bit-exact callers compare against.
             result = cast_to_dest_dtype(result.float(), format_dict[data_format])
 
-        # The format in L1 decides the pack source, so ask with it when the caller has one: a
-        # Bfp8_b input is modelled here as Float16_b but still packs from a block-float source.
-        # Some kernels round their result to bfloat16 on the SFPU before the store when Dest is
-        # 16-bit (convert<vFloat16b>, i.e. SFP_STOCH_RND), and that conversion turns a NaN into an
-        # infinity of its sign before the packer ever sees it, identity pack or not.
+        # The L1 input format decides the pack source (Bfp8_b is modelled as Float16_b but packs from block float).
+        # With a 16 bit Dest, fmod and remainder round to bf16 on the SFPU, which turns a NaN into a signed inf before the pack.
         pack_leg = input_format if input_format is not None else data_format
         rounds_nan_away = (
             model_dest
@@ -4485,8 +4480,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         emitted = torch.isnan(result_row)
         return torch.where(emitted, result_row.abs(), result_row), emitted
 
-    # Binary ops whose 16-bit-Dest path ends in convert<vFloat16b>(result, RoundMode::Nearest)
-    # (ckernel_sfpu_binary_fmod.h, ckernel_sfpu_binary_remainder.h).
+    # Binary ops whose 16 bit Dest path ends in convert<vFloat16b> (binary_fmod, binary_remainder kernels).
     _SFPU_BF16_ROUNDING_OPS = frozenset(
         {MathOperation.SfpuBinaryFmod, MathOperation.SfpuBinaryRemainder}
     )
@@ -5953,10 +5947,7 @@ class ScalarBinopGolden:
         else:
             raise ValueError(f"Unsupported scalar binop operation: {operation}")
 
-        # Dest, then the pack path -- the same two steps UnarySFPUGolden models, and the same
-        # preservation rule: a 32-bit pipeline and a 16-bit identity pack carry a NaN through,
-        # any other pack substitutes an infinity of the NaN's own sign. The input and output
-        # formats of this op are the same, so data_format is both legs.
+        # Dest, then the pack path, with UnarySFPUGolden's NaN rule; data_format is both legs.
         # cast_to_dest_dtype rather than .to(), so torch's cast does not decide that sign.
         result = cast_to_dest_dtype(result, format_dict[data_format]).flatten()
         if not pack_keeps_nan(data_format, data_format, dest_acc):

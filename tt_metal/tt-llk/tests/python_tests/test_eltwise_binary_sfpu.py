@@ -725,8 +725,7 @@ def sfpu_binary(
         golden_tensor = torch.where(unspecified, golden_tensor.abs(), golden_tensor)
         res_tensor = torch.where(unspecified, res_tensor.abs(), res_tensor)
 
-    # On Wormhole a 16-bit SFPU store may narrow a NaN to an infinity on some kernel paths even
-    # where the pack keeps it, so there a golden NaN accepts either (see sfpu_domains).
+    # A Wormhole 16 bit SFPU store may narrow a NaN to inf on some kernel paths, so accept either there.
     res_tensor = accept_wormhole_narrowed_nan(
         golden_tensor,
         res_tensor,

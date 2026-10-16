@@ -141,8 +141,7 @@ def _run_sfpu_binop_scalar(
     torch_format = format_dict[formats.output_format]
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
-    # On Wormhole a 16-bit SFPU store may narrow a NaN to an infinity on some kernel paths even
-    # where the pack keeps it, so there a golden NaN accepts either (see sfpu_domains).
+    # A Wormhole 16 bit SFPU store may narrow a NaN to inf on some kernel paths, so accept either there.
     res_tensor = accept_wormhole_narrowed_nan(
         golden_tensor,
         res_tensor,

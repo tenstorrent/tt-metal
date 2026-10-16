@@ -1502,8 +1502,7 @@ def eltwise_unary_sfpu(
         dest_acc=dest_acc,
         arch=TestConfig.CHIP_ARCH,
     )
-    # On Wormhole a 16-bit SFPU store may narrow a NaN to an infinity on some kernel paths even
-    # where the pack keeps it, so there a golden NaN accepts either (see sfpu_domains).
+    # A Wormhole 16 bit SFPU store may narrow a NaN to inf on some kernel paths, so accept either there.
     res_tensor = accept_wormhole_narrowed_nan(
         golden_tensor,
         res_tensor,
