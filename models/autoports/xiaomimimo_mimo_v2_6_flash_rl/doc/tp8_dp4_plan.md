@@ -118,7 +118,24 @@ profile of 6 layers). Every step kept the accuracy checks above passing.
 | DRAM-sharded qkv and router matmuls; `sparse_matmul` indexed mode skips its output zero-fill | 46.5 ms | 57.6 ms, 139 tok/s |
 | tt-kernel-agent (3 rounds on the MoE decode layer, 651 -> 479 us): per-pair intermediates in L1; the indexed `sparse_matmul` reuses the broadcast activation across experts and prefetches the next expert's first weight block | 38.4 ms | 47.6 ms, 168 tok/s |
 
-With B=4 x 1M allocated (`test_capacity_1m_tp8_dp4.py`, 16 users, 4 per row), after all rows above:
+### DRAM bandwidth utilization (`tests/perf/decode_bandwidth.py`)
+
+Useful bytes per chip per step (the selected experts' weight slices, attention, router, dense MLP, LM head and
+the KV attended, without padding: 3.58 GB at short context, 4 users per replica) / step time / 512 GB/s. The
+device loop (`MiMoGalaxyGenerator.decode_steps`) keeps greedy decoding on device: argmax across the row,
+token feedback and position update inside the trace; its tokens match the host loop.
+
+| Change | 1 row, device loop | 4 rows, device loop | 1 row, host loop |
+|---|---|---|---|
+| Start (MoE layer 479 us) | | | 38.6 ms, 18.0 % |
+| Device-resident greedy loop | 33.3 ms, 20.9 % | 35.4 ms, 19.7 % | 38.8 ms |
+| Routing after the sigmoid in one program (`tt/moe_route.py`: exact fp32 top-8, normalize, mask; replaces top-k, gather and ~20 glue ops); CCL on 2 links (all-reduce 37.7 -> 29.7 us) | 26.8 ms, 26.0 % | 28.9 ms, 24.1 % | 31.8 ms |
+| tt-kernel-agent `mimo_moe_stream` round 2: bank-local streaming gate|up with the routing selection inside the program (MoE layer 283 us) | 23.7 ms, 29.5 % | 25.8 ms, 27.1 % | 28.7 ms |
+
+Accuracy after the last row: teacher-forced top-1 vs the fp32 reference 0.975, logits PCC min 0.9693 / mean
+0.9926 (`test_model_tp8_dp4.py`).
+
+With B=4 x 1M allocated (`test_capacity_1m_tp8_dp4.py`, 16 users, 4 per row), after the first table's rows:
 49.1 ms/step at 4K positions (326 tok/s), 74.5 ms at 128K (215 tok/s), 236.7 ms at ~1M (68 tok/s).
 
 Where one MoE decode layer's ~650 us go (device, per chip): expert `sparse_matmul` gate|up 282 us
