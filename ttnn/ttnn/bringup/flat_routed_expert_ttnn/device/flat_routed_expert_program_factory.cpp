@@ -1034,6 +1034,14 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                         const std::vector<CoreCoord>& cores,
                         tt::DataFormat fmt,
                         uint32_t page) {
+        // (every arena-backed CB must lie inside the arena: one past its end overlaps whatever L1 sits above it)
+        TT_FATAL(
+            off + size <= arena.aligned_size_per_bank(),
+            "flat_routed_expert: CB {} at {} + {} B runs past the {} B arena",
+            idx,
+            off,
+            size,
+            arena.aligned_size_per_bank());
         CircularBufferConfig c(size, {{idx, fmt}});
         c.set_page_size(idx, page);
         c.set_globally_allocated_address(arena);

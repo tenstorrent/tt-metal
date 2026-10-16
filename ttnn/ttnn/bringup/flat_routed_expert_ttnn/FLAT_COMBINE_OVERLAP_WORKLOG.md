@@ -850,3 +850,13 @@ model expert shapes, runs unchanged in an origin/main worktree for the productio
   whatever was there (30% error in one run, inf in the next). MIMO_FL_MT=2: correct. Not the row-pass gate/up kernel
   (MIMO_FL_GU_FULL_SYNC=1: same tiles), not the x ring depth (MIMO_FL_X_SLOTS_MAX=26: same): the 128-row sub-block's
   h exchange / down / y write. The K3 block is unaffected (mt 2). Open.
+- FIXED (same day): only the reader-tail columns were bad (y col tiles 150..191 = 7 tails x pcd_r 6; in each tail the
+  last 3 of its 6, row 3: out-CB tiles 21..23 of the 24-tile block), and only on sub-blocks using the out CB's second
+  half (v 1 / 7 / 11, all odd). The plan sized the shared out region at o_off for the down cores' widest column count
+  (pcd 5) while the reader tails put 2 x mt x pcd_r (6) tiles there: at mt 4 the tails' second half ended 6.6 KB past
+  the arena (arena set by the down role), in L1 owned by something else. Not an LLK issue (llk_push_tiles stalls for
+  the packer before publishing). Fix: out region sized for max(pcd, pcd_r) (plan.cpp; the Python builder too) and a
+  TT_FATAL in arena_cb for any CB past the arena. GLM 5.3 6144 x 2048 (any E: the LoudBox's 32 too; bf16 h mt 2 was
+  undersized as well, unharmed only because another role made the arena bigger) gets +4 arena tiles. After: GLM 5.3
+  flat 1.25-2.5% arithmetic error (worst row 3.4%, was 31% / inf), K2.7 / K3 / the K3 block unchanged. GLM-5.3-Flash
+  (4096, no reader tails), K2.7 (tails == down width), K3: never affected (zz_scratch_flat_plan_cmp.py flags the risk).

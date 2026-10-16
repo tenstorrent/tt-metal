@@ -818,7 +818,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     const uint32_t x_bytes = p.mt * KBLK * p.x_tile;
     p.h_tiles = p.It * (p.hu ? p.hu : p.mt);  // one down h buffer: a sub-block, or an h unit
-    const uint32_t out_tiles = p.mt * pcd;
+    // the out region is shared by the down cores and the reader tails (one offset): sized for the wider of the two
+    // (GLM 5.3: down cores 5 columns, tails 6 -- sized for 5, the tails' second out half ran past the arena)
+    const uint32_t out_tiles = p.mt * std::max(pcd, p.rdown ? p.pcd_r : 0u);
     uint32_t rect_min = 1000;
     for (const auto& [x0, x1, y0, y1] : p.rects) {
         rect_min = std::min(rect_min, (x1 - x0 + 1) * (y1 - y0 + 1));
@@ -943,7 +945,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     p.o_off = p.h_off + al(p.hbuf * p.h_tiles * p.h_tile);
     // (bf16 h: two h buffers leave the row-major y out CB less than out_bytes; it takes what is left, >= 1 row tile)
     const uint32_t dn_bytes = std::min(p.o_off + out_bytes + 2048, L1_BANK);
-    TT_FATAL(p.o_off + al(pcd * 2048) + 2048 <= L1_BANK, "flat_routed_expert: down core arena does not fit");
+    TT_FATAL(
+        p.o_off + al(std::max(pcd, p.rdown ? p.pcd_r : 0u) * 2048) + 2048 <= L1_BANK,
+        "flat_routed_expert: down core arena does not fit");
     const uint32_t gu_bytes = p.hl_off + (p.hl_in_arena ? al(p.hl_slots * p.mtg * p.np * p.h_tile) : 0);
     TT_FATAL(gu_bytes <= L1_BANK, "flat_routed_expert: gate/up core arena does not fit");
     for (uint32_t t : {32u, 16u, 8u}) {

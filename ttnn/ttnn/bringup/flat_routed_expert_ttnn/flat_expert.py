@@ -676,7 +676,9 @@ class FlatExpert:
         x_blk = MT * KBLK
         x_bytes = x_blk * BF8_TILE
         h_tiles = It * MT  # h of one sub-block: [KT][4 row tiles]
-        out_tiles = MT * pcd
+        # (the out region at O_OFF is shared by the down cores and the reader tails: sized for the wider -- GLM 5.3:
+        # down cores 5 columns, tails 6; sized for 5, the tails' second out half ran past the arena)
+        out_tiles = MT * max(pcd, pcd_r if RDOWN else 0)
         pk = lambda c: (phys(c).x << 16) | phys(c).y
 
         # M-groups by rectangle (MIMO_FL_GROUP_RECT, auto: G == 2 and each rectangle holds its group's cores): halves
