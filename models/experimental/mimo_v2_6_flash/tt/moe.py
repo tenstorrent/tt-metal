@@ -21,7 +21,15 @@ import torch
 import ttnn
 
 from .common import TILE, DramShardedMatmul, as_weight, cache_exists, cache_name, compute_config, mcast_1d_config
-from .moe_stream import DownStream, GateUpStream, ReduceExpand, fabric_row_gather, is_dram_interleaved
+from .moe_stream import (
+    DownStream,
+    GateUpStream,
+    PendingCompact,
+    ReduceExpand,
+    fabric_row_gather,
+    fabric_transport_noc,
+    is_dram_interleaved,
+)
 from .proj_stream import RouterScoreStream
 
 
@@ -285,13 +293,23 @@ class TtMiMoMoE:
             scores.deallocate(True)
             biased.deallocate(True)
 
-        out = self.down_stream(act, self.ids_buf, self.w_down, self.out_buf)  # compact [1, 1, 32, H / 8], persistent
         plan = self.plan
+        if norm is not None and self.fabric_gather:
+            # Down runs in the same launch as the all-gather and the reduce (it signals the transport cores).
+            section = self.down_stream(
+                act,
+                self.ids_buf,
+                self.w_down,
+                self.out_buf,
+                signal=fabric_transport_noc(plan.mesh_device),
+                launch=False,
+            )
+            pending = PendingCompact(section, self.out_buf, len(self.down_stream.cores))
+            return self.reduce_residual(None, residual, norm=norm, compact=pending, extra=extra)
+        out = self.down_stream(act, self.ids_buf, self.w_down, self.out_buf)  # compact [1, 1, 32, H / 8], persistent
         # The row all-reduce as one fabric phase: gather every chip's compact output (chip order along the row, the
         # same on every chip), then ReduceExpand sums the copies in that order. The persistent compact output is
         # rewritten every call, so it is not deallocated.
-        if norm is not None and self.fabric_gather:
-            return self.reduce_residual(None, residual, norm=norm, compact=out, extra=extra)
         gathered = plan.all_gather(out, dim=3)  # [1, 1, 32, tp * H / 8]
         full = self.reduce_residual(gathered, residual, norm=norm)
         if gathered is not self.out_buf:

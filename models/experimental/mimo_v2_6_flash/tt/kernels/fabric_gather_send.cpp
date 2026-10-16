@@ -25,6 +25,9 @@ void kernel_main() {
     constexpr uint32_t chips = get_compile_time_arg_val(4);
     constexpr bool local_copy = get_compile_time_arg_val(5) == 1;
     constexpr bool src_dram = get_compile_time_arg_val(6) == 1;
+    // A producer in the same launch: wait until semaphore wait_sem counts wait_count (its cores' "written").
+    constexpr uint32_t wait_sem = get_compile_time_arg_val(7);
+    constexpr uint32_t wait_count = get_compile_time_arg_val(8);
     constexpr uint32_t tile_bytes = 2048;
     constexpr uint32_t core_bytes = tiles_per_core * tile_bytes;
     static_assert(tiles_per_core == 2, "one scatter packet carries a core's two tiles");
@@ -41,6 +44,12 @@ void kernel_main() {
         core_y[i] = get_arg_val<uint32_t>(arg++);
     }
 
+    auto connection = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg);
+    connection.open_start();
+    if constexpr (wait_count > 0) {
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(wait_sem)), wait_count);
+    }
+
     // This chip's compact tiles, core-major (core i's tiles at scratch + i * core_bytes).
     cb_reserve_back(cb_scratch, cores * tiles_per_core);
     const uint32_t scratch = get_write_ptr(cb_scratch);
@@ -49,8 +58,6 @@ void kernel_main() {
         noc_async_read(src_gen.get_noc_addr(first_core * tiles_per_core + t, 0), scratch + t * tile_bytes, tile_bytes);
     }
 
-    auto connection = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg);
-    connection.open_start();
     PacketHeaderPool::reset();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* headers[cores];
     for (uint32_t i = 0; i < cores; i++) {

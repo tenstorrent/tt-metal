@@ -222,10 +222,12 @@ class BankStreamMatmul:
         )
         return [kernel], [w, staging]
 
-    def __call__(self, x, w, fused=None, staged=None, compact_out=None):
+    def __call__(self, x, w, fused=None, staged=None, compact_out=None, signal=None, launch=True):
         """``staged``: the ``staging`` tensor, already holding every weight row (``prefetch_section``).
         ``compact_out``: write rows 0-3 straight into this compact rows tensor ([1, 1, 32, n / 8] bf16 DRAM tiles,
-        CompactRows' layout) and return it."""
+        CompactRows' layout) and return it. ``signal`` (with ``compact_out``): NoC coordinates of cores whose
+        semaphore 0 every core raises once its output is written. ``launch=False``: return the launch as a section
+        (kernels, cbs, tensors, semaphores) for a merged program."""
         assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT
         assert _is_interleaved(x)
         compact_tiles = 0
@@ -273,6 +275,8 @@ class BankStreamMatmul:
             else:
                 share = [2, loaders[b].x, loaders[b].y, 0]
             writer_rt.append([x_addr, out_addr, first, valid] + share + [0] * (share_len - len(share)))
+            if signal:
+                writer_rt[-1] += [len(signal)] + [v for c in signal for v in (c.x, c.y)]
 
         ranges = _ranges(self.cores)
         x_ranges = _ranges(self.cores + list(x_cores))
@@ -323,6 +327,8 @@ class BankStreamMatmul:
                 self.banks,
                 self.SEM_X,
                 compact_tiles,
+                4 + share_len if signal else 0,
+                0,
             ],
             writer_rt,
             ttnn.WriterConfigDescriptor(),
@@ -338,6 +344,8 @@ class BankStreamMatmul:
         cbs += list(f_cbs)
         tensors = [x, w] + ([staged] if staged is not None else []) + list(f_tensors)
         semaphores = [_semaphore(x_ranges)] if loaders is not None else []
+        if not launch:
+            return dict(kernels=kernels, cbs=cbs, semaphores=semaphores, tensors=tensors)
         program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=semaphores, cbs=cbs)
         ttnn.generic_op(tensors + [out], program)
         return out

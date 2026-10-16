@@ -256,7 +256,7 @@ class TtMiMoDecoderLayer:
             x2, h2 = self.mlp.reduce_residual(gathered, x, norm=fused["post"])
         else:
             x2 = self.mlp.reduce_residual(gathered, x)
-        if gathered is not self.attn.compact_buf:
+        if gathered is not self.attn.compact_buf and hasattr(gathered, "deallocate"):
             gathered.deallocate(True)
         if fused is None:
             h2 = self.post_norm(x2)

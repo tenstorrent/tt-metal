@@ -20,6 +20,10 @@ void kernel_main() {
     constexpr uint32_t banks = get_compile_time_arg_val(7);
     constexpr uint32_t tiny_bytes = get_compile_time_arg_val(8);
     constexpr uint32_t compact_tiles = get_compile_time_arg_val(9);
+    // > 0: index of runtime args [count, x0, y0, ...]: once the output is written, raise semaphore signal_sem of
+    // each of those cores by one (the row all-gather's senders in the same launch wait for every bank core).
+    constexpr uint32_t signal_args_at = get_compile_time_arg_val(10);
+    constexpr uint32_t signal_sem = get_compile_time_arg_val(11);
     constexpr uint32_t tiny_face_bytes = tiny_bytes / 2;  // rows 0-3 of one face
     constexpr uint32_t blocks_per_face = mimo_moe::kBf16FaceBytes / tiny_face_bytes;
     constexpr uint32_t bf16_tile_bytes = 2048;
@@ -56,4 +60,13 @@ void kernel_main() {
     }
     noc_async_write_barrier();
     cb_pop_front(cb_out, groups * ct);
+    if constexpr (signal_args_at > 0) {
+        const uint32_t n = get_arg_val<uint32_t>(signal_args_at);
+        for (uint32_t i = 0; i < n; i++) {
+            const uint32_t sx = get_arg_val<uint32_t>(signal_args_at + 1 + 2 * i);
+            const uint32_t sy = get_arg_val<uint32_t>(signal_args_at + 2 + 2 * i);
+            noc_semaphore_inc(get_noc_addr(sx, sy, get_semaphore(signal_sem)), 1);
+        }
+        noc_async_atomic_barrier();
+    }
 }

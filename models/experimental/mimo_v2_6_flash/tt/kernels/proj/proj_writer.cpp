@@ -33,6 +33,10 @@ void kernel_main() {
     // > 0: write rows 0-3 of output tile column n into the compact rows layout instead (DRAM tiles: rows 4c..4c+3
     // of compact tile n % compact_tiles, c = n / compact_tiles), what CompactRows makes for the row reduction.
     constexpr uint32_t compact_tiles = get_compile_time_arg_val(9);
+    // > 0: index of runtime args [count, x0, y0, ...]: once this core's output is written, raise semaphore
+    // signal_sem of each of those cores by one (a consumer in the same launch waits for every producer core).
+    constexpr uint32_t signal_args_at = get_compile_time_arg_val(10);
+    constexpr uint32_t signal_sem = get_compile_time_arg_val(11);
     constexpr uint32_t tile_bytes = 2048;  // bf16 32x32
     constexpr uint32_t face_bytes = 512;   // bf16 16x16
     constexpr uint32_t user_bytes = 128;   // rows 0-3 of a face
@@ -97,9 +101,15 @@ void kernel_main() {
         }
         noc_async_write_barrier();
         cb_pop_front(cb_out, cols);
-        if (role == 1) {
-            noc_async_atomic_barrier();
+        if constexpr (signal_args_at > 0) {
+            const uint32_t n = get_arg_val<uint32_t>(signal_args_at);
+            for (uint32_t i = 0; i < n; i++) {
+                const uint32_t sx = get_arg_val<uint32_t>(signal_args_at + 1 + 2 * i);
+                const uint32_t sy = get_arg_val<uint32_t>(signal_args_at + 2 + 2 * i);
+                noc_semaphore_inc(get_noc_addr(sx, sy, get_semaphore(signal_sem)), 1);
+            }
         }
+        noc_async_atomic_barrier();
         return;
     }
     for (uint32_t j = 0; j < valid_cols; j++) {

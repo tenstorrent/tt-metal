@@ -19,6 +19,8 @@ and V is not padded: 320 values per token instead of 2 x 384.
 softmax scale because the SDPA kernels apply ``scale`` to the sink logit too.
 """
 
+import os
+
 import torch
 
 import ttnn
@@ -26,7 +28,7 @@ import ttnn
 from .proj_stream import BankStreamMatmul
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config, decode_linear_config, pad_to
 from .kv import kv_replication
-from .moe_stream import KERNEL_DIR, CompactRows
+from .moe_stream import KERNEL_DIR, CompactRows, PendingCompact, fabric_transport_noc
 from .rope import permute_heads_for_rope
 
 # SWA layers page by absolute position (kv.SwaBlockTable, the layout of vLLM's SlidingWindowSpec block tables):
@@ -707,12 +709,21 @@ class TtMiMoAttention:
         the row all-gather of every chip's compact rows (CompactRows) for ReduceExpand instead of the all-reduced
         [1, 1, 32, hidden]."""
         if compact and self.o_stream is not None:
-            # Rows 0-3 written straight in the compact rows layout (no CompactRows launch).
+            # Rows 0-3 written straight in the compact rows layout (no CompactRows launch). MIMO_MERGE_O=1 runs the
+            # projection inside the fabric reduction's launch instead; that launch's dispatch (~10 us, 42 cores) then
+            # cannot hide behind the short head concat before it, so the default launches the projection alone.
+            if self.fabric_gather and os.environ.get("MIMO_MERGE_O") == "1":
+                section = self.o_stream(
+                    attn_cat,
+                    self.wo_decode,
+                    compact_out=self.compact_buf,
+                    signal=fabric_transport_noc(self.plan.mesh_device),
+                    launch=False,
+                )
+                return PendingCompact(section, self.compact_buf, len(self.o_stream.cores), release=[attn_cat])
             rows = self.o_stream(attn_cat, self.wo_decode, compact_out=self.compact_buf)
             attn_cat.deallocate(True)
-            if self.fabric_gather:
-                return rows
-            return self.plan.all_gather(rows, dim=3)
+            return rows if self.fabric_gather else self.plan.all_gather(rows, dim=3)
         else:
             out = ttnn.linear(
                 attn_cat,
