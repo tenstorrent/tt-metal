@@ -78,7 +78,9 @@ void issue_trace_commands(
     const ExpectedWorkerCompletions& expected_num_workers_completed,
     const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state);
 
-uint32_t compute_trace_cmd_size(ContextId context_id, uint32_t num_sub_devices);
+// Size of the replay commands for num_sub_devices of the trace's sub-devices, each owning num_completion_slots
+// counters.
+uint32_t compute_trace_cmd_size(ContextId context_id, uint32_t num_sub_devices, uint32_t num_completion_slots);
 
 void update_worker_state_post_trace_execution(
     const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& trace_worker_descriptors,

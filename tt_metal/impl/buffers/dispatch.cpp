@@ -738,7 +738,8 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
         for (const auto& sub_device_id : sub_device_ids) {
-            const uint32_t counter_index = dispatch_params.expected_num_workers_completed.counter_index(sub_device_id);
+            const uint32_t counter_index =
+                dispatch_params.expected_num_workers_completed.current_counter_index(sub_device_id);
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,
@@ -986,7 +987,8 @@ void issue_buffer_dispatch_command_sequence(
 
     if (dispatch_params.issue_wait) {
         for (const auto& sub_device_id : sub_device_ids) {
-            const uint32_t counter_index = dispatch_params.expected_num_workers_completed.counter_index(sub_device_id);
+            const uint32_t counter_index =
+                dispatch_params.expected_num_workers_completed.current_counter_index(sub_device_id);
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,
@@ -1517,7 +1519,8 @@ void issue_read_buffer_dispatch_command_sequence(
     uint32_t last_index = num_worker_counters - 1;
     // We only need the write barrier + prefetch stall for the last wait cmd
     for (uint32_t i = 0; i < last_index; ++i) {
-        const uint32_t counter_index = dispatch_params.expected_num_workers_completed.counter_index(sub_device_ids[i]);
+        const uint32_t counter_index =
+            dispatch_params.expected_num_workers_completed.current_counter_index(sub_device_ids[i]);
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
@@ -1525,7 +1528,7 @@ void issue_read_buffer_dispatch_command_sequence(
             dispatch_params.expected_num_workers_completed[counter_index]);
     }
     const uint32_t counter_index =
-        dispatch_params.expected_num_workers_completed.counter_index(sub_device_ids[last_index]);
+        dispatch_params.expected_num_workers_completed.current_counter_index(sub_device_ids[last_index]);
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
         0,

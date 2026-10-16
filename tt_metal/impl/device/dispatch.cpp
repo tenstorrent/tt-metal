@@ -88,7 +88,7 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
 
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
         const uint32_t counter_index =
-            dispatch_params.expected_num_workers_completed.counter_index(dispatch_params.sub_device_ids[i]);
+            dispatch_params.expected_num_workers_completed.current_counter_index(dispatch_params.sub_device_ids[i]);
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
@@ -195,15 +195,15 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
     const uint32_t last_index = num_worker_counters - 1;
     for (uint32_t i = 0; i < last_index; ++i) {
         const uint32_t counter_index =
-            dispatch_params.expected_num_workers_completed.counter_index(dispatch_params.sub_device_ids[i]);
+            dispatch_params.expected_num_workers_completed.current_counter_index(dispatch_params.sub_device_ids[i]);
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
             metal_ctx.dispatch_mem_map().get_completion_stream(counter_index),
             dispatch_params.expected_num_workers_completed[counter_index]);
     }
-    const uint32_t counter_index =
-        dispatch_params.expected_num_workers_completed.counter_index(dispatch_params.sub_device_ids[last_index]);
+    const uint32_t counter_index = dispatch_params.expected_num_workers_completed.current_counter_index(
+        dispatch_params.sub_device_ids[last_index]);
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
         0,

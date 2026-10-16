@@ -109,8 +109,10 @@ struct ProgramCommandSequence {
     std::vector<LaunchMsgData> launch_messages;
     std::vector<CQDispatchWritePackedCmd*> launch_msg_write_packed_cmd_ptrs;
     CQDispatchGoSignalMcastCmd* mcast_go_signal_cmd_ptr{};
-    // Completion counter the program's sub-device reports done into under the sub-device manager this sequence was
-    // generated for (MeshDeviceImpl::completion_counter_index).
+    // Completion counter the sequence's go and stall commands are generated with: the base counter of the program's
+    // sub-device under the sub-device manager the sequence was generated for
+    // (MeshDeviceImpl::completion_counter_index). Traced programs report into it; an enqueue patches in the counters it
+    // picks (update_program_dispatch_commands).
     uint32_t completion_counter_index = 0;
 
     bool prefetcher_cache_used = false;

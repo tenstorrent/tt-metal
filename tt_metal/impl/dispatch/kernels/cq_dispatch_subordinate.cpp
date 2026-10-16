@@ -471,18 +471,23 @@ uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
     return (diff << shift) > 0;
 }
 
+// Worker completion semaphore of the completion counter at stream.
+FORCE_INLINE
+volatile uint32_t* worker_completion_sem(uint32_t stream) {
+#ifdef ARCH_QUASAR
+    return worker_completion_sem_addr(stream, first_stream_used, completion_counter_offset);
+#else
+    return reinterpret_cast<volatile uint32_t*>(
+        static_cast<uintptr_t>(STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
+#endif
+}
+
 FORCE_INLINE
 void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     WAYPOINT("WCW");
     last_wait_count = wait_count;
     last_wait_stream = wait_stream;
-#ifdef ARCH_QUASAR
-    volatile uint32_t* worker_sem =
-        worker_completion_sem_addr(wait_stream, first_stream_used, completion_counter_offset);
-#else
-    volatile uint32_t* worker_sem = reinterpret_cast<volatile uint32_t*>(
-        static_cast<uintptr_t>(STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
-#endif
+    volatile uint32_t* worker_sem = worker_completion_sem(wait_stream);
     DPRINT("DISPATCH_S: wait_for_workers: wait_count: {}, worker_sem: {}\n", wait_count, *worker_sem);
 #ifdef ARCH_QUASAR
     while (wrap_gt(wait_count, *worker_sem)) {
@@ -716,6 +721,14 @@ void process_go_signal_mcast_cmd() {
     uint32_t go_ring_slot = cmd->mcast.go_ring_slot;
     uint32_t wait_count = load_aligned<uint32_t>(&cmd->mcast.wait_count);
     uint32_t wait_stream = load_aligned<uint32_t>(&cmd->mcast.wait_stream);
+    // Count the go's counter starts from. A go waits for the go before it on its sub-device, so the count is the wait
+    // count when the go waits on its own counter. A go on another counter waits for later work than any the counter
+    // holds, which completed before that later work's go was sent, so the counter already holds its count.
+    const uint32_t launched_work_stream = first_stream_used + completion_counter;
+    uint32_t launched_work_start_stream_sem = wait_count;
+    if (telemetry_enabled && launched_work_stream != wait_stream) {
+        launched_work_start_stream_sem = *worker_completion_sem(launched_work_stream);
+    }
 
     wait_for_workers_and_send_go_signal(
         aligned_go_signal_storage,
@@ -736,8 +749,8 @@ void process_go_signal_mcast_cmd() {
 
         dispatch_telemetry_control->launched_work_sequence_counter[sync_index] = ++local_launch_seq_counter;
         dispatch_telemetry->last_work_launch_timestamp[sync_index] = get_timestamp();
-        dispatch_telemetry_control->launched_work_start_stream_sem[sync_index] = wait_count;
-        dispatch_telemetry_control->launched_work_stream[sync_index] = first_stream_used + completion_counter;
+        dispatch_telemetry_control->launched_work_start_stream_sem[sync_index] = launched_work_start_stream_sem;
+        dispatch_telemetry_control->launched_work_stream[sync_index] = launched_work_stream;
         dispatch_telemetry_control->launched_work_sequence_counter[sync_index] = ++local_launch_seq_counter;
     }
 
