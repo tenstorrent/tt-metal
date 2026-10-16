@@ -3,8 +3,8 @@
 
 """Host-side guards for the ULP regression check in ``helpers/ulp_budget_diff.py``.
 
-No device and no torch: that module runs on a slim CI runner against two revisions of
-a text file. Pinned here: which changes count as a regression, and that its parse of
+No device and no torch: that module runs on the host against two revisions of a text
+file. Pinned here: which changes count as a regression, and that its parse of
 the live table agrees with the real loader's -- it reads the file a second way, so the
 two are free to drift unless something says they may not.
 """
@@ -659,24 +659,6 @@ def test_the_tool_imports_nothing_but_the_standard_library_and_yaml():
     assert "helpers" not in roots and "torch" not in roots
 
 
-def test_the_workflow_invokes_the_tool_by_path_not_as_a_module():
-    """`helpers/__init__.py` imports ttexalens, which the slim runner does not have, so
-    `-m helpers.ulp_budget_diff` would fail there however clean this module's own
-    imports are."""
-    repo = Path(__file__).resolve().parents[4]
-    workflow = repo / ".github/workflows/llk-sfpu-ulp-budget-guard.yaml"
-    if not workflow.exists():  # pragma: no cover - the guard ships with the workflow
-        pytest.skip("workflow not in this checkout")
-    # Comments stripped: the workflow explains in prose why it does *not* use `-m`.
-    body = "\n".join(
-        line
-        for line in workflow.read_text(encoding="utf-8").splitlines()
-        if not line.lstrip().startswith("#")
-    )
-    assert "helpers/ulp_budget_diff.py diff" in body
-    assert "-m helpers.ulp_budget_diff" not in body
-
-
 def test_the_key_dimensions_are_the_registrys():
     """A new key dimension in the registry that the tool did not know would make every
     row pinning it invisible to the guard, while each copy agreed with itself."""
@@ -686,76 +668,8 @@ def test_the_key_dimensions_are_the_registrys():
     assert KEY_FIELDS == tuple(_KEY_FIELDS)
 
 
-def test_the_guard_is_in_pr_gate_and_the_sweep_runs_nightly():
-    """The guard is host-only and seconds long, so PR Gate calls it on every PR. The
-    sweep holds an N150 for ~10 minutes, which PR Gate's llk wh_n150_civ2 bucket has no
-    room for, so llk-e2e calls it every night and its summary job reports it."""
-    import yaml
-
-    repo = Path(__file__).resolve().parents[4]
-    workflows = repo / ".github/workflows"
-    if not (workflows / "pr-gate.yaml").exists():  # pragma: no cover
-        pytest.skip("workflows not in this checkout")
-    jobs = yaml.safe_load((workflows / "pr-gate.yaml").read_text(encoding="utf-8"))
-    jobs = jobs["jobs"]
-    status = jobs["workflow-status"]
-    (check,) = [
-        step
-        for step in status["steps"]
-        if step.get("uses") == "./.github/actions/workflow-status"
-    ]
-    listed = check["with"]["required-jobs"] + "," + check["with"]["optional-jobs"]
-    listed = {job.strip() for job in listed.split(",")}
-    guard = "llk-sfpu-ulp-budget-guard"
-    assert jobs[guard]["uses"] == f"./.github/workflows/{guard}.yaml"
-    assert guard in status["needs"] and guard in listed
-    assert not [j for j in jobs.values() if "llk-sfpu-ulp-sweep" in str(j.get("uses"))]
-
-    nightly = yaml.safe_load((workflows / "llk-e2e.yaml").read_text(encoding="utf-8"))
-    assert "schedule" in nightly[True]  # PyYAML reads the `on:` key as True
-    sweep = nightly["jobs"]["llk-sfpu-ulp-sweep"]
-    assert sweep["uses"] == "./.github/workflows/llk-sfpu-ulp-sweep.yaml"
-    assert "llk-sfpu-ulp-sweep" in nightly["jobs"]["llk-e2e-summary"]["needs"]
-
-    matrix = repo / "tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml"
-    (entry,) = yaml.safe_load(matrix.read_text(encoding="utf-8"))
-    assert entry["budget_type"] == "e2e"
-
-
-def test_the_sweep_runs_the_sweep_and_the_comparison_and_fails_on_either():
-    """It must run the sweep with --ulp-measure *and* the headroom comparison over it,
-    with the JUnit report so failures no measurement describes reach the summary, and
-    exit with either's failure: a cmd that stopped after a red sweep would publish no
-    report, and one that ignored headroom would pass every tolerance-cell regression."""
-    import yaml
-
-    repo = Path(__file__).resolve().parents[4]
-    matrix = repo / "tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml"
-    if not matrix.exists():  # pragma: no cover - the entry ships with the matrix
-        pytest.skip("matrix not in this checkout")
-    (entry,) = yaml.safe_load(matrix.read_text(encoding="utf-8"))
-    cmd = entry["cmd"]
-    junit = "ulp_sweep_junit.xml"
-    assert "--ulp-measure=ulp_measurements.jsonl" in cmd
-    assert "test_unary_sfpu_ulp.py || status=$?" in cmd
-    assert "helpers/ulp_budget_diff.py headroom" in cmd
-    assert "--measured ulp_measurements.jsonl" in cmd
-    assert f"--junitxml={junit}" in cmd and f"--junit {junit}" in cmd
-    # The job summary is this file.
-    assert "--out ulp_headroom_report.md" in cmd
-    assert cmd.count("|| status=$?") == 2 and 'exit "$status"' in cmd
-    assert "set -e" not in cmd.replace("set -uo", ""), "-e would skip the report"
-    assert set(entry["skus"]) == {"wh_n150_civ2"}
-    # verify-changed-tests would run the cmd from the repo root, where it cannot work.
-    verify = (repo / ".github/workflows/verify-changed-tests.yaml").read_text(
-        encoding="utf-8"
-    )
-    unsupported = yaml.safe_load(verify)["env"]["UNSUPPORTED_YAMLS"].split()
-    assert "llk_sfpu_accuracy_tests.yaml" in unsupported
-
-
 def test_this_parse_agrees_with_the_registry_loader_on_the_live_table():
-    """This module reads the table a second way -- text, no torch -- so the CI check can
+    """This module reads the table a second way -- text, no torch -- so the check can
     run without the LLK environment and against an arbitrary base revision. Nothing
     stops the two parses drifting except this. Compared as (op, key, budget, floor,
     atol, rtol): every number a regression is defined over."""
@@ -910,9 +824,8 @@ _RAISED = _edited(0, "{in: Float16_b, out: Float16_b, max_ulp: 9}  # max 1 ULP")
     ids=["unchanged", "raised", "raised-advisory", "ambiguous-even-advisory"],
 )
 def test_diff_exit_status(tmp_path, capsys, head, flags, status, says):
-    """PR Gate runs the guard with --allow-raises, so its exit status blocks only a table
-    the registry refuses: the flag admits a loosened gate, not a table no gate can be
-    read from."""
+    """Under --allow-raises the exit status fails only a table the registry refuses:
+    the flag admits a loosened gate, not a table no gate can be read from."""
     out = tmp_path / "report.md"
     argv = [
         "diff",
@@ -943,7 +856,7 @@ def test_headroom_exit_status(tmp_path, worst, status):
     assert main([*argv, "--measured", measured]) == status
 
 
-# ── The sweep's failed tests, for the job summary ─────────────────────────────
+# ── The sweep's failed tests, for the headroom report ─────────────────────────
 
 _JUNIT = """<testsuites><testsuite name="pytest">
 <testcase classname="test_unary_sfpu_ulp"
