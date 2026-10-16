@@ -1,172 +1,143 @@
 # VoxCPM2 experimental TTNN components
 
-This directory contains a prototype TTNN component port of [OpenBMB VoxCPM2](https://huggingface.co/openbmb/VoxCPM2).
-The reference implementation is pinned to OpenBMB/VoxCPM source revision
-`f0c787f0937dc1c9a8f4f64d9a332d9c5da2e629`. Checkpoint dimensions are read from
-its own `config.json`; an immutable checkpoint revision must be recorded with
-validation captures. The tested checkpoint revision is
-`32279effe8c19989596f05d353d1447f51d9e915`. The reference code is distributed
-under [Apache-2.0](https://github.com/OpenBMB/VoxCPM/blob/f0c787f0937dc1c9a8f4f64d9a332d9c5da2e629/LICENSE).
-Model weights remain external and are subject to the terms on the model card.
+This directory contains a prototype TTNN component port of [OpenBMB VoxCPM2](https://huggingface.co/openbmb/VoxCPM2). The native reference source is pinned to OpenBMB/VoxCPM revision `f0c787f0937dc1c9a8f4f64d9a332d9c5da2e629`; the tested checkpoint is `openbmb/VoxCPM2` revision `32279effe8c19989596f05d353d1447f51d9e915`. Checkpoint dimensions come from its own `config.json`. The reference code is distributed under [Apache-2.0](https://github.com/OpenBMB/VoxCPM/blob/f0c787f0937dc1c9a8f4f64d9a332d9c5da2e629/LICENSE), and the external weights remain subject to the model card's terms.
 
 ## Implementation status
 
-This is an initial component implementation, not a qualified end-to-end TTS
-model. On 2026-10-01, 16 real-device replay cases covering 14 component types
-passed PCC >= 0.99 against native CUDA captures. See the [accuracy report](validation/RESULTS.md).
-Integrated TT synthesis and steady-state inference performance remain unqualified.
+This is component bring-up, not qualified integrated TT text-to-speech generation. Native CUDA generation supplies captured inputs and outputs for individual TTNN components. In particular, TT waveform replay decodes CUDA-generated latents; it does not demonstrate TT text-to-speech synthesis. AR KV-cache decode, the diffusion solver, tokenizer integration, the stop loop and complete synthesis remain pending.
 
-The model consists of a base MiniCPM language model, residual language model,
-local audio-patch encoder, finite scalar quantizer, local diffusion transformer,
-and AudioVAE V2. Text tokenization, checkpoint loading, and reproducible noise
-creation are host boundaries. Learned network operations belong on TT.
+The current numerical gate combines PCC with explicit relative RMS error limits. The decoder must meet relative RMS error ≤ 3%; the historical approximately 7.6% result does not pass this gate. The corrected codec uses FP32 activation/output storage, nonlinear operations and residual additions, with BF16 convolution inputs and weights and FP32 accumulation. See the [accuracy report](validation/RESULTS.md) for source-build qualification; the historical measurements below use the old runtime and precision policy.
 
-Accuracy development starts from native CUDA generation, capturing each
-component's actual inputs and outputs, then replaying those inputs into its TT
-implementation. Captures are validation data, not the input to an integrated
-TT inference claim. PCC is accompanied by relative RMS and maximum absolute
-error because correlation alone cannot detect a scale or offset error.
+The model contains base and residual MiniCPM language models, a local audio-patch encoder, finite scalar quantizer, local diffusion transformer, and AudioVAE V2. Learned network operations execute on TT; text tokenization, checkpoint loading and reproducible input-noise creation are host boundaries. Audio quality, voice cloning, streaming, multilingual behavior and steady-state performance remain unqualified beyond the recorded component checks. See [DESIGN.md](DESIGN.md) and the [accuracy report](validation/RESULTS.md).
 
-## Development environment
+## Components and historical measurements
 
-The dependency lock targets Linux x86-64 with Python 3.10–3.12, covering the
-tested Python 3.10 TT environment and Python 3.12 CUDA environment. Reference
-capture requires the pinned official VoxCPM package and CUDA dependencies;
-device replay requires a working Blackhole TTNN installation. Checkpoint
-weights and tensor captures must live outside Git, preferably on the data disk.
+The table below preserves the original 2026-10-01 PyTorch 2.8 qualification using an installed `ttnn==0.65.1rc17.dev6333+h3.3` wheel. These are historical component measurements, not results from a build of the submitted source tree. The separate [PyTorch 2.10 report](validation/RESULTS.md#pytorch-210-compatibility--2026-10-07) records fresh CUDA captures and 16 replay cases on that same old TTNN wheel; it also does not establish current-source compatibility.
 
-Audio quality, voice cloning, streaming, multilingual behavior, and integrated
-TT speech synthesis remain unqualified beyond the specific component cases in
-the accuracy report. See [DESIGN.md](DESIGN.md) for the architecture, validation
-plan, and boundaries of this contribution.
-
-## Landed components and remaining work
-
-| Component | Current code | Real-device CUDA PCC |
+| Component | Implementation | Historical real-device CUDA PCC |
 | --- | --- | --- |
-| MiniCPM attention, RMSNorm, SwiGLU, residual blocks and final norm | Full-sequence TTNN forward | Covered by full-model prefill checks |
-| Base and residual LM | Embedding-input prefill; raw KV cache / AR decode pending | Base 0.9999093; residual 0.9999660 |
+| MiniCPM attention, RMSNorm, SwiGLU, residual blocks and final norm | Full-sequence TTNN forward | Covered by prefill checks |
+| Base and residual LM | Embedding-input prefill; KV-cache AR decode pending | Base 0.9999093; residual 0.9999660 |
 | Local patch encoder | Learned special token and noncausal transformer | 0.9999862 |
 | Finite scalar quantization | TTNN inference rounding and projections | 0.9999977 |
 | Local DiT V2 | mu / timestep / condition / target sequence and velocity output | 0.9999425–0.9999570 across three timesteps |
 | AudioVAE V2 | Deterministic nonstreaming encode/decode graph | Encoder 0.9991306; decoder 0.9997781 |
-| Integrated synthesis | AR cache, diffusion solver, tokenizer, stop loop and WAV wiring pending | Pending |
+| Integrated synthesis | Not implemented | Unqualified |
 
-The initial numerical configuration uses BF16 storage with HiFi4 and FP32
-destination accumulation where supported. FP32 storage is also selectable for
-component testing, particularly the AudioVAE, whose native CUDA weights use
-FP32. BF16 storage was tested in the listed component cases; FP32 storage remains
-unqualified. Explicit QK/softmax attention can differ numerically from CUDA fused
-SDPA. Native BF16 timestep rounding is preserved before trigonometry. The codec
-uses 32-row activation blocks and a 256 KiB L1-small device reservation. Its BF16
-waveform has 7.50% relative RMS error despite PCC 0.9997781; passing correlation
-does not establish a 1% amplitude/error bound.
+The current transformer cases use BF16 storage with HiFi4 and FP32 destination accumulation where supported. The current codec cases select `--dtype float32`: activations, nonlinear operations, residuals and outputs use FP32, while convolution inputs and weights use BF16 with FP32 accumulation. Long FP32 transpose convolutions use explicit DRAM width slices to bound L1 allocations. Explicit QK/softmax attention can differ from CUDA fused SDPA. Native BF16 timestep rounding is preserved before trigonometry. Codec replay uses 32-row activation blocks and a 256 KiB L1-small reservation. The original waveform comparison had 7.50% relative RMS error, and the PyTorch 2.10 comparison had 7.64%, despite excellent PCC; correlation alone cannot establish amplitude accuracy.
 
-Unsupported codec options fail explicitly: streaming, noise blocks,
-concatenated sample-rate conditioning, and stride-one transpose blocks. The
-initial replay path accepts a single sample rate per batch.
+Unsupported codec options fail explicitly: streaming, noise blocks, concatenated sample-rate conditioning and stride-one transpose blocks. Replay accepts a single sample rate per batch. MiniCPM cache outputs and `forward_step` are captured by the CUDA harness but not replayed or qualified on TT.
 
-## CUDA reference and TT component replay
+## Environment and weights
 
-The independent dependency declaration is `pyproject.toml`. Install the native
-CUDA reference with `uv sync --locked --extra reference` from this model directory when
-network access is available. Build/install TTNN from this fork into the model
-venv before device replay, using the repository's build instructions. TTNN is an
-external built dependency, not an unrelated model's shared Python environment.
-Dependencies are locked in `uv.lock`, with Torch/Torchaudio 2.10.0 and the
-pinned official source. The `tt-runtime` extra declares Python dependencies
-needed by the tested TTNN wheel. The original qualification used its own venv
-with Torch 2.8.0+cpu and the installed TTNN 0.65.1rc17.dev6333+h3.3 wheel; it did
-not use CUDA or another model's shared Python environment. This checks the model
-code against that installed runtime, not a fresh build of this fork revision.
-
-PyTorch 2.10.0 is also qualified with fresh CUDA reference captures and the same
-TTNN wheel: 16/16 component replay cases passed PCC >= 0.99, and all 30 configured
-TT tests passed. CUDA used Torch/Torchaudio 2.10.0+cu128; TT used Torch 2.10.0+cpu.
-No model computation changed. See the [upgrade results](validation/RESULTS.md#pytorch-210-compatibility--2026-10-07).
-The original table above remains the historical PyTorch 2.8 qualification.
-
-For a separate TT host, create the model environment with
-`uv sync --locked --extra tt-runtime` from this directory, then install the
-TTNN wheel built for that host/Python using
-`uv pip install --python .venv/bin/python /path/to/ttnn.whl`. Follow the
-[repository build instructions](../../../INSTALLING.md) to produce a compatible
-wheel and kernel-source setup. Use the model venv directly for replay after
-installing this external runtime; a later `uv sync` can remove packages not in
-the lock. The CUDA reference extra is unnecessary for TT replay. The installed
-TTNN wheel declares NumPy < 2; its Torch 2.10.0 CPU compatibility environment
-uses NumPy 1.26.4 and passes `uv pip check`. Retain the runtime wheel's dependency
-constraints when installing it rather than forcing the CUDA environment's NumPy
-version onto the TT host.
-
-Run commands from the fork root with the model environment. To prepare the
-pinned checkpoint after installing the reference extra:
+Run the commands below from the repository root. Build TTNN from this checkout using the [repository build instructions](../../../INSTALLING.md), activate the resulting repository environment, then install the model replay dependencies:
 
 ```bash
-uv run --locked --project models/experimental/voxcpm2 --extra reference \
-  python -c 'from huggingface_hub import snapshot_download; snapshot_download(repo_id="openbmb/VoxCPM2", revision="32279effe8c19989596f05d353d1447f51d9e915", local_dir="models/experimental/voxcpm2/checkpoint", allow_patterns=["*.json", "*.py", "*.safetensors", "*.pth"])'
+uv pip install -r models/experimental/voxcpm2/requirements.txt
 ```
 
-This downloads into the model directory's `checkpoint/`; move it to the data
-disk or choose a different `local_dir` before running. The directory is ignored
-by Git. Hugging Face credentials, if required by the hosting service, stay in
-the user's standard Hugging Face environment/cache. For offline runs, provide a
-complete local snapshot; capture/replay do not download missing weights.
+The runtime requirements allow the repository's Torch version (`torch>=2.10`) and constrain NumPy below 2. They do not install the native CUDA reference package or downgrade CI Torch to match the oracle. The model does not maintain a nested standalone project or dependency lock; upstream CI uses the repository environment and its source-built TTNN.
 
-The checkpoint must be a local snapshot of `openbmb/VoxCPM2`; `--checkpoint-revision` must be
-its exact Hugging Face commit, not `main`. Capture records file hashes and replay
-checks those bytes before uploading weights. Keep checkpoints and captures on
-the data disk; they are excluded from Git.
+For an independent development environment, `uv venv "$HOME/data/voxcpm2/tt-venv"` followed by `uv pip install --python "$HOME/data/voxcpm2/tt-venv/bin/python" -r models/experimental/voxcpm2/requirements.txt` installs model dependencies without creating a nested project. Install the TTNN wheel built from this checkout into that environment as well, retaining its dependency constraints and the build's required source/kernel configuration. Use that environment's Python for replay; the repository environment is still required for upstream pytest fixtures and CI dependencies.
+
+Keep native CUDA capture in a separate CUDA environment. Its [reference requirements](requirements-reference.txt) pin Torch/Torchaudio 2.10.0 and the official source revision. Choose a compatible CUDA wheel build for the host; the stored reference was generated with Torch/Torchaudio `2.10.0+cu128`.
 
 ```bash
-uv run --locked --project models/experimental/voxcpm2 --extra reference \
-  python -m models.experimental.voxcpm2.validation.capture_reference \
+uv venv --python 3.12 "$HOME/data/voxcpm2/reference-venv"
+uv pip install --python "$HOME/data/voxcpm2/reference-venv/bin/python" \
+  -r models/experimental/voxcpm2/requirements-reference.txt
+```
+
+Prepare a local snapshot of the pinned checkpoint, outside Git and preferably on the data disk. For example, after installing reference dependencies:
+
+```bash
+"$HOME/data/voxcpm2/reference-venv/bin/python" -c 'import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id="openbmb/VoxCPM2", revision="32279effe8c19989596f05d353d1447f51d9e915", local_dir=os.path.expanduser("~/data/voxcpm2/checkpoint"), allow_patterns=["*.json", "*.py", "*.safetensors", "*.pth"])'
+```
+
+Hugging Face credentials remain in the user's standard environment or cache. For offline replay, provide a complete local snapshot; capture and replay do not download missing weights. Captures record checkpoint hashes, and replay only selects weights recorded in the verified manifest. Missing or changed recorded files fail instead of falling back to unrecorded weights.
+
+## CUDA capture and individual TT replay
+
+A fresh capture can be produced with native CUDA generation:
+
+```bash
+"$HOME/data/voxcpm2/reference-venv/bin/python" \
+  -m models.experimental.voxcpm2.validation.capture_reference \
   --checkpoint "$HOME/data/voxcpm2/checkpoint" \
   --checkpoint-revision 32279effe8c19989596f05d353d1447f51d9e915 \
   --device cuda:0 --seed 42 --max-len 32 --inference-timesteps 10 \
   --text "The quick brown fox jumps over the lazy dog." \
   --output "$HOME/data/voxcpm2/cuda-reference"
+```
 
-# Use a device ID only after confirming/reserving its ownership.
-timeout 600 models/experimental/voxcpm2/.venv/bin/python \
-  -m models.experimental.voxcpm2.validation.replay_component \
+The capture stores `reference.wav`, source/device/version metadata, seeds, RNG states, valid KV prefixes, latents and checksummed tensors. Missing/incomplete captures, non-CUDA oracles, modified checkpoint bytes, nonfinite tensors, shape mismatches and missing outputs fail validation.
+
+After reserving the TT device, replay a nonzero local-encoder event with the active source-built TTNN environment:
+
+```bash
+timeout 600 python -m models.experimental.voxcpm2.validation.replay_component \
   --reference "$HOME/data/voxcpm2/cuda-reference" \
   --checkpoint "$HOME/data/voxcpm2/checkpoint" \
-  --component feat_encoder.forward --event-index 0 --device-id 0 \
+  --component feat_encoder.forward --event-index 1 --device-id 0 \
   --dtype bfloat16 --l1-small-size 262144 --min-pcc 0.99 \
+  --max-relative-rms 0.02 \
   --output "$HOME/data/voxcpm2/encoder-pcc.json"
 ```
 
-Replay supports base/residual prefill hidden outputs, local encoder, quantizer,
-local DiT estimator, LM/DiT/fusion/stop projections, stop activation, and codec
-encode/decode. It reports PCC, relative RMS, maximum absolute error, and cold
-launch time. Cold launch time may include compilation and is **not** a published
-steady-state benchmark. MiniCPM cache output and `forward_step` are captured by
-the CUDA harness but are not yet replayed or qualified on TT.
+The CLI supports base/residual prefill hidden outputs, local encoder, quantizer, local DiT estimator, LM/DiT/fusion/stop projections, stop activation and codec encode/decode. It reports PCC, relative RMS error, maximum absolute error and cold launch time. Cold launch time may include compilation and is not a steady-state benchmark. Codec replay also saves a `.pt` waveform/latent tensor beside the JSON report. Decoding the captured CUDA latents on TT is a paired codec comparison, not integrated synthesis.
 
-The capture also writes `reference.wav`, source/device/version metadata, seeds,
-RNG states, valid KV prefixes, latent outputs, and checksummed tensor files.
-Missing/incomplete captures, non-CUDA oracles, changed checkpoint bytes,
-nonfinite tensors, shape mismatches, and missing outputs fail validation.
-Codec replay additionally saves the TT waveform/latent tensor as a `.pt` file
-beside the JSON report. A decoded waveform from captured CUDA latents is a codec
-comparison, not integrated TT text-to-speech generation.
+## Complete component accuracy suite
 
-## Checks performed
+The pytest gate in [test_component_device.py](tests/test_component_device.py) runs 16 explicit cases defined in [validation/cases.py](validation/cases.py): base/residual prefill, local encoder and FSQ event 1, three local-DiT events (0, 4, 8), projections and stop components, codec decoding from the text capture and codec encoding from the separate voice-reference capture. The small stop-head output uses maximum absolute error as well as PCC.
+
+| Component group | Minimum PCC | Maximum relative RMS error | Additional bound |
+| --- | --- | --- | --- |
+| LMs, local encoder, FSQ, DiT and projections | 0.99 | 0.02 | — |
+| Codec encoder | 0.99 | 0.05 | — |
+| Codec decoder | 0.99 | 0.03 | Historical BF16 result fails; current mixed-precision case must pass |
+| Stop head | 0.99 | 0.02 | Maximum absolute error 0.001 |
+
+The suite's default asset root is `/mnt/MLPerf/tt_dnn-models/openbmb/VoxCPM2`. These assets require maintainer provisioning; the test does not download or generate an oracle.
+
+| Asset | Default directory below the asset root | Optional relocation variable |
+| --- | --- | --- |
+| Checkpoint | `checkpoint` | `VOXCPM2_CHECKPOINT` |
+| Text CUDA capture | `cuda-reference-torch210-20261007` | `VOXCPM2_CUDA_CAPTURE` |
+| Voice CUDA capture | `cuda-reference-with-ref-torch210-20261007` | `VOXCPM2_VOICE_CUDA_CAPTURE` |
+
+The text capture's `manifest.json` SHA256 must be `72a5bbbc9deb2b2f517bde44309bbdf978986d759a4625d6a29f49f98004d782`; the voice capture's must be `971ea6c97fe5601f21442b1bb3e6a3a981b04c2c52767f0fd79b863f0fde3393`. Relocation variables point to these exact captures. Use the individual replay CLI for newly generated or otherwise different captures.
 
 ```bash
+# Optional for local copies of the exact pinned assets:
+export VOXCPM2_CHECKPOINT="$HOME/data/voxcpm2/checkpoint"
+export VOXCPM2_CUDA_CAPTURE="$HOME/data/voxcpm2/cuda-reference-torch210-20261007"
+export VOXCPM2_VOICE_CUDA_CAPTURE="$HOME/data/voxcpm2/cuda-reference-with-ref-torch210-20261007"
+
+# Fail on missing assets, as required in CI. Device ID follows repository pytest.
+export VOXCPM2_REQUIRE_DEVICE_TESTS=1
+pytest models/experimental/voxcpm2/tests --device-id 0 --timeout=600
+```
+
+Absent assets skip the device cases in ordinary local runs; with `VOXCPM2_REQUIRE_DEVICE_TESTS=1`, they fail. A manifest hash mismatch fails in either mode. Tests request the repository device fixture only after asset checks; the fixture owns device selection and teardown, with `l1_small_size=262144`. There is no CPU fallback for device results.
+
+The model is registered in [the model unit-test matrix](../../../tests/pipeline_reorg/models_unit_tests.yaml) for Blackhole P150, tier 3. The registered job timeout is 10 minutes and fits the existing tier budget. See the accuracy report for local complete-suite execution results; this does not constitute an upstream CI run. Asset provisioning and assignment of a notification owner remain maintainer tasks. A missing owner is left unassigned rather than notifying an unrelated contributor.
+
+## Decoder diagnostics and host checks
+
+The stage probe compares each recorded CUDA decoder stage against both an isolated TT replay and a cumulative TT chain, reporting gain/offset fits and residual error. Fits are diagnostic only; the probe does not rescale TT outputs for acceptance.
+
+```bash
+timeout 600 python -m models.experimental.voxcpm2.validation.replay_codec_stages \
+  --reference "$HOME/data/voxcpm2/cuda-reference-torch210-20261007" \
+  --checkpoint "$HOME/data/voxcpm2/checkpoint" \
+  --device-id 0 --dtype float32 \
+  --output "$HOME/data/voxcpm2/decoder-stages.json"
+
+# Host contracts do not exercise the parametrized device cases.
 python -m unittest discover \
   -s models/experimental/voxcpm2/tests -p 'test_*.py' -v
 python -m compileall -q models/experimental/voxcpm2
 git diff --check
 ```
 
-These are host utility/contract checks; they do not substitute for CUDA or TT
-model inference. The device test is skipped unless `VOXCPM2_CUDA_CAPTURE`,
-`VOXCPM2_CHECKPOINT`, and `VOXCPM2_DEVICE_ID` are set. Select a replay component
-with `VOXCPM2_COMPONENT`. A configured device test fails on a runtime error or
-insufficient PCC rather than falling back to a CPU implementation.
-
-The configured test suite also passed all 30 tests on the remote model venv,
-including an actual TT local-encoder replay; no test was skipped in that run.
-When hardware variables are absent, the device test is explicitly skipped.
+Host checks cover utility/configuration contracts and validation integrity; they do not substitute for native CUDA generation, current-source TTNN replay or passing the complete numerical gate. Historical “30 configured tests passed” statements refer to the old unittest setup with one selected device replay, not the current parametrized 16-case suite.

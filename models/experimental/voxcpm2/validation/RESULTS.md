@@ -1,5 +1,7 @@
 # VoxCPM2 component accuracy
 
+The sections below retain historical measurements and their original acceptance criteria. Current qualification uses a fresh source build and explicit RMS bounds; the decoder precision and CI changes are described in the 2026-10-16 review follow-up at the end of this report.
+
 All 16 TT replay cases covering 14 implemented component types passed the stated
 PCC >= 0.99 criterion. These tests replay native CUDA component inputs into TT
 components. They do not qualify integrated autoregressive TT speech generation.
@@ -155,3 +157,76 @@ the stated component accuracy; they do not establish bitwise cross-version
 generation, subjective speech quality or integrated TT synthesis. Different
 native trajectories also mean changes in component metrics between the two
 qualification runs must not be described as accuracy improvements.
+
+
+## Source-build review follow-up — 2026-10-16
+
+The complete component suite passed on a fresh build of the submitted native source tree: **58 tests passed, including all 16 device cases across 14 component types, with zero failures or skips**. Pytest 9 additionally reports 49 successful unittest subtests; these are not 49 additional device cases. Suite elapsed time was **131.99 seconds** on the reserved Blackhole p150b, within the registered 10-minute job budget. This is correctness-suite wall time with possible JIT compilation, not steady-state inference performance.
+
+The [machine-readable qualification](results/2026-10-16-source-build-pcc.json) includes exact source-file SHA256 values, checkpoint identity, both pinned CUDA manifest hashes, native binary SHA256, runtime versions and every measured case. The native tree was cloned at `ec74d3be21e8dabe457e87df464a047c07c115e2`; native code was unchanged by this follow-up, and the patched model/validation Python sources are identified by their hashes. This qualifies the submitted branch's native sources rather than a rebase onto the latest upstream main.
+
+### Runtime and reproduction
+
+- Source build: `CMAKE_BUILD_PARALLEL_LEVEL=12 ./build_metal.sh --release --disable-profiler --without-distributed`, with the branch's submodules and bundled SFPI.
+- Python 3.10.12, Torch 2.11.0+cpu, Torchvision 0.26.0+cpu, NumPy 1.26.4, pytest 9.0.3. All installed dependencies pass `uv pip check`.
+- TTNN imports from the newly built source checkout. Its shallow-clone distribution version is `0.1.dev1+ggec74d3b`; that metadata string is not an upstream release identifier. The recorded source/binary hashes establish provenance.
+- Hardware: one Blackhole p150b, BDF `0000:c1:00.0`, UMD ID 6, `/dev/tenstorrent/5`, filtered logical ID 0; 256 KiB L1-small reservation. UMD IDs and Linux device nodes are different numbering systems.
+- CUDA oracle: the existing native Torch 2.10 text and voice captures, with unchanged source/checkpoint pins, fox sentence, seed 42 and generation settings from the preceding section. No new Torch 2.11 CUDA synthesis is claimed.
+- Precision: transformer components retain BF16/HiFi4/FP32 destination accumulation. Codec activations, nonlinear operations, residual additions and outputs use FP32, while convolution inputs/weights use BF16 and FP32 accumulation. The report exposes both storage and convolution operand dtypes.
+
+After the build, requirements installation and device reservation described in the README, set the three pinned asset environment variables plus `VOXCPM2_REQUIRE_DEVICE_TESTS=1` and run:
+
+```bash
+pytest models/experimental/voxcpm2/tests --device-id 0 --timeout=600
+```
+
+The measured local invocation additionally selected a report directory and JUnit output; its exact command is in the JSON record. If adding a custom `--basetemp`, create its parent directory first. Tests use the repository `device` fixture, which owns opening and closing the device; replay does not close a supplied fixture-owned device.
+
+### Current accuracy
+
+| Component / event | Activation/output storage | PCC | Relative RMS error |
+| --- | --- | ---: | ---: |
+| audio_vae.decode / 0 | float32 | 0.9999540 | 1.2561% |
+| audio_vae.encode / 0 | float32 | 0.9997892 | 2.0619% |
+| base_lm.forward / 0 | bfloat16 | 0.9998486 | 1.7401% |
+| enc_to_lm_proj.forward / 1 | bfloat16 | 0.9999996 | 0.0903% |
+| feat_decoder.estimator.forward / 0 | bfloat16 | 0.9999566 | 0.9888% |
+| feat_decoder.estimator.forward / 4 | bfloat16 | 0.9999525 | 0.9823% |
+| feat_decoder.estimator.forward / 8 | bfloat16 | 0.9999574 | 0.9247% |
+| feat_encoder.forward / 1 | bfloat16 | 0.9999820 | 0.6069% |
+| fsq_layer.forward / 1 | bfloat16 | 0.9999813 | 0.6156% |
+| fusion_concat_proj.forward / 1 | bfloat16 | 0.9999996 | 0.0920% |
+| lm_to_dit_proj.forward / 0 | bfloat16 | 0.9999994 | 0.1105% |
+| res_to_dit_proj.forward / 0 | bfloat16 | 0.9999994 | 0.1120% |
+| residual_lm.forward / 0 | bfloat16 | 0.9999690 | 0.8194% |
+| stop_actn.forward / 0 | bfloat16 | 1.0000000 | 0.0284% |
+| stop_head.forward / 0 | bfloat16 | 1.0000000 | 0.0000% |
+| stop_proj.forward / 0 | bfloat16 | 0.9999995 | 0.0918% |
+
+The gate requires PCC ≥ 0.99 and relative RMS ≤ 2% for ordinary components, ≤ 5% for encoding and ≤ 3% for decoding. Stop-head logits also require maximum absolute error ≤ 0.001; the measured error is zero. PCC on the two-element stop output alone is not evidence of amplitude accuracy. These are component acceptance limits, not universal 1% elementwise bounds.
+
+### Decoder investigation and correction
+
+A fit of the historical waveform against its matched CUDA output gives gain 1.0730594 and offset 0.00020768. After removing the diagnostic fit, residual relative RMS is 2.23%; total error is 7.64%. This confirms a substantial gain component, rather than merely uncorrelated waveform noise. No fitted correction is applied to production/replay outputs.
+
+The [decoder stage record](results/2026-10-16-decoder-stages.json) checks each stage independently from its native input and cumulatively through the TT decoder. Error grows through multiple upsampling/residual blocks. Controlled precision trials on the fresh build produced:
+
+| Decoder policy | PCC | Relative RMS error | Fitted gain |
+| --- | ---: | ---: | ---: |
+| BF16 storage throughout | 0.9997971 | 7.2997% | 1.0697287 |
+| FP32 storage and FP32 convolution operands | 0.9999368 | 4.9449% | 0.9517222 |
+| FP32 storage and BF16 convolution operands | 0.9999540 | 1.2561% | 0.9917985 |
+
+FP32 pointwise/residual storage avoids repeated BF16 rounding, while explicitly rounded BF16 convolution operands avoid truncating arbitrary FP32 operand mantissas on the matrix path. The latter behavior is documented in this tree's FP32 depthwise tests. The final policy keeps native bias handling and causal padding, and uses TTNN operations for all activation work. This is a measured precision choice, not a mathematical error bound for every utterance.
+
+Long FP32 transpose convolutions initially exceeded L1 during automatic slicing. Explicit DRAM width slices bound input length per slice to approximately 4096 samples; the complete decoder and full suite then ran without allocation failures. Prepared-weight caches also include input dtype, layout and memory configuration rather than only batch/length.
+
+A second, independent seed-43 capture also passed the same 3% decoder RMS gate: **PCC 0.9999751, relative RMS 1.0615%, fitted gain 0.9920224**. This replay uses the saved native Torch 2.8 CUDA capture and its exact captured latents, not cross-version waveform matching. Both tested waveforms are four seconds at 48 kHz.
+
+### CI and integrity changes
+
+The former single environment-selected unittest is replaced by 16 explicit pytest cases. The two oracle manifest hashes are pinned; the encoder uses its separate voice-reference capture. Missing assets skip in ordinary local runs and fail in CI under `VOXCPM2_REQUIRE_DEVICE_TESTS=1`; changed manifests fail in either mode. The suite is registered for `bh_p150`, tier 3. Repository matrix generation and all 276 time-budget buckets pass without increasing budgets.
+
+The nested standalone project/lock is replaced by runtime and separate CUDA-reference requirements. Runtime requirements permit CI's Torch 2.11 and constrain NumPy below 2. The checkpoint loader only selects weight files present in the verified manifest, with regressions covering unrecorded safetensors overrides for both model and codec. Missing installed-distribution metadata no longer loses a completed replay report, and source paths plus measured Python hashes are recorded. Derived implementations include OpenBMB attribution.
+
+Remaining maintainer actions: provision the approximately 5.4 GiB pinned checkpoint/capture set under the documented read-only CI path and assign a notification owner. Local source-build results do not imply that upstream CI has those assets or has run this new suite. Current-main rebase testing, additional devices/shapes/voices/languages, integrated TT synthesis and steady-state performance remain outside this qualification. The card reservation was released after all jobs closed; no resets, firmware changes or other users' workload changes were made.

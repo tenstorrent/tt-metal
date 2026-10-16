@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: Copyright OpenBMB
 # SPDX-License-Identifier: Apache-2.0
 """MiniCPM4 full-sequence component port; AR KV decode is a later milestone.
 
@@ -84,9 +85,7 @@ class TtAttention:
 
     def _heads(self, hidden, heads):
         batch, length, _ = hidden.shape
-        return ttnn.permute(
-            ttnn.reshape(hidden, (batch, length, heads, self.head_dim)), (0, 2, 1, 3)
-        )
+        return ttnn.permute(ttnn.reshape(hidden, (batch, length, heads, self.head_dim)), (0, 2, 1, 3))
 
     def __call__(self, hidden, is_causal):
         batch, length, _ = hidden.shape
@@ -118,15 +117,11 @@ class TtAttention:
             query = ttnn.pad(query, padding, 0.0)
             key = ttnn.pad(key, padding, 0.0)
             value = ttnn.pad(value, padding, 0.0)
-        scores = ttnn.matmul(
-            query, ttnn.transpose(key, -1, -2), compute_kernel_config=self.compute
-        )
+        scores = ttnn.matmul(query, ttnn.transpose(key, -1, -2), compute_kernel_config=self.compute)
         scores = ttnn.add(ttnn.multiply(scores, self.head_dim**-0.5), mask)
         probabilities = ttnn.softmax(scores, dim=-1, compute_kernel_config=self.compute)
         context = ttnn.matmul(probabilities, value, compute_kernel_config=self.compute)
-        context = ttnn.slice(
-            context, (0, 0, 0, 0), (batch, self.heads, length, self.head_dim)
-        )
+        context = ttnn.slice(context, (0, 0, 0, 0), (batch, self.heads, length, self.head_dim))
         context = ttnn.reshape(
             ttnn.permute(context, (0, 2, 1, 3)),
             (batch, length, self.heads * self.head_dim),
@@ -136,12 +131,8 @@ class TtAttention:
 
 class TtDecoderLayer:
     def __init__(self, config, state, prefix, device, dtype):
-        self.attention = TtAttention(
-            config, state, prefix + ".self_attn", device, dtype
-        )
-        self.input_norm = TtRMSNorm(
-            state, prefix + ".input_layernorm", config["rms_norm_eps"], device, dtype
-        )
+        self.attention = TtAttention(config, state, prefix + ".self_attn", device, dtype)
+        self.input_norm = TtRMSNorm(state, prefix + ".input_layernorm", config["rms_norm_eps"], device, dtype)
         self.post_norm = TtRMSNorm(
             state,
             prefix + ".post_attention_layernorm",
@@ -153,18 +144,14 @@ class TtDecoderLayer:
         self.up = TtLinear(state, prefix + ".mlp.up_proj", device, dtype)
         self.down = TtLinear(state, prefix + ".mlp.down_proj", device, dtype)
         self.residual_scale = (
-            config["scale_depth"] / math.sqrt(config["num_hidden_layers"])
-            if config.get("use_mup", True)
-            else 1.0
+            config["scale_depth"] / math.sqrt(config["num_hidden_layers"]) if config.get("use_mup", True) else 1.0
         )
 
     def __call__(self, hidden, is_causal):
         branch = self.attention(self.input_norm(hidden), is_causal)
         hidden = ttnn.add(hidden, ttnn.multiply(branch, self.residual_scale))
         normalized = self.post_norm(hidden)
-        branch = self.down(
-            ttnn.multiply(ttnn.silu(self.gate(normalized)), self.up(normalized))
-        )
+        branch = self.down(ttnn.multiply(ttnn.silu(self.gate(normalized)), self.up(normalized)))
         return ttnn.add(hidden, ttnn.multiply(branch, self.residual_scale))
 
 
@@ -176,9 +163,7 @@ class TtMiniCPMModel:
             TtDecoderLayer(config, state, f"{prefix}.layers.{i}", device, dtype)
             for i in range(config["num_hidden_layers"])
         ]
-        self.norm = TtRMSNorm(
-            state, prefix + ".norm", config["rms_norm_eps"], device, dtype
-        )
+        self.norm = TtRMSNorm(state, prefix + ".norm", config["rms_norm_eps"], device, dtype)
 
     def __call__(self, hidden, is_causal=True):
         if len(hidden.shape) != 3 or hidden.shape[-1] != self.config["hidden_size"]:

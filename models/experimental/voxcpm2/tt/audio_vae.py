@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: Copyright OpenBMB
 # SPDX-License-Identifier: Apache-2.0
 """VoxCPM2 deterministic, nonstreaming AudioVAE2 operations.
 
@@ -35,21 +36,14 @@ class AudioVAEConfig:
         names = {field.name for field in fields(cls)}
         unknown = set(values) - names
         if unknown:
-            raise ValueError(
-                f"Unknown AudioVAE configuration fields: {sorted(unknown)}"
-            )
+            raise ValueError(f"Unknown AudioVAE configuration fields: {sorted(unknown)}")
         result = cls(**values)
         result.validate()
         return result
 
     def validate(self):
         rates = tuple(self.encoder_rates) + tuple(self.decoder_rates)
-        if (
-            not rates
-            or not self.encoder_rates
-            or not self.decoder_rates
-            or any(rate < 1 for rate in rates)
-        ):
+        if not rates or not self.encoder_rates or not self.decoder_rates or any(rate < 1 for rate in rates):
             raise ValueError("Encoder and decoder rates must contain positive strides")
         if (
             min(
@@ -65,25 +59,17 @@ class AudioVAEConfig:
         if self.decoder_dim % (2 ** len(self.decoder_rates)):
             raise ValueError("decoder_dim must be divisible by 2**len(decoder_rates)")
         if self.use_noise_block:
-            raise NotImplementedError(
-                "AudioVAE noise blocks require an explicit device RNG implementation"
-            )
+            raise NotImplementedError("AudioVAE noise blocks require an explicit device RNG implementation")
         if self.cond_type not in ("scale_bias", "scale_bias_init", "add"):
-            raise NotImplementedError(
-                f"AudioVAE conditioning {self.cond_type!r} is not implemented"
-            )
+            raise NotImplementedError(f"AudioVAE conditioning {self.cond_type!r} is not implemented")
         if self.sr_bin_boundaries is not None:
             if any(boundary < 1 for boundary in self.sr_bin_boundaries):
                 raise ValueError("Sample-rate boundaries must be positive")
-            if tuple(sorted(set(self.sr_bin_boundaries))) != tuple(
-                self.sr_bin_boundaries
-            ):
+            if tuple(sorted(set(self.sr_bin_boundaries))) != tuple(self.sr_bin_boundaries):
                 raise ValueError("Sample-rate boundaries must be strictly increasing")
         # The upstream causal transpose slicing uses :-trim; trim=0 is empty.
         if any(rate == 1 for rate in self.decoder_rates):
-            raise NotImplementedError(
-                "Stride-one causal transpose blocks are not supported"
-            )
+            raise NotImplementedError("Stride-one causal transpose blocks are not supported")
 
     @property
     def chunk_size(self):
@@ -116,9 +102,7 @@ class CausalConvSpec:
         if self.padding < 0 or self.output_padding < 0 or self.left_pad < 0:
             raise ValueError("Causal padding must be nonnegative")
         if self.transpose and self.left_pad == 0:
-            raise NotImplementedError(
-                "Upstream zero-trim transpose convolution produces an empty slice"
-            )
+            raise NotImplementedError("Upstream zero-trim transpose convolution produces an empty slice")
 
     @property
     def left_pad(self):
@@ -128,15 +112,8 @@ class CausalConvSpec:
         if length < 1:
             raise ValueError("Audio sequence must be nonempty")
         if self.transpose:
-            return (
-                (length - 1) * self.stride
-                + self.dilation * (self.kernel - 1)
-                + 1
-                - self.left_pad
-            )
-        return (
-            length + self.left_pad - self.dilation * (self.kernel - 1) - 1
-        ) // self.stride + 1
+            return (length - 1) * self.stride + self.dilation * (self.kernel - 1) + 1 - self.left_pad
+        return (length + self.left_pad - self.dilation * (self.kernel - 1) - 1) // self.stride + 1
 
 
 def materialize_weight(state, prefix):
@@ -168,20 +145,19 @@ class TtCausalConv1d:
             spec,
             compute_config,
         )
+        # BF16 operands round symmetrically before the matrix path. FP32 codec
+        # activations/outputs retain residual and Snake precision between convolutions.
+        self.conv_dtype = ttnn.bfloat16 if dtype == ttnn.float32 else dtype
         weight = materialize_weight(state, prefix)
         if weight.ndim != 3 or weight.shape[-1] != spec.kernel:
-            raise ValueError(
-                f"Unexpected convolution weight shape for {prefix}: {tuple(weight.shape)}"
-            )
+            raise ValueError(f"Unexpected convolution weight shape for {prefix}: {tuple(weight.shape)}")
         if spec.transpose:
             self.in_channels = weight.shape[0]
             self.out_channels = weight.shape[1] * spec.groups
         else:
             self.in_channels = weight.shape[1] * spec.groups
             self.out_channels = weight.shape[0]
-        self.weight = ttnn.from_torch(
-            weight.unsqueeze(2), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
+        self.weight = ttnn.from_torch(weight.unsqueeze(2), dtype=self.conv_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
         bias = state.get(f"{prefix}.bias")
         self.bias = (
             None
@@ -199,15 +175,13 @@ class TtCausalConv1d:
 
         batch, height, length, channels = tuple(x.shape)
         if height != 1 or channels != self.in_channels:
-            raise ValueError(
-                f"Expected [B,1,T,{self.in_channels}], got {tuple(x.shape)}"
-            )
+            raise ValueError(f"Expected [B,1,T,{self.in_channels}], got {tuple(x.shape)}")
         spec = self.spec
-        prepared_weight, prepared_bias = self.prepared.get(
-            (batch, length), (self.weight, self.bias)
-        )
+        # Prepared convolution weights may depend on the input sharding/layout.
+        signature = (batch, length, str(x.dtype), str(x.layout), str(x.memory_config()))
+        prepared_weight, prepared_bias = self.prepared.get(signature, (self.weight, self.bias))
         kwargs = dict(
-            input_tensor=ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT),
+            input_tensor=ttnn.to_layout(ttnn.typecast(x, self.conv_dtype), ttnn.ROW_MAJOR_LAYOUT),
             weight_tensor=prepared_weight,
             bias_tensor=prepared_bias,
             device=self.device,
@@ -216,9 +190,7 @@ class TtCausalConv1d:
             batch_size=batch,
             groups=spec.groups,
             dtype=self.dtype,
-            conv_config=ttnn.Conv2dConfig(
-                weights_dtype=self.dtype, act_block_h_override=32
-            ),
+            conv_config=ttnn.Conv2dConfig(weights_dtype=self.conv_dtype, act_block_h_override=32),
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
@@ -226,7 +198,9 @@ class TtCausalConv1d:
         if spec.transpose:
             if length > 8192:
                 kwargs["dram_slice_config"] = ttnn.Conv2dSliceConfig(
-                    slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=0
+                    slice_type=ttnn.Conv2dDRAMSliceWidth,
+                    # Auto slicing underestimates the live FP32 transpose buffers.
+                    num_slices=ceil(length / 4096) if self.dtype == ttnn.float32 else 0,
                 )
             out, (_, raw_length), prepared = ttnn.conv_transpose2d(
                 **kwargs,
@@ -248,11 +222,9 @@ class TtCausalConv1d:
                 padding=(spec.left_pad, 0),
                 dilation=spec.dilation,
             )
-        self.prepared[(batch, length)] = prepared
+        self.prepared[signature] = prepared
         if output_length != spec.output_length(length):
-            raise RuntimeError(
-                "TTNN convolution returned an unexpected causal output length"
-            )
+            raise RuntimeError("TTNN convolution returned an unexpected causal output length")
         out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.reshape(
             out,
@@ -264,9 +236,7 @@ class TtCausalConv1d:
             ),
         )
         if spec.transpose:
-            out = ttnn.slice(
-                out, (0, 0, 0, 0), (batch, 1, output_length, self.out_channels)
-            )
+            out = ttnn.slice(out, (0, 0, 0, 0), (batch, 1, output_length, self.out_channels))
         return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
 
 
@@ -275,9 +245,7 @@ class TtSnake1d:
         import ttnn
 
         alpha = state[f"{prefix}.alpha"].detach().float().cpu().reshape(1, 1, 1, -1)
-        self.alpha = ttnn.from_torch(
-            alpha, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT
-        )
+        self.alpha = ttnn.from_torch(alpha, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
         self.inverse_alpha = ttnn.from_torch(
             (alpha + 1e-9).reciprocal(),
             device=device,
@@ -293,9 +261,7 @@ class TtSnake1d:
 
 
 class TtResidualUnit:
-    def __init__(
-        self, state, prefix, device, dtype, dilation, groups, compute_config=None
-    ):
+    def __init__(self, state, prefix, device, dtype, dilation, groups, compute_config=None):
         self.snake1 = TtSnake1d(state, f"{prefix}.block.0", device, dtype)
         self.conv1 = TtCausalConv1d(
             state,
@@ -306,9 +272,7 @@ class TtResidualUnit:
             compute_config,
         )
         self.snake2 = TtSnake1d(state, f"{prefix}.block.2", device, dtype)
-        self.conv2 = TtCausalConv1d(
-            state, f"{prefix}.block.3", device, dtype, CausalConvSpec(1), compute_config
-        )
+        self.conv2 = TtCausalConv1d(state, f"{prefix}.block.3", device, dtype, CausalConvSpec(1), compute_config)
 
     def __call__(self, x):
         import ttnn
@@ -345,18 +309,10 @@ class TtSampleRateCondition:
 
         bucket = self.config.sample_rate_bucket(sample_rate)
         if bucket not in self.cache:
-            names = (
-                ("cond_embed",)
-                if self.config.cond_type == "add"
-                else ("scale_embed", "bias_embed")
-            )
+            names = ("cond_embed",) if self.config.cond_type == "add" else ("scale_embed", "bias_embed")
             self.cache[bucket] = tuple(
                 ttnn.from_torch(
-                    self.state[f"{self.prefix}.{name}.weight"][bucket]
-                    .detach()
-                    .float()
-                    .cpu()
-                    .reshape(1, 1, 1, -1),
+                    self.state[f"{self.prefix}.{name}.weight"][bucket].detach().float().cpu().reshape(1, 1, 1, -1),
                     device=self.device,
                     dtype=self.dtype,
                     layout=ttnn.TILE_LAYOUT,
@@ -390,9 +346,7 @@ class TtAudioVAE:
         base = f"{prefix}." if prefix else ""
 
         def conv(name, spec):
-            return TtCausalConv1d(
-                state, base + name, device, dtype, spec, compute_config
-            )
+            return TtCausalConv1d(state, base + name, device, dtype, spec, compute_config)
 
         def snake(name):
             return TtSnake1d(state, base + name, device, dtype)
@@ -523,9 +477,7 @@ class TtAudioVAE:
         import ttnn
 
         if tuple(latent.shape)[-1] != self.config.latent_dim:
-            raise ValueError(
-                "Decoder latent channel count does not match configuration"
-            )
+            raise ValueError("Decoder latent channel count does not match configuration")
         sample_rate = self.out_sample_rate if sample_rate is None else sample_rate
         for index, layer in enumerate(self.decoder):
             if index in self.conditions:
