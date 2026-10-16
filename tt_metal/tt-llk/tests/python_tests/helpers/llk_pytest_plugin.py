@@ -564,7 +564,11 @@ def pytest_configure(config):
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
-    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+    # LLK_HARDWARE_FREE skips ttexalens after setup_build fills the paths.
+    if (
+        os.environ.get("LLK_HARDWARE_FREE") != "1"
+        and TestConfig.BUILD_MODE != BuildMode.PRODUCE
+    ):
         if TestConfig.TEST_TARGET.run_simulator:
             if _SIMULATOR_PATH is None:
                 pytest.exit(
@@ -1249,7 +1253,10 @@ def pytest_sessionfinish(session):
 
     _finish_ulp_emit(session)
 
-    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+    if (
+        os.environ.get("LLK_HARDWARE_FREE") != "1"
+        and TestConfig.BUILD_MODE != BuildMode.PRODUCE
+    ):
         combine_perf_reports()
 
         # This was set by pytest CLI argument in pytest_configure call

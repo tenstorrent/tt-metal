@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pytest
 
-FIXTURE_DIR = Path(__file__).resolve().parents[1] / "out_of_tree"
+FIXTURE_DIR = Path(__file__).resolve().parents[2] / "out_of_tree"
 # Deliberately below the ambient pytest-timeout budget CI passes (--timeout=60
 # in setup-and-test.yml and collect-test-durations.yml): our own timeout has to
 # fire first, because ``_run_fixture`` turns it into a failure carrying the
@@ -188,6 +188,9 @@ def _assert_the_child_ran_the_fixture(
     # skipping — an arch marker, a guard clause, a mode that returns early — is
     # the same silent loss of coverage this check exists to catch, and it would
     # otherwise still emit a <testcase> element.
+    # The driver compile is the exception: it includes ckernel.h, so a standalone
+    # tt-llk checkout (no sibling hw/inc) cannot run it. It stays required when
+    # that tree is present.
     root = ET.parse(report).getroot()
     ran = {
         case.get("name", "").split("[")[0]
@@ -197,7 +200,11 @@ def _assert_the_child_ran_the_fixture(
         )
     }
 
-    missing = sorted(EXPECTED_FIXTURE_NODE_IDS - ran)
+    expected = EXPECTED_FIXTURE_NODE_IDS
+    if not (Path(__file__).resolve().parents[4] / "hw" / "inc").is_dir():
+        expected = expected - {"test_out_of_tree_driver_compiles"}
+
+    missing = sorted(expected - ran)
     assert not missing, (
         f"the fixture did not run {missing}. Either the child collected the "
         "wrong module, those tests stopped running, or they were renamed "

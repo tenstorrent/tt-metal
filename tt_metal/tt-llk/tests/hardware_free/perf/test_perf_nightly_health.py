@@ -5,7 +5,7 @@ import datetime as dt
 import pathlib
 import sys
 
-_PERF = pathlib.Path(__file__).parents[2] / "perf"
+_PERF = pathlib.Path(__file__).parents[3] / "perf"
 sys.path.insert(0, str(_PERF))
 import baseline_from_warehouse
 import gate_slack_notify

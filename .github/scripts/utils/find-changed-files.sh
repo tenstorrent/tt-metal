@@ -31,6 +31,7 @@ LLK_QUASAR_CHANGED=false
 LLK_TESTS_CHANGED=false
 LLK_UNIT_TESTS_CHANGED=false
 LLK_PERF_CHANGED=false
+LLK_HARDWARE_FREE_CHANGED=false
 LLK_CI_CHANGED=false
 TTSIM_CI_CHANGED=false
 WORKFLOWS_CHANGED=false
@@ -104,6 +105,16 @@ while IFS= read -r FILE; do
             ;;
         tt_metal/tt-llk/tt_llk_quasar/**|tt_metal/tt-llk/tests/sources/quasar/**|tt_metal/tt-llk/tests/python_tests/quasar/**|tt_metal/hw/ckernels/quasar/**)
             LLK_QUASAR_CHANGED=true
+            ;;
+        # Host-only tests, and the gate modules they import. Before the perf and
+        # tests catch-alls: those would start the card perf and smoke jobs.
+        tt_metal/tt-llk/tests/hardware_free/**)
+            LLK_HARDWARE_FREE_CHANGED=true
+            ;;
+        tt_metal/tt-llk/perf/**)
+            LLK_HARDWARE_FREE_CHANGED=true
+            TTMETALIUM_CHANGED=true
+            ANY_CODE_CHANGED=true
             ;;
         tt_metal/tt-llk/tests/**/perf/**|tt_metal/tt-llk/tests/**/*perf*)
             LLK_PERF_CHANGED=true
@@ -404,6 +415,7 @@ declare -A changes=(
     [llk-tests-changed]=$LLK_TESTS_CHANGED
     [llk-unit-tests-changed]=$LLK_UNIT_TESTS_CHANGED
     [llk-perf-changed]=$LLK_PERF_CHANGED
+    [llk-hardware-free-changed]=$LLK_HARDWARE_FREE_CHANGED
     [llk-ci-changed]=$LLK_CI_CHANGED
     [ttsim-ci-changed]=$TTSIM_CI_CHANGED
 )

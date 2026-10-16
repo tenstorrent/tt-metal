@@ -47,10 +47,10 @@ import numpy as np
 import pytest
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 
-# tests/python_tests/ -> tests/ -> tt-llk/ -> tt_metal/
+# tests/hardware_free/kernels/ -> hardware_free/ -> tests/ -> tt-llk/ -> tt_metal/
 # Only valid when tt-llk is vendored inside a tt-metal tree; a standalone tt-llk
 # checkout has no such parent, and `_read_tables` skips rather than fails there.
-_TT_METAL = Path(__file__).resolve().parents[3]
+_TT_METAL = Path(__file__).resolve().parents[4]
 ARCHES = ("wormhole_b0", "blackhole")
 
 

@@ -502,6 +502,10 @@ def test_per_variant_search_dirs_are_accepted():
 def test_out_of_tree_driver_compiles():
     """Compile an out-of-tree driver that depends on every registered dir.
 
+    The driver includes ``ckernel.h``, which pulls ``tt_metal/hw``. A standalone
+    tt-llk checkout has no such tree, so the compile is skipped there. The
+    wrapper still requires this test to pass when ``hw/inc`` is present.
+
     The driver ``#error``s if ``oot_probe.h`` is missing or resolves to the
     shadowed copy, and ``static_assert``s on the helpers tree. So a green
     compile here is the contract holding end to end:
@@ -513,6 +517,10 @@ def test_out_of_tree_driver_compiles():
     Under ``--compile-producer`` the harness compiles and then skips, which is
     what makes this runnable in CI with no silicon attached.
     """
+    if not (Path(__file__).resolve().parents[4] / "hw" / "inc").is_dir():
+        pytest.skip(
+            "tt-metal hw/inc is absent; the driver includes ckernel.h from that tree"
+        )
     configuration = _compilable_variant()
 
     # The compile is the assertion, so this calls ``prepare()`` rather than
