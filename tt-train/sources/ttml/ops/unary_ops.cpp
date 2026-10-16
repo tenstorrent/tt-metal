@@ -184,6 +184,17 @@ autograd::TensorPtr sigmoid(const autograd::TensorPtr& tensor) {
     return out;
 }
 
+autograd::TensorPtr tanh(const autograd::TensorPtr& tensor) {
+    auto out = autograd::create_tensor();
+    out->set_value(ttnn::tanh(tensor->get_value()));
+    autograd::GradFunction grad = [tensor, out]() {
+        auto res = ttnn::tanh_bw(out->get_grad(), tensor->get_value());
+        tensor->add_grad(res[0].value());
+    };
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
+    return out;
+}
+
 autograd::TensorPtr clip(const autograd::TensorPtr& tensor, float lo, float hi) {
     auto out = autograd::create_tensor();
     out->set_value(ttnn::clip(tensor->get_value(), lo, hi));
