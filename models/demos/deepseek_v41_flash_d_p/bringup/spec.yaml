@@ -93,6 +93,10 @@ state:
     dec_reuse: [window_kv]
   fixed: [window_kv, compress_partial, engram_tail]   # not growing along the sequence (topk_idx, candidates: per position)
 golden: {keep_fp32: [compress_partial]}
+tests:
+  waivers:                         # owner waivers (F85), signed 2026-10-16: noise-floor checks reported WAIVED, never hidden
+    attn_hc: &hc_waiver "hc_fn is fp32 in the official model; the FPU holds at most 10 mantissa bits of a matmul weight (9 at HiFi4), and its fixed rounding is a per-column bias no single-pass format removes (DS41-43; split matmuls ruled out). Debug once the model produces tokens."
+    ffn_hc: *hc_waiver
 thresholds: {component: 0.99, block: 0.98, layer: 0.97, state: 0.97, final_hidden: 0.97, top5: 0.9}
 text:                              # the canonical prompt, built once at R.1 (reference/prompt.py)
   source: models/tt_transformers/tests/tale-of-two-cities.txt.bz2
