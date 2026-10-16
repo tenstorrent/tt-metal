@@ -47,8 +47,8 @@ packet header layout comes from `fabric_packet_header_layouts.cpp`.
 | `fabric_context` | Topology, the packet header type (`packet_header`, as `{size, schema}`), payload and channel buffer sizes, the route buffer size, `multi_txq` |
 | `vocabulary` | Every field `category` and `kind` |
 | `archs.<arch>.areas` | L1 areas the architecture fixes: heartbeat, telemetry, routing table, go and launch messages, Ethernet firmware mailbox |
-| `archs.<arch>.types` | Every struct and tagged union a schema names, including the run's packet header. A struct has its size and members in order, and a union its size, its tag's enum and its members |
-| `enums` | Every enum a schema names, and the enums routes are encoded with, with their values |
+| `archs.<arch>.types` | Every struct and tagged union a schema names, including the run's packet header and the routing table as the run's routing mode lays it out. A struct has its size and members in order, and a union its size, its tag's enum and its members |
+| `enums` | Every enum a schema names, with its values |
 | `routing_encodings` | The values routes are encoded with: 1D hop values, 2D action bits and the codes that widen to them, the multicast tree edge layout, and the scatter chunk encoding's width |
 | `meshes` | Each mesh, its chips, and each local chip's routers |
 
@@ -84,14 +84,24 @@ path:
 - A **stream register** is `{stream_id, register, schema}`. `register` is `buf_space_available` (the
   increment-on-write count) or `remote_src` (a plain read-write register).
 - A **schema** is an integer (`u8` to `u32`, `i8` to `i32`), `struct:<Name>` or `union:<Name>` (in
-  `archs.<arch>.types`), `enum:<Name>` (in `enums`), `packed:<name>`, `bytes` or `pad`. Every `struct:`, `union:` and
-  `enum:` schema resolves to a type of that kind: the writer throws otherwise. A class template's name includes its
-  arguments, with no space after a comma, for example `struct:HybridMeshPacketHeaderT<36>`.
+  `archs.<arch>.types`), `enum:<Name>` (in `enums`), `bytes` or `pad`. Every `struct:`, `union:` and `enum:` schema
+  resolves to a type of that kind: the writer throws otherwise. A class template's name includes its arguments, with
+  no space after a comma, for example `struct:HybridMeshPacketHeaderT<36>`.
+- A **packed table** is a schema of `enum:<Name>` with `bits_per_entry`: `num_elements` entries of that many bits,
+  entry 0 at the lowest bits, each holding a value of the enum. The routing table's first-hop direction tables are
+  packed `compressed_routing_values`, and a scatter write's `chunk_encoding` is packed `NocScatterWriteChunkEncoding`,
+  one per chunk; entries from `chunk_count` on are unused.
 - A **tagged union** is a struct member whose bytes hold one of several types, picked by another member of the same
   struct, its `tag`. The packet header's `command_fields` and `udm_control` are tagged by `noc_send_type`. The
   union's entry in `types` has `"kind": "union"`, `tag_schema` (the `enum:` the tag holds), its members, each at
   offset 0 with the `tag_value` that picks it, and `default_member`, the member every other tag value picks, when it
   has one. To decode one, read the tag, then the member it picks; when it picks none, the bytes are raw.
+- The **routing table** (`routing_l1_info_t`) is laid out for the run's routing mode, since one slot of it holds the
+  1D routing-path table or the 2D route table. In 1D the slot is `routing_path_table_1d`, and the rest of the slot and
+  `exit_node_table`, which only 2D fills, are padding. In 2D the slot is `route_table_2d`. `types` holds only the
+  mode's table struct, whose regions are `bytes`, read by rule: entry `i` of the 1D table, the route to the chip `i`
+  hops away, starts at word `i * (1 + routing_1d_extension_words)`, and the 2D regions are sized by the mesh shape
+  (`mesh_y_size`, `mesh_x_size`), as `route_table_2d_t`'s comment in `fabric_common.h` lays out.
 
 ### Routing encodings
 
@@ -107,10 +117,8 @@ with, so a decoder does not copy them. They are the same in every run; the run's
   `mcast_tree_edge` is one multicast tree edge: `bytes` long, with `child`, `parent` and `output` fields, each
   `{shift, bits}`. `output` is a code of the edge's axis.
 - `scatter`: a scatter write's `chunk_encoding` holds one `NocScatterWriteChunkEncoding` per chunk, of
-  `chunk_encoding_bits` bits each, for at most `max_chunks` chunks.
-
-`enums` also lists `compressed_routing_values`, the values of the first-hop direction tables, and
-`NocScatterWriteChunkEncoding`.
+  `chunk_encoding_bits` bits each, for at most `max_chunks` chunks. The header's layout says the same, as a packed
+  table.
 
 ### Fields
 
@@ -189,6 +197,7 @@ names what to update. By kind of change:
 | New packet header size | Nothing: every header `PACKET_HEADER_CONFIGS` lists has its layout checked at compile time | Nothing |
 | New packet header type, or a member added to one | The build, for a type with no `StructLayout` or a layout that misses bytes | Its `StructLayout` in `fabric_packet_header_layouts.cpp`, and a `PacketHeaderStructs` entry if it holds a struct `DescribedStructs` leaves out |
 | New tagged union | The build, when a layout lists it with no `UnionLayout`; the writer, when its schema does not resolve | A `UnionLayout<U>` and an entry in `DescribedUnions` (`fabric_struct_layouts.hpp`), and `LAYOUT_TAGGED_UNION` in the enclosing layout |
+| A member added to `routing_l1_info_t` | The build, for a member that changes an offset or the size, in either routing mode | `routing_l1_info_head` or `routing_l1_info_tail`, or the mode's list (`routing_l1_info_members_1d` or `_2d`), in `fabric_struct_layouts.hpp` |
 | A member added to a packet header command struct | The build, for a member that changes an offset or the size | Its `StructLayout` in `fabric_struct_layouts.hpp`. A member added in the tail padding of a struct that lists `LAYOUT_TAIL_PAD` is not detected: it reads as padding |
 | New enum | The writer, when a schema names it | An entry in `DescribedEnums` (`fabric_struct_layouts.hpp`) |
 | New enum value | Nothing for enums enchantum reads; the build for `EDMStatus`, and for `NocSendType` when no `NocCommandFields` member is picked by it | `FABRIC_MANIFEST_EDM_STATUSES` for `EDMStatus`; for `NocSendType`, the member it picks in `UnionLayout<NocCommandFields>`, and in `UnionLayout<UDMControlFields>` unless the default `write` is right |

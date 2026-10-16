@@ -48,7 +48,7 @@
     "channel_status": { "enum": ["active", "vc_not_serviced", "mux", "trimmed"] },
     "schema": {
       "type": "string",
-      "pattern": "^([ui](8|16|32|64)|bytes|pad|struct:[A-Za-z_][A-Za-z0-9_]*(<([0-9]+|true|false)(,([0-9]+|true|false))*>)?|union:[A-Za-z_][A-Za-z0-9_]*|enum:[A-Za-z_][A-Za-z0-9_]*|packed:[a-z0-9_]+)$"
+      "pattern": "^([ui](8|16|32|64)|bytes|pad|struct:[A-Za-z_][A-Za-z0-9_]*(<([0-9]+|true|false)(,([0-9]+|true|false))*>)?|union:[A-Za-z_][A-Za-z0-9_]*|enum:[A-Za-z_][A-Za-z0-9_]*)$"
     },
 
     "run": {
@@ -113,7 +113,7 @@
     },
 
     "type_keys": {
-      "description": "A type's size and schema. An array also has num_elements and size_per_element, and a packed table num_elements and bits_per_entry.",
+      "description": "A type's size and schema. An array also has num_elements and size_per_element, and a packed table num_elements and bits_per_entry, with the enum its entries hold as its schema.",
       "type": "object",
       "properties": {
         "size": { "$ref": "#/$defs/count" },
@@ -126,7 +126,9 @@
       "dependentRequired": {
         "size_per_element": ["num_elements"],
         "bits_per_entry": ["num_elements"]
-      }
+      },
+      "if": { "required": ["bits_per_entry"] },
+      "then": { "properties": { "schema": { "pattern": "^enum:" } } }
     },
     "region_keys": {
       "$ref": "#/$defs/type_keys",

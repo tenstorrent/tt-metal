@@ -108,25 +108,74 @@ struct StructLayout<RouterStateManager> {
 };
 static_assert(validate_struct_members<RouterStateManager>(StructLayout<RouterStateManager>::members));
 
+// The live part of each region is sized by the mesh shape (routing_l1_info_t's mesh_y_size and mesh_x_size), so
+// decode reads the regions by rule, not by layout.
 template <>
-struct StructLayout<routing_l1_info_t> {
+struct StructLayout<route_table_2d_t> {
     static constexpr std::array members = {
-        LAYOUT_MEMBER(routing_l1_info_t, state_manager),
-        LAYOUT_MEMBER(routing_l1_info_t, my_mesh_id),
-        LAYOUT_MEMBER(routing_l1_info_t, my_device_id),
-        LAYOUT_PACKED(routing_l1_info_t, intra_mesh_direction_table, "direction_table"),
-        LAYOUT_PACKED(routing_l1_info_t, inter_mesh_direction_table, "direction_table"),
-        // The union of the 1D and 2D routing tables, listed by its widest member so the size and offset checks hold.
-        // Decode picks the appropriate union member based on the routing mode, which it gets from is_2d_routing.
-        LAYOUT_BYTES(routing_l1_info_t, route_table_2d),
-        LAYOUT_BYTES(routing_l1_info_t, exit_node_table),
-        LAYOUT_MEMBER(routing_l1_info_t, my_mesh_coord_y),
-        LAYOUT_MEMBER(routing_l1_info_t, my_mesh_coord_x),
-        LAYOUT_MEMBER(routing_l1_info_t, mesh_y_size),
-        LAYOUT_MEMBER(routing_l1_info_t, mesh_x_size),
+        LAYOUT_BYTES(route_table_2d_t, action_vectors),
+        LAYOUT_BYTES(route_table_2d_t, mcast_trees),
     };
 };
-static_assert(validate_struct_members<routing_l1_info_t>(StructLayout<routing_l1_info_t>::members));
+static_assert(validate_struct_members<route_table_2d_t>(StructLayout<route_table_2d_t>::members));
+
+// Entry i, the route to the chip i hops away, starts at word i * (1 + the run's 1D extension words).
+template <>
+struct StructLayout<intra_mesh_routing_path_t<1, false>> {
+    using T = intra_mesh_routing_path_t<1, false>;
+    static constexpr std::string_view name = template_name<"intra_mesh_routing_path_t", 1, false>;
+    static constexpr std::array members = {
+        LAYOUT_BYTES(T, paths),
+    };
+};
+static_assert(validate_struct_members<intra_mesh_routing_path_t<1, false>>(
+    StructLayout<intra_mesh_routing_path_t<1, false>>::members));
+
+// routing_l1_info_t's union holds the 1D routing-path table or the 2D route table, picked by the run's routing mode,
+// and only 2D fills exit_node_table. So it has one member list per mode, routing_table_struct_types describes the
+// run's, and it is not in DescribedStructs.
+namespace detail {
+
+inline constexpr std::array routing_l1_info_head = {
+    LAYOUT_MEMBER(routing_l1_info_t, state_manager),
+    LAYOUT_MEMBER(routing_l1_info_t, my_mesh_id),
+    LAYOUT_MEMBER(routing_l1_info_t, my_device_id),
+    LAYOUT_PACKED(routing_l1_info_t, intra_mesh_direction_table, compressed_routing_values),
+    LAYOUT_PACKED(routing_l1_info_t, inter_mesh_direction_table, compressed_routing_values),
+};
+
+inline constexpr std::array routing_l1_info_tail = {
+    LAYOUT_MEMBER(routing_l1_info_t, my_mesh_coord_y),
+    LAYOUT_MEMBER(routing_l1_info_t, my_mesh_coord_x),
+    LAYOUT_MEMBER(routing_l1_info_t, mesh_y_size),
+    LAYOUT_MEMBER(routing_l1_info_t, mesh_x_size),
+};
+
+}  // namespace detail
+
+inline constexpr auto routing_l1_info_members_1d = concat_members(
+    detail::routing_l1_info_head,
+    std::array{
+        LAYOUT_MEMBER(routing_l1_info_t, routing_path_table_1d),
+        // The rest of the union, which the 1D table is too small to fill
+        [] {
+            using T = routing_l1_info_t;
+            constexpr uint32_t end = offsetof(T, routing_path_table_1d) + sizeof(T::routing_path_table_1d);
+            return Member{"union_padding", end, {element::Pad{}, offsetof(T, exit_node_table) - end, 0}};
+        }(),
+        LAYOUT_PAD(routing_l1_info_t, exit_node_table),
+    },
+    detail::routing_l1_info_tail);
+static_assert(validate_struct_members<routing_l1_info_t>(routing_l1_info_members_1d));
+
+inline constexpr auto routing_l1_info_members_2d = concat_members(
+    detail::routing_l1_info_head,
+    std::array{
+        LAYOUT_MEMBER(routing_l1_info_t, route_table_2d),
+        LAYOUT_MEMBER(routing_l1_info_t, exit_node_table),
+    },
+    detail::routing_l1_info_tail);
+static_assert(validate_struct_members<routing_l1_info_t>(routing_l1_info_members_2d));
 
 // ============ Fabric telemetry ============
 
@@ -280,7 +329,8 @@ struct StructLayout<NocUnicastScatterCommandHeader> {
         LAYOUT_MEMBER(T, noc_address),
         LAYOUT_MEMBER(T, chunk_size),
         LAYOUT_MEMBER(T, chunk_count),
-        LAYOUT_MEMBER(T, chunk_encoding),
+        // One encoding per chunk; entries from chunk_count on are unused.
+        LAYOUT_PACKED_BITS(T, chunk_encoding, NocScatterWriteChunkEncoding, NOC_SCATTER_CHUNK_ENCODING_BITS),
     };
 };
 static_assert(
@@ -402,7 +452,6 @@ using DescribedStructs = std::tuple<
     SenderChannelProducerCursor,
     erisc::datamover::handshake::handshake_info_t,
     RouterStateManager,
-    routing_l1_info_t,
     RiscTimestampV2,
     BandwidthTelemetry,
     EriscDynamicEntry,
@@ -432,6 +481,21 @@ inline std::vector<StructType> described_struct_types() {
     return []<typename... Ts>(std::type_identity<std::tuple<Ts...>>) {
         return std::vector<StructType>{struct_type<Ts>()...};
     }(std::type_identity<DescribedStructs>{});
+}
+
+// The struct name routing_table_struct_types describes.
+inline constexpr std::string_view routing_l1_info_name = enchantum::type_name<routing_l1_info_t>;
+
+// The layouts of routing_l1_info_t in one routing mode and of the table its union holds in that mode:
+// intra_mesh_routing_path_t<1,false> in 1D, route_table_2d_t in 2D.
+inline std::vector<StructType> routing_table_struct_types(bool is_2d) {
+    const auto routing_l1_info = [](const auto& members) {
+        return StructType{routing_l1_info_name, sizeof(routing_l1_info_t), {members.begin(), members.end()}};
+    };
+    if (is_2d) {
+        return {routing_l1_info(routing_l1_info_members_2d), struct_type<route_table_2d_t>()};
+    }
+    return {routing_l1_info(routing_l1_info_members_1d), struct_type<intra_mesh_routing_path_t<1, false>>()};
 }
 
 // ============ All described unions ============
