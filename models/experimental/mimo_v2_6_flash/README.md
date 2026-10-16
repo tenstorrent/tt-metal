@@ -29,9 +29,14 @@ export MIMO_TT_CACHE=/path/to/tensor-cache              # converted TTNN weights
 python -m models.experimental.mimo_v2_6_flash.reference.make_golden --out golden_48l.pt
 export MIMO_GOLDEN=golden_48l.pt
 
-pytest models/experimental/mimo_v2_6_flash/tests/test_decoder_tp8_dp4.py   # one layer per type
-pytest models/experimental/mimo_v2_6_flash/tests/test_model_tp8_dp4.py     # 48 layers
+pytest models/experimental/mimo_v2_6_flash/tests/test_kv_tables.py           # page tables, host only
+pytest models/experimental/mimo_v2_6_flash/tests/test_decoder_tp8_dp4.py     # one layer per type
+pytest models/experimental/mimo_v2_6_flash/tests/test_chunked_prefill_tp8_dp4.py  # chunked prefill, one layer per type
+pytest models/experimental/mimo_v2_6_flash/tests/test_model_tp8_dp4.py       # 48 layers
+pytest models/experimental/mimo_v2_6_flash/tests/test_model_chunked_tp8_dp4.py  # 48 layers: chunked, prefix hit
 ```
+
+The device tests can outlast pytest's default 300 s timeout on a cold weight cache; pass `--timeout 3000`.
 
 On a Galaxy whose CPLD firmware predates v1.16, reset with `tt-smi -glx_reset`: after `tt-smi -r`
 some Ethernet links can stay untrained, and opening the mesh then fails in
@@ -39,7 +44,8 @@ some Ethernet links can stay untrained, and opening the mesh then fails in
 
 ## Not done yet
 
-- Chunked prefill (`start_pos > 0`) and prefix caching.
+- vLLM's hybrid KV page tables for prefill: the model prefills in chunks and from `start_pos > 0`,
+  with the SWA cache in `SlidingWindowSpec` layout, but nothing feeds it vLLM's tables yet.
 - Prefill tracing and performance tuning (decode is traced; everything is DRAM-interleaved with default program configs).
 - Device sampling (the host reads full logits each step).
 - vLLM integration (vllm-tt-plugin#216), sampling on device, speculative decoding.

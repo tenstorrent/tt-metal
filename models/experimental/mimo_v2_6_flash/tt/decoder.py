@@ -107,12 +107,14 @@ class TtMiMoDecoderLayer:
         return y
 
     def _page_table(self, page_table):
-        """Accepts one table or {is_swa: table} (SWA layers address a ring, global layers the full context)."""
+        """Accepts one table or {is_swa: table} (the SWA and global layer groups have their own tables, kv.py)."""
         return page_table[self.is_swa] if isinstance(page_table, dict) else page_table
 
-    def forward_prefill(self, x, user_id, page_table, kv_cache, token_mask=None, real_len=None):
+    def forward_prefill(self, x, user_id, page_table, kv_cache, token_mask=None, real_len=None, start_pos=0):
         h = self.input_norm(x)
-        attn = self.attn.forward_prefill(h, user_id, self._page_table(page_table), kv_cache, real_len=real_len)
+        attn = self.attn.forward_prefill(
+            h, user_id, self._page_table(page_table), kv_cache, start_pos=start_pos, real_len=real_len
+        )
         h.deallocate(True)
         x2 = ttnn.add(x, attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn.deallocate(True)
