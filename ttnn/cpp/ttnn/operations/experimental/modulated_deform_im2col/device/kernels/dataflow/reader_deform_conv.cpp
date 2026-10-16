@@ -325,8 +325,8 @@ void kernel_main() {
     };
 
     if constexpr (STAGES_GEOMETRY) {
-        // Compute derives a block's geometry just before its corners, during the first kernel
-        // position; staging runs two blocks ahead of it, the depth of geom_in_cb.
+        // During the first kernel position compute derives each block's geometry two blocks
+        // ahead of its corners; staging keeps the next two blocks ready, the depth of geom_in_cb.
         for (uint32_t j = 0; j < num_blocks && j < 2; ++j) {
             stage_geometry(start_block + j);
         }

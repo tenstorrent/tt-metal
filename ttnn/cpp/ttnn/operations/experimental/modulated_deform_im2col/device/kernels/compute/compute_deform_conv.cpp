@@ -6,14 +6,13 @@
 // kernel, so the columns never leave L1.
 //
 // Kernel positions run outermost, the core's blocks of 32 output rows inside them. During the
-// first position each block's geometry is computed on the SFPU just before its corners, as the
-// im2col does, and handed to the reader that owns the block (even blocks to the first, odd to the
-// second), which keeps it for every position. For each (position, block) the reader's four corners
-// are tilized on the unpacker, multiplied by their scalar columns and summed in L1, which gives the
-// block's C columns of that position; a matmul with the position's C x C_out slice of the weight
-// then accumulates into the block's output tiles, in fp32 dest within the position and in
-// bfloat16 L1 across positions. After the last position the bias is added, the ReLU applied, and the
-// bfloat16 output handed to the block's reader.
+// first position each block's geometry is computed on the SFPU two blocks ahead of its corners, so
+// a reader gathers one block while compute works through another, and handed to the reader that
+// owns the block (even blocks to the first, odd to the second), which keeps it for every position. For each (position,
+// block) the reader's four corners are tilized on the unpacker, multiplied by their scalar columns and summed in L1,
+// which gives the block's C columns of that position; a matmul with the position's C x C_out slice of the weight then
+// accumulates into the block's output tiles, in fp32 dest within the position and in bfloat16 L1 across positions.
+// After the last position the bias is added, the ReLU applied, and the bfloat16 output handed to the block's reader.
 
 #include <cstdint>
 
@@ -215,16 +214,21 @@ void kernel_main() {
     // Every block's output tiles stay reserved while the positions accumulate into them.
     acc_cb.reserve_back(num_blocks * OUT_TILES);
 
+    auto geometry_of = [&](uint32_t block) {
+        const bool odd = block & 1;
+        compute_geometry(
+            geom_in_cb,
+            odd ? odd_geom_index_cb_index : geom_index_cb_index,
+            odd ? odd_geom_weight_cb_index : geom_weight_cb_index);
+    };
+    for (uint32_t block = 0; block < num_blocks && block < 2; ++block) {
+        geometry_of(block);
+    }
+
     for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
         conv_weight_cb.wait_front(WEIGHT_SLICE_TILES);
         for (uint32_t block = 0; block < num_blocks; ++block) {
             const bool odd = block & 1;
-            if (kk == 0) {
-                compute_geometry(
-                    geom_in_cb,
-                    odd ? odd_geom_index_cb_index : geom_index_cb_index,
-                    odd ? odd_geom_weight_cb_index : geom_weight_cb_index);
-            }
             const uint32_t corner_cb_index = odd ? odd_corner_block_cb_index : corner_block_cb_index;
             const uint32_t scalar_index = odd ? odd_scalar_cb_index : scalar_cb_index;
             CircularBuffer corner_block_cb(corner_cb_index);
@@ -288,6 +292,9 @@ void kernel_main() {
             }
             pack_reconfig_l1_acc(0);
             column_cb.pop_front(channel_tiles);
+            if (kk == 0 && block + 2 < num_blocks) {
+                geometry_of(block + 2);
+            }
         }
         conv_weight_cb.pop_front(WEIGHT_SLICE_TILES);
     }
