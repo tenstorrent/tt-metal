@@ -1159,3 +1159,19 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   norm_bias -8e-9 on every input, A,B,A bit-identical. Metrics `norm_bias_q_a_L02_<input>`.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_q_a.py`
   (BRINGUP_IMPL=mutations | reference | stub for the freeze checks).
+
+## C.enc_source.kv test review (attempt 1)
+- Freeze without review failed: the built-in sweep let scale1.02, scale0.98 and noise1e-2 slip (rel limits 0.0464
+  golden / small / big, 0.0589 layer24, 0.0619 mixed from the input nudge's fp8 flips, DS41-1; K-36).
+- Same step as swa L0 (ds41_ref.py:_window_kv, ratio RoPE table), so DS41-14's fp8 checks were ported from
+  test_c_swa_kv.py, with the sweep in the current form (q_a test: evaluate + error_gate, controls reference / input
+  nudge / bf16 output). off grid == 0 catches scale and noise (1.0 off grid on all 5 inputs).
+- DS41-46: the input-nudge control flips 0.260 / 0.298 / 0.315 of the values (golden-small-big / layer24 / mixed),
+  so DS41-14's 0.15 mismatch limit fails the floor here; FP8_MISMATCH = 0.63 (2 x 0.315). CPU probe (deleted, K-56):
+  RTZ e4m3 0.49 (caught by auto vs-CPU on 5 inputs), rope pos+1 0.038 (caught by auto), bf16 GEMM output 0.018,
+  attn_norm not fp8-quantized 0.36-0.43 (passes auto and 2 x nudge: not separable at this floor).
+- Results: mutations PASS (all mistakes caught), reference PASS (err 0.0232, mismatch 0), stub FAIL. Device gate
+  (kv module from C.swa.kv already serves enc_source): PASS, err_kv_L02 0.0232 <= 0.112, vs CPU rel 2.6e-3,
+  off grid 0, mismatch 0.0077-0.0102, A,B,A bit-identical. The FAIL lines in the log come from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_kv.py`
+  (BRINGUP_IMPL=mutations | reference | stub for the freeze checks).
