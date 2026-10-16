@@ -325,7 +325,7 @@ answered correctly (arithmetic, a 20,000-token needle-in-a-haystack), GSM8K scor
 
 The server can also take images in chat messages. This needs the vision runtime spec
 `assets/runtime_spec_b16_k5_131072_vision.json` instead of the text one (set `SPEC` to it in step 3; everything else in the
-launch is unchanged). It is the text spec plus `limit-mm-per-prompt {"image": 4}` (at most 4 images per request),
+launch is unchanged). It is the text spec plus `limit-mm-per-prompt {"image": 16}` (at most 16 images per request; a request with more images is refused with an OpenAI-style HTTP 400 error and the server keeps serving; an image is at most 1024 tokens, about 1302 x 1302 pixels),
 `mm-processor-cache-gb 0`, `chat-template-content-format openai`, `DSV41_VISION=1` and the modalities `text` + `image`.
 The vision tower costs extra device memory at start and a slightly longer start; text-only requests work as before.
 
