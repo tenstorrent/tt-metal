@@ -1,0 +1,41 @@
+# Same four-mesh pod as fsd_quad_host_mesh_graph_descriptor, with the channel policy flipped
+# to STRICT. Count 2 is a requirement. On the missing-link pod, phase 1 cannot embed the
+# torus and the other ranks do not leave the mapping, so this descriptor is not in the
+# reliability group.
+mesh_descriptors {
+  name: "M"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "M" mesh_id: 3 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 1 } }
+    channels { count: 2 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 2 } }
+    channels { count: 2 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 3 } }
+    channels { count: 2 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 0 } }
+    channels { count: 2 policy: STRICT }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

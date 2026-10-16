@@ -127,12 +127,18 @@ ttnn.attach_golden_function(
     ),
 )
 
-ttnn.attach_golden_function(
-    ttnn.rdiv_bw,
-    golden_function=lambda grad, input, value=None, *args, **kwargs: _golden_function_backward_with_reverse_string(
-        "div", grad, input, value, *args, **kwargs
-    ),
-)
+
+def _golden_function_rdiv_bw(grad_tensor, input_tensor, scalar, rounding_mode=None, *args, **kwargs):
+    import torch
+
+    # rounding_mode is accepted positionally as well as by keyword, as the public overload allows both.
+    if rounding_mode is not None:
+        # TTNN defines the trunc and floor reverse-division gradients as zero, since rounding is piecewise constant.
+        return [torch.zeros_like(grad_tensor)]
+    return _golden_function_backward_with_reverse_string("div", grad_tensor, input_tensor, scalar)
+
+
+ttnn.attach_golden_function(ttnn.rdiv_bw, golden_function=_golden_function_rdiv_bw)
 
 ttnn.attach_golden_function(
     ttnn.asin_bw,
@@ -199,22 +205,22 @@ ttnn.attach_golden_function(
 
 ttnn.attach_golden_function(
     ttnn.hardshrink_bw,
-    golden_function=lambda grad, input, alpha=0.5, *args, **kwargs: _golden_function_unary_backward_with_float(
-        "hardshrink", grad, input, lambd=alpha, *args, **kwargs
+    golden_function=lambda grad, input, lambd=0.5, *args, **kwargs: _golden_function_unary_backward_with_float(
+        "hardshrink", grad, input, lambd=lambd
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.softshrink_bw,
-    golden_function=lambda grad, input, alpha=0.5, *args, **kwargs: _golden_function_unary_backward_with_float(
-        "softshrink", grad, input, lambd=alpha, *args, **kwargs
+    golden_function=lambda grad, input, lambd=0.5, *args, **kwargs: _golden_function_unary_backward_with_float(
+        "softshrink", grad, input, lambd=lambd
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.leaky_relu_bw,
-    golden_function=lambda grad, input, alpha=1e-2, *args, **kwargs: _golden_function_unary_backward_with_float(
-        "leaky_relu", grad, input, negative_slope=alpha, *args, **kwargs
+    golden_function=lambda grad, input, negative_slope=1e-2, *args, **kwargs: _golden_function_unary_backward_with_float(
+        "leaky_relu", grad, input, negative_slope=negative_slope
     ),
 )
 
@@ -232,17 +238,26 @@ ttnn.attach_golden_function(
     ),
 )
 
-ttnn.attach_golden_function(
-    ttnn.rpow_bw,
-    golden_function=lambda grad, input, alpha, *args, **kwargs: _golden_function_unary_backward_with_float(
-        "pow", grad, input, alpha, *args, **kwargs
-    ),
-)
+
+def _golden_function_rpow_bw(grad_tensor, input_tensor, exponent, *args, **kwargs):
+    import torch
+
+    # The device computes grad * exponent * input_tensor ** (exponent - 1), i.e. the gradient of
+    # input_tensor ** exponent, not of the forward rpow's exponent ** input_tensor.
+    input_tensor = _prepare_input_for_backward(input_tensor)
+    (input_grad,) = golden_compute_gradients(torch.pow(input_tensor, exponent), (input_tensor,), grad_tensor)
+    if exponent != 0:
+        # The device writes NaN for negative inputs unless exponent is 0, where it returns zeros everywhere.
+        input_grad = torch.where(input_tensor.detach() < 0, float("nan"), input_grad)
+    return [input_grad]
+
+
+ttnn.attach_golden_function(ttnn.rpow_bw, golden_function=_golden_function_rpow_bw)
 
 ttnn.attach_golden_function(
     ttnn.logiteps_bw,
-    golden_function=lambda grad, input, alpha=None, *args, **kwargs: _golden_function_unary_backward_with_float(
-        "logit", grad, input, eps=alpha, *args, **kwargs
+    golden_function=lambda grad, input, eps=0.0, *args, **kwargs: _golden_function_unary_backward_with_float(
+        "logit", grad, input, eps=eps, *args, **kwargs
     ),
 )
 
@@ -298,14 +313,11 @@ def _golden_function_abs_cmplx(grad_tensor, input_tensor, *args, **kwargs):
     return [golden_pack_complex_gradient(input_gradient)]
 
 
-def _golden_function(grad_tensor, input_tensor, min_val=None, max_val=None, *args, **kwargs):
+def _golden_function(grad_tensor, input_tensor, min=-1.0, max=1.0, *args, **kwargs):
     import torch
 
     input_tensor.retain_grad()
-    if min_val != None and max_val != None:
-        pyt_y = torch.nn.functional.hardtanh(input_tensor, min_val, max_val)
-    else:
-        pyt_y = torch.nn.functional.hardtanh(input_tensor)
+    pyt_y = torch.nn.functional.hardtanh(input_tensor, min, max)
     pyt_y.backward(gradient=grad_tensor)
 
     return [input_tensor.grad]
@@ -314,14 +326,11 @@ def _golden_function(grad_tensor, input_tensor, min_val=None, max_val=None, *arg
 ttnn.attach_golden_function(ttnn.hardtanh_bw, golden_function=_golden_function)
 
 
-def _golden_function(grad_tensor, input_tensor, beta=None, threshold=None, *args, **kwargs):
+def _golden_function(grad_tensor, input_tensor, beta=1.0, threshold=20.0, *args, **kwargs):
     import torch
 
     input_tensor.retain_grad()
-    if beta != None and threshold != None:
-        pyt_y = torch.nn.functional.softplus(input_tensor, beta, threshold)
-    else:
-        pyt_y = torch.nn.functional.softplus(input_tensor)
+    pyt_y = torch.nn.functional.softplus(input_tensor, beta, threshold)
     pyt_y.backward(gradient=grad_tensor)
 
     return [input_tensor.grad]
@@ -490,9 +499,12 @@ def _golden_function_frac(grad_tensor, input_tensor, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.frac_bw, golden_function=_golden_function_frac)
 
 
-def _golden_function_gelu(grad_tensor, input_tensor, *args, approximate="none", **kwargs):
+def _golden_function_gelu(grad_tensor, input_tensor, *args, approximate="none", variant=None, **kwargs):
     import torch
 
+    if variant == ttnn.GeluVariant.Tanh:
+        # The public API selects the tanh derivative through variant; approximate is the host-side spelling.
+        approximate = "tanh"
     x = _to_float32_with_bfloat16_daz(input_tensor)
     grad = _to_float32_with_bfloat16_daz(grad_tensor)
     if approximate == "tanh":

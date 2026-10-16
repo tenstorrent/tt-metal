@@ -34,9 +34,15 @@ CHUNK_SIZE=5120
 GOLDEN_LEN=56320
 MAX_SEQ_LEN=256000
 REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
-# Start, the last chunk wholly inside the golden, midpoint, end. The window that the throughput probe
-# averages over runs forward from each of these, so the first three carry a rate and the last a latency.
-PROBE_CHUNKS="0,$((GOLDEN_LEN / CHUNK_SIZE - 1)),$((REAL_CHUNKS / 2 - 1)),$((REAL_CHUNKS - 1))"
+# Measured the way run_multirank_pcc.sh measures the plain Kimi legs, so the two sets of numbers compare:
+# throwaway chunks first. DFlash is traced-only, so without them every rank captures its trace when the
+# first timed chunk arrives.
+WARMUP_CHUNKS=10
+# Start, ~50k, midpoint and end: run_multirank_pcc.sh's probes over this leg's one window. The window that
+# the throughput probe averages over runs forward from each of these, so the first three carry a rate and
+# the last a latency.
+PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((REAL_CHUNKS / 2 - 1))" \
+  "$((REAL_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
 # Verifier threshold is the sibling KV leg's value for this trace and depth -- run_multirank_pcc.sh gates
 # the same cache on the same golden, so the two legs must not disagree on what a passing verifier is.
 # The drafter gate is held at that same value and never above it: an unnormalized V carries the verifier's
@@ -50,9 +56,8 @@ DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
 
 # The dflash manifest differs from the plain one by the knobs a drafter run needs, so the two legs cannot
 # share a file. What it pins, and why, since JSON cannot say it:
-#   PREFILL_USE_TRACE=1    -- the verifier forward IS trace-captured with dflash on. The drafter's FC tap
-#      fires inside that forward and is allocation-free after warmup; its KV finalize runs after the
-#      captured forward returns and stays eager.
+#   PREFILL_USE_TRACE=1    -- the verifier forward, the drafter's FC taps and its KV finalize (last rank)
+#      or partial export (other ranks) are one capture, replayed per chunk.
 #   PREFILL_LAYER_ACK_D2H=1 -- each rank stands up its own LayerAckService from D2H device records.
 #      Without it the non-first ranks take the host-ring branch and connect() to
 #      /tt_prefill_layer_completion_ring_N with a HARD-CODED 30 s timeout, which a rank that finished
@@ -87,7 +92,7 @@ fi
 # context even within double quotes, and the script fails to parse rather than to run.
 HOSTS="${PREFILL_HOSTS:?PREFILL_HOSTS must list the rank hosts, rank 0 first (e.g. hostA,hostB)}"
 
-# sc1 is single-galaxy. It takes the same STAGED code path as sc4 -- PREFILL_MOCK_MIGRATION all-gathers
+# sc1 is single-galaxy. It takes the same STAGED code path as sc4 -- the runner all-gathers
 # the stage layouts at any rank count -- so what it does not cover is the remote HOST, not the branch: one
 # rank builds the table over its own DRAM and the producer reads it back over local PCIe. The rank count
 # itself comes from the mesh-graph descriptor below, so this only validates the key.
@@ -212,8 +217,7 @@ python3 "${TTRUN_PY}" \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     ${RUNNER_NUM_USERS_EXPORT}\
     export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
-    export PREFILL_ENABLE_MIGRATION=1; \
-    export PREFILL_MOCK_MIGRATION=1; \
+    export PREFILL_ENABLE_MIGRATION=0; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_MIGRATION_DEVICE_MAP_PATH=/tmp/dflash_kv_device_map.json; \
     export PREFILL_SYNC_PER_CHUNK=1; \
@@ -296,7 +300,8 @@ set +e
 # the runner above, so the producer must match them or only this leg hangs.
 # The producer pins itself to one slot rather than taking the manifest count the ranks allocate for.
 # Slot 0 is the only slot with a golden behind it, so the others would replay it for an identical PCC at
-# ~26 s a slot of PCIe readback -- 30 min at the sc4 ceiling, past the leg timeout.
+# ~26 s a slot of PCIe readback -- 30 min at the sc4 ceiling, past the leg timeout. The warmup chunks also
+# go to slot 0, and the timed request rewrites every position they wrote before the PCC check reads it.
 "${MPIRUN}" \
   --host "${PRODUCER_HOSTS}" --map-by "rankfile:file=${RANKFILE_REL}" --bind-to none --tag-output \
   --wdir "${TT_METAL_HOME}" \
@@ -311,6 +316,7 @@ set +e
     export PREFILL_NUM_USERS=1; \
     export PREFILL_PRODUCER_CHECK_PCC=1; \
     export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
+    export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
     export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \
     export PREFILL_PRODUCER_MAX_REQUESTS=1; \
     export PREFILL_PRODUCER_MULTI_TURN_PROB=0; \

@@ -206,6 +206,9 @@ void kernel_main() {
                 receiver_socket.read_ptr,
                 token_page_size);
             noc_async_read_barrier();
+            // The embedding lookup below is an on-chip read on this command buffer, and plain reads don't
+            // program MID, so the PCIe routing has to be cleared here rather than after the loop.
+            noc_async_read_clear_pcie_state(NOC_INDEX, read_cmd_buf);
         }
 
         // TODO: Add and assert that token id is within vocab size
