@@ -24,6 +24,7 @@ from ..reference.model import load_layer_weights
 from . import kv as kv_lib
 from .common import TILE, MeshPlan, as_weight, cache_name, compute_config, pad_to
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
+from .greedy_head import GreedyHead
 from .rope import MiMoRotarySetup
 
 
@@ -38,6 +39,10 @@ def prefill_padded_len(seq_len):
 
 
 class TtMiMoModel:
+    DECODE_TOPK = 32  # candidates per chip read back each decode step
+    DECODE_HISTORY = 64  # device-resident greedy steps between token reads
+    LAYER_CACHE_LAYOUT = "kvsplit-gu-ds"  # split-user global KV, fused gate|up, DRAM-sharded qkv/router
+
     def __init__(
         self,
         mesh_device,
@@ -53,7 +58,7 @@ class TtMiMoModel:
         expert_dtype=ttnn.bfloat4_b,
         lm_head_dtype=ttnn.bfloat8_b,
         kv_dtype=ttnn.bfloat8_b,
-        num_links=1,
+        num_links=2,
     ):
         """``ckpt`` may be None when ``cache_dir`` already holds every tensor (a later DP replica)."""
         self.mesh_device = mesh_device
@@ -101,10 +106,11 @@ class TtMiMoModel:
         self.layers = []
         for i in range(self.num_layers):
             t0 = time.time()
-            # Bump a layer's tag when its cached tensor set changes, so a warm cache from an older layout
-            # is rebuilt instead of loaded with tensors missing (global layers gained grouped decode weights).
-            tag = f"layer{i}_tp{plan.tp}" + ("" if cfg.is_swa(i) else "_kvsplit")
-            weights = None if warm(tag) else load_layer_weights(ckpt, cfg, i)
+            # Bump LAYER_CACHE_LAYOUT when a layer's cached tensor set changes, so a warm cache from an older
+            # layout is rebuilt instead of loaded with tensors missing. Unchanged tensors (e.g. experts) are
+            # still loaded from their cache files; lazy experts are only dequantized when they are missing.
+            tag = f"layer{i}_tp{plan.tp}_{self.LAYER_CACHE_LAYOUT}"
+            weights = None if warm(tag) else load_layer_weights(ckpt, cfg, i, lazy_experts=True)
             self.layers.append(
                 TtMiMoDecoderLayer(
                     plan,
@@ -128,6 +134,17 @@ class TtMiMoModel:
         self.kv_caches = None
         self.page_table_tt = None
         self.decode_trace = None
+        self.greedy_head = None
+        self.decode_users = None
+        # Chip c's vocab shard starts at c * vocab_local: added to its local top-k ids for the device greedy.
+        offsets = (torch.arange(plan.tp, dtype=torch.int32) * self.vocab_local).reshape(plan.tp, 1, 1, 1)
+        self.vocab_offset = ttnn.from_torch(
+            offsets.expand(plan.tp, 1, max_batch, self.DECODE_TOPK).contiguous(),
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=plan.shard(0),
+        )
 
     # ------------------------------------------------------------------ setup
     def setup_kv_cache(self, num_users):
@@ -137,6 +154,7 @@ class TtMiMoModel:
         layer's chip pair splits the users (kv.py), so that page table differs per chip. Slots past
         ``num_users`` are never written (their position is -1)."""
         assert num_users <= self.max_batch
+        self.decode_users = num_users
         self.kv_caches, tables = [], {}
         for layer in self.layers:
             per_user = layer.attn.kv_tokens_per_user(self.max_seq_len)
@@ -146,6 +164,8 @@ class TtMiMoModel:
             )
             self.kv_caches.append(layer.attn.allocate_kv_cache(num_blocks, self.block_size, self.kv_dtype))
             tables.setdefault(layer.is_swa, table)
+            if layer.is_moe:
+                layer.mlp.set_decode_users(num_users)
         self.set_page_tables(tables)
 
     def set_page_tables(self, tables):
@@ -247,9 +267,22 @@ class TtMiMoModel:
         )
 
     def decode_forward_device(
-        self, tokens_tt, cur_pos_tt, cos_swa, sin_swa, cos_full, sin_full, mask_tt, pos_owned_tt, owner_mask_tt
+        self,
+        tokens_tt,
+        cur_pos_tt,
+        cos_swa,
+        sin_swa,
+        cos_full,
+        sin_full,
+        mask_tt,
+        pos_owned_tt,
+        owner_mask_tt,
+        greedy_only=False,
     ):
-        """One decode step from device-resident inputs only (trace-capturable). Returns [1, 1, B, vocab / tp]."""
+        """One decode step from device-resident inputs only (trace-capturable). Returns [1, 1, B, vocab / tp].
+
+        ``greedy_only``: skip the per-chip top-k candidates; GreedyHead computes the greedy tokens and also writes
+        them into ``tokens_tt`` (the next step's input)."""
         x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         x = ttnn.reshape(x, (1, 1, self.max_batch, self.cfg.hidden_size))
         rot_mats = {
@@ -265,24 +298,78 @@ class TtMiMoModel:
         x.deallocate(True)
         for t in (*rot_mats[True], *rot_mats[False]):
             t.deallocate(True)
-        return logits
+        if greedy_only:
+            next_tokens = self.greedy_head(logits, token_input=tokens_tt)
+            return {"logits": logits, "next_tokens": next_tokens}
+        # Each chip's top-k over its vocab shard: the host can merge 8 x k candidates per user instead of
+        # reading 32 x 152576 logits every step.
+        values, indices = ttnn.topk(logits, k=self.DECODE_TOPK, dim=-1, largest=True, sorted=True)
+        # Greedy token on device: gather every chip's candidates with their global vocab ids across the row,
+        # then one top-1 whose label is the global id.
+        gid = ttnn.add(ttnn.typecast(indices, ttnn.int32), self.vocab_offset)
+        all_values = self.plan.all_gather(values, dim=-1)
+        all_ids = self.plan.all_gather(gid, dim=-1)
+        gid.deallocate(True)
+        _, best = ttnn.topk(all_values, k=1, dim=-1, largest=True, sorted=True, indices_tensor=all_ids)
+        all_values.deallocate(True)
+        all_ids.deallocate(True)
+        next_tokens = ttnn.typecast(
+            ttnn.reshape(ttnn.to_layout(best, ttnn.ROW_MAJOR_LAYOUT), (1, self.max_batch)), ttnn.uint32
+        )
+        best.deallocate(True)
+        return {"logits": logits, "values": values, "indices": indices, "next_tokens": next_tokens}
 
-    def capture_decode_trace(self):
+    def _feed_back(self, inputs, output, tokens_written=False):
+        """Device-side step advance: the greedy token becomes the next input; active positions move by one."""
+        tokens_tt, cur_pos_tt, pos_owned_tt = inputs[0], inputs[1], inputs[7]
+        if not tokens_written:
+            ttnn.copy(output["next_tokens"], tokens_tt)
+        ttnn.plus_one(cur_pos_tt, skip_negative_entries=True)
+        ttnn.plus_one(pos_owned_tt, skip_negative_entries=True)
+
+    def capture_decode_trace(self, greedy_only=False):
         """Compile, then capture one decode step. Later decode calls refresh the inputs and replay it.
 
         Warm-up and capture run with every slot empty (position -1), so they write no KV-cache entries
-        and are safe to run after users have been prefilled."""
+        and are safe to run after users have been prefilled. ``greedy_only`` captures the device-greedy step
+        (GreedyHead, no top-k candidates): ``decode_steps_*`` work, ``decode_read_topk`` does not."""
         assert self.decode_trace is None
+        if greedy_only and self.greedy_head is None:
+            # Persistent buffers, allocated before any capture.
+            self.greedy_head = GreedyHead(self.plan, self.vocab_local, self.decode_users, self.max_batch)
+        # Per-step token slots for device-resident runs, allocated before capture: buffers allocated after a
+        # capture may overlap the trace's replayed intermediates.
+        history = [
+            ttnn.from_torch(
+                torch.zeros(1, self.max_batch, dtype=torch.int32),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self.plan.replicate(),
+            )
+            for _ in range(self.DECODE_HISTORY)
+        ]
         empty = torch.full((self.max_batch,), -1, dtype=torch.int32)
         host = self.prepare_decode_inputs_host(torch.zeros(self.max_batch, dtype=torch.int32), empty)
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
-        self.decode_forward_device(*inputs).deallocate(True)
+        warm = self.decode_forward_device(*inputs, greedy_only=greedy_only)
+        self._feed_back(inputs, warm, tokens_written=greedy_only)  # every slot is empty: positions stay -1
+        for name, t in warm.items():
+            if not (greedy_only and name == "next_tokens"):  # GreedyHead's buffer is persistent
+                t.deallocate(True)
         ttnn.synchronize_device(self.mesh_device)
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        output = self.decode_forward_device(*inputs)
+        output = self.decode_forward_device(*inputs, greedy_only=greedy_only)
+        self._feed_back(inputs, output, tokens_written=greedy_only)
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.mesh_device)
-        self.decode_trace = {"id": trace_id, "inputs": inputs, "output": output}
+        self.decode_trace = {
+            "id": trace_id,
+            "inputs": inputs,
+            "output": output,
+            "history": history,
+            "greedy_only": greedy_only,
+        }
 
     def release_decode_trace(self):
         if self.decode_trace is not None:
@@ -290,7 +377,8 @@ class TtMiMoModel:
             self.decode_trace = None
 
     def decode_enqueue(self, tokens, positions):
-        """tokens, positions: torch [max_batch]; position -1 marks an empty slot. Non-blocking."""
+        """tokens, positions: torch [max_batch]; position -1 marks an empty slot. Non-blocking.
+        Returns a handle for ``decode_read`` (full logits) or ``decode_read_topk`` (per-chip candidates)."""
         host = self.prepare_decode_inputs_host(tokens, positions)
         if self.decode_trace is not None:
             for h, d in zip(host, self.decode_trace["inputs"]):
@@ -298,16 +386,70 @@ class TtMiMoModel:
             ttnn.execute_trace(self.mesh_device, self.decode_trace["id"], cq_id=0, blocking=False)
             return self.decode_trace["output"]
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
-        logits = self.decode_forward_device(*inputs)
+        out = self.decode_forward_device(*inputs)
         for t in inputs:
             t.deallocate(True)
-        return logits
+        return out
 
-    def decode_read(self, logits):
-        out = self.plan.to_torch_tp_concat(logits, dim=-1).float()
-        if self.decode_trace is None or logits is not self.decode_trace["output"]:
-            logits.deallocate(True)
+    def _release(self, handle):
+        if self.decode_trace is None or handle is not self.decode_trace["output"]:
+            for t in handle.values():
+                t.deallocate(True)
+
+    def decode_read(self, handle):
+        """Full logits [max_batch, vocab] (reads every vocab shard)."""
+        out = self.plan.to_torch_tp_concat(handle["logits"], dim=-1).float()
+        self._release(handle)
         return out.reshape(self.max_batch, -1)
+
+    def decode_read_topk(self, handle):
+        """Per-user candidates: values [max_batch, tp * k] and global vocab ids [max_batch, tp * k]."""
+        values = self.plan.to_torch_tp_concat(handle["values"], dim=-1).float().reshape(self.max_batch, -1)
+        local = self.plan.to_torch_tp_concat(handle["indices"], dim=-1).to(torch.int64).reshape(self.max_batch, -1)
+        shard = torch.arange(self.plan.tp).repeat_interleave(self.DECODE_TOPK) * self.vocab_local
+        self._release(handle)
+        return values, local + shard[None, :]
 
     def decode(self, tokens, positions):
         return self.decode_read(self.decode_enqueue(tokens, positions))
+
+    def decode_steps_host_inputs(self, tokens, positions, steps):
+        """Host tensors for a device-resident greedy run: step 0's full inputs, then each later step's cos/sin.
+
+        Only cos/sin change between steps on the host side: tokens and positions advance on device."""
+        first = self.prepare_decode_inputs_host(tokens, positions)
+        later = []
+        active = positions >= 0
+        for s in range(1, steps):
+            p = torch.where(active, positions + s, positions)
+            later.append(
+                (*self.rope_setups["swa"].decode_host_inputs(p), *self.rope_setups["full"].decode_host_inputs(p))
+            )
+        return first, later
+
+    def decode_steps_enqueue(self, host_inputs, step):
+        """Enqueue step ``step`` of a device-resident greedy run (non-blocking): refresh what the host owns
+        (everything at step 0, cos/sin later), replay the trace, keep the step's tokens in a history slot.
+        At most DECODE_HISTORY steps between ``decode_steps_read``."""
+        first, later = host_inputs
+        inputs = self.decode_trace["inputs"]
+        if step == 0:
+            for h, d in zip(first, inputs):
+                ttnn.copy_host_to_device_tensor(h, d)
+        else:
+            for h, d in zip(later[step - 1], inputs[2:6]):
+                ttnn.copy_host_to_device_tensor(h, d)
+        ttnn.execute_trace(self.mesh_device, self.decode_trace["id"], cq_id=0, blocking=False)
+        ttnn.copy(self.decode_trace["output"]["next_tokens"], self.decode_trace["history"][step % self.DECODE_HISTORY])
+
+    def decode_steps_read(self, first, count):
+        """Greedy tokens of steps [first, first + count) of a device-resident run, int64 [count, max_batch].
+        Blocks until they finished."""
+        assert count <= self.DECODE_HISTORY
+        hist = self.decode_trace["history"]
+        return torch.stack(
+            [
+                self.plan.to_torch_replicated(hist[(first + s) % self.DECODE_HISTORY]).reshape(-1).to(torch.int64)
+                for s in range(count)
+            ]
+        )

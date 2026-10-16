@@ -81,6 +81,8 @@ def test_decoder_layer_tp8_dp4(mesh_device, layer_idx):
         layer_blocks = layer.attn.kv_tokens_per_user(MAX_SEQ) // BLOCK
         tables, num_blocks = kv_lib.page_tables(USERS_PER_REPLICA, MAX_BATCH, layer_blocks, TP, layer.attn.rep, seed=r)
         kv = layer.attn.allocate_kv_cache(num_blocks, BLOCK, KV_DTYPE)
+        if layer.is_moe:
+            layer.mlp.set_decode_users(USERS_PER_REPLICA)
         replicas.append(
             dict(
                 plan=plan,

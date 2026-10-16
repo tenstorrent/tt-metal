@@ -5,7 +5,9 @@
 
 SWA layers (8 KV heads): each chip has 8 Q heads and one KV head, in prefill and decode. V has
 128 dims; it is zero-padded to 192 (and so are the matching ``o_proj`` rows) so the SDPA kernels see
-one head dim. The SWA cache is a 512-token ring per user, so the padding costs ~nothing.
+one head dim. The SWA cache is a 512-token ring per user, so the padding costs ~nothing. Decode drops the
+padding columns after SDPA and uses an unpadded copy of ``o_proj`` (the dropped rows only ever multiplied
+zeros).
 
 Global layers (4 KV heads over 8 chips): chips 2g and 2g+1 serve KV head g and split its users
 (see ``kv.py``). Prefill keeps 8 Q heads per chip on freshly computed K/V. Decode gives each chip all
@@ -20,14 +22,108 @@ import torch
 
 import ttnn
 
-from .common import TILE, as_weight, cache_name, compute_config
+from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config, decode_linear_config, pad_to
 from .kv import kv_replication
+from .moe_stream import KERNEL_DIR, CompactRows
 from .rope import permute_heads_for_rope
 
 # SWA layers keep a per-user ring of this many tokens (``cache_position_modulo``) instead of the full context.
 # It must hold the 128-token window plus the prefill padding tail, which the fill writes into the ring
 # after the real tokens (prefill pads by up to 255 tokens), and be a multiple of the block size.
 SWA_RING_TOKENS = 512
+
+
+class ConcatHeads:
+    """Decode SDPA output [1, B, heads, D] (bf16 tiles, interleaved) -> the concatenated heads [1, 1, B, heads * vd]
+    in L1 (bf16 tiles, interleaved), without the V padding columns D > vd. With ``mask`` ([1, 1, B, 1] bf16 0 / 1
+    tiles, interleaved) the rows of masked users are zeros. One data-movement generic_op in place of slice, reshard,
+    nlp_concat_heads_decode and the copy to L1 (and the owner-mask mul); a unit is one output tile's 16-row half."""
+
+    MAX_CORES = 64
+    GRID_X = 8
+
+    def __init__(self, plan, num_heads, v_head_dim):
+        assert v_head_dim % TILE == 0 and num_heads <= TILE
+        self.device = plan.mesh_device
+        self.num_heads = num_heads
+        self.v_tiles = v_head_dim // TILE
+        self.width = num_heads * v_head_dim
+        units = 2 * num_heads * self.v_tiles
+        cores = self.MAX_CORES
+        while cores > self.GRID_X and units % cores:
+            cores -= self.GRID_X
+        assert units % cores == 0, (units, cores)
+        self.units_per_core = units // cores
+        rows = cores // self.GRID_X
+        self.cores = [ttnn.CoreCoord(x, y) for y in range(rows) for x in range(self.GRID_X)]
+        self.core_ranges = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.GRID_X - 1, rows - 1))]
+        )
+        full = ttnn.Tile([TILE, TILE])
+        page = full.get_tile_size(ttnn.bfloat16)
+        fmt = ttnn.CBFormatDescriptor(
+            buffer_index=0, data_format=ttnn.bfloat16, page_size=page, tile=ttnn.TileDescriptor(full)
+        )
+        # units_per_core 1 KB halves and the mask tile
+        self.cbs = [
+            ttnn.CBDescriptor(
+                total_size=(self.units_per_core + 1) * page, core_ranges=self.core_ranges, format_descriptors=[fmt]
+            )
+        ]
+
+    def __call__(self, attn, mask=None):
+        shape = list(attn.shape)
+        mc = attn.memory_config()
+        assert attn.layout == ttnn.TILE_LAYOUT and attn.dtype == ttnn.bfloat16
+        assert mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+        assert len(shape) == 4 and shape[0] == 1 and shape[1] == TILE and shape[2] >= self.num_heads
+        assert shape[3] % TILE == 0
+        d_tiles = shape[3] // TILE
+        assert self.v_tiles <= d_tiles
+        user_pages = pad_to(shape[2], TILE) // TILE * d_tiles
+        in_dram = 1 if mc.buffer_type == ttnn.BufferType.DRAM else 0
+        has_mask = mask is not None
+        mask_dram = 1
+        if has_mask:
+            mmc = mask.memory_config()
+            assert mask.layout == ttnn.TILE_LAYOUT and mask.dtype == ttnn.bfloat16
+            assert mmc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED and mask.shape[-2] == TILE
+            mask_dram = 1 if mmc.buffer_type == ttnn.BufferType.DRAM else 0
+
+        out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, TILE, self.width]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.device,
+            ttnn.L1_MEMORY_CONFIG,
+        )
+        mask_addr = mask.buffer_address() if has_mask else 0
+        rt = ttnn.RuntimeArgs()
+        for i, core in enumerate(self.cores):
+            rt[core.x][core.y] = [attn.buffer_address(), out.buffer_address(), i * self.units_per_core, mask_addr]
+        kernel = ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/attn/attn_concat_heads.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=self.core_ranges,
+            compile_time_args=[
+                0,
+                self.units_per_core,
+                user_pages,
+                d_tiles,
+                self.v_tiles,
+                in_dram,
+                1 if has_mask else 0,
+                mask_dram,
+            ],
+            runtime_args=rt,
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_0_default
+            ),
+        )
+        program = ttnn.ProgramDescriptor(kernels=[kernel], cbs=self.cbs, semaphores=[])
+        io = [attn] + ([mask] if has_mask else []) + [out]
+        ttnn.generic_op(io, program)
+        return out
 
 
 def kv_heads_for_chip(chip, tp, num_kv_heads):
@@ -125,25 +221,69 @@ class TtMiMoAttention:
                 sinks = s.reshape(1, dims.num_heads, 1, 1)
                 decode_sinks = torch.nn.functional.pad(s.reshape(dims.num_heads, 1), (0, TILE - 1))
 
-        self.wqkv = as_weight(wqkv, plan, plan.shard(-1), weight_dtype, cache_name(cache_dir, prefix, "wqkv"))
+        hidden = cfg.hidden_size
+        self.qkv_width = (self.nh_local + 2 * self.nkv_local) * self.head_dim
         self.wo = as_weight(wo, plan, plan.shard(-2), weight_dtype, cache_name(cache_dir, prefix, "wo"))
         if self.split_users:
+            # Prefill keeps 8 heads per chip on an interleaved weight; decode has its own grouped weight.
+            self.wqkv = as_weight(wqkv, plan, plan.shard(-1), weight_dtype, cache_name(cache_dir, prefix, "wqkv"))
             self.nh_decode = dims.num_heads // dims.num_kv_heads
+            self.decode_qkv_width = (self.nh_decode + 2) * self.head_dim
+            self.decode_qkv = DramShardedMatmul(plan, hidden, self.decode_qkv_width)
             wqkv_d = wo_d = None
             if weights is not None:
                 wqkv_d, wo_d = prepare_grouped_decode_qkv_o(weights, dims, cfg.attention_value_scale, tp)
-            self.wqkv_decode = as_weight(
-                wqkv_d, plan, plan.shard(-1), weight_dtype, cache_name(cache_dir, prefix, "wqkv_grouped")
+                wqkv_d = self.decode_qkv.pad_chip_blocks(wqkv_d, tp)
+            self.wqkv_decode = self._interleaved_qkv(
+                as_weight(
+                    wqkv_d,
+                    plan,
+                    plan.shard(-1),
+                    weight_dtype,
+                    cache_name(cache_dir, prefix, "wqkv_grouped_ds"),
+                    memory_config=self.decode_qkv.weight_memory_config,
+                ),
+                self.decode_qkv_width,
             )
             self.wo_decode = as_weight(
                 wo_d, plan, plan.shard(-2), weight_dtype, cache_name(cache_dir, prefix, "wo_grouped")
             )
+            self.decode_qkv_program = decode_linear_config(plan.mesh_device, hidden, self.decode_qkv_width)
+            self.decode_o_program = decode_linear_config(plan.mesh_device, self.nh_decode * self.v_head_dim, hidden)
+        else:
+            # The cached weight is DRAM-sharded and padded per chip; decode and prefill both read an unpadded
+            # interleaved copy made once here.
+            self.decode_qkv = DramShardedMatmul(plan, hidden, self.qkv_width)
+            if wqkv is not None:
+                wqkv = self.decode_qkv.pad_chip_blocks(wqkv, tp)
+            self.wqkv = self._interleaved_qkv(
+                as_weight(
+                    wqkv,
+                    plan,
+                    plan.shard(-1),
+                    weight_dtype,
+                    cache_name(cache_dir, prefix, "wqkv_ds"),
+                    memory_config=self.decode_qkv.weight_memory_config,
+                ),
+                self.qkv_width,
+            )
+            # Decode o_proj without the V padding rows (they only ever multiplied zeros), sliced on device.
+            self.wo_decode = self._unpadded_o()
+            self.decode_qkv_program = decode_linear_config(plan.mesh_device, hidden, self.qkv_width)
+            self.decode_o_program = decode_linear_config(plan.mesh_device, self.nh_local * self.v_head_dim, hidden)
         self.sinks = self.decode_sinks = None
         if dims.has_sink:
             self.sinks = as_weight(sinks, plan, plan.shard(1), ttnn.bfloat16, cache_name(cache_dir, prefix, "sinks"))
             self.decode_sinks = as_weight(
                 decode_sinks, plan, plan.shard(0), ttnn.bfloat16, cache_name(cache_dir, prefix, "decode_sinks")
             )
+
+        # Decode with the users in rows 0-3 (forward_decode(compact=True)): rows 0-3 of the o-projection output go to a
+        # persistent compact [1, 1, 32, hidden / 8] tensor, so the row reduction is one all-gather of 1/8 of the tile.
+        self.compact_rows = CompactRows(plan, hidden)
+        self.compact_buf = self.compact_rows.output(plan)
+        # Decode: SDPA output -> concatenated heads (V's real dims) in one launch.
+        self.concat_heads = ConcatHeads(plan, self.nh_decode if self.split_users else self.nh_local, self.v_head_dim)
 
         self.mm_config = compute_config(ttnn.MathFidelity.HiFi2)
         self.sdpa_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=False, packer_l1_acc=False)
@@ -153,6 +293,35 @@ class TtMiMoAttention:
             k_chunk_size=128,
             exp_approx_mode=False,
         )
+
+    def _interleaved_qkv(self, w, width):
+        """DRAM-sharded fused qkv [K, n_pad] per chip -> DRAM-interleaved [K, width], padding columns dropped.
+
+        The decode 1D matmul reads it with no input reshard, output copy or trimming slice; prefill reads it
+        directly. The slice is tile-aligned, so the BFP8 tiles are copied unchanged."""
+        k, n_pad = w.shape[-2], w.shape[-1]
+        flat = ttnn.to_memory_config(w, ttnn.DRAM_MEMORY_CONFIG)
+        w.deallocate(True)
+        if n_pad == width:
+            return flat
+        cols = ttnn.reshape(flat, (1, 1, k, n_pad))
+        real = ttnn.slice(cols, (0, 0, 0, 0), (1, 1, k, width), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        flat.deallocate(True)
+        return ttnn.reshape(real, (k, width))
+
+    def _unpadded_o(self):
+        """Per-chip padded o_proj [nh_local * head_dim, hidden] -> [nh_local * v_head_dim, hidden], on device.
+
+        The slice is tile-aligned (192 -> 128 rows per head), so the BFP8 tiles are copied unchanged."""
+        hidden = self.wo.shape[-1]
+        heads = ttnn.reshape(self.wo, (1, self.nh_local, self.head_dim, hidden))
+        real = ttnn.slice(
+            heads,
+            (0, 0, 0, 0),
+            (1, self.nh_local, self.v_head_dim, hidden),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return ttnn.reshape(real, (self.nh_local * self.v_head_dim, hidden))
 
     # ---------------------------------------------------------------- KV cache
     def kv_tokens_per_user(self, max_seq_len):
@@ -177,6 +346,27 @@ class TtMiMoAttention:
         return caches
 
     # ---------------------------------------------------------------- prefill
+    def _prefill_qkv(self, x):
+        assert self.wqkv.shape[-1] == self.qkv_width, (self.wqkv.shape, self.qkv_width)
+        return ttnn.linear(
+            x,
+            self.wqkv,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.mm_config,
+        )
+
+    def _decode_qkv(self, x, weight, program_config):
+        # Keep the fused qkv row in L1: the decode head split reads it with many small per-user row reads.
+        return ttnn.linear(
+            x,
+            weight,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            program_config=program_config,
+            compute_kernel_config=self.mm_config,
+        )
+
     def _prefill_sdpa_program(self, seq_len):
         chunk = 256 if seq_len >= 2048 else (128 if seq_len >= 128 else 32)
         return ttnn.SDPAProgramConfig(
@@ -192,13 +382,7 @@ class TtMiMoAttention:
         assert start_pos == 0, "chunked prefill (start_pos > 0) is not implemented yet"
         seq_len = x.shape[-2]
         real_len = seq_len if real_len is None else real_len
-        xqkv = ttnn.linear(
-            x,
-            self.wqkv,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.mm_config,
-        )
+        xqkv = self._prefill_qkv(x)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
             num_heads=self.nh_local,
@@ -269,26 +453,39 @@ class TtMiMoAttention:
             use_height_and_width_as_shard_shape=True,
         )
 
-    def forward_decode(self, x, rot_mats, cur_pos, page_table, kv_cache):
+    def _decode_o(self, attn_cat, compact):
+        """o projection and the row reduction (consumes ``attn_cat``). ``compact``: the users are in rows 0-3; returns
+        the row all-gather of every chip's compact rows (CompactRows) for ReduceExpand instead of the all-reduced
+        [1, 1, 32, hidden]."""
+        out = ttnn.linear(
+            attn_cat,
+            self.wo_decode,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG if compact else ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self.decode_o_program,
+            compute_kernel_config=self.mm_config,
+        )
+        attn_cat.deallocate(True)
+        if not compact:
+            return self.plan.all_reduce(out)
+        rows = self.compact_rows(out, self.compact_buf)
+        out.deallocate(True)
+        return self.plan.all_gather(rows, dim=3)  # [1, 1, 32, tp * hidden / 8]
+
+    def forward_decode(self, x, rot_mats, cur_pos, page_table, kv_cache, compact=False):
         """x [1, 1, B, hidden] (B users padded to a tile).
 
         cur_pos: int32 [B] on device (-1 skips a slot), or a dict {"pos", "pos_owned", "owner_mask"}; global
-        layers with split users read the per-chip owned view (see kv.py)."""
+        layers with split users read the per-chip owned view (see kv.py).
+        ``compact``: users only in rows 0-3; returns the gathered compact rows (see ``_decode_o``)."""
         if isinstance(cur_pos, dict):
             if self.split_users:
                 return self._forward_decode_split(
-                    x, rot_mats, cur_pos["pos_owned"], cur_pos["owner_mask"], page_table, kv_cache
+                    x, rot_mats, cur_pos["pos_owned"], cur_pos["owner_mask"], page_table, kv_cache, compact
                 )
             cur_pos = cur_pos["pos"]
         assert not self.split_users, "global layers on TP=8 need the per-chip owned positions"
-        batch = x.shape[-2]
-        xqkv = ttnn.linear(
-            x,
-            self.wqkv,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.mm_config,
-        )
+        xqkv = self._decode_qkv(x, self.wqkv, self.decode_qkv_program)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             xqkv,
             num_heads=self.nh_local,
@@ -321,43 +518,18 @@ class TtMiMoAttention:
             cache_position_modulo=self.cache_modulo,
             program_config=self.decode_sdpa_program,
             compute_kernel_config=self.sdpa_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         q_rot.deallocate(True)
-        batch_grid = ttnn.num_cores_to_corerangeset(batch, ttnn.CoreCoord(8, 8), row_wise=True)
-        sharded = ttnn.create_sharded_memory_config(
-            shape=(((self.nh_local + TILE - 1) // TILE) * TILE, self.head_dim),
-            core_grid=batch_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        attn_sharded = ttnn.to_memory_config(attn, sharded)
+        # Heads concatenated with only V's 128 real dims (the padding columns are zeros), in L1 for the o matmul.
+        attn_cat = self.concat_heads(attn)
         attn.deallocate(True)
-        attn_cat = ttnn.experimental.nlp_concat_heads_decode(attn_sharded, num_heads=self.nh_local)
-        attn_sharded.deallocate(True)
-        attn_cat_dram = ttnn.to_memory_config(attn_cat, ttnn.DRAM_MEMORY_CONFIG)
-        attn_cat.deallocate(True)
-        out = ttnn.linear(
-            attn_cat_dram,
-            self.wo,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.mm_config,
-        )
-        attn_cat_dram.deallocate(True)
-        return self.plan.all_reduce(out)
+        return self._decode_o(attn_cat, compact)
 
-    def _forward_decode_split(self, x, rot_mats, pos_owned, owner_mask, page_table, kv_cache):
+    def _forward_decode_split(self, x, rot_mats, pos_owned, owner_mask, page_table, kv_cache, compact=False):
         """Global-layer decode: all 16 Q heads of this chip's KV group, for the slots this chip owns."""
         batch = x.shape[-2]
-        xqkv = ttnn.linear(
-            x,
-            self.wqkv_decode,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.mm_config,
-        )
+        xqkv = self._decode_qkv(x, self.wqkv_decode, self.decode_qkv_program)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             xqkv,
             num_heads=self.nh_decode,
@@ -396,25 +568,11 @@ class TtMiMoAttention:
             scale=self.scale,
             program_config=self.decode_sdpa_program,
             compute_kernel_config=self.sdpa_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )  # [1, B, 16, 128]
         q_rot.deallocate(True)
-        heads_pad = ((self.nh_decode + TILE - 1) // TILE) * TILE
-        attn_sharded = ttnn.to_memory_config(attn, self._height_sharded(batch, heads_pad, self.v_head_dim))
+        # Heads concatenated in L1; slots owned by the other chip of the pair were skipped here, so the owner mask
+        # zeroes their rows before the row all-reduce.
+        owned = self.concat_heads(attn, owner_mask)
         attn.deallocate(True)
-        attn_cat = ttnn.experimental.nlp_concat_heads_decode(attn_sharded, num_heads=self.nh_decode)
-        attn_sharded.deallocate(True)
-        attn_cat_dram = ttnn.to_memory_config(attn_cat, ttnn.DRAM_MEMORY_CONFIG)
-        attn_cat.deallocate(True)
-        # Slots owned by the other chip of the pair were skipped here; zero them before the row all-reduce.
-        owned = ttnn.mul(attn_cat_dram, owner_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        attn_cat_dram.deallocate(True)
-        out = ttnn.linear(
-            owned,
-            self.wo_decode,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.mm_config,
-        )
-        owned.deallocate(True)
-        return self.plan.all_reduce(out)
+        return self._decode_o(owned, compact)

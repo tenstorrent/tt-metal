@@ -107,3 +107,49 @@ tracked separately and do not change the plan above:
 - Chunked prefill (`start_pos > 0`) and prefix caching: #60808.
 - Device sampling, speculative decoding, performance tuning: #60809.
 - vLLM data-parallel serving over the four rows: vllm-tt-plugin#216.
+
+## Decode performance (traced, one TP=8 row unless noted)
+
+Measured with `test_model_traced_tp8_dp4.py` (2 users per row) and `test_decode_perf_tp8.py` (device
+profile of 6 layers). Every step kept the accuracy checks above passing.
+
+| Change | Step (1 row) | 4 rows, aggregate |
+|---|---|---|
+| First traced decode | 163 ms | 233 ms, 34 tok/s |
+| MoE decode computes only the selected (user, top-k) pairs: indexed `sparse_matmul`, fused gate/up weight, `in0_block_w` 64; RMSNorm over 32 cores instead of 1 | 64.5 ms | 131 ms, 61 tok/s |
+| Per-chip top-k of the LM head on device; the host reads 8 x 32 candidates instead of full logits | 52.5 ms | 62.5 ms, 128 tok/s |
+| DRAM-sharded qkv and router matmuls; `sparse_matmul` indexed mode skips its output zero-fill | 46.5 ms | 57.6 ms, 139 tok/s |
+| tt-kernel-agent (3 rounds on the MoE decode layer, 651 -> 479 us): per-pair intermediates in L1; the indexed `sparse_matmul` reuses the broadcast activation across experts and prefetches the next expert's first weight block | 38.4 ms | 47.6 ms, 168 tok/s |
+
+### DRAM bandwidth utilization (`tests/perf/decode_bandwidth.py`)
+
+Useful bytes per chip per step (the selected experts' weight slices, attention, router, dense MLP, LM head and
+the KV attended, without padding: 3.58 GB at short context, 4 users per replica) / step time / 512 GB/s. The
+device loop (`MiMoGalaxyGenerator.decode_steps`) keeps greedy decoding on device: argmax across the row,
+token feedback and position update inside the trace; its tokens match the host loop.
+
+| Change | 1 row, device loop | 4 rows, device loop | 1 row, host loop |
+|---|---|---|---|
+| Start (MoE layer 479 us) | | | 38.6 ms, 18.0 % |
+| Device-resident greedy loop | 33.3 ms, 20.9 % | 35.4 ms, 19.7 % | 38.8 ms |
+| Routing after the sigmoid in one program (`tt/moe_route.py`: exact fp32 top-8, normalize, mask; replaces top-k, gather and ~20 glue ops); CCL on 2 links (all-reduce 37.7 -> 29.7 us) | 26.8 ms, 26.0 % | 28.9 ms, 24.1 % | 31.8 ms |
+| tt-kernel-agent `mimo_moe_stream` round 2: bank-local streaming gate|up with the routing selection inside the program (MoE layer 283 us) | 23.7 ms, 29.5 % | 25.8 ms, 27.1 % | 28.7 ms |
+| tt-kernel-agent final (4 rounds): bank-local streaming down with the pair sum in dest (MoE layer 204 us) | 20.1 ms, 34.7 % | 24.1 ms, 29.0 % | 24.6 ms |
+| Bank-reader cores from the 4x8 parent: row 2's own answer (x = 6 for banks 4-7) slowed six of its chips | 20.1 ms, 34.7 % | 21.95 ms, 31.8 % | 24.8 ms |
+| tt-kernel-agent `mimo_attn_decode` round 2: L1 hand-offs around the projections and the all-reduce; SWA o projection without the V padding rows (attention block 174.7 -> 156.9 us) | 18.5 ms, 37.7 % | 21.1 ms, 33.1 % | 22.3 ms |
+| tt-kernel-agent `mimo_moe_stream2`: compact 4-row all-gather + fixed-order fp32 reduce, earlier streaming start (MoE layer 204 -> 181 us) | 18.07 ms, 38.6 % | 20.15 ms, 34.6 % | 22.4 ms |
+| tt-kernel-agent `mimo_attn_decode` final: wide-K-block 1D matmuls for qkv / o on unpadded weights (attention block -> 147.4 us) | 17.68 ms, 39.5 % | 19.75 ms, 35.3 % | 22.0 ms |
+| tt-kernel-agent `mimo_layer_decode`: compact attention all-reduce through the MoE's fp32 reduce, residual adds folded into it, one-launch head concat (layer 340.5 -> 321.7 us) | 16.70 ms, 41.8 % | 18.64 ms, 37.5 % | 21.0 ms |
+
+Accuracy after the last row: teacher-forced top-1 vs the fp32 reference 0.975, logits PCC min 0.9689 / mean
+0.9930 (`test_model_tp8_dp4.py`; before this table: 0.950, 0.9693 / 0.9926). The GDDR6 of this Galaxy runs at 14 Gbps on every chip (tt-smi), so the
+attainable peak is ~448 GB/s; the table keeps the 512 GB/s spec peak as the denominator.
+
+With B=4 x 1M allocated (`test_capacity_1m_tp8_dp4.py`, 16 users, 4 per row), after the first table's rows:
+49.1 ms/step at 4K positions (326 tok/s), 74.5 ms at 128K (215 tok/s), 236.7 ms at ~1M (68 tok/s).
+
+Where one MoE decode layer's ~650 us go (device, per chip): expert `sparse_matmul` gate|up 282 us
+(16 cores) and down 118 us, fp32 top-k 44 us and gather 33 us, row all-reduce 34 us, the rest in
+small ops. The expert matmuls read ~57 MB of BFP4 weights per call, so they run at about half of the
+bandwidth a DRAM-sharded matmul reaches. `tests/perf/kagent_moe_decode_{bench,check}.py` are the
+tt-kernel-agent perf and correctness commands for this layer (baseline 653 us, spread 0.04 %).
