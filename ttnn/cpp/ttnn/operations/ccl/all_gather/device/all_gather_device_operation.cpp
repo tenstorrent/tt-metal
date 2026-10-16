@@ -102,8 +102,8 @@ AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::comp
     // gathered tensor dim (their pieces are still distinct after the gather). Without a cluster_axis the gather
     // spans the whole mesh and every placement becomes Replicate. The helper expands a collapsed 1-D label to one
     // placement per mesh axis first and compares Shard dims normalised, treating an out-of-range dim left behind by
-    // a rank-changing op (#52331) as matching nothing, so the old skip-over-invalid-dims workaround is gone.
-    // `dim_from_end` is negative by construction; the helper normalises it. No honest label (nullopt, already
+    // a rank-changing op (#52331) as matching nothing. `dim_from_end` is negative by construction; the helper
+    // normalises it. No honest label (nullopt, already
     // reported): the output keeps the input's label. Returning {} would instead hand the framework the union over
     // every tensor argument, the persistent output tensor's label included.
     const auto& input_tensor = tensor_args.input_tensor;
