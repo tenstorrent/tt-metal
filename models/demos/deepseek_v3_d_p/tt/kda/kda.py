@@ -269,6 +269,7 @@ class ttKDA:
         self.output_gate_weight = None
         self._output_gate_program = None
         self._output_projection_programs = None
+        self._input_projection_program = None
         if self.overlap_output_gate:
             fused = self.weights.input_projection
             hidden, width = tuple(fused.shape)[-2:]
@@ -316,6 +317,16 @@ class ttKDA:
                     k_block=8,
                     math_fidelity=program_config.output_projection_math_fidelity,
                 ),
+            )
+        if self.overlap_output_gate:
+            # The input projection on the whole worker grid: the same blocking as the tuned linear (2 x 27 tiles per
+            # core, 8-tile K blocks), and its BF16 output leaves each subblock as it is finished.
+            self._input_projection_program = GateMatmulProgram(
+                mesh_device,
+                rows=(0, grid.y - 1),
+                cols=(0, grid.x - 1),
+                k_block=8,
+                math_fidelity=program_config.input_projection_math_fidelity,
             )
         self.input_projection_program_config, self.output_projection_program_config = (
             tuned_projection_matmul_configs(
@@ -474,15 +485,26 @@ class ttKDA:
         # The tuned schedule writes the projection to L1: it is only read back by this layer (the QKV, decay, beta
         # and output-gate columns, all in place), and its DRAM write would otherwise sit after the last K block,
         # outside the compute.
-        projected = ttnn.linear(
-            hidden_states,
-            weights.input_projection,
-            program_config=self.input_projection_program_config,
-            memory_config=(
-                ttnn.DRAM_MEMORY_CONFIG if self.input_projection_program_config is None else ttnn.L1_MEMORY_CONFIG
-            ),
-            compute_kernel_config=self.input_projection_compute_config,
-        )
+        if self._input_projection_program is not None:
+            projected = ttnn.allocate_tensor_on_device(
+                ttnn.Shape(list(hidden_states.shape)[:-1] + [weights.input_projection.shape[-1]]),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                self.device,
+                ttnn.L1_MEMORY_CONFIG,
+            )
+            io, program = self._input_projection_program(hidden_states, weights.input_projection, projected)
+            ttnn.generic_op(io, program)
+        else:
+            projected = ttnn.linear(
+                hidden_states,
+                weights.input_projection,
+                program_config=self.input_projection_program_config,
+                memory_config=(
+                    ttnn.DRAM_MEMORY_CONFIG if self.input_projection_program_config is None else ttnn.L1_MEMORY_CONFIG
+                ),
+                compute_kernel_config=self.input_projection_compute_config,
+            )
         auxiliary_start = self._convolution_width
         # With overlap_output_gate the projection keeps only the first heads' output-gate columns.
         gate_width = self.input_projection_gate_columns if self.overlap_output_gate else config.v_dim
