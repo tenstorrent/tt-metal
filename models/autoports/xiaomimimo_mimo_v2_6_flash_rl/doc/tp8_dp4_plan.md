@@ -116,9 +116,10 @@ profile of 6 layers). Every step kept the accuracy checks above passing.
 | MoE decode computes only the selected (user, top-k) pairs: indexed `sparse_matmul`, fused gate/up weight, `in0_block_w` 64; RMSNorm over 32 cores instead of 1 | 64.5 ms | 131 ms, 61 tok/s |
 | Per-chip top-k of the LM head on device; the host reads 8 x 32 candidates instead of full logits | 52.5 ms | 62.5 ms, 128 tok/s |
 | DRAM-sharded qkv and router matmuls; `sparse_matmul` indexed mode skips its output zero-fill | 46.5 ms | 57.6 ms, 139 tok/s |
+| tt-kernel-agent (3 rounds on the MoE decode layer, 651 -> 479 us): per-pair intermediates in L1; the indexed `sparse_matmul` reuses the broadcast activation across experts and prefetches the next expert's first weight block | 38.4 ms | 47.6 ms, 168 tok/s |
 
-With B=4 x 1M allocated (`test_capacity_1m_tp8_dp4.py`, 16 users): 261 ms/step at 4K positions,
-278 ms at 128K and 449 ms at ~1M; those runs predate the last two rows above.
+With B=4 x 1M allocated (`test_capacity_1m_tp8_dp4.py`, 16 users, 4 per row), after all rows above:
+49.1 ms/step at 4K positions (326 tok/s), 74.5 ms at 128K (215 tok/s), 236.7 ms at ~1M (68 tok/s).
 
 Where one MoE decode layer's ~650 us go (device, per chip): expert `sparse_matmul` gate|up 282 us
 (16 cores) and down 118 us, fp32 top-k 44 us and gather 33 us, row all-reduce 34 us, the rest in

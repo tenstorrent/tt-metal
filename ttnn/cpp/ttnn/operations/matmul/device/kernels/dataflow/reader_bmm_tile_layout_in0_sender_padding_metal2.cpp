@@ -226,8 +226,22 @@ void kernel_main() {
     constexpr bool in0_reread_per_batch = in0_reuse_in_dfb && !in0_replay_in_buffer;
     constexpr uint32_t in0_num_batches_read = in0_reread_per_batch ? in1_B : in0_B;
 
+    // Indexed mode with a broadcast A: every group multiplies the same A slice. Once the in0 buffer has
+    // been filled with whole groups (its write pointer returns to where this A batch started exactly at a
+    // group boundary), every slot already holds the block compute will read there, so later groups only
+    // replay the credits (keeping the receiver handshake) instead of re-reading and re-multicasting A.
+    // If the pointer wraps mid-group the buffer is not a whole number of groups and A is always re-read.
+    constexpr uint32_t IN0_FILLING = 0;
+    constexpr uint32_t IN0_REPLAY = 1;
+    constexpr uint32_t IN0_NO_REPLAY = 2;
+    [[maybe_unused]] uint32_t in0_fill_state = IN0_FILLING;
+    [[maybe_unused]] uint32_t in0_fill_blocks = 0;
+    [[maybe_unused]] uint32_t in0_fill_start_ptr = 0;
+
     for (uint32_t b = 0; b < in0_num_batches_read; ++b) {
         [[maybe_unused]] const uint32_t in0_batch_start_tile_id = in0_tensor_start_tile_id;
+        in0_fill_state = IN0_FILLING;
+        in0_fill_blocks = 0;
 #ifdef SPARSITY
         if constexpr (batchB > 0 && !use_indices) {
             noc.async_read(s_sparsity, dfb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
@@ -309,6 +323,33 @@ void kernel_main() {
                         // Common for sharded and interleaved paths
                         dfb_in0.reserve_back(in0_block_num_tiles);
 #ifndef IN0_SHARDED
+                        if constexpr (use_indices && bcast_A) {
+                            const uint32_t in0_wp = dfb_in0.get_write_ptr();
+                            if (in0_fill_state == IN0_FILLING) {
+                                if (in0_fill_blocks == 0) {
+                                    in0_fill_start_ptr = in0_wp;
+                                } else if (in0_wp == in0_fill_start_ptr) {
+                                    in0_fill_state = (bh == 0 && bw == 0 && block == 0) ? IN0_REPLAY : IN0_NO_REPLAY;
+                                }
+                                ++in0_fill_blocks;
+                            }
+                            if (in0_fill_state == IN0_REPLAY) {
+#ifndef SKIP_MCAST
+                                // The receivers' slot already holds this block; only release them.
+                                sender_sem.wait(in0_mcast_num_dests);
+                                sender_sem.set(0);
+                                receiver_sem.set_multicast(
+                                    noc,
+                                    in0_mcast_dest_noc_start_x,
+                                    in0_mcast_dest_noc_start_y,
+                                    in0_mcast_dest_noc_end_x,
+                                    in0_mcast_dest_noc_end_y,
+                                    in0_mcast_num_cores);
+#endif  // SKIP_MCAST
+                                dfb_in0.push_back(in0_block_num_tiles);
+                                continue;
+                            }
+                        }
 
                         uint32_t in0_write_offset = 0;
 

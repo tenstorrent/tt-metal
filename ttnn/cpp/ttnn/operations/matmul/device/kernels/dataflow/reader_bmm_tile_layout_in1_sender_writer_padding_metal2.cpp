@@ -70,6 +70,14 @@
 #include "ttnn/operations/matmul/device/kernels/dataflow/prefetcher_pipe_in1_window.hpp"
 #endif
 
+// Indexed/gather mode, plain interleaved in1 without multicast: block 0 of the next group can be read while
+// compute still works on the current group (see in1_prefetch_next_group below).
+#if defined(SPARSITY) && defined(SKIP_MCAST) && !defined(IN1_SHARDED) && !defined(IN1_DRAM_WIDTH_SHARDED) && \
+    !defined(IN1_DRAM_HEIGHT_SHARDED) && !defined(ENABLE_GLOBAL_CB) && !defined(ENABLE_PREFETCHER_PIPE) &&   \
+    !defined(FUSE_BIAS) && !defined(FUSE_OP_ALL_GATHER) && !defined(FUSE_OP_REDUCE_SCATTER)
+#define IN1_INDEXED_GROUP_PREFETCH 1
+#endif
+
 void kernel_main() {
     // READER
 #if defined(FUSE_OP_ALL_GATHER) || defined(FUSE_OP_REDUCE_SCATTER)
@@ -161,6 +169,13 @@ void kernel_main() {
     constexpr auto num_active = get_arg(args::num_active);
     constexpr bool use_indices = num_active > 0;
     constexpr uint32_t batch_loop_lim = use_indices ? num_active : batchB_lim;
+
+    // Software-pipeline the indexed group loop by one group: block 0 of group indices[bB + 1] is read and
+    // pushed before the writer waits for group bB's output, so its DRAM latency overlaps compute of group
+    // bB instead of stalling compute at every group boundary. Each in1 block is still reserved/pushed once.
+#ifdef IN1_INDEXED_GROUP_PREFETCH
+    constexpr bool in1_prefetch_next_group = use_indices && num_blocks_h_dim == 1 && num_blocks_w_dim == 1;
+#endif
 
     const Noc noc;
     DataflowBuffer dfb_in1(dfb::in1);
@@ -325,6 +340,11 @@ void kernel_main() {
 #ifdef IN1_DRAM_HEIGHT_SHARDED
     constexpr uint32_t in1_batch_stride_bytes = in1_KtNt_per_batch * in1_single_tile_size_bytes;
 #endif  // IN1_DRAM_HEIGHT_SHARDED
+
+#ifdef IN1_INDEXED_GROUP_PREFETCH
+    // Set when the next group's block 0 has already been read and pushed.
+    [[maybe_unused]] bool in1_next_block0_ready = false;
+#endif
 
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in1_batch_tile_id = in1_tensor_start_tile_id;
@@ -501,6 +521,16 @@ void kernel_main() {
                         noc.async_read_barrier();
 #elif !defined(IN1_SHARDED)
                         // Operand 1 - interleaved
+#ifdef IN1_INDEXED_GROUP_PREFETCH
+                        if constexpr (in1_prefetch_next_group) {
+                            if (in1_next_block0_ready) {
+                                // Block 0 of this group was read and pushed at the end of the previous group.
+                                in1_next_block0_ready = false;
+                                in1_tensor_current_inner_dim_block_start_tile_id += in1_tensor_next_block_stride;
+                                continue;
+                            }
+                        }
+#endif  // IN1_INDEXED_GROUP_PREFETCH
                         dfb_in1.reserve_back(in1_block_num_tiles);
                         uint32_t in1_write_offset = 0;
                         const uint64_t in1_start_address =
@@ -596,6 +626,39 @@ void kernel_main() {
                         experimental::remote_cb_pop_front(remote_cb_id, 1);
                     }
 #endif  // ENABLE_PREFETCHER_PIPE / ENABLE_GLOBAL_CB
+#ifdef IN1_INDEXED_GROUP_PREFETCH
+                    if constexpr (in1_prefetch_next_group) {
+                        if (bB + 1 < batch_loop_lim) {
+                            // Read block 0 of the next group before waiting on this group's output. The reserve
+                            // only needs compute to pop an earlier in1 block, which it does right after packing.
+                            const uint32_t next_group_id =
+                                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB + 1];
+                            ASSERT(next_group_id < batchB);
+                            dfb_in1.reserve_back(in1_block_num_tiles);
+                            uint32_t next_write_offset = 0;
+                            uint32_t next_row_start_tile_id = in1_tensor_start_tile_id + next_group_id * KtNt;
+                            for (uint32_t h = 0; h < in1_block_h; ++h) {
+                                uint32_t next_tile_id = next_row_start_tile_id;
+                                for (uint32_t w = 0; w < in1_block_w; ++w) {
+                                    if (w < last_block_w) {
+                                        noc.async_read(
+                                            s1,
+                                            dfb_in1,
+                                            in1_single_tile_size_bytes,
+                                            {.page_id = next_tile_id},
+                                            {.offset_bytes = next_write_offset});
+                                    }
+                                    next_write_offset += in1_aligned_tile_size_bytes;
+                                    next_tile_id += in1_tensor_stride_w;
+                                }
+                                next_row_start_tile_id += in1_tensor_stride_h;
+                            }
+                            noc.async_read_barrier();
+                            dfb_in1.push_back(in1_block_num_tiles);
+                            in1_next_block0_ready = true;
+                        }
+                    }
+#endif  // IN1_INDEXED_GROUP_PREFETCH
 #ifdef FUSE_BIAS
                     // Only read bias on first batch, or we have multiple output blocks; a per-group bias
                     // is re-read for every group (the compute kernel pops it after each group).

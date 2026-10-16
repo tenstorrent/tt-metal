@@ -151,16 +151,15 @@ class TtMiMoMoE:
             dense = masked
         return dense
 
-    def _swiglu(self, gate_up):
+    def _swiglu(self, gate_up, memory_config=None):
         """[..., 2 * I] (gate | up) -> silu(gate) * up, [..., I]."""
+        mem = memory_config or ttnn.DRAM_MEMORY_CONFIG
         shape = list(gate_up.shape)
         I = self.inter_local
-        gate = ttnn.slice(gate_up, [0] * len(shape), shape[:-1] + [I])
-        up = ttnn.slice(gate_up, [0] * (len(shape) - 1) + [I], shape)
+        gate = ttnn.slice(gate_up, [0] * len(shape), shape[:-1] + [I], memory_config=mem)
+        up = ttnn.slice(gate_up, [0] * (len(shape) - 1) + [I], shape, memory_config=mem)
         gate_up.deallocate(True)
-        act = ttnn.mul(
-            gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        act = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mem)
         gate.deallocate(True)
         up.deallocate(True)
         return act
@@ -194,6 +193,9 @@ class TtMiMoMoE:
         U, k = self.decode_users, self.cfg.num_experts_per_tok
         pairs = U * k
         H, I = self.hidden, self.inter_local
+        # Per-pair intermediates are small (<= 64 KiB per core interleaved): keep them in L1, off the DRAM
+        # that the expert weights stream from.
+        L1 = ttnn.L1_MEMORY_CONFIG
         logits = self._router_logits(x)
         indices, weights = self._topk(logits)
         logits.deallocate(True)
@@ -201,15 +203,17 @@ class TtMiMoMoE:
         idx_u = ttnn.slice(indices, (0, 0, 0, 0), (1, 1, U, k))
         # reshape does not take uint16, so flatten while uint32, then narrow to the uint16 stick sparse_matmul wants
         ids = ttnn.typecast(ttnn.reshape(ttnn.to_layout(idx_u, ttnn.ROW_MAJOR_LAYOUT), (1, 1, 1, pairs)), ttnn.uint16)
-        w_u = ttnn.slice(weights, (0, 0, 0, 0), (1, 1, U, k))
-        mask_u = ttnn.slice(token_mask, (0, 0, 0, 0), (1, 1, U, 1))
-        w_u = ttnn.mul(w_u, ttnn.typecast(mask_u, ttnn.float32))
+        # The mask is 0/1, so rounding to bf16 before masking is bit-identical to masking in fp32 first;
+        # masking the whole tile with a broadcast mul avoids slicing and typecasting the mask.
+        w_bf16 = ttnn.typecast(weights, ttnn.bfloat16)
+        w_masked = ttnn.mul(w_bf16, token_mask)
+        w_u = ttnn.slice(w_masked, (0, 0, 0, 0), (1, 1, U, k))
         w_col = ttnn.to_layout(
-            ttnn.reshape(ttnn.to_layout(ttnn.typecast(w_u, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT), (1, pairs, 1, 1)),
+            ttnn.reshape(ttnn.to_layout(w_u, ttnn.ROW_MAJOR_LAYOUT), (1, pairs, 1, 1)),
             ttnn.TILE_LAYOUT,
         )
-        row_weight = ttnn.mul(self.pair_onehot, w_col)  # [1, pairs, 32, 1]
-        for t in (indices, weights, idx_u, w_u, mask_u, w_col):
+        row_weight = ttnn.mul(self.pair_onehot, w_col, memory_config=L1)  # [1, pairs, 32, 1]
+        for t in (indices, weights, idx_u, w_bf16, w_masked, w_u, w_col):
             t.deallocate(True)
 
         out_tile = ttnn.Tile([TILE, TILE])
@@ -218,14 +222,14 @@ class TtMiMoMoE:
             self.w_gate_up,
             sparsity=self.all_experts,
             indices=ids,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=L1,
             output_tile=out_tile,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.expert_config,
             program_config=self.gate_up_program,
         )  # [1, 1, 1, pairs, 32, 2I]
-        act = self._swiglu(ttnn.reshape(gate_up, (1, pairs, TILE, 2 * I)))
-        act_w = ttnn.mul(act, row_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        act = self._swiglu(ttnn.reshape(gate_up, (1, pairs, TILE, 2 * I)), memory_config=L1)
+        act_w = ttnn.mul(act, row_weight, memory_config=L1)
         act.deallocate(True)
         row_weight.deallocate(True)
         down = ttnn.sparse_matmul(
@@ -235,7 +239,7 @@ class TtMiMoMoE:
             indices=ids,
             is_input_a_sparse=True,
             is_input_b_sparse=True,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=L1,
             output_tile=out_tile,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.expert_config,
@@ -243,7 +247,7 @@ class TtMiMoMoE:
         )  # [1, pairs, 32, H]
         act_w.deallocate(True)
         ids.deallocate(True)
-        out = ttnn.sum(down, dim=1, keepdim=True)  # [1, 1, 32, H]
+        out = ttnn.sum(down, dim=1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, 32, H]
         down.deallocate(True)
         return self.plan.all_reduce(out)
 
