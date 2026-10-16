@@ -138,10 +138,11 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_conv_descriptor(
     push_cb(geom_weight_cb, CORNERS * even_slots, tile_nbytes);
     push_cb(odd_geom_weight_cb, CORNERS * odd_slots, tile_nbytes);
     // A block's columns of one position; two weight slices, the next loading while compute works
-    // through the current one; every block's fp32 output; the bias; each reader's output.
+    // through the current one; every block's output, accumulated across positions in bfloat16 (fp32
+    // within a position, in dest); the bias; each reader's output.
     push_cb(column_cb, channel_tiles, tile_nbytes);
     push_cb(conv_weight_cb, 2 * channel_tiles * out_tiles, tile_nbytes);
-    push_cb(acc_cb, max_blocks * out_tiles, fp32_tile_nbytes, tt::DataFormat::Float32);
+    push_cb(acc_cb, max_blocks * out_tiles, tile_nbytes);
     push_cb(bias_cb, out_tiles, tile_nbytes);
     for (const uint8_t cb : {output_tile_cb, odd_output_tile_cb}) {
         push_cb(cb, 2 * out_tiles, tile_nbytes);
@@ -158,13 +159,13 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_conv_descriptor(
     TT_FATAL(
         other_cbs <= l1_free,
         "modulated_deform_conv2d: needs {} KB of L1 per core, {} KB free: {} blocks of 32 rows per core, C {}, C_out "
-        "{} (fp32 accumulators {} KB, weight slices {} KB)",
+        "{} (output accumulators {} KB, weight slices {} KB)",
         other_cbs / 1024,
         l1_free / 1024,
         max_blocks,
         s.channels,
         s.out_channels,
-        max_blocks * out_tiles * fp32_tile_nbytes / 1024,
+        max_blocks * out_tiles * tile_nbytes / 1024,
         2 * channel_tiles * out_tiles * tile_nbytes / 1024);
     // The band is optional: without room for it the readers fetch the corners from the input in DRAM.
     const uint64_t band_budget = l1_free > other_cbs + kBandL1Reserve ? l1_free - other_cbs - kBandL1Reserve : 0;

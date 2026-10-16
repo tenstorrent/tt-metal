@@ -11,8 +11,8 @@
 // second), which keeps it for every position. For each (position, block) the reader's four corners
 // are tilized on the unpacker, multiplied by their scalar columns and summed in L1, which gives the
 // block's C columns of that position; a matmul with the position's C x C_out slice of the weight
-// then accumulates into the block's fp32 output tiles, in dest within the position and in L1
-// across positions. After the last position the bias is added, the ReLU applied, and the
+// then accumulates into the block's output tiles, in fp32 dest within the position and in
+// bfloat16 L1 across positions. After the last position the bias is added, the ReLU applied, and the
 // bfloat16 output handed to the block's reader.
 
 #include <cstdint>
@@ -58,8 +58,8 @@ constexpr uint32_t odd_scalar_cb_index = get_compile_time_arg_val(15);
 constexpr uint32_t odd_geom_index_cb_index = get_compile_time_arg_val(16);
 constexpr uint32_t odd_geom_weight_cb_index = get_compile_time_arg_val(17);
 constexpr uint32_t odd_output_cb_index = get_compile_time_arg_val(18);
-// The block's columns of one kernel position, the weight slices, the fp32 output accumulators and
-// the bias.
+// The block's columns of one kernel position, the weight slices, the output accumulators and the
+// bias.
 constexpr uint32_t column_cb_index = get_compile_time_arg_val(19);
 constexpr uint32_t conv_weight_cb_index = get_compile_time_arg_val(20);
 constexpr uint32_t acc_cb_index = get_compile_time_arg_val(21);

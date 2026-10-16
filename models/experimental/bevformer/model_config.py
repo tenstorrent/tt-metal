@@ -233,7 +233,7 @@ _TTNN_DTYPES["BOX_DTYPE"] = _TTNN_DTYPES["GRID_DTYPE"]
 CODER_BISECTION_STEPS = 22
 
 # DCN input channels that run as one fused op, ttnn.experimental.modulated_deform_conv2d, whose
-# columns never leave L1. It holds every block's fp32 output on its core, which fits Blackhole's
+# columns never leave L1. It holds every block's output on its core, which fits Blackhole's
 # grid at layer3 (C=256); layer4's (C=512) weight slices and accumulators do not fit, so it runs
 # ttnn.experimental.modulated_deform_im2col and a matmul.
 DCN_FUSED_CHANNELS = (256,)
