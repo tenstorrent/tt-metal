@@ -2790,6 +2790,14 @@ tasks:
     kind: op
     layer: 2
     stateful: true
+  frozen:
+    at: '2026-10-16T19:33:36'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_indexer.py: 175e084868f99e74fbd7cc5a33d219d464855190b0356b29153c71e7bf40b301
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.enc_source.07
   title: 'enc_source block with steps 1-7 on device (last: indexer)'
   step: implement
