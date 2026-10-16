@@ -458,6 +458,7 @@ manifest::Arch describe_arch(const tt::tt_metal::Hal& hal, const PacketHeaderCon
         .stream_registers = stream_registers(hal),
         .core_registers = core_registers(hal),
         .types = std::move(types),
+        .unions = layout::described_union_types(),
     };
 }
 
