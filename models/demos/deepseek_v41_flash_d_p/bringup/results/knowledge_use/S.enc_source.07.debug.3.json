@@ -1,0 +1,23 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [],
+ "cited_only": [
+  "DS41-50"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "S.enc_source.07",
+  "role": "debug",
+  "attempt": 3,
+  "agent": "ttnn-expert-debugger",
+  "t": "2026-10-16T20:31:50",
+  "head": "9eb223ec8c7",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.enc_source.07.implement.103.json"
+  ]
+ }
+}
