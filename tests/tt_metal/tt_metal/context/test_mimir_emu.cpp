@@ -12,7 +12,7 @@
 #include <limits>
 #include <cstdlib>
 #include <memory>
-#include <set>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -27,6 +27,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "umd/device/types/arch.hpp"
 #include "umd/device/types/core_coordinates.hpp"
+#include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -37,48 +38,12 @@ static_assert(MEM_L1_UNCACHED_BASE == MEM_L1_SIZE);
 // 0-based offset; UMD maps that onto the host AXI window. Those are different windows.
 constexpr uint64_t kCceSramTestOffset = 0x800;
 constexpr uint32_t kDramOffset = 0x800;
-constexpr uint64_t kGddrSlotStride = 1ull << 30;
-// Mimir/MMK emu GDDR is an 8GiB SPA with a 1GiB sparse backing store
-// (8 channels * 4096 pages * 32KiB). Unique 32KiB pages persist until reset.
-constexpr uint64_t kEmuGddrBackingBudget = 1ull << 30;
+constexpr uint64_t kGddrSlotStride = 128ull << 20;
+// Mimir/MMK emu GDDR backing page size.
 constexpr uint64_t kEmuGddrBackingPage = 32ull << 10;
 
-struct GddrBackingTracker {
-    std::set<uint64_t> pages;
-
-    void note(uint32_t mimir_index, uint64_t address, uint64_t size) {
-        if (size == 0) {
-            return;
-        }
-        const uint64_t first = address / kEmuGddrBackingPage;
-        const uint64_t last = (address + size - 1) / kEmuGddrBackingPage;
-        for (uint64_t page = first; page <= last; ++page) {
-            pages.insert((static_cast<uint64_t>(mimir_index) << 32) | page);
-        }
-        const uint64_t used = pages.size() * kEmuGddrBackingPage;
-        ASSERT_LE(used, kEmuGddrBackingBudget)
-            << "EMU GDDR unique backing " << used << " B exceeds the 1GiB sparse budget";
-    }
-};
-
-thread_local GddrBackingTracker* t_gddr_backing = nullptr;
-
-struct GddrBackingScope {
-    GddrBackingTracker tracker;
-    GddrBackingScope() { t_gddr_backing = &tracker; }
-    ~GddrBackingScope() { t_gddr_backing = nullptr; }
-};
-
-uint32_t mimir_index_for_cce(uint32_t cce_index) { return cce_index / 2; }
-
-uint32_t location_for_cce(uint32_t cce_index) { return cce_index % 2; }
-
-uint32_t num_cces_from_soc(const metal_SocDescriptor& soc_desc) {
-    return static_cast<uint32_t>(soc_desc.get_num_dram_channels() * soc_desc.get_grid_size(tt::CoreType::DRAM).y);
-}
-
 uint32_t num_cces_on(const IDevice* device) {
-    return num_cces_from_soc(MetalContext::instance().get_cluster().get_soc_desc(device->id()));
+    return mimir_test::num_cces_from_soc(MetalContext::instance().get_cluster().get_soc_desc(device->id()));
 }
 
 struct GddrSweep {
@@ -88,8 +53,8 @@ struct GddrSweep {
 
 GddrSweep gddr_sweep_from_soc(const IDevice* device) {
     const uint64_t view_size = MetalContext::instance().get_cluster().get_soc_desc(device->id()).dram_view_size;
-    // Views of at least 1 GiB are walked in 1 GiB slots. The emu descriptors expose 512 MiB
-    // halves, which is one slot. The slot must still divide the 4 GiB half-start.
+    // Views are walked in 128 MiB slots; a view smaller than that is one slot. The slot must
+    // still divide the 4 GiB half-start.
     uint64_t slot_stride = kGddrSlotStride;
     if (view_size == 0 || view_size > std::numeric_limits<uint32_t>::max()) {
         return {};
@@ -121,14 +86,13 @@ struct CcePartition {
     uint32_t partition = 0;
 };
 
-constexpr uint32_t kMaxCces = 4;
 constexpr uint32_t kMaxPartitions = 4;
 
 const std::vector<CcePartition>& cce_partition_params() {
     static const std::vector<CcePartition> params = [] {
         std::vector<CcePartition> built;
-        built.reserve(kMaxCces * kMaxPartitions);
-        for (uint32_t cce_index = 0; cce_index < kMaxCces; ++cce_index) {
+        built.reserve(mimir_test::kMaxCces * kMaxPartitions);
+        for (uint32_t cce_index = 0; cce_index < mimir_test::kMaxCces; ++cce_index) {
             for (uint32_t partition = 0; partition < kMaxPartitions; ++partition) {
                 built.push_back({cce_index, partition});
             }
@@ -147,51 +111,9 @@ bool is_cross_mimir_case() {
     return std::string_view(suite).find("CrossMimir") != std::string_view::npos;
 }
 
-const metal_SocDescriptor& soc_desc_of(const IDevice* device) {
-    return MetalContext::instance().get_cluster().get_soc_desc(device->id());
-}
-
-std::vector<uint32_t> dram_views_for_channel(const metal_SocDescriptor& soc_desc, uint32_t channel) {
-    std::vector<uint32_t> views;
-    for (uint32_t view = 0; view < soc_desc.get_num_dram_views(); ++view) {
-        if (soc_desc.get_channel_for_dram_view(static_cast<int>(view)) == channel) {
-            views.push_back(view);
-        }
-    }
-    return views;
-}
-
-// Merged DRAM has one view per Mimir, so both CCEs on that die use it. Split DRAM has one view
-// per coordinate, in location order, so CCE 0 uses the first and CCE 1 the second.
-uint32_t local_dram_view_for_cce(const metal_SocDescriptor& soc_desc, uint32_t cce_index) {
-    const std::vector<uint32_t> views = dram_views_for_channel(soc_desc, mimir_index_for_cce(cce_index));
-    TT_FATAL(!views.empty(), "Mimir {} has no DRAM view", mimir_index_for_cce(cce_index));
-    if (views.size() == 1) {
-        return views.front();
-    }
-    const uint32_t location = location_for_cce(cce_index);
-    TT_FATAL(
-        location < views.size(),
-        "CCE {} location {} has no DRAM view on mimir {}",
-        cce_index,
-        location,
-        mimir_index_for_cce(cce_index));
-    return views[location];
-}
-
-// Metal's logical DRAM coordinate is {view, index into that view's endpoints}, not {channel, location}.
-// Launching CCE n at {n/2, n%2} is the same core on the merged descriptor, where one view covers a
-// Mimir and lists location 0 then location 1. On the split descriptor that pair is view 1, whose
-// endpoints are Mimir 0's two CCEs, so CCE 2 and CCE 3 were dispatched onto CCE 1 and CCE 0.
-CoreCoord logical_cce_core(const metal_SocDescriptor& soc_desc, uint32_t cce_index) {
-    const uint32_t view = local_dram_view_for_cce(soc_desc, cce_index);
-    return soc_desc.get_logical_dram_core_for_subchannel(
-        static_cast<int>(view), static_cast<int>(location_for_cce(cce_index)));
-}
-
 uint32_t dram_view_location(const metal_SocDescriptor& soc_desc, uint32_t view) {
     const uint32_t channel = static_cast<uint32_t>(soc_desc.get_channel_for_dram_view(static_cast<int>(view)));
-    const std::vector<uint32_t> views = dram_views_for_channel(soc_desc, channel);
+    const std::vector<uint32_t> views = mimir_test::dram_views_for_channel(soc_desc, channel);
     for (uint32_t location = 0; location < views.size(); ++location) {
         if (views[location] == view) {
             return location;
@@ -206,7 +128,7 @@ bool partition_in_case(const metal_SocDescriptor& soc_desc, uint32_t cce_index, 
         return false;
     }
     const bool local =
-        soc_desc.get_channel_for_dram_view(static_cast<int>(partition)) == mimir_index_for_cce(cce_index);
+        soc_desc.get_channel_for_dram_view(static_cast<int>(partition)) == mimir_test::mimir_index_for_cce(cce_index);
     return cross ? !local : local;
 }
 
@@ -227,27 +149,13 @@ GddrTarget gddr_target_for_view(const metal_SocDescriptor& soc_desc, uint32_t vi
         sweep.slot_stride};
 }
 
-uint64_t host_slot_offset(const GddrTarget& target, uint32_t slot) {
-    return static_cast<uint64_t>(slot) * target.slot_stride;
-}
-
 void write_gddr_view(IDevice* device, uint32_t view, uint64_t address, const std::vector<uint32_t>& data) {
-    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
     const uint32_t size = static_cast<uint32_t>(data.size() * sizeof(uint32_t));
-    if (t_gddr_backing != nullptr) {
-        const uint32_t channel = static_cast<uint32_t>(soc_desc.get_channel_for_dram_view(static_cast<int>(view)));
-        t_gddr_backing->note(channel, soc_desc.get_address_offset(static_cast<int>(view)) + address, size);
-    }
     MetalContext::instance().get_cluster().write_dram_vec(
         data.data(), size, device->id(), static_cast<int>(view), address);
 }
 
 void read_gddr_view(IDevice* device, uint32_t view, uint64_t address, uint32_t size, std::vector<uint32_t>& data) {
-    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
-    if (t_gddr_backing != nullptr) {
-        const uint32_t channel = static_cast<uint32_t>(soc_desc.get_channel_for_dram_view(static_cast<int>(view)));
-        t_gddr_backing->note(channel, soc_desc.get_address_offset(static_cast<int>(view)) + address, size);
-    }
     data.assign(size / sizeof(uint32_t), 0);
     MetalContext::instance().get_cluster().dram_barrier(device->id());
     MetalContext::instance().get_cluster().read_dram_vec(
@@ -258,30 +166,22 @@ void read_gddr_view(IDevice* device, uint32_t view, uint64_t address, uint32_t s
 // four on the split descriptor. The copy kernel uses that count as a SPA instance index, so a view
 // count sends it past the last die and the load never completes.
 uint32_t num_mimirs_on(const IDevice* device) {
-    return static_cast<uint32_t>(soc_desc_of(device).get_num_dram_channels());
-}
-
-// The start of a Mimir is the view at offset 0 on that channel. On the split descriptor that is not
-// view index == channel: view 1 is still Mimir 0, 4 GiB in.
-uint32_t base_dram_view_for_mimir(const metal_SocDescriptor& soc_desc, uint32_t mimir_index) {
-    const std::vector<uint32_t> views = dram_views_for_channel(soc_desc, mimir_index);
-    TT_FATAL(!views.empty(), "Mimir {} has no DRAM view", mimir_index);
-    for (uint32_t view : views) {
-        if (soc_desc.get_address_offset(static_cast<int>(view)) == 0) {
-            return view;
-        }
-    }
-    TT_FATAL(false, "Mimir {} has no DRAM view at offset 0", mimir_index);
-    return views.front();
+    return static_cast<uint32_t>(mimir_test::soc_desc_of(device).get_num_dram_channels());
 }
 
 void write_mimir_gddr(IDevice* device, uint32_t mimir_index, uint64_t address, const std::vector<uint32_t>& data) {
-    write_gddr_view(device, base_dram_view_for_mimir(soc_desc_of(device), mimir_index), address, data);
+    write_gddr_view(
+        device, mimir_test::base_dram_view_for_mimir(mimir_test::soc_desc_of(device), mimir_index), address, data);
 }
 
 void read_mimir_gddr(
     IDevice* device, uint32_t mimir_index, uint64_t address, uint32_t size, std::vector<uint32_t>& data) {
-    read_gddr_view(device, base_dram_view_for_mimir(soc_desc_of(device), mimir_index), address, size, data);
+    read_gddr_view(
+        device,
+        mimir_test::base_dram_view_for_mimir(mimir_test::soc_desc_of(device), mimir_index),
+        address,
+        size,
+        data);
 }
 
 bool emu_server_configured() {
@@ -289,6 +189,10 @@ bool emu_server_configured() {
     const bool jtag = std::getenv("TT_METAL_GRENDEL_JTAG_SERVER") != nullptr &&
                       std::getenv("TT_METAL_GRENDEL_JTAG_SOC_DESC") != nullptr;
     return emu || jtag;
+}
+
+uint64_t host_slot_offset(const GddrTarget& target, uint32_t slot) {
+    return static_cast<uint64_t>(slot) * target.slot_stride;
 }
 
 // Opening the emulator is what makes a skipped case take tens of seconds. The view map is in the
@@ -308,21 +212,13 @@ const metal_SocDescriptor& configured_soc_desc() {
 
 bool cce_partition_case_applies(const CcePartition& param, bool cross) {
     const metal_SocDescriptor& soc_desc = configured_soc_desc();
-    if (param.cce_index >= num_cces_from_soc(soc_desc) || soc_desc.get_num_dram_channels() == 0) {
+    if (param.cce_index >= mimir_test::num_cces_from_soc(soc_desc) || soc_desc.get_num_dram_channels() == 0) {
         return false;
     }
     if (cross && soc_desc.get_num_dram_channels() < 2) {
         return false;
     }
     return partition_in_case(soc_desc, param.cce_index, param.partition, cross);
-}
-
-CoreCoord translated_dram_core(const metal_SocDescriptor& soc_desc, uint32_t cce_index) {
-    const auto core = soc_desc.translate_coord_to(
-        tt::umd::CoreCoord(
-            mimir_index_for_cce(cce_index), location_for_cce(cce_index), CoreType::DRAM, CoordSystem::LOGICAL),
-        CoordSystem::TRANSLATED);
-    return {core.x, core.y};
 }
 
 class CceSramRoundTripThroughMetalCluster : public ::testing::TestWithParam<uint32_t> {};
@@ -341,11 +237,11 @@ TEST_P(CceSramRoundTripThroughMetalCluster, RoundTrip) {
     constexpr ChipId chip_id = 0;
     const uint32_t cce_index = GetParam();
     const auto& soc_desc = cluster.get_soc_desc(chip_id);
-    const uint32_t num_cces = num_cces_from_soc(soc_desc);
+    const uint32_t num_cces = mimir_test::num_cces_from_soc(soc_desc);
     if (cce_index >= num_cces) {
         GTEST_SKIP() << "Configured descriptor exposes only " << num_cces << " CCEs.";
     }
-    const CoreCoord cce = translated_dram_core(soc_desc, cce_index);
+    const CoreCoord cce = mimir_test::translated_dram_core(soc_desc, cce_index);
     constexpr uint64_t address = MEM_CCE_L1_NOC_OFFSET + kCceSramTestOffset;
     const uint32_t written = 0xC0FFEE01 + cce_index;
     uint32_t read_back = 0;
@@ -369,7 +265,7 @@ TEST(MimirEmu, CceSramChannelsDoNotAliasThroughMetalCluster) {
 
     constexpr ChipId chip_id = 0;
     const auto& soc_desc = cluster.get_soc_desc(chip_id);
-    const uint32_t num_cces = num_cces_from_soc(soc_desc);
+    const uint32_t num_cces = mimir_test::num_cces_from_soc(soc_desc);
     ASSERT_GE(num_cces, 2u);
 
     // Every channel is written before any is read: an aliasing window only shows up once a later
@@ -377,11 +273,13 @@ TEST(MimirEmu, CceSramChannelsDoNotAliasThroughMetalCluster) {
     constexpr uint64_t address = MEM_CCE_L1_NOC_OFFSET + kCceSramTestOffset;
     for (uint32_t cce_index = 0; cce_index < num_cces; ++cce_index) {
         const uint32_t written = 0xC0FFEE01 + cce_index;
-        cluster.write_core(&written, sizeof(written), {chip_id, translated_dram_core(soc_desc, cce_index)}, address);
+        cluster.write_core(
+            &written, sizeof(written), {chip_id, mimir_test::translated_dram_core(soc_desc, cce_index)}, address);
     }
     for (uint32_t cce_index = 0; cce_index < num_cces; ++cce_index) {
         uint32_t read_back = 0;
-        cluster.read_core(&read_back, sizeof(read_back), {chip_id, translated_dram_core(soc_desc, cce_index)}, address);
+        cluster.read_core(
+            &read_back, sizeof(read_back), {chip_id, mimir_test::translated_dram_core(soc_desc, cce_index)}, address);
         EXPECT_EQ(read_back, 0xC0FFEE01 + cce_index) << "CCE" << cce_index;
     }
 }
@@ -405,8 +303,8 @@ TEST_P(CceSramRoundTripThroughMinimalDevice, RoundTrip) {
     }
 
     Cluster& cluster = MetalContext::instance().get_cluster();
-    const CoreCoord cce =
-        device->virtual_core_from_logical_core(logical_cce_core(soc_desc_of(device.get()), cce_index), CoreType::DRAM);
+    const CoreCoord cce = device->virtual_core_from_logical_core(
+        mimir_test::logical_cce_core(mimir_test::soc_desc_of(device.get()), cce_index), CoreType::DRAM);
     constexpr uint64_t address = MEM_CCE_L1_NOC_OFFSET + kCceSramTestOffset;
     const uint32_t written = 0xC0FFEE03 + cce_index;
     uint32_t read_back = 0;
@@ -445,7 +343,7 @@ TEST_P(HartZeroRunsDramKernel, WritesMagic) {
         GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << ".";
     }
 
-    const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
+    const CoreCoord logical_dram_core = mimir_test::logical_cce_core(mimir_test::soc_desc_of(device), cce_index);
     const uint32_t magic = 0xC0FFEE04 + cce_index;
     const auto& hal = MetalContext::instance().hal();
     const uint32_t result_dev_addr =
@@ -487,7 +385,7 @@ TEST_P(AllHartsRunDramKernel, WritesMagic) {
         GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << ".";
     }
 
-    const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
+    const CoreCoord logical_dram_core = mimir_test::logical_cce_core(mimir_test::soc_desc_of(device), cce_index);
     const auto& hal = MetalContext::instance().hal();
     const uint32_t num_harts = hal.get_num_risc_processors(HalProgrammableCoreType::DRAM);
     ASSERT_EQ(num_harts, 8u);
@@ -545,11 +443,10 @@ TEST_P(CopiesGddrWithCompileTimeArgs, RoundTrip) {
     IDevice* device = CreateDevice(0);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
-    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
+    const metal_SocDescriptor& soc_desc = mimir_test::soc_desc_of(device);
     const GddrSweep sweep = gddr_sweep_from_soc(device);
     ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must hold at least one GDDR slot";
     const std::vector<GddrTarget> targets = {gddr_target_for_view(soc_desc, param.partition, sweep)};
-    GddrBackingScope gddr_backing;
 
     const auto& hal = MetalContext::instance().hal();
     const uint32_t transfer_size = hal.get_alignment(HalMemType::DRAM);
@@ -557,7 +454,7 @@ TEST_P(CopiesGddrWithCompileTimeArgs, RoundTrip) {
     const uint32_t dst_dram_offset = src_dram_offset + transfer_size;
     const uint32_t staging_dev_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     const uint64_t staging_noc_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-    const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
+    const CoreCoord logical_dram_core = mimir_test::logical_cce_core(mimir_test::soc_desc_of(device), cce_index);
     const CoreCoord virtual_dram_core = device->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
     std::vector<uint32_t> cleared(transfer_size / sizeof(uint32_t), 0);
 
@@ -590,7 +487,7 @@ TEST_P(CopiesGddrWithCompileTimeArgs, RoundTrip) {
                     target.num_slots,
                     target.slot_stride,
                     target.slot_base,
-                    mimir_index_for_cce(cce_index)}});
+                    mimir_test::mimir_index_for_cce(cce_index)}});
 
         detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
 
@@ -626,18 +523,17 @@ TEST_P(CopiesGddrThroughAllocatedBuffer, RoundTrip) {
     IDevice* device = CreateDevice(0);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
-    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
+    const metal_SocDescriptor& soc_desc = mimir_test::soc_desc_of(device);
     const GddrSweep sweep = gddr_sweep_from_soc(device);
     ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must hold at least one GDDR slot";
     const std::vector<GddrTarget> targets = {gddr_target_for_view(soc_desc, param.partition, sweep)};
-    GddrBackingScope gddr_backing;
 
     const auto& hal = MetalContext::instance().hal();
     const uint32_t transfer_size = hal.get_alignment(HalMemType::DRAM);
     const uint32_t src_dram_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
     const uint32_t dst_dram_offset = src_dram_offset + transfer_size;
     const uint32_t staging_dev_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-    const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
+    const CoreCoord logical_dram_core = mimir_test::logical_cce_core(mimir_test::soc_desc_of(device), cce_index);
     std::vector<uint32_t> cleared(transfer_size / sizeof(uint32_t), 0);
 
     for (const GddrTarget& target : targets) {
@@ -669,7 +565,7 @@ TEST_P(CopiesGddrThroughAllocatedBuffer, RoundTrip) {
                     target.num_slots,
                     target.slot_stride,
                     target.slot_base,
-                    mimir_index_for_cce(cce_index)}});
+                    mimir_test::mimir_index_for_cce(cce_index)}});
 
         detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
 
@@ -700,18 +596,17 @@ TEST_P(CopiesAllocatedBufferWithRuntimeArgs, RoundTrip) {
     IDevice* device = CreateDevice(0);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
-    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
+    const metal_SocDescriptor& soc_desc = mimir_test::soc_desc_of(device);
     const GddrSweep sweep = gddr_sweep_from_soc(device);
     ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must hold at least one GDDR slot";
     const std::vector<GddrTarget> targets = {gddr_target_for_view(soc_desc, param.partition, sweep)};
-    GddrBackingScope gddr_backing;
 
     const auto& hal = MetalContext::instance().hal();
     const uint32_t transfer_size = hal.get_alignment(HalMemType::DRAM);
     const uint32_t src_dram_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
     const uint32_t dst_dram_offset = src_dram_offset + transfer_size;
     const uint32_t staging_dev_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-    const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
+    const CoreCoord logical_dram_core = mimir_test::logical_cce_core(mimir_test::soc_desc_of(device), cce_index);
     std::vector<uint32_t> cleared(transfer_size / sizeof(uint32_t), 0);
 
     for (const GddrTarget& target : targets) {
@@ -745,7 +640,7 @@ TEST_P(CopiesAllocatedBufferWithRuntimeArgs, RoundTrip) {
              target.num_slots,
              target.slot_stride,
              target.slot_base,
-             mimir_index_for_cce(cce_index)});
+             mimir_test::mimir_index_for_cce(cce_index)});
 
         detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
 
@@ -775,7 +670,6 @@ TEST_P(AllocatedDramBufferHostLoopback, RoundTrip) {
         EXPECT_TRUE(CloseDevice(device));
         GTEST_SKIP() << "Configured descriptor does not expose partition " << dram_partition << ".";
     }
-    GddrBackingScope gddr_backing;
 
     const auto& hal = MetalContext::instance().hal();
     const uint32_t page_size = hal.get_alignment(HalMemType::DRAM);
@@ -783,7 +677,6 @@ TEST_P(AllocatedDramBufferHostLoopback, RoundTrip) {
     auto buffer = CreateBuffer(BufferConfig{device, buffer_size, page_size, BufferType::DRAM});
     ASSERT_NE(buffer, nullptr);
     for (uint32_t partition = 0; partition < device->num_dram_channels(); ++partition) {
-        gddr_backing.tracker.note(partition, buffer->address(), page_size);
     }
 
     const std::size_t words_per_page = page_size / sizeof(uint32_t);
@@ -825,7 +718,6 @@ TEST_P(CopiesEveryMimirBlock, RoundTrip) {
         EXPECT_TRUE(CloseDevice(device));
         GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << ".";
     }
-    GddrBackingScope gddr_backing;
 
     const auto& hal = MetalContext::instance().hal();
     const uint32_t transfer_size = hal.get_alignment(HalMemType::DRAM);
@@ -843,7 +735,7 @@ TEST_P(CopiesEveryMimirBlock, RoundTrip) {
         write_mimir_gddr(device, mimir_index, dst_dram_offset, cleared);
     }
 
-    const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
+    const CoreCoord logical_dram_core = mimir_test::logical_cce_core(mimir_test::soc_desc_of(device), cce_index);
     Program program = CreateProgram();
     const KernelHandle kernel = CreateKernel(
         program,
@@ -859,7 +751,7 @@ TEST_P(CopiesEveryMimirBlock, RoundTrip) {
          num_mimirs,
          staging_dev_addr,
          static_cast<uint32_t>(cleared.size()),
-         mimir_index_for_cce(cce_index)});
+         mimir_test::mimir_index_for_cce(cce_index)});
 
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
 
@@ -887,11 +779,10 @@ TEST_P(CopiesAllocatedBufferLargerThanAlignment, RoundTrip) {
     IDevice* device = CreateDevice(0);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
-    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
+    const metal_SocDescriptor& soc_desc = mimir_test::soc_desc_of(device);
     const GddrSweep sweep = gddr_sweep_from_soc(device);
     ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must hold at least one GDDR slot";
     const std::vector<GddrTarget> targets = {gddr_target_for_view(soc_desc, param.partition, sweep)};
-    GddrBackingScope gddr_backing;
 
     const auto& hal = MetalContext::instance().hal();
     const uint32_t alignment = hal.get_alignment(HalMemType::DRAM);
@@ -900,7 +791,7 @@ TEST_P(CopiesAllocatedBufferLargerThanAlignment, RoundTrip) {
     const uint32_t src_dram_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
     const uint32_t dst_dram_offset = src_dram_offset + transfer_size;
     const uint32_t staging_dev_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-    const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
+    const CoreCoord logical_dram_core = mimir_test::logical_cce_core(mimir_test::soc_desc_of(device), cce_index);
     std::vector<uint32_t> cleared(transfer_size / sizeof(uint32_t), 0);
 
     for (const GddrTarget& target : targets) {
@@ -934,7 +825,7 @@ TEST_P(CopiesAllocatedBufferLargerThanAlignment, RoundTrip) {
              target.num_slots,
              target.slot_stride,
              target.slot_base,
-             mimir_index_for_cce(cce_index)});
+             mimir_test::mimir_index_for_cce(cce_index)});
 
         detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
 
@@ -962,19 +853,19 @@ TEST(MimirEmu, AllCcesCopyLocalMimirBlock) {
     ASSERT_GE(num_mimirs, 1u);
     const GddrSweep sweep = gddr_sweep_from_soc(device);
     ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must hold at least one GDDR slot";
-    GddrBackingScope gddr_backing;
 
     const auto& hal = MetalContext::instance().hal();
     const uint32_t transfer_size = hal.get_alignment(HalMemType::DRAM);
     const uint32_t src_dram_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
     const uint32_t staging_dev_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
 
-    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
+    const metal_SocDescriptor& soc_desc = mimir_test::soc_desc_of(device);
     std::vector<std::vector<uint32_t>> inputs(num_cces, std::vector<uint32_t>(transfer_size / sizeof(uint32_t)));
     std::vector<uint32_t> cleared(transfer_size / sizeof(uint32_t), 0);
     Program program = CreateProgram();
     for (uint32_t cce_index = 0; cce_index < num_cces; ++cce_index) {
-        const GddrTarget local = gddr_target_for_view(soc_desc, local_dram_view_for_cce(soc_desc, cce_index), sweep);
+        const GddrTarget local =
+            gddr_target_for_view(soc_desc, mimir_test::local_dram_view_for_cce(soc_desc, cce_index), sweep);
         for (std::size_t i = 0; i < inputs[cce_index].size(); ++i) {
             inputs[cce_index][i] = 0xB07C0000u | (cce_index << 8) | static_cast<uint32_t>(i);
         }
@@ -983,7 +874,7 @@ TEST(MimirEmu, AllCcesCopyLocalMimirBlock) {
         write_gddr_view(device, local.host_view, cce_src, inputs[cce_index]);
         write_gddr_view(device, local.host_view, cce_dst, cleared);
 
-        const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
+        const CoreCoord logical_dram_core = mimir_test::logical_cce_core(mimir_test::soc_desc_of(device), cce_index);
         const KernelHandle kernel = CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/cce_dram_buffer_round_trip.cpp",
@@ -1009,7 +900,8 @@ TEST(MimirEmu, AllCcesCopyLocalMimirBlock) {
     for (uint32_t cce_index = 0; cce_index < num_cces; ++cce_index) {
         std::vector<uint32_t> output;
         const uint32_t cce_dst = src_dram_offset + cce_index * 2 * transfer_size + transfer_size;
-        read_gddr_view(device, local_dram_view_for_cce(soc_desc, cce_index), cce_dst, transfer_size, output);
+        read_gddr_view(
+            device, mimir_test::local_dram_view_for_cce(soc_desc, cce_index), cce_dst, transfer_size, output);
         EXPECT_EQ(output, inputs[cce_index]) << "cce " << cce_index;
     }
     EXPECT_TRUE(CloseDevice(device));
@@ -1033,10 +925,10 @@ TEST_P(WritesCrossMimirCceSram, WritesMagic) {
         GTEST_SKIP() << "Configured descriptor does not expose a remote Mimir CCE.";
     }
 
-    const uint32_t local_mimir = mimir_index_for_cce(src_cce);
+    const uint32_t local_mimir = mimir_test::mimir_index_for_cce(src_cce);
     std::vector<uint32_t> dest_cces;
     for (uint32_t cce_index = 0; cce_index < num_cces; ++cce_index) {
-        if (mimir_index_for_cce(cce_index) != local_mimir) {
+        if (mimir_test::mimir_index_for_cce(cce_index) != local_mimir) {
             dest_cces.push_back(cce_index);
         }
     }
@@ -1053,12 +945,12 @@ TEST_P(WritesCrossMimirCceSram, WritesMagic) {
 
     Cluster& cluster = MetalContext::instance().get_cluster();
     for (uint32_t dest_cce : dest_cces) {
-        const CoreCoord dest_core =
-            device->virtual_core_from_logical_core(logical_cce_core(soc_desc_of(device), dest_cce), CoreType::DRAM);
+        const CoreCoord dest_core = device->virtual_core_from_logical_core(
+            mimir_test::logical_cce_core(mimir_test::soc_desc_of(device), dest_cce), CoreType::DRAM);
         cluster.write_core(&zero, sizeof(zero), {device->id(), dest_core}, noc_addr);
     }
 
-    const CoreCoord logical_src = logical_cce_core(soc_desc_of(device), src_cce);
+    const CoreCoord logical_src = mimir_test::logical_cce_core(mimir_test::soc_desc_of(device), src_cce);
     Program program = CreateProgram();
     const KernelHandle kernel = CreateKernel(
         program,
@@ -1071,8 +963,8 @@ TEST_P(WritesCrossMimirCceSram, WritesMagic) {
 
     for (uint32_t dest_cce : dest_cces) {
         uint32_t result = 0;
-        const CoreCoord dest_core =
-            device->virtual_core_from_logical_core(logical_cce_core(soc_desc_of(device), dest_cce), CoreType::DRAM);
+        const CoreCoord dest_core = device->virtual_core_from_logical_core(
+            mimir_test::logical_cce_core(mimir_test::soc_desc_of(device), dest_cce), CoreType::DRAM);
         cluster.read_core(&result, sizeof(result), {device->id(), dest_core}, noc_addr);
         EXPECT_EQ(result, magic_base | dest_cce) << "src cce " << src_cce << " dest cce " << dest_cce;
     }
@@ -1091,7 +983,7 @@ TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
 
     const uint32_t src_cce = GetParam();
     const uint32_t num_cces = num_cces_on(device);
-    const uint32_t local_mimir = mimir_index_for_cce(src_cce);
+    const uint32_t local_mimir = mimir_test::mimir_index_for_cce(src_cce);
     if (src_cce >= num_cces || num_mimirs_on(device) < 2) {
         EXPECT_TRUE(CloseDevice(device));
         GTEST_SKIP() << "Configured descriptor does not expose a remote Mimir CCE.";
@@ -1099,7 +991,7 @@ TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
 
     std::vector<uint32_t> dest_cces;
     for (uint32_t cce_index = 0; cce_index < num_cces; ++cce_index) {
-        if (mimir_index_for_cce(cce_index) != local_mimir) {
+        if (mimir_test::mimir_index_for_cce(cce_index) != local_mimir) {
             dest_cces.push_back(cce_index);
         }
     }
@@ -1108,7 +1000,6 @@ TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
         GTEST_SKIP() << "Remote Mimir does not expose two CCEs.";
     }
 
-    GddrBackingScope gddr_backing;
     const auto& hal = MetalContext::instance().hal();
     const uint32_t transfer_size = hal.get_alignment(HalMemType::DRAM);
     const uint32_t src_gddr_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
@@ -1122,8 +1013,8 @@ TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
     for (uint32_t i = 0; i < num_words; ++i) {
         input[i] = 0xD2D10000u | (src_cce << 8) | i;
     }
-    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
-    const uint32_t local_view = local_dram_view_for_cce(soc_desc, src_cce);
+    const metal_SocDescriptor& soc_desc = mimir_test::soc_desc_of(device);
+    const uint32_t local_view = mimir_test::local_dram_view_for_cce(soc_desc, src_cce);
     const uint64_t local_address_offset = soc_desc.get_address_offset(static_cast<int>(local_view));
     ASSERT_EQ(local_address_offset % kGddrSlotStride, 0ull);
     const uint32_t local_base_slots = static_cast<uint32_t>(local_address_offset / kGddrSlotStride);
@@ -1131,12 +1022,12 @@ TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
 
     Cluster& cluster = MetalContext::instance().get_cluster();
     for (uint32_t dest_cce : dest_cces) {
-        const CoreCoord dest_core =
-            device->virtual_core_from_logical_core(logical_cce_core(soc_desc_of(device), dest_cce), CoreType::DRAM);
+        const CoreCoord dest_core = device->virtual_core_from_logical_core(
+            mimir_test::logical_cce_core(mimir_test::soc_desc_of(device), dest_cce), CoreType::DRAM);
         cluster.write_core(cleared.data(), transfer_size, {device->id(), dest_core}, noc_addr);
     }
 
-    const CoreCoord logical_src = logical_cce_core(soc_desc_of(device), src_cce);
+    const CoreCoord logical_src = mimir_test::logical_cce_core(mimir_test::soc_desc_of(device), src_cce);
     Program program = CreateProgram();
     const KernelHandle kernel = CreateKernel(
         program,
@@ -1161,8 +1052,8 @@ TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
 
     for (uint32_t dest_cce : dest_cces) {
         std::vector<uint32_t> output(num_words, 0);
-        const CoreCoord dest_core =
-            device->virtual_core_from_logical_core(logical_cce_core(soc_desc_of(device), dest_cce), CoreType::DRAM);
+        const CoreCoord dest_core = device->virtual_core_from_logical_core(
+            mimir_test::logical_cce_core(mimir_test::soc_desc_of(device), dest_cce), CoreType::DRAM);
         cluster.read_core(output.data(), transfer_size, {device->id(), dest_core}, noc_addr);
         EXPECT_EQ(output, input) << "src cce " << src_cce << " dest cce " << dest_cce;
     }
@@ -1185,11 +1076,10 @@ TEST_P(AllHartsWriteAllocatedBuffer, WritesMagic) {
     IDevice* device = CreateDevice(0);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
-    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
+    const metal_SocDescriptor& soc_desc = mimir_test::soc_desc_of(device);
     const GddrSweep sweep = gddr_sweep_from_soc(device);
     ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must hold at least one GDDR slot";
     const std::vector<GddrTarget> targets = {gddr_target_for_view(soc_desc, param.partition, sweep)};
-    GddrBackingScope gddr_backing;
 
     const auto& hal = MetalContext::instance().hal();
     const uint32_t num_harts = hal.get_num_risc_processors(HalProgrammableCoreType::DRAM);
@@ -1197,7 +1087,7 @@ TEST_P(AllHartsWriteAllocatedBuffer, WritesMagic) {
 
     const uint32_t dst_dram_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
     const uint32_t staging_dev_base = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-    const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
+    const CoreCoord logical_dram_core = mimir_test::logical_cce_core(mimir_test::soc_desc_of(device), cce_index);
     std::vector<uint32_t> cleared(num_harts, 0);
 
     for (const GddrTarget& target : targets) {
@@ -1225,7 +1115,7 @@ TEST_P(AllHartsWriteAllocatedBuffer, WritesMagic) {
                         target.num_slots,
                         target.slot_stride,
                         target.slot_base,
-                        mimir_index_for_cce(cce_index)}});
+                        mimir_test::mimir_index_for_cce(cce_index)}});
         }
 
         detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
@@ -1267,11 +1157,10 @@ INSTANTIATE_TEST_SUITE_P(
         return fmt::format("Cce{}", info.param);
     });
 
-std::string cce_param_name(const ::testing::TestParamInfo<uint32_t>& info) { return fmt::format("Cce{}", info.param); }
+INSTANTIATE_TEST_SUITE_P(MimirEmu, WritesCrossMimirCceSram, ::testing::Range(0u, 4u), mimir_test::cce_param_name);
 
-INSTANTIATE_TEST_SUITE_P(MimirEmu, WritesCrossMimirCceSram, ::testing::Range(0u, 4u), cce_param_name);
-
-INSTANTIATE_TEST_SUITE_P(MimirEmu, PrefetchesLocalGddrToRemoteCceSram, ::testing::Range(0u, 4u), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(
+    MimirEmu, PrefetchesLocalGddrToRemoteCceSram, ::testing::Range(0u, 4u), mimir_test::cce_param_name);
 
 INSTANTIATE_TEST_SUITE_P(
     MimirEmuSameMimirDirect,
@@ -1315,7 +1204,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::ValuesIn(cce_partition_params()),
     cce_partition_name);
 
-INSTANTIATE_TEST_SUITE_P(MimirEmu, CopiesEveryMimirBlock, ::testing::Range(0u, 4u), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(MimirEmu, CopiesEveryMimirBlock, ::testing::Range(0u, 4u), mimir_test::cce_param_name);
 
 INSTANTIATE_TEST_SUITE_P(
     MimirEmuSameMimirDirect,
@@ -1360,10 +1249,7 @@ TEST_P(DramChannelsDoNotAliasThroughPublicDeviceApi, RoundTrip) {
         device.reset();
         GTEST_SKIP() << "Configured descriptor does not expose partition " << dram_partition << ".";
     }
-    GddrBackingScope gddr_backing;
     const uint32_t other_partition = (dram_partition + num_partitions / 2) % num_partitions;
-    gddr_backing.tracker.note(dram_partition, kDramOffset, sizeof(uint32_t));
-    gddr_backing.tracker.note(other_partition, kDramOffset, sizeof(uint32_t));
     std::vector<uint32_t> written{0xAAAA1111 + dram_partition};
     std::vector<uint32_t> other_written{0xBBBB2222 + other_partition};
     ASSERT_TRUE(detail::WriteToDeviceDRAMChannel(device.get(), other_partition, kDramOffset, other_written));
