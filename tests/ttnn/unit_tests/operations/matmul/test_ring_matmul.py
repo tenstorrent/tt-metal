@@ -6,7 +6,7 @@
 import pytest
 import torch
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 # Hardcoded grid from PREFETCHER_NOC1_OUTPUT_GRID adjusted to work on smaller grids like on an x2

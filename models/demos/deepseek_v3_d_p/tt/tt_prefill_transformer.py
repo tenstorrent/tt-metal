@@ -711,8 +711,10 @@ class TtPrefillTransformer(LightweightModule):
             )
             ttnn.deallocate(logits)
             logits = full
-        ids = ttnn.argmax(logits, dim=-1, keepdim=False)
+        rm_logits = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(logits)
+        ids = ttnn.argmax(rm_logits, dim=-1, keepdim=False)
+        ttnn.deallocate(rm_logits)
         emb = self.mtp_embed_ids(ids)
         ttnn.deallocate(ids)
         if self.sp_factor == 1:

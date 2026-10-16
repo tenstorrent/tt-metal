@@ -15,7 +15,6 @@ from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     PerfRunType,
     UnpackerEngine,
     format_dict,
@@ -38,7 +37,6 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
@@ -53,14 +51,6 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
-
-
-def datacopy_implied_math_formats(format, *, is_perf=False):
-    if is_perf:
-        return [ImpliedMathFormat.Yes]
-    if format.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
-    return [ImpliedMathFormat.Yes, ImpliedMathFormat.No]
 
 
 def generate_eltwise_unary_datacopy_combinations(
@@ -172,16 +162,11 @@ PERF_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=ALL_DATACOPY_COMBINATIONS,
-    # don't generate the No variant for them. combo[0] is the InputOutputFormat (input/output pair).
-    implied_math_format=lambda formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices: datacopy_implied_math_formats(
-        formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[0]
-    ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_eltwise_unary_datacopy_quasar(
     formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
-    implied_math_format,
     run_types,
     loop_factor,
     *,
@@ -197,13 +182,6 @@ def test_eltwise_unary_datacopy_quasar(
         dest_index,
         tile_dimensions,
     ) = formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices
-
-    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
-    if (
-        formats.input_format.is_mx_format()
-        and implied_math_format == ImpliedMathFormat.No
-    ):
-        pytest.skip("MX formats require implied_math_format=Yes on Quasar")
 
     tile_shape = construct_tile_shape(tile_dimensions)
 
@@ -245,7 +223,6 @@ def test_eltwise_unary_datacopy_quasar(
         "test_name": "sources/quasar/eltwise_unary_datacopy_quasar_test.cpp",
         "formats": formats,
         "templates": [
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(data_copy_type),
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpB
@@ -284,10 +261,6 @@ def test_eltwise_unary_datacopy_quasar(
         ),
         "unpack_to_dest": False,
         "dest_acc": dest_acc,
-        "disable_format_inference": (
-            implied_math_format == ImpliedMathFormat.Yes
-            and formats.input_format.is_mx_format()
-        ),
     }
 
     configuration = create_test_or_perf_config(
