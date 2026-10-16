@@ -13,6 +13,7 @@ all-gathers restore the replicated [tokens, hidden] layout the lane wrapper expe
 Enabled with GEMMA4_MOE_DISPATCH_PREFILL=1 (see experts/__init__.py).
 """
 import os
+from pathlib import Path
 
 from loguru import logger
 
@@ -116,7 +117,7 @@ class Gemma4DispatchExperts:
             torch_weights=expert_weights,
             activations_dtype=ttnn.bfloat8_b,
             weights_dtype=weights_dtype,
-            weight_cache_path=tensor_cache_path,
+            weight_cache_path=Path(tensor_cache_path) if tensor_cache_path else None,  # the loader joins with '/'
             cache_name_prefix=f"layer_{layer_idx}.dispatch_experts",
             activation=ttnn.RoutedExpertActivation.GeluTanhGlu,
             hybrid_token_threshold=None,
