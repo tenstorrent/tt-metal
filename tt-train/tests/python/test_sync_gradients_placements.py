@@ -134,7 +134,11 @@ def _named_mesh_or_skip(fresh_device_mesh, shape: tuple[int, ...], axis_names: t
     module's conftest-provided 1x2 fixtures leave their path set until module teardown, so a shape larger than a line
     installs its own bundled descriptor here first (a path set for a line does not describe it); a 2-device shape
     keeps whatever is set (the bench box runs its own descriptor). With no descriptor at all, a shape that is the
-    whole host is tried with the runtime's default descriptor; anything else skips."""
+    whole host is tried with the runtime's default descriptor; anything else skips.
+
+    Skips come only from here (no descriptor) and from the conftest (too few devices): any other failure to open the
+    mesh propagates, so a fabric timeout or a descriptor that does not describe the host fails the tests instead of
+    skipping them."""
     needed = int(np.prod(shape))
     previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
     arch = _detect_arch()
@@ -148,13 +152,7 @@ def _named_mesh_or_skip(fresh_device_mesh, shape: tuple[int, ...], axis_names: t
     # The conftest releases it again before opening, which is harmless with no mesh open.
     _release_metal_env_quietly()
     try:
-        with contextlib.ExitStack() as stack:
-            try:
-                mesh = stack.enter_context(
-                    fresh_device_mesh(shape, axis_names, what=f"{axis_names} placements tests", require_mgd=False)
-                )
-            except Exception as e:  # noqa: BLE001
-                pytest.skip(f"needs a {shape} {axis_names} mesh: {e}")
+        with fresh_device_mesh(shape, axis_names, what=f"{axis_names} placements tests", require_mgd=False) as mesh:
             yield mesh
     finally:
         _restore_mgd_path(previous)
