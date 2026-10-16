@@ -104,7 +104,7 @@ def test_capabilities_flag_on(monkeypatch):
     assert caps["supports_async_decode"] is True
     assert caps["supports_sample_on_device"] is True
     assert caps["supports_prefix_caching"] is True
-    assert caps["supports_chunked_prefill"] is True
+    assert caps["supports_chunked_prefill"] is False  # opt-in (QWEN36_CHUNKED_PREFILL=1)
     assert caps["max_device_top_k"] == 32
     assert caps["supports_device_penalties"] is False
     assert Qwen36ForCausalLM.decode_input_update_contract == 1
@@ -123,20 +123,24 @@ def test_capabilities_flag_off_is_the_old_dict(monkeypatch):
     caps.pop("fabric_config", None)  # the fabric packet payload (multi-device meshes) does not depend on this flag
     assert caps == {
         "supports_prefix_caching": True,
-        "supports_chunked_prefill": True,
+        "supports_chunked_prefill": False,
         "supports_async_decode": False,
         "supports_sample_on_device": True,
     }
 
 
-def test_capabilities_chunked_prefill_opt_out(monkeypatch):
-    monkeypatch.setenv("QWEN36_CHUNKED_PREFILL", "0")
+def test_capabilities_chunked_prefill_opt_in(monkeypatch):
+    # Off by default: declared, the plugin keeps chunked prefill on, which vLLM's hybrid-model prefix caching rejects.
+    monkeypatch.delenv("QWEN36_CHUNKED_PREFILL", raising=False)
     assert _build_model_capabilities()["supports_chunked_prefill"] is False
     assert Qwen36ForCausalLM._read_vllm_chunked_prefill() is False
+    assert Qwen36ForCausalLM._read_vllm_chunked_prefill(_vllm_cfg()) is False
+    monkeypatch.setenv("QWEN36_CHUNKED_PREFILL", "1")
+    assert _build_model_capabilities()["supports_chunked_prefill"] is True
 
 
 def test_read_vllm_chunked_prefill_without_vllm_config(monkeypatch):
-    monkeypatch.delenv("QWEN36_CHUNKED_PREFILL", raising=False)
+    monkeypatch.setenv("QWEN36_CHUNKED_PREFILL", "1")
     assert Qwen36ForCausalLM._vllm_config_or_none() is None
     assert Qwen36ForCausalLM._read_vllm_chunked_prefill() == (None, 0, 128)
 
@@ -155,7 +159,7 @@ def _vllm_cfg(chunked=True, budget=16384, max_len=262144, thr=0, tt=None):
 
 
 def test_read_vllm_chunked_prefill_from_config(monkeypatch):
-    monkeypatch.delenv("QWEN36_CHUNKED_PREFILL", raising=False)
+    monkeypatch.setenv("QWEN36_CHUNKED_PREFILL", "1")
     read = Qwen36ForCausalLM._read_vllm_chunked_prefill
     assert read(_vllm_cfg()) == (16384, 0, 128)
     assert read(_vllm_cfg(tt={"prefill_chunk_alignment": 256})) == (16384, 0, 256)

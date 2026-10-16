@@ -7,6 +7,7 @@ prompt from position 0, prompt_lens = the chunk END, start_pos = the tokens alre
 128-aligned, the final chunk may be a single token, and the decode slot may change between chunks. Each chunked
 prefill is compared with a REFERENCE single-shot prefill of the same tokens (fresh blocks): last-token logits PCC, top-1,
 then greedy decode tokens side by side. One scenario runs decode steps of another request between the chunks.
+Chunked prefill is opt-in; the test turns it on itself (QWEN36_CHUNKED_PREFILL=1).
 
     pytest models/demos/blackhole/qwen36/tests/test_chunked_prefill.py -svq
 """
@@ -32,7 +33,7 @@ from models.demos.blackhole.qwen36.tests.test_prefix_cache import (
     _corpus,
     pcc,
 )
-from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
+from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM, _build_model_capabilities
 
 PCC_MIN = 0.99
 
@@ -87,8 +88,10 @@ def decode(h, rows, steps):
 @pytest.mark.timeout(3500)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_chunked_prefill_serving(mesh_device, reset_seeds, ensure_gc):
+def test_chunked_prefill_serving(mesh_device, reset_seeds, ensure_gc, monkeypatch):
     from transformers import AutoConfig, AutoTokenizer
+
+    monkeypatch.setenv("QWEN36_CHUNKED_PREFILL", "1")  # opt-in; read by initialize_vllm_model / warmup
 
     hf = os.environ["HF_MODEL"]
     tok = AutoTokenizer.from_pretrained(hf)
@@ -105,7 +108,7 @@ def test_chunked_prefill_serving(mesh_device, reset_seeds, ensure_gc):
     gen.warmup_model_decode(enable_trace=True, **dkw)
     store = model._chunk_state_cache
     assert store is not None, "the chunked-prefill continuation store was not built by warmup_model_prefill"
-    assert gen.model_capabilities["supports_chunked_prefill"]
+    assert _build_model_capabilities()["supports_chunked_prefill"]
 
     h = Harness(gen, kv, _corpus(tok))
     failures, results = [], []

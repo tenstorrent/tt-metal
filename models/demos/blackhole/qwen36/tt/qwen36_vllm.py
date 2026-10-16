@@ -74,8 +74,11 @@ def _build_model_capabilities():
         # vLLM chunked prefill: a prompt longer than the per-step token budget (--max-num-batched-tokens) is prefilled
         # over several engine steps, with decode steps in between. Batched TP resumes each chunk from a GDN snapshot
         # taken at the previous chunk's end (model._chunk_state_cache); the B=1 TP path recomputes from 0 (correct,
-        # slower: keep --max-num-batched-tokens >= max_model_len at max_num_seqs 1). QWEN36_CHUNKED_PREFILL=0 disables.
-        "supports_chunked_prefill": os.environ.get("QWEN36_CHUNKED_PREFILL", "1") == "1",
+        # slower: keep --max-num-batched-tokens >= max_model_len at max_num_seqs 1). Opt-in (QWEN36_CHUNKED_PREFILL=1):
+        # declared, the plugin keeps vLLM's chunked prefill on and sets disable_chunked_mm_input, which vLLM's
+        # hybrid-model prefix caching (mamba_cache_mode 'align') rejects at startup, so it also needs
+        # --no-enable-prefix-caching (README "Chunked prefill").
+        "supports_chunked_prefill": os.environ.get("QWEN36_CHUNKED_PREFILL", "0") == "1",
         "supports_async_decode": False,
         "supports_sample_on_device": True,
     }
@@ -255,9 +258,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     @staticmethod
     def _read_vllm_chunked_prefill(vc=None):
         """(per-step token budget, long_prefill_token_threshold, prefill_chunk_alignment) when vLLM can split a prompt
-        across engine steps, False when it cannot (chunked prefill off, or the budget covers max_model_len), or
-        (None, 0, 128) without a vLLM config (tests, demos: budget unknown)."""
-        if os.environ.get("QWEN36_CHUNKED_PREFILL", "1") != "1":
+        across engine steps; False when it cannot (QWEN36_CHUNKED_PREFILL is not 1, chunked prefill off, or the budget
+        covers max_model_len); (None, 0, 128) without a vLLM config (tests, demos: budget unknown)."""
+        if os.environ.get("QWEN36_CHUNKED_PREFILL", "0") != "1":
             return False
         if vc is None:
             return (None, 0, 128)

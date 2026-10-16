@@ -267,7 +267,8 @@ single-device paths ignore `start_pos` and recompute from 0.
 
 ## Chunked prefill (vLLM serving, batched TP path)
 
-The model declares `supports_chunked_prefill`. With `--max-num-batched-tokens` below `max_model_len`, vLLM prefills a
+Opt-in: with `QWEN36_CHUNKED_PREFILL=1` the model declares `supports_chunked_prefill` (serve it with
+`--no-enable-prefix-caching`, see below). With `--max-num-batched-tokens` below `max_model_len`, vLLM prefills a
 longer prompt over several engine steps, and the plugin runs decode steps for the other requests in between (its
 decode interleave: at most `decode_interleave_prefill_steps` (2) prefill steps, then `decode_interleave_decode_steps` (1)
 decode step, both in `additional_config['tt']`). Without it, one prefill step holds every waiting prompt that fits the
@@ -295,7 +296,7 @@ until the plugin relaxes that for TT-owned recurrent state; the continuation sto
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `QWEN36_CHUNKED_PREFILL` | `1` | advertise `supports_chunked_prefill` and build the continuation store (`0` disables) |
+| `QWEN36_CHUNKED_PREFILL` | `0` | `1` advertises `supports_chunked_prefill` and builds the continuation store (needs `--no-enable-prefix-caching`) |
 | `QWEN36_CHUNK_STATE_SLOTS` | `4` | continuation snapshot slots (about 19 MB of DRAM per device per slot at TP=8) |
 
 ## Multimodal serving: vision buckets and `max_pixels` (vLLM)
