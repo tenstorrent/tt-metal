@@ -24,10 +24,11 @@ constexpr float FRESH_FILL_VALUE = 5.0f;
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_fill_fresh_cpp(const float value)
 {
+    const sfpi::vFloat v = value;
+#pragma GCC unroll 32
     for (int d = 0; d < ITERATIONS; ++d)
     {
-        sfpi::dst_reg[0] = sfpi::vFloat(value);
-        sfpi::dst_reg++;
+        sfpi::dst_reg[d] = v;
     }
 }
 
