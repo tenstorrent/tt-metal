@@ -1,0 +1,63 @@
+{
+ "used": [
+  {
+   "id": "DS41-32",
+   "how": "carried test 14's split-by-routing router checks; the rendered PCC 0.99 vs golden fails on the CPU reference (0.984586)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-33",
+   "how": "carried the experts' split-by-routing golden checks, 2 x control CPU limits and row slope",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-34",
+   "how": "carried SHARED_CPU_LIMITS for the shared expert vs the CPU step",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-25",
+   "how": "kept the w2-span check, reading shared_out from the block trail since ffn_residual is last",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-39",
+   "how": "router / experts vs golden split by routing rather than gated by PCC over all rows",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the swap-test template does not carry a block's earlier test-review customizations forward, so every later swap test of the block fails the reference freeze the same way (tests 15-18 all rebuilt from the previous one)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "n/a",
+   "evidence": "known_issues.md not touched by this step; DS41-20 already reads '(RESOLVED by the framework, F73) ... no cap'"
+  }
+ ],
+ "cited_only": [
+  "DS41-20"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "S.swa_engram.18",
+  "role": "test",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T06:25:24",
+  "head": "2fe5228a996",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.swa_engram.18.test.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_18_ffn_residual.py"
+  ]
+ }
+}
