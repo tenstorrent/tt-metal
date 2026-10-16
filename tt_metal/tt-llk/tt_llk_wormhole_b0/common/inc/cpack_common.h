@@ -117,6 +117,60 @@ typedef union
     dest_rd_ctrl_t f;
 } dest_rd_ctrl_u;
 
+/**
+ * @brief Return whether the pack is an identity 16-bit float pack, Float16_b to Float16_b or Float16 to Float16.
+ *
+ * Ref: tt-isa-documentation WormholeB0/TensixTile/TensixCoprocessor/Packers/FormatConversion.md, Read_raw = true (Read_int8
+ * here) is "Identity (i.e. preserve denormals and NaN)" for BF16->BF16 and FP16->FP16. The conversion path flushes
+ * denormals, folds -0 to +0 and turns NaN into infinity.
+ *
+ * @param pack_src_format: Pack input (Dst) data format, masked with 0x1F here.
+ * @param pack_dst_format: Pack output (L1) data format, masked with 0x1F here.
+ * @note Equality alone is not enough: a BFP output reports pack_src == pack_dst (see get_single_pack_src_format in
+ *       jit_build/data_format.cpp), yet the packer still converts it, so the format must also be Float16_b or Float16.
+ */
+inline bool is_identity_16b_float_pack(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format)
+{
+    const std::uint32_t src = pack_src_format & 0x1F;
+    return (src == (pack_dst_format & 0x1F)) && ((src == to_underlying(DataFormat::Float16_b)) || (src == to_underlying(DataFormat::Float16)));
+}
+
+/**
+ * @brief Inputs of PCK_DEST_RD_CTRL_Read_int8, kept by the pack thread so a relu or dest-acc reconfig can recompute it.
+ */
+struct PackDstReadRaw
+{
+    bool int8_formats;       // Pack source is Int8 or UInt8.
+    bool identity_16b_float; // See is_identity_16b_float_pack.
+    bool threshold_relu;     // STACC_RELU_ApplyRelu is MinThresholdRelu or MaxThresholdRelu.
+    bool read_32b;           // PCK_DEST_RD_CTRL_Read_32b_data.
+};
+
+// C++17 inline variable: one instance per kernel without a definition in every kernel and firmware.
+inline PackDstReadRaw pack_dst_read_raw_state {};
+
+/**
+ * @brief Return whether an ApplyRelu mode is a threshold relu (MinThresholdRelu or MaxThresholdRelu).
+ *
+ * @param relu_mode: STACC_RELU_ApplyRelu value.
+ */
+inline bool is_threshold_relu(const std::uint32_t relu_mode)
+{
+    return (relu_mode == to_underlying(ReluType::MIN_THRESHOLD_RELU)) || (relu_mode == to_underlying(ReluType::MAX_THRESHOLD_RELU));
+}
+
+/**
+ * @brief Compute PCK_DEST_RD_CTRL_Read_int8 from @ref pack_dst_read_raw_state.
+ *
+ * @note A threshold relu keeps the conversion path: the raw path keeps a datum equal to a MinThresholdRelu threshold
+ *       that the conversion path zeroes, measured on P300. A 32-bit Dst read with Read_int8 set truncates instead of rounding.
+ */
+inline bool pack_dst_read_raw()
+{
+    const PackDstReadRaw& state = pack_dst_read_raw_state;
+    return !state.read_32b && (state.int8_formats || (state.identity_16b_float && !state.threshold_relu));
+}
+
 // PACK_EDGE_OFFSET_SEC[0:3] register structure
 //
 // Lower 16b represent a mask that is applied on a single row of one face on the packer output
@@ -509,21 +563,11 @@ inline void set_packer_config(
     bool is_int8_format = pack_src_format == to_underlying(DataFormat::Int8) || pack_src_format == to_underlying(DataFormat::UInt8);
 
     dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = is_32b_format || is_fp32_dest_acc_en;
-    // An identity pack, meaning a 16-bit float format packed to itself, needs no conversion, but the
-    // default rounding path still flushes denormals, folds -0 to +0 and maps NaN to infinity. Select
-    // the identity path for it. Wormhole names this bit Read_int8; the ISA documentation calls it
-    // Read_raw and lists Read_raw=true as "Identity (i.e. preserve denormals and NaN)" for exactly
-    // the two pairs tested below, BF16 -> BF16 and FP16 -> FP16.
-    // Ref: tt-isa-documentation WormholeB0/TensixTile/TensixCoprocessor/Packers/FormatConversion.md
-    //
-    // The format pair has to be one of those two. Equality alone is not sufficient: a BFP output
-    // reports pack_src_format equal to pack_dst_format (see get_single_pack_src_format in
-    // jit_build/data_format.cpp), yet the packer still performs the block-float conversion, so
-    // reading Dst raw there changes the packed mantissas.
-    const bool is_identity_16b_float_pack =
-        ((pack_src_format & 0x1F) == (pack_dst_format & 0x1F)) &&
-        (((pack_src_format & 0x1F) == to_underlying(DataFormat::Float16_b)) || ((pack_src_format & 0x1F) == to_underlying(DataFormat::Float16)));
-    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8 = !(is_fp32_dest_acc_en || is_32b_format) && (is_int8_format || is_identity_16b_float_pack);
+    // threshold_relu keeps the value of the last configure_pack or _llk_pack_relu_config_.
+    pack_dst_read_raw_state.int8_formats       = is_int8_format;
+    pack_dst_read_raw_state.identity_16b_float = is_identity_16b_float_pack(pack_src_format, pack_dst_format);
+    pack_dst_read_raw_state.read_32b           = is_32b_format || is_fp32_dest_acc_en;
+    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8  = pack_dst_read_raw();
 
     if (pack_dst_format == to_underlying(DataFormat::UInt8))
     {
@@ -689,21 +733,11 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     bool is_int8_format = pack_src_format == to_underlying(DataFormat::Int8) || pack_src_format == to_underlying(DataFormat::UInt8);
 
     dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = is_32b_format || is_fp32_dest_acc_en;
-    // An identity pack, meaning a 16-bit float format packed to itself, needs no conversion, but the
-    // default rounding path still flushes denormals, folds -0 to +0 and maps NaN to infinity. Select
-    // the identity path for it. Wormhole names this bit Read_int8; the ISA documentation calls it
-    // Read_raw and lists Read_raw=true as "Identity (i.e. preserve denormals and NaN)" for exactly
-    // the two pairs tested below, BF16 -> BF16 and FP16 -> FP16.
-    // Ref: tt-isa-documentation WormholeB0/TensixTile/TensixCoprocessor/Packers/FormatConversion.md
-    //
-    // The format pair has to be one of those two. Equality alone is not sufficient: a BFP output
-    // reports pack_src_format equal to pack_dst_format (see get_single_pack_src_format in
-    // jit_build/data_format.cpp), yet the packer still performs the block-float conversion, so
-    // reading Dst raw there changes the packed mantissas.
-    const bool is_identity_16b_float_pack =
-        ((pack_src_format & 0x1F) == (pack_dst_format & 0x1F)) &&
-        (((pack_src_format & 0x1F) == to_underlying(DataFormat::Float16_b)) || ((pack_src_format & 0x1F) == to_underlying(DataFormat::Float16)));
-    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8 = !(is_fp32_dest_acc_en || is_32b_format) && (is_int8_format || is_identity_16b_float_pack);
+    // threshold_relu keeps the value of the last configure_pack or _llk_pack_relu_config_.
+    pack_dst_read_raw_state.int8_formats       = is_int8_format;
+    pack_dst_read_raw_state.identity_16b_float = is_identity_16b_float_pack(pack_src_format, pack_dst_format);
+    pack_dst_read_raw_state.read_32b           = is_32b_format || is_fp32_dest_acc_en;
+    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8  = pack_dst_read_raw();
 
     if (pack_dst_format == to_underlying(DataFormat::UInt8))
     {
@@ -717,9 +751,7 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     static_assert(
         PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Read_int8_ADDR32,
         "PCK_DEST_RD_CTRL_Read_32b_data and Read_int8 must share ADDR32 for combined RMW");
-    // Read_int8 has to be in the mask. Without it the bit keeps whatever set_packer_config left,
-    // so a kernel that initialises with an identity pack and later reconfigures to a narrowing
-    // output format would pack that output with Read_raw still set.
+    // Read_int8 is in the mask so a reconfig away from an identity pack clears it.
     cfg_reg_rmw_tensix<
         PCK_DEST_RD_CTRL_Read_32b_data_ADDR32,
         PCK_DEST_RD_CTRL_Read_32b_data_SHAMT,
@@ -833,6 +865,9 @@ inline void configure_pack(
     cfg_reg_rmw_tensix<STACC_RELU_ApplyRelu_ADDR32, 0, hw_relu_mask>(hw_relu_config.val[0]);
 
     t6_mutex_release(mutex::REG_RMW);
+
+    // set_packer_config derives Read_int8 from the relu mode programmed above.
+    pack_dst_read_raw_state.threshold_relu = is_threshold_relu(hw_relu_config.r.STACC_RELU_ApplyRelu);
 
     set_packer_config<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, num_faces, partial_face);
 

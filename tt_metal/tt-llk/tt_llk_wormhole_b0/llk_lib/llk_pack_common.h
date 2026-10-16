@@ -198,6 +198,7 @@ inline void set_dst_write_addr(const std::uint32_t tile_index)
  * @brief Configure the packer relu mode and threshold.
  *
  * Writes the relu mode and threshold carried by the config to the STACC_RELU config register.
+ * Also rewrites PCK_DEST_RD_CTRL_Read_int8, which a threshold relu keeps off the identity path.
  *
  * @param relu_config: Relu configuration carrying the mode and threshold value.
  */
@@ -215,6 +216,9 @@ TT_ALWAYS_INLINE void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_con
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     t6_mutex_acquire(mutex::REG_RMW);
     cfg_reg_rmw_tensix<STACC_RELU_ApplyRelu_ADDR32, 0, hw_relu_mask>(val);
+    // A threshold relu takes Read_int8 off the identity path, see pack_dst_read_raw.
+    pack_dst_read_raw_state.threshold_relu = is_threshold_relu(mode);
+    cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_int8_RMW>(pack_dst_read_raw());
     t6_mutex_release(mutex::REG_RMW);
 }
 

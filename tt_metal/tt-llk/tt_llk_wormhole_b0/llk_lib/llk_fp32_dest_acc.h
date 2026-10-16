@@ -10,6 +10,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
+#include "cpack_common.h"
 #include "llk_assert.h"
 
 using namespace ckernel;
@@ -23,6 +24,8 @@ constexpr std::uint32_t MATH_DONE    = 0x46504110; // 'FPA' | 0x10
 
 /**
  * @brief Coordinate a mid-kernel FP32 dest-acc reconfiguration across Unpack, Math, and Pack.
+ *
+ * MATH programs ALU_ACC_CTRL and PCK_DEST_RD_CTRL_Read_32b_data, PACK then derives Read_int8 from its formats.
  *
  * Dest-acc CFG is MATH-owned. tensix_sync drains each thread's Tensix FIFO (including FPU / SFPU /
  * packer); the mailbox then holds RISC so no new work is issued until MATH has written dest-acc:
@@ -58,6 +61,11 @@ inline void _llk_set_fp32_dest_acc_(bool enable = false)
         mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::PACK_READY);
         const std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
         LLK_ASSERT(math_done == fp32_dest_acc::MATH_DONE, "Unexpected dest-acc message from math thread.");
+
+        // MATH drained before MATH_DONE, so this RISC read sees its Read_32b_data. A 32-bit Dst read with
+        // Read_int8 set truncates instead of rounding, so Read_int8 follows it. The packer is idle (tensix_sync above).
+        packer::pack_dst_read_raw_state.read_32b = packer::read_dest_rd_ctrl().PCK_DEST_RD_CTRL_Read_32b_data;
+        cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_int8_RMW>(packer::pack_dst_read_raw());
     }
     else
     {
