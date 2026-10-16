@@ -62,8 +62,8 @@ inline constexpr uint32_t kSafePllMhz = 200;
 // ASIC reset -- enough to take a host down when the error recovery saturates
 // its CPUs. Nothing here can serialise against another process, so this is a
 // precondition on the caller and not a check any of the three can make: do not
-// move this clock on a host where anything else holds the device open. A fleet
-// telemetry agent counts.
+// move this clock on a host where anything else holds the device open. A telemetry
+// daemon counts.
 
 enum class RuntimeOpenOutcome {
     Ready,
