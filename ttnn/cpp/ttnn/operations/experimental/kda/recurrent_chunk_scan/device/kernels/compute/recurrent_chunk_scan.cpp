@@ -149,12 +149,16 @@ FORCE_INLINE void subtract_from_values(DataflowBuffer& values, DataflowBuffer& p
 
 // The summary carries the zero-seeded state B and the identity-seeded state A + B side by side: a [Kt, 2 * Vt]
 // state whose first Vt columns hold B. Publish (A + B) - B, or copy B, one tile row of Vt tiles per packet, from the
-// FP32 carry (UnpackToDest) with an SFPU subtraction, so A is exact in FP32 before it is packed.
-template <bool Difference, uint32_t Kt, uint32_t Vt, uint32_t PacketRows>
-FORCE_INLINE void extract_paths(DataflowBuffer& carry, DataflowBuffer& output) {
+// FP32 carry (UnpackToDest) with an SFPU subtraction, so A is exact in FP32 before it is packed. In complement form
+// the packed head transform publishes E = A - I instead: I is subtracted on the global diagonal tiles, where this
+// value block's column v meets key tile row value_block * Vt + v (summaries require K == V).
+template <bool Difference, uint32_t Kt, uint32_t Vt, uint32_t PacketRows, bool Complement = false>
+FORCE_INLINE void extract_paths(
+    DataflowBuffer& carry, DataflowBuffer& output, DataflowBuffer* identity = nullptr, uint32_t value_block = 0) {
     static_assert(Kt % PacketRows == 0);
     const uint32_t carry_id = carry.get_id();
     const uint32_t output_id = output.get_id();
+    const uint32_t identity_id = identity == nullptr ? 0 : identity->get_id();
     reconfig_data_format_srca(carry_id);
     for (uint32_t first_row = 0; first_row < Kt; first_row += PacketRows) {
         output.reserve_back(PacketRows * Vt);
@@ -166,8 +170,18 @@ FORCE_INLINE void extract_paths(DataflowBuffer& carry, DataflowBuffer& output) {
                 if constexpr (Difference) {
                     copy_tile(carry_id, b_tile + Vt, 0);
                     copy_tile(carry_id, b_tile, 1);
+                    const bool diagonal = Complement && first_row + row == value_block * Vt + value;
+                    if (diagonal) {
+                        reconfig_data_format_srca(carry_id, identity_id);
+                        copy_init(identity_id);
+                        copy_tile(identity_id, 0, 2);
+                        reconfig_data_format_srca(identity_id, carry_id);
+                    }
                     sub_binary_tile_init();
                     sub_binary_tile(0, 1, 0);
+                    if (diagonal) {
+                        sub_binary_tile(0, 2, 0);
+                    }
                 } else {
                     copy_tile(carry_id, b_tile, 0);
                 }
@@ -383,8 +397,8 @@ FORCE_INLINE void update_state(
 
 // The zero-seeded B and identity-seeded A + B recurrences advance together as one [Kt, 2 * Vt] state, so every
 // operation covers both; each tile's arithmetic is the same as advancing them apart.
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, bool PackedHead>
+FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk, uint32_t value_block) {
     DataflowBuffer state(dfb::state);
     DataflowBuffer t_inv(dfb::t_inv);
     DataflowBuffer v_beta(dfb::v_beta);
@@ -457,7 +471,8 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     pack_reconfig_data_format(output.get_id());
     constexpr uint32_t packet_rows = kda::largest_divisor_at_most(
         Kt, ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>() / Vt);
-    extract_paths<true, Kt, Vt, packet_rows>(state_carry, output);
+    // The packed head transform feeds chain_affine_transforms in complement form (E = A - I).
+    extract_paths<true, Kt, Vt, packet_rows, PackedHead>(state_carry, output, &identity, value_block);
     pack_reconfig_data_format(transport_state.get_id());
     extract_paths<false, Kt, Vt, packet_rows>(state_carry, transport_state);
     final_state.pop_front(key_pair_tiles);
@@ -527,8 +542,8 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     state_carry.pop_front(key_value_tiles);
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary>
-TT_KERNEL void compute(uint32_t num_chunks, uint32_t group) {
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary, uint32_t packed_head>
+TT_KERNEL void compute(uint32_t num_chunks, uint32_t group, uint32_t value_block) {
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::kd, dfb::v_beta, dfb::output);
 
     kda_chronology::Topology topology{};
@@ -543,7 +558,7 @@ TT_KERNEL void compute(uint32_t num_chunks, uint32_t group) {
         return;
     }
     if constexpr (summary) {
-        compute_summary<Ct, Kt, Vt>(valid_chunks, reset_chunk);
+        compute_summary<Ct, Kt, Vt, packed_head != 0>(valid_chunks, reset_chunk, value_block);
     } else {
         compute_recurrent<Ct, Kt, Vt>(valid_chunks, reset_chunk);
     }

@@ -469,7 +469,8 @@ def test_sp_chain_affine_transforms_order(mesh_device, axis):
     generator = torch.Generator().manual_seed(4127)
     eye = torch.eye(key_dim).expand(sp_size, heads, -1, -1)
     # Non-commuting, BF16-representable transitions: a reordered chain fails loudly.
-    a = (0.9 * eye + 0.05 * torch.randn(sp_size, heads, key_dim, key_dim, generator=generator)).bfloat16().float()
+    # Complement form: the op takes E = A - I.
+    a = (-0.1 * eye + 0.05 * torch.randn(sp_size, heads, key_dim, key_dim, generator=generator)).bfloat16().float()
     b = (0.05 * torch.randn(sp_size, heads, key_dim, value_dim, generator=generator)).bfloat16().float()
     seed = initial_state(heads, key_dim, value_dim)
     transforms = ttnn.from_torch(
@@ -497,7 +498,7 @@ def test_sp_chain_affine_transforms_order(mesh_device, axis):
         for step in range(sp_size):
             rank = (first_rank + step) % sp_size
             entries[rank] = carry
-            carry = a[rank] @ carry + b[rank]
+            carry = carry + (a[rank] @ carry + b[rank])
         entry, final = ttnn.experimental.kda.chain_affine_transforms(
             transforms,
             initial,

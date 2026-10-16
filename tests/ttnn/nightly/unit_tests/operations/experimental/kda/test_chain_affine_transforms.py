@@ -100,10 +100,10 @@ def test_chain_affine_transforms_work_golden() -> None:
 def _host_inputs(
     batch_heads: int, key_dim: int, value_dim: int, *, seed: int = 914
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Return BF16-representable A and B, which cross the mesh as BF16, and an FP32 initial state."""
+    """Return BF16-representable E = A - I and B, which cross the mesh as BF16, and an FP32 initial state."""
     generator = torch.Generator().manual_seed(seed)
     eye = torch.eye(key_dim).reshape(1, 1, key_dim, key_dim)
-    a = (0.94 * eye).expand(_STEPS, batch_heads, -1, -1).clone()
+    a = (-0.06 * eye).expand(_STEPS, batch_heads, -1, -1).clone()
     a += 0.0125 * torch.randn(a.shape, generator=generator)
     b = 0.025 * torch.randn(_STEPS, batch_heads, key_dim, value_dim, generator=generator)
     initial = 0.1 * torch.randn(batch_heads, key_dim, value_dim, generator=generator)
@@ -113,7 +113,7 @@ def _host_inputs(
 def _oracle(a: torch.Tensor, b: torch.Tensor, initial: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     carry = initial
     for step in range(a.shape[0]):
-        carry = a[step] @ carry + b[step]
+        carry = carry + (a[step] @ carry + b[step])
     return initial, carry
 
 
@@ -167,7 +167,7 @@ def _composed_ttnn_baseline(
         transform_a = ttnn.typecast(_to_device(a[step : step + 1], device, ttnn.bfloat16), ttnn.float32)
         transform_b = ttnn.typecast(_to_device(b[step : step + 1], device, ttnn.bfloat16), ttnn.float32)
         product = ttnn.matmul(transform_a, carry, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config)
-        carry = ttnn.add(product, transform_b)
+        carry = ttnn.add(carry, ttnn.add(product, transform_b))
     return carry
 
 

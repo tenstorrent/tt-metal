@@ -49,17 +49,12 @@ FORCE_INLINE void drain(DataflowBuffer& buffer) {
     buffer.pop_front(Rows * Vt);
 }
 
-// A rank with no head contributes the affine identity (I, 0): this value block writes its columns of I and of 0
-// into the packed [A | B] rows. One BF16 scratch tile is zeroed, written to every off-diagonal tile, then given
-// its diagonal and written to the diagonal tiles.
+// A rank with no head contributes the affine identity, which the complement-form packed head transform [E | B] writes
+// as (0, 0): this value block's columns of E and of B are zero tiles.
 template <uint32_t Kt, uint32_t Vt, uint32_t VtFull, typename Accessor>
 FORCE_INLINE void write_identity_summary(
     const Accessor& packed, DataflowBuffer& scratch, Noc& noc, uint32_t head, uint32_t value_block) {
     constexpr uint32_t row_stride = Kt + VtFull;
-    constexpr uint16_t bf16_one_bits = 0x3F80;
-    constexpr uint32_t face_rows = tt::constants::FACE_HEIGHT;
-    constexpr uint32_t face_cols = tt::constants::FACE_WIDTH;
-    constexpr uint32_t bottom_right_face_offset = (tt::constants::TILE_WIDTH / face_cols + 1) * tt::constants::FACE_HW;
     const uint32_t row_base = head * Kt * row_stride;
     const uint32_t first_column = value_block * Vt;
 
@@ -70,19 +65,8 @@ FORCE_INLINE void write_identity_summary(
     for (uint32_t row = 0; row < Kt; ++row) {
         for (uint32_t column = first_column; column < first_column + Vt; ++column) {
             noc.async_write(scratch, packed, tile_bytes, {}, {.page_id = row_base + row * row_stride + Kt + column});
-            if (row != column) {
-                noc.async_write(scratch, packed, tile_bytes, {}, {.page_id = row_base + row * row_stride + column});
-            }
+            noc.async_write(scratch, packed, tile_bytes, {}, {.page_id = row_base + row * row_stride + column});
         }
-    }
-    noc.async_write_barrier();
-    auto* halfwords = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch.get_write_ptr());
-    for (uint32_t r = 0; r < face_rows; ++r) {
-        halfwords[r * face_cols + r] = bf16_one_bits;
-        halfwords[bottom_right_face_offset + r * face_cols + r] = bf16_one_bits;
-    }
-    for (uint32_t row = first_column; row < first_column + Vt; ++row) {
-        noc.async_write(scratch, packed, tile_bytes, {}, {.page_id = row_base + row * row_stride + row});
     }
     noc.async_write_barrier();
 }

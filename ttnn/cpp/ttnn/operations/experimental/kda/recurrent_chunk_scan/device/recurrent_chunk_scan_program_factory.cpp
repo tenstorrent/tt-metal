@@ -344,8 +344,13 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 tt::tt_metal::experimental::ProducerOf(summary_head_state_dfb_name, "summary_head_state"),
                 tt::tt_metal::experimental::ConsumerOf(tail_entry_states_dfb_name, "tail_entry_states"),
             },
-        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"summary", static_cast<uint32_t>(summary)}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_chunks", "group"}},
+        .compile_time_args =
+            {{"Ct", Ct},
+             {"Kt", Kt},
+             {"Vt", Vt},
+             {"summary", static_cast<uint32_t>(summary)},
+             {"packed_head", static_cast<uint32_t>(packed_head)}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_chunks", "group", "value_block"}},
         .hw_config = std::move(compute_hw),
     };
     tt::tt_metal::experimental::KernelRunArgs reader_run_args{.kernel = reader_kernel_name};
@@ -385,7 +390,9 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
              {"peer_y1", sender ? peers.y0 : peers.y1},
              {"receivers", value_blocks - 1}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
-            compute_run_args.runtime_arg_values, core, {{"num_chunks", NC}, {"group", group}});
+            compute_run_args.runtime_arg_values,
+            core,
+            {{"num_chunks", NC}, {"group", group}, {"value_block", value_block}});
     }
 
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::TensorParameter> tensor_parameters = {
