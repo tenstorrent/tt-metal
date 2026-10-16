@@ -334,6 +334,22 @@ def _icl_ref_cached(key, build):
     return val
 
 
+def warm_text_projection(model, device, config, max_tokens: int = None) -> list:
+    """Compile the text embedding + projection programs for every padded text length
+    create_icl_embedding_ttnn can use (multiples of 32 up to the prefill cap), so no request
+    pays the first-use compile (~0.2-0.45 s per new length). Returns the warmed lengths."""
+    max_tokens = int(max_tokens or MAX_PREFILL_BUCKET)
+    lengths = list(range(32, max_tokens + 1, 32))
+    for n in lengths:
+        ids = torch.full((1, n), int(config.tts_pad_token_id), dtype=torch.long)
+        ids_tt = ttnn.from_torch(ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        out = model.project_text(model.get_text_embedding(ids_tt))
+        _mesh_to_torch(out)
+        ttnn.deallocate(out)
+        ttnn.deallocate(ids_tt)
+    return lengths
+
+
 def create_icl_embedding_ttnn(
     target_text: str,
     ref_text: str,
@@ -405,12 +421,17 @@ def create_icl_embedding_ttnn(
 
     # Combined text embeddings (ref_text + target_text)
     combined_text_ids = torch.cat([ref_text_ids, target_text_ids], dim=1)
-    combined_text_ids_tt = ttnn.from_torch(
-        combined_text_ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
-    )
+    # Pad the token count to a multiple of 32 (tile height) so the embedding + projection
+    # programs are reused across requests: every new length used to compile them again
+    # (~35 ms). Both ops are row-wise and tiles already pad to 32 rows, so the real rows are
+    # unchanged; the pad rows are cut off below. TT_QWEN3_ICL_CACHE=0 turns this off too.
+    n_text = combined_text_ids.shape[1]
+    n_pad = (-n_text) % 32 if ICL_CACHE else 0
+    padded_ids = torch.nn.functional.pad(combined_text_ids, (0, n_pad), value=int(config.tts_pad_token_id))
+    combined_text_ids_tt = ttnn.from_torch(padded_ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
     combined_text_embeds_tt = model.get_text_embedding(combined_text_ids_tt)
     combined_text_proj_tt = model.project_text(combined_text_embeds_tt)
-    combined_text_proj = _mesh_to_torch(combined_text_proj_tt).squeeze(1).float()
+    combined_text_proj = _mesh_to_torch(combined_text_proj_tt).squeeze(1).float()[:, :n_text, :]
 
     # Full text embedding with EOS
     text_embed = torch.cat([combined_text_proj, tts_eos_embed], dim=1)
@@ -3819,6 +3840,8 @@ def decode_bucket_for(max_ref_frames: int, max_new_tokens: int, step: int = 64) 
     Rounded to a power of two rather than a multiple of ``step`` because conv1d
     weight-prepare was observed to deadlock the device at 192 frames while 64 and
     128 prepared fine; non-power-of-two lengths appear to hit a bad prepare path.
+    prepare_device_decoder no longer uses this: it takes the decoder's bucket_ladder,
+    which is finer (x1.5) for the fused conv.
     """
     total = max(int(step), int(max_ref_frames) + int(max_new_tokens))
     bucket = int(step)
@@ -3848,10 +3871,9 @@ def prepare_device_decoder(
     ``build_device_decoder``). After this returns, no request can trigger a conv
     weight-prepare or any other persistent allocation: an over-long decode raises.
 
-    Warms the power-of-two ladder up to the max bucket, matching the rounding in
-    ``TtSpeechTokenizerDecoder.forward``. Every warmed length is one that ttnn's
-    conv1d tests cover; the multiple-of-64 ladder is NOT safe, because preparing
-    bucket 192 deadlocks the device.
+    Warms the decoder's bucket ladder up to the max bucket (``bucket_ladder``, the same
+    rounding ``_select_bucket`` uses): x1.5 steps for the fused conv, powers of two for
+    native conv1d, whose weight-prepare deadlocks the device at bucket 192.
 
     Tight buckets matter for latency: decode cost tracks the bucket, so a short
     utterance is ~0.33s at bucket 128 but ~1.68s if padded up to 512.
@@ -3863,18 +3885,13 @@ def prepare_device_decoder(
     step = DECODE_MIN_BUCKET  # must match TtSpeechTokenizerDecoder's smallest bucket
     if icl_continue:
         max_ref_frames = DECODER_BACKEND_CONTEXT_FRAMES
-    max_bucket = decode_bucket_for(max_ref_frames, max_new_tokens, step=step)
+    decoder = build_device_decoder(device, decoder_weights, max_decode_bucket=None, variant=variant)
+    # The decoder's own ladder (TtSpeechTokenizerDecoder.bucket_ladder), so warm-up and
+    # per-request bucket selection always agree.
+    buckets = decoder.bucket_ladder(max(int(step), int(max_ref_frames) + int(max_new_tokens)))
     if pin_single_bucket:
-        buckets = [max_bucket]
-    else:
-        buckets = []
-        n = step
-        while n <= max_bucket:
-            buckets.append(n)
-            n *= 2
-    decoder = build_device_decoder(
-        device, decoder_weights, max_decode_bucket=max_bucket if pin_single_bucket else None, variant=variant
-    )
+        buckets = [buckets[-1]]
+        decoder.max_decode_bucket = buckets[0]
     warmup_device_decoder(decoder, buckets, freeze=True, backend_only=icl_continue)
     return decoder, buckets
 

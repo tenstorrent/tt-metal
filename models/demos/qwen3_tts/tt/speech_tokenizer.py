@@ -16,6 +16,7 @@ The pre-transformer uses TTNN, while convolutional layers use PyTorch fallback.
 """
 
 import os
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
@@ -36,6 +37,30 @@ from models.demos.qwen3_tts.tt.ttnn_conv_decoder import TTNNConv1d, backend_comp
 LEGACY_NUMERICS = os.environ.get("TT_QWEN3_DECODE_NUMERICS", "hifi") == "legacy"
 SNAKE_EPS = 1e-9
 DECODE_MIN_BUCKET = int(os.environ.get("TT_QWEN3_DECODE_MIN_BUCKET", "32"))
+# Decode bucket ladder. "x1.5" (default unless the conv mode is conv1d): 32, 48, 64, 96, 128,
+# 192, ... so a decode pads by at most 50 % instead of up to 100 % (35 frames used to pad to
+# 64 and cost twice bucket 32). "pow2": powers of two only, required by native conv1d, whose
+# weight-prepare deadlocked the device at 192 frames. Unset = pick by conv mode.
+DECODE_LADDER = os.environ.get("TT_QWEN3_DECODE_LADDER", "")
+
+
+def decode_bucket_ladder(step: int, total: int, conv_mode: str) -> list:
+    """Every decode bucket from ``step`` up to the first one that holds ``total`` frames."""
+    mode = DECODE_LADDER or ("pow2" if conv_mode == "conv1d" else "x1.5")
+    out, n = [], int(step)
+    while True:
+        out.append(n)
+        if n >= total:
+            return out
+        half = n * 3 // 2
+        if mode == "x1.5" and half % 16 == 0 and half >= total:
+            out.append(half)
+            return out
+        if mode == "x1.5" and half % 16 == 0:
+            out.append(half)
+        n *= 2
+
+
 # SnakeBeta: "fused" (default) = one ttnn.snake_beta SFPU op (fp32 inside, one bf16 rounding;
 # Blaze codec_fast step A); "host" = mul, sin, square, mul, add on host-folded parameters.
 SNAKE_MODE = os.environ.get("TT_QWEN3_DECODE_SNAKE", "fused")
@@ -1762,6 +1787,8 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         batch_size, channels, real_len = latent.shape
         assert batch_size == 1, "batch 1 only"
         bucket = self._select_bucket(real_len)
+        # Read by the runner's per-request stage log: frames decoded, bucket, back-end ms.
+        self.last_backend = {"frames": int(real_len), "bucket": int(bucket), "t0": time.perf_counter()}
         x = latent.permute(0, 2, 1).to(torch.bfloat16)  # [1, frames, C]
         if bucket != real_len:
             x = torch.nn.functional.pad(x, (0, 0, 0, bucket - real_len))
@@ -1771,11 +1798,15 @@ class TtSpeechTokenizerDecoder(LightweightModule):
             ttnn.synchronize_device(self.device)
             ttnn.copy_host_to_device_tensor(ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), x_in)
             ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
-            return self._audio_to_host(out, real_len)
+            audio = self._audio_to_host(out, real_len)
+            self.last_backend["ms"] = (time.perf_counter() - self.last_backend.pop("t0")) * 1e3
+            return audio
         x_tt = ttnn.from_torch(
             x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        return self._audio_to_host(self._conv_decoder_forward(x_tt), real_len)
+        audio = self._audio_to_host(self._conv_decoder_forward(x_tt), real_len)
+        self.last_backend["ms"] = (time.perf_counter() - self.last_backend.pop("t0")) * 1e3
+        return audio
 
     def capture_backend_traces(self, buckets) -> None:
         """Record one trace of the conv back-end per warmed bucket (Blaze L2).
@@ -1841,6 +1872,14 @@ class TtSpeechTokenizerDecoder(LightweightModule):
             ttnn.deallocate(out)
         self._backend_traces = {}
 
+    def bucket_ladder(self, total: int) -> list:
+        """Buckets from the smallest up to the first that holds ``total`` frames (see
+        decode_bucket_ladder); the ladder follows this decoder's conv mode."""
+        from models.demos.qwen3_tts.tt import ttnn_conv_decoder as tcd
+
+        conv = (self.variant or {}).get("conv", tcd.CONV_MODE)
+        return decode_bucket_ladder(self.decode_bucket_step, total, conv)
+
     def _select_bucket(self, real_seq_len: int) -> int:
         """Pick the decode bucket for ``real_seq_len`` frames and make its cache active.
 
@@ -1851,9 +1890,7 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         non-power-of-two lengths (192 hangs, while 64/128/256/512 prepare fine), and
         those bad lengths are exactly the ones missing from ttnn's conv1d test matrix.
         """
-        bucket = self.decode_bucket_step
-        while bucket < real_seq_len:
-            bucket *= 2
+        bucket = self.bucket_ladder(real_seq_len)[-1]
         if self.max_decode_bucket is not None:
             if bucket > self.max_decode_bucket:
                 raise ValueError(
