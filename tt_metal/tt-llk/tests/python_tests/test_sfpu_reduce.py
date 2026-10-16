@@ -314,12 +314,23 @@ def test_sfpu_reduce(
         mathop == MathOperation.ReduceRow
         and reduce_pool in (ReducePool.Max, ReducePool.Min)
         and formats.input_format == DataFormat.UInt16
+        and dest_acc == DestAccumulation.No
     ):
         pytest.skip(
-            reason="UInt16 row MAX/MIN is unsupported by the kernel: without a 32-bit dest it loads "
-            "with LO16 (rejected by the row MAX/MIN static_assert), and with a 32-bit dest it routes "
-            "through the INT32 sign-magnitude row path, which does not mask UInt16's high bits and "
-            "returns garbage. Column UInt16 MAX/MIN (the ttnn-exercised path) is still covered."
+            reason="UInt16 row MAX/MIN without a 32-bit dest loads with LO16, which the row MAX/MIN "
+            "path does not support (Blackhole rejects it in its row MAX/MIN static_assert). With a "
+            "32-bit dest (dest_acc=Yes) the UInt16 datum is masked on load and the cells run."
+        )
+
+    if (
+        mathop == MathOperation.ReduceRow
+        and reduce_pool in (ReducePool.Max, ReducePool.Min)
+        and formats.input_format == DataFormat.UInt16
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+    ):
+        pytest.skip(
+            reason="Blackhole routes UInt16 row MAX/MIN in a 32-bit dest through the Int32 "
+            "sign-magnitude row path, which does not mask UInt16's high bits and returns garbage."
         )
 
     if (

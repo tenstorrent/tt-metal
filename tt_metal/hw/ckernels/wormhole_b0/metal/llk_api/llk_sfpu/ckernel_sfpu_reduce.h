@@ -1858,6 +1858,13 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
             if constexpr (uint32_max_min) {
                 flip_sign_bits(num_tiles);
             }
+        } else if constexpr (reduce_dim == ReduceDim::REDUCE_ROW) {
+            // Row MAX/MIN for every remaining format. This branch must sit ahead of the clear_high_bits
+            // one: UInt16 in a 32-bit dest (clear_high_bits) takes the row helper too, which masks the
+            // garbage high 16 bits on every load, whereas calculate_reduce_max_min_uint16 below is the
+            // column-only manual path and rejects REDUCE_ROW at compile time.
+            perform_reduce_row_max_min<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16>(
+                block_ct_dim, block_rt_dim);
         } else if constexpr (clear_high_bits) {
             // UInt16 in 32-bit dest: manual load/mask/swap path (LOADMACRO cannot mask between load and swap).
             calculate_reduce_max_min_uint16<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>();
