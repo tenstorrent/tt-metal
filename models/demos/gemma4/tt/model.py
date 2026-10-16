@@ -432,6 +432,13 @@ class Gemma4Model:
         # ``ttnn_prefill_forward`` and bypass this stash.
         self._prefill_input_ids_torch = None
         self._prefill_embeds_torch = None
+        # Multimodal prefill (vLLM bridge): the host-merged text + soft-token embeddings
+        # of the user being prefilled, as ``(embeds [N, hidden] bf16, base_offset)`` with
+        # row ``i`` = prompt position ``base_offset + i``. ``prepare_inputs_prefill`` feeds
+        # them in place of ``embed_tokens`` so the text prefill's page-table, per-layer
+        # table, chunk and APC handling is reused unchanged. Installed per call by
+        # ``Gemma4Generator._prefill_single_user_with_embeds``.
+        self._g4_mm_prefill_embeds = None
 
         # Stash for the per-layer-input (PLI) device tensor produced in
         # ``prepare_decode_inputs_host``. ``Generator``'s decode path
@@ -1894,6 +1901,7 @@ class Gemma4Model:
         """
         import torch.nn.functional as F
 
+        prefill_start = int(start_pos or 0)
         del start_pos, last_token_idx, batched_prefill, kwargs
 
         device = None if trace_enabled else self.mesh_device
@@ -2017,6 +2025,13 @@ class Gemma4Model:
         if trace_enabled:
             return tt_tokens, None, None, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
+        mm_override = getattr(self, "_g4_mm_prefill_embeds", None)
+        if mm_override is not None:
+            tt_embeds = self._mm_prefill_embeds_to_device(
+                mm_override, prefill_start, per_user_seq_len, batch_size=batch_size, lane_parallel=lane_parallel
+            )
+            return tt_embeds, None, None, tt_page_table, tt_chunk_page_table, None
+
         tt_embeds = self.embed_tokens(tt_tokens)
         if batch_size > 1:
             if len(tt_embeds.shape) == 3:
@@ -2026,6 +2041,37 @@ class Gemma4Model:
         tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
 
         return tt_embeds, None, None, tt_page_table, tt_chunk_page_table, None
+
+    def _mm_prefill_embeds_to_device(self, override, prefill_start, seq_len, *, batch_size=1, lane_parallel=False):
+        """Device prefill input from the installed multimodal embeddings.
+
+        Rows ``[prefill_start - base, +seq_len)`` of the merged prompt: ``prefill_start``
+        is this chunk's absolute start (``start_pos`` of ``prepare_inputs_prefill``) and
+        ``base`` the cached prefix the generator sliced off, so the two line up for the
+        single-chunk, multi-chunk and APC-continuation prefills alike. Rows past the
+        prompt are zero (they mirror the token path's pad ids and are never read back).
+        """
+        if batch_size != 1 or lane_parallel:
+            raise NotImplementedError("multimodal prefill runs one user at a time (no batched / lane-parallel prefill)")
+        embeds, base = override
+        rel = int(prefill_start) - int(base)
+        total = int(embeds.shape[0])
+        if rel < 0 or rel > total:
+            raise ValueError(
+                f"multimodal prefill chunk start {prefill_start} lies outside the merged embeddings "
+                f"(base={base}, rows={total})"
+            )
+        rows = embeds[rel : rel + seq_len]
+        if int(rows.shape[0]) < seq_len:
+            pad = torch.zeros(seq_len - int(rows.shape[0]), int(embeds.shape[1]), dtype=embeds.dtype)
+            rows = torch.cat([rows, pad], dim=0)
+        return ttnn.from_torch(
+            rows.to(torch.bfloat16).reshape(1, 1, seq_len, self.hidden_size).contiguous(),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=self._replicate_to_mesh_mapper(),
+        )
 
     def prepare_prefill_inputs_trace(self, tokens, **kwargs):
         return self.prepare_inputs_prefill(tokens, trace_enabled=True, **kwargs)

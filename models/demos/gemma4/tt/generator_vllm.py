@@ -279,22 +279,6 @@ def _patch_model_args(
     model_args.is_llama_vision = lambda: False
 
 
-def _gemma4_position_ids(kwargs):
-    """The per-slot patch position ids for a multimodal prefill batch.
-
-    The HF ``Gemma4Processor`` emits ``image_position_ids``; upstream vLLM's
-    ``Gemma4MultiModalProcessor`` renames that field to ``pixel_position_ids``
-    before it reaches the model runner, and the plugin forwards multimodal
-    fields under their vLLM names. Accept either so the demo path (HF names)
-    and the served path (vLLM names) share one prefill.
-    """
-    for key in ("pixel_position_ids", "image_position_ids"):
-        value = kwargs.get(key)
-        if value is not None:
-            return value
-    return None
-
-
 def _gemma4_has_vision_weights(state_dict) -> bool:
     """True when the checkpoint ships a ``model.vision_tower.*`` sub-tree (SigLIP,
     31B) or the unified encoder-free embedder (``model.vision_embedder.*``, 12B)."""
@@ -385,7 +369,7 @@ def _build_gemma4_audio(mesh_device, state_dict, model_path, text_hidden_size, w
     return embedder, audio_token_id
 
 
-def merge_soft_tokens(input_ids: torch.Tensor, soft_tokens, pad_token_id: int):
+def merge_soft_tokens(input_ids: torch.Tensor, soft_tokens, pad_token_id: int, *, num_cached: int = 0):
     """Line up every modality's soft tokens with its placeholder slots in one prompt.
 
     ``soft_tokens`` is a list of ``(placeholder_token_id, embeds)`` with ``embeds`` a
@@ -394,7 +378,12 @@ def merge_soft_tokens(input_ids: torch.Tensor, soft_tokens, pad_token_id: int):
     placeholder replaced by ``pad_token_id``, the placeholder positions sorted
     ascending across modalities (``int32 [num_valid]``) and the soft tokens in
     that same order (``bf16 [num_valid, text_hidden]``), ready for one scatter.
-    Raises when a modality's placeholder count differs from its soft-token count.
+
+    ``num_cached`` (vLLM prefix caching): an item whose placeholders all sit inside
+    the cached prefix arrives without its payload, so a modality may carry fewer
+    soft tokens than placeholders. They then fill that modality's LAST placeholders
+    (items are forwarded in prompt order, cached ones first) and every placeholder
+    past the cached prefix must receive one. Any other count mismatch raises.
     """
     input_ids = input_ids.reshape(-1).to(torch.long)
     placeholder_mask = torch.zeros_like(input_ids, dtype=torch.bool)
@@ -404,13 +393,18 @@ def merge_soft_tokens(input_ids: torch.Tensor, soft_tokens, pad_token_id: int):
         if token_id is None:
             raise ValueError("soft tokens for a modality this checkpoint has no placeholder id for")
         slot_mask = input_ids == token_id
-        n_slots = int(slot_mask.sum().item())
-        if n_slots != int(embeds.shape[0]):
-            raise ValueError(
-                f"Placeholder count for token id {token_id} ({n_slots}) != soft tokens ({int(embeds.shape[0])}). "
-                "The processor's placeholder run lengths and the embedder's valid-token counts must agree."
-            )
-        positions_per_modality.append(torch.where(slot_mask)[0])
+        slots = torch.where(slot_mask)[0]
+        n_slots, n_soft = int(slots.numel()), int(embeds.shape[0])
+        if n_soft != n_slots:
+            uncovered = slots[: max(n_slots - n_soft, 0)]
+            if n_soft > n_slots or num_cached <= 0 or int(uncovered.max()) >= num_cached:
+                raise ValueError(
+                    f"Placeholder count for token id {token_id} ({n_slots}) != soft tokens ({n_soft}). "
+                    "The processor's placeholder run lengths and the embedder's valid-token counts must agree "
+                    "(a shortfall is only valid for items fully inside the cached prefix)."
+                )
+            slots = slots[n_slots - n_soft :]
+        positions_per_modality.append(slots)
         embeds_per_modality.append(embeds.to(torch.bfloat16))
         placeholder_mask |= slot_mask
     if not positions_per_modality:
@@ -424,15 +418,40 @@ def merge_soft_tokens(input_ids: torch.Tensor, soft_tokens, pad_token_id: int):
     return llm_ids, positions, merged_embeds
 
 
+# Multimodal fields the plugin forwards per batch slot (vLLM ``Gemma4MultiModalProcessor``
+# names, plus the HF ``Gemma4Processor`` names the demo path uses). The payload keys
+# decide whether a batch is multimodal; the bridge consumes all of them before the
+# text prefill runs (``_stage_multimodal_prefill``) so none reaches ``prepare_inputs_prefill``.
+_GEMMA4_MM_PAYLOAD_KEYS = ("pixel_values", "pixel_values_videos", "input_features", "input_features_padded")
+_GEMMA4_MM_FIELD_KEYS = _GEMMA4_MM_PAYLOAD_KEYS + (
+    "pixel_position_ids",
+    "image_position_ids",
+    "image_grid_thw",
+    "image_sizes",
+    "pixel_position_ids_videos",
+    "video_position_ids",
+    "video_frame_counts",
+    "video_num_soft_tokens",
+    "video_timestamps",
+    "input_features_mask",
+)
+
+
+def _mm_value_present(value) -> bool:
+    """True when a forwarded multimodal field carries a payload for some slot (a text
+    batch on a multimodal class still carries ``pixel_values=[None] * B``)."""
+    if value is None:
+        return False
+    if isinstance(value, (list, tuple)):
+        return any(_mm_value_present(v) for v in value)
+    return True
+
+
 def _gemma4_has_mm_inputs(kwargs) -> bool:
-    """True when the plugin forwarded any multimodal feature for this prefill batch:
-    images (``pixel_values`` + positions), videos (``pixel_values_videos``) or audio
-    (``input_features``; vLLM's own parser spells it ``input_features_padded``)."""
-    if kwargs.get("pixel_values") is not None and _gemma4_position_ids(kwargs) is not None:
-        return True
-    if kwargs.get("pixel_values_videos") is not None:
-        return True
-    return kwargs.get("input_features") is not None or kwargs.get("input_features_padded") is not None
+    """True when the plugin forwarded an image (``pixel_values``), video
+    (``pixel_values_videos``) or audio (``input_features``; vLLM's own parser spells it
+    ``input_features_padded``) payload for any user of this prefill batch."""
+    return any(_mm_value_present(kwargs.get(key)) for key in _GEMMA4_MM_PAYLOAD_KEYS)
 
 
 class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCausalLM):
@@ -900,30 +919,34 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             image_embeds_tt.deallocate(True)
         logger.info("Gemma4 vLLM: vision warmup complete")
 
-    def _prefill_single_user_multimodal(
-        self,
-        user_tokens: torch.Tensor,
-        soft_tokens,
-        page_table_u: torch.Tensor,
-        kv_cache,
-        prompt_len_u: int,
-        model_id: int = 0,
-    ) -> torch.Tensor:
-        """Prefill one multimodal user with precomputed soft tokens.
+    def _host_text_embeds(self, llm_ids: torch.Tensor, model) -> torch.Tensor:
+        """Host ``[N, text_hidden]`` bf16 text embeddings of ``llm_ids`` (``[N]``), scaled by
+        ``sqrt(hidden)`` exactly as ``Gemma4Model.embed_tokens`` does on device."""
+        weight = getattr(model, "_embed_weight_cpu", None)
+        if weight is not None:
+            embeds = torch.nn.functional.embedding(llm_ids, weight).float() * model.embed_scale
+            return embeds.to(torch.bfloat16)
+        # No host copy of the embedding table: look the rows up on device.
+        ids_tt = ttnn.from_torch(
+            llm_ids.view(1, -1),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._replicate_mapper(),
+        )
+        embeds_tt = ttnn.reshape(model.embed_tokens(ids_tt), (int(llm_ids.numel()), model.hidden_size))
+        return self._vision_to_host(embeds_tt)
+
+    def _merged_prompt_embeds(self, user_tokens: torch.Tensor, soft_tokens, model_id: int = 0, num_cached: int = 0):
+        """Host ``[prompt_len, text_hidden]`` bf16 embeddings of one multimodal prompt.
 
         ``soft_tokens`` is a list of ``(placeholder_token_id, embeds)`` pairs, one per
-        modality present in the prompt (image / video / audio). Each ``embeds`` is a
-        host ``[num_valid, text_hidden]`` bf16 tensor holding that modality's valid
-        soft tokens in prompt order (every image of the user concatenated, every
-        video frame, every audio clip). A single ttnn ``[num_valid, text_hidden]``
-        tensor is still accepted and taken as the image soft tokens.
-
-        Mirrors ``Gemma4Generator.prefill_forward_multimodal``: build ``llm_ids``
-        (placeholders -> pad), embed on device via ``model.embed_tokens``, scatter
-        every modality's soft tokens into its placeholder slots in one scatter (in
-        prompt order), then feed the merged embeddings straight into
-        ``Gemma4Model.ttnn_prefill_forward`` (bypassing ``embed_tokens`` in the
-        decoder). Returns host logits ``[1, vocab]`` for the last prompt token.
+        modality present in the prompt (image / video / audio), each ``embeds`` a host
+        (or ttnn) ``[num_valid, text_hidden]`` tensor holding that modality's valid
+        soft tokens in prompt order. The text rows are embedded and scaled as the
+        decoder's ``embed_tokens`` does and every placeholder row is replaced by its
+        soft token (``merge_soft_tokens``), which is what HF's ``masked_scatter`` of
+        the projected features into ``inputs_embeds`` produces.
         """
         model = self.model[model_id]
         if getattr(model, "hidden_size_per_layer_input", 0):
@@ -931,87 +954,19 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 "Multimodal prefill + per-layer inputs (PLI) is not supported. "
                 "Use a non-PLI multimodal checkpoint (gemma-4 12B / 26B-A4B / 31B IT)."
             )
-        if not isinstance(soft_tokens, (list, tuple)):
-            soft_tokens = [(self.image_token_id, soft_tokens)]
-        prompt_len = int(user_tokens.shape[-1])
-        last_token_idx = prompt_len_u - 1
-        prefill_seq_len = get_padded_prefill_len(prompt_len)
-        input_ids = user_tokens[0].to(torch.long) if user_tokens.dim() == 2 else user_tokens.to(torch.long)
+        input_ids = user_tokens.reshape(-1).to(torch.long)
         soft_tokens = [
             (token_id, embeds if isinstance(embeds, torch.Tensor) else self._vision_to_host(embeds))
             for token_id, embeds in soft_tokens
         ]
-        llm_ids, positions, merged_embeds = merge_soft_tokens(input_ids, soft_tokens, self.pad_token_id)
-        num_valid = int(positions.numel())
-        text_hidden = int(merged_embeds.shape[1])
-        pad = prefill_seq_len - prompt_len
-        if pad > 0:
-            llm_ids = torch.cat([llm_ids, torch.full((pad,), self.pad_token_id, dtype=torch.long)], dim=0)
-        llm_ids_tt = ttnn.from_torch(
-            llm_ids.view(1, prefill_seq_len),
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=self._replicate_mapper(),
-        )
+        llm_ids, positions, soft = merge_soft_tokens(input_ids, soft_tokens, self.pad_token_id, num_cached=num_cached)
+        merged = self._host_text_embeds(llm_ids, model).clone()
+        merged[positions.long()] = soft.to(torch.bfloat16)
+        return merged
 
-        text_embeds_tt = model.embed_tokens(llm_ids_tt)  # [1, prefill_seq, text_hidden] (or 4D under TP)
-        text_embeds_tt = ttnn.reshape(text_embeds_tt, (prefill_seq_len, text_hidden))
-        text_embeds_tt = ttnn.to_layout(text_embeds_tt, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        scatter_index = positions.view(num_valid, 1).expand(num_valid, text_hidden).contiguous()
-        scatter_index_tt = ttnn.from_torch(
-            scatter_index,
-            device=self.mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self._replicate_mapper(),
-        )
-        soft_embeds_tt = ttnn.from_torch(
-            merged_embeds,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=self._replicate_mapper(),
-        )
-        merged_tt = ttnn.scatter(text_embeds_tt, 0, scatter_index_tt, soft_embeds_tt)  # [prefill_seq, text_hidden]
-        if hasattr(text_embeds_tt, "deallocate"):
-            text_embeds_tt.deallocate(True)
-        if hasattr(soft_embeds_tt, "deallocate"):
-            soft_embeds_tt.deallocate(True)
-        merged_tt = ttnn.reshape(merged_tt, (1, 1, prefill_seq_len, text_hidden))
-
-        tt_page_table = None
-        if page_table_u is not None:
-            tt_page_table = ttnn.from_torch(
-                page_table_u.to(torch.int32),
-                device=self.mesh_device,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=self._replicate_mapper(),
-            )
-
-        model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
-        get_last_token = (last_token_idx // 32) * 32
-        logits_tt = model.ttnn_prefill_forward(
-            x=merged_tt,
-            page_table=tt_page_table,
-            kv_cache=model_kv_cache,
-            get_last_token=get_last_token,
-            batch_size=1,
-            input_ids_torch=None,
-            embeds_torch=None,
-        )
-        ttnn.synchronize_device(self.mesh_device)
-        if model.mesh_config is not None and model.mesh_config.tp > 1:
-            torch_logits = ttnn.to_torch(ttnn.get_device_tensors(logits_tt)[0])
-        else:
-            torch_logits = ttnn.to_torch(logits_tt)
-        return torch_logits[..., last_token_idx % 32, : model.vocab_size]
-
-    def _prefill_multimodal_batch(self, tokens, kwargs, page_table, kv_cache, prompt_lens):
-        """Per-user multimodal prefill for a vLLM prefill batch.
+    def _stage_multimodal_prefill(self, tokens, kwargs, prompt_lens) -> int:
+        """Encode this prefill batch's multimodal inputs and stage each user's merged
+        prompt embeddings for the text prefill.
 
         The plugin forwards the processor's multimodal fields in ``kwargs``, each a
         per-batch-slot list (None for slots without that modality) whose entries are
@@ -1023,17 +978,21 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             the image path and the frames' soft tokens fill the video placeholders;
           * audio (12B unified): ``input_features`` ``[T, 640]`` raw-waveform frames
             + ``input_features_mask`` ``[T]``.
-        Each user is prefilled with the on-device scatter merge
-        (``_prefill_single_user_multimodal``); text-only users in the same batch fall
-        back to the inherited single-user text prefill.
 
-        Returns host logits ``[batch, 1, vocab]`` (no on-device sampling for the
-        multimodal step; sampling is left to the host runner, matching the demo).
+        Each user with inputs gets the host ``[prompt_len, text_hidden]`` merged
+        embedding of its prompt in ``kwargs["pixel_values"]``: the one per-user field
+        the shared prefill loop indexes per batch row and passes on to
+        ``prefill_forward_single_user_text``, which installs it as the embedding
+        override of that user's (eager) prefill. So the multimodal prefill IS the
+        text prefill -- same page tables, per-layer tables, chunking and cached
+        prefixes -- with only the embedding step replaced. Every other multimodal
+        field is dropped so the text prefill sees exactly its usual kwargs.
+        Returns the number of users with multimodal inputs.
         """
         batch_size = int(tokens.shape[0])
         model_id = 0
-        vocab_size = self.model[model_id].vocab_size
-        output_logits = torch.zeros(batch_size, 1, vocab_size, dtype=torch.float32)
+        start_pos = kwargs.get("start_pos")
+        num_cached = [int(n) for n in start_pos] if start_pos is not None else [0] * batch_size
 
         def _per_slot(*keys):
             for key in keys:
@@ -1059,7 +1018,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         af_per_user = _per_slot("input_features", "input_features_padded")
         am_per_user = _per_slot("input_features_mask")
 
-        per_user_soft: dict[int, list] = {}
+        staged = [None] * batch_size
         for u in range(batch_size):
             soft = []
             pvs, ips = _items(pv_per_user[u]), _items(ip_per_user[u])
@@ -1091,32 +1050,19 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                     am = ams[i] if i < len(ams) else None
                     chunks.append(self._vision_to_host(self.encode_audio(af, am)))
                 soft.append((self.audio_token_id, torch.cat(chunks, dim=0)))
-            if soft:
-                per_user_soft[u] = soft
+            if not soft:
+                continue
+            prompt_len_u = int(prompt_lens[u]) if prompt_lens is not None else int(tokens.shape[-1])
+            staged[u] = self._merged_prompt_embeds(
+                tokens[u, :prompt_len_u], soft, model_id=model_id, num_cached=num_cached[u]
+            )
 
-        for u in range(batch_size):
-            user_tokens = tokens[u : u + 1]
-            page_table_u = page_table[u : u + 1] if page_table is not None else None
-            prompt_len_u = int(prompt_lens[u])
-            if u in per_user_soft:
-                user_logits = self._prefill_single_user_multimodal(
-                    user_tokens, per_user_soft[u], page_table_u, kv_cache, prompt_len_u, model_id=model_id
-                )
-            else:
-                # Text-only user in a mixed batch: inherited single-user text prefill.
-                user_logits = self.prefill_forward_single_user_text(
-                    user_tokens,
-                    page_table=page_table_u,
-                    user_id=u,
-                    last_token_idx=prompt_len_u - 1,
-                    kv_cache=kv_cache,
-                    model_id=model_id,
-                )
-            output_logits[u, 0, :] = user_logits.reshape(-1)[:vocab_size]
-        logger.info(
-            f"Gemma4 vLLM: multimodal prefill done for {batch_size} user(s) ({len(per_user_soft)} with multimodal inputs)"
-        )
-        return output_logits
+        for key in _GEMMA4_MM_FIELD_KEYS:
+            kwargs.pop(key, None)
+        kwargs["pixel_values"] = staged
+        staged_users = sum(1 for e in staged if e is not None)
+        logger.info(f"Gemma4 vLLM: staged multimodal prefill embeddings for {staged_users}/{batch_size} user(s)")
+        return staged_users
 
     def prefill_forward_text(self, *args, enable_trace=True, **kwargs):
         tokens = args[0] if args else kwargs.get("tokens")
@@ -1899,7 +1845,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 return any(x is not None for x in v)
             return True
 
-        if any(_mm_present(kwargs.get(k)) for k in ("pixel_values", "images", "image_embeds")):
+        if any(_mm_present(kwargs.get(k)) for k in _GEMMA4_MM_PAYLOAD_KEYS + ("images", "image_embeds")):
             return self._g4_router_reject("multimodal kwargs")
         start_pos = kwargs.get("start_pos")
         if start_pos is not None and any(int(p) > 0 for p in torch.as_tensor(start_pos).reshape(-1)):
@@ -2164,6 +2110,14 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         if start_pos is not None:
             kwargs["start_pos"] = align_num_cached_tokens_to_sdpa([int(n) for n in start_pos])
 
+        # Multimodal batch: encode the images / video frames / audio and stage each
+        # user's merged prompt embeddings for the text prefill below, which runs
+        # per user and eagerly (the lane router and batched prefill decline it).
+        mm_users = 0
+        if self.is_multimodal and _gemma4_has_mm_inputs(kwargs):
+            mm_users = self._stage_multimodal_prefill(tokens, kwargs, prompt_lens)
+            enable_trace = False
+
         t0 = time.perf_counter()
 
         # Opt-in lane-parallel prefill router: a full lane group prefills in one
@@ -2226,6 +2180,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             and not getattr(self.model_args[0], "disable_batched_prefill", False)
             and padded_lens_equal
             and all(n == 0 for n in num_cached_for_plan)
+            and mm_users == 0
             # Batched prefill is opt-in via G4_FORCE_BATCH_PREFILL=1: it works
             # under BOTH unbounded and bounded sliding since the 2026-09 fixes
             # (identity-gated, byte-equal vs the sequential/B=1 references):
@@ -2286,32 +2241,6 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             for m in self.model:
                 if hasattr(m, "_active_page_tables_per_layer"):
                     del m._active_page_tables_per_layer
-        # Multimodal branch: when image, video or audio inputs are present (the
-        # processor fields forwarded by the plugin), run the per-user on-device
-        # merge path (``_prefill_multimodal_batch``). The per-layer
-        # page-table routing above is reused so hybrid KV layers stay correct.
-        # Text-only batches fall through to the inherited batched text prefill.
-        if self.is_multimodal and _gemma4_has_mm_inputs(kwargs):
-            mm_t0 = time.perf_counter()
-            out = self._prefill_multimodal_batch(
-                tokens,
-                kwargs,
-                kwargs.get("page_table"),
-                kwargs.get("kv_cache"),
-                prompt_lens,
-            )
-            dt = time.perf_counter() - mm_t0
-            seq_len_mm = int(max(prompt_lens)) if prompt_lens is not None else int(tokens.shape[-1])
-            logger.info(
-                "[gemma4-vllm-perf] multimodal prefill TTFT={:.1f} ms | seq_len={} | batch={}",
-                dt * 1000.0,
-                seq_len_mm,
-                batch_size,
-            )
-            self._perf_decode_tokens = 0
-            self._perf_decode_s = 0.0
-            return out
-
         if use_sequential:
             logger.info(
                 "Gemma4 vLLM: sequential per-user prefill for batch_size={} "
@@ -2369,13 +2298,14 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         chunk = getattr(self.model_args[0], "max_prefill_chunk_size", None)
         logger.info(
             "[gemma4-vllm-perf] prefill TTFT={:.1f} ms | prefill_tok/s={:.2f} | "
-            "seq_len={} | max_prefill_chunk_size={} | bounded_sliding={} | batch={}",
+            "seq_len={} | max_prefill_chunk_size={} | bounded_sliding={} | batch={} | multimodal_users={}",
             ttft_ms,
             prefill_tok_s,
             seq_len,
             chunk,
             self._bounded_sliding_kv_cache,
             batch_size,
+            mm_users,
         )
         # Reset decode accumulators at the start of each new generate.
         self._perf_decode_tokens = 0

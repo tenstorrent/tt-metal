@@ -60,3 +60,18 @@ def test_merge_rejects_count_mismatch_and_missing_id(expect_error):
         merge_soft_tokens(ids, [(AUD, _embeds(5, 3))], PAD)
     with expect_error(ValueError, "no placeholder id"):
         merge_soft_tokens(ids, [(None, _embeds(4, 3))], PAD)
+
+
+def test_merge_cached_prefix_fills_trailing_placeholders(expect_error):
+    # vLLM prefix caching: the first image sits inside the cached prefix and arrives
+    # without its payload, so only the second image's 3 soft tokens are forwarded.
+    ids = _prompt([("t", 2), (IMG, 3), ("t", 1), (IMG, 3), ("t", 2)])
+    llm_ids, positions, merged = merge_soft_tokens(ids, [(IMG, _embeds(3, 1))], PAD, num_cached=6)
+    assert positions.tolist() == [6, 7, 8] and merged[:, 1].tolist() == [0, 1, 2]
+    assert (llm_ids[ids == IMG] == PAD).all()  # every placeholder still becomes pad
+    # a shortfall that would leave an uncached placeholder empty is an error ...
+    with expect_error(ValueError, "Placeholder count"):
+        merge_soft_tokens(ids, [(IMG, _embeds(3, 1))], PAD, num_cached=4)
+    # ... and so is a shortfall with no cached prefix at all
+    with expect_error(ValueError, "Placeholder count"):
+        merge_soft_tokens(ids, [(IMG, _embeds(3, 1))], PAD)

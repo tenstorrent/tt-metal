@@ -1023,6 +1023,14 @@ class ChunkedPrefillPageTableGuardMixin:
     def prefill_forward_single_user_text(
         self, tokens, page_table=None, *, kv_cache=None, num_cached_tokens=0, **kwargs
     ):
+        # vLLM multimodal: the shared per-user loop hands every user its ``pixel_values``
+        # entry; the bridge stages the user's host-merged prompt embeddings there
+        # (``_stage_multimodal_prefill``) and text users carry None.
+        mm_embeds = kwargs.pop("pixel_values", None)
+        if torch.is_tensor(mm_embeds):
+            return self._prefill_single_user_with_embeds(
+                mm_embeds, tokens, page_table, kv_cache=kv_cache, num_cached_tokens=num_cached_tokens, **kwargs
+            )
         # Lane-sharded page tables are stacked on the request's owner lane (_page_table_host_layout);
         # bind it from global_user_id before any per-layer staging in this forward.
         _gid = kwargs.get("global_user_id", None)
@@ -1123,6 +1131,9 @@ class ChunkedPrefillPageTableGuardMixin:
             # Lane-sharded KV stacks each chunk's page table on the owner column host-side; the traced replay's
             # chunk-table refresh cannot, so chunked prompts stay eager under lanes.
             and not bool(getattr(getattr(self.model[model_id], "mesh_config", None), "lane_sharded", False))
+            # A multimodal prefill feeds merged embeddings (``_g4_mm_prefill_embeds``); the
+            # captured chunk's input is the token ids, so it stays eager.
+            and getattr(self.model[model_id], "_g4_mm_prefill_embeds", None) is None
         )
         if not use_traced_chunks:
             # Eager path stays in gemma4 (do not patch models/tt_transformers):
@@ -1345,6 +1356,33 @@ class ChunkedPrefillPageTableGuardMixin:
             out[lane] = host[0, 0, last_in_chunk[lane] % 32, : model.vocab_size]
         tt_logits.deallocate(True)
         return out
+
+    def _prefill_single_user_with_embeds(
+        self, mm_embeds, tokens, page_table=None, *, kv_cache=None, num_cached_tokens=0, **kwargs
+    ):
+        """Prefill one user from precomputed prompt embeddings (multimodal).
+
+        ``mm_embeds`` is the host ``[prompt_len, hidden]`` embedding of the FULL prompt:
+        text rows embedded and scaled as ``embed_tokens`` does, soft tokens in their
+        placeholder slots. The text prefill then runs unchanged -- page tables,
+        per-layer tables, chunking, cached-prefix offsets, bounded rings -- except
+        that ``prepare_inputs_prefill`` reads the installed override instead of
+        embedding ``tokens`` (which still drive every shape). Eager only.
+        """
+        if int(kwargs.get("batch_size", 1) or 1) != 1 or isinstance(kwargs.get("user_id"), (list, tuple)):
+            raise NotImplementedError("multimodal prefill is per user (batched prefill is off for multimodal batches)")
+        model = self.model[kwargs.get("model_id", -1)]
+        base = int(num_cached_tokens or 0)
+        suffix = mm_embeds[base : base + int(tokens.shape[-1])]
+        if int(suffix.shape[0]) == 0:
+            raise ValueError(f"cached prefix {base} covers the whole merged prompt ({int(mm_embeds.shape[0])} rows)")
+        model._g4_mm_prefill_embeds = (suffix.contiguous(), base)
+        try:
+            return self.prefill_forward_single_user_text(
+                tokens, page_table, kv_cache=kv_cache, num_cached_tokens=num_cached_tokens, **kwargs
+            )
+        finally:
+            model._g4_mm_prefill_embeds = None
 
     def _prefill_forward_single_user_text_eager(
         self,
