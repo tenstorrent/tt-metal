@@ -1239,3 +1239,19 @@ def test_sampled_spec_verify_without_the_in_trace_sampler_fails_loudly(expect_er
             accepted_counts=torch.ones(8, dtype=torch.int32),
             spec_mode="argmax_ids",
         )
+
+
+def test_prefix_caching_capability_is_behind_dsv41_apc(monkeypatch):
+    """APC plan M3: supports_prefix_caching follows DSV41_APC=1 (default off) and needs the interleaved prefill."""
+    import models.demos.blackhole.deepseek_v41_flash.tt.generator_vllm as GV
+
+    monkeypatch.setenv("DSV41_VLLM_INTERLEAVE", "1")
+    monkeypatch.delenv("DSV41_APC", raising=False)
+    assert importlib.reload(GV).DeepseekV41ForCausalLM.model_capabilities["supports_prefix_caching"] is False
+    monkeypatch.setenv("DSV41_APC", "1")
+    assert importlib.reload(GV).DeepseekV41ForCausalLM.model_capabilities["supports_prefix_caching"] is True
+    monkeypatch.setenv("DSV41_VLLM_INTERLEAVE", "0")
+    assert importlib.reload(GV).DeepseekV41ForCausalLM.model_capabilities["supports_prefix_caching"] is False
+    monkeypatch.delenv("DSV41_APC")
+    monkeypatch.delenv("DSV41_VLLM_INTERLEAVE")
+    importlib.reload(GV)

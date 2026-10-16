@@ -1215,6 +1215,40 @@ class Model:
             taken.add(sl)
         return out
 
+    def enable_apc(self, budget_bytes, policy="pow2"):
+        """Automatic prefix caching of the interleaved prefill (tt/prefix_cache.py): host snapshots of the carried prefill state at chunk boundaries, restored into any user."""
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefix_cache import PrefixCache
+
+        self.apc = PrefixCache(self, int(os.environ.get("DSV41_VLLM_CHUNK", "512")), budget_bytes, policy, log=self.log)
+        self.apc.set_signature((tuple(self.layer_ids), self.pool.ring_rows, str(self.kv_dtype), self.Up))
+        return self.apc
+
+    def reset_prefix_cache(self):
+        """vLLM's reset_prefix_cache (the plugin forwards it) / a weight reload: drop every snapshot."""
+        if getattr(self, "apc", None) is not None:
+            self.apc.clear()
+            self.log("prefix cache reset")
+
+    def _apc_restore_wave(self, wave, apc, vis):
+        """The users of ``wave`` that start at 0 (and are no image prompts) take the deepest snapshot of their token prefix (users that take the SAME snapshot are restored together);
+        -> the wave with the new start positions."""
+        found = {}
+        for b, t, st, e in wave:
+            if st == 0 and not (vis and b in vis):
+                snap = apc.lookup(b, t, e)
+                if snap is not None:
+                    found.setdefault(id(snap), (snap, []))[1].append(b)
+        start = {}
+        for snap, bs in found.values():
+            apc.restore_group(snap, bs)
+            for b in bs:
+                start[b] = snap.s
+                e_b = next(e for b2, _, _, e in wave if b2 == b)
+                self.pool.grow(b, e_b + 1)
+        if start:
+            self.pool.sync_page_table()
+        return [(b, t, start.get(b, st), e) for b, t, st, e in wave]
+
     def prefill_interleaved(self, items, chunk, s_pad_max=None, want_logits=False, vis=None):
         """Prefill of SOME users (new requests / prompt chunks) through the captured chunk trace while the other users keep their decode state.
 
@@ -1269,6 +1303,8 @@ class Model:
             C, S_pad
         ):  # (re)captured: the carried state of every user is gone, the decode trace shares the freed DRAM
             resume.clear()
+            if getattr(self, "apc", None) is not None:
+                self.apc.clear()  # (the FIFO geometry follows S_pad)
             self.__dict__.pop("pf_slot_of", None)
             self.__dict__.pop("pf_slot_owner", None)
             self.release_trace()
@@ -1285,7 +1321,10 @@ class Model:
             cap = self.hasher.st.cache.shape[1]
             assert -(-max_end // C) * C <= cap, f"Engram history capacity {cap} < padded prompt {-(-max_end // C) * C}"
         res, self._res, self._want_logits = {}, {}, want_logits
-        n_replays, t_rep, t_host, t_exp, t_hash = 0, 0.0, 0.0, 0.0, 0.0
+        n_replays, t_rep, t_host, t_exp, t_hash, t_apc = 0, 0.0, 0.0, 0.0, 0.0, 0.0
+        apc = getattr(self, "apc", None)
+        if apc is not None and not apc.active():
+            apc = None
         t_pre = time.perf_counter() - t_start
         for st0 in sorted(
             {st for _, _, st, _ in items}, reverse=True
@@ -1302,9 +1341,15 @@ class Model:
             else:
                 waves = [grp]
             for wave in waves:
+                if apc is not None and st0 == 0:
+                    wave = self._apc_restore_wave(
+                        wave, apc, vis
+                    )  # new prompts take the deepest stored snapshot (earlier waves of THIS call may have just stored one)
                 slot_of = self._slot_alloc(wave, resume) if general else {b: b for b, _, _, _ in wave}
-                for s0 in range(st0, max(e for _, _, _, e in wave), C):
-                    part = [it for it in wave if it[3] > s0]
+                for s0 in range(min(it[2] for it in wave), max(e for _, _, _, e in wave), C):
+                    part = [it for it in wave if it[2] <= s0 < it[3]]
+                    if not part:
+                        continue
                     active, lens = torch.zeros(rows * Up, dtype=torch.bool), torch.zeros(B, dtype=torch.long)
                     tok = torch.zeros(rows * Up, C, dtype=torch.long)
                     slot_b = [None] * (rows * Up)
@@ -1360,6 +1405,14 @@ class Model:
                                 resume[b] = e
                         else:
                             resume[b] = s0 + C
+                    if (
+                        apc is not None
+                    ):  # prefix snapshots of the users that just crossed a boundary the policy wants (the state of a user is complete and resumable here)
+                        for b, t, st, e in part:
+                            if s0 + C <= e and not (vis and b in vis):
+                                t_apc0 = time.perf_counter()
+                                apc.maybe_snapshot(b, s0 + C, t)
+                                t_apc += time.perf_counter() - t_apc0
                     if not masked:  # unmasked trace: every user outside this replay had its carried state overwritten
                         for b in [b for b in resume if b not in {p[0] for p in part}]:
                             resume.pop(b)
@@ -1375,6 +1428,7 @@ class Model:
             pre_s=t_pre,
             hash_s=t_hash,
             export_s=t_exp,
+            apc_snapshot_s=t_apc,
         )
         return res
 

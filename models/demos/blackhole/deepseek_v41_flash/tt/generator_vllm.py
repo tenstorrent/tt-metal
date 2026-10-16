@@ -85,6 +85,13 @@ def _interleave_on():
     return True  # (also with --speculative-config: the drafter is seeded lazily at the first verify round of a request, see ``_spec_seed_active``)
 
 
+def _apc_on():
+    """Automatic prefix caching (APC_CHUNKED_PREFILL_PLAN.md M3, DEFAULT OFF): ``DSV41_APC=1`` flips ``model_capabilities['supports_prefix_caching']`` (vLLM then keeps its block-level prefix cache and reports
+    hits as ``start_pos`` of new requests) and builds the model's snapshot store (tt/prefix_cache.py); needs the interleaved prefill. Read at import time like ``_interleave_on``.
+    """
+    return os.environ.get("DSV41_APC", "0") == "1" and _interleave_on()
+
+
 def _chunked_prefill_capabilities():
     """``prefill_chunk_alignment`` (the traced chunk, ``DSV41_VLLM_CHUNK`` default 512) and ``max_partial_prefills`` of the plugin's scheduler (see ``model_capabilities``); empty without interleaved
     prefill (the whole-batch path does not split prompts). Read at import time like ``_interleave_on``."""
@@ -140,7 +147,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         raise ValueError("Only image modality is supported")
 
     model_capabilities = {
-        "supports_prefix_caching": False,
+        "supports_prefix_caching": _apc_on(),
         # a split prompt resumes only at a multiple of the traced chunk (``pf_resume``), and a mesh row holds ONE carried prefill state per prefill slot (``DSV41_PREFILL_UP``): the plugin's scheduler
         # ends every non-final prefill piece on a multiple of the chunk and keeps at most (rows x Up - 1) prompts part-way through prefill (a new prompt of a row takes the slot of the one in progress)
         # (``DSV41_VLLM_MAX_PARTIAL`` overrides the cap, 0 = no cap). APC_CHUNKED_PREFILL_PLAN.md section 2.
@@ -503,6 +510,13 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         self.slots = VS.SlotTable(self.max_num_seqs, self.B)
         self.book = VS.TokenBook(self.B, self.max_seq_len + 1024)
         self.interleave = _interleave_on()
+        if _apc_on() and hasattr(self.m, "enable_apc"):
+            self.m.enable_apc(
+                int(float(os.environ.get("DSV41_APC_GB", "6")) * 2**30), os.environ.get("DSV41_APC_POLICY", "pow2")
+            )
+            logger.info(
+                f"DSV4.1 prefix caching ON: snapshot policy {self.m.apc.policy}, host budget {self.m.apc.store.budget / 2**30:.1f} GiB"
+            )
         self.inprog = VS.PrefillTracker()  # users prefilled in chunks and not decoding yet (interleave mode)
         self.s_pad_cur = 0
         self.s_pad_policy = os.environ.get("DSV41_VLLM_S_PAD", "bucket")
@@ -560,6 +574,10 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         if not self.interleave:
             raise ValueError("image input needs the interleaved prefill (DSV41_VLLM_INTERLEAVE=1, the default)")
         va = vision_args_of(hf_config)
+        if getattr(self.m, "apc", None) is not None:
+            self.m.apc.image_token_id = (
+                va.image_token_id
+            )  # prompts with image placeholder tokens never use / feed the prefix cache (the key would have to cover the pixels)
         t0 = time.perf_counter()
         # The tower uses the MODEL's CCL manager. A second ``CCLManager`` created now (after the model's persistent L1 buffers) puts its global semaphores in the middle of L1 (1.51 MB; the
         # model's sit right under the L1_SMALL region at 1.556 MB) where they get overwritten: its all-reduces return corrupted data (the replicas of a mesh row differ, errors up to 14), so the
@@ -791,7 +809,8 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     self.slots.bind(slot, p)
                     self.slots.live.add(p)
                 else:
-                    logger.warning(
+                    # (with prefix caching vLLM reports hits of its own block cache for NEW requests: the model's snapshot store decides what is reused, see Model.prefill_interleaved)
+                    (logger.info if getattr(self.m, "apc", None) is not None else logger.warning)(
                         f"DSV4.1 chunk continuation at {st} without carried state: recomputing from position 0"
                     )
                     st = 0
@@ -806,6 +825,9 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             phys.append(p)
         if len(set(phys)) != N:
             raise ValueError(f"duplicate prefill slots {empty_slots}")
+        eff = [
+            it[2] for it in items
+        ]  # effective starts: a request whose reported start (a vLLM prefix hit) had no carried state is a NEW request (start 0)
         S = max(ends)
         chunk = self._interleave_chunk()
         self.s_pad_cur = max(self.s_pad_cur, VS.s_pad_bucket(S, chunk, self.s_pad_policy))
@@ -813,9 +835,9 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         sampled = [] if samp is None else [i for i in range(N) if not VS.row_is_greedy(samp[0][i], samp[1][i])]
         if samp is not None:
             for i, p in enumerate(phys):  # per-request seed: its own generator, advanced by every draw of this request
-                if samp[3][i] is not None and starts[i] == 0:
+                if samp[3][i] is not None and eff[i] == 0:
                     self.gens[p] = torch.Generator().manual_seed(int(samp[3][i]))
-                elif starts[i] == 0:
+                elif eff[i] == 0:
                     self.gens.pop(p, None)
         want_logits = (not device_sampling) or bool(
             sampled
@@ -847,7 +869,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 self.spec_has[
                     p
                 ] = False  # the drafter is seeded when the plugin asks for the first drafts of this request (propose_draft_tokens)
-                if starts[i] == 0:
+                if eff[i] == 0:
                     self.spec_ok[p] = True
                 if ends[i] > self.spec_isl_max:
                     self.spec_ok[p] = False  # ISL beyond the speculative range: this request decodes plain
@@ -1112,6 +1134,11 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             st.update(n=0, **{"in": 0.0, "gap": 0.0, "gn": 0})
 
     # ---- request lifecycle / warmup ---------------------------------------------------------------------------------------------------------
+    def reset_prefix_cache(self):
+        """The plugin forwards vLLM's reset_prefix_cache: drop every snapshot of the model."""
+        if hasattr(self.m, "reset_prefix_cache"):
+            self.m.reset_prefix_cache()
+
     def release_request(self, slot):
         """The plugin finished / preempted the request of logical ``slot``: free its pages (the model user is reused by the next prefill into that slot)."""
         p = self.slots.release(int(slot))

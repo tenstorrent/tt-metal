@@ -240,3 +240,48 @@ def test_per_device_shard_write(mesh_device):
         )
         assert ok and keep
         before_t = after_t
+
+    # ---- E. tail write into a TILE tensor (index-key FIFO): slice + where + slice_write of just the valid tail rows -----------------------------------------
+    Nt, n_t = 16384, 2048
+    tt_ = ttnn.from_torch(
+        torch.randn(rows, 1, Nt, 128).to(torch.bfloat16),
+        device=md,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=shard,
+    )
+    before_e = [ttnn.to_torch(d) for d in ttnn.get_device_tensors(tt_)]
+    new_e = torch.randn(1, 1, n_t, 128).to(torch.bfloat16)
+    mask3 = torch.zeros(rows, 1, 1, 1)
+    mask3[3] = 1.0
+    mask3_d = ttnn.from_torch(mask3, device=md, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=shard)
+    for rep in range(2):
+        host_e = torch.zeros(rows, 1, n_t, 128, dtype=torch.bfloat16)
+        host_e[3] = new_e[0]
+        t0 = time.perf_counter()
+        d_new = ttnn.from_torch(
+            host_e,
+            device=md,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard,
+        )
+        old = ttnn.slice(tt_, [0, 0, Nt - n_t, 0], [1, 1, Nt, 128])
+        upd = ttnn.where(mask3_d, d_new, old)
+        ttnn.experimental.slice_write(upd, tt_, [0, 0, Nt - n_t, 0], [1, 1, Nt, 128], [1, 1, 1, 1])
+        ttnn.synchronize_device(md)
+        t_e = time.perf_counter() - t0
+        for x in (d_new, old, upd):
+            ttnn.deallocate(x)
+    after_e = [ttnn.to_torch(d) for d in ttnn.get_device_tensors(tt_)]
+    ok = all(same(after_e[3 * cols + c].reshape(-1, 128)[Nt - n_t :], new_e) for c in range(cols))
+    keep = all(same(after_e[k], before_e[k]) for k in range(rows * cols) if k // cols != 3) and all(
+        same(after_e[3 * cols + c].reshape(-1, 128)[: Nt - n_t], before_e[3 * cols + c].reshape(-1, 128)[: Nt - n_t])
+        for c in range(cols)
+    )
+    log(
+        f"E: tile tail write ({n_t} of {Nt} rows) into one mesh row: bit-exact {ok}, everything else untouched {keep}, {1000 * t_e:.1f} ms warm"
+    )
+    assert ok and keep

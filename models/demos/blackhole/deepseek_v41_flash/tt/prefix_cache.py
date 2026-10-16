@@ -51,6 +51,7 @@ class CarriedSpec:
         0  # ``keys`` (tile copy of ``keys_rm`` + 32 zero pad rows): the tail ends ``pad_rows`` before the last row
     )
     end: int = 0  # kv table: the latent FIFO ends at row LAT (window scratch rows follow); 0 = N - pad_rows
+    replicated: bool = True  # identical on the 8 columns of a mesh row (everything but the column-sharded key FIFO): one host copy, one upload per mesh row
 
     def end_row(self, N):
         return self.end or N - self.pad_rows
@@ -85,10 +86,16 @@ def carried_specs(model):
         if ix is not None and sp.owner and ix.key_owner is None:
             sh = getattr(ix, "sh", None)
             if sh is not None:  # column-sharded FIFO
-                add(CarriedSpec(f"L{lid}.keys_rm", ix.keys_rm, "tail", ratio=pa.ratio, div=sh["cols"]))
-                add(CarriedSpec(f"L{lid}.keys", ix.keys, "tail", ratio=pa.ratio, div=sh["cols"], pad_rows=32))
-            elif ix.keys is not None:
-                add(CarriedSpec(f"L{lid}.keys", ix.keys, "full"))
+                add(
+                    CarriedSpec(f"L{lid}.keys_rm", ix.keys_rm, "tail", ratio=pa.ratio, div=sh["cols"], replicated=False)
+                )
+                add(
+                    CarriedSpec(
+                        f"L{lid}.keys", ix.keys, "tail", ratio=pa.ratio, div=sh["cols"], pad_rows=32, replicated=False
+                    )
+                )
+            elif ix.keys is not None:  # replicated FIFO: appended at the end like the others
+                add(CarriedSpec(f"L{lid}.keys", ix.keys, "tail", ratio=pa.ratio, end=ix.KL))
     return out
 
 
@@ -105,17 +112,19 @@ def read_shard(t, k):
 PIECE = 2048  # rows per ``paged_scatter_rows`` call: the row count is a COMPILE-time argument (one program per distinct count, ~0.4 s at first use), so every write is split into pieces of the same size (the last one padded with SKIP ids)
 
 
-def scatter_rows_mesh(model, t, r, rows_, data, base=0):
-    """In place: t[rows_[j] + base] = data[j] on mesh row ``r`` only (other mesh rows get SKIP ids), t a bf16 row-major tensor whose rows are ``data.shape[1]`` wide; fixed-size pieces."""
+def scatter_rows_mesh(model, t, per_row, base=0):
+    """In place: ``t[ids + base] = data`` on the mesh rows of ``per_row`` {mesh row: (ids [n] torch, data [n, D] torch)} only (the other mesh rows get SKIP ids), t a bf16 (or, for the pool, fp8: the
+    kernel converts) row-major tensor whose rows are D wide; fixed-size pieces."""
     md, rows, cols = model.md, model.rows, model.cols
     shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(rows, cols))
-    n, D = data.shape
+    n, D = next(iter(per_row.values()))[1].shape
     for a in range(0, n, PIECE):
         m = min(PIECE, n - a)
         ids = torch.full((rows, 1, PIECE), SKIP, dtype=torch.int64)
-        ids[r, 0, :m] = rows_[a : a + m].long() + base
         src = torch.zeros(rows, 1, PIECE, D, dtype=torch.bfloat16)
-        src[r, 0, :m] = data[a : a + m]
+        for r, (ids_r, data_r) in per_row.items():
+            ids[r, 0, :m] = ids_r[a : a + m].long() + base
+            src[r, 0, :m] = data_r[a : a + m]
         d_ids = ttnn.from_torch(
             ids.to(torch.int32),
             device=md,
@@ -133,9 +142,7 @@ def scatter_rows_mesh(model, t, r, rows_, data, base=0):
             mesh_mapper=shard,
         )
         P.paged_scatter_rows(t, d_src, d_ids)
-        ttnn.synchronize_device(
-            md
-        )  # (the host tensors of the next piece reuse nothing, but the device buffers are freed here)
+        ttnn.synchronize_device(md)  # (the device buffers are freed here)
         ttnn.deallocate(d_src)
         ttnn.deallocate(d_ids)
 
@@ -152,11 +159,12 @@ def _where(mask, new, old):
     return out
 
 
-def slot_mask(model, r, i):
-    """per-(mesh row, slot) 0/1 mask [rows * Up, 1, 1, 1] sharded over the mesh rows (the ``DynCtx.umask`` layout), one-hot at (r, i)"""
+def slot_mask(model, targets):
+    """per-(mesh row, slot) 0/1 mask [rows * Up, 1, 1, 1] sharded over the mesh rows (the ``DynCtx.umask`` layout), one-hot at every (r, i) of ``targets``"""
     rows, cols, Up, md = model.rows, model.cols, model.Up, model.md
     mask = torch.zeros(rows * Up, 1, 1, 1)
-    mask[r * Up + i] = 1.0
+    for r, i in targets:
+        mask[r * Up + i] = 1.0
     return ttnn.from_torch(
         mask,
         device=md,
@@ -167,37 +175,54 @@ def slot_mask(model, r, i):
     )
 
 
-def write_slot(model, t, r, i, per_col, row0=0, use_scatter=True, mask_d=None):
-    """Write ``per_col`` (list [cols] of torch [1, 1, n, D]: the content of slot ``i`` on each column device of mesh row ``r``) into rows [row0, row0 + n) of slot i of persistent tensor t [Up, 1, N, D]
-    on mesh row r only, in place, outside any trace; everything else (other rows / slots / rows of the slot) keeps its content, except on the masked path where the REST of the target slot is zeroed
-    (don't-care rows of a FIFO / table). No device synchronisation here (the caller syncs once)."""
-    rows, cols, Up = model.rows, model.cols, model.Up
-    N, D = t.shape[2], t.shape[3]
-    n = per_col[0].shape[2]
-    assert t.dtype == ttnn.bfloat16, "kv table in fp8 (DSV41_PFA_SP_FP8) is not supported by the prototype"
-    md = model.md
-    if (
-        use_scatter
-        and t.layout == ttnn.ROW_MAJOR_LAYOUT
-        and D == 512
-        and all(torch.equal(x, per_col[0]) for x in per_col[1:])
-    ):
-        # replicated over the columns, rows of 1 KiB: scatter only the valid rows (ids are SKIP on the other mesh rows)
-        scatter_rows_mesh(model, t, r, torch.arange(n) + (i * N + row0), per_col[0][0, 0])
-        return
-    mesh = ttnn.ShardTensor2dMesh(md, dims=(0, 1), mesh_shape=(rows, cols))
-    host = torch.zeros(rows * Up, cols, N, D, dtype=torch.bfloat16)
-    for c in range(cols):
-        host[r * Up + i, c, row0 : row0 + n] = per_col[c][0, 0]
-    d_new = ttnn.from_torch(
-        host, device=md, dtype=ttnn.bfloat16, layout=t.layout, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=mesh
+def _fill(host, targets, j, rn, data, tail, N, row0, replicated):
+    """put ``data`` (list [cols] of [1, 1, n, D]) of tensor j of a batch into the host slab at every target (r, i)"""
+    ncol = host.shape[1]
+    n = data[0].shape[2]
+    for flat in targets:
+        for c in range(ncol):
+            lo = j * rn + (0 if tail else row0)
+            host[flat, c, lo : lo + n] = data[c][0, 0]
+
+
+def write_batch(model, batch, targets, mask_d):
+    """Write a batch of persistent tensors that share (layout, rows-per-tensor, width, replication) into the slots ``targets`` [(r, i)] of their mesh rows with ONE host upload: ``batch`` =
+    [(spec, per_col)]. ``tail`` kinds write only the valid rows (slice + where + slice_write), full tensors are replaced (rest of the slot zeros).
+    """
+    rows, cols, Up, md = model.rows, model.cols, model.Up, model.md
+    sp0, _ = batch[0]
+    t0_ = sp0.tensor
+    N, D = t0_.shape[2], t0_.shape[3]
+    tail = sp0.kind == "tail"
+    n = batch[0][1][0].shape[2]
+    rn = n if tail else N
+    replicated = sp0.replicated
+    ncol = 1 if replicated else cols
+    host = torch.zeros(rows * Up, ncol, len(batch) * rn, D, dtype=torch.bfloat16)
+    flats = [r * Up + i for r, i in targets]
+    for j, (sp, per_col) in enumerate(batch):
+        row0 = sp.end_row(sp.tensor.shape[2]) - n if tail else 0
+        _fill(host, flats, j, rn, per_col, tail, N, row0, replicated)
+    mesh = ttnn.ShardTensor2dMesh(md, dims=(0, None if replicated else 1), mesh_shape=(rows, cols))
+    big = ttnn.from_torch(
+        host, device=md, dtype=ttnn.bfloat16, layout=t0_.layout, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=mesh
     )
-    own = mask_d is None
-    d_mask = slot_mask(model, r, i) if own else mask_d
-    upd = _where(d_mask, d_new, t)
-    ttnn.copy(upd, t)
-    for x in (upd, d_new) + ((d_mask,) if own else ()):
-        ttnn.deallocate(x)
+    for j, (sp, per_col) in enumerate(batch):
+        t = sp.tensor
+        new_j = ttnn.slice(big, [0, 0, j * rn, 0], [Up, 1, (j + 1) * rn, D]) if len(batch) > 1 else big
+        if tail:
+            row0 = sp.end_row(t.shape[2]) - n
+            old = ttnn.slice(t, [0, 0, row0, 0], [Up, 1, row0 + n, D])
+            upd = _where(mask_d, new_j, old)
+            ttnn.experimental.slice_write(upd, t, [0, 0, row0, 0], [Up, 1, row0 + n, D], [1, 1, 1, 1])
+            extra = (old,)
+        else:
+            upd = _where(mask_d, new_j, t)
+            ttnn.copy(upd, t)
+            extra = ()
+        for x in (upd,) + extra + ((new_j,) if len(batch) > 1 else ()):
+            ttnn.deallocate(x)
+    ttnn.deallocate(big)
 
 
 @dataclass
@@ -210,8 +235,12 @@ class PrefixSnapshot:
 
     @property
     def nbytes(self):
-        n = sum(x.numel() * x.element_size() for v in self.carried.values() for x in v)
-        return n + sum(x.numel() * x.element_size() for x in self.pool.values())
+        seen, n = set(), 0
+        for x in [x for v in self.carried.values() for x in v] + list(self.pool.values()):
+            if id(x) not in seen:  # (replicated tensors and the pool latents share one host copy)
+                seen.add(id(x))
+                n += x.numel() * x.element_size()
+        return n
 
 
 def _sources(model):
@@ -229,103 +258,153 @@ def _slot_of(model, b):
     return sl // Up, sl % Up
 
 
+class ApcUnsupported(RuntimeError):
+    """the model build has no carried state the snapshot code knows (dense prefill path, fp8 kv table): prefix caching stays off"""
+
+
 def snapshot_user(model, b, s, toks):
-    """State of user ``b`` right after a step that ended at position ``s`` (``model.pf_resume[b] == s``) -> PrefixSnapshot. ``toks``: the user's tokens [>= s]."""
+    """State of user ``b`` right after a step that ended at position ``s`` (``model.pf_resume[b] == s``) -> PrefixSnapshot. ``toks``: the user's tokens [>= s]. The pool latents of the kv-source layers
+    are NOT read from the pool (an fp8 pool, and reading it would mean the whole per-device pool): the kv table of a source layer holds the same bf16 latents (entry j = FIFO row LAT - n + j).
+    """
     t0 = time.perf_counter()
     assert model.__dict__.get("pf_resume", {}).get(b) == s, f"user {b} is not resumable at {s}"
     r, i = _slot_of(model, b)
     cols = model.cols
     snap = PrefixSnapshot(s=s, toks=torch.as_tensor(toks).long().reshape(-1)[:s].clone())
-    for name, sp in carried_specs(model).items():
+    specs = carried_specs(model)
+    for src in _sources(model):
+        if f"L{src}.kvt" not in specs:
+            raise ApcUnsupported(f"no kv table for source layer {src} (dense prefill path)")
+    for name, sp in specs.items():
+        if sp.tensor.dtype != ttnn.bfloat16:
+            raise ApcUnsupported(f"{name} is {sp.tensor.dtype}")
         n = sp.count(s)
         vals = []
-        for c in range(cols):
+        for c in range(1 if sp.replicated else cols):
             x = read_shard(sp.tensor, r * cols + c)[i : i + 1]
             if sp.kind == "tail":
                 end = sp.end_row(x.shape[2])
                 x = x[:, :, end - n : end]
             vals.append(x.clone())
-        snap.carried[name] = vals
-    # pool latents of the kv-source layers (replicated over the columns: column 0 of the mesh row)
-    pool = model.pool
-    if _sources(model):
-        full = read_shard(pool.pool, r * cols)[0, 0]  # [total_rows, 512]
-        for src in _sources(model):
-            ent = torch.arange(s // P.SRC_RATIO[src])
-            snap.pool[src] = full[pool.phys_rows(b, src, ent).long()].clone()
+        snap.carried[name] = vals * cols if sp.replicated else vals
+    for src in _sources(model):
+        snap.pool[src] = snap.carried[f"L{src}.kvt"][0][0, 0]  # [s / ratio, 512], shared with the carried copy
     snap.seconds = time.perf_counter() - t0
     return snap
 
 
-def restore_user(model, snap, b, tokens=None):
-    """Put ``snap`` into user ``b`` (any mesh row / prefill slot): pages, pool latents, carried state of its slot, Engram history, ``pf_resume``. Afterwards
-    ``model.prefill_interleaved([(b, tokens, snap.s, e)], ...)`` continues the prompt. -> seconds."""
+def restore_user(model, snap, b):
+    return restore_users(model, snap, [b])
+
+
+def restore_users(model, snap, bs):
+    """Put ``snap`` into every user of ``bs`` (any mesh rows / prefill slots; users of the SAME call share one host upload and one set of device writes): pages, pool latents, carried state of their
+    slots, Engram history, ``pf_resume``. Afterwards ``model.prefill_interleaved([(b, tokens, snap.s, e)], ...)`` continues the prompts. -> seconds.
+    """
     t0 = time.perf_counter()
     s, cols = snap.s, model.cols
     resume = model.__dict__.setdefault("pf_resume", {})
-    # 1. pages + slot
-    model.release_user(b)
-    model.pool.release(b)
-    model.pool.admit(b, s + 1)
+    # 1. pages + slots
+    targets = []  # (mesh row, slot) per user
+    for b in bs:
+        model.release_user(b)
+        model.pool.release(b)
+        model.pool.admit(b, s + 1)
     model.pool.sync_page_table()
-    if model.Up != model.U:
-        slot = model._slot_alloc([(b, None, 0, s)], resume)[b]
-        r, i = slot // model.Up, slot % model.Up
-    else:
-        r, i = b // model.U, b % model.U
-    # 2. carried state of the target (mesh row, slot): masked write, outside the trace
+    for b in bs:
+        if model.Up != model.U:
+            slot = model._slot_alloc([(b, None, 0, s)], resume)[b]
+            targets.append((slot // model.Up, slot % model.Up))
+        else:
+            targets.append((b // model.U, b % model.U))
+        resume[b] = s  # (protects the slot from the next user's allocation; the state follows below)
+    assert len(set(targets)) == len(targets), f"restore targets collide: {targets}"
+    # 2. carried state of the target (mesh row, slot)s: masked writes, outside the trace
     t_c = time.perf_counter()
-    per = {}
-    mask_d = slot_mask(model, r, i)
+    mask_d = slot_mask(model, targets)
+    groups, per = OrderedDict(), {}
     for name, sp in carried_specs(model).items():
         n = sp.count(s)
         per_col = snap.carried[name]
+        if (
+            sp.kind == "tail"
+            and sp.tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+            and sp.tensor.shape[3] == 512
+            and sp.replicated
+        ):
+            t_n = time.perf_counter()
+            N = sp.tensor.shape[2]
+            row0 = sp.end_row(N) - n
+            scatter_rows_mesh(
+                model, sp.tensor, {r: (torch.arange(n) + (i * N + row0), per_col[0][0, 0]) for r, i in targets}
+            )
+            per[name] = round(time.perf_counter() - t_n, 4)
+            continue
+        key = (
+            sp.kind,
+            sp.tensor.layout,
+            sp.tensor.shape[2],
+            sp.tensor.shape[3],
+            n,
+            sp.replicated,
+            sp.end_row(sp.tensor.shape[2]) if sp.kind == "tail" else 0,
+        )
+        groups.setdefault(key, []).append((sp, per_col))
+    for key, batch in groups.items():
         t_n = time.perf_counter()
-        if sp.kind == "tail":
-            write_slot(model, sp.tensor, r, i, per_col, row0=sp.end_row(sp.tensor.shape[2]) - n, mask_d=mask_d)
-        else:
-            write_slot(model, sp.tensor, r, i, per_col, mask_d=mask_d)
-        per[name] = round(time.perf_counter() - t_n, 4)
+        write_batch(model, batch, targets, mask_d)
+        per[f"batch[{key[0]},{key[3]},n={key[4]}]x{len(batch)}"] = round(time.perf_counter() - t_n, 4)
     ttnn.synchronize_device(model.md)
     ttnn.deallocate(mask_d)
     t_c = time.perf_counter() - t_c
-    # 3. pool latents of the kv-source layers (page table of the target user; replicated over the columns)
+    # 3. pool latents of the kv-source layers (page tables of the target users; replicated over the columns; the kernel converts to an fp8 pool)
     t_p = time.perf_counter()
     pool = model.pool
     for src, lat in snap.pool.items():
-        rows_ = pool.phys_rows(b, src, torch.arange(lat.shape[0])).long()
-        scatter_rows_mesh(model, pool.pool, b // model.U, rows_, lat)
+        ar = torch.arange(lat.shape[0])
+        scatter_rows_mesh(model, pool.pool, {b // model.U: (pool.phys_rows(b, src, ar).long(), lat) for b in bs})
     t_p = time.perf_counter() - t_p
     model.__dict__["_restore_timing"] = {"carried_s": round(t_c, 3), "pool_s": round(t_p, 3), "per_tensor_s": per}
     # 4. Engram history (host, pure function of the tokens)
     if model.host_rows is not None:
         st = model.hasher.st
-        st.cache[b, :s] = st.token_map[snap.toks]
-    resume[b] = s
+        for b in bs:
+            st.cache[b, :s] = st.token_map[snap.toks]
     return time.perf_counter() - t0
 
 
 # ---- host store -------------------------------------------------------------------------------------------------------------------------------------------
 class PrefixStore:
-    """LRU store of snapshots under a host byte budget. Key = (signature, sha256 of the first s tokens): ``signature`` ties a snapshot to the model / chunk / vision configuration
-    (the generator hashes the tokens itself, not vLLM's block hashes). ``lookup(tokens, start, end)`` -> the snapshot with the LARGEST s such that s % chunk == 0, s <= start and
-    s <= end - 128 (the last 128 positions of a prompt are always replayed: ring rows, ``prev_cs`` and the drafter taps come from those chunks), or None. A miss means recompute
+    """LRU store of snapshots under a host byte budget. Key = (signature, sha256 of the first s tokens): ``signature`` ties a snapshot to the model / chunk / context configuration
+    (the generator hashes the tokens itself, not vLLM's block hashes). ``lookup(tokens, start, end, margin)`` -> the snapshot with the LARGEST s such that s % chunk == 0, s <= start and
+    s <= end - margin (the last ``margin`` positions of a prompt are always replayed: ring rows, ``prev_cs`` and the drafter taps come from those chunks), or None. A miss means recompute
     from 0 (always correct)."""
 
     def __init__(self, chunk, budget_bytes, signature=""):
         self.chunk, self.budget, self.signature = int(chunk), int(budget_bytes), signature
         self.snaps = OrderedDict()  # key -> PrefixSnapshot (oldest first)
         self.bytes = 0
-        self.hits = self.misses = self.evictions = 0
+        self.hits = self.misses = self.evictions = self.puts = 0
 
-    def _key(self, tokens, s):
+    def _chain(self, tokens, top):
+        """{s: key} for every multiple s of the chunk up to ``top`` (one pass of an incremental sha256)."""
         import hashlib
 
-        t = torch.as_tensor(tokens).long().reshape(-1)[:s].contiguous()
-        return (self.signature, s, hashlib.sha256(t.numpy().tobytes()).hexdigest())
+        t = torch.as_tensor(tokens).long().reshape(-1)[:top].contiguous().numpy()
+        h, out = hashlib.sha256(), {}
+        for s in range(self.chunk, top + 1, self.chunk):
+            h.update(t[s - self.chunk : s].tobytes())
+            out[s] = (self.signature, s, h.copy().hexdigest())
+        return out
+
+    def key(self, tokens, s):
+        return self._chain(tokens, s)[s]
+
+    def has(self, tokens, s):
+        return self.key(tokens, s) in self.snaps
 
     def put(self, snap):
-        key = self._key(snap.toks, snap.s)
+        key = self.key(snap.toks, snap.s)
         if key in self.snaps:
             self.snaps.move_to_end(key)
             return False
@@ -333,26 +412,120 @@ class PrefixStore:
             return False
         self.snaps[key] = snap
         self.bytes += snap.nbytes
+        self.puts += 1
         while self.bytes > self.budget:
             _, old = self.snaps.popitem(last=False)
             self.bytes -= old.nbytes
             self.evictions += 1
         return True
 
-    def lookup(self, tokens, start, end):
+    def lookup(self, tokens, start, end, margin=128):
         tokens = torch.as_tensor(tokens).long().reshape(-1)
-        top = min(int(start), int(end) - 128, tokens.numel())
-        for s in range(top // self.chunk * self.chunk, 0, -self.chunk):
-            key = self._key(tokens, s)
-            snap = self.snaps.get(key)
-            if snap is not None:
-                self.snaps.move_to_end(key)
-                self.hits += 1
-                return snap
+        top = min(int(start), int(end) - int(margin), tokens.numel()) // self.chunk * self.chunk
+        if top > 0:
+            chain = self._chain(tokens, top)
+            for s in range(top, 0, -self.chunk):
+                snap = self.snaps.get(chain[s])
+                if snap is not None:
+                    self.snaps.move_to_end(chain[s])
+                    self.hits += 1
+                    return snap
         self.misses += 1
         return None
 
     def clear(self):
-        """``reset_prefix_cache`` / a weight reload."""
+        """``reset_prefix_cache`` / a weight reload / a re-captured prefill trace."""
         self.snaps.clear()
         self.bytes = 0
+
+
+class PrefixCache:
+    """The model's prefix caching: a ``PrefixStore`` plus the snapshot policy, driven from ``Model.prefill_interleaved`` (APC_CHUNKED_PREFILL_PLAN.md).
+
+    * restore: a new prompt (no carried state) takes the deepest stored snapshot s <= end - margin (``margin`` = the ring rows of the pool: the continuation must rewrite every ring row), the
+      prompt then computes [s, end) only;
+    * capture: after a replay window that ended at B (a multiple of the chunk) a user that is not an image prompt is snapshotted when ``policy`` wants B (``pow2``: B / chunk a power of two, i.e.
+      512, 1024, 2048, 4096 ... with the default chunk; ``all``; an integer N: the first N boundaries) and the store does not hold it yet (same-step prompts that share a prefix: the first
+      user's snapshot serves the others from their next wave on).
+    Disabled (``enabled = False``) after the first ``ApcUnsupported`` (dense prefill path ...) or by ``DSV41_APC_FILE`` pointing at a file that contains 0 (a live off switch for A/B runs).
+    """
+
+    def __init__(self, model, chunk, budget_bytes, policy="pow2", log=print):
+        self.m, self.chunk, self.log, self.policy = model, int(chunk), log, policy
+        self.store = PrefixStore(chunk, budget_bytes)
+        self.enabled = True
+        self.image_token_id = None  # set when image input is on: prompts with image placeholders bypass the cache
+        self.stats = dict(restores=0, restored_tokens=0, snapshots=0, snap_s=0.0, restore_s=0.0, skipped_vision=0)
+
+    def active(self):
+        import os
+
+        f = os.environ.get("DSV41_APC_FILE")
+        if f:
+            try:
+                if open(f).read().strip() == "0":
+                    return False
+            except OSError:
+                pass
+        return self.enabled
+
+    def set_signature(self, sig):
+        if sig != self.store.signature:
+            self.store.clear()
+            self.store.signature = sig
+
+    def clear(self):
+        self.store.clear()
+
+    def wants(self, B):
+        k = B // self.chunk
+        if self.policy == "all":
+            return True
+        if self.policy.isdigit():
+            return k <= int(self.policy)
+        return k > 0 and (k & (k - 1)) == 0
+
+    def _has_image(self, tokens, n):
+        return self.image_token_id is not None and bool(
+            (torch.as_tensor(tokens).reshape(-1)[:n] == self.image_token_id).any()
+        )
+
+    def maybe_snapshot(self, b, B, tokens):
+        if not self.active() or not self.wants(B):
+            return
+        if self._has_image(tokens, B):
+            self.stats["skipped_vision"] += 1
+            return
+        if self.store.has(tokens, B):
+            return
+        try:
+            snap = snapshot_user(self.m, b, B, tokens)
+        except ApcUnsupported as e:
+            self.enabled = False
+            self.log(f"prefix caching disabled: {e}")
+            return
+        self.store.put(snap)
+        self.stats["snapshots"] += 1
+        self.stats["snap_s"] += snap.seconds
+        self.log(
+            f"prefix cache: snapshot of user {b} at {B} tokens ({snap.nbytes / 2**20:.1f} MiB, {snap.seconds:.2f} s; store {self.store.bytes / 2**20:.0f} MiB, {len(self.store.snaps)} snapshots)"
+        )
+
+    def lookup(self, b, tokens, end):
+        """-> the deepest usable snapshot for user b's prompt (end = this call's end position), else None"""
+        if not self.active():
+            return None
+        if self._has_image(tokens, end):
+            self.stats["skipped_vision"] += 1
+            return None
+        return self.store.lookup(tokens, end, end, margin=self.m.pool.ring_rows)
+
+    def restore_group(self, snap, bs):
+        t = restore_users(self.m, snap, bs)
+        self.stats["restores"] += len(bs)
+        self.stats["restored_tokens"] += snap.s * len(bs)
+        self.stats["restore_s"] += t
+        self.log(
+            f"prefix cache: users {bs} restored at {snap.s} tokens in {t:.2f} s ({self.m.__dict__.get('_restore_timing')})"
+        )
+        return t
