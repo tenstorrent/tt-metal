@@ -320,6 +320,11 @@ class TtTalkerCachedDecoder:
     def _cache_tensor(self, empty):
         return ttnn.from_torch(empty, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
 
+    @property
+    def owns_cache(self):
+        """Whether the cache was allocated here, and so may be cleared here."""
+        return self._owns_cache
+
     def set_page_table(self, blocks):
         """Point prefill and step at one request's cache blocks, in position order."""
         blocks = torch.as_tensor(blocks, dtype=torch.int32).reshape(-1)

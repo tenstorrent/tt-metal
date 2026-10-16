@@ -576,7 +576,10 @@ class Qwen3TTSPipeline:
     then captures the two step traces, since the two cannot coexist.
     """
 
-    def __init__(self, device, max_frames=DEFAULT_MAX_FRAMES, seed=None, profile=False):
+    def __init__(self, device, max_frames=DEFAULT_MAX_FRAMES, seed=None, profile=False, kv_cache=None, codec=True):
+        """`kv_cache` hands the talker a paged cache the caller owns (see
+        `TtTalkerCachedDecoder`). `codec=False` skips the codec decoder, for a caller that only
+        wants frames: the `generate*` methods need it, `codes` and the frame steps do not."""
         self.device = device
         self.max_frames = max_frames
         # Charges each block of the frame loop separately, and syncs the device between them
@@ -592,9 +595,11 @@ class Qwen3TTSPipeline:
         # tokenizer will hand back plus every frame plus the warmup slot past both.
         self.prompt_room = self.talker_config.get("max_position_embeddings", 2048)
         room = min(self.prompt_room, 512) + max_frames + 8
-        self.talker = TtTalkerCachedDecoder(device, preprocess_cached_talker_parameters(device), max_seq=room)
+        self.talker = TtTalkerCachedDecoder(
+            device, preprocess_cached_talker_parameters(device), max_seq=room, kv_cache=kv_cache
+        )
         self.predictor = TtCodePredictorCachedDecoder(device, preprocess_cached_predictor_parameters(device))
-        self.codec = TtCodecDecoder(device, preprocess_codec_parameters(device))
+        self.codec = TtCodecDecoder(device, preprocess_codec_parameters(device)) if codec else None
         self.codec_head = ttnn.from_torch(
             self.tables.codec_head.t().contiguous(),
             dtype=ttnn.bfloat16,
@@ -705,6 +710,8 @@ class Qwen3TTSPipeline:
         dropped, so this drops it, which costs about 0.1 s. Both traces come down first: a trace
         built from dropped programs hangs.
         """
+        if self.codec is None:
+            raise RuntimeError("this pipeline was built with codec=False, so it decodes no waveforms")
         frames = codes.shape[-1]
         if self.codec.program_room_needed(frames):
             self.release()
@@ -742,7 +749,10 @@ class Qwen3TTSPipeline:
             embeddings = torch.cat([embeddings, filler], dim=1)
 
         self.release()
-        self.talker.reset()
+        if self.talker.owns_cache:
+            # A caller-owned cache holds other requests' blocks; this one's are all rewritten
+            # before they are read.
+            self.talker.reset()
         started = time.time()
         hidden = self.talker.prefill(embeddings)
         last = ttnn.slice(hidden, [0, prompt - 1, 0], [1, prompt, hidden.shape[2]])
