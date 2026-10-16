@@ -96,9 +96,10 @@ def test_messages_carry_the_record_identity_and_the_mapped_layer(mesh_device):
         msgs = _pop(ring, len(chunks) * RECORD_COUNT)
         for i, chunk in enumerate(chunks):
             for j in range(RECORD_COUNT):
-                slot_id, pos_start, pos_end, layer_start, layer_end = msgs[i * RECORD_COUNT + j]
+                slot_id, pos_start, pos_end, layer_start, layer_end, host_timestamp_ns = msgs[i * RECORD_COUNT + j]
                 assert (slot_id, pos_start, pos_end) == chunk
                 assert (layer_start, layer_end) == (LAYER_IDS[j], LAYER_IDS[j] + 1)
+                assert host_timestamp_ns > 0
         service.check()
     finally:
         service.stop()

@@ -175,7 +175,13 @@ void LayerAckService::reader_loop() {
         }
         const auto& ack = std::get<internal::DecodedAck>(result);
         const internal::LayerCompletionMessage msg{
-            ack.identity.slot_id, ack.identity.pos_start, ack.identity.pos_end, ack.layer, ack.layer + 1, /*flags=*/0};
+            ack.identity.slot_id,
+            ack.identity.pos_start,
+            ack.identity.pos_end,
+            ack.layer,
+            ack.layer + 1,
+            /*flags=*/0,
+            internal::layer_completion_host_timestamp_ns()};
         if (!push_blocking(msg)) {
             return;
         }

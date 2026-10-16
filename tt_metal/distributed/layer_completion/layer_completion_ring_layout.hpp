@@ -59,7 +59,7 @@ static_assert(sizeof(LayerCompletionRingHeader) == 2 * kLayerCompletionCacheLine
 static_assert(alignof(LayerCompletionCell) == kLayerCompletionCacheLine);
 static_assert(sizeof(LayerCompletionCell) == kLayerCompletionCacheLine);
 static_assert(offsetof(LayerCompletionCell, msg) == 8);
-static_assert(sizeof(LayerCompletionMessage) == 24);
+static_assert(sizeof(LayerCompletionMessage) == 32);
 static_assert(kLayerCompletionCellsOffset == 128);
 static_assert(kLayerCompletionRingBytes % kLayerCompletionCacheLine == 0);
 static_assert(kLayerCompletionRingBytes == 65664);

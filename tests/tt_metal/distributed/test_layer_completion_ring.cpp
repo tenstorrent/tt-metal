@@ -150,7 +150,13 @@ TEST(LayerCompletionQueue, AllFieldsRoundTrip) {
     auto conn = LayerCompletionQueue::connect(name, 5'000);
 
     const LayerCompletionMessage in{
-        /*slot_id=*/5u, /*pos_start=*/5120u, /*pos_end=*/10213u, /*layer_start=*/14u, /*layer_end=*/15u, /*flags=*/0u};
+        /*slot_id=*/5u,
+        /*pos_start=*/5120u,
+        /*pos_end=*/10213u,
+        /*layer_start=*/14u,
+        /*layer_end=*/15u,
+        /*flags=*/0u,
+        /*host_timestamp_ns=*/1'760'000'000'123'456'789ull};
     ASSERT_TRUE(owner->try_push(in));
 
     LayerCompletionMessage out{};
@@ -161,6 +167,7 @@ TEST(LayerCompletionQueue, AllFieldsRoundTrip) {
     EXPECT_EQ(out.layer_start, in.layer_start);
     EXPECT_EQ(out.layer_end, in.layer_end);
     EXPECT_EQ(out.flags, in.flags);
+    EXPECT_EQ(out.host_timestamp_ns, in.host_timestamp_ns);
     owner->shutdown();
 }
 
