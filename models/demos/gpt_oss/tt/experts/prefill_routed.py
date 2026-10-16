@@ -68,6 +68,10 @@ ROUTED_PREFILL_CHUNK_DEFAULT = 16384
 # ones from the [chunk, chunk] one, so an 8K prompt reads the 8192 operator in place instead of a per-layer slice copy
 # of the larger one (measured +6 ms TTFT at 8K with only the 16384 operator).
 ROUTED_PREFIX_TRI_SMALL = 8192
+# Chunks of a multiple of this many tokens (at least two blocks) take the blocked prefix sum (_SharedBlockedPrefix)
+# instead of the [C, C] operator, whose read grows as C^2 (0.81 ms per 16384-token chunk on BH, a 64K-token batched
+# forward has 4 per layer).
+ROUTED_PREFIX_BLOCK = 512
 # masked_bincount splits the token rows over a fixed 64-core grid.
 ROUTED_PREFILL_SEQ_MULTIPLE = 64
 # ttnn.scatter parallelizes over rows only, so the [1, k*C] row -> token scatter of _chunk runs on one core (1.5 ms per
@@ -205,6 +209,49 @@ def _shared_prefix_tri(mesh_device, cmax):
     return holder
 
 
+class _SharedBlockedPrefix:
+    """Operators of the blocked exclusive prefix sum over C = nb * b tokens (b = ROUTED_PREFIX_BLOCK), bfloat4_b
+    (0/1 values, exact): tri [nb, b, b], the strictly lower-triangular ones per block (prefix inside a block); ones
+    [nb, 1, b] (block totals); tri_blocks [nb, nb], strictly lower-triangular (sum of the earlier blocks' totals).
+    Their reads grow as C * b instead of C^2. One per (mesh device, C), shared by every layer; built on first use."""
+
+    def __init__(self, mesh_device, C, block):
+        assert C % block == 0, (C, block)
+        self.mesh_device = mesh_device
+        self.C = C
+        self.block = block
+        self.tensors = None
+
+    def get(self):
+        if self.tensors is None:
+            nb, b = self.C // self.block, self.block
+            kw = dict(
+                device=self.mesh_device,
+                dtype=ttnn.bfloat4_b,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            self.tensors = (
+                ttnn.from_torch(torch.tril(torch.ones(b, b), diagonal=-1).expand(nb, b, b).contiguous(), **kw),
+                ttnn.from_torch(torch.ones(nb, 1, b), **kw),
+                ttnn.from_torch(torch.tril(torch.ones(nb, nb), diagonal=-1), **kw),
+            )
+        return self.tensors
+
+
+_BLOCKED_PREFIX_CACHE = weakref.WeakValueDictionary()
+
+
+def _shared_blocked_prefix(mesh_device, C, block):
+    key = (mesh_device.id(), C, block)
+    holder = _BLOCKED_PREFIX_CACHE.get(key)
+    if holder is None or holder.mesh_device is not mesh_device:
+        holder = _SharedBlockedPrefix(mesh_device, C, block)
+        _BLOCKED_PREFIX_CACHE[key] = holder
+    return holder
+
+
 class RoutedWeightsUnavailable(RuntimeError):
     """Neither HF expert weights nor a complete routed-weight cache: the routed path cannot be built."""
 
@@ -257,6 +304,8 @@ class RoutedPrefillExperts:
         # chunks of at most ROUTED_PREFIX_TRI_SMALL tokens). Each is built on first use.
         self._prefix_tri = _shared_prefix_tri(mesh_device, self.chunk_size)
         self._prefix_tri_small = _shared_prefix_tri(mesh_device, min(self.chunk_size, ROUTED_PREFIX_TRI_SMALL))
+        # Blocked prefix operators per chunk length (strong references to the shared holders).
+        self._blocked_prefix = {}
         # fp32 dest + L1 packer accumulation keep the integer prefix sums of _pair_positions exact across K blocks.
         self._prefix_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -639,6 +688,57 @@ class RoutedPrefillExperts:
         self._consts[C] = consts
         return consts
 
+    def _exclusive_prefix(self, per_token, C):
+        """[C, E] fp32 0/1 -> [C, E] fp32, row t = sum of rows < t (exact integers).
+
+        C a multiple of ROUTED_PREFIX_BLOCK (b), at least 2 blocks: per block i (nb = C / b), the prefix inside the
+        block (tri [nb, b, b] @ per_token as [nb, b, E]) plus the exclusive prefix of the block totals, broadcast over
+        the block's rows. Measured at C = 16384 on one BH device: 0.44 ms vs 0.82 ms for the [C, C] matmul (b = 512;
+        b = 256: 0.48, b = 128: 0.56). A [nb, 1, C] @ [C, E] matmul for the earlier blocks instead runs its K = C on
+        one core: 4.1 ms.
+
+        Otherwise one multi-core matmul with the strictly lower-triangular [C, C] ones matrix; a chunk shorter than its
+        shared [Cmax, Cmax] operator uses a transient copy of the top-left [C, C] block."""
+        b = ROUTED_PREFIX_BLOCK
+        E = per_token.shape[-1]
+        mm = dict(
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self._prefix_compute_config,
+        )
+        if C % b == 0 and C >= 2 * b:
+            holder = self._blocked_prefix.get(C)
+            if holder is None:
+                holder = self._blocked_prefix[C] = _shared_blocked_prefix(self.mesh_device, C, b)
+            tri, ones, tri_blocks = holder.get()
+            nb = C // b
+            per_block = ttnn.reshape(per_token, (nb, b, E))
+            within = ttnn.matmul(tri, per_block, **mm)  # [nb, b, E]: pairs from earlier tokens of the same block
+            totals = ttnn.matmul(ones, per_block, **mm)  # [nb, 1, E]: pairs per block
+            totals = ttnn.reshape(totals, (nb, E))
+            # Block totals reach b, so this operand needs more than LoFi's mantissa bits (HiFi4, as the slot selector).
+            earlier = ttnn.matmul(
+                tri_blocks,
+                totals,
+                dtype=ttnn.float32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self._select_compute_config,
+            )  # [nb, E]: pairs from all earlier blocks
+            ttnn.deallocate(totals)
+            earlier = ttnn.reshape(earlier, (nb, 1, E))
+            before = ttnn.add(within, earlier, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(within)
+            ttnn.deallocate(earlier)
+            return ttnn.reshape(before, (C, E))
+        assert C <= self._prefix_tri.cmax, f"chunk of {C} tokens exceeds the prefix operator ({self._prefix_tri.cmax})"
+        holder = self._prefix_tri_small if C <= self._prefix_tri_small.cmax else self._prefix_tri
+        tri = holder.get()
+        tri_c = tri if C == holder.cmax else ttnn.slice(tri, (0, 0), (C, C))
+        before = ttnn.matmul(tri_c, per_token, **mm)
+        if tri_c is not tri:
+            ttnn.deallocate(tri_c)
+        return before
+
     def _pair_positions(self, indices, region_offsets, consts):
         """Dispatch-buffer row of every (token, slot) pair, uint32 ROW_MAJOR, in two orders: token-major [C, k] (the
         combine gather index) and slot-major [G, k*C/G] (pair r = slot * C + token in row-major order, the scatter
@@ -648,7 +748,6 @@ class RoutedPrefillExperts:
         distinct, so this is the pair's rank within e's region). Non-local pairs: the spare tile. All arithmetic is
         fp32 on integers < 2^24, so it is exact."""
         C = indices.shape[-2]
-        assert C <= self._prefix_tri.cmax, f"chunk of {C} tokens exceeds the prefix operator ({self._prefix_tri.cmax})"
         k = self.top_k
         E = self.num_experts
         idx_f = ttnn.typecast(indices, ttnn.float32)
@@ -674,22 +773,9 @@ class RoutedPrefillExperts:
             compute_kernel_config=self._prefix_compute_config,
         )  # [C, E]: pairs of each expert per token (0/1)
         per_token = ttnn.mul(per_token, self.local_mask_f32, output_tensor=per_token)  # local experts only
-        # Exclusive prefix over tokens (pairs of e from earlier tokens) as one multi-core matmul with the strictly
-        # lower-triangular [C, C] ones matrix. Operands are 0/1 (exact in bf4 / tf32) and the sums (< C, 2^14 at the
-        # default chunk) accumulate in the fp32 dest, so the result is exact.
-        # A chunk shorter than its shared [Cmax, Cmax] operator uses a transient copy of the top-left [C, C] block.
-        holder = self._prefix_tri_small if C <= self._prefix_tri_small.cmax else self._prefix_tri
-        tri = holder.get()
-        tri_c = tri if C == holder.cmax else ttnn.slice(tri, (0, 0), (C, C))
-        before = ttnn.matmul(
-            tri_c,
-            per_token,
-            dtype=ttnn.float32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self._prefix_compute_config,
-        )
-        if tri_c is not tri:
-            ttnn.deallocate(tri_c)
+        # Exclusive prefix over tokens (pairs of e from earlier tokens). Operands are 0/1 (exact in bf4 / tf32) and the
+        # sums (< C, 2^14 at the default chunk) accumulate in the fp32 dest, so the result is exact either way.
+        before = self._exclusive_prefix(per_token, C)
         ttnn.deallocate(per_token)
         base = ttnn.add(before, region, output_tensor=before)
         ttnn.deallocate(region)
