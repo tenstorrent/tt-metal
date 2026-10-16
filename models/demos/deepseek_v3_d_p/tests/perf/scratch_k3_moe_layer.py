@@ -143,3 +143,82 @@ def test_k3_moe_layer(mesh_device, device_params):
         total += med
         logger.info(f"K3_OP {name:16s} {med:9.1f} us  ({v[-1][1]} programs: {' '.join(f'{u:.1f}' for u in stage_progs[name])})")
     logger.info(f"K3_MOE block (sum of the stages' device times, slowest chip per stage, median over {ITERS}): {total:.0f} us")
+
+
+_TRACE_PARAMS = [
+    pytest.param(
+        (R, C),
+        fabric2d_device_params(fabric_payload_size=7232, l1_small_size=0, trace_region_size=int(os.environ.get("K3_TRACE_MB", "64")) << 20),
+        id="fabric2d-mesh-2x4-2link-trace",
+    )
+]
+
+
+@pytest.mark.parametrize("mesh_device, device_params", _TRACE_PARAMS, indirect=["mesh_device", "device_params"])
+@pytest.mark.timeout(7200)
+def test_k3_moe_layer_trace(mesh_device, device_params):
+    """The whole forward as one trace: wall time per replay (no host dispatch, no syncs between ops), vs the
+    untraced forward (host-dispatched, one sync per call / back to back), and the replay's output vs the untraced."""
+    d = K3Dims(E=int(os.environ.get("K3_E", str(56 * N))))
+    w = random_k3_weights(d, pool_size=POOL)
+    moe = TtK3TokenSplitMoE(mesh_device, w, d, S)
+    x = torch.randn(N * S, d.H, generator=torch.Generator().manual_seed(1)).to(torch.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device,
+                         memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0))
+    host = lambda t: torch.cat([ttnn.to_torch(u).reshape(S, d.H) for u in ttnn.get_device_tensors(t)]).float()  # noqa: E731
+    n = int(os.environ.get("K3_TRACE_ITERS", "20"))
+    y0 = moe(xt)  # (compiles every program)
+    ttnn.synchronize_device(mesh_device)
+    ref = host(y0)
+    ttnn.deallocate(y0)
+    t0 = time.perf_counter()
+    for _ in range(n):  # untraced, one sync per call
+        yy = moe(xt)
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(yy)
+    t_sync = (time.perf_counter() - t0) / n
+    t0 = time.perf_counter()
+    for _ in range(n):  # untraced, back to back
+        yy = moe(xt)
+        ttnn.deallocate(yy)
+    ttnn.synchronize_device(mesh_device)
+    t_b2b = (time.perf_counter() - t0) / n
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    y_tr = moe(xt)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)  # (warm)
+    t0 = time.perf_counter()
+    for _ in range(n):
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    t_tr = (time.perf_counter() - t0) / n
+    got = host(y_tr)
+    logger.info(
+        f"K3_TRACE forward wall time per call: traced {t_tr * 1e6:.0f} us | untraced back to back {t_b2b * 1e6:.0f} us "
+        f"| untraced with a sync per call {t_sync * 1e6:.0f} us (median of {n}); replay vs untraced PCC "
+        f"{pcc(got, ref):.6f}, max |diff| {(got - ref).abs().max().item():.3e}"
+    )
+    if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":  # per program of one replay: durations and the gaps
+        ttnn.ReadDeviceProfiler(mesh_device)
+        ttnn.get_latest_programs_perf_data()
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+        ttnn.ReadDeviceProfiler(mesh_device)
+        spans = []
+        for chip, programs in enumerate((ttnn.get_latest_programs_perf_data() or {}).values()):
+            res = [p.program_analyses_results[_DURATION_KEY] for p in programs if _DURATION_KEY in (p.program_analyses_results or {})]
+            res = sorted(res, key=lambda r: r.start_timestamp)
+            if not res:
+                continue
+            busy = sum(r.duration for r in res) / 1e3
+            span = (res[-1].end_timestamp - res[0].start_timestamp)
+            spans.append((chip, len(res), busy, res))
+            logger.info(f"K3_TRACE chip {chip}: {len(res)} programs, busy {busy:.0f} us, first start .. last end {span} cycles")
+        if spans:
+            chip, cnt, busy, res = max(spans, key=lambda t: t[2])
+            f = 1.35e3  # cycles per us (AICLK 1350 MHz)
+            t0_ = res[0].start_timestamp
+            for r in res:
+                logger.info(f"K3_TRACE_OP chip {chip} start {(r.start_timestamp - t0_) / f:8.1f} us  dur {r.duration / 1e3:8.1f} us")
+    ttnn.release_trace(mesh_device, tid)
+    assert pcc(got, ref) > 0.999, "the trace replay differs from the untraced forward"

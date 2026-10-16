@@ -898,3 +898,13 @@ LoFi truncates bf8 weights to 5 bits (a gain loss); HiFi2 restores them; bf16 x 
 42.6), block 4373 -> 4232 us, routed experts still LoFi. The flat SE is compute / pipeline bound (HiFi2 at 320 rows
 per part: DRAM floor 274 us); next: its own lane (overlapped with the routing / dispatch phase) rather than more
 single-op speed.
+
+### K3 block traced (2026-10-16): scratch_k3_moe_layer.py -k trace
+One forward captured as a trace: 4105 us wall per replay (bit-identical to the untraced forward), vs untraced 26.8 ms
+back to back (host-bound: the Python per call -- descriptor rebinds, generic_op hashing -- not the device). Profiled
+replay (slowest chip): 24 programs back to back, busy 4098 us of a 4098 us span: no idle gaps, no overlap. Programs:
+router 41 + top-k 95 | routing rows 26 + all-gathers 53 + 87 | planner 91 | latent down 119 + row-major 12 | dispatch
+prep 28 + arena zero 5 + dispatch 213 | experts + combine 2442 | to tile 53 + rms_norm 58 + latent up 124 | shared
+expert x row-major 49 + flat 527 + part sum 42 | add 32. The tiny routing all-gathers keep their 140 us in the trace
+(latency, not launch skew). Everything outside the experts (1656 us) is serial: the next gains are overlap (the shared
+expert beside the routing / dispatch phase or the experts) and the small-op latency chain.
