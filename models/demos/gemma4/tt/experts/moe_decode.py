@@ -72,24 +72,31 @@ class Gemma4MoEDecode:
             pad = self.frame_rows - R
             hidden = ttnn.pad(hidden, [(0, 0), (0, 0), (0, pad), (0, 0)], 0.0)
             routing = ttnn.pad(routing, [(0, 0), (0, 0), (0, pad), (0, 0)], 0.0)
-        x = ttnn.mesh_partition(hidden, dim=2, cluster_axis=0)  # [1,1,B,H] per row-chip
-        r = ttnn.mesh_partition(routing, dim=2, cluster_axis=0)  # [1,1,B,E]
+        B = self.batch_per_device
+        # Row-major before the per-row split: a slice of B < 32 rows is not tile-aligned, reshapes of uint16 tensors
+        # are only views in row-major, and the gathers below must not carry tile padding between chips.
+        hidden_rm = ttnn.to_layout(hidden, ttnn.ROW_MAJOR_LAYOUT)
+        routing_rm = ttnn.to_layout(routing, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.mesh_partition(hidden_rm, dim=2, cluster_axis=0)  # [1,1,B,H] per row-chip
+        r = ttnn.mesh_partition(routing_rm, dim=2, cluster_axis=0)  # [1,1,B,E]
+        ttnn.deallocate(hidden_rm)
+        ttnn.deallocate(routing_rm)
+        r = ttnn.to_layout(r, ttnn.TILE_LAYOUT)
         scores, indices = ttnn.topk(r, k=self.top_k, dim=-1)  # [1,1,B,K] bf16 / uint16 (TILE)
         ttnn.deallocate(r)
-        B = self.batch_per_device
-        x = ttnn.to_layout(ttnn.reshape(x, (B, 1, 1, self.hidden)), ttnn.ROW_MAJOR_LAYOUT)
+        scores = ttnn.reshape(ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT), (B, 1, 1, self.top_k))
+        indices = ttnn.reshape(ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT), (B, 1, 1, self.top_k))
         if x.dtype != ttnn.bfloat16:
             x = ttnn.typecast(x, ttnn.bfloat16)
-        scores = ttnn.to_layout(ttnn.reshape(scores, (B, 1, 1, self.top_k)), ttnn.ROW_MAJOR_LAYOUT)
-        indices = ttnn.to_layout(ttnn.reshape(indices, (B, 1, 1, self.top_k)), ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.reshape(x, (B, 1, 1, self.hidden))
         out = self.module.forward(x, scores, indices)  # [1,1,B,H/cols] per chip
         ttnn.deallocate(x)
         ttnn.deallocate(scores)
         ttnn.deallocate(indices)
-        out = ttnn.reshape(out, (1, 1, B, self.hidden // self.cols))
-        if out.layout != ttnn.TILE_LAYOUT:
-            out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+        if out.layout != ttnn.ROW_MAJOR_LAYOUT:
+            out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)  # strips any tile padding of a B < 32 slice
         out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.reshape(out, (1, 1, B, self.hidden // self.cols))
         if self.cols > 1:
             full = ttnn.all_gather(out, dim=3, cluster_axis=1, topology=ttnn.Topology.Linear)  # [1,1,B,H]
             ttnn.deallocate(out)
@@ -100,6 +107,7 @@ class Gemma4MoEDecode:
             ttnn.deallocate(full)
         else:
             frame = full
+        frame = ttnn.to_layout(frame, ttnn.TILE_LAYOUT)
         if R < self.frame_rows:
             frame = ttnn.slice(frame, [0, 0, 0, 0], [1, 1, R, self.hidden])
         return frame
