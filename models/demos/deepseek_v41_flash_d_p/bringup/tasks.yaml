@@ -2508,6 +2508,56 @@ tasks:
       official_taps_unmapped: == 0
   paths: *id001
   precheck: false
+- id: FIX.4
+  title: 'the hc mixes (attn_hc, ffn_hc): fp32 SFPU Sinkhorn in the tree; pass the gate'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - C.swa.attn_hc
+  - C.swa.ffn_hc
+  - C.swa_engram.attn_hc
+  - C.swa_engram.ffn_hc
+  - C.enc_source.attn_hc
+  - S.swa.15
+  - S.swa_engram.18
+  gate:
+    cmd: BRINGUP_TASK=C.swa.attn_hc scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_hc.py
+      && BRINGUP_TASK=C.swa.ffn_hc scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_hc.py
+      && BRINGUP_TASK=C.swa_engram.attn_hc scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_hc.py
+      && BRINGUP_TASK=C.swa_engram.ffn_hc scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_hc.py
+      && BRINGUP_TASK=C.enc_source.attn_hc scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_hc.py
+      && BRINGUP_TASK=S.swa.15 scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_15_ffn_residual.py
+      && BRINGUP_TASK=S.swa_engram.18 scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_18_ffn_residual.py
+    metrics:
+      err_attn_hc_L00: <= limit
+      err_ffn_hc_L00: <= limit
+      err_attn_hc_L01: <= limit
+      err_ffn_hc_L01: <= limit
+      err_attn_hc_L02: <= limit
+      err_swap_out: <= limit
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  brief:
+    details: 'State (2026-10-16 18:20): the fix is in the tree and committed (c50953498f6, 89302eddd15): ttnn.bringup.mhc_pre_xing(deepseek=True),
+      HC_SINKHORN=sfpu_fp32 by default. The fork option is off by default; the Xing / GLM cases and the fork regression pass
+      (checked by the overseer: do not rerun them, and do not rebuild unless you change C++). The owner waived the hc steps''
+      noise-floor checks (spec tests.waivers), and the own-floor row / column / bias checks only print WARN lines (F89): never
+      work on a WARN or WAIVED line. Your job: run the gate below once. If it passes, finish with one line in BREADCRUMBS.md.
+      If a test fails on a gating check (a FAIL line that is not WARN / WAIVED, and not the rel=1 lines of the precompile
+      pass), fix that cause in the model''s code (tt/) at the reference''s precision with the device''s normal settings (HiFi4,
+      fp32 accumulation, approx modes off; no multi-pass or split matmuls); a change to a shared op goes through its bring-up
+      fork behind an option. Do not re-measure the Sinkhorn timing.'
+    gate_tasks:
+    - C.swa.attn_hc
+    - C.swa.ffn_hc
+    - C.swa_engram.attn_hc
+    - C.swa_engram.ffn_hc
+    - C.enc_source.attn_hc
+    - S.swa.15
+    - S.swa_engram.18
 - id: S.enc_source.03
   title: 'enc_source block with steps 1-3 on device (last: attn_norm)'
   step: implement

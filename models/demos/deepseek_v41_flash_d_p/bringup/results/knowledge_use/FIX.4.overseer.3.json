@@ -1,0 +1,90 @@
+{
+ "used": [
+  {
+   "id": "K-20",
+   "how": "its exact mhc_split_sinkhorn sequence (pre + eps, softmax + eps, column norm, iters - 1 pairs, no clamp vs Xing's) is what mhc_pre_xing(deepseek=True) implements (kernels/mhc_pre_xing_compute.cpp MHC_XING_DEEPSEEK)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-30",
+   "how": "explains the source kernel's error (FPU steps read fp32 at TF32) and the fp32-streams case of the linear (operand truncation doubles the mixes bias); recorded in DS41-40 / DS41-41",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-16",
+   "how": "the remaining mixes error after the fix is the linear's in-tile partial-dot truncation; stopped there (no multi-pass) and recorded DS41-41 for the waiver",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-31",
+   "how": "tested round_tf32(x) before the hc linear: no change on bf16-valued golden streams, halves the bias on fp32 streams at +1.94 ms per call; not taken (owner pick)",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the hc component gates' golden streams are bf16-valued, while the assembled model feeds fp32 streams: the component tests never see the FPU's operand truncation of x (mixes bias -3.4e-4 there vs -6.9e-4 in the model)",
+  "mhc_pre_xing's in-kernel fp32 Sinkhorn could serve DeepSeek's variant too (now an option, K-20 names only the Xing use)"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.4",
+   "answer": "disagree",
+   "evidence": "The Sinkhorn part is fixed (mhc_pre_xing(deepseek=True), HC_SINKHORN=sfpu_fp32): kernel alone vs a CPU fp32 Sinkhorn on the same mixes 5.9e-4..1.2e-3 -> 6.5e-8..7.6e-8; step vs CPU 6.1e-4/1.27e-3/7.0e-4/8.2e-4/7.8e-4 -> 6.07e-5/1.08e-4/1.36e-4/1.50e-4/1.00e-4 (L0 attn/L0 ffn/L1 attn/L1 ffn/L2 attn), bias -3.4e-4 -> +9e-6, col 22 1.5 % gone. What remains is the device's own arithmetic: the linear's in-tile truncation (DS41-16, mixes x (1 - 3.4e-4..3.75e-4) with exact bf16 x and TF32 w; every flagged column bias equals the one a CPU fp32 Sinkhorn makes from the device's mixes, e.g. L0 attn col 20 -1.74e-3 both). The gate's err_* all pass; the auto checks still fail on column bias (vs CPU 25-38 x, vs golden 3.4-16.7 x) and L0 attn rel 6.07e-5 > 3.52e-5. No multi-pass (owner): needs the waiver. Evidence: BREADCRUMBS FIX.4 attempt 3, known_issues DS41-41 + detail, probes tests/ttnn/unit_tests/operations/mhc_ds41_fix4/probes/probe_001..003.py"
+  },
+  {
+   "id": "OV-10",
+   "answer": "done",
+   "evidence": "Superseded by OV-12 for the op to change (no mhc_split_sinkhorn fork); the Sinkhorn is fp32 on the SFPU (6.5e-8..7.6e-8, 0.031 vs 0.45 ms). RMS stage left as is (rms_norm fork not extended); on the default path the rsqrt runs inside mhc_pre_xing. Linear unchanged. bf16 x not taken: the assembled model's streams are fp32, not bf16-valued (a cast would round them). L0 attn_hc 3.4x its floor reported (DS41-41)."
+  },
+  {
+   "id": "OV-11",
+   "answer": "done",
+   "evidence": "tt/settings.py HC_SINKHORN (sfpu_fp32 | fpu), default and max_precision sfpu_fp32; both paths' error vs floor and time in its description. The fork option (mhc_pre_xing deepseek) defaults off: Xing's program unchanged (define absent, same hash); fpu = the unchanged source op."
+  },
+  {
+   "id": "OV-12",
+   "answer": "done",
+   "evidence": "Deleted ttnn/ttnn/bringup/mhc_split_sinkhorn/, reverted INDEX.md / bringup_nanobind.cpp; mhc_pre_xing extended behind deepseek=False (CHANGELOG 7); tt/mhc.py uses it; option-off regression: model cases 103 passed (xing40, glm53, new), unit + golden 321 passed / 1 skipped (= baseline). Measured Sinkhorn alone, whole step, per layer per chunk (1.54 -> 0.82 ms), both paths, golden inputs (BREADCRUMBS)."
+  }
+ ],
+ "cited_only": [
+  "DS41-40",
+  "DS41-41"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.4",
+  "role": "overseer",
+  "attempt": 3,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T15:42:40",
+  "head": "00c3c7528cf",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.4.overseer.3.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_pre_xing_device_operation.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_pre_xing_device_operation.hpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_pre_xing_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_pre_xing_compute.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/mhc_pre_ttnn_nanobind.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/mhc_pre_xing.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/mhc_pre_xing.hpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/tests/reference.py",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/tests/test_mhc_pre_xing.py",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/tests/xing_cases.py"
+  ]
+ }
+}
