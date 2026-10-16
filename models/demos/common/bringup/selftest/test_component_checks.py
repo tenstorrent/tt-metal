@@ -95,7 +95,7 @@ def test_the_sweep_passes_for_the_fixture_steps(gspec, monkeypatch, capsys, step
 def test_the_sweep_fails_when_a_mistake_slips_through(gspec, monkeypatch, capsys):
     s = gspec()
     monkeypatch.setenv(IMPL_ENV, "mutations")
-    loose = dict(CC.COMPONENT_DEFAULTS, component_bias=1.0, component_ratio=1.0, component_floor=0.5, component_rel=0.5)
+    loose = dict(CC.COMPONENT_DEFAULTS, component_calib=1000.0, component_bias_share=1.0)  # F76: limits = calib x model
     monkeypatch.setattr(CC, "COMPONENT_DEFAULTS", loose)
     assert not run_component_test(s, "mlp", 0, checks="auto")
     assert "scale1.02                    SLIPPED" in capsys.readouterr().out
@@ -252,7 +252,8 @@ def test_every_column_is_checked_against_its_own_limit():
     want = torch.ones(256, 8)
     want[:, 0] = 1e-5 * torch.rand(256)
     lim = CC.limits(_Spec())
-    col_lim = CC.rel_limit(lim, torch.zeros(8), False)  # an exact model: every column at the floor
+    res = torch.full((8,), 2.0**-9)  # one bf16 rounding of each column
+    col_lim = CC.rel_limit(lim, torch.zeros(8), False, res)  # an exact model: every column at its bf16 resolution
     L = CC.float_limits(lim, 1.0, 0.004, None, col_lim=col_lim)
     flipped = want.clone()
     flipped[:, 0] *= -1
@@ -260,5 +261,34 @@ def test_every_column_is_checked_against_its_own_limit():
     assert e["rel"] < 1e-4 and len(bad) == 1 and bad[0].startswith("column 0 rel")
     assert not CC.float_fails(want * (1 + 1e-4), want, L)[1]
     # a column the precision model finds noisy gets a looser limit on its own terms
-    noisy = CC.rel_limit(lim, torch.tensor([0.0, 0.01]), False)
-    assert noisy[0] == lim["component_floor"] and noisy[1] == pytest.approx(0.02), "per column: 2 x e, no cap"
+    noisy = CC.rel_limit(lim, torch.tensor([0.0, 0.01]), False, res[:2])
+    assert noisy[0] == pytest.approx(2 * 2.0**-9) and noisy[1] == pytest.approx(0.02), "per column: 2 x e, no cap"
+
+
+def test_the_precision_model_follows_the_references_dtypes(tmp_path):
+    """F78: a step the reference computes in fp32 (a router's linear(x.float(), w.float())) gets an fp32 model."""
+
+    class Ref:
+        pass
+
+    class S:
+        bringup_dir = tmp_path
+
+    g = torch.Generator().manual_seed(0)
+    x, w = torch.randn(64, 256, generator=g), torch.randn(256, 96, generator=g)
+    cpu = lambda ctx, a: (a @ w).softmax(-1)  # noqa: E731
+    case = CC.Case("golden", [x], 0, lambda: None, None)
+    exact = cpu(None, MU.bf16(x))
+    bf = CC.precision_model(Ref(), cpu, case)
+    f32 = CC.precision_model(Ref(), cpu, case, {"compute": "fp32", "out": "fp32"})
+    assert CC.rel(f32, exact) == 0 and CC.rel(bf, exact) > 1e-3
+    assert CC.step_precision(S, "swa", "router") == {"compute": "bf16", "out": "bf16"}
+    (tmp_path / CC.PRECISION_FILE).write_text(
+        "steps:\n  router: {compute: fp32, out: fp32}\n  swa.attn_norm: {compute: fp32}\n"
+    )
+    assert CC.step_precision(S, "swa", "router") == {"compute": "fp32", "out": "fp32"}
+    assert CC.step_precision(S, "swa", "attn_norm") == {"compute": "fp32", "out": "bf16"}
+    assert CC.step_precision(S, "mla", "attn_norm") == {"compute": "bf16", "out": "bf16"}
+    (tmp_path / CC.PRECISION_FILE).write_text("steps:\n  router: {compute: fp16}\n")
+    with pytest.raises(ValueError):
+        CC.step_precision(S, "swa", "router")

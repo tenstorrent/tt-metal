@@ -104,6 +104,7 @@ from models.demos.common.bringup.plan import op_request as OR
 from models.demos.common.bringup.testing import accuracy_guard
 from models.demos.common.bringup.testing import serving as SV
 from models.demos.common.bringup.testing import settings_lint
+from models.demos.common.bringup.testing.component_checks import PRECISION_FILE as CC_PRECISION_FILE
 
 HERE = Path(__file__).resolve().parent
 AGENT_DEF = HERE / "agents" / "bringup-engineer.md"
@@ -434,6 +435,9 @@ class Orchestrator:
             f"{b}/{kusage.REPORT_DIR}",  # the step's knowledge-use report (the brief names it)
         ]
 
+    def place_fixes(self) -> bool:
+        return _place_fixes(self)
+
     def allowed_paths(self, task: dict, role: str) -> list[str]:
         b = rel(self.spec, self.spec.bringup_dir)
         if role == "test":
@@ -456,6 +460,8 @@ class Orchestrator:
             extra.append(CONTRACT_SHARED)  # the engine's producer and registry learn each new model's layout
             extra.append(f"{b}/hooks.py")  # contract_state_pcc (fixed-size state read-back) is a hook
         extra.append(BRINGUP_OPS)
+        if role in ("reference", OV.FIX_ROLE):  # F78: the reference's dtypes; never an implement agent's to loosen
+            extra.append(f"{b}/{CC_PRECISION_FILE}")
         if role == "implement" and OR.deferrable(task):
             extra.append(rel(self.spec, OR.root(self.spec)))  # an op request, if the agent defers the step (F46)
         # F55: the files this task's gate writes are the agent's to change too (one list: core.gate.gate_outputs), so
@@ -497,6 +503,8 @@ class Orchestrator:
             "component_entry": yaml.safe_dump(comp).strip() if comp else "(none in components.yaml)",
             "gate_cmd": task["gate"]["cmd"],
             "details": brief.get("details", ""),
+            "gate_tasks": ", ".join(brief.get("gate_tasks") or []),
+            "task_id": task["id"],
             "repo": str(s.repo),
             "breadcrumbs": f"{rel(s, b)}/BREADCRUMBS.md",
             "knowledge_report": rel(s, kusage.report_path(b, task["id"], role, attempt)),
@@ -741,6 +749,8 @@ class Orchestrator:
         info = parse_stream(log)
         problems = []
         self.aborted = OV.take_abort(self.run_dir)
+        # F77: the tree diff before any ledger write of ours (an abort's history entry is not the agent's change)
+        self.last_changed = changed_since(before, dirty(self.spec.repo))
         if self.aborted:
             why = self.aborted.get("reason", "")
             problems.append(f"aborted by the overseer: {why}")
@@ -750,7 +760,6 @@ class Orchestrator:
             problems.append(f"agent exited rc={rc} is_error={info['is_error']}")
         problems += command_violations(info["commands"], self.spec.repo)
         pats = self.allowed_paths(task, role)
-        self.last_changed = changed_since(before, dirty(self.spec.repo))
         outside = [p for p in self.last_changed if not allowed(p, pats)]
         if outside:
             problems.append(f"changed files outside the allowed paths (revert them): {outside}")
@@ -1507,6 +1516,16 @@ class Orchestrator:
             if self.pause_file.exists():
                 self.echo(f"paused before {runnable[0]} ({self.pause_file}); `resume` continues")
                 return PAUSED
+            if self.place_fixes():  # F77: the overseer's queued fixes run before anything else
+                continue
+            stopped_fix = [
+                t
+                for t, x in self.led.tasks().items()
+                if x.get("step") == OV.FIX_STEP and state.get(t, {}).get("status") == "STOPPED"
+            ]
+            if stopped_fix:
+                self.echo(f"stopped fix tasks: {stopped_fix}; the run waits for them (fix, then `resume`)")
+                return STOPPED
             tid = runnable[0]
             try:
                 rc = self.step(tid)
@@ -1516,6 +1535,26 @@ class Orchestrator:
                 return rc
             if only:
                 return DONE
+
+
+def _place_fixes(orch: Orchestrator) -> bool:
+    """F77: every queued overseer fix becomes a ledger task placed just before the first unpassed task."""
+    jobs = OV.take_fixes(orch.spec.bringup_dir)
+    if not jobs:
+        return False
+    spec = yaml.safe_load(orch.led.tasks_path.read_text())
+    tasks = {t["id"]: t for t in spec["tasks"]}
+    for job in jobs:
+        first = orch.led.first_unpassed()
+        ids = [t["id"] for t in spec["tasks"]]
+        at = ids.index(first) if first in ids else len(ids)
+        spec["tasks"].insert(at, OV.fix_task(job, tasks))
+        tasks[job["id"]] = spec["tasks"][at]
+        orch.echo(
+            f"[{job['id']}] placed by the overseer before {first}: {job['title']} (gate: {', '.join(job['gate'])})"
+        )
+    orch.led.write_tasks(spec)
+    return True
 
 
 def decide(orch: Orchestrator, tid: str, decision: str, note: str = "") -> int:

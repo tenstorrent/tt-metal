@@ -258,10 +258,25 @@ def _torch_dtype_name(t, target_dtype: str) -> str:
     return target_dtype if t.is_floating_point() else "uint32"
 
 
-def _tolerance(task: dict) -> dict:
-    """From the component gate's threshold (">= 0.99"): pcc, and the relative RMS a pure-noise error of that PCC has."""
-    conds = [str(c).split() for c in (task["gate"].get("metrics") or {}).values()]
-    pcc = next((float(v) for op, v in conds if op in (">=", ">")), 0.99)
+def _tolerance(task: dict, spec=None) -> dict:
+    """From the component gate's threshold (">= 0.99"): pcc, and the relative RMS a pure-noise error of that PCC has.
+    A ">= limit" gate (F76) takes the noise-floor limit its last run recorded (results/<task>.json), else 0.99."""
+    from models.demos.common.bringup.core import metrics
+
+    got = metrics.load(task["id"], spec.bringup_dir / "results") if spec is not None else {}
+    pcc = None
+    for name, c in (task["gate"].get("metrics") or {}).items():
+        op, v = str(c).split()
+        if op not in (">=", ">"):
+            continue
+        if v == "limit":
+            v = next(
+                (x["value"] for k, x in got.items() if k.endswith("_limit") and k.startswith(name.rstrip("*"))), None
+            )
+        if v is not None:
+            pcc = float(v)
+            break
+    pcc = 0.99 if pcc is None else pcc
     return {"pcc": pcc, "rel_rms": round(max(0.02, math.sqrt(2 * (1 - pcc))), 3)}
 
 
@@ -344,7 +359,7 @@ def generate(spec, tid: str, op: str, force: bool = False) -> Path:
             "params": {},
             "memory_layout": "INTERLEAVED",
         },
-        "tolerance": _tolerance(task),
+        "tolerance": _tolerance(task, spec),
         "acceptance": {
             "test": (task.get("tests") or [None])[0],
             "golden": (task.get("freeze_extra") or [None])[0],
