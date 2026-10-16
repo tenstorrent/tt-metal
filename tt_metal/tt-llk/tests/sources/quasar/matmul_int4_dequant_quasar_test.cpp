@@ -203,6 +203,8 @@ constexpr std::uint8_t EPILOGUE_DONE_SEM = semaphore::UNPACK_MATH;
 // Two 16-entry sequences fit the replay buffer where two full-face (32-entry) ones did not.
 // A pass covers 4 rows of the even or odd columns: 8 rows x 2 column parities = 4 passes, each
 // one LOAD, CAST, MUL and STORE.
+constexpr std::uint32_t HALF_FACE_ROWS            = 8;
+constexpr std::uint32_t HALF_FACES_PER_FACE       = 2;
 constexpr std::uint32_t SFPU_PASSES_PER_HALF_FACE = 4;
 constexpr std::uint32_t INSTRS_PER_PASS           = 4;
 constexpr std::uint32_t FACE_SEQ_LEN              = SFPU_PASSES_PER_HALF_FACE * INSTRS_PER_PASS;
@@ -210,6 +212,9 @@ constexpr std::uint32_t FACE_SEQ_SLOT[2]          = {0, FACE_SEQ_LEN};
 // Each pass owns one of LREG0-3 (LREG4-7 hold the scales), and TRISC3's replay buffer holds 32.
 static_assert(SFPU_PASSES_PER_HALF_FACE <= p_sfpu::LREG4, "passes would overwrite the scale LREGs");
 static_assert(2 * FACE_SEQ_LEN <= 32, "both half-face sequences must fit TRISC3's replay buffer");
+
+// s_w is stored as one SrcS slice per 16-column half of each (group, tile column).
+constexpr std::uint32_t W_SCALE_SLICES_PER_TILE_COL = 2;
 
 // Rewrites 8 rows of a 16x16 Dest face in place: float(int32 partial) * column scale. A pass
 // covers 4 rows of the even (addr +0) or odd (addr +2) columns, so the scale LREG alternates.
@@ -229,7 +234,7 @@ inline void record_face_seq(const std::uint32_t slot)
 #pragma GCC unroll SFPU_PASSES_PER_HALF_FACE
             for (std::uint32_t pass = 0; pass < SFPU_PASSES_PER_HALF_FACE; pass++)
             {
-                TT_SFPLOAD(pass, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, pass << 1);
+                TT_SFPLOAD(pass, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0 /*done*/, pass << 1);
             }
 #pragma GCC unroll SFPU_PASSES_PER_HALF_FACE
             for (std::uint32_t pass = 0; pass < SFPU_PASSES_PER_HALF_FACE; pass++)
@@ -240,12 +245,12 @@ inline void record_face_seq(const std::uint32_t slot)
             for (std::uint32_t pass = 0; pass < SFPU_PASSES_PER_HALF_FACE; pass++)
             {
                 // Scale (SrcS-loaded) as the multiplier operand.
-                TT_SFPMUL((pass & 1) ? SCALE_ODD : SCALE_EVEN, pass, p_sfpu::LCONST_0, pass, 0);
+                TT_SFPMUL((pass & 1) ? SCALE_ODD : SCALE_EVEN, pass, p_sfpu::LCONST_0, pass, 0 /*instr_mod1*/);
             }
 #pragma GCC unroll SFPU_PASSES_PER_HALF_FACE
             for (std::uint32_t pass = 0; pass < SFPU_PASSES_PER_HALF_FACE; pass++)
             {
-                TT_SFPSTORE(pass, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0, pass << 1);
+                TT_SFPSTORE(pass, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0 /*done*/, pass << 1);
             }
         });
 }
@@ -349,14 +354,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         // One SrcS fill brings both 16-column halves' scales; LREG4-7 then hold them
                         // for every row tile of this column.
-                        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_S, (group * CT_DIM + col_tile) * 2);
+                        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_S, (group * CT_DIM + col_tile) * W_SCALE_SLICES_PER_TILE_COL);
                         TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, bfd_w_scale_lo, 0b0 /*no dvalid*/);
                         TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b0 /*no L1 inc*/, bfd_w_scale_hi, 0b1 /*Set dvalid*/);
                         _llk_pack_srcs_<1 /*INSTRN_COUNT*/>(bfd_scratch, 0);
-                        TT_SFPLOAD(p_sfpu::LREG4, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0, in0_base);
-                        TT_SFPLOAD(p_sfpu::LREG5, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0, in0_base + 2);
-                        TT_SFPLOAD(p_sfpu::LREG6, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0, in1_base);
-                        TT_SFPLOAD(p_sfpu::LREG7, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0, in1_base + 2);
+                        TT_SFPLOAD(p_sfpu::LREG4, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0 /*done*/, in0_base);
+                        TT_SFPLOAD(p_sfpu::LREG5, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0 /*done*/, in0_base + 2);
+                        TT_SFPLOAD(p_sfpu::LREG6, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0 /*done*/, in1_base);
+                        TT_SFPLOAD(p_sfpu::LREG7, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0 /*done*/, in1_base + 2);
                         _llk_math_eltwise_sfpu_srcs_clear_vlds_<true /*SRCS_RD_DONE*/, true /*SRCS_WR_DONE*/>();
 
                         for (std::uint32_t row_tile = 0; row_tile < RT_DIM; ++row_tile)
@@ -365,10 +370,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #pragma GCC unroll 4
                             for (std::uint32_t face = 0; face < 4; ++face)
                             {
-                                TTI_REPLAY(FACE_SEQ_SLOT[face & 1], FACE_SEQ_LEN, 0, 0, 0, 0);
-                                _inc_dst_addr_<8>();
-                                TTI_REPLAY(FACE_SEQ_SLOT[face & 1], FACE_SEQ_LEN, 0, 0, 0, 0);
-                                _inc_dst_addr_<8>();
+#pragma GCC unroll HALF_FACES_PER_FACE
+                                for (std::uint32_t half = 0; half < HALF_FACES_PER_FACE; ++half)
+                                {
+                                    TTI_REPLAY(
+                                        FACE_SEQ_SLOT[face & 1], FACE_SEQ_LEN, 0 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
+                                    _inc_dst_addr_<HALF_FACE_ROWS>();
+                                }
                             }
                             _llk_math_eltwise_sfpu_done_();
                         }
@@ -400,10 +408,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #pragma GCC unroll 2
                             for (int col = 0; col < 4; col += 2)
                             {
-                                TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0, in0_base + col);
-                                TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0, in1_base + col);
-                                TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-                                TT_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0, out_base + col);
+                                TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0 /*done*/, in0_base + col);
+                                TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0 /*done*/, in1_base + col);
+                                TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /*instr_mod1*/);
+                                TT_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0 /*done*/, out_base + col);
                             }
                             _llk_math_eltwise_sfpu_srcs_clear_vlds_<true /*SRCS_RD_DONE*/, true /*SRCS_WR_DONE*/>();
                         }
@@ -494,7 +502,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     // Group 0 writes the result tiles; later groups accumulate onto them in L1 (fp32).
                     TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
-                    _llk_pack_set_l1_acc_<p_pacr::PACK0>(group > 0);
+                    _llk_pack_set_l1_acc_<p_pacr::PACK0>(group > 0 /*l1_acc_en*/);
                     _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, output_shape);
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
@@ -507,7 +515,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
             TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
-            _llk_pack_set_l1_acc_<p_pacr::PACK0>(false);
+            _llk_pack_set_l1_acc_<p_pacr::PACK0>(false /*l1_acc_en*/);
         }
         PROFILER_SYNC();
     }
