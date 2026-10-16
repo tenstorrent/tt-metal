@@ -634,6 +634,10 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(log1p_init<APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en>);
     }
+    else if constexpr (OPERATION == SfpuType::logsigmoid)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(logsigmoid_init<APPROX_MODE, is_fp32_dest_acc_en>);
+    }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
 #ifdef ARCH_WORMHOLE
@@ -1047,6 +1051,10 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     else if constexpr (OPERATION == SfpuType::log1p)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_log1p, (APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::logsigmoid)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logsigmoid, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::negative)
     {
@@ -1823,9 +1831,8 @@ void call_binary_sfpu_operation_init()
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
-        // BITWISE_AND/OR/XOR, RSUB_INT32, MASK, ISCLOSE and LOGSIGMOID land here: those
-        // kernels need no per-op init beyond the standard binary addrmod configuration
-        // (logsigmoid_init is a no-op).
+        // BITWISE_AND/OR/XOR, RSUB_INT32, MASK and ISCLOSE land here: those
+        // kernels need no per-op init beyond the standard binary addrmod configuration.
         SFPU_BINARY_INIT(add1);
     }
 }
@@ -2256,21 +2263,6 @@ void call_binary_sfpu_operation(
             vector_mode,
             /*rtol_bits=*/0x3727c5acu,
             /*atol_bits=*/0x322bcc77u);
-    }
-    else if constexpr (BINOP == BinaryOp::LOGSIGMOID)
-    {
-        // logsigmoid(x) = -softplus(-x), with x = in0 and exp(-x) = in1 (the compute
-        // kernel is expected to supply exp(-x) as the second operand; the test bakes
-        // it into the paired stimuli). No dedicated init (baseline add1 addrmod).
-        SFPU_BINARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_logsigmoid,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
-            dst_index_in0,
-            dst_index_in1,
-            dst_index_out,
-            vector_mode);
     }
     // Integer relational eq/ne: XOR-based exact compare over Int32 dest bits.
     else if constexpr (BINOP == BinaryOp::EQ_INT || BINOP == BinaryOp::NE_INT)

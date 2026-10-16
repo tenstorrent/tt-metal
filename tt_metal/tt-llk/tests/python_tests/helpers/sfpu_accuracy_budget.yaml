@@ -2347,6 +2347,45 @@ LogicalNot:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
   - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
+Logsigmoid:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b sweep, ttsim wormhole, 2026-10-14, except where a row says otherwise
+  - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 10213 ULP, block-quantized
+  - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 10213 ULP, block-quantized
+  - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 5}  # max 4 ULP
+  - {in: Bfp4_b, out: Float16_b, dest: "No", max_ulp: 3}  # max 2 ULP
+  - {in: Bfp4_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Bfp4_b, out: Float32, dest: "No", max_ulp: 144180}  # max 131072 ULP
+  - {in: Bfp4_b, out: Float32, dest: "Yes", max_ulp: 36018}  # max 32743 ULP
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 3202 ULP, block-quantized
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 3202 ULP, block-quantized
+  - {in: Bfp8_b, out: Float16, dest: "Yes", max_ulp: 5}  # max 4 ULP
+  - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 3}  # max 2 ULP
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Bfp8_b, out: Float32, dest: "No", max_ulp: 144180}  # max 131072 ULP
+  - {in: Bfp8_b, out: Float32, dest: "Yes", max_ulp: 36041}  # max 32764 ULP
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 4 ULP, block-quantized
+  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 12925 ULP, block-quantized
+  - {in: Float16, out: Float16, dest: "No", metric: tolerance}  # not measurable: 4 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: -65504 -> -inf; x=-65472: -65472 -> -inf); max 12 ULP over the 61437 measurable lanes
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP
+  - {in: Float16, out: Float16_b, dest: "Yes", metric: tolerance}  # max 12925 ULP, budget 14218 > ceiling 6
+  - {in: Float16, out: Float32, dest: "No", max_ulp: 108135}  # max 98304 ULP
+  - {in: Float16, out: Float32, dest: "Yes", metric: tolerance}  # max 846998464 ULP, budget 931698311 > ceiling 419430
+  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 3101 ULP, block-quantized
+  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 3 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -3.38953e+38 -> -inf; x=-3.37624e+38: -3.37624e+38 -> -inf); max 3101 ULP over the 65022 measurable lanes
+  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 5}  # max 4 ULP
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Float16_b, out: Float32, dest: "No", max_ulp: 72090}  # max 65536 ULP
+  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 36045}  # max 32768 ULP
+  - {in: Float32, out: Bfp8_b, dest: "No", metric: tolerance}  # max 3286 ULP, block-quantized, ttsim blackhole, 2026-10-14
+  - {in: Float32, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 2 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38132e+38: -3.37624e+38 -> -inf; x=-3.3731e+38: -3.37624e+38 -> -inf); max 3301 ULP over the 65022 measurable lanes, ttsim blackhole, 2026-10-14
+  - {in: Float32, out: Float16, dest: "No", metric: tolerance}  # not measured: unsupported on blackhole, and ttsim wormhole cannot unpack a Float32 input
+  - {in: Float32, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP, ttsim blackhole, 2026-10-14
+  - {in: Float32, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP, ttsim blackhole, 2026-10-14
+  - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 0 ULP, ttsim blackhole, 2026-10-14
+  - {in: Float32, out: Float32, dest: "No", max_ulp: 72090}  # max 65536 ULP, ttsim blackhole, 2026-10-14
+  - {in: Float32, out: Float32, dest: "Yes", max_ulp: 3}  # max 2 ULP, ttsim blackhole, 2026-10-14
+
 Lrelu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
@@ -3562,15 +3601,6 @@ SfpuLerp:
   - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the same measurement carried before
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 3380}  # max 3072 ULP, wormhole, 2026-09-21
-SfpuLogsigmoid:
-  - {out: Float32, max_ulp: 163840}  # max 131072 ULP, 3 variants / 81920 lanes, 2026-09-18
-  - {out: Float16_b, max_ulp: 2}     # max 2 ULP, 3 variants / 81920 lanes, 2026-09-18
-  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 2}  # max 2 ULP, wormhole, 2026-09-21; budget kept at the 2 the same measurement carried before
-  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 2 ULP, wormhole, 2026-09-21; budget kept at the 2 the same measurement carried before
-  - {in: Float16_b, out: Float32, dest: "No", max_ulp: 144180}  # max 131072 ULP, wormhole, 2026-09-21
-  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 133580}  # max 121436 ULP, wormhole, 2026-09-21
-  - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 2 ULP, wormhole, 2026-09-21; budget kept at the 2 the same measurement carried before
-  - {in: Float32, out: Float32, dest: "Yes", max_ulp: 97929}  # max 89026 ULP, wormhole, 2026-09-21
 SfpuMask:
   - {out: Float32, max_ulp: 0}       # 0 ULP, 3 variants / 6144 lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 0}     # 0 ULP, 3 variants / 6144 lanes, 2026-09-18

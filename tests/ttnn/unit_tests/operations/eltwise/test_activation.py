@@ -16,6 +16,54 @@ from tests.ttnn.utils_for_testing import (
 pytestmark = pytest.mark.use_module_device
 
 
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("low, high", [(-30.0, 30.0), (-4.0, 4.0)])
+def test_log_sigmoid_range(device, h, w, low, high):
+    # The wide interval covers both tails, while the narrow interval samples the
+    # central approximation more densely around zero.
+
+    torch_input_tensor = torch.linspace(low, high, h * w, dtype=torch.bfloat16).reshape(h, w)
+    golden_function = ttnn.get_golden_function(ttnn.log_sigmoid)
+    torch_output_tensor = golden_function(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.log_sigmoid(input_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    # Pins the bf16 path at 3 ULP; the fixed defect itself is guarded by the fp32 test in test_unary_fp32.py.
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=3)
+
+
+def test_log_sigmoid_bfloat16_special_values(device):
+    torch_input_tensor = torch.zeros((32, 32), dtype=torch.bfloat16)
+    torch_input_tensor.flatten()[:5] = torch.tensor(
+        [float("nan"), float("inf"), -float("inf"), 0.0, -0.0], dtype=torch.bfloat16
+    )
+    golden_function = ttnn.get_golden_function(ttnn.log_sigmoid)
+    torch_output_tensor = golden_function(torch_input_tensor)
+    # The bfloat16 pack turns NaN into +inf; without the kernel's NaN restore this lane is 0.
+    torch_output_tensor = torch.where(
+        torch.isnan(torch_output_tensor),
+        torch.tensor(float("inf"), dtype=torch_output_tensor.dtype),
+        torch_output_tensor,
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        preserve_nan_values=True,
+    )
+    output_tensor = ttnn.to_torch(ttnn.log_sigmoid(input_tensor))
+
+    assert_with_ulp(
+        expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=3, allow_nonfinite=True
+    )
+
+
 def _bfloat16_neighbour(value, steps):
     """Return ``value`` moved ``steps`` bfloat16 ULP away from zero (``steps`` may be negative).
 

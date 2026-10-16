@@ -202,6 +202,48 @@ def test_atanh(device, h, w):
     run_unary_test(device, h, w, ttnn.atanh, ulp=2)
 
 
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("low, high", [(-30.0, 30.0), (-4.0, 4.0)])
+def test_log_sigmoid(device, h, w, low, high):
+    # [-30, 30] reaches both the x -> -inf asymptote and the x > 0 residual (~1e-13 at x = 30).
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.linspace(low, high, h * w, dtype=torch.float32).reshape(h, w)
+    golden_function = ttnn.get_golden_function(ttnn.log_sigmoid)
+    torch_output_tensor = golden_function(torch_input_tensor, device=device)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.log_sigmoid(input_tensor))
+
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=4)
+
+
+def test_log_sigmoid_float32_special_values(device):
+    # Covers the fp32 DEST path (fp32_dest_acc_en), the only configuration that carries a NaN to L1 unrounded.
+    torch_input_tensor = torch.zeros((32, 32), dtype=torch.float32)
+    torch_input_tensor.flatten()[:6] = torch.tensor(
+        [float("nan"), -float("nan"), float("inf"), -float("inf"), 0.0, -0.0], dtype=torch.float32
+    )
+    golden_function = ttnn.get_golden_function(ttnn.log_sigmoid)
+    torch_output_tensor = golden_function(torch_input_tensor, device=device)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        preserve_nan_values=True,
+    )
+    output_tensor = ttnn.to_torch(ttnn.log_sigmoid(input_tensor))
+
+    # Asserted on its own for a clearer failure message; assert_with_ulp also rejects a NaN mismatch.
+    assert torch.isnan(output_tensor.flatten()[:2]).all(), "log_sigmoid(NaN) must be NaN"
+    assert_with_ulp(
+        expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=4, allow_nonfinite=True
+    )
+
+
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_sign_signed_zero(device, dtype):
     # sign(-0.0) is 0, not -1. SFPSETCC is unspecified for -0.0 (VectorUnit.md), so the

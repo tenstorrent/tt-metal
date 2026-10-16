@@ -117,7 +117,7 @@
 #include "llk_sfpu/ckernel_sfpu_lcm.h"              // calculate_lcm / calculate_lcm_init
 #include "llk_sfpu/ckernel_sfpu_logaddexp.h"        // calculate_sfpu_logaddexp / calculate_sfpu_logaddexp_init
 #include "llk_sfpu/ckernel_sfpu_logaddexp2.h"       // calculate_sfpu_logaddexp2 / calculate_sfpu_logaddexp2_init
-#include "llk_sfpu/ckernel_sfpu_logsigmoid.h"       // calculate_logsigmoid (x, exp(-x) -> logsigmoid(x))
+#include "llk_sfpu/ckernel_sfpu_logsigmoid.h"       // calculate_logsigmoid / logsigmoid_init
 #include "llk_sfpu/ckernel_sfpu_mask.h"             // calculate_mask / calculate_mask_posinf / calculate_int_mask
 #include "llk_sfpu/ckernel_sfpu_quant.h"            // quant_family / quant_family_init (quant/requant/dequant)
 #include "llk_sfpu/ckernel_sfpu_shift.h"            // calculate_binary_left_shift / right / logical right
@@ -337,6 +337,10 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (OPERATION == SfpuType::expm1)
     {
         expm1_init<APPROX, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == SfpuType::logsigmoid)
+    {
+        logsigmoid_init<APPROX, is_fp32_dest_acc_en>();
     }
     else if constexpr (OPERATION == SfpuType::rpow)
     {
@@ -1013,6 +1017,10 @@ void call_unary_sfpu_operation_quasar(
     {
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_expm1, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
     }
+    else if constexpr (OPERATION == SfpuType::logsigmoid)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_logsigmoid, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+    }
     else if constexpr (OPERATION == SfpuType::rpow)
     {
         SFPU_UNARY_CALL(
@@ -1449,7 +1457,7 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
         calculate_gcd_init();
     }
     // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
-    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID are stateless — no init.
+    // ADD / SUB / GT / LT / LE / GE / COPY_DEST are stateless — no init.
 }
 
 /**
@@ -1950,12 +1958,6 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
         // after it (dst_reg[32]), and write in place, so position Dest at src0_tile.
         LLK_ASSERT(dst_tile == src0_tile && src1_tile == src0_tile + 1, "Mask requires adjacent inputs and an in-place output");
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_int_mask, (APPROXIMATION_MODE, ITERATIONS), src0_tile, VectorMode::RC);
-    }
-    else if constexpr (OP == BinaryOp::LOGSIGMOID)
-    {
-        // logsigmoid(x) = -softplus(-x): src0 holds x, src1 holds exp(-x), which the caller computes
-        // first (the YAML case runs Neg + Exp on a copy of x), as the Blackhole compute path does.
-        SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_logsigmoid, (APPROXIMATION_MODE, ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
     }
     else if constexpr (quasar_binary_op_is_max_min(OP))
     {

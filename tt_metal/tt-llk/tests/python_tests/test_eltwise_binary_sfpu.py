@@ -240,7 +240,6 @@ _UNREGISTERED_BINARY_OPS = frozenset(
         MathOperation.SfpuGcd,
         MathOperation.SfpuIsclose,
         MathOperation.SfpuLcm,
-        MathOperation.SfpuLogsigmoid,
         MathOperation.SfpuMask,
         MathOperation.SfpuMaxInt32,
         MathOperation.SfpuMaxUint32,
@@ -418,15 +417,6 @@ def _comparison_stimuli_specs():
         return (ramp + delta).to(dtype)
 
     return _face_spec(a_face), _face_spec(b_face)
-
-
-def _logsigmoid_stimuli_spec():
-    # logsigmoid(x) = -softplus(-x). in1 is only read in the x > 4 branch, so x is restricted
-    # to [-8, 3.9], which sweeps the passthrough and polynomial branches without it.
-    def dist(size, dtype, generator):
-        return torch.linspace(-8.0, 3.9, size).to(dtype)
-
-    return StimuliSpec(distribution=dist, seed=0)
 
 
 # =============================================================================
@@ -766,11 +756,6 @@ ISCLOSE_SWEEP = dict(
     mathop=[MathOperation.SfpuIsclose],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-LOGSIGMOID_SWEEP = dict(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
-    mathop=[MathOperation.SfpuLogsigmoid],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-)
 
 
 @parametrize(**FLOAT_SWEEP)
@@ -1015,23 +1000,6 @@ def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop, **run_kwargs):
 
     spec_A, spec_B = _isclose_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B, **run_kwargs)
-
-
-@parametrize(**LOGSIGMOID_SWEEP)
-def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop, **run_kwargs):
-    # logsigmoid(x) with x = tile0. Piecewise poly/passthrough approximation, gated by its
-    # step budget on Wormhole and by tolerance + PCC elsewhere; x swept over [-8, 3.9].
-    # The x > 4 (-exp(-x)) branch needs a device-computed
-    # exp(-x) operand the shared harness can't provide, left to a future driver.
-    _skip_fp32_no_dest_acc(formats, dest_acc)
-
-    sfpu_binary(
-        formats,
-        dest_acc,
-        mathop,
-        spec_A=_logsigmoid_stimuli_spec(),
-        **run_kwargs,
-    )
 
 
 # =============================================================================
