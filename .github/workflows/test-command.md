@@ -232,6 +232,9 @@ post-steps:
     env:
       GH_TOKEN: ${{ github.token }}
       EXPR_GITHUB_REPOSITORY: ${{ github.repository }}
+      # Same source as the pre-agent step; used to read this PR's earlier `/test`
+      # comments for the l2-nightly duplicate check.
+      PR_NUMBER: ${{ github.event.issue.number }}
     run: |
       set -euo pipefail
       OUT=/tmp/gh-aw/agent_output.json
@@ -312,6 +315,7 @@ post-steps:
       # required set here from the host-owned changed-file list and merge it in, so the
       # prompt table is a description of what happens rather than a request.
       FILES_FILE="$FACTS_DIR/pr-files.txt"
+      SANITY_FILTERED=false
       OPTOUT="$(cat "$FACTS_DIR/nightly-optout.txt" 2>/dev/null || echo unknown)"
 
       if [ "$OPTOUT" = "true" ]; then
@@ -372,6 +376,7 @@ post-steps:
         SANITY_TTNN="$(jq -r '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "sanity-tests")
                                | ((.inputs["run-ttnn-sanity-tests"] // true) | tostring)] | any(. != "false")' "$OUT")"
         if [ -n "$REQ" ] && [ "$SANITY_TTNN" = "true" ] && ! grep -q '^tests/ttnn/nightly/' "$FILES_FILE"; then
+          SANITY_FILTERED=true
           REQ_BEFORE_FILTER="$REQ"
           REQ="$(printf '%s' "$REQ" | tr ',' '\n' \
                  | { grep -vxE 'eltwise|data_movement|conv|matmul|pool|reduction|fused|transformers|sdpa|kernel_lib' || true; } \
@@ -401,20 +406,6 @@ post-steps:
             end' "$OUT" > "$OUT.tmp"
           mv "$OUT.tmp" "$OUT"
 
-          # The cap is applied at ingestion, which has already run — an injected item
-          # can therefore push the count to 9. Trim the agent's own selection rather
-          # than the mandatory one, keeping its order, and say which ones went.
-          DISPATCHES="$(jq '[.items[]? | select(.type == "dispatch_workflow")] | length' "$OUT")"
-          if [ "$DISPATCHES" -gt 8 ]; then
-            DROPPED="$(jq -c '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name != "tt-metal-l2-nightly") | .workflow_name][7:]' "$OUT")"
-            echo "::warning::Mandatory tt-metal-l2-nightly dispatch pushed the selection to ${DISPATCHES}; dropped ${DROPPED} to stay within the cap of 8."
-            jq '
-              ([.items[]? | select(.type == "dispatch_workflow" and .workflow_name != "tt-metal-l2-nightly")][:7]) as $others
-              | ([.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly")]) as $required
-              | .items = ([.items[]? | select(.type != "dispatch_workflow")] + $others + $required)' "$OUT" > "$OUT.tmp"
-            mv "$OUT.tmp" "$OUT"
-          fi
-
           echo "Required nightly categories from changed paths: $REQ"
           echo "additional_test_categories as emitted by the agent: $BEFORE_CATS"
           echo "additional_test_categories after enforcement: $(jq -r '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly") | .inputs.additional_test_categories] | @json' "$OUT")"
@@ -424,34 +415,111 @@ post-steps:
       # Avoid duplicate l2 nightly runs. `/test` is cheap to type, so the same PR head
       # is often re-tested (several people, a re-run "to be sure", a comment on every
       # parallel PR at once) and each tt-metal-l2-nightly dispatch is a full build plus
-      # every SKU of the selected categories. The mandatory rule above makes the
-      # categories a pure function of the changed files, so a run on the same head
-      # commit that is queued, in progress or already green covers this one too. Drop
-      # the dispatch and tell the user where that run is. A failed or cancelled run does
-      # NOT count, so a genuine retry still goes through, and `/test force` bypasses the
-      # check. Fail open: if the lookup errors, dispatch as before rather than silently
-      # skipping coverage.
-      L2_ITEMS="$(jq '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly")] | length' "$OUT")"
+      # every SKU of the selected categories. Drop the dispatch when an earlier `/test`
+      # already dispatched one for the same head commit with inputs that cover this
+      # one, and that run is queued, in progress or green.
+      #
+      # Same SHA alone is not enough: the enforced categories also depend on the base
+      # (the changed-file list) and on whether sanity-tests is selected (filter above),
+      # and the agent may add categories or suite toggles (`run_llk_unit_tests`, ...).
+      # The run list API does not expose dispatch inputs, so every `/test` comment
+      # carries a host-written record of what it actually dispatched, as its last line
+      # (see L2_RECORD_PREFIX below), and a later `/test` reuses a run only when:
+      #   - the record sits in a comment carrying gh-aw's own add_comment footer for
+      #     this workflow (`workflow_id: test-command`). The handler appends that after
+      #     sanitizing, and the sanitizer strips every HTML comment from the body, so
+      #     neither the agent nor a user can forge it;
+      #   - it is the LAST record line of that comment. This step always appends one
+      #     after the agent's text, so anything the agent wrote is never last;
+      #   - it names this head SHA and dispatched inputs that cover the current item:
+      #     a superset of its categories and identical other inputs; and
+      #   - a queued, in-progress or green run on this SHA was created within 10
+      #     minutes of that comment (pairs the record with the run it launched).
+      # Unknown coverage dispatches: a manual or pre-record run never suppresses one.
+      # A failed or cancelled run does NOT count, so a genuine retry still goes
+      # through, and `/test force` bypasses the check. Fail open: if a lookup errors,
+      # dispatch as before rather than silently skipping coverage.
+      L2_SEL='.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly"'
+      L2_RECORD_PREFIX='<sub>l2 dedup record: `'
+      L2_RECORD_SUFFIX='`</sub>'
+      L2_ITEMS="$(jq "[.items[]? | select($L2_SEL)] | length" "$OUT")"
       FORCE="$(cat "$FACTS_DIR/force.txt" 2>/dev/null || echo false)"
       HEAD_SHA="$(cat "$FACTS_DIR/pr-head-sha.txt" 2>/dev/null || true)"
-      if [ "$L2_ITEMS" -gt 0 ] && [ "$FORCE" != "true" ] && [ -n "$HEAD_SHA" ] && [ "$HEAD_SHA" != "null" ]; then
-        if RUNS="$(gh run list --repo "$EXPR_GITHUB_REPOSITORY" --workflow tt-metal-l2-nightly.yaml \
+      case "$HEAD_SHA" in null) HEAD_SHA="" ;; esac
+      NOTE=""
+      if [ "$L2_ITEMS" -gt 0 ] && [ "$FORCE" != "true" ] && [ -n "$HEAD_SHA" ]; then
+        RUNS_FILE="${RUNNER_TEMP}/l2-runs.json"
+        COMMENTS_FILE="${RUNNER_TEMP}/l2-comments.jsonl"
+        if gh run list --repo "$EXPR_GITHUB_REPOSITORY" --workflow tt-metal-l2-nightly.yaml \
               --branch "$HEAD_REF" --event workflow_dispatch --limit 50 \
-              --json headSha,status,conclusion,url 2>/dev/null)"; then
-          EXISTING="$(printf '%s' "$RUNS" | jq -r --arg sha "$HEAD_SHA" \
-            '[.[] | select(.headSha == $sha and (.status != "completed" or .conclusion == "success"))][0].url // empty')"
+              --json headSha,status,conclusion,url,createdAt > "$RUNS_FILE" 2>/dev/null \
+           && gh api --paginate "repos/$EXPR_GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+              --jq '.[] | select(.user.login == "github-actions[bot]") | {created_at, body}' \
+              > "$COMMENTS_FILE" 2>/dev/null; then
+          EXISTING="$(jq -rn --slurpfile runs "$RUNS_FILE" --slurpfile comments "$COMMENTS_FILE" \
+              --arg sha "$HEAD_SHA" --arg pfx "$L2_RECORD_PREFIX" --arg sfx "$L2_RECORD_SUFFIX" --slurpfile out "$OUT" '
+            def cats: ((.additional_test_categories // "") | tostring | split(",") | map(select(length > 0)) | unique);
+            def rest: del(.additional_test_categories) | with_entries(.value |= tostring);
+            def covers($c): (($c | cats) - cats) == [] and rest == ($c | rest);
+            def ts: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
+            [ $comments[]
+              | select(.body | contains("<!-- gh-aw-agentic-workflow:")
+                         and (contains("workflow_id: test-command,") or contains("workflow_id: test-command -->")))
+              | { t: (.created_at | ts),
+                  rec: ([.body | split("\n")[] | rtrimstr("\r") | select(startswith($pfx) and endswith($sfx))] | last
+                        | if . == null then null else (.[($pfx | length):(length - ($sfx | length))] | try fromjson catch null) end) }
+              | select(.rec != null and .rec.sha == $sha and ((.rec.dispatched // []) | length) > 0) ] as $recs
+            | [ $runs[0][] | select(.headSha == $sha and (.status != "completed" or .conclusion == "success"))
+                | (.createdAt | ts) as $rt
+                | ([ $recs[] | {d: ((.t - $rt) | if . < 0 then -. else . end), rec} | select(.d <= 600) ] | sort_by(.d) | first) as $m
+                | select($m != null) | {url, dispatched: $m.rec.dispatched} ] as $paired
+            | [ $out[0].items[]? | select('"$L2_SEL"') | (.inputs // {}) as $c
+                | ([ $paired[] | select(any(.dispatched[]; covers($c))) | .url ] | first) ]
+            | if length > 0 and all(. != null) then unique | join(", ") else "" end')"
           if [ -n "$EXISTING" ]; then
-            echo "tt-metal-l2-nightly already queued/running/green for ${HEAD_SHA}: ${EXISTING}; dropping the dispatch."
-            NOTE="tt-metal-l2-nightly was **not** dispatched again: a run for this exact commit is already queued, running or green ($EXISTING). Comment \`/test force\` to re-run it anyway."
-            jq --arg note "$NOTE" '
-              .items = [ .items[]? | select((.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly") | not) ]
-              | .items = [ .items[]? | if .type == "add_comment" then .body = ((.body // "") + "\n\n> " + $note) else . end ]' \
-              "$OUT" > "$OUT.tmp"
+            echo "tt-metal-l2-nightly already queued/running/green for ${HEAD_SHA} with covering inputs: ${EXISTING}; dropping the dispatch."
+            NOTE="tt-metal-l2-nightly was **not** dispatched again: a run for this exact commit with the same coverage is already queued, running or green ($EXISTING). Comment \`/test force\` to re-run it anyway."
+            jq ".items = [ .items[]? | select(($L2_SEL) | not) ]" "$OUT" > "$OUT.tmp"
             mv "$OUT.tmp" "$OUT"
+          else
+            echo "No queued/running/green tt-metal-l2-nightly run on ${HEAD_SHA} is known to cover this dispatch; keeping it."
           fi
         else
-          echo "::warning::Could not list tt-metal-l2-nightly runs; skipping the duplicate check."
+          echo "::warning::Could not list tt-metal-l2-nightly runs or PR comments; skipping the duplicate check."
         fi
+      fi
+
+      # The cap is applied at ingestion, which has already run — the mandatory item
+      # injected above can therefore push the count to 9. Applied only now, after the
+      # duplicate check, so a reused l2 run does not cost an unrelated selection its
+      # slot. Trim the agent's own selection rather than the mandatory one, keeping its
+      # order, and say which ones went. When the sanity-tests filter above narrowed the
+      # l2 categories, sanity-tests is what covers the removed families, so it is kept
+      # too rather than trimmed out from under them.
+      DISPATCHES="$(jq '[.items[]? | select(.type == "dispatch_workflow")] | length' "$OUT")"
+      if [ "$DISPATCHES" -gt 8 ]; then
+        KEEP_SEL="($L2_SEL) or (\$sanity and .type == \"dispatch_workflow\" and .workflow_name == \"sanity-tests\")"
+        DROPPED="$(jq -c --argjson sanity "$SANITY_FILTERED" "
+          ([.items[]? | select($KEEP_SEL)] | length) as \$n
+          | [.items[]? | select(.type == \"dispatch_workflow\" and (($KEEP_SEL) | not)) | .workflow_name][(8 - \$n):]" "$OUT")"
+        echo "::warning::Mandatory tt-metal-l2-nightly dispatch pushed the selection to ${DISPATCHES}; dropped ${DROPPED} to stay within the cap of 8."
+        jq --argjson sanity "$SANITY_FILTERED" "
+          ([.items[]? | select($KEEP_SEL)]) as \$required
+          | ([.items[]? | select(.type == \"dispatch_workflow\" and (($KEEP_SEL) | not))][:(8 - (\$required | length))]) as \$others
+          | .items = ([.items[]? | select(.type != \"dispatch_workflow\")] + \$others + \$required)" "$OUT" > "$OUT.tmp"
+        mv "$OUT.tmp" "$OUT"
+      fi
+
+      # Append the dedup note (if any) and this run's record as the comment's last line.
+      # The record is written even under `/test force` or when nothing was dispatched,
+      # so the last record line of every test-command comment is always host-written.
+      if [ -n "$HEAD_SHA" ]; then
+        RECORD="$(jq -c --arg sha "$HEAD_SHA" "{sha: \$sha, dispatched: [.items[]? | select($L2_SEL) | (.inputs // {})]}" "$OUT")"
+        jq --arg note "$NOTE" --arg record "${L2_RECORD_PREFIX}${RECORD}${L2_RECORD_SUFFIX}" '
+          .items = [ .items[]? | if .type == "add_comment"
+            then .body = ((.body // "") + (if $note == "" then "" else "\n\n> " + $note end) + "\n\n" + $record)
+            else . end ]' "$OUT" > "$OUT.tmp"
+        mv "$OUT.tmp" "$OUT"
       fi
 
       finish_ok=1
@@ -666,11 +734,14 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 
    **Avoiding duplicate l2 nightly runs.** The same head commit is often `/test`ed
    repeatedly, and each `tt-metal-l2-nightly` dispatch is a full build plus every SKU of
-   the selected categories. After you run, a post-step drops your l2 dispatch when a run
-   for this exact commit is already queued, in progress or green, and appends a note to
-   your comment saying so. A failed or cancelled run does not count, and `/test force`
-   bypasses the check. Keep selecting l2 as usual; do not try to second-guess this, and
-   do not claim in your summary that l2 was dispatched if the note says otherwise.
+   the selected categories. After you run, a post-step drops your l2 dispatch when an
+   earlier `/test` already dispatched one for this exact commit with inputs that cover
+   yours (at least the same categories, the same other inputs) and that run is queued, in
+   progress or green, and appends a note to your comment saying so. A failed or cancelled
+   run does not count, and `/test force` bypasses the check. It also appends an
+   `l2 dedup record` line to your comment recording what was dispatched; do not write
+   one yourself. Keep selecting l2 as usual; do not try to second-guess this, and do not
+   claim in your summary that l2 was dispatched if the note says otherwise.
 
    This rule is enforced deterministically after you run, for the same reason as *The ref
    rule*: a post-step recomputes the required categories from the changed-file list and
