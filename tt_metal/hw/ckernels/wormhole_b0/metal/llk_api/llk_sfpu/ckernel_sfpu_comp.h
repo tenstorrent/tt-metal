@@ -150,10 +150,10 @@ inline void calculate_comp_int() {
         // whose sign-magnitude -> two's complement conversion has no encoding for -2^31 and
         // turns it into 0, which would make eqz/nez/ltz/gez misclassify INT32_MIN.
         //
-        // Every compare below is against the immediate 0, which SFPI lowers to a single
-        // SFPSETCC on the word (sign bit / zero test). `v > 0` and `v <= 0` are written as
-        // (v >= 0) AND (v != 0) and its complement: SFPI lowers them through an integer
-        // subtraction that overflows for INT32_MIN and would classify it as positive.
+        // Every compare below is against the immediate 0, which SFPI lowers to SFPSETCC on the
+        // word itself (sign bit / zero test); `v >= 0 && v != 0` is two chained SFPSETCCs.
+        // `v > 0` and `v <= 0` must not be used: SFPI lowers them through an integer
+        // subtraction (SFPIADD 0 - v) that overflows for INT32_MIN and classifies it as positive.
         vInt v = dst_reg[0].mode<sfpi::DataLayout::I32>();
         vInt res = 0;
 
@@ -178,20 +178,14 @@ inline void calculate_comp_int() {
 
         // a[i] > 0
         if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
-            v_if(v >= 0) {
-                v_if(v != 0) { res = 1; }
-                v_endif;
-            }
+            v_if(v >= 0 && v != 0) { res = 1; }
             v_endif;
         }
 
         // a[i] <= 0
         if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
             res = 1;
-            v_if(v >= 0) {
-                v_if(v != 0) { res = 0; }
-                v_endif;
-            }
+            v_if(v >= 0 && v != 0) { res = 0; }
             v_endif;
         }
 
