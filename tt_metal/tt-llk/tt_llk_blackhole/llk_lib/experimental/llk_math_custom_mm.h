@@ -331,8 +331,9 @@ inline void custom_mm_configure_group_mop(const std::uint32_t operandB_face_r_di
  * @tparam transpose: Transpose in1 faces during the multiply.
  * @tparam split_acc: Accumulate into split DEST halves that the finalize pass merges.
  * @tparam dense_packing: Lay output tiles 32 DEST rows apart instead of 64.
- * @tparam group_finalize: Finalize all output tiles of a call in one group at M 1 and at M 8 with 2 to 4 tiles; false
- *         for 16-bit and 32-bit weights (custom_mm_group_finalize_weights). The call takes the same value.
+ * @tparam group_finalize: Finalize all output tiles of a call in one group at M 1 and at M 8 with 2 to 4 tiles; speed
+ *         only, the results are the same, and custom_mm_group_finalize_weights gives the faster choice. The call takes
+ *         the same value.
  * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
  * @param ct_dim: Number of output column tiles.
  * @note Establishes the operand-driven default Src zero-substitution state, which @ref _llk_math_custom_mm_ asserts

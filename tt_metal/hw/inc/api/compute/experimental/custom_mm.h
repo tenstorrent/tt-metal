@@ -43,7 +43,7 @@ namespace ckernel {
  * | dense_packing    | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                            | False (default false) |
  * | fp32_dest_acc_en | Whether dest accumulates in fp32; defaults to the kernel's DST_ACCUM_MODE              | bool     | true/false                            | False                 |
  * | clear_src        | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)              | bool     | true/false                            | False (default true)  |
- * | group_finalize   | One-group finalize of a call's tiles at M 1 and 8; false for 16-bit and 32-bit weights | bool     | true/false                            | False (default true)  |
+ * | group_finalize   | Speed only, same results: one-group finalize at M 1 and 8; faster for Bfp weights      | bool     | true/false                            | False (default true)  |
  * | in0_cb_id        | The identifier of the first input circular buffer (CB)                                 | uint32_t | 0 to 31                               | True                  |
  * | in1_cb_id        | The identifier of the second input circular buffer (CB)                                | uint32_t | 0 to 31                               | True                  |
  * | out_cb_id        | The identifier of the output circular buffer (CB)                                      | uint32_t | 0 to 31                               | True                  |
@@ -98,7 +98,7 @@ ALWI void custom_mm_block_init(
  * | split_acc      | Whether to accumulate partials within a single tile in different dest locations        | bool     | true/false                            | False (default false) |
  * | dense_packing  | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                            | False (default false) |
  * | clear_src      | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)              | bool     | true/false                            | False (default true)  |
- * | group_finalize | One-group finalize of a call's tiles at M 1 and 8; false for 16-bit and 32-bit weights | bool     | true/false                            | False (default true)  |
+ * | group_finalize | Speed only, same results: one-group finalize at M 1 and 8; faster for Bfp weights      | bool     | true/false                            | False (default true)  |
  * | in0_cb_id      | The identifier of the first input circular buffer (CB)                                 | uint32_t | 0 to 31                               | True                  |
  * | in1_cb_id      | The identifier of the second input circular buffer (CB)                                | uint32_t | 0 to 31                               | True                  |
  * | out_cb_id      | The identifier of the output circular buffer (CB)                                      | uint32_t | 0 to 31                               | True                  |
@@ -153,7 +153,7 @@ ALWI void custom_mm_block_init_short(
  * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t | Any integer from 1 to 256 (inclusive)            | True                  |
  * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 16, the same as at the init                 | False (default 1)     |
  * | banked          | Alternate the two configuration banks, between custom_mm_block_bank_init and custom_mm_block_bank_end           | bool     | true/false (one weight page size)                | False (default false) |
- * | group_finalize  | The init's group_finalize                                                                                       | bool     | true/false                                       | False (default true)  |
+ * | group_finalize  | Must equal the init's group_finalize; only LLK asserts check it                                                 | bool     | true/false                                       | False (default true)  |
  */
 // clang-format on
 template <bool finalize = true, bool read_transposed = false, bool banked = false, bool group_finalize = true>
@@ -232,7 +232,7 @@ ALWI void custom_mm_block_unpack(
  * | Argument        | Description                                                                                                    | Type     | Valid Range                                      | Required              |
  * |-----------------|----------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
  * | finalize        | Whether to perform the finalization step which merges split_accumulation partials                              | bool     | true/false (must be false if split_acc is false) | False (default true)  |
- * | group_finalize  | The init's group_finalize                                                                                      | bool     | true/false                                       | False (default true)  |
+ * | group_finalize  | Must equal the init's group_finalize; only LLK asserts check it                                                | bool     | true/false                                       | False (default true)  |
  * | in0_cb_id       | The identifier of the first input circular buffer (CB)                                                         | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id       | The identifier of the second input circular buffer (CB)                                                        | uint32_t | 0 to 31                                          | True                  |
  * | dst_index       | The index of the tile in DST REG to which the result C will be written                                         | uint32_t | Must be less than the acquired size of DST REG   | True                  |
