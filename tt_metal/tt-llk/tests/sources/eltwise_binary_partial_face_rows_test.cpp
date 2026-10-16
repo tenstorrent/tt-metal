@@ -13,6 +13,10 @@
 // Boot leaves every DEST row undefined (ZEROACC of all rows) and the packer reads an undefined
 // row as zero, so rows 8..15 of each packed face must be zero. If the MOP replaces the INCRWC
 // with a second FPU op, those rows carry SrcA[8..15] (+/-) SrcB[8..15] instead.
+//
+// REUSE_DEST_TYPE selects the MOP under test: NONE runs the standard op once per tile (one
+// output tile per input tile); DEST_TO_SRCA / DEST_TO_SRCB seed DEST with tile 0 through the
+// standard op and fold the remaining tiles through the dest-reuse op (one output tile).
 
 #include <cstdint>
 
@@ -88,12 +92,34 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
         PARTIAL_SHAPE, 0 /* acc_to_dest */);
 
-    // One tile per DEST section so every tile lands at dest index 0 of a freshly released half.
-    for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+    if constexpr (REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::NONE)
     {
+        // One tile per DEST section so every tile lands at dest index 0 of a freshly released half.
+        for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+        {
+            _llk_math_wait_for_dest_available_<dest_sync>();
+            _llk_math_eltwise_binary_<
+                ELTWISE_BINARY_OP,
+                BroadcastType::NONE,
+                dest_sync,
+                is_fp32_dest_acc_en,
+                MathFidelity::LoFi,
+                EltwiseBinaryReuseDestType::NONE>(PARTIAL_SHAPE, 0 /* dst_index */, false /* clear_fp32_dst_acc */);
+            _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        }
+    }
+    else
+    {
+        // Seed dest index 0 with tile 0, then fold tiles 1..TILE_CNT-1 into it through the reuse op.
         _llk_math_wait_for_dest_available_<dest_sync>();
         _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, dest_sync, is_fp32_dest_acc_en, MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
             PARTIAL_SHAPE, 0 /* dst_index */, false /* clear_fp32_dst_acc */);
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, MathFidelity::LoFi, REUSE_DEST_TYPE>(PARTIAL_SHAPE, 0 /* acc_to_dest */);
+        for (std::uint32_t i = 1; i < TILE_CNT; ++i)
+        {
+            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, dest_sync, is_fp32_dest_acc_en, MathFidelity::LoFi, REUSE_DEST_TYPE>(
+                PARTIAL_SHAPE, 0 /* dst_index */, false /* clear_fp32_dst_acc */);
+        }
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
 }
@@ -124,7 +150,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.pack_dst, FULL_SHAPE.face_r_dim, FULL_SHAPE.total_col_dim(), num_faces, partial_face, narrow_tile);
     _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(FULL_SHAPE.face_r_dim, narrow_tile);
 
-    for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+    // The standard op packs one tile per input tile; the dest-reuse variants fold everything into one.
+    const std::uint32_t output_tiles = (REUSE_DEST_TYPE == ckernel::EltwiseBinaryReuseDestType::NONE) ? TILE_CNT : 1;
+    for (std::uint32_t i = 0; i < output_tiles; ++i)
     {
         _llk_packer_wait_for_math_done_();
         _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* dst_index */, L1_ADDRESS(buffer_Res[i]));

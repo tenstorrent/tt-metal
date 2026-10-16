@@ -7,17 +7,30 @@ The kernel unpacks and packs 16x32 tiles but runs the math with 8-row faces, so
 the packed rows 8..15 of each face expose whatever the MOP did past the tile's
 rows. Boot leaves DEST undefined and the packer reads undefined rows as zero,
 so those rows must come back as zero; the rows the tile does have must hold the
-op result.
+op result. The dest-reuse variants seed DEST with the first tile and fold the
+remaining tiles through DEST_TO_SRCA / DEST_TO_SRCB, exercising the dest-reuse
+MOP the same way.
 """
 
 import torch
+from conftest import wormhole_only
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestSync, MathOperation, format_dict
+from helpers.llk_params import (
+    DestSync,
+    EltwiseBinaryReuseDestType,
+    MathOperation,
+    format_dict,
+)
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import DEST_SYNC, MATH_OP, TILE_COUNT
+from helpers.test_variant_parameters import (
+    DEST_SYNC,
+    MATH_OP,
+    REUSE_DEST_TYPE,
+    TILE_COUNT,
+)
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
@@ -25,17 +38,27 @@ from helpers.utils import passed_test
 TILE_DIMENSIONS = [16, 32]
 
 
+def _apply(math_op, src_a, src_b):
+    return (src_a + src_b) if math_op == MathOperation.Elwadd else (src_a - src_b)
+
+
+@wormhole_only
 @parametrize(
     math_op=[MathOperation.Elwadd, MathOperation.Elwsub],
+    reuse_dest_type=[
+        EltwiseBinaryReuseDestType.NONE,
+        EltwiseBinaryReuseDestType.DEST_TO_SRCA,
+        EltwiseBinaryReuseDestType.DEST_TO_SRCB,
+    ],
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float16], same=True),
 )
-def test_partial_face_rows_untouched(math_op, formats):
+def test_partial_face_rows_untouched(math_op, reuse_dest_type, formats):
     input_dimensions = [64, 32]
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(TILE_DIMENSIONS)
     num_faces = num_faces_r_dim * num_faces_c_dim
+    tile_elements = num_faces * face_r_dim * FACE_C_DIM
     # Rows of each face the 8-row-face math op owns; the rest of the 16-row face must stay untouched.
     math_face_r_dim = face_r_dim // 2
-    tile_elements = num_faces * face_r_dim * FACE_C_DIM
 
     src_A, tile_cnt, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -59,11 +82,23 @@ def test_partial_face_rows_untouched(math_op, formats):
     src_B_tilized = tilize(src_B)
 
     torch_format = format_dict[formats.output_format]
-    a = src_A_tilized.to(torch_format)
-    b = src_B_tilized.to(torch_format)
-    golden = (a + b) if math_op == MathOperation.Elwadd else (a - b)
+    a = src_A_tilized.to(torch_format).view(tile_cnt, tile_elements)
+    b = src_B_tilized.to(torch_format).view(tile_cnt, tile_elements)
+    if reuse_dest_type == EltwiseBinaryReuseDestType.NONE:
+        # One output tile per input tile.
+        golden = _apply(math_op, a, b)
+    else:
+        # Seed DEST with tile 0, then fold the remaining tiles through DEST.
+        dest = _apply(math_op, a[0], b[0])
+        for i in range(1, tile_cnt):
+            if reuse_dest_type == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
+                dest = _apply(math_op, dest, b[i])
+            else:
+                dest = _apply(math_op, a[i], dest)
+        golden = dest.view(1, tile_elements)
+    output_tiles = golden.shape[0]
     # Face-major layout: tile t, face f, row r starts at ((t * num_faces + f) * face_r_dim + r) * FACE_C_DIM.
-    golden = golden.view(tile_cnt * num_faces, face_r_dim, FACE_C_DIM)
+    golden = golden.reshape(output_tiles * num_faces, face_r_dim, FACE_C_DIM).clone()
     owned_rows = torch.zeros(face_r_dim, dtype=torch.bool)
     owned_rows[:math_face_r_dim] = True
     golden[:, ~owned_rows, :] = 0
@@ -72,7 +107,11 @@ def test_partial_face_rows_untouched(math_op, formats):
     configuration = TestConfig(
         "sources/eltwise_binary_partial_face_rows_test.cpp",
         formats,
-        templates=[MATH_OP(mathop=math_op), DEST_SYNC(DestSync.Half)],
+        templates=[
+            MATH_OP(mathop=math_op),
+            DEST_SYNC(DestSync.Half),
+            REUSE_DEST_TYPE(reuse_dest_type=reuse_dest_type),
+        ],
         runtimes=[TILE_COUNT(tile_cnt)],
         variant_stimuli=StimuliConfig(
             src_A_tilized,
@@ -82,7 +121,7 @@ def test_partial_face_rows_untouched(math_op, formats):
             formats.output_format,
             tile_count_A=tile_cnt,
             tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
+            tile_count_res=output_tiles,
             num_faces=num_faces,
             face_r_dim=face_r_dim,
             tile_dimensions=TILE_DIMENSIONS,
@@ -91,9 +130,9 @@ def test_partial_face_rows_untouched(math_op, formats):
     )
 
     res_from_L1 = configuration.run().result
-    assert len(res_from_L1) == tile_cnt * tile_elements, "Result length mismatch"
+    assert len(res_from_L1) == output_tiles * tile_elements, "Result length mismatch"
     res = torch.tensor(res_from_L1, dtype=torch_format).view(
-        tile_cnt * num_faces, face_r_dim, FACE_C_DIM
+        output_tiles * num_faces, face_r_dim, FACE_C_DIM
     )
 
     untouched = res[:, ~owned_rows, :]
