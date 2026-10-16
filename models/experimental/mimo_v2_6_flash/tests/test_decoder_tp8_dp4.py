@@ -76,10 +76,20 @@ def test_decoder_layer_tp8_dp4(mesh_device, layer_idx):
         layer = TtMiMoDecoderLayer(
             plan, cfg, layer_idx, weights if r == 0 else None, ropes, cache_dir=cache_dir("layer_bfp8")
         )
-        # SWA layers address a 512-token ring per user, global layers the whole context. Global layers split
-        # each chip pair's users, so their page table differs per chip (kv.py).
-        layer_blocks = layer.attn.kv_tokens_per_user(MAX_SEQ) // BLOCK
-        tables, num_blocks = kv_lib.page_tables(USERS_PER_REPLICA, MAX_BATCH, layer_blocks, TP, layer.attn.rep, seed=r)
+        # SWA layers reuse a few blocks per user as the window moves, global layers map the whole context.
+        # Global layers split each chip pair's users, so their page table differs per chip (kv.py).
+        # Prefill is one shot here, so the SWA blocks must hold a whole prompt.
+        tables, num_blocks = kv_lib.layer_page_tables(
+            USERS_PER_REPLICA,
+            MAX_BATCH,
+            MAX_SEQ,
+            BLOCK,
+            TP,
+            layer.attn.rep,
+            sliding_window=layer.attn.sliding_window,
+            max_chunk=MAX_SEQ,
+            seed=r,
+        )
         kv = layer.attn.allocate_kv_cache(num_blocks, BLOCK, KV_DTYPE)
         replicas.append(
             dict(
@@ -91,8 +101,8 @@ def test_decoder_layer_tp8_dp4(mesh_device, layer_idx):
             )
         )
 
-    # Users: replica r, slot u; lengths 128..640, so SWA layers see the window, the sink and (past 512)
-    # the ring buffer wrapping in both the prefill fill and decode.
+    # Users: replica r, slot u; lengths 128..640, so SWA layers see the window and the sink, in prefill
+    # and in decode.
     users = {}
     for r in range(DP):
         for u in range(USERS_PER_REPLICA):
