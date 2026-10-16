@@ -716,3 +716,19 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - OV-4: DS41-20 already states the F73 fix; nothing to change.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_14_router.py`
   (CPU: `BRINGUP_IMPL=reference` / `stub` / `mutate:<kind> BRINGUP_MUTATE_STEP=router` in front).
+
+## C.swa_engram.experts test review (layer 1, scaled, attempt 1)
+- Previous attempt failed the freeze sweep: noise1e-2 slipped. Its review had kept only `_Expect.check` (golden
+  error added to the vs-golden row / ratio limits) and not layer 0's row-scaling check (DS41-22).
+- Change: the layer-0 test's `ROW_SLOPE_MIN` 0.35, `ROW_SLOPE_ROWS` 32, `row_slope` and `_Expect.evaluate` copied
+  verbatim (the tail of the file is identical to test_c_swa_experts.py from `ROW_SLOPE_MIN` on); LAYER = 1.
+- Layer 1, CPU step vs golden: rel 0.0290, row 0.0690, ratio [0.964, 1.022] (limits with the golden error: rel
+  0.0492, row 0.125, ratio 1 +- 0.079).
+- Row slope b vs the CPU step: device (tt/experts.py) golden 0.685, layer24 0.663, mixed 0.535, small 0.614, big
+  0.752; noise1e-2 (mutate) -0.002..0.005 on every input; stub 1.0 (fails the size checks).
+- Results: mutations PASS (noise by rowscale_experts_L01_golden; bf16 inputs + output and bf16 everywhere pass),
+  reference PASS (pcc 0.999579), stub FAIL, gate PASS: pcc_experts_L01 0.999577, vs CPU rel 0.00246 (limit 0.0202),
+  second inputs rel <= 0.0029, A,B,A bit-identical.
+- OV-4: DS41-20 already states the F73 fix; nothing to change.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_experts.py`
+  (sweep: `BRINGUP_IMPL=mutations` in front; noise slopes: `BRINGUP_IMPL=mutate:noise1e-2 BRINGUP_MUTATE_STEP=experts`).
