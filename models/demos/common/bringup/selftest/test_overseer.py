@@ -156,7 +156,10 @@ def test_a_queued_fix_runs_next_with_an_agent_and_the_gates_it_names(orch):  # n
     order = [x.split("]")[0].strip("[ ") for x in orch.lines if x.startswith("[")]
     assert order.index("FIX.1") < order.index("C.2"), order
     fix = o.led.task("FIX.1")
-    assert fix["step"] == OV.FIX_STEP and fix["precheck"] is False and fix["gate"] == o.led.task("C.1")["gate"]
+    c1 = o.led.task("C.1")["gate"]
+    assert fix["step"] == OV.FIX_STEP and fix["precheck"] is False and fix["gate"]["metrics"] == c1["metrics"]
+    # F79: the segment runs as C.1 (its tests see their own task id); the metrics still land in FIX.1 (it passed)
+    assert fix["gate"]["cmd"] == f"BRINGUP_TASK=C.1 {c1['cmd']}"
     assert o.led.state()["FIX.1"]["status"] == "PASS"
     brief = (o.run_dir / "briefs" / "FIX.1.overseer.1.md").read_text()
     assert "Role: overseer fix" in brief and "Store the weights at load" in brief and "C.1" in brief
@@ -185,3 +188,14 @@ def test_a_held_fix_is_on_record_but_waits_for_its_release(tmp_path):
     assert [x["id"] for x in OV.take_fixes(tmp_path)] == [a["id"]]
     with pytest.raises(SystemExit):
         OV.release(tmp_path, a["id"])  # placed, not held
+
+
+def test_metrics_land_in_the_record_task(monkeypatch, tmp_path):
+    from models.demos.common.bringup.core import metrics as M
+
+    monkeypatch.setenv(M.RESULTS_ENV, str(tmp_path))
+    monkeypatch.setenv(M.TASK_ENV, "C.swa.attention")
+    monkeypatch.setenv(M.RECORD_ENV, "FIX.2")
+    M.record("pcc_attention_L00", 0.999)
+    assert M.task_id() == "C.swa.attention" and M.load("FIX.2", tmp_path)["pcc_attention_L00"]["value"] == 0.999
+    assert not (tmp_path / "C.swa.attention.json").exists()
