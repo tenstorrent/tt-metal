@@ -27,6 +27,14 @@ class DeepSeekV41FlashConfig:
     FABRIC_PAYLOAD_SIZE = 14 * 1024
 
 
+def _physical_users(params) -> int:
+    """PREFILL_V41_ALIAS_SLOTS=1 (user 10-16, the ISL x BS table): ONE prefill slot fanned out to every ring slot -- the runner
+    keeps a KV table of PREFILL_NUM_USERS slots (the engine asserts remote num_slots == local) whose slots alias slot 0, but
+    allocates the attention states and export rows of slot 0 only (64 x 32K slots of prefill state OOM'd host 41, 13:20).
+    """
+    return 1 if os.environ.get("PREFILL_V41_ALIAS_SLOTS", "0") == "1" else int(params.num_users)
+
+
 class DeepSeekV41FlashAdapter(PrefillModelAdapter):
     name = "deepseek_v4_1_flash"
     model_config = DeepSeekV41FlashConfig
@@ -76,11 +84,16 @@ class DeepSeekV41FlashAdapter(PrefillModelAdapter):
             mesh_device,
             hf_config.v41,
             max_seq_len=params.max_seq_len,
-            num_users=params.num_users,
+            num_users=_physical_users(params),
             mesh_shape=tuple(params.mesh_shape),
             sp_axis=params.sp_axis,
         )
-        logger.info(f"[dsv4.1-flash] export caches for max_seq_len {params.max_seq_len}, {params.num_users} user(s)")
+        if _physical_users(params) != params.num_users:
+            exp.table_slots = int(params.num_users)
+        logger.info(
+            f"[dsv4.1-flash] export caches for max_seq_len {params.max_seq_len}, {_physical_users(params)} user(s)"
+            + (f", KV table {params.num_users} slots (aliases of slot 0)" if exp.table_slots else "")
+        )
         return exp
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
@@ -94,7 +107,7 @@ class DeepSeekV41FlashAdapter(PrefillModelAdapter):
             checkpoint(model_dir),
             chunk_size=params.chunk_size,
             max_seq_len=params.max_seq_len,
-            num_users=params.num_users,
+            num_users=_physical_users(params),
             sp_axis=params.sp_axis,
             tp_axis=params.tp_axis,
             weight_cache_path=params.weight_cache_path,
