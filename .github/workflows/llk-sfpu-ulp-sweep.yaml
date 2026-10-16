@@ -1,0 +1,107 @@
+name: "LLK SFPU ULP sweep"
+
+# Nightly, called from llk-e2e.yaml, whose Slack report covers it; dispatch it by hand to
+# sweep a branch before merging an SFPU kernel or SFPI change. On a Wormhole card: every
+# finite bf16/fp16 value (and a stride of fp32) through every enrolled unary op, held
+# against tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget.yaml. The job
+# summary lists each failing (op, in, out, approx, dest_acc) and its measured value.
+#
+# A gated cell over its budget fails in pytest; a tolerance cell past the `max N ULP` or
+# the non-finite lane count its row records fails the `headroom` comparison
+# (helpers/ulp_budget_diff.py). The command is the llk_sfpu_ulp_sweep_wormhole entry of
+# tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml.
+#
+# It compares the hardware with the table on the same commit, so it cannot see a budget
+# raised to fit a regression; llk-sfpu-ulp-budget-guard.yaml reports such a raise on the
+# PR, to the table's reviewers.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  build-images:
+    name: "Docker setup"
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Build test matrix
+        id: build-matrix
+        # The checkout's own copy, not @main, so a dispatch on a branch runs that
+        # branch's matrix.
+        uses: ./.github/actions/prepare-test-matrix
+        with:
+          tests-yaml: ./tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml
+          enabled-skus: "ALL_SKUS_IN_TESTS"
+          sku-config: ./.github/sku_config.yaml
+
+  ulp-sweep:
+    needs: [load-test-matrix, build-images]
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests
+        run: ./setup_testing_env.sh
+
+      # The sweep, then the headroom comparison over what it measured. The cmd runs both
+      # whatever the first returns, publishes the report to the job summary, and exits
+      # with either one's failure.
+      - name: Run the ULP sweep and compare it with the table
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          CHIP_ARCH: wormhole
+        run: |
+          ${{ matrix.test-group.cmd }}
+
+      - name: Upload the measurements and the report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ulp-sweep-wormhole
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/ulp_measurements.jsonl
+            ${{ env.LLK_PATH }}/tests/python_tests/ulp_headroom_report.md
+            ${{ env.LLK_PATH }}/tests/python_tests/ulp_sweep_junit.xml
+          if-no-files-found: warn

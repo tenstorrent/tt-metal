@@ -11,8 +11,8 @@ them: it cannot see a tail the sample never reaches.
 One device run per variant covers the whole format: 65,279 finite bfloat16 values or
 63,487 float16 ones, in 64 tiles. ``Bfp8_b`` is swept in bfloat16 and packed on the way
 in; a ``Float32`` input has 2**32 values, so it is walked with a stride instead.
-Marked ``accuracy``, which every LLK workflow deselects, so it runs only by name or with
-``-m accuracy``. Run it as a gate::
+Marked ``accuracy``, which every LLK workflow deselects; llk-e2e runs it by path every
+night (llk-sfpu-ulp-sweep.yaml). Run it as a gate::
 
     pytest test_unary_sfpu_ulp.py
 
