@@ -591,6 +591,34 @@ def test_where_tss(device, dtype, h, w, scalar1, scalar2):
     assert torch_equal_nan(result, golden)
 
 
+@pytest.mark.parametrize("h, w", [[64, 128]])
+@pytest.mark.parametrize(
+    "scalar1, scalar2",
+    [
+        [15.5, 31.25],
+        [float("inf"), -float("inf")],
+    ],
+)
+def test_where_tss_bf16_condition_fp32_output(device, h, w, scalar1, scalar2):
+    """A preallocated float32 output puts Dest in 32-bit mode while the condition stays bf16; the
+    where must then read and write full 32-bit Dest words, not the 16-bit halves a bf16 input implies."""
+    torch.manual_seed(0)
+
+    C = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
+    C = (C > 0).to(torch.bfloat16)
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_out = ttnn.from_torch(
+        torch.zeros((h, w), dtype=torch.float32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    golden = torch.where(C.bool(), scalar1, scalar2)
+    ttnn.where(ttnn_C, scalar1, scalar2, output_tensor=ttnn_out)
+    result = ttnn.to_torch(ttnn_out)
+
+    assert result.dtype == torch.float32
+    assert torch_equal_nan(result, golden)
+
+
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
     [

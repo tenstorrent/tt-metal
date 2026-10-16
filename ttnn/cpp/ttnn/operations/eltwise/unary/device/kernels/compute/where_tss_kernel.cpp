@@ -19,8 +19,10 @@ constexpr auto kWhereDF = DataFormat::UInt32;
 #elif defined(INP_FLOAT32)
 constexpr auto kWhereDF = DataFormat::Float32;
 #else
-// The legacy kernel used Float16_b for BF16 and both BFP input dtypes.
-constexpr auto kWhereDF = DataFormat::Float16_b;
+// The legacy kernel used Float16_b for BF16 and both BFP input dtypes. The Dest width follows the output,
+// not the input: a float32 output enables the 32-bit Dest, where a Float16_b where would load and store
+// 16-bit halves of each 32-bit Dest word.
+constexpr auto kWhereDF = DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b;
 #endif
 
 constexpr bool kIsInt = kWhereDF == DataFormat::Int32 || kWhereDF == DataFormat::UInt32;
