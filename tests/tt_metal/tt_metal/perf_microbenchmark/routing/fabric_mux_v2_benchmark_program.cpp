@@ -626,6 +626,7 @@ StandaloneMuxV2BenchmarkRunResult run_standalone_mux_v2_benchmark_once(
     const auto channel_buffer_size_bytes = packet_header_size_bytes + resolved_payload_size_bytes;
 
     tt::tt_fabric::FabricMuxV2Config mux_config(
+        *mesh_device,
         static_cast<uint8_t>(benchmark_case.num_senders),
         benchmark_case.num_buffers_per_channel,
         channel_buffer_size_bytes,

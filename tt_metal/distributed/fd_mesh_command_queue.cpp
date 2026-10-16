@@ -530,7 +530,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     const CoreCoord dispatch_core = this->virtual_program_dispatch_core();
     const SubDeviceRecorder sub_device_recorder(mesh_device_, sub_device_id);
 #if defined(TRACY_ENABLE)
-    const bool tag_tracy_zones = !tt::tt_metal::getDeviceProfilerState();
+    const bool tag_tracy_zones = !tt::tt_metal::getDeviceProfilerState(mesh_device_->impl().metal_env());
 #endif
 
     // Iterate over all programs. Update dispatch commands per program to reflect

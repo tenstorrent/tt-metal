@@ -19,7 +19,7 @@
 #include "ring_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
+#include "../ring_joint_ksplit.hpp"  // relative, so its chunked_prefill_utils.hpp is the same file this kernel includes
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -508,7 +508,7 @@ void kernel_main() {
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool dense_causal_skip = get_named_compile_time_arg_val("dense_causal_skip") == 1;
     constexpr bool ksplit_enabled = ksplit_count > 1;
-    static_assert(!ksplit_enabled || (!rotated_q_split_enabled && !has_sliding_window));
+    static_assert(!ksplit_enabled || !rotated_q_split_enabled);
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
     constexpr uint32_t rotated_iter_stride = kRotatedReaderIterWords;
 
@@ -798,12 +798,16 @@ void kernel_main() {
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
     uint32_t half_sequence = num_q_chunks / 2;
-    // Sliding consumes local and halo ranges in one logical Q pass. Wait for every halo that
-    // the host work plan selected before starting that pass; this keeps the hot loop free of
-    // device-wide ring phases and makes Q/accumulator state single-lifetime.
-    if constexpr (has_sliding_window) {
-        // Sliding has a compact write plan (local slab + cyclic predecessor tails). Consume
-        // its signal so a cached program cannot observe the previous invocation's token.
+    // Sliding consumes local and halo ranges in one logical Q pass. Without a K split the plan puts the local K chunks
+    // first, so the halo is waited for only before the first halo chunk; a core that reads none waits at the end, so a
+    // cached program cannot observe the previous invocation's token.
+    bool halo_synchronized = !has_sliding_window;
+    auto synchronize_halo = [&]() {
+        if (halo_synchronized) {
+            return;
+        }
+        halo_synchronized = true;
+        // Sliding has a compact write plan (local slab + cyclic predecessor tails).
         const uint32_t synchronization_iters =
             1 + fused_op_receiver.seq.expected[0] + fused_op_receiver.seq.expected[1];
         // One signal per halo regardless of hop count: the collecting exchange waits for every hop's
@@ -811,7 +815,7 @@ void kernel_main() {
         for (uint32_t ring_iter = 0; ring_iter < synchronization_iters; ++ring_iter) {
             fused_op_receiver.get_next_ring_id_and_consume_one_signal();
         }
-    }
+    };
     // K chunks past this device's last Q row are fully masked; compute skips the same ones.
     const uint32_t causal_end_nt = dense_causal_skip
                                        ? chunked_q_global_end_tile<kv_pad_rotation_enabled, q_local_padded_Nt>(
@@ -824,8 +828,10 @@ void kernel_main() {
                                              qmap.q_valid_tile_count)
                                        : logical_nt;
     auto arrival_preview = fused_op_receiver.seq;
-    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::packed_kv_schedule(
-        GROUPED_KV_SOURCE_COUNT,
+    // Chosen at compile time, and the guard below folds packed_sources to false in the classic ring's
+    // binary so it carries none of the packed-source path.
+    constexpr bool packed_kv_enabled = GROUPED_KV_SOURCE_COUNT > 1;
+    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::make_packed_kv_schedule<GROUPED_KV_SOURCE_COUNT>(
         ring_size,
         kv_local_padded_Nt,
         logical_nt,
@@ -838,7 +844,7 @@ void kernel_main() {
                 arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
         });
     const uint32_t source_group_size = packed_schedule.source_group_size;
-    const bool packed_sources = packed_schedule.packed();
+    const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
@@ -940,7 +946,8 @@ void kernel_main() {
         // gqa_max_q_per_core (GQA), which is why this branch needs no per-family case.
         // Indexed by ACTIVE ordinal -- see rotated_active_ordinal.
         // Static: when K/V mcast is enabled, loop the per-chain max so receivers with less real Q
-        // work still participate in padded multicast handshakes without pushing visible data.
+        // work still participate in padded multicast handshakes. Padded slots push their K/V entries,
+        // which compute drains without computing, and never push Q.
         uint32_t loop_q_count;
         uint32_t rotated_my_count = 0;
         RotatedQSlots rotated_slots;
@@ -978,11 +985,12 @@ void kernel_main() {
                 ASSERT(rotated_my_count % rotation_unit_chunks == 0);
                 // Pad with the corresponding member of the last owned unit. A balanced low
                 // slot must skip on every multicast peer, including cores without a remainder.
-                const uint32_t padded_slot = rotated_my_count - rotation_unit_chunks + q_iter % rotation_unit_chunks;
-                flat_q_index = rotated_slots.at(is_padded_iter ? padded_slot : q_iter);
+                flat_q_index = is_padded_iter ? padded_slot_flat_q<true>(
+                                                    rotated_slots, 0, rotated_my_count, q_iter, rotation_unit_chunks)
+                                              : rotated_slots.at(q_iter);
             } else {
                 is_padded_iter = (q_iter >= q_per_core);
-                flat_q_index = global_q_start + q_iter;
+                flat_q_index = padded_slot_flat_q<false>({}, global_q_start, q_per_core, q_iter, 1);
             }
 
             // Same-core GQA uses group-major (batch, Q chunk, head) scheduling so consecutive
@@ -1076,18 +1084,21 @@ void kernel_main() {
                     Sk_chunk_t,
                     logical_nt,
                     circular_kv_slab_count,
-                    kv_pad_rotation_enabled ? &qmap : nullptr);
+                    kv_pad_rotation_enabled ? &qmap : nullptr,
+                    /*local_first=*/SLIDING_LOCAL_FIRST && ksplit_count == 1);
                 ASSERT(sliding_q_plan.is_valid);
                 ASSERT(sliding_q_plan.total_k_chunk_count > 0);
             }
-            const uint32_t q_k_loop_count =
-                has_sliding_window ? sliding_q_plan.total_k_chunk_count : iter_num_kv_chunks;
+            // Sliding K split: this core's band of the work plan (ring_joint_ksplit.hpp).
+            const auto sliding_band =
+                ring_joint::sliding_ksplit_range(sliding_q_plan.total_k_chunk_count, ksplit_idx, ksplit_count);
+            const uint32_t q_k_loop_count = has_sliding_window ? sliding_band.end : iter_num_kv_chunks;
             // Q must be pushed on the first K chunk actually PROCESSED for this Q chunk — not a
             // hardcoded k_chunk == 0. When spatial k_chunk 0 is beyond logical_n it is skipped, so
             // anchoring Q to k_chunk == 0 would never push Q while compute still waits on it
             // (q_per_core > 1) -> deadlock. Reads Q exactly once per q_iter, so no extra work.
             bool first_k_for_q = true;
-            for (uint32_t k_chunk = 0; k_chunk < q_k_loop_count; ++k_chunk) {
+            for (uint32_t k_chunk = has_sliding_window ? sliding_band.begin : 0; k_chunk < q_k_loop_count; ++k_chunk) {
                 const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
                 const uint32_t source_ring_id = has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id;
                 const uint32_t source_k_chunk = has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk;
@@ -1156,6 +1167,7 @@ void kernel_main() {
                 } else {
                     uint32_t gathered_start_tile = source_ring_id * kv_local_padded_Nt + source_k_chunk * Sk_chunk_t;
                     if constexpr (has_sliding_window) {
+                        synchronize_halo();
                         gathered_start_tile = sliding_k_chunk.compact_k_chunk * Sk_chunk_t;
                     }
                     k_slice =
@@ -1207,15 +1219,9 @@ void kernel_main() {
                         return nq;
                     }
                 }();
+                // Padded slots push like real ones, so a multicast always targets this core's write pointer.
                 CircularBuffer cb_k(cb_k_in);
-                if constexpr ((k_uses_batch_chain && batch_mcast_enabled) || (gqa_grouped_kv && gqa_mcast_enabled)) {
-                    // Ensures that compute has completed with the previous K chunk before we overwrite the buffer with
-                    // the next K chunk for mcast.
-                    const uint32_t reserve_tiles = is_padded_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
-                    cb_k.reserve_back(reserve_tiles);
-                } else {
-                    cb_k.reserve_back(k_chunk_tiles);
-                }
+                cb_k.reserve_back(k_chunk_tiles);
                 uint32_t cb_k_start_address = cb_k.get_write_ptr();
                 bool received_k_from_chain = false;
                 if constexpr (!has_sliding_window) {
@@ -1299,21 +1305,27 @@ void kernel_main() {
                     }
                 }
 
-                // Skip Q and compute-visible pushes for padded mcast iterations.
-                // Note: push_back is intentionally skipped — without it, the write pointer
-                // doesn't advance, so reserve_back returns the same address each iteration.
-                // This lets the buffer act as a reusable staging area for the mcast.
+                // Padded mcast iterations skip Q and compute work. Only multicast rows pad, and sliding mode never
+                // builds chains.
                 if (is_padded_iter) {
-                    // Padded GQA receivers must also receive V, because the row injector multicasts
-                    // both K and V and waits for every receiver's ready signal. The data remains
-                    // staging-only because we intentionally do not push it to compute.
+                    ASSERT(!has_sliding_window);
+                    // Push every received entry so this core's CB advances with the injector's; compute drains
+                    // padded slots without computing. Push a V entry whenever a real chunk would, received
+                    // (GQA multicast) or empty, so both CBs keep the same phase as the real path.
+                    cb_k.push_back(k_chunk_tiles);
+                    KV_chunks_processed_in_iter++;
                     if constexpr (gqa_grouped_kv && gqa_mcast_enabled) {
                         const uint32_t nv = nq / q_heads_per_v;
                         CircularBuffer cb_v(cb_v_in);
-                        cb_v.reserve_back(2 * v_cb_entry_tiles);
+                        cb_v.reserve_back(v_cb_entry_tiles);
                         if (v_chain.should_receive(nv)) {
                             v_chain.receive(noc);
                         }
+                        cb_v.push_back(v_cb_entry_tiles);
+                    } else if constexpr (!kt_inplace_v) {
+                        CircularBuffer cb_v(cb_v_in);
+                        cb_v.reserve_back(v_cb_entry_tiles);
+                        cb_v.push_back(v_cb_entry_tiles);
                     }
                     continue;
                 }
@@ -1467,4 +1479,5 @@ void kernel_main() {
             }
         }
     }
+    synchronize_halo();
 }

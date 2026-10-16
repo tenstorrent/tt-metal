@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
@@ -58,14 +58,14 @@ _REGRESSION_CASE = _PerformanceCase(
     batch_heads=8,
     num_chunks=4,
     dim=32,
-    expected_duration_ns=20_336,
+    expected_duration_ns=14_567,
 )
 _PRODUCTION_CASE = _PerformanceCase(
     "pr7-leaf-bh96-n20-d128",
     batch_heads=96,
     num_chunks=20,
     dim=128,
-    expected_duration_ns=299_691,
+    expected_duration_ns=295_405,
 )
 _PRODUCTION_BF16 = frozenset({"kd", "q_decay", "final_decay"})
 
@@ -179,8 +179,11 @@ def test_summarize_chunk_recurrence_contract_trace_and_semantics(
         names=("affine_a", "affine_b"),
         dtypes=(ttnn.bfloat16, ttnn.bfloat16),
         shapes=((batch_heads, dim, dim), (batch_heads, dim, dim)),
+        nrmse_threshold=0.004,
     )
-    assert_summary_reconstructs_state(host_inputs, ttnn.to_torch(first[0]), ttnn.to_torch(first[1]))
+    assert_summary_reconstructs_state(
+        host_inputs, ttnn.to_torch(first[0]), ttnn.to_torch(first[1]), nrmse_threshold=0.004
+    )
 
 
 def _regression_protocol(
@@ -247,6 +250,7 @@ def _log_summary_subtraction_conditioning(
         actual,
         names=("affine_a", "affine_b"),
         context=f"summary subtraction conditioning {case_id}",
+        nrmse_threshold=0.02,
     )
 
 
@@ -277,9 +281,13 @@ def test_summarize_chunk_recurrence_is_device_deterministic(zero_actual_start, d
     )
     for name, golden, output in zip(("affine_a", "affine_b"), summary_oracle(host_inputs), outputs, strict=True):
         assert_accurate(
-            golden.float(), output.float(), name=f"deterministic summary reference {name}", pcc_threshold=0.999
+            golden.float(),
+            output.float(),
+            name=f"deterministic summary reference {name}",
+            pcc_threshold=0.999,
+            nrmse_threshold=0.005,
         )
-    assert_summary_reconstructs_state(host_inputs, outputs[0], outputs[1])
+    assert_summary_reconstructs_state(host_inputs, outputs[0], outputs[1], nrmse_threshold=0.005)
     for output in reference:
         ttnn.deallocate(output)
 
@@ -303,12 +311,14 @@ def test_summarize_chunk_recurrence_cache_hit_rebinds_fresh_tensors(
         outputs_a,
         names=("affine_a", "affine_b"),
         context="summary cache miss tensors",
+        nrmse_threshold=0.005,
     )
     assert_outputs_accurate(
         summary_oracle(host_b),
         outputs_b,
         names=("affine_a", "affine_b"),
         context="summary cache hit fresh tensors",
+        nrmse_threshold=0.005,
     )
 
 
@@ -349,12 +359,15 @@ def test_summarize_chunk_recurrence_approximate_math_uses_distinct_accurate_prog
     approximate = run_summary(inputs, compute_kernel_config=approximate_config, actual_start=zero_actual_start)
     assert device.num_program_cache_entries() == entries + 1
     expected = summary_oracle(host_inputs)
-    assert_outputs_accurate(expected, exact, names=("affine_a", "affine_b"), context="exact summary math")
+    assert_outputs_accurate(
+        expected, exact, names=("affine_a", "affine_b"), context="exact summary math", nrmse_threshold=0.005
+    )
     assert_outputs_accurate(
         expected,
         approximate,
         names=("affine_a", "affine_b"),
         context="approximate summary math",
+        nrmse_threshold=0.005,
     )
 
 
@@ -465,8 +478,11 @@ def test_summarize_chunk_recurrence_height_sharded_l1_output(zero_actual_start, 
         dtypes=(ttnn.bfloat16, ttnn.bfloat16),
         shapes=((batch_heads, dim, dim), (batch_heads, dim, dim)),
         expected_memory_config=output_memory,
+        nrmse_threshold=0.004,
     )
-    assert_summary_reconstructs_state(host_inputs, ttnn.to_torch(first[0]), ttnn.to_torch(first[1]))
+    assert_summary_reconstructs_state(
+        host_inputs, ttnn.to_torch(first[0]), ttnn.to_torch(first[1]), nrmse_threshold=0.003
+    )
 
 
 @pytest.mark.parametrize("host_index", range(7))
@@ -488,6 +504,7 @@ def test_summarize_chunk_recurrence_rejects_host_protocol_inputs(
         ("key_value_mismatch", "K must equal V"),
         ("q_decay_dtype", "q_decay must be FLOAT32 or BFLOAT16"),
         ("intra_dtype", "intra must be FLOAT32"),
+        ("value_tiles_exceed_dest", "value tiles exceed the 4 destination-register tiles"),
     ],
 )
 def test_summarize_chunk_recurrence_rejects_invalid_inputs(
@@ -496,6 +513,7 @@ def test_summarize_chunk_recurrence_rejects_invalid_inputs(
     host_inputs = list(host_protocol(2, 2, 32, 32))
     inputs = list(device_protocol(host_inputs, device))
     memory_config = None
+    compute_kernel_config = None
     if case == "key_value_mismatch":
         host_inputs = list(host_protocol(2, 2, 32, 64))
         inputs = list(device_protocol(host_inputs, device))
@@ -503,8 +521,20 @@ def test_summarize_chunk_recurrence_rejects_invalid_inputs(
         inputs[2] = to_device(host_inputs[2], device, dtype=ttnn.bfloat8_b)
     elif case == "intra_dtype":
         inputs[3] = to_device(host_inputs[3], device, dtype=ttnn.bfloat16)
+    elif case == "value_tiles_exceed_dest":
+        # One head per core leaves no room to split the 8 value tiles, and FP32 half-sync dest holds 4.
+        grid = device.compute_with_storage_grid_size()
+        inputs = list(device_protocol(host_protocol(grid.x * grid.y, 1, 256, 256), device))
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(), fp32_dest_acc_en=True, dst_full_sync_en=False, packer_l1_acc=False
+        )
     with expect_error(RuntimeError, message):
-        run_summary(tuple(inputs), memory_config=memory_config, actual_start=zero_actual_start)
+        run_summary(
+            tuple(inputs),
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
+            actual_start=zero_actual_start,
+        )
 
 
 @pytest.mark.parametrize(
