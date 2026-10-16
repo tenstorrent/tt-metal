@@ -259,6 +259,36 @@ def test_the_tail_limit_follows_the_noise_floor(gspec, noise, monkeypatch):
     assert not run_swap_test(s, "blk", SWAPPED, checks="steps")
 
 
+def test_the_tail_limit_after_an_index_step_follows_its_noise_floor(gspec):
+    """DS41-50: after a top-k step (int output) the block-out check takes the nudged step's own selection flips as its
+    floor, not the fixed swap_out_rel (DeepSeek-V4.1 indexer: device 0.023, the CPU's own nudged run 0.026)."""
+    from types import SimpleNamespace as NS
+
+    from models.demos.common.bringup.testing import component as C
+
+    s = gspec()
+    x = torch.randn(64, 32, generator=torch.Generator().manual_seed(0))
+    cpu = x.topk(4, dim=-1).indices
+
+    def flip(rows):  # a near-tie flip: the 4th pick becomes the 5th on these rows
+        t = cpu.clone()
+        t[rows, 3] = x.topk(5, dim=-1).indices[rows, 4]
+        return t
+
+    steps = [NS(name="idx", inputs=["x"], output="sel"), NS(name="pick", inputs=["x", "sel"], output="out")]
+    ref = NS(component=lambda layer, name: lambda ctx, x, sel: x.gather(1, sel))
+    ctx = NS(state={}, extra={})
+
+    def tail(dev_sel, model_sel):
+        M.reset("T")
+        seen = {"x": x, "sel": dev_sel, "out": x.gather(1, dev_sel)}
+        return C._check_tail(s, ref, 0, steps, steps[0], seen, cpu, {"ctx": ctx, "model": [model_sel]})
+
+    assert tail(flip(list(range(30))), flip(list(range(40)))), "fewer flips than the nudged CPU step's own"
+    assert got()["swap_idx_out_rel"] > 0.01  # failed the old fixed limit
+    assert not tail(flip(list(range(64))), flip([4, 5, 6, 7])), "far more flips than the floor still fail"
+
+
 def test_a_frozen_test_that_wraps_the_step_check_with_the_old_signature_still_works(gspec, monkeypatch):
     """F79: swap tests frozen before F76 patch component._check_step with an eight-argument wrapper."""
     from unittest import mock
