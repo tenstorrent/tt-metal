@@ -86,10 +86,13 @@ inline void calculate_lgamma_adjusted(
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
-        } else {
-            v_if(sfpi::is_inf(in)) { result = std::numeric_limits<float>::infinity(); }
-            v_endif;
         }
+
+        // Stirling's (z - 0.5) * log(z) - z is inf - inf for an infinite z (the reflection turns
+        // in = -inf into z = +inf), so the override runs in both Dest modes: +inf is exact in
+        // bf16 and fp32 alike, and lgamma(+-inf) = +inf.
+        v_if(sfpi::is_inf(in)) { result = std::numeric_limits<float>::infinity(); }
+        v_endif;
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
