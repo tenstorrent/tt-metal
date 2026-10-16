@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from conftest import skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import (
     get_valid_dest_accumulation_modes,
@@ -31,6 +32,7 @@ from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
+    DATACOPY_FLAG,
     DEST_INDEX,
     LOOP_FACTOR,
     NUM_BLOCKS,
@@ -38,6 +40,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     TILE_COUNT,
     TILIZE,
+    UNPACK_BLOCK,
     generate_input_dim,
 )
 from helpers.utils import passed_test
@@ -128,6 +131,22 @@ DATACOPY_SUB_BYTE_SWEEP = dict(
     input_dimensions=[[32, 32], [64, 64], [32, 256], [128, 256]],
 )
 
+# The shape whose DEST blocks are full (8 tiles at 16 bit, 4 at 32 bit).
+DATACOPY_BLOCK_SWEEP = dict(
+    formats=DATACOPY_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
+    num_faces=[1, 2, 4],
+    tilize=Tilize.No,
+    input_dimensions=[[128, 256]],
+)
+DATACOPY_SUB_BYTE_BLOCK_SWEEP = dict(
+    formats=SUB_BYTE_DATACOPY_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
+    num_faces=[4],
+    tilize=Tilize.No,
+    input_dimensions=[[128, 256]],
+)
+
 
 def _run_unary_datacopy_test(
     formats,
@@ -141,6 +160,7 @@ def _run_unary_datacopy_test(
     perf_report=None,
     run_types=None,
     loop_factor: int = 1,
+    unpack_block: bool = False,
 ):
     """Shared body for the unary datacopy tests.
 
@@ -199,6 +219,17 @@ def _run_unary_datacopy_test(
         blocks_calculation_algorithm,
     )
 
+    # Four-face blocks of two or more tiles pack with one block run under the block unpack; uncompressed four-face
+    # tiles lie back to back in L1 like CB pages, so the block unpack walks from one into the next.
+    pack_block = unpack_block and num_faces == 4 and num_tiles_in_block > 1
+    back_to_back = (
+        unpack_block
+        and num_faces == 4
+        and not unpack_to_dest
+        and not formats.input_format.is_block_float()
+        and not formats.input_format.is_mx_format()
+    )
+
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
 
@@ -211,6 +242,15 @@ def _run_unary_datacopy_test(
         "templates": [
             generate_input_dim(input_dimensions, input_dimensions),
             TILIZE(tilize),
+            UNPACK_BLOCK(unpack_block),  # always present: one report schema
+            *[
+                DATACOPY_FLAG(name)
+                for name, on in (
+                    ("DATACOPY_PACK_BLOCK", pack_block),
+                    ("DATACOPY_TILES_BACK_TO_BACK", back_to_back),
+                )
+                if on
+            ],
         ],
         "runtimes": [
             DEST_INDEX(0),
@@ -280,4 +320,38 @@ def test_eltwise_unary_datacopy_sub_byte_bfp(
         tilize,
         input_dimensions,
         quantize_golden_input=True,
+    )
+
+
+@skip_for_wormhole
+@parametrize(**DATACOPY_BLOCK_SWEEP)
+def test_eltwise_unary_datacopy_block(
+    formats,
+    dest_acc,
+    num_faces,
+    tilize,
+    input_dimensions,
+):
+    _run_unary_datacopy_test(
+        formats, dest_acc, num_faces, tilize, input_dimensions, unpack_block=True
+    )
+
+
+@skip_for_wormhole
+@parametrize(**DATACOPY_SUB_BYTE_BLOCK_SWEEP)
+def test_eltwise_unary_datacopy_sub_byte_bfp_block(
+    formats,
+    dest_acc,
+    num_faces,
+    tilize,
+    input_dimensions,
+):
+    _run_unary_datacopy_test(
+        formats,
+        dest_acc,
+        num_faces,
+        tilize,
+        input_dimensions,
+        quantize_golden_input=True,
+        unpack_block=True,
     )
