@@ -494,6 +494,60 @@ def test_remainder_opposite_sign_exact_multiple(testing_dtype, pairs, device):
     )
 
 
+# Quotients of 2^24 and above: floor(a / b) can no longer be stepped by one in float, so the
+# overshoot correction has to fall back to subtracting b from the raw result. The non-multiple
+# pairs are the ones the kernel resolves at this magnitude (a / b rounds to the float just below
+# the true quotient, leaving |result| >= |b| once); remainder(419430432.0, 25.0) returned 32.0
+# instead of 7.0 without the fallback.
+@pytest.mark.parametrize(
+    "testing_dtype, pairs",
+    [
+        (
+            "float32",
+            [
+                (419430432.0, 25.0),
+                (-419430432.0, -25.0),
+                (419430400.0, 25.0),
+                (419430400.0, -25.0),
+                (-419430400.0, 25.0),
+                (-838860800.0, -25.0),
+                (50331648.0, -3.0),
+                (-50331648.0, 3.0),
+                (125829120.0, 7.5),
+                (-251658240.0, 7.5),
+            ],
+        ),
+        (
+            "bfloat16",
+            [
+                (419430400.0, 25.0),
+                (419430400.0, -25.0),
+                (-524288000.0, 25.0),
+                (-838860800.0, -25.0),
+                (402653184.0, -3.0),
+                (-402653184.0, 24.0),
+            ],
+        ),
+    ],
+)
+def test_remainder_large_quotient(testing_dtype, pairs, device):
+    torch_dtype = getattr(torch, testing_dtype)
+    ttnn_dtype = getattr(ttnn, testing_dtype)
+
+    torch_input_a = torch.tensor([a for a, _ in pairs], dtype=torch_dtype)
+    torch_input_b = torch.tensor([b for _, b in pairs], dtype=torch_dtype)
+    assert torch.all(torch_input_a.abs() / torch_input_b.abs() >= 2.0**24)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    golden = golden_function(torch_input_a, torch_input_b, device=device)
+
+    tt_in_a = ttnn.from_torch(torch_input_a, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_in_b = ttnn.from_torch(torch_input_b, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn.remainder(tt_in_a, tt_in_b))
+
+    assert torch.equal(output_tensor, golden), f"device {output_tensor.tolist()} vs torch {golden.tolist()}"
+
+
 _INF = float("inf")
 
 

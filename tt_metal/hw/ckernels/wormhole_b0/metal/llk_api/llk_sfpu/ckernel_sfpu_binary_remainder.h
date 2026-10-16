@@ -331,6 +331,11 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
         v_endif;
     }
     v_endif;
+    // A quotient of 2^24 or more cannot be stepped by one in float, so diff above is just the raw
+    // result and the lane still holds |result| >= |b|. Fall back to the subtraction, which does
+    // not depend on the quotient's precision; it never fires on a correct remainder.
+    v_if(sfpi::abs(result) >= sfpi::abs(b)) { result -= b; }
+    v_endif;
 
     // Handle division by zero - return NaN
     v_if(b == sfpi::vFloat(0.0f)) { result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN()); }
