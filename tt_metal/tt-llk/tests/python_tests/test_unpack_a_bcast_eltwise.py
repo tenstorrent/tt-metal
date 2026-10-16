@@ -38,31 +38,35 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
 
+MATHOPS = [MathOperation.Elwsub, MathOperation.Elwadd, MathOperation.Elwmul]
+SRCA_REUSE_COUNTS = [2, 4, 8]
+INPUT_DIMENSIONS = [
+    [128, 32],
+    [32, 128],
+    [64, 128],
+    [128, 256],
+]
+
+# Float32 input with a 32-bit Dest unpacks SrcA as Tf32, so the SrcA rows are
+# 64 bytes apart instead of 32: the row-broadcast unpacker must take its
+# SrcA Y-stride from the dst format. The merge-gate test pairs each dest_acc with
+# the format that exercises it (16-bit SrcA rows without fp32 dest, Tf32 SrcA rows
+# with it) == 72 cases; the full format x dest_acc grid (144 cases) runs nightly.
+# The two are the same body.
+REGULAR_FORMATS = {
+    DestAccumulation.No: input_output_formats([DataFormat.Float16_b], same=True),
+    DestAccumulation.Yes: input_output_formats([DataFormat.Float32], same=True),
+}
+
 
 @skip_for_blackhole
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float32,
-        ],
-        same=True,
-    ),
-    mathop=[MathOperation.Elwsub, MathOperation.Elwadd, MathOperation.Elwmul],
-    # Float32 input with a 32-bit Dest unpacks SrcA as Tf32, so the SrcA rows are
-    # 64 bytes apart instead of 32: the row-broadcast unpacker must take its
-    # SrcA Y-stride from the dst format.
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    srca_reuse_count=[2, 4, 8],
-    math_fidelity=[
-        MathFidelity.LoFi,
-    ],
-    input_dimensions=[
-        [128, 32],
-        [32, 128],
-        [64, 128],
-        [128, 256],
-    ],
+    formats=lambda dest_acc: REGULAR_FORMATS[dest_acc],
+    mathop=MATHOPS,
+    srca_reuse_count=SRCA_REUSE_COUNTS,
+    math_fidelity=[MathFidelity.LoFi],
+    input_dimensions=INPUT_DIMENSIONS,
 )
 def test_unp_bcast_sub_sdpa(
     formats,
@@ -72,7 +76,45 @@ def test_unp_bcast_sub_sdpa(
     input_dimensions,
     srca_reuse_count,
 ):
+    _run_unp_bcast_sub_sdpa(
+        formats, mathop, dest_acc, math_fidelity, input_dimensions, srca_reuse_count
+    )
 
+
+@skip_for_blackhole
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats(
+        [DataFormat.Float16_b, DataFormat.Float32],
+        same=True,
+    ),
+    mathop=MATHOPS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    srca_reuse_count=SRCA_REUSE_COUNTS,
+    math_fidelity=[MathFidelity.LoFi],
+    input_dimensions=INPUT_DIMENSIONS,
+)
+def test_unp_bcast_sub_sdpa_full_grid(
+    formats,
+    mathop,
+    dest_acc,
+    math_fidelity,
+    input_dimensions,
+    srca_reuse_count,
+):
+    _run_unp_bcast_sub_sdpa(
+        formats, mathop, dest_acc, math_fidelity, input_dimensions, srca_reuse_count
+    )
+
+
+def _run_unp_bcast_sub_sdpa(
+    formats,
+    mathop,
+    dest_acc,
+    math_fidelity,
+    input_dimensions,
+    srca_reuse_count,
+):
     # Precompute constants
     input_tiles = input_dimensions[0] * input_dimensions[1] // 1024
     reuse_factor = input_tiles // srca_reuse_count
