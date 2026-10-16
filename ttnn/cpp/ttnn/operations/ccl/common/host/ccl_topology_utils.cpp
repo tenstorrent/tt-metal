@@ -199,7 +199,7 @@ std::optional<TopologyPlacements> uncollapse_placements(
 // Shared by both families: all_gather_output_topology below is its first caller.
 namespace {
 
-// mesh_partition's rule 0 (#58915) for the whole family. The devices an op reaches are the mesh's, not the label's:
+// Coverage. The devices an op reaches are the mesh's, not the label's:
 // a cluster-axis op spans the mesh's full extent along that axis and a whole-mesh op every device, so a label that
 // covers fewer devices along the axis addressed -- a (1, 4) row block on a 2x4 along axis 0, or over the whole
 // mesh -- is refused: the devices the label does not describe take part (a sum with them, a gather of them, a
@@ -500,8 +500,7 @@ std::optional<TensorTopology> scatter_output_topology(
         // tile the input). A Shard on a size-1 axis holds the whole extent and passes too. A collapsed
         // {N}, [Shard{other}] is the same case with one placement. A reduction never reaches this check: the sum is
         // one tensor whose other dims are whole on every device. With a cluster_axis the output stays N-D and the
-        // other dim's Shard keeps its own axis, so only the whole-mesh collapse loses it. mesh_partition's own hook
-        // applies the same restriction (shards_another_dim_on_a_nontrivial_axis).
+        // other dim's Shard keeps its own axis, so only the whole-mesh collapse loses it.
         if (kind == ScatterKind::Partition) {
             for (size_t axis = 0; axis < placements.size(); ++axis) {
                 const auto* other_shard = std::get_if<Shard>(&placements[axis]);

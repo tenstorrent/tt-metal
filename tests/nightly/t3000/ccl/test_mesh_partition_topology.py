@@ -4,38 +4,40 @@
 
 """TensorTopology labels produced by ttnn.mesh_partition.
 
-Contract (``MeshPartitionDeviceOperation::compute_output_topologies``; the rule table lives in the op header and is
-unit-tested without devices in ``tests/ttnn/unit_tests/gtests/ccl/test_mesh_partition_topology_rules.cpp``):
+Contract (``MeshPartitionDeviceOperation::compute_output_topologies`` calls the CCL topology helper's
+``mesh_partition_output_topology``, ``ttnn/cpp/ttnn/operations/ccl/common/host/ccl_topology_utils.hpp``, unit-tested
+without devices in ``tests/ttnn/unit_tests/gtests/ccl/test_mesh_partition_topology_rules.cpp``):
 
-0. The label must describe the devices the partition acts on. A collapsed label has no axes and must cover the mesh.
-   An N-D sub-mesh label (``mesh_shape_override`` that fits per axis) is kept, with rule 1 applied within its block,
+- The label must describe the devices the partition acts on. A collapsed label has no axes and must cover the mesh.
+   An N-D sub-mesh label (``mesh_shape_override`` that fits per axis) is kept, and partitioned within its block,
    when the cluster axis spans the mesh along that axis so every partition group lies inside the block; otherwise
    (whole-mesh partition, or a shorter axis) the output keeps the input label with a warning.
-1. N-D input label + ``cluster_axis``: ``Shard(dim)`` on the partitioned axis, the input's placement elsewhere. A
+- N-D input label + ``cluster_axis``: ``Shard(dim)`` on the partitioned axis, the input's placement elsewhere. A
    tensor dim must never be sharded on two mesh axes (the N-D composer rejects it), so when another axis already
    shards ``dim``: a size-1 axis becomes ``Replicate`` (exact); an OUTER axis whose partitioned axis held
    ``Replicate`` or ``Shard(dim)`` collapses to ``{N}, [Shard(dim)]`` over the input's row-major coordinates
    (row-major hierarchical sharding, exact); anything else (inner axis, partitioned axis holding another Shard) is
    not expressible and the output keeps the input label with a warning.
-2. ``cluster_axis=None`` (whole mesh, devices linearised row-major): ``{N}, [Shard(dim)]`` over the input's
+- ``cluster_axis=None`` (whole mesh, devices linearised row-major): ``{N}, [Shard(dim)]`` over the input's
    coordinates when every non-trivial axis of the input is ``Replicate`` or ``Shard(dim)``; otherwise the input label.
    Exact for a replicated input; a ``Shard(dim)`` already on a non-trivial axis is overwritten and the label describes
    the output bytes (the reduce_scatter_minimal_async stance).
-3. Collapsed ``{N}, [p]`` input whose N equals both the mesh size and the cluster-axis size (1xN ring,
+- Collapsed ``{N}, [p]`` input whose N equals both the mesh size and the cluster-axis size (1xN ring,
    ``cluster_axis=1``): ``{N}, [Shard(dim)]`` whatever ``p`` was. The guard identifies the label's only axis with the
-   partitioned axis, so a ``Shard(k)`` is overwritten (reduce_scatter_minimal_async stance); rule 2 has no cluster axis
-   to make that identification and falls back for a ``Shard(k)`` on a non-trivial axis.
-4. Collapsed ``{N}, [Replicate]`` covering a multi-axis mesh: uncollapsed to the device mesh shape, ``Shard(dim)``
+   partitioned axis, so a ``Shard(k)`` is overwritten (reduce_scatter_minimal_async stance); a whole-mesh partition
+   has no cluster axis to make that identification and refuses a ``Shard(k)`` on a non-trivial axis.
+- Collapsed ``{N}, [Replicate]`` covering a multi-axis mesh: uncollapsed to the device mesh shape, ``Shard(dim)``
    on the partitioned axis and ``Replicate`` elsewhere.
-5. A collapsed ``Shard`` label (``ShardTensorToMesh`` on a multi-axis mesh) partitioned along one axis: the input
-   label, silently, i.e. the pre-existing behaviour (no exact label exists in either form).
+- A collapsed ``Shard`` label (``ShardTensorToMesh`` on a multi-axis mesh) partitioned along one axis is read per
+   axis as row-major hierarchical sharding: a ``Shard`` of another dim is refused (the partitioned axis would hold a
+   piece of two dims), a ``Shard(dim)`` collapses again along the inner axis and is refused along the outer one.
 
 Negative controls: before ``compute_output_topologies`` existed the framework's union default copied the input label
 onto the output, so a replicated input stayed ``[Replicate]`` (the serialiser then dedups shards on that axis and
 drops data) and a ``ShardTensor2dMesh`` input kept its pre-partition placements; every test asserting a changed label
 fails on that code (``_assert_label_changed`` makes it explicit). The same-dim tests additionally fail on the first
 version of the hook, which emitted ``[Shard(dim), Shard(dim)]`` (``_assert_no_duplicate_shard_dims`` pins that), and
-the fewer-devices tests fail on the version whose rule 3 fired on any collapsed label of the cluster-axis size and
+the fewer-devices tests fail on the version whose line rule fired on any collapsed label of the cluster-axis size and
 on the version whose whole-mesh rule relabelled a four-device label over an eight-device partition.
 
 ``ConcatMeshToTensor`` is not label-driven (it concatenates the device shards in device order); where it is used it
@@ -155,7 +157,7 @@ def test_mesh_partition_2d_label(mesh_device, input_dims, dim, cluster_axis, exp
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4")], indirect=True)
 @pytest.mark.parametrize("dim", [3, -1])
 def test_mesh_partition_same_dim_outer_axis_collapses(mesh_device, dim):
-    """Rule 1(ii): rows already shard dim 3 (coarse slices), the partition across columns cuts each of them into
+    """Rows already shard dim 3 (coarse slices), the partition across columns cuts each of them into
     fine slices, so device (r, c) holds slice r*cols+c of dim 3: row-major hierarchical sharding, which only the
     collapsed {8}, [Shard(3)] label states exactly. With dim=-1 the input label carries Shard(-1), so the same-dim
     match must normalise before comparing. Negative control: the first hook version emitted [Shard(3), Shard(3)]."""
@@ -185,7 +187,7 @@ def test_mesh_partition_same_dim_outer_axis_collapses(mesh_device, dim):
 
 @pytest.mark.parametrize("mesh_device", [pytest.param(2, id="1x2"), pytest.param(8, id="1x8")], indirect=True)
 def test_mesh_partition_same_dim_trivial_axis_replicates(mesh_device):
-    """Rule 1(i): an N-D label over a 1xN mesh may carry Shard(3) on the size-1 row axis (one chunk = the whole
+    """An N-D label over a 1xN mesh may carry Shard(3) on the size-1 row axis (one chunk = the whole
     extent). Partitioning dim 3 across the columns must turn that axis into Replicate, not leave a second Shard(3).
     Negative controls: the first hook version emitted [Shard(3), Shard(3)]; the union default kept
     [Shard(3), Replicate]."""
@@ -209,7 +211,7 @@ def test_mesh_partition_same_dim_trivial_axis_replicates(mesh_device):
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4")], indirect=True)
 def test_mesh_partition_same_dim_inner_axis_falls_back(mesh_device):
-    """Rule 1(iii): columns shard dim 3 (fine slices first), the partition across rows cuts each again, so device
+    """Columns shard dim 3 (fine slices first), the partition across rows cuts each again, so device
     (r, c) holds slice c*rows+r: column-major, which neither an N-D label (duplicate dim) nor the row-major collapsed
     label can state. The op keeps the input label and logs a warning (documented fallback). Negative control: the
     first hook version emitted [Shard(3), Shard(3)]. The data is still right."""
@@ -226,7 +228,7 @@ def test_mesh_partition_same_dim_inner_axis_falls_back(mesh_device):
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4")], indirect=True)
 def test_mesh_partition_same_dim_partitioned_axis_sharded_falls_back(mesh_device):
-    """Rule 1(iii): rows shard dim 3 (outer axis, same dim) but the partitioned column axis already shards dim 2, so
+    """Rows shard dim 3 (outer axis, same dim) but the partitioned column axis already shards dim 2, so
     the result would need Shard(2) and Shard(3) on the columns at once. Not expressible: the op keeps the input
     label. Negative control: the first hook version emitted [Shard(3), Shard(3)]."""
     mesh_shape = tuple(mesh_device.shape)
@@ -243,7 +245,7 @@ def test_mesh_partition_same_dim_partitioned_axis_sharded_falls_back(mesh_device
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4")], indirect=True)
 @pytest.mark.parametrize("dim", [1, 3])
 def test_mesh_partition_2d_input_whole_mesh_collapses(mesh_device, dim):
-    """Rule 2: cluster_axis=None hands device r*cols+c chunk r*cols+c. An N-D label would need Shard(dim) on both
+    """Whole mesh: cluster_axis=None hands device r*cols+c chunk r*cols+c. An N-D label would need Shard(dim) on both
     axes, which the composer rejects, so a replicated N-D input yields the collapsed {N}, [Shard(dim)] label over the
     same row-major coordinates (identical to what ShardTensorToMesh(dim) would have produced)."""
     mesh_shape = tuple(mesh_device.shape)
@@ -266,7 +268,7 @@ def test_mesh_partition_2d_input_whole_mesh_collapses(mesh_device, dim):
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4")], indirect=True)
 def test_mesh_partition_whole_mesh_other_shard_falls_back(mesh_device):
-    """Rule 2 restriction: the input is sharded on dims 0 and 1 (ShardTensor2dMesh dims=(0, 1), the nightly
+    """Whole-mesh restriction: the input is sharded on dims 0 and 1 (ShardTensor2dMesh dims=(0, 1), the nightly
     test_mesh_partition input); a whole-mesh partition of dim 3 leaves those Shards on the device next to the new
     slice, which no label can state. The op keeps the input label. Negative control: the first hook version emitted
     {8}, [Shard(3)], claiming the eight shards concatenate along dim 3 alone."""
@@ -283,7 +285,7 @@ def test_mesh_partition_whole_mesh_other_shard_falls_back(mesh_device):
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4")], indirect=True)
 def test_mesh_partition_whole_mesh_same_dim_shard_overwrites(mesh_device):
-    """Rule 2 on an input already Shard(3) on a non-trivial axis: ShardTensor2dMesh(dims=(3, None)) gives
+    """A whole-mesh partition of an input already Shard(3) on a non-trivial axis: ShardTensor2dMesh(dims=(3, None)) gives
     [Shard(3), Replicate]; a whole-mesh partition of dim 3 yields the collapsed {8}, [Shard(3)]. Unlike the replicated
     input this label is not exact: device (r, c) holds chunk r*cols+c of its own row's half of dim 3, so the eight
     shards do not reassemble the input. The label describes the output bytes and overwrites the Shard(3) the input
@@ -325,7 +327,7 @@ def test_mesh_partition_whole_mesh_same_dim_shard_overwrites(mesh_device):
 @pytest.mark.parametrize("dim", [1, 3, -1])
 @pytest.mark.parametrize("cluster_axis", [1, None])
 def test_mesh_partition_collapsed_replicate_on_ring(mesh_device, dim, cluster_axis):
-    """Rules 3 and 2 on a ring: ReplicateTensorToMesh gives the collapsed {N}, [Replicate] label. With cluster_axis=1
+    """On a ring: ReplicateTensorToMesh gives the collapsed {N}, [Replicate] label. With cluster_axis=1
     on a 1xN mesh the collapsed axis is the partitioned axis, so the honest label is {N}, [Shard(dim)] over the same
     coordinates. Before the change the output kept [Replicate], which the serialiser dedups (dropping slices)."""
     mesh_shape = tuple(mesh_device.shape)
@@ -350,12 +352,12 @@ def test_mesh_partition_collapsed_replicate_on_ring(mesh_device, dim, cluster_ax
 
 @pytest.mark.parametrize("mesh_device", [pytest.param(8, id="1x8")], indirect=True)
 def test_mesh_partition_collapsed_shard_on_ring_overwrites(mesh_device):
-    """Rule 3 on a collapsed Shard label: ShardTensorToMesh(dim=1) gives {8}, [Shard(1)]; partitioning dim 3 across
+    """A collapsed Shard label on a ring: ShardTensorToMesh(dim=1) gives {8}, [Shard(1)]; partitioning dim 3 across
     the ring (cluster_axis=1, the label's only axis) relabels it {8}, [Shard(3)] over the same coordinates. This is
     the reduce_scatter_minimal_async stance (pinned by tt-train test_ccl_topology.py): the label describes the output
     bytes and the partitioned axis takes the collective's placement whatever it held. The ring guard (N == mesh size
-    == cluster-axis size) is what identifies the label's axis with the partitioned axis; rule 2 (cluster_axis=None)
-    has no such identification and falls back for this input. Negative control: the union default kept [Shard(1)]."""
+    == cluster-axis size) is what identifies the label's axis with the partitioned axis; a whole-mesh partition
+    has no such identification and refuses this input. Negative control: the union default kept [Shard(1)]."""
     mesh_shape = tuple(mesh_device.shape)
     assert mesh_shape[0] == 1
     num_devices = mesh_shape[0] * mesh_shape[1]
@@ -379,7 +381,7 @@ def test_mesh_partition_collapsed_shard_on_ring_overwrites(mesh_device):
 @pytest.mark.parametrize("dim", [1, 3])
 @pytest.mark.parametrize("cluster_axis", [0, 1])
 def test_mesh_partition_collapsed_replicate_uncollapses_on_2d_mesh(mesh_device, dim, cluster_axis):
-    """Rule 4: ReplicateTensorToMesh on a 2x4 mesh gives {8}, [Replicate]. Partitioning along one axis leaves the
+    """ReplicateTensorToMesh on a 2x4 mesh gives {8}, [Replicate]. Partitioning along one axis leaves the
     tensor replicated along the other, which only an N-D label over the device mesh can state; the collapsed
     row-major coordinates already enumerate that mesh, so they carry over. This is the deepseek_v3 mesh_partition
     path."""
@@ -414,7 +416,7 @@ def test_mesh_partition_collapsed_replicate_uncollapses_on_2d_mesh(mesh_device, 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4")], indirect=True)
 def test_mesh_partition_collapsed_replicate_whole_mesh(mesh_device):
-    """Rule 2 on a collapsed replicated input: {8}, [Replicate] -> {8}, [Shard(dim)]."""
+    """A whole-mesh partition of a collapsed replicated input: {8}, [Replicate] -> {8}, [Shard(dim)]."""
     mesh_shape = tuple(mesh_device.shape)
     num_devices = mesh_shape[0] * mesh_shape[1]
     dim = 3
@@ -446,9 +448,9 @@ def _assert_partitioned_data(tt_output, torch_input, dim, cluster_axis, mesh_sha
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4")], indirect=True)
 @pytest.mark.parametrize("cluster_axis", [1, None])
 def test_mesh_partition_fewer_shards_collapsed_label_falls_back(mesh_device, cluster_axis):
-    """Rule 0: a {4}, [Shard(2)] label on a 2x4 mesh covers four of the eight devices the op partitions across, so no
+    """A {4}, [Shard(2)] label on a 2x4 mesh covers four of the eight devices the op partitions across, so no
     label can describe the output and the op keeps the input label. With cluster_axis=1 the label's N equals the
-    cluster-axis size by coincidence (rule 3 must not fire); with cluster_axis=None the whole-mesh rule must not emit
+    cluster-axis size by coincidence (the line rule must not fire); with cluster_axis=None the whole-mesh rule must not emit
     {4}, [Shard(3)] for an eight-slice output (a serialiser would then save four of the eight slices). The label is
     forged with update_tensor_topology on a fully replicated tensor because the hook reads only the label. Negative
     controls: the first hook version returned {4}, [Shard(3)] for cluster_axis=1, the second for cluster_axis=None.
@@ -476,9 +478,9 @@ def test_mesh_partition_fewer_shards_collapsed_label_falls_back(mesh_device, clu
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4")], indirect=True)
 @pytest.mark.parametrize("cluster_axis", [1, 0, None])
 def test_mesh_partition_sub_mesh_nd_label(mesh_device, cluster_axis):
-    """Rule 0 for an N-D sub-mesh label: a 1x4 [Replicate, Replicate] label over row 0 of a 2x4 mesh (what a
+    """An N-D sub-mesh label: a 1x4 [Replicate, Replicate] label over row 0 of a 2x4 mesh (what a
     mesh_shape_override that fits per axis produces). cluster_axis=1 spans the mesh along that axis, so row 0 is a
-    complete partition group and rule 1 applies within the block: 1x4 [Replicate, Shard(3)] over the same four
+    complete partition group and the partition is labelled within the block: 1x4 [Replicate, Shard(3)] over the same four
     coordinates. cluster_axis=0 (groups reach row 1) and cluster_axis=None (the block holds four of eight slices)
     have no honest label and keep the input label. Negative controls: the first hook version emitted {4}, [Shard(3)]
     for the whole-mesh case; the second fell back for cluster_axis=1 as well."""

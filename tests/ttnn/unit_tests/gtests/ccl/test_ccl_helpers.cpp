@@ -1357,7 +1357,7 @@ TEST(CclTopologyUtils, WholeMeshPartitionOfACollapsedShardOfAnotherDimIsRefused)
     // The collapsed form of the other-dim refusal above: {N}, [Shard{2}] partitioned on dim 3 leaves device k with
     // chunk k of dim 2 next to piece k of dim 3, which no label states, so the partition kinds refuse before the
     // collapsed early return; the reduction consumes the chunks and is labelled. Same-dim and Replicate collapsed
-    // inputs compose for every kind. mesh_partition's own hook (rule 2) refuses the same input.
+    // inputs compose for every kind.
     for (const auto& mesh : {MeshShape(1, 8), MeshShape(2, 4)}) {
         const auto other_dim = collapsed_label(mesh, TopoShard{2});
         EXPECT_EQ(
@@ -1392,7 +1392,7 @@ TEST(CclTopologyUtils, WholeMeshScatterOfARowMajorReshapeIsExact) {
     // A 2-D mapper whose mesh_shape_override does not fit the mesh ({1,8} or {4,2} over a 2x4) lays the tensor out
     // row-major over every device: its axes are not the mesh's, so a cluster-axis op cannot address them and is
     // refused, but a whole-mesh scatter addresses no axis -- ring rank i gets piece i -- and the collapsed label over
-    // the same coordinates is exact (mesh_partition's rule 0 lets the same case through to its rule 2). A partition
+    // the same coordinates is exact. A partition
     // still reads the other-dim restriction off the label's own axes.
     const MeshShape mesh(2, 4);
     const auto all = row_major_coords(mesh);
@@ -1421,7 +1421,7 @@ TEST(CclTopologyUtils, WholeMeshScatterOfARowMajorReshapeIsExact) {
 }
 
 TEST(CclTopologyUtils, OpsRefuseALabelThatDoesNotCoverTheDevicesTheyReach) {
-    // mesh_partition's rule 0 (#58915) for the whole family: a (1, 4) row block on a 2x4 is addressed along axis 1,
+    // Coverage: a (1, 4) row block on a 2x4 is addressed along axis 1,
     // which it spans, but not along axis 0 (extent 1 of 2: the groups pair each of its devices with one the label
     // does not describe) nor over the whole mesh (eight devices, four described). Both the host form of the label
     // (the block's own coordinates) and the device form (the storage's, every device) are judged by the shape.
