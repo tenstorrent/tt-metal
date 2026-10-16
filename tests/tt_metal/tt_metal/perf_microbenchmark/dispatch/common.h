@@ -1349,7 +1349,7 @@ protected:
         // between test fixtures possibly because the previously issued commands
         // are not completed before next firmware launch
         HostMemDeviceCommand cmd(metal_ctx, cmd_calc.write_offset_bytes());
-        cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
+        cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
         dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());
         entry_sizes.push_back(cmd.size_bytes());
 

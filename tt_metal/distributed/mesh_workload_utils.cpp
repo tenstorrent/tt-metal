@@ -74,8 +74,7 @@ void populate_go_signal_sequence(DeviceCommand<HugepageWrite>& commands, const G
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(*config.sub_device_id),
-            *config.config_ring_sync_count,
-            config.cq_id);
+            *config.config_ring_sync_count);
     }
 
     const uint8_t sub_device_index = *config.sub_device_id;

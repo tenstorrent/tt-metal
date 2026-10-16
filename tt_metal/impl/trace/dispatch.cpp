@@ -130,15 +130,13 @@ void issue_trace_commands(
                 0,
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
                 expected_num_workers,
-                cq_id,
                 1);
         }
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
-            expected_num_workers,
-            cq_id);
+            expected_num_workers);
     }
 
     uint32_t page_size_log2 = __builtin_ctz(dispatch_md.trace_buffer_page_size);
