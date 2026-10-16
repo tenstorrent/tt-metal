@@ -11,6 +11,8 @@
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
 
+    DataflowBuffer dfb_in_obj(dfb::in);
+    DataflowBuffer dfb_out_obj(dfb::out);
     compute_kernel_hw_startup(dfb::in, dfb::out);
 
     compute_kernel_lib::copy<
@@ -23,5 +25,6 @@ void kernel_main() {
             dfb::out,
             compute_kernel_lib::ReservePolicy::PerTile,
             compute_kernel_lib::PushPolicy::PerTile,
-            compute_kernel_lib::DataFormatReconfig::Disabled)>(compute_kernel_lib::IterationShape::tiles(num_tiles));
+            compute_kernel_lib::DataFormatReconfig::Disabled)>(
+        compute_kernel_lib::IterationShape::tiles(num_tiles), dfb_in_obj, dfb_out_obj);
 }
