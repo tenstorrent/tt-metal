@@ -12,6 +12,7 @@ reference packs them into one. ``v4_layer_from_checkpoint`` holds the per-layer 
 
 from __future__ import annotations
 
+import functools
 import json
 from collections.abc import Sequence
 from pathlib import Path
@@ -28,6 +29,13 @@ _NORM = "norm.weight"
 _HC_HEAD = ("hc_head_fn", "hc_head_base", "hc_head_scale")
 
 
+@functools.lru_cache(maxsize=4)
+def _weight_map(checkpoint_dir: Path) -> dict[str, str]:
+    """The index's key-to-shard map; a layer load reads it once per expert batch."""
+    with (checkpoint_dir / CHECKPOINT_INDEX).open(encoding="utf-8") as handle:
+        return json.load(handle)["weight_map"]
+
+
 def load_checkpoint_tensors(checkpoint_dir: Path, names: list[str]) -> dict[str, torch.Tensor]:
     """Read ``names`` from the shards the index puts each in, opening each shard once.
 
@@ -35,8 +43,7 @@ def load_checkpoint_tensors(checkpoint_dir: Path, names: list[str]) -> dict[str,
     tens of GiB. Grouping by shard is therefore not tidiness: opening one per tensor would open and
     parse that file once for every matrix in it.
     """
-    with (checkpoint_dir / CHECKPOINT_INDEX).open(encoding="utf-8") as handle:
-        weight_map = json.load(handle)["weight_map"]
+    weight_map = _weight_map(checkpoint_dir)
     missing = sorted(name for name in names if name not in weight_map)
     if missing:
         raise ValueError(f"{checkpoint_dir} index is missing {len(missing)} keys, first: {missing[:4]}")
