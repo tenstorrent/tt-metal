@@ -597,17 +597,25 @@ def test_sqrt_custom_infinity_regression(request):
 
 # expm1_cw_clamped's underflow clamp, sfpi::max(x, -87.0f), is an SFPSWAP total-order max:
 # it ranks a sign-set NaN (0xFFC00000, the default quiet NaN x86 produces for 0/0 and
-# inf-inf) below -87.0 and replaces it, so without a NaN guard ELU/CELU/SELU returned the
-# finite -alpha for a -NaN input while a +NaN input survived. Outside the edge sweep because
-# FLOAT_SPECIALS carries only the positive NaN. Float32 -> Float32 at dest_acc=Yes, where the
-# unpack-to-dest path hands the kernel the signed NaN and a NaN result reaches L1 as a NaN;
-# the sign of the NaN out is not asserted (SFPMAD leaves it unspecified on Wormhole).
+# inf-inf) below -87.0 and replaces it, so without a NaN guard ELU and SELU returned the
+# finite -alpha (and the Expm1Cw wrapper -1) for a -NaN input while a +NaN input survived.
+# Outside the edge sweep because FLOAT_SPECIALS carries only the positive NaN. Float32 ->
+# Float32 at dest_acc=Yes, where the unpack-to-dest path hands the kernel the signed NaN and
+# a NaN result reaches L1 as a NaN; the sign of the NaN out is not asserted (SFPMAD leaves
+# it unspecified on Wormhole).
 #
 # Expm1Cw is the test-only wrapper that passes dst_reg[0] straight into the helper, so it
-# probes the clamp directly on both architectures. ELU and SELU also pass x through
-# untouched. CELU scales its input first, so the NaN it hands the helper is an SFPMAD output
-# whose sign is unspecified on Wormhole and canonical (positive) on Blackhole; it is kept as
-# a regression check on the shared helper, not as the probe that demonstrates the defect.
+# probes the clamp directly on both architectures; ELU and SELU also pass x through
+# untouched, and the three demonstrate the defect. CELU only shares the helper: it scales
+# its input first, so what reaches the clamp is an SFPMAD output -- on Wormhole it failed
+# the same way, but on Blackhole SFPMAD's canonical (positive) NaN survives the max unaided.
+# It is kept as a regression check on the shared helper, not as a demonstrating probe.
+#
+# The driver's own golden gate is what fails a regression: passed_test accepts a Float32
+# lane only if it is within tolerance or both sides are NaN, so a finite result on a lane
+# whose golden is NaN fails there (with its generic message) before this test's asserts run.
+# What they add is the check that the NaN probes were delivered and judged at all, and a
+# tighter band on the finite lanes than the op's tolerance.
 _NEGATIVE_NAN = struct.unpack("<f", struct.pack("<I", 0xFFC00000))[0]
 
 _EXPM1_CW_NAN_OPS = [
@@ -653,19 +661,15 @@ def test_expm1_cw_negative_nan_regression(mathop):
     )
     golden = torch.as_tensor(golden, dtype=torch.float32)
 
-    # The driver's own golden gate already fails a finite result on a NaN lane (it accepts a
-    # NaN of either sign there); these name the lane and hold the finite lanes to a tighter
-    # band than the op's tolerance.
+    # The NaN probes reached the golden, once per face: if this count drifts the driver's
+    # gate above judged fewer NaN lanes than the probe list promises.
     nan_lanes = torch.isnan(golden)
-    assert nan_lanes.sum().item() == 2 * FACES_PER_TILE, (
-        "the golden no longer returns NaN for exactly the two NaN probes per face; "
-        f"got {nan_lanes.sum().item()} NaN lanes"
+    expected_nan_lanes = (
+        sum(math.isnan(p) for p in _EXPM1_CW_NAN_PROBES) * FACES_PER_TILE
     )
-    assert torch.isnan(res[nan_lanes]).all(), (
-        f"{mathop.name} returned {res[nan_lanes].tolist()} on the NaN input lanes, expected "
-        "NaN. The NaN guard around the underflow clamp in ckernel_sfpu_expm1_cw.h is what "
-        "keeps a sign-set NaN out of sfpi::max; a finite value close to -alpha (or -1 for "
-        "Expm1Cw) means the clamp absorbed it."
+    assert nan_lanes.sum().item() == expected_nan_lanes, (
+        f"the golden returned NaN on {nan_lanes.sum().item()} lanes, expected "
+        f"{expected_nan_lanes} (the NaN probes once per face)"
     )
     # Tolerance, not equality: the Cody-Waite expm1 is an approximation, so the band only has
     # to separate the right arm from the wrong one (and -1 from a passed-through -inf).
