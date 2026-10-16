@@ -32,6 +32,26 @@ def _hifi4(device):
     )
 
 
+@dataclass(frozen=True)
+class Precision:
+    """Numerics switches. All on by default: with tt_dit's Wan settings (all off) the per-call error was ~10x the CPU
+    bf16 floor and the 12-step sample missed G1 (last call 0.960); with all on, a single pass matches that floor."""
+
+    sdpa_hifi4_fp32_acc: bool = True  # SDPA at HiFi4 with fp32 dest accumulation (off: HiFi2, bf16 acc)
+    linear_hifi4: bool = True  # every Linear at HiFi4 (off: HiFi2; both accumulate in fp32)
+    fp32_residual: bool = True  # keep the residual stream x in fp32 between blocks (off: bf16)
+
+
+def _norm_in(x: ttnn.Tensor) -> ttnn.Tensor:
+    return ttnn.typecast(x, ttnn.bfloat16) if x.dtype != ttnn.bfloat16 else x
+
+
+def _residual_add(x: ttnn.Tensor, branch: ttnn.Tensor) -> ttnn.Tensor:
+    if x.dtype != branch.dtype:
+        branch = ttnn.typecast(branch, x.dtype)
+    return ttnn.add(x, branch)
+
+
 @dataclass
 class DeviceTables:
     """Per-request constants shared by every block."""
@@ -60,15 +80,18 @@ class MultiHeadRMSNorm(Module):
 
 
 class Attention(Module):
-    def __init__(self, dim: int, num_heads: int, *, ctx_dim: int | None, mesh_device: ttnn.MeshDevice) -> None:
+    def __init__(
+        self, dim: int, num_heads: int, *, ctx_dim: int | None, mesh_device: ttnn.MeshDevice, precision: Precision
+    ) -> None:
         super().__init__()
         self.is_self = ctx_dim is None
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.to_q = Linear(dim, dim, mesh_device=mesh_device)
-        self.to_k = Linear(ctx_dim or dim, dim, mesh_device=mesh_device)
-        self.to_v = Linear(ctx_dim or dim, dim, mesh_device=mesh_device)
-        self.to_out = Linear(dim, dim, mesh_device=mesh_device)
+        mm = _hifi4(mesh_device) if precision.linear_hifi4 else None
+        self.to_q = Linear(dim, dim, mesh_device=mesh_device, compute_kernel_config=mm)
+        self.to_k = Linear(ctx_dim or dim, dim, mesh_device=mesh_device, compute_kernel_config=mm)
+        self.to_v = Linear(ctx_dim or dim, dim, mesh_device=mesh_device, compute_kernel_config=mm)
+        self.to_out = Linear(dim, dim, mesh_device=mesh_device, compute_kernel_config=mm)
         self.q_rms_norm = MultiHeadRMSNorm(num_heads, self.head_dim, mesh_device=mesh_device)
         self.k_rms_norm = MultiHeadRMSNorm(num_heads, self.head_dim, mesh_device=mesh_device)
 
@@ -81,9 +104,9 @@ class Attention(Module):
         )
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4 if precision.sdpa_hifi4_fp32_acc else ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=precision.sdpa_hifi4_fp32_acc,
         )
         self.rope_compute_kernel_config = _hifi4(mesh_device)
 
@@ -131,10 +154,11 @@ class Attention(Module):
 
 
 class FeedForward(Module):
-    def __init__(self, dim: int, hidden: int, *, mesh_device: ttnn.MeshDevice) -> None:
+    def __init__(self, dim: int, hidden: int, *, mesh_device: ttnn.MeshDevice, precision: Precision) -> None:
         super().__init__()
-        self.ff1 = Linear(dim, hidden, activation_fn="gelu_tanh", mesh_device=mesh_device)
-        self.ff2 = Linear(hidden, dim, mesh_device=mesh_device)
+        mm = _hifi4(mesh_device) if precision.linear_hifi4 else None
+        self.ff1 = Linear(dim, hidden, activation_fn="gelu_tanh", mesh_device=mesh_device, compute_kernel_config=mm)
+        self.ff2 = Linear(hidden, dim, mesh_device=mesh_device, compute_kernel_config=mm)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         for src, dst in (("mlp.0", "ff1"), ("mlp.2", "ff2")):
@@ -149,15 +173,17 @@ class FeedForward(Module):
 class Block(Module):
     """ModulatedTransformerCrossBlock with share_mod: adaLN self-attn, affine-LN cross-attn (no gate), adaLN MLP."""
 
-    def __init__(self, *, mesh_device: ttnn.MeshDevice) -> None:
+    def __init__(self, *, mesh_device: ttnn.MeshDevice, precision: Precision) -> None:
         super().__init__()
         d = host.MODEL_CHANNELS
         self.norm1 = LayerNorm(d, norm_eps=host.BLOCK_NORM_EPS, norm_elementwise_affine=False, mesh_device=mesh_device)
         self.norm2 = LayerNorm(d, norm_eps=host.BLOCK_NORM_EPS, norm_elementwise_affine=True, mesh_device=mesh_device)
         self.norm3 = LayerNorm(d, norm_eps=host.BLOCK_NORM_EPS, norm_elementwise_affine=False, mesh_device=mesh_device)
-        self.self_attn = Attention(d, host.NUM_HEADS, ctx_dim=None, mesh_device=mesh_device)
-        self.cross_attn = Attention(d, host.NUM_HEADS, ctx_dim=host.COND_CHANNELS, mesh_device=mesh_device)
-        self.mlp = FeedForward(d, host.MLP_CHANNELS, mesh_device=mesh_device)
+        self.self_attn = Attention(d, host.NUM_HEADS, ctx_dim=None, mesh_device=mesh_device, precision=precision)
+        self.cross_attn = Attention(
+            d, host.NUM_HEADS, ctx_dim=host.COND_CHANNELS, mesh_device=mesh_device, precision=precision
+        )
+        self.mlp = FeedForward(d, host.MLP_CHANNELS, mesh_device=mesh_device, precision=precision)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # the per-block modulation table is folded into the host-side adaLN vectors
@@ -165,20 +191,21 @@ class Block(Module):
 
     def forward(self, x: ttnn.Tensor, mod: list[ttnn.Tensor], context: ttnn.Tensor, tables: DeviceTables):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = mod
-        h = ttnn.add(ttnn.multiply(self.norm1(x), scale_msa), shift_msa)
-        x = ttnn.add(x, ttnn.multiply(self.self_attn(h, tables), gate_msa))
-        x = ttnn.add(x, self.cross_attn(self.norm2(x), tables, context))
-        h = ttnn.add(ttnn.multiply(self.norm3(x), scale_mlp), shift_mlp)
-        return ttnn.add(x, ttnn.multiply(self.mlp(h), gate_mlp))
+        h = ttnn.add(ttnn.multiply(_norm_in(self.norm1(x)), scale_msa), shift_msa)
+        x = _residual_add(x, ttnn.multiply(self.self_attn(h, tables), gate_msa))
+        x = _residual_add(x, self.cross_attn(_norm_in(self.norm2(x)), tables, context))
+        h = ttnn.add(ttnn.multiply(_norm_in(self.norm3(x)), scale_mlp), shift_mlp)
+        return _residual_add(x, ttnn.multiply(self.mlp(h), gate_mlp))
 
 
 class TtStructureFlow(Module):
-    def __init__(self, *, mesh_device: ttnn.MeshDevice) -> None:
+    def __init__(self, *, mesh_device: ttnn.MeshDevice, precision: Precision = Precision()) -> None:
         super().__init__()
         self.mesh_device = mesh_device
+        self.precision = precision
         d = host.MODEL_CHANNELS
         self.input_layer = Linear(host.CHANNEL_PAD, d, mesh_device=mesh_device)
-        self.blocks = ModuleList(Block(mesh_device=mesh_device) for _ in range(host.NUM_BLOCKS))
+        self.blocks = ModuleList(Block(mesh_device=mesh_device, precision=precision) for _ in range(host.NUM_BLOCKS))
         self.final_norm = LayerNorm(
             d, norm_eps=host.FINAL_NORM_EPS, norm_elementwise_affine=False, mesh_device=mesh_device
         )
@@ -227,8 +254,10 @@ class TtStructureFlow(Module):
         mods = self.modulation(t)
         context = bf16_tensor(host.pad_context(cond.float()), device=dev)
         h = self.input_layer(bf16_tensor(host.x_to_tokens(x.float()), device=dev))
+        if self.precision.fp32_residual:
+            h = ttnn.typecast(h, ttnn.float32)
         for block, mod in zip(self.blocks, mods):
             h = block(h, mod, context, tables)
-        h = self.out_layer(self.final_norm(h))
+        h = self.out_layer(_norm_in(self.final_norm(h)))
         out = ttnn.to_torch(ttnn.get_device_tensors(h)[0]).float()
         return host.tokens_to_x(out)
