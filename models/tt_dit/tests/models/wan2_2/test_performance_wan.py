@@ -15,7 +15,7 @@ from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
 from models.tt_dit.pipelines.events import profiler_event_callback
-from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig, is_dram_harvested
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config
 from models.tt_dit.utils.video import export_to_video
@@ -278,6 +278,7 @@ def test_pipeline_performance(
         device=mesh_device,
         config=WanPipelineConfig.default(
             mesh_shape=mesh_device.shape,
+            dram_harvested=is_dram_harvested(mesh_device),
             dit_parallel_config=parallel_config,
             vae_parallel_config=vae_parallel_config,
             encoder_parallel_config=encoder_parallel_config,
