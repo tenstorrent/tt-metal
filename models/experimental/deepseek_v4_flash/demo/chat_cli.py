@@ -54,16 +54,24 @@ from __future__ import annotations
 import argparse
 import contextlib
 import os
+import re
 import sys
 import time
 from collections import deque
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 import torch
 from loguru import logger
 
 import ttnn
-from models.experimental.deepseek_v4_flash.encoding_dsv4 import REASONING_EFFORTS, render_message
+from models.experimental.deepseek_v4_flash.encoding_dsv4 import (
+    REASONING_EFFORTS,
+    merge_tool_messages,
+    render_message,
+    sort_tool_results_by_call_order,
+)
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
 from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import PagedCacheFull, round_context
@@ -91,6 +99,51 @@ _DECODE_RATE_WINDOW = 64
 # generation. Prefill already queues the whole prompt; decode cannot (EOS can stop it),
 # so this is a rolling window. Leftovers are dummy-drained if the reply ends early.
 _DECODE_REPLAY_AHEAD = 32
+
+
+_DSML = "｜DSML｜"  # U+FF5C FULLWIDTH VERTICAL LINE, as in the model's other special tokens
+
+
+@dataclass
+class ChatFormat:
+    """What a checkpoint's chat encoding fixes for the CLI and the server.
+
+    How a message renders, how OpenAI ``tool`` turns fold into user turns, the reasoning efforts it takes, and the
+    DSML tag names the model writes its tool calls with: ``<｜DSML｜{calls_tag}>`` around one
+    ``<｜DSML｜{invoke_tag} name="...">`` per call, each holding ``<｜DSML｜{parameter_tag} name="..." string="...">``
+    values. V4 writes ``tool_calls`` / ``invoke`` / ``parameter``; V4.1 renamed them.
+    """
+
+    render_message: Callable
+    merge_tool_messages: Callable
+    sort_tool_results_by_call_order: Callable
+    reasoning_efforts: tuple
+    calls_tag: str = "tool_calls"
+    invoke_tag: str = "invoke"
+    parameter_tag: str = "parameter"
+    # Efforts accepted on the command line or in a request but not by the encoding, rendered as another.
+    effort_aliases: dict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.calls_open = f"<{_DSML}{self.calls_tag}>"
+        self.calls_close = f"</{_DSML}{self.calls_tag}>"
+        invoke, parameter = re.escape(self.invoke_tag), re.escape(self.parameter_tag)
+        self.invoke_re = re.compile(
+            rf'<{_DSML}{invoke} name="(?P<name>[^"]*)">(?P<body>.*?)</{_DSML}{invoke}>', re.DOTALL
+        )
+        self.param_re = re.compile(
+            rf'<{_DSML}{parameter} name="(?P<name>[^"]*)" string="(?P<string>true|false)">'
+            rf"(?P<value>.*?)</{_DSML}{parameter}>",
+            re.DOTALL,
+        )
+
+    def render(self, index: int, messages: list[dict], thinking_mode: str, reasoning_effort=None) -> str:
+        """Message ``index`` of ``messages`` in the checkpoint's prompt format."""
+        effort = self.effort_aliases.get(reasoning_effort, reasoning_effort)
+        return self.render_message(index, messages, thinking_mode, reasoning_effort=effort)
+
+
+V4_CHAT_FORMAT = ChatFormat(render_message, merge_tool_messages, sort_tool_results_by_call_order, REASONING_EFFORTS)
 
 
 class ContextFull(RuntimeError):
@@ -302,6 +355,8 @@ class ChatEngine:
     ``prefetcher`` is a stack owned by the caller that the model's prefetcher session is
     entered on, so the DRISC senders stay up for as long as the engine is alive.
     """
+
+    chat_format: ChatFormat = V4_CHAT_FORMAT
 
     def __init__(self, mesh_device, args, prefetcher: contextlib.ExitStack):
         from transformers import AutoTokenizer
@@ -600,7 +655,7 @@ class UserSession:
         # Past assistant turns are skipped: the model's own tokens are in the cache
         # already (see the EOS handling below).
         rendered = "".join(
-            render_message(i, self.messages, self.thinking_mode, reasoning_effort=self.reasoning_effort)
+            self.engine.chat_format.render(i, self.messages, self.thinking_mode, self.reasoning_effort)
             for i in range(self._next_render, len(self.messages))
             if self.messages[i]["role"] != "assistant"
         )
