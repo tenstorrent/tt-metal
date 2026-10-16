@@ -451,6 +451,7 @@ def _scan_sp_grouped_chunks(
     ring_relay: RingRelayPrefix | None = None,
     final_carry: "_RelayFinalCarry | None" = None,
     prefix_companion=None,
+    carry_companion=None,
 ) -> RecurrenceResult:
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
@@ -536,7 +537,15 @@ def _scan_sp_grouped_chunks(
         # The relay leaves the prefix's final state on the first and last chronological ranks only: without a split
         # tail the last rank multicasts it, with one the tail's owner multicasts its own.
         return RecurrenceResult(
-            output, final_carry(rank_final, prefix_final_state, actual_start, actual_end, geometry.local_rows)
+            output,
+            final_carry(
+                rank_final,
+                prefix_final_state,
+                actual_start,
+                actual_end,
+                geometry.local_rows,
+                companion=carry_companion,
+            ),
         )
     # The device chooses the completed tail when split, or the prefix's final state when unsplit, at runtime: only
     # the owner of a separated tail sends its last group's state over the fabric.
@@ -562,14 +571,17 @@ class _RelayFinalCarry:
         self._cores = [ttnn.CoreCoord(x, y) for y in range(grid.y - 1, grid.y - 3, -1) for x in range(grid.x)]
         self._device = device
 
-    def __call__(self, rank_final, prefix_final, actual_start, actual_end, local_rows):
+    def __call__(self, rank_final, prefix_final, actual_start, actual_end, local_rows, companion=None):
+        """companion: as RingRelayPrefix's, a program on the worker rows above the final carry's, run alongside."""
         output = self._program.allocate_output(prefix_final)
+        if companion is not None:
+            companion = companion()
         rows, cols = tuple(self._device.shape)
         desc = ttnn.MeshProgramDescriptor()
         for r in range(rows):
             for c in range(cols):
                 key = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))
-                desc[key] = self._program.program(
+                program = self._program.program(
                     (r, c),
                     self._cores,
                     rank_final=rank_final,
@@ -580,7 +592,12 @@ class _RelayFinalCarry:
                     local_rows=local_rows,
                     prefix_on_last_rank=True,
                 )
+                if companion is not None:
+                    program = ttnn.merge_program_descriptors([program, companion[1][key]])
+                desc[key] = program
         io = [t for t in (rank_final, prefix_final, actual_start, actual_end) if t is not None]
+        if companion is not None:
+            io += list(companion[0])
         ttnn.generic_op(io + [output], desc)
         return output
 
@@ -787,6 +804,7 @@ class KDARecurrence:
         beta_logits_column_offset: int,
         release_gate: bool = False,
         prefix_companion=None,
+        carry_companion=None,
     ) -> RecurrenceResult:
         """Execute the constructed graph using caller-owned state and chronology.
 
@@ -794,7 +812,8 @@ class KDARecurrence:
         pre-sigmoid logits, such as the fused input projection; chunk preparation applies the sigmoid.
         With ``release_gate`` the recurrence takes ownership of ``gate`` and frees it once chunk preparation has
         read it. ``prefix_companion`` returns (io_tensors, MeshProgramDescriptor) of a program on the worker cores the
-        SP ring relay leaves idle (``ring_relay_cores``), built and dispatched together with the relay.
+        SP ring relay leaves idle (``ring_relay_cores``), built and dispatched together with the relay;
+        ``carry_companion`` likewise one on the worker rows above the final carry's (``final_carry_cores``).
         """
         if prefix_companion is not None and not self.uses_ring_relay:
             raise ValueError("a prefix companion program needs the SP ring relay")
@@ -810,8 +829,8 @@ class KDARecurrence:
             beta_logits_column_offset=beta_logits_column_offset,
             release_gate=release_gate,
         )
-        if prefix_companion is not None:
-            result = self._run_sp(prepared, state, actual_start, actual_end, prefix_companion)
+        if prefix_companion is not None or carry_companion is not None:
+            result = self._run_sp(prepared, state, actual_start, actual_end, prefix_companion, carry_companion)
         else:
             result = self._execute(prepared, state, actual_start, actual_end)
         # Release the chunk terms as soon as the scan consumed them, so every call sees the same free memory.
@@ -861,6 +880,11 @@ class KDARecurrence:
         return self._ring_relay is not None
 
     @property
+    def final_carry_cores(self) -> list[ttnn.CoreCoord]:
+        """Worker cores the relay's final carry program runs on."""
+        return list(self._relay_final_carry._cores)
+
+    @property
     def ring_relay_cores(self) -> list[ttnn.CoreCoord]:
         """Worker cores the SP ring relay runs on (one per head, then one per link)."""
         return list(self._ring_relay.head_cores) + list(self._ring_relay.sender_cores)
@@ -872,6 +896,7 @@ class KDARecurrence:
         actual_start: ttnn.Tensor,
         actual_end: ttnn.Tensor | None,
         prefix_companion=None,
+        carry_companion=None,
     ) -> RecurrenceResult:
         return _scan_sp_grouped_chunks(
             prepared,
@@ -888,4 +913,5 @@ class KDARecurrence:
             ring_relay=self._ring_relay,
             final_carry=self._relay_final_carry,
             prefix_companion=prefix_companion,
+            carry_companion=carry_companion,
         )

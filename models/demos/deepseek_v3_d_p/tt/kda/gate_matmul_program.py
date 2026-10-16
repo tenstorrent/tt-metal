@@ -265,7 +265,7 @@ class GateMatmulProgram:
         k_block = self.k_block
         assert Kt % k_block == 0, f"K={Kt} tiles must split into {k_block}-tile blocks"
         k_blocks = Kt // k_block
-        sub_w = max(s for s in (4, 2, 1) if n_block % s == 0)
+        sub_w = max(s for s in (4, 3, 2, 1) if n_block % s == 0)
         out_row_tiles = output.padded_shape[-1] // 32
         rect = ttnn.CoreRange(ttnn.CoreCoord(self.x0, self.y0), ttnn.CoreCoord(self.x1, self.y1))
         rect_set = ttnn.CoreRangeSet([rect])
