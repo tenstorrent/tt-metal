@@ -21,7 +21,7 @@ import torch
 import ttnn
 
 from .common import TILE, DramShardedMatmul, as_weight, cache_exists, cache_name, compute_config, mcast_1d_config
-from .moe_route import MoERoute
+from .moe_stream import GateUpStream, is_dram_interleaved
 
 
 class TtMiMoMoE:
@@ -31,6 +31,7 @@ class TtMiMoMoE:
         self.plan = plan
         self.cfg = cfg
         self.layer_idx = layer_idx
+        self.expert_dtype = expert_dtype
         tp = plan.tp
         self.num_experts = cfg.n_routed_experts
         self.hidden = cfg.hidden_size
@@ -87,6 +88,8 @@ class TtMiMoMoE:
         self.gate_up_program = mcast_1d_config((8, 2), TILE, 2 * self.inter_local, self.hidden, in0_block_w=64)
         self.down_program = mcast_1d_config((8, 8), TILE, self.hidden, self.inter_local, in0_block_w=8)
         self.decode_users = None
+        self.gate_up_stream = None
+        self.ids_buf = None
 
     def _zeros(self, num_tokens):
         """Cached [1, 1, T, E] zeros. ``ttnn.zeros`` writes from the host, which a trace capture cannot do,
@@ -168,10 +171,14 @@ class TtMiMoMoE:
     def set_decode_users(self, num_users):
         """Decode serves users in slots [0, num_users): their (user, top-k) pairs are the experts computed."""
         self.decode_users = num_users
+        pairs = num_users * self.cfg.num_experts_per_tok
+        # pair j = user * k + slot -> one-hot row of its token in the 32-row tile: [1, pairs, 32, 1]
+        onehot = torch.zeros(1, pairs, TILE, 1)
+        onehot[0, torch.arange(pairs), torch.arange(pairs) // self.cfg.num_experts_per_tok, 0] = 1
         rep = self.plan.replicate()
-        # Decode routing after the sigmoid (top-k, normalize, mask, per-pair row weights) in one small program.
-        assert self.cfg.norm_topk_prob and self.cfg.routed_scaling_factor == 1.0
-        self.router = MoERoute(self.plan, self.num_experts, self.cfg.num_experts_per_tok, num_users)
+        self.pair_onehot = ttnn.from_torch(
+            onehot, device=self.plan.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep
+        )
         # indexed sparse_matmul still takes a sparsity operand sized to the expert axis; it is not read
         self.all_experts = ttnn.from_torch(
             torch.ones(1, 1, 1, self.num_experts),
@@ -180,6 +187,79 @@ class TtMiMoMoE:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=rep,
         )
+        if self.expert_dtype == ttnn.bfloat4_b and num_users <= GateUpStream.MAX_USERS:
+            # BFP4 decode: top-k routing, gate|up, SwiGLU and the routing weight in one bank-local DRAM-streaming
+            # program. It writes only row u of pair (u, k) into this persistent zeroed activation (the other rows
+            # stay zero) and the pairs' uint16 expert ids into ids_buf for the down sparse_matmul.
+            self.gate_up_stream = GateUpStream(
+                self.plan,
+                self.hidden,
+                self.inter_local,
+                pairs,
+                self.cfg.num_experts_per_tok,
+                self.num_experts,
+                norm_topk_prob=self.cfg.norm_topk_prob,
+                routed_scaling_factor=self.cfg.routed_scaling_factor,
+            )
+            # Same row-major uint16 [1, 1, 1, pairs] stick the routing glue used to build with typecast.
+            ids32 = ttnn.from_torch(
+                torch.zeros(1, 1, 1, pairs, dtype=torch.int32),
+                device=self.plan.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=rep,
+            )
+            self.ids_buf = ttnn.typecast(ids32, ttnn.uint16)
+            ids32.deallocate(True)
+            self.act_buf = ttnn.from_torch(
+                torch.zeros(1, pairs, TILE, self.inter_local),
+                device=self.plan.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=rep,
+            )
+
+    def _forward_decode_stream(self, x, token_mask):
+        """BFP4 decode: fp32 router logits, sigmoid and +bias, then one streaming program that selects every user's
+        fp32 top-k, normalizes and masks the weights and computes gate|up + SwiGLU + routing weight; then the
+        indexed down sparse_matmul on the expert ids that program wrote."""
+        logits = self._router_logits(x)
+        scores = ttnn.sigmoid(logits)
+        logits.deallocate(True)
+        biased = ttnn.add(scores, self.score_bias)
+
+        def dram(t):
+            if t is None or is_dram_interleaved(t):
+                return t
+            return ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG)
+
+        srcs = (x, scores, biased, token_mask)
+        x_in, s_in, b_in, m_in = (dram(t) for t in srcs)
+        act_w = self.gate_up_stream(x_in, s_in, b_in, m_in, self.w_gate_up, self.act_buf, self.ids_buf)
+        for t, src in zip((x_in, s_in, b_in, m_in), srcs):
+            if t is not src:
+                t.deallocate(True)
+        scores.deallocate(True)
+        biased.deallocate(True)
+
+        down = ttnn.sparse_matmul(
+            act_w,
+            self.w_down,
+            sparsity=self.all_experts,
+            indices=self.ids_buf,
+            is_input_a_sparse=True,
+            is_input_b_sparse=True,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([TILE, TILE]),
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.expert_config,
+            program_config=self.down_program,
+        )  # [1, pairs, 32, H]
+        out = ttnn.sum(down, dim=1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, 32, H]
+        down.deallocate(True)
+        return self.plan.all_reduce(out)
 
     def forward_decode(self, x, token_mask):
         """Decode: x [1, 1, 32, hidden], users in rows [0, decode_users). Computes only the selected experts.
@@ -187,6 +267,8 @@ class TtMiMoMoE:
         Each (user, k) pair is one entry of an indexed sparse_matmul over the 256 experts: gate|up for the
         pair's expert on all 32 rows, the routing weight applied to the pair's own row (the other rows are
         zeroed), down for the same expert, then a sum over pairs. Nothing is materialized per expert."""
+        if self.gate_up_stream is not None:
+            return self._forward_decode_stream(x, token_mask)
         U, k = self.decode_users, self.cfg.num_experts_per_tok
         pairs = U * k
         H, I = self.hidden, self.inter_local
@@ -194,15 +276,24 @@ class TtMiMoMoE:
         # that the expert weights stream from.
         L1 = ttnn.L1_MEMORY_CONFIG
         logits = self._router_logits(x)
-        scores = ttnn.sigmoid(logits)
+        indices, weights = self._topk(logits)
         logits.deallocate(True)
-        biased = ttnn.add(scores, self.score_bias)
-        # uint16 expert id per (user, k) pair and the pair's routing weight on its user's row ([1, pairs, 32, 1]);
-        # both are persistent buffers of the routing program, rewritten every call.
-        ids, _ = self.router(scores, biased, token_mask)
-        row_weight = self.router.row_weight
-        scores.deallocate(True)
-        biased.deallocate(True)
+
+        idx_u = ttnn.slice(indices, (0, 0, 0, 0), (1, 1, U, k))
+        # reshape does not take uint16, so flatten while uint32, then narrow to the uint16 stick sparse_matmul wants
+        ids = ttnn.typecast(ttnn.reshape(ttnn.to_layout(idx_u, ttnn.ROW_MAJOR_LAYOUT), (1, 1, 1, pairs)), ttnn.uint16)
+        # The mask is 0/1, so rounding to bf16 before masking is bit-identical to masking in fp32 first;
+        # masking the whole tile with a broadcast mul avoids slicing and typecasting the mask.
+        w_bf16 = ttnn.typecast(weights, ttnn.bfloat16)
+        w_masked = ttnn.mul(w_bf16, token_mask)
+        w_u = ttnn.slice(w_masked, (0, 0, 0, 0), (1, 1, U, k))
+        w_col = ttnn.to_layout(
+            ttnn.reshape(ttnn.to_layout(w_u, ttnn.ROW_MAJOR_LAYOUT), (1, pairs, 1, 1)),
+            ttnn.TILE_LAYOUT,
+        )
+        row_weight = ttnn.mul(self.pair_onehot, w_col, memory_config=L1)  # [1, pairs, 32, 1]
+        for t in (indices, weights, idx_u, w_bf16, w_masked, w_u, w_col):
+            t.deallocate(True)
 
         out_tile = ttnn.Tile([TILE, TILE])
         gate_up = ttnn.sparse_matmul(
@@ -219,6 +310,7 @@ class TtMiMoMoE:
         act = self._swiglu(ttnn.reshape(gate_up, (1, pairs, TILE, 2 * I)), memory_config=L1)
         act_w = ttnn.mul(act, row_weight, memory_config=L1)
         act.deallocate(True)
+        row_weight.deallocate(True)
         down = ttnn.sparse_matmul(
             act_w,
             self.w_down,
@@ -233,6 +325,7 @@ class TtMiMoMoE:
             program_config=self.down_program,
         )  # [1, pairs, 32, H]
         act_w.deallocate(True)
+        ids.deallocate(True)
         out = ttnn.sum(down, dim=1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, 32, H]
         down.deallocate(True)
         return self.plan.all_reduce(out)
