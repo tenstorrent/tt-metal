@@ -178,7 +178,10 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
         "ttnn/cpp/ttnn/operations/embedding_backward/device/kernels/compute/embedding_backward.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = {max_tiles_per_core, input_height_tiles};
+    // With 8 or fewer 32-row chunks a 32-token block averages 4 or more live rows per reshuffle call, where the
+    // replayed form is faster; with more chunks most calls carry one or two rows and the direct form is.
+    const uint32_t reshuffle_replay = num_embeddings_tiles <= 8 ? 1 : 0;
+    compute_desc.compile_time_args = {max_tiles_per_core, input_height_tiles, reshuffle_replay};
     compute_desc.config = ComputeConfigDescriptor{};
 
     ////////////////////////////////////////////////////////////////////////////
