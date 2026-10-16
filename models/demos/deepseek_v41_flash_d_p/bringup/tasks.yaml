@@ -3466,6 +3466,14 @@ tasks:
     kind: residual
     layer: 2
     stateful: false
+  frozen:
+    at: '2026-10-16T23:46:49'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_residual.py: 3e2b6055ddf06baba18f3bde0f2ca37435e7f128a7b93c0f8ce05b935596af5d
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.enc_source.17
   title: 'enc_source block with steps 1-17 on device (last: ffn_residual)'
   step: implement
