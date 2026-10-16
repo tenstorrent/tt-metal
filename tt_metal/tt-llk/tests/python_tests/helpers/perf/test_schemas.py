@@ -131,7 +131,7 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_binary_sfpu": {
-        "version": 6,
+        "version": 7,
         "columns": [
             "approx_mode",
             "block_ct_dim",

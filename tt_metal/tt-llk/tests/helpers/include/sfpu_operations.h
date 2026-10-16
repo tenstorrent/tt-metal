@@ -2408,11 +2408,8 @@ void call_binary_sfpu_operation(
     }
     else if constexpr (BINOP == BinaryOp::COPY_DEST)
     {
-        // copy_dest_value(in, out, unused). The shared driver passes (tile, tile + 1, tile),
-        // so the source is in1: copying in0 would write a tile onto itself. A 32-bit Dest
-        // stores the full word, and GetSfpLoadStoreInstrMod defaults is_fp32_dest_acc_en to
-        // false, so a narrow math format is passed as Float32. Int32 is already full width.
-        // Block-float Dest without accumulation holds bf16.
+        // Copy in1 to out; in0 would copy a tile onto itself. A 32-bit dest uses
+        // Float32 unless the math format is Int32.
         constexpr bool copy_full_word = DST_ACCUM_MODE && MATH_FORMAT != static_cast<std::uint32_t>(DataFormat::Int32);
         constexpr bool copy_fp16      = MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Float16);
         constexpr bool copy_bf16      = MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Float16_b) ||
