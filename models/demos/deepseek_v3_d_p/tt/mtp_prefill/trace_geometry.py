@@ -289,7 +289,8 @@ class MTPTraceGeometry:
         assert 0 <= provided_levels <= k_levels, f"provided_levels {provided_levels} outside [0, {k_levels}]"
         assert k_levels <= tile, f"rows packs one level per column of a {tile}-wide tile; K={k_levels}"
         generated = range(provided_levels, k_levels)
-        landing = self._generation_rows(actual_start, actual_end, generated)
+        # A provided chunk reads only the split-chip windows, so it skips the per-chip position lists.
+        landing = self._generation_rows(actual_start, actual_end, generated) if generated else {}
         tile_start, source_row = 0, 0
         if generated:
             last_row = rotated_row_of_position(actual_start, self.sp_factor, w, actual_end - 1)
