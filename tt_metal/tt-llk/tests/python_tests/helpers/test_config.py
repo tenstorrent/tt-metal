@@ -131,7 +131,7 @@ class TestConfig:
     ARCH_LLK_ROOT: ClassVar[str]
     ARCH: ClassVar[str]
     QUASAR_VECTOR_MARCH: ClassVar[str] = (
-        "-march=rv32im_zmmul_zaamo_zve32x_zvl128b_xtttensixqsr_xttzbkb"
+        "-march=rv32im_zmmul_zaamo_zve32f_zvl128b_xtttensixqsr_xttzbkb"
     )
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
@@ -209,7 +209,7 @@ class TestConfig:
     # silicon init_ttexalens and the RTL remote connect both happen after it.
     _PENDING_WORKER_INDEX: ClassVar[int | None] = None
     STIMULI_ADDRESS_MAP: ClassVar[dict[str, int]] = {}
-    SIMULATOR_TIMEOUT: ClassVar[int] = 600
+    SIMULATOR_TIMEOUT: ClassVar[int] = 20000
 
     # When the infrastructure itself needs to be tested, some functionality like compiling the artefacts and writing them
     # to tmpfs can be skipped (eg. object, elf and coverage data files etc.). This flag is used to skip such code to enable fast execution of infra tests.
