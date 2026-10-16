@@ -19,7 +19,7 @@ namespace ckernel::sfpu
 {
 
 template <int SUBOP>
-__attribute__((noinline)) void calculate_int_sum_fresh_cpp()
+inline void calculate_int_sum_fresh_cpp()
 {
     if constexpr (SUBOP == 0)
     {
