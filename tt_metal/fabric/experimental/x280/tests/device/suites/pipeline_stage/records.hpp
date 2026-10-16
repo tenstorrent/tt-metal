@@ -35,6 +35,8 @@ struct Launch {
     uint32_t timed = 0u;
     uint32_t instrumentation = 0u;
     const pipeline_stage_samples_t* samples = nullptr;
+    // route_forward only: the LIM address of the header it decides on.
+    uint64_t header_base = 0u;
 };
 
 namespace detail {
@@ -111,6 +113,7 @@ inline x280::harness::output::RecordSpec x280_route_compute_record(const Launch&
         fields.end(),
         {{"fixture", "direction_table_v1"},
          {"header_count", PIPELINE_STAGE_LOOKUP_HEADER_COUNT},
+         {"header_placement", "uncached_lim"},
          {"prepared_input_base", X280_PINNED_INPUT_BASE},
          {"prepared_input_bytes", X280_PINNED_INPUT_SPAN}});
     detail::append_x280_policy(fields);
@@ -132,21 +135,24 @@ inline x280::harness::output::RecordSpec x280_route_compute_record(const Launch&
 /**
  * The X280 route_forward record: the DECIDE identity, the raw batch and the
  * rdcycle samples, its explicit warm-up, on the fixed mtime clock. Throws
- * std::invalid_argument for an instrumented run, and as validate_measurement()
- * does.
+ * std::invalid_argument for an instrumented run or a zero header_base, and as
+ * validate_measurement() does.
  */
 inline x280::harness::output::RecordSpec x280_route_forward_record(const Launch& launch) {
     namespace hout = x280::harness::output;
     if (launch.instrumentation != PIPELINE_STAGE_INSTRUMENTATION_OFF) {
         throw std::invalid_argument("route_forward requires instrumentation to be OFF");
     }
+    if (launch.header_base == 0u) {
+        throw std::invalid_argument("route_forward requires the LIM header_base it decided on");
+    }
     const auto samples = validate_measurement(launch.result, launch.samples, launch.timed, launch.instrumentation);
     auto fields = detail::head_fields(launch);
     fields.insert(
         fields.end(),
-        {{"source_placement", "pinned_zero_device"},
-         {"source_base", X280_PINNED_INPUT_FIRST_HEADER_BASE},
-         {"source_bytes", X280_PINNED_INPUT_HEADER_BYTES}});
+        {{"source_placement", "uncached_lim"},
+         {"source_base", launch.header_base},
+         {"source_bytes", FS_PACKET_HEADER_BYTES}});
     detail::append_x280_policy(fields);
     detail::append_progress(fields, launch);
     detail::append_forward_identity(fields);

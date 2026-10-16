@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "rt/x280_pinned_input.h"
 
@@ -179,18 +180,34 @@ struct ImageCheck {
 // marker or the stack can wedge the tile until an ASIC reset.
 ImageCheck validate_idle_image(uint64_t load_addr, size_t size);
 
-// Bound an active image against its reserved region before writing LIM.
+// The load address an active image's tag records: boot/entry.S places
+// X280_ACTIVE_IMAGE_TAG_MAGIC and the address in the image's last 16 bytes.
+// nullopt when the image is shorter than that or its tail is not a tag. The
+// address is unchecked; validate_active_image bounds it.
+std::optional<uint64_t> active_image_load_addr(const std::vector<uint8_t>& image);
+
+// Bound an active image against its reserved region before writing it.
 //
-// Two upper bounds, whichever is lower: the selected layout's image boundary
-// and the end of the ECC-primed LIM window, past which a hart's instruction
-// fetch faults even though the host can write and read those bytes.
-// primed_bytes is the tile's LimEccClassification::primed_bytes; empty bounds
-// by kLimEccUnrecordedPrimeBytes.
+// load_addr selects the region and must be one of two. At
+// X280_ACTIVE_FW_LOAD_ADDR (LIM) there are two upper bounds, whichever is
+// lower: the selected layout's image boundary and the end of the ECC-primed
+// LIM window, past which a hart's instruction fetch faults even though the
+// host can write and read those bytes. primed_bytes is the tile's
+// LimEccClassification::primed_bytes; empty bounds by
+// kLimEccUnrecordedPrimeBytes. At X280_ACTIVE_GDDR_LOAD_ADDR the image must end
+// below every hart's stack in the GDDR region; primed_bytes and layout do not
+// apply.
 //
 // Checks file bytes, which exclude NOLOAD .bss, so this is necessary and not
 // sufficient: the linker script is what bounds the memory footprint.
 ImageCheck validate_active_image(
     uint64_t load_addr, size_t size, std::optional<uint64_t> primed_bytes, LimLayout layout = LimLayout::Legacy);
+
+// Whether hardware L2CPU `hw_index` may run an image at `load_addr`. A GDDR
+// image (X280_ACTIVE_GDDR_LOAD_ADDR) runs only on tiles 0 and 1: every such
+// image links at one address, and tiles 2 and 3 share one GDDR tile. Any tile
+// may run a LIM image.
+ImageCheck validate_active_image_tile(uint64_t load_addr, int hw_index);
 
 // ---------------------------------------------------------------------------
 // Tile numbering

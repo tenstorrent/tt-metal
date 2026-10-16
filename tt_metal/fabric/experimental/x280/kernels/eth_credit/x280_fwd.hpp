@@ -303,7 +303,7 @@ private:
     /* What the loop reads and updates on every pass, built once by loop() and
      * passed down by reference to always_inline steps, so the compiler can hold
      * it in registers under the timed-loop rule (transport_bandwidth_frontend_cxx.hpp):
-     * the Forwarder itself is on the uncached LIM stack. Some fields spill to the
+     * the Forwarder itself is on the stack. Some fields spill to the
      * stack. */
     struct Hot {
         uint32_t wr;

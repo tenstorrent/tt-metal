@@ -16,6 +16,10 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <vector>
@@ -181,6 +185,59 @@ TEST(ActiveImage, RejectsAMisplacedImage) {
 TEST(ActiveImage, RejectsAnEmptyImage) {
     const auto check = validate_active_image(X280_ACTIVE_FW_LOAD_ADDR, 0, kLimEccPrimeBytes);
     EXPECT_FALSE(check.ok);
+}
+
+TEST(ActiveImage, GddrImageEndsBelowEveryHartStack) {
+    constexpr size_t kMaximumBytes = X280_ACTIVE_GDDR_IMAGE_END - X280_ACTIVE_GDDR_LOAD_ADDR;
+    // The LIM-only bounds do not apply: no primed window, either layout.
+    EXPECT_TRUE(validate_active_image(X280_ACTIVE_GDDR_LOAD_ADDR, kMaximumBytes, kLimCacheLineBytes).ok);
+    EXPECT_TRUE(
+        validate_active_image(X280_ACTIVE_GDDR_LOAD_ADDR, kMaximumBytes, std::nullopt, LimLayout::PacketInjection).ok);
+    const auto one_past = validate_active_image(X280_ACTIVE_GDDR_LOAD_ADDR, kMaximumBytes + 1u, std::nullopt);
+    EXPECT_FALSE(one_past.ok);
+    EXPECT_TRUE(mentions(one_past.reason, "per-hart stacks")) << one_past.reason;
+}
+
+TEST(ActiveImage, GddrImageRunsOnlyOnTilesThatOwnTheirGddr) {
+    for (int hw_index = 0; hw_index < kNumL2cpuTiles; ++hw_index) {
+        EXPECT_EQ(validate_active_image_tile(X280_ACTIVE_GDDR_LOAD_ADDR, hw_index).ok, hw_index < 2) << hw_index;
+        EXPECT_TRUE(validate_active_image_tile(X280_ACTIVE_FW_LOAD_ADDR, hw_index).ok) << hw_index;
+    }
+}
+
+TEST(ActiveImage, LoadAddressComesFromTheTagInTheLastSixteenBytes) {
+    const auto tagged = [](uint64_t magic, uint64_t load_addr) {
+        std::vector<uint8_t> image(24, 0xA5);
+        std::memcpy(image.data() + 8, &magic, sizeof(magic));
+        std::memcpy(image.data() + 16, &load_addr, sizeof(load_addr));
+        return image;
+    };
+    EXPECT_EQ(
+        active_image_load_addr(tagged(X280_ACTIVE_IMAGE_TAG_MAGIC, X280_ACTIVE_GDDR_LOAD_ADDR)),
+        std::optional<uint64_t>(X280_ACTIVE_GDDR_LOAD_ADDR));
+    EXPECT_EQ(active_image_load_addr(tagged(X280_ACTIVE_IMAGE_TAG_MAGIC + 1, X280_ACTIVE_FW_LOAD_ADDR)), std::nullopt);
+    EXPECT_EQ(active_image_load_addr(std::vector<uint8_t>(15, 0)), std::nullopt);
+}
+
+// Every active image this build produced is tagged with its own placement's load
+// address: the GDDR base for the images X280_GDDR_IMAGES names, LIM for the
+// rest. Resident idle carries no tag.
+TEST(ActiveImage, BuiltImagesCarryTheirPlacementTag) {
+    const std::string gddr_images = "," X280_GDDR_IMAGES ",";
+    size_t checked = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(X280_IMAGE_DIR)) {
+        const auto name = entry.path().filename().string();
+        if (entry.path().extension() != ".bin" || name == "firmware-lim-idle.bin") {
+            continue;
+        }
+        std::ifstream file(entry.path(), std::ios::binary);
+        const std::vector<uint8_t> image{std::istreambuf_iterator<char>(file), {}};
+        const bool gddr = gddr_images.find("," + entry.path().stem().string() + ",") != std::string::npos;
+        const uint64_t expected = gddr ? X280_ACTIVE_GDDR_LOAD_ADDR : X280_ACTIVE_FW_LOAD_ADDR;
+        EXPECT_EQ(active_image_load_addr(image), std::optional<uint64_t>(expected)) << name;
+        ++checked;
+    }
+    EXPECT_GT(checked, 1u);
 }
 
 // The two regions are distinct, so an image that fits one may not fit the other.

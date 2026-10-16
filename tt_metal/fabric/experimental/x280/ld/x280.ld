@@ -56,6 +56,7 @@ SECTIONS {
     *(.data .data.*)
     *(.sdata .sdata.*)
     . = ALIGN(8);
+    KEEP(*(.x280_image_tag))   /* entry.S's image tag: the last bytes of the file */
     _data_end = .;
   } > lim
 
@@ -97,10 +98,6 @@ ASSERT(_bss_end <= (_stack_top - NUM_HARTS * STACK_SIZE),
  * rules pass --defsym=X280_REQUIRE_NO_BSS=1 to hold the precondition here. */
 ASSERT(DEFINED(X280_REQUIRE_NO_BSS) ? (_bss_end == _bss_start) : 1,
        "x280.ld: per-hart images must carry no .bss -- entry.S zeroes none")
-
-/* Packet injection profile requires image to end at or below the lower arena boundary */
-ASSERT(DEFINED(X280_PACKET_INJECTION_LAYOUT) ? (_bss_end <= 0x08020000) : 1,
-       "x280.ld: packet injection active-FW image overflows 0x08020000 lower arena bound")
 
 /* entry.S writes this into mtvec, whose low two bits are the MODE field, so a
  * misaligned handler selects a reserved mode and traps never arrive. */

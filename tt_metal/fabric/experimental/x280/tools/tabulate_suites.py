@@ -390,16 +390,15 @@ PS_FORWARD = [
     ident("hop_count", "hops"),
     ident("boundary"),
 ]
-# The fixed-source forwarding identity every route_forward record must carry:
+# The forwarding identity every route_forward record must carry:
 # FS_PACKET_HEADER_BYTES and FS_ROUTE_BUFFER_CAPACITY
-# (kernels/shared/fabric_shadow.h), X280_PINNED_INPUT_HEADER_BYTES and, on X280,
-# X280_PINNED_INPUT_FIRST_HEADER_BASE (rt/x280_pinned_input.h), and kHopCount
-# (tests/device/suites/pipeline_stage/records.hpp).
+# (kernels/shared/fabric_shadow.h), one header in uncached LIM, and kHopCount
+# (tests/device/suites/pipeline_stage/records.hpp). The header's LIM address is
+# the host's allocation, so it is a column, not part of the identity.
 PS_FORWARD_IDENTITY = {
     "packet_header_bytes": {96},
     "route_buffer_capacity": {35},
-    "source_placement": {"pinned_zero_device"},
-    "source_base": {0x0A000AC0},
+    "source_placement": {"uncached_lim"},
     "source_bytes": {96},
     "hop_count": {4},
     "boundary": {"decision"},
@@ -418,7 +417,11 @@ def ps_columns(identity, instrumentation):
 PS_COMPUTE_TABLES = tuple(
     Table(
         "X280 %s" % instrumentation,
-        {"backend_id": PS_X280_ROUTE_COMPUTE, "instrumentation": {instrumentation}},
+        {
+            "backend_id": PS_X280_ROUTE_COMPUTE,
+            "instrumentation": {instrumentation},
+            "header_placement": {"uncached_lim"},
+        },
         ps_columns(PS_COMPUTE, instrumentation),
     )
     for instrumentation in ("per_sample", "off")

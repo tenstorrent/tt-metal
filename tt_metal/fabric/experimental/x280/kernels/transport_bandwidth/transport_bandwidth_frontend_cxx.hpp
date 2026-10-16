@@ -88,10 +88,11 @@
  * A failed footer replaces the terminal state with WINDOW_CLEANUP_FAILED.
  *
  * Timed-loop rule, for every X280 benchmark: a timed loop keeps its operands
- * in registers wherever register pressure allows. Every hart's stack is in
- * uncached LIM, so each reload of a stack variable, or of an object whose
- * address has escaped, is one LIM read inside the loop, and every fence's
- * "memory" clobber forces those reloads.
+ * in registers wherever register pressure allows. Each reload of a stack
+ * variable, or of an object whose address has escaped, is a memory access
+ * inside the loop -- in the cached GDDR the benchmark images run from, a miss
+ * reaches the L3 or DRAM -- and every fence's "memory" clobber forces those
+ * reloads.
  *
  * Every function on the path from run_member to Backend::issue is
  * always_inline: taking `s` out of line makes every NoC counter store force a

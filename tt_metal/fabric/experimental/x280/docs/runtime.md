@@ -225,9 +225,9 @@ The pipeline_stage suite calls `prepare_pinned_input` before every device case,
 so its executables run in any order and any number of times within one reset
 ([pipeline_stage.md](benchmarks/pipeline_stage.md#suite-prepared-input-x280-only)).
 
-`route_forward` uses the first 96-byte header in this region at `0x0A000AC0`. Its
-`decide_plain` configuration reseeds that complete header before warmup; it
-does not allocate a source region or change the prepared policy.
+`route_forward` reads no prepared bytes: its header is in LIM, and its
+`decide_plain` configuration reseeds that complete header before warmup. It does
+not change the prepared policy.
 
 The operation is compiled into the image instead of supplied through a
 firmware control block. The trusted
@@ -330,8 +330,11 @@ argument-block address and byte extent.
 Enqueue requires released reset and four versioned, committed resident-IDLE
 records before it writes anything. It reserves the tile's single execution slot
 first, so a racing submission loses the slot rather than the records, then
-validates and reads back the active image, zeroes every per-hart record by full
-cache-line writes, publishes and verifies run value, entry and argument-block
+validates, writes and reads back the active image at the load address its image
+tag records (LIM, or the cached local GDDR on L2CPU tiles 0 and 1; benchmark images are always
+in GDDR, the runtime's own images in LIM unless built with `X280_IMAGE_PLACEMENT=gddr`;
+[device_images.md](device_images.md#linker-script-picks)), zeroes every per-hart record by full
+cache-line writes, publishes and verifies run value, entry (the load address) and argument-block
 address and byte extent for all harts,
 registers the runtime-owned session, and publishes four `JUMP` commands last,
 returning that session's `SessionId` without polling. An uncertain JUMP write

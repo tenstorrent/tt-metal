@@ -55,6 +55,12 @@ explicitly stated otherwise.
 
 ## Common design principles
 
+### Image placement
+
+Every X280 benchmark image runs from the cached local GDDR, code, data and stacks, with the L2
+prefetcher on (`PLACEMENT gddr`, [device_images.md](../device_images.md#linker-script-picks)),
+whatever `X280_IMAGE_PLACEMENT` says. Buffers other agents write stay in host-allocated LIM.
+
 ### Behavior-named suites
 
 Implementation suites are named for the measurement they perform:
@@ -1399,8 +1405,9 @@ one 4288-byte image containing the complete 2704-byte routing layout and
 sixteen 96-byte packet headers. The fixture covers same-mesh and cross-mesh
 table selection and varying expected directions. The host supplies an
 independent direction oracle, and the timed loop consumes the returned
-directions through a witness. Forwarding always consumes the first header at
-`0x0A000AC0`.
+directions through a witness. The timed loops read the routing tables from the
+prepared copy and the headers from uncached LIM: route_compute from the staged
+input, forwarding from its one header.
 
 ### Prepared storage
 

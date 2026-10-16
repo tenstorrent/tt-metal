@@ -14,6 +14,7 @@
 #include "x280_hart_protocol.h"
 
 #include <array>
+#include <cstring>
 
 namespace x280 {
 
@@ -34,6 +35,13 @@ static_assert(X280_LIM_BASE < kStackBoundedImageEnd);
 
 constexpr uint64_t kPacketInjectionImageEnd = X280_LIM_PACKET_INJECTION_IMAGE_END;
 static_assert(X280_ACTIVE_FW_LOAD_ADDR <= kPacketInjectionImageEnd);
+
+static_assert(X280_ACTIVE_GDDR_IMAGE_END == X280_ACTIVE_GDDR_REGION_END - kHartsPerTile * X280_ACTIVE_GDDR_STACK_STRIDE);
+constexpr uint64_t kGddrImageEnd = X280_ACTIVE_GDDR_IMAGE_END;
+static_assert(X280_ACTIVE_GDDR_LOAD_ADDR < kGddrImageEnd);
+constexpr uint64_t kMaxGddrImageBytes = kGddrImageEnd - X280_ACTIVE_GDDR_LOAD_ADDR;
+
+constexpr size_t kImageTagBytes = 2 * sizeof(uint64_t);
 
 constexpr std::array<const char*, 4> kLimEccStateNames = {
     "invalid",
@@ -209,6 +217,18 @@ ImageCheck validate_idle_image(uint64_t load_addr, size_t size) {
     return check;
 }
 
+std::optional<uint64_t> active_image_load_addr(const std::vector<uint8_t>& image) {
+    if (image.size() < kImageTagBytes) {
+        return std::nullopt;
+    }
+    uint64_t tag[2];
+    std::memcpy(tag, image.data() + image.size() - kImageTagBytes, kImageTagBytes);
+    if (tag[0] != X280_ACTIVE_IMAGE_TAG_MAGIC) {
+        return std::nullopt;
+    }
+    return tag[1];
+}
+
 ImageCheck validate_active_image(
     uint64_t load_addr, size_t size, std::optional<uint64_t> primed_bytes, LimLayout layout) {
     ImageCheck check;
@@ -216,9 +236,20 @@ ImageCheck validate_active_image(
         check.reason = "active image is empty";
         return check;
     }
+    if (load_addr == X280_ACTIVE_GDDR_LOAD_ADDR) {
+        if (size > kMaxGddrImageBytes) {
+            check.reason = "active image is " + std::to_string(size) + " bytes and must end at or below " +
+                           hex(kGddrImageEnd) + " (max " + std::to_string(kMaxGddrImageBytes) +
+                           " bytes), which is the GDDR region end less all " + std::to_string(kHartsPerTile) +
+                           " per-hart stacks";
+            return check;
+        }
+        check.ok = true;
+        return check;
+    }
     if (load_addr != X280_ACTIVE_FW_LOAD_ADDR) {
-        check.reason = "active image load address " + hex(load_addr) + " is not the reserved region base " +
-                       hex(X280_ACTIVE_FW_LOAD_ADDR);
+        check.reason = "active image load address " + hex(load_addr) + " is neither the LIM region base " +
+                       hex(X280_ACTIVE_FW_LOAD_ADDR) + " nor the GDDR region base " + hex(X280_ACTIVE_GDDR_LOAD_ADDR);
         return check;
     }
     // Instruction fetch from unprimed LIM faults even when host NoC write/readback
@@ -249,6 +280,17 @@ ImageCheck validate_active_image(
         check.reason = "active image is " + std::to_string(size) + " bytes and must end at or below " +
                        hex(active_image_end) + " (max " + std::to_string(max_active_image_bytes) +
                        " bytes), which is " + bound;
+        return check;
+    }
+    check.ok = true;
+    return check;
+}
+
+ImageCheck validate_active_image_tile(uint64_t load_addr, int hw_index) {
+    ImageCheck check;
+    if (load_addr == X280_ACTIVE_GDDR_LOAD_ADDR && hw_index != 0 && hw_index != 1) {
+        check.reason = "a GDDR-placed active image runs only on L2CPU tiles 0 and 1, which own their GDDR tiles; L2CPU " +
+                       std::to_string(hw_index) + " shares its GDDR tile with another L2CPU";
         return check;
     }
     check.ok = true;

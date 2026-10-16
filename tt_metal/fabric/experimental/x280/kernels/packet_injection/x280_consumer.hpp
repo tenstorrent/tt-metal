@@ -689,7 +689,7 @@ private:
 
         // The timed-loop rule (transport_bandwidth_frontend_cxx.hpp): the phase
         // works on local copies of the consumer's state, which lives on the
-        // uncached LIM stack and arena, and stores them back before anything
+        // stack and the LIM arena, and stores them back before anything
         // reads them through the object.
         const uint32_t P = P_;
         const uint32_t K = K_;
@@ -830,7 +830,7 @@ private:
 
                     // return_credit() on the register copies. Marked likely:
                     // GCC otherwise treats the branch as cold and spills
-                    // credit_reg to the stack, one LIM load per credit.
+                    // credit_reg to the stack, one stack load per credit.
                     if (__builtin_expect(pi_counter_distance(consumed, credited) == C && credit_reg != nullptr, 1)) {
                         Transport::counter_store(credit_reg, consumed);
                         credited = consumed;
@@ -876,7 +876,7 @@ private:
 
         // The timed-loop rule (transport_bandwidth_frontend_cxx.hpp): the phase
         // works on local copies of the consumer's state, which lives on the
-        // uncached LIM stack and arena, and stores them back before anything
+        // stack and the LIM arena, and stores them back before anything
         // reads them through the object.
         const uint32_t P = P_;
         const uint32_t K = K_;
@@ -1057,7 +1057,7 @@ private:
 
                         // return_credit() on the register copies. Marked likely:
                         // GCC otherwise treats the branch as cold and spills
-                        // credit_reg to the stack, one LIM load per credit.
+                        // credit_reg to the stack, one stack load per credit.
                         if (__builtin_expect(
                                 pi_counter_distance(v.consumed, v.credited) == C && v.credit_reg != nullptr, 1)) {
                             Transport::counter_store(v.credit_reg, v.consumed);

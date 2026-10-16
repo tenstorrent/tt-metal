@@ -360,7 +360,8 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                  .run_nonce = 0xF01,
                  .warmup = 128,
                  .timed = 16384,
-                 .instrumentation = PIPELINE_STAGE_INSTRUMENTATION_OFF}));
+                 .instrumentation = PIPELINE_STAGE_INSTRUMENTATION_OFF,
+                 .header_base = PIPELINE_STAGE_FIXTURE_LIM_BEGIN + 0xC0u}));
     }
 
     // packet_injection: run, aggregate and one worker per configuration, two

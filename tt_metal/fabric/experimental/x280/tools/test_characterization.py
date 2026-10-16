@@ -87,6 +87,7 @@ def compute_record(**changes):
         "instrumentation": "per_sample",
         "fixture": "direction_table_v1",
         "header_count": 16,
+        "header_placement": "uncached_lim",
         "prepared_input_base": 0,
         "prepared_input_bytes": 4288,
         "wayenable": 1,
@@ -152,8 +153,8 @@ class Tables(unittest.TestCase):
     def test_a_record_matches_exactly_one_table_of_its_member(self):
         forward = dict(
             compute_record(member="route_forward", backend_id=0x10200002, instrumentation="off"),
-            source_placement="pinned_zero_device",
-            source_base=0x0A000AC0,
+            source_placement="uncached_lim",
+            source_base=0x08131BC0,
             source_bytes=96,
             hop_count=4,
             boundary="decision",

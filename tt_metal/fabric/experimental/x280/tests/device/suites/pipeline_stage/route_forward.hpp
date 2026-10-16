@@ -4,8 +4,8 @@
 //
 // suites/pipeline_stage/route_forward.hpp -- the router-side forward.
 //
-// route_forward measures DECIDE: the hop decode and routing_fields update of the
-// pinned first header, with no packet issued.
+// route_forward measures DECIDE: the hop decode and routing_fields update of one
+// header in uncached LIM, with no packet issued.
 
 #ifndef X280_SUITES_PIPELINE_STAGE_ROUTE_FORWARD_HPP
 #define X280_SUITES_PIPELINE_STAGE_ROUTE_FORWARD_HPP
@@ -51,6 +51,7 @@ struct LimRegions {
     hreg::Region window;
     hreg::Region args;
     hreg::Region result;
+    hreg::Region header;
 
     static LimRegions compute(x280::X280Tile& tile) {
         const auto avail = tile.available_lim();
@@ -60,6 +61,7 @@ struct LimRegions {
         R.window = w;
         R.args = arena.allocate(PIPELINE_STAGE_ROUTE_FORWARD_ARGS_BYTES);
         R.result = arena.allocate(sizeof(pipeline_stage_result_t));
+        R.header = arena.allocate(FS_PACKET_HEADER_BYTES);
         return R;
     }
 };
@@ -88,7 +90,7 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
 
     UBENCH_SECTION_STORAGE(pipeline_stage_route_forward_args_block_t, args) store{};
     fill_section(store.args.section, W, N, mode, run_nonce, kHopCount, R.result.addr, 0ull);
-    fill_layout(store.args.layout, R.window, X280_PINNED_INPUT_FIRST_HEADER_BASE);
+    fill_layout(store.args.layout, R.window, R.header.addr);
     hreg::write_args(*f.tile, R.args, store.args);
 
     hexec::X280Launch launch{
@@ -135,7 +137,7 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
 
     std::printf(
         "\n[pipeline_stage route_forward] packet=%u B route_capacity=%u "
-        "source_placement=pinned_zero_device source_base=0x%llx "
+        "source_placement=uncached_lim source_base=0x%llx "
         "source_bytes=%llu wayenable=%u pinned_way=%u "
         "waymask_bits=%llu instr=%s hops=%u "
         "boundary=decision subject=router_forward_decision "
@@ -143,8 +145,8 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
         "raw_batch_delta=%llu secondary_batch_delta=%llu\n",
         FS_PACKET_HEADER_BYTES,
         FS_ROUTE_BUFFER_CAPACITY,
-        static_cast<unsigned long long>(X280_PINNED_INPUT_FIRST_HEADER_BASE),
-        static_cast<unsigned long long>(X280_PINNED_INPUT_HEADER_BYTES),
+        static_cast<unsigned long long>(R.header.addr),
+        static_cast<unsigned long long>(FS_PACKET_HEADER_BYTES),
         X280_PINNED_INPUT_WAYENABLE,
         X280_PINNED_INPUT_RESERVED_WAY,
         static_cast<unsigned long long>(X280_PINNED_INPUT_PREPARED_BITS),
@@ -163,6 +165,7 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
             .warmup = W,
             .timed = N,
             .instrumentation = mode,
+            .header_base = R.header.addr,
         })));
 
     EXPECT_LT(r.raw_batch_delta, 5u * hmeas::kX280MtimeHz) << "batch took longer than 5 s of mtime; something stalled";

@@ -18,8 +18,14 @@ include(x280_image.cmake)
 x280_add_image(NAME firmware-lim-idle LIM_IDLE SOURCES src/lim_idle.c)
 # The sentinel active image.
 x280_add_image(NAME firmware SOURCES src/main.c)
-# Pinned-input preparation, a trusted artifact compiled with exactly one operation define.
-x280_add_image(NAME firmware-pinned-input-prepare SOURCES src/x280_pinned_input.c DEFINES X280_PINNED_INPUT_BUILD_PREPARE=1)
+# Pinned-input preparation, a trusted artifact compiled with exactly one operation define. It
+# rewrites the L3 way masks, so it stays in LIM, where its own code and stack never occupy the L3.
+x280_add_image(
+    NAME firmware-pinned-input-prepare
+    PLACEMENT lim
+    SOURCES src/x280_pinned_input.c
+    DEFINES X280_PINNED_INPUT_BUILD_PREPARE=1
+)
 # Test-only images: the atomics micro-benchmark, which the active-image contract also runs, and
 # the deliberate non-conformer that traps and CEASEs hart 2.
 x280_add_image(NAME firmware-atomic-bench SOURCES src/atomic_bench.c)
@@ -240,6 +246,15 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${X280_TEST_OUTPUT_DIR}
 )
+# ActiveImage.BuiltImagesCarryTheirPlacementTag reads this build's images and checks each against
+# X280_GDDR_IMAGES, the comma-separated names of the gddr ones, defined once every image is declared.
+_x280_uses_images(x280_runtime_host_tests)
+function(_x280_define_gddr_images)
+    get_property(names GLOBAL PROPERTY X280_GDDR_IMAGES)
+    list(JOIN names "," names)
+    target_compile_definitions(x280_runtime_host_tests PRIVATE X280_GDDR_IMAGES="${names}")
+endfunction()
+cmake_language(DEFER CALL _x280_define_gddr_images)
 add_test(NAME x280_runtime_host_tests COMMAND x280_runtime_host_tests)
 
 # _x280_device_test(<name> <source>... [KERNELS <dir>...] [SLOW_DISPATCH]): a gtest executable over
@@ -522,6 +537,7 @@ _x280_gtest_ctest(x280_release_selector x280_bench_release_selector_tests "Relea
 # ---------------------------------------------------------------------------
 x280_add_image(
     NAME firmware-transport-bandwidth-x280-to-tensix
+    PLACEMENT gddr
     SOURCES src/transport_bandwidth_x280_to_tensix.cpp
     INCLUDES
         kernels/shared
@@ -557,6 +573,7 @@ foreach(_image x280-same-tile x280-peer-tile metal-peer-tile)
     string(REPLACE "-" "_" _source "${_image}")
     x280_add_image(
         NAME firmware-p2p-latency-${_image}
+        PLACEMENT gddr
         SOURCES src/p2p_latency_${_source}.cpp
         INCLUDES
             kernels/shared
@@ -606,6 +623,7 @@ endforeach()
 foreach(_member compute forward)
     x280_add_image(
         NAME firmware-pipeline-stage-route-${_member}
+        PLACEMENT gddr
         SOURCES src/pipeline_stage_route_${_member}.cpp
         INCLUDES
             kernels/shared
@@ -635,6 +653,7 @@ foreach(_member director release-probe)
     string(REPLACE "-" "_" _source "${_member}")
     x280_add_image(
         NAME firmware-core-sync-${_member}
+        PLACEMENT gddr
         SOURCES src/core_sync_${_source}.cpp
         INCLUDES
             kernels/shared
@@ -687,6 +706,7 @@ foreach(
     endif()
     x280_add_image(
         NAME firmware-packet-injection-${_name}
+        PLACEMENT gddr
         SOURCES src/packet_injection_x280.cpp
         ${_pinned_input}
         INCLUDES
@@ -696,7 +716,6 @@ foreach(
         DEFINES
             PACKET_INJECTION_MODE=${_mode}
             PACKET_INJECTION_INCLUDE_CREATION=${_creation}
-        LINK_OPTIONS -Wl,--defsym=X280_PACKET_INJECTION_LAYOUT=1
     )
 endforeach()
 _x280_check_headers(
@@ -743,6 +762,7 @@ endforeach()
 # ---------------------------------------------------------------------------
 x280_add_image(
     NAME firmware-eth-credit-x280-fwd
+    PLACEMENT gddr
     SOURCES src/eth_credit_x280_fwd.cpp
     INCLUDES
         kernels
@@ -752,6 +772,7 @@ x280_add_image(
 # The same forwarder with its measurement modes built in (EC_FWD_MEASURE).
 x280_add_image(
     NAME firmware-eth-credit-x280-fwd-measure
+    PLACEMENT gddr
     SOURCES src/eth_credit_x280_fwd.cpp
     INCLUDES
         kernels
@@ -809,5 +830,12 @@ function(_x280_add_stop_poll_test)
     )
 endfunction()
 cmake_language(DEFER CALL _x280_add_stop_poll_test)
+# Hot lines of every cached (gddr-placed) image take distinct L3 indices; LIM images are skipped.
+add_test(
+    NAME x280_l3_conflicts
+    COMMAND
+        ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_l3_conflicts.py --readelf ${X280_READELF}
+        ${X280_IMAGE_DIR}
+)
 
 add_custom_target(x280_abi_headers ALL DEPENDS ${_x280_header_stamps})

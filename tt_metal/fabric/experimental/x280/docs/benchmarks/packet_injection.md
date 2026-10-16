@@ -124,9 +124,9 @@ the producer retires only on the credit X280 returns after servicing.
 start timestamp is taken before or after header construction, so the difference
 between them is the cost of constructing one 96-byte header. Over 6 attempts the
 one-producer latency p50 is
-1984.321 [1974.815-2003.704] ns with creation included and
-1637.531 [1625.185-1644.444] ns with it excluded;
-the difference of the two means, 346.790 ns, is the creation cost
+1423.210 [1388.889-1465.926] ns with creation included and
+1074.938 [1056.296-1100.000] ns with it excluded;
+the difference of the two means, 348.272 ns, is the creation cost
 ([results.md](../results.md#packet_injection)).
 
 ### Throughput Measurement
@@ -192,17 +192,17 @@ mean [min-max] over every producer of every attempt:
 
 | P | family | T | ns/request |
 |---:|---|---:|---:|
-| 1 | brisc | 1 | 696.299 [696.253-696.352] |
-| 2 | brisc | 2 | 697.931 [697.407-698.382] |
-| 2 | paired | 1 | 697.733 [697.281-698.247] |
-| 4 | brisc | 4 | 935.878 [934.701-936.704] |
-| 4 | paired | 2 | 936.642 [935.918-937.374] |
-| 8 | paired | 4 | 1849.213 [1847.683-1850.466] |
+| 1 | brisc | 1 | 697.104 [697.094-697.124] |
+| 2 | brisc | 2 | 695.102 [694.591-695.490] |
+| 2 | paired | 1 | 695.379 [694.912-695.653] |
+| 4 | brisc | 4 | 655.696 [615.556-695.763] |
+| 4 | paired | 2 | 695.552 [694.822-696.195] |
+| 8 | paired | 4 | 838.639 [837.630-839.807] |
 
-From P=1 to P=2 the per-producer time grows by at most 1.632 ns/request; it is larger
-at P=4 and larger again at P=8. At equal P the two topologies, two producers sharing a tile
+From P=1 to P=2 the per-producer time moves by at most 2.002 ns/request, no P=4 mean
+exceeds P=1's, and at P=8 it is larger. At equal P the two topologies, two producers sharing a tile
 across both NoCs or one producer per tile on NoC 0, agree within their ranges. Within one attempt the producers of a shape differ by
-0.224 to 1.603 ns/request (P > 1).
+0.094 to 80.207 ns/request (P > 1).
 
 These records describe individual producer completion only. They do not establish
 aggregate X280 capacity, injection bandwidth, or NoC bandwidth, and the per-producer rates
@@ -366,9 +366,10 @@ The benchmark requires the opt-in `LimLayout::PacketInjection` memory profile:
   harness. Houses the X280 argument block, host control, the run result, the tile coordinate
   table, per-worker core-sync arrivals, consumer slots, produced and completion slots, rings,
   and latency sample export.
-- **Image Text Bound:** Image text/rodata/data is constrained to `[0x08001000, 0x08020000)`
-  (max 126,976 bytes). Linker scripts enforce `_bss_end <= 0x08020000` via `--defsym=X280_PACKET_INJECTION_LAYOUT=1`.
-- **Upper Reserved Spans:** Stacks (`0x080FFF80..0x0811FF80`), trap blocks (`0x0811FF80..0x08120000`),
+- **Image and stacks:** The consumer images run from the cached local GDDR (`PLACEMENT gddr`), so
+  their code, data and stacks are outside the LIM.
+- **Upper Reserved Spans:** The LIM active-image stack span (`0x080FFF80..0x0811FF80`), unused by
+  the gddr consumer images, then trap blocks (`0x0811FF80..0x08120000`),
   and everything above them through the socket layout's end (`0x08120000..0x08154000`, which holds the
   runtime's reservation through the hart protocol block, ending at `0x08131B00`) remain completely untouched.
 
@@ -866,18 +867,19 @@ registers:
 
 | C | K | writers1 ns/header | writers4 ns/header | writers8 ns/header | writers_all ns/header |
 |---:|---:|---:|---:|---:|---:|
-| 1 | 1 | 388.079 [388.066-388.105] | 232.653 [232.617-232.686] | 229.575 [229.536-229.622] | 229.520 [229.404-229.609] |
-| 1 | 8 | 388.132 [388.047-388.242] |  |  | 61.976 [61.956-61.987] |
-| 1 | 16 | 388.197 [388.086-388.359] |  |  | 51.016 [50.969-51.050] |
-| 4 | 8 | 388.307 [388.242-388.359] |  |  | 60.770 [60.735-60.793] |
-| 4 | 16 | 388.353 [388.301-388.398] |  |  | 50.872 [50.859-50.891] |
-| 8 | 8 | 388.281 [388.203-388.379] |  |  | 61.103 [61.033-61.177] |
-| 8 | 16 | 388.320 [388.281-388.379] | 97.277 [97.212-97.319] | 51.027 [50.999-51.067] | 51.016 [50.901-51.138] |
+| 1 | 1 | 387.995 [387.949-388.047] | 103.957 [103.877-104.019] | 104.388 [104.341-104.465] | 104.402 [104.351-104.446] |
+| 1 | 8 | 387.904 [387.793-388.008] |  |  | 48.708 [48.699-48.718] |
+| 1 | 16 | 388.001 [387.949-388.105] |  |  | 48.703 [48.689-48.721] |
+| 4 | 8 | 387.695 [387.617-387.832] |  |  | 48.691 [48.669-48.711] |
+| 4 | 16 | 387.734 [387.656-387.852] |  |  | 48.678 [48.652-48.701] |
+| 8 | 8 | 387.676 [387.500-387.793] |  |  | 48.671 [48.667-48.674] |
+| 8 | 16 | 387.871 [387.715-387.988] | 96.940 [96.919-96.963] | 48.683 [48.672-48.704] | 48.690 [48.677-48.699] |
 
 With every writer and the credit posted through the counter window, as the shipped build does,
-the visit cap K is the lever and C is nearly flat at fixed K. At C=8, K=16 the aggregate with
-every writer is 51.016 [50.901-51.138] ns/header at N=1024 and
-50.856 [50.832-50.879] at N=4096 ([results.md](../results.md#packet_injection)).
+raising the visit cap K from 1 to 8 is the lever; from K=8 to 16, and across C at fixed K, the
+aggregate is nearly flat. At C=8, K=16 the aggregate with
+every writer is 48.690 [48.677-48.699] ns/header at N=1024 and
+48.649 [48.640-48.658] at N=4096 ([results.md](../results.md#packet_injection)).
 
 X280 releases every Ethernet writer by its own endpoint, and the suite fails a
 run whose release used a group: a broadcast, even a one-tile one, does not reach
@@ -913,7 +915,7 @@ with a fence before the counter load and another before the slot loads (see
 ### Credit wait
 
 At S=16, C=1, K=1, `writers1_b1` records 0 credit-stall episodes: one writer never waits for
-credit. With all 8 writers, each records 1005 to 1007 episodes per 1024 headers:
+credit. With all 8 writers, each records 997 to 1003 episodes per 1024 headers:
 it waits for credit on almost every header.
 
 ## Running the Benchmark

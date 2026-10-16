@@ -36,6 +36,7 @@ struct state_t {
     pipeline_stage_result_t* result;
     pipeline_stage_samples_t* samples;
     volatile uint8_t* input;
+    const volatile uint8_t* headers;
 };
 
 inline bool sanity_check(const state_t& state) {
@@ -75,20 +76,25 @@ inline bool compare_staged_input(state_t& state, uint32_t& mismatch) {
 inline bool verify_input(state_t& state) {
     uint32_t mismatch = 0u;
     const bool verified = compare_staged_input(state, mismatch) &&
-                          pipeline_stage::verify_fixture(pipeline_stage::prepared_input_t{state.input}, mismatch);
+                          pipeline_stage::verify_fixture(
+                              pipeline_stage::prepared_input_t{state.input, state.headers}, mismatch);
     state.result->verify_sentinel = mismatch;
     return verified;
 }
 
+/* The routing image is read from the prepared copy, the headers from the
+ * staged input in LIM. */
 inline bool initialize_input(state_t& state, volatile void* prepared_base) {
     state.input = reinterpret_cast<volatile uint8_t*>(prepared_base);
+    state.headers = reinterpret_cast<const volatile uint8_t*>(
+        state.args.section.backend.staged_input_base + X280_PINNED_INPUT_HEADERS_OFFSET);
     copy_staged_input(state);
     return verify_input(state);
 }
 
 struct Backend : member_backend_t<state_t> {
     static inline __attribute__((always_inline)) void stage_once(state_t& state, uint32_t slot, uint32_t& witness) {
-        const prepared_input_t access{state.input};
+        const prepared_input_t access{state.input, state.headers};
         pipeline_stage::stage_once(access, slot, witness);
     }
 

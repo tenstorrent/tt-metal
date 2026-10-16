@@ -79,6 +79,11 @@ ninja -C build x280_images x280_abi_headers x280_runtime_host_tests x280_runtime
 ctest --test-dir build -R x280      # image placement, pinned-input guards, header refusals, host, offline and mock-cluster tests, results tools, STOP-poll scan; no device
 ```
 
+Benchmark images always run from the cached local GDDR with the L2 prefetcher on. The runtime's own
+active images (the sentinel and its test fixtures) run from uncached LIM by default;
+`-DX280_IMAGE_PLACEMENT=gddr` moves them to cached GDDR too
+([docs/device_images.md](docs/device_images.md#linker-script-picks)).
+
 Images land in `build/x280/` and executables in `build/test/tt_metal/x280/`. Every executable
 takes its images from `build/x280/`; an `X280_*_FW_IMAGE` variable names another file.
 
@@ -139,20 +144,21 @@ them into tables and `tools/run_characterization.py` collects a campaign from
 ## 4. Results
 
 Measured on a Blackhole p150b with the X280 at 1750 MHz, every member at 14 LIM ways, and images
-built by SFPI 7.87.0. The headline tables, as mean [min-max] over attempts, are in
-[docs/results.md](docs/results.md); the figures below are attempt means.
+built by SFPI 7.87.0, the benchmark images running from the cached local GDDR. The headline
+tables, as mean [min-max] over attempts, are in [docs/results.md](docs/results.md); the figures
+below are attempt means.
 
-- **p2p_latency.** Round trip (`RTT`, wall p50) between two X280 harts on one tile: 100.000 ns;
-  between two X280 tiles: 240.000 ns; from an X280 to a Tensix, idle-ERISC or DRISC peer:
-  346.667 to 360.000 ns.
+- **p2p_latency.** Round trip (`RTT`, wall p50) between two X280 harts on one tile: 80.000 ns
+  with hart A initiating and 66.667 with hart B; between two X280 tiles: 200.000 ns; from an X280
+  to a Tensix, idle-ERISC or DRISC peer: 360.000 ns.
 - **transport_bandwidth.** X280 -> Tensix from one hart at 65536 B: 1.800 GB/s with `sw`, 3.600
-  with `sd` and 14.399 with `vse32.v`. Tensix -> X280 at 4096 B: 17.504 GB/s.
-- **pipeline_stage.** The next-hop direction-table lookup: 41.824 ns and 73.190 X280 cycles
-  per item; the router forward decision: 25.148 ns and 44.007 cycles per item.
-- **core_sync.** The exits of 16 Tensix workers spread over 119.7 raw live-timer ticks under a
-  multicast release and 11559.3 under unicast.
-- **packet_injection.** Four Tensix BRISC producers: 234.095 ns per header at C=1, K=1 and 174.415
-  at C=8, K=16. Eight idle-ERISC writers at C=1, K=1: 229.575 ns per header.
-- **eth_credit.** One X280 forwarder at 4192 B slots and `BATCH` 4 moves 0.372 Mpkt/s, against
-  0.371 for its NoC hop alone and 5.180 for the Ethernet hop alone; the tabulator names the NoC
+  with `sd` and 14.400 with `vse32.v`. Tensix -> X280 at 4096 B: 17.893 GB/s.
+- **pipeline_stage.** The next-hop direction-table lookup: 44.607 ns and 78.063 X280 cycles
+  per item; the router forward decision: 24.002 ns and 42.004 cycles per item.
+- **core_sync.** The exits of 16 Tensix workers spread over 126.7 raw live-timer ticks under a
+  multicast release and 8956.7 under unicast.
+- **packet_injection.** Four Tensix BRISC producers: 173.933 ns per header at C=1, K=1 and 174.017
+  at C=8, K=16. Eight idle-ERISC writers at C=1, K=1: 104.388 ns per header.
+- **eth_credit.** One X280 forwarder at 4192 B slots and `BATCH` 4 moves 0.376 Mpkt/s, against
+  0.376 for its NoC hop alone and 5.192 for the Ethernet hop alone; the tabulator names the NoC
   hop as the bound.

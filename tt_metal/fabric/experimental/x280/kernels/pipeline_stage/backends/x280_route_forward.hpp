@@ -31,16 +31,20 @@ struct state_t {
     volatile fs_hybrid_mesh_packet_header_t* header;
 };
 
+/* The header is the layout's source_base: a whole header inside the LIM
+ * window, apart from the result. It stays in uncached LIM, where a production
+ * header arrives, while the routing data is pinned. */
 inline bool sanity_check(const state_t& state) {
-    return route_forward_args_valid(state.args) &&
-           x280_pinned_input_contains(
-               &X280_PINNED_INPUT_ROUTER_REGION, X280_PINNED_INPUT_FIRST_HEADER_BASE, FS_PACKET_HEADER_BYTES);
+    const uint64_t header = state.args.layout.source_base;
+    return route_forward_args_valid(state.args) && is_span_contained(header, FS_PACKET_HEADER_BYTES, state.args.layout) &&
+           spans_disjoint(
+               header, FS_PACKET_HEADER_BYTES, state.args.section.backend.result_base, sizeof(pipeline_stage_result_t));
 }
 
-/* Binds state.header to the pinned first header, seeds it
+/* Binds state.header to the layout's source_base, seeds it
  * (fs_seed_forward_header) and fences the seed out. */
 inline void seed_route(state_t& state) {
-    state.header = reinterpret_cast<volatile fs_hybrid_mesh_packet_header_t*>(X280_PINNED_INPUT_FIRST_HEADER_BASE);
+    state.header = reinterpret_cast<volatile fs_hybrid_mesh_packet_header_t*>(state.args.layout.source_base);
     fs_seed_forward_header(state.header);
     x280_fence_ow();
 }

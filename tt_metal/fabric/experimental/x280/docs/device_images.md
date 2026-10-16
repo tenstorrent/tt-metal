@@ -16,8 +16,13 @@ x280_add_image(NAME my-image SOURCES src/my_image.c DEFINES MY_IMAGE_MODE=1)
 ```
 
 It builds `build/x280/my-image.{elf,bin}` as part of `x280_images`. An active
-image, the default, links the lifecycle harness and `ld/x280.ld` at
-`0x08001000`; its `main` follows the active-image contract (§ The active-image contract). `LIM_IDLE`
+image, the default, links the lifecycle harness and the linker script of its
+placement: `lim`, `ld/x280.ld` at `0x08001000`; `gddr`, `ld/x280-gddr.ld`, the whole
+image and its stacks in the cached local GDDR (§ Linker script picks). `PLACEMENT lim|gddr`
+fixes an image's placement; without it the image takes the `X280_IMAGE_PLACEMENT` cache
+option, default `lim`. Benchmark images name `PLACEMENT gddr`, so they always run cached;
+the pinned-input prepare image names `PLACEMENT lim`; the runtime's own active images (the
+sentinel and the contract and fault fixtures) follow the option. Its `main` follows the active-image contract (§ The active-image contract). `LIM_IDLE`
 links the per-hart entry and `ld/x280-lim-idle.ld` at `0x08000000` instead;
 only the resident idle is built that way.
 
@@ -29,6 +34,7 @@ only the resident idle is built that way.
 |---|---|
 | `boot/entry.S` | Reset vector → init gp/sp/mtvec → call `main(hartid)`, or `x280_active_start(hartid)` when assembled with `X280_ACTIVE_HARNESS`. Trap handler has IPI + probe modes. |
 | `ld/x280.ld` | Linker script for active code running from LIM (`0x08001000`). |
+| `ld/x280-gddr.ld` | Linker script for active images placed in `gddr`: code, data and stacks in the cached local GDDR (`X280_ACTIVE_GDDR_*` in `x280_address_map.h`). The build runs it through the C preprocessor with that header. |
 | `ld/x280-lim-idle.ld` | Linker script for resident idle, at the start of LIM (`0x08000000`). |
 | `include/x280_address_map.h` | Canonical LIM, DDR, CLINT, image, trap, sentinel, and ECC addresses; safe for C, C++, and preprocessed assembly. |
 | `include/x280_hart_protocol.h` | Canonical per-hart commands, phases, record offsets, wire structs, and layout assertions; safe for C, C++, and preprocessed assembly. |
@@ -40,17 +46,30 @@ only the resident idle is built that way.
 
 ### Linker script picks
 
-- Current active images use `ld/x280.ld` and the lifecycle harness.
+- Active images use the lifecycle harness and `ld/x280.ld`, or `ld/x280-gddr.ld` when their
+  placement is `gddr`. A `gddr` image's `entry.S` also writes each hart's L2 prefetcher controls
+  with the recommended `0x15811` / `0x38c84e` (tt-isa-documentation
+  BlackholeA0/L2CPUTile/Caches.md § L2 Cache); a `lim` image does not write the prefetcher.
+- `ld/x280-gddr.ld` uses the top 16 MiB of the GDDR tile, which Metal's allocator never hands out.
+  Each hart's stack tops at the region end less `hartid * 0x21000`; the stride is one L3 way plus
+  4 KiB, so, taking an address's L3 index as the address mod 128 KiB, each hart's top 4 KiB of
+  stack has its own index range. The image starts `0x2000`
+  into the region, clear of the indices the pinned input occupies. The CTest `x280_l3_conflicts`
+  (`tools/check_l3_conflicts.py`) checks every built image against this rule. Only L2CPU tiles 0
+  and 1 run such an image; tiles 2 and 3 share one GDDR tile.
+- Every active image ends in a 16-byte tag (`X280_ACTIVE_IMAGE_TAG_MAGIC`, then its load
+  address) from `entry.S`; the runtime loads the image at that address and refuses an image
+  without one.
 - Resident idle uses `ld/x280-lim-idle.ld` (`x280_add_image(... LIM_IDLE ...)`).
 
 ### Multi-hart
 
-`entry.S` puts each hart at `sp = _stack_top - hartid * 0x8000` and calls
+`entry.S` puts each hart at `sp = _stack_top - hartid * _stack_size` (`0x8000` in LIM) and calls
 `main(hartid)` with `mhartid` in `a0`. All four harts run it. A standalone
 image's `main` must check `hartid` and decide what unused harts do; use IPI
 (`msip`) from hart 0 to wake them.
 
-An **active image** — one the runtime loads into the LIM active-FW region and
+An **active image** — one the runtime loads into the active-FW region and
 reaches by `JUMP` from the resident idle FW — does not decide that. It links
 the active harness (every `x280_add_image()` without `LIM_IDLE`), so `entry.S` enters `x280_active_start(hartid)`
 instead, and a hart with no work just returns from `main`.
@@ -218,8 +237,10 @@ Built by `ninja -C build x280_images` ([README](../README.md#2-build-boot-and-ru
 Every image compiles with `-mcpu=sifive-x280 -march=rv64gc -mabi=lp64d
 -mcmodel=medany -O2 -Werror -fno-zero-initialized-in-bss`, freestanding, and
 links with `X280_REQUIRE_NO_BSS` defined, so the linker scripts refuse a `.bss`.
-`x280_image_layout` checks resident idle's `.text` at `0x08000000` and the
-sentinel's at `0x08001000`. The `x280_abi_headers` build target compiles each
+`x280_image_layout` checks resident idle's `.text` at `0x08000000` and the pinned-input
+prepare image's at `0x08001000`; `ActiveImage.BuiltImagesCarryTheirPlacementTag`
+(`x280_runtime_host_tests`) checks every other built image's tag against the placement's load
+address in `x280_address_map.h`. The `x280_abi_headers` build target compiles each
 ABI header alone as C, C++ and, for the two `entry.S` includes, assembly.
 It also compiles each benchmark suite header under `kernels/` alone, as C and
 C++, or as C++ only for the templates.

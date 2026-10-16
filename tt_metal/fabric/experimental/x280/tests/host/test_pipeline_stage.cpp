@@ -102,6 +102,9 @@ constexpr std::array<FixtureDestination, 16> kFixtureDestinations = {{
 
 using ForwardWords = std::array<uint32_t, PIPELINE_STAGE_ROUTE_FORWARD_ARGS_BYTES / 4u>;
 
+// The route_forward header, in the LIM window past a result at +64.
+constexpr uint64_t kForwardHeaderBase = PIPELINE_STAGE_FIXTURE_LIM_BEGIN + 0x100u;
+
 ForwardWords forward_words() {
     return {{
         pipeline_stage_cookie_for(UBENCH_SECTION_COMMON),
@@ -124,8 +127,8 @@ ForwardWords forward_words() {
         static_cast<uint32_t>(PIPELINE_STAGE_FIXTURE_LIM_BEGIN >> 32u),
         static_cast<uint32_t>(PIPELINE_STAGE_FIXTURE_LIM_END - PIPELINE_STAGE_FIXTURE_LIM_BEGIN),
         0u,
-        static_cast<uint32_t>(X280_PINNED_INPUT_FIRST_HEADER_BASE),
-        static_cast<uint32_t>(X280_PINNED_INPUT_FIRST_HEADER_BASE >> 32u),
+        static_cast<uint32_t>(kForwardHeaderBase),
+        static_cast<uint32_t>(kForwardHeaderBase >> 32u),
     }};
 }
 
@@ -142,7 +145,7 @@ TEST(PipelineStageRouteForwardLoad, AcceptsWireOrderAndRetainsValues) {
     EXPECT_EQ(state.args.section.backend.sample_region_base, UINT64_C(0x2233445566778880));
     EXPECT_EQ(state.args.layout.window.addr, PIPELINE_STAGE_FIXTURE_LIM_BEGIN);
     EXPECT_EQ(state.args.layout.window.bytes, PIPELINE_STAGE_FIXTURE_LIM_END - PIPELINE_STAGE_FIXTURE_LIM_BEGIN);
-    EXPECT_EQ(state.args.layout.source_base, X280_PINNED_INPUT_FIRST_HEADER_BASE);
+    EXPECT_EQ(state.args.layout.source_base, kForwardHeaderBase);
 }
 
 TEST(PipelineStageRouteForwardValidate, RejectsIncompatibleCookiesAndNonzeroTail) {
@@ -192,6 +195,14 @@ TEST(PipelineStageRouteForwardSanity, RejectsUnsafeConfigurations) {
     invalid = valid;
     invalid.args.section.backend.result_base = PIPELINE_STAGE_FIXTURE_LIM_BEGIN + 65u;
     EXPECT_FALSE(pipeline_stage::backend_route_forward::sanity_check(invalid));
+
+    invalid = valid;
+    invalid.args.layout.source_base = X280_PINNED_INPUT_FIRST_HEADER_BASE;
+    EXPECT_FALSE(pipeline_stage::backend_route_forward::sanity_check(invalid)) << "a header outside the LIM window";
+
+    invalid = valid;
+    invalid.args.layout.source_base = valid.args.section.backend.result_base;
+    EXPECT_FALSE(pipeline_stage::backend_route_forward::sanity_check(invalid)) << "a header over the result";
 }
 
 TEST(PipelineStageRouteForwardDecode, InvalidCommandHasNoDirection) {

@@ -2,11 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# CTest x280_image_layout: resident idle's .text starts the LIM at 0x08000000, and an active
-# image's .text follows the idle page at 0x08001000.
+# CTest x280_image_layout: resident idle's .text starts the LIM at 0x08000000, and the pinned-input
+# prepare image's follows the idle page at 0x08001000 under either X280_IMAGE_PLACEMENT. Every
+# other active image's placement is checked through its image tag (ActiveImage.BuiltImagesCarryTheirPlacementTag).
 # Usage: cmake -DREADELF=<riscv readelf> -DIMAGE_DIR=<X280_IMAGE_DIR> -P x280_image_layout.cmake
 
-foreach(_pair IN ITEMS "firmware-lim-idle.elf=08000000" "firmware.elf=08001000")
+foreach(_pair IN ITEMS "firmware-lim-idle.elf=08000000" "firmware-pinned-input-prepare.elf=08001000")
     string(REPLACE "=" ";" _pair "${_pair}")
     list(GET _pair 0 _elf)
     list(GET _pair 1 _addr)

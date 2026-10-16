@@ -26,6 +26,7 @@ extern "C" int main(uint64_t hartid) {
     state.result = nullptr;
     state.samples = nullptr;
     state.input = nullptr;
+    state.headers = nullptr;
 
     const bool loaded = x280_load_section<pipeline_stage_route_compute_args_block_t>(
         hartid, kParticipants, state.as_uint32, PIPELINE_STAGE_ROUTE_COMPUTE_ARGS_BYTES);

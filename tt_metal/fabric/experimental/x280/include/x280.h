@@ -10,7 +10,7 @@
 
 #include <stdint.h>
 
-/* Per-hart stack size (must match entry.S and the linker scripts) */
+/* Per-hart stack size of LIM active images (must match ld/x280.ld) */
 #define HART_STACK_SIZE 0x8000UL /* 32 KiB */
 
 #endif /* X280_H */

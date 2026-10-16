@@ -94,10 +94,55 @@ endfunction()
 # calling main directly.
 set(_x280_entry "${CMAKE_CURRENT_LIST_DIR}/boot/entry.S")
 _x280_compile("${_x280_obj_dir}/entry_hart.o" "${_x280_entry}" ${_x280_asflags} -DX280_PER_HART_PROTOCOL)
+# Where an active image runs, and what its entry writes to each hart's L2 prefetcher:
+#   lim   ld/x280.ld; nothing.
+#   gddr  ld/x280-gddr.ld, the cached local GDDR; the recommended values (tt-isa-documentation
+#         BlackholeA0/L2CPUTile/Caches.md § L2 Cache).
+# x280_add_image's PLACEMENT picks one per image; X280_IMAGE_PLACEMENT is the default for images
+# that name none. Resident idle is in LIM regardless.
+set(X280_IMAGE_PLACEMENT "lim" CACHE STRING "Where X280 active images that name no PLACEMENT run: lim or gddr")
+set_property(
+    CACHE
+        X280_IMAGE_PLACEMENT
+    PROPERTY
+        STRINGS
+            lim
+            gddr
+)
+if(NOT X280_IMAGE_PLACEMENT MATCHES "^(lim|gddr)$")
+    message(FATAL_ERROR "x280: X280_IMAGE_PLACEMENT is '${X280_IMAGE_PLACEMENT}'; expected lim or gddr")
+endif()
 # X280_ACTIVE_HARNESS implies X280_PER_HART_PROTOCOL: the harness publishes into the per-hart
 # records the trap path also indexes.
-_x280_compile("${_x280_obj_dir}/entry_active.o" "${_x280_entry}" ${_x280_asflags} -DX280_PER_HART_PROTOCOL
+set(_x280_active_asflags
+    ${_x280_asflags}
+    -DX280_PER_HART_PROTOCOL
     -DX280_ACTIVE_HARNESS
+)
+set(_x280_script_lim "${CMAKE_CURRENT_LIST_DIR}/ld/x280.ld")
+set(_x280_entry_lim "${_x280_obj_dir}/entry_active.o")
+_x280_compile("${_x280_entry_lim}" "${_x280_entry}" ${_x280_active_asflags})
+# Preprocessed, so its region constants are x280_address_map.h's.
+set(_x280_script_gddr "${_x280_obj_dir}/x280-gddr.ld")
+add_custom_command(
+    OUTPUT
+        "${_x280_script_gddr}"
+    COMMAND
+        "${X280_GCC}" -E -P -x assembler-with-cpp -I${CMAKE_CURRENT_LIST_DIR}/include -MD -MT "${_x280_script_gddr}" -MF
+        "${_x280_script_gddr}.d" -o "${_x280_script_gddr}" "${CMAKE_CURRENT_LIST_DIR}/ld/x280-gddr.ld"
+    DEPENDS
+        "${CMAKE_CURRENT_LIST_DIR}/ld/x280-gddr.ld"
+    DEPFILE "${_x280_script_gddr}.d"
+    COMMENT "x280: preprocessing ld/x280-gddr.ld"
+    VERBATIM
+)
+set(_x280_entry_gddr "${_x280_obj_dir}/entry_active_gddr.o")
+_x280_compile(
+    "${_x280_entry_gddr}"
+    "${_x280_entry}"
+    ${_x280_active_asflags}
+    -DX280_L2PF_BASIC=0x15811
+    -DX280_L2PF_USER=0x38c84e
 )
 _x280_compile(
     "${_x280_obj_dir}/x280_active_start.o"
@@ -123,12 +168,15 @@ set_property(
 )
 
 #[[
-x280_add_image(NAME <stem> SOURCES <source>... [LIM_IDLE] [OBJECTS <object>...] [DEFINES <macro>...]
-               [INCLUDES <dir>...] [LINK_OPTIONS <flag>...])
+x280_add_image(NAME <stem> SOURCES <source>... [LIM_IDLE | PLACEMENT <lim|gddr>] [OBJECTS <object>...]
+               [DEFINES <macro>...] [INCLUDES <dir>...] [LINK_OPTIONS <flag>...])
 
 Builds ${X280_IMAGE_DIR}/<stem>.elf and <stem>.bin from C and C++ (.cpp) sources, and adds them
-to x280_images. An image links the active lifecycle harness and ld/x280.ld (.text at
-0x08001000), or with LIM_IDLE the per-hart entry and ld/x280-lim-idle.ld (.text at 0x08000000).
+to x280_images. An image links the active lifecycle harness and the script and prefetcher write of
+its PLACEMENT, X280_IMAGE_PLACEMENT when it names none: ld/x280.ld (.text at 0x08001000) or
+ld/x280-gddr.ld. Each gddr image's name is appended to the global property X280_GDDR_IMAGES.
+LIM_IDLE links the per-hart entry and
+ld/x280-lim-idle.ld (.text at 0x08000000).
 DEFINES and INCLUDES (directories relative to this tree's root) apply to this image's sources only; C++ sources also get -std=c++17 -fno-exceptions -fno-rtti. LINK_OPTIONS
 apply to this image's link. OBJECTS are prebuilt objects linked after the image's own, such as
 ${_x280_pinned_input_library}, the pinned-input operations compiled once with the plain image flags; each
@@ -137,19 +185,37 @@ image linking the active harness, its objects' included, are appended to the glo
 X280_ACTIVE_IMAGE_SOURCES, which the STOP-poll check scans.
 #]]
 function(x280_add_image)
-    cmake_parse_arguments(PARSE_ARGV 0 ARG "LIM_IDLE" "NAME" "SOURCES;OBJECTS;DEFINES;INCLUDES;LINK_OPTIONS")
-    if(NOT ARG_NAME OR NOT ARG_SOURCES OR ARG_UNPARSED_ARGUMENTS)
-        message(FATAL_ERROR "x280_add_image: needs NAME and SOURCES; unparsed: '${ARG_UNPARSED_ARGUMENTS}'")
+    cmake_parse_arguments(PARSE_ARGV 0 ARG "LIM_IDLE" "NAME;PLACEMENT" "SOURCES;OBJECTS;DEFINES;INCLUDES;LINK_OPTIONS")
+    if(NOT ARG_NAME OR NOT ARG_SOURCES OR ARG_UNPARSED_ARGUMENTS OR (ARG_LIM_IDLE AND ARG_PLACEMENT))
+        message(
+            FATAL_ERROR
+            "x280_add_image: needs NAME and SOURCES, and at most one of LIM_IDLE and PLACEMENT; unparsed: '${ARG_UNPARSED_ARGUMENTS}'"
+        )
+    endif()
+    if(NOT ARG_PLACEMENT)
+        set(ARG_PLACEMENT "${X280_IMAGE_PLACEMENT}")
+    endif()
+    if(NOT ARG_PLACEMENT MATCHES "^(lim|gddr)$")
+        message(FATAL_ERROR "x280_add_image(${ARG_NAME}): PLACEMENT is '${ARG_PLACEMENT}'; expected lim or gddr")
     endif()
     if(ARG_LIM_IDLE)
         set(entry "${_x280_obj_dir}/entry_hart.o")
         set(script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ld/x280-lim-idle.ld")
     else()
         set(entry
-            "${_x280_obj_dir}/entry_active.o"
+            "${_x280_entry_${ARG_PLACEMENT}}"
             "${_x280_obj_dir}/x280_active_start.o"
         )
-        set(script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ld/x280.ld")
+        set(script "${_x280_script_${ARG_PLACEMENT}}")
+        if(ARG_PLACEMENT STREQUAL "gddr")
+            set_property(
+                GLOBAL
+                APPEND
+                PROPERTY
+                    X280_GDDR_IMAGES
+                        "${ARG_NAME}"
+            )
+        endif()
     endif()
     list(TRANSFORM ARG_DEFINES PREPEND "-D")
     list(TRANSFORM ARG_INCLUDES PREPEND "-I${CMAKE_CURRENT_FUNCTION_LIST_DIR}/")

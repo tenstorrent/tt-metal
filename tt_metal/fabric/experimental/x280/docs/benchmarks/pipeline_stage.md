@@ -12,9 +12,9 @@ Results are in [`docs/results.md`](../results.md). Per item on the published rec
 
 | stage | ns/item | cpu/item |
 |---|---:|---:|
-| route_compute, plain | 41.824 [41.708-41.884] | 73.190 [72.987-73.294] |
-| route_compute, instrumented | 72.184 [72.129-72.236] | 126.322 [126.228-126.414] |
-| route_forward decision | 25.148 | 44.007 [44.007-44.008] |
+| route_compute, plain | 44.607 [44.537-44.658] | 78.063 [77.940-78.154] |
+| route_compute, instrumented | 62.093 [62.061-62.139] | 108.660 [108.603-108.741] |
+| route_forward decision | 24.002 [24.001-24.003] | 42.004 [42.003-42.005] |
 
 X280 micro-benchmark figures move with firmware code layout alone, so a figure compares only against a run of the same image.
 
@@ -51,14 +51,17 @@ There is no route-construction member. Lookup has no PACKED/ALIGNED selector, co
 destination-window sweep, table-placement sweep, or header-placement sweep.
 Instrumentation remains a measurement mode, not an implementation alternative.
 
-Forwarding's source is the first 96-byte header in the prepared Zero Device image
-at `0x0A000AC0`. DECIDE stops after
+Forwarding's source is one 96-byte header in uncached LIM, allocated by the host and
+named by the layout's `source_base`. DECIDE stops after
 the load, decode, cursor update, and witness update without issuing the packet.
 
 ## route_compute: destination-to-next-hop lookup
 
 One timed item reads `dst_start_chip_id` and `dst_start_mesh_id` from one of
-sixteen resident packet headers and returns one decoded direction:
+sixteen packet headers and returns one decoded direction. The routing tables
+are read from the cached prepared input; the headers are read from the staged
+input in uncached LIM, where production headers arrive, so every item pays an
+uncached header read against a warm table:
 
 ```text
 if destination_mesh == routing.my_mesh_id:
@@ -157,7 +160,9 @@ Both return failure before reading when `index >= entry_count`; callers pass
 ## Suite-prepared input (X280 only)
 
 The lookup routing image and headers occupy one fixed cached Zero Device region
-on each participating L2CPU tile:
+on each participating L2CPU tile. The firmware copies the whole staged input there
+and verifies it, but the timed loops read only its routing image; both members
+read headers from uncached LIM:
 
 ```text
 [0x0A000000, 0x0A0010C0)  4288 bytes
@@ -253,8 +258,8 @@ Before binding any output, each X280 entry validates every applicable owned span
 arguments, staged lookup input, result, and optional samples. Each must be
 aligned, have a non-overflowing checked end, lie wholly inside the available-LIM
 window the host publishes (`[0x08131B00, 0x081C0000)` at 14 LIM ways), and be pairwise
-non-overlapping. Forwarding's fixed Zero Device source is not an owned-LIM span;
-it is checked separately with `x280_pinned_input_contains(&X280_PINNED_INPUT_ROUTER_REGION, addr, bytes)`.
+non-overlapping. Forwarding's header is the layout's `source_base`, a 96-byte
+owned-LIM span inside the window and apart from the result.
 
 The X280 forwarding section is exactly 64 bytes, with 44 defined bytes;
 bytes 44 through 63 must be zero. The composed block appends the 24-byte
@@ -263,8 +268,7 @@ host/device layout, making `sizeof(pipeline_stage_route_forward_args_block_t)`
 extent. The section uses the same common prefix, followed by
 the backend cookie, the result and sample-region addresses, and the hop count
 at byte 40. Forwarding runs uninstrumented, so the sample-region address must
-be zero. The source address
-is not an argument: it is fixed at `0x0A000AC0`.
+be zero. The header address is the layout's `source_base`.
 
 ## Timing and result contract
 
@@ -327,7 +331,7 @@ record envelope (`docs/measurement.md` "Record contract"):
 
 ```text
 suite, member, kind, backend_id, run_nonce, packet_header_bytes,
-route_buffer_capacity, instrumentation, fixture, header_count,
+route_buffer_capacity, instrumentation, fixture, header_count, header_placement,
 prepared_input_base, prepared_input_bytes, wayenable, pinned_way, waymask_bits,
 warmup, timed_count, items_completed, stage_witness, raw_batch_delta,
 secondary_batch_delta, verify_sentinel, subject, cpu_samples
@@ -336,8 +340,9 @@ secondary_batch_delta, verify_sentinel, subject, cpu_samples
 Its fixed identities are `member="route_compute"`,
 `subject="next-hop direction-table lookup"`,
 `fixture="direction_table_v1"`, `packet_header_bytes=96`,
-`route_buffer_capacity=35`, `header_count=16`, and the fixed prepared base and
-4288-byte extent. Successful rows report `wayenable=1`, `pinned_way=1`, and
+`route_buffer_capacity=35`, `header_count=16`, `header_placement="uncached_lim"`,
+and the fixed prepared base and 4288-byte extent; the tabulator rejects a row
+without that header placement. Successful rows report `wayenable=1`, `pinned_way=1`, and
 `waymask_bits=1`; these identify the admitted policy and are distinct from the
 full observed-register value published only on refusal. The instrumented row's
 `cpu_samples` holds the raw rdcycle samples; the tabulator derives the per-item
@@ -354,7 +359,7 @@ window, declared-geometry, or effective-working-set fields.
 
 ### X280 placement
 
-`route_forward` reads one hop command from the first header in the prepared image, decodes
+`route_forward` reads one hop command from its header in uncached LIM, decodes
 it, advances the cursor, and adds the decoded direction to the witness. This
 arm, DECIDE, issues no packet and opens no NoC window.
 
@@ -370,8 +375,9 @@ seed overwrites all 96 bytes, sets the cursor to zero, writes
 SOUTH/EAST/NORTH/WEST, and fills the remaining route buffer with NOOP. Each
 consumed command must decode to one of those four directions; an invalid
 command selects no direction and fails verification. Per-sample
-instrumentation is refused. There is no header-placement axis, source window,
-local-DDR path, or header allocation in the case.
+instrumentation is refused. The case allocates one header from the LIM arena and
+reuses it for every item: LIM is uncached, so reuse does not warm it. There is no
+header-placement axis, source window, or local-DDR path.
 
 The prepared cache profile applies to the compatible suite even when a
 forwarding case does not use the reserved lookup bytes. That changes available
@@ -381,15 +387,15 @@ code does not imply the same cycle values.
 ### Forwarding summary rows
 
 Forwarding summary rows report
-`source_placement="pinned_zero_device"`,
-`source_base=0x0A000AC0`,
+`source_placement="uncached_lim"`,
+`source_base` (the header's LIM address),
 `source_bytes=96`, `packet_header_bytes`, `route_buffer_capacity`,
 `instrumentation`, `hop_count`,
 `stage_witness`, verification, and the common timing fields.
 Rows report the fixed cache-profile fields `wayenable=1`, `pinned_way=1`,
 and `waymask_bits=1`, `boundary="decision"` and
 `subject="router forward decision"`.
-The tabulator rejects a fixed-source forwarding row unless its source, packet,
+The tabulator rejects a forwarding row unless its source placement, packet,
 capacity, hop count, boundary, subject, and instrumentation match this
 identity. Rows carry no `args_schema`.
 
@@ -421,7 +427,7 @@ A current forwarding observation is valid only when:
     admission before outputs were bound;
   * terminal state is `DONE`, verification reports a match, the witness equals
     the host oracle, and the item count is complete;
-  * source is `0x0A000AC0` and hop count is 4.
+  * the header is in uncached LIM and hop count is 4.
 
 **Acceptance boundaries**:
 A host build establishes that host C++ executables compile and link. Separate

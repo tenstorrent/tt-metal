@@ -59,11 +59,13 @@ static inline __attribute__((always_inline)) uint32_t next_slot(uint32_t& genera
     return value & (PIPELINE_STAGE_LOOKUP_HEADER_COUNT - 1u);
 }
 
-/* The prepared input at `input`: the routing image at its start, then
- * PIPELINE_STAGE_LOOKUP_HEADER_COUNT header slots at
- * X280_PINNED_INPUT_HEADERS_OFFSET. */
+/* The routing image at `input`, and PIPELINE_STAGE_LOOKUP_HEADER_COUNT header
+ * slots from `headers`. The X280 member reads the routing image from the
+ * pinned input and the headers from the staged input in uncached LIM, as a
+ * production router finds them. */
 struct prepared_input_t {
     volatile uint8_t* input;
+    const volatile uint8_t* headers;
 
     inline __attribute__((always_inline)) const volatile fs_routing_l1_info_t* routing() const {
         return reinterpret_cast<const volatile fs_routing_l1_info_t*>(input);
@@ -72,7 +74,7 @@ struct prepared_input_t {
     /* slot is below PIPELINE_STAGE_LOOKUP_HEADER_COUNT. */
     inline __attribute__((always_inline)) const volatile fs_hybrid_mesh_packet_header_t* header(uint32_t slot) const {
         return reinterpret_cast<const volatile fs_hybrid_mesh_packet_header_t*>(
-            input + X280_PINNED_INPUT_HEADERS_OFFSET + (uint64_t)slot * FS_PACKET_HEADER_BYTES);
+            headers + (uint64_t)slot * FS_PACKET_HEADER_BYTES);
     }
 };
 

@@ -14,9 +14,8 @@
  * instruction.
  *
  * The source of every store is a 64 B pattern held in registers across the
- * timed loop. The stack is in LIM, which is uncached, so a load per store
- * would cost one LIM read each and the loop would measure that instead of
- * the transport.
+ * timed loop. A load per store from the stack would add a memory access to
+ * every store, and the loop would measure that instead of the transport.
  *
  * Timing uses TWO counters around the same bracket. mtime (fixed 50 MHz,
  * PLL-independent) is the PRIMARY -- it is a wall clock that needs no

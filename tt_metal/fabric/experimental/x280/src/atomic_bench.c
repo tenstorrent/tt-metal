@@ -90,7 +90,7 @@
  * The GATE gives all participants a near-simultaneous start so the
  * contention window overlaps.
  *
- * Linker: ld/x280.ld (active-FW LIM region at 0x08001000).
+ * Linker: ld/x280.ld (0x08001000), or ld/x280-gddr.ld under X280_IMAGE_PLACEMENT=gddr.
  * Build:  ninja x280_images  ->  build/x280/firmware-atomic-bench.bin
  *
  * NOTE ON RECOVERY: if AMOs against LIM are unsupported, the amo_probe
