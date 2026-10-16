@@ -132,7 +132,6 @@ import contextlib
 import json
 import os
 import queue
-import re
 import sys
 import threading
 import time
@@ -149,16 +148,12 @@ import ttnn
 from models.experimental.deepseek_v4_flash.demo import tui
 from models.experimental.deepseek_v4_flash.demo.chat_cli import (
     ChatEngine,
+    ChatFormat,
     ContextFull,
     UserSession,
     open_mesh_device,
 )
-from models.experimental.deepseek_v4_flash.encoding_dsv4 import (
-    REASONING_EFFORTS,
-    merge_tool_messages,
-    render_message,
-    sort_tool_results_by_call_order,
-)
+from models.experimental.deepseek_v4_flash.encoding_dsv4 import REASONING_EFFORTS
 from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill_demo import (
     _ATTENTION_WEIGHT_DTYPE,
     _TP_SIZE,
@@ -187,14 +182,7 @@ _DEFAULT_USER = "default"
 #
 # ``string="true"`` marks a raw string; ``string="false"`` marks a JSON value (number,
 # boolean, array, object). The block follows the answer text, separated by a blank line.
-_DSML = "｜DSML｜"
-_TOOL_CALLS_OPEN = f"<{_DSML}tool_calls>"
-_TOOL_CALLS_CLOSE = f"</{_DSML}tool_calls>"
-_INVOKE_RE = re.compile(rf'<{_DSML}invoke name="(?P<name>[^"]*)">(?P<body>.*?)</{_DSML}invoke>', re.DOTALL)
-_PARAM_RE = re.compile(
-    rf'<{_DSML}parameter name="(?P<name>[^"]*)" string="(?P<string>true|false)">(?P<value>.*?)</{_DSML}parameter>',
-    re.DOTALL,
-)
+# The tag names are the engine's :class:`ChatFormat`'s: V4.1 writes ``<｜DSML｜ calls>`` etc.
 
 
 class RequestError(Exception):
@@ -336,7 +324,7 @@ def _normalized_tools(tools) -> list[dict]:
     return out
 
 
-def _normalized_messages(messages, tools=None) -> list[dict]:
+def _normalized_messages(messages, tools, chat_format: ChatFormat) -> list[dict]:
     """Validate a request's ``messages`` and put them in the form the renderer wants.
 
     Two shapes are canonicalised here. OpenAI's ``content`` may be a string or an array
@@ -382,7 +370,7 @@ def _normalized_messages(messages, tools=None) -> list[dict]:
         system["tools"] = _normalized_tools(tools)
 
     if any(m["role"] == "tool" for m in out):
-        out = sort_tool_results_by_call_order(merge_tool_messages(out))
+        out = chat_format.sort_tool_results_by_call_order(chat_format.merge_tool_messages(out))
     return out
 
 
@@ -427,8 +415,8 @@ def _parameter_value(value: str, is_string: bool):
         return value
 
 
-def _parse_tool_calls(block: str) -> list[dict]:
-    """The OpenAI ``tool_calls`` described by a DSML block.
+def _parse_tool_calls(block: str, chat_format: ChatFormat) -> list[dict]:
+    """The OpenAI ``tool_calls`` described by a DSML block in ``chat_format``'s tags.
 
     Deliberately tolerant where the checkpoint's reference parser raises: a serving loop
     should hand back whatever the model managed to express rather than fail the request
@@ -436,8 +424,8 @@ def _parse_tool_calls(block: str) -> list[dict]:
     bare JSON object that the model sometimes writes inside ``invoke`` instead.
     """
     calls = []
-    for invoke in _INVOKE_RE.finditer(block):
-        parameters = list(_PARAM_RE.finditer(invoke["body"]))
+    for invoke in chat_format.invoke_re.finditer(block):
+        parameters = list(chat_format.param_re.finditer(invoke["body"]))
         arguments: dict = {}
         if parameters:
             for parameter in parameters:
@@ -523,9 +511,10 @@ class _Streamer:
     describes is parsed into OpenAI ``tool_calls`` and left on :attr:`tool_calls`.
     """
 
-    def __init__(self, tokenizer, on_chunk):
+    def __init__(self, tokenizer, on_chunk, chat_format: ChatFormat):
         self.tokenizer = tokenizer
         self.on_chunk = on_chunk
+        self.chat_format = chat_format
         self.text = ""  # raw decoded reply, tags included, no escapes
         self.reasoning = ""
         self.content = ""
@@ -557,7 +546,7 @@ class _Streamer:
         Generation is over, so nothing more can complete the tail: it is emitted
         as-is and :attr:`reasoning` / :attr:`content` hold the complete reply."""
         reasoning, content, tool_block = self._split(self.text)
-        self.tool_calls = _parse_tool_calls(tool_block) if tool_block else []
+        self.tool_calls = _parse_tool_calls(tool_block, self.chat_format) if tool_block else []
         if len(reasoning) > self._sent_r:
             self.on_chunk(reasoning[self._sent_r :], "")
             self._sent_r = len(reasoning)
@@ -579,23 +568,23 @@ class _Streamer:
             else:
                 reasoning, answer = after[:end], text[:start] + after[end + len(_THINK_CLOSE) :]
 
-        opened = answer.find(_TOOL_CALLS_OPEN)
+        calls_open, calls_close = self.chat_format.calls_open, self.chat_format.calls_close
+        opened = answer.find(calls_open)
         if opened == -1:
             return reasoning, answer, ""
-        closed = answer.find(_TOOL_CALLS_CLOSE, opened)
-        block = answer[opened : closed + len(_TOOL_CALLS_CLOSE)] if closed != -1 else answer[opened:]
+        closed = answer.find(calls_close, opened)
+        block = answer[opened : closed + len(calls_close)] if closed != -1 else answer[opened:]
         # The encoder separates the answer from the block with a blank line, which would
         # otherwise trail the reply as whitespace.
         return reasoning, answer[:opened].rstrip("\n"), block
 
-    @staticmethod
-    def _held_back(text: str) -> int:
+    def _held_back(self, text: str) -> int:
         """Characters at the end that could still turn into a tag once more arrive.
 
         The newlines before a tool-call block count: they are the block's separator, and
         streaming them the moment they arrive would leave a trailing blank line on a
         reply whose visible text has actually ended."""
-        for tag in (_THINK_CLOSE, _THINK_OPEN, _TOOL_CALLS_OPEN):
+        for tag in (_THINK_CLOSE, _THINK_OPEN, self.chat_format.calls_open):
             for n in range(len(tag) - 1, 0, -1):
                 if text.endswith(tag[:n]):
                     return n + len(text[: len(text) - n]) - len(text[: len(text) - n].rstrip("\n"))
@@ -1314,7 +1303,9 @@ class _Scheduler:
             return
         user._next_render = len(user.messages)
         turn.t_replay = turn.t_admit
-        turn.stream = _Streamer(self.engine.tokenizer, lambda r, c: turn.events.put(("delta", r, c)))
+        turn.stream = _Streamer(
+            self.engine.tokenizer, lambda r, c: turn.events.put(("delta", r, c)), self.engine.chat_format
+        )
         self._active.append(turn)
         how = "re-prefill whole conversation" if turn.rebuilt else "continuing" if continuing else "fresh session"
         logger.debug(
@@ -1962,7 +1953,7 @@ class GenerationServer:
         Blocks until the reply is complete, but holds nothing except this user's own
         lock: the decode steps run on the scheduler thread, interleaved with the other
         users' turns, and this thread only relays what they produce."""
-        messages = _normalized_messages(body.get("messages"), body.get("tools"))
+        messages = _normalized_messages(body.get("messages"), body.get("tools"), self.engine.chat_format)
         body = {**body, "messages": messages}
 
         max_tokens = body.get("max_tokens")
@@ -2019,10 +2010,9 @@ class GenerationServer:
             user.thinking_mode = "thinking" if body.get("thinking") else "chat"
         effort = body.get("reasoning_effort")
         if effort is not None:
-            if effort not in REASONING_EFFORTS:
-                raise RequestError(
-                    400, f"reasoning_effort must be 'low', 'medium', 'high', or 'max', but got {effort!r}"
-                )
+            efforts = user.engine.chat_format.reasoning_efforts
+            if effort not in efforts:
+                raise RequestError(400, f"reasoning_effort must be one of {list(efforts)}, but got {effort!r}")
             user.reasoning_effort = effort
 
     def _render_ids(self, user: UserSession, include_assistant: bool) -> list[int]:
@@ -2035,7 +2025,7 @@ class GenerationServer:
         engine = user.engine
         first_turn = user._next_render == 0
         rendered = "".join(
-            render_message(i, user.messages, user.thinking_mode, reasoning_effort=user.reasoning_effort)
+            engine.chat_format.render(i, user.messages, user.thinking_mode, user.reasoning_effort)
             for i in range(user._next_render, len(user.messages))
             if include_assistant or user.messages[i]["role"] != "assistant"
         )
@@ -2125,7 +2115,7 @@ class _Handler(BaseHTTPRequestHandler):
             # a malformed request still gets a real status code. The result is discarded:
             # ``generate`` normalises the body itself, and folding tool turns into user
             # messages is not something to do twice.
-            _normalized_messages(body.get("messages"), body.get("tools"))
+            _normalized_messages(body.get("messages"), body.get("tools"), self.api.engine.chat_format)
             completion_id = "chatcmpl-" + uuid.uuid4().hex
             object_kind, chunk_kind = "chat.completion", "chat.completion.chunk"
         else:
