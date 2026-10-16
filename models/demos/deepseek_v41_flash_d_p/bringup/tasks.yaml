@@ -1866,6 +1866,14 @@ tasks:
     kind: norm
     layer: 1
     stateful: false
+  frozen:
+    at: '2026-10-16T03:19:02'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_norm.py: a290622e494e7c30bbbf64e9c842cef04a43434472ad621757204b13c1928bcd
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.swa_engram.13
   title: 'swa_engram block with steps 1-13 on device (last: ffn_norm)'
   step: implement
