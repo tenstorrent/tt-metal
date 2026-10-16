@@ -1965,20 +1965,7 @@ def test_only_a_note_the_emitter_writes_is_credited_to_the_key_lines_run(tmp_pat
 #: on, each with that cause. A cell whose disagreeing lanes are a tracked defect on a
 #: handful of inputs does not belong here: name the inputs in
 #: ``ulp_sweep._KNOWN_NONFINITE_LANES`` instead, and the rest of the cell stays gated.
-_NO_INFINITY_IN_A_16BIT_DEST = (
-    "the golden models a 16-bit Dest as IEEE fp16, whose range ends at 65504, while the "
-    "hardware's 16-bit Dest carries a magnitude up to ~131008 and no infinity: where the "
-    "answer is past 65504 the kernel reads a finite value (-66560 for tan(177.5), -130560 "
-    "for sinh(-65504)) against the golden's -inf"
-)
 _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
-    # -- the store or the Dest, not the op ------------------------------------------
-    **{
-        (op, DataFormat.Float16, None, None, DestAccumulation.No): (
-            _NO_INFINITY_IN_A_16BIT_DEST
-        )
-        for op in (MathOperation.Sinh, MathOperation.Tan)
-    },
     # -- the approximation's own shortfall at the fp16 overflow edge ----------------
     (
         MathOperation.Exp,
@@ -2092,8 +2079,6 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
 #: makes a newly demoted cell a change someone has to read: the table moved, the cause
 #: must be looked at, and the number here bumped on purpose. Exact-cell keys need no pin.
 _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
-    (MathOperation.Sinh, DataFormat.Float16, None, None, DestAccumulation.No): 2,
-    (MathOperation.Tan, DataFormat.Float16, None, None, DestAccumulation.No): 2,
     (
         MathOperation.Exp,
         DataFormat.Float16,
@@ -2108,7 +2093,7 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
         ApproximationMode.Yes,
         None,
     ): 2,
-    (MathOperation.Digamma, None, None, None, None): 22,
+    (MathOperation.Digamma, None, None, None, None): 20,
     (
         MathOperation.ExpWithBase,
         DataFormat.Float16,
@@ -2125,7 +2110,7 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
     ): 2,
     (MathOperation.Expm1Cw, None, None, None, None): 25,
     (MathOperation.I0, None, None, None, None): 18,
-    (MathOperation.I1, None, None, None, None): 20,
+    (MathOperation.I1, None, None, None, None): 18,
     (MathOperation.Lgamma, None, None, None, None): 19,
     (MathOperation.Polygamma, None, None, None, None): 50,
     (MathOperation.Rpow, None, None, None, None): 20,

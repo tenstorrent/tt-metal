@@ -100,7 +100,7 @@
 # visible at all (atol=0.05 is ~6 bf16 steps). No headroom on the 0-step rows,
 # deliberately: these are exact by construction, so any movement is real signal. The
 # narrowing Float16->Float16_b rows measure 1 and carry the emitter's 1.1x, as 2.
-Abs:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Abs:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -143,7 +143,7 @@ Abs:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float3
   - {out: Bfp8_b, metric: tolerance}  # see the Bfp8_b note above, 2026-09-16
 
 
-Acos:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Acos:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 3 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 3 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -242,7 +242,7 @@ Acos:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
 # Regenerate an `exhaustive` block with `--ulp-emit` rather than editing a row: the
 # comment is the measurement, and a number changed without it is a guess.
 
-Acosh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Acosh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 3 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 2 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -282,7 +282,7 @@ Acosh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Floa
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 2}  # max 1 ULP
 
 
-Add1:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Add1:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 3 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 3 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -322,7 +322,7 @@ Add1:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 1}  # max 0 ULP
 
 
-Asin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Asin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -362,7 +362,7 @@ Asin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 3}  # max 2 ULP
 
 
-Asinh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Asinh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -402,7 +402,7 @@ Asinh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Floa
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 2}  # max 1 ULP
 
 
-Atan:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Atan:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -442,7 +442,7 @@ Atan:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 3}  # max 2 ULP
 
 
-Atanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Atanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -482,7 +482,7 @@ Atanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Floa
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 3}  # max 2 ULP
 
 
-CastFp32ToFp16a:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+CastFp32ToFp16a:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -522,7 +522,7 @@ CastFp32ToFp16a:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + st
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 9012}  # max 8192 ULP
 
 
-Cbrt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Cbrt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 3 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 1 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -562,7 +562,7 @@ Cbrt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 3}  # max 2 ULP
 
 
-Ceil:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Ceil:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -603,7 +603,7 @@ Ceil:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {max_ulp: 0}  # wh: 0 ULP, as Floor, 2026-09-16
 
 
-Celu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Celu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -643,7 +643,7 @@ Celu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 10}  # max 9 ULP
 
 
-Clamp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Clamp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -683,7 +683,7 @@ Clamp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Floa
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP
 
 
-Cos:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Cos:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 48343 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 48445 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", metric: tolerance}  # max 42822 ULP, budget 47105 > ceiling 51
@@ -723,7 +723,7 @@ Cos:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float3
   - {in: Float32, out: Float32, dest: "Yes", metric: tolerance}  # max 3183431454 ULP, budget 3501774600 > ceiling 419430
 
 
-Cosh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Cosh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 27810 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 27810 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -763,7 +763,7 @@ Cosh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 2}  # max 1 ULP
 
 
-Digamma:  # tracked: #51128 (saturates below the LUT range, under #52178); measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Digamma:  # tracked: #51128 (saturates below the LUT range, under #52178), #58682 (no branch for x <= 0); measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 16224 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: inf -> -inf; x=-3.37624e+38: inf -> -inf); max 50726 ULP over the 48800 measurable lanes
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 16224 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: inf -> -inf; x=-3.37624e+38: inf -> -inf); max 50726 ULP over the 48800 measurable lanes
   - {in: Bfp4_b, out: Float16, dest: "Yes", metric: tolerance}  # not measurable: 51 lane(s) disagreeing with the golden about being finite (golden -> result: x=1.33514e-05: -inf -> -61312; x=1.3411e-05: -inf -> -61312); max 31792 ULP over the 20576 measurable lanes
@@ -778,13 +778,13 @@ Digamma:  # tracked: #51128 (saturates below the LUT range, under #52178); measu
   - {in: Bfp8_b, out: Float16_b, dest: "Yes", metric: tolerance}  # not measurable: 15742 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: inf -> -inf; x=-3.37624e+38: inf -> -inf); max 50727 ULP over the 49282 measurable lanes
   - {in: Bfp8_b, out: Float32, dest: "No", metric: tolerance}  # not measurable: 15742 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: inf -> -inf; x=-3.37624e+38: inf -> -inf); max 3324248066 ULP over the 49282 measurable lanes
   - {in: Bfp8_b, out: Float32, dest: "Yes", metric: tolerance}  # max 3324305663 ULP, budget 3656736230 > ceiling 419430
-  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 1 lane(s) disagreeing with the golden about being finite (golden -> result: x=-0: -inf -> -130048); max 36606 ULP over the 61440 measurable lanes
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 36606 ULP, block-quantized
   - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 7168 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: inf -> -132; x=-65472: inf -> -132); max 34488 ULP over the 54273 measurable lanes
   - {in: Float16, out: Float16, dest: "No", metric: tolerance}  # max 46518 ULP, budget 51170 > ceiling 51
   - {in: Float16, out: Float16, dest: "Yes", metric: tolerance}  # max 46518 ULP, budget 51170 > ceiling 51
-  - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # not measurable: 1 lane(s) disagreeing with the golden about being finite (golden -> result: x=-0: -inf -> -130560); max 36608 ULP over the 61440 measurable lanes
+  - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # max 36608 ULP, budget 40269 > ceiling 6
   - {in: Float16, out: Float16_b, dest: "Yes", metric: tolerance}  # not measurable: 7168 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: inf -> -132; x=-65472: inf -> -132); max 34489 ULP over the 54273 measurable lanes
-  - {in: Float16, out: Float32, dest: "No", metric: tolerance}  # not measurable: 1 lane(s) disagreeing with the golden about being finite (golden -> result: x=-0: -inf -> -131008); max 2399125506 ULP over the 61440 measurable lanes
+  - {in: Float16, out: Float32, dest: "No", metric: tolerance}  # max 2399125506 ULP, budget 2639038057 > ceiling 419430
   - {in: Float16, out: Float32, dest: "Yes", metric: tolerance}  # not measurable: 1 lane(s) disagreeing with the golden about being finite (golden -> result: x=-0: -inf -> -337672); max 2260111539 ULP over the 54273 measurable lanes
   - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 15616 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: inf -> -inf; x=-3.37624e+38: inf -> -inf); max 50726 ULP over the 49409 measurable lanes
   - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 15616 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: inf -> -inf; x=-3.37624e+38: inf -> -inf); max 50726 ULP over the 49409 measurable lanes
@@ -803,7 +803,7 @@ Digamma:  # tracked: #51128 (saturates below the LUT range, under #52178); measu
   - {in: Float32, out: Float32, dest: "Yes", metric: tolerance}  # not measurable: 74 lane(s) disagreeing with the golden about being finite (golden -> result: x=-8.32644e+06: 15.9349 -> -inf; x=-8.28593e+06: 15.9301 -> -inf); max 3324262146 ULP over the 51382 measurable lanes
 
 
-Elu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Elu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -843,7 +843,7 @@ Elu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float3
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 10}  # max 9 ULP
 
 
-EqualZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+EqualZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, max_ulp: 0}  # max 0 ULP
   - {in: Bfp4_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
@@ -866,7 +866,7 @@ EqualZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided 
   - {in: Float32, out: Float32, max_ulp: 0}  # max 0 ULP
 
 
-Erf:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Erf:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 381 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 381 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 381 ULP, block-quantized
@@ -943,7 +943,7 @@ Erf:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float3
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 58337}  # max 53033 ULP
 
 
-Erfc:  # tracked: #51137 (input clamp, under #52178); measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Erfc:  # tracked: #51137 (input clamp, under #52178); measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 12805 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 12805 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", metric: tolerance}  # max 373 ULP, budget 411 > ceiling 51
@@ -1031,7 +1031,7 @@ Erfinv:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Flo
   - {in: Float32, out: Float32, approx: "Yes", dest: "No", metric: tolerance}  # max 963575809 ULP, budget 1059933390 > ceiling 419430
 
 
-Exp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Exp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 27938 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 27938 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 27938 ULP, block-quantized
@@ -1108,7 +1108,7 @@ Exp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float3
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 416503}  # max 378639 ULP
 
 
-Exp2:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Exp2:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 28417 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 28417 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -1148,7 +1148,7 @@ Exp2:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 2}  # max 1 ULP
 
 
-ExpWithBase:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+ExpWithBase:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 27938 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 27938 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 27938 ULP, block-quantized
@@ -1225,7 +1225,7 @@ ExpWithBase:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + stride
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 416496}  # max 378632 ULP
 
 
-Expm1:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Expm1:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 27938 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 27938 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -1265,7 +1265,7 @@ Expm1:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Floa
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 2}  # max 1 ULP
 
 
-Expm1Cw:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Expm1Cw:  # tracked: #54770 (exponent wraps past overflow; closed, production feeds x < 0 only); measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 9276 lane(s) disagreeing with the golden about being finite (golden -> result: x=96: inf -> 0; x=96.5: inf -> -1); max 30891 ULP over the 55748 measurable lanes
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 9276 lane(s) disagreeing with the golden about being finite (golden -> result: x=96: inf -> 0; x=96.5: inf -> -1); max 30891 ULP over the 55748 measurable lanes
   - {in: Bfp4_b, out: Float16, dest: "Yes", metric: tolerance}  # not measurable: 243 lane(s) disagreeing with the golden about being finite (golden -> result: x=96: inf -> -1; x=96.5: inf -> -1); max 1 ULP over the 49088 measurable lanes
@@ -1305,7 +1305,7 @@ Expm1Cw:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Fl
   - {in: Float32, out: Float32, dest: "Yes", metric: tolerance}  # not measurable: 8655 lane(s) disagreeing with the golden about being finite (golden -> result: x=89.2905: inf -> -1; x=89.5995: inf -> -1); max 9 ULP over the 56319 measurable lanes
 
 
-Fill:  # 0 ULP, 115 variants / 2.09M lanes, 2026-09-18; measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Fill:  # 0 ULP, 115 variants / 2.09M lanes, 2026-09-18; measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, max_ulp: 0}  # max 0 ULP
   - {in: Bfp4_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
@@ -1329,7 +1329,7 @@ Fill:  # 0 ULP, 115 variants / 2.09M lanes, 2026-09-18; measured by: exhaustive 
   - {out: Float32, max_ulp: 0}  # 0 ULP, 115 variants / 2.09M lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 0}  # 0 ULP, 115 variants / 2.09M lanes, 2026-09-18
   - {out: Float16, max_ulp: 0}  # 0 ULP, 115 variants / 2.09M lanes, 2026-09-18
-Floor:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Floor:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -1370,7 +1370,7 @@ Floor:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Floa
   - {max_ulp: 0}  # wh: 0 ULP, 156 variants each, all four output formats x both dest_acc, 2026-09-16
 
 
-Fmod:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Fmod:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -1414,7 +1414,7 @@ Fmod:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
 # the rows below gate each swept cell at what it measured (0 on most, 2 for a measured 1
 # on the narrowing cells). The sampled `{out: Float16}` wildcard's 384 steps, from
 # 2026-09-18, has no cause recorded; it answers only the cells the sweep does not drive.
-Frac:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Frac:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -1516,20 +1516,20 @@ Gelu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Float16_b, out: Bfp8_b, approx: "Yes", dest: "Yes", metric: tolerance}  # not measurable: 3 lane(s) disagreeing with the golden about being finite (golden -> result: x=3.36295e+38: 3.36295e+38 -> inf; x=3.37624e+38: 3.37624e+38 -> inf); max 29581 ULP over the 65022 measurable lanes
   - {in: Float16_b, out: Float16, approx: "No", dest: "Yes", max_ulp: 5}  # max 4 ULP
   - {in: Float16_b, out: Float16, approx: "Yes", dest: "Yes", metric: tolerance}  # max 7002 ULP, budget 7703 > ceiling 51
-  - {in: Float16, out: Float16_b, approx: "No", dest: "No", max_ulp: 2, near_zero_atol: 7.63e-05}  # max 1 ULP outside the floor, exhaustive Float16 sweep, wormhole, 2026-10-07; the whole-format worst lane is 14337 steps, in the near-zero tail near_zero_atol holds, whose worst |error| is 6.10e-05. write_table cannot regenerate a floor, so it keeps this op's block verbatim and the row is hand-maintained; without the floor the cell demotes to tolerance on that tail alone. Budget is the 1 plus the emitter's 1.1x headroom
-  - {in: Float16, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 2, near_zero_atol: 7.09e-07}  # max 1 ULP outside the floor, exhaustive Float16 sweep against the fp64 erfc golden, wormhole, 2026-10-07; the whole-format worst lane is 13106 steps, in the near-zero tail near_zero_atol holds, whose worst |error| is 7.083e-07 (7.08e-07 before the golden moved that lane one bf16 step). write_table cannot regenerate a floor, so it keeps this op's block verbatim and the row is hand-maintained; without the floor the cell demotes to tolerance on that tail alone. Budget is the 1 plus the emitter's 1.1x headroom
+  - {in: Float16, out: Float16_b, approx: "No", dest: "No", max_ulp: 2, near_zero_atol: 7.63e-05}  # max 1 ULP outside the floor, exhaustive Float16 sweep, wormhole, 2026-10-16; hand-kept (write_table keeps a floor row verbatim), budget the emitter's 1.1x
+  - {in: Float16, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 3, near_zero_atol: 7.09e-07}  # max 2 ULP outside the floor, exhaustive Float16 sweep, wormhole, 2026-10-16; hand-kept (write_table keeps a floor row verbatim), budget the emitter's 1.1x
   - {in: Float16, out: Float16_b, approx: "Yes", dest: "No", metric: tolerance}  # max 29875 ULP, budget 32863 > ceiling 6
   - {in: Float16, out: Float16_b, approx: "Yes", dest: "Yes", metric: tolerance}  # max 29875 ULP, budget 32863 > ceiling 6
   - {in: Float16_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 2}  # max 1 ULP
-  - {in: Float16_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 2, near_zero_atol: 5.59e-07}  # max 1 ULP outside the floor, exhaustive Float16_b sweep, wormhole, 2026-10-07; the whole-format worst lane is 13088 steps, in the near-zero tail near_zero_atol holds, whose worst |error| is 4.47e-07. write_table cannot regenerate a floor, so it keeps this op's block verbatim and the row is hand-maintained; without the floor the cell demotes to tolerance on that tail alone. Budget is the 1 plus the emitter's 1.1x headroom
+  - {in: Float16_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 3, near_zero_atol: 5.59e-07}  # max 2 ULP outside the floor, exhaustive Float16_b sweep, wormhole, 2026-10-16; hand-kept (write_table keeps a floor row verbatim), budget the emitter's 1.1x
   - {in: Float16_b, out: Float16_b, approx: "Yes", dest: "No", metric: tolerance}  # max 29549 ULP, budget 32504 > ceiling 6
   - {in: Float16_b, out: Float16_b, approx: "Yes", dest: "Yes", metric: tolerance}  # max 29549 ULP, budget 32504 > ceiling 6
   - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 72090}  # max 65536 ULP
-  - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 71680, near_zero_atol: 5.59e-07}  # max 57344 ULP, p99.9 57344.0, 0% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 164 near-zero pts reach 3932160 steps and are held by the atol floor instead; floor measured at dynamic range 5; holds while the judged tile's range stays above 0.00398 (1255.8x narrower)
-  - {in: Float16_b, out: Float32, approx: "Yes", metric: tolerance}  # max 1936392194 ULP, budget 2130031414 > ceiling 419430
-  - {in: Float16, out: Float32, approx: "No", dest: "No", max_ulp: 71680, near_zero_atol: 7.63e-05}  # max 57344 ULP, p99.9 57344.0, 13% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 462 near-zero pts reach 939524097 steps and are held by the atol floor instead; floor measured at dynamic range 5; holds while the judged tile's range stays above 0.283 (17.7x narrower)
-  - {in: Float16, out: Float32, approx: "No", dest: "Yes", max_ulp: 54965, near_zero_atol: 7.08e-07}  # max 49968 ULP outside the floor (a lane at x=-9.7e-05, well above it), exhaustive Float16 sweep against the corrected golden, wormhole, 2026-09-30; earlier: max 46656 ULP, p99.9 37126.2, 0% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 176 near-zero pts reach 3932160 steps and are held by the atol floor instead; floor measured at dynamic range 5; holds while the judged tile's range stays above 0.00641 (780.3x narrower)
-  - {in: Float16, out: Float32, approx: "Yes", metric: tolerance}  # max 1957756930 ULP, budget 2153532623 > ceiling 419430
+  - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 69387, near_zero_atol: 5.59e-07}  # max 63079 ULP outside the floor, exhaustive Float16_b sweep, wormhole, 2026-10-16; hand-kept (write_table keeps a floor row verbatim), budget the emitter's 1.1x
+  - {in: Float16_b, out: Float32, approx: "Yes", metric: tolerance}  # max 1936392194 ULP, budget 2130031414 > ceiling 419430; exhaustive sweep, wormhole, 2026-09-25, both dest_acc (was max 5111808 ULP over 4096 sampled pts, 2026-09-17; the full range reaches ~1.9e9 on every input format, see the rows above)
+  - {in: Float16, out: Float32, approx: "No", dest: "No", max_ulp: 72090, near_zero_atol: 7.63e-05}  # max 65536 ULP outside the floor, exhaustive Float16 sweep, wormhole, 2026-10-16; hand-kept (write_table keeps a floor row verbatim), budget the emitter's 1.1x
+  - {in: Float16, out: Float32, approx: "No", dest: "Yes", max_ulp: 59615, near_zero_atol: 7.08e-07}  # max 54195 ULP outside the floor, exhaustive Float16 sweep, wormhole, 2026-10-16; hand-kept (write_table keeps a floor row verbatim), budget the emitter's 1.1x
+  - {in: Float16, out: Float32, approx: "Yes", metric: tolerance}  # max 1957756930 ULP, budget 2153532623 > ceiling 419430; exhaustive sweep, wormhole, 2026-09-25, both dest_acc (was max 5111808 ULP over 4096 sampled pts, 2026-09-17; the full range reaches ~1.9e9 on every input format, see the rows above)
 
 
 # GeluAppx and SigmoidAppx, still on the tolerance metric, moved here from the test body:
@@ -1581,7 +1581,7 @@ GeluAppx:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided F
   - &coarse_lut_tolerance {metric: tolerance, atol: 0.13, rtol: 0.05}
 
 
-GeluDerivative:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+GeluDerivative:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 3 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 3 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 15 ULP, block-quantized
@@ -1662,7 +1662,7 @@ GeluDerivative:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + str
 # GeluTanh and Tanhshrink are past the ceiling on most Float16_b and Float32 columns, by
 # up to three orders of magnitude on Float32, where the tolerance is the tighter bound.
 # The cells that measure inside it -- mostly Float16 outputs -- carry step rows and gate.
-GeluTanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+GeluTanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 11835 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 11835 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -1703,7 +1703,7 @@ GeluTanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided F
   - {metric: tolerance}  # max 868220929 ULP Float32 / 13249 Float16_b / 1003 Float16 / 15616 Bfp8_b, 2026-09-18
 
 
-GreaterThanEqualZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+GreaterThanEqualZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, max_ulp: 0}  # max 0 ULP
   - {in: Bfp4_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
@@ -1726,7 +1726,7 @@ GreaterThanEqualZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b
   - {in: Float32, out: Float32, max_ulp: 0}  # max 0 ULP
 
 
-GreaterThanZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+GreaterThanZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, max_ulp: 0}  # max 0 ULP
   - {in: Bfp4_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
@@ -1749,7 +1749,7 @@ GreaterThanZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + st
   - {in: Float32, out: Float32, max_ulp: 0}  # max 0 ULP
 
 
-Hardmish:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Hardmish:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -1789,7 +1789,7 @@ Hardmish:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided F
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 2}  # max 1 ULP
 
 
-Hardshrink:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Hardshrink:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -1829,7 +1829,7 @@ Hardshrink:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 1}  # max 0 ULP
 
 
-Hardsigmoid:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Hardsigmoid:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 1 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 1 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -1869,7 +1869,7 @@ Hardsigmoid:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + stride
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 189}  # max 171 ULP
 
 
-Hardtanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Hardtanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -1908,7 +1908,7 @@ Hardtanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided F
   - {in: Float32, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP
 # See the Sign/Heaviside note above Sign.
-Heaviside:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Heaviside:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, max_ulp: 0}  # max 0 ULP
   - {in: Bfp4_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
@@ -1932,7 +1932,7 @@ Heaviside:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided 
   - {metric: tolerance}       # exact except -0.0; max 1048576001 ULP Float32, 16001 Float16_b, 2026-09-18
 
 
-I0:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+I0:  # tracked: #50465 (no large-|x| branch; closed unfixed, fix in #52126); measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 704 lane(s) disagreeing with the golden about being finite (golden -> result: x=-636: inf -> 6.04799e+37; x=-632: inf -> 6.04799e+37); max 24705 ULP over the 64320 measurable lanes
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 704 lane(s) disagreeing with the golden about being finite (golden -> result: x=-636: inf -> 6.04799e+37; x=-632: inf -> 6.04799e+37); max 24705 ULP over the 64320 measurable lanes
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 3}  # max 2 ULP
@@ -1972,7 +1972,7 @@ I0:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32
   - {in: Float32, out: Float32, dest: "Yes", metric: tolerance}  # not measurable: 678 lane(s) disagreeing with the golden about being finite (golden -> result: x=-552.06: inf -> 3.1658e+38; x=-549.588: inf -> 2.8682e+38); max 476812063 ULP over the 64346 measurable lanes
 
 
-I1:  # tracked: #52174 (input clamped at 88.5); measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+I1:  # tracked: #52174 (input clamped at 88.5); measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 31104 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.16307e+37; x=-3.37624e+38: -inf -> -1.16307e+37); max 27393 ULP over the 33920 measurable lanes
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 31104 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.16307e+37; x=-3.37624e+38: -inf -> -1.16307e+37); max 27393 ULP over the 33920 measurable lanes
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 5}  # max 4 ULP
@@ -1987,13 +1987,13 @@ I1:  # tracked: #52174 (input clamped at 88.5); measured by: exhaustive Float16_
   - {in: Bfp8_b, out: Float16_b, dest: "Yes", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37); max 453 ULP over the 33904 measurable lanes
   - {in: Bfp8_b, out: Float32, dest: "No", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.16307e+37; x=-3.37624e+38: -inf -> -1.16307e+37); max 29622272 ULP over the 33904 measurable lanes
   - {in: Bfp8_b, out: Float32, dest: "Yes", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37); max 29680114 ULP over the 33904 measurable lanes
-  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 12629 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -130048; x=-65472: -inf -> -130048); max 18177 ULP over the 48812 measurable lanes
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 18177 ULP, block-quantized
   - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 19586 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -1.16307e+37; x=-65472: -inf -> -1.16307e+37); max 31885 ULP over the 41855 measurable lanes
   - {in: Float16, out: Float16, dest: "No", max_ulp: 8}  # max 7 ULP
   - {in: Float16, out: Float16, dest: "Yes", max_ulp: 8}  # max 7 ULP
-  - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # not measurable: 12629 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -130560; x=-65472: -inf -> -130560); max 14337 ULP over the 48812 measurable lanes
+  - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # max 14337 ULP, budget 15771 > ceiling 6
   - {in: Float16, out: Float16_b, dest: "Yes", metric: tolerance}  # not measurable: 19586 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -1.15477e+37; x=-65472: -inf -> -1.15477e+37); max 621 ULP over the 41855 measurable lanes
-  - {in: Float16, out: Float32, dest: "No", metric: tolerance}  # not measurable: 12629 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -131008; x=-65472: -inf -> -131008); max 939524097 ULP over the 48812 measurable lanes
+  - {in: Float16, out: Float32, dest: "No", metric: tolerance}  # max 939524097 ULP, budget 1033476507 > ceiling 419430
   - {in: Float16, out: Float32, dest: "Yes", metric: tolerance}  # not measurable: 19586 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -1.15477e+37; x=-65472: -inf -> -1.15477e+37); max 40708465 ULP over the 41855 measurable lanes
   - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.16307e+37; x=-3.37624e+38: -inf -> -1.16307e+37); max 31885 ULP over the 33905 measurable lanes
   - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.16307e+37; x=-3.37624e+38: -inf -> -1.16307e+37); max 31885 ULP over the 33905 measurable lanes
@@ -2017,7 +2017,7 @@ I1:  # tracked: #52174 (input clamped at 88.5); measured by: exhaustive Float16_
 # `out: Float32` / `out: Float16_b` wildcards at the end (sampled, 2026-09-16), which
 # answer only for cells no input-keyed row names. Its steps are the pack path's, as for
 # Abs and Neg.
-Identity:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Identity:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -2118,7 +2118,7 @@ Isposinf:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
   - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
-LessThanEqualZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+LessThanEqualZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, max_ulp: 0}  # max 0 ULP
   - {in: Bfp4_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
@@ -2141,7 +2141,7 @@ LessThanEqualZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + 
   - {in: Float32, out: Float32, max_ulp: 0}  # max 0 ULP
 
 
-LessThanZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+LessThanZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, max_ulp: 0}  # max 0 ULP
   - {in: Bfp4_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
@@ -2164,7 +2164,7 @@ LessThanZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strid
   - {in: Float32, out: Float32, max_ulp: 0}  # max 0 ULP
 
 
-Lgamma:  # tracked: #55356 (Stirling series with no argument shift); measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Lgamma:  # tracked: #55356 (Stirling series with no argument shift); measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 15424 lane(s) disagreeing with the golden about being finite (golden -> result: x=-4.63153e+36: inf -> 3.32307e+38; x=-4.61076e+36: inf -> 3.32307e+38); max 32509 ULP over the 49600 measurable lanes
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 15424 lane(s) disagreeing with the golden about being finite (golden -> result: x=-4.63153e+36: inf -> 3.32307e+38; x=-4.61076e+36: inf -> 3.32307e+38); max 32509 ULP over the 49600 measurable lanes
   - {in: Bfp4_b, out: Float16, dest: "Yes", metric: tolerance}  # max 30245 ULP, budget 33270 > ceiling 51
@@ -2204,7 +2204,7 @@ Lgamma:  # tracked: #55356 (Stirling series with no argument shift); measured by
   - {in: Float32, out: Float32, dest: "Yes", metric: tolerance}  # not measurable: 12740 lane(s) disagreeing with the golden about being finite (golden -> result: x=-4.05568e+36: inf -> 3.37674e+38; x=-4.04284e+36: inf -> 3.36592e+38); max 2564443542 ULP over the 52284 measurable lanes
 
 
-Log:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Log:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 16944 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 16944 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -2244,7 +2244,7 @@ Log:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float3
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 2}  # max 1 ULP
 
 
-Log1p:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Log1p:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -2284,7 +2284,7 @@ Log1p:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Floa
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 2}  # max 1 ULP
 
 
-LogWithBase:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+LogWithBase:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 17021 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 17021 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -2336,7 +2336,7 @@ LogicalNot:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
   - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
-Lrelu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Lrelu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -2376,7 +2376,7 @@ Lrelu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Floa
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 1}  # max 0 ULP
 
 
-Mish:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Mish:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 391 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 391 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 391 ULP, block-quantized
@@ -2453,7 +2453,7 @@ Mish:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", metric: tolerance}  # max 51966703 ULP, budget 57163374 > ceiling 419430
 
 
-Neg:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Neg:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -2496,7 +2496,7 @@ Neg:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float3
   - {out: Bfp8_b, metric: tolerance}  # see the Bfp8_b note above, 2026-09-16
 
 
-NotEqualZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+NotEqualZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, max_ulp: 0}  # max 0 ULP
   - {in: Bfp4_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
@@ -2519,7 +2519,7 @@ NotEqualZero:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strid
   - {in: Float32, out: Float32, max_ulp: 0}  # max 0 ULP
 
 
-Polygamma:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Polygamma:  # tracked: #52278 (wrong for x < 0); measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # not measurable: 16032 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: inf -> 0; x=-3.37624e+38: inf -> 0); max 32421 ULP over the 48992 measurable lanes
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # not measurable: 16032 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: inf -> 0; x=-3.37624e+38: inf -> 0); max 32421 ULP over the 48992 measurable lanes
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # not measurable: 16032 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: inf -> 0; x=-3.37624e+38: inf -> 0); max 32421 ULP over the 48992 measurable lanes
@@ -2596,7 +2596,7 @@ Polygamma:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided 
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", metric: tolerance}  # not measurable: 13568 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: inf -> 0; x=-3.38132e+38: inf -> 0); max 2494420310 ULP over the 51456 measurable lanes
 
 
-Prelu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Prelu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -2636,7 +2636,7 @@ Prelu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Floa
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 1}  # max 0 ULP
 
 
-Rdiv:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Rdiv:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
@@ -2713,7 +2713,7 @@ Rdiv:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", metric: tolerance}  # max 8335929 ULP, budget 9169522 > ceiling 419430
 
 
-Reciprocal:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Reciprocal:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
@@ -2792,7 +2792,7 @@ Reciprocal:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided
 
 # ReluMax/ReluMin follow the Abs/Neg shape: exact on Float32, one step of output
 # rounding on the 16-bit formats.
-ReluMax:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+ReluMax:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -2833,7 +2833,7 @@ ReluMax:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Fl
   - {out: Float32, max_ulp: 0}    # 0 ULP, 40 variants / 623k lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 1}  # 1 ULP, 48 variants / 770k lanes, 2026-09-18
   - {out: Float16, max_ulp: 1}    # 1 ULP, 40 variants / 737k lanes, 2026-09-18
-ReluMin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+ReluMin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -2876,7 +2876,7 @@ ReluMin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Fl
   - {out: Float16, max_ulp: 1}    # 1 ULP, 40 variants / 737k lanes, 2026-09-18
 
 
-Remainder:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Remainder:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 16257 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 16257 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", metric: tolerance}  # max 15361 ULP, budget 16898 > ceiling 51
@@ -2916,7 +2916,7 @@ Remainder:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided 
   - {in: Float32, out: Float32, dest: "Yes", metric: tolerance}  # max 1065353217 ULP, budget 1171888539 > ceiling 419430
 
 
-Round:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Round:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -2956,7 +2956,7 @@ Round:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Floa
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP
 
 
-Rpow:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Rpow:  # tracked: #52675 (no overflow guard, 16-bit Dest), #55129 (Veltkamp split overflows, 32-bit Dest); measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 2818 lane(s) disagreeing with the golden about being finite (golden -> result: x=8.04958e+31: inf -> 0; x=8.08127e+31: inf -> 0); max 28417 ULP over the 62206 measurable lanes
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 3074 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: 0 -> inf; x=-3.37624e+38: 0 -> inf); max 28417 ULP over the 61950 measurable lanes
   - {in: Bfp4_b, out: Float16, dest: "Yes", metric: tolerance}  # not measurable: 1536 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: 0 -> nan; x=-3.37624e+38: 0 -> nan); max 1 ULP over the 47648 measurable lanes
@@ -2996,7 +2996,7 @@ Rpow:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Float32, out: Float32, dest: "Yes", metric: tolerance}  # not measurable: 3072 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: 0 -> inf; x=-3.38132e+38: 0 -> inf); max 1 ULP over the 61952 measurable lanes
 
 
-Rsqrt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Rsqrt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 24193 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 24193 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 24193 ULP, block-quantized
@@ -3093,7 +3093,7 @@ ScalarSub:
   - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
 
-Selu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Selu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 391 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 391 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -3160,7 +3160,7 @@ SfpuAtan2:
   - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the same measurement carried before
   - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Float16_b, out: Float32, dest: "No", max_ulp: 72090}  # max 65536 ULP, wormhole, 2026-09-21
-  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 36044}  # max 32767 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 4}  # max 3 ULP, wormhole, 2026-10-16
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the same measurement carried before
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 4}  # max 3 ULP, wormhole, 2026-09-21
 
@@ -3438,12 +3438,12 @@ SfpuElwdiv:
   - {in: Float16, out: Float16_b, dest: "No", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the same measurement carried before
   - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the same measurement carried before
   - {in: Float16, out: Float32, dest: "No", max_ulp: 36045}  # max 32768 ULP, wormhole, 2026-09-21
-  - {in: Float16, out: Float32, dest: "Yes", max_ulp: 4504}  # max 4094 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-10-16
   - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 5}  # max 4 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Float16_b, out: Float32, dest: "No", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
-  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 35903}  # max 32639 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-10-16
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
 
@@ -3455,14 +3455,14 @@ SfpuElwmul:
   - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Bfp8_b, out: Float32, dest: "No", max_ulp: 72090}  # max 65536 ULP, wormhole, 2026-09-21
-  - {in: Bfp8_b, out: Float32, dest: "Yes", max_ulp: 36045}  # max 32768 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-10-16, floored to 1 (a finite sample cannot assert exactness)
   - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
-  - {in: Float16, out: Float32, dest: "Yes", max_ulp: 4506}  # max 4096 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-10-16, floored to 1 (a finite sample cannot assert exactness)
   - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 5}  # max 4 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Float32, dest: "No", max_ulp: 72090}  # max 65536 ULP, wormhole, 2026-09-21
-  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 36045}  # max 32768 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-10-16, floored to 1 (a finite sample cannot assert exactness)
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
 
@@ -3586,7 +3586,7 @@ SfpuXlogy:
   - {out: Float16_b, metric: tolerance, atol: 0.6}
   - {out: Float16, metric: tolerance, atol: 0.12}    # 0.0989 measured
 
-Sigmoid:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Sigmoid:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 2 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 2 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 15733 ULP, block-quantized
@@ -3711,9 +3711,9 @@ SigmoidAppx:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + stride
 # branch on `abs(v) == 0`, so -0.0 is answered as zero (fixed in #55306), and a
 # recurrence is a regression, not specified behaviour. Their block-float inputs measure 0
 # like Signbit's: the one -0.0 lane the golden's own block quantization turns non-zero is
-# masked by `flushed_inputs`. The op-wide tolerance row answers only what the sweep does
+# masked by `ulp_sweep._normal_input`. The op-wide tolerance row answers only what the sweep does
 # not drive.
-Sign:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Sign:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, max_ulp: 0}  # max 0 ULP
   - {in: Bfp4_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
@@ -3735,7 +3735,7 @@ Sign:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Float32, out: Float16_b, max_ulp: 0}  # max 0 ULP
   - {in: Float32, out: Float32, max_ulp: 0}  # max 0 ULP
   - {metric: tolerance}       # exact except -0.0; max 1056964609 ULP Float32, 16129 Float16_b, 2026-09-18
-Signbit:  # 0 ULP, 16 variants / 65536 lanes, 2026-09-18; measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Signbit:  # 0 ULP, 16 variants / 65536 lanes, 2026-09-18; measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, max_ulp: 0}  # max 0 ULP
   - {in: Bfp4_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
@@ -3760,7 +3760,7 @@ Signbit:  # 0 ULP, 16 variants / 65536 lanes, 2026-09-18; measured by: exhaustiv
   - {out: Float16_b, max_ulp: 0}  # 0 ULP, 16 variants / 65536 lanes, 2026-09-18
 
 
-Silu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Silu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -3800,7 +3800,7 @@ Silu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Float32, out: Float32, dest: "Yes", metric: tolerance}  # max 51966703 ULP, budget 57163374 > ceiling 419430
 
 
-Sin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Sin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 48490 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 48478 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", metric: tolerance}  # max 36041 ULP, budget 39646 > ceiling 51
@@ -3840,7 +3840,7 @@ Sin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float3
   - {in: Float32, out: Float32, dest: "Yes", metric: tolerance}  # max 3182718554 ULP, budget 3500990410 > ceiling 419430
 
 
-Sinh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Sinh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 27810 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 27810 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -3855,13 +3855,13 @@ Sinh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP
   - {in: Bfp8_b, out: Float32, dest: "No", max_ulp: 72090}  # max 65536 ULP
   - {in: Bfp8_b, out: Float32, dest: "Yes", max_ulp: 3}  # max 2 ULP
-  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 12827 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -130048; x=-65472: -inf -> -130048); max 18177 ULP over the 48614 measurable lanes
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 18177 ULP, block-quantized
   - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 32505 ULP, block-quantized
   - {in: Float16, out: Float16, dest: "No", max_ulp: 5}  # max 4 ULP
   - {in: Float16, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
-  - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # not measurable: 12827 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -130560; x=-65472: -inf -> -130560); max 126 ULP over the 48614 measurable lanes
+  - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # max 126 ULP, budget 139 > ceiling 6
   - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP
-  - {in: Float16, out: Float32, dest: "No", metric: tolerance}  # not measurable: 12827 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -131008; x=-65472: -inf -> -131008); max 8314880 ULP over the 48614 measurable lanes
+  - {in: Float16, out: Float32, dest: "No", metric: tolerance}  # max 8314880 ULP, budget 9146368 > ceiling 419430
   - {in: Float16, out: Float32, dest: "Yes", max_ulp: 3}  # max 2 ULP
   - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 32425 ULP, block-quantized
   - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 32425 ULP, block-quantized
@@ -3880,7 +3880,7 @@ Sinh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 3}  # max 2 ULP
 
 
-Softplus:  # tracked: #51866 (returns 0 below -5, under #52178); measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Softplus:  # tracked: #51866 (returns 0 below -5, under #52178); measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 15011 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 15011 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", metric: tolerance}  # max 5395 ULP, budget 5935 > ceiling 51
@@ -3920,7 +3920,7 @@ Softplus:  # tracked: #51866 (returns 0 below -5, under #52178); measured by: ex
   - {in: Float32, out: Float32, dest: "Yes", metric: tolerance}  # max 995507200 ULP, budget 1095057920 > ceiling 419430
 
 
-Softshrink:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Softshrink:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 2 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 2 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -3960,7 +3960,7 @@ Softshrink:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 1}  # max 0 ULP
 
 
-Softsign:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Softsign:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 16129 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 16129 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 16129 ULP, block-quantized
@@ -4037,7 +4037,7 @@ Softsign:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided F
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", metric: tolerance}  # max 1056964609 ULP, budget 1162661070 > ceiling 419430
 
 
-Sqrt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Sqrt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 2 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 2 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 2 ULP, block-quantized
@@ -4112,7 +4112,7 @@ Sqrt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 2}  # max 1 ULP
   - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 72090}  # max 65536 ULP
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 16227}  # max 14751 ULP
-SqrtCustom:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+SqrtCustom:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 162 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 162 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -4162,7 +4162,7 @@ SqrtCustom:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided
 # the product at bf16 or fp16 precision, so a Bfp8_b input reads one bf16 step there,
 # and a Float16 input the fp16 Dest's subnormal flush. The op-wide Float32 row keeps the
 # 2026-09-16 sample only for the cells the sweep does not drive.
-Square:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Square:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 32401 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 32401 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -4206,7 +4206,7 @@ Square:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Flo
   - {out: Bfp8_b, metric: tolerance}  # see the Bfp8_b note above, 2026-09-16
 
 
-Tan:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Tan:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 47980 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 48757 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", metric: tolerance}  # max 40155 ULP, budget 44171 > ceiling 51
@@ -4221,13 +4221,13 @@ Tan:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float3
   - {in: Bfp8_b, out: Float16_b, dest: "Yes", metric: tolerance}  # max 48757 ULP, budget 53633 > ceiling 6
   - {in: Bfp8_b, out: Float32, dest: "No", metric: tolerance}  # max 3195404290 ULP, budget 3514944719 > ceiling 419430
   - {in: Bfp8_b, out: Float32, dest: "Yes", metric: tolerance}  # max 3195260588 ULP, budget 3514786647 > ceiling 419430
-  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 1 lane(s) disagreeing with the golden about being finite (golden -> result: x=177.5: -inf -> -66560); max 16639 ULP over the 61440 measurable lanes
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 16639 ULP, block-quantized
   - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 16639 ULP, block-quantized
   - {in: Float16, out: Float16, dest: "No", max_ulp: 5}  # max 4 ULP
   - {in: Float16, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
-  - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # not measurable: 1 lane(s) disagreeing with the golden about being finite (golden -> result: x=177.5: -inf -> -66560); max 125 ULP over the 61440 measurable lanes
+  - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # max 125 ULP, budget 138 > ceiling 6
   - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP
-  - {in: Float16, out: Float32, dest: "No", metric: tolerance}  # not measurable: 1 lane(s) disagreeing with the golden about being finite (golden -> result: x=177.5: -inf -> -66560); max 8249344 ULP over the 61440 measurable lanes
+  - {in: Float16, out: Float32, dest: "No", metric: tolerance}  # max 8249344 ULP, budget 9074279 > ceiling 419430
   - {in: Float16, out: Float32, dest: "Yes", max_ulp: 3}  # max 2 ULP
   - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 49111 ULP, block-quantized
   - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 48867 ULP, block-quantized
@@ -4246,7 +4246,7 @@ Tan:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float3
   - {in: Float32, out: Float32, dest: "Yes", metric: tolerance}  # max 3181633666 ULP, budget 3499797033 > ceiling 419430
 
 
-Tanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Tanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 377 ULP, block-quantized
@@ -4321,7 +4321,7 @@ Tanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 3}  # max 2 ULP
   - {in: Float32, out: Float32, approx: "Yes", dest: "No", metric: tolerance}  # max 655360 ULP, budget 720896 > ceiling 419430
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", metric: tolerance}  # max 638969 ULP, budget 702866 > ceiling 419430
-TanhDerivative:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+TanhDerivative:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 10469 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 10469 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 7}  # max 6 ULP
@@ -4361,7 +4361,7 @@ TanhDerivative:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + str
   - {in: Float32, out: Float32, dest: "Yes", metric: tolerance}  # max 607847653 ULP, budget 668632419 > ceiling 419430
 
 
-TanhDerivativeLut:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+TanhDerivativeLut:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 3 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 3 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -4399,7 +4399,7 @@ TanhDerivativeLut:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + 
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 0 ULP
   - {in: Float32, out: Float32, dest: "No", max_ulp: 72090}  # max 65536 ULP
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 94}  # max 85 ULP
-Tanhshrink:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Tanhshrink:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 5777 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 5777 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -4444,7 +4444,7 @@ Tanhshrink:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided
 # for their own reason: on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through
 # branch never fires, so every block holds only the constant 10.0. That 0 is exact, but
 # it measured the constant, never the pass-through a budget would have to hold.
-Threshold:  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18; measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Threshold:  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18; measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -4487,7 +4487,7 @@ Threshold:  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18; measured by: exhaus
   - {out: Float16, metric: tolerance}  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so that run measured only the constant 10.0, not the pack rounding of a passed-through x (Identity reads 1 step on these keys)
 
 
-Trunc:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Trunc:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -4538,7 +4538,7 @@ UnaryEq:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
   - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
-UnaryGe:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+UnaryGe:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, max_ulp: 0}  # max 0 ULP
   - {in: Bfp4_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
@@ -4561,7 +4561,7 @@ UnaryGe:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Fl
   - {in: Float32, out: Float32, max_ulp: 0}  # max 0 ULP
 
 
-UnaryGt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+UnaryGt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, max_ulp: 0}  # max 0 ULP
   - {in: Bfp4_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
@@ -4584,7 +4584,7 @@ UnaryGt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Fl
   - {in: Float32, out: Float32, max_ulp: 0}  # max 0 ULP
 
 
-UnaryLe:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+UnaryLe:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, max_ulp: 0}  # max 0 ULP
   - {in: Bfp4_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
@@ -4607,7 +4607,7 @@ UnaryLe:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Fl
   - {in: Float32, out: Float32, max_ulp: 0}  # max 0 ULP
 
 
-UnaryLt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+UnaryLt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, max_ulp: 0}  # max 0 ULP
   - {in: Bfp4_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
@@ -4630,7 +4630,7 @@ UnaryLt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Fl
   - {in: Float32, out: Float32, max_ulp: 0}  # max 0 ULP
 
 
-UnaryMax:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+UnaryMax:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -4670,7 +4670,7 @@ UnaryMax:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided F
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP
 
 
-UnaryMin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+UnaryMin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -4720,7 +4720,7 @@ UnaryNe:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
   - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
-UnaryPower:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+UnaryPower:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 32401 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 32401 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
@@ -4758,7 +4758,7 @@ UnaryPower:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP
   - {in: Float32, out: Float32, dest: "No", max_ulp: 72090}  # max 65536 ULP
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 4}  # max 3 ULP
-Xielu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
+Xielu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 32401 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 32401 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
