@@ -1225,3 +1225,8 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   size). Component tests, every swapped step's checks, and the tail check of a waived last step. Only the owner adds
   a waiver (a spec edit, re-approved); the dashboard and the end-of-run report list every waived step.
 - Selftest: test_noise_floor.py::test_an_owner_waiver_passes_a_steps_noise_floor_checks_and_records_it.
+- First device check (DeepSeek-V4.1, 6 passed steps): attention passed on its real inputs (row 1.76, column 0.85,
+  bias 1.22 x its floor) but its `small` probe (inputs at RMS 1e-3) had one row 36x: at synthetic scales the device's
+  absolute limits (fp8 scale floors, epsilons) dominate and the relative nudge does not model them. The own-floor
+  checks now run on inputs with real value scales only (golden, chunk0, another layer, mixed); `small` / `big` keep
+  their structural-probe limits.
