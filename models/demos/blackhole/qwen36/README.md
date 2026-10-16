@@ -145,9 +145,17 @@ Default decode settings (TP paths, 27B), each with an env var that reverts it:
 | 8 KB fabric packet payload on multi-device meshes (demo and vLLM) | `QWEN36_FABRIC_PAYLOAD_BYTES=0` (fabric default, 4352 B) or another size |
 | BF8 paged KV cache (demo and vLLM; prefill Q stays BF16) | `QWEN36_KV_BF8=0` (BF16 cache) |
 
-With the GDN and MLP defaults (and a BF16 KV cache) Qwen3.8-27B served through vLLM (`max_num_seqs` 32) passed
-AIME 2026, GPQA-Diamond and MMLU-Pro (reference score inside the 95% CI); BFP4 MLP-down + attention on top of them
-failed AIME. `accuracy_512` passes with all of the defaults above.
+With all of the defaults above, Qwen3.8-27B served through vLLM on a P150x8 ring (`max_num_seqs` 32, thinking on,
+temperature 1.0 / top_p 0.95 / top_k 20, `qwen38_handoff/eval/task_eval.py`) passes the task evals (reference score
+inside the question-clustered 95% CI):
+
+| Eval | Score [95% CI] | Reference |
+|---|---|---|
+| AIME 2026, 4 repeats, 65k max tokens | 94.17 [86.67, 99.17] | 98.13 |
+| GPQA-Diamond, 2 repeats, 65k max tokens | 89.14 [85.10, 92.93] | 89.2 |
+| MMLU-Pro, 500-question subset | 85.20 [82.00, 88.20] | 85.54 |
+
+`accuracy_512` passes as well. BFP4 MLP-down + attention on top of these defaults failed AIME.
 
 
 ## End-to-end demo test (`demo/text_demo.py`)
