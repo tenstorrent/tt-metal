@@ -1,0 +1,86 @@
+{
+ "used": [
+  {
+   "id": "DS41-23",
+   "how": "kept the routing weight in the dispatched row and r x h before fp8 q(h); the reason the fused unified_routed_expert_moe cannot run this expert (BREADCRUMBS FIX.1)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-22",
+   "how": "checked the fused op's high_precision path as the candidate for bfp8 experts; rejected for lack of the r / q(h) hook, kept HiFi4 + fp32 acc ttnn.linear in the loop",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-1",
+   "how": "dispatched buffer still kept until combine; the loop's insert slab unchanged",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-2",
+   "how": "counts / region offsets stay [1, E] global for extract / insert (unchanged)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-24",
+   "how": "the per-chunk decode it describes became EXPERTS_IMPL=fp4_decode only; entry updated with the 611 vs 319 ms numbers",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-10",
+   "how": "bfp8 chosen as the exact format, but in the stored [N, K] orientation after finding it wrong for W^T; entry rewritten",
+   "traced": null,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-10",
+   "evidence": "'exact in both [N, K] and [K, N]' is wrong for [K, N]: tt/perf_experts.py::test_bfp8_check_matches_ttnn (scaled checkpoint, layers 0-3,14,20,21,24, 2304 matrices): all exact as stored [N, K], 48 not exact as W^T (layer 0 expert 3 w2: 2 of 737280 16-value groups mix -0.5 at scale 2^-3 with 3 x 2^-8); ttnn's own bfp8 packing agrees. 'It does not fit' is out of date for the scaled run: 0.84 GiB per layer per chip at 24 experts per chip, 6.7 GiB for 8 layers. Entry rewritten; new DS41-35.",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "bfp8_b shares an exponent per 16 values along the last dim, so a block-scaled weight is bfp8-exact only when the 16-groups lie inside one scale block: keep the stored [N, K] and use transpose_b (now DS41-35)",
+  "ttnn.linear transpose_b is done in-kernel only for the mcast / reuse program configs; other configs run a separate ttnn.transpose of B (a per-call lossy bfp8 re-quantization)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "touched known_issues.md this step; DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x (swap_step_calib) the step's own component error, no cap (testing/component.py:350-356)'; its remaining model-specific content (do not add an exact kernel, OV-3) kept, no further change"
+  },
+  {
+   "id": "OV-6",
+   "answer": "done",
+   "evidence": "tt/experts.py:_load_bfp8 converts w1|w3 and w2 to bfp8 once at load ([N, K] + transpose_b, exact asserted); per-chunk decode only under EXPERTS_IMPL=fp4_decode (not default); fused op does not fit (no routing weight / fp8 q(h) before w2), reason in BREADCRUMBS; timing 610.7 ms -> 318.7 ms per layer per chunk (tt/perf_experts.py) in BREADCRUMBS and the setting; memory 0.84 GiB/layer/chip, 6.7 GiB for 8 layers on 2x2, 33.6 GiB for 40 layers on galaxy_4x4 (does not fit, flagged); DS41-10 / DS41-24 / repo_map row updated, DS41-35 added"
+  }
+ ],
+ "cited_only": [
+  "DS41-20",
+  "DS41-35"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.1",
+  "role": "implement",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T07:20:09",
+  "head": "ffe72bdcd26",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.1.implement.2.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
