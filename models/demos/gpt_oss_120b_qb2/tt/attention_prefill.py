@@ -70,6 +70,42 @@ def _project_output(projection_input, weights, batch_size, activation_dtype, com
             output.deallocate(True)
 
 
+def _reduce_output(tensor, mesh_config, ccl_manager, hidden_size, batch_size):
+    """Keep independent short users on the singleton collective shape."""
+    if (
+        batch_size <= 1
+        or mesh_config.tp != 4
+        or mesh_config.tp_axis != 1
+        or hidden_size != 2880
+        or tuple(tensor.shape) != (1, 1, batch_size * 128, 2944)
+    ):
+        return apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size)
+
+    # The original collective consumes each slab. On failure it may already
+    # have freed that input, so query allocation before releasing our ownership.
+    outputs = []
+    try:
+        for user in range(batch_size):
+            slab = ttnn.slice(
+                tensor,
+                [0, 0, user * 128, 0],
+                [1, 1, (user + 1) * 128, 2944],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            try:
+                outputs.append(apply_allreduce(slab, mesh_config, ccl_manager, hidden_size))
+            finally:
+                if slab.is_allocated():
+                    slab.deallocate(True)
+        return ttnn.concat(outputs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    finally:
+        for output in outputs:
+            if output.is_allocated():
+                output.deallocate(True)
+        if tensor.is_allocated():
+            tensor.deallocate(True)
+
+
 def prefill_forward(
     hidden_states,
     rope_mats,
@@ -496,5 +532,5 @@ def _finish_prefill(
         projection_input.deallocate(True)
         ttnn.add(tt_out, weights.o_proj_bias, output_tensor=tt_out)
         tt_sdpa_out.deallocate(True)
-        tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
+        tt_out_result = _reduce_output(tt_out, mesh_config, ccl_manager, hidden_size, batch_size)
     return tt_out_result

@@ -108,5 +108,5 @@ def test_actual_bias_reduction_unchanged():
     f = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_finish_prefill")
     text = ast.unparse(f)
     assert "ttnn.add(tt_out, weights.o_proj_bias, output_tensor=tt_out)" in text
-    assert "apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)" in text
+    assert "_reduce_output(tt_out, mesh_config, ccl_manager, hidden_size, batch_size)" in text
     assert text.count("_project_output(") == 1
