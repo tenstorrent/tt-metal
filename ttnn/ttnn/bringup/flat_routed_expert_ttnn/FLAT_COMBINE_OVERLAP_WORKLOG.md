@@ -860,3 +860,20 @@ model expert shapes, runs unchanged in an origin/main worktree for the productio
   undersized as well, unharmed only because another role made the arena bigger) gets +4 arena tiles. After: GLM 5.3
   flat 1.25-2.5% arithmetic error (worst row 3.4%, was 31% / inf), K2.7 / K3 / the K3 block unchanged. GLM-5.3-Flash
   (4096, no reader tails), K2.7 (tails == down width), K3: never affected (zz_scratch_flat_plan_cmp.py flags the risk).
+
+### K3 block: sparse 2D dispatch (2026-10-16)
+The dense dispatch (two ttnn.all_gather, 168 + 225 us) is replaced by sparse_all_gather_2d (combine_rf/, the
+dispatch worktree's op): each own row goes only to the chips holding one of its experts, dimension-order trees, one
+hop per port, neighbour fences + generational END markers (so it is a barrier, as the arena zeroing needs: a chip
+finishes only after every chip's ports started). Inputs from `combine_rf/dispatch_prep.py` (one generic_op): the
+route words of the own tokens from the joint routing rows (destination mask, X- or Y-first by fewer tree links, link by
+a hash of t; 8 cores, 40 tokens each) and the own rows copied into their slots idx * S + t of the dispatch buffer (16
+cores, ping-pong batches). K3_DISPATCH=dense keeps the baseline.
+| | dense AG | sparse 2D |
+| prep (route words + own-row copy) | - | 28 us (one core: 124; 8 copy cores, no ping-pong: 35) |
+| dispatch | 393 us | 229 us |
+Block 4551 -> 4373 us, exact (PCC 0.99623, repeat call bit-identical). On the LoudBox a top-16 row reaches 6.2 of the
+other 7 chips: busiest link (CPU model, this routing) stateless 653 rows = 187 us floor at 25 GB/s, the cheap greedy
+plan 554 (159 us), dense 726 (208 us): the sparse op is at 82% of its floor; the gain is mostly a better transport than
+ttnn.all_gather (53% of its floor), not sparsity (that grows on 4 x 4). Next for dispatch: the greedy plan (~-35 us,
+sequential over every token: needs a parallel / overlapped form), the own-row copy folded into latent down's untilize.

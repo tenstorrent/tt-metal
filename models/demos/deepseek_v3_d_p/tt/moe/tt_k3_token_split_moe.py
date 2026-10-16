@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 
 import torch
 from ttnn.bringup.combine_rf.combine_plan import combine_planner_prepare, port_luts
+from ttnn.bringup.combine_rf.dispatch_prep import dispatch_prep_prepare
+from ttnn.bringup.combine_rf.sparse_all_gather_2d import sparse_all_gather_2d
 from ttnn.bringup.combine_rf.l1_zero import l1_zero_program
 from ttnn.bringup.combine_rf.sparse_combine_rf import sparse_combine_rf_prepare
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import W_DTYPES, FlatRoutedExpert, _bank_sharded, flat_weight_regions
@@ -192,6 +194,8 @@ class TtK3TokenSplitMoE:
         # zeroing and the experts is the cross-chip barrier (no chip's combine writes into another's arena before
         # that one is zeroed); the combine's ports drain their credits, so nothing lands after the call either.
         # Allocated here once for its address (the kernels bake it: every call's arena must land there).
+        self.sparse_dispatch = os.environ.get("K3_DISPATCH", "sparse") == "sparse"
+        self.dprep = dispatch_prep_prepare(mesh_device, S=S, K=d.K, EPC=self.EPC) if self.sparse_dispatch else None
         self._warm_up()  # (the dense ops once first: what they keep in L1 across calls sits above the arena)
         a_rows = int(plan["arena_tiles"]) * 32
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
@@ -253,7 +257,7 @@ class TtK3TokenSplitMoE:
         ids, wts = self.router(x)
         gi, gw = self.gather_routing(ids, wts)
         lat = self.latent_down(x)
-        xg = self.dispatch(lat)
+        xg = self.dispatch(lat, self.dispatch_prep(lat, gi))
         o = ttnn.to_layout(ttnn.reshape(lat, [self.S, self.d.latent]), ttnn.TILE_LAYOUT)
         n = ttnn.rms_norm(o, epsilon=self.d.eps, weight=self.g_ln, compute_kernel_config=self.cfg_hi)
         yr = self._linear(n, self.w_lu, self.cfg)
@@ -294,11 +298,31 @@ class TtK3TokenSplitMoE:
         lat = self._linear(x, self.w_ld, self.cfg)
         return ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT)
 
-    def dispatch(self, lat_rm):
-        a = ttnn.all_gather(lat_rm, dim=0, cluster_axis=1)
-        b = ttnn.all_gather(a, dim=0, cluster_axis=0)
-        ttnn.deallocate(a)
-        return b  # [N * S, latent]: gathered token home * S + t
+    def dispatch_prep(self, lat_rm, gi):
+        """Sparse dispatch: the buffer [1, 1, N S, latent] with this chip's own rows in place and the route words of
+        its own tokens (dispatch_prep.py, one generic_op); the dense baseline (K3_DISPATCH=dense) needs nothing."""
+        if not self.sparse_dispatch:
+            return None
+        N, S, W = self.N, self.S, self.d.latent
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        xbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, N * S, W]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, dram)
+        route = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, 1, S]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh, dram)
+        self.dprep(gi, lat_rm, xbuf, route)
+        return xbuf, route
+
+    def dispatch(self, lat_rm, prep=None):
+        """The gathered tokens [N S, latent] (row home * S + t). Sparse (default): each row only to the chips holding
+        one of its experts (sparse_all_gather_2d, its neighbour fences and END markers make it a barrier as the
+        dense all-gathers were); dense: two all-gathers."""
+        if prep is None:
+            a = ttnn.all_gather(lat_rm, dim=0, cluster_axis=1)
+            b = ttnn.all_gather(a, dim=0, cluster_axis=0)
+            ttnn.deallocate(a)
+            return b
+        xbuf, route = prep
+        sparse_all_gather_2d(xbuf, route, num_links=2)
+        ttnn.deallocate(route)
+        return ttnn.reshape(xbuf, [self.N * self.S, self.d.latent])
 
     def alloc_arena(self):
         """The call's arena (uninitialized) with the combine's state zeroed."""
@@ -354,9 +378,11 @@ class TtK3TokenSplitMoE:
         mark("planner")
         lat = self.latent_down(x)
         mark("lat_down")
+        prep = self.dispatch_prep(lat, gi)
+        mark("dispatch_prep")
         arena = self.alloc_arena()
         mark("arena_zero")
-        xg = self.dispatch(lat)  # (also the barrier: every chip zeroed its arena before any chip's experts start)
+        xg = self.dispatch(lat, prep)  # (also the barrier: every chip zeroed its arena before any chip's experts start)
         mark("dispatch")
         self.experts_combine(xg, pl, arena)
         ttnn.deallocate(arena)
