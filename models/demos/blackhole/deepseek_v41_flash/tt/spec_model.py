@@ -441,6 +441,17 @@ class SpecRunner:
         for P in self.bucket_list():
             self.set_bucket(P)
             t = {"tid_a": None, "tid_b": None, "tid_s": None, "pack_mono": None, "pack_b": None}
+            if os.environ.get("DSV41_SPEC_PRECAPTURE_WARM", "1") == "1":
+                # one eager step of every traced function right before its capture (programs that were missing from the program cache at a 1M context after the prefill / decode
+                # captures: "Cannot load new binaries during trace capture"); state restored after each
+                dec.forward()
+                ttnn.synchronize_device(self.md)
+                dec.restore_states(self.snaps)
+                if self.sampled:
+                    dec.forward_verify()
+                    dec.forward_tail()
+                    ttnn.synchronize_device(self.md)
+                    dec.restore_states(self.snaps)
             t["tid"] = ttnn.begin_trace_capture(self.md, cq_id=0)
             dec.forward()
             ttnn.end_trace_capture(self.md, t["tid"], cq_id=0)

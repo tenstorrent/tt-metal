@@ -86,6 +86,8 @@ def mask_scores(scores, nvalid, ar):
     return ttnn.to_layout(ttnn.typecast(masked, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
 
 
+_ARANGES = {}  # id(mesh device) -> {n: [1,1,1,n] float32 tile 0..n-1}
+
 SELECT_CONCAT_BYTES = (
     1 << 20
 )  # score rows of the users concatenated into one tensor must stay below this (the circular buffer of the concat holds a few of them in L1)
@@ -180,8 +182,10 @@ class DSV41DecodeIndexer:
         return self.nb or self.n_alloc
 
     def _arange_for(self, n):
-        """[1,1,1,n] float32 tile 0..n-1 (the per-user validity mask of ``select``), one per scored length; created before any trace exists (``set_pos_bucket`` of every bucket runs in the compile pass)."""
-        ar = self.__dict__.setdefault("_aranges", {})
+        """[1,1,1,n] float32 tile 0..n-1 (the per-user validity mask of ``select``), one per scored length and device; created before any trace exists (``set_pos_bucket`` of every bucket runs in the compile pass)."""
+        ar = _ARANGES.setdefault(
+            id(self.md), {}
+        )  # shared by every indexer layer of the device: the tile layout pads the single row to 32 (128 MiB at 1M entries), 8 layers x 8 lengths held ~0.8 GiB per chip
         if n not in ar:
             ar[n] = ttnn.from_torch(
                 torch.arange(n, dtype=torch.float32).reshape(1, 1, 1, -1),

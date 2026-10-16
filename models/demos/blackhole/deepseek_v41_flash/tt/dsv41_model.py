@@ -937,7 +937,7 @@ class Model:
         self.pool.sync_page_table()
         getattr(self, "pf_resume", {}).pop(b, None)
 
-    def _export_state(self, NA, UD):
+    def _export_state(self, NA, UD):  # NA: entries per piece
         """Persistent device tensors of the key hand-off for slab length ``NA`` / ``UD`` users per row (allocated before any trace capture by ``warm_key_export``; the values are rewritten
         per call): gather indices [1, NA], entry mask [1,1,NA,1], (mesh row, user) mask [rows * UD,1,1,1]."""
         st = self.__dict__.setdefault("_exp_state", {})
@@ -979,23 +979,14 @@ class Model:
         buffer after the traces are captured (the first version sliced at value dependent offsets: each new prompt length created programs whose buffers were allocated under live traces,
         found by TT_METAL_TRACE_ALLOC_TRACKING; ``warm_key_export`` compiles the few programs before the captures).
         """
-        kfull = ix.keys_full()  # column-sharded indexer: the FIFO gathered back to a replicated slab (freed below)
-        IDIM, NA, UD, KL = kfull.shape[3], k_cache.shape[2], k_cache.shape[0], kfull.shape[2]
-        st = self._export_state(NA, UD)
-        idx = torch.zeros(1, NA, dtype=torch.int32)
-        idx[0, :n] = torch.arange(off, off + n, dtype=torch.int32)
-        em = torch.zeros(1, 1, NA, 1)
-        em[..., :n, :] = 1.0
+        sh = ix.sh
+        IDIM, NA, UD = ix.keys.shape[3], k_cache.shape[2], k_cache.shape[0]
+        P = min(NA, int(os.environ.get("DSV41_KEY_EXPORT_PIECE", "65536")))
+        st = self._export_state(P, UD)
+        rep = ttnn.ReplicateTensorToMesh(self.md)
         um = torch.zeros(self.rows, UD, 1, 1, 1)
         for r in rows_sel:
             um[r, u_dst] = 1.0
-        rep = ttnn.ReplicateTensorToMesh(self.md)
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(idx, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep), st["idx"]
-        )
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(em, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep), st["emask"]
-        )
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(
                 um.reshape(self.rows * UD, 1, 1, 1),
@@ -1005,39 +996,84 @@ class Model:
             ),
             st["umask"],
         )
-        tmp = []
-        fifo = ttnn.slice(
-            kfull, [i_src, 0, 0, 0], [i_src + 1, 1, KL, IDIM]
-        )  # (a full-extent slice may alias ix.keys: never freed, see below)
-        tmp.append(fifo)
-        table = ttnn.to_layout(fifo, ttnn.ROW_MAJOR_LAYOUT)
-        tmp.append(table)
-        emb = ttnn.embedding(st["idx"], ttnn.reshape(table, [1, 1, KL, IDIM]), layout=ttnn.TILE_LAYOUT)  # [1, NA, IDIM]
-        tmp.append(emb)
-        emb = ttnn.reshape(emb, [1, 1, NA, IDIM])
-        emb_full = ttnn.repeat(emb, ttnn.Shape([UD, 1, 1, 1]))
-        tmp.append(emb_full)
-        cond = ttnn.multiply(st["umask"], st["emask"])  # [UD, 1, NA, 1]
-        tmp.append(cond)
-        old_all = k_cache if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(k_cache, ttnn.bfloat16)
-        tmp.append(old_all)
-        new_all = ttnn.where(cond, emb_full, old_all)
-        tmp.append(new_all)
-        out = new_all if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(new_all, k_cache.dtype)
-        tmp.append(out)
-        ttnn.copy(out, k_cache)
-        protect = {kfull.buffer_unique_id(), k_cache.buffer_unique_id()}
-        seen = set(protect)
-        for t in tmp:
-            if not t.is_allocated():
+        # Source blocks of the key FIFO (a whole-FIFO gather / whole-slab rebuild needs several 256 MiB temporaries per chip at 1M entries): block b = FIFO slots [base, base + SB).
+        # Column-sharded FIFO: slot cols * q + c - dL sits on column c at row q; a block is the gather of Lq rows (fixed shape, static row offset q0). Replicated FIFO: one block.
+        if sh is None:
+            KL = ix.keys.shape[2]
+            blocks = [(0, KL, None)]
+        else:
+            cols, Lc = sh["cols"], sh["Lc"]
+            dL = cols * Lc - ix.KL_full
+            KL = ix.KL_full
+            Lq = min(Lc, P // cols)
+            blocks = []
+            for q0 in range(0, Lc, Lq):
+                q0 = min(q0, Lc - Lq)
+                blocks.append((cols * q0 - dL, cols * Lq, q0))
+            blocks = list(dict.fromkeys(blocks))
+        warm = n == 0 and off == 0 and not rows_sel
+        NP = -(-NA // P)
+        for base, SB, q0 in blocks:
+            hi = min(base + SB, KL)
+            pieces = []
+            for j0 in dict.fromkeys(
+                min(pj * P, NA - P) for pj in range(NP)
+            ):  # the last piece is shifted back (its overlap is served twice with equal values)
+                j1 = j0 + P
+                a_, b_ = max(off + j0, base, 0), min(off + min(j1, n), hi)  # source slots served by this (block, piece)
+                if warm or a_ < b_:
+                    pieces.append((j0, j1, a_, b_))
+            if not pieces:
                 continue
-            uid = t.buffer_unique_id()
-            if uid in seen:
-                continue
-            seen.add(uid)
-            ttnn.deallocate(t)
-        if kfull is not ix.keys:
-            ttnn.deallocate(kfull)
+            if sh is None:
+                fifo = ttnn.slice(ix.keys, [i_src, 0, 0, 0], [i_src + 1, 1, KL, IDIM])
+                table = ttnn.to_layout(
+                    fifo, ttnn.ROW_MAJOR_LAYOUT
+                )  # a full-extent slice may alias ix.keys: never freed
+                tmp_blk = [table, fifo]
+            else:
+                k = ttnn.to_layout(
+                    ttnn.slice(ix.keys, [i_src, 0, q0, 0], [i_src + 1, 1, q0 + Lq, IDIM]), ttnn.ROW_MAJOR_LAYOUT
+                )
+                g = sh["mc"].allgather(
+                    k, sh["ccl"], axis=1, dim=1
+                )  # [1, cols, Lq, 128]: g[:, c, q] = padded slot cols * (q0 + q) + c
+                g = ttnn.permute(g, (0, 2, 1, 3))
+                table = ttnn.reshape(g, [1, 1, SB, IDIM])
+                tmp_blk = [k, g, table]
+            table = ttnn.reshape(table, [1, 1, table.shape[2], IDIM])
+            for j0, j1, a_, b_ in pieces:
+                idx = torch.zeros(1, P, dtype=torch.int32)
+                em = torch.zeros(1, 1, P, 1)
+                if a_ < b_:
+                    js = torch.arange(a_ - off, b_ - off) - j0
+                    idx[0, js] = torch.arange(a_ - base, b_ - base, dtype=torch.int32)
+                    em[0, 0, js, 0] = 1.0
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(idx, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep), st["idx"]
+                )
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(em, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep), st["emask"]
+                )
+                emb = ttnn.embedding(st["idx"], table, layout=ttnn.TILE_LAYOUT)  # [1, P, IDIM]
+                emb = ttnn.reshape(emb, [1, 1, P, IDIM])
+                emb_full = ttnn.repeat(emb, ttnn.Shape([UD, 1, 1, 1]))
+                cond = ttnn.multiply(st["umask"], st["emask"])  # [UD, 1, P, 1]
+                old = ttnn.slice(k_cache, [0, 0, j0, 0], [UD, 1, j0 + P, IDIM])
+                old_bf = old if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(old, ttnn.bfloat16)
+                new = ttnn.where(cond, emb_full, old_bf)
+                out = new if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(new, k_cache.dtype)
+                ttnn.experimental.slice_write(out, k_cache, [0, 0, j0, 0], [UD, 1, j0 + P, IDIM], [1, 1, 1, 1])
+                seen = {ix.keys.buffer_unique_id(), k_cache.buffer_unique_id()}
+                for t in (emb, emb_full, cond, old, old_bf, new, out):
+                    if t.is_allocated() and t.buffer_unique_id() not in seen:
+                        seen.add(t.buffer_unique_id())
+                        ttnn.deallocate(t)
+            seen = {ix.keys.buffer_unique_id(), k_cache.buffer_unique_id()}
+            for t in tmp_blk:
+                if t.is_allocated() and t.buffer_unique_id() not in seen:
+                    seen.add(t.buffer_unique_id())
+                    ttnn.deallocate(t)
 
     def selftest_key_export(self):
         """Device self-test of ``_export_user_keys`` on the idle model: random content in the prefill key FIFO of the first key-owner layer, an export of FIFO[off, off + n) into user ``u`` of
@@ -1117,7 +1153,7 @@ class Model:
             if ix is None or ix.key_owner is not None or ix.keys is None:
                 continue
             for i_src in range(ix.keys.shape[0]):
-                self._export_user_keys(ix, dec.k_cache, i_src, 0, [], 0, 1)
+                self._export_user_keys(ix, dec.k_cache, i_src, 0, [], 0, 0)
         ttnn.synchronize_device(self.md)
 
     def _export_keys_users(self, users, ends, s_end, slot_of):
@@ -1704,7 +1740,9 @@ class Model:
         for name, (b, tok, pos, phys) in self.buckets_x.items():
             b.capture(tok, pos)
         if self.trace_id is None:
-            self._capture_decode(filler, zeros, compile_pass=False)
+            # one more eager decode step right before the capture (the program of paged_update_cache of the decode indexer was missing from the program cache at a 1M context with the
+            # spec runner built: "Cannot load new binaries during trace capture"); costs one step, state restored
+            self._capture_decode(filler, zeros, compile_pass=os.environ.get("DSV41_DEC_PRECAPTURE_WARM", "1") == "1")
         self.log_dram("serving warm-up done (all traces captured)")
         t3 = time.perf_counter()
         self.timing["warm_serving"] = {"alloc_compile": t2 - t0, "prefill_compile": t1 - t0, "capture": t3 - t2}
