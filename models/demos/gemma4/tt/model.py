@@ -2175,26 +2175,31 @@ class Gemma4Model:
             page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
         page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
         mm_attn_masks = self._g4_mm_prefill_attn_masks(x, chunk_page_table, chunk_start_idx)
-        return self(
-            hidden_states=x,
-            position_idx=None,
-            page_table=page_table,
-            kv_caches=kv_cache,
-            is_decode=False,
-            input_ids_torch=input_ids_torch,
-            embeds_torch=embeds_torch,
-            pli_device_tensors=pli_device_tensors,
-            get_last_token=get_last_token,
-            page_tables_per_layer=page_tables_per_layer,
-            batch_size=batch_size,
-            user_id=user_id,
-            chunk_start_idx=chunk_start_idx,
-            chunk_page_table=chunk_page_table,
-            valid_seq_lens=valid_seq_lens,
-            mm_attn_masks=mm_attn_masks,
-        )
-
-    _G4_MM_MASK_CACHE_SIZE = 4
+        try:
+            return self(
+                hidden_states=x,
+                position_idx=None,
+                page_table=page_table,
+                kv_caches=kv_cache,
+                is_decode=False,
+                input_ids_torch=input_ids_torch,
+                embeds_torch=embeds_torch,
+                pli_device_tensors=pli_device_tensors,
+                get_last_token=get_last_token,
+                page_tables_per_layer=page_tables_per_layer,
+                batch_size=batch_size,
+                user_id=user_id,
+                chunk_start_idx=chunk_start_idx,
+                chunk_page_table=chunk_page_table,
+                valid_seq_lens=valid_seq_lens,
+                mm_attn_masks=mm_attn_masks,
+            )
+        finally:
+            # Masks are per-prefill device tensors: a persistent cache kept buffers alive across the
+            # decode trace replays, whose baked-in addresses then overlapped them (served 26B on the
+            # lane engine decoded garbage after the first multimodal request).
+            for m in (mm_attn_masks or {}).values():
+                m.deallocate(True)
 
     def _g4_mm_prefill_attn_masks(self, x, chunk_page_table, chunk_start_idx):
         """Device image-span masks for this prefill, or None (plain causal attention).
@@ -2217,25 +2222,14 @@ class Gemma4Model:
                 "GEMMA4_MM_BIDIR_MASK: chunked / cached-prefix prefill keeps causal attention over image spans"
             )
             return None
-        from models.demos.gemma4.tt.mm_attention_mask import build_mm_prefill_masks, vision_block_spans
+        from models.demos.gemma4.tt.mm_attention_mask import build_mm_prefill_masks
 
         seq_len = int(x.shape[-2])
-        # Device masks are cached by (padded length, vision-block spans): prompts that place the same
-        # image layout at the same offsets (the common case for one image plus a short question)
-        # reuse the uploaded masks instead of rebuilding and re-uploading 2 x [S, S] per prefill.
-        key = (seq_len, vision_block_spans(blocks))
-        cache = getattr(self, "_g4_mm_mask_cache", None)
-        if cache is None:
-            cache = self._g4_mm_mask_cache = {}
-        hit = cache.pop(key, None)
-        if hit is not None:
-            cache[key] = hit  # most recently used last
-            return hit
         host_masks = build_mm_prefill_masks(blocks, seq_len, getattr(self.hf_config, "sliding_window", None))
         if host_masks is None:
             return None
         is_mesh = hasattr(self.mesh_device, "shape")
-        masks = {
+        return {
             lt: ttnn.from_torch(
                 m,
                 device=self.mesh_device,
@@ -2246,12 +2240,6 @@ class Gemma4Model:
             )
             for lt, m in host_masks.items()
         }
-        while len(cache) >= self._G4_MM_MASK_CACHE_SIZE:
-            oldest = next(iter(cache))  # insertion order = least recently used
-            for m in cache.pop(oldest).values():
-                m.deallocate(True)
-        cache[key] = masks
-        return masks
 
     def process_output_prefill(self, tt_out, last_token_idx):
         """Read prefill logits to host and slice to the last token's vocab row.
