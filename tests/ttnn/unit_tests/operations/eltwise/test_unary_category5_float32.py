@@ -101,7 +101,7 @@ def test_reglu(device, dim):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# swiglu — silu gate, same bounds as silu in test_unary_category2_float32.py
+# swiglu — silu gate, same bounds as silu
 # ─────────────────────────────────────────────────────────────────────────────
 
 
