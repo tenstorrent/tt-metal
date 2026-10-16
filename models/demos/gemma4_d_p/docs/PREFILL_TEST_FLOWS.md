@@ -167,7 +167,6 @@ TTNN readback slices the populated prefix, untilizes a temporary copy to BF16 ro
 - **Next-token likelihood:** scored on the host while the KV is read back.
 
 ```bash
-export THP_MEM_ALLOC_ENABLE=1
 pytest 'models/demos/gemma4_d_p/tests/test_prefill_accuracy.py::test_prefill_accuracy[blackhole-256k-8x4]' -sv
 ```
 
