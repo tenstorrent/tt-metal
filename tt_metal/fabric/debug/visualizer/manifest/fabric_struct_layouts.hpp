@@ -26,6 +26,10 @@ namespace tt::tt_metal {
 class Hal;
 }  // namespace tt::tt_metal
 
+namespace tt::tt_fabric {
+struct PacketHeaderConfig;
+}  // namespace tt::tt_fabric
+
 namespace tt::tt_fabric::layout {
 
 // ============ Sender channels ============
@@ -266,6 +270,16 @@ inline constexpr std::string_view go_msg_name = "go_msg_t";
 // it holds, each member named by the HAL's generated field. Sizes, offsets and array lengths are the arch's.
 std::vector<StructType> hal_struct_types(const tt::tt_metal::Hal& hal);
 
+// ============ Packet headers ============
+
+// The header type a configuration picks, e.g. struct:HybridMeshPacketHeaderT<36> and its size. Every header
+// FabricContext can choose has a layout, checked at compile time in fabric_packet_header_layouts.cpp.
+Type packet_header_type(const PacketHeaderConfig& config);
+
+// The layouts of the header a configuration picks and of the structs only it holds (a 1D header's routing
+// fields). Not in DescribedStructs, since a run describes only its own header.
+std::vector<StructType> packet_header_struct_types(const PacketHeaderConfig& config);
+
 // ============ Enums ============
 
 struct Enumerator {
@@ -338,6 +352,7 @@ using DescribedEnums = std::tuple<
     manifest::NocCmdBuf,
     RouterState,
     RouterCommand,
-    DynamicStatistics>;
+    DynamicStatistics,
+    NocSendType>;
 
 }  // namespace tt::tt_fabric::layout

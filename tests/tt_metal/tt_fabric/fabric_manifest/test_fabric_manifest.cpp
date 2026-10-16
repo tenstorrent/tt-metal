@@ -209,13 +209,27 @@ void check_top_level(
         (std::set<std::string>{
             "topology",
             "is_2d_routing",
-            "packet_header_size_bytes",
+            "packet_header",
             "max_payload_size_bytes",
             "channel_buffer_size_bytes",
             is_2d ? "routing_2d_route_buffer_size" : "routing_1d_extension_words",
             "multi_txq"}));
     EXPECT_EQ(block.at("is_2d_routing"), is_2d);
     EXPECT_TRUE(block.at("multi_txq").is_boolean());
+
+    // The header is the mode's type, described in the arch's types, and is the header a channel buffer holds.
+    const auto& header = block.at("packet_header");
+    EXPECT_EQ(keys_of(header), (std::set<std::string>{"size", "schema"}));
+    const auto schema = header.at("schema").get<std::string>();
+    EXPECT_TRUE(schema.starts_with(is_2d ? "struct:HybridMeshPacketHeaderT<" : "struct:LowLatencyPacketHeaderT<"))
+        << schema;
+    const auto& types = manifest.at("archs").at(lower_enum_name(BaseFabricFixture::arch_)).at("types");
+    const auto header_name = schema.substr(manifest::k_struct_schema.size());
+    ASSERT_TRUE(types.contains(header_name)) << header_name;
+    EXPECT_EQ(types.at(header_name).at("size"), header.at("size"));
+    EXPECT_EQ(
+        header.at("size").get<uint32_t>() + block.at("max_payload_size_bytes").get<uint32_t>(),
+        block.at("channel_buffer_size_bytes").get<uint32_t>());
 
     // Other ranks write their manifests into the same directory, and may still be writing.
     const auto temp_prefix = manifest_path.filename().string() + ".tmp.";
@@ -1326,6 +1340,10 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::WR_REG_CMD_BUF), "wr_reg_cmd_buf");
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::AT_CMD_BUF), "at_cmd_buf");
 
+    EXPECT_EQ(lower_enum_name(NocSendType::NOC_UNICAST_READ), "noc_unicast_read");
+    // NOC_SEND_TYPE_LAST names the same value; the manifest writes the name declared first.
+    EXPECT_EQ(lower_enum_name(NocSendType::NOC_SPARSE_MCAST_WRITE), "noc_sparse_mcast_write");
+
     EXPECT_EQ(lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_0), "riscv_0");
     EXPECT_EQ(lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_1), "riscv_1");
 
@@ -1349,6 +1367,8 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(schema_name({element::Uint{}, 8, 2}), "u32");
     EXPECT_EQ(schema_name({element::Enum{"RouterState"}, 4, 0}), "enum:RouterState");
     EXPECT_EQ(schema_name({element::Struct{"WorkerXY"}, 4, 0}), "struct:WorkerXY");
+    EXPECT_EQ((layout::template_name<"HybridMeshPacketHeaderT", 36>), "HybridMeshPacketHeaderT<36>");
+    EXPECT_EQ((layout::template_name<"T", 1, false>), "T<1,false>");
     EXPECT_EQ(schema_name({element::Packed{"direction_table", 2}, 16, 64}), "packed:direction_table");
     EXPECT_EQ(schema_name({element::Bytes{}, 1, 0}), "bytes");
     EXPECT_EQ(schema_name({element::Pad{}, 1, 0}), "pad");

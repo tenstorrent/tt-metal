@@ -45,7 +45,7 @@
     "channel_status": { "enum": ["active", "vc_not_serviced", "mux", "trimmed"] },
     "schema": {
       "type": "string",
-      "pattern": "^([ui](8|16|32|64)|bytes|pad|struct:[A-Za-z_][A-Za-z0-9_]*|enum:[A-Za-z_][A-Za-z0-9_]*|packed:[a-z0-9_]+)$"
+      "pattern": "^([ui](8|16|32|64)|bytes|pad|struct:[A-Za-z_][A-Za-z0-9_]*(<([0-9]+|true|false)(,([0-9]+|true|false))*>)?|enum:[A-Za-z_][A-Za-z0-9_]*|packed:[a-z0-9_]+)$"
     },
 
     "run": {
@@ -73,7 +73,16 @@
       "properties": {
         "topology": { "$ref": "#/$defs/name" },
         "is_2d_routing": { "type": "boolean" },
-        "packet_header_size_bytes": { "$ref": "#/$defs/count" },
+        "packet_header": {
+          "description": "The run's packet header type, whose layout is in archs.<arch>.types.",
+          "type": "object",
+          "properties": {
+            "size": { "$ref": "#/$defs/count" },
+            "schema": { "$ref": "#/$defs/schema", "pattern": "^struct:" }
+          },
+          "required": ["size", "schema"],
+          "additionalProperties": false
+        },
         "max_payload_size_bytes": { "$ref": "#/$defs/count" },
         "channel_buffer_size_bytes": { "$ref": "#/$defs/count" },
         "routing_2d_route_buffer_size": { "$ref": "#/$defs/count" },
@@ -81,7 +90,7 @@
         "multi_txq": { "type": "boolean" }
       },
       "required": [
-        "topology", "is_2d_routing", "packet_header_size_bytes", "max_payload_size_bytes",
+        "topology", "is_2d_routing", "packet_header", "max_payload_size_bytes",
         "channel_buffer_size_bytes", "multi_txq"
       ],
       "if": { "properties": { "is_2d_routing": { "const": true } } },

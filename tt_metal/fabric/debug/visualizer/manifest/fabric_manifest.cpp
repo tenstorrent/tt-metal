@@ -80,12 +80,26 @@ json make_run_json(const ControlPlane& control_plane, const tt::Cluster& cluster
     return run;
 }
 
+// A type's size and schema. An array also gets its element count and the size of one element, and a packed table
+// its entry count and the bits in one entry.
+void add_type_json(json& out, const layout::Type& type) {
+    out["size"] = type.size;
+    if (const auto* packed = std::get_if<layout::element::Packed>(&type.element)) {
+        out["num_elements"] = type.count;
+        out["bits_per_entry"] = packed->bits_per_entry;
+    } else if (type.count > 0) {
+        out["num_elements"] = type.count;
+        out["size_per_element"] = manifest::element_size(type);
+    }
+    out["schema"] = manifest::schema_name(type);
+}
+
 // Returns a JSON object with the fabric context block information.
 json make_fabric_context_json(const FabricContext& fabric_context) {
     json block;
     block["topology"] = lower_enum_name(fabric_context.get_fabric_topology());
     block["is_2d_routing"] = fabric_context.is_2D_routing_enabled();
-    block["packet_header_size_bytes"] = fabric_context.get_fabric_packet_header_size_bytes();
+    add_type_json(block["packet_header"], layout::packet_header_type(fabric_context.get_packet_header_config()));
     block["max_payload_size_bytes"] = fabric_context.get_fabric_max_payload_size_bytes();
     block["channel_buffer_size_bytes"] = fabric_context.get_fabric_channel_buffer_size_bytes();
     if (fabric_context.is_2D_routing_enabled()) {
@@ -120,20 +134,6 @@ json make_credit_transport_json(const FabricBuilderContext& builder_context, Mes
 }
 
 // ============ Contents ============
-
-// A type's size and schema. An array also gets its element count and the size of one element, and a packed table
-// its entry count and the bits in one entry.
-void add_type_json(json& out, const layout::Type& type) {
-    out["size"] = type.size;
-    if (const auto* packed = std::get_if<layout::element::Packed>(&type.element)) {
-        out["num_elements"] = type.count;
-        out["bits_per_entry"] = packed->bits_per_entry;
-    } else if (type.count > 0) {
-        out["num_elements"] = type.count;
-        out["size_per_element"] = manifest::element_size(type);
-    }
-    out["schema"] = manifest::schema_name(type);
-}
 
 json l1_json(const manifest::content::L1& l1) {
     json out;
@@ -634,7 +634,8 @@ void serialize_fabric_manifest_to_file(
     manifest["run"] = make_run_json(control_plane, cluster);
     manifest["fabric_context"] = make_fabric_context_json(fabric_context);
     manifest["vocabulary"] = make_vocabulary_json();
-    const manifest::Arch arch = describe_arch(tt::tt_metal::MetalContext::instance().hal());
+    const manifest::Arch arch =
+        describe_arch(tt::tt_metal::MetalContext::instance().hal(), fabric_context.get_packet_header_config());
     manifest["archs"] = make_archs_json(arch);
     manifest["enums"] = make_enums_json();
 

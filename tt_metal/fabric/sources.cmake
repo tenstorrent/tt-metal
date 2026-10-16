@@ -44,6 +44,7 @@ set(FABRIC_SOURCES
     debug/visualizer/manifest/fabric_manifest.cpp
     debug/visualizer/manifest/fabric_manifest_chip_pass.cpp
     debug/visualizer/manifest/fabric_manifest_collector.cpp
+    debug/visualizer/manifest/fabric_packet_header_layouts.cpp
     debug/visualizer/manifest/fabric_struct_layouts.cpp
     channel_trimming_export.cpp
     channel_trimming_import.cpp

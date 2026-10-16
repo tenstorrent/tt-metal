@@ -342,7 +342,7 @@ manifest::Chip join_chip(
     return chip;
 }
 
-manifest::Arch describe_arch(const tt::tt_metal::Hal& hal) {
+manifest::Arch describe_arch(const tt::tt_metal::Hal& hal, const PacketHeaderConfig& packet_header) {
     namespace dev_msgs = tt::tt_metal::dev_msgs;
     const auto& factory = hal.get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH);
     const layout::Type go_msg{
@@ -353,6 +353,7 @@ manifest::Arch describe_arch(const tt::tt_metal::Hal& hal) {
         0};
     std::vector<layout::StructType> types = layout::described_struct_types();
     std::ranges::move(layout::hal_struct_types(hal), std::back_inserter(types));
+    std::ranges::move(layout::packet_header_struct_types(packet_header), std::back_inserter(types));
     return manifest::Arch{
         .arch = hal.get_arch(),
         .areas =
