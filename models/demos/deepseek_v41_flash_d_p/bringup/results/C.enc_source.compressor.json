@@ -1,0 +1,385 @@
+{
+ "metrics": {
+  "auto_compressor_L02_big_bias": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.0
+  },
+  "auto_compressor_L02_big_ratio_max": {
+   "t": "2026-10-16T19:28:20",
+   "value": 1.0024305582046509
+  },
+  "auto_compressor_L02_big_ratio_min": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.9979050159454346
+  },
+  "auto_compressor_L02_big_rel": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.008210023865103722
+  },
+  "auto_compressor_L02_big_rel_limit": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.03178906813263893
+  },
+  "auto_compressor_L02_big_row": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.03555219620466232
+  },
+  "auto_compressor_L02_chunk0_bias": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.0
+  },
+  "auto_compressor_L02_chunk0_bias_at": {
+   "t": "2026-10-16T19:28:20",
+   "value": 520
+  },
+  "auto_compressor_L02_chunk0_bias_floor": {
+   "t": "2026-10-16T19:28:20",
+   "value": Infinity
+  },
+  "auto_compressor_L02_chunk0_bias_signed": {
+   "t": "2026-10-16T19:28:20",
+   "value": -0.00035092982019986233
+  },
+  "auto_compressor_L02_chunk0_col_at": {
+   "t": "2026-10-16T19:28:20",
+   "value": 520
+  },
+  "auto_compressor_L02_chunk0_col_floor": {
+   "t": "2026-10-16T19:28:20",
+   "value": Infinity
+  },
+  "auto_compressor_L02_chunk0_ratio_max": {
+   "t": "2026-10-16T19:28:20",
+   "value": 1.0028910636901855
+  },
+  "auto_compressor_L02_chunk0_ratio_min": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.9978535175323486
+  },
+  "auto_compressor_L02_chunk0_rel": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.008023097179830074
+  },
+  "auto_compressor_L02_chunk0_rel_limit": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.030938396230340004
+  },
+  "auto_compressor_L02_chunk0_row": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.035778142511844635
+  },
+  "auto_compressor_L02_chunk0_row_at": {
+   "t": "2026-10-16T19:28:20",
+   "value": 240
+  },
+  "auto_compressor_L02_chunk0_row_floor": {
+   "t": "2026-10-16T19:28:20",
+   "value": 2.7720994108069967
+  },
+  "auto_compressor_L02_layer24_bias": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.0
+  },
+  "auto_compressor_L02_layer24_bias_at": {
+   "t": "2026-10-16T19:28:20",
+   "value": 517
+  },
+  "auto_compressor_L02_layer24_bias_floor": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.38469686458597213
+  },
+  "auto_compressor_L02_layer24_bias_signed": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.0010326699939512702
+  },
+  "auto_compressor_L02_layer24_col_at": {
+   "t": "2026-10-16T19:28:20",
+   "value": 605
+  },
+  "auto_compressor_L02_layer24_col_floor": {
+   "t": "2026-10-16T19:28:20",
+   "value": 1.3854212088414037
+  },
+  "auto_compressor_L02_layer24_ratio_max": {
+   "t": "2026-10-16T19:28:20",
+   "value": 1.0029767751693726
+  },
+  "auto_compressor_L02_layer24_ratio_min": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.9975861310958862
+  },
+  "auto_compressor_L02_layer24_rel": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.008892064914107323
+  },
+  "auto_compressor_L02_layer24_rel_limit": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.0400577113032341
+  },
+  "auto_compressor_L02_layer24_row": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.04276035353541374
+  },
+  "auto_compressor_L02_layer24_row_at": {
+   "t": "2026-10-16T19:28:20",
+   "value": 364
+  },
+  "auto_compressor_L02_layer24_row_floor": {
+   "t": "2026-10-16T19:28:20",
+   "value": 1.9800710077192836
+  },
+  "auto_compressor_L02_mixed_bias": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.0
+  },
+  "auto_compressor_L02_mixed_bias_at": {
+   "t": "2026-10-16T19:28:20",
+   "value": 570
+  },
+  "auto_compressor_L02_mixed_bias_floor": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.4137851486570144
+  },
+  "auto_compressor_L02_mixed_bias_signed": {
+   "t": "2026-10-16T19:28:20",
+   "value": -0.0009832279961513785
+  },
+  "auto_compressor_L02_mixed_col_at": {
+   "t": "2026-10-16T19:28:20",
+   "value": 372
+  },
+  "auto_compressor_L02_mixed_col_floor": {
+   "t": "2026-10-16T19:28:20",
+   "value": 1.3211524869972966
+  },
+  "auto_compressor_L02_mixed_ratio_max": {
+   "t": "2026-10-16T19:28:20",
+   "value": 1.0031534433364868
+  },
+  "auto_compressor_L02_mixed_ratio_min": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.9943932890892029
+  },
+  "auto_compressor_L02_mixed_rel": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.009919192641973495
+  },
+  "auto_compressor_L02_mixed_rel_limit": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.042472779750823975
+  },
+  "auto_compressor_L02_mixed_row": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.05062708258628845
+  },
+  "auto_compressor_L02_mixed_row_at": {
+   "t": "2026-10-16T19:28:20",
+   "value": 258
+  },
+  "auto_compressor_L02_mixed_row_floor": {
+   "t": "2026-10-16T19:28:20",
+   "value": 2.0352652856588542
+  },
+  "auto_compressor_L02_small_bias": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.0
+  },
+  "auto_compressor_L02_small_ratio_max": {
+   "t": "2026-10-16T19:28:20",
+   "value": 1.005697250366211
+  },
+  "auto_compressor_L02_small_ratio_min": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.9971729516983032
+  },
+  "auto_compressor_L02_small_rel": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.0077608204446733
+  },
+  "auto_compressor_L02_small_rel_limit": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.03086576610803604
+  },
+  "auto_compressor_L02_small_row": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.04780591279268265
+  },
+  "auto_compressor_L02_vs_cpu_bias": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.0
+  },
+  "auto_compressor_L02_vs_cpu_bias_at": {
+   "t": "2026-10-16T19:28:20",
+   "value": 539
+  },
+  "auto_compressor_L02_vs_cpu_bias_floor": {
+   "t": "2026-10-16T19:28:20",
+   "value": Infinity
+  },
+  "auto_compressor_L02_vs_cpu_bias_signed": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.00013959937918770808
+  },
+  "auto_compressor_L02_vs_cpu_col_at": {
+   "t": "2026-10-16T19:28:20",
+   "value": 539
+  },
+  "auto_compressor_L02_vs_cpu_col_floor": {
+   "t": "2026-10-16T19:28:20",
+   "value": Infinity
+  },
+  "auto_compressor_L02_vs_cpu_floor_warn": {
+   "t": "2026-10-16T19:28:20",
+   "value": 1
+  },
+  "auto_compressor_L02_vs_cpu_ratio_max": {
+   "t": "2026-10-16T19:28:20",
+   "value": 1.0023114681243896
+  },
+  "auto_compressor_L02_vs_cpu_ratio_min": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.9976025223731995
+  },
+  "auto_compressor_L02_vs_cpu_rel": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.007763370871543884
+  },
+  "auto_compressor_L02_vs_cpu_rel_limit": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.07458944618701935
+  },
+  "auto_compressor_L02_vs_cpu_row": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.039847686886787415
+  },
+  "auto_compressor_L02_vs_cpu_row_at": {
+   "t": "2026-10-16T19:28:20",
+   "value": 361
+  },
+  "auto_compressor_L02_vs_cpu_row_floor": {
+   "t": "2026-10-16T19:28:20",
+   "value": Infinity
+  },
+  "auto_compressor_L02_vs_golden_bias": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.0
+  },
+  "auto_compressor_L02_vs_golden_bias_at": {
+   "t": "2026-10-16T19:28:20",
+   "value": 539
+  },
+  "auto_compressor_L02_vs_golden_bias_floor": {
+   "t": "2026-10-16T19:28:20",
+   "value": Infinity
+  },
+  "auto_compressor_L02_vs_golden_bias_signed": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.00013959937918770808
+  },
+  "auto_compressor_L02_vs_golden_col_at": {
+   "t": "2026-10-16T19:28:20",
+   "value": 539
+  },
+  "auto_compressor_L02_vs_golden_col_floor": {
+   "t": "2026-10-16T19:28:20",
+   "value": Infinity
+  },
+  "auto_compressor_L02_vs_golden_floor_warn": {
+   "t": "2026-10-16T19:28:20",
+   "value": 1
+  },
+  "auto_compressor_L02_vs_golden_ratio_max": {
+   "t": "2026-10-16T19:28:20",
+   "value": 1.0038528442382812
+  },
+  "auto_compressor_L02_vs_golden_ratio_min": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.9953678250312805
+  },
+  "auto_compressor_L02_vs_golden_rel": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.01587391272187233
+  },
+  "auto_compressor_L02_vs_golden_rel_limit": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.19052115082740784
+  },
+  "auto_compressor_L02_vs_golden_row": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.04639703035354614
+  },
+  "auto_compressor_L02_vs_golden_row_at": {
+   "t": "2026-10-16T19:28:20",
+   "value": 493
+  },
+  "auto_compressor_L02_vs_golden_row_floor": {
+   "t": "2026-10-16T19:28:20",
+   "value": Infinity
+  },
+  "det_compressor_L02": {
+   "t": "2026-10-16T19:28:21",
+   "value": 1.0
+  },
+  "err_compressor_L02": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.01587391272187233
+  },
+  "err_compressor_L02_limit": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.19052115082740784
+  },
+  "fp4_compressor_L02_big_mismatch": {
+   "t": "2026-10-16T19:28:23",
+   "value": 0.0012954712146893144
+  },
+  "fp4_compressor_L02_big_offgrid": {
+   "t": "2026-10-16T19:28:23",
+   "value": 0.0
+  },
+  "fp4_compressor_L02_chunk0_mismatch": {
+   "t": "2026-10-16T19:28:23",
+   "value": 0.0012252808082848787
+  },
+  "fp4_compressor_L02_chunk0_offgrid": {
+   "t": "2026-10-16T19:28:23",
+   "value": 0.0
+  },
+  "fp4_compressor_L02_golden_mismatch": {
+   "t": "2026-10-16T19:28:23",
+   "value": 0.00113677978515625
+  },
+  "fp4_compressor_L02_golden_offgrid": {
+   "t": "2026-10-16T19:28:23",
+   "value": 0.0
+  },
+  "fp4_compressor_L02_layer24_mismatch": {
+   "t": "2026-10-16T19:28:23",
+   "value": 0.0015975951682776213
+  },
+  "fp4_compressor_L02_layer24_offgrid": {
+   "t": "2026-10-16T19:28:23",
+   "value": 0.0
+  },
+  "fp4_compressor_L02_mixed_mismatch": {
+   "t": "2026-10-16T19:28:23",
+   "value": 0.0018859863048419356
+  },
+  "fp4_compressor_L02_mixed_offgrid": {
+   "t": "2026-10-16T19:28:23",
+   "value": 0.0
+  },
+  "fp4_compressor_L02_small_mismatch": {
+   "t": "2026-10-16T19:28:23",
+   "value": 0.0011795044410973787
+  },
+  "fp4_compressor_L02_small_offgrid": {
+   "t": "2026-10-16T19:28:23",
+   "value": 0.0
+  },
+  "pcc_compressor_L02": {
+   "t": "2026-10-16T19:28:20",
+   "value": 0.9998740071744701
+  }
+ },
+ "task": "C.enc_source.compressor"
+}
