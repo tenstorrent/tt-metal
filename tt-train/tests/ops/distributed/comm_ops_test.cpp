@@ -440,7 +440,7 @@ xt::xarray<float> mean_of_the_two_slices(const xt::xarray<float>& grad_data) {
 
 }  // namespace
 
-TEST_F(N300CommOpsTest, SynchronizeGradientsCollapsedGradientIsAveragedAndReadsReplicate) {
+TEST_F(Mesh1x2CommOpsTest, SynchronizeGradientsCollapsedGradientIsAveragedAndReadsReplicate) {
     // The gradient carries the collapsed {2}, [Shard{0}] label of the whole-mesh 1-D mapper. It must read as sharded
     // on axis 1 (negative control: it read as not sharded there before, the one placement sat at index 0), be averaged
     // along axis 1, and come back labelled Replicate on every axis by the collective itself.
@@ -473,7 +473,7 @@ TEST_F(N300CommOpsTest, SynchronizeGradientsCollapsedGradientIsAveragedAndReadsR
     EXPECT_TRUE(xt::allclose(expected, shards[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 }
 
-TEST_F(N300CommOpsTest, SynchronizeGradientsNDGradientIsAveragedAndReadsReplicate) {
+TEST_F(Mesh1x2CommOpsTest, SynchronizeGradientsNDGradientIsAveragedAndReadsReplicate) {
     // The same with an N-D [Replicate, Shard{0}] gradient label: averaged along axis 1, [Replicate, Replicate] out.
     auto* device = &ttml::autograd::ctx().get_device();
     auto& rng = ttml::autograd::ctx().get_generator();
@@ -500,7 +500,7 @@ TEST_F(N300CommOpsTest, SynchronizeGradientsNDGradientIsAveragedAndReadsReplicat
     EXPECT_TRUE(xt::allclose(expected, shards[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 }
 
-TEST_F(N300CommOpsTest, IsShardedOnAxisReadsTensorParallelShardsPerAxis) {
+TEST_F(Mesh1x2CommOpsTest, IsShardedOnAxisReadsTensorParallelShardsPerAxis) {
     // A TP weight sharded on dim 3 along axis 1, spelled N-D and collapsed, reads as sharded on axis 1 only; the
     // collapsed spelling read as not sharded on axis 1 before this change. A label that does not cover the mesh is
     // refused rather than guessed. A reduction request over the size-1 axis 0 is a no-op (synchronize_tensor's early
