@@ -30,6 +30,9 @@ void kernel_main() {
     constexpr uint32_t cols = get_compile_time_arg_val(6);
     constexpr uint32_t col_stride = get_compile_time_arg_val(7);
     constexpr uint32_t sem_id = get_compile_time_arg_val(8);
+    // > 0: write rows 0-3 of output tile column n into the compact rows layout instead (DRAM tiles: rows 4c..4c+3
+    // of compact tile n % compact_tiles, c = n / compact_tiles), what CompactRows makes for the row reduction.
+    constexpr uint32_t compact_tiles = get_compile_time_arg_val(9);
     constexpr uint32_t tile_bytes = 2048;  // bf16 32x32
     constexpr uint32_t face_bytes = 512;   // bf16 16x16
     constexpr uint32_t user_bytes = 128;   // rows 0-3 of a face
@@ -82,6 +85,23 @@ void kernel_main() {
 
     cb_wait_front(cb_out, cols);
     uint32_t src = get_read_ptr(cb_out);
+    if constexpr (compact_tiles > 0) {
+        for (uint32_t j = 0; j < valid_cols; j++) {
+            const uint32_t n = first_col + j * col_stride;
+            const uint32_t c = n / compact_tiles;
+            const uint64_t dst = page_noc_addr<true>(out_addr, n % compact_tiles, tile_bytes) +
+                                 (c / 4) * 2 * face_bytes + (c % 4) * user_bytes;
+            noc_async_write(src, dst, user_bytes);
+            noc_async_write(src + face_bytes, dst + face_bytes, user_bytes);
+            src += tile_bytes;
+        }
+        noc_async_write_barrier();
+        cb_pop_front(cb_out, cols);
+        if (role == 1) {
+            noc_async_atomic_barrier();
+        }
+        return;
+    }
     for (uint32_t j = 0; j < valid_cols; j++) {
         const uint64_t dst = page_noc_addr<false>(out_addr, first_col + j * col_stride, tile_bytes);
         noc_async_write(src, dst, user_bytes);

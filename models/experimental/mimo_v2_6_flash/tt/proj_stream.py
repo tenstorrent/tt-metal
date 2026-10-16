@@ -222,17 +222,28 @@ class BankStreamMatmul:
         )
         return [kernel], [w, staging]
 
-    def __call__(self, x, w, fused=None, staged=None):
-        """``staged``: the ``staging`` tensor, already holding every weight row (``prefetch_section``)."""
+    def __call__(self, x, w, fused=None, staged=None, compact_out=None):
+        """``staged``: the ``staging`` tensor, already holding every weight row (``prefetch_section``).
+        ``compact_out``: write rows 0-3 straight into this compact rows tensor ([1, 1, 32, n / 8] bf16 DRAM tiles,
+        CompactRows' layout) and return it."""
         assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT
         assert _is_interleaved(x)
-        out = ttnn.empty(
-            [1, 1, TILE, self.n],
-            dtype=x.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.plan.mesh_device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        compact_tiles = 0
+        if compact_out is not None:
+            compact_tiles = self.n // TILE // (TILE // 4)
+            assert (
+                compact_out.shape[-1] == compact_tiles * TILE
+                and compact_out.memory_config().buffer_type == ttnn.BufferType.DRAM
+            )
+            out = compact_out
+        else:
+            out = ttnn.empty(
+                [1, 1, TILE, self.n],
+                dtype=x.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.plan.mesh_device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
         w_tile, row_bytes, block_rows = self._sizes(w.dtype)
         num_blocks = self.kt // block_rows
         block_tiles = block_rows * self.cpc
@@ -301,7 +312,18 @@ class BankStreamMatmul:
         writer = _kernel(
             "proj_writer.cpp",
             self.cores,
-            [self.CB_X, self.CB_OUT, self.CB_ZERO, x_dram, num_blocks, block_rows, self.cpc, self.banks, self.SEM_X],
+            [
+                self.CB_X,
+                self.CB_OUT,
+                self.CB_ZERO,
+                x_dram,
+                num_blocks,
+                block_rows,
+                self.cpc,
+                self.banks,
+                self.SEM_X,
+                compact_tiles,
+            ],
             writer_rt,
             ttnn.WriterConfigDescriptor(),
         )

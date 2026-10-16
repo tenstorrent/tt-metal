@@ -479,13 +479,15 @@ class TtMiMoAttention:
                 ),
                 self.qkv_width,
             )
-            # Decode o_proj without the V padding rows (they only ever multiplied zeros), sliced on device.
+            # Decode o_proj without the V padding rows (they only ever multiplied zeros), sliced on device; streamed
+            # bank-locally (1024 x 4096 per chip: 13.2 us instead of the linear's 18.9) straight into compact rows.
             self.wo_decode = self._unpadded_o()
+            self.o_stream = self._bank_stream(self.nh_local * self.v_head_dim, hidden)
             self.decode_qkv_program = decode_linear_config(plan.mesh_device, hidden, self.qkv_width)
             self.decode_o_program = decode_linear_config(plan.mesh_device, self.nh_local * self.v_head_dim, hidden)
             # Bank-local streaming qkv (4096 x 1920 per chip, read padded to 2048 columns once: 23.9 us instead of
             # 32.4 us). It reads its own padded copy; prefill keeps the interleaved weight. The SWA o projection
-            # (1024 x 4096) stays on the linear, which is faster at that size.
+            # (1024 x 4096) streams too (o_stream above).
             # Off the bank cores, so the previous layer's reductions can stage these weights in L1 (qkv_prefetch).
             self.qkv_stream = self._bank_stream(hidden, self.qkv_width, skip_bank_core=True)
             if self.qkv_stream is not None:
@@ -705,7 +707,12 @@ class TtMiMoAttention:
         the row all-gather of every chip's compact rows (CompactRows) for ReduceExpand instead of the all-reduced
         [1, 1, 32, hidden]."""
         if compact and self.o_stream is not None:
-            out = self.o_stream(attn_cat, self.wo_decode)  # [1, 1, 32, hidden] bf16 in L1, rows 0-3
+            # Rows 0-3 written straight in the compact rows layout (no CompactRows launch).
+            rows = self.o_stream(attn_cat, self.wo_decode, compact_out=self.compact_buf)
+            attn_cat.deallocate(True)
+            if self.fabric_gather:
+                return rows
+            return self.plan.all_gather(rows, dim=3)
         else:
             out = ttnn.linear(
                 attn_cat,
