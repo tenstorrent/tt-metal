@@ -2161,3 +2161,22 @@ i.e. ~0.1 / 0.7 ms a forward, against an op that would have to fit H beside FF13
 smaller FF13 blocks, which lose the SwiGLU hiding of §60). Not built. §77's "mostly the output write" was wrong: FF13's
 exposed data movement (full - compute only: 85 / 70 µs a call) and FF2's at bs32 (85 µs) are the reads (activations /
 weights), which is where the remaining matmul data-movement time is.
+
+## 82. The MLP matmuls' exposed reads are weight re-reads per M block (2026-10-16)
+
+`bench_mm_ablate.py` (new `MM_W=sharded|interleaved`, `MM_TRANSPOSE=0|1` overrides), wall µs per call:
+
+| | full | no in0 read | no in1 read | no reads | compute only |
+|---|---|---|---|---|---|
+| FF13 fused 4,40,8 bs16 (untransposed) | 1643.3 | 1633.6 | 1587.1 | 1558.6 | 1555.1 |
+| FF13 bs32 untransposed | 3131.5 | 3092.5 | 3114.7 | 3063.5 | 3056.1 |
+| FF13 bs32 transposed (the model's) | 3085.0 | 3053.9 | 3013.3 | | |
+| FF2 8,8,8 bs16 | 723.6 | 720.3 (§81) | 717.4 | 716.5 | 716.1 |
+| FF2 bs32 | 1470.1 | 1466.0 (§81) | 1390.3 | 1384.6 | 1385.4 |
+
+Width-sharded FF13 weights are much slower (bs16 2015.9, bs32 3780.1, transposed 3875.0), and FF2 bs32 untransposed is
+slower (1543.8). The exposed in1 time is DRAM re-reads: the loop is M blocks outer, N inner, so each M block re-reads
+its N slice of the weight. FF13's M_block is 4 (all that fits beside K_block 40), so each core column reads the 28 MB
+packed weight ~7 times a call (~200 MB at bs16). Next: an N-outer order that keeps an N block's full-K weight resident
+(FF13 has two K blocks and its in1 CB already holds two) while in0 streams from L1: weight reads 7x -> 1x, ~56 / 72 µs a
+call (~2.0 / 2.6 ms a forward) to win. FF2 (K 304 tiles) cannot hold its weight; its bs32 exposure (80 µs) is open.

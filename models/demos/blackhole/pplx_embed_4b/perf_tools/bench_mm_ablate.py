@@ -6,7 +6,8 @@
 # Usage: bench_mm_ablate.py <preset> [batch]   presets: ff13 (bs8 / bs16 fused SwiGLU, bs32 plain FF1), ff13plain
 #        (the packed w13 shape without the SwiGLU epilogue), qkv, ff2, wo
 #        ABL_ONLY="full|no reads" picks variants; MM_BLOCKS=M,K,N,sh,sw overrides the preset's blocks; MM_IN0=L1|DRAM
-#        overrides the in0 placement, MM_OUT=L1|DRAM the output placement.
+#        overrides the in0 placement, MM_OUT=L1|DRAM the output placement, MM_W=sharded|interleaved the weight layout,
+#        MM_TRANSPOSE=0|1 the core-grid orientation (MinimalMatmulConfig.transpose_core_grid).
 import os
 import statistics
 import subprocess
@@ -85,6 +86,7 @@ def child(name, B, out_path):
     outp = os.getenv("MM_OUT") or outp
     if os.getenv("MM_BLOCKS"):
         blocks = tuple(int(v) for v in os.getenv("MM_BLOCKS").split(","))
+    wlayout = os.getenv("MM_W") or wlayout
     torch.manual_seed(0)
     D = ttnn.open_device(device_id=0, l1_small_size=32768, trace_region_size=64 * 1024 * 1024)
     try:
@@ -96,6 +98,8 @@ def child(name, B, out_path):
             subblock_w=blocks[4],
             compute_with_storage_grid_size=ttnn.CoreCoord(12, 10),
         )
+        if os.getenv("MM_TRANSPOSE") in ("0", "1"):
+            cfg.transpose_core_grid = os.getenv("MM_TRANSPOSE") == "1"
         ckc = ttnn.init_device_compute_kernel_config(
             D.arch(), math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=True
         )
