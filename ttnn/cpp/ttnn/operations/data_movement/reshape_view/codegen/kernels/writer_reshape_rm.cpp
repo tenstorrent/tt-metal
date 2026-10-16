@@ -8,11 +8,11 @@
 #include "ttnn/operations/data_movement/common/kernels/codegen/sequencers.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_reads = get_arg_val<uint32_t>(1);
-    uint32_t num_sticks_per_read = get_arg_val<uint32_t>(2);
-    uint32_t num_sticks_per_cb_push = get_arg_val<uint32_t>(3);
-    uint32_t start_stick = get_arg_val<uint32_t>(4);
+    uint32_t dst_addr = get_common_arg_val<uint32_t>(0);
+    uint32_t num_reads = get_arg_val<uint32_t>(0);
+    uint32_t num_sticks_per_read = get_arg_val<uint32_t>(1);
+    uint32_t num_sticks_per_cb_push = get_arg_val<uint32_t>(2);
+    uint32_t start_stick = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_out0 = get_compile_time_arg_val(0);
     constexpr uint32_t new_stick_size = get_compile_time_arg_val(1);

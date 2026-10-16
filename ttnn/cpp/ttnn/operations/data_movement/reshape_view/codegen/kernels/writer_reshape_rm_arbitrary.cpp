@@ -7,9 +7,9 @@
 #include "api/dataflow/noc.h"
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_unit = get_arg_val<uint32_t>(1);
-    const uint32_t num_units = get_arg_val<uint32_t>(2);
+    const uint32_t dst_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t start_unit = get_arg_val<uint32_t>(0);
+    const uint32_t num_units = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t cb_out = get_compile_time_arg_val(0);
     constexpr uint32_t new_stick_bytes = get_compile_time_arg_val(1);

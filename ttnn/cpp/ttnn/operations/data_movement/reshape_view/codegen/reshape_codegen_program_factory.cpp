@@ -156,18 +156,19 @@ ProgramDescriptor build_rm(const rcg::RmPlan& p, const Tensor& input, Tensor& ou
     writer.compile_time_args.push_back(tt::tt_metal::hal::get_noc_max_burst_size_bytes());
     writer.config = WriterConfigDescriptor{};
 
+    reader.emplace_common_runtime_args({in_buf});
+    writer.emplace_common_runtime_args({out_buf});
     const auto cores = corerange_to_cores(split.all_cores, split.num_cores, false);
     uint32_t start = 0;
     for (const auto& core : cores) {
         const uint32_t n = split.group1.contains(core) ? split.units_group1 : split.units_group2;
         const RmCoreWork w = rm_core_work(p, start, n);
         if (p.can_coalesce) {
-            reader.emplace_runtime_args(core, {in_buf, w.num_old_reads, w.old_per_read, w.old_per_push, w.curr_old});
+            reader.emplace_runtime_args(core, {w.num_old_reads, w.old_per_read, w.old_per_push, w.curr_old});
         } else {
             reader.emplace_runtime_args(
                 core,
-                {in_buf,
-                 w.num_old_reads,
+                {w.num_old_reads,
                  w.old_per_read,
                  w.curr_old,
                  p.old_stick,
@@ -175,7 +176,7 @@ ProgramDescriptor build_rm(const rcg::RmPlan& p, const Tensor& input, Tensor& ou
                  p.ratio,
                  p.split_nonaligned ? 1u : 0u});
         }
-        writer.emplace_runtime_args(core, {out_buf, w.num_new_reads, w.new_per_read, w.new_per_push, w.curr_new});
+        writer.emplace_runtime_args(core, {w.num_new_reads, w.new_per_read, w.new_per_push, w.curr_new});
         start += n;
     }
 
@@ -223,12 +224,14 @@ ProgramDescriptor build_rm_arbitrary(
     TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
     writer.config = WriterConfigDescriptor{};
 
+    reader.emplace_common_runtime_args({in_buf});
+    writer.emplace_common_runtime_args({out_buf});
     const auto cores = corerange_to_cores(all_cores, split.num_cores, false);
     uint32_t start = 0;
     for (const auto& core : cores) {
         const uint32_t n = split.group1.contains(core) ? split.units_group1 : split.units_group2;
-        reader.emplace_runtime_args(core, {in_buf, start, n});
-        writer.emplace_runtime_args(core, {out_buf, start, n});
+        reader.emplace_runtime_args(core, {start, n});
+        writer.emplace_runtime_args(core, {start, n});
         start += n;
     }
 

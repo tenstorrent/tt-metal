@@ -19,7 +19,6 @@ FORCE_INLINE void drain_halfword_stores(uint32_t last_addr, uint16_t value) {
 }
 
 struct ArgsCoalesced {
-    uint32_t src_addr;
     uint32_t num_reads;
     uint32_t sticks_per_read;
     uint32_t sticks_per_cb_push;
@@ -27,7 +26,6 @@ struct ArgsCoalesced {
 };
 
 struct ArgsNonaligned {
-    uint32_t src_addr;
     uint32_t num_reads;
     uint32_t sticks_per_read;
     uint32_t start_stick;
@@ -50,11 +48,12 @@ void kernel_main() {
     // Slack each scratch slot carries beyond the aligned page: one NOC read-alignment unit, a power of two.
     constexpr uint32_t READ_ALIGNMENT = get_compile_time_arg_val(7);
     constexpr auto src_args = TensorAccessorArgs<8>();
+    const uint32_t src_addr = get_common_arg_val<uint32_t>(0);
 
     // Reads num_reads work units of sticks_per_read sticks each; the CB push count can differ from the read count.
     if constexpr (!NONALIGNED) {
         const auto* a = reinterpret_cast<const ArgsCoalesced*>(get_arg_addr(0));
-        const auto s = TensorAccessor(src_args, a->src_addr, aligned_page_size);
+        const auto s = TensorAccessor(src_args, src_addr, aligned_page_size);
         Noc noc;
         CircularBuffer cb(cb_id);
         uint32_t i_stick = a->start_stick;
@@ -72,7 +71,7 @@ void kernel_main() {
         }
     } else {
         const auto* a = reinterpret_cast<const ArgsNonaligned*>(get_arg_addr(0));
-        const auto s = TensorAccessor(src_args, a->src_addr, aligned_page_size);
+        const auto s = TensorAccessor(src_args, src_addr, aligned_page_size);
 
         Noc noc;
         CircularBuffer cb(cb_id);
