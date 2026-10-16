@@ -432,6 +432,27 @@
   "status": "PASS",
   "waiting": null
  },
+ "C.enc_source.ffn_collapse": {
+  "attempts": 0,
+  "duration_s": 55.9,
+  "history": [
+   {
+    "s": 55.9,
+    "status": "PASS",
+    "t": "2026-10-16T22:35:42"
+   }
+  ],
+  "last_run": "2026-10-16T22:35:42",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.enc_source.ffn_collapse.log",
+  "metrics": {
+   "err_ffn_collapse_L02": 0.002491113729774952,
+   "err_ffn_collapse_L02_limit": 0.12220875918865204
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-16T22:34:46",
+  "status": "PASS"
+ },
  "C.enc_source.ffn_hc": {
   "attempts": 0,
   "duration_s": 45.0,
