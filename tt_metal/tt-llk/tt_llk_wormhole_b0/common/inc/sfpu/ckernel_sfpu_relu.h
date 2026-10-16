@@ -52,6 +52,10 @@ sfpi_inline sfpi::vFloat _relu_max_body_(sfpi::vFloat val, sfpi::vFloat threshol
     return result;
 }
 
+// Float relu_max. Reflects the current Wormhole float behavior (the Prgm1 scalar-threshold
+// form lives in _relu_max_float_impl_ on Blackhole; that optimization is a separate item).
+// The integer instantiation is retired: the plain compares below are not safe over the full
+// int32 range, and int thresholds route to _relu_max_int_impl_ instead (item 13).
 template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _relu_max_impl_(const int iterations, VecType threshold)
 {
@@ -70,6 +74,52 @@ inline void _relu_max_impl_(const int iterations, VecType threshold)
         v_endif;
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
+    }
+}
+
+// Dst holds int32 in whatever encoding the caller put there, and ttnn's is two's complement,
+// which is what the compares below assume. Pinned rather than left to sfpi's default, because
+// that default is per-arch: SM32 (converting) on Wormhole, so an unpinned load/store would
+// not read the two's-complement word the compares need.
+inline constexpr sfpi::DataLayout INT_DEST_LAYOUT = sfpi::DataLayout::I32;
+
+// Integer relu_max: max(0, min(a, threshold)) on int32 in Dst. Mirrors the metal relu_clamp_int.
+// A threshold <= 0 gives 0 on every lane, and a positive threshold zeroes the negative lanes
+// first -- which is their whole answer -- so the `a > threshold` compare only ever sees
+// non-negative operands. That keeps the compare exact under either arch's integer compare
+// lowering, where a bare ordered compare over the full int32 range is not (the difference of
+// operands 2^31 or more apart overflows the subtract-based forms).
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _relu_max_int_impl_(const int iterations, const int threshold)
+{
+    if (threshold > 0)
+    {
+        const sfpi::vInt v_threshold = threshold;
+        for (int d = 0; d < iterations; d++)
+        {
+            sfpi::vInt a = sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>();
+            v_if (a < 0)
+            {
+                a = 0;
+            }
+            v_endif;
+            v_if (a > v_threshold)
+            {
+                a = v_threshold;
+            }
+            v_endif;
+            sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>() = a;
+            sfpi::dst_reg++;
+        }
+    }
+    else
+    {
+        const sfpi::vInt zero = 0;
+        for (int d = 0; d < iterations; d++)
+        {
+            sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>() = zero;
+            sfpi::dst_reg++;
+        }
     }
 }
 
@@ -92,12 +142,16 @@ inline void _relu_max_(T threshold)
     {
         if constexpr (std::is_same_v<VectorType, sfpi::vInt>)
         {
-            v_threshold = static_cast<int>(Converter::as_float(threshold));
+            // Raw two's-complement int bits, the encoding _relu_min_'s integer branch takes.
+            // The old decode -- int(Converter::as_float(threshold)) -- read a float bit
+            // pattern: a raw int threshold like 5 arrived as a denormal and truncated to 0,
+            // and a float-encoding threshold fed an integer compare that subtracts and
+            // inverts its answer once the operands are 2^31 or more apart.
+            // _relu_max_int_impl_ takes the threshold directly and keeps its compare exact.
+            _relu_max_int_impl_<APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, static_cast<int>(threshold));
+            return;
         }
-        else
-        {
-            v_threshold = Converter::as_float(threshold);
-        }
+        v_threshold = Converter::as_float(threshold);
     }
     else
     {
