@@ -676,3 +676,22 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - Attempt 1's window_exact.py G == 1 fix stays in the tree (comparison path only).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_11_router.py`;
   fork: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_high_precision.py -k fp32_scores`
+
+## C.swa.experts test review (scaled checkpoint, attempt 1)
+- Freeze without review failed the mistake sweep: noise1e-2 slipped (rel 0.010 vs the bf16 precision model's
+  0.016-0.018 on every input; DS41-22). Size limits cannot separate them; no grid (fp32 sum of six GEMMs) and no
+  subspace (six experts' w2 span 6 x 2304 > 5120, so no DS41-25 span check).
+- Added a row-scaling check (`_Expect.evaluate`, so the device run and `CC.sweep` under BRINGUP_IMPL=mutations both
+  run it): least-squares slope b of log ||got_i - cpu_i|| on log ||cpu_i|| over rows, vs the CPU step, every input;
+  b >= ROW_SLOPE_MIN 0.35; skipped when < 32 rows differ (the reference: rel 0). Float-point error is relative,
+  added noise is not.
+- Measured b: bf16 inputs + output 1.00; bf16 precision model golden 0.71, layer24 0.94, mixed 0.81, small 0.73,
+  big 0.69; noise1e-2 -0.004..0.001; device (tt/experts.py) golden 0.72, layer24 0.87, mixed 0.67, small 0.66,
+  big 0.78. Column slope separates less (model 0.13-0.25), not used.
+- The previous review's `_Expect.check` (golden error added to vs-golden row / ratio limits) is kept; scaled golden:
+  CPU step vs golden rel 0.0242, row 0.066, ratio [0.959, 1.025].
+- Results: mutations PASS (every mistake caught, noise by rowscale_experts_L00_golden), reference PASS, stub FAIL,
+  gate (device) PASS: pcc 0.999706, vs CPU rel 0.00225 (limit 0.0197), second inputs rel <= 0.0030, A,B,A identical.
+- OV-4: DS41-20 already states the F73 fix; nothing to change.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_experts.py`
+  (sweep: `BRINGUP_IMPL=mutations` in front).
