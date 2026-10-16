@@ -12,6 +12,8 @@ Nothing enforced that before these tests. `start == 0` reset the slot and anythi
 accepted on the assumption that it was a later chunk of the same request in the same slot.
 """
 
+from collections import Counter
+
 import pytest
 
 from models.demos.qwen38_27b_t3k.tt.generator import validate_prefix_continuity
@@ -62,3 +64,33 @@ def test_one_bad_row_rejects_the_whole_batch(expect_error):
     # Rows are validated before any device effect, so a mixed batch must not half-apply.
     with expect_error(ValueError, "recurrent state"):
         validate_prefix_continuity([0, 99], [0, 1], [0, 64, 0, 0])
+
+
+def test_reset_clears_the_held_lengths_it_just_zeroed_the_state_for():
+    """reset_cache zeroes conv and recurrent, so every held length now describes nothing.
+
+    Leaving one behind lets a continuation chunk pass validate_prefix_continuity against a slot
+    whose state is zero, and makes save_slot_state store zeros under a nonzero length.
+    """
+    from types import MethodType, SimpleNamespace
+
+    from models.demos.qwen38_27b_t3k.tests.unit.test_serving_prefill_trace import load_methods
+
+    gen = SimpleNamespace(
+        model=SimpleNamespace(_resident_decode_bucket=None, reset_cache=lambda cache: None),
+        cache=SimpleNamespace(batch_size=4),
+        positions=None,
+        rope_indices=None,
+        tokens="tokens",
+        sampler=SimpleNamespace(seeds_tt_tensor="seeds"),
+        seed=0,
+        counters=Counter(),
+        remaining_steps=7,
+        reset_active_slots=False,
+        _copy=lambda source, target, name: None,
+        _reset_history=lambda: None,
+        _slot_prefix_len=[0, 64, 4096, 0],
+    )
+    methods = load_methods("generator.py", "Qwen38Generator", ["reset"], SimpleNamespace())
+    MethodType(methods["reset"], gen)()
+    assert gen._slot_prefix_len == [0, 0, 0, 0]

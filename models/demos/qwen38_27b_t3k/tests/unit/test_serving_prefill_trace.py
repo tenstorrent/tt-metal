@@ -93,6 +93,7 @@ class ServingPrefillTraceTests(unittest.TestCase):
                 "_drop_trace",
                 "_admit_traced",
                 "_active_prefill_cache",
+                "_reserve_snapshot_pool",
                 "_record_prefill_trace",
                 "_record_prefill_sample_trace",
                 "_prefill_for_generate",
@@ -121,6 +122,7 @@ class ServingPrefillTraceTests(unittest.TestCase):
             page_table=SimpleNamespace(shape=(4, 256)),
             _slot_prefix_len=[0] * 4,
             _state_snapshots={},
+            _snapshot_pool=[],
             tokens=object(),
             positions=object(),
             rope_indices=object(),
@@ -139,7 +141,7 @@ class ServingPrefillTraceTests(unittest.TestCase):
         self.gen._refresh_table = lambda table: self.events.append(("table", table))
         self.gen._sampling_step = lambda output: self.events.append(("sample", output))
         self.gen._release_traces = MethodType(self.methods["_release_traces"], self.gen)
-        for name in ("_drop_trace", "_admit_traced", "_active_prefill_cache"):
+        for name in ("_drop_trace", "_admit_traced", "_active_prefill_cache", "_reserve_snapshot_pool"):
             setattr(self.gen, name, MethodType(self.methods[name], self.gen))
         # Recording on demand needs a live decode trace; the fakes start without one, so these
         # return immediately unless a test arranges otherwise.

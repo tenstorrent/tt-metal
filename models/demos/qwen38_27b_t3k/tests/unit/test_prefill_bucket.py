@@ -255,6 +255,19 @@ class ResidentBucketTests(OwnedPrefillFixture):
         self.owned(torch.arange(110, dtype=torch.int64).reshape(1, 110))
         self.assertEqual(self.gen.counters["prefill_replays"], 0)
 
+    def test_a_recording_bound_to_dead_state_is_rebuilt_rather_than_left_eager(self):
+        # Keeping the stale handle pins the bucket to eager for the rest of the run: re-admitting
+        # it makes it the most recent, so eviction never reaches it to force a rebuild either.
+        self.run_prompt(100)
+        prepared = self.gen.prefill_prepared
+        self.gen.trace = "decode-trace"
+        prepared["trace"], prepared["trace_cache"] = "stale-trace", object()
+        self.owned(torch.arange(110, dtype=torch.int64).reshape(1, 110))
+        self.assertEqual(prepared["trace"], "new-trace")
+        self.assertIs(prepared["trace_cache"], self.gen.cache)
+        self.owned(torch.arange(112, dtype=torch.int64).reshape(1, 112))
+        self.assertEqual(self.gen.counters["prefill_replays"], 1)
+
     def test_a_recording_bound_to_the_live_state_is_replayed(self):
         self.run_prompt(100)
         prepared = self.gen.prefill_prepared

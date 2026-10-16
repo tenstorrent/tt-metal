@@ -165,6 +165,7 @@ class Qwen38Generator:
         self.positions = self.page_table = self.logits = None
         self._slot_prefix_len = []
         self._state_snapshots = {}
+        self._snapshot_pool = []
         self._next_snapshot_handle = 0
         self.prefill_signatures = set()
         self.batched_prefill_shapes = set()
@@ -407,9 +408,12 @@ class Qwen38Generator:
             self.prefill_prepared = prepared
             self._copy(tokens.int(), prepared["tokens"], "prefill_token_refreshes")
             self._aim_prefill_selectors(valid)
-            if prepared["trace"] is None or prepared["trace_cache"] is not self._active_prefill_cache():
+            if prepared["trace"] is not None and prepared["trace_cache"] is not self._active_prefill_cache():
                 # A recording writes the state copy it was captured against, so one aimed at a
-                # copy that is no longer live is served eagerly rather than replayed.
+                # copy that is no longer live is dropped rather than kept: the capture below
+                # rebuilds it against the copy that is live now, and replay resumes.
+                self._drop_trace(prepared)
+            if prepared["trace"] is None:
                 self._prefill_trace_step(prepared)
                 self.counters["prefill_eager_calls"] += 1
             else:
@@ -564,7 +568,7 @@ class Qwen38Generator:
             batch_size=batch, capacity=min(self.model.context, ((capacity + 31) // 32) * 32)
         )
         self._slot_prefix_len = [0] * self.cache.batch_size
-        self._state_snapshots.clear()
+        self._reserve_snapshot_pool()
         self.positions = self.model.upload(
             torch.zeros(batch, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
         )
@@ -600,6 +604,9 @@ class Qwen38Generator:
             self.model.suspend_decode_bucket()
         if self.cache is not None:
             self.model.reset_cache(self.cache)
+            # The held lengths summarise state that is now zero. A stale one would let a
+            # continuation chunk pass validate_prefix_continuity against a slot holding nothing.
+            self._slot_prefix_len = [0] * self.cache.batch_size
         if self.positions is not None:
             self._copy(torch.zeros(self.cache.batch_size, dtype=torch.int32), self.positions, "position_refreshes")
         self._copy(torch.zeros(1, 1, 1, 32, dtype=torch.int32), self.tokens, "token_refreshes")
@@ -640,16 +647,20 @@ class Qwen38Generator:
         starts = [0] * len(slots) if start_pos is None else list(start_pos)
         if len(starts) != len(slots) or len(slots) != len(prompt_lens) or len(set(slots)) != len(slots):
             raise ValueError("Each prompt must name one distinct fixed slot")
+        # The per-row loop below compiles one program and uploads one set of selectors per chunk,
+        # so the set has to name every chunk. Naming only the first lets a tail chunk's buffers
+        # land while a decode trace still holds the addresses they would take.
         signatures = {
             (
                 kv_cache.batch_size,
                 tuple(page_table.shape),
                 slot,
-                start,
-                prefill_bucket(min(4096, length), kv_cache.capacity, start),
+                start + offset,
+                prefill_bucket(min(4096, length - offset), kv_cache.capacity, start + offset),
                 return_all_logits,
             )
             for slot, start, length in zip(slots, starts, prompt_lens)
+            for offset in range(0, length, 4096)
         }
         batched_shape = (
             batched_prefill_shape(slots, starts, prompt_lens, return_all_logits)
@@ -846,6 +857,29 @@ class Qwen38Generator:
         # warm. Their transient outputs die here, before any decode replay.
         self._recurrent_reset_warmed = self.cache
 
+    def _reserve_snapshot_pool(self):
+        """Allocate every snapshot the store can ever hold, against the cache just bound.
+
+        A snapshot is written while the server is mid-request, with a decode trace live, and the
+        allocator cannot place a buffer safely beside one: it would be free to take an address
+        replay already writes. Both callers reach this with the traces released, so taking the
+        whole store here is the one moment it can be taken at all. The pool is what the shared
+        KV budget already pays for -- it subtracts a snapshot per entry whether or not one is
+        ever saved -- so reserving it eagerly costs nothing that was not already spent.
+        """
+        self._state_snapshots.clear()
+        self._snapshot_pool = []
+        if self.cache is None:
+            return
+        for _ in range(MAX_PREFIX_SNAPSHOTS):
+            rows = {}
+            for index, state in enumerate(self.cache.layers):
+                for name in ("conv", "recurrent"):
+                    tensor = getattr(state, name)
+                    if tensor is not None:
+                        rows[(index, name)] = ttnn.clone(tensor[0:1])
+            self._snapshot_pool.append(rows)
+
     @property
     def prefix_snapshot_capacity(self):
         """How many prefixes the caller may keep alive at once."""
@@ -860,19 +894,26 @@ class Qwen38Generator:
         if not 0 <= slot < self.cache.batch_size:
             raise ValueError("Snapshot slot lies outside the bound cache")
         held = self._slot_prefix_len[slot]
-        if held <= 0 or len(self._state_snapshots) >= MAX_PREFIX_SNAPSHOTS:
+        if held <= 0 or not self._snapshot_pool:
             return None
         if getattr(self.model, "_resident_decode_bucket", None) is not None:
             # The resident bucket, not the scheduler cache, holds the live rows.
             self.model.suspend_decode_bucket()
-        rows = {}
+        rows = self._snapshot_pool.pop()
         for index, state in enumerate(self.cache.layers):
             for name in ("conv", "recurrent"):
                 tensor = getattr(state, name)
                 if tensor is not None:
-                    # Clone, as _capture does: a stored slice still tracks later writes to the
-                    # source, so a reset before the restore would hand back zeros.
-                    rows[(index, name)] = ttnn.clone(tensor[slot : slot + 1])
+                    # Into the reserved buffer, never a fresh one: a slice of its own would
+                    # allocate here, which is exactly what the live decode trace forbids. The copy
+                    # is also what detaches the row, so a later reset cannot empty the snapshot.
+                    shape = tuple(tensor.shape)
+                    ttnn.slice(
+                        tensor,
+                        [slot] + [0] * (len(shape) - 1),
+                        [slot + 1] + list(shape[1:]),
+                        output_tensor=rows[(index, name)],
+                    )
         handle = self._next_snapshot_handle
         self._next_snapshot_handle += 1
         self._state_snapshots[handle] = (held, rows)
@@ -893,7 +934,9 @@ class Qwen38Generator:
         return True
 
     def free_slot_state(self, handle):
-        self._state_snapshots.pop(handle, None)
+        entry = self._state_snapshots.pop(handle, None)
+        if entry is not None:
+            self._snapshot_pool.append(entry[1])
 
     def reset_recurrent_slots(self, slots):
         """Start new requests without clearing any scheduler-owned attention pages."""
@@ -1188,7 +1231,7 @@ class Qwen38Generator:
         self.remaining_steps = None
         self.cache = cache
         self._slot_prefix_len = [0] * cache.batch_size
-        self._state_snapshots.clear()
+        self._reserve_snapshot_pool()
         self.owns_cache = False
         self.positions = self.model.upload(
             torch.zeros(cache.batch_size, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
