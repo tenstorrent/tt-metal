@@ -1180,11 +1180,20 @@ class MTPSpecEngine:
     # Propose
     # --------------------------------------------------------------------- #
     def propose(
-        self, committed_tokens, committed_positions, accepted_counts, page_table, decline=None, cap_blocks=None
+        self,
+        committed_tokens,
+        committed_positions,
+        accepted_counts,
+        page_table,
+        decline=None,
+        cap_blocks=None,
+        keep_kv=None,
     ):
         """Refresh the anchor, reseed the MTP KV of the committed slots, then draft K tokens per user.
         ``decline`` (list[bool] [B]) rows draft nothing: their drafter writes go to scratch and their ids are 0;
-        without it every row must fit. ``cap_blocks``: the caller's real table width (default: page_table's).
+        without it every row must fit. ``keep_kv`` (list[bool] [B]): declined rows that still get their anchor
+        slot's MTP KV, so a row offered drafts again later drafts from a complete history.
+        ``cap_blocks``: the caller's real table width (default: page_table's).
         Returns torch.int32 [B, K]."""
         assert self.captured and self._vfeed is not None, "propose needs a verify first"
         B, T, K = self.B, self.T, self.K
@@ -1200,6 +1209,9 @@ class MTPSpecEngine:
         else:
             decline = [bool(d) for d in decline]
             assert len(decline) == B and all(d or f for d, f in zip(decline, fits)), "a non-declined row does not fit"
+        keep = [False] * B if keep_kv is None else [bool(k) for k in keep_kv]
+        # draft step 0 writes the anchor slot p; a declined row in keep gets it from one more reseed row (i = m)
+        m_kv = [mu + int(d and k) for mu, d, k in zip(m, decline, keep)]
         pt = self._fit(page_table)
         self._check_scratch(pt)
         eager = B == 1 and p[0] > self.eager_reseed_len
@@ -1211,7 +1223,7 @@ class MTPSpecEngine:
                 p = [0 if d else pu for d, pu in zip(decline, p)]
                 pending = [0 if d else t for d, t in zip(decline, pending)]
             self._stage(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-            drafts = self._propose_recorded(ctok, cpos, m, pending, p, pt)
+            drafts = self._propose_recorded(ctok, cpos, m, pending, p, pt, m_kv)
             if any(decline):
                 drafts[torch.tensor(decline)] = 0
             return drafts
@@ -1219,9 +1231,9 @@ class MTPSpecEngine:
 
         self._set_anchor(self._vfeed, m)
         if eager:
-            self._reseed_mtp(ctok, cpos, m)
+            self._reseed_mtp(ctok, cpos, m_kv)
         else:
-            self._reseed_mtp_batched(ctok, cpos, m, pt)
+            self._reseed_mtp_batched(ctok, cpos, m_kv, pt)
         if all(decline):
             return torch.zeros(B, K, dtype=torch.int32)
         if any(decline):  # declined rows draft at position 0 over an all-scratch table; their ids are discarded
@@ -1271,13 +1283,14 @@ class MTPSpecEngine:
         fit = draft_rows_fit(p, K, table_capacity(cap_blocks, self.block_size))
         decline = [(not f) or pd for f, pd in zip(fit, pad)]
         skip, skip_all = propose_skip_plan(self._no_draft, B)
-        # B > 1 keeps the reseed: a row re-offered after a release then drafts from a complete MTP KV
+        # B > 1 still writes skipped rows' MTP KV (keep_kv): a row re-offered after a release has its full history
         if skip_all and B == 1:  # the runner withholds every row's drafts: no anchor/reseed/drafter work
             self.skipped_propose_calls += 1
             self._offered.clear()
             return DraftResult(torch.zeros(B, K, dtype=torch.int32), torch.zeros(B, dtype=torch.int32))
+        keep = [s and not pd for s, pd in zip(skip, pad)]
         decline = [d or s for d, s in zip(decline, skip)]
-        drafts = self.propose(ctok, cpos, acc, page_table, decline=decline, cap_blocks=cap_blocks)
+        drafts = self.propose(ctok, cpos, acc, page_table, decline=decline, cap_blocks=cap_blocks, keep_kv=keep)
         num_valid = torch.tensor([0 if d else K for d in decline], dtype=torch.int32)
         self._offered = {u for u in range(B) if decline[u] is False}
         return DraftResult(drafts, num_valid)
@@ -1376,13 +1389,13 @@ class MTPSpecEngine:
         ttnn.deallocate(h)
         return outs
 
-    def _propose_recorded(self, ctok, cpos, m, pending, p, pt):
+    def _propose_recorded(self, ctok, cpos, m, pending, p, pt, m_kv=None):
         """Stage the drafter trace's inputs (host->device copies only; _mtp_pt already staged), replay, read ids.
-        The reseed rows always run (padding-only when every m == 0)."""
+        The reseed rows always run (padding-only when every m == 0). ``m_kv``: reseed row counts (default m)."""
         B, T, K, model = self.B, self.T, self.K, self.model
         stage, bf, rm, tile = self._stage, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
         stage(anchor_selector(m, B, T), self._anchor_sel, bf, tile)
-        plan = reseed_row_plan(ctok, cpos, m, B, T)
+        plan = reseed_row_plan(ctok, cpos, m if m_kv is None else m_kv, B, T)
         rtok, rpos, rpt = reseed_rows_host(plan, pt, T, self.nb, self._scratch_block)
         rcos, rsin = model._rope_tp_cos_sin_decode_torch(rpos)
         stage(rtok, self._dr_rs_tok, ttnn.uint32, rm)

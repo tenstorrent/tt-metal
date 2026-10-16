@@ -574,7 +574,9 @@ def test_propose_all_marked_skips_only_at_b1(B):
     if B == 1:
         assert e.skipped_propose_calls == 1 and not calls
     else:
-        assert e.skipped_propose_calls == 0 and calls[0]["decline"] == [True, True]
+        assert (
+            e.skipped_propose_calls == 0 and calls[0]["decline"] == [True, True] and calls[0]["keep_kv"] == [True, True]
+        )
 
 
 def test_decode_forward_remap_after_validation(expect_error):
@@ -749,3 +751,55 @@ def test_prepare_decode_after_record_prefill_refused(expect_error):
     )
     with expect_error(AssertionError, "prepare_decode after record_prefill"):
         MTPSpecEngine.prepare_decode(e)
+
+
+@pytest.mark.parametrize("recorded", [False, True])
+def test_propose_writes_anchor_kv_of_kept_rows(recorded, monkeypatch):
+    """A declined row in keep_kv still gets MTP KV at its anchor slot p (one more reseed row, i = m)."""
+    import ttnn
+
+    B, K = 3, 2
+    staged, reseeds = {}, []
+    model = types.SimpleNamespace(
+        _fit_spec_page_table=lambda pt, nb: torch.as_tensor(pt, dtype=torch.int32),
+        _rope_tp_cos_sin_decode_torch=lambda pos: (None, None),
+    )
+    e = _bare_engine(
+        B,
+        K,
+        captured=True,
+        nb=4,
+        model=model,
+        _vfeed="feed",
+        _scratch_block=99,
+        eager_reseed_len=10**9,
+        recorded_drafter=recorded,
+        _dr_trace="trace",
+        mesh=None,
+        mtp_extra_steps=0,
+        _hp_buf=None,
+    )
+    for name in ("_anchor_sel", "_dr_rs_tok", "_dr_rs_pos", "_dr_rs_pt", "_dr_rs_cos", "_dr_rs_sin", "_dr_tok0"):
+        setattr(e, name, name)
+    e._mtp_pt = "_mtp_pt"
+    e._dr_pos = e._dr_cos = e._dr_sin = e._dr_outs = [None] * K
+    e._stage = lambda host, buf, *a: staged.__setitem__(buf, host) if isinstance(buf, str) else None
+    e._stage_mtp_tables = e._set_anchor = lambda *a, **k: None
+    e._reseed_mtp_batched = lambda ctok, cpos, m, pt: reseeds.append(list(m))
+    e._draft = lambda *a: torch.zeros(B, K, dtype=torch.int32)
+    e._id_to_host = lambda t: [0] * B
+    monkeypatch.setattr(ttnn, "execute_trace", lambda *a, **k: None)
+    ctok = torch.tensor([[11, -1, -1], [21, -1, -1], [31, -1, -1]])
+    cpos = torch.tensor([[10, -1, -1], [20, -1, -1], [30, -1, -1]])
+    pt = torch.arange(1, 13, dtype=torch.int32).reshape(B, 4)
+    acc = torch.ones(B, dtype=torch.int32)
+    MTPSpecEngine.propose(
+        e, ctok, cpos, acc, pt, decline=[True, True, False], cap_blocks=4, keep_kv=[True, False, False]
+    )
+    if recorded:
+        tok = staged["_dr_rs_tok"].reshape(-1).tolist()
+        rows = list(zip(tok, staged["_dr_rs_pos"].tolist(), staged["_dr_rs_pt"][:, 0].tolist()))
+        assert rows[0] == (11, 9, 1), "kept row: pending token at anchor slot p = 9 over its own table"
+        assert all(r == (0, 0, 99) for r in rows[1:]), "every other reseed row pads to scratch"
+    else:
+        assert reseeds == [[1, 0, 0]]

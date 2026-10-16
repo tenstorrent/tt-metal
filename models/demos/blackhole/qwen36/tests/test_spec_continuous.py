@@ -56,16 +56,18 @@ def _setup(mesh_device):
 class BatchDriver:
     """Host mirror of the plugin runner at B > 1 (greedy); row == state slot, None = padding row."""
 
-    def __init__(self, eng, seed, lookahead=True, drafts=True):
+    def __init__(self, eng, seed, lookahead=True, drafts=True, recycle=True):
         self.eng = eng
         self.lookahead = lookahead  # False: a row's blocks cover only its real tokens (no lookahead, as ngram)
         self.drafts = drafts  # False: proposals are withheld, every step verifies n = 0
+        self.recycle = recycle  # False: finished requests keep their blocks, so their KV can be read after the run
         self.reqs = [None] * B
         g = torch.Generator().manual_seed(seed)
         self.free = (1 + torch.randperm(NUM_BLOCKS - 1, generator=g)).tolist()
         self.outs = {}
         self.steps = 0
         self.stats = []
+        self.blocks_of = {}
 
     def _blocks_for(self, req, last_pos):
         """[NB] int32 row covering positions up to last_pos + (1+K) + (K+1) lookahead (up to last_pos without
@@ -84,7 +86,9 @@ class BatchDriver:
         req = self.reqs[row]
         self.eng.release(row)
         self.outs[req["rid"]] = req["out"]
-        self.free.extend(req["blocks"])
+        self.blocks_of[req["rid"]] = list(req["blocks"])
+        if self.recycle:
+            self.free.extend(req["blocks"])
         self.reqs[row] = None
 
     def admit(self, row, rid, prompt, max_new=MAX_NEW):
@@ -160,7 +164,7 @@ class BatchDriver:
         for r in live:
             if len(self.reqs[r]["out"]) >= self.reqs[r]["max_new"]:
                 self._finish(r)
-        self.stats.append({"live": live, "n": ns, "m": ms, "cross": cross})
+        self.stats.append({"live": live, "n": ns, "m": ms, "cross": cross, "no_draft": sorted(eng._no_draft)})
         self.steps += 1
 
     def remap(self, perm):
@@ -197,6 +201,16 @@ def _assert_same(name, got, ref):
     if got != ref:
         i = next((j for j in range(min(len(got), len(ref))) if got[j] != ref[j]), min(len(got), len(ref)))
         raise AssertionError(f"{name}: first divergence at {i}\n got {got}\n ref {ref}")
+
+
+def _mtp_kv_rows(eng, blocks, start, stop):
+    """Device-0 MTP K and V rows [stop - start, heads, head_dim] at positions start..stop-1 over ``blocks``."""
+    att = eng.mtp.attention
+    out = []
+    for cache in (att.paged_k, att.paged_v):
+        c = ttnn.to_torch(ttnn.get_device_tensors(cache)[0]).float()
+        out.append(torch.stack([c[blocks[q // BLOCK_SIZE], :, q % BLOCK_SIZE] for q in range(start, stop)]))
+    return out
 
 
 @run_for_blackhole()
@@ -346,3 +360,46 @@ def test_padded_columns_past_reservation(mesh_device):
         assert mesh_device.num_program_cache_entries() == n_prog, "a program compiled after capture"
     finally:
         mesh_device.set_program_cache_misses_allowed(True)
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_withheld_rows_keep_mtp_kv(mesh_device):
+    """Rows marked no_draft (drafts withheld past the streak) still write their MTP KV: the drafter cache over the
+    generated positions matches a run where no row is ever marked."""
+    model, eng, tokenizer, prompts = _setup(mesh_device)
+    n_prog = mesh_device.num_program_cache_entries()
+    mesh_device.set_program_cache_misses_allowed(False)
+    streak = eng.no_draft_streak
+    # rid 2 joins unmarked while rids 0 and 1 are marked: the recorded drafter then runs with kept rows
+    sched = {0: [(0, 0, prompts[0]), (3, 1, prompts[3])], 20: [(5, 2, prompts[5])]}
+    runs = {}
+    try:
+        for name, limit, seed in (("unmarked", 10**9, 9), ("marked", streak, 10)):
+            eng.no_draft_streak = limit
+            drv = BatchDriver(eng, seed=seed, drafts=False, recycle=False)
+            outs = drv.run(sched)
+            marked = (
+                max(len(s["no_draft"]) for s in drv.stats),
+                any(0 < len(s["no_draft"]) < len(s["live"]) for s in drv.stats),
+            )
+            kv = {}
+            for rid, r in ((0, 0), (1, 3), (2, 5)):
+                P = len(prompts[r])
+                # anchor slots P .. P + len(out) - 2 (one per step); the last drafts past them are junk
+                kv[rid] = _mtp_kv_rows(eng, drv.blocks_of[rid], P, P + len(outs[rid]) - 1)
+            runs[name] = (outs, marked, kv)
+    finally:
+        eng.no_draft_streak = streak
+        mesh_device.set_program_cache_misses_allowed(True)
+    assert runs["unmarked"][1][0] == 0 and runs["marked"][1] == (3, True), "rows not marked no_draft as expected"
+    for rid in (0, 1, 2):
+        _assert_same(f"request {rid} marked vs unmarked", runs["marked"][0][rid], runs["unmarked"][0][rid])
+        for which, a, b in zip("KV", runs["unmarked"][2][rid], runs["marked"][2][rid]):
+            cos = torch.nn.functional.cosine_similarity(a.flatten(1), b.flatten(1), dim=1)
+            worst = int(cos.argmin())
+            logger.info(f"[mtp_kv] request {rid} {which}: min cos {float(cos.min()):.5f} at offset {worst}")
+            assert float(cos.min()) > 0.99, f"request {rid}: MTP {which} differs at generated offset {worst}"
+    assert mesh_device.num_program_cache_entries() == n_prog, "a program compiled after capture"
