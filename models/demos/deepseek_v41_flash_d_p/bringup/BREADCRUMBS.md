@@ -732,3 +732,22 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - OV-4: DS41-20 already states the F73 fix; nothing to change.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_experts.py`
   (sweep: `BRINGUP_IMPL=mutations` in front; noise slopes: `BRINGUP_IMPL=mutate:noise1e-2 BRINGUP_MUTATE_STEP=experts`).
+
+## S.swa_engram.15 test review (layer 1, scaled, attempt 1)
+- Freeze failed: with BRINGUP_IMPL=reference only `swap_router_vs_golden` failed (0.984586 < 0.99): the rendered test
+  lacks test 14's router checks (DS41-32). Carried `_router_checks` over unchanged.
+- Experts (DS41-33): vs golden PCC is 0.990793 on the CPU (device 0.990515), 0.0008 above 0.99, because 12.4 % of
+  rows run other experts. `_experts_checks`: PCC >= 0.98 over all rows; on the rows whose routing (the swapped
+  router's output, kept in `_ROUTING` by the router's check, which runs first) keeps the golden's support:
+  reselected <= 0.25, rel <= 0.09, row <= 0.154, ratio 1 +- 0.092 (2 x the CPU chain's 0.045 / 0.077 / 0.046),
+  bias 0.01.
+- Experts vs the CPU step: mutate:bf16 control failed the framework's fixed row-ratio limit (1 +- 0.02; control
+  [0.966, 1.013], worst row 0.047 vs 0.05). `_Limits` proxy gives `_check_step` row 0.094 / ratio 0.068 (2 x the
+  control) for the experts only; rel (0.058) and bias (0.01) stay the framework's. noise1e-2 passed every check
+  (rel 0.0100); added DS41-22's row slope >= 0.35 (device 0.709, control 0.61, noise 0.000).
+- Results: reference PASS, stub FAIL, mutate:bf16 PASS, mutate:{noise1e-2, scale1.02, scale0.98, halfswap,
+  rowshift, quarterzero, sign} (BRINGUP_MUTATE_STEP=experts) all FAIL; gate (device) PASS: pcc_swap_out 0.999781,
+  experts vs CPU rel 0.0024, tail rel 0.0003. Table in the test docstring.
+- OV-4: DS41-20 already states the F73 fix; nothing to change.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_15_experts.py`
+  (CPU: `BRINGUP_IMPL=reference` / `stub` / `mutate:<kind> BRINGUP_MUTATE_STEP=experts` in front).
