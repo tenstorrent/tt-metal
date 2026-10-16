@@ -13,8 +13,11 @@ from transformers import Gemma4ImageProcessor
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.gemma4.tests.test_factory import skip_unless_siglip_vision
 from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
 from models.demos.gemma4.tt.vision.vision_patch_embedder import VisionPatchEmbedder
+
+pytestmark = skip_unless_siglip_vision()
 
 
 @torch.no_grad()

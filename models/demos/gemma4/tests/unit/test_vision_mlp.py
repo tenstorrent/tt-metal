@@ -10,11 +10,14 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.gemma4.tests.test_factory import skip_unless_siglip_vision
 from models.demos.gemma4.tt.vision.vision_mlp import Gemma4VisionMLP
 from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
+
+pytestmark = skip_unless_siglip_vision()
 
 
 @torch.no_grad()

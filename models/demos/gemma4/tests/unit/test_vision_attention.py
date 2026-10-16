@@ -12,12 +12,15 @@ from transformers import Gemma4ImageProcessor
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.gemma4.tests.test_factory import skip_unless_siglip_vision
 from models.demos.gemma4.tt.vision.vision_attention import VisionAttention
 from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import map_hf_to_meta_keys, standardize_hf_keys_multimodal
 from models.tt_transformers.tt.model_config import ModelArgs
+
+pytestmark = skip_unless_siglip_vision()
 
 
 # ---------------------------------------------------------------------------

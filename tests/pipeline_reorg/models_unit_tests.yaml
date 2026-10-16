@@ -499,6 +499,7 @@
     # The cheap pure-Python test_gemma4_make_sampling_args_* regression (no device)
     # does not match "test_sampling_" and is intentionally still run.
     pytest --timeout 600 \
+      --ignore-glob='*/tests/unit/test_vision_*.py' \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
@@ -541,6 +542,7 @@
     export TT_METAL_WATCHER=30
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-E4B-it
     pytest --timeout 600 \
+      --ignore-glob='*/tests/unit/test_vision_*.py' \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
@@ -572,24 +574,29 @@
     export TT_METAL_WATCHER=30
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-26B-A4B-it
+    # Only the MoE-specific paths: the generic Gemma-4 unit suite (attention,
+    # norms, page tables, spec-decode and dFlash host logic, ...) is identical
+    # across the variants and runs once, on the 31B config. The 26B keeps the
+    # expert / router / shared-MLP tests and the layer + single-layer-model tests
+    # that assemble them (the 16/8-head attention config itself is covered by the 12B).
     pytest --timeout 900 \
-      --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
-      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
-      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
-      models/demos/gemma4/tests/unit/
+      models/demos/gemma4/tests/unit/test_experts.py \
+      models/demos/gemma4/tests/unit/test_moe.py \
+      models/demos/gemma4/tests/unit/test_router.py \
+      models/demos/gemma4/tests/unit/test_shared_mlp.py \
+      models/demos/gemma4/tests/unit/test_shared_mlp_intermediate.py \
+      models/demos/gemma4/tests/unit/test_layer.py \
+      models/demos/gemma4/tests/unit/test_model.py
   model: gemma-4-26b-a4b
   model_family: Gemma
   skus:
     wh_llmbox:
-      timeout: 30
+      timeout: 14
       tier: 2
     bh_quietbox_2:
-      timeout: 15
+      timeout: 8
       tier: 1
     # bh_galaxy: temporarily disabled — sliding-1x32 path hits an unrecoverable
     # ethernet / fabric hang on Blackhole Galaxy that surfaces during
@@ -608,7 +615,12 @@
     uv pip install -r models/demos/gemma4/requirements.txt
     export TT_METAL_WATCHER=30
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-31B-it
+    # The SigLIP vision-tower unit tests (test_vision_*.py) load the real HF
+    # vision weights, so they cannot run on the checked-in config.json; the
+    # weight-backed e2e jobs run them. The unified (encoder-free) embedder and
+    # multimodal-merge tests are weight-free and stay here.
     pytest --timeout 900 \
+      --ignore-glob='*/tests/unit/test_vision_*.py' \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
@@ -622,10 +634,10 @@
   model_family: Gemma
   skus:
     wh_llmbox:
-      timeout: 25
+      timeout: 20
       tier: 2
     bh_quietbox_2:
-      timeout: 15
+      timeout: 12
       tier: 1
     # bh_galaxy: temporarily disabled — same Blackhole Galaxy ethernet / fabric
     # hang as Gemma-4-26B-A4B above (surfaces during sliding-1x32 attention
@@ -642,21 +654,24 @@
     export TT_METAL_WATCHER=30
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-12B-it
+    # The 12B-specific paths: attention / layer / single-layer-model at the
+    # 12B dims (16 query heads, 8 KV heads: the configs the 31B's 32/16 does not
+    # exercise) and the unified (encoder-free) image / audio embedders with the
+    # soft-token merge. The generic host suite runs once, on the 31B config.
     pytest --timeout 900 \
-      --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
-      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
-      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
-      models/demos/gemma4/tests/unit/
+      models/demos/gemma4/tests/unit/test_attention.py \
+      models/demos/gemma4/tests/unit/test_layer.py \
+      models/demos/gemma4/tests/unit/test_model.py \
+      models/demos/gemma4/tests/unit/test_unified_vision_embedder.py \
+      models/demos/gemma4/tests/unit/test_unified_audio_embedder.py \
+      models/demos/gemma4/tests/unit/test_multimodal_merge.py
   model: gemma-4-12b
   model_family: Gemma
   skus:
     bh_quietbox_2:
-      timeout: 15
+      timeout: 8
       tier: 1
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
