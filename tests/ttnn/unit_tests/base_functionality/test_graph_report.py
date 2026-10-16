@@ -6864,7 +6864,8 @@ class TestReportModesDuringTraceCapture:
 def test_multihost_graph_report(request):
     """
     Smoke test for graph reports in a multi-process (multi-host) run: every rank captures its own graph and rank 0
-    merges all of them into one db.sqlite, with each rank's rows tagged by rank.
+    merges all of them into one db.sqlite, with each rank's rows tagged by rank. The report is left under
+    generated/ttnn/reports, so this test also serves as a quick way to produce a small multi-rank report.
 
     Skipped unless launched with tt-run on at least two ranks, e.g. on a T3K:
         tt-run --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml \\
@@ -6892,7 +6893,11 @@ def test_multihost_graph_report(request):
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
-            ttnn.relu(ttnn.to_device(x, mesh_device))
+            # A few cheap ops, so each rank's part of the report has more than one operation.
+            x = ttnn.to_device(x, mesh_device)
+            y = ttnn.relu(x)
+            y = ttnn.add(y, x)
+            ttnn.multiply(y, x)
             ttnn.synchronize_device(mesh_device)
 
     config_path = report_path / f"config_{rank + 1}_of_{world_size}.json"
@@ -6902,15 +6907,19 @@ def test_multihost_graph_report(request):
 
     db_path = report_path / "db.sqlite"
     assert db_path.exists(), f"no db.sqlite written under {report_path}"
+    op_names = ("relu", "add", "multiply")
     conn = sqlite3.connect(db_path)
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT rank FROM operations WHERE name LIKE '%relu%' ORDER BY rank")
-        relu_ranks = [row[0] for row in cursor.fetchall()]
+        op_ranks = {}
+        for op_name in op_names:
+            cursor.execute("SELECT DISTINCT rank FROM operations WHERE name LIKE ? ORDER BY rank", (f"%{op_name}%",))
+            op_ranks[op_name] = [row[0] for row in cursor.fetchall()]
         cursor.execute("SELECT DISTINCT rank FROM devices ORDER BY rank")
         device_ranks = [row[0] for row in cursor.fetchall()]
     finally:
         conn.close()
     all_ranks = list(range(world_size))
-    assert relu_ranks == all_ranks, f"relu recorded for ranks {relu_ranks}, expected {all_ranks}"
+    for op_name in op_names:
+        assert op_ranks[op_name] == all_ranks, f"{op_name} recorded for ranks {op_ranks[op_name]}, expected {all_ranks}"
     assert device_ranks == all_ranks, f"devices recorded for ranks {device_ranks}, expected {all_ranks}"
