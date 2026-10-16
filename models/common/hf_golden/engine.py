@@ -308,6 +308,12 @@ class LayerwiseGolden:
         ap.add_argument(
             "--attn-chunk", type=int, default=0, help="attention on this many query rows at a time (0: all at once)"
         )
+        ap.add_argument(
+            "--prefill-chunk",
+            type=int,
+            default=0,
+            help="chunked prefill: each layer on this many rows at a time through the cache (0: whole sequence)",
+        )
         ap.add_argument("--prefix", default=self.prefix, help="text prefilled before the token cache ('' for none)")
         ap.add_argument("--device", default="auto", help="auto (cuda if visible, else cpu), cpu, cuda, cuda:N")
         ap.add_argument("--compute-dtype", default="bfloat16", choices=("bfloat16", "float32"))
@@ -421,14 +427,20 @@ class LayerwiseGolden:
             save({"model.embed_tokens.output": hidden}, "hidden/embed.safetensors")
             state = self.prepare(backbone, text_config, hidden, position_ids)
             state.input_ids = input_ids
+            self.chunk_device = device
+            if args.prefill_chunk and args.isl % args.prefill_chunk:
+                print(f"[prefill-chunk] note: isl {args.isl} is not a multiple of {args.prefill_chunk}", flush=True)
 
             for i in range(n_layers):
                 ts = time.time()
                 layer = load(1 + i)
                 captured: dict[str, torch.Tensor] = {}
                 handles = self.register_hooks(i, layer, captured, args.sublayers)
-                output = layer(hidden, **self.layer_kwargs(i, kinds[i], state))
-                hidden = self.after_layer(i, output, state)
+                if args.prefill_chunk:
+                    hidden = self.chunked_layer(i, layer, hidden, kinds[i], state, captured, args.prefill_chunk)
+                else:
+                    output = layer(hidden, **self.layer_kwargs(i, kinds[i], state))
+                    hidden = self.after_layer(i, output, state)
                 for h in handles:
                     h.remove()
 
@@ -482,6 +494,7 @@ class LayerwiseGolden:
             "fp32_tensors": ["logits", *self.recipe.keep_fp32],
             "attn_implementation": args.attn,
             "attn_chunk": args.attn_chunk or None,
+            "prefill_chunk": args.prefill_chunk or None,
             "experts_implementation": getattr(text_config, "_experts_implementation", None),
             "device": torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu",
             "threads": torch.get_num_threads() if device.type == "cpu" else None,
@@ -495,6 +508,54 @@ class LayerwiseGolden:
         (out / "metadata.json").write_text(json.dumps(metadata, indent=2, default=str))
         share(out.parent, args.root)  # the token cache and the trace
         print(f"[done] {out}  ({elapsed / 60:.1f} min)", flush=True)
+        return out
+
+    def chunked_layer(self, i, layer, hidden, kind, state, captured, chunk):
+        """Layer ``i`` as a chunked prefill: rows [s, e) at a time, each chunk attending to keys [0, e) through the
+        cache, which grows chunk by chunk (HF's own multi-step prefill path). Every row-local op then sees chunk-sized
+        operands whatever the ISL, and attention a key length set by the chunk, not by N; so for any two ISLs that are
+        multiples of ``chunk`` the shared prefix is computed with identical shapes. The kwargs the upstream model passes
+        for the whole sequence are cut to the chunk (chunk_kwargs); hooks fire per chunk and are concatenated along
+        the token dimension."""
+        n = hidden.shape[1]
+        kwargs = self.layer_kwargs(i, kind, state)
+        if any(v is not None for k, v in state.carry.items() if k not in ("cache_position",)):
+            raise SystemExit(f"--prefill-chunk: layer {i} carries {sorted(state.carry)} across layers; not supported")
+        outs, parts = [], []
+        for s in range(0, n, chunk):
+            e = min(s + chunk, n)
+            captured.clear()
+            output = layer(hidden[:, s:e], **self.chunk_kwargs(kwargs, s, e, n))
+            outs.append(self.after_layer(i, output, state))
+            parts.append(dict(captured))
+        captured.clear()
+        for key in parts[0]:
+            pieces = [p[key] for p in parts]
+            sizes = [min(s + chunk, n) - s for s in range(0, n, chunk)]
+            # the token dimension: the one whose size follows the chunk lengths (dim 1 of [1, N, ...], dim 0 of [N, ...])
+            dim = next(d for d in range(pieces[0].dim()) if all(p.shape[d] == m for p, m in zip(pieces, sizes)))
+            captured[key] = torch.cat(pieces, dim=dim)
+        return torch.cat(outs, dim=1)
+
+    def chunk_kwargs(self, kwargs: dict, s: int, e: int, n: int) -> dict:
+        """The whole-sequence layer kwargs cut to query rows [s, e): 4D masks to rows s:e and keys :e (the cache holds
+        exactly e keys once this chunk is appended), position tensors and (cos, sin) to positions s:e. A whole-sequence
+        mask of None (sdpa's is_causal shortcut) is made explicit, since a chunk's causal mask is offset."""
+        out = {}
+        for k, v in kwargs.items():
+            if k == "attention_mask":
+                if v is None:
+                    rows = torch.arange(s, e, device=self.chunk_device)[:, None]
+                    v = (torch.arange(e, device=self.chunk_device)[None, :] <= rows)[None, None]
+                elif torch.is_tensor(v) and v.dim() == 4:
+                    v = v[:, :, s:e, :e]
+                else:
+                    raise SystemExit(f"--prefill-chunk: unsupported attention_mask {type(v)} {getattr(v, 'shape', '')}")
+            elif k in ("position_ids", "cache_position") and torch.is_tensor(v):
+                v = v[..., s:e]
+            elif k == "position_embeddings" and v is not None:
+                v = tuple(t[:, s:e] for t in v)
+            out[k] = v
         return out
 
     # ---- pieces of the engine a subclass may need to adjust ----------------------------------------------------

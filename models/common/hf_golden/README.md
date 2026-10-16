@@ -182,6 +182,12 @@ Defaults:
 - Sliding-window layers store K/V for every position. The device needs only the last window.
 - Models with attention sinks (gpt-oss, MiMo, DeepSeek-V4, Hy4) run `--attn eager`, the only kernel that applies the
   sinks.
+- `--prefill-chunk N` runs every layer as a chunked prefill: N rows at a time, each chunk attending to keys [0, end)
+  through the growing cache (HF's multi-step prefill path). Every row-local op then has the same shapes whatever the
+  ISL, so traces at any two ISLs that are multiples of N share their prefix bit for bit: MiMo-V2.6-Flash-RL at isl
+  10240 vs 56320 with N = 5120, all 48 layers' hidden states, K/V, router logits and expert picks (unchunked, its
+  fp32 router logits round by row count and routing drifts). Same ppl (4.414 vs 4.413). Selftested on MiMo, Hy3 and
+  Muse-Glimmer; refused for models that hand a top-k from layer to layer (shared DSA indexers).
 - `--attn-chunk N` runs the model's own attention on N query rows at a time, so no [heads, N, N] score matrix exists
   whole (needed past ~10k for eager attention, and for MLA models whose head sizes keep sdpa on its math path). Each
   query row's softmax reads only its own row, so traces are bit-identical to unchunked ones (checked at isl 8192 on
