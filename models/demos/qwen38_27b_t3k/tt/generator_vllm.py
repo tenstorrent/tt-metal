@@ -65,8 +65,9 @@ class Qwen38ForCausalLM:
     # No explicit-seed stream reaches int32 overflow or manual_seed's -1 sentinel.
     _SEED_MODULUS = (1 << 31) - _MAX_CONTEXT - 1
 
-    # Half the store's hard cap, so a snapshot taken before the displaced one is freed -- the
-    # free travels a step behind -- still finds room rather than being dropped.
+    # Half the store's hard cap. A displaced handle is freed a step behind the save that
+    # replaced it, and one batched prefill snapshots every eligible row at once, so the store
+    # has to cover the index plus a whole step's worth of handles still awaiting their free.
     _PREFIX_SNAPSHOTS = MAX_PREFIX_SNAPSHOTS // 2
 
     model_capabilities = {
