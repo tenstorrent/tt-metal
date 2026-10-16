@@ -192,6 +192,26 @@ def test_reshape_codegen_cache_hit_new_addresses(device, path, in_shape, out_sha
     _assert_bits(other.reshape(out_shape), ttnn.to_torch(second), dtype)
 
 
+@pytest.mark.parametrize("entry", ["auto", "forced"])
+@pytest.mark.parametrize(
+    "big_shape,view_shape,out_shape",
+    [([1, 128, 1024], [1, 64, 1024], [1, 64, 8, 128]), ([2, 128, 1024], [2, 64, 1024], [2, 64, 8, 128])],
+    ids=["b1", "b2"],
+)
+def test_reshape_codegen_view_on_larger_buffer(device, entry, big_shape, view_shape, out_shape):
+    source = _make(big_shape, ttnn.bfloat16)
+    x = _to_device(device, source, ttnn.bfloat16, ttnn.TILE_LAYOUT, _DRAM)
+    # Shrinking the volume with the last dim kept returns a view on x's whole buffer.
+    view = ttnn.reshape(x, ttnn.Shape(view_shape))
+    assert view.buffer_address() == x.buffer_address()
+    # The size check under test runs only on a program cache miss.
+    device.clear_program_cache()
+    reshape = ttnn.reshape if entry == "auto" else _force_codegen
+    out = reshape(view, out_shape, memory_config=_DRAM)
+    expected = source.flatten()[: torch.Size(view_shape).numel()].reshape(out_shape)
+    _assert_bits(expected, ttnn.to_torch(out), ttnn.bfloat16)
+
+
 def _l1_hog(device, bytes_per_core):
     grid = device.compute_with_storage_grid_size()
     rows = grid.x * grid.y * bytes_per_core // 2048

@@ -39,9 +39,11 @@ void ReshapeCodegenDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.sub_core_grids);
     TT_FATAL(reason == nullptr, "ReshapeCodegen: {}", reason);
     const auto& layout = operation_attributes.plan.tile_rows.layout;
+    // A view keeps its source's buffer, so the buffer may hold more pages than the plan reads; interleaved
+    // page i sits at the same address either way, so only a short buffer is an error.
     TT_FATAL(
-        input.buffer()->num_pages() == layout.num_input_pages,
-        "Reshape input has {} tiles, the tile-row plan expects {}",
+        input.buffer()->num_pages() >= layout.num_input_pages,
+        "Reshape input has {} tiles, the tile-row plan needs at least {}",
         input.buffer()->num_pages(),
         layout.num_input_pages);
 }
