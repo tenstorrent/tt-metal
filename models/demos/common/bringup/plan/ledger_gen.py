@@ -294,8 +294,9 @@ def generate(spec, ref=None, early: bool = False) -> dict:
             "Official arithmetic per step (official_taps hook + official_taps.yaml; the noise floor's reference term)",
             "reference",
             [comp_golden, "R.3"],
-            f"{real}{PY}.testing.official_floor",
+            f"{PY}.testing.official_floor",  # on the checkpoint the goldens come from (scaled on a scaled run)
             {"official_taps_steps": ">= 1", "official_taps_errors": "== 0", "official_taps_unmapped": "== 0"},
+            paths=ref_paths,
         )
         floor_dep = ["R.5"]
     last_swaps = []
