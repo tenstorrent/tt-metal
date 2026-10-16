@@ -2199,3 +2199,27 @@ The weight re-reads drop (in1 exposure 55 -> 22 µs at bs16) but the output writ
 4 -> 37 µs; successive blocks now walk down M, so the writer's rows change every block) and the compute loses ~17 µs
 (no in0 reuse, the in1 load at each N block boundary is not prefetched). Net +40 / +35 µs. Next per the plan: weight
 reads from the bank-adjacent cores (DRAM-sharded weights, `get_optimal_dram_bank_to_logical_worker_assignment`).
+
+## 84. Bank-local weight reads (one core group per DRAM bank): much slower (2026-10-16)
+
+`MinimalMatmulConfig.bank_local_in1` (not kept; `doc/patches/minimal_matmul_bank_local_in1.patch`): the weight DRAM
+width-sharded one shard per bank (FF13: 76 tiles = 38 gate/up pairs per bank); the 12 x 10 grid split into 8 groups of
+15 cores around each bank's optimal worker (`get_optimal_dram_bank_to_logical_worker_assignment`, NOC_0 on this
+P150b: banks 0-3 -> (0,9) (0,0) (0,7) (0,3), banks 4-7 -> (7,9) (7,1) (7,6) (7,4); greedy nearest-worker assignment
+improved by pairwise swaps). The worker reads its bank's shard and forwards it down a nearest-neighbour chain through its
+group; each group splits M 15 ways; the in0 chain of position i links the i-th core of every group. Only the program
+descriptor changes (core -> index map, chain orders, region core sets); the kernels are unchanged. Output matches the
+reference as closely as the default layout (rel. RMSE vs float 0.1740 vs 0.1741). FF13 fused 4,40,8, µs per call:
+
+| | full | no in1 read | compute only |
+|---|---|---|---|
+| bs16 default (interleaved, untransposed) | 1640.9 | 1585.6 | 1555.1 |
+| bs16 bank-local | 2716.3 | 2553.6 | 2056.7 |
+| bs32 default (transposed) | 3079.9 | 3019.2 | |
+| bs32 bank-local | 4923.4 | 4733.9 | 3708.5 |
+
+The weight reads cost more (55 -> 163 µs at bs16): one reader per bank, reading each K block synchronously and
+forwarding it before the next read, has less bandwidth than today's 10-12 readers each pulling from all 8 banks; distance
+is not what limits them. The forwarding structure alone costs ~500 µs (compute only): the in0 chains now hop across the
+chip between groups and cross the in1 chains, where today's are neighbour-to-neighbour. With the N-outer order (§83)
+also negative, the remaining matmul read exposure (FF13 55-72, FF2 bs32 80 µs a call) stays open.

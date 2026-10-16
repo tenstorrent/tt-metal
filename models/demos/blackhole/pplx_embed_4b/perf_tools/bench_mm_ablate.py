@@ -8,7 +8,9 @@
 #        ABL_ONLY="full|no reads" picks variants; MM_BLOCKS=M,K,N,sh,sw overrides the preset's blocks; MM_IN0=L1|DRAM
 #        overrides the in0 placement, MM_OUT=L1|DRAM the output placement, MM_W=sharded|interleaved the weight layout,
 #        MM_TRANSPOSE=0|1 the core-grid orientation (MinimalMatmulConfig.transpose_core_grid), MM_N_OUTER=1 the N-outer
-#        block order with in1 resident (needs doc/patches/minimal_matmul_n_outer.patch, §83).
+#        block order with in1 resident (needs doc/patches/minimal_matmul_n_outer.patch, §83),
+#        MM_BANK_LOCAL=1 bank-local in1 reads (needs doc/patches/minimal_matmul_bank_local_in1.patch, §84;
+#        with MM_W=sharded).
 import os
 import statistics
 import subprocess
@@ -103,6 +105,8 @@ def child(name, B, out_path):
             cfg.transpose_core_grid = os.getenv("MM_TRANSPOSE") == "1"
         if os.getenv("MM_N_OUTER") == "1":
             cfg.n_outer = True
+        if os.getenv("MM_BANK_LOCAL") == "1":  # needs MM_W=sharded
+            cfg.bank_local_in1 = True
         ckc = ttnn.init_device_compute_kernel_config(
             D.arch(), math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=True
         )

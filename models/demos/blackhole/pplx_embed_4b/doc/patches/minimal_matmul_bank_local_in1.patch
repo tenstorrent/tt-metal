@@ -1,0 +1,347 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp
+index 23442c0cb7b..b4a8a06d15c 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp
+@@ -24,6 +24,12 @@ struct MinimalMatmulConfig {
+     // Parallelize M over the grid's x axis and N over y (true) or the reverse (false). Unset: transposed when M > N.
+     // Each axis is padded to a multiple of its core count, so the choice sets the padded work per core.
+     std::optional<bool> transpose_core_grid = std::nullopt;
++
++    // in1 (the weight) DRAM width-sharded with one shard per DRAM bank: the grid splits into one group of cores per
++    // bank around that bank's optimal worker (IDevice::get_optimal_dram_bank_to_logical_worker_assignment), the worker
++    // reads its bank's shard and forwards it through its group, and each group splits M. in1 is only read by the core
++    // next to its bank. Needs the shard width to equal N / banks (in tiles: N_tiles_per_core) and banks | cores.
++    bool bank_local_in1 = false;
+ };
+ 
+ struct MinimalMatmulParams {
+diff --git a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_program_descriptor.cpp b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_program_descriptor.cpp
+index af615117126..207f1bb18c0 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_program_descriptor.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_program_descriptor.cpp
+@@ -122,6 +122,123 @@ CoreCoord clamped_next(const std::vector<CoreCoord>& order, uint32_t index) {
+     return order.at(index >= last ? last : index + 1);
+ }
+ 
++// MinimalMatmulConfig::bank_local_in1: one group of cores per DRAM bank around that bank's optimal worker. Group b
++// carries in1_idx = b (its N range is bank b's shard); a core's in0_idx is its position in its group's in1 chain,
++// which starts at the worker. The in0 chain of position i visits the i-th core of every group, starting at bank 0's.
++struct BankLocalLayout {
++    std::map<CoreCoord, std::pair<uint32_t, uint32_t>> idx;  // core -> (in0_idx, in1_idx)
++    std::vector<std::vector<CoreCoord>> in0_chains;          // [in0_idx] -> cores in chain order
++    std::vector<std::vector<CoreCoord>> in1_chains;          // [in1_idx] -> cores in chain order
++};
++
++BankLocalLayout build_bank_local_layout(const std::vector<CoreCoord>& workers, const CoreCoord& grid_size) {
++    const uint32_t num_banks = workers.size();
++    const uint32_t num_cores = grid_size.x * grid_size.y;
++    TT_FATAL(num_banks > 0 && num_cores % num_banks == 0, "bank_local_in1: {} cores over {} banks", num_cores, num_banks);
++    const uint32_t per_group = num_cores / num_banks;
++    auto dist = [](const CoreCoord& a, const CoreCoord& b) {
++        return static_cast<uint32_t>(
++            (a.x > b.x ? a.x - b.x : b.x - a.x) + (a.y > b.y ? a.y - b.y : b.y - a.y));
++    };
++    for (const auto& w : workers) {
++        TT_FATAL(w.x < grid_size.x && w.y < grid_size.y, "bank_local_in1: worker {} outside the grid", w);
++    }
++    // Greedy: closest (core, bank) pairs first, each bank capped at per_group; workers seed their own group.
++    std::vector<CoreCoord> cores;
++    for (uint32_t y = 0; y < grid_size.y; ++y) {
++        for (uint32_t x = 0; x < grid_size.x; ++x) {
++            cores.push_back({x, y});
++        }
++    }
++    std::map<CoreCoord, uint32_t> group_of;
++    std::vector<uint32_t> fill(num_banks, 0);
++    for (uint32_t b = 0; b < num_banks; ++b) {
++        TT_FATAL(!group_of.contains(workers[b]), "bank_local_in1: worker {} serves two banks", workers[b]);
++        group_of[workers[b]] = b;
++        fill[b]++;
++    }
++    std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> pairs;  // (distance, core index, bank)
++    for (uint32_t c = 0; c < cores.size(); ++c) {
++        for (uint32_t b = 0; b < num_banks; ++b) {
++            pairs.emplace_back(dist(cores[c], workers[b]), c, b);
++        }
++    }
++    std::sort(pairs.begin(), pairs.end());
++    for (const auto& [d, c, b] : pairs) {
++        if (!group_of.contains(cores[c]) && fill[b] < per_group) {
++            group_of[cores[c]] = b;
++            fill[b]++;
++        }
++    }
++    // Pairwise swaps (never moving a worker) while they shorten the total core-to-worker distance.
++    for (bool improved = true; improved;) {
++        improved = false;
++        for (uint32_t i = 0; i < cores.size(); ++i) {
++            for (uint32_t j = i + 1; j < cores.size(); ++j) {
++                const uint32_t bi = group_of[cores[i]], bj = group_of[cores[j]];
++                if (bi == bj || cores[i] == workers[bi] || cores[j] == workers[bj]) {
++                    continue;
++                }
++                if (dist(cores[i], workers[bj]) + dist(cores[j], workers[bi]) <
++                    dist(cores[i], workers[bi]) + dist(cores[j], workers[bj])) {
++                    group_of[cores[i]] = bj;
++                    group_of[cores[j]] = bi;
++                    improved = true;
++                }
++            }
++        }
++    }
++    // in1 chains: from the worker, nearest unvisited group member next (ties: lower y, then lower x).
++    BankLocalLayout layout;
++    layout.in1_chains.resize(num_banks);
++    for (uint32_t b = 0; b < num_banks; ++b) {
++        std::vector<CoreCoord> rest;
++        for (const auto& c : cores) {
++            if (group_of[c] == b && c != workers[b]) {
++                rest.push_back(c);
++            }
++        }
++        auto& chain = layout.in1_chains[b];
++        chain.push_back(workers[b]);
++        while (!rest.empty()) {
++            auto best = std::min_element(rest.begin(), rest.end(), [&](const CoreCoord& a, const CoreCoord& c) {
++                const uint32_t da = dist(a, chain.back()), dc = dist(c, chain.back());
++                return da != dc ? da < dc : (a.y != c.y ? a.y < c.y : a.x < c.x);
++            });
++            chain.push_back(*best);
++            rest.erase(best);
++        }
++        TT_FATAL(chain.size() == per_group, "bank_local_in1: group {} has {} cores", b, chain.size());
++    }
++    // Group order for the in0 chains: bank 0 first (in0 injectors sit at in1_idx 0), then the nearest worker.
++    std::vector<uint32_t> order{0};
++    std::vector<bool> used(num_banks, false);
++    used[0] = true;
++    while (order.size() < num_banks) {
++        uint32_t best = num_banks;
++        for (uint32_t b = 0; b < num_banks; ++b) {
++            if (!used[b] && (best == num_banks || dist(workers[b], workers[order.back()]) <
++                                                      dist(workers[best], workers[order.back()]))) {
++                best = b;
++            }
++        }
++        used[best] = true;
++        order.push_back(best);
++    }
++    layout.in0_chains.resize(per_group);
++    for (uint32_t i = 0; i < per_group; ++i) {
++        for (uint32_t b : order) {
++            layout.in0_chains[i].push_back(layout.in1_chains[b][i]);
++        }
++    }
++    for (uint32_t b = 0; b < num_banks; ++b) {
++        for (uint32_t i = 0; i < per_group; ++i) {
++            layout.idx[layout.in1_chains[b][i]] = {i, b};
++        }
++    }
++    return layout;
++}
++
+ // The define builders below (and throttle_mm_perf) work in terms of std::map; KernelSpec wants a
+ // Table of the same pairs.
+ KernelSpec::CompilerOptions::Defines to_defines(const std::map<std::string, std::string>& defines) {
+@@ -315,6 +432,10 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
+     if (config.has_value() && config->transpose_core_grid.has_value()) {
+         transpose_core_grid = *config->transpose_core_grid;
+     }
++    const bool bank_local = config.has_value() && config->bank_local_in1;
++    if (bank_local) {
++        transpose_core_grid = false;  // in1 is the large input: its reader takes the DRAM-read NOC
++    }
+ 
+     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
+     auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;
+@@ -323,6 +444,22 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
+     auto in1_noc = transpose_core_grid ? small_input_noc : large_input_noc;
+     auto in1_risc = transpose_core_grid ? small_input_risc : large_input_risc;
+     uint32_t in1_parallel_axis_cores = transpose_core_grid ? grid_size.y : grid_size.x;
++    std::optional<BankLocalLayout> bank_layout;
++    if (bank_local) {
++        TT_FATAL(
++            grid_size == device->compute_with_storage_grid_size(),
++            "bank_local_in1 needs the full compute grid ({} vs {})",
++            grid_size,
++            device->compute_with_storage_grid_size());
++        // Through the IDevice interface: the MeshDevice override of this overload is deprecated for heterogeneous
++        // meshes; this op runs on one device's grid.
++        const auto workers =
++            static_cast<const tt::tt_metal::IDevice*>(device)->get_optimal_dram_bank_to_logical_worker_assignment(
++                in1_noc);
++        bank_layout = build_bank_local_layout(workers, grid_size);
++        in1_parallel_axis_cores = workers.size();
++        in0_parallel_axis_cores = num_cores / workers.size();
++    }
+ 
+     /**
+      * We pad the input dimensions to the nearest multiple of the parallelization factor.
+@@ -349,6 +486,16 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
+     }
+ 
+     uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
++    if (bank_local) {
++        const auto& wmc = weight_tensor.memory_config();
++        TT_FATAL(
++            wmc.buffer_type() == tt::tt_metal::BufferType::DRAM &&
++                wmc.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED && wmc.shard_spec().has_value() &&
++                wmc.shard_spec()->shape[1] == N_tiles_per_core * tt::constants::TILE_WIDTH,
++            "bank_local_in1 needs the weight DRAM width-sharded with {}-wide shards (one per bank), got {}",
++            N_tiles_per_core * tt::constants::TILE_WIDTH,
++            wmc);
++    }
+ 
+     uint32_t K_blocks = padded_K_tiles / K_block_tiles;
+ 
+@@ -887,13 +1034,12 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
+     auto in0_kernel_for = [&](uint32_t in1_idx) { return in1_idx == 0 ? K_IN0_SENDER : K_IN0_RECEIVER; };
+     auto in1_kernel_for = [&](uint32_t in0_idx) { return in0_idx == 0 ? K_IN1_SENDER : K_IN1_RECEIVER; };
+ 
+-    auto add_work_unit = [&](const std::string& name, const CoreRange& nodes, uint32_t in0_idx, uint32_t in1_idx) {
++    auto add_work_unit = [&](const std::string& name, const CoreRangeSet& nodes, uint32_t in0_idx, uint32_t in1_idx) {
+         Group<KernelSpecName> kernels;
+         kernels.push_back(in0_kernel_for(in1_idx));
+         kernels.push_back(in1_kernel_for(in0_idx));
+         kernels.push_back(K_COMPUTE);
+-        spec.work_units.push_back(
+-            WorkUnitSpec{.name = name, .kernels = std::move(kernels), .target_nodes = CoreRangeSet(nodes)});
++        spec.work_units.push_back(WorkUnitSpec{.name = name, .kernels = std::move(kernels), .target_nodes = nodes});
+     };
+ 
+     // Representative (in0_idx, in1_idx) for each of the four regions, computed the same way the
+@@ -905,18 +1051,32 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
+     };
+     auto add_region = [&](const char* name, const CoreRange& nodes) {
+         auto [in0_idx, in1_idx] = idx_for(nodes.start_coord);
+-        add_work_unit(name, nodes, in0_idx, in1_idx);
++        add_work_unit(name, CoreRangeSet(nodes), in0_idx, in1_idx);
+     };
+-    // Only the regions that exist on this grid (all four on WH/BH, see has_in*_receivers above).
+-    add_region("corner", CoreRange(core_0_0, core_0_0));
+-    if (grid_size.x > 1) {
+-        add_region("top_row", CoreRange(core_1_0, core_endx_0));
+-    }
+-    if (grid_size.y > 1) {
+-        add_region("left_col", CoreRange(core_0_1, core_0_endy));
+-    }
+-    if (grid_size.x > 1 && grid_size.y > 1) {
+-        add_region("interior", CoreRange(CoreCoord{1, 1}, core_endx_endy));
++    if (bank_local) {
++        // The same four kernel pairings, on the core sets the bank-local layout gives them.
++        std::vector<CoreRange> region_cores[4];  // (in0_idx == 0) * 2 + (in1_idx == 0) -> 3 corner, 2 top, 1 left
++        for (const auto& [c, ij] : bank_layout->idx) {
++            region_cores[(ij.first == 0) * 2 + (ij.second == 0)].emplace_back(c, c);
++        }
++        const std::pair<const char*, uint32_t> regions[] = {{"corner", 3}, {"top_row", 2}, {"left_col", 1}, {"interior", 0}};
++        for (const auto& [name, r] : regions) {
++            if (!region_cores[r].empty()) {
++                add_work_unit(name, CoreRangeSet(region_cores[r]), r >= 2 ? 0 : 1, (r & 1) ? 0 : 1);
++            }
++        }
++    } else {
++        // Only the regions that exist on this grid (all four on WH/BH, see has_in*_receivers above).
++        add_region("corner", CoreRange(core_0_0, core_0_0));
++        if (grid_size.x > 1) {
++            add_region("top_row", CoreRange(core_1_0, core_endx_0));
++        }
++        if (grid_size.y > 1) {
++            add_region("left_col", CoreRange(core_0_1, core_0_endy));
++        }
++        if (grid_size.x > 1 && grid_size.y > 1) {
++            add_region("interior", CoreRange(CoreCoord{1, 1}, core_endx_endy));
++        }
+     }
+ 
+     /**
+@@ -969,21 +1129,31 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
+         CoreCoord left_core = {(std::size_t)0, (std::size_t)core.y};
+         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)0};
+ 
+-        auto [in0_core_order, in0_core_order_index] = build_core_order_for_axis(
+-            core,
+-            transpose_core_grid,
+-            in1_parallel_axis_cores,
+-            in0_noc,
+-            /*axis_is_x_when_not_transposed=*/true,
+-            /*initial_endpoint=*/(transpose_core_grid ? top_core : left_core));
+-
+-        auto [in1_core_order, in1_core_order_index] = build_core_order_for_axis(
+-            core,
+-            transpose_core_grid,
+-            in0_parallel_axis_cores,
+-            in1_noc,
+-            /*axis_is_x_when_not_transposed=*/false,
+-            /*initial_endpoint=*/(transpose_core_grid ? left_core : top_core));
++        std::vector<CoreCoord> in0_core_order, in1_core_order;
++        uint32_t in0_core_order_index = 0, in1_core_order_index = 0;
++        if (bank_local) {
++            std::tie(in0_idx, in1_idx) = bank_layout->idx.at(core);
++            in0_core_order = bank_layout->in0_chains.at(in0_idx);
++            in1_core_order = bank_layout->in1_chains.at(in1_idx);
++            in0_core_order_index =
++                std::find(in0_core_order.begin(), in0_core_order.end(), core) - in0_core_order.begin();
++            in1_core_order_index = in0_idx;
++        } else {
++            std::tie(in0_core_order, in0_core_order_index) = build_core_order_for_axis(
++                core,
++                transpose_core_grid,
++                in1_parallel_axis_cores,
++                in0_noc,
++                /*axis_is_x_when_not_transposed=*/true,
++                /*initial_endpoint=*/(transpose_core_grid ? top_core : left_core));
++            std::tie(in1_core_order, in1_core_order_index) = build_core_order_for_axis(
++                core,
++                transpose_core_grid,
++                in0_parallel_axis_cores,
++                in1_noc,
++                /*axis_is_x_when_not_transposed=*/false,
++                /*initial_endpoint=*/(transpose_core_grid ? left_core : top_core));
++        }
+ 
+         auto in0_prev_core = clamped_prev(in0_core_order, in0_core_order_index);
+         auto in0_next_core = clamped_next(in0_core_order, in0_core_order_index);
+diff --git a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
+index 8a2d4a76d77..a50bdcfb7d4 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
+@@ -90,6 +90,9 @@ void bind_minimal_matmul(nb::module_& mod) {
+             - transpose_core_grid: Optional[bool]. M over the grid's x axis and N over y (True) or the reverse (False).
+               Each axis is padded to a multiple of its core count, so this sets the padded work per core. Default
+               (None): transposed when M > N.
++            - bank_local_in1: bool. in1 must be DRAM width-sharded with one shard per DRAM bank (shard width N /
++              banks). The grid splits into one group of cores per bank around that bank's optimal worker, which reads
++              the shard and forwards it through its group; each group splits M.
+ 
+             Required invariants:
+             - All block/subblock sizes must be > 0.
+@@ -173,7 +176,7 @@ void bind_minimal_matmul(nb::module_& mod) {
+                             )doc")
+             .def(nb::init<>())
+             .def(
+-                nb::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord, std::optional<bool>>(),
++                nb::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord, std::optional<bool>, bool>(),
+                 nb::kw_only(),
+                 nb::arg("M_block_size") = 1,
+                 nb::arg("K_block_size") = 1,
+@@ -181,7 +184,8 @@ void bind_minimal_matmul(nb::module_& mod) {
+                 nb::arg("subblock_h") = 1,
+                 nb::arg("subblock_w") = 1,
+                 nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}),
+-                nb::arg("transpose_core_grid") = nb::none());
++                nb::arg("transpose_core_grid") = nb::none(),
++                nb::arg("bank_local_in1") = false);
+ 
+     py_minimal_matmul_config.def_rw("M_block_size", &MinimalMatmulConfig::M_block_size, "");
+     py_minimal_matmul_config.def_rw("K_block_size", &MinimalMatmulConfig::K_block_size, "");
+@@ -194,6 +198,10 @@ void bind_minimal_matmul(nb::module_& mod) {
+         "transpose_core_grid",
+         &MinimalMatmulConfig::transpose_core_grid,
+         "M over the grid's x axis and N over y (True) or the reverse (False); None: transposed when M > N");
++    py_minimal_matmul_config.def_rw(
++        "bank_local_in1",
++        &MinimalMatmulConfig::bank_local_in1,
++        "in1 DRAM width-sharded one shard per bank, read only by a group of cores around that bank's optimal worker");
+ 
+     py_minimal_matmul_config.def(
+         "__repr__", [](const MinimalMatmulConfig& config) { return fmt::format("{}", config); });
