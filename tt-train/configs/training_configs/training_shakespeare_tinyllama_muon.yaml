@@ -6,7 +6,8 @@ training_config:
   max_steps: 5000
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  model_config: "configs/model_configs/tinyllama.yaml"
+  data_path: "data/tokenized_shakespeare_tinyllama.yaml"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/tinyllama_bpe.yaml"
   optimizer:
     type: MuonWithAdamW
     # Module names whose weights use AdamW instead of Muon: embeddings (tok_emb) and the LM

@@ -16,48 +16,59 @@
 
 namespace ttml::ops {
 
-std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_creation(
-    const autograd::TensorPtr& qkv, uint32_t num_heads, std::optional<uint32_t> num_groups) {
-    // qkv shape is (B, 1, S, (num_heads + 2 * num_kv_heads) * head_dim), laid out [Q | K | V].
-    // q: (B, num_heads, S, head_dim); k, v: (B, num_kv_heads, S, head_dim).
-    // num_groups defaults to num_heads (standard MHA); num_groups < num_heads selects GQA.
-    const uint32_t num_kv_heads = num_groups.value_or(num_heads);
+namespace {
+
+// Splits `qs` (and `kvs`, when given) into heads with nlp_create_qkv_heads:
+// q: (B, num_heads, S, head_dim); k, v: (B, num_kv_heads, S, head_dim).
+// Without `kvs`, `qs` holds [Q | K | V]; with it, `qs` holds Q and `kvs` holds [K | V].
+std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> create_heads(
+    const autograd::TensorPtr& qs, const autograd::TensorPtr& kvs, uint32_t num_heads, uint32_t num_kv_heads) {
     auto [q, k, v] = ttnn::experimental::nlp_create_qkv_heads(
-        qkv->get_value(),
-        std::nullopt,
-        num_heads,
-        num_kv_heads,
-        /* transpose_k */ false,
-        /* kv_tied */ false,
-        /* memory_config */ std::nullopt,
-        /* optional_output_tensors */ std::nullopt);
+        qs->get_value(),
+        kvs ? std::optional<ttnn::Tensor>(kvs->get_value()) : std::nullopt,
+        /*num_q_heads=*/num_heads,
+        /*num_kv_heads=*/num_kv_heads,
+        /*transpose_k_heads=*/false,
+        /*kv_tied=*/false,
+        /*memory_config=*/std::nullopt,
+        /*optional_output_tensors=*/std::nullopt);
 
     auto out_q = autograd::create_tensor(q);
     auto out_k = autograd::create_tensor(k);
     auto out_v = autograd::create_tensor(v);
 
-    autograd::GradFunction grad_q = [out_q, out_k, out_v, qkv]() {
-        auto grad_q = out_q->get_grad();
-        auto grad_k = out_k->get_grad();
-        auto grad_v = out_v->get_grad();
-        // (B, num_heads, S, E / num_heads) -> (B, 1, S, E)
-        grad_q = ttnn::experimental::nlp_concat_heads(grad_q);
-        grad_k = ttnn::experimental::nlp_concat_heads(grad_k);
-        grad_v = ttnn::experimental::nlp_concat_heads(grad_v);
-        auto result = ttnn::concat(std::vector<ttnn::Tensor>({grad_q, grad_k, grad_v}), /* dim */ 3);
-        qkv->add_grad(result);
+    autograd::GradFunction grad_q = [out_q, out_k, out_v, qs, kvs]() {
+        // (B, heads, S, head_dim) -> (B, 1, S, heads * head_dim)
+        auto grad_q = ttnn::experimental::nlp_concat_heads(out_q->get_grad());
+        auto grad_k = ttnn::experimental::nlp_concat_heads(out_k->get_grad());
+        auto grad_v = ttnn::experimental::nlp_concat_heads(out_v->get_grad());
+        if (kvs) {
+            qs->add_grad(grad_q);
+            kvs->add_grad(ttnn::concat(std::vector<ttnn::Tensor>({grad_k, grad_v}), /* dim */ 3));
+        } else {
+            qs->add_grad(ttnn::concat(std::vector<ttnn::Tensor>({grad_q, grad_k, grad_v}), /* dim */ 3));
+        }
     };
 
     // grad_q function depends on gradients of q, k and v
-    auto q_node = autograd::add_backward_node(std::move(grad_q), out_q, qkv);
+    auto q_node = autograd::add_backward_node(std::move(grad_q), out_q, qs, kvs);
     out_q->set_node(q_node);
     // this needs to be added to make sure that gradients for k and v are computed before we run backward for q
     // Only add sync nodes if out_q has a node (i.e., gradients are needed)
     if (q_node.has_value()) {
-        out_k->set_node(autograd::add_backward_node_always([]() {}, out_k, qkv, out_q));
-        out_v->set_node(autograd::add_backward_node_always([]() {}, out_v, qkv, out_q));
+        out_k->set_node(autograd::add_backward_node_always([]() {}, out_k, qs, kvs, out_q));
+        out_v->set_node(autograd::add_backward_node_always([]() {}, out_v, qs, kvs, out_q));
     }
     return {out_q, out_k, out_v};
+}
+
+}  // namespace
+
+std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_creation(
+    const autograd::TensorPtr& qkv, uint32_t num_heads, std::optional<uint32_t> num_groups) {
+    // qkv: (B, 1, S, (num_heads + 2 * num_groups) * head_dim), laid out [Q | K | V].
+    // num_groups defaults to num_heads (standard MHA); num_groups < num_heads selects GQA.
+    return create_heads(qkv, nullptr, num_heads, num_groups.value_or(num_heads));
 }
 
 autograd::TensorPtr heads_fusion(const autograd::TensorPtr& x) {
@@ -90,47 +101,8 @@ autograd::TensorPtr heads_fusion(const autograd::TensorPtr& x) {
 
 std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> grouped_heads_creation(
     const autograd::TensorPtr& qs, const autograd::TensorPtr& kvs, uint32_t num_heads, uint32_t num_groups) {
-    // qs shape is (B, 1, S, E)
-    // q shape is (B, num_heads, S, E/num_heads)
-    // kvs shape is (B, 1, S, E*2)
-    // k, v shapes are (B, num_groups, S, E / num_groups)
-    auto [q, k, v] = ttnn::experimental::nlp_create_qkv_heads(
-        qs->get_value(),
-        kvs->get_value(),
-        /*num_q_heads=*/num_heads,
-        /*num_kv_heads=*/num_groups,
-        /*transpose_k_heads=*/false,
-        /*kv_tied=*/false,
-        /*memory_config=*/std::nullopt,
-        /*optional_output_tensors=*/std::nullopt);
-
-    auto out_q = autograd::create_tensor(q);
-    auto out_k = autograd::create_tensor(k);
-    auto out_v = autograd::create_tensor(v);
-
-    autograd::GradFunction grad_q = [out_q, out_k, out_v, qs, kvs]() {
-        auto grad_q = out_q->get_grad();
-        auto grad_k = out_k->get_grad();
-        auto grad_v = out_v->get_grad();
-        // (B, num_heads, S, E / num_heads) -> (B, 1, S, E)
-        grad_q = ttnn::experimental::nlp_concat_heads(grad_q);
-        grad_k = ttnn::experimental::nlp_concat_heads(grad_k);
-        grad_v = ttnn::experimental::nlp_concat_heads(grad_v);
-        qs->add_grad(grad_q);
-        auto kvs_grad = ttnn::concat(std::vector<ttnn::Tensor>({grad_k, grad_v}), /* dim */ 3);
-        kvs->add_grad(kvs_grad);
-    };
-
-    // grad_q function depends on gradients of q, k and v
-    auto q_node = autograd::add_backward_node(std::move(grad_q), out_q, qs, kvs);
-    out_q->set_node(q_node);
-    // this needs to be added to make sure that gradients for k and v are computed before we run backward for q
-    // Only add sync nodes if out_q has a node (i.e., gradients are needed)
-    if (q_node.has_value()) {
-        out_k->set_node(autograd::add_backward_node_always([]() {}, out_k, qs, kvs));
-        out_v->set_node(autograd::add_backward_node_always([]() {}, out_v, qs, kvs));
-    }
-    return {out_q, out_k, out_v};
+    // qs: (B, 1, S, num_heads * head_dim); kvs: (B, 1, S, 2 * num_groups * head_dim), laid out [K | V].
+    return create_heads(qs, kvs, num_heads, num_groups);
 }
 
 }  // namespace ttml::ops

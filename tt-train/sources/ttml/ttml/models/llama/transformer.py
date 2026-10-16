@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
+import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode, LinearLayer, ColumnParallelLinear, RowParallelLinear
 
@@ -89,10 +90,10 @@ class LlamaMLP(AbstractModuleBase):
             raise ValueError(
                 f"intermediate_size ({intermediate_size}) must be divisible by the tensor-parallel size ({tp_size})"
             )
-        if (intermediate_size // tp_size) % 32 != 0:
+        if (intermediate_size // tp_size) % ttnn.TILE_SIZE != 0:
             raise ValueError(
                 f"intermediate_size per device ({intermediate_size // tp_size}) must be a "
-                f"multiple of 32 so the packed gate|up halves stay tile-aligned"
+                f"multiple of {ttnn.TILE_SIZE} so the packed gate|up halves stay tile-aligned"
             )
 
         if use_tp:
@@ -161,6 +162,7 @@ class LlamaBlock(AbstractModuleBase):
         use_tp: bool = False,
         out_proj_init: Optional[Callable] = None,
         down_proj_init: Optional[Callable] = None,
+        use_composite_sdpa: bool = False,
     ) -> None:
         super().__init__()
 
@@ -182,6 +184,7 @@ class LlamaBlock(AbstractModuleBase):
             bias_linears=attention_bias,
             use_tp=use_tp,
             out_proj_init=out_proj_init,
+            use_composite_sdpa=use_composite_sdpa,
         )
 
     def forward(
