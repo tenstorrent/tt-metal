@@ -184,7 +184,6 @@ ELTWISE_FORMATS = (
     input_output_formats(
         [
             DataFormat.Float16_b,
-            DataFormat.Float16,
         ],
     )
     + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]

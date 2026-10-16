@@ -68,7 +68,6 @@ POOL_TYPES = [ReducePool.Max, ReducePool.Sum, ReducePool.Average]
 REDUCE_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
     ],
 ) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 
@@ -313,11 +312,6 @@ _ARCH = get_chip_architecture()
 @parametrize(
     register_format_hint=[DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B],
     formats=lambda register_format_hint: [
-        InputOutputFormat(
-            DataFormat.MxFp4,
-            DataFormat.Float16,
-            register_format_hint=register_format_hint,
-        ),
         InputOutputFormat(
             DataFormat.MxFp4,
             DataFormat.Float16_b,

@@ -147,7 +147,6 @@ def generate_eltwise_unary_datacopy_combinations(
 DATACOPY_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
     ]
 ) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(

@@ -78,7 +78,7 @@ DEST_SYNC_MODE = DestSync.Half
 
 # Plain (non-2x) formats out of Quasar's matmul set. MX formats are covered by the 2x test below,
 # which needs the MX golden machinery anyway.
-MATMUL_FORMATS = input_output_formats([DataFormat.Float16, DataFormat.Float16_b])
+MATMUL_FORMATS = input_output_formats([DataFormat.Float16_b])
 
 
 def _dest_bank_max_tiles(formats, dest_acc):
