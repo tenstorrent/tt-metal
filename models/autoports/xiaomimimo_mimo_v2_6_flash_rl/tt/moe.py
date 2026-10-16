@@ -21,7 +21,7 @@ import torch
 import ttnn
 
 from .common import TILE, DramShardedMatmul, as_weight, cache_exists, cache_name, compute_config, mcast_1d_config
-from .moe_stream import GateUpStream, is_dram_interleaved
+from .moe_stream import DownStream, GateUpStream, is_dram_interleaved, zero_output
 
 
 class TtMiMoMoE:
@@ -89,6 +89,7 @@ class TtMiMoMoE:
         self.down_program = mcast_1d_config((8, 8), TILE, self.hidden, self.inter_local, in0_block_w=8)
         self.decode_users = None
         self.gate_up_stream = None
+        self.down_stream = None
         self.ids_buf = None
 
     def _zeros(self, num_tokens):
@@ -212,19 +213,16 @@ class TtMiMoMoE:
             )
             self.ids_buf = ttnn.typecast(ids32, ttnn.uint16)
             ids32.deallocate(True)
-            self.act_buf = ttnn.from_torch(
-                torch.zeros(1, pairs, TILE, self.inter_local),
-                device=self.plan.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                mesh_mapper=rep,
-            )
+            # Down + sum over pairs, bank-local from the interleaved w_down, into rows 0-3 of a persistent zeroed
+            # output (the padding rows stay zero).
+            self.down_stream = DownStream(self.plan, self.hidden, self.inter_local, pairs)
+            self.act_buf = self.down_stream.activation_buffer(self.plan)
+            self.out_buf = zero_output(self.plan, self.hidden)
 
     def _forward_decode_stream(self, x, token_mask):
         """BFP4 decode: fp32 router logits, sigmoid and +bias, then one streaming program that selects every user's
         fp32 top-k, normalizes and masks the weights and computes gate|up + SwiGLU + routing weight; then the
-        indexed down sparse_matmul on the expert ids that program wrote."""
+        streaming down program (down and the sum over each user's pairs) on the expert ids that program wrote."""
         logits = self._router_logits(x)
         scores = ttnn.sigmoid(logits)
         logits.deallocate(True)
@@ -237,29 +235,25 @@ class TtMiMoMoE:
 
         srcs = (x, scores, biased, token_mask)
         x_in, s_in, b_in, m_in = (dram(t) for t in srcs)
-        act_w = self.gate_up_stream(x_in, s_in, b_in, m_in, self.w_gate_up, self.act_buf, self.ids_buf)
+        act = self.gate_up_stream(x_in, s_in, b_in, m_in, self.w_gate_up, self.act_buf, self.ids_buf)
         for t, src in zip((x_in, s_in, b_in, m_in), srcs):
             if t is not src:
                 t.deallocate(True)
         scores.deallocate(True)
         biased.deallocate(True)
 
-        down = ttnn.sparse_matmul(
-            act_w,
-            self.w_down,
-            sparsity=self.all_experts,
-            indices=self.ids_buf,
-            is_input_a_sparse=True,
-            is_input_b_sparse=True,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            output_tile=ttnn.Tile([TILE, TILE]),
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=self.expert_config,
-            program_config=self.down_program,
-        )  # [1, pairs, 32, H]
-        out = ttnn.sum(down, dim=1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, 32, H]
-        down.deallocate(True)
-        return self.plan.all_reduce(out)
+        out = self.down_stream(act, self.ids_buf, self.w_down, self.out_buf)  # [1, 1, 32, H], persistent
+        plan = self.plan
+        if plan.tp == 1:
+            return ttnn.clone(out)
+        # The persistent output is rewritten every call, so it is not deallocated like plan.all_reduce does.
+        return ttnn.all_reduce(
+            out,
+            cluster_axis=plan.tp_axis,
+            num_links=plan.num_links,
+            topology=plan.topology,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def forward_decode(self, x, token_mask):
         """Decode: x [1, 1, 32, hidden], users in rows [0, decode_users). Computes only the selected experts.

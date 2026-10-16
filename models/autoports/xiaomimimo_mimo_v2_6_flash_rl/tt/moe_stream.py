@@ -15,7 +15,7 @@ import torch
 
 import ttnn
 
-from .common import TILE
+from .common import TILE, pad_to
 
 KERNEL_DIR = "models/autoports/xiaomimimo_mimo_v2_6_flash_rl/tt/kernels"
 
@@ -46,6 +46,19 @@ def fp32_bits(value):
     return int(torch.tensor([float(value)], dtype=torch.float32).view(torch.int32).item()) & 0xFFFFFFFF
 
 
+def bank_vcs(cores):
+    """Readers in the same core row get different VCs (as DeepSeek-B1's DRAM streaming matmul)."""
+    vcs = []
+    for idx, core in enumerate(cores):
+        vc = idx & 0x3
+        for j in range(idx):
+            if cores[j].y == core.y and (j & 0x3) == (idx & 0x3):
+                vc = (vc + 1) & 0x3
+                break
+        vcs.append(vc)
+    return vcs
+
+
 class GateUpStream:
     """Top-k routing, then silu(x @ gate) * (x @ up) * w for every decode pair, streamed bank-locally from the
     interleaved w_gate_up.
@@ -58,12 +71,14 @@ class GateUpStream:
 
     The per-chip w_gate_up [1, E, K, 2 * I] has 2 * I / 32 = 2 * banks tile columns, so DRAM bank b holds gate
     column b and up column b of every expert, contiguous per expert as [kt][gate, up]. Core b streams bank b and
-    writes row u of pair (u, k)'s h tile column b into ``out`` [1, pairs, 32, I] (other rows stay zero).
+    writes row u of pair (u, k)'s [4, 32] h tile b into page p of the zeroed row-major ``out`` (DownStream's
+    activation: page p = pair p's 8 tiny tiles; the other rows stay zero).
     """
 
     BLOCK_K = 16  # K tiles per block: 16 x (gate, up) x 576 B = 18 KB
-    NUM_BUFFERS = 6
-    IN_FLIGHT = 4
+    # 12 blocks (216 KB, ~1.5 pairs) keep the bank streaming through a pair's SwiGLU epilogue; trids 1..12.
+    NUM_BUFFERS = 12
+    IN_FLIGHT = 6
     MAX_PACKET = 16384
     MAX_USERS = 4  # routing stages rows 0-3 of each tile face
     FP32_TILE_BYTES = 4096
@@ -81,6 +96,7 @@ class GateUpStream:
         self.users = num_pairs // topk
         assert self.users * topk == num_pairs and 1 <= self.users <= self.MAX_USERS and topk <= 16
         assert num_pairs * 4 <= 1024
+        assert self.IN_FLIGHT < self.NUM_BUFFERS <= 15
         self.num_pairs, self.topk = num_pairs, topk
         self.reader_users = (self.users + 1) // 2
         self.expert_tiles = num_experts // TILE
@@ -105,15 +121,7 @@ class GateUpStream:
         self.out_tiles_per_pair = inter_local // TILE
         self.core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.cores])
 
-        # Readers in the same core row get different VCs (as DeepSeek-B1's DRAM streaming matmul).
-        self.vcs = []
-        for idx, core in enumerate(self.cores):
-            vc = idx & 0x3
-            for j in range(idx):
-                if self.cores[j].y == core.y and (j & 0x3) == (idx & 0x3):
-                    vc = (vc + 1) & 0x3
-                    break
-            self.vcs.append(vc)
+        self.vcs = bank_vcs(self.cores)
 
         tiny = ttnn.Tile([4, TILE])
         full = ttnn.Tile([TILE, TILE])
@@ -254,4 +262,168 @@ class GateUpStream:
         program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], cbs=self.cbs, semaphores=[])
         io = [x, scores, biased] + ([token_mask] if has_mask else []) + [w_gate_up, ids_out, out]
         ttnn.generic_op(io, program)
+        return out
+
+
+class DownStream:
+    """Down projection and the sum over pairs for every decode pair, streamed bank-locally from the interleaved
+    w_down, into rows 0-3 of a zeroed [1, 1, 32, hidden] output.
+
+    The per-chip w_down [1, E, I, H] has H / 32 tile columns, so DRAM bank b holds expert e as I / 32 rows of
+    H / 32 / banks tiles (output columns b, b + banks, ...), contiguous per expert. Core b streams bank b. The
+    activation (GateUpStream's output) holds pair (u, k)'s h only in row u of its [4, 32] tiny tiles, so the
+    accumulation over all pairs in fp32 dest leaves user u's expert sum in row u.
+    """
+
+    BLOCK_COLS = 4  # output tiles per dest pass: 4 fp32 dest tiles (half sync)
+    NUM_BUFFERS = 8
+    IN_FLIGHT = 6
+    TINY_ROWS = 4
+
+    def __init__(self, plan, hidden, inter_local, num_pairs):
+        device = plan.mesh_device
+        self.cores = list(dram_bank_cores(device))
+        self.banks = device.dram_grid_size().x
+        assert len(self.cores) == self.banks, (len(self.cores), self.banks)
+        self.kt = inter_local // TILE
+        assert self.kt == self.banks, "h tile b comes from bank core b"
+        nt = hidden // TILE
+        assert nt % self.banks == 0
+        self.cols = nt // self.banks
+        assert self.cols % self.BLOCK_COLS == 0
+        self.groups = self.cols // self.BLOCK_COLS
+        assert self.IN_FLIGHT < self.NUM_BUFFERS <= 15
+        self.hidden, self.inter_local, self.num_pairs = hidden, inter_local, num_pairs
+
+        self.w_tile_bytes = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat4_b)
+        self.block_tiles = self.kt * self.BLOCK_COLS
+        self.group_bytes = self.BLOCK_COLS * self.w_tile_bytes
+        self.block_bytes = self.kt * self.group_bytes
+        self.row_bytes = self.cols * self.w_tile_bytes
+        self.expert_bytes = self.kt * self.row_bytes
+        tiny = ttnn.Tile([self.TINY_ROWS, TILE])
+        full = ttnn.Tile([TILE, TILE])
+        self.tiny_bytes = tiny.get_tile_size(ttnn.bfloat16)
+        self.act_page_bytes = self.kt * self.tiny_bytes
+        self.ids_bytes = pad_to(2 * num_pairs, 64)
+        assert self.ids_bytes <= 4096
+        self.core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.cores])
+        self.vcs = bank_vcs(self.cores)
+
+        def cb(index, dtype, tile, pages):
+            page = tile.get_tile_size(dtype)
+            fmt = ttnn.CBFormatDescriptor(
+                buffer_index=index, data_format=dtype, page_size=page, tile=ttnn.TileDescriptor(tile)
+            )
+            return ttnn.CBDescriptor(total_size=pages * page, core_ranges=self.core_ranges, format_descriptors=[fmt])
+
+        self.cb_h, self.cb_w, self.cb_out, self.cb_ids = 0, 1, 2, 3
+        self.cbs = [
+            cb(self.cb_h, ttnn.bfloat16, tiny, num_pairs * self.kt),
+            cb(self.cb_w, ttnn.bfloat4_b, full, self.NUM_BUFFERS * self.block_tiles),
+            cb(self.cb_out, ttnn.bfloat16, tiny, self.cols),
+            cb(self.cb_ids, ttnn.float32, full, 1),
+        ]
+        self.compute_config = ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            dst_full_sync_en=False,
+        )
+
+    def activation_buffer(self, plan):
+        """Zeroed row-major [1, 1, pairs, kt * 4 * 32] bf16 in L1: page p = pair p's kt [4, 32] tiny tiles."""
+        return ttnn.from_torch(
+            torch.zeros(1, 1, self.num_pairs, self.act_page_bytes // 2),
+            device=plan.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=plan.replicate(),
+        )
+
+    def __call__(self, act, ids, w_down, out):
+        """act from ``activation_buffer``, ids the uint16 [1, 1, 1, pairs] stick, w_down [1, E, I, H] BFP4 (DRAM
+        interleaved); writes rows 0-3 of ``out`` [1, 1, 32, H] (zeroed bf16 DRAM tiles) and returns it."""
+        assert act.layout == ttnn.ROW_MAJOR_LAYOUT and act.dtype == ttnn.bfloat16
+        assert act.shape[-2] == self.num_pairs and act.shape[-1] * 2 == self.act_page_bytes
+        assert ids.layout == ttnn.ROW_MAJOR_LAYOUT and ids.dtype == ttnn.uint16 and is_dram_interleaved(ids)
+        assert ids.shape[-1] == self.num_pairs
+        assert w_down.layout == ttnn.TILE_LAYOUT and w_down.dtype == ttnn.bfloat4_b and is_dram_interleaved(w_down)
+        assert w_down.shape[-2] == self.inter_local and w_down.shape[-1] == self.hidden
+        assert out.layout == ttnn.TILE_LAYOUT and out.dtype == ttnn.bfloat16 and is_dram_interleaved(out)
+        assert out.shape[-2] == TILE and out.shape[-1] == self.hidden
+
+        reader_ct = [
+            self.cb_w,
+            self.cb_ids,
+            self.num_pairs,
+            self.groups,
+            self.kt,
+            self.block_tiles,
+            self.block_bytes,
+            self.group_bytes,
+            self.row_bytes,
+            self.expert_bytes,
+            self.NUM_BUFFERS,
+            self.IN_FLIGHT,
+            self.ids_bytes,
+        ]
+        writer_ct = [
+            self.cb_h,
+            self.cb_out,
+            self.num_pairs,
+            self.kt,
+            self.act_page_bytes,
+            self.groups,
+            self.BLOCK_COLS,
+            self.banks,
+            self.tiny_bytes,
+        ]
+        compute_ct = [
+            self.cb_h,
+            self.cb_w,
+            self.cb_out,
+            self.num_pairs,
+            self.kt,
+            self.BLOCK_COLS,
+            self.groups,
+        ]
+
+        reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        for bank, core in enumerate(self.cores):
+            reader_rt[core.x][core.y] = [bank, self.vcs[bank], w_down.buffer_address(), ids.buffer_address()]
+            writer_rt[core.x][core.y] = [act.buffer_address(), out.buffer_address(), bank]
+            compute_rt[core.x][core.y] = []
+
+        reader = ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/moe_down_reader.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=self.core_ranges,
+            compile_time_args=reader_ct,
+            runtime_args=reader_rt,
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_0_default
+            ),
+        )
+        writer = ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/moe_down_writer.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=self.core_ranges,
+            compile_time_args=writer_ct,
+            runtime_args=writer_rt,
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_1_default
+            ),
+        )
+        compute = ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/moe_down_compute.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=self.core_ranges,
+            compile_time_args=compute_ct,
+            runtime_args=compute_rt,
+            config=self.compute_config,
+        )
+        program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], cbs=self.cbs, semaphores=[])
+        ttnn.generic_op([act, ids, w_down, out], program)
         return out

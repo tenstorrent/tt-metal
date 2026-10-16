@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // BRISC (NOC 1): x rows 0-3 as [4, 32] tiny tiles; routing of users [first_user, users) handed to the reader through
-// cb_sel; then row u of every pair's h tile into the zeroed [1, pairs, 32, 8 * 32] activation (tile column = this
-// core's bank).
+// cb_sel; then row u of every pair's h tile into the zeroed row-major activation (page p = pair p's 8 [4, 32] tiny
+// tiles, the down matmul's in0; tiny tile = this core's bank).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "moe_stream_common.hpp"
@@ -70,16 +70,18 @@ void kernel_main() {
     }
     cb_push_back(cb_sel, 1);
 
-    const InterleavedAddrGen<false> out_gen = {.bank_base_address = out_addr, .page_size = bf16_tile_bytes};
+    constexpr uint32_t tiny_tile_bytes = 2 * tiny_face_bytes;
+    const InterleavedAddrGen<false> out_gen = {
+        .bank_base_address = out_addr, .page_size = out_tiles_per_pair * tiny_tile_bytes};
+    const uint32_t col_base = col * tiny_tile_bytes;
     for (uint32_t p = 0; p < num_pairs; p++) {
         const uint32_t u = p / topk;
-        const uint32_t page = p * out_tiles_per_pair + col;
         cb_wait_front(cb_h, 1);
         const uint32_t h_l1 = get_read_ptr(cb_h);
-        noc_async_write(h_l1 + u * row_bytes, out_gen.get_noc_addr(page, u * row_bytes), row_bytes);
+        noc_async_write(h_l1 + u * row_bytes, out_gen.get_noc_addr(p, col_base + u * row_bytes), row_bytes);
         noc_async_write(
             h_l1 + tiny_face_bytes + u * row_bytes,
-            out_gen.get_noc_addr(page, mimo_moe::kBf16FaceBytes + u * row_bytes),
+            out_gen.get_noc_addr(p, col_base + tiny_face_bytes + u * row_bytes),
             row_bytes);
         noc_async_write_barrier();
         cb_pop_front(cb_h, 1);

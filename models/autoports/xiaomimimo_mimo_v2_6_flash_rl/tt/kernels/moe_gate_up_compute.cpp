@@ -13,9 +13,13 @@
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_silu.h"
 #include "ckernel_sfpu_binary.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 using namespace ckernel;
+#ifdef TRISC_MATH
+using namespace ckernel::sfpu;
+#endif
 
 void kernel_main() {
     constexpr uint32_t cb_x = get_compile_time_arg_val(0);
@@ -45,9 +49,10 @@ void kernel_main() {
         custom_mm_block<true>(cb_x, cb_w, (blocks_per_pair - 1) * block_k, 0, 0, block_k, ct);
         cb_pop_front(cb_w, block_tiles);
 
-        // Only rows 0-3 are packed (tiny [4, 32] h tile); the SFPU ops cover the whole dest tile.
+        // Only rows 0-3 are packed (tiny [4, 32] h tile): silu runs on rows 0-3 of faces 0 and 1 only (2 SFPU
+        // iterations per face, as B1 does for tiny tiles); the cheap multiplies cover the whole dest tile.
         silu_tile_init();
-        silu_tile(0);
+        MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (DST_ACCUM_MODE, 2), 0, VectorMode::R));
         mul_binary_tile_init();
         mul_binary_tile(0, 1, 0);
         binop_with_scalar_tile_init();
