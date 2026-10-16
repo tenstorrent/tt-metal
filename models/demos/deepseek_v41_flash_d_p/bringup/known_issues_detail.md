@@ -328,3 +328,31 @@ The framework fix, measured (S.enc_source.07 implement attempt 103, probe
 are). Every check passes: `swap_indexer_out` 0.022992 <= 0.052679 (2 x the nudged floor 0.026339), err_swap_out
 0.030351 <= 0.063240, every step check ok, `run_swap_test` True. That one-line change in
 `models/demos/common/bringup/testing/component.py` (read-only for model steps), or the owner waiver, closes the step.
+
+## The 'small' second input of a compressed-layer attention misses the fixed 0.03 floor at the reference's precision
+
+C.enc_source.attention attempt 1 (tt/sparse_attention.py, layer 2, 2x2, chunk 2048). Every check passes except the
+auto second input `small` (every float input scaled by a power of 2 to RMS ~1e-3): rel 0.0352 vs the CPU step,
+limit 0.03 = the fixed second-input floor (component_second_rel); its calibrated limit is 0.0057 (2 x the input nudge,
+0.0029). Golden 0.0350 <= 0.1616, vs CPU 0.0316 <= 0.0668, chunk0 0.0292 <= 0.0545, layer14 0.0287 <= 0.0529, mixed
+0.0298 <= 0.0505, big 0.0230 <= 0.0491.
+
+Probe `tests/ttnn/unit_tests/operations/ds41_sparse_attn/probes/probe_004.py` (device o captured before the inverse
+RoPE, float64 statistics):
+
+| case | device o vs CPU o | kernel dtypes (bf16 q, P, o) vs CPU o | CPU tail on bf16(CPU o) | CPU tail on device o | device step |
+|---|---|---|---|---|---|
+| small | rel 0.00227, norm ratio 0.99911, bias -8.9e-4 | rel 0.0018, bias -2.2e-4 | 0.0329 | 0.0352 | 0.0352 |
+| golden | rel 0.00203, norm ratio 0.99992, bias -8.2e-5 | rel 0.0018, bias -7e-6 | 0.0311 | 0.0316 | 0.0316 |
+
+- The official kernel (inference/kernel.py sparse_attn) returns o in q's dtype, bf16. Rounding the CPU's own o to bf16
+  flips 3.1 % of the fp8 values after the inverse RoPE and gives rel 0.0329 on `small`, above the 0.03 floor. The
+  input nudge (q_resid bf16; kv / compressed / top-k fixed) moves nothing there: the scores are ~0 (row max 0.000-0.002),
+  the softmax is flat, so q's rounding does not reach the output.
+- What the device adds beyond the kernel's dtypes is a coherent shrink of o (norm ratio 0.99911, per head 0.99813 to
+  1.00006) only in the flat-softmax regime (golden -8e-5). The sink is not the cause (|sink| < 0.6, its term is 0.2 % of
+  the denominator, the fit per head is inconsistent). It fits DS41-16: every in-tile partial dot of P@V is truncated to
+  about TF32, and averaging many keys of mixed sign (uniform P) amplifies it. No setting removes it (no split matmul).
+- Raising the output to fp32 (WINDOW_SDPA_OUT=fp32) would be above the reference (FIX.2), so not done. The check needs
+  an owner waiver (spec tests.waivers: `enc_source.attention`) or a framework floor for second inputs that includes
+  the official arithmetic's excess (as the golden's official_floor does: 0.0808).

@@ -58,7 +58,7 @@ import ttnn
 
 from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, tp_sum
 from .quant import fp8_qdq, round_tf32
-from .rope import RopeTable, deinterleave_perm, rope_heads
+from .rope import RopeTable, deinterleave_perm, deinterleave_tail, rope_heads
 from .settings import settings
 from .window_exact import ExactWindow
 
@@ -328,6 +328,8 @@ class TtWindowAttention:
     end = actual_end -> attn_out [1, 1, S/SP, H/TP] fp32 (hidden split); writes the chunk's window rows into ``cache``.
     Does not consume its inputs."""
 
+    INTERLEAVED = False  # q / table rope tail order in the sparse_sdpa (False: [even | odd], the table transformed)
+
     def __init__(self, mesh, cfg, w: dict, rope: RopeTable, tables: WindowTables):
         self.mesh, self.cfg, self.rope, self.tables, self.geo = mesh, cfg, rope, tables, tables.geo
         g = self.geo
@@ -397,7 +399,8 @@ class TtWindowAttention:
 
     def _table(self, kv: ttnn.Tensor, start: int, end: int, cache: TtWindowCache) -> ttnn.Tensor:
         """Writes the chunk's rows into the cache; returns the sparse table [1, 1, 128 + S, 512] bf16 ROW_MAJOR
-        (carry | chunk), rope tail de-interleaved."""
+        (carry | chunk), rope tail de-interleaved (as stored, the reference's interleaved order, when
+        ``INTERLEAVED``: q is then interleaved too)."""
         g = self.geo
         full = kv
         if g.sp > 1:
@@ -415,6 +418,8 @@ class TtWindowAttention:
         if carry is not self.tables.zero_carry:
             ttnn.deallocate(carry)
         ttnn.deallocate(kv_rm)
+        if self.INTERLEAVED:
+            return table
         # the rope tail [interleaved pairs] -> [even | odd] (q's order): ROW_MAJOR transpose, exact
         rows, half, r0 = table.shape[2], self.rd // 2, self.d - self.rd
         tail = ttnn.slice(table, [0, 0, 0, r0], [1, 1, rows, self.d], memory_config=DRAM)
@@ -435,7 +440,7 @@ class TtWindowAttention:
         ttnn.deallocate(xq)
         q4 = ttnn.transpose(ttnn.reshape(qf, [1, rows, self.h_l, self.d]), 1, 2, memory_config=DRAM)
         ttnn.deallocate(qf)
-        qr = rope_heads(q4, cos, sin)  # tail stays [even | odd], the table's order
+        qr = rope_heads(q4, cos, sin, interleave=self.INTERLEAVED)  # the table's order
         ttnn.deallocate(q4)
         qs = ttnn.multiply(qr, self.scale, dtype=ttnn.float32, memory_config=DRAM)
         ttnn.deallocate(qr)
@@ -504,6 +509,10 @@ class TtWindowAttention:
         """attention output of the chip's heads [1, H/TP, S/SP, 512] fp32 (rope tail [even | odd]; consumed) ->
         attn_out [1, 1, S/SP, H/TP] fp32."""
         rows = of.shape[2]
+        if self.INTERLEAVED:  # the table's (and so the output's) tail is interleaved: [even | odd] for the rope
+            od = deinterleave_tail(of, self.rd // 2)
+            ttnn.deallocate(of)
+            of = od
         ou = rope_heads(of, cos, sin, inverse=True, interleave=True)  # the reference's order again
         ttnn.deallocate(of)
         oq = fp8_qdq(ou, dtype=ttnn.bfloat16)  # groups of 32 inside each head (512 % 32 == 0)
