@@ -61,6 +61,9 @@ class LlamaConfig:
     ``embedding_placement`` selects how the token-embedding table is placed across the
     TP axis (see :class:`EmbeddingPlacement`); it defaults to ``Replicated`` (no
     sharding) and is ignored when ``use_tp=False``.
+
+    ``use_composite_sdpa`` runs attention through ``scaled_dot_product_attention_composite``,
+    which also accepts non-broadcast masks such as ``(B, 1, S, S)``.
     """
 
     hidden_size: int = 384
@@ -79,6 +82,7 @@ class LlamaConfig:
     rope_scaling: LlamaRopeScalingConfig = field(default_factory=LlamaRopeScalingConfig)
     use_tp: bool = False
     embedding_placement: EmbeddingPlacement = EmbeddingPlacement.Replicated
+    use_composite_sdpa: bool = False
 
     def __post_init__(self):
         if self.max_position_embeddings % 32 != 0:
@@ -294,6 +298,7 @@ class Llama(AbstractModuleBase):
                     use_tp=config.use_tp,
                     out_proj_init=out_proj_init,
                     down_proj_init=down_proj_init,
+                    use_composite_sdpa=config.use_composite_sdpa,
                 )
                 for _ in range(config.num_hidden_layers)
             ]

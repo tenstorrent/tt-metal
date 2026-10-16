@@ -20,6 +20,9 @@ class GroupedQueryAttention(AbstractModuleBase):
     (output features sharded) with ``gather_output=False``, and the output projection
     uses ``RowParallelLinear`` with ``input_is_parallel=True``. This avoids redundant
     communication between the two matmuls.
+
+    ``use_composite_sdpa`` selects ``scaled_dot_product_attention_composite``,
+    which also accepts non-broadcast masks such as ``(B, 1, S, S)``.
     """
 
     def __init__(
@@ -32,6 +35,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         bias_linears: bool = False,
         use_tp: bool = False,
         out_proj_init: Optional[Callable] = None,
+        use_composite_sdpa: bool = False,
     ) -> None:
         super().__init__()
 
@@ -44,10 +48,16 @@ class GroupedQueryAttention(AbstractModuleBase):
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
         self.rope_params = rope_params
+        self.use_composite_sdpa = use_composite_sdpa
 
         head_dim = embedding_size // num_heads
+        # Fused Q+K+V: on one device the rows are [Q | K | V]. Under TP, device d takes a contiguous
+        # slice and reads it as [Q_d | K_d | V_d], so the full weight is
+        # [Q_0 | K_0 | V_0 | Q_1 | K_1 | V_1 | ...] and its row order changes with the TP size.
         qkv_dim = (num_heads + 2 * num_groups) * head_dim  # == embedding_size + 2 * num_groups * head_dim
 
+        # Head/group counts stored here are LOCAL (per-device) so that splitting
+        # in heads_creation matches the sharded activation width.
         if use_tp:
             tp_size = ttml.mesh().axis_size("tp")
             if num_heads % tp_size != 0:
@@ -93,16 +103,6 @@ class GroupedQueryAttention(AbstractModuleBase):
                 bias_init=ttml.init.zeros(),
             )
 
-    def sdpa(
-        self,
-        q_heads: ttml.autograd.Tensor,
-        k_heads: ttml.autograd.Tensor,
-        v_heads: ttml.autograd.Tensor,
-        mask: ttml.autograd.Tensor,
-    ) -> ttml.autograd.Tensor:
-        """The attention kernel; assign per instance or override to swap it."""
-        return ttml.ops.attention.scaled_dot_product_attention(q_heads, k_heads, v_heads, mask)
-
     def forward_no_kv(self, input: ttml.autograd.Tensor, mask: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         qkv = self.qkv_linear(input)
 
@@ -111,7 +111,11 @@ class GroupedQueryAttention(AbstractModuleBase):
         q_heads = ttml.ops.rope.rope(q_heads, self.rope_params)
         k_heads = ttml.ops.rope.rope(k_heads, self.rope_params)
 
-        attention = self.sdpa(q_heads, k_heads, v_heads, mask)
+        sdpa_args = (q_heads, k_heads, v_heads, mask)
+        if self.use_composite_sdpa:
+            attention = ttml.ops.attention.scaled_dot_product_attention_composite(*sdpa_args)
+        else:
+            attention = ttml.ops.attention.scaled_dot_product_attention(*sdpa_args)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
 
         out = self.out_linear(attention)
@@ -158,7 +162,11 @@ class GroupedQueryAttention(AbstractModuleBase):
         k_cache_to_process = ttml.autograd.create_tensor(k_cache_slice)
         v_cache_to_process = ttml.autograd.create_tensor(v_cache_slice)
 
-        attention = self.sdpa(q_heads, k_cache_to_process, v_cache_to_process, mask)
+        sdpa_args = (q_heads, k_cache_to_process, v_cache_to_process, mask)
+        if self.use_composite_sdpa:
+            attention = ttml.ops.attention.scaled_dot_product_attention_composite(*sdpa_args)
+        else:
+            attention = ttml.ops.attention.scaled_dot_product_attention(*sdpa_args)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
 
         out = self.out_linear(attention)

@@ -2,16 +2,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
+
 import ttnn
-import ttml
 
 from ttml.models import WeightTyingType
-from ttml.models.llama import Llama
+from ttml.models.llama import Llama, compute_swiglu_intermediate_size
 
 
 class LlamaCompositeKV(Llama):
     """Extends Llama for 2 reasons:
-    1. Swaps every block's attention kernel for scaled_dot_product_attention_composite: the
+    1. Runs attention through scaled_dot_product_attention_composite (``use_composite_sdpa``): the
        completer emits non-broadcast masks ((B, 1, S, S)) that only the composite kernel accepts,
        and it makes the decode path (KV-cache slice -> attention) actually work.
     2. Adds weights_ref_hf_dict() -- an HF-keyed export of live ttml ttnn.Tensor handles, shaped
@@ -19,11 +20,8 @@ class LlamaCompositeKV(Llama):
        the remote-rollout weight sync depends on, and it doesn't exist upstream."""
 
     def __init__(self, config):
-        super().__init__(config)
+        super().__init__(replace(config, use_composite_sdpa=True))
         self.create_name("Llama")
-
-        for block in self.blocks:
-            block.attention.sdpa = ttml.ops.attention.scaled_dot_product_attention_composite
 
     def weights_ref_hf_dict(self) -> dict[str, ttnn.Tensor]:
         """Export this ttml model's parameters as an HF-keyed dict of on-device
@@ -64,6 +62,9 @@ class LlamaCompositeKV(Llama):
         H = cfg.hidden_size
         head_dim = H // n_heads
         kv_dim = n_kv * head_dim
+        intermediate = cfg.intermediate_size
+        if intermediate is None:
+            intermediate = compute_swiglu_intermediate_size(H)
 
         params = self.parameters()
 
@@ -110,10 +111,10 @@ class LlamaCompositeKV(Llama):
 
             gate_up = get(f"{p}/mlp/w_gate_up/weight")
             gate_up_shape = tuple(gate_up.shape)
-            assert gate_up_shape[:2] == (1, 1) and gate_up_shape[2] % 2 == 0 and gate_up_shape[3] == H, (
-                f"w_gate_up shape mismatch at layer {i}: got {gate_up_shape}, " f"expected (1, 1, 2*I, {H})"
+            assert gate_up_shape == (1, 1, 2 * intermediate, H), (
+                f"w_gate_up shape mismatch at layer {i}: got {gate_up_shape}, "
+                f"expected (1, 1, {2 * intermediate}, {H})"
             )
-            intermediate = gate_up_shape[2] // 2
             out[f"model.layers.{i}.mlp.gate_proj.weight"] = rows(gate_up, 0, intermediate)
             out[f"model.layers.{i}.mlp.up_proj.weight"] = rows(gate_up, intermediate, 2 * intermediate)
             out[f"model.layers.{i}.mlp.down_proj.weight"] = get(f"{p}/mlp/w2/weight")
