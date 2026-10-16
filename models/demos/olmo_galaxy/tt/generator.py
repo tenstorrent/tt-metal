@@ -4,6 +4,7 @@
 
 import os
 from collections import defaultdict
+from contextlib import contextmanager
 from dataclasses import fields, replace
 from typing import List
 
@@ -45,6 +46,26 @@ def get_olmo_long_isl_warmup_seqlens(requested_prefill_len: int) -> list[int]:
 
 def should_warmup_prefill_traces(prefill_traces_warmup: bool, enable_trace: bool) -> bool:
     return enable_trace and not prefill_traces_warmup
+
+
+@contextmanager
+def _long_prefill_matmul_throttle(active):
+    """Throttle matmul issue rate (TT_MM_THROTTLE_PERF) while an eager prefill longer than the largest traced length runs.
+
+    Long eager prefill runs large matmuls on more than 48 cores back to back, which can trip di/dt limits on Wormhole
+    (hangs / corrupted results; the same fix applies to other models' prefill). The variable is read when a matmul program is
+    created, so setting it only around this call leaves the traced prefills and the decode traces (captured earlier) at full
+    speed. OLMO_LONG_PREFILL_MM_THROTTLE overrides the level (default 3 = 50%, 0 = off); an already set TT_MM_THROTTLE_PERF wins.
+    """
+    level = os.environ.get("OLMO_LONG_PREFILL_MM_THROTTLE", "3")
+    if not active or level == "0" or "TT_MM_THROTTLE_PERF" in os.environ:
+        yield
+        return
+    os.environ["TT_MM_THROTTLE_PERF"] = level
+    try:
+        yield
+    finally:
+        os.environ.pop("TT_MM_THROTTLE_PERF", None)
 
 
 class Generator(WarmupForwardMixin):
@@ -356,9 +377,8 @@ class Generator(WarmupForwardMixin):
                     self.tt_logits_accumulated_batched = []
                 tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
             else:
-                if os.environ.get("OLMO_CLEAR_PC_EAGER") == "1":
-                    self.mesh_device.clear_program_cache()  # debug: stale cached programs on the eager long-ISL path?
-                tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
+                with _long_prefill_matmul_throttle(prefill_seq_len > max(self.model.tt_ccl.support_seqlens)):
+                    tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
 
             if not do_device_sampling:
                 tt_tok = self.model.process_output_prefill(

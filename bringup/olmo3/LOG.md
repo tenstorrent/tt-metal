@@ -163,3 +163,13 @@ OLMO_NO_KV_RESET / OLMO_NO_PROGRAM_CACHE / OLMO_TRACE_REGION / OLMO_REPEAT_BATCH
 - `OLMO_EAGER_PREFILL_LAYER_SYNC=1` (sync the device between layers of an eager prefill) HUNG THE DEVICE: both server starts that used it
   (21:46 and 00:24) hit "device timeout in fetch queue wait" within seconds of the first requests and lost all 32 chips (tt-triage then
   reports PcieHangError on every device). Servers without it were fine. The option is removed; do not re-add it.
+
+## 2026-10-16 tt-inference-server evals (ci-nightly) on the fixed code: AIME24 6/15, collapsed outputs; server hung in MATH-500
+- r1_aime24 (15 of 30 problems, T0.6 / top_p 0.95 / top_k 32 default, max 32768 tokens, up to 15-32 concurrent): 6/15 = 40% vs 80.6 published.
+  Of the 9 wrong: 7 are collapsed generations (random multi-script junk or "Thus, Thus," loops, no answer, 85-128K chars ~ the token cap),
+  2 are wrong arithmetic. Of the 8 outputs that closed </think>, 6 are correct. The 38-minute stage finished without any device error.
+- MATH-500 stage then hit "Timeout detected" at 01:55:26 (device hang) at 92.7% KV usage with 18 running / 13 waiting; generation stayed at 0 tok/s
+  until the stalled server/eval were killed. No experiment options were set. Devices need a power cycle.
+- Hypothesis (untested): sustained heavy concurrent decode trips di/dt limits on Wormhole -> corrupted compute (junk after thousands of tokens) and
+  eventually a hang; single-user demo runs to 6.2K tokens are clean. TT_MM_THROTTLE_PERF (matmul throttle) is the planned test: demo batch-32 speed
+  with it, then the same AIME24 eval with it set globally. Eager prefill > 4096 now runs with TT_MM_THROTTLE_PERF=3 (see generator.py).
