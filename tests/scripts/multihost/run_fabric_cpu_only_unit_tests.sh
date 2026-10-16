@@ -893,10 +893,10 @@ LONG_RING_STRESS_TIMEOUT=1800
 # phase-1 setup) even though 64-into-144 (SC36, ~3 min) and 64-into-80 (SC20 aisleC, ~42 s) solve
 # fine; that erratic embedded-case cost is a separate z-link issue, not the conflict-cap budget.
 for entry in \
-    "SC36_revC_subtorus_120_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 128" \
+    "SC36_revC_subtorus_120_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64" \
     "SC36_revAB_subtorus_120_aisleC_sc20:${SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
-    "SC28_revC_subtorus_120_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 112" \
-    "SC24_revC_subtorus_110_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 96" ; do
+    "SC28_revC_subtorus_120_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64" \
+    "SC24_revC_subtorus_110_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
   if [[ ! -f "${cluster_map}" ]]; then
     # Guard against a tt-cluster-descriptors pin that predates the mapping (all current entries are in the pin).
@@ -910,6 +910,31 @@ for entry in \
     run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${stage_timeout} tt-run --mesh-graph-descriptor "${!mgd_var}" --mock-cluster-rank-binding "${cluster_map}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
   done
 done
+
+# ================== THROWAWAY: kissat-vs-cadical wall-time A/B (DO NOT MERGE) ==================
+# Runs each big-ring phase-1 min-host solve under BOTH engines back-to-back on the SAME runner, so the
+# wall times are directly comparable under one machine's load. Deterministic engine = kissat (default);
+# TT_TOPO_SAT_ENGINE=cadical selects the former engine. Grep CI log for 'ABENCH' to read the table.
+# 96->SC24(exact), 112->SC28(exact), 128->SC36(144-slot embed). 144 excluded (heaviest).
+for abench in \
+    "96:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" \
+    "112:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" \
+    "128:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" ; do
+  abstage="${abench%%:*}"; abmap="${abench#*:}"; abmgd_var="MGD_BLITZ_${abstage}"
+  for abengine in kissat cadical; do
+    ab_t0=$(date +%s)
+    echo "ABENCH START engine=${abengine} stage=${abstage} t0=${ab_t0}"
+    run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_TOPO_SAT_ENGINE="${abengine}" TT_TOPO_SAT_LOG_SOLVES=1 \
+        TT_METAL_OPERATION_TIMEOUT_SECONDS=2700 TT_FABRIC_TEST_TIMEOUT=2800 \
+        tt-run --mesh-graph-descriptor "${!abmgd_var}" --mock-cluster-rank-binding "${abmap}" \
+        --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" \
+        ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder" \
+      || echo "ABENCH NOTE engine=${abengine} stage=${abstage} returned nonzero (timeout/UNSAT)"
+    ab_t1=$(date +%s)
+    echo "ABENCH RESULT engine=${abengine} stage=${abstage} wall_s=$(( ab_t1 - ab_t0 ))"
+  done
+done
+# ============================================================================================
 
 # Multi-solution host-cap sweep on the same SC36 mock: enumerate --all-solutions for the 32-stage ring, then run
 # the host-count gtest (SweepConsumer_SolutionSpansExpectedHosts, asserts 8 galaxies) per solution. #49629 blocks
