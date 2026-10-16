@@ -202,7 +202,7 @@ def _run_auto(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
     elif outs["golden"].numel() == want.numel():
         metrics.record(name, CC.gate_value(outs["golden"], want, ex.kind, compare_mode))  # PCC: a diagnostic only
     ok = not ex.evaluate(outs) and ok
-    ok = NF.waive(s, s.block_type_of(layer), step, ok, outs["golden"], err_name)  # F85: an owner waiver, recorded
+    ok = NF.waive(s, s.block_type_of(layer), step, ok, outs["golden"], err_name, want)  # F85: an owner waiver, recorded
     # A, B, A: the second inputs above already ran after the golden (B); run the golden again and compare its bytes
     gold = next(x for x in ex.cases if x.name == "golden")
     other = [x for x in ex.cases if x.name != "golden"]
@@ -541,7 +541,7 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
     if warn:
         metrics.record(f"{tag}_floor_warn", 1)
         print(f"WARN {tag} (not gating, for the owner's review; do not work on it): {'; '.join(warn)}")
-    return NF.waive(s, block_type, st.name, ok and not bad, got, tag)  # F85: an owner waiver, recorded
+    return NF.waive(s, block_type, st.name, ok and not bad, got, tag, cpu)  # F85: an owner waiver, recorded
 
 
 def _check_tail(s, ref, layer: int, steps, last, seen: dict, cpu, snapshot: dict) -> bool:
@@ -595,7 +595,7 @@ def _check_tail(s, ref, layer: int, steps, last, seen: dict, cpu, snapshot: dict
     )
     from models.demos.common.bringup.testing import noise_floor as NF
 
-    return NF.waive(s, s.block_type_of(layer), last.name, ok, seen["out"], tag)  # F85: the last step's waiver
+    return NF.waive(s, s.block_type_of(layer), last.name, ok, seen["out"], tag, want)  # F85: the last step's waiver
 
 
 def _model_chain(s, ref, hooks, steps, layer: int, g, c: int, swapped, block_type: str) -> list | None:

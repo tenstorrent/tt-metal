@@ -197,3 +197,7 @@ Every intervention by the supervising session: time, task, trigger, classificati
 ## 2026-10-16 21:55 C.enc_source.attention attempt 1 FAIL, attempt 2 stopped
 - Only auto_attention_L02_small rel 0.0352 > 0.03 (fixed second-input floor); golden 0.035 <= 0.16, big 0.023 <= 0.049.
   Class: framework (the scaled probes are structural checks; F96 limit 0.2). Attempt 2 aborted as doomed; resumed.
+
+## 2026-10-16 22:25 C.enc_source.ffn_hc: test passes with a zero stub
+- Class: framework (F85 waiver passed any finite output). F97: waived steps still fail beyond rel 0.2. The test agent
+  was stopped (doomed: it may not change the framework); resumed.
