@@ -919,7 +919,6 @@ class Qwen38Decoder(LightweightModule):
                 (h * d, h * d, hv * d),
                 self.conv_actual_start,
                 self.conv_selector(b),
-                self.ckc,
             )
         else:
             chunks = []
@@ -1002,9 +1001,15 @@ class Qwen38Decoder(LightweightModule):
         return self._linear(output, "linear_attn.out_proj")
 
     def conv_selector(self, batch):
-        """The packed convolution's one-hot row reader for this batch width."""
+        """The packed convolution's one-hot row reader for this batch width.
+
+        Raises rather than building one, so that a width nobody primed fails here instead of
+        allocating a persistent buffer in the middle of a decode.
+        """
         if batch not in self.conv_selectors:
-            self.conv_selectors[batch] = row_selector(self.device, batch)
+            raise ValueError(
+                f"No conv selector for batch {batch}; prime_conv_selectors covers {sorted(self.conv_selectors)}"
+            )
         return self.conv_selectors[batch]
 
     def prime_conv_selectors(self, max_batch):
@@ -1016,7 +1021,8 @@ class Qwen38Decoder(LightweightModule):
         if self.kind != "linear_attention":
             return
         for batch in range(8, max_batch + 1, 8):
-            self.conv_selector(batch)
+            if batch not in self.conv_selectors:
+                self.conv_selectors[batch] = row_selector(self.device, batch)
 
     def decode_forward(self, x, *, state, current_pos, page_table=None, cos=None, sin=None):
         """One token [B,1,5120] or compact [1,1,B,5120]."""
