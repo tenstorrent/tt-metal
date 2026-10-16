@@ -132,6 +132,9 @@ target_link_libraries(
         cadical::cadical
 )
 target_compile_features(tt_fabric_topology_utils PUBLIC cxx_std_20)
+# yaml-cpp and cadical are implementation details: do not export their symbols. The process already has
+# yaml-cpp via libtt-umd.so, and a second exported copy trips ASan's ODR check.
+target_link_options(tt_fabric_topology_utils PRIVATE "LINKER:--exclude-libs=libyaml-cpp.a:libcadical.a")
 TT_ENABLE_UNITY_BUILD(tt_fabric_topology_utils)
 tt_reuse_precompile_headers(tt_fabric_topology_utils TT::CommonPCH)
 install(TARGETS tt_fabric_topology_utils EXPORT Metalium LIBRARY COMPONENT metalium-runtime)
