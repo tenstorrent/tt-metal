@@ -43,8 +43,8 @@ def load_methods(names, ops):
 class Row:
     """Stands in for one layer's conv or recurrent tensor, sliceable by row."""
 
-    def __init__(self, label, rows=4):
-        self.label, self.rows = label, rows
+    def __init__(self, label, rows=4, layout="tile"):
+        self.label, self.rows, self.layout = label, rows, layout
         self.shape = (rows, 2, 2)
 
     def __getitem__(self, key):
@@ -65,16 +65,21 @@ class PrefixSnapshotTests(unittest.TestCase):
     LAYERS = 3
 
     def setUp(self):
-        self.copies = []
+        self.copies, self.fills = [], []
         self.ops = SimpleNamespace(
             zeros_like=lambda tensor: f"zeros({tensor})",
             clone=lambda tensor: Buffer(tensor),
             slice=self.write_row,
+            fill_cache=lambda tensor, row, slot: self.fills.append((tensor.label, row, slot)),
+            TILE_LAYOUT="tile",
             copy=lambda source, target: self.copies.append((source, target)),
             concat=lambda parts, **kw: ("concat", tuple(parts)),
         )
         self.methods, self.module = load_methods(METHODS, self.ops)
-        layers = [SimpleNamespace(conv=Row(f"conv{i}"), recurrent=Row(f"rec{i}")) for i in range(self.LAYERS)]
+        layers = [
+            SimpleNamespace(conv=Row(f"conv{i}", layout="row_major"), recurrent=Row(f"rec{i}", layout="tile"))
+            for i in range(self.LAYERS)
+        ]
         self.gen = SimpleNamespace(
             cache=SimpleNamespace(batch_size=4, layers=layers),
             model=SimpleNamespace(_resident_decode_bucket=None),
@@ -158,17 +163,29 @@ class PrefixSnapshotTests(unittest.TestCase):
         self.gen._slot_prefix_len[0] = 512
         handle = self.gen.save_slot_state(0)
         self.copies.clear()
+        self.fills.clear()
         self.gen.restore_slot_state(3, handle)
-        # One rebuilt tensor per conv and recurrent on every layer.
-        self.assertEqual(len(self.copies), 2 * self.LAYERS)
-        parts = dict(self.copies)
+        # Tiled state takes one in-place row write per layer; row-major state has no such op, so
+        # its whole tensor is still rebuilt.
+        self.assertEqual(len(self.fills), self.LAYERS)
+        self.assertEqual(len(self.copies), self.LAYERS)
+        self.assertEqual([(label, slot) for label, _, slot in self.fills], [(f"rec{i}", 3) for i in range(self.LAYERS)])
+        self.assertEqual(self.fills[0][1].content, "rec0[0]")
         rebuilt = [source for source, _ in self.copies]
         self.assertTrue(all(kind == "concat" for kind, _ in rebuilt))
         # Slot 3's position carries the saved row; the other rows are the slot's own.
         first = rebuilt[0][1]
         self.assertEqual(first[3].content, "conv0[0]")
         self.assertEqual(first[1], "conv0[1]")
-        self.assertEqual(len(parts), 2 * self.LAYERS)
+
+    def test_a_tiled_row_write_does_not_scale_with_how_many_slots_the_cache_holds(self):
+        # The rebuild is O(batch) per layer; this is the path that stops restore growing with it.
+        self.gen._slot_prefix_len[0] = 512
+        handle = self.gen.save_slot_state(0)
+        self.fills.clear()
+        self.gen.cache.batch_size = 16
+        self.gen.restore_slot_state(3, handle)
+        self.assertEqual(len(self.fills), self.LAYERS)
 
     def test_a_remap_carries_each_slot_prefix_with_the_row_it_describes(self):
         # remap_recurrent_slots rebuilds row j from old row order[j]; the length each row stands
