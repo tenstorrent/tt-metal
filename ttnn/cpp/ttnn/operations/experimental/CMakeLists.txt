@@ -66,6 +66,7 @@ add_subdirectory(dropout)
 add_subdirectory(fft)
 add_subdirectory(fused_msda)
 add_subdirectory(multi_scale_deformable_attn)
+add_subdirectory(nomic_embed_text_v2_moe/routing_metadata)
 add_subdirectory(plusone)
 add_subdirectory(reshape)
 add_subdirectory(ssm)
@@ -113,6 +114,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::FFT
         TTNN::Ops::Experimental::FusedMSDA
         TTNN::Ops::Experimental::MultiScaleDeformableAttn
+        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutingMetadata
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reshape
         TTNN::Ops::Experimental::SSM
@@ -165,6 +167,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::FFT>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::FusedMSDA>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MultiScaleDeformableAttn>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutingMetadata>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PlusOne>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reshape>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::SSM>
