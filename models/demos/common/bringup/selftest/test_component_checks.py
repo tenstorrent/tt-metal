@@ -263,6 +263,9 @@ def test_an_aborted_test_agent_retries_the_freeze_without_review(orch, sandbox):
 
     def overseer_fixes_and_aborts(task, role, attempt, brief, **kw):
         if role == "test":
+            from models.demos.common.bringup.testing.templates import component_test_path
+
+            component_test_path(o.spec, "blk", "a").write_text("# the aborted agent's half edit\n")  # F95: replaced
             (sandbox.repo / "src/sweep.txt").unlink(missing_ok=True)  # the framework fix
             abort = {"task": task["id"], "role": role, "attempt": attempt, "reason": "the sweep is fixed"}
             (o.run_dir / OV.ABORT_FILE).write_text(json.dumps(abort))
@@ -272,6 +275,9 @@ def test_an_aborted_test_agent_retries_the_freeze_without_review(orch, sandbox):
     assert o.run() == DONE
     assert [c for c in orch.calls() if ".test." in c] == ["C.blk.a.test.1.md bringup-engineer"]
     assert any("frozen without review after the abort (F94)" in line for line in orch.lines)
+    from models.demos.common.bringup.testing.templates import component_test_path
+
+    assert "half edit" not in component_test_path(o.spec, "blk", "a").read_text()
 
 
 def test_freeze_with_mutations_requires_the_sweep(sandbox):

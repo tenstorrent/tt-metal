@@ -135,6 +135,18 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
 Watch the orchestrator log for gate results, attempts, stops and problems. After every gate, re-export and republish
 the dashboards.
 
+### Stop doomed work at once; the run is resumable
+
+The framework is resumable (F95, owner): a run killed at any point (a power loss, the overseer) restarts with
+`orchestrator resume` at the task it was on. The task gates first, a test frozen without review is rendered afresh
+from its template, attempt numbers continue (no brief or transcript is overwritten) and the next agent's brief says
+which attempt was cut off and that its edits are in the tree. So never wait for an agent you know is doing work that
+will fail or is not needed (a false alarm, a check the framework gets wrong, a fix already made): stop it now
+(`overseer abort --reason ...`, or kill the orchestrator and the agent's process group by pid), fix the cause, resume.
+If any part of the framework is not resumable this way (a restart loses work, repeats finished work or trusts a stale
+file), that is a framework bug: fix it with a selftest (`test_a_power_loss_mid_agent_resumes_at_the_interrupted_task`
+is the model) before relying on it.
+
 ### Always be watching
 
 While a run is live, a watch is always armed: the run must never sit at a stop (an approval, a STOPPED task, a pause,
