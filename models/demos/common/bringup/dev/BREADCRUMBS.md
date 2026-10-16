@@ -1268,3 +1268,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   next brief says the attempt was cut off; a test frozen without review is always rendered afresh (an aborted test
   agent's half-written coef check survived a restart and sent a second agent to fix it: DeepSeek-V4.1 attention).
   Skill: stop doomed agents at once, the run is resumable.
+- F96: the scaled probes (small RMS 1e-3, big x 2) gate rel at component_scaled_rel 0.2 (structural mistakes: 0.5-2):
+  at tiny scales a correct device meets absolute floors (fp8 scale, eps) the nudge model does not cover. DeepSeek-V4.1
+  attention L2: small 0.035 > 0.03 with every other input well inside; golden 0.035 vs 0.16. Every standard mistake
+  is still caught (sweep selftests).
