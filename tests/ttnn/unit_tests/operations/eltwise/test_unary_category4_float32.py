@@ -57,11 +57,11 @@ Accuracy criteria (FTZ = flush-to-zero, SNB = smallest normal bfloat16)
 | celu                  | alpha > 1            | -alpha*SNB < x < 0 | exactly 0                   |
 |                       | alpha = 2^k          | elsewhere          | ULP ≤ 1                     |
 |                       | alpha = 0.1          | elsewhere          | ULP ≤ 2                     |
-| rpow                  | all                  | |x| >= 2^116       | xfail: inverted result      |
+| rpow                  | all                  | |x| >= 2^116       | xfail (#55129)              |
 |                       |                      | exact result < SNB | exactly 0                   |
 |                       |                      | overflow           | +inf                        |
 |                       | exponent = 2^k       | elsewhere          | ULP ≤ 1                     |
-|                       | other exponents      | elsewhere          | rtol 1e-5                   |
+|                       | other exponents      | elsewhere          | rtol 1e-5 (#59761)          |
 """
 
 
@@ -282,7 +282,8 @@ def test_rpow(device, exponent):
     |          | overflow           | ±inf      | non-finite values must match the golden    |
     | 2^k      | elsewhere          | ULP ≤ 1   | log2(exponent) is exact                    |
     | other    | elsewhere          | rtol 1e-5 | the rounding of log2(exponent) is scaled   |
-    |          |                    |           | by x: up to 70 ULP (exponent = 3, x = 78)  |
+    |          |                    |           | by x: up to 70 ULP (exponent = 3, x = 78); |
+    |          |                    |           | #59761                                     |
 
     |x| >= 2^116 is test_rpow_split_overflow.
     """
@@ -305,13 +306,15 @@ def test_rpow(device, exponent):
     ftz = exact.abs() < SMALLEST_NORMAL_BF16
     assert_equal(torch.zeros_like(result[ftz]), result[ftz])
     golden, result = golden[~ftz], result[~ftz]
-    assert torch.equal(torch.isinf(golden), torch.isinf(result)), "rpow overflow positions differ from the golden"
+    overflow = torch.isinf(golden)
+    assert torch.equal(overflow, torch.isinf(result)), "rpow overflow positions differ from the golden"
+    assert torch.equal(golden[overflow], result[overflow]), "rpow overflow signs differ from the golden"
     finite = torch.isfinite(golden)
     assert_allclose(expected_result=golden[finite], actual_result=result[finite], rtol=1e-5, atol=0)
 
 
 @pytest.mark.parametrize("exponent", [0.5, 1.0, 2.0])
-@pytest.mark.xfail(reason="float32 pow overflows its Veltkamp split (x * 4097) for |x| >= 2^116")
+@pytest.mark.xfail(strict=True, reason="#55129: float32 pow overflows its Veltkamp split (x * 4097) for |x| >= 2^116")
 def test_rpow_split_overflow(device, exponent):
     """rpow(x, exponent) for |x| >= 2^116.
 
