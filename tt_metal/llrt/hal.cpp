@@ -39,7 +39,7 @@ Hal::Hal(
     bool enable_dram_backed_cq,
     bool is_simulator,
     bool enable_blackhole_dram_programmable_cores,
-    bool enable_aerisc_ptp_trace) :
+    bool enable_aerisc_ptp_trace,
     bool enable_cce_programmable_cores) :
     arch_(arch) {
     switch (this->arch_) {

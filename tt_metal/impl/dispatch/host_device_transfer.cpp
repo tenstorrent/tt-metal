@@ -385,7 +385,7 @@ bool WriteToDeviceDRAMChannel(
     }
     // Management-only packages (standalone Mimir) have no allocator. Firmware-reserved DRAM
     // only exists once compute bring-up has partitioned the banks.
-    if (device->allocator_impl()) {
+    if (device.allocator()) {
         TT_FATAL(
             address >= device.allocator()->get_base_allocator_addr(HalMemType::DRAM),
             "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",

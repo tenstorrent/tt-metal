@@ -176,9 +176,14 @@ void MetalContext::initialize(
         resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config()));
 
     if (initialized_) {
-        if (dispatch_core_config_ != resolved_config or num_hw_cqs != num_hw_cqs_ or
-            worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
-            fw_compile_hash != fw_compile_hash_) {
+        const bool params_changed = dispatch_core_config_ != resolved_config or num_hw_cqs != num_hw_cqs_ or
+                                    worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
+                                    fw_compile_hash != fw_compile_hash_;
+        // A minimal context has no firmware initializer, dispatch state, or JIT build state. It
+        // cannot stand in for a full one: a later full request must run the complete path, or
+        // the cores stay in reset and the first kernel build dereferences null.
+        const bool needs_upgrade = minimal_ && !minimal;
+        if (params_changed) {
             // The legacy implicit context keeps tearing down underneath open devices; an explicit MetalEnv refuses.
             const bool devices_open = device_manager_ && device_manager_->is_initialized() &&
                                       !device_manager_->get_all_active_devices().empty();
@@ -190,14 +195,6 @@ void MetalContext::initialize(
                 num_hw_cqs,
                 worker_l1_size_,
                 worker_l1_size);
-        const bool params_changed = dispatch_core_config_ != resolved_config or num_hw_cqs != num_hw_cqs_ or
-                                    worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
-                                    fw_compile_hash != fw_compile_hash_;
-        // A minimal context has no firmware initializer, dispatch state, or JIT build state. It
-        // cannot stand in for a full one: a later full request must run the complete path, or
-        // the cores stay in reset and the first kernel build dereferences null.
-        const bool needs_upgrade = minimal_ && !minimal;
-        if (params_changed) {
             log_warning(tt::LogAlways, "Closing and re-initializing MetalContext with new parameters.");
             teardown();
         } else if (needs_upgrade) {

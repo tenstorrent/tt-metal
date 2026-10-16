@@ -356,7 +356,6 @@ public:
             log_info(LogMetal, "Using variant: {} with the base Quasar register map", variant);
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");
         } else {
-            log_info(LogMetal, "Using variant: Quasar");
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");
         }
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");

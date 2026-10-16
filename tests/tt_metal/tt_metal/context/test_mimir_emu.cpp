@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <cstdlib>
 #include <memory>
 #include <set>
@@ -87,10 +88,18 @@ struct GddrSweep {
 
 GddrSweep gddr_sweep_from_soc(const IDevice* device) {
     const uint64_t view_size = MetalContext::instance().get_cluster().get_soc_desc(device->id()).dram_view_size;
-    if (view_size < kGddrSlotStride || view_size % kGddrSlotStride != 0) {
+    // Views of at least 1 GiB are walked in 1 GiB slots. The emu descriptors expose 512 MiB
+    // halves, which is one slot. The slot must still divide the 4 GiB half-start.
+    uint64_t slot_stride = kGddrSlotStride;
+    if (view_size == 0 || view_size > std::numeric_limits<uint32_t>::max()) {
         return {};
     }
-    return {static_cast<uint32_t>(view_size / kGddrSlotStride), static_cast<uint32_t>(kGddrSlotStride)};
+    if (view_size < kGddrSlotStride) {
+        slot_stride = view_size;
+    } else if (view_size % kGddrSlotStride != 0) {
+        return {};
+    }
+    return {static_cast<uint32_t>(view_size / slot_stride), static_cast<uint32_t>(slot_stride)};
 }
 
 struct GddrTarget {
@@ -538,7 +547,7 @@ TEST_P(CopiesGddrWithCompileTimeArgs, RoundTrip) {
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
     const GddrSweep sweep = gddr_sweep_from_soc(device);
-    ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must be a non-zero multiple of 1GiB";
+    ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must hold at least one GDDR slot";
     const std::vector<GddrTarget> targets = {gddr_target_for_view(soc_desc, param.partition, sweep)};
     GddrBackingScope gddr_backing;
 
@@ -619,7 +628,7 @@ TEST_P(CopiesGddrThroughAllocatedBuffer, RoundTrip) {
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
     const GddrSweep sweep = gddr_sweep_from_soc(device);
-    ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must be a non-zero multiple of 1GiB";
+    ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must hold at least one GDDR slot";
     const std::vector<GddrTarget> targets = {gddr_target_for_view(soc_desc, param.partition, sweep)};
     GddrBackingScope gddr_backing;
 
@@ -693,7 +702,7 @@ TEST_P(CopiesAllocatedBufferWithRuntimeArgs, RoundTrip) {
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
     const GddrSweep sweep = gddr_sweep_from_soc(device);
-    ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must be a non-zero multiple of 1GiB";
+    ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must hold at least one GDDR slot";
     const std::vector<GddrTarget> targets = {gddr_target_for_view(soc_desc, param.partition, sweep)};
     GddrBackingScope gddr_backing;
 
@@ -880,7 +889,7 @@ TEST_P(CopiesAllocatedBufferLargerThanAlignment, RoundTrip) {
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
     const GddrSweep sweep = gddr_sweep_from_soc(device);
-    ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must be a non-zero multiple of 1GiB";
+    ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must hold at least one GDDR slot";
     const std::vector<GddrTarget> targets = {gddr_target_for_view(soc_desc, param.partition, sweep)};
     GddrBackingScope gddr_backing;
 
@@ -952,7 +961,7 @@ TEST(MimirEmu, AllCcesCopyLocalMimirBlock) {
     const uint32_t num_mimirs = num_mimirs_on(device);
     ASSERT_GE(num_mimirs, 1u);
     const GddrSweep sweep = gddr_sweep_from_soc(device);
-    ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must be a non-zero multiple of 1GiB";
+    ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must hold at least one GDDR slot";
     GddrBackingScope gddr_backing;
 
     const auto& hal = MetalContext::instance().hal();
@@ -1178,7 +1187,7 @@ TEST_P(AllHartsWriteAllocatedBuffer, WritesMagic) {
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
     const GddrSweep sweep = gddr_sweep_from_soc(device);
-    ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must be a non-zero multiple of 1GiB";
+    ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must hold at least one GDDR slot";
     const std::vector<GddrTarget> targets = {gddr_target_for_view(soc_desc, param.partition, sweep)};
     GddrBackingScope gddr_backing;
 
