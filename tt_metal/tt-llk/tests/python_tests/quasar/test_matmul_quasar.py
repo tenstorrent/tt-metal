@@ -674,15 +674,14 @@ def matmul_int4_implied_math_formats(register_format_hint):
 
 # Int8 activations (A) x Int4 weights (B): the integer core of a wint4_aint8 linear. The
 # unpacker widens the sign-magnitude Int4 weights to Int8, so the FPU runs a plain int8 matmul.
+MATMUL_INT4_FORMAT = InputOutputFormat(
+    DataFormat.Int8, DataFormat.Int32, input_format_B=DataFormat.Int4
+)
+
+
 @pytest.mark.quasar
 @parametrize(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
-    format=[
-        InputOutputFormat(
-            DataFormat.Int8, DataFormat.Int32, input_format_B=DataFormat.Int4
-        )
-    ],
-    math_fidelity=[MathFidelity.LoFi],
     dest_sync_mode=lambda: matmul_dest_sync_modes(),
     dest_acc=[DestAccumulation.Yes],
     matmul_tile_dims=runtime(
@@ -693,35 +692,27 @@ def matmul_int4_implied_math_formats(register_format_hint):
     register_format_hint=matmul_int4_register_format_hints(),
     implied_math_format=matmul_int4_implied_math_formats,
     enable_direct_indexing=matmul_enable_direct_indexing,
-    transpose=[Transpose.No],
-    run_types=[[PerfRunType.L1_TO_L1]],
-    loop_factor=[1],
 )
 def test_matmul_int4(
     input_tile_dimensions,
     matmul_tile_dims,
-    math_fidelity,
     dest_sync_mode,
     dest_acc,
-    format,
     register_format_hint,
     implied_math_format,
     enable_direct_indexing,
-    transpose,
-    run_types,
-    loop_factor,
 ):
     test_matmul(
         input_tile_dimensions,
         matmul_tile_dims,
-        math_fidelity,
+        MathFidelity.LoFi,
         dest_sync_mode,
         dest_acc,
-        format,
+        MATMUL_INT4_FORMAT,
         implied_math_format,
         register_format_hint,
         enable_direct_indexing,
-        transpose,
-        run_types,
-        loop_factor,
+        Transpose.No,
+        [PerfRunType.L1_TO_L1],
+        1,
     )
