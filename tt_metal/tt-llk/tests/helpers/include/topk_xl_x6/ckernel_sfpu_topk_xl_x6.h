@@ -962,26 +962,14 @@ inline void transpose_8_faces()
     }
 
     // 8 value faces at +0, +16, ..., +112.
-    transpose_dest_face_32b<0>();
-    transpose_dest_face_32b<16>();
-    transpose_dest_face_32b<32>();
-    transpose_dest_face_32b<48>();
-    transpose_dest_face_32b<64>();
-    transpose_dest_face_32b<80>();
-    transpose_dest_face_32b<96>();
-    transpose_dest_face_32b<112>();
+    sfpi::face_transpose_dst_32b_batch<4, 0, false>();
+    sfpi::face_transpose_dst_32b_batch<4, 64, false>();
     if constexpr (!fused)
     {
         // Unfused mode keeps the indices in a parallel DST region. Transpose
         // the 8 index faces so they match the (now-transposed) values.
-        transpose_dest_face_32b<indices_offset + 0>();
-        transpose_dest_face_32b<indices_offset + 16>();
-        transpose_dest_face_32b<indices_offset + 32>();
-        transpose_dest_face_32b<indices_offset + 48>();
-        transpose_dest_face_32b<indices_offset + 64>();
-        transpose_dest_face_32b<indices_offset + 80>();
-        transpose_dest_face_32b<indices_offset + 96>();
-        transpose_dest_face_32b<indices_offset + 112>();
+        sfpi::face_transpose_dst_32b_batch<4, indices_offset, false>();
+        sfpi::face_transpose_dst_32b_batch<4, indices_offset + 64, false>();
     }
 
     if constexpr (manage_outer_cfg)
@@ -1009,35 +997,18 @@ inline void transpose_N_faces()
         enter_transpose_cfg_block();
     }
 
-    transpose_dest_face_32b<0>();
-    transpose_dest_face_32b<16>();
-    if constexpr (N > 2)
-    {
-        transpose_dest_face_32b<32>();
-        transpose_dest_face_32b<48>();
-    }
+    // At most four faces per batch: the batch parks every face in SrcA.
+    sfpi::face_transpose_dst_32b_batch<(N > 4 ? 4 : N), 0, false>();
     if constexpr (N > 4)
     {
-        transpose_dest_face_32b<64>();
-        transpose_dest_face_32b<80>();
-        transpose_dest_face_32b<96>();
-        transpose_dest_face_32b<112>();
+        sfpi::face_transpose_dst_32b_batch<N - 4, 64, false>();
     }
     if constexpr (!fused)
     {
-        transpose_dest_face_32b<indices_offset + 0>();
-        transpose_dest_face_32b<indices_offset + 16>();
-        if constexpr (N > 2)
-        {
-            transpose_dest_face_32b<indices_offset + 32>();
-            transpose_dest_face_32b<indices_offset + 48>();
-        }
+        sfpi::face_transpose_dst_32b_batch<(N > 4 ? 4 : N), indices_offset, false>();
         if constexpr (N > 4)
         {
-            transpose_dest_face_32b<indices_offset + 64>();
-            transpose_dest_face_32b<indices_offset + 80>();
-            transpose_dest_face_32b<indices_offset + 96>();
-            transpose_dest_face_32b<indices_offset + 112>();
+            sfpi::face_transpose_dst_32b_batch<N - 4, indices_offset + 64, false>();
         }
     }
 
