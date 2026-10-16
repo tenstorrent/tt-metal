@@ -149,6 +149,13 @@ inline DeviceCausalGeometry device_causal_geometry(
         has_bc ? query_geometry_ranks(args, device_index, tp_index) : QueryGeometryRanks{device_index, tp_index};
     device_index = ranks.device_index;
     tp_index = ranks.tp_index;
+    if (has_bc && args.natural_query_blocks) {
+        // Bring-up fork: natural query blocks (see operation_attributes_t::natural_query_blocks). The keys stay
+        // block-cyclic; the queries of device (d, c) are the contiguous positions chunk_start + d*chunk_local +
+        // c*Sq + [0, Sq): a linear diagonal with no straddle, at any tile-aligned start.
+        const uint32_t first = args.chunk_start_idx + device_index * chunk_local + tp_index * Sq;
+        return DeviceCausalGeometry{first / kCausalTileWidth, 0u, 0u};
+    }
     TT_FATAL(
         !(has_bc && rotation_exact) || device_index < sp,
         "indexer_score: device_index {} out of range for block-cyclic sp={} (check seq_shard_axes[0] vs "

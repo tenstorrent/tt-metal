@@ -98,3 +98,27 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 
 ### Tests: glm53_flash_d_p ring case (O.1, 2026-10-13)
 - GLM's captured ring_indexer_score_dsa call (2x2 full-mesh snake ring, key_compression_ratio 4, chunk start 51200, kv_len 14080) replaces its planned 2x4 sig-None case, with a new `test_ring_indexer_score_dsa_key_stride` model-case test; the 2x4 config moved inline into `tests/unit/test_key_stride_ring.py`. No op change.
+
+### key_compression_ratio 2 and natural_query_blocks (opt-in), 2026-10-16
+- What: (a) `key_compression_ratio=2` accepted by `indexer_score_dsa` / `ring_indexer_score_dsa` (the validations
+  allowed 1 or 4; the mask, partial-mask index and work split were already generic for any ratio dividing 32: ratio 2
+  gives residues {0, 16}). The refusal text keeps its old prefix ("must be 1 or 4, or 2 in the bring-up fork"), so
+  the source's and the fork's refusal tests match unchanged. (b) `ring_indexer_score_dsa(..., natural_query_blocks=
+  False)`: True = the queries are NATURAL contiguous blocks at any tile-aligned start (device at SP rank d, TP rank c
+  holds positions chunk_start_idx + d * block_cyclic_chunk_local + c * Sq + [0, Sq)) while the keys keep the
+  block-cyclic cache layout: `device_causal_geometry` returns that linear diagonal with no straddle. New attribute
+  `natural_query_blocks` (hashed), refused without a block-cyclic layout on an axis ring and with the metadata
+  (`chunk_start_idx_tensor`) path. Default False = the source's rotation-exact geometry; ratio 1 / 4 untouched.
+- Why: DeepSeek-V4.1's index keys pool 2 tokens (causal t < (pos + 1) // 2). Its layers compute natural blocks of
+  the chunk (row r = positions start + r W) at every 32-aligned start (serving contract), while the served index-key
+  cache is block-cyclic by position. The source geometry assumes the server's rotated query order at a mid-slab start:
+  at start 32 on 2x2 (S 2048, W 1024, Sq 512) 16384 future columns of one device came out finite
+  (tests/unit/test_natural_query_blocks.py with the option off). With it: every start (0, 32, 1088, 2048, 2592, 4064)
+  masks exactly, visible columns PCC 0.9999985, rel 0.00186 vs fp32 torch on the same bf16 inputs; the model's
+  component gate C.enc_source.indexer err 0.0174 <= 0.0329.
+- Regression, option off: tests/unit 17 passed, 1 skipped (the 2x4 case on this 2x2 box); model cases 2 passed;
+  fork_source 134 tests, 0 regressions vs baseline (the one failure is the recorded test_indexer_score_rejects_fp32_dest_acc).
+- Needed by: deepseek_v41_flash_d_p C.enc_source.indexer
+- Files: device/indexer_score_device_operation.cpp (validations, launch, ring entry, hash),
+  device/indexer_score_device_operation.hpp, device/indexer_score_device_operation_types.hpp,
+  device/indexer_score_host_common.hpp (geometry), indexer_score_nanobind.cpp, tests/unit/test_natural_query_blocks.py
