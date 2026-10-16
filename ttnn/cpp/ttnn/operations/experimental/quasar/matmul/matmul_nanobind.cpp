@@ -648,8 +648,8 @@ void py_module(nb::module_& mod) {
         tt_serializable_class<MatmulUnifiedProgramConfig>(mod, "MatmulUnifiedProgramConfig", R"doc(
         Placement-first program config (Quasar-native matmul).
 
-        GEMM vocabulary, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. Name the cores; every
-        other field defaults to auto. Each core produces C slices of C_slice_M_tiles x C_slice_N_tiles tiles:
+        GEMM vocabulary, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. Every field defaults to
+        auto; with no cores the placement is chosen too. Each core produces C slices of C_slice_M_tiles x C_slice_N_tiles tiles:
         the factory walks the C slices of a batch (across N, then down M) and hands that walk to the cores
         in enumeration order as contiguous runs (a core may produce several, for every batch; surplus cores
         idle). Edge C slices are clipped on read and write, so any M / N works. Every operand is addressed
@@ -660,8 +660,14 @@ void py_module(nb::module_& mod) {
         K chunks are assigned round-robin to the reader threads and the compute threads' shares of C to the
         writer threads (DM cores).
 
-        Limits: no fused bias (applied as a separate add) or activation, no untilize, 32x32 tiles
-        only; a sharded output needs batch 1 and exactly one C slice per core.
+        A bias row (ttnn.experimental.quasar.linear's bias) and fused_activation are applied to the finished
+        sum in DST before the final pack.
+
+        Batches of A that multiply one unbatched B are stacked into a single [batch * M x N] GEMM, so their C
+        slices spread over the cores like any other rows.
+
+        Limits: no untilize, 32x32 tiles only; a sharded output needs exactly one C slice per core (and batch 1
+        with a batched B).
     )doc");
 
     matmul_unified_program_config
@@ -674,18 +680,23 @@ void py_module(nb::module_& mod) {
                 std::size_t,
                 std::size_t,
                 tt::tt_metal::ShardOrientation,
-                std::size_t>(),
+                std::size_t,
+                std::optional<UnaryWithParam>>(),
             nb::kw_only(),
-            nb::arg("cores"),
+            nb::arg("cores") = CoreRangeSet(),
             nb::arg("C_slice_M_tiles").noconvert() = 0,
             nb::arg("C_slice_N_tiles").noconvert() = 0,
             nb::arg("K_chunk_tiles").noconvert() = 0,
             nb::arg("subblock_M_tiles").noconvert() = 0,
             nb::arg("subblock_N_tiles").noconvert() = 0,
             nb::arg("orientation") = tt::tt_metal::ShardOrientation::ROW_MAJOR,
-            nb::arg("num_compute_threads").noconvert() = 0)
+            nb::arg("num_compute_threads").noconvert() = 0,
+            nb::arg("fused_activation") = nb::none())
         .def_rw("cores", &MatmulUnifiedProgramConfig::cores, R"doc(
-            Cores (clusters) that take part, as a CoreRangeSet.
+            Cores (clusters) that take part, as a CoreRangeSet. Empty (the default) = auto placement: the cores, C
+            slice and orientation are chosen by a cost estimate over the natural placements (2D, 1D along a row or
+            column of cores, 1D across N or M, and placements that keep a sharded operand where it is); the other
+            fields are kept. ttnn.experimental.quasar.matmul without a program config does the same on Quasar.
         )doc")
         .def_rw("C_slice_M_tiles", &MatmulUnifiedProgramConfig::C_slice_M_tiles, R"doc(
             Height of the C slice each core produces, in tiles. 0 = auto: the output shard height when C is
@@ -701,7 +712,8 @@ void py_module(nb::module_& mod) {
             K tiles multiplied per accumulation step. One A slice (C_slice_M_tiles x K_chunk_tiles tiles) and
             one B slice (K_chunk_tiles x C_slice_N_tiles tiles) are resident in L1 at a time, and the partial
             sums round-trip L1 between steps. Must divide K in tiles. 0 = auto: the largest divisor of K in
-            tiles whose buffers fit L1, capped at 8 unless the C slice is 4 tiles or fewer.
+            tiles whose buffers fit L1, capped at 8 unless the C slice is 4 tiles or fewer, which still leaves a
+            K chunk per reader thread (4 on Quasar, 2 elsewhere).
         )doc")
         .def_rw("subblock_M_tiles", &MatmulUnifiedProgramConfig::subblock_M_tiles, R"doc(
             Subblock height in tiles (the C slice's tiles accumulated in DST at once). Need not divide
@@ -721,10 +733,14 @@ void py_module(nb::module_& mod) {
             subblocks are assigned round-robin to the threads, which share the resident A and B slices.
             0 = auto: 4 on Quasar, 1 elsewhere (Wormhole / Blackhole have one compute engine per core).
         )doc")
+        .def_rw("fused_activation", &MatmulUnifiedProgramConfig::fused_activation, R"doc(
+            Optional activation applied to the finished sum in DST, after the bias and before the final pack.
+        )doc")
         .def("__repr__", [](const MatmulUnifiedProgramConfig& config) {
             return fmt::format(
                 "MatmulUnifiedProgramConfig(cores={}, C_slice_M_tiles={}, C_slice_N_tiles={}, K_chunk_tiles={}, "
-                "subblock_M_tiles={}, subblock_N_tiles={}, orientation={}, num_compute_threads={})",
+                "subblock_M_tiles={}, subblock_N_tiles={}, orientation={}, num_compute_threads={}, "
+                "fused_activation={})",
                 config.cores.str(),
                 config.C_slice_M_tiles,
                 config.C_slice_N_tiles,
@@ -732,7 +748,8 @@ void py_module(nb::module_& mod) {
                 config.subblock_M_tiles,
                 config.subblock_N_tiles,
                 config.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR ? "ROW_MAJOR" : "COL_MAJOR",
-                config.num_compute_threads);
+                config.num_compute_threads,
+                config.fused_activation);
         });
 
     ttnn::bind_function<"matmul", "ttnn.experimental.quasar.">(
