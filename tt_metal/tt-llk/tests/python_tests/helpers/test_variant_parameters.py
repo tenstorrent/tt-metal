@@ -922,6 +922,47 @@ class REDUCE_ORDER(TemplateParameter):
 
 
 @dataclass
+class WELFORD_RECIP_SIZE(TemplateParameter):
+    """Size of the Welford reciprocal table; 0 selects the no-table form."""
+
+    welford_recip_size: int = 256
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr std::uint32_t WELFORD_RECIP_SIZE = {self.welford_recip_size}u;"
+        )
+
+
+@dataclass
+class WELFORD_RECIP_BASE(RuntimeParameter):
+    """First index whose reciprocal sfpu_welford_recip_test.cpp computes."""
+
+    welford_recip_base: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr std::uint32_t WELFORD_RECIP_BASE = {self.welford_recip_base}u;"
+        )
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t WELFORD_RECIP_BASE;", "I"
+
+
+@dataclass
+class WELFORD_ROWS(TemplateParameter):
+    """Rows [start_row, start_row + num_rows) of every tile that sfpu_welford_test.cpp folds."""
+
+    welford_start_row: int = 0
+    welford_num_rows: int = 32
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr std::uint32_t WELFORD_START_ROW = {self.welford_start_row}u;\n"
+            f"constexpr std::uint32_t WELFORD_NUM_ROWS = {self.welford_num_rows}u;"
+        )
+
+
+@dataclass
 class SDPA_OP(TemplateParameter):
     sdpa_op: SdpaOp = SdpaOp.RecipIter
 

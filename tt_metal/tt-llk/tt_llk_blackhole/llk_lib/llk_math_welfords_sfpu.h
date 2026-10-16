@@ -52,6 +52,7 @@ inline void _llk_math_welfords_sfpu_inc_dst_face_addr_()
 
 inline void _llk_math_welfords_sfpu_init_()
 {
+    static_assert(WELFORD_INSTR_PER_ROW * 4 <= ckernel::math::replay_buf_offset, "the Welford record must fit the SFPU replay slots");
     sfpu::_init_sfpu_config_reg();
     welfords_sfpu_configure_addrmod();
     math::reset_counters(p_setrwc::SET_ABD_F);
