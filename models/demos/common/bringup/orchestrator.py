@@ -891,12 +891,17 @@ class Orchestrator:
         from models.demos.common.bringup.testing.templates import render_component_test, render_swap_test
 
         b = task.get("brief") or {}
-        if "swapped" in b:
-            render_swap_test(self.spec, b["block_type"], b["swapped"])
-        elif "step" in b:
-            render_component_test(self.spec, b["block_type"], b["step"])
-        previous = ""
+
+        def render():
+            if "swapped" in b:
+                render_swap_test(self.spec, b["block_type"], b["swapped"])
+            elif "step" in b:
+                render_component_test(self.spec, b["block_type"], b["step"])
+
+        render()
+        previous, unreviewed = "", None  # the kwargs of the freeze without review, when the task has one
         if "step" in b and "swapped" not in b and not self.component_review(b["block_type"]):
+            unreviewed = {"mutations": True}
             try:
                 rec = freeze_task(self.spec, self.led, task["id"], mutations=True)
                 self.echo(
@@ -910,6 +915,7 @@ class Orchestrator:
                     f"  [{task['id']}] freeze without review failed, starting the test role: {previous.splitlines()[0]}"
                 )
         if "swapped" in b and not self.swap_review(b["block_type"]):
+            unreviewed = {}
             try:
                 rec = freeze_task(self.spec, self.led, task["id"])
                 self.echo(
@@ -932,6 +938,17 @@ class Orchestrator:
                 previous = "\n".join(problems)
                 if aborts > OV.MAX_ABORTS:
                     return f"aborted by the overseer {aborts} times"
+                if unreviewed is not None:  # F94: the overseer may have fixed the check that sent it to an agent
+                    try:
+                        render()  # the aborted agent's half-edited test is replaced by the template's
+                        rec = freeze_task(self.spec, self.led, task["id"], **unreviewed)
+                        self.echo(f"  [{task['id']}] frozen without review after the abort (F94)")
+                        return None
+                    except FreezeError as e:
+                        previous = str(e)
+                        self.echo(
+                            f"  [{task['id']}] freeze without review after the abort failed: {previous.splitlines()[0]}"
+                        )
                 continue
             used += 1
             if problems:
