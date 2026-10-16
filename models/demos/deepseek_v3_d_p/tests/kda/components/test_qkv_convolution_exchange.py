@@ -82,10 +82,11 @@ def _mesh(shape: tuple[int, int], sp_axis: int, device_params: dict, topology: s
     )
 
 
+# LoudBox, its production SP2xTP4 call on a 1D fabric (the last rank reaches rank 0 backward).
+_LOUDBOX = _mesh((2, 4), 0, fabric_1d_device_params(), "mesh-2x4", "loudbox-SP2xTP4-fabric-1d", _LOUDBOX_SP2XTP4)
 # Each system's ids start with it, so its CI job selects them with -k.
 _MESHES = [
-    # LoudBox, its production SP2xTP4 call on a 1D fabric (the last rank reaches rank 0 backward).
-    _mesh((2, 4), 0, fabric_1d_device_params(), "mesh-2x4", "loudbox-SP2xTP4-fabric-1d", _LOUDBOX_SP2XTP4),
+    _LOUDBOX,
     # QuietBox: an SP4 ring on a 1D torus and SP2 on a 2D fabric.
     _mesh((1, 4), 1, torus_x_device_params(), "ring", "quietbox-SP4-axis1-ring", _COVERAGE),
     _mesh((2, 2), 0, fabric2d_device_params(), "mesh-2x2", "quietbox-SP2xTP2-fabric-2d", _COVERAGE),
@@ -321,48 +322,19 @@ def test_qkv_convolution_exchange_matches_single_sequence(
 _PERF_CALLS_PER_TRACE = 20
 _PERF_SAMPLES = 7
 _PERF_MARGIN = 0.05
-
-
-@dataclass(frozen=True)
-class _PerfCase:
-    geometry: _Geometry
-    # None until the case is measured on its system.
-    reference_us: float | None
-
-
-def _perf(shape, sp_axis, device_params, topology, case_id, case: _PerfCase):
-    return pytest.param(
-        shape,
-        sp_axis,
-        device_params,
-        case,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=shape, topology=topology),
-        id=case_id,
-    )
-
-
-_PERF_CASES = [
-    # LoudBox's production SP2xTP4 call.
-    _perf(
-        (2, 4),
-        0,
-        fabric_1d_device_params(),
-        "mesh-2x4",
-        "loudbox-SP2xTP4-fabric-1d",
-        _PerfCase(_LOUDBOX_SP2XTP4, None),
-    ),
-]
+# LoudBox's production SP2xTP4 call.
+_PERF_REFERENCE_US = 351.8
 
 
 @pytest.mark.parametrize(
-    "mesh_device,sp_axis,device_params,case", _PERF_CASES, indirect=["mesh_device", "device_params"]
+    "mesh_device,sp_axis,device_params,geometry", [_LOUDBOX], indirect=["mesh_device", "device_params"]
 )
 def test_qkv_convolution_exchange_kimi_k3_perf(
-    mesh_device: ttnn.MeshDevice, sp_axis: int, device_params: dict, case: _PerfCase
+    mesh_device: ttnn.MeshDevice, sp_axis: int, device_params: dict, geometry: _Geometry
 ) -> None:
-    exchange = _Exchange(mesh_device, sp_axis, case.geometry)
-    capacity = exchange.sp_size * case.geometry.local_rows
-    start = _mid_device_start(exchange.sp_size, case.geometry.local_rows)
+    exchange = _Exchange(mesh_device, sp_axis, geometry)
+    capacity = exchange.sp_size * geometry.local_rows
+    start = _mid_device_start(exchange.sp_size, geometry.local_rows)
     interval = _Interval(start, start + capacity)
     actual_start = make_actual_start(mesh_device, interval.start)
     actual_end = make_actual_start(mesh_device, interval.end)
@@ -388,11 +360,10 @@ def test_qkv_convolution_exchange_kimi_k3_perf(
             ttnn.release_trace(mesh_device, trace)
         median_us = statistics.median(samples_us)
         logger.info(f"qkv_causal_conv1d_silu_with_carry Kimi-K3 perf: {median_us:.1f} us per call, {samples_us}")
-        assert case.reference_us is not None, f"no perf reference for this system yet: measured {median_us:.1f} us"
-        lower, upper = case.reference_us * (1 - _PERF_MARGIN), case.reference_us * (1 + _PERF_MARGIN)
+        lower, upper = _PERF_REFERENCE_US * (1 - _PERF_MARGIN), _PERF_REFERENCE_US * (1 + _PERF_MARGIN)
         assert lower <= median_us <= upper, (
             f"{median_us:.1f} us per call outside [{lower:.1f}, {upper:.1f}] "
-            f"(reference {case.reference_us} us, margin +/- {_PERF_MARGIN * 100:.0f}%)"
+            f"(reference {_PERF_REFERENCE_US} us, margin +/- {_PERF_MARGIN * 100:.0f}%)"
         )
     finally:
         for tensor in (actual_start, actual_end):
