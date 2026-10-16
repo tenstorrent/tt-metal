@@ -34,9 +34,11 @@ def _shared_pool_ceiling():
     return spare // budget["kv_cache_per_page"] * 32
 
 
-# Shortest prefix worth stopping a prefill for. Restoring one costs ~55 ms and splitting the
-# prefill that saves it ~200 ms, against ~2.5 tokens/ms of prefill avoided on a hit, so a prefix
-# repays its own split about fivefold at this length and not at all a block or two above zero.
+# Shortest prefix worth stopping a prefill for. Restoring one costs ~33 ms at the widest decode
+# bucket and splitting the prefill that saves it ~200 ms, against ~2.5 tokens/ms of prefill
+# avoided on a hit, so a prefix repays its own split about sevenfold at this length and not at
+# all a block or two above zero. The split sets this floor, not the restore: a second pass is
+# mostly the traversal of 64 layers, so even a free restore would move the figure by a quarter.
 MIN_SNAPSHOT_TOKENS = 4096
 
 

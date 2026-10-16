@@ -849,6 +849,13 @@ class Qwen38Generator:
                 tensor = getattr(state, name)
                 if tensor is None:
                     continue
+                if tensor.layout == ttnn.TILE_LAYOUT:
+                    # One in-place row write, so the cost stops scaling with how many slots the
+                    # cache holds. The rebuild below is only for state this op refuses: it wants
+                    # TILE on both sides, and the convolution history is row-major.
+                    for slot in slots:
+                        ttnn.fill_cache(tensor, make_row(index, name, tensor[slot : slot + 1]), slot)
+                    continue
                 parts = [tensor[i : i + 1] for i in range(self.cache.batch_size)]
                 for slot in slots:
                     parts[slot] = make_row(index, name, parts[slot])
