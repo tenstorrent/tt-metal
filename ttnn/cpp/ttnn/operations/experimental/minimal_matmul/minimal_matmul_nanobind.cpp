@@ -87,6 +87,9 @@ void bind_minimal_matmul(nb::module_& mod) {
             - subblock_h: Sub-block height (M dimension) used by compute kernel within a block.
             - subblock_w: Sub-block width (N dimension) used by compute kernel within a block.
             - compute_with_storage_grid_size: Core grid (x, y) to run the op on.
+            - transpose_core_grid: Optional[bool]. M over the grid's x axis and N over y (True) or the reverse (False).
+              Each axis is padded to a multiple of its core count, so this sets the padded work per core. Default
+              (None): transposed when M > N.
 
             Required invariants:
             - All block/subblock sizes must be > 0.
@@ -161,22 +164,24 @@ void bind_minimal_matmul(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("fuse_swiglu") = false);
 
-    auto py_minimal_matmul_config = nb::class_<MinimalMatmulConfig>(
-                                        mod,
-                                        "MinimalMatmulConfig",
-                                        R"doc(
+    auto py_minimal_matmul_config =
+        nb::class_<MinimalMatmulConfig>(
+            mod,
+            "MinimalMatmulConfig",
+            R"doc(
                             Configuration for the MinimalMatmul operation.
                             )doc")
-                                        .def(nb::init<>())
-                                        .def(
-                                            nb::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord>(),
-                                            nb::kw_only(),
-                                            nb::arg("M_block_size") = 1,
-                                            nb::arg("K_block_size") = 1,
-                                            nb::arg("N_block_size") = 1,
-                                            nb::arg("subblock_h") = 1,
-                                            nb::arg("subblock_w") = 1,
-                                            nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}));
+            .def(nb::init<>())
+            .def(
+                nb::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord, std::optional<bool>>(),
+                nb::kw_only(),
+                nb::arg("M_block_size") = 1,
+                nb::arg("K_block_size") = 1,
+                nb::arg("N_block_size") = 1,
+                nb::arg("subblock_h") = 1,
+                nb::arg("subblock_w") = 1,
+                nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}),
+                nb::arg("transpose_core_grid") = nb::none());
 
     py_minimal_matmul_config.def_rw("M_block_size", &MinimalMatmulConfig::M_block_size, "");
     py_minimal_matmul_config.def_rw("K_block_size", &MinimalMatmulConfig::K_block_size, "");
@@ -185,6 +190,10 @@ void bind_minimal_matmul(nb::module_& mod) {
     py_minimal_matmul_config.def_rw("subblock_w", &MinimalMatmulConfig::subblock_w, "");
     py_minimal_matmul_config.def_rw(
         "compute_with_storage_grid_size", &MinimalMatmulConfig::compute_with_storage_grid_size, "");
+    py_minimal_matmul_config.def_rw(
+        "transpose_core_grid",
+        &MinimalMatmulConfig::transpose_core_grid,
+        "M over the grid's x axis and N over y (True) or the reverse (False); None: transposed when M > N");
 
     py_minimal_matmul_config.def(
         "__repr__", [](const MinimalMatmulConfig& config) { return fmt::format("{}", config); });

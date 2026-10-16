@@ -403,6 +403,33 @@ def test_linear_block_padding(device, M, K, N, M_block_size, K_block_size, N_blo
     assert check_result["relative_rmse"] < 0.02
 
 
+@pytest.mark.parametrize("M,K,N", [(1024, 512, 1536), (1536, 512, 768), (800, 320, 1088)])
+@pytest.mark.parametrize("transpose_core_grid", [None, True, False], ids=["auto", "transposed", "untransposed"])
+def test_linear_transpose_core_grid(device, M, K, N, transpose_core_grid):
+    """MinimalMatmulConfig.transpose_core_grid: both grid orientations give the same result (incl. padded axes)."""
+    torch.manual_seed(0)
+    a, b = torch.randn(1, 1, M, K), torch.randn(1, 1, K, N)
+    tt_a = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_b = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    cfg = ttnn.MinimalMatmulConfig(
+        M_block_size=4,
+        K_block_size=4,
+        N_block_size=4,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        transpose_core_grid=transpose_core_grid,
+    )
+    assert cfg.transpose_core_grid == transpose_core_grid
+    ckc = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+    out = ttnn.to_torch(ttnn.experimental.minimal_matmul(tt_a, tt_b, config=cfg, compute_kernel_config=ckc))
+    check_result = assert_quality(a @ b, out)
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
 @pytest.mark.parametrize("M,K,N", [(255, 255, 255)])
 @pytest.mark.parametrize(
     "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",

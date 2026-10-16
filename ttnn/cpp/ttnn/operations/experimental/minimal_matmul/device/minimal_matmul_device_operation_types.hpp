@@ -20,6 +20,10 @@ struct MinimalMatmulConfig {
     uint32_t subblock_w{};
 
     tt::tt_metal::CoreCoord compute_with_storage_grid_size = {0, 0};
+
+    // Parallelize M over the grid's x axis and N over y (true) or the reverse (false). Unset: transposed when M > N.
+    // Each axis is padded to a multiple of its core count, so the choice sets the padded work per core.
+    std::optional<bool> transpose_core_grid = std::nullopt;
 };
 
 struct MinimalMatmulParams {

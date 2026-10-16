@@ -312,6 +312,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     // Transpose core grid if the output is wide (M > N)
     // If transpose core grid, we parallelize M on cores_x and N on cores_y and swap the NOCs and RISCVs
     bool transpose_core_grid = M > N;
+    if (config.has_value() && config->transpose_core_grid.has_value()) {
+        transpose_core_grid = *config->transpose_core_grid;
+    }
 
     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
     auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;
