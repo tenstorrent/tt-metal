@@ -329,17 +329,16 @@ def test_cumsum_fp32_long_scan_accuracy(size, dim, sequence_type, device):
     )
 
 
-def test_cumsum_disable_compensated_sum(device):
+def test_cumsum_disable_compensated_sum(device, n=8192):
     """`disable_compensated_sum=True` must actually fall back to the plain sequential sum.
 
     Uses the discriminating sequence from the accuracy test above (piecewise-constant, where
     consecutive rounding errors share a sign). The default compensated path stays within the
-    8*eps*sum|x| bound; the plain path is expected well outside it (~22x at this length, ~216x at
-    the 72192 of #55542). If the flag did nothing, both would pass the bound and the escape hatch
-    would be a silent no-op.
+    8*eps*sum|x| bound; the plain path is expected well outside it (~22x at n=8192, ~216x at the
+    72192 of #55542, which the reduction nightly runs). If the flag did nothing, both would pass the
+    bound and the escape hatch would be a silent no-op.
     """
     torch.manual_seed(29112024)
-    n = 8192
     along = torch.randn(n // 256 + 1, dtype=torch.float32).repeat_interleave(256)[:n]
     torch_input = along.view(1, n, 1).expand(1, n, 9).contiguous()
 

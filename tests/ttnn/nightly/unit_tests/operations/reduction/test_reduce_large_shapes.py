@@ -16,9 +16,13 @@ from tests.ttnn.unit_tests.operations.test_utils import compute_kernel_options, 
 from tests.ttnn.unit_tests.operations.reduce.test_cumprod import test_cumprod_normal as _cumprod_normal
 from tests.ttnn.unit_tests.operations.reduce.test_cumprod import test_cumprod_backward as _cumprod_backward
 from tests.ttnn.unit_tests.operations.reduce.test_cumprod import test_cumprod_preallocated as _cumprod_preallocated
+from tests.ttnn.unit_tests.operations.reduce.test_argmax import test_argmax as _argmax
 from tests.ttnn.unit_tests.operations.reduce.test_cumsum import test_cumsum as _cumsum
 from tests.ttnn.unit_tests.operations.reduce.test_cumsum import test_cumsum_backward as _cumsum_backward
 from tests.ttnn.unit_tests.operations.reduce.test_cumsum import test_cumsum_bf16_accuracy as _cumsum_bf16_accuracy
+from tests.ttnn.unit_tests.operations.reduce.test_cumsum import (
+    test_cumsum_disable_compensated_sum as _cumsum_disable_compensated_sum,
+)
 from tests.ttnn.unit_tests.operations.reduce.test_cumsum import (
     test_cumsum_fp32_long_scan_accuracy as _cumsum_fp32_long_scan_accuracy,
 )
@@ -169,6 +173,11 @@ def test_cumsum_fp32_long_scan_accuracy_large(size, dim, sequence_type, device):
     _cumsum_fp32_long_scan_accuracy(size, dim, sequence_type, device)
 
 
+# The #55542 length; the sanity group runs the same check at n=8192.
+def test_cumsum_disable_compensated_sum_large(device):
+    _cumsum_disable_compensated_sum(device, n=72192)
+
+
 @pytest.mark.parametrize(
     "size, dim",
     [
@@ -183,7 +192,9 @@ def test_cumsum_bf16_accuracy_large(size, dim, sequence_type, reverse_order, dev
 
 
 # k=3000 runs on one core (k > 64 and above the routed range); the sanity group keeps a W=3100 case.
-@pytest.mark.parametrize("dtype", (ttnn.bfloat16,), ids=["BFLOAT16_B"])
+@pytest.mark.parametrize(
+    "dtype", (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32), ids=["BFLOAT16_B", "BFLOAT8_B", "FLOAT32"]
+)
 @pytest.mark.parametrize(
     "N, C, H, W, dim, k",
     (
@@ -211,3 +222,23 @@ def test_topk_large_k(N, C, H, W, dim, k, dtype, sorted, largest, device):
 @pytest.mark.parametrize("pass_indices_tensor", [True, False])
 def test_topk_large_2d_shapes_vocab(N, C, H, W, dim, k, dtype, sorted, largest, device, pass_indices_tensor):
     _topk_large_2d_shapes(N, C, H, W, dim, k, dtype, sorted, largest, device, None, pass_indices_tensor)
+
+
+# The batch dims the sanity group cuts (it keeps the last two dims, which set the work split).
+@pytest.mark.parametrize(
+    "tensor_shape, tensor_layout, dim, keepdim, dtype, error_msg, enable_secondary_dm",
+    [
+        ([16, 32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, torch.bfloat16, None, None),
+        ([16, 32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, torch.float32, None, None),
+        ([16, 32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, torch.int32, None, None),
+        ([16, 32, 64, 128], ttnn.TILE_LAYOUT, -1, True, torch.bfloat16, None, None),
+        ([16, 32, 64, 128], ttnn.TILE_LAYOUT, -1, False, torch.float32, None, None),
+        ([16, 32, 70, 130], ttnn.TILE_LAYOUT, -1, True, torch.bfloat16, None, None),
+        ([16, 32, 70, 130], ttnn.TILE_LAYOUT, -1, False, torch.bfloat16, None, None),
+        ([12, 24, 48, 96], ttnn.ROW_MAJOR_LAYOUT, -1, True, torch.bfloat16, None, None),
+    ],
+)
+def test_argmax_large(
+    device, tensor_shape, tensor_layout, dim, keepdim, dtype, error_msg, enable_secondary_dm, expect_error
+):
+    _argmax(device, tensor_shape, tensor_layout, dim, keepdim, dtype, error_msg, enable_secondary_dm, expect_error)
