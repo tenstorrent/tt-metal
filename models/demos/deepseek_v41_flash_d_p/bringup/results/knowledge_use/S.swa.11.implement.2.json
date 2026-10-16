@@ -1,0 +1,57 @@
+{
+ "used": [
+  {
+   "id": "DS41-30",
+   "how": "took attempt 1's diagnosis as the start; did not repeat the exact-path run, measured the remaining lever (fp32 / TF32 q and probabilities) by CPU emulation instead",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "K-39",
+   "how": "treated swap_router_vs_golden as near-tie top-k reselection from upstream noise (router vs CPU rel 9e-5, reselected 0.0015), not a router bug; no router change",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-19",
+   "how": "did not make the exact window kernel the default or max-precision value (owner decision, OV-3)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-16",
+   "how": "estimated the device gain of fp32 operands below the emulation's because the in-tile partial-dot rounding stays",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the swap test's vs-golden check for a selection output (router dense weights) uses the fixed component PCC 0.99, not a noise-floor limit as F72 / F73 gave the vs-CPU and tail checks; on the scaled 96-expert router it sits below the bf16 floor (DS41-30)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "known_issues.md DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x (swap_step_calib) the step's own component error, no cap (testing/component.py:350-356)'; matches component.py _check_step; left unchanged"
+  }
+ ],
+ "cited_only": [
+  "DS41-20"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "S.swa.11",
+  "role": "implement",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T00:18:56",
+  "head": "956e200b4c3",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.swa.11.implement.2.json"
+  ]
+ }
+}

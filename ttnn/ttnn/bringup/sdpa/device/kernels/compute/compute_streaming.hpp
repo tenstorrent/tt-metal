@@ -525,10 +525,16 @@ void reduce_c_row_group(
 
     if (do_eltwise_max) {
         CircularBuffer(prev_cb).wait_front(cumulative_prev_tiles);
+#ifdef SPARSE_SDPA_FP32_SCORES
+        reconfig_data_format_srca(prev_cb);  // sparse_sdpa fp32_scores: bf16 max, Float32 scores (in0_cb)
+#endif
         sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
         for (uint32_t i = 0; i < group_size; i++) {
             copy_tile(prev_cb, row_start + i, i);
         }
+#ifdef SPARSE_SDPA_FP32_SCORES
+        reconfig_data_format_srca(in0_cb);
+#endif
     }
 
     // Deferred: wait for in0_cb just before its first use (reduce_block_max_row).
@@ -627,6 +633,12 @@ void sub_exp_block_bcast_cols(
 #endif
             }
         }
+#ifdef SPARSE_SDPA_FP32_SCORES
+        // sparse_sdpa fp32_scores: the Float32 probabilities rounded to TF32 to nearest (the FPU reads them at TF32)
+        for (uint32_t t = 0; t < tiles_per_row * tiles_per_column; ++t) {
+            round_tf32_packthread_tile(t);
+        }
+#endif
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
     }
 
@@ -892,6 +904,11 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             tile_regs_commit();
 
             tile_regs_wait();
+#ifdef SPARSE_SDPA_FP32_SCORES
+            // sparse_sdpa fp32_scores: 1/sum rounded to TF32 (nearest); the normalize multiply reads it via the FPU
+            round_tf32_packthread_tile(0);
+            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+#endif
             pack_tile(0, scratch_cb);
             tile_regs_release();
             CircularBuffer(scratch_cb).push_back(1);

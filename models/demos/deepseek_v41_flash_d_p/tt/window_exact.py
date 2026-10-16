@@ -85,7 +85,14 @@ def _pieces(x: ttnn.Tensor, n: int) -> ttnn.Tensor:
 
 
 def _lane_sum(o: ttnn.Tensor, g: int, n: int, acc):
-    """o [.., G * n] (lane results side by side) -> acc + sum over the lanes, fp32 SFPU adds."""
+    """o [.., G * n] (lane results side by side) -> acc + sum over the lanes, fp32 SFPU adds. G == 1 with no acc
+    returns o itself (a full-range slice aliases o's buffer: the caller frees o only when it is not the result)."""
+    if g == 1:
+        if acc is None:
+            return o
+        res = ttnn.add(o, acc, dtype=ttnn.float32, memory_config=DRAM)
+        _free(acc)
+        return res
     shape = list(o.shape)
     parts = []
     for u in range(g):
@@ -199,7 +206,8 @@ class ExactWindow:
             )
             _free(ws)  # (w2 is a view of ws)
             acc = _lane_sum(o, group, n, acc)
-            _free(o)
+            if acc is not o:
+                _free(o)
         if lk > 1:
             _free(xl, wl)
         return acc
