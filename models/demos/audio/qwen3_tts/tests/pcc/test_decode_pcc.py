@@ -261,6 +261,12 @@ def test_the_talker_reads_and_writes_only_the_blocks_its_page_table_names(device
         after = ttnn.to_torch(shared.k_cache[layer]).float()[:per_request]
         assert torch.equal(before, after), f"the second request wrote into the first's blocks, layer {layer}"
 
+    # A cache with fewer blocks than `max_seq` asks for bounds the table and the context.
+    small = TtTalkerCachedDecoder(
+        device, parameters, max_seq=4 * own.max_seq, kv_cache=_external_cache(device, own, per_request)
+    )
+    assert small.max_blocks == per_request and small.max_seq == per_request * small.block_size
+
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_a_long_prefill_seeds_every_position(device, frame_tail):

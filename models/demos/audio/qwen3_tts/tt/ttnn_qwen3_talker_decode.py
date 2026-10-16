@@ -233,6 +233,11 @@ class TtTalkerCachedDecoder:
         # One request's blocks, in position order. Device-resident and rewritten in place, so a
         # captured step reads whichever request's table is current.
         self.max_blocks = -(-self.max_seq // self.block_size)
+        if not self._owns_cache and self.max_blocks > int(self.k_cache[0].shape[0]):
+            # A page table may not be wider than the cache it indexes, and no request can
+            # hold more positions than the cache has, so the caller's cache bounds both.
+            self.max_blocks = int(self.k_cache[0].shape[0])
+            self.max_seq = self.max_blocks * self.block_size
         self._page_table = ttnn.from_torch(
             torch.zeros(1, self.max_blocks, dtype=torch.int32), dtype=ttnn.int32, device=device
         )
