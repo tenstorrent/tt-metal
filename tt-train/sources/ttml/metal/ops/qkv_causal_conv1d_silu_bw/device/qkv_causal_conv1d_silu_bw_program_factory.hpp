@@ -20,15 +20,13 @@ inline constexpr uint32_t qkv_conv_bw_dst_tiles = 4;
 inline constexpr uint32_t qkv_conv_bw_window_rows =
     tt::constants::TILE_HEIGHT + qkv_conv_bw_tap_count - 1;  // 3 rows above + 32
 
-// One dataflow buffer of the program; entries are tiles of `format`. channel_tiles_per_block = channels per core / 32.
-// This single table sizes the buffers in the
-// program factory and the per-core L1 budget checked in validation, so the two cannot drift apart.
 struct QkvCausalConv1dSiluBackwardDataflowBuffer {
     std::string_view name;
     uint32_t tiles;
     tt::DataFormat format;
 };
 
+// Every L1 buffer of the program, sized in tiles. Used by both the program factory and the L1 budget check.
 inline std::array<QkvCausalConv1dSiluBackwardDataflowBuffer, 14> qkv_conv_bw_dataflow_buffers(
     uint32_t channel_tiles_per_block, tt::DataFormat input_format) {
     const auto bf16 = input_format;
