@@ -58,6 +58,14 @@ void kernel_main() {
     const uint32_t tab_bytes = get_arg_val<uint32_t>(a++), off = get_arg_val<uint32_t>(a++), n = get_arg_val<uint32_t>(a++);
     const uint32_t area = get_arg_val<uint32_t>(a++), cx = get_arg_val<uint32_t>(a++), cy = get_arg_val<uint32_t>(a++);
     const uint32_t counts_addr = get_arg_val<uint32_t>(a++), W = get_arg_val<uint32_t>(a++);
+    const uint32_t tdbg = get_arg_val<uint32_t>(a++), tpage = get_arg_val<uint32_t>(a++);
+    constexpr uint32_t TPROF = __TPROF__;  // (timeline: when each local expert was released, start / end)
+    uint32_t tl_[128];
+    if constexpr (TPROF) {
+        for (uint32_t i = 0; i < 128; ++i) tl_[i] = 0;
+        tl_[0] = 0x7E000000 | tpage;
+        tl_[1] = get_timestamp_32b();
+    }
     const auto y = TensorAccessor(y_args, y_addr, row_bytes);
     const auto tab = TensorAccessor(t_args, tab_addr, tab_bytes);
     volatile tt_l1_ptr uint32_t* misc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + MISC);
@@ -79,6 +87,9 @@ void kernel_main() {
             if (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc)[e & 3] >= target) break;
         }
         e_ok = e;
+        if constexpr (TPROF) {
+            if (e < 124) tl_[4 + e] = get_timestamp_32b();
+        }
     };
     cb_reserve_back(cb_tab, 1);
     const uint32_t tl = get_write_ptr(cb_tab);
@@ -109,7 +120,7 @@ void kernel_main() {
             wait_e(hdr >> 24);
             for (uint32_t pc = 0; pc < P; ++pc) {
                 const uint32_t pb = row_bytes - pc * PD < PD ? row_bytes - pc * PD : PD;
-                noc_async_read(y.get_noc_addr(yrow) + pc * PD, w + pc * PS, pb);
+                if constexpr (!__NOYREAD__) noc_async_read(y.get_noc_addr(yrow) + pc * PD, w + pc * PS, pb);
                 volatile tt_l1_ptr uint32_t* tr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w + pc * PS + pb);
                 tr[0] = hdr;
                 tr[3] = 1;  // arrival flags: the last 16-byte chunk of each NoC write stream (0 / 1 mod 32)
@@ -121,8 +132,79 @@ void kernel_main() {
         noc_async_read_barrier();
         for (uint32_t j = 0; j < k; ++j) cb_push_back(cb_inj, 1);
     }
+    if constexpr (TPROF) {
+        tl_[2] = get_timestamp_32b();
+        tl_[3] = n;
+        const uint32_t buf = tl;  // (the table CB: free by now; misc is shared with the sender)
+        for (uint32_t i = 0; i < 128; ++i) reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buf)[i] = tl_[i];
+        const InterleavedAddrGen<true> dg = {.bank_base_address = tdbg, .page_size = 512};
+        noc_async_write(buf, get_noc_addr(tpage, dg), 512);
+        noc_async_write_barrier();
+    }
 }
 """
+_RF_READER_L1 = r"""
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+constexpr uint32_t cb_inj = get_compile_time_arg_val(0);
+constexpr uint32_t MISC = __MISC__;
+constexpr uint32_t GRANT_B = 8;  // grants go out in batches of this many slots (or the rest)
+// Port reader, L1 hand-off from the flat expert's y writers (se_yrm.hpp SE_Y_L1): the writers put every row of this
+// port straight into its injection ring (this CB) in the order they produce them; this reader grants ring slots
+// (grant[d] on every writer, cumulative), and pushes a row once every writer's landed counter here covers it (the
+// column-0 writer also wrote the trailer: header word and flags). Counters are cumulative across calls (misc[101]: this
+// port's rows before this call).
+void kernel_main() {
+    size_t a = 0;
+    const uint32_t area = get_arg_val<uint32_t>(a++), n = get_arg_val<uint32_t>(a++), W = get_arg_val<uint32_t>(a++);
+    const uint32_t did = get_arg_val<uint32_t>(a++), Q = get_arg_val<uint32_t>(a++), words = get_arg_val<uint32_t>(a++);
+    const uint32_t tdbg = get_arg_val<uint32_t>(a++), tpage = get_arg_val<uint32_t>(a++);
+    uint32_t wx[32], wy[32];
+    for (uint32_t w = 0; w < W; ++w) {
+        wx[w] = get_arg_val<uint32_t>(a++);
+        wy[w] = get_arg_val<uint32_t>(a++);
+    }
+    const uint32_t t0 = get_timestamp_32b();
+    uint32_t t_land = 0;
+    volatile tt_l1_ptr uint32_t* misc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + MISC);
+    volatile tt_l1_ptr uint32_t* landed = misc + 128;
+    const uint32_t base = misc[101];
+    uint32_t granted = 0, pushed = 0;
+    auto grant_to = [&](uint32_t g) {
+        const uint32_t dlt = g - granted;
+        for (uint32_t w = 0; w < W; ++w) noc_semaphore_inc(get_noc_addr(wx[w], wy[w], words + 4 * did), dlt);
+        granted = g;
+    };
+    while (pushed < n) {
+        invalidate_l1_cache();
+        const uint32_t want = pushed + Q < n ? pushed + Q : n;
+        uint32_t g = granted;
+        while (g < want && cb_pages_reservable_at_back(cb_inj, g - pushed + 1)) ++g;
+        if (g > granted && (g - granted >= GRANT_B || g == want)) grant_to(g);
+        uint32_t m = 0xFFFFFFFF;
+        for (uint32_t w = 0; w < W; ++w) {
+            const uint32_t v = landed[w] - base;
+            m = v < m ? v : m;
+        }
+        if (m >= n && t_land == 0) t_land = get_timestamp_32b();
+        while (pushed < m && pushed < granted) {
+            cb_push_back(cb_inj, 1);
+            ++pushed;
+        }
+    }
+    misc[101] = base + n;
+    noc_async_atomic_barrier();
+    if constexpr (__TPROF__) {  // (timeline: start, every row landed, end)
+        cb_reserve_back(__CBTAB__, 1);
+        volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(__CBTAB__));
+        d[0] = 0x7E300000 | tpage; d[1] = t0; d[2] = t_land ? t_land : get_timestamp_32b(); d[3] = get_timestamp_32b(); d[4] = n;
+        const InterleavedAddrGen<true> dg = {.bank_base_address = tdbg, .page_size = 512};
+        noc_async_write(get_write_ptr(__CBTAB__), get_noc_addr(tpage, dg), 64);
+        noc_async_write_barrier();
+    }
+}
+"""
+
 # per-core L1 area: counters (cumulative), headers, then the accumulators' rings
 CRED, USED, RET, MISC, HDRS, RINGS = 0, 1024, 2048, 4096, 5120, 22528
 # MISC words: 1 returned so far; 16.. rows consumed per source chip (accumulators increment), 32.. rows covered by the
@@ -177,7 +259,7 @@ void kernel_main() {
     }
     const uint32_t pace = get_arg_val<uint32_t>(a++);  // cycles per injected row (0: as fast as possible)
     const uint32_t a_dbg = a;
-    a += 2;
+    a += 4;
     auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
 
     // headers per (destination chip, rotation), routed once; a send only sets the NoC command
@@ -300,6 +382,15 @@ void kernel_main() {
     }
     flush();
     misc[1] = returned;
+    if constexpr (__TPROF__) {
+        const uint32_t tdbg = get_arg_val<uint32_t>(a_dbg + 2), tpage = get_arg_val<uint32_t>(a_dbg + 3);
+        volatile tt_l1_ptr uint32_t* d = misc + 192;
+        d[0] = 0x7E100000 | tpage; d[1] = p0; d[2] = get_timestamp_32b(); d[3] = p_slot; d[4] = p_idle; d[5] = p_cred;
+        d[6] = n_blocked; d[7] = n_inj; d[8] = p_send; d[9] = n_empty; d[10] = d[11] = d[12] = d[13] = d[14] = d[15] = 0;
+        const InterleavedAddrGen<true> dg = {.bank_base_address = tdbg, .page_size = 512};
+        noc_async_write(area + MISC + 192 * 4, get_noc_addr(tpage, dg), 64);
+        noc_async_write_barrier();
+    }
     if constexpr (PROF) {
         const uint32_t dbg = get_arg_val<uint32_t>(a_dbg), pidx = get_arg_val<uint32_t>(a_dbg + 1);
         volatile tt_l1_ptr uint32_t* d = misc + 192;
@@ -406,6 +497,22 @@ void kernel_main() {
         }
         return le + 2 * (i - c0);
     };
+    // L1 hand-off: local rows land in a ring of QL slots at LB (the y writers, se_yrm.hpp SE_Y_L1), granted from here
+    constexpr uint32_t L1M = __L1__;
+    const uint32_t QL = get_arg_val<uint32_t>(a + 4), LB = get_arg_val<uint32_t>(a + 5), WL = get_arg_val<uint32_t>(a + 6);
+    const uint32_t ldid = get_arg_val<uint32_t>(a + 7), lwords = get_arg_val<uint32_t>(a + 8);
+    volatile tt_l1_ptr uint32_t* landed = misc + 128;
+    const uint32_t lbase = L1M ? misc[101] : 0;
+    uint32_t lgranted = 0;
+    auto lgrant_to = [&](uint32_t g) {
+        for (uint32_t w = 0; w < WL; ++w) {
+            noc_semaphore_inc(
+                get_noc_addr(get_arg_val<uint32_t>(a + 9 + 2 * w), get_arg_val<uint32_t>(a + 10 + 2 * w), lwords + 4 * ldid),
+                g - lgranted);
+        }
+        lgranted = g;
+    };
+    if (L1M && n_local) lgrant_to(n_local < QL ? n_local : QL);
     auto expert_done = [&](uint32_t e) -> bool {
         if (W == 0 || (e_ok != 0xFFFFFFFF && e <= e_ok)) return true;
         if ((polls++ & 15) != 0) return false;  // (a remote read every 16th look)
@@ -416,12 +523,28 @@ void kernel_main() {
         e_ok = e;
         return true;
     };
+    uint32_t t_local = 0;
     while (done < n_rows) {
         invalidate_l1_cache();
-        while (li < n_local) {
+        if (li == n_local && t_local == 0) t_local = get_timestamp_32b();
+        while (L1M && li < n_local) {
+            uint32_t m = 0xFFFFFFFF;
+            for (uint32_t w = 0; w < WL; ++w) {
+                const uint32_t v = landed[w] - lbase;
+                m = v < m ? v : m;
+            }
+            if (li >= m) break;
+            const uint32_t sl = LB + (li % QL) * SLOT;
+            push_pieces(sl, (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sl + LASTPB)[0] >> 8) & 0xFFFF);
+            ++li;
+            ++done;
+            const uint32_t g = li + QL < n_local ? li + QL : n_local;
+            if (g > lgranted && (g - lgranted >= 4 || g == n_local)) lgrant_to(g);
+        }
+        while (!L1M && li < n_local) {
             const uint32_t* en = lentry(li);
             if (!expert_done(en[1] >> 24)) break;
-            push(y.get_noc_addr(en[0]), (en[1] >> 8) & 0xFFFF);
+            push(__NOYREAD__ ? get_noc_addr(tl) : y.get_noc_addr(en[0]), (en[1] >> 8) & 0xFFFF);  // (probe: no y reads)
             ++li;
             ++done;
         }
@@ -453,7 +576,17 @@ void kernel_main() {
         }
     }
     const uint32_t p_total = get_timestamp_32b() - p0;
+    if (L1M) misc[101] = lbase + n_local;
     noc_async_atomic_barrier();
+    if constexpr (__TPROF__) {
+        const uint32_t tdbg = get_arg_val<uint32_t>(a + 2), tpage = get_arg_val<uint32_t>(a + 3);
+        volatile tt_l1_ptr uint32_t* d = misc + 192;
+        d[0] = 0x7E200000 | tpage; d[1] = p0; d[2] = t_local; d[3] = p0 + p_total; d[4] = n_local; d[5] = n_rows;
+        for (uint32_t i = 6; i < 16; ++i) d[i] = 0;
+        const InterleavedAddrGen<true> dg = {.bank_base_address = tdbg, .page_size = 512};
+        noc_async_write(area + MISC + 192 * 4, get_noc_addr(tpage, dg), 64);
+        noc_async_write_barrier();
+    }
     if constexpr (PROF) {
         const uint32_t dbg = get_arg_val<uint32_t>(a), pidx = get_arg_val<uint32_t>(a + 1);
         volatile tt_l1_ptr uint32_t* d = misc + 192;
@@ -485,6 +618,7 @@ def sparse_combine_rf_prepare(
     arena=None,
     writers=0,
     counts_off=None,
+    l1=None,
 ):
     """rows_by_chip[coord] = list of (y row on that chip, home coord, home token t, link[, local expert]). cells: the
     logical (x, y) cells the combine may use (ports nearest their Ethernet cores, accumulators the rest), else the
@@ -492,7 +626,9 @@ def sparse_combine_rf_prepare(
     caller (e.g. the flat expert's arena, flat_routed_expert_with_program): the combine's state, rings and CBs live
     in it. writers > 0: overlapped with the flat expert, whose `writers` y writers report each local expert to the
     collector (the first accumulator, counts at area + counts_off): rows of expert e are read once it is reported.
-    Returns run(y, out) (standalone) with run.build(y, out) -> the MeshProgramDescriptor and run.collector."""
+    l1: dict(writers=[logical (x, y) of the flat y writers], words=address of their L1 words): the L1 hand-off (no y
+    in DRAM; flat_routed_expert_with_program l1_args = run.l1_args). Returns run(y, out) (standalone) with
+    run.build(y, out) -> the MeshProgramDescriptor and run.collector."""
     R, C = tuple(mesh_device.shape)
     N, L, A0 = R * C, num_links, n_acc
     row_bytes = W * 2
@@ -588,6 +724,31 @@ def sparse_combine_rf_prepare(
     )
     tab_bytes = 8 * n_tab
     MAXT = (S + A - 1) // A
+    if l1 is not None:  # destination ids per chip: its ports (sorted), then its accumulators
+        port_ids = {ch: {k: j for j, k in enumerate(sorted(k for k in port_core if k[0] == ch))} for ch in chips}
+        n_y = max((max((r[0] for r in rows), default=-1) for rows in rows_by_chip.values()), default=-1) + 1
+        n_tiles = max((n_y + 31) // 32, 1)
+        lt = torch.full((R, C, n_tiles, 64), 0, dtype=torch.int64)
+        for ch, rows in rows_by_chip.items():
+            for row in rows:
+                yrow, home, t, l = row[:4]
+                hdr = idx(home) | (t << 8) | ((row[4] if len(row) > 4 else 0) << 24)
+                dd = len(port_ids[ch]) + t % A if home == ch else port_ids[ch][(ch, fh(ch, home), l)]
+                lt[ch[0], ch[1], yrow // 32, 2 * (yrow % 32)] = dd
+                lt[ch[0], ch[1], yrow // 32, 2 * (yrow % 32) + 1] = hdr
+        l1_tab = ttnn.from_torch(
+            lt.to(torch.int32).reshape(R, C, n_tiles, 64),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard,
+        )
+        wv = [virt(ttnn.CoreCoord(*c)) for c in l1["writers"]]
+        wxy = [v for c in wv for v in (c.x, c.y)]
+        assert len(wv) <= 32
+        QP = min(64, (N * L * D * SLOT) // ISLOT)  # a port's injection ring: in its (unused) ring region
+    l1_args = []
     prof = os.environ.get("SPC_PROF") == "1"
     pace_us = float(os.environ.get("SPC_PACE", "0"))  # pace every port's injections to finish at this time
     inj_b = int(os.environ.get("SPC_INJB", "8"))
@@ -604,6 +765,10 @@ def sparse_combine_rf_prepare(
         "__CREDTHR__": os.environ.get("SPC_CREDTHR", "8"),
         "__PACE__": str(int(pace_us > 0)),
         "__P__": str(NP),
+        "__TPROF__": os.environ.get("SPC_TPROF", "0"),
+        "__L1__": str(int(l1 is not None)),
+        "__CBTAB__": str(CB_TAB),
+        "__NOYREAD__": os.environ.get("SPC_NOYREAD", "0"),  # (probe: rows not read from y: garbage)
         "__PD__": str(PD),
         "__PS__": str(PS),
     }
@@ -615,9 +780,18 @@ def sparse_combine_rf_prepare(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(0, 1)),
     )
+    tdbg_t = ttnn.from_torch(  # (SPC_TPROF timeline: pages 0-7 port readers, 8-15 senders, 16.. accumulators)
+        torch.zeros(R, C, 48, 128, dtype=torch.int32),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(0, 1)),
+    )
     srcs = {}
     for name, ksrc in (
         ("pr", _RF_READER),
+        ("pr1", _RF_READER_L1),
         ("ps", _RF_SENDER),
         ("ar", _RF_ACC_READER),
         ("ac", _ACC_COMPUTE),
@@ -673,6 +847,13 @@ def sparse_combine_rf_prepare(
                 ends = {"p": base, "a": base}
                 for cb, crs, total, fmt, page in specs:
                     kinds = ("p", "a") if cb == CB_TAB else (("p",) if cb == CB_INJ else ("a",))
+                    if l1 is not None and cb == CB_INJ:  # (the hand-off ring: the writers address it directly)
+                        d_ = ttnn.cb_descriptor_from_sharded_tensor(
+                            cb, area_t, address_offset=RINGS, total_size=QP * ISLOT, core_ranges=crs
+                        )
+                        d_.format_descriptors = [ttnn.CBFormatDescriptor(cb, fmt, page)]
+                        cbs.append(d_)
+                        continue
                     off = max(ends[k] for k in kinds)
                     for k in kinds:
                         ends[k] = al(off + total)
@@ -684,22 +865,50 @@ def sparse_combine_rf_prepare(
                 assert (
                     max(ends.values()) <= arena_bytes
                 ), f"combine needs {max(ends.values()) >> 10} KB per core, the arena has {arena_bytes >> 10} KB"
+                if l1 is not None:  # the accumulators' local ring: what is left of the arena
+                    loc_off = ends["a"]
+                    QL = min(16, (arena_bytes - loc_off) // ISLOT)
+                    assert QL >= 2, f"no room for the accumulators' local ring ({(arena_bytes - loc_off) >> 10} KB)"
             program.cbs = cbs
+            if l1 is not None:
+                pids = port_ids[ch]
+                la = [len(pids) + A, ISLOT, int(l1_tab.buffer_address()), int(l1["words"]), 0, 0, 0, 0]
+                for k in sorted(pids, key=pids.get):
+                    v = virt(port_core[k])
+                    la += [v.x, v.y, area + RINGS, QP, area + MISC + 512]
+                for i_, ac in enumerate(acc_cores):
+                    v = virt(ac)
+                    la += [v.x, v.y, area + loc_off, QL, area + MISC + 512]
+                l1_args.append(la)
             pr_rt, ps_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for d, li, core in my:
                 k = (ch, d, li)
-                pr_rt[core.x][core.y] = [
-                    int(y.buffer_address()),
-                    int(tab_t.buffer_address()),
-                    tab_bytes,
-                    offs[("p",) + k],
-                    len(inj[k]),
-                    area,
-                    coll_v.x,
-                    coll_v.y,
-                    area + cnt_off,
-                    writers,
-                ]
+                if l1 is not None:
+                    pr_rt[core.x][core.y] = [
+                        area,
+                        len(inj[k]),
+                        len(wv),
+                        port_ids[ch][k],
+                        QP,
+                        int(l1["words"]),
+                        int(tdbg_t.buffer_address()),
+                        DIRS.index(d) * 2 + li,
+                    ] + wxy
+                else:
+                    pr_rt[core.x][core.y] = [
+                        int(y.buffer_address()),
+                        int(tab_t.buffer_address()),
+                        tab_bytes,
+                        offs[("p",) + k],
+                        len(inj[k]),
+                        area,
+                        coll_v.x,
+                        coll_v.y,
+                        area + cnt_off,
+                        writers,
+                        int(tdbg_t.buffer_address()),
+                        DIRS.index(d) * 2 + li,
+                    ]
                 peer = ports[d]["peer"]
                 args = [area, mesh_id, idx(ch), li, len(inj[k]), n_ret[k]] + chip_ids + acc_xy
                 for i in range(N):
@@ -711,6 +920,7 @@ def sparse_combine_rf_prepare(
                         args += [0, 0]
                 args += [int(pace_us * 1350 / len(inj[k])) if pace_us > 0 and inj[k] else 0]
                 args += [int(dbg_t.buffer_address()), DIRS.index(d) * 2 + li]
+                args += [int(tdbg_t.buffer_address()), 8 + DIRS.index(d) * 2 + li]
                 args += list(ttnn.setup_fabric_connection(node(ch), node(peer), ports[d]["links"][li], program, core))
                 ps_rt[core.x][core.y] = args
             ar_rt, ac_rt, aw_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -737,16 +947,21 @@ def sparse_combine_rf_prepare(
                         args += [w, v.x, v.y]
                     else:
                         args += [0, 0, 0]
-                ar_rt[core.x][core.y] = args + [int(dbg_t.buffer_address()), 8 + i]
+                args += [int(dbg_t.buffer_address()), 8 + i, int(tdbg_t.buffer_address()), 16 + i]
+                if l1 is not None:
+                    args += [QL, area + loc_off, len(wv), len(port_ids[ch]) + i, int(l1["words"])] + wxy
+                else:
+                    args += [0, 0, 0, 0, 0]
+                ar_rt[core.x][core.y] = args
                 n_rows = len(loc[(ch, i)]) + sum(want[(ch, i)])
                 ac_rt[core.x][core.y] = [n_rows, n_tok]
                 aw_rt[core.x][core.y] = [int(out.buffer_address()), n_tok, i]
             program.kernels = [
                 ttnn.KernelDescriptor(
-                    kernel_source=srcs["pr"],
+                    kernel_source=srcs["pr1"] if l1 is not None else srcs["pr"],
                     source_type=st,
                     core_ranges=pset,
-                    compile_time_args=[CB_INJ, CB_TAB, row_bytes, ISLOT] + y_ct + t_ct,
+                    compile_time_args=[CB_INJ] if l1 is not None else [CB_INJ, CB_TAB, row_bytes, ISLOT] + y_ct + t_ct,
                     runtime_args=pr_rt,
                     config=dm("RISCV_1", NOC0),
                 ),
@@ -792,7 +1007,14 @@ def sparse_combine_rf_prepare(
             state["key"], state["desc"] = k, build(y, out)
         return ttnn.generic_op([y, tab_t, out], state["desc"])
 
+    def build_l1(y, out):  # (the descriptor and, per chip in its order, the y writers' hand-off args)
+        l1_args.clear()
+        desc = build(y, out)
+        return desc, [list(v) for v in l1_args]
+
     run.build = build
+    run.build_l1 = build_l1
+    run.tdbg = tdbg_t
     run.tab = tab_t
     run.collector = dict(core=coll, counts_addr=area + cnt_off, writers=writers)
     run.counts = dict(n_inj={k: len(v) for k, v in inj.items()}, n_ret=n_ret)

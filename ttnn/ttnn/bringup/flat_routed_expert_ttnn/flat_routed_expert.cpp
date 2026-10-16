@@ -365,7 +365,8 @@ ttnn::Tensor flat_routed_expert_with_program(
     const std::optional<ttnn::Tensor>& token_index,
     bool down_fp32,
     bool x_bf16,
-    bool h_bf16) {
+    bool h_bf16,
+    const std::vector<std::vector<uint32_t>>& l1_args) {
     using namespace tt::tt_metal;
     FlatRoutedExpertConfig cfg{
         .hidden = x.logical_shape()[-1],
@@ -410,7 +411,14 @@ ttnn::Tensor flat_routed_expert_with_program(
         .collector = collector,
         .counts_addr = counts_addr,
         .writers = writers,
-        .extra_key = extra_key};
+        .extra_key = extra_key,
+        .l1_args = l1_args};
+    if (!l1_args.empty()) {
+        setenv("MIMO_FL_Y_L1", "1", 0);  // (the writers' args and SE_Y_L1)
+        for (const auto& v : l1_args) {
+            p.addrs.insert(p.addrs.end(), v.begin(), v.end());
+        }
+    }
     for (const ttnn::Tensor* tt : std::initializer_list<const ttnn::Tensor*>{
              &x,
              &counts,

@@ -280,7 +280,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 "flat_routed_expert: {} writer args > cmb_rt {}",
                 args.v.size(),
                 cfg.cmb_rt);
-            args.v.resize(cfg.cmb_rt + 4, 0);
+            args.v.resize(cfg.cmb_rt + 4 + (std::getenv("MIMO_FL_Y_L1") ? FLAT_Y_L1_ARGS : 0), 0);
             sv.cmb_writers.emplace_back(k, c);
         }
         return args;
@@ -288,6 +288,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     Defines cmb_def = cfg.cmb_rt ? Defines{{"SE_CMB_DONE_RT", std::to_string(cfg.cmb_rt)}} : Defines{};
     if (cfg.cmb_rt && std::getenv("MIMO_FL_CMB_NO_GO")) {  // (flat_with_program: cumulative counts, no go)
         cmb_def["SE_CMB_NO_GO"] = "1";
+    }
+    if (cfg.cmb_rt && std::getenv("MIMO_FL_Y_L1")) {  // (flat_with_program: y rows straight into the combine's L1)
+        cmb_def["SE_Y_L1"] = std::to_string(cfg.cmb_rt + 4);
     }
     if (cfg.cmb_rt && std::getenv("MIMO_FL_CMB_EARLY")) {  // (perf probe: combine released at launch, garbage)
         cmb_def["SE_CMB_EARLY"] = "1";

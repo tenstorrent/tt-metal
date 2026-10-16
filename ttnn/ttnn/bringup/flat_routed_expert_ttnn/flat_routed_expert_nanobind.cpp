@@ -244,7 +244,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("token_index") = nb::none(),
         nb::arg("down_fp32") = false,
         nb::arg("x_bf16") = false,
-        nb::arg("h_bf16") = false);
+        nb::arg("h_bf16") = false,
+        nb::arg("l1_args") = std::vector<std::vector<uint32_t>>{});
     mod.def(
         "flat_routed_expert_plan",
         &plan_dict,

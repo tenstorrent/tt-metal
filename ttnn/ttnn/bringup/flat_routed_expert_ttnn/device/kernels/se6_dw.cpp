@@ -167,6 +167,9 @@ void kernel_main() {
         invalidate_l1_cache();
         y_poll();
     }
+#ifdef SE_Y_L1
+    yw.finish();
+#endif
     noc_async_write_barrier();
 #ifdef SE_CMB_DONE_RT
     cmb.report();  // the experts this core writes nothing of

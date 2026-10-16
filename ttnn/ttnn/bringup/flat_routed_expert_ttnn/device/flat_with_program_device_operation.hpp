@@ -33,6 +33,9 @@ struct FlatWithProgramParams {
     std::vector<uint32_t> addrs;
     std::vector<uint32_t> flat_key;
     uint64_t extra_key = 0;
+    // MIMO_FL_Y_L1: per appended program (same order), the y writers' L1 hand-off args (se_yrm.hpp SE_Y_L1; the
+    // writer index is filled in here)
+    std::vector<std::vector<uint32_t>> l1_args;
 
     static constexpr auto attribute_names =
         std::forward_as_tuple("flat_key", "addrs", "extra_key", "writers", "counts_addr", "collector_x", "collector_y");

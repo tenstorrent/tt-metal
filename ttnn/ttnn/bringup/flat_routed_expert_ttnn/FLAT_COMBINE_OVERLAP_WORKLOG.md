@@ -689,3 +689,24 @@ All exact (worst token 1.74-1.76e-3, bf16 rounding). Bugs on the way: (1) the Py
 FLAT_WP_LOG=1 logs the merged program's kernel groups); (2) credit arrays for 15 accumulators were not 16-byte aligned.
 Next: where the remaining 4-14% goes (the tail after the last expert vs the flat slowed by the combine's NoC traffic),
 entry-order reporting instead of slot order, the L1 hand-off (no y writes).
+
+### Why the overlap was not perfect, and the L1 hand-off (2026-10-16, same setup)
+1. Launch skew: the host starts the 8 chips one after another (~130 us first to last); the per-call timing synced after
+   every call, so the earliest chip paid it every time (its tail after its last expert 133 us vs 9-14 us on the
+   last-launched chips). Queued back to back (FC_PIPE=1), only the first call pays it: uniform fused 2674 -> 2595 us.
+2. The combine's y reads from DRAM (36.7 MB / chip) slow the DRAM-bound flat expert: the experts' release times (SPC_TPROF
+   timeline) put the flat ~100 us later beside the combine; with the reads removed (SPC_NOYREAD probe, garbage rows)
+   fused / flat = 1.008 (uniform), 1.003 (packed); Zipf spread stayed 1.115: there the experts are released whole in
+   slot order, so a hot expert's rows wait for the whole expert.
+3. L1 hand-off (FC_L1=1; se_yrm.hpp SE_Y_L1 via MIMO_FL_Y_L1, set by the op when l1_args are passed): no y in DRAM. Each
+   down core writes its 256-byte segment of every row straight into the row's destination slot (a combine port's
+   injection ring in its unused ring region, 64 slots, or an accumulator's local ring); destinations number rows in
+   the writers' common production order, grant slots (cumulative grant[d] on each writer), and take a row once every
+   writer's landed counter (+rows per acked row tile) covers it; the column-0 writer writes each row's trailer.
+   Per-chip host table: (destination, header) per y row, one 256-byte page per 32-row tile.
+Queued back to back, slowest chip, median, all exact (1.74-1.75e-3):
+| routing | flat alone (writes y) | flat alone (no y) | combine alone | fused, y via DRAM | fused, L1 hand-off | hand-off fused / flat no y |
+| uniform | 2462 | 2320 | 1027 | 2595 | 2432 | 1.048 |
+| Zipf spread 1.2 | 2731 | 2588 | 1029 | 3056 | 2667 | 1.031 |
+| Zipf packed 1.2 | 5873 | 5747 | 2336 | 6004 | 5888 | 1.024 |
+Open: the remaining 3-5% (uniform ~110 us) with no combine DRAM traffic left.

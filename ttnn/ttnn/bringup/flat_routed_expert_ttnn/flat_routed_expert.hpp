@@ -106,7 +106,8 @@ ttnn::Tensor flat_routed_expert_with_program(
     const std::optional<ttnn::Tensor>& token_index = std::nullopt,
     bool down_fp32 = false,
     bool x_bf16 = false,
-    bool h_bf16 = false);
+    bool h_bf16 = false,
+    const std::vector<std::vector<uint32_t>>& l1_args = {});
 
 // The plan for a device / config (cached): what the weight layout and the done words need.
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
