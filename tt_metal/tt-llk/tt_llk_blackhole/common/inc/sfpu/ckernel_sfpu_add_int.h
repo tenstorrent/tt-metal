@@ -73,11 +73,12 @@ inline void _add_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
         // this one runs its own init first.
         addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 
-#pragma GCC unroll 8
+        // Full unroll: the compiler records the row in the replay buffer once per call, not once per 8 rows.
+#pragma GCC unroll 32
         for (int d = 0; d < ITERATIONS; d++)
         {
-            vType a                                                          = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<layout>();
-            vType b                                                          = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<layout>();
+            vType a                                                                    = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<layout>();
+            vType b                                                                    = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<layout>();
             sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<layout>(ADDR_MOD_6) = a + b;
         }
     }
