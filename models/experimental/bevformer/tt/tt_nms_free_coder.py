@@ -19,7 +19,7 @@ from models.experimental.bevformer.model_config import (
     BOX_CENTER,
     BOX_H,
     BOX_Z,
-    CODER_NUM_CANDIDATES,
+    CODER_BISECTION_STEPS,
     CODE_COS,
     CODE_H,
     CODE_SIN,
@@ -104,7 +104,7 @@ class TtNMSFreeCoder:
         # Wider than the pivot's bfloat16 rounding step on either side; the floor covers a pivot of 0.
         half_width = ttnn.add(ttnn.multiply(ttnn.abs(pivot), 2.0**-6), 1e-30)
         low, high = ttnn.subtract(pivot, half_width), ttnn.add(pivot, half_width)
-        for _ in range(PIVOT_BISECTION_STEPS):
+        for _ in range(CODER_BISECTION_STEPS):
             middle = ttnn.multiply(ttnn.add(low, high), 0.5)
             count = ttnn.sum(ttnn.ge(logits, middle), dim=-1, keepdim=True, compute_kernel_config=self._count_config)
             enough = ttnn.ge(count, float(k))
@@ -122,22 +122,18 @@ class TtNMSFreeCoder:
         a multi-core route on Blackhole; bfloat16 alone ties many scores. So the logits, which
         rank as their sigmoid scores do, are ranked in three steps:
 
-        1. A bfloat16 top-k: as rounding is monotonic, its k-th value is the true k-th logit
-           rounded, the pivot.
-        2. A bfloat16 top-``CODER_NUM_CANDIDATES`` of the logits minus the pivot: near the k-th logit
-           the differences are small, where bfloat16 resolves them finely.
-        3. A float32 top-k of the candidates' own logits, returning their original indexes.
-
-        The result is exact unless more than ``CODER_NUM_CANDIDATES - max_num`` logits tie with the
-        k-th one after the pivot shift in bfloat16.
+        1. The exact k-th logit, ``_kth_logit``.
+        2. A bfloat16 top-k of the logits minus it: larger logits stay positive, smaller ones
+           negative and equal ones zero, so it selects exactly the top-k set; it ties only
+           logits equal in float32.
+        3. A float32 top-k of those k logits, which sorts them and returns their indexes.
         """
         if cls_scores.dtype != SCORE_DTYPE:
             raise ValueError(f"cls_scores must be {SCORE_DTYPE}, got {cls_scores.dtype}")
         bs, num_query, num_classes = cls_scores.shape
         if num_classes != self.num_classes:
             raise ValueError(f"{num_classes} class logits, the coder has {self.num_classes} classes")
-        num_candidates = min(CODER_NUM_CANDIDATES, num_query * num_classes)
-        if num_candidates < self.max_num:
+        if num_query * num_classes < self.max_num:
             raise ValueError(f"{num_query * num_classes} scores for a top-{self.max_num}")
         logits = ttnn.reshape(cls_scores, (bs, 1, 1, num_query * num_classes))
         shifted = ttnn.typecast(ttnn.subtract(logits, self._kth_logit(logits)), ttnn.bfloat16)

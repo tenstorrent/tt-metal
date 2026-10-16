@@ -229,9 +229,10 @@ _TTNN_DTYPES = {
 # The head's box predictions: their centers are the decoder's refined reference points.
 _TTNN_DTYPES["BOX_DTYPE"] = _TTNN_DTYPES["GRID_DTYPE"]
 
-# Candidates the coder's exact float32 top-k ranks (TtNMSFreeCoder.topk): its top-k is exact
-# unless more than CODER_NUM_CANDIDATES - MAX_NUM logits tie with the k-th one in bfloat16.
-CODER_NUM_CANDIDATES = 512
+# Bisection steps of the coder's exact top-k (TtNMSFreeCoder.topk), which narrow the k-th logit's
+# bracket around the bfloat16 pivot, 2^-5 of the pivot wide, down to one float32 value; 19
+# suffice, the rest is margin.
+CODER_BISECTION_STEPS = 22
 
 
 # The backbone and FPN, for 6 cameras at 1600x928. Layer indices count the ResNet layers from 0
