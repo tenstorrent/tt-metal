@@ -295,6 +295,38 @@ def test_resume_after_a_fix(orch):
     assert main(["resume", "--spec", str(o.spec.path)]) == DONE
 
 
+@pytest.mark.parametrize("command", ["resume", "run"])
+def test_a_power_loss_mid_agent_resumes_at_the_interrupted_task(orch, command):
+    """F95: the orchestrator dies while an agent works (power loss): the task stays RUNNING, the agent's half edit
+    and its AGENT.json stay behind. A restart gates the task first, then continues it; stale files are not trusted."""
+    import json
+
+    from models.demos.common.bringup import overseer as OV
+    from models.demos.common.bringup.orchestrator import main
+
+    o = orch([impl_task()], {"C.1.implement.2.md": {"write": {"src/impl.txt": "0.999"}}})
+    real = o.run_agent
+
+    def power_loss(task, role, attempt, brief, **kw):
+        if role != "implement":
+            return real(task, role, attempt, brief, **kw)
+        o.led.update(task["id"], status="RUNNING", attempt=attempt, role=role)
+        (o.spec.repo / "src/impl.txt").write_text("0.5")  # half done
+        (o.run_dir / OV.AGENT_FILE).write_text(json.dumps({"pid": 1, "pgid": 1, "task": task["id"], "role": role}))
+        raise KeyboardInterrupt  # the process is gone
+
+    o.run_agent = power_loss
+    with pytest.raises(KeyboardInterrupt):
+        o.run()
+    assert o.led.status("C.1") == "RUNNING"
+    o.run_agent = real
+    assert main([command, "--spec", str(o.spec.path)]) == DONE
+    assert not (o.run_dir / OV.AGENT_FILE).exists()
+    if command == "resume":  # the numbering continues after the interrupted attempt 1; the brief says so
+        assert orch.calls()[-1] == "C.1.implement.2.md bringup-engineer"  # implement.1 was cut off
+        assert "interrupted during implement attempt 1" in (o.run_dir / "briefs" / "C.1.implement.2.md").read_text()
+
+
 def test_files_committed_by_someone_else_during_a_step_are_not_the_agents(orch, sandbox):
     (sandbox.repo / "mine.py").write_text("a person's work in progress\n")
     o = orch([impl_task()], {"C.1.implement.1.md": {"write": {"src/impl.txt": "0.999"}}})
