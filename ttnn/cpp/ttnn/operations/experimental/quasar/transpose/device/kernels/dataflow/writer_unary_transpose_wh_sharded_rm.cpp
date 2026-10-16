@@ -4,11 +4,11 @@
 
 // Metal 2.0 conversion (in place; this kernel is transpose-owned). The device-side NoC + local-copy
 // logic is unchanged; only the resource bindings move to the Metal 2.0 namespaces (dfb::/args::).
-// Only instantiated on the Ht>8 path: cb_src (dfb::cb_src) is the compute kernel's tile-staging
-// output; the output shard is written by L1 address obtained from tensor::output (a local
-// TensorAccessor over the resident shard), not a borrowed self-loop CB.
-// The Ht>8 guard is preserved verbatim (always true here, since the factory only builds this kernel
-// when ht>8).
+// Only instantiated on the staging path (ht>8, or always on Quasar): cb_src (dfb::cb_src) is the
+// compute kernel's tile-staging output; the output shard is written by L1 address obtained from
+// tensor::output (a local TensorAccessor over the resident shard), not a borrowed self-loop CB.
+// The Ht>8 guard is preserved verbatim (always true off Quasar, since the factory only builds this
+// kernel there when ht>8).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -17,6 +17,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
+#include "experimental/idma_copy_rows.h"
 
 // get_arg lives in `namespace experimental` and is normally found via ADL on the args:: accessor
 // type. The CoreLocalMem/UnicastEndpoint NoC-with-state includes this kernel pulls in change the
@@ -34,13 +35,26 @@ void kernel_main() {
 
     const uint32_t stick_size_bytes = H_size_bytes;
 
-    Noc noc;
     DataflowBuffer cb_src(dfb::cb_src);
 
     // Local output-shard base L1 address from the resident output TensorAccessor (no borrowed self-loop CB).
     const auto s = TensorAccessor(tensor::output);
     uint32_t dst_addr = noc_address_backend::extract_local_address(s.get_noc_addr(0));
 
+#ifdef ARCH_QUASAR
+    // Copy the valid H datums of each padded row (l1_read_offset_bytes apart) into the dense output shard.
+    for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
+        for (uint32_t w = 0; w < Wt; ++w) {
+            cb_src.wait_front(Ht);
+            uint32_t W_curr = w == Wt - 1 ? W_per_tile_last : W_per_tile;
+            experimental::idma_copy_rows(
+                cb_src.get_read_ptr(), l1_read_offset_bytes, dst_addr, stick_size_bytes, W_curr);
+            dst_addr += W_curr * stick_size_bytes;
+            cb_src.pop_front(Ht);
+        }
+    }
+#else
+    Noc noc;
     // temporary fix until pack_untilze is fully fixed
     if constexpr (Ht > 8) {
         noc.set_async_write_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
@@ -69,4 +83,5 @@ void kernel_main() {
         }
         noc.async_write_barrier();
     }
+#endif
 }
