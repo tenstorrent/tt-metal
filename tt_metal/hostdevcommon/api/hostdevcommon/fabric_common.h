@@ -374,13 +374,19 @@ static_assert(
     "The 4x64 maximum must fill both fixed route-table regions exactly");
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-// Compile-time express-routing configuration. FabricContext injects FABRIC_EXPRESS_AXIS (0 = N/S,
-// 1 = E/W) when any locally bound mesh declares express links; absent means no express routing.
-// Device-only: host code must query the ControlPlane, never this struct.
+// Compile-time express-routing configuration. FabricContext injects FABRIC_EXPRESS_ENABLED together
+// with FABRIC_EXPRESS_AXIS (0 = N/S, 1 = E/W) when any locally bound mesh declares express links;
+// neither is defined without express routing. Device-only: host code must query the ControlPlane,
+// never this struct.
 struct FabricExpressConfig {
-#ifdef FABRIC_EXPRESS_AXIS
+#if defined(FABRIC_EXPRESS_ENABLED)
+#if !defined(FABRIC_EXPRESS_AXIS)
+#error "FABRIC_EXPRESS_ENABLED requires FABRIC_EXPRESS_AXIS"
+#endif
     static constexpr bool ENABLED = true;
     static constexpr std::uint32_t AXIS = FABRIC_EXPRESS_AXIS;
+#elif defined(FABRIC_EXPRESS_AXIS)
+#error "FABRIC_EXPRESS_AXIS requires FABRIC_EXPRESS_ENABLED"
 #else
     static constexpr bool ENABLED = false;
     static constexpr std::uint32_t AXIS = 0;  // meaningless when !ENABLED

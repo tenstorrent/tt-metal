@@ -347,6 +347,7 @@ TEST_F(ControlPlaneFixture, TestExpressRingPredicates32x4) {
 
     // Kernels are compiled for chords along N/S.
     const auto defines = control_plane->get_fabric_kernel_defines();
+    EXPECT_TRUE(defines.contains("FABRIC_EXPRESS_ENABLED"));
     ASSERT_TRUE(defines.contains("FABRIC_EXPRESS_AXIS"));
     EXPECT_EQ(defines.at("FABRIC_EXPRESS_AXIS"), "0");
 }
@@ -409,6 +410,7 @@ TEST_F(ControlPlaneFixture, TestExpressRingPredicates4x32) {
 
     // Kernels are compiled for chords along E/W.
     const auto defines = control_plane->get_fabric_kernel_defines();
+    EXPECT_TRUE(defines.contains("FABRIC_EXPRESS_ENABLED"));
     ASSERT_TRUE(defines.contains("FABRIC_EXPRESS_AXIS"));
     EXPECT_EQ(defines.at("FABRIC_EXPRESS_AXIS"), "1");
 }
@@ -426,6 +428,7 @@ TEST_F(ControlPlaneFixture, TestExpressAxisKernelDefine8x4) {
             FabricConfig::FABRIC_2D_TORUS_XY);
         ASSERT_TRUE(control_plane->express_routing_enabled(MeshId{0}));
         const auto defines = control_plane->get_fabric_kernel_defines();
+        EXPECT_TRUE(defines.contains("FABRIC_EXPRESS_ENABLED"));
         ASSERT_TRUE(defines.contains("FABRIC_EXPRESS_AXIS"));
         EXPECT_EQ(defines.at("FABRIC_EXPRESS_AXIS"), "0");
     }
@@ -438,6 +441,7 @@ TEST_F(ControlPlaneFixture, TestExpressAxisKernelDefine8x4) {
         ASSERT_FALSE(control_plane->express_routing_enabled(MeshId{0}));
         const auto defines = control_plane->get_fabric_kernel_defines();
         EXPECT_TRUE(defines.contains("ROUTING_MODE")) << "premise: the fabric context computed its defines";
+        EXPECT_FALSE(defines.contains("FABRIC_EXPRESS_ENABLED"));
         EXPECT_FALSE(defines.contains("FABRIC_EXPRESS_AXIS"));
     }
 }
