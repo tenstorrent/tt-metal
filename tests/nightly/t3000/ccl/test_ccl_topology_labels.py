@@ -189,19 +189,6 @@ def _all_reduce_async(tensor, mesh_device, cluster_axis):
     )
 
 
-def _all_reduce_async_whole_mesh(tensor, mesh_device):
-    """The `num_devices` overload: no cluster_axis, the ring is the whole mesh; explicit semaphores are required."""
-    return ttnn.experimental.all_reduce_async(
-        tensor,
-        num_devices=mesh_device.get_num_devices(),
-        barrier_semaphores=_semaphores(mesh_device, 2),
-        rs_global_semaphores=_semaphores(mesh_device, 3),
-        ag_global_semaphores=_semaphores(mesh_device, 2),
-        math_op=ttnn.ReduceType.Sum,
-        topology=ttnn.Topology.Linear,
-    )
-
-
 def _all_reduce_height(rs_ag_branch, ring_size):
     """all_reduce_async picks reduce_scatter + all_gather when some per-device dim has a tile count divisible by the
     ring size (finding_scatter_dim) and the composite all_gather + local sum otherwise. Inputs here are one tile
@@ -596,7 +583,16 @@ def test_all_reduce_async_whole_mesh_overload(mesh_device, sharded, rs_ag_branch
     mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3) if sharded else ttnn.ReplicateTensorToMesh(mesh_device)
     tt_input = _from_torch(full, mesh_device, mapper)
 
-    tt_output = _all_reduce_async_whole_mesh(tt_input, mesh_device)
+    # The `num_devices` overload takes no cluster_axis (the ring is the whole mesh) and requires explicit semaphores.
+    tt_output = ttnn.experimental.all_reduce_async(
+        tt_input,
+        num_devices=num_devices,
+        barrier_semaphores=_semaphores(mesh_device, 2),
+        rs_global_semaphores=_semaphores(mesh_device, 3),
+        ag_global_semaphores=_semaphores(mesh_device, 2),
+        math_op=ttnn.ReduceType.Sum,
+        topology=ttnn.Topology.Linear,
+    )
 
     assert _placements(tt_output) == [REPLICATE]
     assert _dist_shape(tt_output) == (num_devices,)
