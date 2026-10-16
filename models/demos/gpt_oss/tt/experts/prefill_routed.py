@@ -84,11 +84,14 @@ ROUTED_SCATTER_GROUPS = 32
 # of a DRAM round trip; at C = 8192 this measured 2.39 -> 1.91 ms per layer for gather + reduce + bf8 cast (one device).
 ROUTED_COMBINE_BLOCK = 2048
 # Largest chunk-size-dependent transient this module places in L1 (per device, interleaved). Above it the tensor goes
-# to DRAM, so a larger GPT_OSS_ROUTED_PREFILL_CHUNK still runs instead of overflowing L1. A chunk of 8192 puts the
-# dispatch-gather input x_rm (C*H*2 = 47 MB) under it (the default 16384 chunk keeps x_rm in DRAM); the combine block
-# is bounded by ROUTED_COMBINE_BLOCK (2048 tokens: [Cs, k, H] bf16 = 47 MB, the reduced block 12 MB), which is also
-# under it.
+# to DRAM, so a larger GPT_OSS_ROUTED_PREFILL_CHUNK still runs instead of overflowing L1 (the dispatch-gather input
+# x_rm has its own cap, ROUTED_XRM_L1_CAP_BYTES); the combine block is bounded by ROUTED_COMBINE_BLOCK (2048 tokens:
+# [Cs, k, H] bf16 = 47 MB, the reduced block 12 MB), which is also under it.
 ROUTED_L1_CAP_BYTES = 64 << 20
+# Cap for the dispatch-gather input x_rm alone (C*H*2 bytes): it is the only large transient live in L1 while it
+# exists (tok_of_row is small; the gather output goes to DRAM), so the default 16384 chunk (90 MiB) fits. Measured on
+# one BH device at C = 16384: untilize + dispatch gather 1.86 ms (x_rm in DRAM) -> 1.52 ms (L1), bit-identical.
+ROUTED_XRM_L1_CAP_BYTES = 96 << 20
 # Version of the cached routed-expert weights; the weight-cache completion marker records it (model_config.py).
 ROUTED_PREFILL_WEIGHTS_VERSION = 1
 ROUTED_CACHE_SUBDIR = "experts_routed_ep"
@@ -851,8 +854,9 @@ class RoutedPrefillExperts:
             ttnn.deallocate(tok_u)
         # The row-major copy of x lives in L1 (47 MB at C = 8192) only for the gather: the untilize skips a DRAM write
         # and the gather reads the local pairs' rows from L1 (measured 0.94 -> 0.77 ms per layer at 8K, one device).
-        # A chunk whose copy exceeds ROUTED_L1_CAP_BYTES (C > 11650) keeps it in DRAM.
-        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=_l1_if_fits(C * H * 2))
+        # A chunk whose copy exceeds ROUTED_XRM_L1_CAP_BYTES (C > 17476) keeps it in DRAM.
+        x_rm_mem = ttnn.L1_MEMORY_CONFIG if C * H * 2 <= ROUTED_XRM_L1_CAP_BYTES else ttnn.DRAM_MEMORY_CONFIG
+        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=x_rm_mem)
         x_rm = ttnn.reshape(x_rm, (C, H))
         # padding_idx=0: every row that reads token 0 (about 3/4 of the k*C buffer rows on each of the N devices are
         # unwritten and read token 0) is served from a per-core L1 copy of x[0] instead of DRAM; same values.
