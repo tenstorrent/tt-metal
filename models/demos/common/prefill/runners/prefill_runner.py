@@ -750,7 +750,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             # The capture's warm pass fires a whole chunk's acks before any host reader exists. Acks
             # that arrive while the FIFO is full overrun the reader kernel's exact-count write-ack
             # wait, which then never matches again, so the FIFO must hold all of them.
-            fifo_size_bytes = max(fifo_size_bytes, 1 << (ack_local_count * LAYER_ACK_RECORD_BYTES - 1).bit_length())
+            ack_fifo_bytes = layout.rank_record_count * LAYER_ACK_RECORD_BYTES
+            fifo_size_bytes = max(fifo_size_bytes, 1 << (ack_fifo_bytes - 1).bit_length())
         d2h_service = ttnn.D2HStreamService(
             mesh_device,
             global_spec=None,
