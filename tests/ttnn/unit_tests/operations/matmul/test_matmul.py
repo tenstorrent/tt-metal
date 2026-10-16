@@ -3704,7 +3704,7 @@ def test_matmul_packer_l1_acc_two_k_blocks(device, family):
         )
         _, pcc[num_k_blocks] = comp_pcc(torch_output, ttnn.to_torch(output).float())
     logger.info(f"{family}: PCC with 2 K blocks {pcc[2]:.5f}, with 4 K blocks {pcc[4]:.5f}")
-    assert 1 - pcc[2] <= 1.1 * (1 - pcc[4])
+    assert 1 - pcc[2] <= 1.1 * (1 - pcc[4]), f"{family}: PCC with 2 K blocks {pcc[2]:.5f}, with 4 K blocks {pcc[4]:.5f}"
 
 
 @pytest.mark.parametrize(
