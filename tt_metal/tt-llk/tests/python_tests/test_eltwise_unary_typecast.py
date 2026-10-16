@@ -434,7 +434,10 @@ def _fp32_random_normal_bits(count: int, seed: int) -> list[int]:
     by the special patterns.
     """
     generator = torch.Generator().manual_seed(seed)
-    sign = torch.randint(0, 2, (count,), generator=generator, dtype=torch.int64) << 31
+    sign = (
+        torch.randint(0, 2, (count,), generator=generator, dtype=torch.int64)
+        * _FP32_SIGN_BIT
+    )
     exponent = (
         torch.randint(1, 255, (count,), generator=generator, dtype=torch.int64)
         << _FP32_MANTISSA_BITS
