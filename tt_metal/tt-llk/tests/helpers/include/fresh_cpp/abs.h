@@ -15,6 +15,7 @@ namespace ckernel::sfpu
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_abs_fresh_cpp()
 {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; ++d)
     {
         const sfpi::vFloat v = sfpi::dst_reg[0];

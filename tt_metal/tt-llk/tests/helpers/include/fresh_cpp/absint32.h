@@ -16,6 +16,7 @@ namespace ckernel::sfpu
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_abs_int32_fresh_cpp()
 {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; ++d)
     {
         const sfpi::vInt v = sfpi::dst_reg[0];
