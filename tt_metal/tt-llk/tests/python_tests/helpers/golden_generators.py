@@ -2421,6 +2421,7 @@ class UnarySFPUGolden:
             MathOperation.SigmoidAppx: self._sigmoid_appx,
             MathOperation.SqrtCustom: self._sqrt,
             MathOperation.Add1: self._add1,
+            MathOperation.AddOne: self._add_one,
             MathOperation.CastFp32ToFp16a: self._cast_fp32_to_fp16a,
             MathOperation.Isinf: self._isinf,
             MathOperation.Isposinf: self._isposinf,
@@ -2857,6 +2858,10 @@ class UnarySFPUGolden:
 
     def _add1(self, x):
         # add1(x) = x + 1
+        return x + 1.0
+
+    def _add_one(self, x):
+        # add_one(x) = x + 1 (KT-demo toy kernel)
         return x + 1.0
 
     # Predicate ops: return 1.0 where the test holds, else 0.0. Each x is a

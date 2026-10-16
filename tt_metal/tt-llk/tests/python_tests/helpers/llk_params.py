@@ -213,6 +213,7 @@ class MathOperation(Enum):
     SigmoidAppx = OpSpec("sigmoid_appx", MathOpType.SFPU_UNARY)
     SqrtCustom = OpSpec("sqrt_custom", MathOpType.SFPU_UNARY)
     Add1 = OpSpec("add1", MathOpType.SFPU_UNARY)
+    AddOne = OpSpec("add_one", MathOpType.SFPU_UNARY)
     CastFp32ToFp16a = OpSpec("cast_fp32_to_fp16a", MathOpType.SFPU_UNARY)
     # isinf/isnan family: cpp_enum_value must match the SfpuType enumerator name
     # so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.

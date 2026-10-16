@@ -18,6 +18,7 @@
 #include "llk_sfpu/ckernel_sfpu_abs.h"
 #include "llk_sfpu/ckernel_sfpu_activations.h"
 #include "llk_sfpu/ckernel_sfpu_add1.h"
+#include "llk_sfpu/ckernel_sfpu_add_one.h"
 #include "llk_sfpu/ckernel_sfpu_alt_complex_rotate90.h"
 #include "llk_sfpu/ckernel_sfpu_bitwise.h"
 #include "llk_sfpu/ckernel_sfpu_bitwise_not.h"
@@ -863,6 +864,10 @@ void call_unary_sfpu_operation_quasar(
     else if constexpr (OPERATION == SfpuType::add1)
     {
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_add1, (APPROX, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::add_one)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_add_one, (APPROX, ITERATIONS), dst_index, VectorMode::RC);
     }
     // Activation family. The fixed parameters match the Blackhole harness (sfpu_operations.h) and
     // helpers/sfpu_dispatch_constants.py, which the goldens read.
