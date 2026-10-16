@@ -60,6 +60,9 @@ _PERF_REFERENCE_MS = {
 # Device time of one traced forward: the sum over programs of each program's slowest chip, as the K3 MLA perf test
 # gates it. Host wall time on a QuietBox varies by several percent between replays; device time does not.
 _DEVICE_PERF_REFERENCE_MS = {
+    _PERF_SKU: {
+        "SP4xTP2": 2.075,
+    },
     _QUIETBOX_PERF_SKU: {
         "SP2xTP2": 2.045,
     },
@@ -81,6 +84,11 @@ _GALAXY_ACTUAL_START = 4 * _GALAXY_ROWS_PER_CHIP + 320
 _QUIETBOX_SEQUENCE = 2 * _GALAXY_ROWS_PER_CHIP
 _QUIETBOX_NUM_HEADS = 2 * _GALAXY_HEADS_PER_CHIP
 _QUIETBOX_ACTUAL_START = _GALAXY_ROWS_PER_CHIP + 320
+# LoudBox SP4xTP2 runs the same per-chip workload on a 2560-token chunk. The SP chain is 4 ranks and the TP
+# reduce-scatter 2; the 11x10 grid splits each head's values over 2 cores as on QuietBox.
+_LOUDBOX_SEQUENCE = 4 * _GALAXY_ROWS_PER_CHIP
+_LOUDBOX_NUM_HEADS = 2 * _GALAXY_HEADS_PER_CHIP
+_LOUDBOX_ACTUAL_START = 2 * _GALAXY_ROWS_PER_CHIP + 320
 # Like the model's prefill tests, give CCL semaphores their own L1_SMALL region: allocated in L1 on the first call,
 # they would land between the chunk terms and fragment L1, so the traced call would plan ops on less free L1 than
 # the warm-up compiled for.
@@ -151,7 +159,7 @@ def _assert_synthetic_performance(layout: str, median_wall_ms: float) -> None:
 @pytest.mark.parametrize(
     "layout,sku,reference",
     [
-        ("SP2xTP4", _PERF_SKU, _synthetic_perf_reference_ms),
+        ("SP4xTP2", _PERF_SKU, _device_perf_reference_ms),
         ("SP2xTP2", _QUIETBOX_PERF_SKU, _device_perf_reference_ms),
         ("SP8xTP4", _PERF_SKU, _synthetic_perf_reference_ms),
     ],
@@ -366,7 +374,7 @@ def test_kimi_k3_layer_1_perf(
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params",
     [
-        pytest.param((2, 4), 1, fabric_1d_device_params(l1_small_size=_L1_SMALL_SIZE), id="SP2xTP4-fabric-1d"),
+        pytest.param((2, 4), 0, fabric_1d_device_params(l1_small_size=_L1_SMALL_SIZE), id="SP4xTP2-fabric-1d"),
         pytest.param((2, 2), 1, fabric_1d_device_params(l1_small_size=_L1_SMALL_SIZE), id="SP2xTP2-fabric-1d"),
         pytest.param(
             (8, 4),
@@ -391,6 +399,7 @@ def test_synthetic_kimi_k3_perf(
     reference_ms = _synthetic_perf_reference_ms(layout) if device_reference_ms is None else None
     sequence, num_heads, actual_start = {
         "SP8xTP4": (_SEQUENCE, None, _GALAXY_ACTUAL_START),
+        "SP4xTP2": (_LOUDBOX_SEQUENCE, _LOUDBOX_NUM_HEADS, _LOUDBOX_ACTUAL_START),
         "SP2xTP2": (_QUIETBOX_SEQUENCE, _QUIETBOX_NUM_HEADS, _QUIETBOX_ACTUAL_START),
     }.get(layout, (_SEQUENCE, None, 0))
     if _ACTUAL_START_OVERRIDE is not None:
@@ -403,7 +412,7 @@ def test_synthetic_kimi_k3_perf(
         tensor_parallel_axis=tensor_parallel_axis,
         cache_weights=False,
     )
-    if layout in ("SP8xTP4", "SP2xTP2"):
+    if layout in ("SP8xTP4", "SP4xTP2", "SP2xTP2"):
         assert (layer.active_seq_len_local, layer.config.num_heads) == (
             _GALAXY_ROWS_PER_CHIP,
             _GALAXY_HEADS_PER_CHIP,
