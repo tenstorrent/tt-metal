@@ -15,15 +15,11 @@ from helpers.llk_params import (
 )
 from helpers.param_config import parametrize
 from quasar.test_matmul_int4_dequant_quasar import (
+    PERF_GROUP_DIMS,
+)
+from quasar.test_matmul_int4_dequant_quasar import (
     test_matmul_int4_dequant_quasar as run_matmul_int4_dequant,
 )
-
-# (ct, rt, kt, group_kt): dest-full wide and tall output grids plus a single tile.
-PERF_GROUP_DIMS = [
-    (ct, rt, 8, group_kt)
-    for ct, rt in [(1, 1), (4, 1), (1, 4)]
-    for group_kt in [8, 4, 2]
-]
 
 
 @pytest.mark.perf
