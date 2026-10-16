@@ -23,11 +23,14 @@ FORCE_INLINE float reduce_fp32(const float current, const uint16_t source_bf16, 
 }
 
 void kernel_main() {
-    const uint32_t index_addr = get_arg_val<uint32_t>(0);
-    const uint32_t src_addr = get_arg_val<uint32_t>(1);
-    const uint32_t start_stick = get_arg_val<uint32_t>(2);
-    const uint32_t num_sticks = get_arg_val<uint32_t>(3);
-    // Args 4..20 are the fixed-width logical page-map descriptor.
+    // Buffer addresses are common (per-kernel) runtime args: a program-cache hit then rebinds two
+    // slots per kernel instead of two per core.
+    const uint32_t index_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t src_addr = get_common_arg_val<uint32_t>(1);
+    // Per-core runtime args
+    const uint32_t start_stick = get_arg_val<uint32_t>(0);
+    const uint32_t num_sticks = get_arg_val<uint32_t>(1);
+    // Args 2..18 are the fixed-width logical page-map descriptor.
 
     constexpr uint32_t cb_input = get_compile_time_arg_val(0);
     constexpr uint32_t cb_output = get_compile_time_arg_val(1);
@@ -89,7 +92,7 @@ void kernel_main() {
 
         const uint32_t input_stick_id = start_stick + s;
         uint32_t source_stick_id = 0;
-        const bool has_src_data = map_scatter_input_page<4>(input_stick_id, source_stick_id);
+        const bool has_src_data = map_scatter_input_page<2>(input_stick_id, source_stick_id);
 
         for (uint32_t base = 0; has_src_data && base < index_stick_elems; base += chunk_elems) {
             uint32_t this_chunk = chunk_elems;
