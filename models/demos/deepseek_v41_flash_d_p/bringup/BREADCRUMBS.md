@@ -1320,3 +1320,34 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   0.022992 <= 0.052679 (2 x floor 0.026339), err_swap_out 0.030351 <= 0.063240, run_swap_test True. The step needs
   that framework change (int step outputs get the nudged tail floor) or the owner waiver (spec tests.waivers, indexer).
 - Re-run: `PYTHONPATH=$PWD scripts/tt-probe.sh ds41_indexer < tests/ttnn/unit_tests/operations/ds41_indexer/probes/probe_006.py`.
+
+## C.enc_source.attention implement (attempt 1)
+- New `tt/sparse_attention.py:TtSparseAttention` (subclass of TtWindowAttention) for a compressed layer: one
+  `ttnn.bringup.sparse_sdpa` per chunk at the window step's dtypes (DS41-18: high_precision + sink / 1, scale 1 with
+  512^-0.5 in q (K-27), fp32_scores, bf16_probs, bf16 out) over the table [window region 128 + S (TtWindowAttention._table,
+  writes the served 0_window_kv) | compressed rows]. The compressed rows are the KV source's served cache
+  (TtServedRows, TP-dedup, token units, DS41-48): the local rows of the first nb = ceil((start + S) / S) chunk periods,
+  viewed as [nb stripe / 2, 512], tiled, all_gather axis 1 then axis 0 (gather order). Top-k group j -> table row
+  128 + S + q nb hs + b hs + j mod hs (hs = stripe / r, s = j div hs, q = s mod N, b = s div N), fp32 integer ops on the
+  device (floor((x + 1/2) / d), exact below 2^24; -1 kept via int32 -> bitcast uint32, K-18).
+- Index list [window 128 | top-k 512] (640 = 5 k-chunks of 128). sparse_sdpa stops at the first sentinel
+  (sparse_sdpa_reader.cpp:9), so for starts < 128 the list goes through `ttnn.gather` with a load-time permutation per
+  start class (`SparseIndexTables`; TtCSA.index_tables' idea); start >= 128 is a plain concat.
+- q and the table keep the rope tail interleaved (`INTERLEAVED = True`): the stored compressed rows are interleaved, so
+  no per-chunk transform of the whole compressed table; q via rope_heads(interleave=True), the output de-interleaved
+  (new `tt/rope.deinterleave_tail`) before the inverse RoPE. TtWindowAttention keeps INTERLEAVED = False (C.swa.attention
+  re-run: PASS, err 0.0235, unchanged).
+- hooks: `_sparse_attention_host_fn` (component tests: a window cache from the golden ring and a compressed cache from
+  state_prefix compress_kv + this chunk's `compressed`; hybrid: ctx.extra window_cache / compress_cache.ckv), the
+  `attention` step dispatches compressed layers to it (own KV and top-k source only so far), attention added to
+  DEVICE_STEPS['enc_source'] (DS41-28). K-31 is out of date: the fork takes the sink under high_precision.
+- Gate: component test FAILS on one check only: auto_attention_L02_small rel 0.0352 > 0.03 (the fixed second-input
+  floor). Passing: err_attention_L02 0.0350 <= 0.1616, vs CPU 0.0316 <= 0.0668, chunk0 0.0292 <= 0.0545, layer14
+  0.0287 <= 0.0529, mixed 0.0298 <= 0.0505, big 0.0230 <= 0.0491, determinism bit-identical. Contract
+  test_cache_starts (BRINGUP_TASK=C.enc_source.attention): 4 passed.
+- Why `small` fails (DS41-51, probe ds41_sparse_attn/probe_004): the official kernel's own bf16 o alone gives 0.0329 on
+  those inputs (fp8 flips after it); the device 0.0352 (o vs CPU rel 0.0023, a flat-softmax shrink -8.9e-4, DS41-16).
+  No device fix at the reference's precision (fp32 o is above it, FIX.2): needs an owner waiver (tests.waivers
+  enc_source.attention) or a framework second-input floor that includes the official arithmetic.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attention.py && BRINGUP_TASK=C.enc_source.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`;
+  probe `CASE=small,golden PYTHONPATH=$PWD scripts/tt-probe.sh ds41_sparse_attn < tests/ttnn/unit_tests/operations/ds41_sparse_attn/probes/probe_004.py`.
