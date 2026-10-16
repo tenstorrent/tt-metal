@@ -58,6 +58,12 @@ struct FusedLightningSelectKvDeviceOperation {
         // ``[1, max_blocks_per_user * block_size]`` INT32 ``kv_cache`` row of each key, replacing the
         // page-table mapping for the gather (a candidate pool's rows in the source's cache).
         std::optional<Tensor> row_table;
+        // ``[1]`` INT32 session row of the paged tables: the ``page_table_tensor`` row read when it is
+        // ``[num_sessions, max_blocks_per_user]`` (no ``row_table``), or the ``kv_page_table`` row.
+        std::optional<Tensor> page_table_row_tensor;
+        // ``[num_sessions, max_blocks]`` INT32 ``kv_cache`` page table that maps ``new_kv_row_index``
+        // with a ``row_table`` (whose ``page_table_tensor`` maps the candidate pool, not ``kv_cache``).
+        std::optional<Tensor> kv_page_table;
     };
 
     // [0] selected kv rows (with num_parts > 1: the local candidates, ``[1, 1, 1, 2k + 16]`` INT32:
@@ -107,6 +113,8 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
     const std::optional<ttnn::Tensor>& pool_count_output = std::nullopt,
     uint32_t num_parts = 1,
     const std::optional<ttnn::Tensor>& part_index_tensor = std::nullopt,
-    const std::optional<ttnn::Tensor>& row_table = std::nullopt);
+    const std::optional<ttnn::Tensor>& row_table = std::nullopt,
+    const std::optional<ttnn::Tensor>& page_table_row_tensor = std::nullopt,
+    const std::optional<ttnn::Tensor>& kv_page_table = std::nullopt);
 
 }  // namespace ttnn::prim

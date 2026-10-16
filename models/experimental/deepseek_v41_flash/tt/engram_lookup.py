@@ -15,6 +15,7 @@ import importlib.util
 import json
 import math
 import struct
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -91,9 +92,12 @@ class EngramHostLookup:
 
     Keeps each user's compressed-token history across calls, so decode calls it once per step with that
     step's token at its position, after prefill called it with the prompt from position 0.
+
+    ``sessions`` histories ``[batch, max_seq]`` are kept, one per decode session slot;
+    :meth:`use_session` picks the one the next calls read and extend.
     """
 
-    def __init__(self, config, snapshot_dir, tables: dict, batch: int, max_seq: int, tokenizer=None):
+    def __init__(self, config, snapshot_dir, tables: dict, batch: int, max_seq: int, tokenizer=None, sessions: int = 1):
         """``tables`` maps an Engram layer id to its ``(weight, scale)`` from :func:`load_engram_table`.
         ``tokenizer`` defaults to the checkpoint's; it only feeds the normalized-token map."""
         if tokenizer is None:
@@ -120,11 +124,30 @@ class EngramHostLookup:
             assert tuple(weight.shape) == (rows, self.layout.head_dim), (layer_id, tuple(weight.shape))
             assert tuple(scale.shape) == (rows, self.layout.head_dim // TABLE_BLOCK), (layer_id, tuple(scale.shape))
         self.tables = tables
+        self._histories = [self.hash.cache] + [torch.empty_like(self.hash.cache) for _ in range(sessions - 1)]
+        # The decode packet writer hashes on its own thread while the posting thread switches sessions.
+        self._lock = threading.Lock()
+
+    def use_session(self, slot: int) -> None:
+        """Hash against session slot ``slot``'s token history from now on (a pointer swap, no copy)."""
+        with self._lock:
+            self.hash.cache = self._histories[slot]
+
+    @torch.no_grad()
+    def hash_session(self, slot: int, input_ids: torch.Tensor, start_pos: int) -> torch.Tensor:
+        """``self.hash`` against session slot ``slot``'s history, leaving the :meth:`use_session` choice as it was."""
+        with self._lock:
+            picked, self.hash.cache = self.hash.cache, self._histories[slot]
+            try:
+                return self.hash(input_ids, start_pos)
+            finally:
+                self.hash.cache = picked
 
     @torch.no_grad()
     def __call__(self, input_ids: torch.Tensor, start_pos: int) -> dict:
         """``input_ids`` ``[B, L]`` at positions ``start_pos ..`` -> each table layer's rows ``[B, L, n_hash_cols * head_dim]``."""
-        hashes = self.hash(input_ids, start_pos)  # [B, L, n_engram_layers, n_hash_cols]
+        with self._lock:
+            hashes = self.hash(input_ids, start_pos)  # [B, L, n_engram_layers, n_hash_cols]
         return {
             layer_id: self.gather(layer_id, hashes[:, :, self.layout.layer_ids.index(layer_id)]).flatten(-2)
             for layer_id in self.tables

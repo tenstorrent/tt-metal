@@ -120,17 +120,36 @@ void kernel_main() {
         hist_dfb.reserve_back(1);
         volatile tt_l1_ptr uint32_t* scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hist_dfb.get_write_ptr());
         noc.async_read(new_kv_row_index, hist_dfb, 64, {.page_id = 0}, {.offset_bytes = 0});
+#ifdef PAGE_TABLE_ROW
+        const auto page_table_row_gen = TensorAccessor(tensor::page_table_row);
+        noc.async_read(page_table_row_gen, hist_dfb, 64, {.page_id = 0}, {.offset_bytes = 128});
+#endif
         noc.async_read_barrier();
         invalidate_l1_cache();
-#ifdef ROW_TABLE
+#ifdef PAGE_TABLE_ROW
+        [[maybe_unused]] const uint32_t page_table_row = scratch[32];
+#else
+        [[maybe_unused]] const uint32_t page_table_row = 0;
+#endif
+#if defined(ROW_TABLE) && !defined(KV_PAGE_TABLE)
         // The page table maps the candidate pool, not kv_cache, so the index is already a kv_cache row.
         const uint32_t physical_row = scratch[0];
 #else
+#ifdef ROW_TABLE
+        // The page table maps the candidate pool; kv_page_table maps kv_cache.
+        const auto row_page_table = TensorAccessor(tensor::kv_page_table);
+#else
+        const auto& row_page_table = page_table;
+#endif
         const uint32_t logical_row = scratch[0];
         const uint32_t block = logical_row / page_block_size;
         // Each 64 B DRAM-aligned chunk of the page table holds 16 uint32_t entries.
         noc.async_read(
-            page_table, hist_dfb, 64, {.page_id = 0, .offset_bytes = 64 * (block / 16)}, {.offset_bytes = 64});
+            row_page_table,
+            hist_dfb,
+            64,
+            {.page_id = page_table_row, .offset_bytes = 64 * (block / 16)},
+            {.offset_bytes = 64});
         noc.async_read_barrier();
         invalidate_l1_cache();
         const uint32_t physical_row = scratch[16 + block % 16] * page_block_size + logical_row % page_block_size;
