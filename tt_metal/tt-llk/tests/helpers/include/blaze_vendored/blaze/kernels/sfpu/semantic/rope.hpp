@@ -51,14 +51,16 @@ sfpi_inline void sfpu_rope_face(const std::uint32_t xi, sfpi::vFloat cs_cos, sfp
     vFloat x_even = dst_reg[xi].mode<sfpi::DataLayout::F16b>();
     vFloat x_odd = dst_reg[xi + 1].mode<sfpi::DataLayout::F16b>();
 
-    // Same two-rounding dataflow as the original's MAD pairs:
-    //   t = cos*x_even;  out_even = -(sin*x_odd) + t
-    //   u = sin*x_even;  out_odd  =   cos*x_odd  + u
-    vFloat out_even = cs_cos * x_even - cs_sin * x_odd;
-    vFloat out_odd = cs_sin * x_even + cs_cos * x_odd;
+    // Two roundings per output, as in the original's MAD pairs: one product
+    // is rounded and the other is fused into the add.  Both rounded products
+    // come first so neither MAD waits on its multiply.
+    const vFloat sin_odd = cs_sin * x_odd;
+    const vFloat cos_odd = cs_cos * x_odd;
+    vFloat out_even = cs_cos * x_even - sin_odd;
+    vFloat out_odd = cs_sin * x_even + cos_odd;
 
-    dst_reg[xi].mode<sfpi::DataLayout::F16b>() = out_even;
     dst_reg[xi + 1].mode<sfpi::DataLayout::F16b>() = out_odd;
+    dst_reg[xi].mode<sfpi::DataLayout::F16b>() = out_even;
 }
 
 /**
