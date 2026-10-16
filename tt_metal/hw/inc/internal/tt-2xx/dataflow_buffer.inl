@@ -27,7 +27,7 @@
 #define DFB_IS_COMPUTE_MATH 0
 #endif
 
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_(logical_dfb_id) {
     dfb_ensure_ready(g_dfb_config_base_addr, static_cast<uint8_t>(logical_dfb_id));
 }
@@ -45,7 +45,7 @@ inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
 #endif
 
 inline uint32_t DataflowBuffer::get_entry_size() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #else
     return address_units_to_bytes(local_dfb_interface_.entry_size);
@@ -53,7 +53,7 @@ inline uint32_t DataflowBuffer::get_entry_size() const {
 }
 
 inline uint32_t DataflowBuffer::get_stride_size() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #else
     return address_units_to_bytes(local_dfb_interface_.stride_size);
@@ -61,7 +61,7 @@ inline uint32_t DataflowBuffer::get_stride_size() const {
 }
 
 inline uint32_t DataflowBuffer::get_total_num_entries() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #else
     return local_dfb_interface_.num_entries;
@@ -69,7 +69,7 @@ inline uint32_t DataflowBuffer::get_total_num_entries() const {
 }
 
 inline uint32_t DataflowBuffer::get_total_size_bytes() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #else
     return get_total_num_entries() * address_units_to_bytes(local_dfb_interface_.entry_size);
@@ -77,7 +77,7 @@ inline uint32_t DataflowBuffer::get_total_size_bytes() const {
 }
 
 inline uint32_t DataflowBuffer::get_local_num_entries() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #else
     const dfb::PackedTileCounter packed_tc =
@@ -93,7 +93,7 @@ inline uint32_t DataflowBuffer::get_local_num_entries() const {
 }
 
 inline uint32_t DataflowBuffer::get_local_size_bytes() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #else
     const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
@@ -107,7 +107,7 @@ inline uint32_t DataflowBuffer::get_local_size_bytes() const {
 
 namespace {
 
-#if !DFB_IS_COMPUTE_MATH
+#if !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
 
 inline uint32_t dfb_ring_span_address_units(const LocalDFBInterface& intf) {
     const uint8_t last = static_cast<uint8_t>(intf.num_tcs_to_rr - 1);
@@ -119,12 +119,12 @@ inline uint32_t dfb_ring_span_address_units(const LocalDFBInterface& intf) {
     return intf.tc_slots[last].limit - intf.tc_slots[0].base_addr;
 #endif
 }
-#endif  // !DFB_IS_COMPUTE_MATH
+#endif  // !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
 
 }  // namespace
 
 inline uint32_t DataflowBuffer::get_ring_span_bytes() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #else
     return address_units_to_bytes(dfb_ring_span_address_units(local_dfb_interface_));
@@ -132,7 +132,7 @@ inline uint32_t DataflowBuffer::get_ring_span_bytes() const {
 }
 
 inline uint32_t DataflowBuffer::get_ring_span_num_entries() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #else
     const uint32_t entry_bytes = get_entry_size();
@@ -141,7 +141,7 @@ inline uint32_t DataflowBuffer::get_ring_span_num_entries() const {
 }
 
 inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
-#if !DFB_IS_COMPUTE_MATH
+#if !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
     WAYPOINT("RBW");
     dfb::PackedTileCounter packed_tc =
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
@@ -175,7 +175,7 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
 }
 
 inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
-#if !DFB_IS_COMPUTE_MATH
+#if !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
@@ -210,7 +210,7 @@ inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
 }
 
 inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
-#if !DFB_IS_COMPUTE_MATH
+#if !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
     WAYPOINT("WFW");
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
@@ -230,7 +230,7 @@ inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
 }
 
 inline void DataflowBuffer::pop_front_impl(uint16_t num_entries) {
-#if !DFB_IS_COMPUTE_MATH
+#if !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
@@ -272,7 +272,7 @@ inline void DataflowBuffer::wait_relay_consumer_caught_up() const {
 #endif
 
 inline void DataflowBuffer::finish_impl() {
-#if !DFB_IS_COMPUTE_MATH
+#if !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
 #ifndef COMPILE_FOR_TRISC
     if (ptiles_read_ > 0) {
         handle_final_credits<true>(ptiles_read_, ptxn_id_index_);
@@ -332,7 +332,7 @@ inline DataflowBuffer::~DataflowBuffer() {
 }
 
 inline uint32_t DataflowBuffer::get_write_ptr_impl() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
     {
@@ -349,7 +349,7 @@ inline uint32_t DataflowBuffer::get_write_ptr_impl() const {
 }
 
 inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
     {
@@ -684,7 +684,7 @@ inline void DataflowBuffer::commit_implicit_write() {
 // DataflowBuffer type (circular dependency: dataflow_buffer.h includes noc.h, not vice versa).
 
 template <NocOptions opts, typename Src>
-std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
+NOC_TRANSFER_INLINE std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
 Noc::async_read(
     const Src& src,
     DataflowBuffer& dst,
@@ -698,18 +698,24 @@ Noc::async_read(
     noc_async_read_set_trid(txn_id, noc_id_);
     while (noc_available_transactions(noc_id_, txn_id) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
     // DPRINT("Issue the read\n");
-    noc_async_read_impl<NOC_MAX_BURST_SIZE + 1, true>(
-        get_src_ptr<AddressType::NOC>(src, src_args),
-        // Use cached addresses for NOC APIs
-        dst.get_noc_write_addr(),
-        dst.get_entry_size(),
-        noc_id_,
-        NOC_UNICAST_WRITE_VC);
+    // Use cached addresses for NOC APIs
+    const uint32_t dst_addr = dst.get_noc_write_addr();
+    auto issue = [&](uint64_t src_noc_addr) {
+        noc_async_read_impl<NOC_MAX_BURST_SIZE + 1, true>(
+            src_noc_addr, dst_addr, dst.get_entry_size(), noc_id_, NOC_UNICAST_WRITE_VC);
+    };
+    if constexpr (noc_addrgen_push_v<Src>) {
+        // The ordinary issue below always traces (noc_async_read_impl<..., true>); so does the pushed one.
+        issue_read_maybe_pushed</*trace=*/true>(
+            src, src_args, dst_addr, dst.get_entry_size(), NOC_UNICAST_WRITE_VC, issue);
+    } else {
+        issue(get_src_ptr<AddressType::NOC>(src, src_args));
+    }
     dst.commit_implicit_read();
 }
 
 template <NocOptions opts, typename Dst>
-std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
+NOC_TRANSFER_INLINE std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
 Noc::async_write(
     DataflowBuffer& src,
     const Dst& dst,
@@ -721,23 +727,30 @@ Noc::async_write(
     uint32_t txn_id = src.prepare_implicit_write();
     // Use cached addresses for NOC APIs
     auto src_addr = src.get_noc_read_addr();
-    auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, src.get_entry_size());
-    // DPRINT("Issue the write\n");
-    ncrisc_noc_fast_write_any_len<noc_mode, true, /*one_packet*/false>(
-        noc_id_,
-        write_cmd_buf,
-        src_addr,
-        dst_noc_addr,
-        src.get_entry_size(),
-        NOC_UNICAST_WRITE_VC,
-        false,   // mcast
-        false,   // linked
-        1,       // num_dests
-        true,    // multicast_path_reserve
-        false,   // posted == false (NocOptions::POSTED not set)
-        txn_id);
+    auto issue = [&](uint64_t dst_noc_addr) {
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, src.get_entry_size());
+        // DPRINT("Issue the write\n");
+        ncrisc_noc_fast_write_any_len<noc_mode, true, /*one_packet*/false>(
+            noc_id_,
+            write_cmd_buf,
+            src_addr,
+            dst_noc_addr,
+            src.get_entry_size(),
+            NOC_UNICAST_WRITE_VC,
+            false,   // mcast
+            false,   // linked
+            1,       // num_dests
+            true,    // multicast_path_reserve
+            false,   // posted == false (NocOptions::POSTED not set)
+            txn_id);
+    };
+    if constexpr (noc_addrgen_push_v<Dst>) {
+        issue_write_maybe_pushed</*posted=*/false, /*use_trid=*/true, /*trace=*/true>(
+            dst, dst_args, src_addr, src.get_entry_size(), NOC_UNICAST_WRITE_VC, txn_id, issue);
+    } else {
+        issue(get_dst_ptr<AddressType::NOC>(dst, dst_args));
+    }
     src.commit_implicit_write();
 }
 

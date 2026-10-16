@@ -566,6 +566,16 @@ class RingJointSDPARuntime:
     compute_kernel_config: object
 
 
+def fence_persistent_buffers(mesh_device):
+    """Finish a host write to an all-gather persistent buffer on every device before the next op.
+
+    The fused all-gather writes remote shards straight into each peer's persistent buffer, with no
+    start barrier (persistent buffers are assumed ready). Each device's command queue runs on its
+    own, so a peer still draining this zero-fill would overwrite shards that already arrived.
+    """
+    ttnn.synchronize_device(mesh_device)
+
+
 def open_ring_joint_sdpa_runtime(
     mesh_config,
     *,
@@ -1054,6 +1064,7 @@ def run_ring_joint_sdpa(
             device=mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims),
         )
+        fence_persistent_buffers(mesh_device)
 
         # Create program config
         program_config = ttnn.SDPAProgramConfig(
@@ -1368,6 +1379,7 @@ def run_ring_joint_sdpa_model_configs(
                     mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims
                 ),
             )
+            fence_persistent_buffers(mesh_device)
             return persistent_output_buffer_k, persistent_output_buffer_v
 
         persistent_output_buffer_k, persistent_output_buffer_v = create_persistent_buffers()
@@ -1576,6 +1588,7 @@ def run_ring_mla_sdpa(
                 mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_kv_shard_dims
             ),
         )
+        fence_persistent_buffers(mesh_device)
 
         main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
         main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
@@ -2040,6 +2053,7 @@ def run_ring_joint_sdpa_chunked(
                     mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_persistent_shard_dims
                 ),
             )
+            fence_persistent_buffers(mesh_device)
             return persistent_output_buffer_k, persistent_output_buffer_v
 
         # ring_mla uses one shared latent K/V tensor (width d_k).
@@ -2790,6 +2804,7 @@ def run_ring_joint_sdpa_kv_pad_rotation_case(
                 mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_persistent_shard_dims
             ),
         )
+        fence_persistent_buffers(mesh_device)
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=sdpa_compute_grid,
@@ -2953,6 +2968,7 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
             kv_dtype,
             persistent_shard_dims,
         )
+        fence_persistent_buffers(mesh_device)
         mesh_device.enable_program_cache()
         mesh_device.clear_program_cache()
 
@@ -3240,6 +3256,7 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
             device=mesh_device,
             mesh_mapper=persistent_mapper,
         )
+        fence_persistent_buffers(mesh_device)
         mesh_device.enable_program_cache()
         mesh_device.clear_program_cache()
 
@@ -3575,6 +3592,7 @@ def run_ring_mla_sdpa_chunked_indexed_kv_cache(
                     device=mesh_device,
                     mesh_mapper=persistent_mapper,
                 )
+                fence_persistent_buffers(mesh_device)
 
                 try:
                     tt_out, _ = ttnn.transformer.ring_mla(
@@ -4229,13 +4247,15 @@ def test_ring_mla_metadata_matches_scalar_indexed(kv_cache_batch_idx, full_mesh)
         # instance: sharing one across the two runs would let the scalar run's leftovers stand in for
         # anything the metadata run fails to gather, and the comparison could pass on stale data.
         def make_persistent_output_buffer_kv():
-            return ttnn.from_torch(
+            buffer = ttnn.from_torch(
                 torch.zeros(cache_batch, nhk, sq, d_k),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 mesh_mapper=persistent_mapper,
             )
+            fence_persistent_buffers(mesh_device)
+            return buffer
 
         # No rotation here: the whole sq is valid, so actual_start=0.
         tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(mesh_device, slot_id=kv_cache_batch_idx, actual_start=0)
@@ -4363,13 +4383,15 @@ def test_ring_mla_metadata_matches_scalar_rotation(kv_actual_isl, full_mesh):
         # Own instance per run -- ring_mla writes this buffer, so sharing it between the two runs would let
         # the scalar run's leftovers stand in for anything the metadata run fails to gather.
         def make_persistent_output_buffer_kv():
-            return ttnn.from_torch(
+            buffer = ttnn.from_torch(
                 torch.zeros(b, nhk, sp_size * cache_seq_per_dev, d_k),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 mesh_mapper=persistent_mapper,
             )
+            fence_persistent_buffers(mesh_device)
+            return buffer
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=runtime.sdpa_compute_grid,
@@ -4568,6 +4590,7 @@ def test_ring_mla_metadata_trace_replay_matches_scalar(num_chunks):
         persistent_output_buffer_kv = upload(
             torch.zeros(cache_batch, nhk, persistent_seq_len, d_k), persistent_shard_dims
         )
+        fence_persistent_buffers(mesh_device)
         zeros_persistent_host = host_sharded(
             torch.zeros(cache_batch, nhk, persistent_seq_len, d_k), persistent_shard_dims
         )
@@ -4582,6 +4605,7 @@ def test_ring_mla_metadata_trace_replay_matches_scalar(num_chunks):
             ttnn.copy_host_to_device_tensor(host_sharded(chunks[i]["q_host"], q_shard_dims), tt_q)
             ttnn.copy_host_to_device_tensor(host_sharded(chunks[i]["kv_host"], kv_shard_dims), tt_kv)
             ttnn.copy_host_to_device_tensor(zeros_persistent_host, persistent_output_buffer_kv)
+            fence_persistent_buffers(mesh_device)
             ttnn.copy_host_to_device_tensor(_ring_mla_host_scalar_tensor(mesh_device, slot_id), tt_slot_id)
             ttnn.copy_host_to_device_tensor(
                 _ring_mla_host_scalar_tensor(mesh_device, chunks[i]["kv_actual_isl"]), tt_kv_actual_isl
@@ -4790,6 +4814,7 @@ def test_ring_mla_segmented_accumulation_matches_unsegmented():
         persistent_output_buffer_kv = upload(
             torch.zeros(cache_batch, nhk, persistent_seq_len, d_k), persistent_shard_dims, ttnn.bfloat8_b
         )
+        fence_persistent_buffers(mesh_device)
         zeros_persistent_host = host_sharded(
             torch.zeros(cache_batch, nhk, persistent_seq_len, d_k), persistent_shard_dims, ttnn.bfloat8_b
         )
@@ -4798,6 +4823,7 @@ def test_ring_mla_segmented_accumulation_matches_unsegmented():
             ttnn.copy_host_to_device_tensor(host_sharded(chunks[i]["q_host"], q_shard_dims), tt_q)
             ttnn.copy_host_to_device_tensor(host_sharded(chunks[i]["kv_host"], kv_shard_dims, ttnn.bfloat8_b), tt_kv)
             ttnn.copy_host_to_device_tensor(zeros_persistent_host, persistent_output_buffer_kv)
+            fence_persistent_buffers(mesh_device)
 
         program_configs = [
             ttnn.SDPAProgramConfig(
@@ -7970,6 +7996,7 @@ def run_ring_joint_sdpa_cross(
         persistent_output_buffer_v = shard_to_device(
             torch.zeros(BATCH_SIZE, nhq_total, kv_global, head_dim), persistent_kv_shard_dims
         )
+        fence_persistent_buffers(mesh_device)
 
         compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),

@@ -29,6 +29,8 @@ void kernel_main() {
 
     constexpr auto dfb_id_src_id = get_compile_time_arg_val(0);
     constexpr auto dfb_id_dst_id = get_compile_time_arg_val(1);
+    DataflowBuffer dfb_id_src_id_obj(dfb_id_src_id);
+    DataflowBuffer dfb_id_dst_id_obj(dfb_id_dst_id);
     compute_kernel_hw_startup(dfb_id_src_id, dfb_id_dst_id);
     unary_bcast_init<BroadcastType::ROW>(dfb_id_src_id);
 
@@ -47,12 +49,12 @@ void kernel_main() {
                                 dfb_id_src_id,
                                 ckl::WaitPolicy::PerTile,
                                 ckl::PopPolicy::PerTile,
-                                ckl::DataFormatReconfig::Disabled)>{},
+                                ckl::DataFormatReconfig::Disabled)>{dfb_id_src_id_obj},
                         ckl::PackTile<ckl::output(
                             dfb_id_dst_id,
                             ckl::ReservePolicy::PerTile,
                             ckl::PushPolicy::PerTile,
-                            ckl::DataFormatReconfig::Disabled)>{});
+                            ckl::DataFormatReconfig::Disabled)>{dfb_id_dst_id_obj});
                     ++num_tiles_read;
                 }
             }

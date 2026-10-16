@@ -11,7 +11,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     device_protocol,
@@ -180,12 +180,15 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
                                 expected_parts[part][folded].bfloat16().float(),
                                 got_summaries[part][shard][folded].float(),
                                 name=f"SP summary rank={rank} group={group} part={part}",
+                                nrmse_threshold=0.007,
                             )
                     if 0 < inside < chunks:
                         a, b, tail_a, tail_b = [parts[shard][folded].float() for parts in got_summaries]
                         full_a, full_b = summary_oracle(protocol)
-                        assert_accurate(full_a[0], tail_a @ a, name="summary composition A")
-                        assert_accurate(full_b[0], tail_a @ b + tail_b, name="summary composition B")
+                        assert_accurate(full_a[0], tail_a @ a, name="summary composition A", nrmse_threshold=0.004)
+                        assert_accurate(
+                            full_b[0], tail_a @ b + tail_b, name="summary composition B", nrmse_threshold=0.005
+                        )
             for expected, actual, name in (
                 (torch.cat(expected_entries), got_entries, "entries"),
                 (torch.cat(expected_output), got_output, "outputs"),
@@ -195,7 +198,7 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
                     expected,
                     actual,
                     name=f"SP {name} rank={rank} actual_start={actual_start_value}",
-                    rmse_threshold=0.04,
+                    nrmse_threshold=0.015,
                 )
         _assert_immutable(owned, before)
         current = [*owned, *summaries, entries, output, final]
@@ -238,7 +241,9 @@ def test_sp_rectangular_recurrent_reset(mesh_device, axis, key_dim, value_dim):
                     else ordinary
                 )
                 for golden, got in zip(expected, (got_output, got_state), strict=True):
-                    assert_accurate(golden, got, name=f"rectangular reset rank={first_rank} split={split}")
+                    assert_accurate(
+                        golden, got, name=f"rectangular reset rank={first_rank} split={split}", nrmse_threshold=0.007
+                    )
             for tensor in (actual_start, output, state):
                 ttnn.deallocate(tensor)
 
@@ -290,7 +295,7 @@ def test_sp_convolution_rebinds_histories(mesh_device, axis):
             else:
                 expected = qkv_reference(host, history if rank == first_rank else predecessor, taps, widths)
             for golden, actual in zip(expected, got, strict=True):
-                assert_accurate(golden, actual, name=f"SP convolution rank={rank}")
+                assert_accurate(golden, actual, name=f"SP convolution rank={rank}", nrmse_threshold=0.009)
         _assert_immutable(owned, before)
         current = [*owned, *outputs]
         if previous:
@@ -449,6 +454,7 @@ def test_sp_affine_rectangular_live_slots(mesh_device, axis, dtype):
                     expected[_rank(shard, mesh_device, axis)],
                     actual,
                     name=f"affine live slots {dtype} rank={first_rank} split={split_chunk}",
+                    nrmse_threshold=0.01,
                 )
             for tensor in (*tensors, head_tt, tail_tt, actual_start, result):
                 ttnn.deallocate(tensor)
@@ -502,6 +508,8 @@ def test_sp_chain_affine_transforms_order(mesh_device, axis):
         for index, (local_entry, local_final) in enumerate(zip(_shards(entry), _shards(final), strict=True)):
             rank = _rank(index, mesh_device, axis)
             label = f"axis={axis} start={start} rank={rank} device={index}"
-            assert_accurate(entries[rank], local_entry, name=f"entry {label}", pcc_threshold=0.999)
-            assert_accurate(carry, local_final, name=f"final {label}", pcc_threshold=0.999)
+            assert_accurate(
+                entries[rank], local_entry, name=f"entry {label}", pcc_threshold=0.999, nrmse_threshold=0.009
+            )
+            assert_accurate(carry, local_final, name=f"final {label}", pcc_threshold=0.999, nrmse_threshold=0.01)
     _assert_immutable([transforms, initial], before)
