@@ -1799,6 +1799,14 @@ tasks:
     kind: op
     layer: 1
     stateful: false
+  frozen:
+    at: '2026-10-16T03:13:35'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_collapse.py: 238cec0601397b38e3b7ab2fba9f1c44c63f11dfa61811b5b6843ea1ad8b5158
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.swa_engram.12
   title: 'swa_engram block with steps 1-12 on device (last: ffn_collapse)'
   step: implement
