@@ -94,6 +94,8 @@ private:
     // Wait for base FW to reach a terminal postcode (PASS/FAIL/SKIP). Idle eth only —
     // any terminal state, as long as we don't assert/deassert during that process
     bool wait_for_eth_fw_ready(tt::ChipId device_id, const CoreCoord& virtual_core, int timeout_ms = 20000);
+    // Downed virtual-cable ports: wait for base firmware, then take the port down. Blackhole only.
+    void park_virtual_cable_ports(tt::ChipId device_id);
 
     // Zero all ETH RISC interrupt-mode registers on core. No-op on archs that don't
     // expose this (num_interrupt_vecs == 0)

@@ -33,7 +33,8 @@ using HeaderT = tt::tt_fabric::LowLatencyPacketHeaderT<0>;
 
 struct H2ELeg::Impl {
     Config cfg{};
-    std::shared_ptr<MeshDevice> mesh;
+    // Not owned: the mesh can own this leg (via its virtual cables), so a shared_ptr would be a cycle.
+    MeshDevice* mesh = nullptr;
     IDevice* dev = nullptr;
     CoreCoord eth_logical{0, 0};
 
@@ -86,7 +87,7 @@ std::unique_ptr<H2ELeg> H2ELeg::create(const std::shared_ptr<MeshDevice>& mesh, 
     std::unique_ptr<H2ELeg> leg(new H2ELeg());
     auto& im = *leg->impl_;
     im.cfg = cfg;
-    im.mesh = mesh;
+    im.mesh = mesh.get();
     im.dev = mesh->get_device(MeshCoordinate(cfg.mesh_row, cfg.mesh_col));
     if (im.dev == nullptr) {
         err = "H2ELeg::create: no device at mesh coordinate (" + std::to_string(cfg.mesh_row) + ", " +
@@ -108,9 +109,10 @@ std::unique_ptr<H2ELeg> H2ELeg::create(const std::shared_ptr<MeshDevice>& mesh, 
         err = "H2ELeg::create: link_idx out of range for the active eth channels";
         return nullptr;
     }
-    // HeaderT is fixed at zero extension words. Fabric picks 0-3 at runtime, and a longer header
-    // would put our payload where the router expects header -- refuse rather than corrupt frames.
-    if (const size_t want = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(); want != sizeof(HeaderT)) {
+    // A synthesised HeaderT has no extension words, so a longer fabric header would misplace the payload:
+    // refuse. Frames that carry their own header (the default) go to L1 as they are, at any header size.
+    if (const size_t want = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+        !cfg.frames_carry_header && want != sizeof(HeaderT)) {
         err = "H2ELeg::create: fabric uses a " + std::to_string(want) + " B packet header, this leg synthesises " +
               std::to_string(sizeof(HeaderT)) + " B";
         return nullptr;
@@ -132,16 +134,16 @@ std::unique_ptr<H2ELeg> H2ELeg::create(const std::shared_ptr<MeshDevice>& mesh, 
     // The receiver channel the remote ERISC would have written -- derived from fabric's own
     // allocator, never a constant.
     const eb::EriscBridgePlacement place(eb::router_config(cp));
-    // One receiver channel: VC0 ch0, stream 0.
-    im.rx_base = place.receiver_channel_base(0, 0);
-    im.rx_slots = place.receiver_channel_slots(0, 0);
-    im.slot_bytes = place.channel_slot_bytes();
+    // The caller's layout, recorded from the config this router was built with, wins over the default config.
+    im.rx_base = cfg.rx_base != 0 ? cfg.rx_base : place.receiver_channel_base(cfg.receiver_vc, 0);
+    im.rx_slots = cfg.rx_slots != 0 ? cfg.rx_slots : place.receiver_channel_slots(cfg.receiver_vc, 0);
+    im.slot_bytes = cfg.slot_bytes != 0 ? cfg.slot_bytes : place.channel_slot_bytes();
     if (im.rx_base == 0 || im.rx_slots == 0) {
-        err = "H2ELeg::create: receiver channel unreadable";
+        err = "H2ELeg::create: receiver channel unreadable for VC " + std::to_string(cfg.receiver_vc);
         return nullptr;
     }
-    // The router's own receiver-0 counter: fabric assigns stream ids, so a fixed id rings the wrong one.
-    const uint32_t stream = eb::receiver_pkts_sent_stream(cp, *node.mesh_id, 0);
+    // The router's own receiver counter: fabric assigns stream ids, so a fixed id rings the wrong one.
+    const uint32_t stream = eb::receiver_pkts_sent_stream(cp, *node.mesh_id, cfg.receiver_channel);
     if (!eb::stream_id_valid_for_eth(stream)) {
         err = "H2ELeg::create: doorbell stream id " + std::to_string(stream) + " is outside the ERISC's 32";
         return nullptr;
@@ -171,6 +173,14 @@ bool H2ELeg::publish(const BridgeDeliverTask& task) {
     // a bad frame behind a full channel would have the caller re-offer it until the run times out.
     if (task.length == 0) {
         im.fail("H2ELeg::publish: empty frame");
+        return false;
+    }
+    // Sender channels sharing the far ring arrive on separate arenas: hold a frame until its slot's turn.
+    if (im.cfg.in_far_slot_order && task.far_slot.has_value() &&
+        static_cast<uint32_t>(*task.far_slot) != im.next_slot % im.rx_slots) {
+        if (static_cast<uint32_t>(*task.far_slot) >= im.rx_slots) {
+            im.fail("H2ELeg::publish: far slot " + std::to_string(*task.far_slot) + " is outside the receiver ring");
+        }
         return false;
     }
     if (!im.credit.has_room(static_cast<uint32_t>(im.outstanding))) {

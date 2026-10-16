@@ -396,7 +396,11 @@ void syncDeviceDevice(MetalContext& ctx, ChipId device_id_sender, ChipId device_
         constexpr std::uint16_t sample_size = 16;
         constexpr std::uint16_t channel_count = 1;
 
-        const auto& connected_chips = env.get_cluster().get_ethernet_cores_grouped_by_connected_chips(device_id_sender);
+        auto connected_chips = env.get_cluster().get_ethernet_cores_grouped_by_connected_chips(device_id_sender);
+        // The sync runs raw ethernet kernels, so it needs a real wire, not a virtual cable.
+        std::erase_if(connected_chips[device_id_receiver], [&](const CoreCoord& core) {
+            return env.get_cluster().is_virtual_ethernet_link(device_id_sender, core);
+        });
 
         if (!connected_chips.contains(device_id_receiver) || connected_chips.at(device_id_receiver).empty()) {
             log_warning(

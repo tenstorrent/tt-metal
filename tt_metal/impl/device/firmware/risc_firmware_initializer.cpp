@@ -236,11 +236,57 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                         virtual_core.y);
                 }
             }
+            park_virtual_cable_ports(device_id);
             reset_cores(device_id);
             initialize_and_launch_firmware(device_id);
         }
     }
     initialized_ = true;
+}
+
+void RiscFirmwareInitializer::park_virtual_cable_ports(tt::ChipId device_id) {
+    // Base firmware must finish init and stop chasing the absent link, or it stops servicing its mailbox. BH only.
+    const auto& links = cluster_.get_virtual_ethernet_links();
+    const auto chip = links.find(device_id);
+    if (chip == links.end() || cluster_.arch() != ARCH::BLACKHOLE || rtoptions_.get_simulator_enabled()) {
+        return;
+    }
+    for (const auto& [chan, link] : chip->second) {
+        const auto logical = cluster_.get_soc_desc(device_id).get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
+        const CoreCoord virtual_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
+            device_id, CoreCoord(logical.x, logical.y), CoreType::ETH);
+        TT_FATAL(
+            wait_for_eth_fw_ready(device_id, virtual_core),
+            "Device {} eth chan {}: base firmware not ready for a virtual cable; reset the chip (tt-smi -r)",
+            device_id,
+            chan);
+        try {
+            tt::llrt::internal_::send_msg_to_eth_mailbox(
+                descriptor_->env_impl(),
+                device_id,
+                virtual_core,
+                tt_metal::FWMailboxMsg::ETH_MSG_PORT_ACTION,
+                /*mailbox_index=*/0,
+                {2, 0, 0},  // port down
+                /*wait_for_ack=*/true,
+                /*timeout_ms=*/5000);
+        } catch (const std::exception& e) {
+            TT_THROW("Device {} eth chan {}: base firmware did not take the port down ({})", device_id, chan, e.what());
+        }
+        // Confirm it: base firmware refreshes rx_link_up about once a second.
+        const auto link_up_addr = hal_.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LINK_UP);
+        std::uint32_t link_up = 1;
+        for (int i = 0; i < 30 && link_up != 0; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            cluster_.read_reg(&link_up, tt_cxy_pair(device_id, virtual_core), link_up_addr);
+        }
+        log_info(
+            tt::LogMetal,
+            "Device {} eth chan {}: virtual cable port {}",
+            device_id,
+            chan,
+            link_up ? "STILL UP" : "down");
+    }
 }
 
 void RiscFirmwareInitializer::configure() {}

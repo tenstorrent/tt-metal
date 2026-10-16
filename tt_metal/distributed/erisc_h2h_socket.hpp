@@ -37,6 +37,14 @@ public:
         uint32_t max_batch = 0;          // frames per poll(); 0 = half of arenas * ring, so put and drain overlap
         bool collect_timing = false;
         uint64_t timing_samples = 0;  // RTT samples reserved up front: growing them mid-run stalls for ms
+        // Routed (virtual cables): each arena names its peer half, so regions may differ; same form on every rank.
+        struct Route {
+            uint32_t peer_rank = 0;
+            uint32_t peer_arena = 0;
+            uint32_t peer_arenas = 0;
+        };
+        bool routed = false;
+        std::vector<Route> routes;
     };
 
     // Collective: every rank must call it, including one that already failed locally, or the

@@ -49,6 +49,7 @@ class SystemMemoryManager;
 namespace experimental {
 class DispatchContext;
 class HostRegion;
+class VirtualCableBridge;
 }  // namespace experimental
 
 namespace program_cache::detail {
@@ -214,6 +215,9 @@ private:
     // to experimental::StartTensorPrefetcher; torn down in close_impl() before the
     // rest of the mesh shutdown so any in-flight kernel completes against live resources.
     std::unique_ptr<TensorPrefetcherManager> tensor_prefetcher_;
+
+    // The host half of this rank's virtual cables, if any (experimental). shared_ptr: MPI builds define it.
+    std::shared_ptr<experimental::VirtualCableBridge> virtual_cables_;
 
     // The one pinned host region backing this mesh's D2H2H2D's D2H sockets. Lazily constructed on the
     // first host_region() call; released in close_impl() so the pin is dropped while the
@@ -382,6 +386,7 @@ public:
         bool minimal = false);
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
     void init_streaming_profiler(const std::shared_ptr<MeshDevice>& mesh_device);
+    experimental::VirtualCableBridge* virtual_cable_bridge() const { return virtual_cables_.get(); }
     void trigger_realtime_profiler_sync_check();
     RealtimeProfilerManager* get_realtime_profiler() const;
 

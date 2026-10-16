@@ -64,7 +64,7 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
 )
 
-# One target per leg benchmark. Each keeps its own main so DistributedContext::create sees
+# One target per leg benchmark, plus test_virtual_cables. Each keeps its own main so DistributedContext::create sees
 # argv, which is why none of them can be a source in distributed_benchmarks.
 # name | source | needs MPI | needs hd_socket_test_utils.cpp
 set(LEG_BENCHMARKS
@@ -72,6 +72,7 @@ set(LEG_BENCHMARKS
     "h2d_leg_benchmark|benchmark_h2d_leg.cpp|OFF|ON"
     "h2h_leg_benchmark|benchmark_h2h_leg.cpp|ON|OFF"
     "d2h2h2d_leg_benchmark|benchmark_d2h2h2d_leg.cpp|ON|ON"
+    "test_virtual_cables|test_virtual_cables.cpp|ON|OFF"
 )
 
 foreach(spec IN LISTS LEG_BENCHMARKS)

@@ -70,7 +70,8 @@ std::unique_ptr<E2HLeg> E2HLeg::create(
             err = "E2HLeg::create: socket count exceeds chans_per_link";
             return nullptr;
         }
-        c.arena_idx = bridge_arena_index(cfg.link_idx, static_cast<uint32_t>(i), cfg.chans_per_link);
+        c.arena_idx = cfg.arena_base ? *cfg.arena_base + static_cast<uint32_t>(i)
+                                     : bridge_arena_index(cfg.link_idx, static_cast<uint32_t>(i), cfg.chans_per_link);
         if (c.arena_idx >= cfg.arenas) {
             err = "E2HLeg::create: arena " + std::to_string(c.arena_idx) + " is outside the region";
             return nullptr;
