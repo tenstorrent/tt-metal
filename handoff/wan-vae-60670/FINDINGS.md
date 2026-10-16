@@ -103,6 +103,48 @@ information.
   `tt_device.read_from_device` / `write_to_device`, so check how often that runs.
 - tt-umd#3349, #3414, #3416, #3417: cluster_id, test renames, CI. Not relevant.
 
+## Update: environment ruled out, more commits cleared
+
+- **Not an environment change.** The mid-window branch runs executed on 09-16/17, after the
+  regression date, so on their own they can't separate a code change from a runner change.
+  However, the good run, the bad nightly and the branch run all report the same
+  `KMD version: 2.10.0`, `Established firmware bundle version: 19.12.0` and `IOMMU: enabled`,
+  and the runners come from the same `multihost-ci-sc1-mn9pv` pool.
+- **Docker image is not the cause.** The nightly image changed between 09-14 (`2be5f2ab…`) and
+  09-16 (`8c782511…`), but the regressed branch run (105012202248) used the *old* image
+  `2be5f2ab…`.
+- **The UMD submodule commit tracks good/bad** in all three runs (good `f70cc57f`, bad and branch
+  `b2a5f606`). That is consistent with the UMD bump, but not proof.
+- **LLK sanitizer hooks are cleared.** The hooks are live only with `-DLLK_SAN_ENABLE`
+  (`TT_METAL_LLK_SANITIZER`), and that flag appears in none of the CI kernel compile lines.
+- **No mechanism found yet for the UMD bump.** Metal never calls `create_io_window`, so the bump
+  affects Metal only through `LocalChip::write_to_device` / `read_from_device` falling back to a
+  reconfigured window, which is now Strict. That fallback is used only for targets with no static
+  TLB. Metal sets up static TLBs (`tt_metal/llrt/tlb_config.cpp`) for all Tensix, ETH, DISPATCH
+  and L2CPU cores. On BH it also sets one 4 GiB DRAM window per channel, on the *last* NOC port
+  only and only when the chip has 8 channels. Fast-dispatch buffer reads and writes go through the
+  CQ and hugepages, and the prefetcher uses a static TLB. The direct `Cluster::write_core` /
+  `read_core` / barrier calls I found are init-time, sockets, global CBs or slow dispatch, so none
+  of them is on the VAE's per-op path. Dispatch telemetry is read on demand only.
+- The `test_pipeline_wan` 720p leg shows the same jump in its `[>>] vae` / `[<<] vae` events:
+  0.655 s (09-14) vs 1.090 s (09-16).
+
+## CI bisect plan (no local hardware needed)
+
+`models-t1-e2e-tests.yaml` can be dispatched with `model=wan-2.2-t2v`, `sku=bh_sc1 (BH Single
+Galaxy)`. The workflow file at both `f8c4ce59dd0` and `656f87fcdb4` accepts these inputs. Each run
+takes about 45 min on one sc1 galaxy. Push a branch per probe point and dispatch it.
+
+| Probe | Ref | Expected | Purpose |
+|---|---|---|---|
+| A | `f8c4ce59dd0` | ~0.32 s | Confirms old code is still fast *today*, which rules out any date-based drift. |
+| B | `656f87fcdb4` | ~0.76 s | Confirms the narrowed window without the matmul-registry branch confound. |
+| C | `656f87fcdb4` with `tt_metal/third_party/umd` set back to `f70cc57f7f8` | ? | Isolates the UMD bump in a single run. |
+
+If C is fast, the culprit is the UMD bump; split tt-umd#3399 from #3406. If C is slow, bisect
+`f8c4ce59dd0..656f87fcdb4` (24 commits, about 5 runs). The VAE-relevant commits to test first are
+`668c2907575` (concat), `668752a4056` (decorators), `656f87fcdb4` (scalar-LHS binary).
+
 ## Next steps
 
 1. **On hardware:** build `656f87fcdb4` and `0d472904340^` (or check out `f8c4ce59dd0` with only
