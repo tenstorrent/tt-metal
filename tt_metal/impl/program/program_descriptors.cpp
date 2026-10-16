@@ -41,57 +41,6 @@ std::optional<uint32_t> ProgramDescriptor::find_available_semaphore_id(
     return std::nullopt;
 }
 
-uint32_t ProgramDescriptor::add_semaphore(const CoreRangeSet& core_ranges, uint32_t initial_value, CoreType core_type) {
-    TT_FATAL(!core_ranges.ranges().empty(), "Expecting a non-empty CoreRangeSet!");
-
-    std::bitset<NUM_SEMAPHORES> used_semaphore_ids;
-    for (const auto& core_range : core_ranges.ranges()) {
-        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
-            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
-                const CoreCoord logical_core(x, y);
-                uint32_t semaphores_on_core = 0;
-                for (const auto& sem : semaphores) {
-                    if (sem.core_type == core_type && sem.core_ranges.contains(logical_core)) {
-                        TT_FATAL(
-                            sem.id < NUM_SEMAPHORES,
-                            "Semaphore id {} exceeds max value {}",
-                            sem.id,
-                            NUM_SEMAPHORES - 1);
-                        used_semaphore_ids.set(sem.id);
-                        ++semaphores_on_core;
-                    }
-                }
-                TT_FATAL(
-                    semaphores_on_core < NUM_SEMAPHORES,
-                    "Cannot add semaphore on core {}. Max number of semaphores ({}) reached!",
-                    logical_core.str(),
-                    NUM_SEMAPHORES);
-            }
-        }
-    }
-
-    std::optional<uint32_t> semaphore_id;
-    for (uint32_t sem_id = 0; sem_id < NUM_SEMAPHORES; ++sem_id) {
-        if (!used_semaphore_ids.test(sem_id)) {
-            semaphore_id = sem_id;
-            break;
-        }
-    }
-    TT_FATAL(
-        semaphore_id.has_value(),
-        "Unable to initialize semaphore on CoreRangeSet {}: all {} IDs are in use",
-        core_ranges.str(),
-        NUM_SEMAPHORES);
-
-    semaphores.push_back(SemaphoreDescriptor{
-        .id = *semaphore_id,
-        .core_type = core_type,
-        .core_ranges = core_ranges,
-        .initial_value = initial_value,
-    });
-    return *semaphore_id;
-}
-
 namespace {
 
 // Helper function to collect all core ranges from kernels in a descriptor
