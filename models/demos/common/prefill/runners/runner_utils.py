@@ -232,7 +232,7 @@ def compute_layer_split(
             )
     else:
         base, rem = divmod(num_layers + mtp_levels, num_ranks)
-        counts = [base + (1 if r < rem else 0) for r in range(num_ranks)]
+        counts = [base + (1 if r >= num_ranks - rem else 0) for r in range(num_ranks)]
         counts[-1] -= mtp_levels
         if counts[-1] < 1:
             raise ValueError(
