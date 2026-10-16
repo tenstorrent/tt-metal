@@ -22,10 +22,6 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
 /**
  * @brief Column-broadcast one face pair of a 32-bit tile already unpacked into DEST.
  *
- * Extracts the 16 source rows of the left face into SrcB four at a time, then broadcasts each row's
- * datum[0] across all 16 datums of that row into the left face (rows 0-15) and the right face
- * (rows 16-31), in a hi16 and a lo16 pass because MOVB2D writes 16 bits at a time.
- *
  * @tparam face_base: Intra-tile DEST row of the face pair, values = <0 (faces 0+1)/32 (faces 2+3)>
  * @note Point the math dest offset at the target tile (@ref math::set_dst_write_addr) before calling:
  *       the move operands are intra-tile rows only.
@@ -76,10 +72,6 @@ inline void eltwise_unary_bcast_col_32b_face_pair()
 
 /**
  * @brief Row-broadcast one source row of a 32-bit tile already unpacked into DEST.
- *
- * Copies the source row into SrcB, then broadcasts it across the 16 rows of the two faces that share its
- * column position (faces 0 and 2 for row 0, faces 1 and 3 for row 16), in a hi16 and a lo16 pass because
- * MOVB2D writes 16 bits at a time.
  *
  * @tparam src_row: Intra-tile DEST row of the source row, values = <0 (faces 0+2)/FACE_R_DIM (faces 1+3)>
  * @note Point the math dest offset at the target tile (@ref math::set_dst_write_addr) before calling:
@@ -147,12 +139,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
         math::math_unpack_to_dest_tile_ready();
 
-        // Point the math dest offset at this tile. The budabackend#2730 ZEROACC below takes a CLR_16 block index
-        // relative to the 4-tile 32-bit bank (local_tile wraps tiles 4-7 onto 0-3) and selects the bank from this
-        // offset, so SyncFull tiles 4-7 clear their own faces. The broadcast sequences add it to their
-        // MOVD2B/MOVB2D immediates, which carry only the intra-tile row and issue as compile-time TTI_ instructions.
-        // A SyncHalf plain copy (NONE) skips the write, as on Wormhole: its tiles all sit in the bank of the current
-        // DEST half, which its inherited offset already selects.
+        // The tile offset picks the bank for the ZEROACC below and the tile for the broadcast moves; a SyncHalf
+        // plain copy keeps its inherited offset, which already selects the bank of the current DEST half.
         if constexpr (src_b_bcast_type != BroadcastType::NONE || Dst == DstSync::SyncFull)
         {
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
@@ -271,9 +259,6 @@ inline void _llk_math_eltwise_unary_datacopy_(
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
         {
             TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
-
-            // Restore the bank base for a following SyncHalf 32-bit plain copy, whose ZEROACC runs without programming the offset.
-            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
 
             // The 32b path manipulated the flag directly above (tt-llk#449 Fp32_enabled dance); invalidate the
             // tracked state so the next op re-applies the Src zero-substitution flag.

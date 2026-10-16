@@ -22,10 +22,6 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
 /**
  * @brief Column-broadcast one face pair of a 32-bit tile already unpacked into DEST.
  *
- * Extracts the 16 source rows of the left face into SrcB four at a time, then broadcasts each row's
- * datum[0] across all 16 datums of that row into the left face (rows 0-15) and the right face
- * (rows 16-31), in a hi16 and a lo16 pass because MOVB2D writes 16 bits at a time.
- *
  * @tparam face_base: Intra-tile DEST row of the face pair, values = <0 (faces 0+1)/32 (faces 2+3)>
  * @note Point the math dest offset at the target tile (@ref math::set_dst_write_addr) before calling:
  *       the move operands are intra-tile rows only.
@@ -69,10 +65,6 @@ inline void eltwise_unary_bcast_col_32b_face_pair()
 
 /**
  * @brief Row-broadcast one source row of a 32-bit tile already unpacked into DEST.
- *
- * Copies the source row into SrcB, then broadcasts it across the 16 rows of the two faces that share its
- * column position (faces 0 and 2 for row 0, faces 1 and 3 for row 16), in a hi16 and a lo16 pass because
- * MOVB2D writes 16 bits at a time.
  *
  * @tparam src_row: Intra-tile DEST row of the source row, values = <0 (faces 0+2)/FACE_R_DIM (faces 1+3)>
  * @note Point the math dest offset at the target tile (@ref math::set_dst_write_addr) before calling:
@@ -129,9 +121,7 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
         math::math_unpack_to_dest_tile_ready();
 
-        // Point the math dest offset at this tile: hardware adds it to the MOVD2B/MOVB2D immediates below, so
-        // those carry only the intra-tile row and issue as compile-time TTI_ instructions, and a preceding op
-        // may have left another tile's offset here.
+        // Point the math dest offset at this tile: the broadcast moves below carry only the intra-tile row.
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
         {
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
