@@ -10,7 +10,7 @@
 
 // Kernel defines go first, ahead of every firmware/LLK header, as they do for data-movement
 // kernels (passed as -D there). risc_attribs.h keys FORCE_INLINE off whether the kernel defines
-// it, so it has to see the kernel's defines.
+// DISABLE_FORCE_INLINE, so it has to see the kernel's defines.
 #include "defines_generated.h"
 
 #include "internal/firmware_common.h"
