@@ -231,21 +231,23 @@ def boxes_summary(spec, res: Path) -> dict | None:
     }
 
 
-def resolve_thresholds(thr: dict, vals: dict, recorded: dict) -> tuple[dict, str | None]:
-    """F76: a '>= limit' gate shows the limit its run recorded (<metric>_limit in state.json, else results/<task>.json).
-    A step gated before F76 recorded none: its metric is shown without a limit (it passed a fixed bar)."""
+def resolve_thresholds(thr: dict, vals: dict, recorded: dict, status: str = "TODO") -> tuple[dict, str | None]:
+    """F76: a '<= limit' gate shows the limit its run recorded (<metric>_limit in state.json, else results/<task>.json).
+    The word 'limit' never reaches the page (it cannot compare it: every such metric turned red). A metric without a
+    recorded limit, or a passed step gated under an earlier rule (no metric of the current gate's name, e.g. pcc_* before
+    F81's err_*), is left out with a note; a pending step's gate is left out until it runs."""
     import fnmatch
 
     out, note = {}, None
+    done = status in ("PASS", "DEFERRED", "REJECTED")
     for g, cond in (thr or {}).items():
         op, v = str(cond).split()
         if v != "limit":
             out[g] = cond
             continue
         hits = [k for k in vals if fnmatch.fnmatchcase(k, g) and not k.endswith("_limit")]
-        if not hits:
-            out[g] = cond  # not run yet: the page shows "missing" only for a task that should have it
-            continue
+        if not hits and done:
+            note = "gated under an earlier rule (before the noise-floor error limits): passed the gate of its time"
         for k in hits:
             lim = vals.get(f"{k}_limit")
             lim = (recorded.get(f"{k}_limit") or {}).get("value") if lim is None else lim
@@ -254,6 +256,39 @@ def resolve_thresholds(thr: dict, vals: dict, recorded: dict) -> tuple[dict, str
             else:
                 note = "gated before the noise-floor limits (F76): passed a fixed bar"
     return out, note
+
+
+CHECK_FILE = "CHECK.txt"  # passed tasks the page would show red (red_passed); absent when consistent
+_OPS = {">=": float.__ge__, "<=": float.__le__, ">": float.__gt__, "<": float.__lt__, "==": float.__eq__}
+
+
+def red_passed(tasks: list[dict]) -> list[str]:
+    """The page's own pass check (template worstMetric) over every passed task: a passed task shown red is an export
+    bug (an unreadable condition, a missing metric), never the model's. Empty when the page is consistent."""
+    import fnmatch
+
+    bad = []
+    for t in tasks:
+        if t["status"] != "PASS":
+            continue
+        for g, cond in (t.get("thresholds") or {}).items():
+            op, v = str(cond).split()[:2]
+            try:
+                want = float(v)
+            except ValueError:
+                bad.append(f"{t['id']}: {g} '{cond}' is not a number")
+                continue
+            hits = [(k, x) for k, x in (t.get("metrics") or {}).items() if fnmatch.fnmatchcase(k, g)]
+            if not hits:
+                bad.append(f"{t['id']}: {g} missing")
+            for k, x in hits:
+                try:
+                    ok = op in _OPS and _OPS[op](float(x), want)
+                except (TypeError, ValueError):
+                    ok = False
+                if not ok:
+                    bad.append(f"{t['id']}: {k} = {x} fails {cond}")
+    return bad
 
 
 def _overseer_status(spec, led) -> str | None:
@@ -283,7 +318,7 @@ def build(spec) -> dict:
     for tid in led.topo_order():
         t, s = tasks_spec[tid], state.get(tid, {})
         thresholds, thr_note = resolve_thresholds(
-            t["gate"].get("metrics") or {}, s.get("metrics", {}), M.load(tid, res)
+            t["gate"].get("metrics") or {}, s.get("metrics", {}), M.load(tid, res), s.get("status", "TODO")
         )
         fr = t.get("frozen") or {}
         runs = s.get("agent_runs") or []
@@ -915,6 +950,15 @@ def main(argv=None):
     a = ap.parse_args(argv)
     spec = load_spec(a.spec)
     data = build(spec)
+    red = red_passed(data["tasks"])
+    for line in red:
+        print(f"DASHBOARD CHECK: a passed task shows red (an export bug): {line}")
+    check = spec.bringup_dir / "dashboard" / CHECK_FILE  # the supervisor's watch reports it (links.stale)
+    check.parent.mkdir(parents=True, exist_ok=True)
+    if red:
+        check.write_text("".join(f"{x}\n" for x in red))
+    else:
+        check.unlink(missing_ok=True)
     styles = styles_of(spec, a.style)
     outs = []
     for style in styles:
