@@ -59,8 +59,16 @@ static std::uint32_t src_zero_flag_srcb_fmt = 0xff;
 inline __attribute__((noinline)) void _apply_src_zero_flag_(const std::uint32_t value)
 {
     src_zero_flag_hw = value;
+    // Drains only the config write below up to the scope end.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::MATH | p_stall::WAIT_SFPU));
+#else
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+#endif
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(value);
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __builtin_rvtt_stall_scope_end();
+#endif
 }
 
 // Set the flag to `disable`; skip if it already holds that value. The check is inlined at every call
@@ -69,8 +77,16 @@ inline __attribute__((noinline)) void _apply_src_zero_flag_(const std::uint32_t 
 inline void _configure_src_zero_flag_(const bool disable)
 {
     const std::uint32_t value = disable ? 1u : 0u;
+    // Drains only the config write below up to the scope end.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::MATH | p_stall::WAIT_SFPU));
+#else
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+#endif
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(value);
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __builtin_rvtt_stall_scope_end();
+#endif
 }
 
 // A kernel tight on program-config space (e.g. ring-joint SDPA, which reconfigs ~30x) can
@@ -306,8 +322,16 @@ inline void dest_section_flip()
 {
     update_dest_offset_id();
     std::uint32_t base_addr = get_dest_buffer_base();
+    // Drains only the dest offset write below up to the scope end.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::MATH | p_stall::SFPU1));
+#else
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
+#endif
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __builtin_rvtt_stall_scope_end();
+#endif
 }
 
 template <DstStart Dst>

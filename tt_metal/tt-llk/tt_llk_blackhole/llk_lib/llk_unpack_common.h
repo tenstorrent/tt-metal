@@ -133,7 +133,12 @@ inline void _llk_unpack_reconfig_tile_shape_srca_(
 
     if constexpr (issue_stall)
     {
+        // Drains only the config writes up to the scope end below.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+        __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::UNPACK0));
+#else
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0);
+#endif
     }
 
     // Tile size (bytes) tracks the tile shape; refresh the GPR the unpack MOP uses to step the SrcA L1 base.
@@ -146,6 +151,12 @@ inline void _llk_unpack_reconfig_tile_shape_srca_(
 
     // Set Z-dim to number of faces
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, TILE_DESC_UPPER_HALFWORD_MASK>(0 | (unpack_num_faces << 16));
+    if constexpr (issue_stall)
+    {
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+        __builtin_rvtt_stall_scope_end();
+#endif
+    }
 }
 
 /**
@@ -172,7 +183,12 @@ inline void _llk_unpack_reconfig_tile_shape_srcb_(
 
     if constexpr (issue_stall)
     {
+        // Drains only the config writes up to the scope end below.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+        __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::UNPACK1));
+#else
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK1);
+#endif
     }
 
     // Tile size (bytes) tracks the tile shape; refresh the GPR the unpack MOP uses to step the SrcB L1 base.
@@ -183,6 +199,12 @@ inline void _llk_unpack_reconfig_tile_shape_srcb_(
 
     // Set Z-dim to number of faces
     cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1, 0, TILE_DESC_UPPER_HALFWORD_MASK>(0 | (unpack_num_faces << 16));
+    if constexpr (issue_stall)
+    {
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+        __builtin_rvtt_stall_scope_end();
+#endif
+    }
 }
 
 /**

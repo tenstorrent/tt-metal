@@ -312,9 +312,17 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     TT_SETDMAREG(0, UPPER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, HI_16(p_gpr_pack::TMP0));
     TT_SETDMAREG(0, LOWER_HALFWORD((z_stride << PCK0_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT)), 0, LO_16(p_gpr_pack::TMP1));
     TT_SETDMAREG(0, UPPER_HALFWORD((w_stride << PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT)), 0, HI_16(p_gpr_pack::TMP1));
+    // Drains only the stride writes below up to the scope end.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::THCON));
+#else
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+#endif
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __builtin_rvtt_stall_scope_end();
+#endif
     TTI_NOP;
     TTI_NOP;
 
@@ -323,8 +331,16 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
         const std::uint32_t z_stride_ch1 = FACE_R_DIM * y_stride;
         TT_SETDMAREG(0, LOWER_HALFWORD((z_stride_ch1 << PCK0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)), 0, LO_16(p_gpr_pack::TMP1));
         TT_SETDMAREG(0, UPPER_HALFWORD((z_stride_ch1 << PCK0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)), 0, HI_16(p_gpr_pack::TMP1));
+        // Drains only the stride write below up to the scope end.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+        __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::THCON));
+#else
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+#endif
         TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+        __builtin_rvtt_stall_scope_end();
+#endif
         TTI_NOP;
         TTI_NOP;
     }
@@ -332,9 +348,16 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
 
 inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
 {
-    // Stall to avoid clobbering current packer configuration, then enable/disable L1 accumulation
+    // Drains the packer so the L1 accumulation write cannot clobber its current configuration, up to the scope end.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::PACK));
+#else
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+#endif
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pack_L1_Acc_RMW>(pack_l1_acc);
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __builtin_rvtt_stall_scope_end();
+#endif
 }
 
 /**
@@ -739,8 +762,16 @@ inline void program_packer_dest_offset_registers(std::uint32_t dest_tile_offset)
 {
     TT_SETDMAREG(0, LOWER_HALFWORD(dest_tile_offset), 0, LO_16(p_gpr_pack::TEMP_TILE_OFFSET));
     TT_SETDMAREG(0, UPPER_HALFWORD(dest_tile_offset), 0, HI_16(p_gpr_pack::TEMP_TILE_OFFSET));
+    // Drains only the tile offset write below up to the scope end.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::THCON | p_stall::PACK));
+#else
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON | p_stall::PACK);
+#endif
     TTI_WRCFG(p_gpr_pack::TEMP_TILE_OFFSET, p_cfg::WRCFG_32b, PCK0_ADDR_BASE_REG_0_Base_ADDR32);
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __builtin_rvtt_stall_scope_end();
+#endif
     TTI_DMANOP;
     TTI_DMANOP;
 }
