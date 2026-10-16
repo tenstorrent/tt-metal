@@ -17,8 +17,8 @@ def _hf_embedder():
     from transformers import AutoConfig
 
     try:
+        from transformers.models.gemma4_unified.modeling_gemma4_unified import Gemma4UnifiedMultimodalEmbedder
         from transformers.models.gemma4_unified.modeling_gemma4_unified import (
-            Gemma4UnifiedMultimodalEmbedder,
             Gemma4UnifiedVisionEmbedder as HFVisionEmbedder,
         )
     except ImportError:  # transformers without the unified Gemma 4 classes
@@ -81,7 +81,9 @@ def test_unified_vision_embedder(mesh_device, num_valid, num_patches):
         text_hidden_size=cfg.text_config.hidden_size,
     )
     out_tt, mask = tt.forward(pixel_values, pos)
-    out = ttnn.to_torch(out_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0) if hasattr(mesh_device, "shape") else None)
+    out = ttnn.to_torch(
+        out_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0) if hasattr(mesh_device, "shape") else None
+    )
     out = out[0, 0, :num_patches].float() if out.dim() == 4 else out[:num_patches].float()
 
     assert mask.shape == (1, out_tt.shape[2])

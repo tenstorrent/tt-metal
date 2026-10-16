@@ -176,4 +176,6 @@ def test_decode_roofline(mesh_device, model_path, batch_size):
         ttnn.ReadDeviceProfiler(mesh_device)
     except Exception:  # profiler off: nothing to flush
         pass
-    logger.info(f"{os.path.basename(model_path)} batch={batch_size}: {N_STEPS} {'traced' if TRACED else 'eager'} decode steps between signposts")
+    logger.info(
+        f"{os.path.basename(model_path)} batch={batch_size}: {N_STEPS} {'traced' if TRACED else 'eager'} decode steps between signposts"
+    )

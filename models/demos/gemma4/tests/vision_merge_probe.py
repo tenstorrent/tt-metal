@@ -23,13 +23,21 @@ from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_pr
 
 
 def _host(t, mesh_device):
-    return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float() if hasattr(mesh_device, "shape") else ttnn.to_torch(t).float()
+    return (
+        ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+        if hasattr(mesh_device, "shape")
+        else ttnn.to_torch(t).float()
+    )
 
 
 @pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4), "P150x8": (1, 8)}.get(
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
     indirect=True,
 )
 def test_vision_merge_probe(mesh_device):
@@ -38,8 +46,12 @@ def test_vision_merge_probe(mesh_device):
     input_ids, pixel_values, pos = ref["input_ids"], ref["pixel_values"], ref["image_position_ids"]
     pac = PagedAttentionConfig(block_size=64, max_num_blocks=4096 // 64)
     generator, tt_kv_cache, _tok = Gemma4Generator.from_pretrained(
-        mesh_device=mesh_device, model_path=model_path, max_batch_size=1, max_seq_len=4096,
-        paged_attention_config=pac, multimodal=True,
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=1,
+        max_seq_len=4096,
+        paged_attention_config=pac,
+        multimodal=True,
     )
     model = generator.model[0]
     text_hidden = model.hidden_size
@@ -56,17 +68,30 @@ def test_vision_merge_probe(mesh_device):
     assert int(image_mask.sum()) == num_valid, (int(image_mask.sum()), num_valid)
     llm_ids = ids.clone()
     llm_ids[image_mask] = generator.pad_token_id
-    llm_ids = torch.cat([llm_ids, torch.full((prefill_seq_len - prompt_len,), generator.pad_token_id, dtype=torch.long)])
-    llm_ids_tt = ttnn.from_torch(llm_ids.view(1, prefill_seq_len), device=mesh_device, dtype=ttnn.uint32,
-                                 layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=generator._replicate_mapper())
+    llm_ids = torch.cat(
+        [llm_ids, torch.full((prefill_seq_len - prompt_len,), generator.pad_token_id, dtype=torch.long)]
+    )
+    llm_ids_tt = ttnn.from_torch(
+        llm_ids.view(1, prefill_seq_len),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=generator._replicate_mapper(),
+    )
     text_embeds_tt = model.embed_tokens(llm_ids_tt)
     text_embeds_tt = ttnn.reshape(text_embeds_tt, (prefill_seq_len, text_hidden))
     text_embeds_tt = ttnn.to_layout(text_embeds_tt, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     text_embeds = _host(text_embeds_tt, mesh_device)[:prefill_seq_len]
 
     scatter_index = image_positions.view(num_valid, 1).expand(num_valid, text_hidden).contiguous()
-    scatter_index_tt = ttnn.from_torch(scatter_index, device=mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT,
-                                       memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=generator._replicate_mapper())
+    scatter_index_tt = ttnn.from_torch(
+        scatter_index,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=generator._replicate_mapper(),
+    )
     merged_tt = ttnn.scatter(text_embeds_tt, 0, scatter_index_tt, image_embeds_tt)
     merged = _host(merged_tt, mesh_device)[:prefill_seq_len]
 

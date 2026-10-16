@@ -74,7 +74,9 @@ class Gemma4UnifiedVisionEmbedder(LightweightModule):
         self.text_hidden_size = text_hidden_size
         layout = _layout(state_dict)
         if layout is None:
-            raise KeyError(f"'{PATCH_DENSE_KEY}' / '{PROJECTION_KEY}' not in checkpoint: not a unified Gemma-4 checkpoint")
+            raise KeyError(
+                f"'{PATCH_DENSE_KEY}' / '{PROJECTION_KEY}' not in checkpoint: not a unified Gemma-4 checkpoint"
+            )
         PREFIX, PROJECTION_KEY = layout  # noqa: N806 - shadow the module defaults with this checkpoint's layout
 
         dense_w = state_dict[PREFIX + "patch_dense.weight"]  # [mm_embed, patch_dim]
@@ -83,7 +85,9 @@ class Gemma4UnifiedVisionEmbedder(LightweightModule):
         self.pos_table = state_dict[PREFIX + "pos_embedding"].float()
         proj_w = state_dict[PROJECTION_KEY]  # [text_hidden, mm_embed]
         if tuple(proj_w.shape) != (text_hidden_size, self.mm_embed_dim):
-            raise ValueError(f"projection {tuple(proj_w.shape)} vs text_hidden={text_hidden_size}, mm_embed={self.mm_embed_dim}")
+            raise ValueError(
+                f"projection {tuple(proj_w.shape)} vs text_hidden={text_hidden_size}, mm_embed={self.mm_embed_dim}"
+            )
 
         is_mesh = hasattr(mesh_device, "shape")
         replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None

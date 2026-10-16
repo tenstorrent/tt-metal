@@ -103,9 +103,7 @@ def main():
         f"top1 {(top1[scored] == true_next[scored]).float().mean():.4f} "
         f"top5 {(top5[scored] == true_next[scored, None]).any(-1).float().mean():.4f}"
     )
-    out = args.out or os.path.join(
-        os.path.dirname(__file__), "reference_outputs", model_id.split("/")[-1] + ".refpt"
-    )
+    out = args.out or os.path.join(os.path.dirname(__file__), "reference_outputs", model_id.split("/")[-1] + ".refpt")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     torch.save(
         {

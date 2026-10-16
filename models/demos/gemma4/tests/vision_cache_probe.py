@@ -21,13 +21,21 @@ from models.demos.gemma4.tt.vision.unified_embedder import Gemma4UnifiedVisionEm
 
 
 def _host(t, mesh_device):
-    return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float() if hasattr(mesh_device, "shape") else ttnn.to_torch(t).float()
+    return (
+        ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+        if hasattr(mesh_device, "shape")
+        else ttnn.to_torch(t).float()
+    )
 
 
 @pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4), "P150x8": (1, 8)}.get(
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
     indirect=True,
 )
 def test_vision_cache_probe(mesh_device):
@@ -37,7 +45,9 @@ def test_vision_cache_probe(mesh_device):
     snap = glob.glob(os.path.expanduser("~/.cache/huggingface/hub/models--google--gemma-4-12B-it/snapshots/*/"))[0]
     sd = Gemma4ModelArgs.load_state_dict(snap)
     w = sd["model.vision_embedder.patch_dense.weight"]
-    logger.info(f"checkpoint patch_dense dtype {w.dtype} abs mean {w.float().abs().mean():.5f}; pos_embedding abs mean {sd['model.vision_embedder.pos_embedding'].float().abs().mean():.5f}")
+    logger.info(
+        f"checkpoint patch_dense dtype {w.dtype} abs mean {w.float().abs().mean():.5f}; pos_embedding abs mean {sd['model.vision_embedder.pos_embedding'].float().abs().mean():.5f}"
+    )
     cache_dir = os.environ.get("GEMMA4_CACHE_PROBE_DIR")
 
     def run(label, state_dict, cache):
@@ -47,7 +57,9 @@ def test_vision_cache_probe(mesh_device):
         out = _host(out_tt, mesh_device)[0, 0]
         valid = out[: int(mask.sum())]
         pcc = comp_pcc(hf, valid, 0.95)[1] if valid.shape == hf.shape and torch.isfinite(valid).all() else "n/a"
-        logger.info(f"{label}: dense_w on device abs mean {w_dev.abs().mean():.5f}; out abs mean {valid.abs().mean():.4f} max {valid.abs().max():.4f} nan {int(torch.isnan(valid).sum())}; PCC vs HF {pcc}")
+        logger.info(
+            f"{label}: dense_w on device abs mean {w_dev.abs().mean():.5f}; out abs mean {valid.abs().mean():.4f} max {valid.abs().max():.4f} nan {int(torch.isnan(valid).sum())}; PCC vs HF {pcc}"
+        )
 
     run("bf16 weights, no cache", sd, None)
     run("fp32 weights, no cache", {k: (v.float() if v.is_floating_point() else v) for k, v in sd.items()}, None)

@@ -25,7 +25,11 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 @pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4), "P150x8": (1, 8)}.get(
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
     indirect=True,
 )
 def test_vision_e2e_probe(mesh_device):
@@ -39,16 +43,26 @@ def test_vision_e2e_probe(mesh_device):
     pac = PagedAttentionConfig(block_size=64, max_num_blocks=page_params["page_max_num_blocks"])
     page_table = create_tt_page_table(1, pac)
     generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
-        mesh_device=mesh_device, model_path=model_path, max_batch_size=1, max_seq_len=max_seq_len,
-        paged_attention_config=pac, multimodal=True,
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=1,
+        max_seq_len=max_seq_len,
+        paged_attention_config=pac,
+        multimodal=True,
     )
     assert generator.is_multimodal
 
     # 1. Tower + embedder vs HF image features on the real image.
     embeds_tt = generator.encode_vision(pixel_values.to(torch.bfloat16), pos.to(torch.long))
-    tt_feats = ttnn.to_torch(ttnn.get_device_tensors(embeds_tt)[0]).float() if hasattr(mesh_device, "shape") else ttnn.to_torch(embeds_tt).float()
+    tt_feats = (
+        ttnn.to_torch(ttnn.get_device_tensors(embeds_tt)[0]).float()
+        if hasattr(mesh_device, "shape")
+        else ttnn.to_torch(embeds_tt).float()
+    )
     hf_feats = ref["image_features"].float()
-    logger.info(f"TT image features {tuple(tt_feats.shape)} abs mean {tt_feats.abs().mean():.4f} | HF {tuple(hf_feats.shape)} abs mean {hf_feats.abs().mean():.4f}")
+    logger.info(
+        f"TT image features {tuple(tt_feats.shape)} abs mean {tt_feats.abs().mean():.4f} | HF {tuple(hf_feats.shape)} abs mean {hf_feats.abs().mean():.4f}"
+    )
     assert tt_feats.shape == hf_feats.shape, "soft-token count differs from HF"
     ok, pcc = comp_pcc(hf_feats, tt_feats, 0.95)
     per_tok = torch.nn.functional.cosine_similarity(hf_feats, tt_feats, dim=-1)
@@ -56,12 +70,18 @@ def test_vision_e2e_probe(mesh_device):
 
     # 2. First token after the multimodal prefill vs HF's first generated token.
     out = generator.prefill_forward_multimodal(
-        input_ids, pixel_values.to(torch.bfloat16), pos.to(torch.long),
-        page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=[prompt_len],
+        input_ids,
+        pixel_values.to(torch.bfloat16),
+        pos.to(torch.long),
+        page_table=page_table,
+        kv_cache=tt_kv_cache,
+        prompt_lens=[prompt_len],
     )
     logits = out[0] if isinstance(out, tuple) else out
     tt_tok = int(torch.argmax(logits.reshape(1, -1).float(), dim=-1))
     hf_text = ref["generated"]
     hf_first = tokenizer.encode(hf_text, add_special_tokens=False)[0]
-    logger.info(f"first token: TT {tt_tok} ({tokenizer.decode([tt_tok])!r}) vs HF {hf_first} ({tokenizer.decode([hf_first])!r}); HF text: {hf_text[:80]!r}")
+    logger.info(
+        f"first token: TT {tt_tok} ({tokenizer.decode([tt_tok])!r}) vs HF {hf_first} ({tokenizer.decode([hf_first])!r}); HF text: {hf_text[:80]!r}"
+    )
     assert ok, f"image features PCC {pcc} < 0.95"

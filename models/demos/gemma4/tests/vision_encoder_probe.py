@@ -19,18 +19,28 @@ from models.demos.gemma4.tt.generator import Gemma4Generator, _vision_encoder_se
 
 
 def _host(t, mesh_device):
-    return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float() if hasattr(mesh_device, "shape") else ttnn.to_torch(t).float()
+    return (
+        ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+        if hasattr(mesh_device, "shape")
+        else ttnn.to_torch(t).float()
+    )
 
 
 def _stats(name, t):
     t = t.float()
-    logger.info(f"{name}: shape {tuple(t.shape)} abs mean {t.abs().mean():.4f} max {t.abs().max():.4f} nan {int(torch.isnan(t).sum())} inf {int(torch.isinf(t).sum())}")
+    logger.info(
+        f"{name}: shape {tuple(t.shape)} abs mean {t.abs().mean():.4f} max {t.abs().max():.4f} nan {int(torch.isnan(t).sum())} inf {int(torch.isinf(t).sum())}"
+    )
 
 
 @pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4), "P150x8": (1, 8)}.get(
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
     indirect=True,
 )
 def test_vision_encoder_probe(mesh_device):
@@ -38,11 +48,17 @@ def test_vision_encoder_probe(mesh_device):
     model_path = os.environ.get("HF_MODEL", "google/gemma-4-31B-it")
     pixel_values, pos = ref["pixel_values"], ref["image_position_ids"].to(torch.long)
     _stats("pixel_values (host)", pixel_values)
-    logger.info(f"pixel dtype {pixel_values.dtype}; positions valid {(pos != -1).all(-1).sum().item()} / {pos.shape[1]}")
+    logger.info(
+        f"pixel dtype {pixel_values.dtype}; positions valid {(pos != -1).all(-1).sum().item()} / {pos.shape[1]}"
+    )
     vdt = getattr(ttnn, os.environ.get("GEMMA4_PROBE_VISION_DTYPE", "bfloat8_b"))
     logger.info(f"vision dtype {vdt}")
     generator, _kv, _tok = Gemma4Generator.from_pretrained(
-        mesh_device=mesh_device, model_path=model_path, max_batch_size=1, max_seq_len=4096, multimodal=True,
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=1,
+        max_seq_len=4096,
+        multimodal=True,
         vision_dtype=vdt,
     )
     tower = generator.vision_tower
