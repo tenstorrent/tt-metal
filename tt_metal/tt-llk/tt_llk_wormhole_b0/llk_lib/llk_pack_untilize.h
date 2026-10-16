@@ -26,12 +26,11 @@ using namespace ckernel::packer;
  * between rows/faces for the selected layout.
  *
  * @tparam diagonal: True to configure for diagonal (per-packer split) untilize packing.
- * @tparam narrow_row: True when packing fewer than a full row of datums.
  */
-template <bool diagonal = false, bool narrow_row = false>
+template <bool diagonal = false>
 inline void _llk_pack_untilize_configure_addrmod_()
 {
-    if constexpr (diagonal || narrow_row)
+    if constexpr (diagonal)
     {
         addr_mod_pack_t {
             .y_src = {.incr = 1},
@@ -90,8 +89,8 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     const std::uint32_t PACKCNT              = diagonal ? (num_faces > 2 ? num_faces / 2 : num_faces) : ((face_r_dim < FACE_R_DIM) ? 1 : num_faces);
     constexpr std::uint32_t MEGAROW          = 1;
     constexpr std::uint32_t ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;
-    constexpr std::uint32_t MOP_INNER_LOOP   = narrow_row ? (TILE_R_DIM / 4) : (diagonal ? FACE_R_DIM - 1 : 1);
-    constexpr std::uint32_t MOP_OUTER_LOOP   = narrow_row ? 1 : block_ct_dim;
+    constexpr std::uint32_t MOP_INNER_LOOP   = diagonal ? FACE_R_DIM - 1 : 1;
+    constexpr std::uint32_t MOP_OUTER_LOOP   = block_ct_dim;
 
     if constexpr (diagonal)
     {
@@ -108,8 +107,14 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     else
     {
         if constexpr (narrow_row)
-        { // always
-            ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 0));
+        {
+            // One PACR per tile packs the first row_num_datums datums (X range set by SETADCXX in init) of the
+            // current Dest row of every tile in the block: ADDR_MOD_1 reloads Y from its CR so the next tile
+            // reads the same row, INCADCZW steps W to the next tile. The row advances between MOP runs,
+            // exactly as for the full-row path, so the packers cover block_ct_dim tiles per row, which is the
+            // layout program_packer_untilized_destination lays the per-packer L1 bases out for.
+            ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 0));
+            tmp.set_end_op(TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0)); // w cnt points to the next tile
             tmp.program();
         }
         else
@@ -180,14 +185,16 @@ inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const 
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    _llk_pack_untilize_configure_addrmod_<diagonal, narrow_row>();
+    _llk_pack_untilize_configure_addrmod_<diagonal>();
 
     _llk_pack_untilize_mop_config_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(face_r_dim, num_faces);
 
     if (block_ct_dim != full_ct_dim)
     {
         // Match BH: 2 face-cols per tile-row for num_faces>=2; old WH `num_faces/2` gave 1 only at num_faces==2 (#52175).
-        const std::uint32_t output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * ((num_faces == 1) ? 1 : 2) * FACE_C_DIM);
+        // A narrow row holds row_num_datums datums per tile.
+        const std::uint32_t row_datums_per_tile = narrow_row ? row_num_datums : ((num_faces == 1) ? 1 : 2) * FACE_C_DIM;
+        const std::uint32_t output_addr_offset  = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * row_datums_per_tile);
         TT_SETDMAREG(0, LOWER_HALFWORD(output_addr_offset / 16), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET)); // store 16B aligned row offset address
     }
 
@@ -251,23 +258,16 @@ inline void _llk_pack_untilize_(
 
     program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal, row_num_datums>(address, pack_dst_format);
 
-    if constexpr (narrow_row)
-    {
-        ckernel::ckernel_template::run();
-    }
-    else
-    {
-        const std::uint32_t num_rows = (face_r_dim < FACE_R_DIM) ? face_r_dim : TILE_R_DIM / 4;
+    const std::uint32_t num_rows = (face_r_dim < FACE_R_DIM) ? face_r_dim : TILE_R_DIM / 4;
 
-        for (std::uint32_t row = 0; row < num_rows; row++)
+    for (std::uint32_t row = 0; row < num_rows; row++)
+    {
+        set_dst_write_addr(tile_dst_ct_offset + tile_dst_rt_offset); // Clear tile counter
+        ckernel::ckernel_template::run();
+        TTI_ADDRCRXY(p_setadc::PAC, 0, 0, 1, 0, 0b0010); // Read new row in the tile
+        if constexpr (block_ct_dim != full_ct_dim)
         {
-            set_dst_write_addr(tile_dst_ct_offset + tile_dst_rt_offset); // Clear tile counter
-            ckernel::ckernel_template::run();
-            TTI_ADDRCRXY(p_setadc::PAC, 0, 0, 1, 0, 0b0010); // Read new row in the tile
-            if constexpr (block_ct_dim != full_ct_dim)
-            {
-                lltt::replay(ckernel::packer::replay_buf_offset, 10); // update row address
-            }
+            lltt::replay(ckernel::packer::replay_buf_offset, 10); // update row address
         }
     }
 
