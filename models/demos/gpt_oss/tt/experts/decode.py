@@ -194,3 +194,18 @@ def decode_forward(
     )
 
     return next_states
+
+
+def decode_forward_stream(hidden_states, expert_indices, expert_weights, weights, stream, send=None):
+    """Decode MoE for one token over its top-k experts with the DRAM-streaming ops of fused_decode/stream.py.
+
+    hidden_states: the flat BF16 norm output of the layer boundary (fused_decode/boundary.py, one token).
+    expert_indices / expert_weights: the streamed router's [1, 32] UINT16 ids / BF16 softmax weights buffers (top-k
+    in the first k entries; shared, not deallocated here).
+    gate|up + bias + SwiGLU + routing-weight scaling run in one op into the shared [k, I_pad] activation; the down
+    projection + bias + sum over the routed experts run in a second op, straight into this device's flat partial sum.
+    Returns that partial sum (the layer's next boundary all-reduces it and adds it to the residual); send: fuse the
+    boundary's fabric send into the down op (ccl.CCLManager.decode_boundary_send).
+    """
+    act = stream["gate_up"](hidden_states, expert_indices, expert_weights, weights.gate_up_stream, stream["act"])
+    return stream["down"](act, expert_indices, expert_weights, weights.down_stream, stream["partial"], send=send)
