@@ -436,6 +436,7 @@ UNARY_SFPU_OPS = {
     MathOperation.Xielu,
     MathOperation.Neg,
     MathOperation.Add1,
+    MathOperation.AddOne,
     MathOperation.Cbrt,
     MathOperation.Exp2,
     MathOperation.Expm1,

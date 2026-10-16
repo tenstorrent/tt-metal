@@ -1,0 +1,35 @@
+# add_one (x + 1), KT demo. 16-bit Dest: Float32 needs dest_acc, so it is in the _dest32 file,
+# and Float16_b -> Float16 needs dest_acc, so the output stays Float16_b.
+# Two stacked tiles; random ranges, the points -2..2 and a large-magnitude band on both signs.
+
+dest_acc: false
+
+operands:
+  - name: "input_A"
+    dims: [64, 32]
+    format: [Float16_b, Float16]
+    stimuli:
+      include:
+        - [-10100.0, -10000.0]
+        - [-10.0, -2.01]
+        - [-1.99, -1.01]
+        - [-0.99, -0.01]
+        - [0.01, 0.99]
+        - [1.01, 1.99]
+        - [2.01, 10.0]
+        - [10000.0, 10100.0]
+        - -2.0
+        - -1.0
+        - 0.0
+        - 1.0
+        - 2.0
+  - name: "sfpu_out"
+    dims: [64, 32]
+    format: Float16_b
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [64, 32]}
+      - {type: "UnarySfpu", operation: AddOne, approximation_mode: false, iterations: 32, block_size: [64, 32]}
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [64, 32]}
