@@ -44,7 +44,10 @@ def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_co
     if use_throughput_experts:
         return expert_indices, expert_weights
     else:
-        return expert_indices, ttnn.scatter(ttnn.zeros_like(g), dim=1, index=expert_indices, src=expert_weights)
+        # (the dense weights in the softmax's dtype: ttnn.scatter needs input and src alike, and g is BFP8 in long
+        # prefills)
+        dense = ttnn.zeros_like(g, dtype=expert_weights.dtype)
+        return expert_indices, ttnn.scatter(dense, dim=1, index=expert_indices, src=expert_weights)
 
 
 class TopKRouter:
