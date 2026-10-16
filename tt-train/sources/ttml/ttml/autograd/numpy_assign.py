@@ -18,11 +18,13 @@ def assign_numpy(tensor, array: np.ndarray, *, layout=ttnn.Layout.TILE, mapper=N
     """Load ``array`` into ``tensor`` in the dtype ``tensor`` is stored in.
 
     The array is converted on the host to the tensor's dtype: an fp32 tensor gets the exact values, a bf16 tensor the
-    values rounded with ml_dtypes. ``mapper`` distributes the array as in ``Tensor.from_numpy``.
+    values rounded with ml_dtypes. An array with fewer than 4 dimensions gets leading unit ones, as ttml tensors are
+    4D: a 2D weight loads as ``[1, 1, rows, cols]``. ``mapper`` distributes the array as in ``Tensor.from_numpy``.
     """
     dtype = tensor.dtype()
     if dtype not in _NUMPY_DTYPES:
         raise ValueError(f"assign_numpy: unsupported tensor dtype {dtype} (only FLOAT32 and BFLOAT16)")
     # from_numpy reads the buffer in C order and rejects read-only arrays; copy only when the array is neither.
     values = np.require(array, dtype=_NUMPY_DTYPES[dtype], requirements=["C", "W"])
+    values = values.reshape((1,) * (4 - values.ndim) + values.shape)
     tensor.assign(cpp.autograd.Tensor.from_numpy(values, layout=layout, new_type=dtype, mapper=mapper))

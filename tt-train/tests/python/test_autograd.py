@@ -724,6 +724,18 @@ def test_assign_numpy_loads_in_the_storage_dtype(dtype):
     np.testing.assert_array_equal(parameter.to_numpy(precision=_NATIVE), expected)
 
 
+@pytest.mark.parametrize("shape", [(32,), (32, 64), (1, 32, 64)])
+def test_assign_numpy_adds_leading_unit_dims(shape):
+    """A weight or bias with fewer than 4 dimensions, as safetensors stores them, loads with leading unit ones."""
+    shape_4d = (1,) * (4 - len(shape)) + shape
+    values = np.random.default_rng(0).standard_normal(shape).astype(np.float32)
+    parameter = ttml.autograd.Tensor.from_numpy(np.zeros(shape_4d, dtype=np.float32), new_type=ttnn.DataType.FLOAT32)
+
+    ttml.autograd.assign_numpy(parameter, values)
+
+    np.testing.assert_array_equal(parameter.to_numpy(precision=_NATIVE), values.reshape(shape_4d))
+
+
 def test_linear_layer_setstate_keeps_the_layer_dtype():
     """__setstate__ loads the weights in the dtype the layer stores them in: an fp32 layer gets the exact values."""
     layer = ttml.modules.LinearLayer(32, 32)
