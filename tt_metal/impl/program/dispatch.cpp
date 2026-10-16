@@ -45,6 +45,7 @@
 #include "dispatch/device_command.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/dispatch_core_common.hpp"
 #include "dispatch_core_common.hpp"
@@ -2358,6 +2359,8 @@ public:
                 metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index)),
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
             has_multicast_launch_cmds ? sub_device_index : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+            // Go ring slot resolved when the program is enqueued
+            0,
             dispatcher_for_go_signal);
 
         LOG_TRACE_LAZY(
@@ -2877,7 +2880,8 @@ void update_program_dispatch_commands(
     for (auto* launch_msg_cmd_ptr : cached_program_command_sequence.launch_msg_write_packed_cmd_ptrs) {
         launch_msg_cmd_ptr->addr = multicast_cores_launch_msg_addr;
     }
-    // Update go signal to reflect the new wait count
+    // Update go signal to reflect the new launch_msg slot and wait count
+    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_ring_slot = multicast_cores_launch_message_wptr;
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
 }
 
@@ -3049,7 +3053,8 @@ void update_traced_program_dispatch_commands(
     for (auto* launch_msg_cmd_ptr : cached_program_command_sequence.launch_msg_write_packed_cmd_ptrs) {
         launch_msg_cmd_ptr->addr = multicast_cores_launch_msg_addr;
     }
-    // Update go signal to reflect the new wait count
+    // Update go signal to reflect the new launch_msg slot and wait count
+    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_ring_slot = multicast_cores_launch_message_wptr;
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
 }
 
@@ -3363,6 +3368,7 @@ void reset_worker_dispatch_state_on_device(
     SystemMemoryManager& manager,
     uint8_t cq_id,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
+    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
     bool reset_launch_msg_state,
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands) {
     auto num_sub_devices = mesh_device->num_sub_devices();
@@ -3412,6 +3418,7 @@ void reset_worker_dispatch_state_on_device(
                     metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(i)),
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(i),
                 mesh_device->impl().has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+                worker_launch_message_buffer_state[i].get_mcast_wptr(),
                 dispatcher_for_go_signal);
         }
     }
@@ -3607,9 +3614,9 @@ static HostMemDeviceCommand build_set_core_go_message_mapping_on_device(
     CoreCoord virtual_end = device->virtual_core_from_logical_core(all_core_range_logical.end_coord, CoreType::WORKER);
     CoreRange all_core_range_virtual{virtual_start, virtual_end};
 
-    // Write done to all indices on all tensix cores. All cores should already be idle at this point, but they may have
-    // garbage in the GO message entries they aren't using.
-    std::vector<uint32_t> go_data(dev_msgs::go_message_num_entries, dev_msgs::RUN_MSG_DONE);
+    // Write done to every go message on all tensix cores. All cores should already be idle at this point, but they may
+    // have garbage in the GO message entries they aren't using.
+    std::vector<uint32_t> go_data(go_msg_size / sizeof(uint32_t), dev_msgs::RUN_MSG_DONE);
     TT_ASSERT(
         metal_ctx.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG) %
             metal_ctx.hal().get_alignment(HalMemType::L1) ==

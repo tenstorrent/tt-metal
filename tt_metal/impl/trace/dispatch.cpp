@@ -83,7 +83,8 @@ void issue_trace_commands(
     SystemMemoryManager& sysmem_manager,
     const TraceDispatchMetadata& dispatch_md,
     uint8_t cq_id,
-    const DispatchArray<uint32_t>& expected_num_workers_completed) {
+    const DispatchArray<uint32_t>& expected_num_workers_completed,
+    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state) {
     MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
     void* cmd_region = sysmem_manager.issue_queue_reserve(dispatch_md.cmd_sequence_sizeB, cq_id);
 
@@ -111,6 +112,7 @@ void issue_trace_commands(
             desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
                 ? index
                 : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+            worker_launch_message_buffer_state[index].get_mcast_wptr(),
             dispatcher_for_go_signal);
     }
 
