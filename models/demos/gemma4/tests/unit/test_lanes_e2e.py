@@ -107,6 +107,10 @@ def test_lanes_e2e(mesh_device, reset_seeds, request):
             enable_trace=False,
             read_from_device=True,
             sampling_params=None,
+            reload_inputs=True,
+            reload_page_table=True,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         lg = logits[0] if isinstance(logits, (list, tuple)) else logits
         lg = lg.reshape(B_g, -1)

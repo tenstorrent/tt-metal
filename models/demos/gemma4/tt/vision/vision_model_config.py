@@ -139,6 +139,20 @@ class VisionModelArgs(ModelArgs):
         assert self.n_heads % self.tp == 0, f"n_heads ({self.n_heads}) must be divisible by TP ({self.tp})"
         assert self.n_kv_heads % self.tp == 0, f"n_kv_heads ({self.n_kv_heads}) must be divisible by TP ({self.tp})"
 
+    def _lm_head_grid_dims(self):
+        """The vision tower has no LM head. The base heuristic special-cases 32-device meshes for
+        Llama widths (``dim % 1024 == 0``) and divides by zero for the Gemma text widths, so use
+        the generic rule here on every mesh (it is what the 8-device engines already run)."""
+        rows, cores_per_row = 8, 8
+        while self.dim % (ttnn.TILE_SIZE * rows * cores_per_row) != 0:
+            rows -= 1
+            if rows == 0:
+                cores_per_row -= 1
+                if cores_per_row == 0:
+                    raise ValueError(f"No LM head core grid divides dim={self.dim}")
+                rows = 8
+        return rows, cores_per_row
+
     def prepare_residual_tensor_prefill(self, x_bsh):
         """
         Prepare inputs for prefill mode.
