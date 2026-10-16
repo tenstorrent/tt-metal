@@ -24,6 +24,8 @@
 
 #define HYB_MERGED 1
 #include "hybrid_merged_prologue.hpp"
+// Ahead of the LLK pack lib too: it renames the pack source-format table that lib reads.
+#include "hybrid_pack_precision.hpp"
 // FIRST, ahead of any header that pulls in the LLK pack/unpack lib: this one works by renaming
 // the helpers for everything parsed after it, so what it reaches is exactly what follows it.
 #include "hybrid_llk_shims.hpp"
