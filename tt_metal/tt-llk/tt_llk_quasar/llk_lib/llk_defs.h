@@ -220,6 +220,7 @@ enum class SfpuType : std::uint32_t
     signbit,
     rand,
     ema,
+    dropout,
 };
 
 // Load/store layout selectors shared with the WH/BH SFPI kernels: calculate_logical_not picks its
