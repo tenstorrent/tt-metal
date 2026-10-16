@@ -2854,6 +2854,14 @@ tasks:
     kind: attention
     layer: 2
     stateful: true
+  frozen:
+    at: '2026-10-16T21:12:26'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attention.py: 595e86eaaf120a93824ce3394b3b643aa90369e51ab1badfbcb62a105d15594d
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.enc_source.08
   title: 'enc_source block with steps 1-8 on device (last: attention)'
   step: implement
