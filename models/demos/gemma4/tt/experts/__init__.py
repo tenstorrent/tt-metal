@@ -13,7 +13,7 @@ import os
 import ttnn
 
 from .decode import decode_forward
-from .prefill import create_local_expert_mask, create_prefill_sparsity, prefill_forward
+from .prefill import create_prefill_sparsity, prefill_forward
 from .weights import ExpertWeights, load_expert_weights
 from models.demos.gemma4.tt.ccl import ccl_allreduce, ccl_lane_gather_rows, ccl_lane_scatter_rows
 
@@ -54,20 +54,16 @@ class Gemma4Experts:
             weight_dtype=weight_dtype,
             tensor_cache_path=tensor_cache_path,
         )
-        # Expert parallelism over the mesh axis that is not TP: every device keeps the full
-        # (TP-sliced) expert set, but row ``r`` of the ep axis only ever computes experts
-        # [r*E/ep, (r+1)*E/ep). The static local-expert mask zeroes the routing of the other
-        # experts, so ``sparse_matmul`` neither reads nor computes them; the ep-axis combine
-        # below sums the rows' partial outputs. EP=1 keeps the previous all-ones behaviour.
-        self.ep = int(getattr(mesh_config, "ep", 1) or 1) if mesh_config is not None else 1
-        self.num_local_experts = config.num_experts // self.ep
+        # Whole-expert sharding: every chip holds E / (ep * tp) experts at full width (ep over the
+        # lane axis, tp over the other), and the dense routing is partitioned to its expert
+        # columns on device. The ep-axis combine sums the lanes' partial outputs, the tp-axis
+        # all-reduce the columns' partials, exactly as before; only the per-chip expert set and
+        # the tensor widths changed (Qwen3.6 MoE layout).
+        self.ep = self.weights.ep
+        self.num_local_experts = self.weights.num_local_experts
         self.local_expert_mask = None
-        if self.ep > 1:
-            self.local_expert_mask = create_local_expert_mask(mesh_device, mesh_config, config.num_experts, self.ep)
-        # Prefill sparsity: all-ones, or the local-expert mask under EP (reused for every prefill call)
-        self.prefill_sparsity = create_prefill_sparsity(
-            mesh_device, config.num_experts, mesh_config=mesh_config if self.ep > 1 else None, ep=self.ep
-        )
+        # Prefill sparsity: all-ones over the local experts (reused for every prefill call)
+        self.prefill_sparsity = create_prefill_sparsity(mesh_device, self.num_local_experts)
 
     def __call__(self, hidden_states, dense_routing):
         lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
