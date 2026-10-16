@@ -300,6 +300,23 @@ def encode_reference_audio(
     return ref_codes, audio_data
 
 
+# Request-invariant pieces of the ICL embedding, made once per model (Blaze L4: precomputed
+# embedding tables). Every request used to re-read the talker codec table from the device, convert
+# all 15 code-predictor tables to fp32 (~240 MB), and round-trip the TTS / role / codec special
+# tokens; the cached values are the same computations, so results are bit-identical.
+# TT_QWEN3_ICL_CACHE=0 restores the per-request recomputation.
+_ICL_CACHE: dict = {}
+ICL_CACHE = os.environ.get("TT_QWEN3_ICL_CACHE", "1") == "1"
+
+
+def _icl_cached(key, build):
+    if not ICL_CACHE:
+        return build()
+    if key not in _ICL_CACHE:
+        _ICL_CACHE[key] = build()
+    return _ICL_CACHE[key]
+
+
 def create_icl_embedding_ttnn(
     target_text: str,
     ref_text: str,
@@ -345,21 +362,29 @@ def create_icl_embedding_ttnn(
     # === Get embeddings using TTNN ===
 
     # TTS special token embeddings (text embedding + projection)
+    mkey = id(model)
+
+    def _text_proj(ids):
+        ids_tt = ttnn.from_torch(ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        return _mesh_to_torch(model.project_text(model.get_text_embedding(ids_tt))).squeeze(1).float()
+
+    def _codec_embeds(ids):
+        ids_tt = ttnn.from_torch(ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        return _mesh_to_torch(model.get_codec_embedding(ids_tt)).float()
+
     tts_tokens = torch.tensor([[config.tts_bos_token_id, config.tts_eos_token_id, config.tts_pad_token_id]])
-    tts_tokens_tt = ttnn.from_torch(tts_tokens, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-    tts_embeds_tt = model.get_text_embedding(tts_tokens_tt)
-    tts_embeds_proj_tt = model.project_text(tts_embeds_tt)
-    tts_embeds_proj = _mesh_to_torch(tts_embeds_proj_tt).squeeze(1).float()  # [1, 3, 2048]
+    tts_embeds_proj = _icl_cached(
+        (mkey, "text_proj", tuple(tts_tokens.flatten().tolist())), lambda: _text_proj(tts_tokens)
+    )  # [1, 3, 2048]
 
     tts_bos_embed = tts_embeds_proj[:, 0:1, :]
     tts_eos_embed = tts_embeds_proj[:, 1:2, :]
     tts_pad_embed = tts_embeds_proj[:, 2:3, :]
 
     # Role token embeddings
-    role_ids_tt = ttnn.from_torch(role_ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-    role_embeds_tt = model.get_text_embedding(role_ids_tt)
-    role_embeds_proj_tt = model.project_text(role_embeds_tt)
-    role_embeds_proj = _mesh_to_torch(role_embeds_proj_tt).squeeze(1).float()
+    role_embeds_proj = _icl_cached(
+        (mkey, "text_proj", tuple(role_ids.flatten().tolist())), lambda: _text_proj(role_ids)
+    )
 
     # Combined text embeddings (ref_text + target_text)
     combined_text_ids = torch.cat([ref_text_ids, target_text_ids], dim=1)
@@ -383,15 +408,12 @@ def create_icl_embedding_ttnn(
     )
     codec_suffix_ids = torch.tensor([[config.codec_pad_id, config.codec_bos_id]])
 
-    codec_prefix_ids_tt = ttnn.from_torch(
-        codec_prefix_ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+    codec_prefix_embeds = _icl_cached(
+        (mkey, "codec_ids", tuple(codec_prefix_ids.flatten().tolist())), lambda: _codec_embeds(codec_prefix_ids)
     )
-    codec_suffix_ids_tt = ttnn.from_torch(
-        codec_suffix_ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+    codec_suffix_embeds = _icl_cached(
+        (mkey, "codec_ids", tuple(codec_suffix_ids.flatten().tolist())), lambda: _codec_embeds(codec_suffix_ids)
     )
-
-    codec_prefix_embeds = _mesh_to_torch(model.get_codec_embedding(codec_prefix_ids_tt)).float()
-    codec_suffix_embeds = _mesh_to_torch(model.get_codec_embedding(codec_suffix_ids_tt)).float()
 
     # Ensure 3D shape [batch, seq, hidden]
     if codec_prefix_embeds.dim() == 2:
@@ -422,42 +444,53 @@ def create_icl_embedding_ttnn(
 
     # === Reference codes embedding (sum of all 16 codebooks) ===
     # Get CodePredictor embeddings for codebooks 1-15 from main_weights
-    code_pred_embeds = []
-    for i in range(config.num_code_groups - 1):
-        key = f"talker.code_predictor.model.codec_embedding.{i}.weight"
-        if key in main_weights:
-            code_pred_embeds.append(main_weights[key].float())
-        else:
-            print(f"  WARNING: Missing CodePredictor embedding {key}")
+    def _code_pred_embeds():
+        out = []
+        for i in range(config.num_code_groups - 1):
+            key = f"talker.code_predictor.model.codec_embedding.{i}.weight"
+            if key in main_weights:
+                out.append(main_weights[key].float())
+            else:
+                print(f"  WARNING: Missing CodePredictor embedding {key}")
+        return out
+
+    code_pred_embeds = _icl_cached((mkey, id(main_weights), "code_pred_embeds"), _code_pred_embeds)
     print(f"  Loaded {len(code_pred_embeds)} CodePredictor embeddings")
 
     # Get main codec embedding from TTNN tensor
-    codec_embed_torch = _mesh_to_torch(codec_embed_weight).squeeze(0).squeeze(0).float()
+    codec_embed_torch = _icl_cached(
+        (mkey, "codec_embed_torch"), lambda: _mesh_to_torch(codec_embed_weight).squeeze(0).squeeze(0).float()
+    )
 
     # Build reference code embeddings using proper codebook embeddings
     ref_len = ref_codes.shape[0]
-    codec_embeds_list = []
 
-    for i in range(config.num_code_groups):
-        code_ids = ref_codes[:, i : i + 1]  # [ref_len, 1]
-        if i == 0:
-            # First codebook uses main talker codec_embedding
-            cb_embed = F.embedding(code_ids, codec_embed_torch)
-        else:
-            # Codebooks 1-15 use CodePredictor embeddings
-            if i - 1 < len(code_pred_embeds):
-                cb_embed = F.embedding(code_ids, code_pred_embeds[i - 1])
+    def _summed_ref_embeds():
+        codec_embeds_list = []
+        for i in range(config.num_code_groups):
+            code_ids = ref_codes[:, i : i + 1]  # [ref_len, 1]
+            if i == 0:
+                # First codebook uses main talker codec_embedding
+                cb_embed = F.embedding(code_ids, codec_embed_torch)
             else:
-                cb_embed = F.embedding(code_ids, codec_embed_torch)  # Fallback
-        codec_embeds_list.append(cb_embed)
+                # Codebooks 1-15 use CodePredictor embeddings
+                if i - 1 < len(code_pred_embeds):
+                    cb_embed = F.embedding(code_ids, code_pred_embeds[i - 1])
+                else:
+                    cb_embed = F.embedding(code_ids, codec_embed_torch)  # Fallback
+            codec_embeds_list.append(cb_embed)
+        stacked_embeds = torch.cat(codec_embeds_list, dim=1)  # [ref_len, 16, 2048]
+        return stacked_embeds.sum(dim=1).unsqueeze(0)  # [1, ref_len, 2048]
 
-    stacked_embeds = torch.cat(codec_embeds_list, dim=1)  # [ref_len, 16, 2048]
-    summed_embeds = stacked_embeds.sum(dim=1).unsqueeze(0)  # [1, ref_len, 2048]
+    # Keyed on the codes themselves: a preset voice repeats them, a clone brings new ones.
+    ref_bytes = ref_codes.to(torch.int64).contiguous().numpy().tobytes()
+    summed_embeds = _icl_cached((mkey, "ref_sum", tuple(ref_codes.shape), ref_bytes), _summed_ref_embeds)
 
     # Prepend codec_bos
     codec_bos_ids = torch.tensor([[config.codec_bos_id]])
-    codec_bos_ids_tt = ttnn.from_torch(codec_bos_ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-    codec_bos_embed = _mesh_to_torch(model.get_codec_embedding(codec_bos_ids_tt)).float()  # [1, 1, 2048]
+    codec_bos_embed = _icl_cached(
+        (mkey, "codec_ids", tuple(codec_bos_ids.flatten().tolist())), lambda: _codec_embeds(codec_bos_ids)
+    )  # [1, 1, 2048]
     if codec_bos_embed.dim() == 2:
         codec_bos_embed = codec_bos_embed.unsqueeze(1)  # [1, 1, 2048]
 
