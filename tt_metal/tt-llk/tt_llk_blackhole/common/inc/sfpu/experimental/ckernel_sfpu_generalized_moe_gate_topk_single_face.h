@@ -434,13 +434,16 @@ inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale, s
  * @note Resets the Dst RWC counter at entry (TTI_SETRWC SET_D): a preceding FPU MOP (e.g. copy4rows) leaves
  *       it advanced by +64/tile, which would bias the SFPLOAD offsets — so run this after any such MOP.
  *       Reads bias(mode 0)/indices(LO16)/scores(HI16) at the read columns and writes the same convention at
- *       the store columns; clobbers LREG0-7. @ref _gmg_merge16_to_run is the full-16 (two-run) variant.
+ *       the store columns; clobbers LREG0-7. Enables SFPU index tracking at entry (an SFPU init clears it,
+ *       and the idx|score concat in LREG4-7 follows the bias swaps only while it is on) and leaves it on at
+ *       exit. @ref _gmg_merge16_to_run is the full-16 (two-run) variant.
  */
 template <bool is_fp32_dest_acc_en, std::uint32_t read_base, std::uint32_t store_lo, std::uint32_t store_hi>
 inline void _gmg_merge4_top8()
 {
     constexpr bool idir = false; // descending
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    TTI_SFPCONFIG(0x4, 0xF, 1); // enable index tracking (idx|score in LREG4-7 follow the bias swaps)
 
     // Odd columns (read_base+6, read_base+2), reversed to form a bitonic sequence.
     TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_3, bias_offset + read_base + 6);
