@@ -131,9 +131,12 @@ token feedback and position update inside the trace; its tokens match the host l
 | Device-resident greedy loop | 33.3 ms, 20.9 % | 35.4 ms, 19.7 % | 38.8 ms |
 | Routing after the sigmoid in one program (`tt/moe_route.py`: exact fp32 top-8, normalize, mask; replaces top-k, gather and ~20 glue ops); CCL on 2 links (all-reduce 37.7 -> 29.7 us) | 26.8 ms, 26.0 % | 28.9 ms, 24.1 % | 31.8 ms |
 | tt-kernel-agent `mimo_moe_stream` round 2: bank-local streaming gate|up with the routing selection inside the program (MoE layer 283 us) | 23.7 ms, 29.5 % | 25.8 ms, 27.1 % | 28.7 ms |
+| tt-kernel-agent final (4 rounds): bank-local streaming down with the pair sum in dest (MoE layer 204 us) | 20.1 ms, 34.7 % | 24.1 ms, 29.0 % | 24.6 ms |
+| Bank-reader cores from the 4x8 parent: row 2's own answer (x = 6 for banks 4-7) slowed six of its chips | 20.1 ms, 34.7 % | 21.95 ms, 31.8 % | 24.8 ms |
 
-Accuracy after the last row: teacher-forced top-1 vs the fp32 reference 0.975, logits PCC min 0.9693 / mean
-0.9926 (`test_model_tp8_dp4.py`).
+Accuracy after the MoE rows: teacher-forced top-1 vs the fp32 reference 0.975, logits PCC min 0.9693 / mean
+0.9925 (`test_model_tp8_dp4.py`). The GDDR6 of this Galaxy runs at 14 Gbps on every chip (tt-smi), so the
+attainable peak is ~448 GB/s; the table keeps the 512 GB/s spec peak as the denominator.
 
 With B=4 x 1M allocated (`test_capacity_1m_tp8_dp4.py`, 16 users, 4 per row), after the first table's rows:
 49.1 ms/step at 4K positions (326 tok/s), 74.5 ms at 128K (215 tok/s), 236.7 ms at ~1M (68 tok/s).
