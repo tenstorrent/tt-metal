@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 
+#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -32,7 +33,9 @@ namespace tt::tt_metal::experimental {
 //   ScratchpadSpec only if they occupy disjoint node sets.
 //
 // LIFETIME: Program-scope. The backing memory is allocated for the Program's
-//   execution lifetime, alongside DFBs (and from the same region of L1).
+//   execution lifetime, alongside DFBs (and from the same region of SRAM).
+//   (Advanced users may instead place a scratchpad in a user-managed RawAllocation;
+//   see ScratchpadAdvancedOptions.)
 //
 // INSTANCING: Like KernelSpec, a ScratchpadSpec is a *per-node template*. One
 //   independent scratchpad instance is allocated per node where its bound kernel
@@ -76,6 +79,11 @@ struct ScratchpadSpec {
     // The tile format is optional; if unspecified, the default tile format (32x32) is assumed.
     // Tile format includes the tile's "face" layout (sub-block arrangement within the tile).
     std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
+
+    //////////////////////////////
+    // Advanced options (see advanced_options.hpp)
+    //////////////////////////////
+    ScratchpadAdvancedOptions advanced_options;
 };
 
 }  // namespace tt::tt_metal::experimental
