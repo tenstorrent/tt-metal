@@ -70,6 +70,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.tilize_untilize import tilize
+from helpers.utils import assert_bf16_separates_rne, assert_bit_exact, bf16_from_bits
 
 # =============================================================================
 # Shared skip helpers
@@ -820,37 +821,12 @@ def test_eltwise_binary_sfpu_float(
     )
 
 
-def _bf16(bits):
-    """One bfloat16 value, as a Python float, from its 16-bit pattern."""
-    return float(torch.tensor([bits], dtype=torch.int16).view(torch.bfloat16).item())
-
-
 def _tile_from_pairs(pairs):
     """Row-major operand tiles from cycled (a, b) pairs. One tile each."""
     src = _build_paired_tile_override(pairs, torch.float32)
     a = src[:_ELEMENTS_PER_TILE].to(torch.bfloat16)
     b = src[_ELEMENTS_PER_TILE:].to(torch.bfloat16)
     return src, a, b
-
-
-def _assert_separates_rne(wide):
-    """Fail when every lane rounds the same under truncation and RNE.
-
-    A bit-exact NearestEven check is vacuous on values that are already bf16.
-    """
-    rne = wide.to(torch.bfloat16)
-    trunc = (wide.view(torch.int32) & 0xFFFF0000).view(torch.float32).to(torch.bfloat16)
-    if torch.equal(rne.view(torch.int16), trunc.view(torch.int16)):
-        raise AssertionError("stimulus does not separate NearestEven from truncation")
-
-
-def _assert_bit_exact(got, want, what):
-    if got.dtype != want.dtype:
-        raise AssertionError(f"{what}: dtype {got.dtype} vs {want.dtype}")
-    if torch.equal(got, want):
-        return
-    differ = int((got.view(torch.int16) != want.view(torch.int16)).sum())
-    raise AssertionError(f"{what}: {differ} of {got.numel()} lanes differ")
 
 
 # One in0/in1 pair. The golden's first tile is the result in row-major order.
@@ -881,8 +857,10 @@ def test_eltwise_binary_sfpu_bf16_rne_exact():
     The contract tolerance also passes a truncated store, so this compares
     the device result to the golden with torch.equal.
     """
-    src, a, b = _tile_from_pairs([(_bf16(x), _bf16(y)) for x, y in _RNE_ADD_PAIRS])
-    _assert_separates_rne(a.float() + b.float())
+    src, a, b = _tile_from_pairs(
+        [(bf16_from_bits(x), bf16_from_bits(y)) for x, y in _RNE_ADD_PAIRS]
+    )
+    assert_bf16_separates_rne(a.float() + b.float())
     res, golden = sfpu_binary(
         _BF16_FORMATS,
         DestAccumulation.No,
@@ -892,16 +870,16 @@ def test_eltwise_binary_sfpu_bf16_rne_exact():
         dst_rounding_mode=DstRoundingMode.NearestEven,
         check_contract=False,
     )
-    _assert_bit_exact(res, golden, "NearestEven ADD")
+    assert_bit_exact(res, golden, "NearestEven ADD")
 
 
 def test_eltwise_binary_sfpu_mul_production_exact():
     """Production mul is RNE, and 0 * inf stores 0 rather than a NaN."""
     src, a, b = _tile_from_pairs(
-        [(_bf16(x), _bf16(y)) for x, y in _PRODUCTION_MUL_PAIRS]
+        [(bf16_from_bits(x), bf16_from_bits(y)) for x, y in _PRODUCTION_MUL_PAIRS]
     )
     finite = torch.isfinite(a.float() * b.float())
-    _assert_separates_rne((a.float() * b.float())[finite])
+    assert_bf16_separates_rne((a.float() * b.float())[finite])
     res, golden = sfpu_binary(
         _BF16_FORMATS,
         DestAccumulation.No,
@@ -917,7 +895,7 @@ def test_eltwise_binary_sfpu_mul_production_exact():
     got_zero = golden[:_ELEMENTS_PER_TILE][zero]
     if not torch.equal(got_zero, torch.zeros_like(got_zero)):
         raise AssertionError("golden did not model production 0 * x = +0")
-    _assert_bit_exact(res, golden, "production mul")
+    assert_bit_exact(res, golden, "production mul")
 
 
 @parametrize(**DIV_SWEEP)
