@@ -47,4 +47,12 @@ ALWI void rand_tile_init(uint32_t seed = 0, uint32_t stream_id = 0) {
     MATH(SFPU_UNARY_INIT_FN_ARGS(unused, sfpu::rand_init, (APPROX), seed + stream_id * stream_seed_multiplier));
 }
 
+/**
+ * Programs the address mode rand_tile stores under without touching the PRNG seed, so a stream
+ * started by an earlier rand_tile_init (e.g. ttnn.manual_seed) continues. Required before every
+ * rand_tile that follows another SFPU init in the same kernel, because other inits (topk_tile_init
+ * among them) reprogram the same address-mode slot.
+ */
+ALWI void rand_tile_addrmod_init() { MATH(SFPU_UNARY_INIT_FN(unused, sfpu::rand_addrmod_init, (APPROX))); }
+
 }  // namespace ckernel
