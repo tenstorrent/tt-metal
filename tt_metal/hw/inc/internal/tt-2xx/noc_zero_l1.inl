@@ -41,9 +41,9 @@ inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const ds
     // setup as iDMA copy, but with AXI_OPT_1.src_protocol = 4. The payload bytes coming
     // out the back are forced to zero. Source address is ignored. We reuse
     // idma_setup_as_copy_cmdbuf_0 for the MISC setup, then flip src_protocol via
-    // set_axi_opt_1_cmdbuf_0. The spec's recipe also sets decouple_aw = 1, but Quasar's
-    // iDMA has an OBI backend, which keeps only the two protocol fields of AXI_OPT_1:
-    // decouple_aw is an AXI option with no storage there, so it is left at 0.
+    // set_axi_opt_1_cmdbuf_0. The spec's recipe also sets decouple_aw = 1; it is left at 0
+    // here because the Quasar simulator models the iDMA's AXI_OPT_1 as keeping only the
+    // protocol fields and refuses a write to decouple_aw. src_protocol alone selects zero mode.
     //
     // The cmdbuf splits the transaction into packets and round-robins them across
     // the 8 backend engines via per-packet VC autoincrement wrapping the 8 iDMA
