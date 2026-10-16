@@ -101,8 +101,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
-    constexpr MathFidelity MATH_FIDELITY = MathFidelity::HiFi4;
-
     constexpr bool IS_INT_FPU = false;
 
     const ckernel::TensorShape DEFAULT_TENSOR_SHAPE = {FACE_R_DIM, FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
