@@ -17,9 +17,9 @@
 using namespace tt::data_movement::common;
 
 void kernel_main() {
-    const uint32_t output_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_batch = get_arg_val<uint32_t>(1);
-    const uint32_t end_batch = get_arg_val<uint32_t>(2);
+    const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t start_batch = get_arg_val<uint32_t>(0);
+    const uint32_t end_batch = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(0);
     constexpr uint32_t face_row_bytes = get_compile_time_arg_val(1);
