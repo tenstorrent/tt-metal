@@ -80,14 +80,16 @@ ROUTED_PREFILL_SEQ_MULTIPLE = 64
 ROUTED_SCATTER_SPLIT_MIN_C = 1024
 ROUTED_SCATTER_GROUPS = 32
 # The combine gather writes k rows per token ([Cs, k, H] bf16) that post_combine_reduce reads straight back. It runs on
-# token blocks of at most this many tokens so that intermediate (47 MB at 2048) and the reduced block live in L1 instead
-# of a DRAM round trip; at C = 8192 this measured 2.39 -> 1.91 ms per layer for gather + reduce + bf8 cast (one device).
-ROUTED_COMBINE_BLOCK = 2048
+# token blocks of at most this many tokens so that intermediate (71 MB at 3072) and the reduced block live in L1 instead
+# of a DRAM round trip; at C = 8192 this measured 2.39 -> 1.91 ms per layer for gather + reduce + bf8 cast (one device,
+# 2048-token blocks). 3072 vs 2048 measured b32 TTFT 512 -1.2%, 1K -0.5%, 2K -0.7% (fewer blocks per 16K chunk);
+# 3584 is slower and 4096 overflows L1 (static circular buffers clash with the L1 buffers).
+ROUTED_COMBINE_BLOCK = 3072
 # Largest chunk-size-dependent transient this module places in L1 (per device, interleaved). Above it the tensor goes
 # to DRAM, so a larger GPT_OSS_ROUTED_PREFILL_CHUNK still runs instead of overflowing L1 (the dispatch-gather input
-# x_rm has its own cap, ROUTED_XRM_L1_CAP_BYTES); the combine block is bounded by ROUTED_COMBINE_BLOCK (2048 tokens:
-# [Cs, k, H] bf16 = 47 MB, the reduced block 12 MB), which is also under it.
-ROUTED_L1_CAP_BYTES = 64 << 20
+# x_rm has its own cap, ROUTED_XRM_L1_CAP_BYTES); the combine block is bounded by ROUTED_COMBINE_BLOCK (3072 tokens:
+# [Cs, k, H] bf16 = 67.5 MiB, the reduced block 17 MiB), which is also under it.
+ROUTED_L1_CAP_BYTES = 72 << 20
 # Cap for the dispatch-gather input x_rm alone (C*H*2 bytes): it is the only large transient live in L1 while it
 # exists (tok_of_row is small; the gather output goes to DRAM), so the default 16384 chunk (90 MiB) fits. Measured on
 # one BH device at C = 16384: untilize + dispatch gather 1.86 ms (x_rm in DRAM) -> 1.52 ms (L1), bit-identical.
@@ -152,6 +154,40 @@ def routed_expert_order(layer_idx, num_experts, num_devices):
 def _l1_if_fits(nbytes):
     """L1 for a transient of nbytes per device when it fits under ROUTED_L1_CAP_BYTES, else DRAM."""
     return ttnn.L1_MEMORY_CONFIG if nbytes <= ROUTED_L1_CAP_BYTES else ttnn.DRAM_MEMORY_CONFIG
+
+
+def _narrowable(t, dim, start):
+    """True when ttnn.narrow can view t from row start along dim (zero-copy): t is DRAM-interleaved, dim is its first
+    dimension larger than 1, and the range starts on DRAM bank 0 (start page a multiple of the bank count)."""
+    shape = list(t.padded_shape)
+    dim = dim % len(shape)
+    mem = t.memory_config()
+    if mem.buffer_type != ttnn.BufferType.DRAM or mem.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        return False
+    if any(shape[i] != 1 for i in range(dim)):
+        return False
+    inner = math.prod(shape[dim + 1 :])  # elements per row along dim (tile-padded for TILE)
+    if t.layout == ttnn.TILE_LAYOUT:
+        if start % ttnn.TILE_SIZE:
+            return False
+        pages = start * inner // (ttnn.TILE_SIZE * ttnn.TILE_SIZE)
+    else:
+        pages = start * inner // shape[-1]
+    return pages % t.device().dram_grid_size().x == 0
+
+
+def _row_view(t, dim, start, length):
+    """Rows [start, start + length) of t along dim: a zero-copy ttnn.narrow view where _narrowable, else a ttnn.slice
+    copy. Returns (tensor, owned): owned is True for a copy the caller deallocates; a view is only dropped."""
+    if _narrowable(t, dim, start):
+        return ttnn.narrow(t, dim, start, length), False
+    rank = len(t.shape)
+    dim = dim % rank
+    begins = [0] * rank
+    ends = list(t.shape)
+    begins[dim] = start
+    ends[dim] = start + length
+    return ttnn.slice(t, begins, ends), True
 
 
 def routed_prefill_mesh_supported(mesh_device, num_experts=32):
@@ -782,16 +818,11 @@ class RoutedPrefillExperts:
         ttnn.deallocate(per_token)
         base = ttnn.add(before, region, output_tensor=before)
         ttnn.deallocate(region)
-        cols = []
-        for j in range(k):
-            oh = ttnn.slice(onehot, (0, j * E), (C, (j + 1) * E))  # tile-aligned block j
-            cols.append(ttnn.sum(ttnn.mul(oh, base, output_tensor=oh), dim=-1, keepdim=True))
-            ttnn.deallocate(oh)
         ttnn.deallocate(onehot)
+        # Pair (t, j) reads base[t, indices[t, j]] (its expert's column): one gather instead of a per-slot one-hot
+        # mask, row sum and concat (each row of a slot's one-hot block has exactly one 1, so the same value).
+        pos = ttnn.gather(base, -1, index=indices)  # [C, k] fp32 TILE
         ttnn.deallocate(base)
-        pos = ttnn.concat(cols, dim=-1)  # [C, k] fp32 TILE
-        for c in cols:
-            ttnn.deallocate(c)
         pos = ttnn.typecast(pos, ttnn.uint32)
         # Slot-major copy via a tile transpose: [k, C] row-major is k long rows, so the flatten to [1, k*C] is cheap
         # (the token-major [C, k] -> [1, k*C] reshape copies C 16-byte rows and cost 3.3 ms per layer at 8K).
@@ -803,12 +834,13 @@ class RoutedPrefillExperts:
         ttnn.deallocate(pos)
         return pos_tm, pos_sm
 
-    def _chunk(self, x, indices, weights):
+    def _chunk(self, x, indices, weights, out=None, out_start=0):
         """Partial MoE output of this device's experts for one chunk.
 
         x: [1, 1, C, H] (any float dtype, TILE); indices: [C, k] uint16 TILE; weights: [C, k] bf16 TILE.
         Returns the [1, 1, Cs, H] bf8 TILE blocks of the output in token order (ROUTED_COMBINE_BLOCK tokens each, the
-        last one shorter; zero rows where no top-k expert is local)."""
+        last one shorter; zero rows where no top-k expert is local). With out ([1, 1, S, H] bf8, every block start
+        _narrowable), the blocks are written to its rows out_start onward instead and the list is empty."""
         C = x.shape[-2]
         H = self.hidden_size
         k = self.top_k
@@ -909,11 +941,11 @@ class RoutedPrefillExperts:
         for s in range(0, C, Cs):
             e = min(s + Cs, C)
             if s == 0 and e == C:
-                pos_s, w_s, idx_s = pos_tm, w_5d, idx_rm
+                block = [(pos_tm, False), (w_5d, False), (idx_rm, False)]
             else:
-                pos_s = ttnn.slice(pos_tm, (s, 0), (e, k))
-                w_s = ttnn.slice(w_5d, (0, 0, s, 0, 0), (1, 1, e, k, 1))
-                idx_s = ttnn.slice(idx_rm, (0, s, 0), (1, e, k))
+                # Zero-copy row views where the block starts on DRAM bank 0 (every block start at the default size).
+                block = [_row_view(pos_tm, 0, s, e - s), _row_view(w_5d, 2, s, e - s), _row_view(idx_rm, 1, s, e - s)]
+            (pos_s, _), (w_s, _), (idx_s, _) = block
             # padding_idx=spare: the non-local pairs (about (N-1)/N of them) all point at the spare row and are served
             # from a per-core L1 copy of it instead of DRAM; same values, and post_combine_reduce skips them anyway.
             combined = ttnn.embedding(
@@ -933,11 +965,15 @@ class RoutedPrefillExperts:
                 output_memory_config=part_mem,
             )
             ttnn.deallocate(combined)
-            if pos_s is not pos_tm:
-                ttnn.deallocate(pos_s)
-                ttnn.deallocate(w_s)
-                ttnn.deallocate(idx_s)
-            pieces.append(ttnn.typecast(part, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            for t, owned in block:
+                if owned:
+                    ttnn.deallocate(t)
+            if out is not None:
+                # Cast straight into this block's rows of the preallocated output (a narrow view): no concat.
+                dst = ttnn.narrow(out, 2, out_start + s, e - s)
+                ttnn.typecast(part, ttnn.bfloat8_b, output_tensor=dst)
+            else:
+                pieces.append(ttnn.typecast(part, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG))
             ttnn.deallocate(part)
         ttnn.deallocate(out_rm)
         ttnn.deallocate(pos_tm)
@@ -965,23 +1001,42 @@ class RoutedPrefillExperts:
         if len(x.shape) != 4:
             x = ttnn.reshape(x, (1, 1, seq_len, self.hidden_size))
         C = min(self.chunk_size, seq_len)
+        Cs = min(C, ROUTED_COMBINE_BLOCK)
+        # More than one combine block: cast every block into its rows of one preallocated output (narrow views)
+        # instead of concatenating the blocks afterwards (a full read + write of the [S, H] bf8 output), when every
+        # block start is a view start.
+        out = None
+        if seq_len > Cs:
+            out = ttnn.empty(
+                (1, 1, seq_len, self.hidden_size),
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            starts = (c + b for c in range(0, seq_len, C) for b in range(0, min(C, seq_len - c), Cs))
+            if not all(_narrowable(out, 2, r) for r in starts):
+                ttnn.deallocate(out)
+                out = None
         outputs = []
         for start in range(0, seq_len, C):
             end = min(start + C, seq_len)
             if start == 0 and end == seq_len:
-                x_c, i_c, w_c = x, topk_indices, topk_weights
+                chunk = [(x, False), (topk_indices, False), (topk_weights, False)]
             else:
-                x_c = ttnn.slice(x, (0, 0, start, 0), (1, 1, end, self.hidden_size))
-                i_c = ttnn.slice(topk_indices, (start, 0), (end, self.top_k))
-                w_c = ttnn.slice(topk_weights, (start, 0), (end, self.top_k))
-            outputs.extend(self._chunk(x_c, i_c, w_c))
-            if x_c is not x:
-                ttnn.deallocate(x_c)
-                ttnn.deallocate(i_c)
-                ttnn.deallocate(w_c)
-        if len(outputs) == 1:
+                # Zero-copy row views where the chunk starts on DRAM bank 0 (any multiple of 256 tokens), else copies.
+                chunk = [
+                    _row_view(x, 2, start, end - start),
+                    _row_view(topk_indices, 0, start, end - start),
+                    _row_view(topk_weights, 0, start, end - start),
+                ]
+            outputs.extend(self._chunk(*(t for t, _ in chunk), out=out, out_start=start))
+            for t, owned in chunk:
+                if owned:
+                    ttnn.deallocate(t)
+        if out is None and len(outputs) == 1:
             out = outputs[0]
-        else:
+        elif out is None:
             out = ttnn.concat(outputs, dim=2)
             for t in outputs:
                 ttnn.deallocate(t)
