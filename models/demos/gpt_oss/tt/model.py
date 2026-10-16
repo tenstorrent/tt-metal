@@ -106,7 +106,8 @@ class Model:
 
     # Generator opt-in (models/tt_transformers/tt/generator.py prefill_forward_text): a batched prefill passes the
     # per-user last-token indices as get_last_token, the forward runs the final norm and LM head on those rows only,
-    # and process_output_prefill_rows reads the logits back once for all users.
+    # and process_output_prefill_rows reads the logits back once for all users. With on-device sampling the generator
+    # batches through extract_last_tokens_batched_prefill and _apply_norm_and_lm_head instead.
     batched_prefill_last_token_rows = True
 
     def __init__(
@@ -547,15 +548,46 @@ class Model:
             return logits
 
         # Final norm and lm_head
-        hidden_states = self.norm(hidden_states)
-        logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
-        hidden_states.deallocate(True)
-        self._prefill_sampling_active = False
+        logits = self._apply_norm_and_lm_head(hidden_states)
         # TP all-gather is deferred to process_output_prefill / process_output_decode
         # (outside trace capture) since all_gather_async writes to device,
         # which is forbidden during trace capture.
 
         return logits
+
+    def _apply_norm_and_lm_head(self, x):
+        """Final norm + vocab-sharded LM head (logits [..., vocab / TP] per device, bf8). x: replicated [..., H].
+        Also the generator's batched on-device sampling hook (after extract_last_tokens_batched_prefill)."""
+        normed = self.norm(x)
+        logits = ttnn.matmul(normed, self.lm_head_weight, dtype=ttnn.bfloat8_b)
+        normed.deallocate(True)
+        self._prefill_sampling_active = False
+        return logits
+
+    def extract_last_tokens_batched_prefill(
+        self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len, target_batch=None
+    ):
+        """Generator hook (batched prefill with on-device sampling): hidden_states = the final residual of the batched
+        forward ([padded_batch, 1, S, H] view of the [1, 1, B*S, H] rows, replicated, see ttnn_prefill_forward) ->
+        [1, 1, target_batch, H], row b = user b's last token, zero rows after padded_batch. On device: the same
+        one-hot selection (last_token_rows, exact) as the non-sampling batched path, so _apply_norm_and_lm_head gives
+        the same logits."""
+        target_batch = padded_batch if target_batch is None else target_batch
+        assert hidden_states.shape[-1] == self.hf_config.hidden_size, (
+            f"extract_last_tokens_batched_prefill needs the final residual (width {self.hf_config.hidden_size}), got "
+            f"width {hidden_states.shape[-1]}: the batched forward ran the LM head (skip_lm_head not passed; traced "
+            f"batched prefill with on-device sampling is not supported)"
+        )
+        assert len(last_token_idx_list) == padded_batch <= target_batch, (len(last_token_idx_list), target_batch)
+        rows = ttnn.reshape(hidden_states, [1, 1, padded_batch * prefill_seq_len, hidden_states.shape[-1]])
+        picked = last_token_rows(rows, last_token_idx_list, prefill_seq_len, self.mesh_device)
+        hidden_states.deallocate(True)
+        if picked.shape[-2] < target_batch:
+            padded = ttnn.pad(picked, padding=[(0, 0), (0, 0), (0, target_batch - picked.shape[-2]), (0, 0)], value=0.0)
+            picked.deallocate(True)
+            picked = padded
+        assert picked.shape[-2] == target_batch, (tuple(picked.shape), target_batch)
+        return picked
 
     @staticmethod
     def _gather_prefill_rows(rows, get_last_token, cluster_axis):
@@ -756,6 +788,11 @@ class Model:
                 self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
                 self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
             ]
+
+        # The generator's batched prefill with on-device sampling passes skip_lm_head explicitly
+        # (prefill_forward_single_user_text batched_skip_lm_head): the forward returns the final residual of all B*S
+        # rows, and extract_last_tokens_batched_prefill + _apply_norm_and_lm_head run the head on one row per user.
+        # Every other batched call with get_last_token == -1 (e.g. traced batched prefill) gets logits of all rows.
 
         # Forward through layers and head (shared with decode)
         logits = self._forward_layers_and_head(

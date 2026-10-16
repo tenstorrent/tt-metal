@@ -275,7 +275,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
     def _batched_prefill_samples_on_device(self, model_id: int) -> bool:
         """Whether the model has the hooks of the batched prefill's on-device sampling (prefill_forward_text):
         last-token extraction from the batched hidden states, then norm + LM head on those rows. A model without
-        them (GPT-OSS) prefills sequentially when sampling on device, and warms only batch 1 for it."""
+        them prefills sequentially when sampling on device, and warms only batch 1 for it."""
         model = self.model[model_id]
         return hasattr(model, "extract_last_tokens_batched_prefill") and hasattr(model, "_apply_norm_and_lm_head")
 
@@ -1590,6 +1590,14 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 )
                 if batched_last_token_rows:
                     local_kwargs["batched_last_token_rows"] = True
+                elif (
+                    use_batched_prefill
+                    and sampling_enabled
+                    and getattr(self.model[model_id], "batched_prefill_last_token_rows", False)
+                ):
+                    # Such a forward also runs the LM head itself; the sampling path below needs the final
+                    # residual of every row for extract_last_tokens_batched_prefill.
+                    local_kwargs["batched_skip_lm_head"] = True
                 logits = self.prefill_forward_single_user_text(
                     prefill_ids,
                     page_table=page_table_user,
@@ -2011,6 +2019,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         num_cached_tokens: int = 0,
         batch_size=1,
         batched_last_token_rows=False,  # opt-in (prefill_forward_text): get_last_token = the per-user list
+        batched_skip_lm_head=False,  # opt-in (prefill_forward_text, on-device sampling): return the final residual
         **kwargs,
     ):
         seq_len = tokens.shape[-1]
@@ -2152,6 +2161,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 ),
                 kv_cache=kv_cache,
                 batch_size=batch_size,
+                **({"skip_lm_head": True} if batched_skip_lm_head else {}),
             )
             return tt_logits
 

@@ -195,10 +195,12 @@ def _model_ctx(mesh_device):
     # Record the batch size of every model forward, to prove which path (batched or per user) ran.
     model = ctx["model"][0]
     ctx["forward_batches"] = calls = []
+    ctx["forward_skip_lm_head"] = skips = []
     orig = model.ttnn_prefill_forward
 
     def spy(*args, batch_size=1, **kwargs):
         calls.append(batch_size)
+        skips.append(kwargs.get("skip_lm_head", False))
         return orig(*args, batch_size=batch_size, **kwargs)
 
     model.ttnn_prefill_forward = spy
@@ -208,6 +210,7 @@ def _model_ctx(mesh_device):
 def _prefill(ctx, tokens, lens, page_table, sampling_params=None):
     """One Generator.prefill_forward_text call (untraced); logits [B, vocab] float, or the sampled tokens [B]."""
     ctx["forward_batches"].clear()
+    ctx["forward_skip_lm_head"].clear()
     out = ctx["generator"].prefill_forward_text(
         tokens,
         page_table=page_table,
@@ -261,11 +264,12 @@ def test_model_batched_unequal_lengths(mesh_device, device_params):
         ), f"user {u} ({n} tokens): max {(logits32[u] - logits1[0]).abs().max()}"
 
 
-@pytest.mark.parametrize("B", [4, 32])
+@pytest.mark.parametrize("B, L", [(4, 128), (32, 128), (32, 2048)])
 @parametrize_mesh_with_fabric([(1, 4)])
-def test_model_on_device_sampling(mesh_device, device_params, B):
-    """Greedy on-device sampling with B users of 128 tokens (the text demo's prefill call): completes, and each
-    user's token is the argmax of its logits from the same prompts without sampling (the batched path)."""
+def test_model_on_device_sampling(mesh_device, device_params, B, L, expect_error):
+    """Greedy on-device sampling with B users of L tokens (128: the text demo's prefill call; 2K: sequence-parallel
+    residual): one batched forward (extract_last_tokens_batched_prefill + _apply_norm_and_lm_head), and each user's
+    token is the argmax of its logits from the same prompts without sampling (also one batched forward)."""
     from models.common.sampling import SamplingParams
     from models.demos.gpt_oss.tests.perf.prefill_common import b32_prompt_tokens
 
@@ -273,23 +277,49 @@ def test_model_on_device_sampling(mesh_device, device_params, B):
     if ctx["model"][0].sampling is None:
         pytest.skip("no on-device sampling on this mesh")
     pt = ctx["page_table"][:B]
-    tokens = b32_prompt_tokens(128, "text")[:B]
+    tokens = b32_prompt_tokens(L, "text")[:B]
     n = 32  # the text demo's SAMPLING_BATCH_SIZE
     greedy = SamplingParams(temperature=[0.0] * n, top_k=[1] * n, top_p=[1.0] * n)
-    sampled = _prefill(ctx, tokens, [128] * B, pt, sampling_params=greedy)
-    # GPT-OSS has no batched on-device sampling hooks (Generator._batched_prefill_samples_on_device): per user.
-    assert ctx["forward_batches"] == [1] * B, f"sampling prefill not per user: {ctx['forward_batches']}"
-    logits = _prefill(ctx, tokens, [128] * B, pt)
+    sampled = _prefill(ctx, tokens, [L] * B, pt, sampling_params=greedy)
+    assert ctx["generator"]._batched_prefill_samples_on_device(0)
+    assert ctx["forward_batches"] == [B], f"batched path not taken with sampling: {ctx['forward_batches']}"
+    # The residual return is asked for explicitly by the sampling path (batched_skip_lm_head), never inferred.
+    assert ctx["forward_skip_lm_head"] == [True], ctx["forward_skip_lm_head"]
+    logits = _prefill(ctx, tokens, [L] * B, pt)
     assert ctx["forward_batches"] == [B], f"batched path not taken without sampling: {ctx['forward_batches']}"
+    assert ctx["forward_skip_lm_head"] == [False], ctx["forward_skip_lm_head"]
     expect = logits.argmax(dim=-1)
     assert torch.equal(sampled.long(), expect.long()), f"sampled {sampled.tolist()} != argmax {expect.tolist()}"
 
-    # Warmup agrees: batch sizes > 1 are warmed only when the prefill will batch (here: not when sampling on device).
     gen = ctx["generator"]
+    if (B, L) == (4, 128):
+        # A batched call with the slot list and get_last_token = -1 but no skip_lm_head (the shape of the traced
+        # batched prefill without sampling, whose caller slices logits per user) still returns the logits of every
+        # row, not the residual; extract_last_tokens_batched_prefill rejects such logits.
+        model = ctx["model"][0]
+        out = gen.prefill_forward_single_user_text(
+            tokens,
+            page_table=pt,
+            user_id=list(range(B)),
+            last_token_idx=[L - 1] * B,
+            kv_cache=ctx["kv_cache"][0],
+            model_id=0,
+            batch_size=B,
+        )
+        assert out.shape[-1] == model.lm_head_weight.shape[-1] != model.hf_config.hidden_size, tuple(out.shape)
+        assert out.shape[-2] == B * L, tuple(out.shape)
+        full = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)).float()
+        rows = full[0, 0, [b * L + L - 1 for b in range(B)], : logits.shape[-1]]
+        assert torch.equal(rows.argmax(dim=-1), expect), f"{rows.argmax(dim=-1).tolist()} != {expect.tolist()}"
+        with expect_error(AssertionError, "final residual"):
+            model.extract_last_tokens_batched_prefill(
+                ttnn.reshape(out, [B, 1, L, out.shape[-1]]), [L - 1] * B, B, L, target_batch=32
+            )
+
+    # Warmup agrees: batch sizes up to 32 are warmed with and without on-device sampling (the prefill batches both).
     warmed = []
     gen._warmup_prefill_sweep = lambda **kw: warmed.append(kw["warmup_batch_sizes"])
     for can_sample in (True, False):
         gen.already_warmed_up_prefill = False
         gen.warmup_model_prefill(ctx["kv_cache"], enable_trace=False, can_sample_on_device=can_sample)
-    assert warmed[0] == (1,), warmed
-    assert max(warmed[1]) == 32, warmed
+    assert max(warmed[0]) == 32 and max(warmed[1]) == 32, warmed
