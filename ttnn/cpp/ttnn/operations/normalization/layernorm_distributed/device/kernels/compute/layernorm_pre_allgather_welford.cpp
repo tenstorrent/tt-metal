@@ -88,6 +88,12 @@ void kernel_main() {
         constexpr uint32_t dst0 = 0;
         constexpr uint32_t dst1 = 1;
         constexpr uint32_t dst2 = 2;
+#ifdef ARCH_BLACKHOLE
+        // The Float32 Welford loop alternates its input between dst0 and dst1, so its statistics go to dst2 and dst3.
+        [[maybe_unused]] constexpr uint32_t dst_stats = welford_unpack_fp32_active ? dst2 : dst1;
+#else
+        [[maybe_unused]] constexpr uint32_t dst_stats = dst1;
+#endif
 
 #ifdef FUSE_PRE_ADD
         // Block-interleaved pre-add + Welford. The Welford accumulator lives in the SFPU within a
@@ -185,20 +191,41 @@ void kernel_main() {
             if constexpr (!welford_rerecord_per_tile) {
                 transpose_init(dfb_inp_id);
             }
-            for (auto i : block.local()) {
-                if constexpr (welford_rerecord_per_tile) {
-                    transpose_init(dfb_inp_id);
+#ifdef ARCH_BLACKHOLE
+            if constexpr (welford_unpack_fp32_active) {
+                // Each tile unpacks to DEST while the previous one updates, so the input alternates dst0 and dst1.
+                transpose_tile_start(dfb_inp_id, 0, dst0);
+                for (auto i : block.local()) {
+                    const uint32_t dst = (i & 1) ? dst1 : dst0;
+                    transpose_tile_finish(dfb_inp_id, dst);
+                    if (i + 1 < block.size()) {
+                        transpose_tile_start<true>(dfb_inp_id, i + 1, (i & 1) ? dst0 : dst1);
+                    }
+                    if (block.to_global(i) < Wt - 1) {
+                        welford_update<W>(dst, start_N, *p_reciprocals);
+                    } else {
+                        welford_update_rows<W>(dst, start_N, 0, last_tile_rows, *p_reciprocals);
+                    }
+                    start_N += 32;
                 }
-                transpose_tile(dfb_inp_id, i, dst0);
-                if constexpr (welford_rerecord_per_tile) {
-                    welford_init<WelfordInitMode::PreserveStats>();
+            } else
+#endif
+            {
+                for (auto i : block.local()) {
+                    if constexpr (welford_rerecord_per_tile) {
+                        transpose_init(dfb_inp_id);
+                    }
+                    transpose_tile(dfb_inp_id, i, dst0);
+                    if constexpr (welford_rerecord_per_tile) {
+                        welford_init<WelfordInitMode::PreserveStats>();
+                    }
+                    if (block.to_global(i) < Wt - 1) {
+                        welford_update<W>(dst0, start_N, *p_reciprocals);
+                    } else {
+                        welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
+                    }
+                    start_N += 32;
                 }
-                if (block.to_global(i) < Wt - 1) {
-                    welford_update<W>(dst0, start_N, *p_reciprocals);
-                } else {
-                    welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
-                }
-                start_N += 32;
             }
             if constexpr (welford_state_in_lregs) {
                 if constexpr (!DST_ACCUM_MODE) {
@@ -286,7 +313,42 @@ void kernel_main() {
         // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_tile routes
         // through SrcA without touching the math-thread replay buffer, so the recovery is
         // gated out.
-        for (uint32_t wt = 0; wt < (Wt - 1); wt++) {
+#ifdef ARCH_BLACKHOLE
+        if constexpr (welford_unpack_fp32_active) {
+            // Each tile unpacks to DEST while the previous one updates, so the input alternates dst0 and dst1.
+            dfb_inp.wait_front(1);
+            transpose_tile_start(dfb_inp_id, 0, dst0);
+            dfb_inp.pop_front(1);
+            for (uint32_t wt = 0; wt < Wt; wt++) {
+                const uint32_t dst = (wt & 1) ? dst1 : dst0;
+                transpose_tile_finish(dfb_inp_id, dst);
+                if (wt + 1 < Wt) {
+                    dfb_inp.wait_front(1);
+                    transpose_tile_start<true>(dfb_inp_id, 0, (wt & 1) ? dst0 : dst1);
+                    dfb_inp.pop_front(1);
+                    welford_update<W>(dst, start_N, *p_reciprocals);
+                } else {
+                    welford_update_rows<W>(dst, start_N, 0, last_tile_rows, *p_reciprocals);
+                }
+                start_N += 32;
+            }
+        } else
+#endif
+        {
+            for (uint32_t wt = 0; wt < (Wt - 1); wt++) {
+                dfb_inp.wait_front(1);  // cumulative wait
+                if constexpr (welford_rerecord_per_tile) {
+                    transpose_init(dfb_inp_id);
+                }
+                transpose_tile(dfb_inp_id, 0, dst0);
+                if constexpr (welford_rerecord_per_tile) {
+                    welford_init<WelfordInitMode::PreserveStats>();
+                }
+                // welford_tile<dst0, dst1, dst2, true, 0>((wt) * 32, W, 0, {});
+                welford_update<W>(dst0, start_N, *p_reciprocals);
+                start_N += 32;
+                dfb_inp.pop_front(1);
+            }
             dfb_inp.wait_front(1);  // cumulative wait
             if constexpr (welford_rerecord_per_tile) {
                 transpose_init(dfb_inp_id);
@@ -295,22 +357,10 @@ void kernel_main() {
             if constexpr (welford_rerecord_per_tile) {
                 welford_init<WelfordInitMode::PreserveStats>();
             }
-            // welford_tile<dst0, dst1, dst2, true, 0>((wt) * 32, W, 0, {});
-            welford_update<W>(dst0, start_N, *p_reciprocals);
-            start_N += 32;
+            welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
             dfb_inp.pop_front(1);
         }
-        dfb_inp.wait_front(1);  // cumulative wait
-        if constexpr (welford_rerecord_per_tile) {
-            transpose_init(dfb_inp_id);
-        }
-        transpose_tile(dfb_inp_id, 0, dst0);
-        if constexpr (welford_rerecord_per_tile) {
-            welford_init<WelfordInitMode::PreserveStats>();
-        }
-        welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
-        dfb_inp.pop_front(1);
-        welford_finalize_to_row<W>(dst1, W - 1, *p_reciprocals);
+        welford_finalize_to_row<W>(dst_stats, W - 1, *p_reciprocals);
         // tt-llk/issues/549
         // BUG: using transpose_dest here causes a bug. where the kernel hangs
         //  transpose_dest_init();
@@ -319,8 +369,8 @@ void kernel_main() {
         dfb_scratch.reserve_back(2);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(dst1, dfb::scratch);
-        pack_tile(dst2, dfb::scratch);
+        pack_tile(dst_stats, dfb::scratch);
+        pack_tile(dst_stats + 1, dfb::scratch);
         dfb_scratch.push_back(2);
         tile_regs_release();
 #endif

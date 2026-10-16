@@ -646,7 +646,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_ema": "perf_sfpu_ema"},
     },
     "perf_sfpu_welford": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "approx_mode",
             "dest_acc",
@@ -666,6 +666,7 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
             "unpack_transpose_faces",
             "unpack_transpose_within_face",
+            "welford_loop",
             "welford_recip_size",
         ],
         "aliases": {},

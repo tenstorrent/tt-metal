@@ -136,6 +136,39 @@ ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
 #endif
 }
 
+#ifdef ARCH_BLACKHOLE
+// clang-format off
+/**
+ * transpose_tile in two calls for a 32-bit tile (Float32, Int32 or UInt32, unpacked to DEST): transpose_tile_start
+ * hands DST REG tile idst to the unpacker and returns; transpose_tile_finish waits for the tile and transposes it. Math
+ * work issued between the two runs while the tile unpacks and must not use idst. transpose_tile_start waits for the
+ * math work issued before it, unless after_finish: then it must follow transpose_tile_finish of the previous tile, and
+ * only the math work issued after that finish must keep off idst.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                             | Type     | Valid Range                                    | Required |
+ * |----------------|---------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | icb            | The identifier of the circular buffer (CB) containing A | uint32_t | 0 to 31                                        | True     |
+ * | itile          | The index of tile A within the first CB                 | uint32_t | Must be less than the size of the CB           | True     |
+ * | idst           | The index of the tile in DST REG for the result B       | uint32_t | Must be less than the acquired size of DST REG | True     |
+ */
+// clang-format on
+template <bool after_finish = false>
+ALWI void transpose_tile_start(uint32_t icb, uint32_t itile, uint32_t idst) {
+    LLK_SAN_FUNCTION();
+    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, itile)));
+    UNPACK((llk_unpack_set_srcb_dummy_valid()));
+    MATH((llk_math_unpack_to_dest_request<!after_finish>(idst)));
+}
+
+ALWI void transpose_tile_finish(uint32_t icb, uint32_t idst) {
+    LLK_SAN_FUNCTION();
+    MATH((llk_math_unpack_to_dest_wait(idst, icb)));
+    MATH((llk_math_transpose_dest<false, true>(idst)));
+}
+#endif
+
 // clang-format off
 /**
  * Performs a 32x32 transpose operation *B[w,h] = A[h,w]* on `ntiles` consecutive tiles from the input

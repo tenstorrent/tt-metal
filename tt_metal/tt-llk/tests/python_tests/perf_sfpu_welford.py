@@ -17,6 +17,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
+    WELFORD_LOOP,
     WELFORD_RECIP_SIZE,
 )
 
@@ -56,6 +57,7 @@ def test_perf_sfpu_welford(perf_report, formats, dest_acc, recip_size):
         templates=[
             APPROX_MODE(ApproximationMode.No),
             WELFORD_RECIP_SIZE(recip_size),
+            WELFORD_LOOP(0),
             TILE_COUNT(tile_count),
             LOOP_FACTOR(16),  # amortise profiler overhead
             NUM_FACES(num_faces=faces_to_generate),
@@ -75,6 +77,55 @@ def test_perf_sfpu_welford(perf_report, formats, dest_acc, recip_size):
         ),
         unpack_to_dest=formats.input_format.is_32_bit(),
         dest_acc=dest_acc,
+        compile_time_formats=True,
+    )
+
+    configuration.run(perf_report)
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=[InputOutputFormat(DataFormat.Float32, DataFormat.Float32)],
+    loop=[1, 2],
+)
+def test_perf_sfpu_welford_row(perf_report, formats, loop):
+    """The layernorm loop: one DEST section per tile loop; loop 2 overlaps each tile's unpack with the previous update."""
+    tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
+        INPUT_DIMENSIONS, INPUT_DIMENSIONS, face_r_dim=16, num_faces=4
+    )
+
+    configuration = PerfConfig(
+        "sources/sfpu_welford_perf.cpp",
+        formats,
+        run_types=[
+            PerfRunType.MATH_ISOLATE,
+            PerfRunType.L1_TO_L1,
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.PACK_ISOLATE,
+        ],
+        templates=[
+            APPROX_MODE(ApproximationMode.No),
+            WELFORD_RECIP_SIZE(256),
+            WELFORD_LOOP(loop),
+            TILE_COUNT(tile_count),
+            LOOP_FACTOR(16),
+            NUM_FACES(num_faces=faces_to_generate),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+        ],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            None,
+            formats.input_format,
+            None,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_count,
+            tile_count_B=tile_count,
+            tile_count_res=tile_count,
+        ),
+        unpack_to_dest=True,
+        dest_acc=DestAccumulation.Yes,
         compile_time_formats=True,
     )
 

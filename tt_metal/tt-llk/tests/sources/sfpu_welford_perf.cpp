@@ -23,6 +23,12 @@ static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
 
 static constexpr std::uint32_t WELFORD_INPUT_DST_INDEX = 0;
 
+// L1_TO_L1 loop (WELFORD_LOOP): 0 = a DEST section per tile; 1 = a section per TILE_CNT tiles, every tile in DEST tile 0,
+// as the layernorm kernels; 2 = as 1 with the 32-bit input alternating DEST tiles 0 and 1, each tile's unpack requested
+// before the previous tile's update.
+static_assert(WELFORD_LOOP <= 2, "unknown Welford loop");
+static_assert(WELFORD_LOOP != 2 || unpack_to_dest, "the alternating loop requests unpacks to DEST");
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_A.h"
@@ -156,7 +162,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
-        else // L1_TO_L1
+        else if constexpr (WELFORD_LOOP == 0) // L1_TO_L1
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -166,6 +172,37 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     welford_tile<true>(tile);
                     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
                 }
+            }
+        }
+        else if constexpr (WELFORD_LOOP == 1)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                _llk_math_wait_for_dest_available_<DST_SYNC>();
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                {
+                    welford_tile<true>(tile);
+                }
+                _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                _llk_math_wait_for_dest_available_<DST_SYNC>();
+                _llk_math_unpack_to_dest_request_(0);
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                {
+                    const std::uint32_t dst = tile & 1;
+                    _llk_math_unpack_to_dest_wait_(dst, formats.math);
+                    if (tile + 1 < TILE_CNT)
+                    {
+                        _llk_math_unpack_to_dest_request_<false>(dst ^ 1);
+                    }
+                    _llk_math_welfords_sfpu_params_(ckernel::sfpu::_calculate_welfords_tile_<WELFORD_RECIP_SIZE>, dst, (tile & 7) * TILE_R_DIM, reciprocal_lut);
+                }
+                _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
             }
         }
 
@@ -204,7 +241,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 && WELFORD_LOOP == 0)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -214,6 +251,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(WELFORD_INPUT_DST_INDEX, PERF_ADDRESS(PERF_OUTPUT, tile));
                     _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
                 }
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                _llk_packer_wait_for_math_done_();
+                _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(WELFORD_INPUT_DST_INDEX, PERF_ADDRESS(PERF_OUTPUT, loop % TILE_CNT));
+                _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
             }
         }
 
