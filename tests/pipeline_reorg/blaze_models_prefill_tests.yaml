@@ -989,8 +989,9 @@
 
 # Runs only when named: excluded from "all", tags and the nightly by its own test_group (see the
 # dsv4-depth job in blaze-models-prefill-tests.yaml). Flash and Pro are separate legs so a failure in
-# one does not stop the other. Pro runs as three sections in one leg; the third reads the layer-35
-# streams the second writes to generated/v4_depth_handoff.
+# one does not stop the other. Pro runs as three sections in one leg: layers 0-9 graded per layer, then
+# the end-to-end tail graded at the last layer; each section after the first reads the streams the one
+# before it writes to generated/v4_depth_handoff.
 - name: "(DeepSeek-V4-Flash) transformer full-depth chunked accuracy 55k@5k vs vLLM golden"
   fabric_profile: torus_xy
   cmd: |
@@ -1046,13 +1047,13 @@
   budget_type: demo
   sp_config: sc1
 
-- name: "(DeepSeek-V4-Pro) transformer full-depth chunked accuracy 55k@5k vs vLLM golden, three processes"
+- name: "(DeepSeek-V4-Pro) transformer layers 0-9 + end-to-end chunked accuracy 55k@5k vs vLLM golden, three processes"
   fabric_profile: torus_xy
   cmd: |
     titles=(
       "(DeepSeek-V4-Pro) transformer layers 0-9 chunked accuracy 55k@5k vs vLLM golden"
-      "(DeepSeek-V4-Pro) transformer layers 10-35 chunked 55k@5k from golden layer 9"
-      "(DeepSeek-V4-Pro) transformer layers 36-60 chunked accuracy 55k@5k vs vLLM golden"
+      "(DeepSeek-V4-Pro) transformer end-to-end layers 10-35 chunked 55k@5k"
+      "(DeepSeek-V4-Pro) transformer end-to-end layers 36-60 chunked accuracy 55k@5k vs vLLM golden"
     )
     summary=""
     section_start() {
@@ -1094,7 +1095,7 @@
     (
       timeout -k 2m 117m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py::test_v4_pro_transformer_depth_tail_b1 -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py -k "test_v4_pro_transformer_e2e and layers10to35" -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
@@ -1103,7 +1104,7 @@
     (
       timeout -k 2m 106m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py::test_v4_pro_transformer_depth_tail_b2 -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py -k "test_v4_pro_transformer_e2e and layers36to60" -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0

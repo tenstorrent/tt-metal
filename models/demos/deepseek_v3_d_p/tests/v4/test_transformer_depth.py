@@ -4,18 +4,18 @@
 
 """Full-depth chunked-prefill accuracy for TtV4Transformer against the vLLM golden, real weights.
 
-The golden's 56320-token prompt runs a chunk at a time through every layer of the model, free-running:
-no layer is fed the golden's own input except where a segment starts. The layers the trace kept are
-graded, 0..9 at ``layer_floor`` and the last at ``_LAST_LAYER_FLOOR``, and the last rank's output is taken
-end to end through the checkpoint's LM head and compared with vLLM's next-token top-k, one prediction per chunk.
+The golden's 56320-token prompt runs a chunk at a time from the embedding, free-running: no layer is
+fed the golden's own input. The trace keeps only layers 0..9 and the last, so those are the layers that
+can be graded: 0..9 at ``layer_floor`` and the last at ``_LAST_LAYER_FLOOR``. The last rank's output is
+also taken through the checkpoint's LM head and compared with vLLM's next-token top-k, one prediction
+per chunk; that comparison is logged, not asserted.
 
-Flash runs in one process. Pro does not fit one Galaxy whole, and 10..60 leaves too little DRAM headroom
-for a run that loads for hours first, so it runs in three: 0..9 from the embedding; 10..35 from the
-golden's layer-9 output, writing layer 35's streams to disk; and 36..60 from that file. The file is an
-exact (fp32) pipeline boundary, so 36..60 still sees only what the device computed from layer 9 on.
-The two tail rows depend on each other and run in that order.
-
-End-to-end metrics are logged, not asserted.
+Flash runs all 43 layers in one process and grades 0..9 and 42. Pro does not fit one Galaxy whole, so
+it runs in three processes, each writing its last layer's streams to disk for the next.
+``test_v4_pro_transformer_depth_head`` runs 0..9 from the embedding and grades each of them. The
+end-to-end rows continue from its layer-9 file through 10..35 and 36..60 and grade only the last layer.
+The files are exact (fp32) pipeline boundaries, so 60 sees only what the device computed from the
+embedding on. The three rows depend on each other and run in that order.
 """
 
 import os
@@ -54,18 +54,19 @@ SEQ_CACHE = 55 * 1024  # 56320, the length the golden was captured at
 N_CHUNKS = SEQ_CACHE // CHUNK
 _GOLDEN = {DeepSeekV4ProConfig: golden.V4_PRO, DeepSeekV4FlashConfig: golden.V4_FLASH}
 _HEAD = "head.weight"
-_PRO_SPLIT = 36  # first layer of the second Pro tail process
+_PRO_HEAD = 10  # layers 0..9, the ones the trace keeps before the last
+_PRO_TAIL = ((_PRO_HEAD, 26), (36, 25))  # (first, count) of each process after the head
 _HANDOFF = Path(os.getenv("V4_DEPTH_HANDOFF_DIR", "generated/v4_depth_handoff")) / "pro"
 # The last layer is graded at its own floor: its PCC is carried by a few tokens whose norm is
-# hundreds of times the median. It measures Flash L42 0.5919 to 0.6348 and Pro L60 0.7457 to 0.7581
-# across hosts and bases.
-_LAST_LAYER_FLOOR = {DeepSeekV4FlashConfig: 0.62, DeepSeekV4ProConfig: 0.73}
+# hundreds of times the median. It measures Flash L42 0.5919 to 0.6348 across hosts and bases. A model
+# without an entry logs its last-layer PCC ungraded.
+_LAST_LAYER_FLOOR = {DeepSeekV4FlashConfig: 0.62}
 
 _GALAXY = [p for p in mesh_params(DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE) if p.id == "torus-xy-8x4"]
 
 
-def _handoff_file(chunk: int) -> Path:
-    return _HANDOFF / f"layer{_PRO_SPLIT - 1}_chunk{chunk:02d}.pt"
+def _handoff_file(layer: int, chunk: int) -> Path:
+    return _HANDOFF / f"layer{layer}_chunk{chunk:02d}.pt"
 
 
 def _upload_streams(mesh_device, streams):
@@ -111,13 +112,12 @@ def _end_to_end(trace, checkpoint, final, label):
     )
 
 
-def run_depth(mesh_device, device_params, num_links, model_config, first, count, floor, graded):
+def run_depth(mesh_device, device_params, num_links, model_config, first, count, floor, graded, write_handoff=False):
     """Run layers ``[first, first + count)`` over the whole golden prompt and grade ``graded`` layers.
 
-    The first rank starts from the prompt's tokens. Otherwise the input is the golden's layer-9 output
-    for layer 10, or the earlier tail process's handoff file for ``_PRO_SPLIT``. A rank that does not
-    end the model writes its last layer's streams to the handoff dir when that layer feeds
-    ``_PRO_SPLIT``. Asserts rather than skips: a skipped row reads as a green one.
+    The first rank starts from the prompt's tokens, any other from the handoff file the process ending
+    at layer ``first - 1`` wrote. ``write_handoff`` writes this process's last layer's streams for the
+    next one. Asserts rather than skips: a skipped row reads as a green one.
     """
     gold = _GOLDEN[model_config]
     trace = golden.resolve_trace(gold)
@@ -128,15 +128,13 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
     last = first + count
     label = f"v4 depth {model_config.__name__} [{first}, {last})"
     is_first, is_last = first == 0, last == model_config.NUM_LAYERS
-    from_golden = not is_first and first - 1 in trace.kept_layers
-    needed = graded + ([first - 1] if from_golden else [])
-    missing = [i for i in needed if i not in trace.kept_layers]
+    missing = [i for i in graded if i not in trace.kept_layers]
     assert not missing, f"{trace.path.name} did not keep decoder_output for layers {missing}"
-    if not is_first and not from_golden:
-        assert first == _PRO_SPLIT, f"layer {first} has no golden input and no handoff"
-        absent = [str(_handoff_file(c)) for c in range(N_CHUNKS) if not _handoff_file(c).is_file()]
-        assert not absent, f"no handoff for layer {first}; run the preceding tail row first. Missing: {absent[:2]}"
-    writes_handoff = not is_last and last == _PRO_SPLIT
+    if not is_first:
+        absent = [
+            str(_handoff_file(first - 1, c)) for c in range(N_CHUNKS) if not _handoff_file(first - 1, c).is_file()
+        ]
+        assert not absent, f"no handoff for layer {first}; run the preceding row first. Missing: {absent[:2]}"
 
     config = v4_hf_config(model_config, last, max_seq_len=SEQ_CACHE)
     n, hidden = config.hc_mult, config.hidden_size
@@ -160,7 +158,7 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
     del state_dict
     logger.info(f"built layers [{first}, {last}) in {(time.monotonic() - t0) / 60:.1f} min")
 
-    if writes_handoff:
+    if write_handoff:
         _HANDOFF.mkdir(parents=True, exist_ok=True)
     per_layer = {i: torch.zeros(1, SEQ_CACHE, n, hidden) for i in graded}
     final = torch.zeros(N_CHUNKS, hidden)
@@ -174,18 +172,15 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
 
         if is_first:
             tt_in = upload_tokens(mesh_device, trace.token_ids(CHUNK, start))
-        elif from_golden:
-            streams = trace.decoder_output(first - 1, start, start + CHUNK).reshape(1, CHUNK, n, hidden)
-            tt_in = _upload_streams(mesh_device, streams)
         else:
-            tt_in = _upload_streams(mesh_device, torch.load(_handoff_file(chunk)))
+            tt_in = _upload_streams(mesh_device, torch.load(_handoff_file(first - 1, chunk)))
 
         out = model(tt_in, actual_isl=CHUNK, actual_start=start, layer_tap=tap)
         ttnn.deallocate(tt_in)
         if is_last:
             final[chunk] = hidden_to_host(mesh_device, out)[0, CHUNK - 1]
-        elif writes_handoff:
-            torch.save(streams_to_host(mesh_device, out, n), _handoff_file(chunk))
+        elif write_handoff:
+            torch.save(streams_to_host(mesh_device, out, n), _handoff_file(last - 1, chunk))
         ttnn.deallocate(out)
         logger.info(f"  chunk {chunk} done (start={start}) in {time.monotonic() - t0:.0f} s")
 
@@ -197,10 +192,10 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
         logger.info(f"[{label}] layer {i} PCC: {pcc:.6f}")
         del truth, dev
         if i == model_config.NUM_LAYERS - 1:
-            min_pcc = _LAST_LAYER_FLOOR[model_config]
+            min_pcc = _LAST_LAYER_FLOOR.get(model_config)
         else:
             min_pcc = layer_floor(config, i, floor)
-        if pcc < min_pcc:
+        if min_pcc is not None and pcc < min_pcc:
             failures.append(f"layer {i} {pcc:.6f} < {min_pcc}")
     if is_last:
         _end_to_end(trace, checkpoint, final, label)
@@ -221,21 +216,34 @@ def test_v4_flash_transformer_depth(mesh_device, device_params, num_links):
 @pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
 @pytest.mark.timeout(0)
 def test_v4_pro_transformer_depth_head(mesh_device, device_params, num_links):
-    run_depth(mesh_device, device_params, num_links, DeepSeekV4ProConfig, 0, 10, 0.98, list(range(10)))
-
-
-@pytest.mark.parametrize("mesh_device, device_params, num_links", _GALAXY, indirect=["mesh_device", "device_params"])
-@pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
-@pytest.mark.timeout(0)
-def test_v4_pro_transformer_depth_tail_b1(mesh_device, device_params, num_links):
-    run_depth(mesh_device, device_params, num_links, DeepSeekV4ProConfig, 10, _PRO_SPLIT - 10, 0.98, [])
-
-
-@pytest.mark.parametrize("mesh_device, device_params, num_links", _GALAXY, indirect=["mesh_device", "device_params"])
-@pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
-@pytest.mark.timeout(0)
-def test_v4_pro_transformer_depth_tail_b2(mesh_device, device_params, num_links):
-    last = DeepSeekV4ProConfig.NUM_LAYERS
     run_depth(
-        mesh_device, device_params, num_links, DeepSeekV4ProConfig, _PRO_SPLIT, last - _PRO_SPLIT, 0.98, [last - 1]
+        mesh_device,
+        device_params,
+        num_links,
+        DeepSeekV4ProConfig,
+        0,
+        _PRO_HEAD,
+        0.98,
+        list(range(_PRO_HEAD)),
+        write_handoff=True,
+    )
+
+
+@pytest.mark.parametrize("mesh_device, device_params, num_links", _GALAXY, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("first, count", _PRO_TAIL, ids=[f"layers{f}to{f + c - 1}" for f, c in _PRO_TAIL])
+@pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
+@pytest.mark.timeout(0)
+def test_v4_pro_transformer_e2e(mesh_device, device_params, num_links, first, count):
+    is_last = first + count == DeepSeekV4ProConfig.NUM_LAYERS
+    graded = [DeepSeekV4ProConfig.NUM_LAYERS - 1] if is_last else []
+    run_depth(
+        mesh_device,
+        device_params,
+        num_links,
+        DeepSeekV4ProConfig,
+        first,
+        count,
+        0.98,
+        graded,
+        write_handoff=not is_last,
     )
