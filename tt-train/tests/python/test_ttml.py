@@ -335,7 +335,8 @@ class TestCppOptimizersWithPythonModules:
         weight_before = params[weight_key].to_numpy(ttnn.DataType.FLOAT32).copy()
 
         # Create C++ SGD optimizer with the Python module's parameters. The loss is a mean over 1024 elements, so the
-        # gradient is small: with lr=0.1 a step is below bf16 resolution and leaves every weight as it was.
+        # gradient is small: with lr=0.1 a step is below bf16 resolution for almost every weight, and most runs
+        # changed none.
         sgd_config = ttml.optimizers.SGDConfig.make(
             lr=10.0, momentum=0.0, dampening=0.0, weight_decay=0.0, nesterov=False
         )

@@ -283,8 +283,8 @@ def load_weights_from_hf(
       already-sharded. Each HF weight is uploaded distributed to match the
       destination parameter's existing placements, so the full unsharded weight
       never lands on a single device (only its per-device slice does; the full
-      tensor stays in host RAM). The materialized parameter's value is swapped
-      in place via ``set_value`` so any FSDP markers attached to the autograd
+      tensor stays in host RAM). The materialized parameter's value is loaded
+      in place via ``assign`` so any FSDP markers attached to the autograd
       tensor at materialize time are preserved. The device transfer runs
       serially in the main thread (concurrent device ops race on the
       program-cache binary commit), so only the CPU prep is threaded.
