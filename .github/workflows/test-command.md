@@ -193,6 +193,15 @@ pre-agent-steps:
         printf 'false\n' > "$FACTS_DIR/nightly-optout.txt"
       fi
 
+      # Head commit and the `/test force` flag, recorded as host-owned facts for the
+      # l2-nightly dedup in the post-step (see *Avoiding duplicate l2 nightly runs*).
+      jq -r '.headRefOid' /tmp/gh-aw/agent/pr-meta.json > "$FACTS_DIR/pr-head-sha.txt"
+      if printf '%s' "${COMMENT_BODY:-}" | grep -qiE '(^|[[:space:]])force($|[[:space:]])'; then
+        printf 'true\n' > "$FACTS_DIR/force.txt"
+      else
+        printf 'false\n' > "$FACTS_DIR/force.txt"
+      fi
+
       echo "PR #${PR_NUMBER}: head=${HEAD_REF} fork=${IS_FORK} files=$(wc -l < /tmp/gh-aw/agent/pr-files.txt) diff_lines=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)"
 
 # Deterministic enforcement of *The ref rule* (see the prompt below). The rule is
@@ -220,6 +229,9 @@ pre-agent-steps:
 post-steps:
   - name: Enforce dispatch ref and mandatory nightly categories
     if: always()
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPR_GITHUB_REPOSITORY: ${{ github.repository }}
     run: |
       set -euo pipefail
       OUT=/tmp/gh-aw/agent_output.json
@@ -388,6 +400,39 @@ post-steps:
           echo "Required nightly categories from changed paths: $REQ"
           echo "additional_test_categories as emitted by the agent: $BEFORE_CATS"
           echo "additional_test_categories after enforcement: $(jq -r '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly") | .inputs.additional_test_categories] | @json' "$OUT")"
+        fi
+      fi
+
+      # Avoid duplicate l2 nightly runs. `/test` is cheap to type, so the same PR head
+      # is often re-tested (several people, a re-run "to be sure", a comment on every
+      # parallel PR at once) and each tt-metal-l2-nightly dispatch is a full build plus
+      # every SKU of the selected categories. The mandatory rule above makes the
+      # categories a pure function of the changed files, so a run on the same head
+      # commit that is queued, in progress or already green covers this one too. Drop
+      # the dispatch and tell the user where that run is. A failed or cancelled run does
+      # NOT count, so a genuine retry still goes through, and `/test force` bypasses the
+      # check. Fail open: if the lookup errors, dispatch as before rather than silently
+      # skipping coverage.
+      L2_ITEMS="$(jq '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly")] | length' "$OUT")"
+      FORCE="$(cat "$FACTS_DIR/force.txt" 2>/dev/null || echo false)"
+      HEAD_SHA="$(cat "$FACTS_DIR/pr-head-sha.txt" 2>/dev/null || true)"
+      if [ "$L2_ITEMS" -gt 0 ] && [ "$FORCE" != "true" ] && [ -n "$HEAD_SHA" ] && [ "$HEAD_SHA" != "null" ]; then
+        if RUNS="$(gh run list --repo "$EXPR_GITHUB_REPOSITORY" --workflow tt-metal-l2-nightly.yaml \
+              --branch "$HEAD_REF" --event workflow_dispatch --limit 50 \
+              --json headSha,status,conclusion,url 2>/dev/null)"; then
+          EXISTING="$(printf '%s' "$RUNS" | jq -r --arg sha "$HEAD_SHA" \
+            '[.[] | select(.headSha == $sha and (.status != "completed" or .conclusion == "success"))][0].url // empty')"
+          if [ -n "$EXISTING" ]; then
+            echo "tt-metal-l2-nightly already queued/running/green for ${HEAD_SHA}: ${EXISTING}; dropping the dispatch."
+            NOTE="tt-metal-l2-nightly was **not** dispatched again: a run for this exact commit is already queued, running or green ($EXISTING). Comment \`/test force\` to re-run it anyway."
+            jq --arg note "$NOTE" '
+              .items = [ .items[]? | select((.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly") | not) ]
+              | .items = [ .items[]? | if .type == "add_comment" then .body = ((.body // "") + "\n\n> " + $note) else . end ]' \
+              "$OUT" > "$OUT.tmp"
+            mv "$OUT.tmp" "$OUT"
+          fi
+        else
+          echo "::warning::Could not list tt-metal-l2-nightly runs; skipping the duplicate check."
         fi
       fi
 
@@ -591,6 +636,14 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
    in the comment that names other hardware (e.g. `/test blackhole`) narrows the *rest* of
    your selection, not this rule; only an explicit `/test skip nightly` (or equivalent)
    opts out, and say so in the comment.
+
+   **Avoiding duplicate l2 nightly runs.** The same head commit is often `/test`ed
+   repeatedly, and each `tt-metal-l2-nightly` dispatch is a full build plus every SKU of
+   the selected categories. After you run, a post-step drops your l2 dispatch when a run
+   for this exact commit is already queued, in progress or green, and appends a note to
+   your comment saying so. A failed or cancelled run does not count, and `/test force`
+   bypasses the check. Keep selecting l2 as usual; do not try to second-guess this, and
+   do not claim in your summary that l2 was dispatched if the note says otherwise.
 
    This rule is enforced deterministically after you run, for the same reason as *The ref
    rule*: a post-step recomputes the required categories from the changed-file list and
