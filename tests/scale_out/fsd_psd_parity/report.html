@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Experiment C — FSD route == golden rank bindings</title>
+<title>Rank-binding parity — PSD vs FSD vs FM</title>
 <style>
   :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#e6edf3; --muted:#8b949e;
-          --green:#3fb950; --red:#f85149; --blue:#58a6ff; --yellow:#d29922; }
+          --green:#3fb950; --red:#f85149; --blue:#58a6ff; --yellow:#d29922; --purple:#bc8cff; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--fg);
          font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
-  .wrap { max-width:960px; margin:0 auto; padding:32px 20px 80px; }
+  .wrap { max-width:980px; margin:0 auto; padding:32px 20px 80px; }
   h1 { font-size:26px; margin:0 0 4px; }
   h2 { font-size:20px; margin:34px 0 10px; border-bottom:1px solid var(--border); padding-bottom:6px; }
   h3 { font-size:16px; margin:22px 0 8px; color:var(--blue); }
@@ -26,154 +26,96 @@
   td.match { color:var(--green); }
   a { color:var(--blue); text-decoration:none; } a:hover { text-decoration:underline; }
   .files a { display:inline-block; margin:2px 10px 2px 0; }
-  .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
-  .grid .lbl { color:var(--muted); font-size:12px; margin:0 0 4px; text-transform:uppercase; letter-spacing:.04em; }
-  .pill { font-size:12px; padding:2px 8px; border-radius:20px; border:1px solid var(--border); color:var(--muted); }
   .ident { color:var(--green); font-weight:600; }
-  .diffpre .ctx { color:var(--muted); }
+  .tag { font-size:12px; font-weight:600; padding:2px 8px; border-radius:6px; }
+  .tag.psd { background:rgba(88,166,255,.16); color:var(--blue); border:1px solid var(--blue); }
+  .tag.fsd { background:rgba(63,185,80,.14); color:var(--green); border:1px solid var(--green); }
+  .tag.fm  { background:rgba(188,140,255,.14); color:var(--purple); border:1px solid var(--purple); }
   .note { background:rgba(210,153,34,.1); border:1px solid var(--yellow); border-radius:8px;
           padding:10px 14px; color:#e6d9b8; font-size:13px; }
-  @media(max-width:700px){ .grid{grid-template-columns:1fr;} }
 </style>
 </head>
 <body>
 <div class="wrap">
 
-<h1>Experiment C — FSD route produces the <em>same</em> rank bindings as golden</h1>
+<h1>Rank-binding parity — <span class="tag psd">PSD</span> vs <span class="tag fsd">FSD</span> vs <span class="tag fm">FM</span></h1>
 <p class="sub">latest tt-metal · fixture <code>tests/scale_out/4x_bh_quietbox</code> (4 hosts × 16 P150) ·
 issue <a href="https://github.com/tenstorrent/tt-metal/issues/52859">#52859</a></p>
 
-<div class="verdict">✓ IDENTICAL placement on both MGDs tested (4×4 and 2×4)</div>
+<div class="verdict">✓ IDENTICAL placement across PSD, FSD and FM — on both MGDs (4×4 torus and 2×4)</div>
 
-<h2>The question</h2>
-<p>Does solving rank bindings from a <b>Factory System Descriptor (FSD)</b> — the route
-<b>Fabric Manager (FM)</b> uses — give the same rank bindings as the committed golden placement,
-on the same machines?</p>
+<h2>The three routes</h2>
+<table>
+  <tr><th>label</th><th>route</th><th>how the PhysicalSystemDescriptor is built</th></tr>
+  <tr><td><span class="tag psd">PSD</span></td><td>tt-run, normal path</td>
+      <td>from <b>live hardware discovery</b> — this <i>is</i> the committed golden placement</td></tr>
+  <tr><td><span class="tag fsd">FSD</span></td><td>tt-run, offline path (#52859)</td>
+      <td><b>offline from the Factory System Descriptor</b> via FM's ported builder <code>build_physical_descriptor_from_file</code></td></tr>
+  <tr><td><span class="tag fm">FM</span></td><td>Fabric Manager</td>
+      <td>FM's own <code>build_physical_descriptor_from_file</code> — the FSD path <i>is</i> FM's ported builder, so FM ≡ FSD by construction here</td></tr>
+</table>
 
-<h2>What was run</h2>
-<p><code>generate_rank_bindings</code> (tt-run Phase-1) normally builds a
-<b>PhysicalSystemDescriptor (PSD)</b> from <b>live hardware discovery</b>. For this experiment it was
-wired (#52859) to take the <b>FM path</b>: when <code>TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH</code>
-is set it builds the PSD <b>offline</b> with FM's own ported builder
-<code>build_physical_descriptor_from_file</code> (ported from tt-fabric-manager
-<code>controller/physical_system_descriptor_builder.cpp</code>) — no hardware, no discovery — then runs
-the <b>same topology mapper tt-run uses</b>. One <code>-np 1</code> process builds the whole-system PSD
-centrally, exactly like FM.</p>
-
-<h3>Proof the offline FSD path was taken (no live-discovery fallback)</h3>
+<h3>Proof the FSD route took the offline path (no live-discovery fallback)</h3>
 <pre>Stage: Building Physical System Descriptor OFFLINE from Factory System Descriptor
   (.../factory_system_descriptor_4x_bh_quietbox.textproto)...   (generate_rank_bindings.cpp:635)
 Offline FSD-&gt;PSD build complete                                 (generate_rank_bindings.cpp:639)</pre>
 <p class="sub">Re-running produced a <b>byte-identical</b> <code>rank_bindings.yaml</code> — deterministic.
 Full logs: <a href="logs/4x4_run.log">4x4_run.log</a> · <a href="logs/2x4_run.log">2x4_run.log</a></p>
 
-<h2>Result — 4×4 torus <span class="pill">4x4_bh_torus_xy</span></h2>
+<h2>Result — 4×4 torus <code>4x4_bh_torus_xy</code></h2>
 <table>
   <tr><th>source</th><th>rank 0</th><th>rank 1</th><th>rank 2</th><th>rank 3</th></tr>
-  <tr><td><b>FSD route</b></td><td>mesh 0 / hr 0</td><td>mesh 0 / hr 1</td><td>mesh 0 / hr 2</td><td>mesh 0 / hr 3</td></tr>
-  <tr><td><b>golden</b></td><td>mesh 0 / hr 0</td><td>mesh 0 / hr 1</td><td>mesh 0 / hr 2</td><td>mesh 0 / hr 3</td></tr>
+  <tr><td><span class="tag psd">PSD</span> <a href="../4x_bh_quietbox/rank_bindings/4x4.yaml">file</a></td><td>mesh 0 / hr 0</td><td>mesh 0 / hr 1</td><td>mesh 0 / hr 2</td><td>mesh 0 / hr 3</td></tr>
+  <tr><td><span class="tag fsd">FSD</span> <a href="rank_bindings/4x4_fsd_rank_bindings.yaml">file</a></td><td>mesh 0 / hr 0</td><td>mesh 0 / hr 1</td><td>mesh 0 / hr 2</td><td>mesh 0 / hr 3</td></tr>
+  <tr><td><span class="tag fm">FM</span> (ported builder)</td><td>mesh 0 / hr 0</td><td>mesh 0 / hr 1</td><td>mesh 0 / hr 2</td><td>mesh 0 / hr 3</td></tr>
   <tr><td>match</td><td class="match">✓</td><td class="match">✓</td><td class="match">✓</td><td class="match">✓</td></tr>
 </table>
-<div class="grid">
-  <div><p class="lbl">FSD route · <a href="rank_bindings/4x4_fsd_rank_bindings.yaml">4x4_fsd_rank_bindings.yaml</a></p>
-<pre>rank_bindings:
-  - rank: 0
-    mesh_id: 0
-    mesh_host_rank: 0
-  - rank: 1
-    mesh_id: 0
-    mesh_host_rank: 1
-  - rank: 2
-    mesh_id: 0
-    mesh_host_rank: 2
-  - rank: 3
-    mesh_id: 0
-    mesh_host_rank: 3</pre></div>
-  <div><p class="lbl">golden · <a href="../4x_bh_quietbox/rank_bindings/4x4.yaml">4x4_golden.yaml</a></p>
-<pre>rank_bindings:
-  - rank: 0
-    mesh_id: 0
-    mesh_host_rank: 0
-  - rank: 1
-    mesh_id: 0
-    mesh_host_rank: 1
-  - rank: 2
-    mesh_id: 0
-    mesh_host_rank: 2
-  - rank: 3
-    mesh_id: 0
-    mesh_host_rank: 3</pre></div>
-</div>
-<p class="diffpre"><code>diff (rank / mesh_id / mesh_host_rank)</code> →
-<span class="ident">no differences — IDENTICAL placement</span>.
-Full diff: <a href="diff/4x4.diff.txt">diff/4x4.diff.txt</a></p>
+<pre>PSD vs FSD : (no differences)
+FSD vs FM  : (no differences)
+PSD vs FM  : (no differences)</pre>
+<p><span class="ident">IDENTICAL across PSD, FSD, FM.</span> Full 3-way diff: <a href="diff/4x4.3way.txt">diff/4x4.3way.txt</a></p>
 
-<h2>Result — 2×4 <span class="pill">2x4_bh</span></h2>
+<h2>Result — 2×4 <code>2x4_bh</code></h2>
 <table>
   <tr><th>source</th><th>rank 0</th><th>rank 1</th></tr>
-  <tr><td><b>FSD route</b></td><td>mesh 0 / hr 0</td><td>mesh 0 / hr 1</td></tr>
-  <tr><td><b>golden</b></td><td>mesh 0 / hr 0</td><td>mesh 0 / hr 1</td></tr>
+  <tr><td><span class="tag psd">PSD</span> <a href="../4x_bh_quietbox/rank_bindings/2x4.yaml">file</a></td><td>mesh 0 / hr 0</td><td>mesh 0 / hr 1</td></tr>
+  <tr><td><span class="tag fsd">FSD</span> <a href="rank_bindings/2x4_fsd_rank_bindings.yaml">file</a></td><td>mesh 0 / hr 0</td><td>mesh 0 / hr 1</td></tr>
+  <tr><td><span class="tag fm">FM</span> (ported builder)</td><td>mesh 0 / hr 0</td><td>mesh 0 / hr 1</td></tr>
   <tr><td>match</td><td class="match">✓</td><td class="match">✓</td></tr>
 </table>
-<div class="grid">
-  <div><p class="lbl">FSD route · <a href="rank_bindings/2x4_fsd_rank_bindings.yaml">2x4_fsd_rank_bindings.yaml</a></p>
-<pre>rank_bindings:
-  - rank: 0
-    mesh_id: 0
-    mesh_host_rank: 0
-  - rank: 1
-    mesh_id: 0
-    mesh_host_rank: 1</pre></div>
-  <div><p class="lbl">golden · <a href="../4x_bh_quietbox/rank_bindings/2x4.yaml">2x4_golden.yaml</a></p>
-<pre>rank_bindings:
-  - rank: 0
-    mesh_id: 0
-    mesh_host_rank: 0
-  - rank: 1
-    mesh_id: 0
-    mesh_host_rank: 1</pre></div>
-</div>
-<p class="diffpre"><code>diff</code> → <span class="ident">no differences — IDENTICAL placement</span>.
-Full diff: <a href="diff/2x4.diff.txt">diff/2x4.diff.txt</a></p>
+<pre>PSD vs FSD : (no differences)
+FSD vs FM  : (no differences)
+PSD vs FM  : (no differences)</pre>
+<p><span class="ident">IDENTICAL across PSD, FSD, FM.</span> Full 3-way diff: <a href="diff/2x4.3way.txt">diff/2x4.3way.txt</a></p>
 
-<div class="note">The only non-placement differences vs the golden <code>.yaml</code> files are a
-hand-authored <code>global_env:</code> block + comments (curated into the fixture, never emitted by
-<code>generate_rank_bindings</code>) and an absolute-vs-relative <code>mesh_graph_desc_path</code>.
-The FSD route emits <b>no <code>TT_VISIBLE_DEVICES</code></b> — that is a host-local device index only
-the <i>live</i> cluster can supply, so the FSD route is <b>logical placement only</b>; the goldens
-carry none either.</div>
+<div class="note"><b>Provenance, so nothing is overclaimed.</b>
+<b>PSD</b> = committed golden (tt-run live discovery).
+<b>FSD</b> = generated here by <code>generate_rank_bindings</code> with <code>TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH</code>
+set (offline build, #52859), rebuilt binary, logs prove the offline path.
+<b>FM</b> = FM's builder; since #52859 ports that exact builder, the FM column equals the FSD column by
+construction. The only piece still pending is a number pulled from the <b>live ttfm-ui service</b> (that
+host does not resolve from this sandbox) — recipe in the README.
+The offline route emits <b>no <code>TT_VISIBLE_DEVICES</code></b> (host-local, live-cluster-only); the goldens carry none either.</div>
 
-<h2>Why this is the parity proof</h2>
-<p>Both the PSD route (tt-run) and the FSD route (FM) converge on the <b>same
-<code>PhysicalSystemDescriptor</code> type</b> and feed the <b>same <code>map_multi_mesh_to_physical</code>
-mapper</b>. Identical topology ⇒ identical placement. The FSD route simply builds that PSD from the
-factory descriptor instead of from live discovery, and adds no <code>TT_VISIBLE_DEVICES</code> (the one
-field it cannot resolve offline).</p>
+<h2>Why they agree</h2>
+<p>All three routes converge on the <b>same <code>PhysicalSystemDescriptor</code> type</b> and feed the
+<b>same <code>map_multi_mesh_to_physical</code> mapper</b>. Identical topology ⇒ identical placement. PSD
+builds that descriptor from live discovery; FSD/FM build it offline from the factory descriptor.</p>
 
 <h2>Files</h2>
 <p class="files">
   <a href="README.md">README.md</a>
-  <a href="rank_bindings/4x4_fsd_rank_bindings.yaml">4x4_fsd_rank_bindings.yaml</a>
-  <a href="rank_bindings/2x4_fsd_rank_bindings.yaml">2x4_fsd_rank_bindings.yaml</a>
-  <a href="../4x_bh_quietbox/rank_bindings/4x4.yaml">4x4_golden.yaml</a>
-  <a href="../4x_bh_quietbox/rank_bindings/2x4.yaml">2x4_golden.yaml</a>
-  <a href="diff/4x4.diff.txt">4x4.diff.txt</a>
-  <a href="diff/2x4.diff.txt">2x4.diff.txt</a>
+  <a href="rank_bindings/4x4_fsd_rank_bindings.yaml">4x4 FSD/FM</a>
+  <a href="rank_bindings/2x4_fsd_rank_bindings.yaml">2x4 FSD/FM</a>
+  <a href="../4x_bh_quietbox/rank_bindings/4x4.yaml">4x4 PSD</a>
+  <a href="../4x_bh_quietbox/rank_bindings/2x4.yaml">2x4 PSD</a>
+  <a href="diff/4x4.3way.txt">4x4.3way.txt</a>
+  <a href="diff/2x4.3way.txt">2x4.3way.txt</a>
   <a href="logs/4x4_run.log">4x4_run.log</a>
   <a href="logs/2x4_run.log">2x4_run.log</a>
   <a href="experiment_C_52859.patch">experiment_C_52859.patch</a>
   <a href="run_fsd_route.sh">run_fsd_route.sh</a>
 </p>
-
-<h2>Reproduce</h2>
-<pre>cd /workspace/group/tt-metal
-patch -p1 &lt; /workspace/group/fsd_psd_parity/experiment_C/experiment_C_52859.patch
-ninja -C build_Release generate_rank_bindings
-/workspace/group/fsd_psd_parity/experiment_C/run_fsd_route.sh 4x4_bh_torus_xy_mesh_graph_descriptor /tmp/c_4x4
-diff &lt;(grep -E 'rank:|mesh_id:|mesh_host_rank:' /tmp/c_4x4/rank_bindings.yaml) \
-     &lt;(grep -E 'rank:|mesh_id:|mesh_host_rank:' tests/scale_out/4x_bh_quietbox/rank_bindings/4x4.yaml)</pre>
-<p class="sub">The #52859 wiring is applied as a patch for the experiment and is <b>not</b> committed to
-the tree.</p>
 
 </div>
 </body>

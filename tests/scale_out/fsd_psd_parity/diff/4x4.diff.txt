@@ -1,2 +1,0 @@
-=== 4x4 normalized diff (FSD-route vs golden) ===
-RESULT: IDENTICAL placement
