@@ -2009,3 +2009,29 @@ on the host side to fix; less energy per iteration (fewer DRAM bytes, fewer pass
 roofline in device cycles is 276 − 222 ≈ 54 ms, ~33 ms of it the matmuls (QKV / WO / FF13 / FF2 at 81-91% of the
 590.6 TFLOP/s roofline rate). Sustained runs at every batch size sit at ~200-230 A while power varies (~90-150 W),
 which suggests a current (TDC) limit rather than a power limit (not verified).
+
+## 77. Where the batched matmuls lose cycles against the LLK (diagnostic) (2026-10-16)
+
+**The LLK at the model's shapes** (tt-llk `perf_matmul` scratch copy, bfp8, LoFi, cycles per tile product L1 -> L1 /
+math only): 1×8 kt 8 half-sync 17.4 / 17.1, 1×8 kt 40 17.2 / 17.1, 1×4 kt 8 17.8, 2×4 kt 8 17.5, 2×8 kt 8 full-sync
+20.5. The shipped 1×8 subblocks are the LLK's best shape (below the roofline's 18.0); bigger subblocks need full-sync
+DST, which is slower.
+
+**Per-core balance** (`perf_tools/mm_core_balance.py`, TRISC1 kernel time per core under the device profiler): mean
+core / busiest core 96.5-99.4% for every matmul: work imbalance is not the gap. Cycles per tile product on the mean
+core (full op): QKV bs16 21.5, bs32 chunk 20.2, FF13 fused bs16 / 32 21.1 / 20.1, WO bs16 19.1, FF2 bs16 / 32 18.5 /
+18.9.
+
+**Compute only** (`bench_mm_gap_ladder.py`, µs): QKV bs16 full 528.8, compute only 493.9 (20.35 cycles per tile
+product); WO 319.8 / 310.5 (19.19); FF2 718.1 / 708.4 (18.43). The compute-only cost fits a + b / K with a = 17.7
+(the LLK's 17.4) and b ≈ 208 cycles per output tile: a fixed cost per output tile, amortised over K (QKV K = 80 worst,
+FF2 K = 304 best). Of it, the plain path's end-of-block epilogue (`copy_and_pack_block`, intermediate -> out, one DST
+acquire per tile) is ~71 cycles per tile (`bench_mm_epilogue.py`, compute only: QKV 493.9 -> 472.2 µs without it, WO
+310.5 -> 303.3, FF2 708.4 -> 701.2); batching it 8 tiles per acquire recovers only ~1/5 (QKV -4.6 µs). QKV bs16 per
+call: LLK ideal 422, data movement not hidden 35, epilogue 22, other per-block structure 50 µs.
+
+**FF13 fused** (4,40,8 1×8, µs): bs16 full 1639.7, no partials add 1572.0, no add / no SFPU 1537.5, compute only (no add
+/ SFPU) 1434.0, skeleton 585.2 (LLK ideal 1322); bs32 3124.7 / 2982.9 / 2905.2 / 2822.4 / 1096.5 (ideal 2644). Per
+forward above the LLK rate, bs16 / bs32: partial-sum add 2.4 / 5.1 ms, data movement 3.7 / 3.0 (mostly the 85 MB (bs16)
+output write to DRAM, the FF13 -> FF2 round trip), the compute loop 4.0 / 6.4, SwiGLU 1.2 / 2.8. K_block 80 (no
+partials) needs ~1.5 MB of CBs at 4,x,8 (in0 4×80×2 bfp8 + in1 80×8×2 bfp4): beyond L1.
