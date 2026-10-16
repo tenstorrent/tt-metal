@@ -412,7 +412,6 @@ ON_FLAGS = (
     "-mtt-tensix-optimize-crossrow-pairing "
     "-mtt-tensix-optimize-record-hoist-peel "
     "-mtt-tensix-optimize-lut-select-fp16 "
-    "-mtt-tensix-optimize-native-compare "
     "-mtt-tensix-optimize-pressure-park "
     # Row-pair interleave of counted Dst row loops: hides SFPMAD result
     # latency and halves the per-row loop overhead; refuses on LREG pressure,
@@ -977,45 +976,6 @@ KNOBS = {
     # exactly the two target rows' TUs; threshold-fitted and every
     # hand arm byte-identical.
     "store-sink": "-mtt-tensix-optimize-store-fold " "-mtt-tensix-optimize-store-sink",
-    # HZ (stochrnd-store-fold, LICENSED, lane HZ 2026-08-27 under the
-    # owner overnight mandate): fold the semantic body's explicit
-    # deterministic-nearest SFPSTOCHRND float precision reduction into
-    # its consuming format-converting Dst store — the store's own
-    # conversion path (truncation) delivers the value, instruction-for-
-    # instruction the HAND idiom (binary-float class: sem 5 -> 4
-    # words/row, the row's whole +6.45 anatomy).  VALUE-CHANGING per
-    # the standing laneEK 2^32 sweep tt/proofs/stochrnd-store-round
-    # (store truncates toward zero and keeps -0/denormal signs; the
-    # explicit round is ties-away and normalizes specials; BF16 row
-    # 2,155,741,184/2^32) — the bit-exact cut stays refused; the
-    # license admits exactly the swept deterministic-nearest float
-    # pairs (FP16B->BF16, FP16A->FP16, either->SRCB), with lv-carrier /
-    # stochastic-mode / integer-path / cross-precision / multi-use /
-    # mask-divergent-span / PRNG-consumer belts refusing by name
-    # regardless of the token.  Accuracy authority per the licensed
-    # discipline: the folded stream is the hand kernel's own store
-    # path, so the hand arm's device-golden PASS is the certificate
-    # (laneCX: golden = proven hw cast behavior).  The token gates the
-    # pass BY ITSELF and the knob string carries ONLY the token: lane
-    # HZ's silicon A/B showed the parent store-fold flag's own S1
-    # forward re-shapes the production (hand) binary-float TU's replay
-    # window (0,4,1,1 x8 -> 0,6,1,1 x4; 25766 -> 19498 cycles) — a
-    # knob string carrying it would move BOTH arms and the delta would
-    # no longer read as the license's own effect (hand arm anchors
-    # must stay byte-identical; the S1-unlocked hand form is a named
-    # successor finding, not this knob's business).  KNOB-LEG CENSUS
-    # (own farm, pin-35-canonical base 3300/3300 byte-identical at
-    # OFF/TD/ON-36; license-only knob vs ON-36): 64 changed variants,
-    # ALL = licensed-fold fires on the shape corpus-wide (38 unary
-    # production convert-before-store bodies, binary sub fresh +
-    # rem/fmod/pow arms, ternary addcmul/addcdiv/snake_beta, typecast,
-    # cast_fp32_to_fp16a production, moe_gate, sdpa-exp); delta CRAQ on
-    # the NEW pinned sim: 36/36 runnable ids corr PASS on BOTH legs
-    # (zero LICENSED-EXPECTED exceptions), 2 ids symmetric sim-SKIP.
-    # BOOKED (headline-laneHZ-stochrndfold-20260827): binary-float sem
-    # 27428 -> 21291, hand 25766 byte-and-cycle-identical, 3-rep
-    # cycle-exact => vs_hand -17.37 WIN (was +6.45 LOSS).
-    "stochrnd-store-fold": "-mtt-tensix-optimize-stochrnd-store-fold",
     # EK (int-not): single-SFPNOT selection for the
     # all-ones-minus-x value function (exhaustive 2^32 equivalence
     # proof); byte-inert on the mapped corpus at its lane gate.
@@ -1517,39 +1477,6 @@ KNOBS = {
     # are the chains pass and the rename service's requesters), so a
     # solo leg is inert.
     "rename-cc-region": "-mtt-tensix-optimize-rename-cc-region",
-    # KP (residency-merge-rename, FABLE_GOES_BURR R1(b)): the addrsqrt
-    # cert's GIMPLE-side rename successor, executed — the const-residency
-    # walk's MERGE-RENAME class renames an in-loop constant-immediate CC
-    # merge (single-issue FLOATB sfploadi_lv over a loop-varying link,
-    # the one materialization no invariant/residency class can hoist
-    # because the STATEMENT is loop-variant even though its immediate is
-    # not) into a parked full-lane twin (the pressure-park LREG tier's
-    # proven programming point) plus an in-loop register-source
-    # sfpassign_lv merge.  The rename is delivery-word-neutral BY
-    # CONSTRUCTION (one in-loop word before and after) while the park
-    # adds its materialization word once, so the shipped verdict is the
-    # named refusal merge-rename-word-neutral; the companion
-    # -mtt-tensix-merge-rename-allow-neutral adjudication override
-    # (never on by default) admits the neutral rename for measurement
-    # legs only.  MEASURED (laneKP-evidence-20260901, BH p150 CHIP 2,
-    # 3 reps ALL cycle-identical, corr-first PASS every session): at the
-    # booked addrsqrt-fresh leg (ON37 + stochrnd-store-fold) the sem
-    # anchor reproduces 121006 EXACT and the hand comparator 119837
-    # EXACT (the booked cell, fresh both-arm re-measure); with the
-    # rename FIRED on the exact cert-named shape (the qnan 0x7FC00000
-    # lv-merge parked at the pre-peel entry, in-loop SFPLOADI -> SFPMOV,
-    # rolled row still 24 words, LREG file 7/8 -> 8/8) the sem arm
-    # measures 121132 x3 = +126 cy (+0.10%) WORSE — the priced
-    # word-neutral refusal is silicon-validated: the rename can only add
-    # the parked twin's delivered word.  Composition census: with the
-    # rename fired, 2datum/round-interleave/cyclic knobs stay
-    # byte-inert on the row and the item-#7 chains engine that byte-fired
-    # on base goes SILENT (the park consumed the file's last free LREG) —
-    # a GIMPLE-side rename SPENDS the 8-LREG wall's slack, never creates
-    # it.  Cert re-certified, cell unchanged (LOSS +0.98 stands);
-    # remaining successors = R2 CC-dance restructure + JU-class
-    # economics.
-    "residency-merge-rename": "-mtt-tensix-optimize-residency-merge-rename",
     # KO (reassoc-mad-restructure, FABLE_GOES_BURR residual attack R3):
     # the laneIJ trig cert's named "muli+add -> fused mad =
     # value-changing licensed class" successor, shipped as licensed
@@ -1565,7 +1492,7 @@ KNOBS = {
     # query (rvtt_pressure_window_peak: the may-live model restricted
     # to the pair window — the whole-block conservative peak reads
     # 64-66 on the trig body and would refuse everything the file
-    # admits).  LICENSED KNOB (like "reassoc"/"stochrnd-store-fold"):
+    # admits).  LICENSED KNOB (like "reassoc"):
     # the value-change class is double->single rounding on the fused
     # product plus SFPMULI's +0-flush sign-of-zero — the ratified
     # reassoc-license divergence family (laneKO DIVERGENCE-CERT.md).
@@ -1608,24 +1535,6 @@ KNOBS = {
     # lcm-fresh keeps its FZ downstream-fallback refusal byte-identically
     # (measured honest no-fire), gcd-fresh inert.
     "record-hoist-peel": "-mtt-tensix-optimize-record-hoist-peel",
-    # GW (native-compare): BH SFPGT/SFPLE SET_CC lowering for the
-    # strict-greater / less-or-equal float compare webs (sfpi-gcc
-    # agent/isa-unlocks-arecip-gtle, GS-2 unlock).  The GT arm's two-word
-    # SETCC web (mod4 sign-clear + mod2 nonzero) and the LE arm's
-    # three-word web + fenced COMPC each become ONE BH-native compare
-    # against the constant +0.0 register L9 (SET_CC form, mod1=1),
-    # pointwise-equal over all 2^32 compared bit patterns including the
-    # -0/+0/Inf/NaN classes (sfpi-gcc tt/proofs/native-compare-gtle/:
-    # the established qNaN-admitting contract is PRESERVED).  Fail-closed:
-    # BH only, REG operands only, LT/GE/EQ/NE and every other target keep
-    # the established lowering byte-identically.  Booking A/B = (ON-28 +
-    # flag) vs plain ON-28.  Target rows: threshold-fresh (v <= t predicate),
-    # hardshrink-fresh (|v| <= lambda band).  softsign-fresh /
-    # smoothstep-fresh = expected honest no-fire controls (their fresh
-    # bodies carry no GT/LE-direction compare: recip-form and min/max
-    # clamp respectively — the GS-2 row mapping's premise for them is
-    # refuted at the current bodies).
-    "native-compare": "-mtt-tensix-optimize-native-compare",
     # GV (pressure-park): post-CC residency admission + LREG tier — the
     # FX PASS-GAP "invariant-loadi rename/pressure admission" class.
     # The const-residency CC-canonical peel class stops its candidate
@@ -2020,13 +1929,6 @@ KNOB_MODES = {
     # store-fold flag rides the knob string because store-fold is not
     # in the reviewed ON set; a licensed fire needs both).
     "store-sink": "on-plus",
-    # HZ stochrnd-store-fold license: booking A/B is (reviewed-ON +
-    # license token) vs plain reviewed-ON.  Unlike store-sink the token
-    # gates its pass alone and the knob string deliberately does NOT
-    # carry -mtt-tensix-optimize-store-fold — the S1 forward would move
-    # the hand arm too (see the KNOBS comment) and the delta must read
-    # as the license's own effect.
-    "stochrnd-store-fold": "on-plus",
     "int-not": "drop-one",
     # EJ licensed reassociation: booking A/B is (reviewed-ON + license
     # tokens) vs plain reviewed-ON — the licensed fire acts on the
@@ -2045,7 +1947,6 @@ KNOB_MODES = {
     "crossrow-pairing": "drop-one",
     "record-hoist-peel": "drop-one",
     "lut-select-fp16": "drop-one",
-    "native-compare": "drop-one",
     "pressure-park": "drop-one",
     # HB crossrow-pairing-seed: default-off Init(0) booking knob; the
     # Rule-B rename runs only inside an admitted pairing, so the knob
@@ -2132,14 +2033,6 @@ KNOB_MODES = {
     # cc-region leg still has nothing profitable to compose with.  REFUSED
     # (no measured benefit + chains-gated; laneLM-evidence-20260903).
     "rename-cc-region": "on-plus",
-    # KP residency-merge-rename: default-off Init(0) walk-vocabulary
-    # widening whose shipped verdict on every in-vocabulary site is the
-    # named word-neutral refusal (the flag alone is corpus byte-inert by
-    # construction; fires exist only under the never-default
-    # allow-neutral adjudication override, measured WORSE on the target
-    # row).  on-plus so the nightly knob leg pins the corpus-wide
-    # byte-inertness and the refusal counters; promotion is not sought.
-    "residency-merge-rename": "on-plus",
     # KO reassoc-mad-restructure: default-off Init(0) LICENSED booking
     # knob (two-key wall: nothing fires without -fassociative-math,
     # like the "reassoc" row); a combine-preference steering knob whose
@@ -2276,18 +2169,6 @@ LICENSED_KNOBS = {
         "would denormal-flush (golden-closer per "
         "tt/proofs/store-sink-roundtrip); requires BOTH "
         "-mtt-tensix-optimize-store-fold AND -mtt-tensix-optimize-store-sink"
-    ),
-    "stochrnd-store-fold": (
-        "value-changing SFPSTOCHRND-into-store fold on the deterministic-"
-        "nearest float rows, lane HZ 2026-08-27 (owner overnight mandate): "
-        "the explicit rounding word is deleted and the store's own "
-        "truncating conversion delivers the hand idiom's bits "
-        "(tt/proofs/stochrnd-store-round NOT-EQUAL census: round-up / -0 / "
-        "denormal-sign / NaN->Inf); the "
-        "-mtt-tensix-optimize-stochrnd-store-fold token gates the fold by "
-        "itself (the value-preserving S1/S2 merge folds stay behind "
-        "-mtt-tensix-optimize-store-fold, deliberately NOT in this knob's "
-        "string — the S1 forward moves the hand arm too)"
     ),
 }
 for _k in LICENSED_KNOBS:
