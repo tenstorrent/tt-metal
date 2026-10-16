@@ -37,10 +37,28 @@ cd models/experimental/ops/quasar/tests/panoptic_deeplab_ops
 | Q8 | `ttnn.avg_pool2d` (`00`, ASPP pooling branch, `[1,32,64,2048]` → 1x1) | hangs, both base (`kernels/compute/reduce.cpp`) and `ttnn.experimental.quasar.avg_pool2d` (`reduce_metal2.cpp`), after the first program's DFB config is written | `pytest test_avg_pool2d.py`; base: add `TTNN_GRAPH_OPS_QUASAR_FORKS=0` | none | open, craq-sim only |
 | Q9 | Base `ttnn.matmul` with `MatmulMultiCoreReuseMultiCast1DProgramConfig` (final-upsample matmuls, both captured cases) | hang after the first program's DFB config is written (killed after 30 min) | `pytest test_matmul.py` | none; `ttnn.experimental.quasar.matmul` not tried yet | open, craq-sim only |
 | Q10 | Base `ttnn.typecast` (`kernels/compute/eltwise_typecast.cpp`) | hang after the first program's DFB config is written (killed after 30 min). Note: with the Q1 switch the captured bf16 → bfloat8_b casts become bf16 → bf16, which may be what hangs. | `pytest test_typecast.py` | none; `ttnn.experimental.quasar.typecast` not tried yet | open, craq-sim only |
+| Q11 | Any Quasar compute kernel built with `TT_METAL_WATCHER=1`, e.g. `tilize_metal2` (device tilize used by `ttnn.to_layout` and by the TILE upload of `ttnn.add` inputs) | JIT link fails: `trisc3 build failed ... dataflow_buffer.inl:36: undefined reference to 'g_dfb_interface'`. `trisc3` is the isolated-SFPU TRISC (`UCK_CHLKC_ISOLATE_SFPU`); `firmware/src/tt-2xx/trisc.cc:67-74` defines `g_dfb_interface` only for the unpack/pack TRISCs, but the non-math `DataflowBuffer` constructor references it. Without the watcher the reference is apparently dropped and the kernel links (unconfirmed). Same on craq-sim and the emulator; `TT_METAL_LLK_ASSERTS=1` alone is fine. Note `TT_METAL_WATCHER=0` still enables the watcher — unset it. | `TT_METAL_WATCHER=1 pytest "test_to_layout.py::test_to_layout[00_1x256_bf16_int-dram-ttnn_mesh_device0]"` (craq-sim reproduces in seconds) | run without the watcher | open |
 
 ## 1b. Small-grid limits
 
 Not yet run: the 2-core grid (emu2x3 stand-in, see 2.1) comes after the 8x4 results above.
+
+## 1c. Quasar emulator (emu-quasar-2x3, 2 worker cores)
+
+2026-10-15, tt-umd-simulators `f8191c7` (local 2-channel DRAM yaml), `TTNN_GRAPH_OPS_BF8_AS_BF16=1`,
+`TT_METAL_LLK_ASSERTS=1`, slow dispatch, one case per pytest process. Six small DRAM-interleaved cases
+of ops that passed on craq-sim, one per op:
+
+| Case | Result | Time |
+|---|---|---|
+| `to_device` 00 (1x256) | pass | 75 s |
+| `to_layout` 00 (1x256) | pass without the watcher; with `TT_METAL_WATCHER=1` fails to build (Q11) | 82 s |
+| `reshape` 04 (1x2048) | pass | 70 s |
+| `to_memory_config` 05 (1x2048) | pass | 224 s |
+| `upsample` 01 (1x256 → 32x64) | pass | 86 s |
+| `add` 01 (2048x256, `ttnn.experimental.quasar.add`) | pass without the watcher; Q11 with it | 76 s |
+
+The hangs Q6–Q10 are not yet checked on the emulator.
 
 ## 2. Simulator and harness issues — not Quasar gaps
 
