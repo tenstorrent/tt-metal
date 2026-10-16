@@ -16,7 +16,6 @@ from types import SimpleNamespace
 import torch
 from loguru import logger
 from transformers import AutoTokenizer, GenerationConfig
-from ttnn.tools.trace_allocation_tracker import corruptible_allocation_scope
 
 import ttnn
 from models.common.sampling.tt_sampling import TTSampling
@@ -861,15 +860,13 @@ class Gemma4Generator:
         self.mesh.set_program_cache_misses_allowed(False)
         try:
             logger.info("Capturing model trace")
-            with corruptible_allocation_scope(self.mesh):
-                entry["model_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
-                self._model_step(entry, state)
-                ttnn.end_trace_capture(self.mesh, entry["model_trace"], cq_id=0)
+            entry["model_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            self._model_step(entry, state)
+            ttnn.end_trace_capture(self.mesh, entry["model_trace"], cq_id=0)
             logger.info("Capturing sampling trace")
-            with corruptible_allocation_scope(self.mesh):
-                entry["sampling_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
-                self._sample_step(entry)
-                ttnn.end_trace_capture(self.mesh, entry["sampling_trace"], cq_id=0)
+            entry["sampling_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            self._sample_step(entry)
+            ttnn.end_trace_capture(self.mesh, entry["sampling_trace"], cq_id=0)
         finally:
             # Unseen eager prefill shapes still need to compile before the
             # existing conservative prefill retirement and next capture.
