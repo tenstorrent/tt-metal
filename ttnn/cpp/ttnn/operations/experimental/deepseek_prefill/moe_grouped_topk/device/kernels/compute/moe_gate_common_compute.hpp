@@ -203,7 +203,8 @@ void add_bias(
     uint32_t cb_in_bias_id,
     uint32_t cb_biased_scores_id,
     uint32_t width_tiles,
-    uint32_t cb_biased_dump_id = 0) {
+    uint32_t cb_biased_dump_id = 0,
+    uint32_t sigmoid_offset = 0) {
     CircularBuffer cb_sigmoid_scores(cb_sigmoid_scores_id);
     CircularBuffer cb_in_bias(cb_in_bias_id);
     CircularBuffer cb_biased_scores(cb_biased_scores_id);
@@ -216,11 +217,11 @@ void add_bias(
 #else
     constexpr bool pack_setup_once = false;
 #endif
-    cb_sigmoid_scores.wait_front(width_tiles);
+    cb_sigmoid_scores.wait_front(sigmoid_offset + width_tiles);
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_in_bias.wait_front(1);
         tile_regs_acquire();
-        add_tiles(cb_sigmoid_scores_id, cb_in_bias_id, width_tile, 0, 0);
+        add_tiles(cb_sigmoid_scores_id, cb_in_bias_id, sigmoid_offset + width_tile, 0, 0);
         tile_regs_commit();
         cb_in_bias.pop_front(1);
 
@@ -453,7 +454,12 @@ ALWI void datacopy_mop_only(uint32_t cb_id) {
 
 // rank_tag: valid only when tile j holds indices above every index in tiles 0..j-1: the single-group top-k,
 // and on Blackhole the grouped path, whose writer gathers winning groups by id.
-template <bool stable_sort = false, bool indices_pretransposed = false, bool rank_tag = false>
+// keep_indices: the index tiles are a template that later rows read again, so they are not popped.
+template <
+    bool stable_sort = false,
+    bool indices_pretransposed = false,
+    bool rank_tag = false,
+    bool keep_indices = false>
 void topk(
     const uint32_t cb_winning_group_scores_id,
     const uint32_t cb_winning_group_indices_id,
@@ -469,16 +475,25 @@ void topk(
     bool ascending = false;
     int end_phase = (tiles <= 2) ? log_tiles - 1 : 5;
 
+#if defined(ARCH_BLACKHOLE)
+    // Each step waits only for the tiles it reads, so it overlaps the writer gathering the later ones.
+    constexpr bool wait_per_step = true;
+#else
+    constexpr bool wait_per_step = false;
+#endif
     gate_topk_init<rank_tag>();
     tile_regs_acquire();
-    cb_winning_group_scores.wait_front(tiles);
-    cb_winning_group_indices.wait_front(tiles);
+    cb_winning_group_scores.wait_front(wait_per_step ? 1 : tiles);
+    cb_winning_group_indices.wait_front(wait_per_step ? 2 : tiles);
     // local sort first two tiles:
 
     // transpose and unpack into dest regs
     reconfig_data_format_srca(cb_winning_group_scores_id);
     transpose_init(cb_winning_group_scores_id);
     transpose_tile(cb_winning_group_scores_id, 0, 0);
+    if constexpr (wait_per_step) {
+        cb_winning_group_scores.wait_front(2);
+    }
     transpose_tile(cb_winning_group_scores_id, 1, 1);
 
     // transpose and unpack into dest regs
@@ -512,6 +527,10 @@ void topk(
     constexpr bool switch_mop_only = false;
 #endif
     for (uint32_t j = 2; j < tiles; j++) {
+        if constexpr (wait_per_step) {
+            cb_winning_group_scores.wait_front(j + 1);
+            cb_winning_group_indices.wait_front(j + 1);
+        }
         reconfig_data_format_srca(cb_winning_group_scores_id);
         if constexpr (switch_mop_only) {
             UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(
@@ -565,7 +584,9 @@ void topk(
     transpose_and_pack(cb_final_indices_transposed_id, cb_out_indices_id, 1);
 
     cb_winning_group_scores.pop_front(tiles);
-    cb_winning_group_indices.pop_front(tiles);
+    if constexpr (!keep_indices) {
+        cb_winning_group_indices.pop_front(tiles);
+    }
 }
 
 void normalize_scores(

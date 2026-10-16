@@ -85,6 +85,10 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
          num_height_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, height_tiles);
 
     uint32_t remainder_tokens_per_tile = seq_len % tile_height == 0 ? tile_height : seq_len % tile_height;
+    // On Blackhole a core with two or more rows runs them in pairs: a row's activated scores and winning-group tiles
+    // stay while the next row's steps run.
+    const uint32_t rows_in_flight =
+        (device->arch() == tt::ARCH::BLACKHOLE && num_height_tiles_per_core_group_1 >= 2) ? 2u : 1u;
 
     auto cb_in_scores = tt::CBIndex::c_0;
     auto cb_in_bias = tt::CBIndex::c_1;
@@ -134,7 +138,7 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
 
     auto cb_sigmoid_scores = tt::CBIndex::c_4;
     auto cb_biased_scores = tt::CBIndex::c_5;
-    add_cb(cb_sigmoid_scores, compute_page_size, width_tiles, compute_data_format);
+    add_cb(cb_sigmoid_scores, compute_page_size, rows_in_flight * width_tiles, compute_data_format);
     add_cb(cb_biased_scores, compute_page_size, width_tiles, compute_data_format);
 
     // Test-only debug output.
@@ -195,7 +199,11 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     add_cb(cb_group_summed_scores, compute_page_size, num_group_tiles, compute_data_format);
     add_cb(cb_sorted_group_order, indices_page_size, num_group_tiles, tt::DataFormat::UInt16);
 
-    add_cb(cb_winning_group_scores, compute_page_size, operation_attributes.topk_groups, compute_data_format);
+    add_cb(
+        cb_winning_group_scores,
+        compute_page_size,
+        rows_in_flight * operation_attributes.topk_groups,
+        compute_data_format);
     add_cb(
         cb_winning_group_indices,
         tt::tile_size(winning_index_format),
@@ -235,6 +243,14 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     add_cb(cb_padding_config, padding_config_page_size, 1, tt::DataFormat::UInt32);
     Buffer* padding_runtime_buffer =
         tensor_args.padding_config.has_value() ? tensor_args.padding_config->buffer() : nullptr;
+
+    // On Blackhole the reader takes half of the writer's gathers, through a job CB and a done CB.
+    auto cb_helper_job = tt::CBIndex::c_27;
+    auto cb_helper_done = tt::CBIndex::c_28;
+    if (blackhole) {
+        add_cb(cb_helper_job, 32, 2, tt::DataFormat::UInt32);
+        add_cb(cb_helper_done, 16, 4, tt::DataFormat::UInt32);
+    }
 
     KernelDescriptor::NamedCompileTimeArgs reader_named_compile_time_args = {
         {"cb_in_scores", cb_in_scores},
@@ -357,6 +373,16 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel_desc.core_ranges = all_cores;
     reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
+    if (blackhole) {
+        reader_named_compile_time_args.emplace_back("cb_helper_job", cb_helper_job);
+        reader_named_compile_time_args.emplace_back("cb_helper_done", cb_helper_done);
+        reader_named_compile_time_args.emplace_back("index_u16_mask", index_u16_mask);
+        reader_named_compile_time_args.emplace_back("n_groups", operation_attributes.n_groups);
+        reader_named_compile_time_args.emplace_back("topk_groups", operation_attributes.topk_groups);
+        reader_named_compile_time_args.emplace_back("n_activated_experts", operation_attributes.n_activated_experts);
+        reader_named_compile_time_args.emplace_back(
+            "winning_groups_by_id", static_cast<uint32_t>(winning_groups_by_id));
+    }
     reader_kernel_desc.named_compile_time_args = std::move(reader_named_compile_time_args);
     reader_kernel_desc.config = ReaderConfigDescriptor{};
 
@@ -384,6 +410,8 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     writer_kernel_desc.core_ranges = all_cores;
     writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
     if (blackhole) {
+        writer_named_compile_time_args.emplace_back("cb_helper_job", cb_helper_job);
+        writer_named_compile_time_args.emplace_back("cb_helper_done", cb_helper_done);
         writer_named_compile_time_args.emplace_back("index_u16_mask", index_u16_mask);
         writer_named_compile_time_args.emplace_back(
             "winning_groups_by_id", static_cast<uint32_t>(winning_groups_by_id));

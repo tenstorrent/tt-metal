@@ -64,6 +64,77 @@ void kernel_main() {
     const uint32_t end_height_tile = get_arg_val<uint32_t>(1);
     compute_kernel_hw_startup(cb_scores_fp32, cb_bias_fp32, cb_biased_scores);
 
+#if defined(ARCH_BLACKHOLE)
+    // Unless the sort compares index words, the final top-k sorts slot positions (the template's first topk_groups
+    // tiles), which the writer maps back to expert ids; the winning groups arrive by id, so rank tags order ties.
+    constexpr bool slot_indices = !(stable_sort && !sort_keys_tf32);
+    // Up to two rows a pass: both rows' steps up to the group sort, then both final top-ks, then both normalizes, so
+    // the writer's gathers for one row overlap compute on the other (the factory sizes the CBs for two rows).
+    for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile += 2) {
+        const uint32_t rows = (height_tile + 1 < end_height_tile) ? 2 : 1;
+        for (uint32_t row = 0; row < rows; row++) {
+            // The activation unpacks the raw logits itself: the copy into DEST widens bf16 exactly.
+            blocks::apply_score_func<score_func>(cb_in_scores, cb_sigmoid_scores, width_tiles);
+            blocks::upcast_tiles(cb_in_bias, cb_bias_fp32, width_tiles);
+            // The activation left SrcA on the raw logits' format. The writer pops a row's activated scores after its
+            // gather, so the second row's sit behind the first's.
+            reconfig_data_format_srca(cb_sigmoid_scores);
+            blocks::add_bias<dump_biased_scores != 0>(
+                cb_sigmoid_scores, cb_bias_fp32, cb_biased_scores, width_tiles, cb_biased_dump, row * width_tiles);
+            if constexpr (n_groups == 1) {
+                blocks::topk<stable_sort, /*indices_pretransposed=*/true, rank_tag>(
+                    cb_biased_scores,
+                    cb_expert_index_template,
+                    cb_final_indices_transposed,
+                    cb_out_indices,
+                    width_tiles,
+                    log_width_tiles,
+                    n_activated_experts);
+            } else {
+                blocks::process_and_sort_tiles<stable_sort>(
+                    cb_biased_scores,
+                    cb_expert_index_template,
+                    cb_sorted_group_scores,
+                    cb_sorted_expert_indices_temp,
+                    width_tiles,
+                    false,
+                    false,
+                    end_phase);
+                blocks::sum_top_experts_per_group(
+                    cb_top_experts_per_group, cb_group_summed_scores, summed_experts_per_group);
+                blocks::topk_group_scores<stable_sort, rank_tag>(
+                    cb_group_summed_scores,
+                    cb_group_index_template,
+                    cb_sorted_group_order,
+                    false,
+                    false,
+                    log_n_groups - 1);
+            }
+        }
+        if constexpr (n_groups != 1) {
+            for (uint32_t row = 0; row < rows; row++) {
+                blocks::topk<stable_sort, /*indices_pretransposed=*/false, rank_tag, /*keep_indices=*/slot_indices>(
+                    cb_winning_group_scores,
+                    slot_indices ? cb_expert_index_template : cb_winning_group_indices,
+                    cb_final_indices_transposed,
+                    cb_out_indices,
+                    topk_groups,
+                    log_topk_groups,
+                    n_activated_experts);
+            }
+        }
+        for (uint32_t row = 0; row < rows; row++) {
+            blocks::normalize_scores(
+                cb_gathered_sigmoid,
+                cb_reduce_ones_scalar,
+                cb_reduce_intermediate,
+                cb_reciprocal_sums,
+                cb_epsilon_scalar,
+                cb_normalized_scores);
+            blocks::scale(cb_normalized_scores, cb_route_scale_scalar, cb_out_weights);
+        }
+    }
+#else
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         // Upcast the raw (possibly bf16) logits and bias to fp32 so the rest of the gate runs entirely
         // in fp32 (the two-operand ops below require a single operand format). Identity when fp32 in.
@@ -129,4 +200,5 @@ void kernel_main() {
             cb_normalized_scores);
         blocks::scale(cb_normalized_scores, cb_route_scale_scalar, cb_out_weights);
     }
+#endif
 }
