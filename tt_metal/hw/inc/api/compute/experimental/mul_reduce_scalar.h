@@ -45,11 +45,11 @@ ALWI void mul_reduce_scalar_init(uint32_t icb0, uint32_t icb1) {
         if (row_tiles >= 2 && llk_unpack_mul_reduce_scalar_two_face_banks(icb0)) {
             llk_unpack_mul_reduce_scalar_two_face_banks_init();
         } else { llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1); });
-    // The interleaved row sets its own math state in mul_reduce_scalar_tile and runs no multiply MOP.
-    MATH(if (!(row_tiles >= 2 && MATH_FIDELITY == MathFidelity::LoFi &&
-               llk_math_mul_reduce_scalar_two_face_banks(icb0, row_tiles))) {
-        llk_math_eltwise_mul_reduce_scalar_init<MATH_FIDELITY>(icb0, false /*acc_to_dest*/);
-    });
+    // The interleaved row runs no multiply MOP.
+    MATH(if (row_tiles >= 2 && MATH_FIDELITY == MathFidelity::LoFi &&
+             llk_math_mul_reduce_scalar_two_face_banks(icb0, row_tiles)) {
+        llk_math_mul_reduce_scalar_interleaved_init<DST_ACCUM_MODE>();
+    } else { llk_math_eltwise_mul_reduce_scalar_init<MATH_FIDELITY>(icb0, false /*acc_to_dest*/); });
 #else
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
     MATH((llk_math_eltwise_mul_reduce_scalar_init<MATH_FIDELITY>(icb0, false /*acc_to_dest*/)));
@@ -86,7 +86,7 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
     MATH(const bool two_face_banks = row_tiles >= 2 && llk_math_mul_reduce_scalar_two_face_banks(icb0, row_tiles));
     MATH(const bool interleave = two_face_banks && mul_f == MathFidelity::LoFi && reduce_f == MathFidelity::LoFi);
     MATH(if (interleave) {
-        llk_math_mul_reduce_scalar_interleaved_init<is_fp32_dest_acc_en>();
+        llk_math_mul_reduce_scalar_interleaved_start();
         llk_math_mul_reduce_scalar_interleaved_row<row_tiles>(scaler);
     });
 #endif

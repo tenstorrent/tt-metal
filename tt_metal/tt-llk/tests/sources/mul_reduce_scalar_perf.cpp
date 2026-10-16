@@ -119,6 +119,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "sfpu/ckernel_sfpu_fill.h"
 
 static constexpr float REDUCE_SCALER = 1.0f;
+// The isolate runs of the other threads never run the row, so their INIT stays the same.
+static constexpr bool RUNS_ROW =
+    PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION;
 
 template <std::uint32_t row_tiles>
 __attribute__((always_inline)) inline void reduce_later_tiles(const ckernel::TensorShape& tensor_shape)
@@ -134,10 +137,10 @@ __attribute__((always_inline)) inline void reduce_later_tiles(const ckernel::Ten
 __attribute__((always_inline)) inline void row_math(const std::uint32_t runtime_tile_cnt, const ckernel::TensorShape& tensor_shape)
 {
     const std::uint32_t tile_cnt = ROW_TILES > 0 ? ROW_TILES : runtime_tile_cnt;
-    // The compiled rows give the API their length, as the DeepSeek RMSNorm does; the interleaved row skips the multiply init.
+    // The compiled rows give the API their length, as the DeepSeek RMSNorm does; the interleaved row's init runs once, in INIT.
     if constexpr (TWO_FACE_BANKS && MATH_FIDELITY == MathFidelity::LoFi)
     {
-        _llk_math_mul_reduce_scalar_interleaved_init_<is_fp32_dest_acc_en>();
+        _llk_math_mul_reduce_scalar_interleaved_start_();
         _llk_math_mul_reduce_scalar_interleaved_row_<ROW_TILES>(REDUCE_SCALER);
         _llk_math_mul_reduce_scalar_interleaved_tail_(tile_cnt);
         return;
@@ -213,6 +216,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_eltwise_unary_sfpu_init_once_();
+        if constexpr (TWO_FACE_BANKS && MATH_FIDELITY == MathFidelity::LoFi && RUNS_ROW)
+        {
+            _llk_math_mul_reduce_scalar_interleaved_init_<is_fp32_dest_acc_en>();
+        }
         PROFILER_SYNC();
     }
     {

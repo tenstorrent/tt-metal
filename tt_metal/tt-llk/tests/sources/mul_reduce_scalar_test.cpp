@@ -133,8 +133,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool two_face_banks = ROW_TILES >= 2 && _llk_math_mul_reduce_scalar_two_face_banks_(tensor_shape, ROW_TILES);
     const bool interleave     = two_face_banks && MATH_FIDELITY == MathFidelity::LoFi;
 
-    // mul_reduce_scalar_init: element-wise multiply, no accumulate-to-dest; the interleaved row sets its own state.
-    if (!interleave)
+    // mul_reduce_scalar_init: the interleaved row's state, or the element-wise multiply with no accumulate-to-dest.
+    if (interleave)
+    {
+        _llk_math_mul_reduce_scalar_interleaved_init_<is_fp32_dest_acc_en>();
+    }
+    else
     {
         _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
             tensor_shape, 0 /* acc_to_dest */);
@@ -144,7 +148,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if (interleave)
     {
-        _llk_math_mul_reduce_scalar_interleaved_init_<is_fp32_dest_acc_en>();
+        _llk_math_mul_reduce_scalar_interleaved_start_();
         _llk_math_mul_reduce_scalar_interleaved_row_<ROW_TILES>(REDUCE_SCALER);
         _llk_math_mul_reduce_scalar_interleaved_tail_(tile_cnt);
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();

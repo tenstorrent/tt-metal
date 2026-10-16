@@ -119,6 +119,11 @@ inline void llk_math_mul_reduce_scalar_interleaved_init() {
     _llk_math_mul_reduce_scalar_interleaved_init_<is_fp32_dest_acc_en>();
 }
 
+inline void llk_math_mul_reduce_scalar_interleaved_start() {
+    SAN_HOOK(unsupported());
+    _llk_math_mul_reduce_scalar_interleaved_start_();
+}
+
 template <std::uint32_t row_tiles>
 inline void llk_math_mul_reduce_scalar_interleaved_row(const float scaler) {
     SAN_HOOK(unsupported());

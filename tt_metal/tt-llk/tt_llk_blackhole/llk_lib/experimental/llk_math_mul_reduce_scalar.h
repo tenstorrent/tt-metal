@@ -422,6 +422,8 @@ inline void _llk_math_mul_reduce_scalar_mul_two_face_banks_(const std::uint32_t 
     math::clear_dst_reg_addr();
 }
 
+// The row's address modes and zero flag, set once by mul_reduce_scalar_init; each row then starts with
+// _llk_math_mul_reduce_scalar_interleaved_start_.
 template <bool is_fp32_dest_acc_en>
 inline void _llk_math_mul_reduce_scalar_interleaved_init_()
 {
@@ -429,6 +431,14 @@ inline void _llk_math_mul_reduce_scalar_interleaved_init_()
     addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 8}, .dest = {.incr = 0}}.set(ADDR_MOD_3);
     addr_mod_t {.srca = {.incr = 24}, .srcb = {.incr = 8}, .dest = {.incr = 0}}.set(ADDR_MOD_4);
     addr_mod_t {.srca = {.incr = 32}, .srcb = {.incr = 32}, .dest = {.incr = 0}}.set(ADDR_MOD_5);
+}
+
+inline void _llk_math_mul_reduce_scalar_interleaved_start_()
+{
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "interleaved row: Src zero-substitution flag is not in DEFAULT state");
+    math::reset_counters(p_setrwc::SET_ABD_F);
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dest_offset_id * DEST_REGISTER_HALF_SIZE);
 }
 
@@ -457,17 +467,13 @@ inline void _llk_math_mul_reduce_scalar_move_two_faces_()
 // reaches the result.
 inline void _llk_math_mul_reduce_scalar_fill_scaler_(const float scaler)
 {
-    _llk_math_eltwise_sfpu_start_(0);
+    // DEST is still at the section base the row started from, and immediate rows leave its counter at 0.
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     sfpi::vFloat value = scaler;
     sfpi::dst_reg[0]   = value;
-    sfpi::dst_reg++;
-    sfpi::dst_reg[0] = value;
-    sfpi::dst_reg++;
-    TTI_INCRWC(0, 4, 0, 0);
-    sfpi::dst_reg[0] = value;
-    sfpi::dst_reg++;
-    sfpi::dst_reg[0] = value;
-    _llk_math_eltwise_sfpu_done_();
+    sfpi::dst_reg[1]   = value;
+    sfpi::dst_reg[4]   = value;
+    sfpi::dst_reg[5]   = value;
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
 }
 
