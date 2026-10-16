@@ -34,6 +34,10 @@ def plan_prefill_batches(lengths, maximum, *, long_spans=False, packed_rows=MAX_
             long_group = long_spans and padded > MAX_BATCHED_SPAN and padded == padded_span(lengths[group[0]])
             if (
                 config_family(lengths[row]) != config_family(lengths[group[0]])
+                # Bound extra matrix rows relative to the native per-request
+                # page rounding. Equal short partial spans must not be penalized
+                # for padding that the serial path already requires.
+                or 4 * padded * (len(group) + 1) > 5 * (sum(padded_span(lengths[index]) for index in group) + padded)
                 or padded * (len(group) + 1) > (8192 if long_group else packed_rows)
                 # Subdividing a native sliding SDPA chunk changes masked K
                 # iterations and their finite-precision softmax corrections.

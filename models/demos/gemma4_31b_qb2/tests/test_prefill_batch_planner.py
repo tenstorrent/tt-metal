@@ -18,6 +18,11 @@ class PrefillBatchPlannerTests(unittest.TestCase):
             wide = plan_prefill_batches([span] * batch, 8, long_spans=True, packed_rows=8192)
             self.assertEqual(wide, [list(range(batch))])
 
+    def test_measured_padding_regression_uses_serial_fallback(self):
+        self.assertEqual(plan_prefill_batches([257, 769], 8), [[0], [1]])
+        # These short partial requests already require 256 native rows each.
+        self.assertEqual(plan_prefill_batches([129] * 8, 8), [list(range(8))])
+
     def test_original_matmul_families_remain_separate(self):
         lengths = [128, 129, 256, 257, 512, 769, 897, 1024]
         groups = plan_prefill_batches(lengths, 8)
@@ -39,6 +44,8 @@ class PrefillBatchPlannerTests(unittest.TestCase):
                                 continue
                             span = max(padded_span(lengths[row]) for row in group)
                             self.assertLessEqual(span * len(group), 8192)
+                            native_rows = sum(padded_span(lengths[row]) for row in group)
+                            self.assertLessEqual(4 * span * len(group), 5 * native_rows)
                             self.assertLessEqual(min(span, 1024) * len(group), budget)
                             self.assertEqual(len({config_family(lengths[row]) for row in group}), 1)
                             if span > 1024:

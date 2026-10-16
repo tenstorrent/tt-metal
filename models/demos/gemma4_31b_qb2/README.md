@@ -96,3 +96,9 @@ python3 -m unittest models.demos.gemma4_31b_qb2.tests.test_prefill_batch_planner
 ```
 
 These checks enforce coverage, numerical configuration boundaries and preservation of complete native sliding-attention chunks. They complement the hardware KV-isolation, retained-history, traced-decode and concurrent-sampling gates; they do not replace them. The earlier published serving and accuracy results above predate this experiment.
+
+The opt-in request planner limits additional packed matrix rows to 25% above
+the original per-request page rounding. This rejects the measured regressing
+257/769-token pair while preserving equal short partial requests; the default
+serial path is unchanged. This bound is measured on the ragged full-model
+frontier, not claimed as a globally optimal serving policy.
