@@ -46,7 +46,8 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
     double clamp_min,
     double clamp_max,
     bool coefficients_given,
-    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config) {
+    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
+    bool deepseek) {
     const auto cfg = compute_kernel_config.value_or(default_compute_kernel_config());
     if (!cfg.fp32_dest_acc_en) {
         throw UnsupportedAxisError("mhc_pre_xing: fp32_dest_acc_en=False not in SUPPORTED [True]");
@@ -63,6 +64,9 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
         }
         if (!streams.has_value()) {
             throw ValueErrorCpp("mhc_pre_xing: coefficients_given needs streams (nothing to compute)");
+        }
+        if (deepseek) {
+            throw ValueErrorCpp("mhc_pre_xing: deepseek selects the coefficient math; coefficients_given has none");
         }
     } else {
         if (in_last != TILE_HW) {
@@ -111,6 +115,7 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
     p.sinkhorn_iters = static_cast<uint32_t>(std::max<int64_t>(sinkhorn_iters, 1));
     p.clamp_min = clamp_min;
     p.clamp_max = clamp_max;
+    p.deepseek = deepseek;
     p.compute_config = cfg;
     auto out = ttnn::prim::bringup::mhc_pre_xing(input, streams, p);
     std::optional<Tensor> hc, y;

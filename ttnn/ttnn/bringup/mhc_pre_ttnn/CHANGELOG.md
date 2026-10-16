@@ -109,3 +109,31 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_pre` on 
    - Needed by: rebase onto origin/llk_helper_library @ `bdc576fa652` (2026-10-12)
    - Files: `device/mcast_wire.hpp`, `device/mhc_pre_ttnn_program_factory.cpp`, `device/mhc_pre_xing_program_factory.cpp`,
      `mhc_pre_ttnn.cpp`, `mhc_pre_program_descriptor.py`, `kernels/mhc_pre_writer.cpp`.
+
+7. `mhc_pre_xing(deepseek=True)`: DeepSeek-V4's coefficient math (deepseek_v41_flash_d_p FIX.4, owner OV-12).
+   - What: a keyword option `deepseek` (default False). On: the coefficients follow DeepSeek's
+     `hc_split_sinkhorn_kernel` (checkpoint `inference/kernel.py`; CPU port `deepseek_v41_flash_d_p/reference/
+     kernels.py:sinkhorn_split`): pre = sigmoid(z) + hc_eps; L not clamped (clamp_min / clamp_max ignored); comb =
+     exp(L - rowmax) / rowsum + hc_eps, then m / (colsum + hc_eps), then (sinkhorn_iters - 1) x (rows, columns). Same
+     lane-wise fp32 SFPU arithmetic as the Xing path (accurate exp, Newton reciprocal / rsqrt). The kernel code is
+     behind the compute define `MHC_XING_DEEPSEEK`, added only when the option is on; off, the kernels, compile-time
+     args, runtime args, CBs and the program hash are the ones they were. `deepseek` with `coefficients_given=True` is
+     refused (no coefficient math to select).
+   - Why: deepseek_v41_flash_d_p computed these mixes with ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn,
+     whose FPU steps (SEL matmul, add_tiles, RB / CB sum matmuls, mul_tiles, copies without UnpackToDestFp32) read
+     fp32 at TF32: the step's error was 3.8-33x its noise floor, a -3.3e-4 bias and a 1.5-3.5 % comb column. On the
+     golden inputs of the 5 hc gates (2x2, 1024 rows per chip) the coefficients vs a CPU fp32 Sinkhorn on the same
+     mixes: source kernel rel 5.9e-4..1.2e-3, this option 6.5e-8..7.6e-8. Time (wall, 20 synced calls): rsqrt chain +
+     source kernel + concat 0.45 ms -> this op 0.031 ms; the whole mixes step 0.77 -> 0.41 ms.
+   - Tests: `tests/xing_cases.py` 5 cases `deepseek_v41_flash_d_p-2x2-coef-ds-t1024-*` (the checkpoint's scale / base
+     of layers 0-1 attn / ffn, incl. L0 attn's comb bases -25.5..13.4, and a strong-logit case; measured rel
+     5.2e-8..1.0e-7, limit 1e-5; with the option off the same check fails: comb rel 3.6e-4..5.4e-4);
+     `tests/reference.py:mhc_pre_xing_coefficients(deepseek=True)`; `test_reference_matches_deepseek_kernel` (CPU:
+     the reference == kernels.py:sinkhorn_split element-wise <= 2e-5, and differs from the Xing math).
+     Regression, option off (2026-10-16, 2x2 box): model cases 103 passed (86 xing40 cases on the box's 2x2, 10
+     glm53, the 5 new, 2 CPU reference checks); unit + golden 321 passed, 1 skipped (= unit 115 + 1 skipped,
+     golden 206: the recorded counts).
+   - Needed by: deepseek_v41_flash_d_p FIX.4 (tt/mhc.py, setting HC_SINKHORN=sfpu_fp32).
+   - Files: `kernels/mhc_pre_xing_compute.cpp`, `device/mhc_pre_xing_device_operation.{hpp,cpp}`,
+     `device/mhc_pre_xing_program_factory.cpp`, `mhc_pre_xing.{hpp,cpp}`, `mhc_pre_ttnn_nanobind.cpp`,
+     `tests/{reference.py,xing_cases.py,test_mhc_pre_xing.py}`.

@@ -98,6 +98,7 @@ def _coef_ref(case, row, base):
         case["hc_eps"],
         case["sinkhorn_iters"],
         case["clamp"],
+        deepseek=case.get("deepseek", False),
     )
 
 
@@ -114,6 +115,7 @@ def _call_coef(case, row_d, streams_d, base):
         sinkhorn_iters=case["sinkhorn_iters"],
         clamp_min=case["clamp"][0],
         clamp_max=case["clamp"][1],
+        **({"deepseek": True} if case.get("deepseek") else {}),
     )
 
 
@@ -212,3 +214,34 @@ def test_reference_matches_xing_ref():
         got = ref.mhc_pre_xing_coefficients(row, scale, base.tolist(), float(n * H), n, 1e-6, 1e-6, 20, (-30.0, 30.0))
         # hc_weights rounds its mixes to float32 (mix = F.linear(...).float()): agreement to float32 level
         assert torch.allclose(got, want.double(), rtol=1e-5, atol=1e-6), (got - want).abs().max()
+
+
+def test_reference_matches_deepseek_kernel():
+    """CPU only: the deepseek=True reference == deepseek_v41_flash_d_p reference/kernels.py:sinkhorn_split (the
+    CPU port of DeepSeek-V4's hc_split_sinkhorn_kernel, which computes in fp32) on the same mixes, element-wise to fp32
+    level (measured <= 2.5e-6 relative); the Xing math (clamp, no pre eps, iters x (row, column)) differs by ~100 %
+    on the entries the clamp and the eps placement touch."""
+    try:
+        from models.demos.deepseek_v41_flash_d_p.reference.kernels import sinkhorn_split
+    except ImportError:
+        pytest.skip("deepseek_v41_flash_d_p reference not importable")
+    g = torch.Generator().manual_seed(11)
+    n, H, S = 4, 256, 64
+    flat = torch.randn(S, n * H, generator=g, dtype=torch.float64)
+    fn = torch.randn(NG, n * H, generator=g, dtype=torch.float64) * (n * H) ** -0.5
+    base = torch.randn(NG, generator=g, dtype=torch.float64) * 3
+    base[2 * n] = -40.0  # a logit far below the old [-30, 30] clamp
+    for scale in ([0.8, 0.5, 3.0], [0.06, 0.012, 0.06]):
+        mixes = (flat @ fn.T) * torch.rsqrt(flat.square().mean(-1, keepdim=True) + 1e-6)
+        pre, post, comb = sinkhorn_split(mixes.double(), torch.tensor(scale).double(), base, n, 20, 1e-6)
+        want = torch.cat([pre, post, comb.flatten(-2)], dim=-1).double()
+        row = torch.zeros(S, 32, dtype=torch.float64)
+        row[:, :NG] = flat @ fn.T
+        row[:, NG] = flat.square().sum(-1)
+        got = ref.mhc_pre_xing_coefficients(
+            row, scale, base.tolist(), float(n * H), n, 1e-6, 1e-6, 20, (-30.0, 30.0), deepseek=True
+        )
+        rel = ((got - want).abs() / want.abs()).max().item()
+        assert rel <= 2e-5, rel
+        xing = ref.mhc_pre_xing_coefficients(row, scale, base.tolist(), float(n * H), n, 1e-6, 1e-6, 20, (-30.0, 30.0))
+        assert ((xing - want).abs() / want.abs()).max() > 1e-2, "the Xing math must differ from DeepSeek's"
