@@ -212,6 +212,7 @@ target_link_libraries(
     PRIVATE
         enchantum::enchantum
         Boost::asio # boost/move header included by common/mesh_coord.cpp
+        umd::tt-umd # resolves spdlog from libtt-umd.so instead of bundling a second copy (ASan ODR)
 )
 target_compile_features(tt_metalium_types PUBLIC cxx_std_20)
 TT_ENABLE_UNITY_BUILD(tt_metalium_types)
