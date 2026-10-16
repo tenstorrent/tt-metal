@@ -206,6 +206,8 @@ constexpr std::uint32_t FACE_SEQ_SLOT[2] = {0, FACE_SEQ_LEN};
 
 // Rewrites 8 rows of a 16x16 Dest face in place: float(int32 partial) * column scale. A pass
 // covers 4 rows of the even (addr +0) or odd (addr +2) columns, so the scale LREG alternates.
+// Recorded stage-major (4 loads, 4 casts, 4 multiplies, 4 stores), each pass in its own LREG0-3,
+// so independent work sits between every dependent pair instead of stalling on each result.
 template <std::uint32_t SCALE_EVEN, std::uint32_t SCALE_ODD>
 inline void record_face_seq(const std::uint32_t slot)
 {
@@ -220,13 +222,23 @@ inline void record_face_seq(const std::uint32_t slot)
 #pragma GCC unroll 4
             for (int pass = 0; pass < 4; pass++)
             {
-                // Rotate temporaries so consecutive passes do not serialize on one LREG.
-                const std::uint32_t tmp = pass;
-                TT_SFPLOAD(tmp, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, pass << 1);
-                TT_SFPCAST(tmp, tmp, 0 /* int32 (sign-magnitude) -> fp32, RNE */);
+                TT_SFPLOAD(pass, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, pass << 1);
+            }
+#pragma GCC unroll 4
+            for (int pass = 0; pass < 4; pass++)
+            {
+                TT_SFPCAST(pass, pass, 0 /* int32 (sign-magnitude) -> fp32, RNE */);
+            }
+#pragma GCC unroll 4
+            for (int pass = 0; pass < 4; pass++)
+            {
                 // Scale (SrcS-loaded) as the multiplier operand.
-                TT_SFPMUL((pass & 1) ? SCALE_ODD : SCALE_EVEN, tmp, p_sfpu::LCONST_0, tmp, 0);
-                TT_SFPSTORE(tmp, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0, pass << 1);
+                TT_SFPMUL((pass & 1) ? SCALE_ODD : SCALE_EVEN, pass, p_sfpu::LCONST_0, pass, 0);
+            }
+#pragma GCC unroll 4
+            for (int pass = 0; pass < 4; pass++)
+            {
+                TT_SFPSTORE(pass, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0, pass << 1);
             }
         });
 }
