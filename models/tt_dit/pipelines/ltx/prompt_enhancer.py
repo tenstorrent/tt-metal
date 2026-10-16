@@ -803,6 +803,16 @@ class DevicePromptEnhancer(PromptEnhancer):
         if temperature > 0:
             torch.manual_seed(seed)
 
+        # Debug (LTX_ENHANCER_PREFILL_SYNC=1): drain work already queued on the mesh before the prefill
+        # clock starts, and report the drain apart, so prefill_s cannot absorb an earlier stage's tail.
+        prefill_sync_s = None
+        if _env_flag("LTX_ENHANCER_PREFILL_SYNC"):
+            import ttnn
+
+            t0 = time.time()
+            ttnn.synchronize_device(self.mesh_device)
+            prefill_sync_s = time.time() - t0
+
         t0 = time.time()
         logits = self._generator.prefill_forward_text(
             torch.tensor(prompt_ids, dtype=torch.int32).view(1, prompt_len),
@@ -918,6 +928,8 @@ class DevicePromptEnhancer(PromptEnhancer):
             "decode_token_feedback": feedback_capable,
             "feedback": use_feedback,
         }
+        if prefill_sync_s is not None:
+            self.last_stats["prefill_sync_s"] = round(prefill_sync_s, 3)
         if step_timing and dispatch_ms:
             self.last_stats["dispatch_ms_median"] = round(statistics.median(dispatch_ms), 3)
             self.last_stats["read_ms_median"] = round(statistics.median(read_ms), 3)
@@ -1013,4 +1025,10 @@ def apply_prompt_enhancer(
     logger.info(
         f"prompt enhanced ({enhancer.name}, {mode}, {time.time() - t0:.1f}s)\n  raw: {prompt!r}\n  enhanced: {enhanced!r}"
     )
+    stats = getattr(enhancer, "last_stats", None)
+    if stats:
+        logger.info(
+            "prompt enhancer stats: "
+            + " ".join(f"{k}={stats[k]}" for k in ("prompt_tokens", "prefill_s", "new_tokens", "decode_s") if k in stats)
+        )
     return enhanced
