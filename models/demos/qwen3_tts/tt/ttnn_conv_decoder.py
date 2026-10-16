@@ -31,6 +31,9 @@ from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
 # once, as conv1d does, but through the matmul reader only (Blaze codec_fast: the missing fp32
 # accumulation across taps was the decoder's dominant error; 28.8 -> 35.1 dB vs CPU).
 CONV_MODE = os.environ.get("TT_QWEN3_DECODE_CONV", "fused")
+# Largest tap-stacked (im2col) input the fused conv builds at once; longer inputs run in row
+# chunks (see TTNNConv1d._fused_call).
+IM2COL_MAX_BYTES = int(os.environ.get("TT_QWEN3_DECODE_IM2COL_MB", "256")) << 20
 # Math fidelity with fp32 accumulation. tt-metal warns that on Wormhole HiFi4 + fp32
 # accumulation can be less accurate than HiFi3 (hardware bug), so this is A/B-able.
 FIDELITY = os.environ.get("TT_QWEN3_DECODE_FIDELITY", "HiFi4")
@@ -237,18 +240,43 @@ class TTNNConv1d:
             x_cat = ttnn.reshape(x, (b, input_length, in_c), memory_config=mc)
             if x_cat.layout != ttnn.TILE_LAYOUT:
                 x_cat = ttnn.to_layout(x_cat, ttnn.TILE_LAYOUT)
-        else:
-            # Tap shifts are not 32-aligned on the length axis, so slice in ROW_MAJOR.
-            x_rm = ttnn.to_layout(ttnn.reshape(x, (b, input_length, in_c), memory_config=mc), ttnn.ROW_MAJOR_LAYOUT)
-            shifts = [ttnn.slice(x_rm, [0, j * d, 0], [b, j * d + l_out, in_c], memory_config=mc) for j in range(k)]
+            y = ttnn.linear(
+                x_cat,
+                self._tap_w,
+                bias=self._bias_dev,
+                memory_config=mc,
+                compute_kernel_config=self.matmul_compute_config,
+            )
+            return y, l_out
+
+        # The stacked input is k times the activation; at bucket 1024 the 96-channel convs
+        # would need 2.6 GB in one buffer. Output rows [a, a+n) only read input rows
+        # [a, a+n+(k-1)d), so the conv runs over row chunks with identical products.
+        rows = max(32, (IM2COL_MAX_BYTES // (k * in_c * 2)) // 32 * 32)
+        # Tap shifts are not 32-aligned on the length axis, so slice in ROW_MAJOR.
+        x_rm = ttnn.to_layout(ttnn.reshape(x, (b, input_length, in_c), memory_config=mc), ttnn.ROW_MAJOR_LAYOUT)
+        outs = []
+        for a in range(0, l_out, rows):
+            n = min(rows, l_out - a)
+            shifts = [ttnn.slice(x_rm, [0, a + j * d, 0], [b, a + j * d + n, in_c], memory_config=mc) for j in range(k)]
             x_cat = ttnn.to_layout(ttnn.concat(shifts, dim=-1, memory_config=mc), ttnn.TILE_LAYOUT)
             for s in shifts:
                 ttnn.deallocate(s)
-        y = ttnn.linear(
-            x_cat, self._tap_w, bias=self._bias_dev, memory_config=mc, compute_kernel_config=self.matmul_compute_config
-        )
-        if k > 1:  # for k == 1 x_cat is a view of the caller's x
+            outs.append(
+                ttnn.linear(
+                    x_cat,
+                    self._tap_w,
+                    bias=self._bias_dev,
+                    memory_config=mc,
+                    compute_kernel_config=self.matmul_compute_config,
+                )
+            )
             ttnn.deallocate(x_cat)
+        if len(outs) == 1:
+            return outs[0], l_out
+        y = ttnn.concat(outs, dim=1, memory_config=mc)
+        for t in outs:
+            ttnn.deallocate(t)
         return y, l_out
 
     def _conv1d_call(self, x: ttnn.Tensor, input_length: int) -> Tuple[ttnn.Tensor, int]:

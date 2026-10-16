@@ -1786,7 +1786,12 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         then alias only other traces' scratch, never a persistent buffer, and the input /
         output are written and read around each replay, so a talker replay in between
         cannot leave stale data in them.
+
+        A bucket whose capture fails is left untraced (it decodes eagerly, as before this
+        existed) and is reported in the returned dict instead of raising.
+        Returns {bucket: error message} for the buckets that could not be traced.
         """
+        failed = {}
         with _variant_scope(self.variant):
             for bucket in buckets:
                 bucket = int(bucket)
@@ -1802,23 +1807,39 @@ class TtSpeechTokenizerDecoder(LightweightModule):
                     device=self.device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
-                # One eager pass under the memory state the trace will see: the talker's
-                # resident buffers can change auto-picked op configs (and so program hashes)
-                # from what warm-up compiled, and capture cannot compile.
-                ttnn.deallocate(self._conv_decoder_forward(x_in))
-                ttnn.synchronize_device(self.device)
+                try:
+                    # One eager pass under the memory state the trace will see: the talker's
+                    # resident buffers can change auto-picked op configs (and so program
+                    # hashes) from what warm-up compiled, and capture cannot compile.
+                    ttnn.deallocate(self._conv_decoder_forward(x_in))
+                    ttnn.synchronize_device(self.device)
+                except Exception as e:  # noqa: BLE001 -- this bucket stays eager
+                    ttnn.deallocate(x_in)
+                    failed[bucket] = f"{type(e).__name__}: {e}"
+                    continue
                 tid = ttnn.begin_trace_capture(self.device, cq_id=0)
                 try:
                     out = self._conv_decoder_forward(x_in)
-                except Exception:
+                except Exception as e:  # noqa: BLE001 -- this bucket stays eager
                     # Close and drop the capture: an open one makes every later write and
                     # close_device fail.
                     ttnn.end_trace_capture(self.device, tid, cq_id=0)
                     ttnn.release_trace(self.device, tid)
-                    raise
+                    ttnn.deallocate(x_in)
+                    failed[bucket] = f"{type(e).__name__}: {e}"
+                    continue
                 ttnn.end_trace_capture(self.device, tid, cq_id=0)
                 ttnn.synchronize_device(self.device)
                 self._backend_traces[bucket] = (tid, x_in, out)
+        return failed
+
+    def release_backend_traces(self) -> None:
+        """Release every back-end trace and its persistent input / output (before close)."""
+        for tid, x_in, out in self._backend_traces.values():
+            ttnn.release_trace(self.device, tid)
+            ttnn.deallocate(x_in)
+            ttnn.deallocate(out)
+        self._backend_traces = {}
 
     def _select_bucket(self, real_seq_len: int) -> int:
         """Pick the decode bucket for ``real_seq_len`` frames and make its cache active.

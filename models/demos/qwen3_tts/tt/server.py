@@ -35,6 +35,7 @@ KV Cache:
 - Drops O(n²) → O(n) for generation.
 """
 
+import collections
 import os
 import time
 from dataclasses import dataclass, field
@@ -307,6 +308,10 @@ def encode_reference_audio(
 # TT_QWEN3_ICL_CACHE=0 restores the per-request recomputation.
 _ICL_CACHE: dict = {}
 ICL_CACHE = os.environ.get("TT_QWEN3_ICL_CACHE", "1") == "1"
+# Reference-code sums are per voice: preset voices repeat them, but every ad-hoc clone brings
+# new codes, so these entries are kept in a small LRU instead of the unbounded dict.
+_ICL_REF_CACHE: "collections.OrderedDict" = collections.OrderedDict()
+ICL_REF_CACHE_SIZE = 16
 
 
 def _icl_cached(key, build):
@@ -315,6 +320,18 @@ def _icl_cached(key, build):
     if key not in _ICL_CACHE:
         _ICL_CACHE[key] = build()
     return _ICL_CACHE[key]
+
+
+def _icl_ref_cached(key, build):
+    if not ICL_CACHE:
+        return build()
+    if key in _ICL_REF_CACHE:
+        _ICL_REF_CACHE.move_to_end(key)
+        return _ICL_REF_CACHE[key]
+    val = _ICL_REF_CACHE[key] = build()
+    while len(_ICL_REF_CACHE) > ICL_REF_CACHE_SIZE:
+        _ICL_REF_CACHE.popitem(last=False)
+    return val
 
 
 def create_icl_embedding_ttnn(
@@ -484,7 +501,7 @@ def create_icl_embedding_ttnn(
 
     # Keyed on the codes themselves: a preset voice repeats them, a clone brings new ones.
     ref_bytes = ref_codes.to(torch.int64).contiguous().numpy().tobytes()
-    summed_embeds = _icl_cached((mkey, "ref_sum", tuple(ref_codes.shape), ref_bytes), _summed_ref_embeds)
+    summed_embeds = _icl_ref_cached((mkey, tuple(ref_codes.shape), ref_bytes), _summed_ref_embeds)
 
     # Prepend codec_bos
     codec_bos_ids = torch.tensor([[config.codec_bos_id]])
