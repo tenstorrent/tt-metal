@@ -127,9 +127,16 @@ struct ProgramRunArgs {
         std::optional<uint32_t> entry_size = std::nullopt;
         std::optional<uint32_t> num_entries = std::nullopt;
 
-        // NOTE: Borrowed-memory DFBs update their backing L1 SRAM address from the corresponding
-        // tensor_arg. If you update a borrowed-memory DFB size from an UpdateProgramRunArgs call
-        // (i.e. partial args update; advanced users only) you must ALSO supply its backing tensor_arg.
+        // NOTE: Borrowed-memory DFBs take their backing SRAM address from the user-managed object
+        // they borrow from.
+        //  - Borrowed from a TensorParameter: if you update the DFB's size from an
+        //    UpdateProgramRunArgs call (i.e. partial args update; advanced users only),
+        //    you must ALSO supply its backing tensor_arg.
+        //  - Borrowed from a RawAllocationParameter: the DFB may be resized without re-supplying
+        //    its RawAllocation. The resized DFB must still fit within the RawAllocation
+        //    (checked against the RawAllocationParameter's declared size). There are NO checks
+        //    for overlap with other DFBs or scratchpads placed in the same RawAllocation
+        //    (see DFBAdvancedOptions::borrowed_memory_offset).
     };
     // DFBRunOverrides is optional. Provide entries only when overriding DFB sizes.
     Group<DFBRunOverrides> dfb_run_overrides;
@@ -138,7 +145,7 @@ struct ProgramRunArgs {
     // Advanced options (see advanced_options.hpp)
     ////////////////////////////////////////////////////////////////////////
     // Companion to ProgramAdvancedOptions on the schema side; holds the
-    // experimental PrefetcherPipe arguments.
+    // experimental RawAllocation and PrefetcherPipe arguments.
     AdvancedProgramRunArgs advanced_options;
 };
 

@@ -12,6 +12,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp>
+#include <tt-metalium/experimental/metal2_host_api/raw_allocation_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -416,6 +417,30 @@ struct AdvancedKernelRunArgs {
 
 struct AdvancedProgramRunArgs {
     ////////////////////////////////////////////////////////////////////////////////
+    // RawAllocation arguments (experimental)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // The actual RawAllocation argument. (Non-owning reference.)
+    using RawAllocationArgument = std::reference_wrapper<const tt::tt_metal::experimental::RawAllocation>;
+
+    // A RawAllocationArgument must be specified:
+    //  For EVERY RawAllocationParameter in the ProgramSpec, when calling SetProgramRunArgs.
+    //  For any SUBSET of RawAllocationParameters, when calling UpdateProgramRunArgs.
+    //
+    // The supplied RawAllocation MUST live on the MeshDevice the Program was built for, and its
+    // properties MUST match the RawAllocationParameter's (see raw_allocation_parameter.hpp).
+    //
+    // A different RawAllocation may be supplied for each Program execution. Every DFB and
+    // scratchpad that borrows from the parameter is then placed at the new RawAllocation's
+    // base address, plus its borrowed_memory_offset.
+    //
+    // CAUTION: RawAllocation is an RAII object. The user is responsible for keeping it alive until
+    //          the last Program execution that uses it has completed on the device. A stale binding
+    //          to a destroyed RawAllocation (e.g. one retained by an UpdateProgramRunArgs call that
+    //          omits it) will produce undefined behavior.
+    Table<RawAllocationParamName, RawAllocationArgument> raw_allocation_args;
+
+    ////////////////////////////////////////////////////////////////////////////////
     // PrefetcherPipe arguments (experimental)
     ////////////////////////////////////////////////////////////////////////////////
 
@@ -486,5 +511,6 @@ struct SemaphoreAdvancedOptions {
 
 using PrefetcherPipeBinding = KernelAdvancedOptions::PrefetcherPipeBinding;
 using PrefetcherPipeArgument = AdvancedProgramRunArgs::PrefetcherPipeArgument;
+using RawAllocationArgument = AdvancedProgramRunArgs::RawAllocationArgument;
 
 }  // namespace tt::tt_metal::experimental
