@@ -97,8 +97,13 @@ class BankStreamMatmul:
     MAX_DEST = 4  # fp32 tiles in half-sync Dest
     CB_X, CB_W, CB_OUT, CB_ZERO = 0, 1, 2, 3
     SEM_X = 0  # tiles of x the bank's loader has landed
+    PREFETCH_CHUNK_ROWS = 8  # weight rows per transaction id of prefetch_section
+    PREFETCH_CHUNKS = 2  # chunks in flight per core (12-24 rows in flight stream at ~400 GB/s)
 
-    def __init__(self, plan, k, n, compute_kernel_config):
+    def __init__(self, plan, k, n, compute_kernel_config, skip_bank_core=False):
+        """``skip_bank_core``: use the GROUP cores after each bank core in its row, so the bank cores stay free and
+        this matmul's weights can be prefetched into L1 (``staging`` / ``prefetch_section``) by kernels added to
+        programs that run on the bank cores."""
         device = plan.mesh_device
         self.plan, self.k, self.n = plan, k, n
         self.banks = device.dram_grid_size().x
@@ -109,13 +114,17 @@ class BankStreamMatmul:
         self.cpc = self.cpb // self.GROUP
         assert self.cpc <= self.MAX_DEST, self.cpc
         grid = device.compute_with_storage_grid_size()
+        bank_cores = list(dram_bank_cores(device))
         taken, self.cores, self.slots = set(), [], []
-        for b, c in enumerate(dram_bank_cores(device)):
-            xs = [x for x in list(range(c.x, grid.x)) + list(range(c.x - 1, -1, -1)) if (x, c.y) not in taken]
+        if skip_bank_core:
+            taken = {(c.x, c.y) for c in bank_cores}
+        for b, c in enumerate(bank_cores):
+            row = [(x, c.y) for x in list(range(c.x, grid.x)) + list(range(c.x - 1, -1, -1))]
+            xs = [p for p in row if p not in taken]
             assert len(xs) >= self.GROUP, (b, c)
-            for q, x in enumerate(xs[: self.GROUP]):
-                taken.add((x, c.y))
-                self.cores.append(ttnn.CoreCoord(x, c.y))
+            for q, (x, y) in enumerate(xs[: self.GROUP]):
+                taken.add((x, y))
+                self.cores.append(ttnn.CoreCoord(x, y))
                 self.slots.append((b, q))
         self.vcs = bank_vcs(self.cores)
         self.noc_cores = _noc_coords(device, self.cores)
@@ -175,7 +184,43 @@ class BankStreamMatmul:
         ttnn.generic_op([w, out], program)
         return out
 
-    def __call__(self, x, w, fused=None):
+    def staging(self, w_dtype):
+        """Persistent L1 tensor holding every core's whole weight slice (kt rows of cpc tiles, row-major), height-
+        sharded so each of this matmul's cores owns its slice at the same L1 address."""
+        tiles = self.kt * self.cpc
+        mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(_ranges(self.cores), [tiles * TILE, TILE], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        return ttnn.from_torch(
+            torch.zeros(len(self.cores) * tiles * TILE, TILE),
+            device=self.plan.mesh_device,
+            dtype=w_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=self.plan.replicate(),
+            memory_config=mc,
+        )
+
+    def prefetch_section(self, w, staging, k0, k1):
+        """(kernels, tensors) to add to another program (on other cores): weight rows [k0, k1) of every core's slice
+        from DRAM into ``staging``. Once rows [0, kt) are staged, ``self(x, w, staged=staging)`` reads no DRAM."""
+        w_tile, row_bytes, _ = self._sizes(w.dtype)
+        rt = [
+            [b, vc, w.buffer_address(), q * row_bytes, k0, k1, staging.buffer_address()]
+            for (b, q), vc in zip(self.slots, self.vcs)
+        ]
+        kernel = _kernel(
+            "proj_prefetch_reader.cpp",
+            self.cores,
+            [row_bytes, self.cpb * w_tile, self.PREFETCH_CHUNK_ROWS, self.PREFETCH_CHUNKS],
+            rt,
+            ttnn.ReaderConfigDescriptor(),
+        )
+        return [kernel], [w, staging]
+
+    def __call__(self, x, w, fused=None, staged=None):
+        """``staged``: the ``staging`` tensor, already holding every weight row (``prefetch_section``)."""
         assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT
         assert _is_interleaved(x)
         out = ttnn.empty(
@@ -217,28 +262,39 @@ class BankStreamMatmul:
 
         ranges = _ranges(self.cores)
         x_ranges = _ranges(self.cores + list(x_cores))
+        if staged is not None:
+            cb_w = ttnn.cb_descriptor_from_sharded_tensor(self.CB_W, staged)
+            reader = _kernel(
+                "proj_staged_push.cpp",
+                self.cores,
+                [self.CB_W, self.kt * self.cpc],
+                [[] for _ in self.cores],
+                ttnn.ReaderConfigDescriptor(),
+            )
+        else:
+            cb_w = _cb(self.CB_W, w.dtype, self.NUM_BUFFERS * block_tiles, ranges)
+            reader = _kernel(
+                "proj_reader.cpp",
+                self.cores,
+                [
+                    self.CB_W,
+                    num_blocks,
+                    block_rows,
+                    block_tiles,
+                    row_bytes,
+                    self.cpb * w_tile,
+                    self.NUM_BUFFERS,
+                    self.IN_FLIGHT,
+                ],
+                reader_rt,
+                ttnn.ReaderConfigDescriptor(),
+            )
         cbs = [
             _cb(self.CB_X, x.dtype, self.kt, x_ranges),
-            _cb(self.CB_W, w.dtype, self.NUM_BUFFERS * block_tiles, ranges),
+            cb_w,
             _cb(self.CB_OUT, x.dtype, self.cpc, ranges),
             _cb(self.CB_ZERO, x.dtype, 1, ranges),
         ]
-        reader = _kernel(
-            "proj_reader.cpp",
-            self.cores,
-            [
-                self.CB_W,
-                num_blocks,
-                block_rows,
-                block_tiles,
-                row_bytes,
-                self.cpb * w_tile,
-                self.NUM_BUFFERS,
-                self.IN_FLIGHT,
-            ],
-            reader_rt,
-            ttnn.ReaderConfigDescriptor(),
-        )
         writer = _kernel(
             "proj_writer.cpp",
             self.cores,
@@ -255,7 +311,7 @@ class BankStreamMatmul:
         )
         kernels = [reader, writer, compute] + list(f_kernels)
         cbs += list(f_cbs)
-        tensors = [x, w] + list(f_tensors)
+        tensors = [x, w] + ([staged] if staged is not None else []) + list(f_tensors)
         semaphores = [_semaphore(x_ranges)] if loaders is not None else []
         program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=semaphores, cbs=cbs)
         ttnn.generic_op(tensors + [out], program)

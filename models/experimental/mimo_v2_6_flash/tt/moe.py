@@ -21,7 +21,7 @@ import torch
 import ttnn
 
 from .common import TILE, DramShardedMatmul, as_weight, cache_exists, cache_name, compute_config, mcast_1d_config
-from .moe_stream import DownStream, GateUpStream, ReduceExpand, is_dram_interleaved
+from .moe_stream import DownStream, GateUpStream, ReduceExpand, fabric_row_gather, is_dram_interleaved
 from .proj_stream import RouterScoreStream
 
 
@@ -91,6 +91,7 @@ class TtMiMoMoE:
         self.decode_users = None
         self.gate_up_stream = None
         self.router_scores = None
+        self.fabric_gather = False  # set by the model: the block reductions all-gather over the fabric
         self.down_stream = None
         self.ids_buf = None
 
@@ -231,10 +232,12 @@ class TtMiMoMoE:
             except AssertionError:
                 self.router_scores = None
 
-    def reduce_residual(self, gathered, residual=None, norm=None):
+    def reduce_residual(self, gathered, residual=None, norm=None, compact=None, extra=None):
         """Row all-gather of the chips' compact [1, 1, 32, H / 8] rows -> a new [1, 1, 32, H]: their chip-ordered sum
         in rows 0-3 and zeros elsewhere, or with ``residual`` the residual plus that (bf16-rounded) sum.
-        ``norm`` = (compact gamma, persistent output, eps): returns (sum, RMSNorm(sum) * gamma in that output)."""
+        ``norm`` = (compact gamma, persistent output, eps): returns (sum, RMSNorm(sum) * gamma in that output).
+        ``compact`` (with ``norm``, in place of ``gathered``): this chip's compact rows, all-gathered over the fabric
+        inside the reduce launch (FabricRowGather)."""
         full = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, TILE, self.hidden]),
             ttnn.bfloat16,
@@ -245,12 +248,16 @@ class TtMiMoMoE:
         res = residual
         if residual is not None and not is_dram_interleaved(residual):
             res = ttnn.to_memory_config(residual, ttnn.DRAM_MEMORY_CONFIG)
-        normed = self.reduce_expand(gathered, full, residual=res, norm=norm)
+        if compact is not None:
+            fabric = fabric_row_gather(self.plan, self.reduce_expand)
+            normed = self.reduce_expand.call_fabric(compact, full, res, norm, fabric, extra=extra)
+        else:
+            normed = self.reduce_expand(gathered, full, residual=res, norm=norm)
         if res is not residual:
             res.deallocate(True)
         return normed if norm is not None else full
 
-    def _forward_decode_stream(self, x, token_mask, residual=None, norm=None):
+    def _forward_decode_stream(self, x, token_mask, residual=None, norm=None, extra=None):
         """BFP4 decode: fp32 router logits, sigmoid and +bias, then one streaming program that selects every user's
         fp32 top-k, normalizes and masks the weights and computes gate|up + SwiGLU + routing weight; then the
         streaming down program (down and the sum over each user's pairs) on the expert ids that program wrote."""
@@ -283,13 +290,15 @@ class TtMiMoMoE:
         # The row all-reduce as one fabric phase: gather every chip's compact output (chip order along the row, the
         # same on every chip), then ReduceExpand sums the copies in that order. The persistent compact output is
         # rewritten every call, so it is not deallocated.
+        if norm is not None and self.fabric_gather:
+            return self.reduce_residual(None, residual, norm=norm, compact=out, extra=extra)
         gathered = plan.all_gather(out, dim=3)  # [1, 1, 32, tp * H / 8]
         full = self.reduce_residual(gathered, residual, norm=norm)
         if gathered is not self.out_buf:
             gathered.deallocate(True)
         return full
 
-    def forward_decode(self, x, token_mask, residual=None, norm=None):
+    def forward_decode(self, x, token_mask, residual=None, norm=None, extra=None):
         """Decode: x [1, 1, 32, hidden], users in rows [0, decode_users). Computes only the selected experts.
         ``residual``: returns residual + the MoE output (fused into the streaming path's reduction); ``norm`` (streaming
         path with ``residual``): returns (that, its RMSNorm), see ``reduce_residual``.
@@ -298,7 +307,7 @@ class TtMiMoMoE:
         pair's expert on all 32 rows, the routing weight applied to the pair's own row (the other rows are
         zeroed), down for the same expert, then a sum over pairs. Nothing is materialized per expert."""
         if self.gate_up_stream is not None:
-            return self._forward_decode_stream(x, token_mask, residual, norm)
+            return self._forward_decode_stream(x, token_mask, residual, norm, extra)
         assert norm is None
         U, k = self.decode_users, self.cfg.num_experts_per_tok
         pairs = U * k

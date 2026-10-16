@@ -606,6 +606,29 @@ class ReduceExpand:
         if norm is not None:
             assert residual is not None and self.can_norm
             return self._call_norm(gathered, out, residual, *norm)
+
+    def call_fabric(self, compact, out, residual, norm, fabric, extra=None):
+        """The row all-gather and the fused reduce + residual + RMSNorm in one launch per chip: ``compact`` is this
+        chip's [1, 1, 32, hidden / 8] compact rows (DRAM tiles), sent over the fabric to every chip of the row
+        (``fabric``: the row's FabricRowGather); returns (out, norm_out) as ``__call__`` with ``norm``. ``extra``:
+        (kernels, tensors) on other cores to run in the same launch (e.g. staging the next layer's weights)."""
+        gamma, norm_out, eps = norm
+        for t in (compact, out, residual, gamma, norm_out):
+            assert t.layout == ttnn.TILE_LAYOUT and t.dtype == ttnn.bfloat16 and is_dram_interleaved(t)
+        assert compact.shape[-1] == self.compact_width
+        phase = fabric.next_phase()
+        kernels, cbs, semaphores = self._norm_kernels(
+            out, residual, gamma, norm_out, eps, gather_sem=fabric.sem_addr(phase)
+        )
+        # cb_in is the gather buffer of this phase (every chip's copies of this core's tiles land there)
+        cbs[self.cb_in] = ttnn.cb_descriptor_from_sharded_tensor(
+            self.cb_in, fabric.gather, address_offset=phase * fabric.phase_bytes, total_size=fabric.phase_bytes
+        )
+        extra_kernels, extra_tensors = extra if extra is not None else ([], [])
+        mesh_program = fabric.programs(kernels + list(extra_kernels), cbs, semaphores, compact, phase)
+        io = [compact, residual, gamma, self.norm_consts, fabric.gather] + list(extra_tensors) + [out, norm_out]
+        ttnn.generic_op(io, mesh_program)
+        return out, norm_out
         tensors = (gathered, out) + ((residual,) if residual is not None else ())
         for t in tensors:
             assert t.layout == ttnn.TILE_LAYOUT and t.dtype == ttnn.bfloat16 and is_dram_interleaved(t)
@@ -672,6 +695,14 @@ class ReduceExpand:
             assert t.layout == ttnn.TILE_LAYOUT and t.dtype == ttnn.bfloat16 and is_dram_interleaved(t)
             assert t.shape[-2] == TILE
         assert gathered.shape[-1] == self.chips * self.compact_width
+        kernels, cbs, semaphores = self._norm_kernels(out, residual, gamma, norm_out, eps, gathered=gathered)
+        program = ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=semaphores)
+        ttnn.generic_op([gathered, residual, gamma, self.norm_consts, out, norm_out], program)
+        return out, norm_out
+
+    def _norm_kernels(self, out, residual, gamma, norm_out, eps, gathered=None, gather_sem=None):
+        """Kernels, CBs and semaphores of the fused reduce + residual + RMSNorm on the bank cores. The chips' copies
+        come from ``gathered`` (a row all-gather in DRAM) or, with ``gather_sem``, from the fabric gather buffer."""
         assert out.shape[-1] == self.hidden and residual.shape[-1] == self.hidden and norm_out.shape[-1] == self.hidden
         assert gamma.shape[-1] == self.compact_width
         cores = len(self.cores)
@@ -684,7 +715,7 @@ class ReduceExpand:
         for i, core in enumerate(self.cores):
             first = i * self.tiles_per_core
             reader_rt[core.x][core.y] = [
-                gathered.buffer_address(),
+                gathered.buffer_address() if gathered is not None else gather_sem,
                 first,
                 residual.buffer_address(),
                 gamma.buffer_address(),
@@ -698,7 +729,6 @@ class ReduceExpand:
                 i,
             ] + noc
             compute_rt[core.x][core.y] = []
-
         sem_id = 0
         reader_ct = [
             self.cb_in,
@@ -744,7 +774,7 @@ class ReduceExpand:
             fp32_bits(eps),
         ]
         reader = ttnn.KernelDescriptor(
-            kernel_source=f"{KERNEL_DIR}/moe_reduce_norm_reader.cpp",
+            kernel_source=f"{KERNEL_DIR}/moe_reduce_norm_reader{'' if gathered is not None else '_fabric'}.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=self.core_ranges,
             compile_time_args=reader_ct,
@@ -771,13 +801,139 @@ class ReduceExpand:
             runtime_args=compute_rt,
             config=self.norm_compute_config,
         )
-        program = ttnn.ProgramDescriptor(
-            kernels=[reader, writer, compute],
-            cbs=self.norm_cbs,
-            semaphores=[semaphore_descriptor(self.core_ranges)],
+        return [reader, writer, compute], list(self.norm_cbs), [semaphore_descriptor(self.core_ranges)]
+
+
+class FabricRowGather:
+    """The row all-gather of the compact rows feeding ReduceExpand.call_fabric, over the fabric instead of a separate
+    all-gather op: one transport core per chip multicasts this chip's compact tiles (BRISC: the next 4 chips of the
+    ring, NCRISC: the previous 3), each reduce core's two tiles as one fused scatter write + semaphore increment into
+    that core's persistent gather buffer on every chip. Shared by every layer of a row.
+
+    Chips run at most one gather phase apart (a chip finishes phase k only after every chip has sent its phase k
+    rows), so two gather buffers and global semaphores alternated by phase never take data a chip still reads."""
+
+    PHASES = 2
+    CB_SCRATCH = (14, 15)  # forward, backward sender scratch on a transport core
+    TRANSPORT_CORES = ((5, 5), (6, 5))  # one per fabric link; not bank cores
+    FORWARD_RANGE = 4
+
+    def __init__(self, plan, reduce):
+        device = plan.mesh_device
+        self.device = device
+        self.chips = plan.tp
+        assert tuple(device.shape) == (1, self.chips), tuple(device.shape)
+        self.cores = list(reduce.cores)
+        self.tiles_per_core = reduce.tiles_per_core
+        self.compact_tiles = reduce.compact_tiles
+        assert self.tiles_per_core == 2 and len(self.cores) * self.tiles_per_core == self.compact_tiles
+        self.core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.cores])
+        tile_bytes = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat16)
+        self.phase_tiles = self.tiles_per_core * self.chips
+        self.phase_bytes = self.phase_tiles * tile_bytes
+        rows = self.PHASES * self.phase_tiles * TILE
+        mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(self.core_ranges, [rows, TILE], ttnn.ShardOrientation.ROW_MAJOR),
         )
-        ttnn.generic_op([gathered, residual, gamma, self.norm_consts, out, norm_out], program)
-        return out, norm_out
+        self.gather = ttnn.from_torch(
+            torch.zeros(len(self.cores) * rows, TILE),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=plan.replicate(),
+            memory_config=mc,
+        )
+        self.sems = [ttnn.create_global_semaphore(device, self.core_ranges, 0) for _ in range(self.PHASES)]
+        self.transports = [ttnn.CoreCoord(*c) for c in self.TRANSPORT_CORES]
+        assert len(self.cores) % len(self.transports) == 0
+        self.nodes = [device.get_fabric_node_id(ttnn.MeshCoordinate(0, c)) for c in range(self.chips)]
+        self.noc_cores = noc_coords(device, self.cores)
+        self.phase = 0
+
+    def next_phase(self):
+        phase = self.phase
+        self.phase = (self.phase + 1) % self.PHASES
+        return phase
+
+    def sem_addr(self, phase):
+        return ttnn.get_global_semaphore_address(self.sems[phase])
+
+    def programs(self, kernels, cbs, semaphores, compact, phase):
+        """MeshProgramDescriptor: per chip, ``kernels`` / ``cbs`` / ``semaphores`` (the reduce, the same on every
+        chip) plus, per fabric link, a transport core whose two senders multicast its share of ``compact``."""
+        transport = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.transports])
+        per_link = len(self.cores) // len(self.transports)
+        page = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat16)
+        scratch = []
+        for index in self.CB_SCRATCH:
+            fmt = ttnn.CBFormatDescriptor(
+                buffer_index=index,
+                data_format=ttnn.bfloat16,
+                page_size=page,
+                tile=ttnn.TileDescriptor(ttnn.Tile([TILE, TILE])),
+            )
+            scratch.append(
+                ttnn.CBDescriptor(
+                    total_size=per_link * self.tiles_per_core * page, core_ranges=transport, format_descriptors=[fmt]
+                )
+            )
+        gather_addr = self.gather.buffer_address() + phase * self.phase_bytes
+        directions = (
+            (1, self.CB_SCRATCH[0], self.FORWARD_RANGE, 1, ttnn.WriterConfigDescriptor()),
+            (-1, self.CB_SCRATCH[1], self.chips - 1 - self.FORWARD_RANGE, 0, ttnn.ReaderConfigDescriptor()),
+        )
+        mesh_program = ttnn.MeshProgramDescriptor()
+        for chip in range(self.chips):
+            senders = []
+            for _, cb, rng, local, config in directions:
+                rt = ttnn.RuntimeArgs()
+                for link, t in enumerate(self.transports):
+                    first = link * per_link
+                    noc = []
+                    for c in self.noc_cores[first : first + per_link]:
+                        noc += [c.x, c.y]
+                    rt[t.x][t.y] = [compact.buffer_address(), gather_addr, self.sem_addr(phase), chip, first] + noc
+                senders.append(
+                    ttnn.KernelDescriptor(
+                        kernel_source=f"{KERNEL_DIR}/fabric_gather_send.cpp",
+                        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                        core_ranges=transport,
+                        compile_time_args=[cb, rng, per_link, self.tiles_per_core, self.chips, local, 1],
+                        runtime_args=rt,
+                        config=config,
+                    )
+                )
+            program = ttnn.ProgramDescriptor(
+                kernels=list(kernels) + senders, cbs=list(cbs) + scratch, semaphores=list(semaphores)
+            )
+            n = len(kernels)
+            for d, (step, *_rest) in enumerate(directions):
+                dst = self.nodes[(chip + step) % self.chips]
+                for link, t in enumerate(self.transports):
+                    args = ttnn.setup_fabric_connection(
+                        src_fabric_node_id=self.nodes[chip],
+                        dst_fabric_node_id=dst,
+                        link_idx=link,
+                        program_descriptor=program,
+                        worker_core=t,
+                    )
+                    program.kernels[n + d].runtime_args[t.x][t.y].extend(args)
+            coord = ttnn.MeshCoordinate(0, chip)
+            mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
+        return mesh_program
+
+
+_FABRIC_GATHERS = {}
+
+
+def fabric_row_gather(plan, reduce):
+    """The row's shared FabricRowGather (created on first use)."""
+    key = tuple(plan.mesh_device.get_device_ids())
+    if key not in _FABRIC_GATHERS:
+        _FABRIC_GATHERS[key] = FabricRowGather(plan, reduce)
+    return _FABRIC_GATHERS[key]
 
 
 class CompactRows:

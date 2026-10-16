@@ -224,6 +224,8 @@ class TtMiMoAttention:
 
         hidden = cfg.hidden_size
         self.qkv_stream = self.o_stream = None
+        self.qkv_staged = None  # set by the model: the L1 staging tensor that holds this layer's qkv weight
+        self.fabric_gather = False  # set by the model: forward_decode(compact=True) returns the un-gathered rows
         self.mm_config = compute_config(ttnn.MathFidelity.HiFi2)
         self.qkv_width = (self.nh_local + 2 * self.nkv_local) * self.head_dim
         self.wo = as_weight(wo, plan, plan.shard(-2), weight_dtype, cache_name(cache_dir, prefix, "wo"))
@@ -279,7 +281,8 @@ class TtMiMoAttention:
             # Bank-local streaming qkv (4096 x 1920 per chip, read padded to 2048 columns once: 23.9 us instead of
             # 32.4 us). It reads its own padded copy; prefill keeps the interleaved weight. The SWA o projection
             # (1024 x 4096) stays on the linear, which is faster at that size.
-            self.qkv_stream = self._bank_stream(hidden, self.qkv_width)
+            # Off the bank cores, so the previous layer's reductions can stage these weights in L1 (qkv_prefetch).
+            self.qkv_stream = self._bank_stream(hidden, self.qkv_width, skip_bank_core=True)
             if self.qkv_stream is not None:
                 self.wqkv_stream = self.qkv_stream.prepare(self.wqkv)
         self.sinks = self.decode_sinks = None
@@ -366,18 +369,23 @@ class TtMiMoAttention:
             compute_kernel_config=self.mm_config,
         )
 
-    def _bank_stream(self, k, n):
+    def _bank_stream(self, k, n, skip_bank_core=False):
         """A BankStreamMatmul for a [k, n] decode projection, or None when its layout constraints do not hold."""
         try:
-            return BankStreamMatmul(self.plan, k, n, self.mm_config)
+            return BankStreamMatmul(self.plan, k, n, self.mm_config, skip_bank_core=skip_bank_core)
         except AssertionError:
             return None
+
+    def qkv_prefetch(self, staging, k0, k1):
+        """(kernels, tensors) that stage rows [k0, k1) of this layer's decode qkv weight into ``staging`` (to add to
+        a launch of the previous layer); see BankStreamMatmul.prefetch_section."""
+        return self.qkv_stream.prefetch_section(self.wqkv_stream, staging, k0, k1)
 
     def _decode_qkv(self, x, weight, program_config, compact=False):
         # Keep the fused qkv row in L1: the decode head split reads it with many small per-user row reads. The bank
         # stream computes rows 0-3 only, so it serves the compact (users in rows 0-3) decode.
         if compact and weight is self.wqkv and self.qkv_stream is not None:
-            return self.qkv_stream(x, self.wqkv_stream)
+            return self.qkv_stream(x, self.wqkv_stream, staged=self.qkv_staged)
         return ttnn.linear(
             x,
             weight,
@@ -493,6 +501,8 @@ class TtMiMoAttention:
             return self.plan.all_reduce(out)
         rows = self.compact_rows(out, self.compact_buf)
         out.deallocate(True)
+        if self.fabric_gather:
+            return rows  # the reduction all-gathers it over the fabric
         return self.plan.all_gather(rows, dim=3)  # [1, 1, 32, tp * hidden / 8]
 
     def forward_decode(self, x, rot_mats, cur_pos, page_table, kv_cache, compact=False):

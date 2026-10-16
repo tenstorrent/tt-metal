@@ -138,6 +138,7 @@ class TtMiMoModel:
         self.greedy_head = None
         self.decode_users = None
         self.norm_buffers = None
+        self.qkv_staging = None
         # Chip c's vocab shard starts at c * vocab_local: added to its local top-k ids for the device greedy.
         offsets = (torch.arange(plan.tp, dtype=torch.int32) * self.vocab_local).reshape(plan.tp, 1, 1, 1)
         self.vocab_offset = ttnn.from_torch(
@@ -184,6 +185,28 @@ class TtMiMoModel:
                 continue
             nxt = self.layers[i + 1].input_norm if i + 1 < len(self.layers) else self.final_norm
             layer.set_fused_norms(self.plan, nxt, self.norm_buffers)
+        self._setup_qkv_prefetch()
+
+    def _setup_qkv_prefetch(self):
+        """Each fused, fabric-gathered layer stages the next SWA layer's qkv weight into one shared L1 tensor during
+        its two reductions (half each), while DRAM is otherwise idle; that layer's qkv then reads no DRAM.
+        Off unless MIMO_QKV_PREFETCH=1."""
+        if os.environ.get("MIMO_QKV_PREFETCH", "0") != "1":
+            return
+        for i, layer in enumerate(self.layers[:-1]):
+            nxt = self.layers[i + 1]
+            if layer.prefetch is not None or layer.fused_norm is None or not layer.attn.fabric_gather:
+                continue
+            if not nxt.can_fuse_norms() or getattr(nxt.attn, "qkv_stream", None) is None:
+                continue
+            if self.qkv_staging is None:
+                self.qkv_staging = nxt.attn.qkv_stream.staging(nxt.attn.wqkv_stream.dtype)
+            kt = nxt.attn.qkv_stream.kt
+            layer.prefetch = (
+                nxt.attn.qkv_prefetch(self.qkv_staging, 0, kt // 2),
+                nxt.attn.qkv_prefetch(self.qkv_staging, kt // 2, kt),
+            )
+            nxt.attn.qkv_staged = self.qkv_staging
 
     def set_page_tables(self, tables):
         """tables: {is_swa: int32 [tp, max_batch, blocks_per_user]} (per chip slot -> physical block)."""

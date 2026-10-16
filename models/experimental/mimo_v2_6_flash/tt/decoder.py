@@ -6,6 +6,8 @@
 The residual stream is replicated on every chip of the row (each sub-block ends in an all-reduce).
 """
 
+import os
+
 import ttnn
 
 from .attention import TtMiMoAttention
@@ -169,6 +171,8 @@ class TtMiMoDecoderLayer:
         else:
             self.mlp = TtMiMoDenseMLP(plan, layer_idx, w.get("mlp"), cache_dir=cache_dir, weight_dtype=mlp_dtype)
         self.fused_norm = None
+        # Set by the model: (kernels, tensors) staging the next layer's qkv weight, for this layer's two reductions.
+        self.prefetch = None
 
     def can_fuse_norms(self):
         return self._compact_decode() and self.mlp.reduce_expand.can_norm
@@ -179,6 +183,9 @@ class TtMiMoDecoderLayer:
         input norm, or the final norm) of the layer output into ``buffers[0]``; forward_decode(h=..., return_norm=True)
         passes the latter on. ``buffers``: persistent zero [1, 1, 32, hidden] bf16 DRAM tensors shared by all layers."""
         red = self.mlp.reduce_expand
+        # Both block reductions also all-gather the compact rows over the fabric (MIMO_FABRIC_GATHER=0: all_gather).
+        fabric = os.environ.get("MIMO_FABRIC_GATHER", "1") == "1" and tuple(plan.mesh_device.shape) == (1, plan.tp)
+        self.attn.fabric_gather = self.mlp.fabric_gather = fabric
         self.fused_norm = {
             "post": (red.compact_gamma(plan, self.post_norm.torch_weight()), buffers[1], self.post_norm.eps),
             "next": (red.compact_gamma(plan, next_norm.torch_weight()), buffers[0], next_norm.eps),
@@ -242,7 +249,10 @@ class TtMiMoDecoderLayer:
         )
         if own_h:
             h.deallocate(True)
-        if fused is not None:
+        if fused is not None and self.attn.fabric_gather:
+            extra = self.prefetch[0] if self.prefetch is not None else None
+            x2, h2 = self.mlp.reduce_residual(None, x, norm=fused["post"], compact=gathered, extra=extra)
+        elif fused is not None:
             x2, h2 = self.mlp.reduce_residual(gathered, x, norm=fused["post"])
         else:
             x2 = self.mlp.reduce_residual(gathered, x)
@@ -251,7 +261,11 @@ class TtMiMoDecoderLayer:
         if fused is None:
             h2 = self.post_norm(x2)
         nxt = fused["next"] if fused is not None and return_norm else None
-        out = self.mlp.forward_decode(h2, token_mask, residual=x2, norm=nxt)
+        extra = self.prefetch[1] if self.prefetch is not None and nxt is not None else None
+        out = self.mlp.forward_decode(h2, token_mask, residual=x2, norm=nxt, extra=extra)
+        if self.prefetch is not None and nxt is None:  # no fused reduction to carry the second half: its own launch
+            kernels, tensors = self.prefetch[1]
+            ttnn.generic_op(list(tensors), ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[]))
         if fused is None:
             h2.deallocate(True)
         x2.deallocate(True)
