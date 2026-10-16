@@ -57,9 +57,10 @@
         "fits": false
       }
     ],
-    "shared_pool_tokens_max_that_fits": 885024,
+    "shared_pool_tokens_max_that_fits": 849664,
+    "shared_pool_tokens_without_prefix_snapshots": 885024,
     "shared_pool_tokens_recommended": 525312,
-    "shared_pool_derivation": "max = (state_budget_remaining - gdn_recurrent_and_conv_per_request) // kv_cache_per_page * 32 = 27657 pages = 885024 tokens at batch 1. The recommended 525312 is two full contexts plus 1024 of slack, costing 4.258 GiB, chosen to leave headroom for activations and dispatch rather than because it is the ceiling."
+    "shared_pool_derivation": "max = (state_budget_remaining - gdn_recurrent_and_conv_per_request * (1 + MAX_PREFIX_SNAPSHOTS)) // kv_cache_per_page * 32 = 26552 pages = 849664 tokens at batch 1, with MAX_PREFIX_SNAPSHOTS = 16. Serving reserves the snapshot store unconditionally because the pool is sized once at startup and cannot give the memory back later; without that reserve the same budget holds 27657 pages = 885024 tokens. The recommended 525312 is two full contexts plus 1024 of slack, costing 4.258 GiB, chosen to leave headroom for activations and dispatch rather than because it is the ceiling."
   },
   "limiting_reason": "none for single-request context; the binding constraint is the shared paged pool across concurrent requests, not the per-request context",
   "outstanding_verification": "An end-to-end 262144-token run has not been executed on this mesh; the figure above is a capacity result, not a latency or quality result."

@@ -25,6 +25,23 @@ class KVPoolConfigurationTests(unittest.TestCase):
         with patch.dict(os.environ, {"QWEN_VLLM_KV_POOL_TOKENS": "525312"}):
             self.assertEqual(Qwen38ForCausalLM.get_max_tokens_all_users(262144, max_num_seqs=8), 525312)
 
+    def test_the_contract_records_the_ceiling_the_code_derives(self):
+        """The artifact and the derivation must not drift apart.
+
+        _shared_pool_ceiling reads the byte budget and recomputes, so a contract whose recorded
+        token figure disagrees with it is describing a pool nothing will ever allocate.
+        """
+        import json
+        from pathlib import Path
+
+        import models.demos.qwen38_27b_t3k.tt.generator_vllm as adapter
+
+        contract = json.loads((Path(adapter.__file__).parents[1] / "doc/context_contract.json").read_text())[
+            "capacity_evidence"
+        ]
+        self.assertEqual(contract["shared_pool_tokens_max_that_fits"], _shared_pool_ceiling())
+        self.assertLessEqual(contract["shared_pool_tokens_recommended"], _shared_pool_ceiling())
+
     def test_pool_ceiling_is_the_derived_budget_and_is_granted(self):
         ceiling = _shared_pool_ceiling()
         # The pool is sized once, before anything knows whether prefix caching will be on, so
