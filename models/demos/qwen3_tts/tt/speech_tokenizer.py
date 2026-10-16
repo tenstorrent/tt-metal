@@ -270,8 +270,20 @@ def transpose_conv1d_nhwc(x_nhwc: ttnn.Tensor, weight: torch.Tensor, bias, strid
         y, _ = conv(_causal_left_pad_nlc(x_nlc, taps - 1, device), L + taps - 1)
         out_total = L * stride
         if stride > 1:
-            y = ttnn.to_layout(ttnn.reshape(y, (b, L, stride * out_c), memory_config=mc), ttnn.ROW_MAJOR_LAYOUT)
-            y = ttnn.to_layout(ttnn.reshape(y, (b, out_total, out_c), memory_config=mc), ttnn.TILE_LAYOUT)
+            # Untilize phase by phase: one untilize at width stride*out_c sizes its circular
+            # buffers past what L1 has free once the talker is resident (bucket 512 clashed).
+            y = ttnn.reshape(y, (b, L, stride * out_c), memory_config=mc)
+            phases = [
+                ttnn.to_layout(
+                    ttnn.slice(y, [0, 0, r * out_c], [b, L, (r + 1) * out_c], memory_config=mc), ttnn.ROW_MAJOR_LAYOUT
+                )
+                for r in range(stride)
+            ]
+            ttnn.deallocate(y)
+            cat = ttnn.concat(phases, dim=-1, memory_config=mc)  # [b, L, stride*out_c], row major
+            for t in phases:
+                ttnn.deallocate(t)
+            y = ttnn.to_layout(ttnn.reshape(cat, (b, out_total, out_c), memory_config=mc), ttnn.TILE_LAYOUT)
         return ttnn.reshape(y, (b, 1, out_total, out_c), memory_config=mc), out_total
 
     phase_nlc = []
