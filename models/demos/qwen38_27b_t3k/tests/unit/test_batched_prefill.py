@@ -120,3 +120,63 @@ class BatchedPrefillDispatchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PrefillSignatureCoverageTests(unittest.TestCase):
+    """Every chunk the per-row loop compiles has to appear in the signature set.
+
+    Each chunk builds its own program and uploads its own selectors. Those are persistent device
+    buffers, and the allocator refuses to place them safely beside a live trace, so a chunk the
+    set does not name lands on addresses a decode trace already reserved.
+    """
+
+    def setUp(self):
+        self.releases = []
+        self.ops = SimpleNamespace(uint32="u32", ROW_MAJOR_LAYOUT="rm")
+        self.cache = SimpleNamespace(batch_size=4, capacity=16384)
+        self.table = torch.zeros(4, 512, dtype=torch.int32)
+        self.gen = SimpleNamespace(
+            batched_prefill=False,
+            prefill_prepared=None,
+            cache=self.cache,
+            prefill_signatures=set(),
+            batched_prefill_shapes=set(),
+            page_table=self.table,
+            counters=Counter(),
+            model=SimpleNamespace(
+                config=SimpleNamespace(vocab_size=1000),
+                upload=lambda x, **kw: x,
+                prefill=lambda x, **kw: "single",
+            ),
+            _release_traces=lambda **kw: self.releases.append(kw),
+            _refresh_table=lambda table: None,
+            _bucket_selectors=lambda bucket: SimpleNamespace(update=lambda count: None),
+            _slot_prefix_len=[0] * self.cache.batch_size,
+        )
+        methods = load_methods(
+            "generator.py", "Qwen38Generator", ["prefill_forward", "_begin_prefix", "_end_prefix"], self.ops
+        )
+        self.gen._begin_prefix = MethodType(methods["_begin_prefix"], self.gen)
+        self.gen._end_prefix = MethodType(methods["_end_prefix"], self.gen)
+        self.forward = MethodType(methods["prefill_forward"], self.gen)
+
+    def run_prefill(self, length):
+        tokens = torch.ones(1, length, dtype=torch.int64)
+        self.gen._slot_prefix_len[0] = 0
+        return self.forward(
+            tokens, page_table=self.table, kv_cache=self.cache, prompt_lens=[length], slots=[0], start_pos=[0]
+        )
+
+    def test_a_tail_chunk_whose_shape_is_new_releases_before_it_compiles(self):
+        # The head chunk of 4128 is the same 4096-token program a 4096 prompt already compiled,
+        # so a set naming only the head would call this prompt entirely known.
+        self.run_prefill(4096)
+        self.releases.clear()
+        self.run_prefill(4128)
+        self.assertEqual(len(self.releases), 1)
+
+    def test_a_prompt_whose_every_chunk_is_known_keeps_its_traces(self):
+        self.run_prefill(4128)
+        self.releases.clear()
+        self.run_prefill(4128)
+        self.assertEqual(self.releases, [])

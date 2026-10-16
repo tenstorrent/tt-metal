@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 METHODS = (
     "remap_recurrent_slots",
+    "_reserve_snapshot_pool",
     "save_slot_state",
     "restore_slot_state",
     "free_slot_state",
@@ -44,9 +45,20 @@ class Row:
 
     def __init__(self, label, rows=4):
         self.label, self.rows = label, rows
+        self.shape = (rows, 2, 2)
 
     def __getitem__(self, key):
         return f"{self.label}[{key.start}]"
+
+
+class Buffer:
+    """A reserved snapshot row. A save overwrites what it holds rather than allocating."""
+
+    def __init__(self, content):
+        self.content = content
+
+    def __repr__(self):
+        return f"Buffer({self.content})"
 
 
 class PrefixSnapshotTests(unittest.TestCase):
@@ -56,7 +68,8 @@ class PrefixSnapshotTests(unittest.TestCase):
         self.copies = []
         self.ops = SimpleNamespace(
             zeros_like=lambda tensor: f"zeros({tensor})",
-            clone=lambda tensor: f"clone({tensor})",
+            clone=lambda tensor: Buffer(tensor),
+            slice=self.write_row,
             copy=lambda source, target: self.copies.append((source, target)),
             concat=lambda parts, **kw: ("concat", tuple(parts)),
         )
@@ -68,6 +81,7 @@ class PrefixSnapshotTests(unittest.TestCase):
             counters=Counter(),
             _slot_prefix_len=[0, 0, 0, 0],
             _state_snapshots={},
+            _snapshot_pool=[],
             _next_snapshot_handle=0,
             _recurrent_reset_warmed=None,
             _release_traces=lambda **kw: None,
@@ -75,6 +89,14 @@ class PrefixSnapshotTests(unittest.TestCase):
         for name in METHODS:
             setattr(self.gen, name, MethodType(self.methods[name], self.gen))
         self.gen._recurrent_reset_warmed = self.gen.cache
+        self.gen._reserve_snapshot_pool()
+
+    def write_row(self, tensor, start, end, output_tensor=None):
+        """Stand in for ttnn.slice writing one row into an already-reserved buffer."""
+        assert output_tensor is not None, "a save must never allocate its own destination"
+        assert (start[0], end[0]) == (end[0] - 1, start[0] + 1), (start, end)
+        output_tensor.content = f"{tensor.label}[{start[0]}]"
+        return output_tensor
 
     def test_a_slot_holding_nothing_has_no_snapshot_worth_taking(self):
         self.assertIsNone(self.gen.save_slot_state(1))
@@ -91,8 +113,8 @@ class PrefixSnapshotTests(unittest.TestCase):
         self.assertEqual(held, 4096)
         # One row per conv and recurrent on every layer, taken from slot 2.
         self.assertEqual(len(rows), 2 * self.LAYERS)
-        self.assertEqual(rows[(0, "conv")], "clone(conv0[2])")
-        self.assertEqual(rows[(2, "recurrent")], "clone(rec2[2])")
+        self.assertEqual(rows[(0, "conv")].content, "conv0[2]")
+        self.assertEqual(rows[(2, "recurrent")].content, "rec2[2]")
 
     def test_the_store_refuses_rather_than_evicting_something_still_referenced(self):
         self.gen._slot_prefix_len[0] = 64
@@ -100,6 +122,24 @@ class PrefixSnapshotTests(unittest.TestCase):
         self.assertNotIn(None, handles)
         self.assertEqual(len(set(handles)), len(handles))
         self.assertIsNone(self.gen.save_slot_state(0))
+
+    def test_the_whole_store_is_reserved_before_any_request_can_need_it(self):
+        # Allocation is what a live decode trace forbids, so every snapshot is taken at bind time.
+        self.assertEqual(len(self.gen._snapshot_pool), self.module.MAX_PREFIX_SNAPSHOTS)
+        self.assertEqual(len(self.gen._snapshot_pool[0]), 2 * self.LAYERS)
+        reserved = {id(row) for rows in self.gen._snapshot_pool for row in rows.values()}
+        self.gen._slot_prefix_len[0] = 64
+        saved = self.gen._state_snapshots[self.gen.save_slot_state(0)][1]
+        self.assertTrue({id(row) for row in saved.values()} <= reserved)
+
+    def test_freeing_a_snapshot_returns_its_buffers_for_the_next_save(self):
+        self.gen._slot_prefix_len[0] = 64
+        handles = [self.gen.save_slot_state(0) for _ in range(self.module.MAX_PREFIX_SNAPSHOTS)]
+        self.assertEqual(self.gen._snapshot_pool, [])
+        rows = self.gen._state_snapshots[handles[0]][1]
+        self.gen.free_slot_state(handles[0])
+        self.assertEqual(self.gen._snapshot_pool, [rows])
+        self.assertIsNotNone(self.gen.save_slot_state(0))
 
     def test_restoring_an_unknown_handle_reports_failure_without_touching_the_slot(self):
         self.assertFalse(self.gen.restore_slot_state(1, 999))
@@ -126,7 +166,7 @@ class PrefixSnapshotTests(unittest.TestCase):
         self.assertTrue(all(kind == "concat" for kind, _ in rebuilt))
         # Slot 3's position carries the saved row; the other rows are the slot's own.
         first = rebuilt[0][1]
-        self.assertEqual(first[3], "clone(conv0[0])")
+        self.assertEqual(first[3].content, "conv0[0]")
         self.assertEqual(first[1], "conv0[1]")
         self.assertEqual(len(parts), 2 * self.LAYERS)
 
