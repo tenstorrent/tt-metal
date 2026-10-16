@@ -208,3 +208,55 @@ def test_an_explained_step_passes_the_tap_check(gspec, monkeypatch):  # noqa: F8
     )
     doc = OF.generate(s, write=False)
     assert not doc["errors"] and any("explained" in v[str(doc["chunk"])]["check"] for v in doc["steps"].values())
+
+
+def _floor_case(seed=0, rows=2048, cols=256):
+    g = torch.Generator().manual_seed(seed)
+    w = torch.randn(rows, cols, generator=g, dtype=torch.float64)
+    w[5] *= 1e-5  # a near-zero row
+    w[:, 3] *= 1e-6  # a near-zero column
+    outs = [w + 1e-3 * torch.randn(w.shape, generator=g, dtype=torch.float64) * w.abs() for _ in range(3)]
+    dev = w + 1e-3 * torch.randn(w.shape, generator=g, dtype=torch.float64) * w.abs()
+    return w, outs, dev
+
+
+def test_each_row_and_column_is_judged_against_its_own_floor():
+    """F83: a correct output (the floor's own noise) passes, near-zero rows and columns included; one row scaled by
+    1 %, one tiny row with a large error, and an additive offset on one column each fail, at their own place."""
+    for seed in range(5):
+        w, outs, dev = _floor_case(seed)
+        r = NF.own_floor(dev, w, outs, "fp32")
+        assert max(r["row_floor"], r["col_floor"], r["bias_floor"]) < 2.0, (seed, r)
+    w, outs, dev = _floor_case()
+    bad = dev.clone()
+    bad[7] *= 1.01
+    r = NF.own_floor(bad, w, outs, "fp32")
+    assert r["row_floor"] > 2 and r["row_at"] == 7
+    tiny = dev.clone()
+    tiny[5] += 1e-3 * w.abs().mean()  # an error the size of a normal row's noise, on a row 1e-5 its size
+    assert NF.own_floor(tiny, w, outs, "fp32")["row_at"] == 5
+    off = dev.clone()
+    off[:, 9] += 3e-4 * w[:, 9].pow(2).mean().sqrt()
+    r = NF.own_floor(off, w, outs, "fp32")
+    assert r["bias_floor"] > 2 and r["bias_at"] == 9 and r["bias_signed"] > 0
+    exact = NF.own_floor(w.clone(), w, outs, "fp32")
+    assert exact["row_floor"] == exact["col_floor"] == exact["bias_floor"] == 0  # an exact output counts 0
+
+
+def test_an_owner_waiver_passes_a_steps_noise_floor_checks_and_records_it(gspec, monkeypatch):  # noqa: F811
+    """F85: a waived step's noise-floor failures are printed WAIVED and recorded; the test and the gate pass."""
+    from models.demos.common.bringup.core.gate import check_metrics
+    from models.demos.common.bringup.core.runs import IMPL_ENV
+    from models.demos.common.bringup.testing import mutate as MU
+    from models.demos.common.bringup.testing.component import run_component_test
+
+    s = gspec()
+    monkeypatch.setenv(IMPL_ENV, "mutate:scale1.02")
+    monkeypatch.setenv(MU.MUTATE_STEP_ENV, "attn_norm")
+    assert not run_component_test(s, "attn_norm", 0, checks="auto")
+    s.data.setdefault("tests", {})["waivers"] = {"attn_norm": "device arithmetic; fix later (owner)"}
+    assert run_component_test(s, "attn_norm", 0, checks="auto")
+    m = {k: {"value": v} for k, v in got().items()}
+    assert m["err_attn_norm_L00_waived"]["value"] == 1
+    ok, lines = check_metrics({"err_attn_norm_L00": "<= limit"}, m)
+    assert ok and any("WAIVED" in x for x in lines)
