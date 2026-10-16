@@ -868,9 +868,51 @@ def test_logsigmoid_perf_says_what_mains_cycles_leave_out():
 def test_a_clean_report_says_so():
     summary = _summary()
     summary["perf"] = {}
-    summary["accuracy"] = []
+    rec = summary["accuracy"][0]
+    rec["head"], rec["worse"], rec["better"] = dict(rec["base"]), 0, 0
+    rec["specials"] = {"changed": [], "nan_propagates": {"base": True, "head": True}}
     assert report.findings([summary]) == []
-    assert "**No regressions.**" in report.render([summary])
+    text = report.render([summary])
+    assert "**No regressions.** Nothing is slower beyond the thresholds, and no accuracy or edge-case" in text
+    assert "Not measured for" not in text
+
+
+def test_an_op_without_accuracy_results_is_not_reported_as_unchanged():
+    # #59869: no accuracy driver covers SfpuMask, and both sections read as measured.
+    summary = _summary()
+    summary["accuracy"] = []
+    summary["notes"] = ["No accuracy driver covers `Square` (not an elementwise function of its inputs, ...)."]
+    text = report.render([summary])
+    assert text.count("Not measured for `Square`: see the notes.") == 2  # accuracy, edge cases
+    assert "No accuracy change worth a row" not in text and "No special-input result changed" not in text
+    summary["perf"] = {}
+    assert (
+        "**No regressions.** Nothing is slower beyond the thresholds. "
+        "Accuracy was not measured for `Square`: see the notes." in report.render([summary])
+    )
+
+
+def test_ops_without_accuracy_results_are_named_next_to_the_measured_ones():
+    wormhole = _summary()
+    wormhole["ops"] = dict(wormhole["ops"], measured=["Square", "Typecast"])
+    blackhole = dict(_summary(), arch="blackhole", accuracy=[])
+    text = report.render([wormhole, blackhole])
+    accuracy_part, edge_part = text.split("### Accuracy")[1].split("### Edge cases")
+    for part in (accuracy_part, edge_part):
+        assert "Not measured for `Typecast` (Wormhole), `Square` (Blackhole): see the notes." in part
+    assert "| Wormhole | Square |" in accuracy_part and "| Wormhole | Square |" in edge_part
+
+
+def test_a_variant_with_a_result_on_one_side_only_is_not_called_unmeasured():
+    summary = _summary()
+    summary["accuracy"] = [
+        {"key": ["Square", "Float16", "Float16", "No", "No"], "missing": ["head sweep", "head specials"]}
+    ]
+    text = report.render([summary])
+    assert "ran on base, no result on head" in text
+    assert "Not measured for" not in text
+    assert "No variant has accuracy results on both sides; see run.log." in text
+    assert "No variant has special-input results on both sides; see run.log." in text
 
 
 def test_a_small_drift_is_not_a_regression():

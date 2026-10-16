@@ -312,6 +312,27 @@ def _table(rows, header, cells):
     return header + [_row_prefix(k) + "| " + " | ".join(c) + " |" for k, _, c in _merge_approx(rows, cells)]
 
 
+def _no_accuracy(summaries):
+    """The measured ops an arch has no accuracy result for, on either side: `op`, or
+    `op` (Arch) when only some archs lack it. The notes say why (no driver covers it,
+    its run failed, Typecast). A variant with a result on one side only is not in it:
+    the findings and the notes report those."""
+    lacking = {}
+    for s in summaries:
+        have = {rec["key"][0] for rec in s["accuracy"]}
+        for op in s["ops"]["measured"]:
+            if op not in have:
+                lacking.setdefault(op, []).append(_ARCH[s["arch"]])
+    return [
+        f"`{op}`" if len(archs) == len(summaries) else f"`{op}` ({', '.join(archs)})" for op, archs in lacking.items()
+    ]
+
+
+def _no_accuracy_line(summaries):
+    lacking = _no_accuracy(summaries)
+    return f"Not measured for {', '.join(lacking)}: see the notes." if lacking else None
+
+
 def accuracy_section(summaries):
     ulp_head = [
         "| arch | op | format | dest_acc | approx | max old | max new | mean old → new | ≤1 ULP old → new | worse / better | non-finite old → new |",
@@ -336,6 +357,18 @@ def accuracy_section(summaries):
             key = (s["arch"], *rec["key"])
             metric = rec["base"].get("metric", "ulp")
             groups[(metric, bool(rec.get("bit_identical")))].append((key, rec))
+    not_measured = _no_accuracy_line(summaries)
+    perf_only = _perf_only_variants(summaries)
+    if perf_only:
+        perf_only = [
+            "",
+            "Measured for perf, not for accuracy: " + ", ".join(perf_only) + ". Accuracy runs unary "
+            "ops with fast mode off, and binary ops with approx off.",
+        ]
+    if not any(groups.values()):
+        # Nothing to compare: "unchanged" would read as measured.
+        what = not_measured or "No variant has accuracy results on both sides; see run.log."
+        return ["### Accuracy", "", what, *perf_only, ""]
     lines = [
         "### Accuracy",
         "",
@@ -366,13 +399,9 @@ def accuracy_section(summaries):
         ]
     if not shown_ulp and not shown_exact:
         lines.append("No accuracy change worth a row: max error and lane counts are unchanged.")
-    perf_only = _perf_only_variants(summaries)
-    if perf_only:
-        lines += [
-            "",
-            "Measured for perf, not for accuracy: " + ", ".join(perf_only) + ". Accuracy runs unary "
-            "ops with fast mode off, and binary ops with approx off.",
-        ]
+    if not_measured:
+        lines += ["", not_measured]
+    lines += perf_only
     folded = len(folded_ulp) + len(folded_exact)
     if folded:
         lines += [
@@ -455,6 +484,10 @@ def edge_section(summaries):
                 nan_lost.append(where)
             elif nan["head"] and not nan["base"]:
                 nan_gained.append(where)
+    not_measured = _no_accuracy_line(summaries)
+    if not total:
+        what = not_measured or "No variant has special-input results on both sides; see run.log."
+        return ["### Edge cases", "", what, ""]
     header = [
         "| arch | op | format | dest_acc | approx | input | old | new |",
         "|---|---|---|---|---|---|---|---|",
@@ -478,6 +511,8 @@ def edge_section(summaries):
         lines.append(f"No special-input result changed across the {total} variant(s).")
     else:
         lines.append("No special-input result changed kind.")
+    if not_measured:
+        lines += ["", not_measured]
     if minor:
         lines += [
             "",
@@ -639,6 +674,15 @@ def glance_section(summaries, not_measured=()):
             return [
                 f"**No regressions on {', '.join(_ARCH[x['arch']] for x in summaries)}.** "
                 f"{missing} was not measured: see the notes.",
+                "",
+            ]
+        lacking = _no_accuracy(summaries)
+        if lacking:
+            compared = any("base" in r or "specials" in r for s in summaries for r in s["accuracy"])
+            return [
+                "**No regressions.** Nothing is slower beyond the thresholds"
+                + (", and no accuracy or edge-case result got worse" if compared else "")
+                + f". Accuracy was not measured for {', '.join(lacking)}: see the notes.",
                 "",
             ]
         return [
