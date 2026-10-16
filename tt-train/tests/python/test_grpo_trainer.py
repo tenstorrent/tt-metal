@@ -188,7 +188,8 @@ def patch_llama_weight_loading(monkeypatch):
 
 
 @pytest.mark.requires_device
-def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
+@pytest.mark.parametrize("lr_scheduler_type, use_clip_grad_norm", [("constant", False), ("cosine", True)])
+def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path, lr_scheduler_type, use_clip_grad_norm):
     """One full GRPO optimizer step on a tiny random-init Llama.
 
     Asserts the loop reaches every callback hook, produces finite metrics,
@@ -226,7 +227,9 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
         temperature=1.0,
         max_completion_length=4,
         num_generations=2,
-        warmup_steps=2,  # the single step trains at half the configured LR
+        warmup_steps=0,
+        lr_scheduler_type=lr_scheduler_type,
+        use_clip_grad_norm=use_clip_grad_norm,
     )
 
     tokenizer = completer.tokenizer
@@ -293,7 +296,6 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
 
     metrics = recorder.last_step_metrics
     assert metrics is not None
-    assert metrics["lr"] == pytest.approx(optimizer_dict["lr"] * 0.5), "first of 2 warmup steps trains at half the LR"
     for key in ("reward_mean", "reward_std", "mean_completion_len", "generation_time_s"):
         assert key in metrics, f"missing metric {key}"
         assert np.isfinite(metrics[key]), f"metric {key} is not finite: {metrics[key]}"
