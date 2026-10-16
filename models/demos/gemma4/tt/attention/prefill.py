@@ -239,14 +239,68 @@ def _clone_sliding_prefill_tail(tt_k, tt_v, hist, head_dim, valid_seq_len=None, 
     return (k_owned, v_owned)
 
 
+def _owner_lane_device_index(mesh_config) -> int:
+    """Row-major index of the first chip of the lane that owns the current single-user prefill (0 without lanes).
+
+    ``_g4_single_lane_prefill_owner`` is set by ``prepare_inputs_prefill`` for eager single-user prefills; a
+    lane-parallel prefill (owner None) has one user per lane and keeps shard 0, as before.
+    """
+    if mesh_config is None or not getattr(mesh_config, "lane_sharded", False):
+        return 0
+    owner = getattr(mesh_config, "_g4_single_lane_prefill_owner", None)
+    if owner is None:
+        return 0
+    rows, cols = (int(x) for x in mesh_config.mesh_shape)
+    return int(owner) if int(mesh_config.sp_axis) == 1 else int(owner) * cols
+
+
+def _paged_tail_block_range(row, chunk_offset, sliding_window, block_size, pool_blocks):
+    """Blocks of the paged cache holding the prior window ``[chunk_offset - window, chunk_offset)``.
+
+    Returns ``(start_token, block_ids)`` or ``None``. Block 0 is vLLM's null block (never allocated to a
+    request; the lane scratch block here), and the hybrid allocator nulls blocks older than the kept
+    window, so leading null blocks are dropped and the tail shortened to the real ones: a cached-prefix
+    hit aligned down to the SDPA chunk can start one block before the window vLLM guarantees.
+    """
+    if chunk_offset is None or chunk_offset <= 0:
+        return None
+    take = min(int(sliding_window), int(chunk_offset))
+    start = int(chunk_offset) - take
+    if chunk_offset % block_size or start % block_size:
+        return None
+    lb0, lb1 = start // block_size, int(chunk_offset) // block_size
+    blocks = [int(b) for b in row[lb0:lb1]]
+    while blocks and blocks[0] == 0:
+        blocks.pop(0)
+        start += block_size
+    if not blocks or any(b <= 0 or b >= int(pool_blocks) for b in blocks):
+        return None
+    return start, blocks
+
+
 def _read_sliding_tail_from_paged_cache(
-    k_cache, v_cache, page_table, user_id, chunk_offset, sliding_window, head_dim, out_dtype, kv_local
+    k_cache,
+    v_cache,
+    page_table,
+    user_id,
+    chunk_offset,
+    sliding_window,
+    head_dim,
+    out_dtype,
+    kv_local,
+    lane_device_index=0,
 ):
     """Rebuild the prior-window K/V tail from the paged cache (APC cache-hit resumes carry no stash).
 
     Returns the last ``min(sliding_window, chunk_offset)`` tokens, or None when the range is not block-aligned.
+    ``lane_device_index`` selects the mesh shard holding the request's page-table row: under lane-sharded
+    batches the table is sharded over the lanes and only the owner lane's row carries real block ids (the
+    other lanes hold scratch rows), so reading shard 0 for a user on another lane would rebuild the tail
+    from the scratch block.
     """
     if page_table is None or chunk_offset is None or chunk_offset <= 0:
+        if chunk_offset is not None and chunk_offset > 0:
+            logger.warning("Gemma4 sliding prefill: no page table for the paged tail at chunk_start={}", chunk_offset)
         return None
     cache_kv, block_size, cache_hd = (int(k_cache.padded_shape[i]) for i in (1, 2, 3))
     if cache_kv != int(kv_local) or cache_hd != int(head_dim):
@@ -257,19 +311,29 @@ def _read_sliding_tail_from_paged_cache(
             f"the shared buffer is allocated as {tuple(k_cache.padded_shape)}"
         )
     try:
-        take = min(int(sliding_window), int(chunk_offset))
-        start = chunk_offset - take
-        if chunk_offset % block_size or start % block_size:
-            return None
         row = page_table
         if isinstance(row, ttnn.Tensor):
-            row = ttnn.to_torch(ttnn.get_device_tensors(row)[0])
+            shards = ttnn.get_device_tensors(row)
+            row = ttnn.to_torch(shards[min(int(lane_device_index), len(shards) - 1)])
         if row.dim() > 1:
             row = row[user_id]
-        lb0, lb1 = start // block_size, chunk_offset // block_size
-        blocks = [int(b) for b in row[lb0:lb1]]
-        if not blocks or any(b < 0 or b >= int(k_cache.padded_shape[0]) for b in blocks):
+        tail_range = _paged_tail_block_range(row, chunk_offset, sliding_window, block_size, k_cache.padded_shape[0])
+        if tail_range is None:
+            logger.warning(
+                "Gemma4 sliding prefill: no usable paged tail at chunk_start={} (table row {}, pool {} blocks)",
+                chunk_offset,
+                [int(b) for b in row[: min(int(row.shape[-1]), 16)]],
+                int(k_cache.padded_shape[0]),
+            )
             return None
+        start, blocks = tail_range
+        if start > chunk_offset - min(int(sliding_window), int(chunk_offset)):
+            logger.info(
+                "Gemma4 sliding prefill: paged tail shortened to [{}, {}) at chunk_start={} (null blocks before it)",
+                start,
+                chunk_offset,
+                chunk_offset,
+            )
         k_parts = [ttnn.slice(k_cache, [b, 0, 0, 0], [b + 1, cache_kv, block_size, cache_hd]) for b in blocks]
         v_parts = [ttnn.slice(v_cache, [b, 0, 0, 0], [b + 1, cache_kv, block_size, cache_hd]) for b in blocks]
         k_tail = ttnn.concat(k_parts, dim=2) if len(k_parts) > 1 else k_parts[0]
@@ -861,6 +925,7 @@ def _prefill_forward_single(
                 config.head_dim,
                 tt_k.dtype,
                 kv_local=1 if weights.kv_replicated else config.num_key_value_heads // tp,
+                lane_device_index=_owner_lane_device_index(mesh_config),
             )
         if sliding_tail_in is not None:
             k_tail, v_tail = sliding_tail_in
