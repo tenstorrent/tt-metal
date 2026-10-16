@@ -206,6 +206,9 @@ def create_tt_model(
         "attn_dram_shard": os.environ.get("GEMMA4_ATTN_DRAM_SHARD", "1"),
         "mlp_dram_shard": os.environ.get("GEMMA4_MLP_DRAM_SHARD", "1"),
         "dram_cores": os.environ.get("GEMMA4_DRAM_CORES", "8"),
+        # The token-dispatch prefill converts the routed experts into the fused kernel's own cache files; a
+        # marker seeded without them must not certify a build that needs them.
+        "moe_dispatch_prefill": os.environ.get("GEMMA4_MOE_DISPATCH_PREFILL", "0"),
     }
     cache_identity = dict(
         # vLLM hands over the resolved hub snapshot dir, not the HF id: keyed on the plain
@@ -220,8 +223,11 @@ def create_tt_model(
         },
     )
     loaded_real_weights = False
+    # The decode MoE kernel uploads its bfp4 expert weights from the host tensors on every build (no cache yet),
+    # so a warm-cache placeholder cannot serve it: always load the checkpoint when it is on.
+    needs_host_weights = os.environ.get("GEMMA4_MOE_DECODE_KERNEL", "0") == "1"
     if state_dict is None:
-        if num_layers is None and weight_cache_is_complete(cache_dir, **cache_identity):
+        if num_layers is None and not needs_host_weights and weight_cache_is_complete(cache_dir, **cache_identity):
             logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load (gemma4 hybrid).")
             state_dict = build_cached_state_dict(
                 cache_dir, args=model_args, build_variant=cache_identity["build_variant"]
