@@ -51,8 +51,10 @@ def test_combine_plan(mesh_device, device_params, routing):
     wbits = gates.view(torch.int16).to(torch.int64) & 0xFFFF
     luts, nps = port_luts(mesh_device)
     rep = ttnn.ReplicateTensorToMesh(mesh_device)
+    ROWS = os.environ.get("FC_PLAN_ROWS") == "1"  # (the routing as [N S, K] row-major: a page per token)
+    shp = (N * S, K) if ROWS else (1, -1)
     ids_t = ttnn.from_torch(
-        ids.reshape(1, -1).to(torch.int32),
+        ids.reshape(*shp).to(torch.int32),
         dtype=ttnn.uint16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
@@ -60,7 +62,7 @@ def test_combine_plan(mesh_device, device_params, routing):
         mesh_mapper=rep,
     )
     w_t = ttnn.from_torch(
-        gates.reshape(1, -1),
+        gates.reshape(*shp),
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
@@ -70,7 +72,7 @@ def test_combine_plan(mesh_device, device_params, routing):
     m = int(os.environ.get("FC_PLAN_CORES", "8"))  # (0: the one-core planner)
     cores = [(i % 8, i // 8) for i in range(m)] if m else None
     run = combine_planner_prepare(
-        mesh_device, S=S, K=K, EPC=EPC, A=A, L=L, port_luts=luts, n_ports=nps, rows_cap=ROWS_CAP, cores=cores
+        mesh_device, S=S, K=K, EPC=EPC, A=A, L=L, port_luts=luts, n_ports=nps, rows_cap=ROWS_CAP, cores=cores, row_pages=ROWS
     )
     outs = run(ids_t, w_t)
     ttnn.synchronize_device(mesh_device)

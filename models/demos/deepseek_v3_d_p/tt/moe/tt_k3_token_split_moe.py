@@ -31,6 +31,7 @@ from ttnn.bringup.combine_rf.l1_zero import l1_zero_program
 from ttnn.bringup.combine_rf.sparse_combine_rf import sparse_combine_rf_prepare
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import W_DTYPES, FlatRoutedExpert, _bank_sharded, flat_weight_regions
 
+import models.demos.glm53_flash_d_p.tt.mm_configs as mm_configs
 import ttnn
 
 
@@ -203,7 +204,7 @@ class TtK3TokenSplitMoE:
         self.rows_cap = rows_cap
         chips = [(r, c) for r in range(R) for c in range(C)]
         self._planner_args = dict(S=S, K=d.K, EPC=EPC, L=2, port_luts=luts, n_ports=nps, rows_cap=rows_cap,
-                                  cores=sorted(pcores, key=lambda c: (c[1], c[0])))
+                                  cores=sorted(pcores, key=lambda c: (c[1], c[0])), row_pages=True)
         probe = combine_planner_prepare(mesh_device, A=15, **self._planner_args)  # (outputs only: their addresses)
         self.combine = sparse_combine_rf_prepare(
             mesh_device, S, d.latent, {ch: [] for ch in chips}, num_links=2, n_acc=16, depth=int(os.environ.get("K3_D", "4")),
@@ -231,6 +232,13 @@ class TtK3TokenSplitMoE:
         self.arena = None
         self.key = 7_000_000 + id(self) % 1_000_000
 
+    @staticmethod
+    def _linear(x, w, cfg):
+        """ttnn.linear with the 2D-multicast config for the shape (models/demos/glm53_flash_d_p/tt/mm_configs.mm2d):
+        2-4x the default at 320 rows (zz_scratch_k3_dense_mm.py)."""
+        pc = mm_configs.linear_config(x, w, ttnn.bfloat16)
+        return ttnn.linear(x, w, compute_kernel_config=cfg, dtype=ttnn.bfloat16, program_config=pc)
+
     def _warm_up(self):
         """Every dense op once on zero tokens (e.g. CCL semaphores are allocated on first use and kept)."""
         x = ttnn.from_torch(
@@ -243,7 +251,7 @@ class TtK3TokenSplitMoE:
         xg = self.dispatch(lat)
         o = ttnn.to_layout(ttnn.reshape(lat, [self.S, self.d.latent]), ttnn.TILE_LAYOUT)
         n = ttnn.rms_norm(o, epsilon=self.d.eps, weight=self.g_ln, compute_kernel_config=self.cfg_hi)
-        yr = ttnn.linear(n, self.w_lu, compute_kernel_config=self.cfg, dtype=ttnn.bfloat16)
+        yr = self._linear(n, self.w_lu, self.cfg)
         y = ttnn.add(yr, self.shared(x))
         ttnn.synchronize_device(self.mesh)
         for t in (x, ids, wts, gi, gw, lat, xg, o, n, yr, y):
@@ -251,7 +259,7 @@ class TtK3TokenSplitMoE:
 
     # -- the ops (per chip; tensors on the mesh) --
     def router(self, x):
-        logits = ttnn.linear(x, self.w_gate, compute_kernel_config=self.cfg_hi, dtype=ttnn.bfloat16)
+        logits = self._linear(x, self.w_gate, self.cfg_hi)
         wts, ids = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
             logits, self.bias, n_groups=1, summed_experts_per_group=1, topk_groups=1, n_activated_experts=self.d.K,
             route_scale=self.d.route_scale, stable_sort=True, epsilon=1e-20, score_func="sigmoid",
@@ -261,30 +269,23 @@ class TtK3TokenSplitMoE:
         return ids, wts
 
     def gather_routing(self, ids, wts):
-        """ids (uint16 TILE [S, K]) / weights (bf16 row-major [S, K]) -> the planner's single-page rows [1, N S K],
-        home-major (an all-gather along the last dim over the columns, then the rows), replicated."""
+        """ids (uint16 TILE [S, K]) / weights (bf16 row-major [S, K]) -> [N S, K] row-major, home-major (an all-gather
+        over the columns, then the rows), replicated: the planner reads a page per token (row_pages)."""
 
         def ag(t):
-            a = ttnn.all_gather(t, dim=1, cluster_axis=1)
-            b = ttnn.all_gather(a, dim=1, cluster_axis=0)
+            a = ttnn.all_gather(t, dim=0, cluster_axis=1)
+            b = ttnn.all_gather(a, dim=0, cluster_axis=0)
             ttnn.deallocate(a)
             return b
 
-        S, K = self.S, self.d.K
-        t = ttnn.typecast(ids, ttnn.uint32)  # (row-major uint16 has no reshape: through uint32)
-        t2 = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(t)
-        t3 = ttnn.reshape(t2, [1, S * K])
-        ids_row = ttnn.typecast(t3, ttnn.uint16)
-        ttnn.deallocate(t2)
+        ids_rm = ttnn.to_layout(ids, ttnn.ROW_MAJOR_LAYOUT)
         w = wts if wts.layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.to_layout(wts, ttnn.ROW_MAJOR_LAYOUT)
-        w_row = ttnn.reshape(w if w.dtype == ttnn.bfloat16 else ttnn.typecast(w, ttnn.bfloat16), [1, S * K])
-        gi, gw = ag(ids_row), ag(w_row)
-        ttnn.deallocate(ids_row)
+        gi, gw = ag(ids_rm), ag(w)
+        ttnn.deallocate(ids_rm)
         return gi, gw
 
     def latent_down(self, x):
-        lat = ttnn.linear(x, self.w_ld, compute_kernel_config=self.cfg, dtype=ttnn.bfloat16)
+        lat = self._linear(x, self.w_ld, self.cfg)
         return ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT)
 
     def dispatch(self, lat_rm):
@@ -319,17 +320,17 @@ class TtK3TokenSplitMoE:
         o = ttnn.to_layout(ttnn.reshape(self.out, [self.S, self.d.latent]), ttnn.TILE_LAYOUT)
         n = ttnn.rms_norm(o, epsilon=self.d.eps, weight=self.g_ln, compute_kernel_config=self.cfg_hi)
         ttnn.deallocate(o)
-        y = ttnn.linear(n, self.w_lu, compute_kernel_config=self.cfg, dtype=ttnn.bfloat16)
+        y = self._linear(n, self.w_lu, self.cfg)
         ttnn.deallocate(n)
         return y
 
     def shared(self, x):
-        g = ttnn.linear(x, self.w_sg, compute_kernel_config=self.cfg, dtype=ttnn.bfloat16)
-        u = ttnn.linear(x, self.w_su, compute_kernel_config=self.cfg, dtype=ttnn.bfloat16)
+        g = self._linear(x, self.w_sg, self.cfg)
+        u = self._linear(x, self.w_su, self.cfg)
         a = ttnn.situ_glu(g, u, self.d.beta, self.d.linear_beta)
         ttnn.deallocate(g)
         ttnn.deallocate(u)
-        y = ttnn.linear(a, self.w_sd, compute_kernel_config=self.cfg, dtype=ttnn.bfloat16)
+        y = self._linear(a, self.w_sd, self.cfg)
         ttnn.deallocate(a)
         return y
 

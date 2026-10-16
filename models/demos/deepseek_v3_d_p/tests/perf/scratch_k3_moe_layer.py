@@ -95,12 +95,14 @@ def test_k3_moe_layer(mesh_device, device_params):
     assert pcc(yd, yref_dev) > 0.98, "block output off"
     # timing: per stage (the programs between two stage marks), slowest chip; and the whole forward
     per_chip_programs(mesh_device)
-    stage_us, totals = {}, []
+    stage_us, totals, stage_progs = {}, [], {}
 
     def hook(name):
         ttnn.synchronize_device(mesh_device)
         progs = per_chip_programs(mesh_device)
         stage_us.setdefault(name, []).append((max(sum(u for _, u in row) for row in progs), max(len(r) for r in progs)))
+        n = min(len(r) for r in progs)
+        stage_progs[name] = [max(r[i][1] for r in progs) for i in range(n)]
 
     for it in range(ITERS):
         yy = moe(xt, hook=hook)
@@ -114,5 +116,5 @@ def test_k3_moe_layer(mesh_device, device_params):
     for name, v in stage_us.items():
         med = statistics.median(u for u, _ in v)
         total += med
-        logger.info(f"K3_OP {name:16s} {med:9.1f} us  ({v[-1][1]} programs)")
+        logger.info(f"K3_OP {name:16s} {med:9.1f} us  ({v[-1][1]} programs: {' '.join(f'{u:.1f}' for u in stage_progs[name])})")
     logger.info(f"K3_MOE block (sum of the stages' device times, slowest chip per stage, median over {ITERS}): {total:.0f} us")

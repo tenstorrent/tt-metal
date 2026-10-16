@@ -795,3 +795,19 @@ dispatch, the shared expert in its own lane (parallel with the experts).
 Port credit drain cost (standalone fused test, uniform): 2533 us with it vs 2520 without (SPC_NODRAIN=1), noise;
 pipelined (FC_PIPE=1) fused 2438 us, as before the change (2425). The layer's 2516 is the unpipelined number (a sync
 before each stage leaves ~80-100 us of launch skew).
+
+### K3 block: dense op configs + routing without the reshape (2026-10-16)
+- Matmul configs at 320 rows (`tests/perf/zz_scratch_k3_dense_mm.py`, slowest chip, HiFi2): the default picks are
+  18-31% of the weight's DRAM floor; the GLM prefill 2D-multicast picker (glm53_flash_d_p/tt/mm_configs.mm2d) is
+  45-48%: router 157 -> 42, latent down 292 -> 118, latent up 173 -> 116, shared gate / up 302 -> 188, down 276 -> 191.
+  1D in0-mcast and hand 2D variants are no better; DRAM width-sharded weights with mm2d give wrong results (PCC 0.13,
+  not pursued). LoFi changes nothing (bandwidth bound). The block uses mm2d for every linear.
+- The planner reads the routing row-paged (`row_pages=True`: [N S, K] row-major, one 32 B page per token): no
+  reshape / typecast chain (that 10 KB reshape alone was 130 us). Pages land 64 B apart (a DRAM read keeps its
+  64-byte alignment in L1: packed 32 B destinations hung the planner) in local scratch -- the home ids in the slice
+  staging, not past the bucket region (the other cores' counts exchange lands there: corrupted home counts). Bit-exact
+  vs the host model in both modes; the reads cost ~43 us (packed routing 113 -> 156 us; in the layer 53 -> 98).
+Per stage now (us): router 136 (gate 42 + top-k 95), routing gather 292 (four ttnn.all_gather of 10-80 KB at 54-88 us
+each), planner 98, latent down 131, arena zero 6, dispatch 394, experts + combine 2526, norm + latent up 236
+(to tile 54, rms_norm 58, linear 124), shared 766 (gate 197, up 198, situ_glu 179, down 196), add 33: 4617 us (was
+5223). Exact as before (PCC 0.99623, repeat call bit-identical).
