@@ -142,6 +142,50 @@ inline void reduce_row_advance_dest(const bool is_narrow_tile)
     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
 }
 
+// An immediate RMWCIB is one RISC instruction; the MMIO store of cfg_reg_rmw_tensix costs the math RISC more.
+template <std::uint32_t value>
+inline void reduce_row_max_set_src_zero_flag()
+{
+    static_assert(ALU_ACC_CTRL_Zero_Flag_disabled_src_SHAMT == 0 && ALU_ACC_CTRL_Zero_Flag_disabled_src_MASK <= 0xff);
+    TTI_RMWCIB0(ALU_ACC_CTRL_Zero_Flag_disabled_src_MASK, value, ALU_ACC_CTRL_Zero_Flag_disabled_src_ADDR32);
+}
+
+/**
+ * @brief Pool the four faces of a 32x32 tile, face row 1 into DEST row 32 through the instruction's DEST offset.
+ */
+inline void reduce_row_max_pool_full_tile()
+{
+    // Each second pool waits for the first one's DEST row; a counter advance between the rows would add to that chain.
+    TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+    TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+    TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 32);
+    TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 32);
+}
+
+/**
+ * @brief The moves of reduce_row_perform_transpose for both face rows of a 32x32 tile (DEST rows 0 and 32).
+ */
+inline void reduce_row_max_transpose_full_tile()
+{
+    // SrcB is addressed from B = 16: the counter writes issue while MOVD2B waits for the pools, not in its 3-cycle hold.
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 8, 0, p_setrwc::SET_BD);
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
+    TTI_MOVD2B(0, 0, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+    TTI_TRNSPSRCB;
+    TTI_MOVD2B(0, 0, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+    TTI_ZEROSRC(0, 1, 0, 1);
+    TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
+    TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
+    // B back to its carriage return (16), D to 0.
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_BD);
+    TTI_MOVD2B(0, 0, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 32);
+    TTI_TRNSPSRCB;
+    TTI_MOVD2B(0, 0, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 32);
+    TTI_ZEROSRC(0, 1, 0, 1);
+    TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 32);
+    TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 32);
+}
+
 /**
  * @brief Configure the reduce MOP for all paths: REDUCE_ROW SUM/AVG records a dual replay-buffer
  *        MOP, high-fidelity COL/SCALAR programs a multi-phase GAPOOL loop, all other paths need no MOP.
@@ -280,33 +324,48 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
             // rows are pooled first; the last face's banks stay for the transposes.
             // Constant config writes: the tracked setters' calls and checks starve the math thread's instruction issue.
             const bool default_is_preserve = requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt);
+            const bool full_tile           = !is_int_fpu_en && (tensor_shape.total_num_faces() == 4);
             if (default_is_preserve)
             {
                 math::_configure_preserve_zero_flag_state_();
             }
             else
             {
-                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+                reduce_row_max_set_src_zero_flag<0>();
             }
-            if (tensor_shape.num_faces_r_dim > 1)
+            if (full_tile)
             {
-                reduce_row_pool_all_faces_release<type, high_fidelity>(tensor_shape.num_faces_c_dim);
-                reduce_row_advance_dest(is_narrow_tile);
+                reduce_row_max_pool_full_tile();
             }
-            reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
+            else
+            {
+                if (tensor_shape.num_faces_r_dim > 1)
+                {
+                    reduce_row_pool_all_faces_release<type, high_fidelity>(tensor_shape.num_faces_c_dim);
+                    reduce_row_advance_dest(is_narrow_tile);
+                }
+                reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
+            }
 
             if (!default_is_preserve)
             {
-                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+                reduce_row_max_set_src_zero_flag<1>();
             }
             math::src_zero_flag_hw = 1;
-            if (tensor_shape.num_faces_r_dim > 1)
+            if (full_tile)
             {
-                TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-                reduce_row_perform_transpose<is_int_fpu_en>();
-                reduce_row_advance_dest(is_narrow_tile);
+                reduce_row_max_transpose_full_tile();
             }
-            reduce_row_perform_transpose<is_int_fpu_en>();
+            else
+            {
+                if (tensor_shape.num_faces_r_dim > 1)
+                {
+                    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+                    reduce_row_perform_transpose<is_int_fpu_en>();
+                    reduce_row_advance_dest(is_narrow_tile);
+                }
+                reduce_row_perform_transpose<is_int_fpu_en>();
+            }
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
         }
         else
