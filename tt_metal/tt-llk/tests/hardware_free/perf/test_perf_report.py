@@ -425,8 +425,8 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     workers = tmp_path / "workers"
     workers.mkdir()
     root = tmp_path / "root"
-    monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", workers, raising=False)
-    monkeypatch.setattr(TestConfig, "LLK_ROOT", root, raising=False)
+    monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", workers)
+    monkeypatch.setattr(TestConfig, "LLK_ROOT", root)
     monkeypatch.setenv("CHIP_ARCH", "wormhole")
     monkeypatch.setenv("GITHUB_SHA", "testsha")
     monkeypatch.setenv("GITHUB_RUN_ID", "testrun")
@@ -471,8 +471,8 @@ def test_combine_perf_reports_raises_on_unknown_parquet_columns(tmp_path, monkey
     workers = tmp_path / "workers"
     workers.mkdir()
     root = tmp_path / "root"
-    monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", workers, raising=False)
-    monkeypatch.setattr(TestConfig, "LLK_ROOT", root, raising=False)
+    monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", workers)
+    monkeypatch.setattr(TestConfig, "LLK_ROOT", root)
     monkeypatch.setenv("CHIP_ARCH", "wormhole")
     monkeypatch.setenv("GITHUB_SHA", "testsha")
     monkeypatch.setenv("GITHUB_RUN_ID", "testrun")
@@ -520,7 +520,7 @@ def _perf_run(tmp_path, monkeypatch, tag, bases, mean=10.0):
     """
     workers = tmp_path / f"workers-{tag}"
     workers.mkdir()
-    monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", workers, raising=False)
+    monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", workers)
     monkeypatch.setenv("PERF_RUN_TAG", tag)
     for base in bases:
         _seed_worker_csv(workers, base, mean)
@@ -532,7 +532,7 @@ def test_second_run_does_not_mix_into_the_first(tmp_path, monkeypatch):
     # shared output directory kept run 1's perf_b/ alongside run 2's perf_a/ and
     # the tree read as one complete run.
     root = tmp_path / "root"
-    monkeypatch.setattr(TestConfig, "LLK_ROOT", root, raising=False)
+    monkeypatch.setattr(TestConfig, "LLK_ROOT", root)
 
     _perf_run(tmp_path, monkeypatch, "run-1", ["perf_a", "perf_b"])
     _perf_run(tmp_path, monkeypatch, "run-2", ["perf_a"])
@@ -548,7 +548,7 @@ def test_second_run_does_not_mix_into_the_first(tmp_path, monkeypatch):
 
 def test_latest_follows_the_most_recent_run(tmp_path, monkeypatch):
     root = tmp_path / "root"
-    monkeypatch.setattr(TestConfig, "LLK_ROOT", root, raising=False)
+    monkeypatch.setattr(TestConfig, "LLK_ROOT", root)
 
     _perf_run(tmp_path, monkeypatch, "run-1", ["perf_a"], mean=10.0)
     _perf_run(tmp_path, monkeypatch, "run-2", ["perf_a"], mean=99.0)
@@ -561,7 +561,7 @@ def test_latest_follows_the_most_recent_run(tmp_path, monkeypatch):
 
 def test_run_history_is_pruned_to_the_keep_limit(tmp_path, monkeypatch):
     root = tmp_path / "root"
-    monkeypatch.setattr(TestConfig, "LLK_ROOT", root, raising=False)
+    monkeypatch.setattr(TestConfig, "LLK_ROOT", root)
     monkeypatch.setenv("PERF_KEEP_RUNS", "2")
 
     for i in range(4):
