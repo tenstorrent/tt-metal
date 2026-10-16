@@ -31,9 +31,9 @@ import ttnn
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 
 from .config import ExpertConfig, ProgramConfig
-from .decode import decode_forward
+from .decode import decode_forward, decode_forward_stream
 from .prefill import prefill_forward
-from .weights import load_expert_weights
+from .weights import load_decode_expert_weights, load_expert_weights
 
 __all__ = ["Experts", "ExpertConfig", "ProgramConfig"]
 
@@ -56,6 +56,7 @@ class Experts:
         program_config: ProgramConfig,
         weight_dtype=ttnn.bfloat4_b,
         tensor_cache_path=None,
+        indexed_decode=False,
     ):
         """
         Initialize expert layers.
@@ -69,6 +70,8 @@ class Experts:
             program_config: Model-specific program configurations
             weight_dtype: Data type for weights (default: bfloat4_b)
             tensor_cache_path: Optional path for weight caching
+            indexed_decode: Fused decode: only the routed experts are computed (DRAM-streaming ops, one token per
+                device, TP without expert parallelism); requires the router's decode_indexed outputs.
         """
         self.config = config
         self.mesh_config = mesh_config
@@ -88,6 +91,28 @@ class Experts:
 
         # Cache prefill sparsity (created once, reused for all prefill calls)
         self.prefill_sparsity = self._create_prefill_sparsity()
+
+        # Fused decode (TP over mesh columns, no expert parallelism): only the routed experts are computed, by the
+        # DRAM-streaming ops of fused_decode/stream.py (ops and buffers shared by every layer through the CCL manager).
+        self.decode_weights = None
+        self.decode_stream = None
+        if indexed_decode:
+            assert mesh_config.decode.tp > 1 and mesh_config.decode.ep == 1, "fused decode needs TP > 1, EP == 1"
+            self.decode_weights = load_decode_expert_weights(
+                mesh_device=mesh_device,
+                config=config,
+                state_dict=state_dict,
+                mesh_config=mesh_config,
+                weight_dtype=weight_dtype,
+                tensor_cache_path=tensor_cache_path,
+            )
+            self.decode_stream = ccl_manager.get_decode_expert_stream(
+                config.hidden_size,
+                self.decode_weights.intermediate_padded,
+                config.num_experts_per_tok,
+                config.swiglu_limit,
+                config.alpha,
+            )
 
         # For backward compatibility
         self.intermediate_size = config.intermediate_size
@@ -138,6 +163,15 @@ class Experts:
         Returns:
             Expert output tensor [1, batch, seq_len, hidden_size]
         """
+        if is_decode and self.decode_stream is not None:
+            return decode_forward_stream(
+                hidden_states,
+                topk_expert_indices,
+                topk_expert_weights,
+                weights=self.decode_weights,
+                stream=self.decode_stream,
+                send=self.ccl_manager.decode_boundary_send(self.config.hidden_size, "moe"),
+            )
         # Determine mode based on sequence length
         if is_decode:
             return decode_forward(
