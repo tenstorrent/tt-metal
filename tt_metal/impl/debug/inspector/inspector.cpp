@@ -113,13 +113,9 @@ void Inspector::serialize_rpc(const MetalContext& context) {
     }
 }
 
-void Inspector::program_created(const detail::ProgramImpl* program) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+void Inspector::program_created(const MetalContext& context, const detail::ProgramImpl* program) noexcept {
+    auto* data = context.get_inspector_data();
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
@@ -155,13 +151,12 @@ void Inspector::program_destroyed(const detail::ProgramImpl* program) noexcept {
 }
 
 void Inspector::program_compile_started(
-    const detail::ProgramImpl* program, const IDevice* /*device*/, uint64_t /*build_key*/) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+    const MetalContext& context,
+    const detail::ProgramImpl* program,
+    const IDevice* /*device*/,
+    uint64_t /*build_key*/) noexcept {
+    auto* data = context.get_inspector_data();
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
@@ -175,13 +170,12 @@ void Inspector::program_compile_started(
 }
 
 void Inspector::program_compile_already_exists(
-    const detail::ProgramImpl* program, const IDevice* /*device*/, uint64_t /*build_key*/) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+    const MetalContext& context,
+    const detail::ProgramImpl* program,
+    const IDevice* /*device*/,
+    uint64_t /*build_key*/) noexcept {
+    auto* data = context.get_inspector_data();
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
@@ -194,17 +188,14 @@ void Inspector::program_compile_already_exists(
 }
 
 void Inspector::program_kernel_compile_finished(
+    const MetalContext& context,
     const detail::ProgramImpl* program,
     const IDevice* device,
     const std::shared_ptr<Kernel>& kernel,
     const tt::tt_metal::JitBuildOptions& build_options,
     const std::string& binary_root) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+    auto* data = context.get_inspector_data();
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
@@ -235,13 +226,12 @@ void Inspector::program_kernel_compile_finished(
 }
 
 void Inspector::program_compile_finished(
-    const detail::ProgramImpl* program, const IDevice* /*device*/, uint64_t /*build_key*/) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+    const MetalContext& context,
+    const detail::ProgramImpl* program,
+    const IDevice* /*device*/,
+    uint64_t /*build_key*/) noexcept {
+    auto* data = context.get_inspector_data();
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
@@ -557,17 +547,14 @@ void Inspector::release_trace(distributed::MeshTraceId trace_id) noexcept {
 
 // Set dispatch core info
 void Inspector::set_dispatch_core_info(
+    const MetalContext& context,
     const tt_cxy_pair& virtual_core,
     const tt::tt_metal::DispatchWorkerType& type,
     const uint8_t cq_id,
     const ChipId device_id,
     const ChipId servicing_device_id) {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+    auto* data = context.get_inspector_data();
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
@@ -580,17 +567,14 @@ void Inspector::set_dispatch_core_info(
 
 // Set dispatch_s core info
 void Inspector::set_dispatch_s_core_info(
+    const MetalContext& context,
     const tt_cxy_pair& virtual_core,
     const tt::tt_metal::DispatchWorkerType& type,
     const uint8_t cq_id,
     const ChipId device_id,
     const ChipId servicing_device_id) {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+    auto* data = context.get_inspector_data();
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
@@ -603,17 +587,14 @@ void Inspector::set_dispatch_s_core_info(
 
 // Set prefetcher core info
 void Inspector::set_prefetcher_core_info(
+    const MetalContext& context,
     const tt_cxy_pair& virtual_core,
     const tt::tt_metal::DispatchWorkerType& type,
     const uint8_t cq_id,
     const ChipId device_id,
     const ChipId servicing_device_id) {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+    auto* data = context.get_inspector_data();
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
@@ -639,13 +620,9 @@ inspector::RpcServer& Inspector::get_rpc_server() {
     return empty_rpc_server;
 }
 
-void Inspector::enable_kernel_path_collection() {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+void Inspector::enable_kernel_path_collection(const MetalContext& context) {
+    auto* data = context.get_inspector_data();
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
@@ -655,15 +632,12 @@ void Inspector::enable_kernel_path_collection() {
     }
 }
 
-std::string Inspector::get_kernel_elf_path(int watcher_kernel_id, uint32_t processor_index) {
+std::string Inspector::get_kernel_elf_path(
+    const MetalContext& context, int watcher_kernel_id, uint32_t processor_index) {
     std::string elf_path;
 
-    if (!is_enabled()) {
-        return elf_path;
-    }
-    auto* data = get_inspector_data();
+    auto* data = context.get_inspector_data();
     if (!data) {
-        // Inspector failed to initialize.
         return elf_path;
     }
     try {
