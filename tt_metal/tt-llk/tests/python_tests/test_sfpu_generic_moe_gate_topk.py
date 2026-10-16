@@ -225,6 +225,35 @@ def test_sfpu_generic_moe_gate_partial_face(
 
 @blackhole_only
 @parametrize(
+    num_total_experts=[32, 64, 80],
+    num_selected_experts=[4, 12],
+    normalize=[False, True],
+)
+def test_sfpu_generic_moe_gate_partial_face_negative_keys(
+    num_total_experts, num_selected_experts, normalize
+):
+    """Every active key is negative, so the inactive-expert padding must be -inf.
+
+    The partial-face sweep above uses keys >= 1.0, which any padding value below
+    1.0 loses to, -inf or not. Softmax router logits are mostly negative, and
+    against those only a true -inf padding stays out of the top-k: a +0 padding
+    (or any positive value) outranks every active expert and phantom ids >=
+    num_total_experts come back as winners. 32 and 80 exercise the partial
+    4-row padding, 64 the quarter-face filler (top-8) and the full 4-row
+    padding (top-16).
+    """
+    _check_moe_gate(
+        num_selected_experts,
+        True,
+        normalize,
+        True,
+        num_total_experts,
+        negative_keys=True,
+    )
+
+
+@blackhole_only
+@parametrize(
     num_total_experts=[80, 128, 256],
     num_selected_experts=[4, 12],
     normalize=[False, True],
@@ -288,6 +317,7 @@ def _check_moe_gate(
     scores_include_bias=False,
     generate_indices=True,
     spread_biased_scores=False,
+    negative_keys=False,
 ):
     torch.manual_seed(0)
 
@@ -328,6 +358,10 @@ def _check_moe_gate(
             biased[:num_total_experts][lower_positions] = lower_keys
             biased[winner_positions] = winning_keys
         biased = biased.to(torch_format).to(torch.float32)
+    if negative_keys:
+        # Same distinct keys, mirrored below zero: -1.0 .. -3.984375. The raw
+        # scores (the payload) stay positive so normalization is unaffected.
+        biased[:num_total_experts] = -biased[:num_total_experts]
     # Without the SFPU's -inf padding these inactive experts would win.
     biased[num_total_experts:] = 1000.0
     scores = (
