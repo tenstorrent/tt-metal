@@ -411,7 +411,7 @@ def _fp32_to_fp16b_special_bits() -> list[int]:
     """
     patterns = [
         0x7F800001,  # NaN, payload below bit 16: the mask alone leaves +inf
-        0x7F808000,  # NaN, payload bit 15: +0x7FFF carries it out, the mask leaves +inf
+        0x7F808000,  # NaN, payload bit 15 only: lsb is 0, nothing carries, the mask leaves +inf
         0x7FFFFFFF,  # NaN, every mantissa bit: the carry runs through the sign (-0.0)
         0x7FFF8000,  # NaN, bits 15..22: same carry (lsb set) -> -0.0
         0x7FC00000,  # canonical quiet NaN: unaffected today and must stay NaN
