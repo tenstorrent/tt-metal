@@ -1176,6 +1176,8 @@ def _run_quant(
             ITERATIONS(iterations),
             BROADCAST_TYPE(LlkBroadcastType.None_),
             SFPU_BCAST_DIM(LlkBroadcastType.None_),
+            # The shared math driver reads this for every op. Quant does not use it.
+            SFPU_DST_ROUNDING_MODE(),
             SIGN_MAGNITUDE_FORMAT(sign_magnitude),
         ],
         "runtimes": [
