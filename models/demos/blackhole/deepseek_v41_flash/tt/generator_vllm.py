@@ -184,10 +184,9 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 f"DSV41_SPEC={os.environ['DSV41_SPEC']} ignored by the vLLM interface (decode mode: {'spec k=%d' % spec_k if spec_k else 'plain'})"
             )
         os.environ["DSV41_SPEC"] = str(spec_k)
-        if spec_k:
-            os.environ.setdefault(
-                "DSV41_IDX_SWITCH", "262144"
-            )  # the spec verify needs the matmul indexer backend, which the default switch (65536 entries) drops at max_model_len >= 64k (indexer layers with ratio 1)
+        os.environ.setdefault(
+            "DSV41_IDX_SWITCH", "262144"
+        )  # spec and plain decode alike: the spec verify needs the matmul indexer backend, which the default switch (65536 entries) drops at max_model_len >= 64k (indexer layers with ratio 1); a plain-decode server on the fused backend at 16 users (U = 4 per mesh row) answered the 8-shot GSM8K prompts wrongly (85.67 % at 131072 tokens, 80.59 % at 262144)
         # Sampling is done INSIDE the decode / verify traces (tt/device_sampler.py: temperature, top-k, top-p over the full vocabulary, per-row parameters and uniform draws uploaded with the step):
         # no device top-k candidates, no host draw, no full-row fallback (DSV41_DEV_CAND_K / DSV41_SPEC_CAND_K stay 0).
         os.environ.setdefault("MOE_COMPUTE_FP32_ACC", "1")
