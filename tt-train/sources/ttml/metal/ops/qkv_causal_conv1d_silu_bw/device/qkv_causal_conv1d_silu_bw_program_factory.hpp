@@ -29,7 +29,7 @@ struct QkvCausalConv1dSiluBackwardDataflowBuffer {
     tt::DataFormat format;
 };
 
-inline std::array<QkvCausalConv1dSiluBackwardDataflowBuffer, 14> qkv_conv_bw_dfbs(
+inline std::array<QkvCausalConv1dSiluBackwardDataflowBuffer, 14> qkv_conv_bw_dataflow_buffers(
     uint32_t channel_tiles_per_block, tt::DataFormat input_format) {
     const auto bf16 = input_format;
     constexpr auto fp32 = tt::DataFormat::Float32;
@@ -59,8 +59,8 @@ inline uint64_t qkv_conv_bw_window_bytes(uint64_t channel_tiles_per_block, uint6
 inline uint64_t qkv_conv_bw_l1_bytes(
     uint32_t channel_tiles_per_block, tt::DataFormat input_format, uint64_t bytes_per_element) {
     uint64_t bytes = 0;
-    for (const auto& dfb : qkv_conv_bw_dfbs(channel_tiles_per_block, input_format)) {
-        bytes += static_cast<uint64_t>(dfb.tiles) * tt::tile_size(dfb.format);
+    for (const auto& buffer : qkv_conv_bw_dataflow_buffers(channel_tiles_per_block, input_format)) {
+        bytes += static_cast<uint64_t>(buffer.tiles) * tt::tile_size(buffer.format);
     }
     return bytes + 2 * qkv_conv_bw_window_bytes(channel_tiles_per_block, bytes_per_element);
 }

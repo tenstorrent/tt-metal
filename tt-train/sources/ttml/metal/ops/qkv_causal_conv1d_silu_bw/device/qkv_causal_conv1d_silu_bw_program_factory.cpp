@@ -31,7 +31,7 @@ const m2::KernelSpecName COMPUTE{"compute"};
 const m2::ScratchpadSpecName ACT_WINDOW{"act_window"};
 const m2::ScratchpadSpecName DC_WINDOW{"dc_window"};
 
-m2::DataflowBufferSpec make_dfb(const m2::DFBSpecName& name, uint32_t tiles, tt::DataFormat format) {
+m2::DataflowBufferSpec make_dataflow_buffer(const m2::DFBSpecName& name, uint32_t tiles, tt::DataFormat format) {
     return m2::DataflowBufferSpec{
         .unique_id = name,
         .entry_size = tt::tile_size(format),
@@ -109,9 +109,10 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
         GRAD_TAP_PARTIAL{"grad_tap_partial"};
 
     const auto bf16 = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    m2::Group<m2::DataflowBufferSpec> dfbs;
-    for (const auto& dfb : qkv_conv_bw_dfbs(channel_tiles_per_block, bf16)) {
-        dfbs.push_back(make_dfb(m2::DFBSpecName{std::string(dfb.name)}, dfb.tiles, dfb.format));
+    m2::Group<m2::DataflowBufferSpec> dataflow_buffers;
+    for (const auto& buffer : qkv_conv_bw_dataflow_buffers(channel_tiles_per_block, bf16)) {
+        dataflow_buffers.push_back(
+            make_dataflow_buffer(m2::DFBSpecName{std::string(buffer.name)}, buffer.tiles, buffer.format));
     }
     const auto window_bytes =
         static_cast<uint32_t>(qkv_conv_bw_window_bytes(channel_tiles_per_block, input.element_size()));
@@ -176,7 +177,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
     m2::ProgramSpec spec{
         .name = "qkv_causal_conv1d_silu_bw",
         .kernels = {std::move(reader), std::move(writer), std::move(compute)},
-        .dataflow_buffers = std::move(dfbs),
+        .dataflow_buffers = std::move(dataflow_buffers),
         .scratchpads =
             {{.unique_id = ACT_WINDOW, .size_per_node = window_bytes},
              {.unique_id = DC_WINDOW, .size_per_node = window_bytes}},
