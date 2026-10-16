@@ -458,8 +458,9 @@ public:
     void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
-    // Base completion counter of an active sub-device: each of the num_sub_devices() sub-devices owns
-    // DispatchSettings::num_completion_slots(num_sub_devices()) of a CQ's completion counters.
+    // Base completion counter of an active sub-device, the one traced programs report into: each of the
+    // num_sub_devices() sub-devices owns DispatchSettings::num_completion_slots(num_sub_devices()) of a CQ's completion
+    // counters.
     uint32_t completion_counter_index(SubDeviceId sub_device_id) const;
     bool is_mmio_capable() const override;
     // Returns true if this MeshDevice contains only remote devices (no local devices on this host).

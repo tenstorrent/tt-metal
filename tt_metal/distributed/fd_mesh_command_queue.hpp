@@ -72,14 +72,12 @@ private:
     void write_go_signal_sequences_to_unused_sub_grids(
         const std::unordered_set<uint32_t>& chip_ids_in_workload,
         const SubDeviceId& sub_device_id,
-        uint32_t expected_num_workers_completed,
+        const ExpectedWorkerCompletions::ProgramCompletion& completion,
         bool mcast_go_signals,
         uint32_t go_ring_slot,
         const program_dispatch::ProgramDispatchMetadata& dispatch_md);
     // Clear the num_workers_completed counter on the dispatcher cores corresponding to this CQ.
     void clear_expected_num_workers_completed();
-    // Index into expected_num_workers_completed_ of the completion counter sub_device_id's programs report done into.
-    uint32_t completion_counter_index(SubDeviceId sub_device_id) const;
     // Access a reference system memory manager, which acts as a global host side state manager for
     // specific MeshCommandQueue attributes.
     // TODO: All Mesh level host state managed by this class should be moved out, since its not
@@ -114,7 +112,7 @@ private:
     ExpectedWorkerCompletions expected_num_workers_completed_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
     // CrossNode programs rewrite a program-owned config Buffer at launch. For each
-    // program id, remember the worker-completion count that launch will report when
+    // program id, remember the sub-device sync count that launch reaches when
     // finished so a later enqueue of the same program can wait only for that prior to
     // launch.
     DispatchArray<std::unordered_map<uint64_t, uint32_t>> cross_node_program_completion_counts_;

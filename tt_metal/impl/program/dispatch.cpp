@@ -2733,12 +2733,13 @@ void update_program_dispatch_commands(
     ProgramImpl& program,
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
-    uint32_t expected_num_workers_completed,
+    const ExpectedWorkerCompletions::ProgramCompletion& completion,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status) {
     TT_ASSERT(cached_program_command_sequence.ctx != nullptr);
     MetalContext& metal_ctx = *cached_program_command_sequence.ctx;
 
+    static constexpr uint32_t wait_stream_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.stream));
     static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
     static constexpr uint32_t write_offsets_offset = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
     static constexpr uint32_t tensix_l1_write_offset_offset = write_offsets_offset + sizeof(uint32_t);
@@ -2757,8 +2758,12 @@ void update_program_dispatch_commands(
     }
 
     auto& curr_stall_seq_idx = cached_program_command_sequence.current_stall_seq_idx;
+    const auto sync_stream =
+        static_cast<uint16_t>(metal_ctx.dispatch_mem_map().get_completion_stream(dispatch_md.sync_wait.counter));
     cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
-        wait_count_offset, &(dispatch_md.sync_count), sizeof(uint32_t));
+        wait_stream_offset, &sync_stream, sizeof(uint16_t));
+    cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
+        wait_count_offset, &(dispatch_md.sync_wait.count), sizeof(uint32_t));
 
     // Update preamble based on kernel config ring buffer slot
     const auto& hal = metal_ctx.hal();
@@ -2882,9 +2887,13 @@ void update_program_dispatch_commands(
     for (auto* launch_msg_cmd_ptr : cached_program_command_sequence.launch_msg_write_packed_cmd_ptrs) {
         launch_msg_cmd_ptr->addr = multicast_cores_launch_msg_addr;
     }
-    // Update go signal to reflect the new launch_msg slot and wait count
-    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_ring_slot = multicast_cores_launch_message_wptr;
-    cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
+    // Update go signal to reflect the new launch_msg slot, the counter the program reports into, and the wait for the
+    // program before it on the sub-device
+    auto* go_signal_cmd = cached_program_command_sequence.mcast_go_signal_cmd_ptr;
+    go_signal_cmd->go_ring_slot = multicast_cores_launch_message_wptr;
+    go_signal_cmd->go_signal = hal.make_go_msg_u32(dev_msgs::RUN_MSG_GO, completion.counter);
+    go_signal_cmd->wait_count = completion.go_wait.count;
+    go_signal_cmd->wait_stream = metal_ctx.dispatch_mem_map().get_completion_stream(completion.go_wait.counter);
 }
 
 void update_traced_program_dispatch_commands(
@@ -3366,6 +3375,39 @@ void reset_config_buf_mgrs_and_expected_workers(
     expected_num_workers_completed.reset(num_sub_devices);
 }
 
+void add_sub_device_counter_clears(
+    MetalContext& metal_ctx,
+    HugepageDeviceCommand& command_sequence,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
+    SubDeviceId sub_device_id,
+    uint32_t num_control_acks) {
+    const auto& mem_map = metal_ctx.dispatch_mem_map();
+    const bool distributed_dispatcher = metal_ctx.get_dispatch_query_manager().distributed_dispatcher();
+    const uint32_t base_counter = expected_num_workers_completed.base_counter_index(sub_device_id);
+    const uint32_t current_counter = expected_num_workers_completed.current_counter_index(sub_device_id);
+    for (uint32_t counter = base_counter; counter < base_counter + expected_num_workers_completed.num_completion_slots;
+         ++counter) {
+        uint32_t count = expected_num_workers_completed[counter];
+        if (counter == current_counter) {
+            count += num_control_acks;
+        }
+        if (distributed_dispatcher) {
+            command_sequence.add_dispatch_wait(
+                CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
+                0,
+                mem_map.get_completion_stream(counter),
+                count,
+                DispatcherSelect::DISPATCH_SUBORDINATE);
+        }
+        command_sequence.add_dispatch_wait(
+            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
+            0,
+            mem_map.get_completion_stream(counter),
+            count,
+            DispatcherSelect::DISPATCH_MASTER);
+    }
+}
+
 void reset_worker_dispatch_state_on_device(
     distributed::MeshDevice* mesh_device,
     SystemMemoryManager& manager,
@@ -3375,6 +3417,7 @@ void reset_worker_dispatch_state_on_device(
     bool reset_launch_msg_state,
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands) {
     auto num_sub_devices = mesh_device->num_sub_devices();
+    TT_ASSERT(num_sub_devices == expected_num_workers_completed.num_sub_devices);
 
     MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
     const auto& mem_map = metal_ctx.dispatch_mem_map();
@@ -3387,7 +3430,7 @@ void reset_worker_dispatch_state_on_device(
             calculator.add_notify_dispatch_s_go_signal_cmd();
         }
     }
-    for (uint32_t i = 0; i < num_sub_devices; ++i) {
+    for (uint32_t i = 0; i < num_sub_devices * expected_num_workers_completed.num_completion_slots; ++i) {
         if (metal_ctx.get_dispatch_query_manager().distributed_dispatcher()) {
             calculator.add_dispatch_wait();
         }
@@ -3415,11 +3458,11 @@ void reset_worker_dispatch_state_on_device(
         for (uint32_t i = 0; i < num_sub_devices; ++i) {
             // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
             SubDeviceId sub_device_id(static_cast<uint8_t>(i));
-            const uint32_t counter_index = expected_num_workers_completed.counter_index(sub_device_id);
+            const CompletionWait all_work = expected_num_workers_completed.current_wait(sub_device_id);
             command_sequence.add_dispatch_go_signal_mcast(
-                expected_num_workers_completed[counter_index],
-                metal_ctx.hal().make_go_msg_u32(dev_msgs::RUN_MSG_RESET_READ_PTR, counter_index),
-                mem_map.get_completion_stream(counter_index),
+                all_work.count,
+                metal_ctx.hal().make_go_msg_u32(dev_msgs::RUN_MSG_RESET_READ_PTR, all_work.counter),
+                mem_map.get_completion_stream(all_work.counter),
                 static_cast<uint8_t>(i),
                 mesh_device->impl().has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
                 worker_launch_message_buffer_state[i].get_mcast_wptr(),
@@ -3428,28 +3471,14 @@ void reset_worker_dispatch_state_on_device(
     }
     // Wait to ensure that all workers have reset their read_ptr. dispatch_d will stall until all workers have completed
     // this step, before sending kernel config data to workers or notifying dispatch_s that its safe to send the
-    // go_signal. Clear the dispatch <--> worker semaphore, since trace starts at 0.
+    // go_signal. Clear the dispatch <--> worker semaphores, since the counts start at 0 again.
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         SubDeviceId sub_device_id(static_cast<uint8_t>(i));
-        const uint32_t counter_index = expected_num_workers_completed.counter_index(sub_device_id);
-        uint32_t expected_num_workers = expected_num_workers_completed[counter_index];
-        if (reset_launch_msg_state) {
-            // The reset go-signal is multicast to TENSIX workers; wait for their acknowledgements.
-            expected_num_workers += mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-        }
-        if (metal_ctx.get_dispatch_query_manager().distributed_dispatcher()) {
-            command_sequence.add_dispatch_wait(
-                CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
-                0,
-                mem_map.get_completion_stream(counter_index),
-                expected_num_workers,
-                1);
-        }
-        command_sequence.add_dispatch_wait(
-            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
-            0,
-            mem_map.get_completion_stream(counter_index),
-            expected_num_workers);
+        // The reset go-signal is multicast to TENSIX workers; wait for their acknowledgements.
+        const uint32_t num_reset_acks =
+            reset_launch_msg_state ? mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) : 0;
+        add_sub_device_counter_clears(
+            metal_ctx, command_sequence, expected_num_workers_completed, sub_device_id, num_reset_acks);
     }
     TT_ASSERT(command_sequence.write_offset_bytes() == reset_size);
     if (combine_setup && first_setup_size != 0) {
@@ -3515,34 +3544,26 @@ void set_num_worker_sems_on_dispatch(
     submit_setup_commands(manager, cq_id, commands.data(), commands.size_bytes());
 }
 
-// Wait for number of workers to complete and then reset the counter on the device
 void reset_expected_num_workers_completed_on_device(
-    Device* device, uint32_t completion_counter_index, uint32_t num_expected_workers, uint8_t cq_id) {
+    Device* device,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
+    SubDeviceId sub_device_id,
+    uint8_t cq_id) {
     MetalContext& metal_ctx = MetalContext::instance(device->get_context_id());
     tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
-    bool distributed_dispatcher = metal_ctx.get_dispatch_query_manager().distributed_dispatcher();
-    if (distributed_dispatcher) {
+    for (uint32_t i = 0; i < expected_num_workers_completed.num_completion_slots; ++i) {
+        if (metal_ctx.get_dispatch_query_manager().distributed_dispatcher()) {
+            calculator.add_dispatch_wait();
+        }
         calculator.add_dispatch_wait();
     }
-    calculator.add_dispatch_wait();
 
     auto& manager = device->sysmem_manager();
     const auto cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
-    const auto populate_dispatch_wait_cmd = [&](DispatcherSelect dispatcher_type) {
-        command_sequence.add_dispatch_wait(
-            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
-            0,
-            metal_ctx.dispatch_mem_map().get_completion_stream(completion_counter_index),
-            num_expected_workers,
-            dispatcher_type);
-    };
-
-    if (distributed_dispatcher) {
-        populate_dispatch_wait_cmd(DispatcherSelect::DISPATCH_SUBORDINATE);
-    }
-    populate_dispatch_wait_cmd(DispatcherSelect::DISPATCH_MASTER);
+    add_sub_device_counter_clears(
+        metal_ctx, command_sequence, expected_num_workers_completed, sub_device_id, /*num_control_acks=*/0);
 
     manager.cq_write(cmd_region, cmd_sequence_sizeB, manager.get_issue_queue_write_ptr(cq_id));
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);

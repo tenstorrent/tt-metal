@@ -117,11 +117,13 @@ void append_go_signal_sequence(
     // GO-signal-only sequences carry no kernel binary; marking them cached skips the prefetcher ring-buffer offset
     // command.
     dispatch_metadata.prefetcher_cache_info.is_cached = true;
+    // Command lists replay like traces, so their programs report into the sub-device's base counter.
+    const uint32_t base_counter = mesh_device.impl().completion_counter_index(sub_device);
     HostMemDeviceCommand commands = build_go_signal_sequence(
         cq_id,
         &mesh_device,
         sub_device,
-        expected_workers,
+        {.go_wait = {base_counter, expected_workers}, .counter = base_counter},
         send_multicast,
         go_ring_slot,
         dispatch_metadata,

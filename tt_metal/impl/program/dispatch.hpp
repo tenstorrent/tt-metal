@@ -29,6 +29,8 @@
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
+template <bool hugepage_write>
+class DeviceCommand;
 class Device;
 class IDevice;
 class LaunchMessageRingBufferState;
@@ -49,7 +51,9 @@ namespace program_dispatch {
 
 struct ProgramDispatchMetadata {
     std::vector<ConfigBufferEntry> kernel_config_addrs;
+    // Sub-device sync count (ExpectedWorkerCompletions::total) the stall waits for, and the counter wait covering it.
     uint32_t sync_count{};
+    CompletionWait sync_wait{};
     uint32_t stall_first{};
     uint32_t stall_before_program{};
 
@@ -187,8 +191,9 @@ void reserve_space_in_kernel_config_buffer(
     const std::vector<uint32_t>& program_config_sizes,
     ProgramBinaryStatus program_binary_status,
     uint32_t num_program_workers,
+    // Sub-device sync count (ExpectedWorkerCompletions::total) before this program.
     uint32_t expected_num_workers_completed,
-    // Non-zero: stall before config writes until this many workers complete. Used to
+    // Non-zero: stall before config writes until the sub-device's sync count reaches this. Used to
     // order re-launches of the same CrossNode program.
     uint32_t program_ordering_sync_count,
     ProgramDispatchMetadata& dispatch_md);
@@ -200,7 +205,7 @@ void update_program_dispatch_commands(
     detail::ProgramImpl& program,
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
-    uint32_t expected_num_workers_completed,
+    const ExpectedWorkerCompletions::ProgramCompletion& completion,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status);
 
@@ -253,6 +258,17 @@ void reset_config_buf_mgrs_and_expected_workers(
     uint32_t num_sub_devices,
     uint32_t worker_l1_unreserved_start);
 
+// Adds a wait for each of sub_device_id's completion counters to reach its count, clearing the counter after. Waiting
+// on every counter covers all of the sub-device's work, since its current counter is among them. The current counter
+// also waits for num_control_acks more, the acks of a control go sent into it. Each counter takes one dispatch wait, or
+// two with a distributed dispatcher.
+void add_sub_device_counter_clears(
+    MetalContext& metal_ctx,
+    DeviceCommand<true>& command_sequence,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
+    SubDeviceId sub_device_id,
+    uint32_t num_control_acks);
+
 void reset_worker_dispatch_state_on_device(
     distributed::MeshDevice* mesh_device,
     SystemMemoryManager& manager,
@@ -270,9 +286,12 @@ void set_num_worker_sems_on_dispatch(
     uint32_t num_sub_devices,
     ttsl::Span<const uint32_t> workers_per_sub_device);
 
-// Wait for number of workers to complete and then reset the completion counter on the device
+// Waits for sub_device_id's work and then clears each of its completion counters on the device.
 void reset_expected_num_workers_completed_on_device(
-    Device* device, uint32_t completion_counter_index, uint32_t num_expected_workers, uint8_t cq_id);
+    Device* device,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
+    SubDeviceId sub_device_id,
+    uint8_t cq_id);
 
 //
 // Get the expected number of workers completed values for the given Program to run on the sub device.

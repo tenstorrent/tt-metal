@@ -30,22 +30,22 @@ HostMemDeviceCommand build_go_signal_sequence(
     uint8_t cq_id,
     MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
-    uint32_t expected_num_workers_completed,
+    const ExpectedWorkerCompletions::ProgramCompletion& completion,
     bool send_mcast,
     uint32_t go_ring_slot,
     const program_dispatch::ProgramDispatchMetadata& dispatch_metadata,
-    std::optional<uint32_t> config_ring_sync_count);
+    std::optional<CompletionWait> config_ring_sync);
 
 void write_go_signal_sequence(
     uint8_t cq_id,
     MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
     SystemMemoryManager& sysmem_manager,
-    uint32_t expected_num_workers_completed,
+    const ExpectedWorkerCompletions::ProgramCompletion& completion,
     bool send_mcast,
     uint32_t go_ring_slot,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md,
-    std::optional<uint32_t> config_ring_sync_count);
+    std::optional<CompletionWait> config_ring_sync);
 
 void write_rt_profiler_flush(
     uint8_t cq_id, uint32_t completion_counter_index, SystemMemoryManager& sysmem_manager, uint32_t wait_count);

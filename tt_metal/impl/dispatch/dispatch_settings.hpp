@@ -107,7 +107,8 @@ public:
     }
 
     // Base completion counter of a sub-device, within a CQ's counter block, when each sub-device owns
-    // num_completion_slots counters. Programs and control acks report done into it.
+    // num_completion_slots counters. Traced programs report done into it; enqueued programs rotate through the
+    // sub-device's counters (ExpectedWorkerCompletions).
     static constexpr uint32_t completion_counter_index(uint32_t sub_device_index, uint32_t num_completion_slots) {
         return sub_device_index * num_completion_slots;
     }

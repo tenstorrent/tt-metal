@@ -126,8 +126,10 @@ inline void init_go_signalling(tt_l1_ptr mailboxes_t* const mailboxes) {
     asm volatile("csrrs zero, mie, %0" : : "r"(uint32_t{1} << MACHINE_EXTERNAL_INTERRUPT_OFFSET));
     asm volatile("csrrs zero, mstatus, %0" : : "r"(uint32_t{1} << 3));
     clear_go_messages(mailboxes->go_messages);
-    // Until a sub-device reconfigure writes it, the core is in sub-device 0, which reports into completion counter 0.
-    mailboxes->fds_go_group_mask = 1u << overlay::fds_signalling::group_for_completion_counter(0);
+    // Until a sub-device reconfigure writes it, the core is in the only sub-device, whose programs report into any of
+    // the completion counters, so it accepts every go group.
+    mailboxes->fds_go_group_mask = ((1u << fds_num_go_groups) - 1)
+                                   << overlay::fds_signalling::group_for_completion_counter(0);
 }
 
 // Readies this launch's FDS done: waits for the go if asked, then queues idle on the done wire so the

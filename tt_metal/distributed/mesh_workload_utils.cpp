@@ -31,19 +31,20 @@ struct GoSignalSequenceConfig {
     uint8_t cq_id;
     MeshDevice* mesh_device;
     SubDeviceId sub_device_id;
-    uint32_t expected_num_workers_completed;
+    // The wait before the go, and the counter its workers report done into.
+    ExpectedWorkerCompletions::ProgramCompletion completion;
     bool send_mcast;
     // Launch message slot the go is for (the sub-device's launch message write pointer).
     uint32_t go_ring_slot;
     const program_dispatch::ProgramDispatchMetadata& dispatch_metadata;
-    std::optional<uint32_t> config_ring_sync_count;
+    std::optional<CompletionWait> config_ring_sync;
 };
 
 uint32_t go_signal_sequence_size(const GoSignalSequenceConfig& config) {
     auto& mesh_impl = config.mesh_device->impl();
     auto& metal_ctx = mesh_impl.metal_context();
     DeviceCommandCalculator calculator(metal_ctx);
-    if (config.config_ring_sync_count.has_value()) {
+    if (config.config_ring_sync.has_value()) {
         calculator.add_dispatch_wait();
     }
     if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
@@ -71,15 +72,17 @@ void populate_go_signal_sequence(DeviceCommand<HugepageWrite>& commands, const G
             true);
     }
 
-    const uint32_t completion_counter = mesh_impl.completion_counter_index(config.sub_device_id);
-    const uint32_t completion_stream = metal_ctx.dispatch_mem_map().get_completion_stream(completion_counter);
-    if (config.config_ring_sync_count.has_value()) {
+    const auto& mem_map = metal_ctx.dispatch_mem_map();
+    if (config.config_ring_sync.has_value()) {
         commands.add_dispatch_wait(
-            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM, 0, completion_stream, *config.config_ring_sync_count);
+            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
+            0,
+            mem_map.get_completion_stream(config.config_ring_sync->counter),
+            config.config_ring_sync->count);
     }
 
     const uint8_t sub_device_index = *config.sub_device_id;
-    const uint32_t go_message = hal.make_go_msg_u32(dev_msgs::RUN_MSG_GO, completion_counter);
+    const uint32_t go_message = hal.make_go_msg_u32(dev_msgs::RUN_MSG_GO, config.completion.counter);
 
     // When running with dispatch_s enabled:
     //   - dispatch_d must notify dispatch_s that a go signal can be sent.
@@ -95,9 +98,9 @@ void populate_go_signal_sequence(DeviceCommand<HugepageWrite>& commands, const G
         dispatcher = DispatcherSelect::DISPATCH_SUBORDINATE;
     }
     commands.add_dispatch_go_signal_mcast(
-        config.expected_num_workers_completed,
+        config.completion.go_wait.count,
         go_message,
-        completion_stream,
+        mem_map.get_completion_stream(config.completion.go_wait.counter),
         sub_device_index,
         (config.send_mcast && config.mesh_device->impl().has_noc_mcast_txns(config.sub_device_id))
             ? *config.sub_device_id
@@ -114,20 +117,20 @@ HostMemDeviceCommand build_go_signal_sequence(
     uint8_t cq_id,
     MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
-    uint32_t expected_num_workers_completed,
+    const ExpectedWorkerCompletions::ProgramCompletion& completion,
     bool send_mcast,
     uint32_t go_ring_slot,
     const program_dispatch::ProgramDispatchMetadata& dispatch_metadata,
-    std::optional<uint32_t> config_ring_sync_count) {
+    std::optional<CompletionWait> config_ring_sync) {
     const GoSignalSequenceConfig config{
         .cq_id = cq_id,
         .mesh_device = mesh_device,
         .sub_device_id = sub_device_id,
-        .expected_num_workers_completed = expected_num_workers_completed,
+        .completion = completion,
         .send_mcast = send_mcast,
         .go_ring_slot = go_ring_slot,
         .dispatch_metadata = dispatch_metadata,
-        .config_ring_sync_count = config_ring_sync_count};
+        .config_ring_sync = config_ring_sync};
     HostMemDeviceCommand commands(mesh_device->impl().metal_context(), go_signal_sequence_size(config));
     populate_go_signal_sequence(commands, config);
     return commands;
@@ -141,20 +144,20 @@ void write_go_signal_sequence(
     MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
     SystemMemoryManager& sysmem_manager,
-    uint32_t expected_num_workers_completed,
+    const ExpectedWorkerCompletions::ProgramCompletion& completion,
     bool send_mcast,
     uint32_t go_ring_slot,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md,
-    std::optional<uint32_t> config_ring_sync_count) {
+    std::optional<CompletionWait> config_ring_sync) {
     const GoSignalSequenceConfig config{
         .cq_id = cq_id,
         .mesh_device = mesh_device,
         .sub_device_id = sub_device_id,
-        .expected_num_workers_completed = expected_num_workers_completed,
+        .completion = completion,
         .send_mcast = send_mcast,
         .go_ring_slot = go_ring_slot,
         .dispatch_metadata = dispatch_md,
-        .config_ring_sync_count = config_ring_sync_count};
+        .config_ring_sync = config_ring_sync};
     const uint32_t cmd_sequence_sizeB = go_signal_sequence_size(config);
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand go_signal_cmd_sequence(mesh_device->impl().metal_context(), cmd_region, cmd_sequence_sizeB);
