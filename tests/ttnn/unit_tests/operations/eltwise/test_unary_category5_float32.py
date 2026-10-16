@@ -155,7 +155,7 @@ def test_geglu(device, dim, variant):
     | all             | bit-identical to ttnn.gelu     | same gate kernel, so ttnn.gelu's own |
     |                 | with the same variant          | accuracy tests carry over            |
 
-    No variant must resolve to Accurate, on the device and in the golden.
+    With variant=None, geglu must resolve to Accurate, on the device and in the golden.
     """
     B = generate_float32_bits()
     input_tensor = _gate_input(B)
@@ -168,9 +168,11 @@ def test_geglu(device, dim, variant):
     expected = ttnn.to_torch(ttnn.gelu(gate_in, variant=expected_variant))
     result = ttnn.to_torch(ttnn.geglu(tt_in, dim=dim, **geglu_kwargs))
 
-    assert torch.equal(result, expected), (
+    result_bits = result.view(torch.int32)
+    expected_bits = expected.view(torch.int32)
+    assert torch.equal(result_bits, expected_bits), (
         f"geglu gate diverged from ttnn.gelu(variant={expected_variant}) for "
-        f"{int((result != expected).sum().item())} of {result.numel()} elements"
+        f"{int((result_bits != expected_bits).sum().item())} of {result.numel()} elements"
     )
 
     golden_function = ttnn.get_golden_function(ttnn.geglu)
