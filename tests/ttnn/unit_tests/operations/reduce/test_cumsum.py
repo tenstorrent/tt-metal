@@ -470,6 +470,8 @@ def test_cumsum_fp32_non_finite(pattern, scan_length, dim, disable_compensated_s
     torch_input = torch.randn(size, dtype=torch.float32)
     steps = torch_input.movedim(dim, 0)  # a view: steps[i] is step i of the scan
     fp32_max = torch.finfo(torch.float32).max
+    # Each pattern sets a few of the 64 columns at the scan steps its name describes; the other columns stay random.
+    # A column only gets one sign of inf, except in inf_then_neg_inf.
     if pattern == "inf":
         steps[1, ..., :5] = float("inf")
     elif pattern == "neg_inf":
