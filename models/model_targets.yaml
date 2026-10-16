@@ -1330,6 +1330,39 @@ targets:
               prefill_time_to_first_token: 83.3
               prefill_time_to_first_token_tolerance: 0.2
             accuracy: {}
+  qwen2.5-vl-7b:
+    aliases: ["Qwen2.5-VL-7B", "Qwen/Qwen2.5-VL-7B-Instruct"]
+    skus:
+      wh_llmbox_perf:
+        entries:
+          # Measured on the wh_llmbox_perf CI runner (all-model-tests run 37830531384, 2026-10-09);
+          # wide tolerances until scheduled runs establish the run-to-run spread.
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf:
+              prefill_time_to_first_token: 65
+              prefill_time_to_first_token_tolerance: 0.4
+              decode_t/s/u: 40.0
+              decode_t_s_u_tolerance: 0.25
+              decode_t/s: 40.0
+              decode_t_s_tolerance: 0.25
+            accuracy: {}
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+          - batch_size: 32
+            seq_len: 2048
+            status: active
+            perf:
+              prefill_time_to_first_token: 280
+              prefill_time_to_first_token_tolerance: 0.4
+              decode_t/s/u: 31.0
+              decode_t_s_u_tolerance: 0.25
+              decode_t/s: 992
+              decode_t_s_tolerance: 0.25
+            accuracy: {}
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
   qwen2.5-vl-32b:
     aliases: ["Qwen2.5-VL-32B", "Qwen/Qwen2.5-VL-32B-Instruct"]
     skus:

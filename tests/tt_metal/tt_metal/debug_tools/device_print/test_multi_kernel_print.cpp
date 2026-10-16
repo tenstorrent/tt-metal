@@ -100,6 +100,9 @@ TEST_F(DevicePrintFixture, TwoWorkerKernelsSameProgram) {
 
 // Single program, two active ETH kernels (DM0) on two different ETH cores.
 TEST_F(DevicePrintFixture, TwoActiveEthKernelsSameProgram) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
         const auto eth_cores = device->get_active_ethernet_cores(true);
@@ -137,6 +140,9 @@ TEST_F(DevicePrintFixture, TwoWorkerProgramsBackToBack) {
 
 // Two programs run back-to-back on the same active ETH core / RISC.
 TEST_F(DevicePrintFixture, TwoActiveEthProgramsBackToBack) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
         const auto eth_cores = device->get_active_ethernet_cores(true);
