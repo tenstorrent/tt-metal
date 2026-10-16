@@ -35,7 +35,7 @@
     "hf-overrides": "{\"architectures\":[\"TTDeepseekV41ForCausalLM\"]}",
     "speculative_config": "{\"method\": \"custom_class\", \"model\": \"vllm_tt_plugin.model_owned_drafter\", \"num_speculative_tokens\": 5}",
     "port": "8000",
-    "limit-mm-per-prompt": "{\"image\": 4}",
+    "limit-mm-per-prompt": "{\"image\": 16}",
     "mm-processor-cache-gb": 0,
     "chat-template-content-format": "openai"
    },
