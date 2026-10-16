@@ -598,6 +598,8 @@ def _assert_nan_lanes(testing_dtype, output_lanes):
 # infinite divisor, which used to leave NaN in every such lane.
 @pytest.mark.parametrize("testing_dtype", ["bfloat16", "float32"])
 def test_remainder_inf_divisor(testing_dtype, device):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("The Quasar kernel does not implement the infinite-divisor cases yet")
     torch_dtype = getattr(torch, testing_dtype)
     ttnn_dtype = getattr(ttnn, testing_dtype)
 
@@ -633,6 +635,8 @@ def test_remainder_inf_divisor(testing_dtype, device):
 # finite-a lanes, while the a == b special case zeroed inf/inf.
 @pytest.mark.parametrize("testing_dtype", ["bfloat16", "float32"])
 def test_fmod_inf_divisor(testing_dtype, device):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("The Quasar kernel does not implement the infinite-divisor cases yet")
     torch_dtype = getattr(torch, testing_dtype)
     ttnn_dtype = getattr(ttnn, testing_dtype)
 
