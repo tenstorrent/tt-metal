@@ -253,3 +253,22 @@ def test_the_tail_limit_follows_the_precision_model(gspec, noise, monkeypatch):
     noise(0.5)  # a broken step still fails: its own checks and the block-out gate
     M.reset("T")
     assert not run_swap_test(s, "blk", SWAPPED, checks="steps")
+
+
+def test_a_frozen_test_that_wraps_the_step_check_with_the_old_signature_still_works(gspec, monkeypatch):
+    """F79: swap tests frozen before F76 patch component._check_step with an eight-argument wrapper."""
+    from unittest import mock
+
+    from models.demos.common.bringup.testing import component
+
+    real, seen = component._check_step, []
+
+    def wrapper(s, block_type, layer, st, got, cpu, golden, bridged):
+        seen.append(st.name)
+        return real(s, block_type, layer, st, got, cpu, golden, bridged)
+
+    s = gspec()
+    monkeypatch.setenv(IMPL_ENV, "reference")
+    with mock.patch.object(component, "_check_step", wrapper):
+        assert run_swap_test(s, "blk", SWAPPED, checks="steps")
+    assert seen == list(SWAPPED) and 0.999 < got()["swap_attention_vs_golden_limit"] < 1.0

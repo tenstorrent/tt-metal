@@ -340,11 +340,11 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         **({"ops": ops} if ops else {}),
         **({"timeline": timeline} if timeline else {}),
     }
-    path = metrics.results_dir() / f"{metrics.task_id()}_profile.json"
+    path = metrics.results_dir() / f"{metrics.record_task()}_profile.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(out, indent=1) + "\n")
     s.profiles_dir.mkdir(parents=True, exist_ok=True)
-    (s.profiles_dir / f"{metrics.task_id()}_{time.strftime('%Y%m%dT%H%M%S')}.json").write_text(
+    (s.profiles_dir / f"{metrics.record_task()}_{time.strftime('%Y%m%dT%H%M%S')}.json").write_text(
         json.dumps(out, indent=1)
     )
     print(f"chunk [{start},{rung['seq']}): wall {wall * 1e3:.0f} ms, device {total / 1e6:.0f} ms")

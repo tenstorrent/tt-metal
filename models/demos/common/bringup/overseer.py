@@ -141,11 +141,18 @@ def fix_task(job: dict, tasks: dict) -> dict:
         "role": FIX_ROLE,
         "precheck": False,
         "deps": list(job["gate"]),
-        "gate": {"cmd": " && ".join(g["gate"]["cmd"] for g in gates), "metrics": metrics},
+        # F79: every segment runs as its own task (its tests see the BRINGUP_TASK of their own gate: layer choice,
+        # golden, limits), and the gate runner's BRINGUP_RECORD_TASK still files the metrics under FIX.<n>
+        "gate": {"cmd": " && ".join(_as_task(g) for g in gates), "metrics": metrics},
         "device": any(g.get("device") for g in gates),
         "paths": paths,
         "brief": {"details": job["text"], "gate_tasks": list(job["gate"])},
     }
+
+
+def _as_task(task: dict) -> str:
+    segs = [x.strip() for x in task["gate"]["cmd"].split("&&") if x.strip()]
+    return " && ".join(f"BRINGUP_TASK={task['id']} {x}" for x in segs)
 
 
 def take_fixes(bringup_dir: Path) -> list[dict]:
