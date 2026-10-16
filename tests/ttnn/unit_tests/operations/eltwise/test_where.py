@@ -7,7 +7,7 @@ import ttnn
 import pytest
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
-from math import isnan
+from math import isfinite, isnan
 
 
 def torch_equal_nan(a, b):
@@ -595,7 +595,9 @@ def test_where_tss(device, dtype, h, w, scalar1, scalar2):
 @pytest.mark.parametrize(
     "scalar1, scalar2",
     [
-        [15.5, 31.25],
+        # Not bf16-representable: the low 16 mantissa bits of each fp32 word are set, so the exact compare
+        # proves the full 32-bit result reaches L1, not just the upper half.
+        [15.123456, 31.654321],
         [float("inf"), -float("inf")],
     ],
 )
@@ -603,6 +605,9 @@ def test_where_tss_bf16_condition_fp32_output(device, h, w, scalar1, scalar2):
     """A preallocated float32 output puts Dest in 32-bit mode while the condition stays bf16; the
     where must then read and write full 32-bit Dest words, not the 16-bit halves a bf16 input implies."""
     torch.manual_seed(0)
+    for scalar in (scalar1, scalar2):
+        if isfinite(scalar):
+            assert torch.tensor(scalar, dtype=torch.float32).view(torch.int32) & 0xFFFF, "scalar must not be bf16-exact"
 
     C = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
     C = (C > 0).to(torch.bfloat16)
