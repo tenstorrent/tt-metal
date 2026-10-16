@@ -232,7 +232,8 @@ public:
     uint16_t get_producer_share() const;
     uint16_t get_consumer_share() const;
     // Spacing between the entries of one op (1 = contiguous). Only a STRIDED side facing BLOCKED
-    // consumers/producers has a stride > 1; copy_tile takes it as the tile index.
+    // consumers/producers has a stride > 1. copy_tile / pack_tile apply it to their tile index
+    // themselves (llk_unpack_A / llk_pack); raw L1 reads and DM NoC transfers multiply by it.
     uint16_t get_producer_stride_tiles() const;
     uint16_t get_consumer_stride_tiles() const;
 
