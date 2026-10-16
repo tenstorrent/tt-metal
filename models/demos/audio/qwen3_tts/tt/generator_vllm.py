@@ -71,6 +71,11 @@ class Qwen3TTSTalkerForConditionalGeneration:
         _point_checkpoint_at(hf_config)
         return cls(mesh_device, max_seq_len)
 
+    @classmethod
+    def get_max_tokens_all_users(cls, max_model_len, max_num_seqs, **kwargs):
+        """KV positions to allocate: one full context per sequence, nothing spare."""
+        return max_model_len * max_num_seqs
+
     # ── allocation and lifecycle ────────────────────────────────────────────
 
     def allocate_kv_cache(self, shape, dtype, num_layers):
