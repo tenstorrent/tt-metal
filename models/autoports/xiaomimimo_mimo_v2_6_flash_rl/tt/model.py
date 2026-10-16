@@ -39,6 +39,7 @@ def prefill_padded_len(seq_len):
 
 class TtMiMoModel:
     DECODE_TOPK = 32  # candidates per chip read back each decode step
+    LAYER_CACHE_LAYOUT = "kvsplit-gu-ds"  # split-user global KV, fused gate|up, DRAM-sharded qkv/router
 
     def __init__(
         self,
@@ -103,10 +104,11 @@ class TtMiMoModel:
         self.layers = []
         for i in range(self.num_layers):
             t0 = time.time()
-            # Bump a layer's tag when its cached tensor set changes, so a warm cache from an older layout
-            # is rebuilt instead of loaded with tensors missing (global layers gained grouped decode weights).
-            tag = f"layer{i}_tp{plan.tp}" + ("" if cfg.is_swa(i) else "_kvsplit") + ("_gu" if cfg.is_moe(i) else "")
-            weights = None if warm(tag) else load_layer_weights(ckpt, cfg, i)
+            # Bump LAYER_CACHE_LAYOUT when a layer's cached tensor set changes, so a warm cache from an older
+            # layout is rebuilt instead of loaded with tensors missing. Unchanged tensors (e.g. experts) are
+            # still loaded from their cache files; lazy experts are only dequantized when they are missing.
+            tag = f"layer{i}_tp{plan.tp}_{self.LAYER_CACHE_LAYOUT}"
+            weights = None if warm(tag) else load_layer_weights(ckpt, cfg, i, lazy_experts=True)
             self.layers.append(
                 TtMiMoDecoderLayer(
                     plan,

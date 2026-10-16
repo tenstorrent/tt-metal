@@ -20,7 +20,7 @@ import torch
 
 import ttnn
 
-from .common import TILE, as_weight, cache_name, compute_config
+from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config
 from .kv import kv_replication
 from .rope import permute_heads_for_rope
 
@@ -125,18 +125,42 @@ class TtMiMoAttention:
                 sinks = s.reshape(1, dims.num_heads, 1, 1)
                 decode_sinks = torch.nn.functional.pad(s.reshape(dims.num_heads, 1), (0, TILE - 1))
 
-        self.wqkv = as_weight(wqkv, plan, plan.shard(-1), weight_dtype, cache_name(cache_dir, prefix, "wqkv"))
+        hidden = cfg.hidden_size
+        self.qkv_width = (self.nh_local + 2 * self.nkv_local) * self.head_dim
         self.wo = as_weight(wo, plan, plan.shard(-2), weight_dtype, cache_name(cache_dir, prefix, "wo"))
         if self.split_users:
+            # Prefill keeps 8 heads per chip on an interleaved weight; decode has its own grouped weight.
+            self.wqkv = as_weight(wqkv, plan, plan.shard(-1), weight_dtype, cache_name(cache_dir, prefix, "wqkv"))
             self.nh_decode = dims.num_heads // dims.num_kv_heads
+            self.decode_qkv_width = (self.nh_decode + 2) * self.head_dim
+            self.decode_qkv = DramShardedMatmul(plan, hidden, self.decode_qkv_width)
             wqkv_d = wo_d = None
             if weights is not None:
                 wqkv_d, wo_d = prepare_grouped_decode_qkv_o(weights, dims, cfg.attention_value_scale, tp)
+                wqkv_d = self.decode_qkv.pad_chip_blocks(wqkv_d, tp)
             self.wqkv_decode = as_weight(
-                wqkv_d, plan, plan.shard(-1), weight_dtype, cache_name(cache_dir, prefix, "wqkv_grouped")
+                wqkv_d,
+                plan,
+                plan.shard(-1),
+                weight_dtype,
+                cache_name(cache_dir, prefix, "wqkv_grouped_ds"),
+                memory_config=self.decode_qkv.weight_memory_config,
             )
             self.wo_decode = as_weight(
                 wo_d, plan, plan.shard(-2), weight_dtype, cache_name(cache_dir, prefix, "wo_grouped")
+            )
+        else:
+            # One DRAM-sharded weight serves decode directly and prefill through an interleaved copy.
+            self.decode_qkv = DramShardedMatmul(plan, hidden, self.qkv_width)
+            if wqkv is not None:
+                wqkv = self.decode_qkv.pad_chip_blocks(wqkv, tp)
+            self.wqkv = as_weight(
+                wqkv,
+                plan,
+                plan.shard(-1),
+                weight_dtype,
+                cache_name(cache_dir, prefix, "wqkv_ds"),
+                memory_config=self.decode_qkv.weight_memory_config,
             )
         self.sinks = self.decode_sinks = None
         if dims.has_sink:
@@ -177,6 +201,30 @@ class TtMiMoAttention:
         return caches
 
     # ---------------------------------------------------------------- prefill
+    def _prefill_qkv(self, x):
+        if self.split_users:
+            weight, temp = self.wqkv, None
+        else:
+            weight = temp = ttnn.to_memory_config(self.wqkv, ttnn.DRAM_MEMORY_CONFIG)  # DRAM-sharded -> interleaved
+        xqkv = ttnn.linear(
+            x, weight, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=self.mm_config
+        )
+        if temp is not None:
+            temp.deallocate(True)
+        if xqkv.shape[-1] != self.qkv_width:
+            trimmed = ttnn.slice(xqkv, (0, 0, 0, 0), (1, 1, xqkv.shape[-2], self.qkv_width))
+            xqkv.deallocate(True)
+            xqkv = trimmed
+        return xqkv
+
+    def _decode_qkv(self, x, weight, width):
+        xqkv = self.decode_qkv(x, weight)
+        if xqkv.shape[-1] != width:
+            trimmed = ttnn.slice(xqkv, (0, 0, 0, 0), (1, 1, xqkv.shape[-2], width))
+            xqkv.deallocate(True)
+            xqkv = trimmed
+        return xqkv
+
     def _prefill_sdpa_program(self, seq_len):
         chunk = 256 if seq_len >= 2048 else (128 if seq_len >= 128 else 32)
         return ttnn.SDPAProgramConfig(
@@ -192,13 +240,7 @@ class TtMiMoAttention:
         assert start_pos == 0, "chunked prefill (start_pos > 0) is not implemented yet"
         seq_len = x.shape[-2]
         real_len = seq_len if real_len is None else real_len
-        xqkv = ttnn.linear(
-            x,
-            self.wqkv,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.mm_config,
-        )
+        xqkv = self._prefill_qkv(x)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
             num_heads=self.nh_local,
@@ -282,13 +324,7 @@ class TtMiMoAttention:
             cur_pos = cur_pos["pos"]
         assert not self.split_users, "global layers on TP=8 need the per-chip owned positions"
         batch = x.shape[-2]
-        xqkv = ttnn.linear(
-            x,
-            self.wqkv,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.mm_config,
-        )
+        xqkv = self._decode_qkv(x, self.wqkv, self.qkv_width)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             xqkv,
             num_heads=self.nh_local,
@@ -351,13 +387,7 @@ class TtMiMoAttention:
     def _forward_decode_split(self, x, rot_mats, pos_owned, owner_mask, page_table, kv_cache):
         """Global-layer decode: all 16 Q heads of this chip's KV group, for the slots this chip owns."""
         batch = x.shape[-2]
-        xqkv = ttnn.linear(
-            x,
-            self.wqkv_decode,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.mm_config,
-        )
+        xqkv = self._decode_qkv(x, self.wqkv_decode, self.decode_qkv_width)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             xqkv,
             num_heads=self.nh_decode,

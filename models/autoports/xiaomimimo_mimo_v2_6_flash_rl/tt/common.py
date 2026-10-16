@@ -87,6 +87,13 @@ def cache_name(cache_dir, *parts):
     return os.path.join(cache_dir, "_".join(str(p) for p in parts))
 
 
+def cache_exists(cache_file, dtype, layout=ttnn.TILE_LAYOUT):
+    """True when ``as_weight`` would load ``cache_file`` without needing the host tensor."""
+    if cache_file is None:
+        return False
+    return os.path.exists(f"{cache_file}_dtype_{dtype.name}_layout_{layout.name}.tensorbin")
+
+
 def as_weight(torch_tensor, plan, mapper, dtype, cache_file, layout=ttnn.TILE_LAYOUT, memory_config=None):
     """``ttnn.as_tensor`` that loads from the cache when ``torch_tensor`` is None and the cache is warm."""
     return ttnn.as_tensor(
@@ -139,3 +146,66 @@ def mcast_1d_config(grid, m, n, k, in0_block_w=4, out_subblock_w=4):
 
 def pad_to(n, multiple):
     return ((n + multiple - 1) // multiple) * multiple
+
+
+class DramShardedMatmul:
+    """Decode matmul [1, 1, 32, K] x [K, N] with the weight width-sharded over the DRAM banks.
+
+    One worker core per DRAM bank reads only its own bank, which for these M = 32 decode matmuls is
+    2-5x faster than a DRAM-interleaved weight (BH, measured: router 50 -> 11 us, SWA qkv 72 -> 34 us).
+    N is padded per chip to a multiple of 32 x banks; ``__call__`` returns the padded width and callers
+    slice when it matters. Prefill keeps using ``ttnn.linear`` on ``interleaved(weight)``.
+    """
+
+    def __init__(self, plan, k, n, out_dtype=ttnn.bfloat16, compute_kernel_config=None):
+        device = plan.mesh_device
+        self.banks = banks = device.dram_grid_size().x
+        self.k, self.n = k, n
+        self.n_pad = math.ceil(n / (TILE * banks)) * TILE * banks
+        assert k % (TILE * banks) == 0, (k, banks)
+        dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
+        self.weight_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(dram_grid, (k, self.n_pad // banks), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        cores = ttnn.num_cores_to_corerangeset(banks, device.compute_with_storage_grid_size(), row_wise=True)
+
+        def l1_width(width):
+            return ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(cores, (TILE, width), ttnn.ShardOrientation.ROW_MAJOR),
+            )
+
+        self.in_memory_config = l1_width(k // banks)
+        self.out_memory_config = l1_width(self.n_pad // banks)
+        self.program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=k // TILE // banks,
+            per_core_M=1,
+            per_core_N=self.n_pad // TILE // banks,
+            fused_activation=None,
+        )
+        self.out_dtype = out_dtype
+        self.compute_kernel_config = compute_kernel_config or compute_config(ttnn.MathFidelity.HiFi2)
+
+    def pad_chip_blocks(self, w, tp):
+        """Host [K, tp * n] (chip blocks side by side) -> [K, tp * n_pad], zero columns at the end of each block."""
+        blocks = w.reshape(w.shape[0], tp, self.n)
+        return torch.nn.functional.pad(blocks, (0, self.n_pad - self.n)).reshape(w.shape[0], tp * self.n_pad)
+
+    def __call__(self, x, weight, memory_config=None):
+        """x [1, 1, 32, K] (interleaved) -> [1, 1, 32, n_pad] (``memory_config``, default DRAM interleaved)."""
+        x_sharded = ttnn.to_memory_config(x, self.in_memory_config)
+        out = ttnn.matmul(
+            x_sharded,
+            weight,
+            program_config=self.program_config,
+            memory_config=self.out_memory_config,
+            dtype=self.out_dtype,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        x_sharded.deallocate(True)
+        result = ttnn.to_memory_config(out, memory_config or ttnn.DRAM_MEMORY_CONFIG)
+        out.deallocate(True)
+        return result

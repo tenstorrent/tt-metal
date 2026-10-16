@@ -20,7 +20,7 @@ import torch
 
 import ttnn
 
-from .common import TILE, as_weight, cache_name, compute_config, mcast_1d_config
+from .common import TILE, DramShardedMatmul, as_weight, cache_exists, cache_name, compute_config, mcast_1d_config
 
 
 class TtMiMoMoE:
@@ -37,9 +37,18 @@ class TtMiMoMoE:
         self.inter_local = cfg.moe_intermediate_size // tp
         prefix = f"layer{layer_idx}_moe_tp{tp}"
 
+        self.router_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=True)
+        # Router logits in fp32 from a DRAM-sharded bf16 weight (decode: 50 -> 11 us on BH).
+        self.router_mm = DramShardedMatmul(
+            plan, self.hidden, self.num_experts, out_dtype=ttnn.float32, compute_kernel_config=self.router_config
+        )
+        expert_cache = [cache_name(cache_dir, prefix, n) for n in ("w_gate_up", "w_down")]
+        if all(cache_exists(f, expert_dtype) for f in expert_cache):
+            experts = None  # already converted: skip dequantizing 256 experts on the host
         w_router = bias = w_gate_up = w_down = None
         if router is not None:
-            w_router = router["weight"].T.contiguous().to(torch.bfloat16)  # [hidden, E]
+            w_router = router["weight"].T.contiguous().to(torch.bfloat16)  # [hidden, E], replicated
+            w_router = self.router_mm.pad_chip_blocks(w_router, 1)
             bias = router["e_score_correction_bias"].float().reshape(1, 1, 1, -1)
         if experts is not None:
             # gate/up [E, I, H] -> one [1, E, H, tp * 2 * I_local] tensor: chip c's slice holds
@@ -56,7 +65,14 @@ class TtMiMoMoE:
             w_down = experts["down_proj"].transpose(1, 2).unsqueeze(0)
 
         rep = plan.replicate()
-        self.w_router = as_weight(w_router, plan, rep, ttnn.bfloat16, cache_name(cache_dir, prefix, "router"))
+        self.w_router = as_weight(
+            w_router,
+            plan,
+            rep,
+            ttnn.bfloat16,
+            cache_name(cache_dir, prefix, "router_ds"),
+            memory_config=self.router_mm.weight_memory_config,
+        )
         self.score_bias = as_weight(bias, plan, rep, ttnn.float32, cache_name(cache_dir, prefix, "score_bias"))
         self.w_gate_up = as_weight(
             w_gate_up, plan, plan.shard(-1), expert_dtype, cache_name(cache_dir, prefix, "w_gate_up")
@@ -65,7 +81,6 @@ class TtMiMoMoE:
         self.w_down = as_weight(w_down, plan, plan.shard(-2), expert_dtype, cache_name(cache_dir, prefix, "w_down"))
 
         self._zero_cache = {}
-        self.router_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=True)
         self.expert_config = compute_config(ttnn.MathFidelity.HiFi2, fp32_acc=True)
         # Measured on BH (decode, 32 experts): wider K blocks cut the per-expert handshakes; down over 8x8 cores.
         self.gate_up_program = mcast_1d_config((8, 2), TILE, 2 * self.inter_local, self.hidden, in0_block_w=64)
@@ -103,16 +118,25 @@ class TtMiMoMoE:
             weights = ttnn.mul(weights, self.cfg.routed_scaling_factor)
         return indices, weights
 
-    def route(self, x, token_mask=None):
-        """x [1, 1, T, hidden] -> dense routing weights [1, 1, T, E] (bf16; zero off the top-8)."""
-        num_tokens = x.shape[-2]
+    def _router_logits(self, x):
+        """fp32 logits [1, 1, T, E]: DRAM-sharded matmul for one tile row, else linear on an interleaved copy."""
+        if x.shape[-2] == TILE:
+            return self.router_mm(x, self.w_router)
+        weight = ttnn.to_memory_config(self.w_router, ttnn.DRAM_MEMORY_CONFIG)
         logits = ttnn.linear(
             x,
-            self.w_router,
+            weight,
             dtype=ttnn.float32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.router_config,
         )
+        weight.deallocate(True)
+        return logits
+
+    def route(self, x, token_mask=None):
+        """x [1, 1, T, hidden] -> dense routing weights [1, 1, T, E] (bf16; zero off the top-8)."""
+        num_tokens = x.shape[-2]
+        logits = self._router_logits(x)
         indices, weights = self._topk(logits)
         logits.deallocate(True)
         weights_bf16 = ttnn.typecast(weights, ttnn.bfloat16)
@@ -170,13 +194,7 @@ class TtMiMoMoE:
         U, k = self.decode_users, self.cfg.num_experts_per_tok
         pairs = U * k
         H, I = self.hidden, self.inter_local
-        logits = ttnn.linear(
-            x,
-            self.w_router,
-            dtype=ttnn.float32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.router_config,
-        )
+        logits = self._router_logits(x)
         indices, weights = self._topk(logits)
         logits.deallocate(True)
 
