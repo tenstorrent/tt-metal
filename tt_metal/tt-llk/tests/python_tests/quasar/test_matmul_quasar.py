@@ -138,6 +138,13 @@ class IndependentMatmulStimuliConfig(StimuliConfig):
             )
 
 
+def matmul_stimuli_spec(data_format):
+    # Integer stimuli are clamped to the format's range, so Int4 gets -7..7.
+    if data_format.is_integer():
+        return StimuliSpec.uniform(low=-127.0, high=127.0)
+    return StimuliSpec.uniform(low=0.0, high=1.0)
+
+
 def matmul_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
@@ -324,27 +331,25 @@ def test_matmul(
     )
     output_tile_cnt = rt_dim * ct_dim
 
-    if format.input_format == DataFormat.Int8:
-        stimuli_spec = StimuliSpec.uniform(low=-127.0, high=127.0)
-    else:
-        stimuli_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    stimuli_spec_A = matmul_stimuli_spec(format.input_format)
+    stimuli_spec_B = matmul_stimuli_spec(format.input_format_B)
     src_A, tile_cnt_A, _, _ = generate_stimuli(
         stimuli_format_A=format.input_format,
         input_dimensions_A=input_A_dimensions,
         stimuli_format_B=format.input_format,
         input_dimensions_B=input_A_dimensions,
-        spec_A=stimuli_spec,
-        spec_B=stimuli_spec,
+        spec_A=stimuli_spec_A,
+        spec_B=stimuli_spec_A,
         tile_dimensions=input_A_tile_dimensions,
         output_format=format.output_format,
     )
     src_B, tile_cnt_B, _, _ = generate_stimuli(
-        stimuli_format_A=format.input_format,
+        stimuli_format_A=format.input_format_B,
         input_dimensions_A=input_B_dimensions,
-        stimuli_format_B=format.input_format,
+        stimuli_format_B=format.input_format_B,
         input_dimensions_B=input_B_dimensions,
-        spec_A=stimuli_spec,
-        spec_B=stimuli_spec,
+        spec_A=stimuli_spec_B,
+        spec_B=stimuli_spec_B,
         tile_dimensions=input_B_tile_dimensions,
         output_format=format.output_format,
     )
@@ -357,7 +362,7 @@ def test_matmul(
     tilized_B = tilize_block(
         src_B,
         dimensions=input_B_dimensions,
-        stimuli_format=format.input_format,
+        stimuli_format=format.input_format_B,
         tile_dimensions=input_B_tile_dimensions,
     )
 
@@ -370,7 +375,7 @@ def test_matmul(
                 tilized_A.flatten().to(torch.bfloat16), format.input_format
             ).reshape(tilized_A.shape)
             tilized_B_golden = quantize_mx_tensor_chunked(
-                tilized_B.flatten().to(torch.bfloat16), format.input_format
+                tilized_B.flatten().to(torch.bfloat16), format.input_format_B
             ).reshape(tilized_B.shape)
             src_A_golden = untilize_block(
                 tilized_A_golden,
@@ -379,7 +384,7 @@ def test_matmul(
             )
             src_B_golden = untilize_block(
                 tilized_B_golden,
-                stimuli_format=format.input_format,
+                stimuli_format=format.input_format_B,
                 dimensions=input_B_dimensions,
             )
 
@@ -388,14 +393,14 @@ def test_matmul(
 
             src_B_golden = t_matrix.transpose_faces_multi_tile(
                 src_B_golden,
-                format.input_format,
+                format.input_format_B,
                 num_tiles=tile_cnt_B,
                 tilize=True,
                 input_dimensions=input_B_dimensions,
             )
             src_B_golden = t_matrix.transpose_within_faces_multi_tile(
                 src_B_golden,
-                format.input_format,
+                format.input_format_B,
                 num_tiles=tile_cnt_B,
                 untilize=True,
                 input_dimensions=input_B_dimensions,
@@ -422,7 +427,7 @@ def test_matmul(
             input_B_dimensions=input_B_dimensions,
             tilize=False,
             input_A_format=format.input_format,
-            input_B_format=format.input_format,
+            input_B_format=format.input_format_B,
             math_format=pack_src_format,  # For accumulation of results in matmul we require to calculate in pack_src_format.
             dest_acc=dest_acc,
         )
@@ -498,7 +503,7 @@ def test_matmul(
         tilized_A.flatten(),
         format.input_format,
         tilized_B.flatten(),
-        format.input_format,
+        format.input_format_B,
         format.output_format,
         input_A_tile_dimensions=input_A_shape.tile_dims,
         input_B_tile_dimensions=input_B_shape.tile_dims,
@@ -647,6 +652,73 @@ def test_matmul_int8_2x(
         dest_sync_mode,
         dest_acc,
         format,
+        register_format_hint,
+        enable_direct_indexing,
+        transpose,
+        run_types,
+        loop_factor,
+    )
+
+
+def matmul_int4_register_format_hints():
+    # Int4 weights can unpack straight into 2x-packed Int8 SrcA storage on the 4-row variant.
+    return [None, DataFormat.Int8_2x] if is_4row_arch() else [None]
+
+
+def matmul_int4_implied_math_formats(register_format_hint):
+    # The 2x attribute is only wired through the implied math format path.
+    if register_format_hint is not None:
+        return [ImpliedMathFormat.Yes]
+    return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+
+
+# Int8 activations (A) x Int4 weights (B): the integer core of a wint4_aint8 linear. The
+# unpacker widens the sign-magnitude Int4 weights to Int8, so the FPU runs a plain int8 matmul.
+@pytest.mark.quasar
+@parametrize(
+    input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
+    format=[
+        InputOutputFormat(
+            DataFormat.Int8, DataFormat.Int32, input_format_B=DataFormat.Int4
+        )
+    ],
+    math_fidelity=[MathFidelity.LoFi],
+    dest_sync_mode=lambda: matmul_dest_sync_modes(),
+    dest_acc=[DestAccumulation.Yes],
+    matmul_tile_dims=runtime(
+        lambda dest_acc, dest_sync_mode: matmul_tile_dimensions(
+            dest_acc, dest_sync_mode
+        )
+    ),
+    register_format_hint=matmul_int4_register_format_hints(),
+    implied_math_format=matmul_int4_implied_math_formats,
+    enable_direct_indexing=matmul_enable_direct_indexing,
+    transpose=[Transpose.No],
+    run_types=[[PerfRunType.L1_TO_L1]],
+    loop_factor=[1],
+)
+def test_matmul_int4(
+    input_tile_dimensions,
+    matmul_tile_dims,
+    math_fidelity,
+    dest_sync_mode,
+    dest_acc,
+    format,
+    register_format_hint,
+    implied_math_format,
+    enable_direct_indexing,
+    transpose,
+    run_types,
+    loop_factor,
+):
+    test_matmul(
+        input_tile_dimensions,
+        matmul_tile_dims,
+        math_fidelity,
+        dest_sync_mode,
+        dest_acc,
+        format,
+        implied_math_format,
         register_format_hint,
         enable_direct_indexing,
         transpose,

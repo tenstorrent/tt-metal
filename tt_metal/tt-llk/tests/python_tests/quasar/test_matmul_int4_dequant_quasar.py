@@ -41,13 +41,27 @@ from helpers.test_variant_parameters import (
 from helpers.tile_shape import construct_tile_shape
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
-from quasar.test_matmul_int4_quasar import (
-    TILE,
-    WEIGHT_FORMATS,
-    generate_int_matrix,
-)
 
+TILE = 32
 TILE_ELEMENTS = TILE * TILE
+
+# Weight (B) formats against Int8 activations (A); Int8 x Int8 is the control.
+WEIGHT_FORMATS = [DataFormat.Int8, DataFormat.Int4]
+
+# Value range the unpacker can see. Both are sign-magnitude, so -8 / -128 have no encoding.
+INT_RANGES = {
+    DataFormat.Int4: (-7, 7),
+    DataFormat.Int8: (-127, 127),
+}
+
+
+def generate_int_matrix(fmt: DataFormat, dimensions, seed: int):
+    lo, hi = INT_RANGES[fmt]
+    generator = torch.Generator().manual_seed(seed)
+    return torch.randint(
+        lo, hi + 1, (dimensions[0] * dimensions[1],), generator=generator
+    ).to(format_dict[fmt])
+
 
 # (ct, rt, kt, group_kt): group_kt K tiles share one scale. group_kt == kt is per-channel;
 # group_kt == 4 is the group-128 case the requester uses.
