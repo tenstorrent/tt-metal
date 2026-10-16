@@ -169,7 +169,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_hc.py
     metrics:
-      pcc_attn_hc_L00: '>= limit'
+      err_attn_hc_L00: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_hc.py
@@ -200,7 +200,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_01_attn_hc.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_01_attn_hc.py
@@ -227,7 +227,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_collapse.py
     metrics:
-      pcc_attn_collapse_L00: '>= limit'
+      err_attn_collapse_L00: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_collapse.py
@@ -256,7 +256,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_02_attn_collapse.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_02_attn_collapse.py
@@ -284,7 +284,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_norm.py
     metrics:
-      pcc_attn_norm_L00: '>= limit'
+      err_attn_norm_L00: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_norm.py
@@ -313,7 +313,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_03_attn_norm.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_03_attn_norm.py
@@ -342,7 +342,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_q_a.py
     metrics:
-      pcc_q_a_L00: '>= limit'
+      err_q_a_L00: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_q_a.py
@@ -371,7 +371,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_04_q_a.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_04_q_a.py
@@ -401,7 +401,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_kv.py
     metrics:
-      pcc_kv_L00: '>= limit'
+      err_kv_L00: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_kv.py
@@ -430,7 +430,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_05_kv.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_05_kv.py
@@ -462,7 +462,7 @@ tasks:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attention.py &&
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
     metrics:
-      pcc_attention_L00: '>= limit'
+      err_attention_L00: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attention.py
@@ -491,7 +491,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_06_attention.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_06_attention.py
@@ -523,7 +523,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_residual.py
     metrics:
-      pcc_attn_residual_L00: '>= limit'
+      err_attn_residual_L00: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_residual.py
@@ -552,7 +552,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_07_attn_residual.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_07_attn_residual.py
@@ -585,7 +585,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_hc.py
     metrics:
-      pcc_ffn_hc_L00: '>= limit'
+      err_ffn_hc_L00: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_hc.py
@@ -614,7 +614,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_08_ffn_hc.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_08_ffn_hc.py
@@ -648,7 +648,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_collapse.py
     metrics:
-      pcc_ffn_collapse_L00: '>= limit'
+      err_ffn_collapse_L00: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_collapse.py
@@ -677,7 +677,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_09_ffn_collapse.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_09_ffn_collapse.py
@@ -712,7 +712,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_norm.py
     metrics:
-      pcc_ffn_norm_L00: '>= limit'
+      err_ffn_norm_L00: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_norm.py
@@ -741,7 +741,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_10_ffn_norm.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_10_ffn_norm.py
@@ -777,7 +777,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_router.py
     metrics:
-      pcc_router_L00: '>= limit'
+      err_router_L00: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_router.py
@@ -806,7 +806,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_11_router.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_11_router.py
@@ -843,7 +843,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_experts.py
     metrics:
-      pcc_experts_L00: '>= limit'
+      err_experts_L00: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_experts.py
@@ -871,7 +871,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_12_experts.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_12_experts.py
@@ -909,7 +909,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_shared_expert.py
     metrics:
-      pcc_shared_expert_L00: '>= limit'
+      err_shared_expert_L00: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_shared_expert.py
@@ -938,7 +938,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_13_shared_expert.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_13_shared_expert.py
@@ -977,7 +977,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_moe_add.py
     metrics:
-      pcc_moe_add_L00: '>= limit'
+      err_moe_add_L00: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_moe_add.py
@@ -1006,7 +1006,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_14_moe_add.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_14_moe_add.py
@@ -1046,7 +1046,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_residual.py
     metrics:
-      pcc_ffn_residual_L00: '>= limit'
+      err_ffn_residual_L00: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_residual.py
@@ -1075,7 +1075,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_15_ffn_residual.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_15_ffn_residual.py
@@ -1116,7 +1116,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_rows.py
     metrics:
-      pcc_engram_rows_L01: '>= limit'
+      err_engram_rows_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_rows.py
@@ -1144,7 +1144,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_01_engram_rows.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_01_engram_rows.py
@@ -1171,7 +1171,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_kv.py
     metrics:
-      pcc_engram_kv_L01: '>= limit'
+      err_engram_kv_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_kv.py
@@ -1200,7 +1200,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_02_engram_kv.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_02_engram_kv.py
@@ -1228,7 +1228,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_add.py
     metrics:
-      pcc_engram_add_L01: '>= limit'
+      err_engram_add_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_add.py
@@ -1257,7 +1257,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_03_engram_add.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_03_engram_add.py
@@ -1286,7 +1286,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_hc.py
     metrics:
-      pcc_attn_hc_L01: '>= limit'
+      err_attn_hc_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_hc.py
@@ -1315,7 +1315,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_04_attn_hc.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_04_attn_hc.py
@@ -1345,7 +1345,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_collapse.py
     metrics:
-      pcc_attn_collapse_L01: '>= limit'
+      err_attn_collapse_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_collapse.py
@@ -1374,7 +1374,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_05_attn_collapse.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_05_attn_collapse.py
@@ -1405,7 +1405,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_norm.py
     metrics:
-      pcc_attn_norm_L01: '>= limit'
+      err_attn_norm_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_norm.py
@@ -1434,7 +1434,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_06_attn_norm.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_06_attn_norm.py
@@ -1466,7 +1466,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_q_a.py
     metrics:
-      pcc_q_a_L01: '>= limit'
+      err_q_a_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_q_a.py
@@ -1495,7 +1495,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_07_q_a.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_07_q_a.py
@@ -1528,7 +1528,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_kv.py
     metrics:
-      pcc_kv_L01: '>= limit'
+      err_kv_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_kv.py
@@ -1557,7 +1557,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_08_kv.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_08_kv.py
@@ -1592,7 +1592,7 @@ tasks:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attention.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
     metrics:
-      pcc_attention_L01: '>= limit'
+      err_attention_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attention.py
@@ -1621,7 +1621,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_09_attention.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_09_attention.py
@@ -1656,7 +1656,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_residual.py
     metrics:
-      pcc_attn_residual_L01: '>= limit'
+      err_attn_residual_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_residual.py
@@ -1685,7 +1685,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_10_attn_residual.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_10_attn_residual.py
@@ -1721,7 +1721,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_hc.py
     metrics:
-      pcc_ffn_hc_L01: '>= limit'
+      err_ffn_hc_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_hc.py
@@ -1750,7 +1750,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_11_ffn_hc.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_11_ffn_hc.py
@@ -1787,7 +1787,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_collapse.py
     metrics:
-      pcc_ffn_collapse_L01: '>= limit'
+      err_ffn_collapse_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_collapse.py
@@ -1816,7 +1816,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_12_ffn_collapse.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_12_ffn_collapse.py
@@ -1854,7 +1854,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_norm.py
     metrics:
-      pcc_ffn_norm_L01: '>= limit'
+      err_ffn_norm_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_norm.py
@@ -1883,7 +1883,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_13_ffn_norm.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_13_ffn_norm.py
@@ -1922,7 +1922,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_router.py
     metrics:
-      pcc_router_L01: '>= limit'
+      err_router_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_router.py
@@ -1951,7 +1951,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_14_router.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_14_router.py
@@ -1991,7 +1991,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_experts.py
     metrics:
-      pcc_experts_L01: '>= limit'
+      err_experts_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_experts.py
@@ -2019,7 +2019,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_15_experts.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_15_experts.py
@@ -2060,7 +2060,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_shared_expert.py
     metrics:
-      pcc_shared_expert_L01: '>= limit'
+      err_shared_expert_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_shared_expert.py
@@ -2088,7 +2088,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_16_shared_expert.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_16_shared_expert.py
@@ -2130,7 +2130,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_moe_add.py
     metrics:
-      pcc_moe_add_L01: '>= limit'
+      err_moe_add_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_moe_add.py
@@ -2159,7 +2159,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_17_moe_add.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_17_moe_add.py
@@ -2202,7 +2202,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_residual.py
     metrics:
-      pcc_ffn_residual_L01: '>= limit'
+      err_ffn_residual_L01: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_residual.py
@@ -2231,7 +2231,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_18_ffn_residual.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_18_ffn_residual.py
@@ -2275,7 +2275,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_hc.py
     metrics:
-      pcc_attn_hc_L02: '>= limit'
+      err_attn_hc_L02: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_hc.py
@@ -2303,7 +2303,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_01_attn_hc.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_01_attn_hc.py
@@ -2330,7 +2330,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_collapse.py
     metrics:
-      pcc_attn_collapse_L02: '>= limit'
+      err_attn_collapse_L02: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_collapse.py
@@ -2359,7 +2359,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_02_attn_collapse.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_02_attn_collapse.py
@@ -2387,7 +2387,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_norm.py
     metrics:
-      pcc_attn_norm_L02: '>= limit'
+      err_attn_norm_L02: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_norm.py
@@ -2420,9 +2420,9 @@ tasks:
       --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_15_ffn_residual.py && scripts/run_safe_pytest.sh
       --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_18_ffn_residual.py
     metrics:
-      pcc_experts_L00: '>= limit'
-      pcc_experts_L01: '>= limit'
-      pcc_swap_out: '>= limit'
+      err_experts_L00: <= limit
+      err_experts_L01: <= limit
+      err_swap_out: <= limit
   device: true
   freeze_extra: *id002
   paths: *id003
@@ -2465,9 +2465,9 @@ tasks:
       && BRINGUP_TASK=S.swa.15 scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_15_ffn_residual.py
       && BRINGUP_TASK=S.swa_engram.18 scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_18_ffn_residual.py
     metrics:
-      pcc_attention_L00: '>= limit'
-      pcc_attention_L01: '>= limit'
-      pcc_swap_out: '>= limit'
+      err_attention_L00: <= limit
+      err_attention_L01: <= limit
+      err_swap_out: <= limit
   device: true
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
@@ -2518,7 +2518,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_03_attn_norm.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_03_attn_norm.py
@@ -2541,7 +2541,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_q_a.py
     metrics:
-      pcc_q_a_L02: '>= limit'
+      err_q_a_L02: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_q_a.py
@@ -2562,7 +2562,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_04_q_a.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_04_q_a.py
@@ -2586,7 +2586,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_kv.py
     metrics:
-      pcc_kv_L02: '>= limit'
+      err_kv_L02: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_kv.py
@@ -2607,7 +2607,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_05_kv.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_05_kv.py
@@ -2632,7 +2632,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_compressor.py
     metrics:
-      pcc_compressor_L02: '>= limit'
+      err_compressor_L02: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_compressor.py
@@ -2653,7 +2653,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_06_compressor.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_06_compressor.py
@@ -2679,7 +2679,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_indexer.py
     metrics:
-      pcc_indexer_L02: '>= limit'
+      err_indexer_L02: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_indexer.py
@@ -2700,7 +2700,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_07_indexer.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_07_indexer.py
@@ -2728,7 +2728,7 @@ tasks:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attention.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
     metrics:
-      pcc_attention_L02: '>= limit'
+      err_attention_L02: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attention.py
@@ -2749,7 +2749,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_08_attention.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_08_attention.py
@@ -2777,7 +2777,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_residual.py
     metrics:
-      pcc_attn_residual_L02: '>= limit'
+      err_attn_residual_L02: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_residual.py
@@ -2798,7 +2798,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_09_attn_residual.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_09_attn_residual.py
@@ -2827,7 +2827,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_hc.py
     metrics:
-      pcc_ffn_hc_L02: '>= limit'
+      err_ffn_hc_L02: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_hc.py
@@ -2848,7 +2848,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_10_ffn_hc.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_10_ffn_hc.py
@@ -2878,7 +2878,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_collapse.py
     metrics:
-      pcc_ffn_collapse_L02: '>= limit'
+      err_ffn_collapse_L02: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_collapse.py
@@ -2899,7 +2899,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_11_ffn_collapse.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_11_ffn_collapse.py
@@ -2930,7 +2930,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_norm.py
     metrics:
-      pcc_ffn_norm_L02: '>= limit'
+      err_ffn_norm_L02: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_norm.py
@@ -2951,7 +2951,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_12_ffn_norm.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_12_ffn_norm.py
@@ -2983,7 +2983,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_router.py
     metrics:
-      pcc_router_L02: '>= limit'
+      err_router_L02: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_router.py
@@ -3004,7 +3004,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_13_router.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_13_router.py
@@ -3037,7 +3037,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_experts.py
     metrics:
-      pcc_experts_L02: '>= limit'
+      err_experts_L02: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_experts.py
@@ -3058,7 +3058,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_14_experts.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_14_experts.py
@@ -3092,7 +3092,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_shared_expert.py
     metrics:
-      pcc_shared_expert_L02: '>= limit'
+      err_shared_expert_L02: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_shared_expert.py
@@ -3113,7 +3113,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_15_shared_expert.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_15_shared_expert.py
@@ -3148,7 +3148,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_moe_add.py
     metrics:
-      pcc_moe_add_L02: '>= limit'
+      err_moe_add_L02: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_moe_add.py
@@ -3169,7 +3169,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_16_moe_add.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_16_moe_add.py
@@ -3205,7 +3205,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_residual.py
     metrics:
-      pcc_ffn_residual_L02: '>= limit'
+      err_ffn_residual_L02: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_residual.py
@@ -3226,7 +3226,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_17_ffn_residual.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_17_ffn_residual.py
@@ -3263,7 +3263,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_engram_rows.py
     metrics:
-      pcc_engram_rows_L14: '>= limit'
+      err_engram_rows_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_engram_rows.py
@@ -3283,7 +3283,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_01_engram_rows.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_01_engram_rows.py
@@ -3304,7 +3304,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_engram_kv.py
     metrics:
-      pcc_engram_kv_L14: '>= limit'
+      err_engram_kv_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_engram_kv.py
@@ -3325,7 +3325,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_02_engram_kv.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_02_engram_kv.py
@@ -3347,7 +3347,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_engram_add.py
     metrics:
-      pcc_engram_add_L14: '>= limit'
+      err_engram_add_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_engram_add.py
@@ -3368,7 +3368,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_03_engram_add.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_03_engram_add.py
@@ -3391,7 +3391,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_hc.py
     metrics:
-      pcc_attn_hc_L14: '>= limit'
+      err_attn_hc_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_hc.py
@@ -3412,7 +3412,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_04_attn_hc.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_04_attn_hc.py
@@ -3436,7 +3436,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_collapse.py
     metrics:
-      pcc_attn_collapse_L14: '>= limit'
+      err_attn_collapse_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_collapse.py
@@ -3457,7 +3457,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_05_attn_collapse.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_05_attn_collapse.py
@@ -3482,7 +3482,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_norm.py
     metrics:
-      pcc_attn_norm_L14: '>= limit'
+      err_attn_norm_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_norm.py
@@ -3503,7 +3503,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_06_attn_norm.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_06_attn_norm.py
@@ -3529,7 +3529,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_q_a.py
     metrics:
-      pcc_q_a_L14: '>= limit'
+      err_q_a_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_q_a.py
@@ -3550,7 +3550,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_07_q_a.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_07_q_a.py
@@ -3577,7 +3577,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_kv.py
     metrics:
-      pcc_kv_L14: '>= limit'
+      err_kv_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_kv.py
@@ -3598,7 +3598,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_08_kv.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_08_kv.py
@@ -3626,7 +3626,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_compressor.py
     metrics:
-      pcc_compressor_L14: '>= limit'
+      err_compressor_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_compressor.py
@@ -3647,7 +3647,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_09_compressor.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_09_compressor.py
@@ -3676,7 +3676,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_indexer.py
     metrics:
-      pcc_indexer_L14: '>= limit'
+      err_indexer_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_indexer.py
@@ -3697,7 +3697,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_10_indexer.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_10_indexer.py
@@ -3728,7 +3728,7 @@ tasks:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attention.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
     metrics:
-      pcc_attention_L14: '>= limit'
+      err_attention_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attention.py
@@ -3749,7 +3749,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_11_attention.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_11_attention.py
@@ -3780,7 +3780,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_residual.py
     metrics:
-      pcc_attn_residual_L14: '>= limit'
+      err_attn_residual_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_residual.py
@@ -3801,7 +3801,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_12_attn_residual.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_12_attn_residual.py
@@ -3833,7 +3833,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_hc.py
     metrics:
-      pcc_ffn_hc_L14: '>= limit'
+      err_ffn_hc_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_hc.py
@@ -3854,7 +3854,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_13_ffn_hc.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_13_ffn_hc.py
@@ -3887,7 +3887,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_collapse.py
     metrics:
-      pcc_ffn_collapse_L14: '>= limit'
+      err_ffn_collapse_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_collapse.py
@@ -3908,7 +3908,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_14_ffn_collapse.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_14_ffn_collapse.py
@@ -3942,7 +3942,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_norm.py
     metrics:
-      pcc_ffn_norm_L14: '>= limit'
+      err_ffn_norm_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_norm.py
@@ -3963,7 +3963,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_15_ffn_norm.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_15_ffn_norm.py
@@ -3998,7 +3998,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_router.py
     metrics:
-      pcc_router_L14: '>= limit'
+      err_router_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_router.py
@@ -4019,7 +4019,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_16_router.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_16_router.py
@@ -4055,7 +4055,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_experts.py
     metrics:
-      pcc_experts_L14: '>= limit'
+      err_experts_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_experts.py
@@ -4076,7 +4076,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_17_experts.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_17_experts.py
@@ -4113,7 +4113,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_shared_expert.py
     metrics:
-      pcc_shared_expert_L14: '>= limit'
+      err_shared_expert_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_shared_expert.py
@@ -4134,7 +4134,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_18_shared_expert.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_18_shared_expert.py
@@ -4172,7 +4172,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_moe_add.py
     metrics:
-      pcc_moe_add_L14: '>= limit'
+      err_moe_add_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_moe_add.py
@@ -4193,7 +4193,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_19_moe_add.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_19_moe_add.py
@@ -4232,7 +4232,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_residual.py
     metrics:
-      pcc_ffn_residual_L14: '>= limit'
+      err_ffn_residual_L14: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_residual.py
@@ -4253,7 +4253,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_20_ffn_residual.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_20_ffn_residual.py
@@ -4293,7 +4293,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_hc.py
     metrics:
-      pcc_attn_hc_L03: '>= limit'
+      err_attn_hc_L03: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_hc.py
@@ -4313,7 +4313,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_01_attn_hc.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_01_attn_hc.py
@@ -4334,7 +4334,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_collapse.py
     metrics:
-      pcc_attn_collapse_L03: '>= limit'
+      err_attn_collapse_L03: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_collapse.py
@@ -4355,7 +4355,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_02_attn_collapse.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_02_attn_collapse.py
@@ -4377,7 +4377,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_norm.py
     metrics:
-      pcc_attn_norm_L03: '>= limit'
+      err_attn_norm_L03: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_norm.py
@@ -4398,7 +4398,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_03_attn_norm.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_03_attn_norm.py
@@ -4421,7 +4421,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_q_a.py
     metrics:
-      pcc_q_a_L03: '>= limit'
+      err_q_a_L03: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_q_a.py
@@ -4442,7 +4442,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_04_q_a.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_04_q_a.py
@@ -4466,7 +4466,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_kv.py
     metrics:
-      pcc_kv_L03: '>= limit'
+      err_kv_L03: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_kv.py
@@ -4487,7 +4487,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_05_kv.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_05_kv.py
@@ -4513,7 +4513,7 @@ tasks:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attention.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
     metrics:
-      pcc_attention_L03: '>= limit'
+      err_attention_L03: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attention.py
@@ -4534,7 +4534,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_06_attention.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_06_attention.py
@@ -4560,7 +4560,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_residual.py
     metrics:
-      pcc_attn_residual_L03: '>= limit'
+      err_attn_residual_L03: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_residual.py
@@ -4581,7 +4581,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_07_attn_residual.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_07_attn_residual.py
@@ -4608,7 +4608,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_hc.py
     metrics:
-      pcc_ffn_hc_L03: '>= limit'
+      err_ffn_hc_L03: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_hc.py
@@ -4629,7 +4629,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_08_ffn_hc.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_08_ffn_hc.py
@@ -4657,7 +4657,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_collapse.py
     metrics:
-      pcc_ffn_collapse_L03: '>= limit'
+      err_ffn_collapse_L03: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_collapse.py
@@ -4678,7 +4678,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_09_ffn_collapse.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_09_ffn_collapse.py
@@ -4707,7 +4707,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_norm.py
     metrics:
-      pcc_ffn_norm_L03: '>= limit'
+      err_ffn_norm_L03: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_norm.py
@@ -4728,7 +4728,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_10_ffn_norm.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_10_ffn_norm.py
@@ -4758,7 +4758,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_router.py
     metrics:
-      pcc_router_L03: '>= limit'
+      err_router_L03: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_router.py
@@ -4779,7 +4779,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_11_router.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_11_router.py
@@ -4810,7 +4810,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_experts.py
     metrics:
-      pcc_experts_L03: '>= limit'
+      err_experts_L03: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_experts.py
@@ -4831,7 +4831,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_12_experts.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_12_experts.py
@@ -4863,7 +4863,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_shared_expert.py
     metrics:
-      pcc_shared_expert_L03: '>= limit'
+      err_shared_expert_L03: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_shared_expert.py
@@ -4884,7 +4884,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_13_shared_expert.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_13_shared_expert.py
@@ -4917,7 +4917,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_moe_add.py
     metrics:
-      pcc_moe_add_L03: '>= limit'
+      err_moe_add_L03: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_moe_add.py
@@ -4938,7 +4938,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_14_moe_add.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_14_moe_add.py
@@ -4972,7 +4972,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_residual.py
     metrics:
-      pcc_ffn_residual_L03: '>= limit'
+      err_ffn_residual_L03: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_residual.py
@@ -4993,7 +4993,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_15_ffn_residual.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_15_ffn_residual.py
@@ -5028,7 +5028,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_hc.py
     metrics:
-      pcc_attn_hc_L20: '>= limit'
+      err_attn_hc_L20: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_hc.py
@@ -5048,7 +5048,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_01_attn_hc.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_01_attn_hc.py
@@ -5069,7 +5069,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_collapse.py
     metrics:
-      pcc_attn_collapse_L20: '>= limit'
+      err_attn_collapse_L20: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_collapse.py
@@ -5090,7 +5090,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_02_attn_collapse.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_02_attn_collapse.py
@@ -5112,7 +5112,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_norm.py
     metrics:
-      pcc_attn_norm_L20: '>= limit'
+      err_attn_norm_L20: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_norm.py
@@ -5133,7 +5133,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_03_attn_norm.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_03_attn_norm.py
@@ -5156,7 +5156,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_q_a.py
     metrics:
-      pcc_q_a_L20: '>= limit'
+      err_q_a_L20: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_q_a.py
@@ -5177,7 +5177,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_04_q_a.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_04_q_a.py
@@ -5201,7 +5201,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_kv.py
     metrics:
-      pcc_kv_L20: '>= limit'
+      err_kv_L20: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_kv.py
@@ -5222,7 +5222,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_05_kv.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_05_kv.py
@@ -5247,7 +5247,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_compressor.py
     metrics:
-      pcc_compressor_L20: '>= limit'
+      err_compressor_L20: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_compressor.py
@@ -5268,7 +5268,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_06_compressor.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_06_compressor.py
@@ -5294,7 +5294,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_indexer.py
     metrics:
-      pcc_indexer_L20: '>= limit'
+      err_indexer_L20: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_indexer.py
@@ -5315,7 +5315,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_07_indexer.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_07_indexer.py
@@ -5343,7 +5343,7 @@ tasks:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attention.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
     metrics:
-      pcc_attention_L20: '>= limit'
+      err_attention_L20: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attention.py
@@ -5364,7 +5364,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_08_attention.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_08_attention.py
@@ -5392,7 +5392,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_residual.py
     metrics:
-      pcc_attn_residual_L20: '>= limit'
+      err_attn_residual_L20: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_residual.py
@@ -5413,7 +5413,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_09_attn_residual.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_09_attn_residual.py
@@ -5442,7 +5442,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_hc.py
     metrics:
-      pcc_ffn_hc_L20: '>= limit'
+      err_ffn_hc_L20: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_hc.py
@@ -5463,7 +5463,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_10_ffn_hc.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_10_ffn_hc.py
@@ -5493,7 +5493,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_collapse.py
     metrics:
-      pcc_ffn_collapse_L20: '>= limit'
+      err_ffn_collapse_L20: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_collapse.py
@@ -5514,7 +5514,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_11_ffn_collapse.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_11_ffn_collapse.py
@@ -5545,7 +5545,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_norm.py
     metrics:
-      pcc_ffn_norm_L20: '>= limit'
+      err_ffn_norm_L20: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_norm.py
@@ -5566,7 +5566,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_12_ffn_norm.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_12_ffn_norm.py
@@ -5598,7 +5598,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_router.py
     metrics:
-      pcc_router_L20: '>= limit'
+      err_router_L20: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_router.py
@@ -5619,7 +5619,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_13_router.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_13_router.py
@@ -5652,7 +5652,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_experts.py
     metrics:
-      pcc_experts_L20: '>= limit'
+      err_experts_L20: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_experts.py
@@ -5673,7 +5673,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_14_experts.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_14_experts.py
@@ -5707,7 +5707,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_shared_expert.py
     metrics:
-      pcc_shared_expert_L20: '>= limit'
+      err_shared_expert_L20: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_shared_expert.py
@@ -5728,7 +5728,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_15_shared_expert.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_15_shared_expert.py
@@ -5763,7 +5763,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_moe_add.py
     metrics:
-      pcc_moe_add_L20: '>= limit'
+      err_moe_add_L20: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_moe_add.py
@@ -5784,7 +5784,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_16_moe_add.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_16_moe_add.py
@@ -5820,7 +5820,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_residual.py
     metrics:
-      pcc_ffn_residual_L20: '>= limit'
+      err_ffn_residual_L20: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_residual.py
@@ -5841,7 +5841,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_17_ffn_residual.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_17_ffn_residual.py
@@ -5878,7 +5878,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_hc.py
     metrics:
-      pcc_attn_hc_L24: '>= limit'
+      err_attn_hc_L24: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_hc.py
@@ -5898,7 +5898,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_01_attn_hc.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_01_attn_hc.py
@@ -5919,7 +5919,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_collapse.py
     metrics:
-      pcc_attn_collapse_L24: '>= limit'
+      err_attn_collapse_L24: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_collapse.py
@@ -5940,7 +5940,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_02_attn_collapse.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_02_attn_collapse.py
@@ -5962,7 +5962,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_norm.py
     metrics:
-      pcc_attn_norm_L24: '>= limit'
+      err_attn_norm_L24: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_norm.py
@@ -5983,7 +5983,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_03_attn_norm.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_03_attn_norm.py
@@ -6006,7 +6006,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_q_a.py
     metrics:
-      pcc_q_a_L24: '>= limit'
+      err_q_a_L24: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_q_a.py
@@ -6027,7 +6027,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_04_q_a.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_04_q_a.py
@@ -6051,7 +6051,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_kv.py
     metrics:
-      pcc_kv_L24: '>= limit'
+      err_kv_L24: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_kv.py
@@ -6072,7 +6072,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_05_kv.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_05_kv.py
@@ -6097,7 +6097,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_indexer.py
     metrics:
-      pcc_indexer_L24: '>= limit'
+      err_indexer_L24: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_indexer.py
@@ -6118,7 +6118,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_06_indexer.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_06_indexer.py
@@ -6145,7 +6145,7 @@ tasks:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attention.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
     metrics:
-      pcc_attention_L24: '>= limit'
+      err_attention_L24: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attention.py
@@ -6166,7 +6166,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_07_attention.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_07_attention.py
@@ -6193,7 +6193,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_residual.py
     metrics:
-      pcc_attn_residual_L24: '>= limit'
+      err_attn_residual_L24: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_residual.py
@@ -6214,7 +6214,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_08_attn_residual.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_08_attn_residual.py
@@ -6242,7 +6242,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_hc.py
     metrics:
-      pcc_ffn_hc_L24: '>= limit'
+      err_ffn_hc_L24: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_hc.py
@@ -6263,7 +6263,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_09_ffn_hc.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_09_ffn_hc.py
@@ -6292,7 +6292,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_collapse.py
     metrics:
-      pcc_ffn_collapse_L24: '>= limit'
+      err_ffn_collapse_L24: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_collapse.py
@@ -6313,7 +6313,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_10_ffn_collapse.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_10_ffn_collapse.py
@@ -6343,7 +6343,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_norm.py
     metrics:
-      pcc_ffn_norm_L24: '>= limit'
+      err_ffn_norm_L24: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_norm.py
@@ -6364,7 +6364,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_11_ffn_norm.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_11_ffn_norm.py
@@ -6395,7 +6395,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_router.py
     metrics:
-      pcc_router_L24: '>= limit'
+      err_router_L24: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_router.py
@@ -6416,7 +6416,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_12_router.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_12_router.py
@@ -6448,7 +6448,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_experts.py
     metrics:
-      pcc_experts_L24: '>= limit'
+      err_experts_L24: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_experts.py
@@ -6469,7 +6469,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_13_experts.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_13_experts.py
@@ -6502,7 +6502,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_shared_expert.py
     metrics:
-      pcc_shared_expert_L24: '>= limit'
+      err_shared_expert_L24: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_shared_expert.py
@@ -6523,7 +6523,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_14_shared_expert.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_14_shared_expert.py
@@ -6557,7 +6557,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_moe_add.py
     metrics:
-      pcc_moe_add_L24: '>= limit'
+      err_moe_add_L24: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_moe_add.py
@@ -6578,7 +6578,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_15_moe_add.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_15_moe_add.py
@@ -6613,7 +6613,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_residual.py
     metrics:
-      pcc_ffn_residual_L24: '>= limit'
+      err_ffn_residual_L24: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_residual.py
@@ -6634,7 +6634,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_16_ffn_residual.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_16_ffn_residual.py
@@ -6670,7 +6670,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_hc.py
     metrics:
-      pcc_attn_hc_L21: '>= limit'
+      err_attn_hc_L21: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_hc.py
@@ -6690,7 +6690,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_01_attn_hc.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_01_attn_hc.py
@@ -6711,7 +6711,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_collapse.py
     metrics:
-      pcc_attn_collapse_L21: '>= limit'
+      err_attn_collapse_L21: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_collapse.py
@@ -6732,7 +6732,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_02_attn_collapse.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_02_attn_collapse.py
@@ -6754,7 +6754,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_norm.py
     metrics:
-      pcc_attn_norm_L21: '>= limit'
+      err_attn_norm_L21: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_norm.py
@@ -6775,7 +6775,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_03_attn_norm.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_03_attn_norm.py
@@ -6798,7 +6798,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_q_a.py
     metrics:
-      pcc_q_a_L21: '>= limit'
+      err_q_a_L21: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_q_a.py
@@ -6819,7 +6819,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_04_q_a.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_04_q_a.py
@@ -6843,7 +6843,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_kv.py
     metrics:
-      pcc_kv_L21: '>= limit'
+      err_kv_L21: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_kv.py
@@ -6864,7 +6864,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_05_kv.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_05_kv.py
@@ -6890,7 +6890,7 @@ tasks:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attention.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
     metrics:
-      pcc_attention_L21: '>= limit'
+      err_attention_L21: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attention.py
@@ -6911,7 +6911,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_06_attention.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_06_attention.py
@@ -6937,7 +6937,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_residual.py
     metrics:
-      pcc_attn_residual_L21: '>= limit'
+      err_attn_residual_L21: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_residual.py
@@ -6958,7 +6958,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_07_attn_residual.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_07_attn_residual.py
@@ -6985,7 +6985,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_hc.py
     metrics:
-      pcc_ffn_hc_L21: '>= limit'
+      err_ffn_hc_L21: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_hc.py
@@ -7006,7 +7006,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_08_ffn_hc.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_08_ffn_hc.py
@@ -7034,7 +7034,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_collapse.py
     metrics:
-      pcc_ffn_collapse_L21: '>= limit'
+      err_ffn_collapse_L21: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_collapse.py
@@ -7055,7 +7055,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_09_ffn_collapse.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_09_ffn_collapse.py
@@ -7084,7 +7084,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_norm.py
     metrics:
-      pcc_ffn_norm_L21: '>= limit'
+      err_ffn_norm_L21: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_norm.py
@@ -7105,7 +7105,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_10_ffn_norm.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_10_ffn_norm.py
@@ -7135,7 +7135,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_router.py
     metrics:
-      pcc_router_L21: '>= limit'
+      err_router_L21: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_router.py
@@ -7156,7 +7156,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_11_router.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_11_router.py
@@ -7187,7 +7187,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_experts.py
     metrics:
-      pcc_experts_L21: '>= limit'
+      err_experts_L21: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_experts.py
@@ -7208,7 +7208,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_12_experts.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_12_experts.py
@@ -7240,7 +7240,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_shared_expert.py
     metrics:
-      pcc_shared_expert_L21: '>= limit'
+      err_shared_expert_L21: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_shared_expert.py
@@ -7261,7 +7261,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_13_shared_expert.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_13_shared_expert.py
@@ -7294,7 +7294,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_moe_add.py
     metrics:
-      pcc_moe_add_L21: '>= limit'
+      err_moe_add_L21: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_moe_add.py
@@ -7315,7 +7315,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_14_moe_add.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_14_moe_add.py
@@ -7349,7 +7349,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_residual.py
     metrics:
-      pcc_ffn_residual_L21: '>= limit'
+      err_ffn_residual_L21: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_residual.py
@@ -7370,7 +7370,7 @@ tasks:
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_15_ffn_residual.py
     metrics:
-      pcc_swap_out: '>= limit'
+      err_swap_out: <= limit
   device: true
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_15_ffn_residual.py
