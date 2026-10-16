@@ -268,7 +268,7 @@ class ttKDA:
         self.input_projection_gate_columns = 0
         self.output_gate_weight = None
         self._output_gate_program = None
-        self._output_projection_program = None
+        self._output_projection_programs = None
         if self.overlap_output_gate:
             fused = self.weights.input_projection
             hidden, width = tuple(fused.shape)[-2:]
@@ -297,12 +297,25 @@ class ttKDA:
                 k_block=8,
                 math_fidelity=program_config.input_projection_math_fidelity,
             )
-            self._output_projection_program = GateMatmulProgram(
-                mesh_device,
-                rows=(0, grid.y - 1),
-                cols=(0, min(c.x for c in self.recurrence.final_carry_cores) - 1),
-                k_block=8,
-                math_fidelity=program_config.output_projection_math_fidelity,
+            # The output projection on every worker core the final carry leaves: the columns left of the carry's
+            # column, and that column above the carry's cores, which takes the projection's last tile columns.
+            carry_cores = self.recurrence.final_carry_cores
+            carry_x = min(c.x for c in carry_cores)
+            self._output_projection_programs = (
+                GateMatmulProgram(
+                    mesh_device,
+                    rows=(0, grid.y - 1),
+                    cols=(0, carry_x - 1),
+                    k_block=8,
+                    math_fidelity=program_config.output_projection_math_fidelity,
+                ),
+                GateMatmulProgram(
+                    mesh_device,
+                    rows=(0, min(c.y for c in carry_cores) - 1),
+                    cols=(carry_x, carry_x),
+                    k_block=8,
+                    math_fidelity=program_config.output_projection_math_fidelity,
+                ),
             )
         self.input_projection_program_config, self.output_projection_program_config = (
             tuned_projection_matmul_configs(
@@ -526,6 +539,24 @@ class ttKDA:
         )
         return self._reduce_scatter(output)
 
+    def _output_projection(self, normed: ttnn.Tensor, output: ttnn.Tensor):
+        """(io_tensors, MeshProgramDescriptor) of the output projection on the cores the final carry leaves."""
+        wide, narrow = self._output_projection_programs
+        weight = self.weights.output_projection
+        n = weight.padded_shape[-1] // ttnn.TILE_SIZE
+        wide_columns = (n // wide.columns) * wide.columns
+        io, program = wide(normed, weight, output, columns=wide_columns)
+        if wide_columns < n:
+            _, rest = narrow(normed, weight, output, w_column=wide_columns, columns=n - wide_columns)
+            merged = ttnn.MeshProgramDescriptor()
+            rows, cols = tuple(self.device.shape)
+            for r in range(rows):
+                for c in range(cols):
+                    key = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))
+                    merged[key] = ttnn.merge_program_descriptors([program[key], rest[key]])
+            program = merged
+        return io, program
+
     def _reduce_scatter(self, output: ttnn.Tensor) -> ttnn.Tensor:
         """The TP reduction of the output projection's partial sums."""
         if self.tensor_parallel_size > 1:
@@ -652,9 +683,7 @@ class ttKDA:
                 self.device,
                 self.partial_output_memory_config,
             )
-            final_state = result.final_state.run(
-                lambda: self._output_projection_program(normed, self.weights.output_projection, output)
-            )
+            final_state = result.final_state.run(lambda: self._output_projection(normed, output))
             ttnn.deallocate(normed)
             output = self._reduce_scatter(output)
         else:

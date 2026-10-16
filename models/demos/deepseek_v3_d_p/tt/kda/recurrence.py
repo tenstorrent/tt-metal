@@ -586,8 +586,8 @@ class _RelayFinalCarry:
     def __init__(self, device: ttnn.MeshDevice, sequence_parallel_axis: int, num_links: int):
         self._program = FinalCarryProgram(device, sequence_parallel_axis, num_links)
         grid = device.compute_with_storage_grid_size()
-        # The last worker column: the fabric senders are the first num_links of these, the rest copy.
-        self._cores = [ttnn.CoreCoord(grid.x - 1, y) for y in range(grid.y)]
+        # The bottom of the last worker column: the fabric senders are the first num_links of these, the rest copy.
+        self._cores = [ttnn.CoreCoord(grid.x - 1, y) for y in range(grid.y - num_links - 1, grid.y)]
         self._device = device
 
     def __call__(self, rank_final, prefix_final, actual_start, actual_end, local_rows, companion=None):

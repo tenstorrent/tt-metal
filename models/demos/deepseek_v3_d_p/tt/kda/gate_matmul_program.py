@@ -255,13 +255,31 @@ class GateMatmulProgram:
         self.compute_config = ttnn.ComputeConfigDescriptor(math_fidelity=math_fidelity, fp32_dest_acc_en=True)
 
     @property
+    def columns(self) -> int:
+        """Worker columns of the rectangle."""
+        return self.x1 - self.x0 + 1
+
+    @property
     def cores(self) -> list[ttnn.CoreCoord]:
         return [ttnn.CoreCoord(x, y) for y in range(self.y0, self.y1 + 1) for x in range(self.x0, self.x1 + 1)]
 
-    def __call__(self, a: ttnn.Tensor, w: ttnn.Tensor, output: ttnn.Tensor, *, output_column: int = 0):
-        """Return (io_tensors, MeshProgramDescriptor) writing a @ w into output's columns from output_column."""
+    def __call__(
+        self,
+        a: ttnn.Tensor,
+        w: ttnn.Tensor,
+        output: ttnn.Tensor,
+        *,
+        output_column: int = 0,
+        w_column: int = 0,
+        columns: int | None = None,
+    ):
+        """Return (io_tensors, MeshProgramDescriptor) writing a @ w into output's columns from output_column.
+
+        With w_column and columns, only w's tile columns [w_column, w_column + columns) (in tiles) are computed, into
+        the same columns of the output (offset by output_column)."""
         Mt, Kt = a.padded_shape[-2] // 32, a.padded_shape[-1] // 32
-        Nt = w.padded_shape[-1] // 32
+        w_row_tiles = w.padded_shape[-1] // 32
+        Nt = w_row_tiles - w_column if columns is None else columns
         rows, cols = self.y1 - self.y0 + 1, self.x1 - self.x0 + 1
         m_block = -(-Mt // rows)
         n_block = -(-Nt // cols)
@@ -319,7 +337,7 @@ class GateMatmulProgram:
                 a_rt, w_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
                 for c in self.cores:
                     m0 = (c.y - self.y0) * m_block
-                    n0 = (c.x - self.x0) * n_block
+                    n0 = w_column + (c.x - self.x0) * n_block
                     m_valid = max(0, min(m_block, Mt - m0))
                     a_rt[c.x][c.y] = [a.buffer_address(), m0, m_valid]
                     w_rt[c.x][c.y] = [
@@ -328,7 +346,7 @@ class GateMatmulProgram:
                         m0,
                         m_valid,
                         n0,
-                        max(0, min(n_block, Nt - n0)),
+                        max(0, min(n_block, w_column + Nt - n0)),
                         output_column // 32,
                     ]
                 a_senders = [c for c in self.cores if c.x == self.x0]
@@ -359,7 +377,16 @@ class GateMatmulProgram:
                             kernel_source=_W_READER_OUT_WRITER,
                             source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
                             core_ranges=_cset(cores),
-                            compile_time_args=[_CB_W, _CB_OUT, m_block, n_block, k_block, k_blocks, Nt, out_row_tiles]
+                            compile_time_args=[
+                                _CB_W,
+                                _CB_OUT,
+                                m_block,
+                                n_block,
+                                k_block,
+                                k_blocks,
+                                w_row_tiles,
+                                out_row_tiles,
+                            ]
                             + [sends]
                             + w_ct
                             + out_ct,
