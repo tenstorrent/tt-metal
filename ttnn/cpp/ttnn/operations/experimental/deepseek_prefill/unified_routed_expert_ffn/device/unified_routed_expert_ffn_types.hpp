@@ -27,6 +27,10 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 // measured token-count crossover between them stops applying. Read it, do not restate it.
 inline constexpr uint32_t kCoreGridX = 11;
 inline constexpr uint32_t kCoreGridY = 8;
+// M-rows the op actually spans when the device has them (Blackhole: 10). Rows only split tokens and
+// host expert-parallel row groups (kernels/adaptive_chunk.hpp), so N blocking -- what the export
+// above pins -- does not depend on it. Devices with fewer rows fall back to kCoreGridY.
+inline constexpr uint32_t kCoreGridYMax = 10;
 
 // Maximum number of global experts the op supports.
 //

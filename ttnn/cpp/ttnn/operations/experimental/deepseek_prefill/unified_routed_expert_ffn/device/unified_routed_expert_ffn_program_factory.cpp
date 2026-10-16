@@ -22,6 +22,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/operation.hpp"
+#include "kernels/adaptive_chunk.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
 
@@ -68,6 +69,13 @@ constexpr uint32_t CB_X_RM = tt::CBIndex::c_16;
 constexpr uint32_t CB_GATE_BIAS = tt::CBIndex::c_17;
 constexpr uint32_t CB_UP_BIAS = tt::CBIndex::c_18;
 constexpr uint32_t CB_DOWN_BIAS = tt::CBIndex::c_19;
+// Row-shared tilize (x_is_row_major only): one gate/up K-block of x, tilized to bf8 by the core
+// that owns that block in its M-row and multicast from here into every row core's CB_IN0_X.
+constexpr uint32_t CB_X_TL = tt::CBIndex::c_20;
+// Cross-group pacing (reader only, see its RE_PACE_CB block): on logical core (0,0) the first 32 B
+// are the row groups' progress board, on every core the next 32 B its snapshot of that board.
+constexpr uint32_t CB_PACE = tt::CBIndex::c_21;
+constexpr uint32_t kPaceBytes = 64;
 
 // Tile columns per DRAM ND shard of a weight tensor, or 0 when it is not ND-sharded (the
 // interleaved default). The kernels take this as a compile-time arg and coalesce a shard row into
@@ -170,10 +178,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     const uint32_t K_down_tiles = down_shape[-2] / TILE;       // = hidden / TILE
     const uint32_t N_down_tiles_full = down_shape[-1] / TILE;  // = emb / TILE
 
-    // Blackhole compute grid is 13x10 worker cores; we use the bottom-left
-    // 11x8 = 88 to leave headroom for dispatch and to give per_core_M /
-    // per_core_N clean divisors of common chunk sizes (chunk_M_tiles values
-    // {16, 24, ..., 64} all divide by GRID_Y=8). N-axis is rounded UP to a
+    // We use the bottom-left 11 columns and every row up to kCoreGridYMax (11x10 = 110 on a
+    // Blackhole 11x10 worker grid, 11x8 on smaller grids). N-axis is rounded UP to a
     // multiple of GRID_X via ceil_div per_core_N. Phantom tiles past the
     // actual tensor dims (col 64-65 of hidden, col 224-230 of emb) are
     // zero-padded in the reader (zero-fill L1 instead of DRAM read).
@@ -193,8 +199,20 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // per_core_M / num_chunks at runtime from the device token count, never
     // exceeding this max; the CBs below are sized to the max so a smaller pick
     // simply uses fewer of the reserved tiles.
+    const auto grid_size = t.x.device()->compute_with_storage_grid_size();
+    TT_FATAL(
+        grid_size.x >= kCoreGridX && grid_size.y >= kCoreGridY,
+        "unified_routed_expert_ffn: expected at least {}x{} compute grid, got {}x{}",
+        kCoreGridX,
+        kCoreGridY,
+        grid_size.x,
+        grid_size.y);
     uint32_t GRID_X = kCoreGridX;
-    uint32_t GRID_Y = kCoreGridY;
+    // Span every M-row the device has (up to kCoreGridYMax). Rows only split tokens and host the
+    // expert-parallel row groups (kernels/adaptive_chunk.hpp, group sizes GRID_Y, GRID_Y/2, GRID_Y/4),
+    // so the extra rows run more concurrent experts, or the same expert with fewer tile-rows per
+    // core, without touching the N blocking. The kernels take GRID_Y as UNIFIED_RE_GRID_Y.
+    uint32_t GRID_Y = (grid_size.y >= kCoreGridYMax) ? kCoreGridYMax : kCoreGridY;
     // chunk_M_tiles is the CB-sized MAXIMUM chunk (per_core_M_max = 4). The host
     // deliberately does NOT pick a chunk from M_tiles_full any more: all three
     // kernels derive the ACTUAL chunk_M_tiles / per_core_M / num_chunks at runtime
@@ -214,19 +232,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // shapes where the halved chunk count outweighs that, the L1 fit doubles this
     // back to 8 -- see kWidenMMinTilesPerBlock.
     //
-    // Keep this a POWER OF TWO * kCoreGridY: per_core_M_for_chunk() quantizes tail
-    // chunks to divisors of per_core_M_max.
-    constexpr uint32_t kMaxChunkMTiles = 4 * kCoreGridY;  // per_core_M <= 4 (see above)
+    const uint32_t kMaxChunkMTiles = 4 * GRID_Y;  // per_core_M <= 4 (see above)
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
     uint32_t in0_block_w_gu = 16;
-    const auto grid_size = t.x.device()->compute_with_storage_grid_size();
-    TT_FATAL(
-        grid_size.x >= kCoreGridX && grid_size.y >= kCoreGridY,
-        "unified_routed_expert_ffn: expected at least {}x{} compute grid, got {}x{}",
-        kCoreGridX,
-        kCoreGridY,
-        grid_size.x,
-        grid_size.y);
     // per_core_M upper bound (the CB-sized max). The adaptive L1-budget guard
     // below may shrink per_core_M / in0_block_w_gu (and hence chunk_M_tiles) to
     // fit the device's per-core L1 on large models.
@@ -411,23 +419,28 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // The resulting per_core_M is the CB-sized MAX; the runtime picker never
     // exceeds it. This mirrors the CB allocations in the "circular buffers"
     // section below; keep the two in sync.
-    const auto cb_footprint_bytes = [&](uint32_t M, uint32_t w_gu) -> uint64_t {
+    //
+    // gu_slots / d_slots are the ring depths of the streamed inputs (see "ring depth" below the
+    // fit): the fit itself always runs at the 2-slot default, so (per_core_M, in0_block_w_gu) --
+    // and with it the K-block accumulation the accuracy depends on -- never depends on them.
+    const auto cb_footprint_bytes =
+        [&](uint32_t M, uint32_t w_gu, uint32_t gu_slots = 2, uint32_t d_slots = 2) -> uint64_t {
         uint64_t total = 0;
-        total += static_cast<uint64_t>(M * w_gu * (op.x_is_row_major ? 1 : 2)) *
-                 in0_x_tile_size;  // cb_in0_x (RM: single-buf)
+        total += static_cast<uint64_t>(M * w_gu * gu_slots) * in0_x_tile_size;  // cb_in0_x
         if (op.x_is_row_major) {
-            total += static_cast<uint64_t>(M * w_gu * 2) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
+            total += static_cast<uint64_t>(M * w_gu) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
+            total += static_cast<uint64_t>(M * w_gu) * in0_x_tile_size;        // cb_x_tl (tilized block)
         }
-        total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;          // cb_in1_gate
-        total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;            // cb_in1_up
-        total += static_cast<uint64_t>(in0_block_w_d * per_core_N_d * 2) * down_tile_size;  // cb_in1_down
+        total += static_cast<uint64_t>(w_gu * per_core_N_gu * gu_slots) * gate_tile_size;         // cb_in1_gate
+        total += static_cast<uint64_t>(w_gu * per_core_N_gu * gu_slots) * up_tile_size;           // cb_in1_up
+        total += static_cast<uint64_t>(in0_block_w_d * per_core_N_d * d_slots) * down_tile_size;  // cb_in1_down
         total += static_cast<uint64_t>(M * per_core_N_gu) * intermed_tile_size;             // cb_gate_intermed
         total += static_cast<uint64_t>(M * per_core_N_gu) * intermed_tile_size;             // cb_activated
         total += static_cast<uint64_t>(M * per_core_N_gu) * partials_gu_tile_size;          // cb_mm_partials_gu
         total += static_cast<uint64_t>(M * per_core_N_gu) * partials_gu_tile_size;          // cb_mm_partials_up
         total += static_cast<uint64_t>(M * per_core_N_d) * partials_d_tile_size;            // cb_mm_partials_d
         total += static_cast<uint64_t>(cb_out_tiles) * out_tile_size;                       // cb_out
-        total += static_cast<uint64_t>(M * in0_block_w_d * 2) * intermed_tile_size;         // cb_in0_down_full
+        total += static_cast<uint64_t>(M * in0_block_w_d * d_slots) * intermed_tile_size;   // cb_in0_down_full
         // Bias CBs (FUSE_BIAS): single-buffered, per_core_N_gu (gate/up) + per_core_N_d
         // (down) tiles. Keep in sync with the CB allocations in the "Bias CBs" section.
         total += static_cast<uint64_t>(2 * per_core_N_gu + per_core_N_d) * bias_ts;
@@ -513,6 +526,26 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     in0_block_w_gu = fit_w;
     chunk_M_tiles = per_core_M * GRID_Y;
 
+    // Ring depth of the streamed inputs. Every gate/up K-block is lock-step on two axes -- x is
+    // multicast along the M-row by the block's owner, the weights down the group column by its
+    // sender -- and every down K-block likewise couples the column's down weights with the row's
+    // rotating activated multicast. With 2 slots a stall on any one core (a contended DRAM read,
+    // an owner's tilize, a sender's multicast) reaches its whole row and column within one block.
+    // A third slot lets each producer run two blocks ahead of its slowest consumer, absorbing that
+    // jitter, and lets the reader leave the gate/up loop (and start the first down read) a block
+    // earlier. Spend only L1 the fit above left over: the gate/up rings (x, gate, up) first, then
+    // the down rings (down weights, activated). Without room the rings stay at 2, today's layout.
+    // Per-RISC block order, K-block geometry and formats are unchanged, so results are identical.
+    constexpr uint32_t kDeepRingSlots = 3;
+    uint32_t gu_slots = 2;
+    uint32_t d_slots = 2;
+    if (cb_footprint_bytes(per_core_M, in0_block_w_gu, kDeepRingSlots, d_slots) <= l1_budget) {
+        gu_slots = kDeepRingSlots;
+    }
+    if (cb_footprint_bytes(per_core_M, in0_block_w_gu, gu_slots, kDeepRingSlots) <= l1_budget) {
+        d_slots = kDeepRingSlots;
+    }
+
     // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound); the
     // divisor-snap after the short_seq picker and the L1 guard above both
     // preserve this, so this is a defensive invariant check.
@@ -523,12 +556,13 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         in0_block_w_gu);
 
     // num_chunks is the compile-time UPPER BOUND on the runtime chunk count used
-    // only to clamp the kernels' loop defensively. The runtime picker may choose
-    // a chunk as small as min(16, chunk_M_tiles) (per_core_M 2), so the worst
-    // case is ceil(M_tiles_full / that min). Matches adaptive_chunk.hpp's
-    // kMinChunkMTiles = 16.
-    constexpr uint32_t kMinChunkMTiles = 16;
-    const uint32_t min_chunk = (chunk_M_tiles < kMinChunkMTiles) ? chunk_M_tiles : kMinChunkMTiles;
+    // only to clamp the kernels' loop defensively. The kernels may split the M-rows into
+    // expert-parallel groups of as few as kMinGroupRows rows (adaptive_chunk.hpp), whose
+    // full chunk is per_core_M * kMinGroupRows tile-rows, so bound the count for that
+    // smallest chunk: the kernels' clamp cap (num_chunks * that chunk) then never cuts
+    // below M_tiles_full whatever group size they pick.
+    constexpr uint32_t kMinGroupRows = 2;  // adaptive_chunk::kMinGroupRows
+    const uint32_t min_chunk = per_core_M * kMinGroupRows;
     const uint32_t num_chunks = (M_tiles_full + min_chunk - 1) / min_chunk;
 
     // Phase-level numbers.
@@ -655,7 +689,19 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // roughly doubles it; handing the whole block to one RISC only moves the serial cost
     // from the reader to the writer, and measured 1.03x against 1.13x for the split.
     //
-    // A split needs >= 2 K-rows to divide; in0_block_w_d is per_core_N_gu.
+    // The split is by TILE COLUMN inside every K-row (see the NoC balance note below), so it
+    // needs >= 2 tiles of per_core_N_d, not >= 2 K-rows.
+    //
+    // NoC balance of the weight reads (both phases). A DRAM read's response returns on the NoC
+    // it was issued on, and the two NoCs leave the DRAM columns (x = 0 and 9) differently:
+    // NoC 0 runs east along the bank endpoint's row first, NoC 1 runs north along the DRAM
+    // column first, so the four banks of a column share that column's NoC-1 links. Modelled
+    // on the staggered sender layouts, an even 50/50 split puts ~1.5x the load of NoC 0's
+    // hottest link on NoC 1's hottest link (65-79 vs 45 GB/s at a 440 GB/s aggregate); the
+    // balance point is ~60% of the bytes on NoC 0 (all-on-one-NoC splits measured -5..-22%).
+    // So the reader (NoC 0) takes ~60%: in gate/up it reads every gate K-row plus the first
+    // up_head_rows of each up block, and in down the first d_head_tiles of every K-row. The
+    // writer (NoC 1) reads the rest into the same slots. Same bytes, same L1 addresses.
     // IN1_WRITER_MCAST: hand the gate/up weight multicast to the WRITER, which owns NoC 1,
     // so it overlaps the reader's NoC-0 weight reads. The reader cannot multicast on NoC 1
     // itself -- in DM_DEDICATED_NOC both RISCs use the same command-buffer indices and only
@@ -675,9 +721,19 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     const uint32_t mcast_go_sem_id = kWriterMcastsIn1 ? add_semaphore() : 0;
     const uint32_t mcast_done_sem_id = kWriterMcastsIn1 ? add_semaphore() : 0;
 
-    const bool kEnableSplitDown = in0_block_w_d >= 2;
-    // Rows the READER keeps; the writer takes [down_split_k, in0_block_w_d).
-    const uint32_t down_split_k = kEnableSplitDown ? (in0_block_w_d / 2) : in0_block_w_d;
+    const bool kEnableSplitDown = per_core_N_d >= 2;
+    // Tile columns of every down K-row the READER keeps; the writer takes the rest of the row.
+    // ~60% to NoC 0, at least one tile each way (see the NoC balance note above).
+    const uint32_t d_head_tiles =
+        kEnableSplitDown ? std::clamp<uint32_t>((per_core_N_d * 3 + 2) / 5, 1u, per_core_N_d - 1) : per_core_N_d;
+    // Leading up K-rows of each gate/up block the READER reads on NoC 0 (UP_SPLIT only), so it
+    // carries (w + up_head_rows) / 2w of the gate/up bytes: ~0.2 w rows, i.e. ~60%. The reader
+    // reads them through gate's accessor layout (one read loop for both), so this needs `up` to
+    // have gate's exact layout and tile size; otherwise the writer keeps every up row.
+    const bool up_shares_gate_layout =
+        up_tile_size == gate_tile_size && tt::tt_metal::TensorAccessorArgs(gate_buffer).get_compile_time_args() ==
+                                              tt::tt_metal::TensorAccessorArgs(up_buffer).get_compile_time_args();
+    const uint32_t up_head_rows = (up_mode == 2 && up_shares_gate_layout) ? (in0_block_w_gu + 2) / 5 : 0;
     // DEDICATED sems, not up_go/up_done: the UP_SPLIT writer indexes its cb_in1_up slot
     // off (up_seq - 1) % slots, which only holds while up_seq counts gate/up blocks
     // alone. Adding down blocks to that counter shifts the up slot by num_blocks_d per
@@ -686,6 +742,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     const uint32_t down_done_sem_id = kEnableSplitDown ? add_semaphore() : 0;
     const uint32_t up_go_sem_id = (up_mode == 2) ? add_semaphore() : 0;
     const uint32_t up_done_sem_id = (up_mode == 2) ? add_semaphore() : 0;
+    // Two-phase schedule (kernels/adaptive_chunk.hpp make_plan): phase A's weight multicast gets
+    // its own ready/valid pair. Group membership changes at the phase switch, and a core that has
+    // moved on to phase B acks its phase-B sender, which may still be running phase A; on the
+    // shared in1 pair that early ack would be counted by a phase-A wait.
+    const uint32_t in1_ready_a_sem_id = add_semaphore();
+    const uint32_t in1_valid_a_sem_id = add_semaphore();
 
     // -------------------------- circular buffers --------------------------
     // Double-buffered DRAM-streamed inputs.
@@ -701,32 +763,29 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         });
     };
 
-    // Single-buffered DRAM-streamed inputs (no double-buffer) to fit L1.
-    // Double-buffered input CBs so the reader (NCRISC) can fetch K-block N+1
-    // while compute consumes K-block N. PM FPU util = 0 today says we're
-    // memory-bound; bigger input CBs let the kernel pipeline DRAM I/O with
-    // compute instead of serialising.
-    // Row-major path: cb_in0_x is compute-internal (tilize output -> matmul input,
-    // both on the compute threads sharing DST -> serial), so a second slot buys no
-    // pipelining. Single-buffer it to free L1 for a wider in0_block_w_gu. TILE path
-    // keeps double-buffering: the reader fills it and compute consumes it (cross-RISC
-    // overlap).
-    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_x_tile_size);
-    // Row-major bf16 x staging (x_is_row_major only). Double-buffered like
-    // cb_in0_x: it is a MULTICAST SOURCE, so the sender must fill K-block N+1
-    // while N's posted mcast still drains — single-buffering reuses the slot
-    // mid-mcast and deadlocks. Skipped when x is TILE so the bf8_b path's L1 is
-    // unchanged.
+    // Double- (or, with L1 to spare, triple-) buffered input CBs so the reader (NCRISC) can
+    // fetch K-block N+1 while compute consumes K-block N. gu_slots / d_slots: see "ring depth"
+    // after the L1 fit.
+    // cb_in0_x is the multicast DESTINATION on both layouts (the reader fills it, compute
+    // consumes it), so it is multi-buffered on both: the next block's multicast lands while
+    // compute still works on this one.
+    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * gu_slots, in0_x_tile_size);
+    // Row-major x only, row-shared tilize (see the reader's gate/up loop): each K-block of x is
+    // read and tilized by ONE core of its M-row. cb_x_rm holds the raw bf16 block a core owns
+    // (local only, never multicast) and cb_x_tl its bf8 tilize, the multicast source. A core owns
+    // every GRID_X-th block, so one block of each is enough. Skipped when x is TILE so the bf8_b
+    // path's L1 is unchanged.
     if (op.x_is_row_major) {
         make_cb(
             CB_X_RM,
             tt::DataFormat::Float16_b,
-            /*tiles=*/gu_in0_block_num_tiles * 2,
+            /*tiles=*/gu_in0_block_num_tiles,
             tt::tile_size(tt::DataFormat::Float16_b));
+        make_cb(CB_X_TL, in0_x_df, /*tiles=*/gu_in0_block_num_tiles, in0_x_tile_size);
     }
-    make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles * 2, gate_tile_size);
-    make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles * 2, up_tile_size);
-    make_cb(CB_IN1_DOWN, down_df, /*tiles=*/d_in1_block_num_tiles * 2, down_tile_size);
+    make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles * gu_slots, gate_tile_size);
+    make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles * gu_slots, up_tile_size);
+    make_cb(CB_IN1_DOWN, down_df, /*tiles=*/d_in1_block_num_tiles * d_slots, down_tile_size);
     // Intermediate L1 buffers hold one full per-core block each.
     make_cb(CB_GATE_INT, intermed_df, /*tiles=*/gu_out_block_num_tiles, intermed_tile_size);
     // cb_up_intermed removed — multiply reads cb_partials_up directly.
@@ -761,7 +820,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     make_cb(
         CB_IN0_DOWN_FULL,
         intermed_df,
-        /*tiles=*/d_in0_block_num_tiles * 2,
+        /*tiles=*/d_in0_block_num_tiles * d_slots,
         intermed_tile_size);
 
     // cb_push_back/cb_pop_front wrap the FIFO pointer only when it lands EXACTLY on
@@ -782,9 +841,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     };
     // x and its row-major staging move one in0_block_w_gu-wide tile-row strip at a time
     // (the tilize helper pushes per strip; the per_core_M remainder is a pointer-only pad).
-    check_ring("cb_in0_x", gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_block_w_gu);
+    check_ring("cb_in0_x", gu_in0_block_num_tiles * gu_slots, in0_block_w_gu);
     if (op.x_is_row_major) {
-        check_ring("cb_x_rm", gu_in0_block_num_tiles * 2, in0_block_w_gu);
+        check_ring("cb_x_rm", gu_in0_block_num_tiles, in0_block_w_gu);
+        check_ring("cb_x_tl", gu_in0_block_num_tiles, in0_block_w_gu);
     }
     // gate/up intermediates and their accumulators move one gate/up subblock at a time.
     check_ring("cb_gate_intermed", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
@@ -798,10 +858,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     const uint32_t d_row_granule = d_out_subblock_h * (d_subblocks_exact ? d_out_subblock_w : per_core_N_d);
     check_ring("cb_mm_partials_d", d_out_block_num_tiles, d_row_granule);
     check_ring("cb_out", cb_out_tiles, d_row_granule);
-    check_ring("cb_in0_down_full", d_in0_block_num_tiles * 2, d_in0_block_num_tiles);
-    check_ring("cb_in1_gate", gu_in1_block_num_tiles * 2, gu_in1_block_num_tiles);
-    check_ring("cb_in1_up", gu_in1_block_num_tiles * 2, gu_in1_block_num_tiles);
-    check_ring("cb_in1_down", d_in1_block_num_tiles * 2, d_in1_block_num_tiles);
+    check_ring("cb_in0_down_full", d_in0_block_num_tiles * d_slots, d_in0_block_num_tiles);
+    check_ring("cb_in1_gate", gu_in1_block_num_tiles * gu_slots, gu_in1_block_num_tiles);
+    check_ring("cb_in1_up", gu_in1_block_num_tiles * gu_slots, gu_in1_block_num_tiles);
+    check_ring("cb_in1_down", d_in1_block_num_tiles * d_slots, d_in1_block_num_tiles);
 
     // Scratch CBs for the device-side count lookup. The reader does a single
     // noc_async_read_page(page=0, ...) of each tensor and then indexes
@@ -849,6 +909,13 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // Reader's `start` scratch. Same sizing; separate CB so
     // reader (NCRISC) and writer (BRISC) never share one scratch page.
     make_cb(CB_START_SCRATCH_READER, tt::DataFormat::UInt32, /*tiles=*/1, start_scratch_bytes);
+    // Row groups that share DRAM do not share it fairly: the topmost groups streaming get far less
+    // than the bottom ones for the same work, and the chip ends when they do. The reader's weight
+    // senders pace their groups against each other through this board. DS_NO_PACE=1 turns it off.
+    const bool pace_groups = std::getenv("DS_NO_PACE") == nullptr;
+    if (pace_groups) {
+        make_cb(CB_PACE, tt::DataFormat::UInt32, /*tiles=*/1, kPaceBytes);
+    }
 
     // Bias CBs (FUSE_BIAS): one full per-core N-column slice each; single-buffered
     // (read once, reused across all chunks). gate/up: per_core_N_gu tiles; down:
@@ -914,9 +981,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // X_RM_ELEM_BYTES — byte size of one row-major x element (x is bf16 in
         // the row-major path).
         tt::datum_size(tt::DataFormat::Float16_b),
-        // DOWN_SPLIT: K-rows of each down block this RISC keeps; the writer reads the
-        // rest on NoC 1. Equals in0_block_w_d when the split is off.
-        down_split_k,  // 30
+        // DOWN_SPLIT: tile columns of every down K-row this RISC reads on NoC 0; the writer
+        // reads the rest of the row on NoC 1. Equals per_core_N_d when the split is off.
+        d_head_tiles,  // 30
         // IN1_WRITER_MCAST: 1 => the writer runs the gate/up multicast on NoC 1.
         static_cast<uint32_t>(kWriterMcastsIn1),  // 31
         // Active-token band. Experts outside it are dropped like a zero count, so a
@@ -928,6 +995,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // kernels' read coalescing only — both layouts run the same code path.
         gu_shard_w,  // 34
         d_shard_w,   // 35
+        // Row-shared tilize output CB (only allocated / used when x_is_row_major).
+        CB_X_TL,  // 36
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -955,6 +1024,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         tt::tt_metal::TensorAccessorArgs(t.up_biases[0].buffer()).append_to(reader_ct_args);
         tt::tt_metal::TensorAccessorArgs(t.down_biases[0].buffer()).append_to(reader_ct_args);
         reader_defines.emplace_back("FUSE_BIAS", "1");
+    }
+    reader_defines.emplace_back("UNIFIED_RE_GRID_Y", std::to_string(GRID_Y));
+    // UP_SPLIT: leading up K-rows of each gate/up block this RISC reads on NoC 0.
+    reader_defines.emplace_back("RE_UP_HEAD_ROWS", std::to_string(up_head_rows));
+    if (pace_groups) {
+        reader_defines.emplace_back("RE_PACE_CB", std::to_string(CB_PACE));
     }
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
@@ -999,14 +1074,14 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         in0_block_w_gu,                       // 17
         K_gate_tiles,                         // 18
         static_cast<uint32_t>(up_mode == 2),  // 19 writer_split_up
-        // DOWN_SPLIT down-weight read: the writer reads the UPPER K-rows of each down block
-        // on NoC 1 while the reader reads the lower rows on NoC 0.
+        // DOWN_SPLIT down-weight read: the writer reads the TRAILING tile columns of every
+        // down K-row on NoC 1 while the reader reads the leading d_head_tiles on NoC 0.
         CB_IN1_DOWN,            // 20
         in0_block_w_d,          // 21
         K_down_tiles,           // 22
         d_num_blocks,           // 23
         d_in1_block_num_tiles,  // 24
-        down_split_k,           // 25 rows the READER keeps
+        d_head_tiles,           // 25 tile columns of each down K-row the READER keeps
         // IN1_WRITER_MCAST: cb_in1_gate so the writer can multicast it, plus the flag.
         CB_IN1_GATE,                              // 26
         static_cast<uint32_t>(kWriterMcastsIn1),  // 27 writer_mcasts_in1
@@ -1037,6 +1112,15 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = core_range_set;
     writer_kernel_desc.compile_time_args = std::move(writer_ct_args);
+    // The writer reads `up` / its down half into slots of rings it never pushes, so it indexes
+    // them off a block counter modulo the ring depth, which must match the CBs above.
+    writer_kernel_desc.defines = {
+        {"IN1_GU_SLOTS", std::to_string(gu_slots)},
+        {"IN1_D_SLOTS", std::to_string(d_slots)},
+        // Leading up K-rows of each gate/up block the READER reads; the writer reads the rest.
+        {"RE_UP_HEAD_ROWS", std::to_string(up_head_rows)},
+        {"UNIFIED_RE_GRID_Y", std::to_string(GRID_Y)},
+    };
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
     // Compute kernel compile-time args: positional + named CB ids.
@@ -1094,6 +1178,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs compute_named_args = {
         // Row-major bf16 x staging (x_is_row_major only); tilize input CB.
         {"cb_x_rm", CB_X_RM},
+        // Row-shared tilize (x_is_row_major only): this core's tilized x blocks, and the M-row
+        // width that decides which blocks it owns.
+        {"cb_x_tl", CB_X_TL},
+        {"grid_x", GRID_X},
         {"cb_in0_x", CB_IN0_X},
         {"cb_in1_gate", CB_IN1_GATE},
         {"cb_in1_up", CB_IN1_UP},
@@ -1124,6 +1212,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // PACKER_L1_ACC controls cross-K-block accumulation via packer L1 RMW.
     tt::tt_metal::KernelDescriptor::Defines compute_defines;
     compute_defines.emplace_back("PACKER_L1_ACC", "1");
+    compute_defines.emplace_back("UNIFIED_RE_GRID_Y", std::to_string(GRID_Y));
     // Dst-accumulator mode -> compute kernel: the fused-binary-activation dst budget and
     // the SFPU fp32-dest template derive from this, staying in sync with
     // DST_CAPACITY / ComputeConfig.fp32_dest_acc_en (single source above).
@@ -1205,7 +1294,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         //   weight sender for column gx -> row    gx % GRID_Y
         //   x      sender for row    gy -> column (gy + 1) % GRID_X
         // A core is in both only if gx == (gx % GRID_Y + 1) % GRID_X, which has no
-        // solution on the 11x8 grid; the TT_FATAL keeps that honest for other grids.
+        // solution on the 11x8 or 11x10 grid; the TT_FATAL keeps that honest for other grids.
         const uint32_t in1_sender_row = gx % GRID_Y;
         const uint32_t in0_sender_col = (gy + 1) % GRID_X;
         TT_FATAL(
@@ -1244,6 +1333,55 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         const uint32_t in0_mcast_ny_end = in0_last_recv_noc.y;
         const uint32_t in0_sender_nx = in0_sender_noc.x;
         const uint32_t in0_sender_ny = in0_sender_noc.y;
+
+        // Expert-parallel row groups (kernels/adaptive_chunk.hpp). The kernels split the GRID_Y
+        // M-rows into groups of consecutive rows that run different experts concurrently, and pick
+        // the layout (the group heights) at runtime from the device-side counts, so every core gets
+        // the weight (in1) multicast topology of its group in every layout, in the layout table's
+        // order: the group-column's sender is the group's top or bottom row
+        // (adaptive_chunk::sender_row_in_group, alternating by column, never a middle row), and the
+        // rectangle spans the group's rows only. A corner sender's column multicast starts at a
+        // rectangle corner -- top: the reader's NoC-0 +y multicast, bottom: the writer's NoC-1 -y one --
+        // so no weight multicast wraps around the column of the torus through the other groups' rows.
+        // x and activated multicasts stay per M-row, which a group never splits.
+        std::vector<uint32_t> group_topologies;
+        for (uint32_t layout = 0; layout < adaptive_chunk::num_layouts(GRID_Y); ++layout) {
+            uint32_t group_base = 0;
+            uint32_t rows = 0;
+            adaptive_chunk::layout_group(adaptive_chunk::layout_at(GRID_Y, layout), gy, group_base, rows);
+            TT_FATAL(
+                rows >= kMinGroupRows && group_base + rows <= GRID_Y,
+                "row-group layout {} puts row {} in a bad group (base {}, {} rows) on the {}-row grid",
+                layout,
+                gy,
+                group_base,
+                rows,
+                GRID_Y);
+            const uint32_t sender_row = group_base + adaptive_chunk::sender_row_in_group(gx, group_base, rows);
+            // 2-row groups keep the old placement, which never meets the TILE path's fixed x sender
+            // ((gy + 1) % GRID_X). A corner row of a 3+-row group can: that core then issues the x
+            // and the weight reads of its row/column one after the other, as the original (0, 0)
+            // sender did (each role keeps its own semaphores). It costs time on the TILE path only;
+            // row-major x is tilized by rotating owners that skip sender columns.
+            TT_FATAL(
+                rows > 2 || !(gy == sender_row && gx == in0_sender_col),
+                "sender placement collision at ({}, {}) for {}-row groups: a core must not own both the "
+                "weight and x DRAM read",
+                gx,
+                gy,
+                rows);
+            const auto g_sender = device->worker_core_from_logical_core(CoreCoord{gx, sender_row});
+            const auto g_first = device->worker_core_from_logical_core(CoreCoord{gx, group_base});
+            const auto g_last = device->worker_core_from_logical_core(CoreCoord{gx, group_base + rows - 1});
+            group_topologies.push_back(static_cast<uint32_t>(gy == sender_row));  // is_sender
+            group_topologies.push_back(rows - 1);                                 // num_receivers
+            group_topologies.push_back(static_cast<uint32_t>(g_first.x));
+            group_topologies.push_back(static_cast<uint32_t>(g_first.y));
+            group_topologies.push_back(static_cast<uint32_t>(g_last.x));
+            group_topologies.push_back(static_cast<uint32_t>(g_last.y));
+            group_topologies.push_back(static_cast<uint32_t>(g_sender.x));
+            group_topologies.push_back(static_cast<uint32_t>(g_sender.y));
+        }
 
         // Per-core schedule and multicast metadata. Tensor bindings are common args.
         // Reader: 0..2 M/N indices, 3..22 input multicast, 23..26 activation/up sems,
@@ -1309,6 +1447,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }
+        // Expert-parallel row groups: one weight-multicast topology per row-group layout, picked
+        // by the kernels at runtime (adaptive_chunk::plan_launch).
+        reader_args.insert(reader_args.end(), group_topologies.begin(), group_topologies.end());
+        // Phase-A weight-multicast sems (PHASE_A_SEM_RT, right after the topologies).
+        reader_args.push_back(in1_ready_a_sem_id);
+        reader_args.push_back(in1_valid_a_sem_id);
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
         reader_rt_args.append(reader_args);
         reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);
@@ -1330,6 +1474,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         writer_args.push_back(in1_valid_sem_id);
         writer_args.push_back(mcast_go_sem_id);
         writer_args.push_back(mcast_done_sem_id);
+        // Expert-parallel row groups (17..): the same per-group-size topologies as the reader.
+        writer_args.insert(writer_args.end(), group_topologies.begin(), group_topologies.end());
+        // Phase-A weight-multicast sems (PHASE_A_SEM_RT, right after the topologies).
+        writer_args.push_back(in1_ready_a_sem_id);
+        writer_args.push_back(in1_valid_a_sem_id);
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
         writer_rt_args.append(writer_args);
         writer_kernel_desc.emplace_runtime_args(core, writer_rt_args);
@@ -1351,6 +1500,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         std::vector<uint32_t> compute_args = {
             (valid_n_gu + gu_out_subblock_w - 1) / gu_out_subblock_w,  // 0 gu valid N subblocks
             (valid_n_d + d_out_subblock_w - 1) / d_out_subblock_w,     // 1 down valid N subblocks
+            gy,                                                        // 2 grid M-row (expert group)
+            gx,                                                        // 3 grid column (x tilize owner)
         };
         tt::tt_metal::KernelDescriptor::RTArgList compute_rt_args;
         compute_rt_args.append(compute_args);

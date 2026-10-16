@@ -42,19 +42,27 @@
 #include "../adaptive_chunk.hpp"
 #include "../weight_runs.hpp"
 
+// Ring depths (in blocks) of cb_in1_up / cb_in1_down, set by the host from its L1 fit.
+#ifndef IN1_GU_SLOTS
+#define IN1_GU_SLOTS 2
+#endif
+#ifndef IN1_D_SLOTS
+#define IN1_D_SLOTS 2
+#endif
+
 constexpr uint32_t TILE_HEIGHT = 32;
 
 void kernel_main() {
     Noc noc;
 
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t my_mt = get_arg_val<uint32_t>(0);
+    // Grid M-row; the row within its expert group is derived once the group size is picked.
+    const uint32_t my_gy = get_arg_val<uint32_t>(0);
     const uint32_t my_nt_d = get_arg_val<uint32_t>(1);
     const uint32_t start_addr = get_common_arg_val<uint32_t>(1);
     // UP_SPLIT up-weight read args. The per-expert `up` addresses live in the
     // runtime-arg array starting at COMMON_UP.
     const uint32_t my_nt_gu = get_arg_val<uint32_t>(2);
-    const bool is_up_sender = get_arg_val<uint32_t>(3) != 0;
     // UP_SPLIT local handshake sems (see reader): up_go = slot reserved,
     // up_done = up landed.
     const uint32_t up_go_sem_id = get_arg_val<uint32_t>(4);
@@ -74,6 +82,9 @@ void kernel_main() {
     constexpr uint32_t N_down_tiles_full = get_compile_time_arg_val(7);
     constexpr uint32_t num_chunks_max = get_compile_time_arg_val(8);
     constexpr uint32_t chunk_M_max = get_compile_time_arg_val(9);
+    // The whole-grid chunk; the runtime chunk is per_core_M_max * group_rows (chunk_M below).
+    static_assert(
+        chunk_M_max == per_core_M_max * adaptive_chunk::kGridY, "chunk_M_max must be per_core_M_max * GRID_Y");
     // device-side count read.
     constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(10);
     constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(11);
@@ -94,17 +105,25 @@ void kernel_main() {
     constexpr uint32_t in0_block_w_gu = get_compile_time_arg_val(17);
     constexpr uint32_t K_gate_tiles = get_compile_time_arg_val(18);
     constexpr uint32_t writer_split_up = get_compile_time_arg_val(19);
-    // DOWN_SPLIT: this RISC reads [down_split_k, in0_block_w_d) of each down K-block on
-    // NoC 1 while the reader reads [0, down_split_k) on NoC 0. Split rather than handed
-    // over wholesale because the reads are issue-bound: two RISCs issuing half each beat
-    // one issuing all (see the program factory).
+    // DOWN_SPLIT: this RISC reads the trailing tile columns [d_head_tiles, per_core_N_d) of
+    // every down K-row on NoC 1 while the reader reads the leading d_head_tiles on NoC 0.
+    // Split rather than handed over wholesale because two RISCs issuing beat one, and ~60/40
+    // toward NoC 0 because NoC 1's responses share the DRAM columns' links (see the program
+    // factory's NoC balance note).
     constexpr uint32_t cb_in1_down = get_compile_time_arg_val(20);
     constexpr uint32_t in0_block_w_d = get_compile_time_arg_val(21);
     constexpr uint32_t K_down_tiles = get_compile_time_arg_val(22);
     constexpr uint32_t num_blocks_d = get_compile_time_arg_val(23);
     constexpr uint32_t d_in1_block_num_tiles = get_compile_time_arg_val(24);
-    constexpr uint32_t down_split_k = get_compile_time_arg_val(25);
-    constexpr bool writer_split_down = down_split_k < in0_block_w_d;
+    constexpr uint32_t d_head_tiles = get_compile_time_arg_val(25);
+    constexpr bool writer_split_down = d_head_tiles < per_core_N_d;
+    // UP_SPLIT: the reader reads the leading up_head_rows K-rows of each `up` block on NoC 0;
+    // this RISC reads the rest.
+#ifdef RE_UP_HEAD_ROWS
+    constexpr uint32_t up_head_rows = RE_UP_HEAD_ROWS;
+#else
+    constexpr uint32_t up_head_rows = 0;
+#endif
 
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
     // Full compile-time M-subblock count of cb_out. The writer DRAINS all of them
@@ -211,7 +230,8 @@ void kernel_main() {
     // up_seq stays in lockstep with the reader ACROSS all experts.
     uint32_t up_seq = 0;
     // DOWN_SPLIT: the down slot index advances once per down K-block and runs across
-    // chunks and experts, so kb % 2 is the wrong slot after the first chunk.
+    // chunks and experts, so kb % 2 is the wrong slot after the first chunk. Like gu_blk below,
+    // down_blk counts every down block this core consumed, not only those it read.
     const uint32_t down_tile_bytes = get_tile_size(cb_in1_down);
     uint32_t down_blk = 0;
     // Separate counter and sems so up_seq stays a pure gate/up count.
@@ -222,13 +242,32 @@ void kernel_main() {
     // corners come in the OPPOSITE order from a NoC-0 multicast: pass them unswapped and
     // the NoC reads start > end as a torus wraparound, covers no receiver, and the run
     // deadlocks with no assert.
-    const uint32_t in1_mc_nx_start = get_arg_val<uint32_t>(IN1_WM_RT + 2);  // NoC-0 frame's END x
-    const uint32_t in1_mc_ny_start = get_arg_val<uint32_t>(IN1_WM_RT + 3);  // NoC-0 frame's END y
-    const uint32_t in1_mc_nx_end = get_arg_val<uint32_t>(IN1_WM_RT + 0);    // NoC-0 frame's START x
-    const uint32_t in1_mc_ny_end = get_arg_val<uint32_t>(IN1_WM_RT + 1);    // NoC-0 frame's START y
-    const uint32_t in1_num_receivers = get_arg_val<uint32_t>(IN1_WM_RT + 4);
-    Semaphore<> in1_ready_sem(get_arg_val<uint32_t>(IN1_WM_RT + 5));
-    Semaphore<> in1_valid_sem(get_arg_val<uint32_t>(IN1_WM_RT + 6));
+    //
+    // Expert-parallel row groups (adaptive_chunk.hpp): plan the row-group layouts and the expert ->
+    // group map from the counts with the identical schedule the reader and compute run, then take
+    // this core's group's weight-multicast topology from the per-layout sets the host appends after
+    // the IN1_WRITER_MCAST block (layout table order; each {is_sender, num_receivers, NoC-0
+    // rectangle x0, y0, x1, y1, sender x, y}). They supersede the whole-column topology in args 3
+    // and IN1_WM_RT + 0..4.
+    constexpr uint32_t GROUP_TOPO_RT = IN1_WM_RT + 9;
+    constexpr uint32_t GROUP_TOPO_ARGS = 8;
+    constexpr uint32_t clamp_chunk = per_core_M_max * adaptive_chunk::kMinGroupRows;
+    auto tiles_of = [&](uint32_t e) -> uint32_t {
+        const uint32_t count =
+            adaptive_chunk::count_in_band(counts_ptr[idx_ptr[e]], min_active_tokens, max_active_tokens);
+        return adaptive_chunk::clamp_count_tiles(
+            (count + TILE_HEIGHT - 1) / TILE_HEIGHT, clamp_chunk, num_chunks_max, M_tiles_full);
+    };
+    // Launch plan, identical to the reader's and compute's (adaptive_chunk::plan_launch); the layout,
+    // group, row within the group, topology and in1 semaphore pair are per phase (see the reader).
+    uint8_t expert_group[2][experts_per_chip];
+    const adaptive_chunk::LaunchPlan plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group);
+    constexpr uint32_t PHASE_A_SEM_RT =
+        GROUP_TOPO_RT + adaptive_chunk::num_layouts(adaptive_chunk::kGridY) * GROUP_TOPO_ARGS;
+    // Gate/up and down blocks this core has consumed so far, sender or not. The writer never pushes,
+    // so it indexes the reader's live ring slot off these. They must count EVERY block: the sender
+    // role can change between phases, while the reader's write pointer advanced on all of them.
+    uint32_t gu_blk = 0;
     Semaphore<> mcast_go_sem(get_arg_val<uint32_t>(IN1_WM_RT + 7));
     Semaphore<> mcast_done_sem(get_arg_val<uint32_t>(IN1_WM_RT + 8));
     // Gate/up blocks only, for the same cross-chunk reason down_seq exists.
@@ -239,261 +278,314 @@ void kernel_main() {
     // cores, feed its `up` weights) into the shared output buffer at the
     // expert's region offset. The chunk-loop body below is unchanged from the
     // single-expert kernel — only the per-expert bindings differ.
-    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
-        const auto up_acc =
-            TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_UP + local_expert_id), up_tile_bytes);
-        const uint32_t global_expert_id = idx_ptr[local_expert_id];
-        // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
-        // op and are dropped here exactly like a zero count.
-        const uint32_t count_value =
-            adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
-        // Same capacity clamp the reader and compute apply to the device-produced
-        // count (see adaptive_chunk::clamp_count_tiles): arithmetic, so it bounds
-        // the chunk loop in Release too, where ASSERT is a no-op.
-        const uint32_t count_tiles_raw = (count_value + TILE_HEIGHT - 1) / TILE_HEIGHT;
-        const uint32_t count_tiles =
-            adaptive_chunk::clamp_count_tiles(count_tiles_raw, chunk_M_max, num_chunks_max, M_tiles_full);
-        ASSERT(count_tiles == count_tiles_raw);
-        // Runtime chunk layout from THIS expert's count — the same math the reader
-        // and compute kernels run, so all three agree on the row mapping (a
-        // mismatch would emit this expert's rows at the wrong token offsets).
-        const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
-        const uint32_t row_offset_tiles = start_ptr[global_expert_id] / TILE_HEIGHT;
+    for (uint32_t phase = 0; phase < 2; ++phase) {
+        const uint32_t layout = plan.layout[phase];
+        if (layout == adaptive_chunk::kNoLayout) {
+            continue;
+        }
+        uint32_t group_base = 0;
+        uint32_t group_rows = 0;
+        const uint32_t my_group = adaptive_chunk::layout_group(
+            adaptive_chunk::layout_at(adaptive_chunk::kGridY, layout), my_gy, group_base, group_rows);
+        const uint32_t my_mt = my_gy - group_base;  // M-row within the group
+        const uint32_t chunk_M = per_core_M_max * group_rows;
+        const uint32_t topo = GROUP_TOPO_RT + GROUP_TOPO_ARGS * layout;
+        const bool is_up_sender = get_arg_val<uint32_t>(topo + 0) != 0;
+        const uint32_t in1_num_receivers = get_arg_val<uint32_t>(topo + 1);
+        const uint32_t in1_mc_nx_start = get_arg_val<uint32_t>(topo + 4);  // NoC-0 frame's END x
+        const uint32_t in1_mc_ny_start = get_arg_val<uint32_t>(topo + 5);  // NoC-0 frame's END y
+        const uint32_t in1_mc_nx_end = get_arg_val<uint32_t>(topo + 2);    // NoC-0 frame's START x
+        const uint32_t in1_mc_ny_end = get_arg_val<uint32_t>(topo + 3);    // NoC-0 frame's START y
+        Semaphore<> in1_ready_sem(
+            (phase == 0) ? get_arg_val<uint32_t>(PHASE_A_SEM_RT + 0) : get_arg_val<uint32_t>(IN1_WM_RT + 5));
+        Semaphore<> in1_valid_sem(
+            (phase == 0) ? get_arg_val<uint32_t>(PHASE_A_SEM_RT + 1) : get_arg_val<uint32_t>(IN1_WM_RT + 6));
+        // IN1_WRITER_MCAST covers a bottom-row sender's gate/up blocks only: NoC 1 multicasts -y from the
+        // rectangle's bottom corner. A top-row sender's would wrap around the column of the torus, so its
+        // reader multicasts them on NoC 0 and this RISC only reads `up`. Same predicate as the reader's.
+        const bool wmc_gu = writer_mcasts_in1 && my_mt + 1 == group_rows;
+        // One linked NoC-1 data multicast into the same L1 address on every column receiver of this group,
+        // and the valid sem that closes it (same reserved path, so it cannot overtake the data). Out of line
+        // and captured by value, so the gate, up and down multicasts share one copy and pin no locals.
+        auto mcast_in1 = [in1_num_receivers, in1_mc_nx_start, in1_mc_ny_start, in1_mc_nx_end, in1_mc_ny_end](
+                             uint32_t l1, uint32_t bytes) __attribute__((noinline)) {
+            Noc noc_mc(1);
+            noc_mc.async_write_multicast(
+                CoreLocalMem<uint32_t>(l1),
+                MulticastEndpoint{},
+                bytes,
+                in1_num_receivers,
+                {.offset_bytes = 0},
+                {.noc_x_start = in1_mc_nx_start,
+                 .noc_y_start = in1_mc_ny_start,
+                 .noc_x_end = in1_mc_nx_end,
+                 .noc_y_end = in1_mc_ny_end,
+                 .addr = l1},
+                /*linked=*/true);
+        };
+        auto mcast_in1_valid =
+            [in1_valid_sem, in1_num_receivers, in1_mc_nx_start, in1_mc_ny_start, in1_mc_nx_end, in1_mc_ny_end]() mutable
+            __attribute__((noinline)) {
+                Noc noc_mc(1);
+                noc_mc.async_writes_flushed();
+                in1_valid_sem.set(1);
+                in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
+                    noc_mc, in1_mc_nx_start, in1_mc_ny_start, in1_mc_nx_end, in1_mc_ny_end, in1_num_receivers);
+            };
 
-        for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
-            // ---- Phase 1/2 weight feed: writer reads `up` on NoC 1 (UP_SPLIT) ----
-            // Streams `up` from DRAM concurrent with the reader's NoC-0 `gate` read.
-            // Runs before the cb_out drain.
-            if constexpr (writer_split_up) {
-                // UP_SPLIT: only gy=0 in1-sender cores read `up`. Per K-block: wait
-                // for the reader to reserve the slot (up_go), read this column's
-                // `up` slice on NoC 1 into it, then signal up_done so the reader
-                // mcasts on NoC 0. Only a NoC-1 DRAM read here (fabric-safe); the
-                // reader owns cb_in1_up reserve/push.
-                if (is_up_sender) {
-                    // The CB write pointer is PER-RISC and the reader owns push, so
-                    // the writer's get_write_ptr never advances. Replicate the
-                    // reader's cadence: cb_in1_up is double-buffered, one push per
-                    // K-block, so the live slot is base + (up_seq-1)%2 * slot.
-                    constexpr uint32_t kUpNumSlots = 2;
-                    CircularBuffer cb_in1_up_buf(cb_in1_up);
-                    const uint32_t up_cb_base = cb_in1_up_buf.get_write_ptr();
-                    const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
-                    for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
-                        ++up_seq;
-                        up_go_sem.wait_min(up_seq);
-                        const uint32_t l1_w_up_block_start = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
-                        uint32_t l1_w_up = l1_w_up_block_start;
-                        // N-OOB hidden padding columns left UNWRITTEN: their up output lands on
-                        // a down K position the down matmul never reduces (the compute bounds
-                        // its K-loop by real_k_tiles), so stale L1 is dropped.
-                        for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-                            GuRuns::read(
-                                noc_up,
-                                up_acc,
-                                kb * in0_block_w_gu + k,
-                                N_gate_tiles_full,
-                                up_col0,
-                                up_col_end,
-                                l1_w_up,
-                                up_tile_bytes);
-                            l1_w_up += per_core_N_gu * up_tile_bytes;
-                        }
-                        noc_up.async_read_barrier();
-                        up_done_sem.set(up_seq);
+        for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+            const auto up_acc =
+                TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_UP + local_expert_id), up_tile_bytes);
+            const uint32_t global_expert_id = idx_ptr[local_expert_id];
+            // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
+            // op and are dropped here exactly like a zero count. So is an expert another row group
+            // owns (same plan as the reader and compute).
+            const bool mine = expert_group[phase][local_expert_id] == my_group;
+            const uint32_t count_value =
+                mine ? adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens)
+                     : 0u;
+            // Same capacity clamp the reader and compute apply to the device-produced
+            // count (see adaptive_chunk::clamp_count_tiles): arithmetic, so it bounds
+            // the chunk loop in Release too, where ASSERT is a no-op.
+            const uint32_t count_tiles_raw = (count_value + TILE_HEIGHT - 1) / TILE_HEIGHT;
+            const uint32_t count_tiles =
+                adaptive_chunk::clamp_count_tiles(count_tiles_raw, clamp_chunk, num_chunks_max, M_tiles_full);
+            ASSERT(count_tiles == count_tiles_raw);
+            // Runtime chunk layout from THIS expert's count — the same math the reader
+            // and compute kernels run, so all three agree on the row mapping (a
+            // mismatch would emit this expert's rows at the wrong token offsets).
+            const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M);
+            const uint32_t row_offset_tiles = start_ptr[global_expert_id] / TILE_HEIGHT;
 
-                        // IN1_WRITER_MCAST: wait for the reader's gate read (mcast_go), then
-                        // for the receivers to free their slots (in1_ready), multicast
-                        // gate+up on NoC 1, and signal mcast_done so the reader may
-                        // eventually REUSE this slot. The reader does not block on
-                        // mcast_done until it needs the slot again, so its next block's DRAM
-                        // read overlaps this multicast -- which is the whole point.
-                        if constexpr (writer_mcasts_in1) {
-                            ++mc_seq;
-                            mcast_go_sem.wait_min(mc_seq);
-                            in1_ready_sem.wait(in1_num_receivers);
-                            in1_ready_sem.set(0);
-                            CircularBuffer cb_in1_gate_buf(cb_in1_gate);
-                            const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
-                            const uint32_t gate_slot_bytes = g_in1_block_num_tiles * gate_tile_bytes;
-                            const uint32_t gate_block_start =
-                                cb_in1_gate_buf.get_write_ptr() + ((up_seq - 1) % kUpNumSlots) * gate_slot_bytes;
-                            // linked=true on both data multicasts and the sem, so the posted
-                            // valid-sem write cannot overtake the data (same rationale as the
-                            // reader's NoC-0 version this replaces).
-                            noc_up.async_write_multicast(
-                                CoreLocalMem<uint32_t>(gate_block_start),
-                                MulticastEndpoint{},
-                                gate_slot_bytes,
-                                in1_num_receivers,
-                                {.offset_bytes = 0},
-                                {.noc_x_start = in1_mc_nx_start,
-                                 .noc_y_start = in1_mc_ny_start,
-                                 .noc_x_end = in1_mc_nx_end,
-                                 .noc_y_end = in1_mc_ny_end,
-                                 .addr = gate_block_start},
-                                /*linked=*/true);
-                            noc_up.async_write_multicast(
-                                CoreLocalMem<uint32_t>(l1_w_up_block_start),
-                                MulticastEndpoint{},
-                                up_slot_bytes,
-                                in1_num_receivers,
-                                {.offset_bytes = 0},
-                                {.noc_x_start = in1_mc_nx_start,
-                                 .noc_y_start = in1_mc_ny_start,
-                                 .noc_x_end = in1_mc_nx_end,
-                                 .noc_y_end = in1_mc_ny_end,
-                                 .addr = l1_w_up_block_start},
-                                /*linked=*/true);
-                            noc_up.async_writes_flushed();
-                            in1_valid_sem.set(1);
-                            in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
-                                noc_up,
-                                in1_mc_nx_start,
-                                in1_mc_ny_start,
-                                in1_mc_nx_end,
-                                in1_mc_ny_end,
-                                in1_num_receivers);
-                            mcast_done_sem.set(mc_seq);
-                        }
-                    }
-                }
-            }
-
-            // ---- DOWN_SPLIT: read the UPPER K-rows of each down block on NoC 1 ----
-            // Mirrors the UP_SPLIT block above. The reader owns cb_in1_down's reserve/push
-            // and multicast and reads rows [0, down_split_k) on NoC 0; this RISC reads
-            // [down_split_k, in0_block_w_d) into the upper part of the same slot,
-            // concurrently. Per K-block: wait for the reader's go, read, barrier, signal
-            // done.
-            //
-            // down_seq and the down_go/down_done sems are DEDICATED, not shared with
-            // UP_SPLIT: the up block indexes its cb_in1_up slot off (up_seq - 1) % slots,
-            // which only holds while up_seq counts gate/up blocks alone. Folding down
-            // blocks into that counter shifts the up slot by num_blocks_d per chunk and
-            // corrupts the gate/up path from the second chunk on.
-            if constexpr (writer_split_down) {
-                if (is_up_sender) {
-                    const auto down_acc = TensorAccessor(
-                        down_args, get_common_arg_val<uint32_t>(COMMON_DOWN + local_expert_id), down_tile_bytes);
-                    // cb_in1_down is double-buffered with one push per down K-block, and this
-                    // RISC never pushes, so its write pointer is static: index the live slot
-                    // off the block counter, exactly as the UP_SPLIT block does.
-                    constexpr uint32_t kDownNumSlots = 2;
-                    CircularBuffer cb_in1_down_buf(cb_in1_down);
-                    const uint32_t down_cb_base = cb_in1_down_buf.get_write_ptr();
-                    const uint32_t down_slot_bytes = d_in1_block_num_tiles * down_tile_bytes;
-                    for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
-                        ++down_seq;
-                        down_go_sem.wait_min(down_seq);
-                        uint32_t l1_w = down_cb_base + (down_blk % kDownNumSlots) * down_slot_bytes +
-                                        down_split_k * per_core_N_d * down_tile_bytes;
-                        ++down_blk;
-                        // Both OOB directions left UNWRITTEN, matching the reader: the compute
-                        // bounds its down K-loop by real_k_tiles and the writer's col guard drops
-                        // phantom output columns.
-                        for (uint32_t k = down_split_k; k < in0_block_w_d; ++k) {
-                            const uint32_t row = kb * in0_block_w_d + k;
-                            if (row < K_down_tiles) {
-                                DRuns::read(
+            for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+                // ---- Phase 1/2 weight feed: writer reads `up` on NoC 1 (UP_SPLIT) ----
+                // Streams `up` from DRAM concurrent with the reader's NoC-0 `gate` read.
+                // Runs before the cb_out drain.
+                if constexpr (writer_split_up) {
+                    // UP_SPLIT: only gy=0 in1-sender cores read `up`. Per K-block: wait
+                    // for the reader to reserve the slot (up_go), read this column's
+                    // `up` slice on NoC 1 into it, then signal up_done so the reader
+                    // mcasts on NoC 0. Only a NoC-1 DRAM read here (fabric-safe); the
+                    // reader owns cb_in1_up reserve/push.
+                    if (is_up_sender) {
+                        // The CB write pointer is PER-RISC and the reader owns push, so
+                        // the writer's get_write_ptr never advances. Replicate the
+                        // reader's cadence: cb_in1_up holds IN1_GU_SLOTS blocks (host ring depth),
+                        // one push per K-block, so the live slot is base + gu_blk % slots * slot.
+                        constexpr uint32_t kUpNumSlots = IN1_GU_SLOTS;
+                        CircularBuffer cb_in1_up_buf(cb_in1_up);
+                        const uint32_t up_cb_base = cb_in1_up_buf.get_write_ptr();
+                        const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
+                        for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
+                            ++up_seq;
+                            up_go_sem.wait_min(up_seq);
+                            const uint32_t up_slot = (gu_blk + kb) % kUpNumSlots;
+                            const uint32_t l1_w_up_block_start = up_cb_base + up_slot * up_slot_bytes;
+                            uint32_t l1_w_up = l1_w_up_block_start + up_head_rows * per_core_N_gu * up_tile_bytes;
+                            // N-OOB hidden padding columns left UNWRITTEN: their up output lands on
+                            // a down K position the down matmul never reduces (the compute bounds
+                            // its K-loop by real_k_tiles), so stale L1 is dropped.
+                            // Rows [0, up_head_rows) are the reader's (NoC 0).
+                            for (uint32_t k = up_head_rows; k < in0_block_w_gu; ++k) {
+                                GuRuns::read(
                                     noc_up,
-                                    down_acc,
-                                    row,
-                                    N_down_tiles_full,
-                                    down_col0,
-                                    down_col_end,
-                                    l1_w,
-                                    down_tile_bytes);
+                                    up_acc,
+                                    kb * in0_block_w_gu + k,
+                                    N_gate_tiles_full,
+                                    up_col0,
+                                    up_col_end,
+                                    l1_w_up,
+                                    up_tile_bytes);
+                                l1_w_up += per_core_N_gu * up_tile_bytes;
                             }
-                            l1_w += per_core_N_d * down_tile_bytes;
-                        }
-                        noc_up.async_read_barrier();
-                        down_done_sem.set(down_seq);
-                    }
-                }
-            }
+                            noc_up.async_read_barrier();
+                            up_done_sem.set(up_seq);
 
-            // ---- Drain cb_out (down matmul output) to DRAM ----
-            // Per-chunk per_core_M (per_core_M_max for full chunks, a smaller
-            // divisor for the tail); chunk starts are uniform at chunk*chunk_M_max.
-            // Contiguous row map: this core owns rows [row0, row0 + per_core_M).
-            const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
-            const uint32_t row0 = chunk * chunk_M_max + my_mt * per_core_M;
-            const uint32_t col0 = my_nt_d * per_core_N_d;
-            // The DOWN matmul packs and pushes the FULL compile-time-MAX ring (its
-            // L1_ACC needs full-ring cycling), so DRAIN all d_in1_num_subblocks_M
-            // rows to keep cb_out balanced — but only WRITE the first per_core_M
-            // (runtime) rows; the rest are MAC-skipped zeros that map onto other
-            // cores' rows and must not be emitted (the local_row < per_core_M guard below).
-            const uint32_t sb_m_bound = d_in1_num_subblocks_M;
-            for (uint32_t sb_m = 0; sb_m < sb_m_bound; ++sb_m) {
-                for (uint32_t sb_n = 0; sb_n < d_in1_num_subblocks_N; ++sb_n) {
-                    const uint32_t this_w =
-                        (sb_n + 1 == d_in1_num_subblocks_N) ? d_out_subblock_w_tail : d_out_subblock_w;
-                    const uint32_t this_tiles = this_w * d_out_subblock_h;
-                    cb_out_buf.wait_front(this_tiles);
-                    uint32_t subblock_tile_offset = 0;
-                    for (uint32_t i = 0; i < d_out_subblock_h; ++i) {
-                        for (uint32_t j = 0; j < this_w; ++j) {
-                            const uint32_t local_row = sb_m * d_out_subblock_h + i;
-                            const uint32_t row = row0 + local_row;
-                            const uint32_t col = col0 + sb_n * d_out_subblock_w + j;
-                            // `row` indexes the FFN *input* (x) tile-rows; the
-                            // destination tile-row adds the per-expert region
-                            // offset.
-                            const uint32_t dst_row = row_offset_tiles + row;
-                            // Bounds that decide whether this is a real output tile
-                            // for this expert:
-                            //   * col < N_down_tiles_full: GRID_X=11 ceil_div
-                            //     produces phantom output cols past actual N.
-                            //   * row < M_tiles_full: ceil_div of M produces a
-                            //     last-chunk tail past actual M when
-                            //     M_tiles_full doesn't divide chunk_M_tiles.
-                            //   * row < count_tiles: the last chunk's per_core_M
-                            //     rows extend past count_tiles when count_tiles
-                            //     is not chunk-aligned.
-                            //   * local_row < per_core_M: cb_out carries per_core_M_max
-                            //     rows (full ring); rows past the runtime per_core_M
-                            //     are zeros that belong to other cores — never write.
-                            //     The bound is on the tile-ROW, not on sb_m: a subblock
-                            //     spans d_out_subblock_h rows, so comparing the subblock
-                            //     index would pass the whole subblock holding the first
-                            //     out-of-range row.
-                            if (local_row < per_core_M && col < N_down_tiles_full && row < M_tiles_full &&
-                                row < count_tiles) {
-                                // The destination tile-row must stay inside the
-                                // (possibly shared) output buffer. ttnn::insert
-                                // asserted the whole-slice fit
-                                // (start_tile_idx + num_tiles <= global_num_tiles);
-                                // assert the per-tile equivalent so an over-capacity
-                                // region offset fails loudly in watcher builds. The
-                                // guard below keeps Release builds safe (skip the OOB
-                                // write rather than corrupt DRAM, since ASSERT is a
-                                // no-op there).
-                                ASSERT(dst_row < dst_M_tiles);
-                                if (dst_row < dst_M_tiles) {
-                                    const uint32_t tile_idx = dst_row * N_down_tiles_full + col;
-                                    noc.async_write(
-                                        cb_out_buf,
-                                        out_acc,
-                                        out_tile_bytes,
-                                        {.offset_bytes = subblock_tile_offset},
-                                        {.page_id = tile_idx});
-                                }
+                            // IN1_WRITER_MCAST, bottom sender: wait for the reader's gate read (mcast_go), then
+                            // for the receivers to free their slots (in1_ready), multicast
+                            // gate+up on NoC 1, and signal mcast_done so the reader may
+                            // eventually REUSE this slot. The reader does not block on
+                            // mcast_done until it needs the slot again, so its next block's DRAM
+                            // read overlaps this multicast -- which is the whole point.
+                            if (wmc_gu) {
+                                ++mc_seq;
+                                mcast_go_sem.wait_min(mc_seq);
+                                in1_ready_sem.wait(in1_num_receivers);
+                                in1_ready_sem.set(0);
+                                CircularBuffer cb_in1_gate_buf(cb_in1_gate);
+                                const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
+                                const uint32_t gate_slot_bytes = g_in1_block_num_tiles * gate_tile_bytes;
+                                const uint32_t gate_block_start =
+                                    cb_in1_gate_buf.get_write_ptr() + up_slot * gate_slot_bytes;
+                                // linked=true on both data multicasts and the sem, so the posted
+                                // valid-sem write cannot overtake the data (same rationale as the
+                                // reader's NoC-0 version this replaces).
+                                mcast_in1(gate_block_start, gate_slot_bytes);
+                                mcast_in1(l1_w_up_block_start, up_slot_bytes);
+                                mcast_in1_valid();
+                                mcast_done_sem.set(mc_seq);
                             }
-                            subblock_tile_offset += out_tile_bytes;
                         }
                     }
-                    // Wait for the writes to LEAVE this core (departed sender);
-                    // doesn't wait for the DRAM round-trip. Safe to reuse the L1
-                    // slot now — the NoC has captured the data. ~10x faster than
-                    // noc_async_write_barrier per subblock at small per_core_M.
-                    noc.async_writes_flushed();
-                    cb_out_buf.pop_front(this_tiles);
                 }
-            }
-        }  // end chunk loop
-    }  // end per-local-expert loop
+
+                // ---- DOWN_SPLIT: read the TRAILING tile columns of each down K-row on NoC 1 ----
+                // Mirrors the UP_SPLIT block above. The reader owns cb_in1_down's reserve/push
+                // and multicast and reads the leading d_head_tiles of every K-row on NoC 0; this
+                // RISC reads the rest of each row into the same slot, concurrently. Per K-block:
+                // wait for the reader's go, read, barrier, signal done.
+                //
+                // down_seq and the down_go/down_done sems are DEDICATED, not shared with
+                // UP_SPLIT: the up block indexes its cb_in1_up slot off (up_seq - 1) % slots,
+                // which only holds while up_seq counts gate/up blocks alone. Folding down
+                // blocks into that counter shifts the up slot by num_blocks_d per chunk and
+                // corrupts the gate/up path from the second chunk on.
+                if constexpr (writer_split_down) {
+                    if (is_up_sender) {
+                        // Bottom-row sender (adaptive_chunk::sender_row_in_group): this RISC also
+                        // multicasts each down block, on NoC 1 (-y) from the rectangle's NoC-1 start
+                        // corner, where the reader's NoC-0 (+y) multicast would wrap around the column of
+                        // the torus. Same predicate as the reader's wmc_down.
+                        const bool wmc_down = writer_mcasts_in1 && my_mt + 1 == group_rows;
+                        const auto down_acc = TensorAccessor(
+                            down_args, get_common_arg_val<uint32_t>(COMMON_DOWN + local_expert_id), down_tile_bytes);
+                        // cb_in1_down holds IN1_D_SLOTS blocks with one push per down K-block, and
+                        // this RISC never pushes, so its write pointer is static: index the live slot
+                        // off the block counter, exactly as the UP_SPLIT block does.
+                        constexpr uint32_t kDownNumSlots = IN1_D_SLOTS;
+                        CircularBuffer cb_in1_down_buf(cb_in1_down);
+                        const uint32_t down_cb_base = cb_in1_down_buf.get_write_ptr();
+                        const uint32_t down_slot_bytes = d_in1_block_num_tiles * down_tile_bytes;
+                        for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
+                            ++down_seq;
+                            down_go_sem.wait_min(down_seq);
+                            const uint32_t down_slot_start =
+                                down_cb_base + ((down_blk + kb) % kDownNumSlots) * down_slot_bytes;
+                            uint32_t l1_w = down_slot_start + d_head_tiles * down_tile_bytes;
+                            // Both OOB directions left UNWRITTEN, matching the reader: the compute
+                            // bounds its down K-loop by real_k_tiles and the writer's col guard drops
+                            // phantom output columns (a tail past down_col_end reads nothing).
+                            for (uint32_t k = 0; k < in0_block_w_d; ++k) {
+                                const uint32_t row = kb * in0_block_w_d + k;
+                                if (row < K_down_tiles) {
+                                    DRuns::read(
+                                        noc_up,
+                                        down_acc,
+                                        row,
+                                        N_down_tiles_full,
+                                        down_col0 + d_head_tiles,
+                                        down_col_end,
+                                        l1_w,
+                                        down_tile_bytes);
+                                }
+                                l1_w += per_core_N_d * down_tile_bytes;
+                            }
+                            noc_up.async_read_barrier();
+                            down_done_sem.set(down_seq);
+
+                            // wmc_down: as the gate/up multicast above -- once the reader's head of the
+                            // block landed (mcast_go, same sequence) and the receivers freed their slots,
+                            // multicast the whole slot and the valid sem on one linked path, then tell the
+                            // reader the slot may be refilled.
+                            if (wmc_down) {
+                                ++mc_seq;
+                                mcast_go_sem.wait_min(mc_seq);
+                                in1_ready_sem.wait(in1_num_receivers);
+                                in1_ready_sem.set(0);
+                                mcast_in1(down_slot_start, down_slot_bytes);
+                                mcast_in1_valid();
+                                mcast_done_sem.set(mc_seq);
+                            }
+                        }
+                    }
+                }
+
+                gu_blk += num_blocks_gu;
+                down_blk += num_blocks_d;
+
+                // ---- Drain cb_out (down matmul output) to DRAM ----
+                // Per-chunk per_core_M (per_core_M_max for full chunks, a smaller
+                // divisor for the tail); chunk starts are uniform at chunk*chunk_M_max.
+                // Contiguous row map: this core owns rows [row0, row0 + per_core_M).
+                const uint32_t per_core_M =
+                    adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M, group_rows);
+                const uint32_t row0 = chunk * chunk_M + my_mt * per_core_M;
+                const uint32_t col0 = my_nt_d * per_core_N_d;
+                // The DOWN matmul packs and pushes the FULL compile-time-MAX ring (its
+                // L1_ACC needs full-ring cycling), so DRAIN all d_in1_num_subblocks_M
+                // rows to keep cb_out balanced — but only WRITE the first per_core_M
+                // (runtime) rows; the rest are MAC-skipped zeros that map onto other
+                // cores' rows and must not be emitted (the local_row < per_core_M guard below).
+                const uint32_t sb_m_bound = d_in1_num_subblocks_M;
+                for (uint32_t sb_m = 0; sb_m < sb_m_bound; ++sb_m) {
+                    for (uint32_t sb_n = 0; sb_n < d_in1_num_subblocks_N; ++sb_n) {
+                        const uint32_t this_w =
+                            (sb_n + 1 == d_in1_num_subblocks_N) ? d_out_subblock_w_tail : d_out_subblock_w;
+                        const uint32_t this_tiles = this_w * d_out_subblock_h;
+                        cb_out_buf.wait_front(this_tiles);
+                        uint32_t subblock_tile_offset = 0;
+                        for (uint32_t i = 0; i < d_out_subblock_h; ++i) {
+                            for (uint32_t j = 0; j < this_w; ++j) {
+                                const uint32_t local_row = sb_m * d_out_subblock_h + i;
+                                const uint32_t row = row0 + local_row;
+                                const uint32_t col = col0 + sb_n * d_out_subblock_w + j;
+                                // `row` indexes the FFN *input* (x) tile-rows; the
+                                // destination tile-row adds the per-expert region
+                                // offset.
+                                const uint32_t dst_row = row_offset_tiles + row;
+                                // Bounds that decide whether this is a real output tile
+                                // for this expert:
+                                //   * col < N_down_tiles_full: GRID_X=11 ceil_div
+                                //     produces phantom output cols past actual N.
+                                //   * row < M_tiles_full: ceil_div of M produces a
+                                //     last-chunk tail past actual M when
+                                //     M_tiles_full doesn't divide chunk_M_tiles.
+                                //   * row < count_tiles: the last chunk's per_core_M
+                                //     rows extend past count_tiles when count_tiles
+                                //     is not chunk-aligned.
+                                //   * local_row < per_core_M: cb_out carries per_core_M_max
+                                //     rows (full ring); rows past the runtime per_core_M
+                                //     are zeros that belong to other cores — never write.
+                                //     The bound is on the tile-ROW, not on sb_m: a subblock
+                                //     spans d_out_subblock_h rows, so comparing the subblock
+                                //     index would pass the whole subblock holding the first
+                                //     out-of-range row.
+                                if (local_row < per_core_M && col < N_down_tiles_full && row < M_tiles_full &&
+                                    row < count_tiles) {
+                                    // The destination tile-row must stay inside the
+                                    // (possibly shared) output buffer. ttnn::insert
+                                    // asserted the whole-slice fit
+                                    // (start_tile_idx + num_tiles <= global_num_tiles);
+                                    // assert the per-tile equivalent so an over-capacity
+                                    // region offset fails loudly in watcher builds. The
+                                    // guard below keeps Release builds safe (skip the OOB
+                                    // write rather than corrupt DRAM, since ASSERT is a
+                                    // no-op there).
+                                    ASSERT(dst_row < dst_M_tiles);
+                                    if (dst_row < dst_M_tiles) {
+                                        const uint32_t tile_idx = dst_row * N_down_tiles_full + col;
+                                        noc.async_write(
+                                            cb_out_buf,
+                                            out_acc,
+                                            out_tile_bytes,
+                                            {.offset_bytes = subblock_tile_offset},
+                                            {.page_id = tile_idx});
+                                    }
+                                }
+                                subblock_tile_offset += out_tile_bytes;
+                            }
+                        }
+                        // Wait for the writes to LEAVE this core (departed sender);
+                        // doesn't wait for the DRAM round-trip. Safe to reuse the L1
+                        // slot now — the NoC has captured the data. ~10x faster than
+                        // noc_async_write_barrier per subblock at small per_core_M.
+                        noc.async_writes_flushed();
+                        cb_out_buf.pop_front(this_tiles);
+                    }
+                }
+            }  // end chunk loop
+        }  // end per-local-expert loop
+    }  // end phase loop
     // Ensure all outstanding writes complete at the destination before the
     // kernel returns (the next dispatched op may read this output).
     noc.async_write_barrier();
