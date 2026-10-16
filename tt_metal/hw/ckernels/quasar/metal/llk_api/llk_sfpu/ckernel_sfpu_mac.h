@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_math_eltwise_ternary_sfpu.h"
 #include "lltt.h"
 #include "sfpi.h"
 
@@ -104,5 +105,22 @@ inline void calculate_mac(
         lltt::replay(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>);
     }
 }
+
+// Op class for elementwise multiply-accumulate: out = in0 * in1 + in2 (the tiles are fixed by mac_init's recording).
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    DataFormat data_format,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Mac : SfpuTernaryOp<Mac<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static constexpr auto& calculate = calculate_mac<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS>;
+
+    static inline __attribute__((always_inline)) void init_op() {
+        mac_init<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format>();
+    }
+};
 
 }  // namespace ckernel::sfpu

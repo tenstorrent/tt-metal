@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 using namespace sfpi;
 
@@ -30,6 +31,13 @@ inline void calculate_tiled_prod() {
     dst_reg[0] = result;
     dst_reg++;
 }
+
+// Op class for the running product over a tile.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct TiledProd : SfpuUnaryOp<TiledProd<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_tiled_prod<APPROXIMATION_MODE, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { tiled_prod_init(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

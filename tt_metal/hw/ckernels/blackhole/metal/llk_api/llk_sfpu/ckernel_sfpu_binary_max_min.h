@@ -278,20 +278,14 @@ inline void binary_max_min_int32_init() {
 // Op class for elementwise max/min of two float tiles in Dest.
 template <bool IS_MAX_OP, int ITERATIONS = 8>
 struct BinaryMaxMin : SfpuBinaryOp<BinaryMaxMin<IS_MAX_OP, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_binary_max_min<IS_MAX_OP, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_binary_max_min<IS_MAX_OP, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { binary_max_min_init<IS_MAX_OP>(); }
 };
 
 // Op class for elementwise max/min of two int32 or uint32 tiles in Dest.
 template <bool IS_MAX_OP, bool IS_UNSIGNED, int ITERATIONS = 8>
 struct BinaryMaxMinInt32 : SfpuBinaryOp<BinaryMaxMinInt32<IS_MAX_OP, IS_UNSIGNED, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_binary_max_min_int32<IS_MAX_OP, IS_UNSIGNED, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_binary_max_min_int32<IS_MAX_OP, IS_UNSIGNED, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { binary_max_min_int32_init<IS_MAX_OP, IS_UNSIGNED>(); }
 };
 

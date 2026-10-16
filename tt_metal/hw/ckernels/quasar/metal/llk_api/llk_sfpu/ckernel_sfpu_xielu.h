@@ -9,6 +9,7 @@
 #include "cmath_common.h"
 #include "ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_exp.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel::sfpu {
 
@@ -177,5 +178,17 @@ void xielu_init() {
     sfpi::vConstFloatPrgm1 = -1e-6f;                // eps value
     sfpi::vConstFloatPrgm2 = -0.0000009999995427f;  // expm1(eps)
 }
+
+// Op class for xielu with alpha_p and alpha_n (fp32 bits).
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Xielu : SfpuUnaryOp<Xielu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
+    static constexpr auto& calculate = calculate_xielu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { xielu_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

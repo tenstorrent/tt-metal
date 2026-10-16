@@ -9,6 +9,7 @@
 #include "ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_exp.h"
+#include "llk_math_eltwise_binary_sfpu.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -58,6 +59,14 @@ inline void calculate_logsigmoid(
 
 template <bool APPROXIMATION_MODE>
 void logsigmoid_init() {}
+
+// Op class for logsigmoid(x) from x (in0) and exp(-x) (in1).
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Logsigmoid : SfpuBinaryOp<Logsigmoid<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static constexpr auto& calculate = calculate_logsigmoid<APPROXIMATION_MODE, ITERATIONS>;
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

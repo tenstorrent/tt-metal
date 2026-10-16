@@ -4,12 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_lgamma.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
-#include "llk_math_eltwise_ternary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -30,17 +28,14 @@ namespace ckernel {
 
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void lgamma_stirling_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_lgamma_stirling, (APPROX, is_fp32_dest_acc_en), idst, VectorMode::RC));
+ALWI void lgamma_stirling_tile(std::uint32_t idst) {
+    MATH((sfpu::LgammaStirling<APPROX, is_fp32_dest_acc_en>::run(idst)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void lgamma_stirling_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(lgamma, sfpu::lgamma_stirling_init, (APPROX)));
-}
+ALWI void lgamma_stirling_tile_init() { MATH((sfpu::LgammaStirling<APPROX>::init())); }
 
 // clang-format off
 /**
@@ -63,24 +58,14 @@ ALWI void lgamma_stirling_tile_init() {
  */
 
 // clang-format on
-ALWI void lgamma_stirling_float_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2) {
-    MATH(SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_lgamma_stirling_fp32,
-        (APPROX),
-        idst0,
-        idst1,
-        idst2,
-        VectorMode::RC));
+ALWI void lgamma_stirling_float_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t idst2) {
+    MATH((sfpu::LgammaStirlingFp32<APPROX>::run(idst0, idst1, idst2)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void lgamma_stirling_float_tile_init() {
-    MATH(SFPU_BINARY_INIT_FN(lgamma, sfpu::lgamma_stirling_init, (APPROX)));
-}
+ALWI void lgamma_stirling_float_tile_init() { MATH((sfpu::LgammaStirlingFp32<APPROX>::init())); }
 
 // clang-format off
 /**
@@ -105,22 +90,13 @@ ALWI void lgamma_stirling_float_tile_init() {
 
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void lgamma_adjusted_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t idst3) {
-    MATH(SFPU_TERNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_lgamma_adjusted,
-        (APPROX, is_fp32_dest_acc_en),
-        idst0,
-        idst1,
-        idst2,
-        idst3,
-        VectorMode::RC));
+ALWI void lgamma_adjusted_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t idst2, std::uint32_t idst3) {
+    MATH((sfpu::LgammaAdjusted<APPROX, is_fp32_dest_acc_en>::run(idst0, idst1, idst2, idst3)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void lgamma_adjusted_tile_init() { MATH(SFPU_TERNARY_INIT(lgamma)); }
+ALWI void lgamma_adjusted_tile_init() { MATH((sfpu::LgammaAdjusted<APPROX, DST_ACCUM_MODE>::init())); }
 
 }  // namespace ckernel

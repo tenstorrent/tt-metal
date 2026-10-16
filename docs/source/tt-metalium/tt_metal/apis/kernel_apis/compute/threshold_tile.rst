@@ -2,4 +2,4 @@ threshold_tile
 ==============
 
 .. doxygenfunction:: threshold_tile_init
-.. doxygenfunction:: threshold_tile(uint32_t idst, uint32_t param0, uint32_t param1)
+.. doxygenfunction:: threshold_tile(std::uint32_t idst, std::uint32_t param0, std::uint32_t param1)

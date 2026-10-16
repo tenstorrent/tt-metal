@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "lltt.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_ternary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -86,10 +88,10 @@ inline void mac_init() {
 // mac_tile call is only valid immediately after mac_tile_init.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
 inline void calculate_mac(
-    [[maybe_unused]] const uint dst_index_in0,  // input a  (fixed at 0)
-    [[maybe_unused]] const uint dst_index_in1,  // input b  (fixed at 1)
-    [[maybe_unused]] const uint dst_index_in2,  // input c  (fixed at 2)
-    [[maybe_unused]] const uint dst_index_out) {  // output  (fixed at 0)
+    [[maybe_unused]] const std::uint32_t dst_index_in0,    // input a  (fixed at 0)
+    [[maybe_unused]] const std::uint32_t dst_index_in1,    // input b  (fixed at 1)
+    [[maybe_unused]] const std::uint32_t dst_index_in2,    // input c  (fixed at 2)
+    [[maybe_unused]] const std::uint32_t dst_index_out) {  // output  (fixed at 0)
     static_assert(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b,
         "Unsupported data format for calculate_mac(). Supported data formats are: Float32, Float16_b.");
@@ -99,5 +101,15 @@ inline void calculate_mac(
         lltt::replay(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>);
     }
 }
+
+// Op class for elementwise multiply-accumulate: out = in0 * in1 + in2 (the tiles are fixed by mac_init's recording).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS = 8>
+struct Mac : SfpuTernaryOp<Mac<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_mac<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS>;
+
+    static inline __attribute__((always_inline)) void init_op() {
+        mac_init<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format>();
+    }
+};
 
 }  // namespace ckernel::sfpu

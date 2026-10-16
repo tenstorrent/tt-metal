@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_mish.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -36,9 +36,8 @@ namespace ckernel {
  */
 // clang-format on
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void mish_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_mish, (APPROXIMATION_MODE, is_fp32_dest_acc_en), idst, VectorMode::RC));
+ALWI void mish_tile(std::uint32_t idst) {
+    MATH((sfpu::Mish<APPROXIMATION_MODE, is_fp32_dest_acc_en>::run(idst)));
 }
 
 /**
@@ -46,7 +45,7 @@ ALWI void mish_tile(uint32_t idst) {
  */
 template <bool APPROXIMATION_MODE>
 ALWI void mish_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(mish, sfpu::mish_init, (APPROXIMATION_MODE)));
+    MATH((sfpu::Mish<APPROXIMATION_MODE, DST_ACCUM_MODE>::init()));
 }
 
 }  // namespace ckernel

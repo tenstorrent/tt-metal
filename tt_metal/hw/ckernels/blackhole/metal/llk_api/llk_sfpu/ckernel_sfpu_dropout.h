@@ -8,6 +8,7 @@
 
 #include "ckernel_ops.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -16,7 +17,7 @@ namespace sfpu {
 // probability should be between 0 - INT_MAX (signed)
 // scale should be binary representation of a float32
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_dropout(uint probability, uint scale) {
+inline void calculate_dropout(std::uint32_t probability, std::uint32_t scale) {
     // SFPU microcode
 
     TT_SFPLOADI(p_sfpu::LREG1, 10, scale & 0xFFFF);
@@ -56,10 +57,20 @@ inline void calculate_dropout(uint probability, uint scale) {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void dropout_init(const uint seed) {
+inline void dropout_init(const std::uint32_t seed) {
     math::reset_counters(p_setrwc::SET_ABD_F);
     init_prng_seed(seed);
 }
+
+// Op class for dropout: zero each element with the given probability, otherwise scale it. init
+// seeds the PRNG.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Dropout : SfpuUnaryOp<Dropout<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_dropout<APPROXIMATION_MODE, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op(const std::uint32_t seed) {
+        dropout_init<APPROXIMATION_MODE>(seed);
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

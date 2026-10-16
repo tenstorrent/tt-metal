@@ -10,6 +10,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_softcap.h"
 #include "ckernel_sfpu_tanh.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 
 // SiTU-GLU activation, a fused binary SFPU op:
 //
@@ -69,12 +70,13 @@ sfpi_inline sfpi::vFloat _situ_glu_sigmoid_(sfpi::vFloat x) {
 }
 
 template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, class Config = SituGluConfigKimi>
-inline void calculate_situ_glu(const uint gate_tile_idx, const uint up_tile_idx, const uint out_tile_idx) {
+inline void calculate_situ_glu(
+    const std::uint32_t gate_tile_idx, const std::uint32_t up_tile_idx, const std::uint32_t out_tile_idx) {
     constexpr float beta_gate = Config::beta_gate;
     constexpr float inv_beta_gate = 1.0f / Config::beta_gate;
     constexpr float beta_up = Config::beta_up;
     constexpr float inv_beta_up = 1.0f / Config::beta_up;
-    constexpr uint dst_tile_size = 32;  // 32 rows per tile in SFPU addressing
+    constexpr std::uint32_t dst_tile_size = 32;  // 32 rows per tile in SFPU addressing
 
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat gate = sfpi::dst_reg[gate_tile_idx * dst_tile_size];
@@ -98,5 +100,12 @@ inline void situ_glu_init() {
     // One tanh init serves the whole op; the sigmoid half claims no vConstFloatPrgm.
     tanh_init</*APPROXIMATION_MODE=*/false, /*is_fp32_dest_acc_en=*/false>();
 }
+
+// Op class for situ_glu of a gate tile (in0) and an up tile (in1).
+template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, class Config = SituGluConfigKimi>
+struct SituGlu : SfpuBinaryOp<SituGlu<is_fp32_dest_acc_en, ITERATIONS, Config>> {
+    static constexpr auto& calculate = calculate_situ_glu<is_fp32_dest_acc_en, ITERATIONS, Config>;
+    static inline __attribute__((always_inline)) void init_op() { situ_glu_init(); }
+};
 
 }  // namespace ckernel::sfpu

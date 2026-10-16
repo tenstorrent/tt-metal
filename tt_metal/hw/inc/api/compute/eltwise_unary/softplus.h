@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_softplus.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -30,41 +30,25 @@ namespace ckernel {
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_softplus,
-        (APPROX, is_fp32_dest_acc_en),
-        idst,
-        VectorMode::RC,
-        beta,
-        beta_reciprocal,
-        threshold));
+ALWI void softplus_tile(
+    std::uint32_t idst, std::uint32_t beta, std::uint32_t beta_reciprocal, std::uint32_t threshold) {
+    MATH((sfpu::Softplus<APPROX, is_fp32_dest_acc_en>::run(idst, beta, beta_reciprocal, threshold)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softplus_tile_init() { MATH(SFPU_UNARY_INIT(softplus)); }
+ALWI void softplus_tile_init() { MATH((sfpu::Softplus<APPROX, DST_ACCUM_MODE>::init())); }
 
 #ifndef ARCH_QUASAR
 // Pack-thread variants: Quasar has no pack-thread SFPU, so these are gated off there.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void softplus_tile_pack(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
-    PACK(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_softplus,
-        (APPROX, is_fp32_dest_acc_en),
-        idst,
-        VectorMode::RC,
-        beta,
-        beta_reciprocal,
-        threshold));
+ALWI void softplus_tile_pack(
+    std::uint32_t idst, std::uint32_t beta, std::uint32_t beta_reciprocal, std::uint32_t threshold) {
+    PACK((sfpu::Softplus<APPROX, is_fp32_dest_acc_en>::run(idst, beta, beta_reciprocal, threshold)));
 }
 
-ALWI void softplus_tile_init_pack() { PACK(SFPU_UNARY_INIT(softplus)); }
+ALWI void softplus_tile_init_pack() { PACK((sfpu::Softplus<APPROX, DST_ACCUM_MODE>::init())); }
 #endif  // !ARCH_QUASAR
 
 }  // namespace ckernel

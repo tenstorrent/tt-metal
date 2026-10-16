@@ -8,6 +8,7 @@
 #include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -41,5 +42,12 @@ inline void calculate_hardshrink(std::uint32_t param0) {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for hardshrink with threshold lambda (param0, fp32 bits).
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Hardshrink : SfpuUnaryOp<Hardshrink<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_hardshrink<APPROXIMATION_MODE, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { hardshrink_init(); }
+};
 
 }  // namespace ckernel::sfpu

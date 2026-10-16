@@ -119,11 +119,7 @@ inline void calculate_binary_max_min(
 // parameters as on Wormhole/Blackhole; the float and MX formats share one kernel here.
 template <bool IS_MAX_OP, int ITERATIONS = SFPU_ITERATIONS, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct BinaryMaxMin : SfpuBinaryOp<BinaryMaxMin<IS_MAX_OP, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_binary_max_min<DataFormat::Float32, IS_MAX_OP, ITERATIONS, SLOT>(
-            dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_binary_max_min<DataFormat::Float32, IS_MAX_OP, ITERATIONS, SLOT>;
     static inline __attribute__((always_inline)) void init_op() { _init_binary_max_min_(); }
 };
 
@@ -135,11 +131,7 @@ template <
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct BinaryMaxMinInt32 : SfpuBinaryOp<BinaryMaxMinInt32<IS_MAX_OP, IS_UNSIGNED, ITERATIONS, SLOT>, SLOT> {
     static_assert(!IS_UNSIGNED, "Quasar has no uint32 binary max/min");
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_binary_max_min<DataFormat::Int32, IS_MAX_OP, ITERATIONS, SLOT>(
-            dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_binary_max_min<DataFormat::Int32, IS_MAX_OP, ITERATIONS, SLOT>;
     static inline __attribute__((always_inline)) void init_op() { _init_binary_max_min_(); }
 };
 

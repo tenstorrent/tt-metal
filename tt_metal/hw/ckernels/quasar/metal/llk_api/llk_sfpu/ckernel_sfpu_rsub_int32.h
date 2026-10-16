@@ -9,6 +9,8 @@
 
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
+#include "llk_math_eltwise_binary_sfpu.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -52,5 +54,24 @@ void calculate_rsub_scalar_int32(std::uint32_t scalar) {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for an elementwise integer reverse subtract of two tiles: out = in1 - in0.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct RsubInt : SfpuBinaryOp<RsubInt<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static constexpr auto& calculate = calculate_rsub_int<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS>;
+};
+
+// Op class for an elementwise int32 reverse subtract with a scalar: y = scalar - x.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct RsubInt32Scalar : SfpuUnaryOp<RsubInt32Scalar<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static constexpr auto& calculate = calculate_rsub_scalar_int32<APPROXIMATION_MODE, ITERATIONS>;
+};
 
 }  // namespace ckernel::sfpu

@@ -11,6 +11,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_binary_sfpu.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -455,6 +456,42 @@ inline void calculate_max_pool_with_indices(
             values_tile_idx, indices_tile_idx, chunk);
     }
 }
+
+// Op class for a max pool that also tracks the index of the max. layout comes second so init(), which
+// needs only it, can leave the rest out. Same name and leading template parameters as on Wormhole/Blackhole.
+// The kernel addresses the whole values/indices tile pair itself (with a 32x32 tile stride), so it runs
+// once per tile.
+template <
+    bool APPROXIMATION_MODE,
+    ckernel::DataLayout layout = ckernel::DataLayout::TILE,
+    bool is_fp32_dest_acc_en = false,
+    int num_rows = 9,
+    int ITERATIONS = 8,
+    bool accumulate = false,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct MaxPoolWithIndices
+    : SfpuBinaryOp<
+          MaxPoolWithIndices<APPROXIMATION_MODE, layout, is_fp32_dest_acc_en, num_rows, ITERATIONS, accumulate, SLOT>,
+          SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "calculate_max_pool_with_indices assumes 32x32 Dest tiles");
+    static constexpr bool walks_faces = false;
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t values_tile_idx,
+        const std::uint32_t indices_tile_idx,
+        const std::uint32_t unused_tile_idx,
+        const std::uint32_t chunk) {
+        calculate_max_pool_with_indices<
+            APPROXIMATION_MODE,
+            is_fp32_dest_acc_en,
+            num_rows,
+            ITERATIONS,
+            layout,
+            accumulate>(values_tile_idx, indices_tile_idx, unused_tile_idx, chunk);
+    }
+    static inline __attribute__((always_inline)) void init_op() {
+        init_max_pool_with_indices<APPROXIMATION_MODE, layout>();
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

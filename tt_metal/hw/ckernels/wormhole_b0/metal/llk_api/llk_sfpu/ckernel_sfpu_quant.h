@@ -11,6 +11,7 @@
 #include "ckernel_ops.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "llk_defs.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 #include "lltt.h"
 #include "sfpi.h"
 
@@ -455,5 +456,58 @@ void dequant_init(const std::uint32_t zero_point) {
         TTI_SFPNOP;
     }
 }
+
+// Op class for per-tensor affine quantization: out = in0 * in1 (scale) + zero_point, rounded to an
+// integer. OUTPUT_FORMAT picks the rounding range (Int32 and UInt8 share calculate_quant_int32;
+// Int8 packs through calculate_quant_int32_int8_pack). init takes the zero point.
+template <bool APPROXIMATION_MODE, DataFormat OUTPUT_FORMAT = DataFormat::Int32, int ITERATIONS = 8>
+struct Quant : SfpuBinaryOp<Quant<APPROXIMATION_MODE, OUTPUT_FORMAT, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
+            calculate_quant_int32_int8_pack<APPROXIMATION_MODE, ITERATIONS>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        } else {
+            calculate_quant_int32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        }
+    }
+    static inline __attribute__((always_inline)) void init_op(const std::uint32_t zero_point) {
+        quant_init<APPROXIMATION_MODE, false /* SIGN_MAGNITUDE_FORMAT */, OUTPUT_FORMAT>(zero_point);
+    }
+};
+
+// Op class for per-tensor affine re-quantization of an int32 (or, with INT8_INPUT, an int8) tile.
+// OUTPUT_FORMAT picks the rounding range as for Quant. init takes the zero point.
+template <
+    bool APPROXIMATION_MODE,
+    DataFormat OUTPUT_FORMAT = DataFormat::Int32,
+    bool INT8_INPUT = false,
+    int ITERATIONS = 8>
+struct Requant : SfpuBinaryOp<Requant<APPROXIMATION_MODE, OUTPUT_FORMAT, INT8_INPUT, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
+            calculate_requant_int32_int8_pack<APPROXIMATION_MODE, ITERATIONS, INT8_INPUT>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        } else {
+            calculate_requant_int32<APPROXIMATION_MODE, ITERATIONS, false /* SIGN_MAGNITUDE_FORMAT */, INT8_INPUT>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        }
+    }
+    static inline __attribute__((always_inline)) void init_op(const std::uint32_t zero_point) {
+        requant_init<APPROXIMATION_MODE, false /* SIGN_MAGNITUDE_FORMAT */, OUTPUT_FORMAT, INT8_INPUT>(zero_point);
+    }
+};
+
+// Op class for per-tensor affine de-quantization of an int32 (or, with INT8_INPUT, an int8) tile to
+// fp32. init takes the negated zero point.
+template <bool APPROXIMATION_MODE, bool INT8_INPUT = false, int ITERATIONS = 8>
+struct Dequant : SfpuBinaryOp<Dequant<APPROXIMATION_MODE, INT8_INPUT, ITERATIONS>> {
+    static constexpr auto& calculate =
+        calculate_dequant_int32<APPROXIMATION_MODE, ITERATIONS, false /* SIGN_MAGNITUDE_FORMAT */, INT8_INPUT>;
+    static inline __attribute__((always_inline)) void init_op(const std::uint32_t zero_point) {
+        dequant_init<APPROXIMATION_MODE, false /* SIGN_MAGNITUDE_FORMAT */, INT8_INPUT>(zero_point);
+    }
+};
 
 }  // namespace ckernel::sfpu

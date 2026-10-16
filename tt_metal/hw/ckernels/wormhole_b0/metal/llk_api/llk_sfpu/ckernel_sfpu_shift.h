@@ -9,6 +9,7 @@
 
 #include "ckernel_ops.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -161,6 +162,47 @@ inline void calculate_clamped_logical_right_shift(
         sfpi::dst_reg++;
     }
 }
+
+// Op class for an elementwise left shift of one tile by another.
+template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS = 8>
+struct BinaryLeftShift : SfpuBinaryOp<BinaryLeftShift<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_binary_left_shift<
+        APPROXIMATION_MODE,
+        ITERATIONS,
+        INSTRUCTION_MODE,
+        false /* SIGN_MAGNITUDE_FORMAT */>;
+};
+
+// Op class for an elementwise arithmetic right shift of one tile by another.
+template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS = 8>
+struct BinaryRightShift : SfpuBinaryOp<BinaryRightShift<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_binary_right_shift<
+        APPROXIMATION_MODE,
+        ITERATIONS,
+        INSTRUCTION_MODE,
+        false /* SIGN_MAGNITUDE_FORMAT */>;
+};
+
+// Op class for an elementwise logical right shift of one tile by another.
+template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS = 8>
+struct LogicalRightShift : SfpuBinaryOp<LogicalRightShift<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_logical_right_shift<
+        APPROXIMATION_MODE,
+        ITERATIONS,
+        INSTRUCTION_MODE,
+        false /* SIGN_MAGNITUDE_FORMAT */>;
+};
+
+// Op class for an elementwise logical right shift of one tile by another, with shift amounts >= 32 clamped to 31.
+template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS = 8>
+struct ClampedLogicalRightShift
+    : SfpuBinaryOp<ClampedLogicalRightShift<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_clamped_logical_right_shift<
+        APPROXIMATION_MODE,
+        ITERATIONS,
+        INSTRUCTION_MODE,
+        false /* SIGN_MAGNITUDE_FORMAT */>;
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

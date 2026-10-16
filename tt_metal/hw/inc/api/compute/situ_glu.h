@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 
 // ckernel_sfpu_situ_glu.h builds on _sfpu_softcap_ and sfpi::approx_recip, neither of which
@@ -12,7 +13,6 @@
 
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_situ_glu.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -42,25 +42,25 @@ namespace ckernel {
  * | idst0          | The index of the tile in DST register buffer holding the gate operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idst1          | The index of the tile in DST register buffer holding the up operand    | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | odst           | The index of the tile in DST register buffer to use as output          | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | vector_mode    | The vector mode of the operation                                       | int      | Must be one of the VectorMode values                  | False    |
  */
 // clang-format on
-ALWI void situ_glu_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_situ_glu,
-        (DST_ACCUM_MODE, 8 /* ITERATIONS */, sfpu::SituGluConfigKimi),
-        idst0,
-        idst1,
-        odst,
-        vector_mode)));
+ALWI void situ_glu_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    MATH((sfpu::SituGlu<DST_ACCUM_MODE, 8 /* ITERATIONS */, sfpu::SituGluConfigKimi>::run(idst0, idst1, odst)));
+}
+
+/**
+ * Legacy overload selecting the faces to process with a VectorMode. Prefer the overload above, which
+ * processes the full tile.
+ */
+ALWI void situ_glu_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst, VectorMode vector_mode) {
+    MATH((sfpu::SituGlu<DST_ACCUM_MODE, 8 /* ITERATIONS */, sfpu::SituGluConfigKimi>::run_vector_mode(
+        vector_mode, idst0, idst1, odst)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void situ_glu_tile_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init))); }
+ALWI void situ_glu_tile_init() { MATH((sfpu::SituGlu<DST_ACCUM_MODE>::init())); }
 
 }  // namespace ckernel
 

@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -27,5 +28,12 @@ void init_softsign() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
+
+// Op class for softsign: x / (1 + |x|).
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Softsign : SfpuUnaryOp<Softsign<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_softsign<APPROXIMATION_MODE, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { init_softsign<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

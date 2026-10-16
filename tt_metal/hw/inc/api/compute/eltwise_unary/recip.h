@@ -4,10 +4,11 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
+#include "tensor_shape.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_recip.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -30,18 +31,10 @@ template <
     ReciprocalDestAcc dest_acc = DST_ACCUM_MODE ? ReciprocalDestAcc::FP32 : ReciprocalDestAcc::BF16,
     ReciprocalApproxMode approximation = ReciprocalApproxMode::Default>
 ALWI void recip_tile_init() {
-    [[maybe_unused]] constexpr bool is_fp32_dest_acc_en = dest_acc == ReciprocalDestAcc::FP32;
-    MATH(constexpr bool approximate = approximation == ReciprocalApproxMode::Default
-                                          ? APPROX
-                                          : approximation == ReciprocalApproxMode::Approximate;)
-#ifdef ARCH_WORMHOLE
-    // Match the explicit BF16 rounding in calculate_reciprocal. Other users
-    // of the shared reciprocal helper retain its default minimax constants.
-    MATH(SFPU_UNARY_INIT_FN(
-        reciprocal, sfpu::recip_init, (approximate, is_fp32_dest_acc_en, !approximate && !is_fp32_dest_acc_en)));
-#else
-    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (approximate, is_fp32_dest_acc_en)));
-#endif
+    MATH((sfpu::Reciprocal<
+          (approximation == ReciprocalApproxMode::Default ? APPROX
+                                                          : approximation == ReciprocalApproxMode::Approximate),
+          (dest_acc == ReciprocalDestAcc::FP32)>::init()));
 }
 // clang-format off
 /**
@@ -54,27 +47,39 @@ ALWI void recip_tile_init() {
  * Explicit destination and approximation overrides must match recip_tile_init.
  * Legacy Boolean template arguments are no longer accepted.
  *
+ * The TENSOR_SHAPE template parameter selects the tile to process, e.g.
+ * tensor_shape_from_tile_dims(32, 16) for the left column of faces; the default is the full 32x32 tile.
+ *
  * Return value: None
  *
  * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | vector_mode | Specifies the vector mode for computation (e.g., Row, Column). (default: VectorMode::RC) | VectorMode | Subject to specific hardware/kernel limits          | False    |
  */
 // clang-format on
 template <
     ReciprocalDestAcc dest_acc = DST_ACCUM_MODE ? ReciprocalDestAcc::FP32 : ReciprocalDestAcc::BF16,
+    ReciprocalApproxMode approximation = ReciprocalApproxMode::Default,
+    TensorShape TENSOR_SHAPE = DEFAULT_TENSOR_SHAPE>
+ALWI void recip_tile(std::uint32_t idst) {
+    MATH((sfpu::Reciprocal<
+          (approximation == ReciprocalApproxMode::Default ? APPROX
+                                                          : approximation == ReciprocalApproxMode::Approximate),
+          (dest_acc == ReciprocalDestAcc::FP32)>::template run<TENSOR_SHAPE>(idst)));
+}
+
+/**
+ * Legacy overload selecting the faces to process with a VectorMode. Prefer the TensorShape template
+ * parameter of the overload above: VectorMode::R and VectorMode::C correspond to
+ * tensor_shape_from_tile_dims(16, 32) and tensor_shape_from_tile_dims(32, 16).
+ */
+template <
+    ReciprocalDestAcc dest_acc = DST_ACCUM_MODE ? ReciprocalDestAcc::FP32 : ReciprocalDestAcc::BF16,
     ReciprocalApproxMode approximation = ReciprocalApproxMode::Default>
-ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
-    [[maybe_unused]] constexpr bool is_fp32_dest_acc_en = dest_acc == ReciprocalDestAcc::FP32;
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_reciprocal,
-        (approximation == ReciprocalApproxMode::Default ? APPROX : approximation == ReciprocalApproxMode::Approximate,
-         is_fp32_dest_acc_en,
-         8 /*ITERATIONS*/),
-        idst,
-        vector_mode));
+ALWI void recip_tile(std::uint32_t idst, VectorMode vector_mode) {
+    MATH((sfpu::Reciprocal<
+          (approximation == ReciprocalApproxMode::Default ? APPROX
+                                                          : approximation == ReciprocalApproxMode::Approximate),
+          (dest_acc == ReciprocalDestAcc::FP32)>::run_vector_mode(vector_mode, idst)));
 }
 }  // namespace ckernel

@@ -10,6 +10,7 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 using namespace sfpi;
 
@@ -35,6 +36,13 @@ inline void calculate_sign(const std::uint32_t /*exponent_size_8*/) {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for sign(x).
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Sign : SfpuUnaryOp<Sign<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_sign<APPROXIMATION_MODE, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { sign_init(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

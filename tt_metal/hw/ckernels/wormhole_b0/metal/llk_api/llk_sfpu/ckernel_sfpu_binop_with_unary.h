@@ -12,6 +12,7 @@
 #include "sfpi.h"
 #include "ckernel_sfpu_conversions.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -101,5 +102,24 @@ void calculate_sub_int32(std::uint32_t scalar) {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for an elementwise float binop with a scalar (BINOP_MODE: 0 add, 1 sub, 2 mul, 3 div, 4 rsub).
+template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
+struct BinopWithScalar : SfpuUnaryOp<BinopWithScalar<APPROXIMATION_MODE, BINOP_MODE, ITERATIONS, is_fp32_dest_acc_en>> {
+    static constexpr auto& calculate =
+        calculate_binop_with_scalar<APPROXIMATION_MODE, BINOP_MODE, ITERATIONS, is_fp32_dest_acc_en>;
+};
+
+// Op class for an elementwise int32 add with a scalar.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct AddInt32Scalar : SfpuUnaryOp<AddInt32Scalar<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_add_int32<APPROXIMATION_MODE, ITERATIONS>;
+};
+
+// Op class for an elementwise int32 subtract of a scalar.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct SubInt32Scalar : SfpuUnaryOp<SubInt32Scalar<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_sub_int32<APPROXIMATION_MODE, ITERATIONS>;
+};
 
 }  // namespace ckernel::sfpu

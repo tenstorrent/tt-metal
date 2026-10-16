@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -41,7 +43,7 @@ template <
     UnaryBitwiseOp BITWISE_OP,
     DataFormat DATA_FORMAT = DataFormat::Int32,
     int ITERATIONS = 8>
-inline void calculate_sfpu_unary_bitwise(const uint value) {
+inline void calculate_sfpu_unary_bitwise(const std::uint32_t value) {
     static_assert(
         DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
         "Unsupported data format for bitwise operation. Supported data formats are: Int32, UInt32, UInt16");
@@ -66,5 +68,27 @@ inline void calculate_sfpu_unary_bitwise(const uint value) {
         }
     }
 }
+
+// Op class for an elementwise bitwise AND/OR/XOR of each element with a scalar.
+template <
+    bool APPROXIMATION_MODE,
+    UnaryBitwiseOp BITWISE_OP,
+    DataFormat DATA_FORMAT = DataFormat::Int32,
+    int ITERATIONS = 8>
+struct UnaryBitwise : SfpuUnaryOp<UnaryBitwise<APPROXIMATION_MODE, BITWISE_OP, DATA_FORMAT, ITERATIONS>> {
+    static constexpr auto& calculate =
+        calculate_sfpu_unary_bitwise<APPROXIMATION_MODE, BITWISE_OP, DATA_FORMAT, ITERATIONS>;
+
+    static inline __attribute__((always_inline)) void init_op() {
+        if constexpr (BITWISE_OP == UnaryBitwiseOp::AND) {
+            bitwise_and_init();
+        } else if constexpr (BITWISE_OP == UnaryBitwiseOp::OR) {
+            bitwise_or_init();
+        } else {
+            bitwise_xor_init();
+        }
+    }
+};
+
 }  // namespace sfpu
 }  // namespace ckernel

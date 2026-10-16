@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "llk_math_eltwise_binary_sfpu.h"
 #include "sfpu/ckernel_sfpu_binary_comp.h"
 #include "ckernel_sfpu_converter.h"
 #include "sfpi.h"
@@ -99,5 +100,20 @@ inline void calculate_sfpu_isclose(
 // Programs the sign-clear mask into a constant register so the hot loop does not
 // rebuild it with a per-element SFPLOADI inside the replay block.
 inline void isclose_init() { sfpi::vConstIntPrgm0 = 0x7FFFFFFF; }
+
+// Op class for elementwise isclose of two float tiles in Dest:
+// out = |in0 - in1| <= atol + rtol * |in1| ? 1.0 : 0.0, with rtol and atol passed as float bits.
+// Same name and leading template parameters as on Wormhole/Blackhole. The kernel addresses operands with a
+// 32x32 tile stride.
+template <
+    bool APPROXIMATION_MODE,
+    bool EQUAL_NAN = false,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct IsClose : SfpuBinaryOp<IsClose<APPROXIMATION_MODE, EQUAL_NAN, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "calculate_sfpu_isclose assumes 32x32 Dest tiles");
+    static constexpr auto& calculate = calculate_sfpu_isclose<APPROXIMATION_MODE, ITERATIONS, EQUAL_NAN>;
+    static inline __attribute__((always_inline)) void init_op() { isclose_init(); }
+};
 
 }  // namespace ckernel::sfpu

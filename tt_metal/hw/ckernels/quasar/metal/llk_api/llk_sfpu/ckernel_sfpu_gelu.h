@@ -16,6 +16,7 @@
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel::sfpu {
 
@@ -291,5 +292,18 @@ inline void calculate_gelu() {
         }
     }
 }
+
+// Op class for gelu. Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Gelu : SfpuUnaryOp<Gelu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
+    static constexpr auto& calculate = calculate_gelu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() {
+        gelu_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+    }
+};
 
 }  // namespace ckernel::sfpu

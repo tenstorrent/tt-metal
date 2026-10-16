@@ -9,27 +9,29 @@
 #include <cstdint>
 
 #include "ckernel_addrmod.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_comp.h"
 
 namespace ckernel::sfpu {
 
-template <SfpuType Op>
-inline constexpr bool is_fp32_equal_compare_v = Op == SfpuType::eq || Op == SfpuType::ne;
+template <CompareOp Op>
+inline constexpr bool is_fp32_equal_compare_v = Op == CompareOp::eq || Op == CompareOp::ne;
 
-template <SfpuType Op>
-inline constexpr bool is_fp32_strict_ordered_compare_v = Op == SfpuType::lt || Op == SfpuType::gt;
+template <CompareOp Op>
+inline constexpr bool is_fp32_strict_ordered_compare_v = Op == CompareOp::lt || Op == CompareOp::gt;
 
-template <SfpuType Op>
-inline constexpr bool is_fp32_weak_ordered_compare_v = Op == SfpuType::le || Op == SfpuType::ge;
+template <CompareOp Op>
+inline constexpr bool is_fp32_weak_ordered_compare_v = Op == CompareOp::le || Op == CompareOp::ge;
 
-template <SfpuType Op>
+template <CompareOp Op>
 inline constexpr bool is_fp32_compare_v =
     is_fp32_equal_compare_v<Op> || is_fp32_strict_ordered_compare_v<Op> || is_fp32_weak_ordered_compare_v<Op>;
 
-template <SfpuType>
+template <CompareOp>
 inline constexpr bool unsupported_fp32_compare_v = false;
 
-template <int ITERATIONS, SfpuType RELATIONAL_OP>
+template <int ITERATIONS, CompareOp RELATIONAL_OP>
 inline void calculate_binary_comp_fp32_equal(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(is_fp32_equal_compare_v<RELATIONAL_OP>, "Supported operation types: eq, ne");
@@ -40,8 +42,8 @@ inline void calculate_binary_comp_fp32_equal(
     constexpr std::uint32_t abs_b = p_sfpu::LREG3;
     constexpr std::uint32_t sum = p_sfpu::LREG4;
     constexpr std::uint32_t inf = p_sfpu::LREG5;
-    constexpr std::uint32_t default_result = RELATIONAL_OP == SfpuType::eq ? p_sfpu::LCONST_0 : p_sfpu::LCONST_1;
-    constexpr std::uint32_t equal_result = RELATIONAL_OP == SfpuType::eq ? p_sfpu::LCONST_1 : p_sfpu::LCONST_0;
+    constexpr std::uint32_t default_result = RELATIONAL_OP == CompareOp::eq ? p_sfpu::LCONST_0 : p_sfpu::LCONST_1;
+    constexpr std::uint32_t equal_result = RELATIONAL_OP == CompareOp::eq ? p_sfpu::LCONST_1 : p_sfpu::LCONST_0;
     constexpr std::uint32_t dst_tile_size = 64;
 
     TTI_SFPLOADI(inf, sfpi::SFPLOADI_MOD0_FLOATB, 0x7f80);
@@ -71,7 +73,7 @@ inline void calculate_binary_comp_fp32_equal(
     }
 }
 
-template <int ITERATIONS, SfpuType RELATIONAL_OP>
+template <int ITERATIONS, CompareOp RELATIONAL_OP>
 inline void calculate_binary_comp_fp32_strict_ordered(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(is_fp32_strict_ordered_compare_v<RELATIONAL_OP>, "Supported operation types: lt, gt");
@@ -85,7 +87,7 @@ inline void calculate_binary_comp_fp32_strict_ordered(
     constexpr std::uint32_t inf = p_sfpu::LREG6;
     constexpr std::uint32_t dst_tile_size = 64;
 
-    constexpr bool swap_operands = RELATIONAL_OP == SfpuType::gt;
+    constexpr bool swap_operands = RELATIONAL_OP == CompareOp::gt;
     const std::uint32_t dst_index_a = swap_operands ? dst_index_in1 : dst_index_in0;
     const std::uint32_t dst_index_b = swap_operands ? dst_index_in0 : dst_index_in1;
 
@@ -116,7 +118,7 @@ inline void calculate_binary_comp_fp32_strict_ordered(
     }
 }
 
-template <int ITERATIONS, SfpuType RELATIONAL_OP>
+template <int ITERATIONS, CompareOp RELATIONAL_OP>
 inline void calculate_binary_comp_fp32_weak_ordered(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(is_fp32_weak_ordered_compare_v<RELATIONAL_OP>, "Supported operation types: le, ge");
@@ -130,7 +132,7 @@ inline void calculate_binary_comp_fp32_weak_ordered(
     constexpr std::uint32_t inf = p_sfpu::LREG6;
     constexpr std::uint32_t dst_tile_size = 64;
 
-    constexpr bool swap_operands = RELATIONAL_OP == SfpuType::le;
+    constexpr bool swap_operands = RELATIONAL_OP == CompareOp::le;
     const std::uint32_t dst_index_a = swap_operands ? dst_index_in1 : dst_index_in0;
     const std::uint32_t dst_index_b = swap_operands ? dst_index_in0 : dst_index_in1;
 
@@ -172,7 +174,7 @@ inline void calculate_binary_comp_fp32_weak_ordered(
 template <
     bool APPROXIMATION_MODE,
     int ITERATIONS,
-    SfpuType RELATIONAL_OP,
+    CompareOp RELATIONAL_OP,
     std::enable_if_t<is_fp32_compare_v<RELATIONAL_OP>, int> = 0>
 inline void calculate_binary_comp_fp32(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
@@ -194,16 +196,16 @@ inline void calculate_binary_comp_fp32(
 // Force b's top bit to 0 for LT or 1 for GE, subtract from a, then fold the
 // original sign relationship with the subtraction result. The final shift
 // converts the selected top bit to 0 or 1.
-template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
+template <bool APPROXIMATION_MODE, int ITERATIONS, CompareOp RELATIONAL_OP>
 inline void calculate_binary_comp_int32(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
-        RELATIONAL_OP == SfpuType::lt || RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le ||
-            RELATIONAL_OP == SfpuType::ge,
+        RELATIONAL_OP == CompareOp::lt || RELATIONAL_OP == CompareOp::gt || RELATIONAL_OP == CompareOp::le ||
+            RELATIONAL_OP == CompareOp::ge,
         "Supported operation types: lt, gt, le, ge");
 
-    constexpr bool use_ge = (RELATIONAL_OP == SfpuType::le || RELATIONAL_OP == SfpuType::ge);
-    constexpr bool swap_operands = (RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le);
+    constexpr bool use_ge = (RELATIONAL_OP == CompareOp::le || RELATIONAL_OP == CompareOp::ge);
+    constexpr bool swap_operands = (RELATIONAL_OP == CompareOp::gt || RELATIONAL_OP == CompareOp::le);
     constexpr std::uint32_t a = p_sfpu::LREG0;
     constexpr std::uint32_t b = p_sfpu::LREG1;
     constexpr std::uint32_t scratch = p_sfpu::LREG2;
@@ -235,19 +237,19 @@ inline void calculate_binary_comp_int32(
 //   ge(a,b) = GE(a,b)           le(a,b) = GE(b,a)
 // UInt32 uses the same subtract/fold structure as Int32. For UInt16, a - b
 // cannot overflow int32; the sign bit gives LT, and SFPNOT turns LT into GE.
-template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP, DataFormat DATA_FORMAT>
+template <bool APPROXIMATION_MODE, int ITERATIONS, CompareOp RELATIONAL_OP, DataFormat DATA_FORMAT>
 inline void calculate_binary_comp_uint(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
         DATA_FORMAT == DataFormat::UInt16 || DATA_FORMAT == DataFormat::UInt32,
         "Unsupported data format for calculate_binary_comp_uint(). Supported formats: UInt16, UInt32.");
     static_assert(
-        RELATIONAL_OP == SfpuType::lt || RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le ||
-            RELATIONAL_OP == SfpuType::ge,
+        RELATIONAL_OP == CompareOp::lt || RELATIONAL_OP == CompareOp::gt || RELATIONAL_OP == CompareOp::le ||
+            RELATIONAL_OP == CompareOp::ge,
         "Supported operation types: lt, gt, le, ge");
 
-    constexpr bool use_ge = (RELATIONAL_OP == SfpuType::le || RELATIONAL_OP == SfpuType::ge);
-    constexpr bool swap_operands = (RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le);
+    constexpr bool use_ge = (RELATIONAL_OP == CompareOp::le || RELATIONAL_OP == CompareOp::ge);
+    constexpr bool swap_operands = (RELATIONAL_OP == CompareOp::gt || RELATIONAL_OP == CompareOp::le);
     constexpr bool needs_msb_handling = (DATA_FORMAT == DataFormat::UInt32);
     constexpr InstrModLoadStore ld_st_mod = needs_msb_handling ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
     constexpr std::uint32_t a = p_sfpu::LREG0;
@@ -289,13 +291,14 @@ inline void calculate_binary_comp_uint(
 // Integer equality comparisons: eq(a,b) and ne(a,b).
 // XOR a and b; the result is zero if a == b. A conditional store writes
 // the appropriate integer 0 or 1 result.
-template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP, DataFormat DATA_FORMAT>
+template <bool APPROXIMATION_MODE, int ITERATIONS, CompareOp RELATIONAL_OP, DataFormat DATA_FORMAT>
 inline void calculate_binary_eq_int(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
         DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt16 || DATA_FORMAT == DataFormat::UInt32,
         "Unsupported data format for calculate_binary_eq_int(). Supported formats: Int32, UInt16, UInt32.");
-    static_assert(RELATIONAL_OP == SfpuType::eq || RELATIONAL_OP == SfpuType::ne, "Supported operation types: eq, ne");
+    static_assert(
+        RELATIONAL_OP == CompareOp::eq || RELATIONAL_OP == CompareOp::ne, "Supported operation types: eq, ne");
 
     constexpr InstrModLoadStore ld_st_mod =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
@@ -304,7 +307,7 @@ inline void calculate_binary_eq_int(
     constexpr std::uint32_t one = p_sfpu::LREG2;
     constexpr std::uint32_t dst_tile_size = 64;
 
-    constexpr bool is_eq = (RELATIONAL_OP == SfpuType::eq);
+    constexpr bool is_eq = (RELATIONAL_OP == CompareOp::eq);
     constexpr std::uint32_t default_result = is_eq ? p_sfpu::LCONST_0 : one;
     constexpr std::uint32_t equal_result = is_eq ? one : p_sfpu::LCONST_0;
 
@@ -329,4 +332,66 @@ inline void binary_comp_init() {
     // The compare kernels store through ADDR_MOD_2, which addr_mod_base maps to hardware slot 6.
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
+
+// SfpuType-selected entry points, kept for existing callers. They forward to the CompareOp versions above.
+
+template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
+inline void calculate_binary_comp_fp32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    calculate_binary_comp_fp32<APPROXIMATION_MODE, ITERATIONS, _sfpu_type_to_compare_op_<RELATIONAL_OP>()>(
+        dst_index_in0, dst_index_in1, dst_index_out);
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
+inline void calculate_binary_comp_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    calculate_binary_comp_int32<APPROXIMATION_MODE, ITERATIONS, _sfpu_type_to_compare_op_<RELATIONAL_OP>()>(
+        dst_index_in0, dst_index_in1, dst_index_out);
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP, DataFormat DATA_FORMAT>
+inline void calculate_binary_comp_uint(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    calculate_binary_comp_uint<APPROXIMATION_MODE, ITERATIONS, _sfpu_type_to_compare_op_<RELATIONAL_OP>(), DATA_FORMAT>(
+        dst_index_in0, dst_index_in1, dst_index_out);
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP, DataFormat DATA_FORMAT>
+inline void calculate_binary_eq_int(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    calculate_binary_eq_int<APPROXIMATION_MODE, ITERATIONS, _sfpu_type_to_compare_op_<RELATIONAL_OP>(), DATA_FORMAT>(
+        dst_index_in0, dst_index_in1, dst_index_out);
+}
+
+// Op class for elementwise compare of two float tiles in Dest: out = (in0 OP in1) ? 1.0 : 0.0.
+template <bool APPROXIMATION_MODE, CompareOp RELATIONAL_OP, int ITERATIONS = 8>
+struct BinaryComp : SfpuBinaryOp<BinaryComp<APPROXIMATION_MODE, RELATIONAL_OP, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_binary_comp_fp32<APPROXIMATION_MODE, ITERATIONS, RELATIONAL_OP>;
+    static inline __attribute__((always_inline)) void init_op() { binary_comp_init(); }
+};
+
+// Op class for elementwise compare of two Int32, UInt32 or UInt16 tiles in Dest: out = (in0 OP in1) ? 1 : 0.
+// eq/ne use calculate_binary_eq_int; lt/gt/le/ge use calculate_binary_comp_int32 (Int32) or
+// calculate_binary_comp_uint (UInt32/UInt16).
+template <bool APPROXIMATION_MODE, CompareOp RELATIONAL_OP, DataFormat DATA_FORMAT, int ITERATIONS = 8>
+struct BinaryCompInt : SfpuBinaryOp<BinaryCompInt<APPROXIMATION_MODE, RELATIONAL_OP, DATA_FORMAT, ITERATIONS>> {
+    static_assert(
+        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
+        "Unsupported data format. Supported: Int32, UInt32, UInt16");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        if constexpr (RELATIONAL_OP == CompareOp::eq || RELATIONAL_OP == CompareOp::ne) {
+            calculate_binary_eq_int<APPROXIMATION_MODE, ITERATIONS, RELATIONAL_OP, DATA_FORMAT>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        } else if constexpr (DATA_FORMAT == DataFormat::Int32) {
+            calculate_binary_comp_int32<APPROXIMATION_MODE, ITERATIONS, RELATIONAL_OP>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        } else {
+            calculate_binary_comp_uint<APPROXIMATION_MODE, ITERATIONS, RELATIONAL_OP, DATA_FORMAT>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        }
+    }
+    static inline __attribute__((always_inline)) void init_op() { binary_comp_init(); }
+};
+
 }  //  namespace ckernel::sfpu

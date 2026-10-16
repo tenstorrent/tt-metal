@@ -14,6 +14,7 @@
 #include "cmath_common.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel::sfpu {
 
@@ -133,5 +134,15 @@ inline void calculate_softplus(std::uint32_t beta, std::uint32_t beta_reciprocal
         _calculate_softplus_body_<is_fp32_dest_acc_en>(beta_f, beta_reciprocal_f, threshold_f);
     }
 }
+
+// Op class for softplus. Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Softplus : SfpuUnaryOp<Softplus<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
+    static constexpr auto& calculate = calculate_softplus<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+};
 
 }  // namespace ckernel::sfpu

@@ -4,9 +4,11 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -105,8 +107,9 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
-inline void calculate_sfpu_atan2(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    constexpr uint dst_tile_size_sfpi = 32;
+inline void calculate_sfpu_atan2(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
@@ -122,6 +125,15 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_atan2_init() {
     sfpu_reciprocal_init<APPROXIMATION_MODE || !is_fp32_dest_acc_en>();
 }
+
+// Op class for elementwise atan2(in0, in1) of two float tiles in Dest (in0 = y, in1 = x).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Atan2 : SfpuBinaryOp<Atan2<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_sfpu_atan2<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>;
+    static inline __attribute__((always_inline)) void init_op() {
+        calculate_sfpu_atan2_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -4,16 +4,18 @@
 
 #pragma once
 
+#include <cstdint>
 #include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
 inline void hardshrink_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_hardshrink(uint32_t param0) {
+inline void calculate_hardshrink(std::uint32_t param0) {
     // Hardshrink(x, λ) = x if |x| > λ, else 0
     // Single comparison using abs: setsgn(v, 0) clears sign bit
     // param0 contains lambda as FP32 bits. For BF16 inputs, the host pre-rounds
@@ -31,5 +33,12 @@ inline void calculate_hardshrink(uint32_t param0) {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for hardshrink with threshold lambda (param0, fp32 bits).
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Hardshrink : SfpuUnaryOp<Hardshrink<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_hardshrink<APPROXIMATION_MODE, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { hardshrink_init(); }
+};
 
 }  // namespace ckernel::sfpu

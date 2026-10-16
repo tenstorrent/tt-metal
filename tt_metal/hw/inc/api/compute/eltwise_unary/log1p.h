@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_log1p.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -18,7 +18,7 @@ namespace ckernel {
 
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void log1p_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(log1p, sfpu::log1p_init, (APPROX, fast_and_approx, is_fp32_dest_acc_en)));
+    MATH((sfpu::Log1p<APPROX, fast_and_approx, is_fp32_dest_acc_en>::init()));
 }
 
 // clang-format off
@@ -36,14 +36,8 @@ ALWI void log1p_tile_init() {
  */
 // clang-format on
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void log1p_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_log1p,
-        (APPROX, fast_and_approx, is_fp32_dest_acc_en),
-        idst,
-        VectorMode::RC));
+ALWI void log1p_tile(std::uint32_t idst) {
+    MATH((sfpu::Log1p<APPROX, fast_and_approx, is_fp32_dest_acc_en>::run(idst)));
 }
 
 }  // namespace ckernel

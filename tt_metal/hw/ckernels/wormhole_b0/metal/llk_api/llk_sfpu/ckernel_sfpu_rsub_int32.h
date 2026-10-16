@@ -8,24 +8,29 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include <type_traits>
+#include <cstdint>
 #include "sfpu/ckernel_sfpu_load_config.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS>
-inline void calculate_rsub_int(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_rsub_int(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
         is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
     // Each Dest tile is 64 rows; sfpi dst_reg[] indexes in stride units (SFP_DESTREG_STRIDE == 2),
     // so 64 raw rows == 32 sfpi stride units.
-    constexpr uint dst_tile_size = 32;
+    constexpr std::uint32_t dst_tile_size = 32;
 
     // Reverse subtract: out = in1 - in0. sfpi's `b - a` lowers to the same SFPIADD that 2's-complements
     // the subtrahend, matching the original TTI_SFPIADD(..., 2SCOMP_LREG_DST). The load/store DataLayout
     // is chosen so its SFP load/store format byte equals the original InstrModLoadStore value:
     //   INT32 (4) -> I32 (sign-mag<->2's-comp conversion), LO16 (6) -> U16, INT32_2S_COMP (12) -> SM32 (raw).
-    constexpr sfpi::DataLayout layout = (INSTRUCTION_MODE == InstrModLoadStore::LO16)            ? sfpi::DataLayout::U16
-                                        : (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP) ? sfpi::DataLayout::SM32
-                                                                                                 : sfpi::DataLayout::I32;
+    constexpr sfpi::DataLayout layout = (INSTRUCTION_MODE == InstrModLoadStore::LO16) ? sfpi::DataLayout::U16
+                                        : (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP)
+                                            ? sfpi::DataLayout::SM32
+                                            : sfpi::DataLayout::I32;
     using vType = std::conditional_t<layout == sfpi::DataLayout::U16, sfpi::vUInt, sfpi::vInt>;
 
 #pragma GCC unroll 8
@@ -38,7 +43,7 @@ inline void calculate_rsub_int(const uint dst_index_in0, const uint dst_index_in
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-void calculate_rsub_scalar_int32(uint32_t scalar) {
+void calculate_rsub_scalar_int32(std::uint32_t scalar) {
     // out = scalar - x. The immediate is materialized once (loop-invariant) outside the loop.
     sfpi::vInt scalar_vec = static_cast<int>(scalar);
     for (int d = 0; d < ITERATIONS; d++) {
@@ -47,5 +52,17 @@ void calculate_rsub_scalar_int32(uint32_t scalar) {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for an elementwise integer reverse subtract of two tiles: out = in1 - in0.
+template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32, int ITERATIONS = 8>
+struct RsubInt : SfpuBinaryOp<RsubInt<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_rsub_int<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS>;
+};
+
+// Op class for an elementwise int32 reverse subtract with a scalar: y = scalar - x.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct RsubInt32Scalar : SfpuUnaryOp<RsubInt32Scalar<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_rsub_scalar_int32<APPROXIMATION_MODE, ITERATIONS>;
+};
 
 }  // namespace ckernel::sfpu

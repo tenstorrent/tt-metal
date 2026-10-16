@@ -8,6 +8,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_polyval.h"
@@ -139,5 +140,17 @@ void polygamma_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     _init_reciprocal_<APPROXIMATION_MODE>();
 }
+
+// Op class for polygamma(n, x), with n and the scale packed by the host.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en = false,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Polygamma : SfpuUnaryOp<Polygamma<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
+    static constexpr auto& calculate = calculate_polygamma<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { polygamma_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

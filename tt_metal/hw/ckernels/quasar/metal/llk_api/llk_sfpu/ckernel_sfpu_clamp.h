@@ -11,6 +11,7 @@
 #include "cmath_common.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -36,18 +37,23 @@ inline void calculate_clamp(std::uint32_t min_val, std::uint32_t max_val) {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
 
-        v_if (val < min_bound) {
-            val = min_bound;
-        }
-        v_elseif (val >= max_bound) {
-            val = max_bound;
-        }
+        v_if(val < min_bound) { val = min_bound; }
+        v_elseif(val >= max_bound) { val = max_bound; }
         v_endif;
 
         sfpi::dst_reg[0] = val;
         sfpi::dst_reg++;
     }
 }
+
+// Op class for clamp on floats. Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Clamp : SfpuUnaryOp<Clamp<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static constexpr auto& calculate = calculate_clamp<APPROXIMATION_MODE, ITERATIONS>;
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

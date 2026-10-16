@@ -12,7 +12,6 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "llk_defs.h"
-#include "llk_sfpu/ckernel_sfpu_relu.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_sqrt.h"
 #include "sfpu/ckernel_sfpu_typecast_fp16b_uint16.h"

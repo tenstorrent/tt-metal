@@ -16,6 +16,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "lltt.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -1027,6 +1028,22 @@ void exp_init() {
         }
     }
 }
+
+// Op class for the exponential. scale is the input scale programmed by the approximate-mode init.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool SCALE_EN = false,
+    int ITERATIONS = 8,
+    bool CLAMP_NEGATIVE = true,
+    std::uint32_t scale = 0x3F800000>
+struct Exp : SfpuUnaryOp<Exp<APPROXIMATION_MODE, is_fp32_dest_acc_en, SCALE_EN, ITERATIONS, CLAMP_NEGATIVE, scale>> {
+    static constexpr auto& calculate =
+        calculate_exponential<APPROXIMATION_MODE, is_fp32_dest_acc_en, SCALE_EN, ITERATIONS, CLAMP_NEGATIVE>;
+    static inline __attribute__((always_inline)) void init_op() {
+        exp_init<APPROXIMATION_MODE, scale, CLAMP_NEGATIVE, is_fp32_dest_acc_en>();
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

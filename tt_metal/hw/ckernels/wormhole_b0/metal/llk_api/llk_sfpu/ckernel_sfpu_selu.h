@@ -9,6 +9,7 @@
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_expm1_cw.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -18,7 +19,7 @@ namespace ckernel::sfpu {
 inline void selu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_selu(uint32_t scale, uint32_t alpha) {
+inline void calculate_selu(std::uint32_t scale, std::uint32_t alpha) {
     const sfpi::vFloat scale_val = Converter::as_float(scale);
     const sfpi::vFloat scale_alpha = Converter::as_float(scale) * Converter::as_float(alpha);
 // unroll 2: with expm1_cw_clamped inlined the loop body is large enough that
@@ -38,5 +39,12 @@ inline void calculate_selu(uint32_t scale, uint32_t alpha) {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for selu with scale and alpha (fp32 bits).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Selu : SfpuUnaryOp<Selu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_selu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { selu_init(); }
+};
 
 }  // namespace ckernel::sfpu

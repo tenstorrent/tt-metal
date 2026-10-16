@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
@@ -11,6 +12,7 @@
 #include "ckernel_sfpu_conversions.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -338,7 +340,7 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
 }
 
 template <int ITERATIONS>
-inline void _sfpu_unary_power_bf16_(const uint32_t exponent) {
+inline void _sfpu_unary_power_bf16_(const std::uint32_t exponent) {
     // Convert exponent to float
     const float pow_scalar = Converter::as_float(exponent);
     const sfpi::vFloat pow = pow_scalar;
@@ -361,7 +363,7 @@ inline void _sfpu_unary_power_bf16_(const uint32_t exponent) {
 }
 
 template <int ITERATIONS>
-inline void _sfpu_unary_power_fp32_(const uint32_t exponent) {
+inline void _sfpu_unary_power_fp32_(const std::uint32_t exponent) {
     // Convert exponent to float
     const float pow_scalar = Converter::as_float(exponent);
     const sfpi::vFloat pow = pow_scalar;
@@ -391,7 +393,7 @@ inline void power_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
  * @param exponent The exponent as IEEE 754 float bits (reinterpreted as uint32_t)
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_unary_power(const uint32_t exponent) {
+inline void calculate_unary_power(const std::uint32_t exponent) {
     if constexpr (is_fp32_dest_acc_en) {
         _sfpu_unary_power_fp32_<ITERATIONS>(exponent);
     } else {
@@ -405,7 +407,7 @@ inline void calculate_unary_power(const uint32_t exponent) {
  * @param exponent Non-negative integer exponent value
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_power_iterative(const uint32_t exponent) {
+inline void calculate_unary_power_iterative(const std::uint32_t exponent) {
     // iterative approach for positive integer exponents
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -414,7 +416,7 @@ inline void calculate_unary_power_iterative(const uint32_t exponent) {
             sfpi::dst_reg[0] = 1.0f;
         } else {
             sfpi::vFloat result = in;
-            uint32_t exp = exponent - 1;
+            std::uint32_t exp = exponent - 1;
 
             while (exp > 0) {
                 if (exp & 1) {
@@ -434,6 +436,20 @@ inline void sfpu_unary_pow_init() {
     sfpi::vConstFloatPrgm1 = -127.0f;
     sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
 }
+
+// Op class for x ^ exponent. Only run() needs is_fp32_dest_acc_en.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+struct UnaryPower : SfpuUnaryOp<UnaryPower<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_unary_power<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { sfpu_unary_pow_init(); }
+};
+
+// Op class for x ^ exponent by repeated multiplication.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct UnaryPowerIterative : SfpuUnaryOp<UnaryPowerIterative<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_unary_power_iterative<APPROXIMATION_MODE, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { power_init(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

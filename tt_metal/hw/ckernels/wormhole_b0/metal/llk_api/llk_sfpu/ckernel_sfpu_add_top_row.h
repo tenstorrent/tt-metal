@@ -4,12 +4,14 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
 #include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -28,7 +30,8 @@ namespace ckernel::sfpu {
  * @param tile_idx_dst The index of the result tile in the Dest register where the result will be stored.
  */
 template <DataFormat format>
-inline void calculate_add_top_row(const uint tile_idx_0 = 0, const uint tile_idx_1 = 0, const uint tile_idx_dst = 0) {
+inline void calculate_add_top_row(
+    const std::uint32_t tile_idx_0 = 0, const std::uint32_t tile_idx_1 = 0, const std::uint32_t tile_idx_dst = 0) {
     static_assert(
         format == DataFormat::Int32 || format == DataFormat::UInt32 || format == DataFormat::Float32,
         "Unsupported data format. Supported formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::Float32");
@@ -96,5 +99,16 @@ inline void init_add_top_row() {
     TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG2, 0);
     TTI_SFPADD(p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG3, 0);
 }
+
+// Op class for adding the top rows of two tiles; the kernel walks Dest itself. Only run() needs format.
+template <DataFormat format = DataFormat::Invalid>
+struct AddTopRow : SfpuBinaryOp<AddTopRow<format>> {
+    static constexpr bool walks_faces = false;
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t tile_idx_0, const std::uint32_t tile_idx_1, const std::uint32_t tile_idx_dst) {
+        calculate_add_top_row<format>(tile_idx_0, tile_idx_1, tile_idx_dst);
+    }
+    static inline __attribute__((always_inline)) void init_op() { init_add_top_row(); }
+};
 
 }  // namespace ckernel::sfpu

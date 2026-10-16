@@ -10,6 +10,7 @@
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_exp.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -56,6 +57,12 @@ inline void calculate_logsigmoid(
         sfpi::dst_reg++;
     }
 }
+
+// Op class for logsigmoid(x) from x (in0) and exp(-x) (in1).
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Logsigmoid : SfpuBinaryOp<Logsigmoid<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_logsigmoid<APPROXIMATION_MODE, ITERATIONS>;
+};
 
 template <bool APPROXIMATION_MODE>
 void logsigmoid_init() {}

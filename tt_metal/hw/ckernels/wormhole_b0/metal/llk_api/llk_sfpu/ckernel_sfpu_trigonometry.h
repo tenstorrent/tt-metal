@@ -17,6 +17,7 @@
 #include "sfpu/ckernel_sfpu_log.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 using namespace sfpi;
 
@@ -1242,5 +1243,94 @@ void init_atanh() {
     // self-contained _sfpu_reciprocal_gt0_, so log1p owns the program registers.
     log1p_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();
 }
+
+// Op class for sin(x).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+struct Sine : SfpuUnaryOp<Sine<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_sine<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { sine_init<APPROXIMATION_MODE>(); }
+};
+
+// Op class for cos(x).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+struct Cosine : SfpuUnaryOp<Cosine<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_cosine<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { cosine_init<APPROXIMATION_MODE>(); }
+};
+
+// Op class for tan(x).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+struct Tangent : SfpuUnaryOp<Tangent<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_tangent<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { tangent_init<APPROXIMATION_MODE>(); }
+};
+
+// Op class for asin(x).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Asin : SfpuUnaryOp<Asin<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_asin<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { asin_acos_init<is_fp32_dest_acc_en>(); }
+};
+
+// Op class for acos(x).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Acos : SfpuUnaryOp<Acos<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_acos<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { asin_acos_init<is_fp32_dest_acc_en>(); }
+};
+
+// Op class for atan(x). As before, the init is instantiated with APPROXIMATION_MODE = true.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Atan : SfpuUnaryOp<Atan<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_atan<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() {
+        atan_init<true /* APPROXIMATION_MODE */, is_fp32_dest_acc_en>();
+    }
+};
+
+// Op class for sinh(x).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Sinh : SfpuUnaryOp<Sinh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_sinh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() {
+        sinh_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+    }
+};
+
+// Op class for cosh(x).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Cosh : SfpuUnaryOp<Cosh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_cosh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() {
+        cosh_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+    }
+};
+
+// Op class for asinh(x).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Asinh : SfpuUnaryOp<Asinh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_asinh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() {
+        init_inverse_hyperbolic<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+    }
+};
+
+// Op class for acosh(x).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Acosh : SfpuUnaryOp<Acosh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_acosh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() {
+        init_inverse_hyperbolic<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+    }
+};
+
+// Op class for atanh(x).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Atanh : SfpuUnaryOp<Atanh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_atanh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() {
+        init_atanh<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+    }
+};
 
 }  // namespace ckernel::sfpu

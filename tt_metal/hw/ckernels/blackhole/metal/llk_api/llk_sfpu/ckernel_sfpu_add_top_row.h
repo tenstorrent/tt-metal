@@ -11,6 +11,7 @@
 #include "ckernel_instr_params.h"
 #include "lltt.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -73,6 +74,17 @@ inline void calculate_add_top_row(
  *        replay buffers the raw implementation programmed here are no longer needed.
  */
 inline void init_add_top_row() { _init_sfpu_config_reg(); }
+
+// Op class for adding the top rows of two tiles; the kernel walks Dest itself. Only run() needs format.
+template <DataFormat format = DataFormat::Invalid>
+struct AddTopRow : SfpuBinaryOp<AddTopRow<format>> {
+    static constexpr bool walks_faces = false;
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t tile_idx_0, const std::uint32_t tile_idx_1, const std::uint32_t tile_idx_dst) {
+        calculate_add_top_row<format>(tile_idx_0, tile_idx_1, tile_idx_dst);
+    }
+    static inline __attribute__((always_inline)) void init_op() { init_add_top_row(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel
