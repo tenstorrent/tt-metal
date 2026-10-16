@@ -53,6 +53,9 @@ struct PagedUpdateCacheInputs {
     Tensor input_tensor;
     std::optional<Tensor> update_idxs_tensor;
     std::optional<Tensor> page_table;
+    // ``[1]`` INT32 page_table row the (single) user reads, in place of its batch index. Read on
+    // device so one traced update serves whichever session the row names at replay.
+    std::optional<Tensor> page_table_row_tensor;
 };
 
 inline bool is_rm_width_sharded_l1_cache(const Tensor& cache) {

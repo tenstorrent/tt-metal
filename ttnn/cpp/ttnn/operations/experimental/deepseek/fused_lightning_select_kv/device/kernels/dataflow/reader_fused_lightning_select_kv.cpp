@@ -127,12 +127,24 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* physical_blocks =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(blocks_dfb.get_write_ptr());
 
+#ifdef PAGE_TABLE_ROW
+    // This session's page-table row.
+    const auto page_table_row_gen = TensorAccessor(tensor::page_table_row);
+    noc.async_read(page_table_row_gen, ctrl_dfb, 64, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    invalidate_l1_cache();
+    const uint32_t page_table_row = page_table_chunk[0];
+#else
+    const uint32_t page_table_row = 0;
+#endif
+
     // Each 64 B DRAM-aligned chunk of the page table holds 16 uint32_t entries.
     uint32_t loaded_chunk = UINT32_MAX;
     for (uint32_t block = start_block; block < end_block; ++block) {
         const uint32_t chunk = block / 16;
         if (chunk != loaded_chunk) {
-            noc.async_read(page_table, ctrl_dfb, 64, {.page_id = 0, .offset_bytes = 64 * chunk}, {.offset_bytes = 0});
+            noc.async_read(
+                page_table, ctrl_dfb, 64, {.page_id = page_table_row, .offset_bytes = 64 * chunk}, {.offset_bytes = 0});
             noc.async_read_barrier();
             loaded_chunk = chunk;
         }

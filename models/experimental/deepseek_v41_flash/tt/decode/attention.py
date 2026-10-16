@@ -140,14 +140,19 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         new_row_index: ttnn.Tensor | None = None,
         candidates: bool = False,
         build_pool: bool = False,
+        page_row: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """V4's :meth:`~DeepSeekV4Indexer.select_kv`, two-level when ``candidates`` is set.
 
         The candidate source then also writes its blocks into ``scache.cand_blocks`` /
         ``pool_count``. A consumer selects from ``scache.pool_keys`` and gathers ``comp_kv`` rows
-        through ``pool_rows``; ``build_pool`` first builds that pool from the source's blocks. The
-        pool's row table bypasses the page table, so ``new_row_index`` is a ``comp_kv`` row, as it
-        is with the identity ``idx_page_table``.
+        through ``pool_rows``; ``build_pool`` first builds that pool from the source's blocks.
+
+        ``page_row`` (INT32 ROW_MAJOR ``[1]``) picks the session's row of a shared ``[N, L]``
+        ``idx_page_table``; without it the table is ``[1, L]``. Block ids are logical (a session's
+        entry ``w`` is at logical block ``w // 64``) and ``pool_rows`` are physical ``comp_kv`` rows,
+        so a consumer's ``new_row_index`` is translated through ``idx_page_table`` (``kv_page_table``)
+        while its selected rows are not.
         """
         users = _packed_users(tokens)
         assert users == 1, f"fused_lightning_select_kv decodes one user, got {users}"
@@ -169,6 +174,8 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
                 "new_kv_row_index": ttnn.reshape(new_row_index, [1]),
             }
         key_cache, page_table = scache.idx_key_cache, scache.idx_page_table
+        if page_row is not None:
+            extra["page_table_row_tensor"] = page_row
         if candidates and self.is_candidate_source:
             extra.update(
                 candidate_topk_blocks=self.candidate_topk_blocks,
@@ -186,9 +193,15 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
                     self.candidate_block_size,
                     pool_keys_output=scache.pool_keys,
                     pool_rows_output=scache.pool_rows,
+                    page_table_row_tensor=page_row,
                 )
             key_cache, page_table = scache.pool_keys, scache.pool_page_table
             extra.update(num_keys_tensor=scache.pool_count, row_table=scache.pool_rows)
+            if page_row is not None:
+                if new_row is None:
+                    del extra["page_table_row_tensor"]
+                else:
+                    extra["kv_page_table"] = scache.idx_page_table
         sel_kv, scores, *_ = ttnn.experimental.deepseek.fused_lightning_select_kv(
             query,
             key_cache,
@@ -227,6 +240,14 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
     pool: ``pool_keys`` (TILE ``[P / 64, 1, 64, index_head_dim]``, ``P = candidate_topk_blocks *
     candidate_block_size``), ``pool_rows`` (INT32 ``[1, P]``, the ``comp_kv`` row of each pool key)
     and ``pool_page_table`` (the identity over the pool's blocks).
+
+    With several sessions, ``kv`` is TILE ``[1, 1, N * window, Dh]`` (session slot ``s`` at rows
+    ``[s * window, (s + 1) * window)``) and ``win_kv`` / ``win_gate`` are ``[1, 1, N * 32, Dh]``
+    (slot ``s`` at row ``s * 32``). A step copies its slot's rows out with ``fill_cache``'s
+    ``input_row_offset_tensor``: a compressed layer straight into ``sel_tile``, a sliding layer into
+    ``ring_view`` (TILE ``[1, 1, window, Dh]``, which SDPA reads), a kv source's window into
+    ``win_view_kv`` / ``win_view_gate`` (TILE ``[1, 1, 32, Dh]``). The views are ``None`` with
+    one session's dense buffers.
     """
 
     __slots__ = (
@@ -240,6 +261,9 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
         "pool_keys",
         "pool_rows",
         "pool_page_table",
+        "ring_view",
+        "win_view_kv",
+        "win_view_gate",
     )
 
     def __init__(
@@ -252,6 +276,9 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
         pool_keys=None,
         pool_rows=None,
         pool_page_table=None,
+        ring_view=None,
+        win_view_kv=None,
+        win_view_gate=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -265,6 +292,9 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
         self.pool_keys = pool_keys
         self.pool_rows = pool_rows
         self.pool_page_table = pool_page_table
+        self.ring_view = ring_view
+        self.win_view_kv = win_view_kv
+        self.win_view_gate = win_view_gate
 
 
 def _stash_row(row: ttnn.Tensor, buffer: ttnn.Tensor) -> None:
@@ -542,10 +572,12 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             out = reduced
         return out
 
-    def _latent(self, tokens, scache, win_slot, pool: bool, hist_slot=None):
+    def _latent(self, tokens, scache, win_slot, pool: bool, hist_slot=None, win_offset=None):
         """Pre-RoPE compressed latent ``[1, 1, 1, Dh]`` of the group this step closes, else ``None``.
 
         ``hist_slot`` also writes the window rows into ``scache.win_hist_kv`` / ``win_hist_gate``.
+        ``win_offset`` (INT32 ``[1]``) is the first window row of the session's slot, already folded
+        into ``win_slot``; the pool reads the slot through ``win_view_kv`` / ``win_view_gate``.
         """
         kv = ttnn.to_memory_config(
             self.comp_kv_proj(_decode_activation(self.comp_kv_proj, tokens)), ttnn.DRAM_MEMORY_CONFIG
@@ -562,34 +594,47 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 _update_cache_at(scache.win_hist_gate, gate_row, hist_slot)
             if not pool:
                 return None
+            windows = (scache.win_kv, scache.win_gate)
+            if win_offset is not None:
+                rows = scache.win_view_kv.shape[2]
+                for view, win in zip((scache.win_view_kv, scache.win_view_gate), windows):
+                    ttnn.fill_cache(view, win, 0, input_row_offset_tensor=win_offset, num_input_rows=rows)
+                windows = (scache.win_view_kv, scache.win_view_gate)
             # softmax over a pair is sigmoid of the difference; a softmax over the 2-row
             # window axis would run into its tile padding.
             k0, k1, g0, g1 = (
-                ttnn.slice(t, [0, 0, j, 0], [1, 1, j + 1, self.head_dim])
-                for t in (scache.win_kv, scache.win_gate)
-                for j in (0, 1)
+                ttnn.slice(t, [0, 0, j, 0], [1, 1, j + 1, self.head_dim]) for t in windows for j in (0, 1)
             )
             w0 = ttnn.sigmoid(ttnn.subtract(g0, g1))
             kv = ttnn.add(k1, ttnn.multiply(w0, ttnn.subtract(k0, k1)))
         return self.comp_norm(kv)
 
-    def _write_index_key(self, latent, cos_win, sin_win, scache, entry) -> None:
-        """``k_norm(wk(latent))``, RoPE'd at the group's position, into index-key row ``entry``."""
+    def _write_index_key(self, latent, cos_win, sin_win, scache, entry, page_row=None) -> None:
+        """``k_norm(wk(latent))``, RoPE'd at the group's position, into index-key row ``entry`` (logical,
+        through row ``page_row`` of ``idx_page_table`` when given)."""
         k = self.index_k_norm(self.index_wk(ttnn.to_memory_config(latent, ttnn.DRAM_MEMORY_CONFIG)))
         k = _apply_rope(k, cos_win, sin_win, self.rot, self.rope_dim)
         if scache.new_key_row is not None:
             _stash_row(k, scache.new_key_row)
         k = _one_row_per_user(k)
         ttnn.experimental.paged_update_cache(
-            scache.idx_key_cache, k, update_idxs_tensor=entry, page_table=scache.idx_page_table
+            scache.idx_key_cache,
+            k,
+            update_idxs_tensor=entry,
+            page_table=scache.idx_page_table,
+            page_table_row_tensor=page_row,
         )
         ttnn.deallocate(k)
 
-    def _write_received_key(self, scache, entry) -> None:
+    def _write_received_key(self, scache, entry, page_row=None) -> None:
         """Write the index key another stage's kv source sent (``scache.new_key_row``) into row ``entry``."""
         k = _one_row_per_user(scache.new_key_row)
         ttnn.experimental.paged_update_cache(
-            scache.idx_key_cache, k, update_idxs_tensor=entry, page_table=scache.idx_page_table
+            scache.idx_key_cache,
+            k,
+            update_idxs_tensor=entry,
+            page_table=scache.idx_page_table,
+            page_table_row_tensor=page_row,
         )
         if k.buffer_address() != scache.new_key_row.buffer_address():
             ttnn.deallocate(k)
@@ -615,6 +660,9 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         hist_slot: ttnn.Tensor | None = None,
         candidates: bool = False,
         build_pool: bool = False,
+        page_row: ttnn.Tensor | None = None,
+        ring_offset: ttnn.Tensor | None = None,
+        win_offset: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """One decode step: ``hidden`` ``[B, 1, 1, D]`` -> the block's output, same shape.
 
@@ -627,6 +675,11 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         where a ratio > 1 kv source keeps this step's window rows (see :class:`DeepSeekV41LayerCache`).
         ``candidates`` makes the select two-level and ``build_pool`` has a consumer build the pool
         first (see :meth:`DeepSeekV41Indexer.select_kv`).
+
+        Several sessions (see :class:`DeepSeekV41LayerCache`): ``page_row`` (INT32 ROW_MAJOR ``[1]``) is
+        the session's slot, its row of every ``idx_page_table``; ``ring_offset`` / ``win_offset`` are
+        the first rows of its slot in ``kv`` and in ``win_kv`` / ``win_gate``. ``sliding_pos`` and
+        ``win_slot`` already include those offsets, and ``entry`` stays the session's logical row.
         """
         b, s, _, d = hidden.shape
         assert s == 1, f"decode attends one token per user, but S == {s}"
@@ -638,11 +691,19 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 kv = _one_row_per_user(kv)
             _update_cache_at(scache.kv, kv, sliding_pos)
             ttnn.deallocate(kv)
-            out = self._attend(q, scache.kv, None, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
+            ring = scache.kv
+            if ring_offset is not None:
+                ring = scache.ring_view
+                ttnn.fill_cache(ring, scache.kv, 0, input_row_offset_tensor=ring_offset, num_input_rows=ring.shape[2])
+            out = self._attend(q, ring, None, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
             ttnn.deallocate(tokens)
             return ttnn.reshape(out, [b, s, 1, d])
         assert b == 1, "fused_lightning_select_kv decodes one user"
-        latent = self._latent(tokens, scache, win_slot, pool, hist_slot) if self.is_kv_source else None
+        latent = (
+            self._latent(tokens, scache, win_slot, pool, hist_slot, win_offset=win_offset)
+            if self.is_kv_source
+            else None
+        )
         assert latent is None or select, "a closed group is written by the select that follows it"
         assert received_entry is None or (select and latent is None), "received rows are written by a non-source select"
         assert select or not candidates, "candidates are a select mode"
@@ -655,12 +716,12 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
             row = None
             if latent is not None:
-                self._write_index_key(latent, cos_win, sin_win, scache, entry)
+                self._write_index_key(latent, cos_win, sin_win, scache, entry, page_row)
                 row = _apply_rope(latent, cos_win, sin_win, self.rot, self.rope_dim)
                 if scache.new_kv_row is not None:
                     _stash_row(row, scache.new_kv_row)
             elif received_entry is not None:
-                self._write_received_key(scache, received_entry)
+                self._write_received_key(scache, received_entry, page_row)
                 row, entry = scache.new_kv_row, received_entry
             self.indexer.select_kv(
                 tokens,
@@ -673,6 +734,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 new_row_index=entry,
                 candidates=candidates,
                 build_pool=build_pool,
+                page_row=page_row,
             )
             if latent is not None:
                 ttnn.deallocate(row)
@@ -680,7 +742,12 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             q = ttnn.to_memory_config(q, q_l1)
         ttnn.deallocate(q_a)
         ttnn.deallocate(tokens)
-        ttnn.fill_cache(scache.sel_tile, scache.kv, 0)
+        if ring_offset is None:
+            ttnn.fill_cache(scache.sel_tile, scache.kv, 0)
+        else:
+            ttnn.fill_cache(
+                scache.sel_tile, scache.kv, 0, input_row_offset_tensor=ring_offset, num_input_rows=self.window
+            )
         out = self._attend(q, scache.sel_tile, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
         return ttnn.reshape(out, [b, s, 1, d])
 

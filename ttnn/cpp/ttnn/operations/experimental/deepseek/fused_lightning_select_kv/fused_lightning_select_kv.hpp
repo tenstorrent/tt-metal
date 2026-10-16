@@ -86,6 +86,13 @@ namespace ttnn::experimental::deepseek {
 //                    passes the pool's rows so it gathers straight from the source's ``kv_cache``.
 //                    ``new_kv_row_index`` is then a ``kv_cache`` row, since ``page_table_tensor``
 //                    maps the pool.
+//   page_table_row_tensor: optional ``[1]`` INT32 session row. Without ``row_table`` the page table
+//                    may then be ``[num_sessions, max_blocks_per_user]`` and this row is read; with
+//                    ``row_table`` it selects the ``kv_page_table`` row. Read on device, so one traced
+//                    call serves whichever session the tensor names.
+//   kv_page_table:   optional ``[num_sessions, max_blocks]`` INT32 ``kv_cache`` page table. With
+//                    ``row_table`` and ``new_kv_row``, ``new_kv_row_index`` is a logical row mapped
+//                    through its ``page_table_row_tensor`` row instead of a ``kv_cache`` row.
 //
 // Returns: ``[kv_rows, scores]``, plus ``[candidate_blocks, pool_count]`` in candidate source mode.
 //   kv_rows: selected KV rows, ``[1, Hkv, k, Dh]``, same dtype and layout as ``kv_cache``,
@@ -120,6 +127,8 @@ std::vector<Tensor> fused_lightning_select_kv(
     const std::optional<Tensor>& pool_count_output = std::nullopt,
     uint32_t num_parts = 1,
     const std::optional<Tensor>& part_index_tensor = std::nullopt,
-    const std::optional<Tensor>& row_table = std::nullopt);
+    const std::optional<Tensor>& row_table = std::nullopt,
+    const std::optional<Tensor>& page_table_row_tensor = std::nullopt,
+    const std::optional<Tensor>& kv_page_table = std::nullopt);
 
 }  // namespace ttnn::experimental::deepseek

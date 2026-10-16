@@ -259,7 +259,8 @@ class _BlockPool:
         if num_blocks < 2:
             raise ValueError(f"pool needs at least 2 blocks (one is the zero block), got {num_blocks}")
         self.num_blocks = num_blocks
-        self._free = list(range(1, num_blocks))
+        # Popped from the end, so a fresh pool hands out ascending, contiguous ids.
+        self._free = list(range(num_blocks - 1, 0, -1))
 
     @property
     def free_blocks(self) -> int:

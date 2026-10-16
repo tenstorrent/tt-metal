@@ -50,6 +50,10 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
          without it, positions past the bounded capacity collapse onto block 0
          and silently corrupt the cache. Must be a multiple of the effective
          ``block_size`` and ≤ ``page_table.shape[1] * block_size``.
+         ``page_table_row_tensor`` (optional, paged mode, one user) is a ``[1]`` INT32
+         device tensor naming the ``page_table`` row to translate through, in place of
+         the user's batch index; ``page_table`` may then hold one row per session. It is
+         read on device, so a traced update follows whichever session the tensor names.
         )doc";
 
     ttnn::bind_function<"paged_update_cache", "ttnn.experimental.">(
@@ -68,7 +72,8 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         nb::arg("mesh_coords").noconvert() = nb::none(),
         nb::arg("block_size") = nb::none(),
         nb::arg("num_kv_heads") = nb::none(),
-        nb::arg("cache_position_modulo") = nb::none());
+        nb::arg("cache_position_modulo") = nb::none(),
+        nb::arg("page_table_row_tensor").noconvert() = nb::none());
 
     const auto* paged_fused_update_cache_doc =
         R"doc(
