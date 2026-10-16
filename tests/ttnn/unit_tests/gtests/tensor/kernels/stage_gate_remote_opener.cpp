@@ -6,7 +6,8 @@
 // mode 0: inline write of open_value. mode 1: flushed atomic +1. mode 2: 16 B payload write
 // covering the gate's slot, open_value first.
 //
-// mode 2 writes 16 B because a 4 B fabric payload write lands garbage.
+// Fabric payload writes must be at least 16 B (smaller writes go as inline writes), so
+// mode 2 writes the gate's whole slot.
 //
 // RT args: mode, gate_noc_x, gate_noc_y, gate_addr, dst_dev_id, dst_mesh_id, open_value,
 // then the fabric connection args.
