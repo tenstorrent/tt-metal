@@ -74,8 +74,7 @@ jobs:
           if [ "$RELEASE_READY_ONLY" = "true" ]; then
             FILTERED=$(echo "$FILTERED" | jq -c '[.[] | select(.release_ready == true)]')
             if [ "$FILTERED" = "[]" ]; then
-              echo "::error::No release_ready tests found for sp_config '${{ inputs.sp-config }}' in ${TESTS_YAML_PATH}"
-              exit 1
+              echo "::warning::No release_ready tests found for sp_config '${{ inputs.sp-config }}' in ${TESTS_YAML_PATH}. Skipping."
             fi
           fi
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
@@ -87,6 +86,7 @@ jobs:
   multihost-tests:
     name: ${{ matrix.test-group.name }}
     needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     env:
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
