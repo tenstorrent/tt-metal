@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -27,6 +28,12 @@
 // so the per-axis edit landed on index 0 whatever `cluster_axis` was. These helpers expand a collapsed label to one
 // placement per mesh axis first, apply the op's edit on `cluster_axis`, then decide whether the result is still
 // expressible per axis or has to collapse back to a 1-D label.
+//
+// Coverage: the devices an op reaches are the mesh's, not the label's. A cluster-axis op spans the mesh's full extent
+// along that axis and a whole-mesh op every device, so a label that covers fewer devices along the axis addressed (a
+// (1, 4) row block on a 2x4 along axis 0, or over the whole mesh) is refused: the devices the label does not describe
+// take part and no label over the block can say what they hold. A block is gathered or scattered within itself only
+// along an axis it spans fully (the row along axis 1).
 //
 // Failure handling: a label the helper cannot honour (a collapsed label that does not cover the mesh in row-major
 // order, an N-D label whose axes do not align with the mesh axes, a gather that would interleave shards, a result no
@@ -64,11 +71,25 @@ public:
     CallerRelabelsScope& operator=(const CallerRelabelsScope&) = delete;
 };
 
+// Which family a refusal belongs to (see "The fallback is not equally safe" above): a gather-family refusal is logged
+// at warning level, a scatter-family one at error level.
+enum class RefusalFamily { Gather, Scatter };
+
+// A refusal raised by a device op's hook rather than by a helper above: a label the op cannot renumber into its
+// output layout, a ring order no label can carry. Handled exactly like the helpers' own refusals -- silent nullopt
+// inside a CallerRelabelsScope, TT_FATAL under strict mode, otherwise one log line per distinct message -- so a hook's
+// "no honest label" is as visible as the helper's and strict mode covers it. Always returns nullopt (or throws), so a
+// hook writes `return {refuse(what, family).value_or(input_topology)};` or calls it and returns the input's label.
+std::optional<tt::tt_metal::TensorTopology> refuse(const std::string& what, RefusalFamily family);
+
 // Expands `in` to one placement per axis of `mesh_shape`. An N-D label (distribution dims == placements == mesh dims)
 // is returned verbatim, provided its axes align with the mesh axes: its distribution shape fits the mesh per axis and
 // its coordinates walk a distribution-shaped block of the mesh in row-major order (an N-D mapper whose shape fits, with
 // or without an offset). A mapper whose mesh_shape_override does not fit distributes in row-major order over the whole
-// mesh, so axis i of its label is not axis i of the mesh and no per-axis edit describes it: not expandable. A
+// mesh, so axis i of its label is not axis i of the mesh and no per-axis edit describes it: not expandable. The
+// coordinates are only consulted when there are as many as the distribution has devices: a device tensor's label
+// lists its storage's coordinates (every device of the mesh, however small the block its input occupied), so a
+// sub-range label on a device tensor is judged by its shape alone -- it fits, so it was mapped as a block. A
 // collapsed 1-D label must cover the whole mesh in row-major order; Replicate expands to Replicate on every axis,
 // Shard{d} to Shard{d} on every axis of size > 1 (row-major hierarchical sharding) and Replicate on size-1 axes.
 // Anything else is not expandable: nullopt is returned and `reason` (if given) says why.
@@ -147,13 +168,38 @@ std::optional<tt::tt_metal::TensorTopology> reduce_scatter_output_topology(
 std::optional<tt::tt_metal::TensorTopology> reduce_scatter_output_topology(
     const Tensor& input, std::optional<uint32_t> cluster_axis, int32_t scatter_dim);
 
+// The respelling the Tensor overload above applies, for a caller whose reduce_scatter input is a label rather than a
+// tensor (a fused op reduce-scatters its own matmul result, which no tensor carries when its hook runs) or whose op
+// ranks a whole-mesh ring the same way (all_to_all_async_generic): a whole-mesh `label` (cluster_axis nullopt) is
+// spelled over `ring_tensor`'s device-storage coordinates -- the tensor the op's program factory passes to
+// get_linearized_index_from_physical_coord -- when that tensor is stored on every device of the mesh. With a
+// cluster_axis, a tensor that is not stored on every device, or no label, `label` is returned as is. A label whose
+// coordinate count differs from the storage's is a scatter-family refusal naming `op`.
+//
+// What it guards against, on a 1x4 line reduce-scattering dim 3 over the whole mesh (piece i goes to ring rank i,
+// the index into the storage coordinates):
+//   storage coordinates (ring order):   (0,0) (0,1) (0,2) (0,3)   -> the devices hold S[0] S[1] S[2] S[3]
+//   label coordinates of a tensor built from an explicit list (from_host_shards, combine_device_tensors):
+//                                       (0,2) (0,3) (0,0) (0,1)
+//   pure result `{4},[Shard{3}]` over the label's coordinates claims piece 0 is on (0,2), which holds S[2]: composing
+//   by it reads the pieces scrambled. Over the storage coordinates it names the device that holds each piece.
+std::optional<tt::tt_metal::TensorTopology> over_storage_ring_order(
+    std::optional<tt::tt_metal::TensorTopology> label,
+    const Tensor& ring_tensor,
+    std::optional<uint32_t> cluster_axis,
+    std::string_view op = "reduce_scatter");
+
 // mesh_partition and all_to_all scatter `out_dim` along `cluster_axis` like reduce_scatter, but nothing is summed, so
 // a Shard of another dim is not consumed: a whole-mesh scatter of a tensor still sharded on another dim along a
 // non-trivial axis, and a scatter along an axis that itself holds a Shard of another dim (each device would hold a
 // piece of two dims on one axis), are refusals (reduce_scatter consumes both). A stale Shard dim left by a
 // rank-changing op (#52331) matches nothing, which the gather and reduce rules treat as harmless, but counts as a
-// Shard of another dim here, so a partition refuses it. No op in this change calls these two; the stacked changes
-// that move mesh_partition, all_to_all_async and their fused variants onto the helper do, which is why they live here.
+// Shard of another dim here, so a partition refuses it. mesh_partition's hook calls mesh_partition_output_topology;
+// all_to_all_output_topology is what the stacked experimental-CCL change calls for all_to_all_async and its
+// fused variants, which is why both live here. The mesh_partition Tensor overload spells a whole-mesh label over the
+// storage's coordinates like reduce_scatter's (the program factory numbers devices row-major over the mesh, the
+// storage order of a tensor stored on every device); the all_to_all one returns the pure result, since those ops'
+// hooks handle their own ring order.
 std::optional<tt::tt_metal::TensorTopology> mesh_partition_output_topology(
     const tt::tt_metal::TensorTopology& in,
     std::optional<uint32_t> cluster_axis,

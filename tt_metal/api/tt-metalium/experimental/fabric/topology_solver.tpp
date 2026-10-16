@@ -10,6 +10,10 @@
 #define TOPOLOGY_SOLVER_TPP
 
 // Only include the header if we're being compiled standalone (not included from the header)
+#include <ostream>
+#include <tuple>
+#include <utility>
+#include <vector>
 #ifndef TOPOLOGY_SOLVER_TPP_INCLUDING
 // NOLINTNEXTLINE(misc-header-include-cycle) - Guard macro prevents actual circular dependency
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -18,7 +22,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <functional>
 #include <iterator>
 #include <optional>
 #include <set>
@@ -34,7 +37,6 @@
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
-#include <tt_stl/assert.hpp>
 
 #include <memory>
 

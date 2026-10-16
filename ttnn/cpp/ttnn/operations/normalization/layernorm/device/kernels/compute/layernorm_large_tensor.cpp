@@ -27,6 +27,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"  // Square
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
+#include "ttnn/operations/normalization/layernorm/device/kernels/layernorm_scaler_tiles.h"
 
 namespace ckl = compute_kernel_lib;
 
@@ -191,7 +192,7 @@ void kernel_main() {
 #else
     compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_ex_id);
 #endif
-#endif
+#endif                      // FUSE_PRE_ADD
     dfb_eps.wait_front(1);  // comes from the reader
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
@@ -225,12 +226,6 @@ void kernel_main() {
                                          .block_size(block.full_block_size(), ckl::BlockTailSync::FullBlock);
 #ifdef TILIZE_IN
             tilize_row_major_block(dfb_in_rm, dfb_in, block_size, block);
-            // TODO(#52395): replace this unsafe mid-kernel startup with a targeted DST re-arm.
-#ifdef RMSNORM
-            compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
-#else
-            compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_ex_id);
-#endif
 #endif
             ckl::eltwise_chain(
                 block_shape,
@@ -334,13 +329,6 @@ void kernel_main() {
             // Tilize one block from dfb_in_rm → dfb_in per loop iteration (Pass 2).
             // Reader supplies this second pass of data after the variance data.
             tilize_row_major_block(dfb_in_rm, dfb_in, block_size, block);
-
-            // TODO(#52395): replace this unsafe mid-kernel startup with a targeted DST re-arm.
-#ifdef RMSNORM
-            compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
-#else
-            compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_ex_id);
-#endif
 #endif
 #ifndef RMSNORM
             dfb_ex.wait_front(1);
@@ -411,4 +399,17 @@ void kernel_main() {
 #endif
         dfb_ex2pe.pop_front(onetile);
     }  // NCHt loop
+
+    // The reduce scalers are pushed once by the reader and waited inside row_wise_mean (or
+    // row_wise_mean_with_pre_add), which never pops them. Those calls compute E[x], so they are
+    // compiled out under RMSNORM and the pop carries the same condition. reduce_scaler_tile_count
+    // is needed to determine the number of tiles to pop, since the number is different for
+    // different compile time args.
+#ifndef RMSNORM
+    dfb_scaler.pop_front(norm::layernorm::reduce_scaler_tile_count(W, tile_width));
+#endif
+
+    // The epsilon tile is pushed once by the reader and read on every NCHt iteration, so it is
+    // waited once up front rather than per iteration. Pop it here to balance the buffer.
+    dfb_eps.pop_front(1);
 }

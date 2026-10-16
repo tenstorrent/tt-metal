@@ -122,7 +122,7 @@ FFTDeviceOperation::tensor_return_value_t FFTDeviceOperation::create_output_tens
     return {make_like(args.input_real), make_like(args.input_real)};
 }
 
-tt::stl::hash::hash_t FFTDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t FFTDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     const auto& shape = args.input_real.padded_shape();
     // attrs carries input_imag_provided, which keeps a real-only call

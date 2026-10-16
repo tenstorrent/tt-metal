@@ -27,13 +27,7 @@ void kernel_main() {
 
     for (std::uint32_t h = 0; h < num_batched_heads; ++h) {
         // Untilize input (standalone operation)
-        compute_kernel_lib::untilize<
-            Wt,
-            input,
-            untilized_input,
-            compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-            compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+        compute_kernel_lib::untilize<Wt, input, untilized_input>(1);
 
         for (std::uint32_t u = 0; u < u_count; ++u) {
             compute_kernel_lib::untilize<Wt, cache, untilized_cache>(granularity);
@@ -41,6 +35,5 @@ void kernel_main() {
             // Wait on writer to update block, then tilize back
             compute_kernel_lib::tilize<Wt, untilized_cache2, output>(granularity);
         }
-        reconfig_data_format_srca(cache, input);
     }
 }

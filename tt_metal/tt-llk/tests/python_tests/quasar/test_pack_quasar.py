@@ -175,7 +175,7 @@ def generate_qsr_pack_combinations(
                                         fmt,
                                         dest_acc,
                                         dest_sync,
-                                        runtime(dimensions) if is_perf else dimensions,
+                                        runtime(dimensions),
                                         runtime(relu_type),
                                         runtime(tile_dims),
                                     )

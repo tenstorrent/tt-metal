@@ -7,6 +7,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -34,10 +35,10 @@ std::string describe(const TensorTopology& topology) {
     return ss.str();
 }
 
-// A 1-D label with a single placement for the whole mesh. On a 1-D mesh this is also the N-D form, so callers that
-// need the distinction also check the mesh rank.
-bool is_collapsed(const TensorTopology& in) {
-    return in.distribution_shape().dims() == 1 && in.placements().size() == 1;
+// The collapsed spelling: a 1-D label with a single placement for the whole of a multi-axis mesh. On a 1-D mesh the
+// same form is the N-D label (one placement per axis), so it is not collapsed there.
+bool is_collapsed(const TensorTopology& in, const MeshShape& mesh_shape) {
+    return in.distribution_shape().dims() == 1 && in.placements().size() == 1 && mesh_shape.dims() > 1;
 }
 
 // The one axis of size > 1 of a mesh that is a line (1xN, Nx1, ...); nullopt when the mesh has none or several.
@@ -58,7 +59,7 @@ bool strict_ccl_topology() { return ttnn::CONFIG.get<"strict_ccl_topology">(); }
 
 // Which family refused: the fallback (the input's label) is safe for a gather family -- it never adds a Replicate the
 // output lacks -- but can over-claim Replicate for the scatter family, so the latter logs at error level.
-enum class Family { Gather, Scatter };
+using Family = RefusalFamily;
 
 // CallerRelabelsScope objects alive on this thread (see the header): while positive, refusals are silent.
 thread_local int caller_relabels_depth = 0;
@@ -105,6 +106,137 @@ std::optional<TensorTopology> fail(const std::string& what, Family family) {
         if (first_time(message)) {
             log_warning(tt::LogOp, "{}", message);
         }
+    }
+    return std::nullopt;
+}
+
+MeshShape mesh_shape_of(const Tensor& input, std::string_view op) {
+    TT_FATAL(input.device() != nullptr, "{} output topology requires a mesh-device tensor", op);
+    return input.device()->shape();
+}
+
+uint32_t rank_of(const Tensor& input) { return static_cast<uint32_t>(input.logical_shape().rank()); }
+
+}  // namespace
+
+CallerRelabelsScope::CallerRelabelsScope() { ++caller_relabels_depth; }
+
+CallerRelabelsScope::~CallerRelabelsScope() { --caller_relabels_depth; }
+
+std::optional<TensorTopology> refuse(const std::string& what, RefusalFamily family) { return fail(what, family); }
+
+std::optional<TopologyPlacements> uncollapse_placements(
+    const TensorTopology& in, const MeshShape& mesh_shape, std::string* reason) {
+    const auto& distribution_shape = in.distribution_shape();
+    const auto& placements = in.placements();
+    const size_t mesh_dims = mesh_shape.dims();
+    const auto set_reason = [reason](std::string text) {
+        if (reason != nullptr) {
+            *reason = std::move(text);
+        }
+    };
+
+    if (distribution_shape.dims() == mesh_dims && placements.size() == mesh_dims) {
+        // One placement per mesh axis only means something when axis i of the label is axis i of the mesh: the
+        // distribution shape fits the mesh per axis and the coordinates walk a distribution-shaped block of it in
+        // row-major order. A mapper whose mesh_shape_override does not fit distributes in row-major order over all
+        // devices instead (DistributionMode::ROW_MAJOR), and per physical axis that layout has no placement.
+        //
+        // The coordinates can only be consulted when they are the distribution's. A device tensor's label carries
+        // its storage's coordinates -- every device of the mesh, since an op output's buffer spans the mesh whatever
+        // block its input occupied (update_output_tensor_topologies keeps each output's own coordinates) -- so for a
+        // sub-range distribution such as the (1, C) row that from_torch(ShardTensor2dMesh(mesh_shape=(1, C))) builds
+        // on a 2-D mesh the coordinate list says nothing about where the block lies. The shape alone decides then:
+        // a shape that fits the mesh per axis was mapped as a block (DistributionMode::SUBMESH, with or without an
+        // offset), so its axes are the mesh's; one that does not fit was laid out row-major over the mesh.
+        bool fits = true;
+        for (size_t axis = 0; axis < mesh_dims; ++axis) {
+            fits &= distribution_shape[static_cast<int32_t>(axis)] <= mesh_shape[static_cast<int32_t>(axis)];
+        }
+        const bool coordinates_are_the_distributions = in.mesh_coords().size() == distribution_shape.mesh_size();
+        if (!fits || (coordinates_are_the_distributions &&
+                      !has_row_major_mesh_coordinates(in.mesh_coords(), distribution_shape))) {
+            set_reason(fmt::format(
+                "tensor topology {} does not align with the axes of mesh {}: its coordinates are not a {}-shaped "
+                "block of the mesh in row-major order (a mapper whose mesh_shape_override does not fit the mesh "
+                "distributes in row-major order over all devices); create the tensor with a mapper whose shape fits "
+                "the mesh",
+                describe(in),
+                mesh_shape,
+                distribution_shape));
+            return std::nullopt;
+        }
+        return placements;
+    }
+    if (!is_collapsed(in, mesh_shape)) {
+        set_reason(fmt::format(
+            "tensor topology {} is neither a collapsed 1-D label nor one placement per axis of mesh {}",
+            describe(in),
+            mesh_shape));
+        return std::nullopt;
+    }
+    if (distribution_shape.mesh_size() != mesh_shape.mesh_size() ||
+        !has_row_major_mesh_coordinates(in.mesh_coords(), mesh_shape)) {
+        set_reason(fmt::format(
+            "collapsed tensor topology {} does not cover mesh {} in row-major order (fewer shards than devices, or a "
+            "sub-mesh); create the tensor with an N-D mesh mapper",
+            describe(in),
+            mesh_shape));
+        return std::nullopt;
+    }
+
+    TopologyPlacements out(mesh_dims, TopologyPlacement{Replicate{}});
+    if (const auto* shard = std::get_if<Shard>(&placements.front())) {
+        for (size_t axis = 0; axis < mesh_dims; ++axis) {
+            if (mesh_shape[static_cast<int32_t>(axis)] > 1) {
+                out[axis] = *shard;
+            }
+        }
+    }
+    return out;
+}
+
+// Shared by both families: all_gather_output_topology below is its first caller.
+namespace {
+
+// Coverage. The devices an op reaches are the mesh's, not the label's:
+// a cluster-axis op spans the mesh's full extent along that axis and a whole-mesh op every device, so a label that
+// covers fewer devices along the axis addressed -- a (1, 4) row block on a 2x4 along axis 0, or over the whole
+// mesh -- is refused: the devices the label does not describe take part (a sum with them, a gather of them, a
+// partition that numbers them) and no label over the block can say what they hold. A block is gathered or
+// scattered within itself only along an axis it spans fully (the row along axis 1). The reason, or nullopt when the
+// label covers what the op reaches. A collapsed label has no axis to compare; uncollapse_placements already
+// requires it to cover the whole mesh, so only N-D labels are judged per axis here.
+std::optional<std::string> coverage_gap(
+    const TensorTopology& in, const MeshShape& mesh_shape, std::optional<uint32_t> axis, std::string_view what) {
+    const auto& label_shape = in.distribution_shape();
+    if (!axis.has_value()) {
+        if (label_shape.mesh_size() != mesh_shape.mesh_size()) {
+            return fmt::format(
+                "a whole-mesh {} spans the {} devices of mesh {} but the label {} covers {}: the devices the label "
+                "does "
+                "not describe take part, and no label over the block can say what they hold",
+                what,
+                mesh_shape.mesh_size(),
+                mesh_shape,
+                describe(in),
+                label_shape.mesh_size());
+        }
+        return std::nullopt;
+    }
+    if (label_shape.dims() != mesh_shape.dims()) {
+        return std::nullopt;
+    }
+    const auto a = static_cast<int32_t>(*axis);
+    if (label_shape[a] != mesh_shape[a]) {
+        return fmt::format(
+            "{} along mesh axis {} spans {} devices but the label {} covers {} along that axis: the groups reach "
+            "devices the label does not describe",
+            what,
+            *axis,
+            mesh_shape[a],
+            describe(in),
+            label_shape[a]);
     }
     return std::nullopt;
 }
@@ -185,214 +317,7 @@ std::optional<TensorTopology> finalise(
         in.mesh_coords());
 }
 
-MeshShape mesh_shape_of(const Tensor& input, const char* op) {
-    TT_FATAL(input.device() != nullptr, "{} output topology requires a mesh-device tensor", op);
-    return input.device()->shape();
-}
-
-uint32_t rank_of(const Tensor& input) { return static_cast<uint32_t>(input.logical_shape().rank()); }
-
-// Whether a scatter sums over the devices it spans (reduce_scatter: everything those devices held is consumed) or
-// leaves each device its own piece (mesh_partition, all_to_all: a Shard of another dim stays next to the new piece).
-enum class ScatterKind { Reduction, Partition };
-
-// The reduce_scatter / mesh_partition / all_to_all label; see the header for the rules and where the two kinds differ.
-std::optional<TensorTopology> scatter_output_topology(
-    const TensorTopology& in,
-    std::optional<uint32_t> cluster_axis,
-    const MeshShape& mesh_shape,
-    uint32_t tensor_rank,
-    int32_t scatter_dim,
-    ScatterKind kind,
-    const char* op) {
-    const auto normalized_dim = normalize_tensor_dim(scatter_dim, tensor_rank);
-    if (!normalized_dim.has_value()) {
-        return fail(
-            fmt::format("{} dim {} is out of range for a rank-{} tensor", op, scatter_dim, tensor_rank),
-            Family::Scatter);
-    }
-    // Only normalised dims are ever written into a placement the helper creates.
-    const TopologyPlacement shard = Shard{static_cast<int>(*normalized_dim)};
-    const bool collapsed = is_collapsed(in) && mesh_shape.dims() > 1;
-    std::string reason;
-
-    if (!cluster_axis.has_value()) {
-        if (collapsed) {
-            // Whole-mesh scatter of a 1-D label: piece i lands on ring rank i, which is the label's own order.
-            return TensorTopology(in.distribution_shape(), TopologyPlacements{shard}, in.mesh_coords());
-        }
-        auto expanded = uncollapse_placements(in, mesh_shape, &reason);
-        if (!expanded.has_value()) {
-            return fail(reason, Family::Scatter);
-        }
-        // Every device holds a distinct piece of `scatter_dim`, in the label's coordinate order: the collapsed label
-        // over those coordinates. A reduction summed every device's tensor into that piece, so nothing stays sharded
-        // on another dim; a partition keeps each device's other-dim piece next to the new one, and no label can state
-        // both.
-        const auto& axis_shape = in.distribution_shape();
-        if (kind == ScatterKind::Partition) {
-            for (size_t axis = 0; axis < expanded->size(); ++axis) {
-                const auto* other_shard = std::get_if<Shard>(&(*expanded)[axis]);
-                if (other_shard != nullptr && axis_shape[static_cast<int32_t>(axis)] > 1 &&
-                    !placement_shards_tensor_dim((*expanded)[axis], *normalized_dim, tensor_rank)) {
-                    return fail(
-                        fmt::format(
-                            "a whole-mesh {} of tensor dim {} on a tensor still sharded on dim {} along mesh axis {} "
-                            "(label {}) is not expressible",
-                            op,
-                            *normalized_dim,
-                            other_shard->dim,
-                            axis,
-                            describe(in)),
-                        Family::Scatter);
-                }
-            }
-        }
-        return TensorTopology(
-            MeshShape(static_cast<uint32_t>(axis_shape.mesh_size())), TopologyPlacements{shard}, in.mesh_coords());
-    }
-
-    const uint32_t axis = *cluster_axis;
-    if (axis >= mesh_shape.dims()) {
-        return std::nullopt;  // the op's validation rejects this cluster_axis right after the hook
-    }
-    auto expanded = uncollapse_placements(in, mesh_shape, &reason);
-    if (!expanded.has_value()) {
-        return fail(reason, Family::Scatter);
-    }
-    if (collapsed && single_non_trivial_axis(mesh_shape) == axis) {
-        // The collapsed axis is the scattered axis (cluster_axis 1 on a 1xN line): keep the collapsed spelling.
-        return TensorTopology(in.distribution_shape(), TopologyPlacements{shard}, in.mesh_coords());
-    }
-
-    // A reduction consumes whatever the scattered axis held. A partition does not: a Shard of another dim there
-    // stays next to each device's new piece (device c holds chunk c of that dim and piece c of `scatter_dim`), which
-    // is two dims sharded on one axis at once -- no label says that, so it is refused whatever the other axes hold.
-    // A stale Shard dim (#52331) is a Shard of another dim here too.
-    const MeshShape& axis_shape = collapsed ? mesh_shape : in.distribution_shape();
-    const TopologyPlacement& scattered_axis_held = (*expanded)[axis];
-    const bool scattered_axis_composes = kind == ScatterKind::Reduction ||
-                                         std::holds_alternative<Replicate>(scattered_axis_held) ||
-                                         placement_shards_tensor_dim(scattered_axis_held, *normalized_dim, tensor_rank);
-    if (!scattered_axis_composes) {
-        return fail(
-            fmt::format(
-                "{} of tensor dim {} along mesh axis {}, which already shards dim {} (label {}), is not expressible: "
-                "a partition keeps each device's piece of dim {} next to its new piece of dim {}",
-                op,
-                *normalized_dim,
-                axis,
-                std::get<Shard>(scattered_axis_held).dim,
-                describe(in),
-                std::get<Shard>(scattered_axis_held).dim,
-                *normalized_dim),
-            Family::Scatter);
-    }
-
-    auto out = std::move(*expanded);
-    out[axis] = shard;
-    auto result = finalise(in, axis_shape, std::move(out), tensor_rank, axis, &reason);
-    if (!result.has_value()) {
-        return fail(reason, Family::Scatter);
-    }
-    return result;
-}
-
-// A whole-mesh reduce_scatter's ring rank is the index into the tensor's device-storage coordinates
-// (get_linearized_index_from_physical_coord without a cluster_axis), not the label's coordinate order the pure
-// overload has to assume: spell `label` over the storage coordinates so piece i sits on ring rank i whatever
-// coordinates the input label carried. Only for a tensor stored on every device of the mesh: on a multi-host mesh the
-// storage holds this host's shard while the label is global, and a single-host sub-mesh tensor's label already
-// carries its own device list, so both keep the label's coordinates. With a cluster_axis the label is returned as is.
-// mesh_partition and all_to_all do not rank by storage order (row * num_cols + col over the mesh view, and
-// MeshDeviceView::get_ring_devices), so their Tensor overloads do not come through here.
-std::optional<TensorTopology> over_reduce_scatter_ring_order(
-    std::optional<TensorTopology> label, const Tensor& input, std::optional<uint32_t> cluster_axis) {
-    if (!label.has_value() || cluster_axis.has_value() || !input.device_storage().is_uniform_storage()) {
-        return label;
-    }
-    const auto storage_coords = input.device_storage().get_coords();
-    if (storage_coords.size() != label->mesh_coords().size()) {
-        return fail(
-            fmt::format(
-                "whole-mesh reduce_scatter label {} has {} coordinates for a tensor stored on {} devices",
-                describe(*label),
-                label->mesh_coords().size(),
-                storage_coords.size()),
-            Family::Scatter);
-    }
-    return TensorTopology(
-        label->distribution_shape(),
-        label->placements(),
-        std::vector<MeshCoordinate>(storage_coords.begin(), storage_coords.end()));
-}
-
 }  // namespace
-
-CallerRelabelsScope::CallerRelabelsScope() { ++caller_relabels_depth; }
-
-CallerRelabelsScope::~CallerRelabelsScope() { --caller_relabels_depth; }
-
-std::optional<TopologyPlacements> uncollapse_placements(
-    const TensorTopology& in, const MeshShape& mesh_shape, std::string* reason) {
-    const auto& distribution_shape = in.distribution_shape();
-    const auto& placements = in.placements();
-    const size_t mesh_dims = mesh_shape.dims();
-    const auto set_reason = [reason](std::string text) {
-        if (reason != nullptr) {
-            *reason = std::move(text);
-        }
-    };
-
-    if (distribution_shape.dims() == mesh_dims && placements.size() == mesh_dims) {
-        // One placement per mesh axis only means something when axis i of the label is axis i of the mesh: the
-        // distribution shape fits the mesh per axis and the coordinates walk a distribution-shaped block of it in
-        // row-major order. A mapper whose mesh_shape_override does not fit distributes in row-major order over all
-        // devices instead, and per physical axis that layout has no placement.
-        bool fits = true;
-        for (size_t axis = 0; axis < mesh_dims; ++axis) {
-            fits &= distribution_shape[static_cast<int32_t>(axis)] <= mesh_shape[static_cast<int32_t>(axis)];
-        }
-        if (!fits || !has_row_major_mesh_coordinates(in.mesh_coords(), distribution_shape)) {
-            set_reason(fmt::format(
-                "tensor topology {} does not align with the axes of mesh {}: its coordinates are not a {}-shaped "
-                "block of the mesh in row-major order (a mapper whose mesh_shape_override does not fit the mesh "
-                "distributes in row-major order over all devices); create the tensor with a mapper whose shape fits "
-                "the mesh",
-                describe(in),
-                mesh_shape,
-                distribution_shape));
-            return std::nullopt;
-        }
-        return placements;
-    }
-    if (!is_collapsed(in)) {
-        set_reason(fmt::format(
-            "tensor topology {} is neither a collapsed 1-D label nor one placement per axis of mesh {}",
-            describe(in),
-            mesh_shape));
-        return std::nullopt;
-    }
-    if (distribution_shape.mesh_size() != mesh_shape.mesh_size() ||
-        !has_row_major_mesh_coordinates(in.mesh_coords(), mesh_shape)) {
-        set_reason(fmt::format(
-            "collapsed tensor topology {} does not cover mesh {} in row-major order (fewer shards than devices, or a "
-            "sub-mesh); create the tensor with an N-D mesh mapper",
-            describe(in),
-            mesh_shape));
-        return std::nullopt;
-    }
-
-    TopologyPlacements out(mesh_dims, TopologyPlacement{Replicate{}});
-    if (const auto* shard = std::get_if<Shard>(&placements.front())) {
-        for (size_t axis = 0; axis < mesh_dims; ++axis) {
-            if (mesh_shape[static_cast<int32_t>(axis)] > 1) {
-                out[axis] = *shard;
-            }
-        }
-    }
-    return out;
-}
 
 std::optional<TensorTopology> all_gather_output_topology(
     const TensorTopology& in,
@@ -400,11 +325,15 @@ std::optional<TensorTopology> all_gather_output_topology(
     const MeshShape& mesh_shape,
     uint32_t tensor_rank,
     int32_t gathered_dim,
-    bool require_contiguous_gather) {
+    bool require_contiguous_gather) {  // refuse gathers that would interleave a dim sharded on more than one axis
     const TopologyPlacement replicate = Replicate{};
     if (!cluster_axis.has_value()) {
         // Whole-mesh gather: every device ends up with every piece, whatever the label's rank. The ring order is the
-        // label's own coordinate order, so the distribution shape and coordinates are kept.
+        // label's own coordinate order, so the distribution shape and coordinates are kept -- provided the label
+        // covers every device the ring reaches.
+        if (const auto gap = coverage_gap(in, mesh_shape, std::nullopt, "collective"); gap.has_value()) {
+            return fail(*gap, Family::Gather);
+        }
         TopologyPlacements out(in.placements().size(), replicate);
         return TensorTopology(in.distribution_shape(), std::move(out), in.mesh_coords());
     }
@@ -419,7 +348,11 @@ std::optional<TensorTopology> all_gather_output_topology(
         return fail(reason, Family::Gather);
     }
 
-    const bool collapsed = is_collapsed(in) && mesh_shape.dims() > 1;
+    if (const auto gap = coverage_gap(in, mesh_shape, axis, "a collective"); gap.has_value()) {
+        return fail(*gap, Family::Gather);
+    }
+
+    const bool collapsed = is_collapsed(in, mesh_shape);
     if (collapsed && single_non_trivial_axis(mesh_shape) == axis) {
         // The collapsed axis is the gathered axis (cluster_axis 1 on a 1xN line): keep the collapsed spelling.
         return TensorTopology(in.distribution_shape(), TopologyPlacements{replicate}, in.mesh_coords());
@@ -494,6 +427,153 @@ std::optional<TensorTopology> all_broadcast_output_topology(const Tensor& input,
         input.tensor_topology(), cluster_axis, mesh_shape_of(input, "all_broadcast"), rank_of(input));
 }
 
+// The scatter family's shared rule, next to its first caller.
+namespace {
+
+// Whether a scatter sums over the devices it spans (reduce_scatter: everything those devices held is consumed) or
+// leaves each device its own piece (mesh_partition, all_to_all: a Shard of another dim stays next to the new piece).
+enum class ScatterKind { Reduction, Partition };
+
+// The reduce_scatter / mesh_partition / all_to_all label; see the header for the rules and where the two kinds differ.
+std::optional<TensorTopology> scatter_output_topology(
+    const TensorTopology& in,
+    std::optional<uint32_t> cluster_axis,
+    const MeshShape& mesh_shape,
+    uint32_t tensor_rank,
+    int32_t scatter_dim,
+    ScatterKind kind,
+    std::string_view op) {
+    const auto normalized_dim = normalize_tensor_dim(scatter_dim, tensor_rank);
+    if (!normalized_dim.has_value()) {
+        return fail(
+            fmt::format("{} dim {} is out of range for a rank-{} tensor", op, scatter_dim, tensor_rank),
+            Family::Scatter);
+    }
+    // Only normalised dims are ever written into a placement the helper creates.
+    const TopologyPlacement shard = Shard{static_cast<int>(*normalized_dim)};
+    const bool collapsed = is_collapsed(in, mesh_shape);
+    std::string reason;
+
+    if (!cluster_axis.has_value()) {
+        // A whole-mesh scatter gives ring rank i piece i of `scatter_dim`, the ring being the label's coordinate
+        // order (what the pure overload has to assume; the Tensor overloads respell over the storage), so the result
+        // is the collapsed {N}, [Shard{scatter_dim}] over those coordinates whatever the label's rank. The label's
+        // own axes are read as they are: no axis is addressed, so the per-axis alignment uncollapse_placements
+        // insists on is not needed, and a row-major reshape of the whole mesh ({1,8} over a 2x4, a 2-D mapper whose
+        // mesh_shape_override did not fit) is as exact as the collapsed label that enumerates the same devices.
+        const auto& label_shape = in.distribution_shape();
+        const auto& placements = in.placements();
+        if (placements.size() != label_shape.dims()) {
+            return fail(
+                fmt::format(
+                    "tensor topology {} has {} placements for a {}-D distribution shape",
+                    describe(in),
+                    placements.size(),
+                    label_shape.dims()),
+                Family::Scatter);
+        }
+        if (const auto gap = coverage_gap(in, mesh_shape, std::nullopt, op); gap.has_value()) {
+            return fail(*gap, Family::Scatter);
+        }
+        // Every device holds a distinct piece of `scatter_dim`, in the label's coordinate order: the collapsed label
+        // over those coordinates. A reduction summed every device's tensor into that piece, so nothing stays sharded
+        // on another dim; a partition keeps each device's other-dim piece next to the new one, and no label can state
+        // both.
+        //
+        // The collapsed label has one placement for the whole mesh, so it can only say "scatter_dim is split N ways
+        // in ring order, every other dim is whole". A partition of a tensor still sharded on another dim along a
+        // non-trivial axis produces outputs that label cannot describe. 2x4 mesh, input [Shard{2}, Replicate],
+        // whole-mesh mesh_partition of dim 3 (ring rank i = r * 4 + c keeps piece i of 8 of its own tensor):
+        //
+        //         c=0          c=1          c=2          c=3
+        //   r=0   d2 half 0    d2 half 0    d2 half 0    d2 half 0
+        //         d3 piece 0   d3 piece 1   d3 piece 2   d3 piece 3
+        //   r=1   d2 half 1    d2 half 1    d2 half 1    d2 half 1
+        //         d3 piece 4   d3 piece 5   d3 piece 6   d3 piece 7
+        //
+        //   {8},[Shard{3}]        says dim 2 is whole on every device: false, the rows hold different halves
+        //   [Shard{2}, Shard{3}]  says device (r, c) holds dim-3 piece c of 4, the same on both rows: false
+        //
+        // No label describes it, so it is refused. A Shard of scatter_dim itself passes: each device keeps a
+        // sub-piece of the piece it already held, and the outputs are N distinct pieces of that dim with every other
+        // dim whole, which is what the collapsed label states (a label says how the outputs assemble, not that they
+        // tile the input). A Shard on a size-1 axis holds the whole extent and passes too. A collapsed
+        // {N}, [Shard{other}] is the same case with one placement. A reduction never reaches this check: the sum is
+        // one tensor whose other dims are whole on every device. With a cluster_axis the output stays N-D and the
+        // other dim's Shard keeps its own axis, so only the whole-mesh collapse loses it.
+        if (kind == ScatterKind::Partition) {
+            for (size_t axis = 0; axis < placements.size(); ++axis) {
+                const auto* other_shard = std::get_if<Shard>(&placements[axis]);
+                if (other_shard != nullptr && label_shape[static_cast<int32_t>(axis)] > 1 &&
+                    !placement_shards_tensor_dim(placements[axis], *normalized_dim, tensor_rank)) {
+                    return fail(
+                        fmt::format(
+                            "a whole-mesh {} of tensor dim {} on a tensor still sharded on dim {} along axis {} of its "
+                            "label {} is not expressible",
+                            op,
+                            *normalized_dim,
+                            other_shard->dim,
+                            axis,
+                            describe(in)),
+                        Family::Scatter);
+                }
+            }
+        }
+        return TensorTopology(
+            MeshShape(static_cast<uint32_t>(label_shape.mesh_size())), TopologyPlacements{shard}, in.mesh_coords());
+    }
+
+    const uint32_t axis = *cluster_axis;
+    if (axis >= mesh_shape.dims()) {
+        return std::nullopt;  // the op's validation rejects this cluster_axis right after the hook
+    }
+    auto expanded = uncollapse_placements(in, mesh_shape, &reason);
+    if (!expanded.has_value()) {
+        return fail(reason, Family::Scatter);
+    }
+    if (const auto gap = coverage_gap(in, mesh_shape, axis, op); gap.has_value()) {
+        return fail(*gap, Family::Scatter);
+    }
+    if (collapsed && single_non_trivial_axis(mesh_shape) == axis) {
+        // The collapsed axis is the scattered axis (cluster_axis 1 on a 1xN line): keep the collapsed spelling.
+        return TensorTopology(in.distribution_shape(), TopologyPlacements{shard}, in.mesh_coords());
+    }
+
+    // A reduction consumes whatever the scattered axis held. A partition does not: a Shard of another dim there
+    // stays next to each device's new piece (device c holds chunk c of that dim and piece c of `scatter_dim`), which
+    // is two dims sharded on one axis at once -- no label says that, so it is refused whatever the other axes hold.
+    // A stale Shard dim (#52331) is a Shard of another dim here too.
+    const MeshShape& axis_shape = collapsed ? mesh_shape : in.distribution_shape();
+    const TopologyPlacement& scattered_axis_held = (*expanded)[axis];
+    const bool scattered_axis_composes = kind == ScatterKind::Reduction ||
+                                         std::holds_alternative<Replicate>(scattered_axis_held) ||
+                                         placement_shards_tensor_dim(scattered_axis_held, *normalized_dim, tensor_rank);
+    if (!scattered_axis_composes) {
+        return fail(
+            fmt::format(
+                "{} of tensor dim {} along mesh axis {}, which already shards dim {} (label {}), is not expressible: "
+                "a partition keeps each device's piece of dim {} next to its new piece of dim {}",
+                op,
+                *normalized_dim,
+                axis,
+                std::get<Shard>(scattered_axis_held).dim,
+                describe(in),
+                std::get<Shard>(scattered_axis_held).dim,
+                *normalized_dim),
+            Family::Scatter);
+    }
+
+    auto out = std::move(*expanded);
+    out[axis] = shard;
+    auto result = finalise(in, axis_shape, std::move(out), tensor_rank, axis, &reason);
+    if (!result.has_value()) {
+        return fail(reason, Family::Scatter);
+    }
+    return result;
+}
+
+}  // namespace
+
 std::optional<TensorTopology> reduce_scatter_output_topology(
     const TensorTopology& in,
     std::optional<uint32_t> cluster_axis,
@@ -504,13 +584,53 @@ std::optional<TensorTopology> reduce_scatter_output_topology(
         in, cluster_axis, mesh_shape, tensor_rank, scatter_dim, ScatterKind::Reduction, "reduce_scatter");
 }
 
+// A whole-mesh ring whose rank is the index into a tensor's device-storage coordinates
+// (get_linearized_index_from_physical_coord without a cluster_axis: reduce_scatter, the fused matmul + reduce_scatter
+// ops and all_to_all_async_generic) puts piece i on storage coordinate i, not on the i-th coordinate of the label the
+// pure overloads have to assume is the ring order: spell `label` over the storage coordinates so piece i sits on ring
+// rank i whatever coordinates the input label carried. Only for a tensor stored on every device of the mesh: on a
+// multi-host mesh the storage holds this host's shard while the label is global, and a single-host sub-mesh tensor's
+// label already carries its own device list, so both keep the label's coordinates. With a cluster_axis the label is
+// returned as is. mesh_partition and all_to_all_async do not rank by storage order (row * num_cols + col over the mesh
+// view, and MeshDeviceView::get_ring_devices), so their labels do not come through here.
+std::optional<TensorTopology> over_storage_ring_order(
+    std::optional<TensorTopology> label,
+    const Tensor& ring_tensor,
+    std::optional<uint32_t> cluster_axis,
+    std::string_view op) {
+    // Returned as is: no label (the pure helper already refused); a cluster_axis (the ring rank is then the coordinate
+    // value along that axis, not a position in the storage list, so the label's coordinates are already right); a
+    // tensor not stored on every device (on a multi-host mesh this host's storage lists only its own devices while the
+    // label is global, so respelling over it would shrink the label; a single-host sub-mesh label already lists its
+    // own devices, so there is nothing to respell).
+    if (!label.has_value() || cluster_axis.has_value() || !ring_tensor.device_storage().is_uniform_storage()) {
+        return label;
+    }
+    const auto storage_coords = ring_tensor.device_storage().get_coords();
+    if (storage_coords.size() != label->mesh_coords().size()) {
+        return fail(
+            fmt::format(
+                "whole-mesh {} label {} has {} coordinates for a tensor stored on {} devices",
+                op,
+                describe(*label),
+                label->mesh_coords().size(),
+                storage_coords.size()),
+            Family::Scatter);
+    }
+    return TensorTopology(
+        label->distribution_shape(),
+        label->placements(),
+        std::vector<MeshCoordinate>(storage_coords.begin(), storage_coords.end()));
+}
+
 std::optional<TensorTopology> reduce_scatter_output_topology(
     const Tensor& input, std::optional<uint32_t> cluster_axis, int32_t scatter_dim) {
-    return over_reduce_scatter_ring_order(
+    return over_storage_ring_order(
         reduce_scatter_output_topology(
             input.tensor_topology(), cluster_axis, mesh_shape_of(input, "reduce_scatter"), rank_of(input), scatter_dim),
         input,
-        cluster_axis);
+        cluster_axis,
+        "reduce_scatter");
 }
 
 std::optional<TensorTopology> mesh_partition_output_topology(
@@ -525,8 +645,16 @@ std::optional<TensorTopology> mesh_partition_output_topology(
 
 std::optional<TensorTopology> mesh_partition_output_topology(
     const Tensor& input, std::optional<uint32_t> cluster_axis, int32_t out_dim) {
-    return mesh_partition_output_topology(
-        input.tensor_topology(), cluster_axis, mesh_shape_of(input, "mesh_partition"), rank_of(input), out_dim);
+    // mesh_partition's program factory numbers a whole-mesh partition by the row-major linearised index of each
+    // device's own coordinate (get_linearized_index over the mesh view), which for a tensor stored on every device is
+    // its storage order: the same respelling as reduce_scatter's. With a cluster_axis the rank is the coordinate
+    // value along that axis and the label's coordinates, a block uncollapse_placements has checked, are kept.
+    return over_storage_ring_order(
+        mesh_partition_output_topology(
+            input.tensor_topology(), cluster_axis, mesh_shape_of(input, "mesh_partition"), rank_of(input), out_dim),
+        input,
+        cluster_axis,
+        "mesh_partition");
 }
 
 std::optional<TensorTopology> all_to_all_output_topology(

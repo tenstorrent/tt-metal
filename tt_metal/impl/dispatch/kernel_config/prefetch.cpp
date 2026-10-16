@@ -50,7 +50,6 @@ PrefetchKernel::PrefetchKernel(
     dispatch_core_manager& dispatch_core_manager,
     const GetControlPlaneFn& get_control_plane,
     const GetDispatchQueryManagerFn& get_dispatch_query_manager,
-    const GetMaxNumEthCoresFn& get_max_num_eth_cores,
     const GetReadsDispatchCoresFn& get_reads_dispatch_cores) :
     FDKernel(
         node_id,
@@ -62,7 +61,6 @@ PrefetchKernel::PrefetchKernel(
         dispatch_core_manager,
         get_control_plane,
         get_dispatch_query_manager,
-        get_max_num_eth_cores,
         get_reads_dispatch_cores) {
     static_config_.is_h_variant = h_variant;
     static_config_.is_d_variant = d_variant;

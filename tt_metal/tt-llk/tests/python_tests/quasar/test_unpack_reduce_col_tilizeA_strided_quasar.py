@@ -165,7 +165,7 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
                                     fmt,
                                     acc,
                                     dest_sync,
-                                    dimensions,
+                                    runtime(dimensions),
                                     pool_type,
                                     runtime(tile_dimensions),
                                 )

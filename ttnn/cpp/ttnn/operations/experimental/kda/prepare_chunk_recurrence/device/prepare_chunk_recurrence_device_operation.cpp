@@ -4,6 +4,7 @@
 #include "prepare_chunk_recurrence_device_operation.hpp"
 
 #include <array>
+#include <cmath>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
@@ -44,7 +45,7 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     check_interleaved(in.g, operation_name, "g");
     check_allocated_device_tensor(in.beta, operation_name, "beta");
     check_layout(in.beta, Layout::TILE, operation_name, "beta");
-    check_dtype(in.beta, DataType::FLOAT32, operation_name, "beta");
+    check_dtype(in.beta, DataType::BFLOAT16, operation_name, "beta");
     check_interleaved(in.beta, operation_name, "beta");
     check_same_device(in.q, in.k, operation_name, "k");
     check_same_device(in.q, in.v, operation_name, "v");
@@ -83,10 +84,15 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
             q_shape[1] == attrs.num_chunks * tt::constants::TILE_HEIGHT,
         "prepare_chunk_recurrence: flat input shapes must match operation attributes");
 
+    // Beta logits are num_heads columns, from a tile-aligned offset, of a token-major [1, num_chunks * 32, columns]
+    // tensor such as the fused input projection.
     TT_FATAL(
-        beta_shape.rank() == 4 && beta_shape[0] == attrs.num_heads && beta_shape[1] == attrs.num_chunks &&
-            beta_shape[2] == tt::constants::TILE_HEIGHT && beta_shape[3] == 1,
-        "prepare_chunk_recurrence: beta shape must be [num_heads, num_chunks, 32, 1]");
+        beta_shape.rank() == 3 && beta_shape[0] == 1 &&
+            beta_shape[1] == attrs.num_chunks * tt::constants::TILE_HEIGHT &&
+            beta_shape[2] >= uint64_t{attrs.beta_logits_column_offset} + attrs.num_heads &&
+            attrs.beta_logits_column_offset % tt::constants::TILE_WIDTH == 0,
+        "prepare_chunk_recurrence: beta logits must be token-major [1, num_chunks * 32, columns] with a "
+        "tile-aligned column offset and num_heads columns after it");
     constexpr uint32_t allowed_bf16_mask = 0x37;
     TT_FATAL(
         (attrs.output_bf16_mask & ~allowed_bf16_mask) == 0,
@@ -156,7 +162,10 @@ std::vector<Tensor> prepare_chunk_recurrence(
     uint32_t output_bf16_mask,
     const std::optional<Tensor>& actual_start,
     const std::optional<Tensor>& actual_end,
-    uint32_t sequence_parallel_axis) {
+    uint32_t sequence_parallel_axis,
+    float gate_scale,
+    uint32_t beta_logits_column_offset) {
+    TT_FATAL(std::isfinite(gate_scale), "prepare_chunk_recurrence: gate_scale must be finite");
     TT_FATAL(!actual_end || actual_start, "prepare_chunk_recurrence: actual_end requires actual_start");
     if (actual_start) {
         kda_factory_detail::check_actual_start(q, *actual_start, "prepare_chunk_recurrence");
@@ -187,6 +196,8 @@ std::vector<Tensor> prepare_chunk_recurrence(
             .key_dim = key_dim,
             .value_dim = value_dim,
             .output_bf16_mask = output_bf16_mask,
+            .gate_scale = gate_scale,
+            .beta_logits_column_offset = beta_logits_column_offset,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         PrepareChunkRecurrenceInputs{

@@ -968,8 +968,9 @@ TEST(CclTopologyUtils, AllGatherReplicatesTheClusterAxisOfAnNDLabelAndKeepsTheRe
         topo::all_gather_output_topology(in, 0, mesh, kRank, /*gathered_dim=*/2),
         nd_label(mesh, {TopoReplicate{}, TopoShard{3}}));
 
-    // Rule (e): another axis sharding the gathered dim keeps its Shard -- its pieces are still distinct after the
-    // gather. The old prim all_gather rule replicated every axis whose Shard dim equalled the gather dim.
+    // Only the gathered axis is replicated: another axis sharding the gathered dim keeps its Shard, since its pieces
+    // are still distinct after the gather. The old prim all_gather rule replicated every axis whose Shard dim equalled
+    // the gather dim.
     EXPECT_EQ(
         topo::all_gather_output_topology(nd_label(mesh, {TopoShard{3}, TopoReplicate{}}), 1, mesh, kRank, 3),
         nd_label(mesh, {TopoShard{3}, TopoReplicate{}}));
@@ -1022,7 +1023,8 @@ TEST(CclTopologyUtils, AllGatherOfACollapsedShardAlongTheInnermostAxis) {
     }
 
     // Three non-trivial axes: gathering along the innermost leaves Shard{3} on two axes next to a Replicate axis,
-    // which no label expresses (rule (c)): warn-only gives nullopt, strict throws.
+    // which no label expresses (finalise collapses a repeated dim only when every non-trivial axis shards it):
+    // warn-only gives nullopt, strict throws.
     const MeshShape cube(2, 2, 2);
     {
         StrictCclTopologyScope warn_only(false);
@@ -1039,7 +1041,8 @@ TEST(CclTopologyUtils, AllGatherOfACollapsedShardAlongAnOuterAxisIsRefusedUnless
     const MeshShape mesh(2, 4);
     const auto in = collapsed_label(mesh, TopoShard{3});
 
-    // Rule (d): gathering dim 3 along axis 0 interleaves the pieces axis 1 keeps apart.
+    // The interleave refusal (require_contiguous_gather): gathering dim 3 along axis 0 interleaves the pieces axis 1
+    // keeps apart.
     {
         StrictCclTopologyScope strict(false);
         EXPECT_FALSE(topo::all_gather_output_topology(in, 0, mesh, kRank, 3).has_value());
@@ -1112,7 +1115,7 @@ TEST(CclTopologyUtils, ReduceScatterShardsTheClusterAxisWithTheNormalisedDim) {
     const MeshShape mesh(2, 4);
     StrictCclTopologyScope strict(true);
 
-    // Rule (f): only normalised dims are written.
+    // Only normalised dims are written into a placement.
     EXPECT_EQ(
         topo::reduce_scatter_output_topology(nd_label(mesh, {TopoReplicate{}, TopoReplicate{}}), 1, mesh, kRank, -1),
         nd_label(mesh, {TopoReplicate{}, TopoShard{3}}));
@@ -1261,15 +1264,22 @@ TEST(CclTopologyUtils, ReduceScatterWholeMeshIsTheCollapsedLabelOverTheInputCoor
             << mesh;
     }
 
-    // A tensor on one row of a 2x4 mesh (an N-D mapper with an offset): the ring is its four devices, in order, and
-    // the label carries those coordinates.
+    // A tensor on one row of a 2x4 mesh (an N-D mapper with an offset): a whole-mesh scatter spans every device of
+    // the mesh, four of which the label does not describe, so it is refused (a tensor that really lives on four
+    // devices is one on a 1x4 sub-mesh device, whose own shape is what its hooks pass).
     const MeshShape mesh(2, 4);
     const std::vector<MeshCoordinate> second_row{
         MeshCoordinate(1, 0), MeshCoordinate(1, 1), MeshCoordinate(1, 2), MeshCoordinate(1, 3)};
-    EXPECT_EQ(
-        topo::reduce_scatter_output_topology(
-            nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoReplicate{}}, second_row), std::nullopt, mesh, kRank, 3),
-        TensorTopology(MeshShape(4), {TopoShard{3}}, second_row));
+    EXPECT_NE(
+        message_of([&] {
+            topo::reduce_scatter_output_topology(
+                nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoReplicate{}}, second_row),
+                std::nullopt,
+                mesh,
+                kRank,
+                3);
+        }).find("covers"),
+        std::string::npos);
 
     // Another dim sharded on a non-trivial axis: the whole-mesh reduction sums every device's tensor into the piece
     // each receives, so the dim-2 pieces are consumed and the collapsed label is honest (the old hook emitted
@@ -1341,6 +1351,118 @@ TEST(CclTopologyUtils, MeshPartitionAndAllToAllShareTheReduceScatterLabelExceptW
     EXPECT_FALSE(topo::all_to_all_output_topology(held_other_only, 1, mesh, kRank, 3).has_value());
 }
 
+TEST(CclTopologyUtils, WholeMeshPartitionOfACollapsedShardOfAnotherDimIsRefused) {
+    // The collapsed form of the other-dim refusal above: {N}, [Shard{2}] partitioned on dim 3 leaves device k with
+    // chunk k of dim 2 next to piece k of dim 3, which no label states, so the partition kinds refuse before the
+    // collapsed early return; the reduction consumes the chunks and is labelled. Same-dim and Replicate collapsed
+    // inputs compose for every kind.
+    for (const auto& mesh : {MeshShape(1, 8), MeshShape(2, 4)}) {
+        const auto other_dim = collapsed_label(mesh, TopoShard{2});
+        EXPECT_EQ(
+            topo::reduce_scatter_output_topology(other_dim, std::nullopt, mesh, kRank, 3),
+            collapsed_label(mesh, TopoShard{3}))
+            << mesh;
+        {
+            StrictCclTopologyScope warn_only(false);
+            EXPECT_FALSE(topo::mesh_partition_output_topology(other_dim, std::nullopt, mesh, kRank, 3).has_value())
+                << mesh;
+            EXPECT_FALSE(topo::all_to_all_output_topology(other_dim, std::nullopt, mesh, kRank, 3).has_value()) << mesh;
+        }
+        StrictCclTopologyScope strict(true);
+        EXPECT_NE(
+            message_of([&] {
+                topo::mesh_partition_output_topology(other_dim, std::nullopt, mesh, kRank, 3);
+            }).find("not expressible"),
+            std::string::npos)
+            << mesh;
+        EXPECT_EQ(
+            topo::mesh_partition_output_topology(collapsed_label(mesh, TopoShard{3}), std::nullopt, mesh, kRank, 3),
+            collapsed_label(mesh, TopoShard{3}))
+            << mesh;
+        EXPECT_EQ(
+            topo::all_to_all_output_topology(collapsed_label(mesh, TopoReplicate{}), std::nullopt, mesh, kRank, 3),
+            collapsed_label(mesh, TopoShard{3}))
+            << mesh;
+    }
+}
+
+TEST(CclTopologyUtils, WholeMeshScatterOfARowMajorReshapeIsExact) {
+    // A 2-D mapper whose mesh_shape_override does not fit the mesh ({1,8} or {4,2} over a 2x4) lays the tensor out
+    // row-major over every device: its axes are not the mesh's, so a cluster-axis op cannot address them and is
+    // refused, but a whole-mesh scatter addresses no axis -- ring rank i gets piece i -- and the collapsed label over
+    // the same coordinates is exact. A partition
+    // still reads the other-dim restriction off the label's own axes.
+    const MeshShape mesh(2, 4);
+    const auto all = row_major_coords(mesh);
+    StrictCclTopologyScope warn_only(false);
+    for (const auto& reshape : {MeshShape(1, 8), MeshShape(4, 2)}) {
+        const auto same_dim = nd_label(reshape, {TopoReplicate{}, TopoShard{3}}, all);
+        EXPECT_EQ(
+            topo::reduce_scatter_output_topology(same_dim, std::nullopt, mesh, kRank, 3),
+            collapsed_label(mesh, TopoShard{3}))
+            << reshape;
+        EXPECT_EQ(
+            topo::mesh_partition_output_topology(same_dim, std::nullopt, mesh, kRank, 3),
+            collapsed_label(mesh, TopoShard{3}))
+            << reshape;
+        EXPECT_FALSE(topo::reduce_scatter_output_topology(same_dim, 1, mesh, kRank, 3).has_value()) << reshape;
+        EXPECT_FALSE(topo::mesh_partition_output_topology(same_dim, 1, mesh, kRank, 3).has_value()) << reshape;
+
+        const auto other_dim = nd_label(reshape, {TopoReplicate{}, TopoShard{2}}, all);
+        EXPECT_EQ(
+            topo::reduce_scatter_output_topology(other_dim, std::nullopt, mesh, kRank, 3),
+            collapsed_label(mesh, TopoShard{3}))
+            << reshape;
+        EXPECT_FALSE(topo::mesh_partition_output_topology(other_dim, std::nullopt, mesh, kRank, 3).has_value())
+            << reshape;
+    }
+}
+
+TEST(CclTopologyUtils, OpsRefuseALabelThatDoesNotCoverTheDevicesTheyReach) {
+    // Coverage: a (1, 4) row block on a 2x4 is addressed along axis 1,
+    // which it spans, but not along axis 0 (extent 1 of 2: the groups pair each of its devices with one the label
+    // does not describe) nor over the whole mesh (eight devices, four described). Both the host form of the label
+    // (the block's own coordinates) and the device form (the storage's, every device) are judged by the shape.
+    const MeshShape mesh(2, 4);
+    const auto all = row_major_coords(mesh);
+    std::vector<MeshCoordinate> row0(all.begin(), all.begin() + 4);
+    StrictCclTopologyScope warn_only(false);
+    for (const auto& coords : {row0, all}) {
+        const auto row = nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoReplicate{}}, coords);
+        // The spanned axis: labelled within the block, coordinates kept.
+        EXPECT_EQ(
+            topo::reduce_scatter_output_topology(row, 1, mesh, kRank, 3),
+            nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoShard{3}}, coords));
+        EXPECT_EQ(
+            topo::mesh_partition_output_topology(row, 1, mesh, kRank, 3),
+            nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoShard{3}}, coords));
+        EXPECT_EQ(
+            topo::all_gather_output_topology(row, 1, mesh, kRank, 3),
+            nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoReplicate{}}, coords));
+        // The axis the block does not span, and the whole mesh: refused for every family.
+        for (const auto& axis : {std::optional<uint32_t>{0}, std::optional<uint32_t>{}}) {
+            EXPECT_FALSE(topo::reduce_scatter_output_topology(row, axis, mesh, kRank, 3).has_value());
+            EXPECT_FALSE(topo::mesh_partition_output_topology(row, axis, mesh, kRank, 3).has_value());
+            EXPECT_FALSE(topo::all_to_all_output_topology(row, axis, mesh, kRank, 3).has_value());
+            EXPECT_FALSE(topo::all_gather_output_topology(row, axis, mesh, kRank, 3).has_value());
+            EXPECT_FALSE(topo::all_broadcast_output_topology(row, axis, mesh, kRank).has_value());
+            EXPECT_FALSE(topo::all_reduce_output_topology(row, axis, mesh, kRank).has_value());
+        }
+    }
+    // A 2x2 block at an offset spans axis 0 but not axis 1.
+    const std::vector<MeshCoordinate> block{
+        MeshCoordinate(0, 2), MeshCoordinate(0, 3), MeshCoordinate(1, 2), MeshCoordinate(1, 3)};
+    const auto square = nd_label(MeshShape(2, 2), {TopoReplicate{}, TopoShard{2}}, block);
+    EXPECT_EQ(
+        topo::mesh_partition_output_topology(square, 0, mesh, kRank, 3),
+        nd_label(MeshShape(2, 2), {TopoShard{3}, TopoShard{2}}, block));
+    EXPECT_FALSE(topo::mesh_partition_output_topology(square, 1, mesh, kRank, 3).has_value());
+    StrictCclTopologyScope strict(true);
+    EXPECT_NE(
+        message_of([&] { topo::all_gather_output_topology(square, 1, mesh, kRank, 3); }).find("covers"),
+        std::string::npos);
+}
+
 TEST(CclTopologyUtils, CallerRelabelsScopeSilencesRefusalsForIntermediates) {
     // all_reduce_async labels its result from its own input and runs reduce_scatter / all_gather on intermediates
     // nobody reads; inside the scope their refusals are nullopt without a log or a TT_FATAL, honest labels are
@@ -1380,4 +1502,67 @@ TEST(CclTopologyUtils, StrictModeThrowsWhereWarnOnlyReturnsNullopt) {
     EXPECT_THROW(topo::reduce_scatter_output_topology(fewer_shards, 1, mesh, kRank, 3), std::runtime_error);
     const auto message = message_of([&] { topo::all_reduce_output_topology(fewer_shards, 1, mesh, kRank); });
     EXPECT_NE(message.find("row-major"), std::string::npos) << message;
+}
+
+TEST(CclTopologyUtils, RefuseIsHandledLikeTheHelpersOwnRefusals) {
+    // A hook-level refusal (a label the op cannot renumber into its output layout, a ring order no label carries)
+    // goes through the same handling as the helpers' own: nullopt in warn-only mode, TT_FATAL under strict mode,
+    // silent inside a CallerRelabelsScope -- so strict mode covers every "no honest label", not only the helpers'.
+    {
+        StrictCclTopologyScope warn_only(false);
+        EXPECT_FALSE(topo::refuse("hook: no honest label", topo::RefusalFamily::Gather).has_value());
+        EXPECT_FALSE(topo::refuse("hook: no honest label", topo::RefusalFamily::Scatter).has_value());
+    }
+    StrictCclTopologyScope strict(true);
+    {
+        const topo::CallerRelabelsScope caller_relabels;
+        EXPECT_FALSE(topo::refuse("hook: intermediate", topo::RefusalFamily::Scatter).has_value());
+    }
+    const auto message = message_of([&] { topo::refuse("hook: no honest label", topo::RefusalFamily::Gather); });
+    EXPECT_NE(message.find("hook: no honest label"), std::string::npos) << message;
+    EXPECT_THROW(topo::refuse("hook: no honest label", topo::RefusalFamily::Scatter), std::runtime_error);
+}
+
+TEST(CclTopologyUtils, UncollapseJudgesASubRangeLabelOnADeviceTensorByItsShape) {
+    // A device tensor's label lists its storage's coordinates: every device of the mesh, however small the block its
+    // input occupied (an op output's buffer spans the mesh and update_output_tensor_topologies keeps each output's
+    // own coordinates). from_torch(ShardTensor2dMesh(mesh_shape=(1, C))) on a 2x4 therefore reaches the ops as a
+    // (1, 4) distribution over eight coordinates, which no (1, 4)-shaped block matches. With more coordinates than
+    // the distribution has devices the shape decides alone: a shape that fits the mesh per axis was mapped as a
+    // block (its axes are the mesh's), one that does not fit was laid out row-major over the mesh.
+    const MeshShape mesh(2, 4);
+    const auto all = row_major_coords(mesh);
+    std::string reason;
+
+    const std::vector<TopoPlacement> row_placements{TopoReplicate{}, TopoShard{3}};
+    const auto row = topo::uncollapse_placements(nd_label(MeshShape(1, 4), row_placements, all), mesh, &reason);
+    ASSERT_TRUE(row.has_value()) << reason;
+    EXPECT_EQ(std::vector<TopoPlacement>(row->begin(), row->end()), row_placements);
+    const std::vector<TopoPlacement> column_placements{TopoShard{3}, TopoShard{2}};
+    const auto column = topo::uncollapse_placements(nd_label(MeshShape(2, 1), column_placements, all), mesh, &reason);
+    ASSERT_TRUE(column.has_value()) << reason;
+    EXPECT_EQ(std::vector<TopoPlacement>(column->begin(), column->end()), column_placements);
+
+    // (4, 1) does not fit a 2x4 mesh (four chunks along an axis of two rows): the mapper laid it out row-major over
+    // row 0, so its axis 0 is the mesh's axis 1 and no per-axis edit describes it -- refused as before, whatever the
+    // coordinates say.
+    EXPECT_FALSE(
+        topo::uncollapse_placements(nd_label(MeshShape(4, 1), {TopoShard{3}, TopoReplicate{}}, all), mesh, &reason)
+            .has_value());
+    EXPECT_NE(reason.find("align"), std::string::npos) << reason;
+
+    // With exactly the distribution's coordinates (a host tensor straight from the mapper) the block check still
+    // applies: a (1, 4) row over four coordinates that are not a row is refused.
+    const std::vector<MeshCoordinate> not_a_row{
+        MeshCoordinate(0, 0), MeshCoordinate(1, 0), MeshCoordinate(0, 1), MeshCoordinate(1, 1)};
+    EXPECT_FALSE(
+        topo::uncollapse_placements(nd_label(MeshShape(1, 4), row_placements, not_a_row), mesh, &reason).has_value());
+    EXPECT_NE(reason.find("align"), std::string::npos) << reason;
+
+    // The ops' per-axis edits then apply: a broadcast along axis 1 of the (1, 4) row replicates it, keeping the
+    // distribution shape and the (storage) coordinates.
+    const auto broadcast =
+        topo::all_broadcast_output_topology(nd_label(MeshShape(1, 4), row_placements, all), 1, mesh, kRank);
+    ASSERT_TRUE(broadcast.has_value());
+    EXPECT_EQ(*broadcast, nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoReplicate{}}, all));
 }

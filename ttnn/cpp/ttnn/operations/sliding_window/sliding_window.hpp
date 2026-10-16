@@ -22,7 +22,7 @@ enum class PaddingMode : uint8_t {
 };
 
 struct ParallelConfig {
-    CoreRangeSet grid;
+    tt::tt_metal::CoreRangeSet grid;
     tt::tt_metal::TensorMemoryLayout shard_scheme{0};
     tt::tt_metal::ShardOrientation shard_orientation{0};
 
@@ -63,7 +63,8 @@ struct SlidingWindowConfig {
     // parallel configuration
     uint32_t num_cores_nhw = 1;                                             // num cores along collapsed height nhw
     uint32_t num_cores_c = 1;                                               // num cores along width c
-    CoreRangeSet core_range_set = CoreRangeSet(CoreRange({0, 0}, {0, 0}));  // active cores
+    tt::tt_metal::CoreRangeSet core_range_set =
+        tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {0, 0}));  // active cores
 
     bool snap_to_tile = false;
     bool is_bilinear = false;

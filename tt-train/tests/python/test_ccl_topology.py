@@ -21,13 +21,12 @@ which call the ttnn experimental async CCL ops.  They exist to catch ops
 that silently drop or fail to update ``TensorTopology`` placements on
 their output tensors.
 
-The fixture opens a 2x2 line-line mesh (4 devices).
+The fixture opens a 2x2 line-line mesh (4 devices). Every test runs with
+``ttnn.CONFIG.strict_ccl_topology`` on (what CI runs), so a label the CCL
+topology helper refuses is an error, not a warning plus the input's label.
 """
 
 from __future__ import annotations
-
-import os
-from typing import Optional
 
 import numpy as np
 import pytest
@@ -35,7 +34,7 @@ import pytest
 import ttnn
 import ttml
 
-pytestmark = pytest.mark.requires_device
+pytestmark = [pytest.mark.requires_device, pytest.mark.usefixtures("strict_ccl_topology")]
 
 # Default mesh for the main tests: 2x2 with both axes addressable as the
 # collective axis. Both axes are size 2 so any axis can be used as the
@@ -45,134 +44,23 @@ AXIS_SIZE = 2
 CLUSTER_AXIS = 1  # axis used as the collective axis in the main suite
 OTHER_AXIS = 0  # axis we will sometimes shard on to verify it stays put
 
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_MGD_FOR_ARCH_AND_SHAPE = {
-    ("blackhole", MESH_SHAPE_2X2): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_2_2_line_line.textproto"),
-}
-
-
-def _detect_arch() -> Optional[str]:
-    """Return ``"blackhole"`` or ``"wormhole_b0"`` for the host, or ``None``.
-
-    Uses ``ttnn.get_arch_name()`` which reads the cluster yaml at
-    process start and does not require any device to be open.
-    """
-    try:
-        name = ttnn.get_arch_name().lower()
-    except Exception:  # noqa: BLE001
-        return None
-    if "blackhole" in name:
-        return "blackhole"
-    if "wormhole_b0" in name:
-        return "wormhole_b0"
-    return None
-
-
-def _num_available_devices() -> int:
-    """Total devices visible to the cluster, or 0 if we can't tell."""
-    try:
-        return int(ttnn.distributed.get_num_devices())
-    except Exception:  # noqa: BLE001
-        return 0
-
 
 # ---------------------------------------------------------------------------
 # Multi-device mesh fixtures
 # ---------------------------------------------------------------------------
 
 
-def _close_device_mesh_quietly() -> None:
-    """Reverse ``open_device_mesh`` (close device, disable fabric, clear the global mesh),
-    swallowing errors so it is safe on the pre-open and teardown paths."""
-    try:
-        ttml.close_device_mesh()
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _ensure_mgd_path(shape: tuple[int, ...]) -> Optional[str]:
-    """Set ``TT_MESH_GRAPH_DESC_PATH`` for ``shape`` and return the previous value.
-
-    Returns the previous env var so a caller can restore it on teardown.
-    Always overwrites the env var when an MGD file is bundled for the
-    host arch + requested shape, so that switching meshes inside a single
-    test session works correctly. Does not overwrite when no bundled MGD
-    matches — that lets a user-supplied ``TT_MESH_GRAPH_DESC_PATH`` win.
-    """
-    previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
-    arch = _detect_arch()
-    if arch is None:
-        return previous
-    candidate = _MGD_FOR_ARCH_AND_SHAPE.get((arch, shape))
-    if candidate and os.path.isfile(candidate):
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
-    return previous
-
-
-def _restore_mgd_path(previous: Optional[str]) -> None:
-    if previous is None:
-        os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    else:
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
-
-
-def _skip_if_unsupported(shape: tuple[int, ...]) -> None:
-    """Skip the test up-front when the host can't run a ``shape`` mesh.
-
-    Two conditions trip a skip:
-      * Cluster has fewer than ``prod(shape)`` chips — e.g. N300 (2)
-        can't host a 2x2 (4) mesh.
-      * Host arch has no bundled MGD entry for ``shape`` and no
-        ``TT_MESH_GRAPH_DESC_PATH`` was supplied — we'd just open and
-        crash inside the fabric layer otherwise.
-
-    Skipping here, before any device or fabric state has been touched,
-    keeps the rest of the test session clean (no leaked fabric config,
-    no half-open mesh).
-    """
-    needed = 1
-    for d in shape:
-        needed *= d
-    available = _num_available_devices()
-    if available and available < needed:
-        pytest.skip(f"CCL topology tests need a {shape} mesh ({needed} chips); host has {available}.")
-
-    arch = _detect_arch()
-    if os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
-        return  # user override wins; assume they know what they're doing
-    if arch is None:
-        return  # unknown arch, let the open path try
-    if (arch, shape) not in _MGD_FOR_ARCH_AND_SHAPE:
-        pytest.skip(
-            f"CCL topology tests need a bundled MGD for arch={arch!r} shape={shape}; "
-            f"none available. Either add one under tt-train/configs/mgd/ and update "
-            f"_MGD_FOR_ARCH_AND_SHAPE, or export TT_MESH_GRAPH_DESC_PATH yourself."
-        )
-
-
-def _open_mesh_or_skip(shape: tuple[int, ...]):
-    """Open a fresh mesh of ``shape``, skipping the test if not possible.
-
-    Returns the previous MGD path so a teardown can restore it.
-    """
-    _skip_if_unsupported(shape)
-    previous_mgd = _ensure_mgd_path(shape)
-    _close_device_mesh_quietly()
-    try:
-        ttml.open_device_mesh(shape)
-    except Exception as e:  # noqa: BLE001
-        _restore_mgd_path(previous_mgd)
-        pytest.skip(f"CCL topology tests need a {shape} mesh: {e}")
-    return previous_mgd
-
-
 @pytest.fixture(scope="module")
-def ccl_mesh():
-    """Open the default 2x2 mesh used by the main test classes."""
-    previous_mgd = _open_mesh_or_skip(MESH_SHAPE_2X2)
-    yield ttml.mesh()
-    _close_device_mesh_quietly()
-    _restore_mgd_path(previous_mgd)
+def ccl_mesh(fresh_device_mesh):
+    """Open the default 2x2 mesh used by the main test classes.
+
+    Skips when the host has too few chips, or when there is no bundled MGD for
+    the host arch and ``TT_MESH_GRAPH_DESC_PATH`` isn't set -- the open would just
+    crash inside the fabric layer otherwise. A host that passes both checks but
+    still fails to open the mesh fails the tests instead.
+    """
+    with fresh_device_mesh(MESH_SHAPE_2X2, what="CCL topology tests", require_mgd=True) as mesh:
+        yield mesh
 
 
 # ---------------------------------------------------------------------------
@@ -409,7 +297,8 @@ class TestAllGatherTopology:
 
 @pytest.fixture
 def strict_ccl_topology():
-    """Promote the CCL topology helper's refusals from warnings to errors for the test (what CI runs)."""
+    """Promote the CCL topology helper's refusals from warnings to errors (what CI runs). Applied to every test in
+    this module through ``pytestmark``, so a refusal surfaces as the helper's reason rather than as a label mismatch."""
     previous = ttnn.CONFIG.strict_ccl_topology
     ttnn.CONFIG.strict_ccl_topology = True
     try:
@@ -472,23 +361,23 @@ class TestCollapsedInputs:
     """The default mappers produce one placement for the whole mesh; before the CCL topology helper every
     collective edited placements by mesh-axis index, so cluster_axis=1 did nothing to the label and cluster_axis=0
     overwrote the single placement. These tests pin the per-axis labels the helper derives and check them against
-    the bytes by composing the shards the way the label says. All run with strict mode on, so a label the helper
-    refuses is an error (asserted explicitly in the negative controls)."""
+    the bytes by composing the shards the way the label says. Like the rest of the module they run with strict mode
+    on, so a label the helper refuses is an error (asserted explicitly in the negative controls)."""
 
     ROWS, COLS = MESH_SHAPE_2X2
 
     @pytest.fixture(autouse=True)
-    def _setup(self, ccl_mesh, strict_ccl_topology):
+    def _setup(self, ccl_mesh):
         self.mesh = ccl_mesh
 
     def _pieces(self, data, dim):
         return np.split(data, self.ROWS * self.COLS, axis=dim)
 
     def test_all_gather_same_dim_inner_axis_keeps_outer_shard(self):
-        """Same-dim case of rule (e): {4}, [Shard(3)] expands to Shard(3) on both axes; gathering dim 3 along axis 1
-        rebuilds each row's chunk, so axis 0 keeps Shard(3) -- it must not be cleared to Replicate (the rows differ).
-        Negative control: before this change the label stayed {4}, [Shard(3)] (cluster_axis=1 was out of range of
-        the one placement), composing to four copies of the row chunks."""
+        """all_gather_output_topology replicates only the gathered axis: {4}, [Shard(3)] expands to Shard(3) on both
+        axes; gathering dim 3 along axis 1 rebuilds each row's chunk, so axis 0 keeps Shard(3) -- it must not be
+        cleared to Replicate (the rows differ). Negative control: before this change the label stayed {4}, [Shard(3)]
+        (cluster_axis=1 was out of range of the one placement), composing to four copies of the row chunks."""
         tensor, data = _collapsed_tensor((1, 1, 64, 128), lambda d: ttnn.shard_tensor_to_mesh_mapper(d, 3), seed=30)
         _assert_collapsed(tensor, 3, "input sanity check")
 
@@ -499,18 +388,20 @@ class TestCollapsedInputs:
         assert tuple(int(d) for d in result.tensor_topology().distribution_shape()) == MESH_SHAPE_2X2
         assert np.array_equal(_compose_by_label(result), data)
 
-    def test_all_gather_same_dim_outer_axis_is_refused(self):
-        """Rule (d), negative control: {4}, [Shard(3)] puts piece 2r+c on device (r, c); gathering dim 3 along axis 0
-        gives device (r, c) pieces c and 2+c side by side, which is no slice of any tensor. Strict mode makes that
-        an error; before this change the label silently became {4}, [Replicate], claiming all four devices equal."""
+    def test_all_gather_same_dim_outer_axis_is_refused(self, expect_error):
+        """Negative control for all_gather_output_topology's interleave refusal (require_contiguous_gather): {4},
+        [Shard(3)] puts piece 2r+c on device (r, c); gathering dim 3 along axis 0 gives device (r, c) pieces c and 2+c
+        side by side, which is no slice of any tensor. Strict mode makes that an error; before this change the label
+        silently became {4}, [Replicate], claiming all four devices equal."""
         tensor, _ = _collapsed_tensor((1, 1, 64, 128), lambda d: ttnn.shard_tensor_to_mesh_mapper(d, 3), seed=31)
 
-        with pytest.raises(RuntimeError, match="would interleave"):  # allow-pytest.raises: no expect_error here
+        with expect_error(RuntimeError, "would interleave"):
             ttml.core.distributed.all_gather(tensor, 3, cluster_axis=0)
 
     def test_all_gather_other_dim_outer_axis(self):
-        """Rule (d) relaxation: gathering dim 2 (not the sharded dim) along axis 0 leaves the dim-3 pieces in place:
-        [Replicate, Shard(3)], and column c composes to concat_2(piece c, piece 2+c)."""
+        """The interleave refusal applies only to the dim the input shards: gathering dim 2 (not the sharded dim) along
+        axis 0 leaves the dim-3 pieces in place: [Replicate, Shard(3)], and column c composes to concat_2(piece c,
+        piece 2+c)."""
         tensor, data = _collapsed_tensor((1, 1, 64, 128), lambda d: ttnn.shard_tensor_to_mesh_mapper(d, 3), seed=32)
 
         result = ttml.core.distributed.all_gather(tensor, 2, cluster_axis=0)
@@ -537,8 +428,9 @@ class TestCollapsedInputs:
         assert np.array_equal(_compose_by_label(result), data * self.COLS)
 
     def test_reduce_scatter_collapsed_shard_same_dim_collapses(self):
-        """Rule (c): {4}, [Shard(3)] reduce-scattered on dim 3 along the inner axis: row r sums its two pieces and
-        splits the sum back across the row -- row-major hierarchical sharding, the collapsed label again."""
+        """reduce_scatter_output_topology collapses a same-dim scatter along the inner axis: {4}, [Shard(3)]
+        reduce-scattered on dim 3 along the inner axis: row r sums its two pieces and splits the sum back across the
+        row -- row-major hierarchical sharding, the collapsed label again."""
         tensor, data = _collapsed_tensor((1, 1, 64, 256), lambda d: ttnn.shard_tensor_to_mesh_mapper(d, 3), seed=34)
 
         result = ttml.core.distributed.reduce_scatter(tensor, 3, cluster_axis=CLUSTER_AXIS)

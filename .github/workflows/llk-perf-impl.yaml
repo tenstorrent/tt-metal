@@ -239,7 +239,8 @@ jobs:
       - name: Merge the run's shards into one file per architecture
         working-directory: ${{ env.LLK_PATH }}/tests/python_tests
         env:
-          PYTHONPATH: .
+          # helpers is `.`; tt_llk_perf is tools/python. Relative: github.workspace is the host path, absent in this container.
+          PYTHONPATH: .:../../tools/python
           # Required, and not by the merge: importing anything under helpers
           # runs helpers/device.py, whose module scope calls
           # get_chip_architecture(), which probes a device when CHIP_ARCH is

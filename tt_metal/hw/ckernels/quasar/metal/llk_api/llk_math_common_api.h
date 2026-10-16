@@ -43,30 +43,7 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
     const DataFormat srca_format = static_cast<DataFormat>(unpack_dst_format[srca_operand_id]);
     const DataFormat srcb_format = static_cast<DataFormat>(unpack_dst_format[srcb_operand_id]);
 
-    // TODO: AM; introduce dest mode enum, issue #37483
-    // Determine the dest format based on the srcA/B formats and EN_32BIT_DEST_FORMAT
-    if (EN_32BIT_DEST_FORMAT && _is_src_fmt_fp32_dest_compatible_(srca_format) &&
-        _is_src_fmt_fp32_dest_compatible_(srcb_format)) {
-        // TODO: AM; hardcoding false for EN_IMPLIED_MATH_FORMAT for now, will be fixed in issue #37720
-        _llk_math_srcAB_hw_configure_<
-            false /*EN_IMPLIED_MATH_FORMAT*/,
-            true /*EN_FP32_DEST_FORMAT*/,
-            false /*EN_INT32_DEST_FORMAT*/>(srca_format, srcb_format);
-    } else if (
-        EN_32BIT_DEST_FORMAT && _is_src_fmt_int32_dest_compatible_(srca_format) &&
-        _is_src_fmt_int32_dest_compatible_(srcb_format)) {
-        // TODO: AM; hardcoding false for EN_IMPLIED_MATH_FORMAT for now, will be fixed in issue #37720
-        _llk_math_srcAB_hw_configure_<
-            false /*EN_IMPLIED_MATH_FORMAT*/,
-            false /*EN_FP32_DEST_FORMAT*/,
-            true /*EN_INT32_DEST_FORMAT*/>(srca_format, srcb_format);
-    } else {
-        // TODO: AM; hardcoding false for EN_IMPLIED_MATH_FORMAT for now, will be fixed in issue #37720
-        _llk_math_srcAB_hw_configure_<
-            false /*EN_IMPLIED_MATH_FORMAT*/,
-            false /*EN_FP32_DEST_FORMAT*/,
-            false /*EN_INT32_DEST_FORMAT*/>(srca_format, srcb_format);
-    }
+    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, EN_32BIT_DEST_FORMAT>(srca_format, srcb_format);
 }
 
 inline void llk_math_reconfig_remap(const bool /*remap_enable*/) {}
@@ -126,7 +103,7 @@ inline void llk_math_wait_for_dest_available() {
     if constexpr (UnpackToDestEn) {
         _llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(
             semaphore::UNPACK_MATH);
-        _llk_sync_get_(semaphore::UNPACK_MATH);
+        // The UNPACK_MATH get is in llk_math_dest_section_done: the tile stays counted until MATH_PACK holds it.
     }
 }
 
@@ -144,6 +121,11 @@ inline void llk_math_dest_section_done() {
     // Always post MATH_PACK, the math thread is in the chain for every op, including the
     // no-real-work unpack-to-dest forwarder.
     _llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
+    if constexpr (UnpackToDestEn) {
+        // Release the unpacked tile only now, after MATH_PACK counts it: getting it at acquire left both
+        // semaphores at zero while SFPU still worked on Dest, and unpack overwrote the tile.
+        _llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);
+    }
     if constexpr (DST_SYNC_MODE == DstSync::SyncHalf && !UnpackToDestEn) {
         _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::WAIT_SFPU, p_stall::MATH>();
     }

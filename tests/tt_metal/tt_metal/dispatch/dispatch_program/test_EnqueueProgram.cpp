@@ -1482,6 +1482,9 @@ TEST_F(UnitMeshCQFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
 }
 
 TEST_F(UnitMeshCQFixture, ActiveEthEnqueueDummyProgram) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     const auto erisc_count =
         tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
     if (erisc_count != 2) {
@@ -1505,6 +1508,9 @@ TEST_F(UnitMeshCQFixture, ActiveEthEnqueueDummyProgram) {
 // Test to see we can launch a kernel at the same time on both active ethernet cores
 // If they can't handshake it means only 1 was able to launch
 TEST_F(UnitMeshCQFixture, ActiveEthTwoRiscsHandshake) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     const auto erisc_count =
         tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
     if (erisc_count < 2) {
@@ -1558,6 +1564,9 @@ TEST_F(UnitMeshCQFixture, ActiveEthTwoRiscsHandshake) {
 // Sanity test for setting and verifying common and unique runtime args to single cores via ERISC. Some arch may return
 // 0 active eth cores, that's okay.
 TEST_F(UnitMeshCQFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementErisc) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_devices()[0]->get_active_ethernet_cores(true)) {
             CoreRange cr0(eth_core);
@@ -2913,6 +2922,9 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestSimplePrograms) {
 }
 
 TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     for (const auto& device : device_->get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
@@ -2944,6 +2956,9 @@ TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
 }
 
 TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     for (const auto& device : device_->get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
@@ -2971,6 +2986,9 @@ TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
 }
 
 TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestPrograms) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     for (const auto& device : device_->get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";

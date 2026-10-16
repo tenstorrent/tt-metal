@@ -188,7 +188,7 @@ all_gather_minimal_matmul_async_factory_helper(
     const uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<ttnn::GlobalSemaphore>& semaphore,
-    //    const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore,
+    const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore,
     //    bool using_persistent_buffers,
     const bool force_transpose,
     const uint32_t num_workers_per_link,
@@ -215,7 +215,7 @@ all_gather_minimal_matmul_async_factory_helper(
 
     auto grid_size =
         config.has_value() ? config.value().compute_with_storage_grid_size : device->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    auto core_grid = tt::tt_metal::CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     auto num_cores = core_grid.size();
 
     bool use_bias = bias_tensor.has_value();
@@ -404,13 +404,13 @@ all_gather_minimal_matmul_async_factory_helper(
     auto core_0_endy_1 = tt::tt_metal::CoreCoord{0, grid_size.y - 2};
     auto core_endx_1_0 = tt::tt_metal::CoreCoord{grid_size.x - 2, 0};
 
-    auto in0_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_endx_0 : core_0_endy);
-    auto in0_receiver_cores_no_fabric =
-        transpose_core_grid ? CoreRange(core_0_1, core_endx_endy_2) : CoreRange(core_1_0, core_endx_2_endy);
-    auto in0_receiver_cores_fabric =
-        transpose_core_grid ? CoreRange(core_0_endy_1, core_endx_endy) : CoreRange(core_endx_1_0, core_endx_endy);
-    auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
-    auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
+    auto in0_sender_cores = tt::tt_metal::CoreRange(core_0_0, transpose_core_grid ? core_endx_0 : core_0_endy);
+    auto in0_receiver_cores_no_fabric = transpose_core_grid ? tt::tt_metal::CoreRange(core_0_1, core_endx_endy_2)
+                                                            : tt::tt_metal::CoreRange(core_1_0, core_endx_2_endy);
+    auto in0_receiver_cores_fabric = transpose_core_grid ? tt::tt_metal::CoreRange(core_0_endy_1, core_endx_endy)
+                                                         : tt::tt_metal::CoreRange(core_endx_1_0, core_endx_endy);
+    auto in1_sender_cores = tt::tt_metal::CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
+    auto in1_receiver_cores = tt::tt_metal::CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
 
     auto in0_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
@@ -584,7 +584,7 @@ all_gather_minimal_matmul_async_factory_helper(
         return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
     };
 
-    std::vector<CoreRange> mux_core_ranges;
+    std::vector<tt::tt_metal::CoreRange> mux_core_ranges;
     mux_core_ranges.reserve(num_mux_cores);
     for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
         uint32_t dir = mux_id % 2;  // 2 being the number of directions
@@ -593,7 +593,7 @@ all_gather_minimal_matmul_async_factory_helper(
             mux_core_ranges.emplace_back(in0_mux_logical(link, dir));
         }
     }
-    CoreRangeSet mux_core_range_set = CoreRangeSet(mux_core_ranges);
+    tt::tt_metal::CoreRangeSet mux_core_range_set = tt::tt_metal::CoreRangeSet(mux_core_ranges);
 
     const uint32_t l1_unreserved_base_address =
         device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -756,7 +756,7 @@ all_gather_minimal_matmul_async_factory_helper(
             fsdp_unicast_forward_args[1] = fsdp_ring_size - 1;  // distance_in_hops = N-1
         }
 
-        std::vector<CoreRange> fsdp_mux_core_ranges;
+        std::vector<tt::tt_metal::CoreRange> fsdp_mux_core_ranges;
         fsdp_mux_core_ranges.reserve(num_mux_cores);
         for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
             uint32_t dir = mux_id % 2;
@@ -771,7 +771,7 @@ all_gather_minimal_matmul_async_factory_helper(
                 fsdp_mux_core_ranges.emplace_back(fsdp_mux_logical(link, dir));
             }
         }
-        CoreRangeSet fsdp_mux_core_range_set = CoreRangeSet(fsdp_mux_core_ranges);
+        tt::tt_metal::CoreRangeSet fsdp_mux_core_range_set = tt::tt_metal::CoreRangeSet(fsdp_mux_core_ranges);
 
         fsdp_mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
             num_full_size_channels,
@@ -1163,7 +1163,7 @@ all_gather_minimal_matmul_async_factory_helper(
     }
 
     // Set common runtime args (same for all cores, updated in override_runtime_arguments)
-    // in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, [ternary_a, ternary_b],
+    // in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, barrier_sem, [ternary_a, ternary_b],
     // output_addrs...]
     {
         std::vector<uint32_t> in0_common_args = {
@@ -1172,6 +1172,7 @@ all_gather_minimal_matmul_async_factory_helper(
             in3_addr,
             semaphore.at(0).address(),
             semaphore.at(1).address(),
+            barrier_semaphore.has_value() ? barrier_semaphore->address() : 0,
         };
         if (use_fused_ternary) {
             in0_common_args.push_back(fused_ternary_input_a.value().buffer()->address());
@@ -1599,13 +1600,15 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     // Output layout: [0]=ag_output, [1]=persistent_weight_buffer (if FSDP), then chunk outputs
     const size_t mm_outputs_start = 1 + (attributes.fsdp_cluster_axis.has_value() ? 1 : 0);
 
-    // Build in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, [ternary], output_addrs...]
+    // Build in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, barrier_sem, [ternary],
+    // output_addrs...]
     std::vector<uint32_t> in0_common = {
         output_tensor.at(0).buffer()->address(),
         tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0,
         tensor_args.input_tensor.buffer()->address(),
         attributes.semaphore.at(0).address(),
         attributes.semaphore.at(1).address(),
+        attributes.barrier_semaphore.has_value() ? attributes.barrier_semaphore->address() : 0,
     };
     if (has_fused_ternary) {
         in0_common.push_back(tensor_args.fused_ternary_input_a.value().buffer()->address());
@@ -1706,7 +1709,7 @@ all_gather_minimal_matmul_async_factory(
     const uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<ttnn::GlobalSemaphore>& semaphore,
-    // const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore,
+    const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore,
     // bool using_persistent_buffers,
     const bool force_transpose,
     const uint32_t num_workers_per_link,
@@ -1746,7 +1749,7 @@ all_gather_minimal_matmul_async_factory(
             ring_index,
             topology,
             semaphore,
-            // barrier_semaphore,
+            barrier_semaphore,
             // using_persistent_buffers,
             force_transpose,
             num_workers_per_link,
@@ -1824,7 +1827,7 @@ AllGatherMinimalMatmulAsyncProgramFactory::create_at(
         device_index,
         attributes.topology,
         attributes.semaphore,
-        // attributes.barrier_semaphore,
+        attributes.barrier_semaphore,
         // attributes.using_persistent_buffers,
         attributes.force_transpose,
         attributes.num_workers_per_link,

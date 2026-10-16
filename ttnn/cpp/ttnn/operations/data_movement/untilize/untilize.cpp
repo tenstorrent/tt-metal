@@ -9,6 +9,7 @@
 #include "device/untilize_device_operation.hpp"
 #include "untilize_force.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
@@ -156,6 +157,39 @@ ttnn::Tensor untilize(
     using ttnn::operations::data_movement::untilize_codegen::is_demoted;
     using ttnn::operations::data_movement::untilize_codegen::supported_by_codegen;
     using ttnn::operations::data_movement::untilize_codegen::supported_execution_controls;
+
+    // Nothing to untilize. The routes below split work by block count, which is 0 for an empty
+    // input, so no work unit is emitted while the dataflow buffers are already declared and the
+    // spec is rejected. The device operation's validation and output spec are both fine on an
+    // empty input, so run them and allocate the result - the only thing skipped is the program,
+    // which cannot be built with no work to do.
+    if (input_tensor.logical_volume() == 0) {
+        // create_device_tensor dereferences the device, which is null for a host tensor.
+        TT_FATAL(input_tensor.device() != nullptr, "untilize: input tensor must be allocated on a device");
+        // A padded interleaved input belongs to untilize_with_unpadding, which derives the output
+        // shard geometry; delegate rather than duplicate that here.
+        if (!input_tensor.is_sharded() && input_tensor.logical_shape() != input_tensor.padded_shape()) {
+            return operations::data_movement::untilize_native(
+                input_tensor, memory_config, use_multicore, sub_core_grids);
+        }
+        // Everything else is the native prim's to decide. fp32_dest_acc_en, enough_space_height
+        // and pf_type only steer factory selection, which is skipped, and neither validate nor
+        // compute_output_specs reads them.
+        const ttnn::prim::UntilizeOperationAttributes attributes{
+            .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+            .use_multicore = use_multicore,
+            .fp32_dest_acc_en = false,
+            .sub_core_grids = sub_core_grids,
+            .enough_space_height = false,
+            .pf_type = 0,
+        };
+        const ttnn::prim::UntilizeTensorArgs tensor_args{input_tensor};
+        ttnn::prim::UntilizeDeviceOperation::validate_on_program_cache_miss(attributes, tensor_args);
+        return create_device_tensor(
+            ttnn::prim::UntilizeDeviceOperation::compute_output_specs(attributes, tensor_args),
+            input_tensor.device(),
+            input_tensor.tensor_topology());
+    }
 
     const bool controls_ok = supported_execution_controls(use_multicore, sub_core_grids);
 
