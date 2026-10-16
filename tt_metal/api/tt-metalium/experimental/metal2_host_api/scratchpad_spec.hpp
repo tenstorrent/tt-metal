@@ -19,10 +19,11 @@ namespace tt::tt_metal::experimental {
 //  ScratchpadSpec API
 // ============================================================================
 //
-// A ScratchpadSpec is a descriptor for a kernel scratchpad: an uninitialized region of node-local SRAM ("L1") for a
-// kernel to use as working memory.
+// A ScratchpadSpec is a descriptor for a kernel scratchpad: a private,
+// uninitialized region of node-local SRAM ("L1") for a kernel to use as
+// working memory.
 //
-// A scratchpad is private to its bound kernel by default. Both DM and compute kernels may use
+// A scratchpad is private to its bound kernel. Both DM and compute kernels may use
 // scratchpads. The kernel accesses it via the device-side accessor:
 //   Scratchpad<uint32_t> s(scratch::<accessor_name>);
 // The template argument is the element type the kernel views the region as.
