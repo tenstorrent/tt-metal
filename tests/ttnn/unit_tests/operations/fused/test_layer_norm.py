@@ -845,3 +845,51 @@ def test_norm_row_major_weight_partial_tile_padding(device, h, w, op_name):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_output_accuracy(torch_output_tensor, output_tensor)
+
+
+# ROW_MAJOR input wider than the L1-fit threshold (bf16 W >= 2592, fp32 W >= 1952) takes the large-tensor path,
+# whose compute kernel tilizes the input itself. Pass 0 used to wait on the tilized buffer directly and hung the
+# device (#58696). With a residual (which layer_norm requires in TILE layout), the input and residual blocks must
+# also be read interleaved.
+@pytest.mark.parametrize("h, w", [(32, 2592), (64, 4096)])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("with_residual", [False, True], ids=["no_residual", "residual"])
+def test_large_layer_norm_row_major_input(device, h, w, dtype, with_residual):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand((h, w), dtype=dtype)
+    torch_residual = torch.rand((h, w), dtype=dtype) if with_residual else None
+    reference_input = torch_input_tensor + torch_residual if with_residual else torch_input_tensor
+    torch_output_tensor = torch.nn.functional.layer_norm(reference_input, normalized_shape=[w])
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    residual_input_tensor = (
+        ttnn.from_torch(torch_residual, layout=ttnn.TILE_LAYOUT, device=device) if with_residual else None
+    )
+    output_tensor = ttnn.layer_norm(input_tensor, residual_input_tensor=residual_input_tensor)
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
+
+    assert_output_accuracy(torch_output_tensor, output_tensor)
+
+
+# The large-tensor reader reads gamma/beta as tiles: ROW_MAJOR input works with TILE gamma/beta, and ROW_MAJOR
+# gamma/beta are rejected on this path instead of being misread.
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_large_layer_norm_row_major_input_affine(device, dtype, expect_error):
+    h, w = 64, 4096
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand((h, w), dtype=dtype)
+    torch_weight = torch.rand((w,), dtype=dtype)
+    torch_bias = torch.rand((w,), dtype=dtype)
+    torch_output_tensor = torch.nn.functional.layer_norm(
+        torch_input_tensor, normalized_shape=[w], weight=torch_weight, bias=torch_bias
+    )
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch_weight.reshape(1, w), layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias.reshape(1, w), layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.from_device(ttnn.layer_norm(input_tensor, weight=weight, bias=bias)))
+    assert_output_accuracy(torch_output_tensor, output_tensor)
+
+    weight_rm = ttnn.from_torch(torch_weight.reshape(w // 32, 32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    bias_rm = ttnn.from_torch(torch_bias.reshape(w // 32, 32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "does not support row-major gamma/beta"):
+        ttnn.layer_norm(input_tensor, weight=weight_rm, bias=bias_rm)
