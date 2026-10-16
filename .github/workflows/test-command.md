@@ -361,8 +361,26 @@ post-steps:
             print out
           }' "$FILES_FILE")"
 
+        # l2 nightly is a last resort, not a default. `sanity-tests`' ttnn leg
+        # (tests/pipeline_reorg/ttnn_sanity_tests.yaml) already runs the
+        # tests/ttnn/unit_tests/operations/<family> suites for these families, so when the
+        # agent has dispatched it with the ttnn leg on, forcing the much heavier nightly
+        # suite on top is duplicate coverage. Still force it if the PR edits the nightly
+        # tests themselves (`tests/ttnn/nightly/**`): sanity-tests does not run those.
+        # Families with no sanity-tests equivalent (ccl, moreh, experimental, misc) are
+        # never filtered. Any l2 item the agent chose itself is left alone.
+        SANITY_TTNN="$(jq -r '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "sanity-tests")
+                               | ((.inputs["run-ttnn-sanity-tests"] // true) | tostring)] | any(. != "false")' "$OUT")"
+        if [ -n "$REQ" ] && [ "$SANITY_TTNN" = "true" ] && ! grep -q '^tests/ttnn/nightly/' "$FILES_FILE"; then
+          REQ_BEFORE_FILTER="$REQ"
+          REQ="$(printf '%s' "$REQ" | tr ',' '\n' \
+                 | { grep -vxE 'eltwise|data_movement|conv|matmul|pool|reduction|fused|transformers|sdpa|kernel_lib' || true; } \
+                 | paste -sd, -)"
+          echo "sanity-tests ttnn leg covers the ttnn unit-test families; l2 categories ${REQ_BEFORE_FILTER} -> ${REQ:-none}."
+        fi
+
         if [ -z "$REQ" ]; then
-          echo "No changed path maps to an l2-nightly op category; nothing to enforce."
+          echo "No changed path maps to an l2-nightly op category that needs enforcing; nothing to enforce."
         else
           BEFORE_CATS="$(jq -r '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly") | (.inputs.additional_test_categories // "MISSING")] | @json' "$OUT")"
           # Merge rather than overwrite: the agent may legitimately have added a
@@ -599,8 +617,15 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
    matches, the pipeline it names is always dispatched with the inputs it specifies, on
    top of whatever else you select. Count it toward the cap of 8.
 
-   `tt-metal-l2-nightly` is mandatory whenever the diff reaches an op family that has an
-   `additional_test_categories` selector. Match **every** row of the table below against the
+   `tt-metal-l2-nightly` is a nightly suite on scarce silicon, so treat it as a **last
+   resort**: dispatch it only for what no cheaper pipeline you are already selecting would
+   validate. `sanity-tests` with `run-ttnn-sanity-tests` on already runs the
+   `tests/ttnn/unit_tests/operations/` suites for `eltwise`, `data_movement`, `conv`,
+   `matmul`, `pool`, `reduction`, `fused`, `transformers`, `sdpa` and `kernel_lib`, so for
+   those families alone you do not need l2 on top, unless the PR edits `tests/ttnn/nightly/**`
+   (sanity-tests does not run those). It stays mandatory for `ccl`, `moreh`, `experimental`
+   and `misc`, which nothing else covers, and for any family when `sanity-tests` is not in
+   your selection. When l2 is needed, match **every** row of the table below against the
    changed paths, collect the categories of all rows that match, and dispatch the pipeline
    **once** with them comma-joined. A PR touching both
    `ttnn/cpp/ttnn/operations/eltwise/**` and `ttnn/cpp/ttnn/operations/data_movement/**`
@@ -631,8 +656,10 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
    categories (`docs_examples`, `cpp_accessor`, `cpp_lab_examples`) map to no
    `operations/` path — pass those only when the diff touches what they test.
 
-   None of these suites are covered by a pr-gate or post-commit job, so a change under
-   those paths that skips this rule is not tested where it is most likely to break. A hint
+   The nightly suites are not covered by a pr-gate or post-commit job. The ttnn leg of
+   `sanity-tests` is the only cheaper cover, and only for the families listed above; a
+   change to any other family that skips this rule is not tested where it is most likely
+   to break. A hint
    in the comment that names other hardware (e.g. `/test blackhole`) narrows the *rest* of
    your selection, not this rule; only an explicit `/test skip nightly` (or equivalent)
    opts out, and say so in the comment.
@@ -681,7 +708,7 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 | `models-t1-*` | Selectable SKU | Tier-1 (highest-priority) model changes under `models/` |
 | `models-t2-*`, `models-t3-*` | Selectable SKU | Tier-2/3 model changes |
 | `perf-device-models` | Single card | Device-perf regressions from op or kernel changes |
-| `tt-metal-l2-nightly` | WH + BH | Broad L2 coverage for wide-reaching `tt_metal/` changes. **Mandatory** for any change under a `ttnn/cpp/ttnn/operations/` family or its tests, with `additional_test_categories` naming every category the change reaches (see *Mandatory selections*) |
+| `tt-metal-l2-nightly` | WH + BH | Broad L2 coverage for wide-reaching `tt_metal/` changes. Last resort for `ttnn/cpp/ttnn/operations/` changes: mandatory for `ccl`/`moreh`/`experimental`/`misc`, and for the families `sanity-tests`' ttnn leg already covers only when it is not selected or `tests/ttnn/nightly/**` changed. Use `additional_test_categories` naming every category the change reaches (see *Mandatory selections*) |
 | `ttnn-run-sweeps` | Selectable | `ttnn/` op changes where sweep coverage is the real signal |
 | `vllm-model-tests` | Selectable SKU | vLLM serving integration |
 | `runtime-sanity-tests`, `runtime-unit-tests`, `runtime-integration-tests`, `runtime-perf-tests` | WH / BH / multichip | `tt_metal/impl/**`, `llrt/**`, `api/**`, `jit_build/**`, dispatch and runtime layers |
