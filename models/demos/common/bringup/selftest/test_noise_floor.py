@@ -260,3 +260,17 @@ def test_an_owner_waiver_passes_a_steps_noise_floor_checks_and_records_it(gspec,
     assert m["err_attn_norm_L00_waived"]["value"] == 1
     ok, lines = check_metrics({"err_attn_norm_L00": "<= limit"}, m)
     assert ok and any("WAIVED" in x for x in lines)
+
+
+def test_a_waiver_never_passes_a_wrong_module(gspec, monkeypatch):  # noqa: F811
+    """F97: a waiver covers a precision gap only: a zero stub (rel 1) of a waived step still fails, so the freeze's
+    stub check still works (DeepSeek-V4.1 ffn_hc: the waived test passed with a zero stub)."""
+    from models.demos.common.bringup.core.runs import IMPL_ENV
+    from models.demos.common.bringup.testing.component import run_component_test
+
+    s = gspec()
+    s.data.setdefault("tests", {})["waivers"] = {"attn_norm": "device arithmetic; fix later (owner)"}
+    monkeypatch.setenv(IMPL_ENV, "stub")
+    assert not run_component_test(s, "attn_norm", 0, checks="auto")
+    monkeypatch.setenv(IMPL_ENV, "reference")
+    assert run_component_test(s, "attn_norm", 0, checks="auto")
