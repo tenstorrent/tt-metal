@@ -248,8 +248,9 @@ def test_pack_untilize(
         ]
     ),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    # [32, 256] with a 32-bit Dest splits the tile-row into two blocks (block_ct_dim < full_ct_dim).
-    input_dimensions=[[64, 64], [32, 128], [32, 256]],
+    # [32, 32] / [64, 32] are one tile per block (the sharded-transpose shape); [32, 256] with a 32-bit
+    # Dest splits the tile-row into two blocks (block_ct_dim < full_ct_dim).
+    input_dimensions=[[32, 32], [64, 32], [64, 64], [32, 128], [32, 256]],
     row_num_datums=[4, 8, 16],
     dest_sync=[DestSync.Half],
     tile_dst_ct_offset=[0],
