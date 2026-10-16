@@ -266,9 +266,9 @@ def test_flux2_performance(
                     value=value,
                     target=(expected_metrics or {}).get(_STEP_TO_METRIC[step_name], value),
                 )
-        from models.demos.utils.common_demo_utils import report_generation_rate
-
-        report_generation_rate("flux.2-dev", total_times[-1], 1)
+        benchmark_profiler.start("inference")
+        benchmark_profiler.end("inference")
+        benchmark_data.add_measurement(benchmark_profiler, 0, "inference", "fps", 1.0 / total_times[-1])
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
             run_type=device_name_map.get(tuple(mesh_device.shape), "UNKNOWN"),

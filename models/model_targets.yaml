@@ -2128,8 +2128,7 @@ targets:
             team: models
 
   vit:
-    # e2e demo emits ml_model_name "ttnn-vit-base-trace-2cq-batch-size-8"; alias so it resolves (issue #58596).
-    aliases: ["ViT", "vit", "google/vit-base-patch16-224", "ttnn-vit-base-trace-2cq-batch-size-8"]
+    aliases: ["ViT", "vit", "google/vit-base-patch16-224"]
     skus:
       # samples/sec is reported as fps (report_vision_fps).
       wh_n150:
@@ -2414,7 +2413,7 @@ targets:
             owner_id: U088413NP0Q # Ashai Reddy
             team: models
   shallow-unet:
-    aliases: ["shallow-unet", "unet-shallow", "unet-shallow-trace-2cq-same-io"]
+    aliases: ["shallow-unet", "unet-shallow"]
     skus:
       bh_p150:
         entries:
@@ -2534,7 +2533,7 @@ targets:
         entries:
           - status: active
             perf:
-              fps: 0.0114
+              fps: 0.01396
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
