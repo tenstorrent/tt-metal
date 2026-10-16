@@ -1,0 +1,107 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""A partial-face ELWADD/ELWSUB must leave DEST rows 8..15 of every face slot untouched.
+
+The kernel unpacks and packs 16x32 tiles but runs the math with 8-row faces, so
+the packed rows 8..15 of each face expose whatever the MOP did past the tile's
+rows. Boot leaves DEST undefined and the packer reads undefined rows as zero,
+so those rows must come back as zero; the rows the tile does have must hold the
+op result.
+"""
+
+import torch
+from helpers.format_config import DataFormat
+from helpers.llk_params import DestSync, MathOperation, format_dict
+from helpers.param_config import input_output_formats, parametrize
+from helpers.stimuli_config import StimuliConfig
+from helpers.stimuli_generator import generate_stimuli
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import DEST_SYNC, MATH_OP, TILE_COUNT
+from helpers.tile_constants import FACE_C_DIM, get_tile_params
+from helpers.tilize_untilize import tilize_block
+from helpers.utils import passed_test
+
+TILE_DIMENSIONS = [16, 32]
+
+
+@parametrize(
+    math_op=[MathOperation.Elwadd, MathOperation.Elwsub],
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float16], same=True),
+)
+def test_partial_face_rows_untouched(math_op, formats):
+    input_dimensions = [64, 32]
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(TILE_DIMENSIONS)
+    num_faces = num_faces_r_dim * num_faces_c_dim
+    # Rows of each face the 8-row-face math op owns; the rest of the 16-row face must stay untouched.
+    math_face_r_dim = face_r_dim // 2
+    tile_elements = num_faces * face_r_dim * FACE_C_DIM
+
+    src_A, tile_cnt, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        tile_dimensions=TILE_DIMENSIONS,
+    )
+
+    def tilize(tensor):
+        return tilize_block(
+            tensor,
+            dimensions=input_dimensions,
+            stimuli_format=formats.input_format,
+            num_faces=num_faces,
+            tile_dimensions=TILE_DIMENSIONS,
+            face_r_dim=face_r_dim,
+        ).flatten()
+
+    src_A_tilized = tilize(src_A)
+    src_B_tilized = tilize(src_B)
+
+    torch_format = format_dict[formats.output_format]
+    a = src_A_tilized.to(torch_format)
+    b = src_B_tilized.to(torch_format)
+    golden = (a + b) if math_op == MathOperation.Elwadd else (a - b)
+    # Face-major layout: tile t, face f, row r starts at ((t * num_faces + f) * face_r_dim + r) * FACE_C_DIM.
+    golden = golden.view(tile_cnt * num_faces, face_r_dim, FACE_C_DIM)
+    owned_rows = torch.zeros(face_r_dim, dtype=torch.bool)
+    owned_rows[:math_face_r_dim] = True
+    golden[:, ~owned_rows, :] = 0
+    golden = golden.flatten()
+
+    configuration = TestConfig(
+        "sources/eltwise_binary_partial_face_rows_test.cpp",
+        formats,
+        templates=[MATH_OP(mathop=math_op), DEST_SYNC(DestSync.Half)],
+        runtimes=[TILE_COUNT(tile_cnt)],
+        variant_stimuli=StimuliConfig(
+            src_A_tilized,
+            formats.input_format,
+            src_B_tilized,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+            num_faces=num_faces,
+            face_r_dim=face_r_dim,
+            tile_dimensions=TILE_DIMENSIONS,
+            use_dense_tile_dimensions=True,
+        ),
+    )
+
+    res_from_L1 = configuration.run().result
+    assert len(res_from_L1) == tile_cnt * tile_elements, "Result length mismatch"
+    res = torch.tensor(res_from_L1, dtype=torch_format).view(
+        tile_cnt * num_faces, face_r_dim, FACE_C_DIM
+    )
+
+    untouched = res[:, ~owned_rows, :]
+    assert torch.all(untouched == 0), (
+        "A partial-face op wrote DEST rows beyond its face_r_dim: rows "
+        f"{math_face_r_dim}..{face_r_dim - 1} of the packed faces are not zero "
+        f"(max |value| {untouched.abs().max().item()})"
+    )
+    assert passed_test(
+        golden, res.flatten(), formats.output_format
+    ), "Assert against golden failed"
