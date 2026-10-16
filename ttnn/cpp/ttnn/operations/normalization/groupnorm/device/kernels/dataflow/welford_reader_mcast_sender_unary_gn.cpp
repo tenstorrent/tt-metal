@@ -388,7 +388,7 @@ void kernel_main() {
             stick_u16[m * 2 + 0] = global_result.mean;
             stick_u16[m * 2 + 1] = global_result.variance;
             // A RISC-V store can retire before it lands in L1. load_blocking reads the mean and variance
-            // back, which makes those stores land before the fabric write reads this stick.
+            // back, which makes those stores land before the NoC write to the forwarder reads this stick.
             (void)ckernel::load_blocking(&stick_u16[m * 2]);
             (void)ckernel::load_blocking(&stick_u16[m * 2 + 1]);
 #endif
