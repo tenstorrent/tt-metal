@@ -1,0 +1,52 @@
+{
+ "used": [
+  {
+   "id": "DS41-25",
+   "how": "carried layer 0's w2 column-span check (SPAN_REL 0.003) into the layer-1 test; it alone catches noise1e-2 (span 0.0074)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-22",
+   "how": "added the fp32 CPU step's own error vs the bf16 golden to the vs-golden worst-row and row-ratio limits (_Expect.check), which the reference failed (ratio 0.982 vs 1 +- 0.0152)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-36",
+   "how": "structural check (subspace) instead of tighter size limits to catch 1 % noise below the device noise floor",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "layer 1 golden error: the built-in vs-golden checks add the CPU step's golden error to rel / column limits but not to worst-row / ratio; every layer-1 float step with fp8 re-quantization needs the _Expect patch (now noted in DS41-25)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "known_issues.md DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x the step's own component error, no cap'; nothing model-specific to change"
+  }
+ ],
+ "cited_only": [
+  "DS41-20"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa_engram.shared_expert",
+  "role": "test",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T05:16:36",
+  "head": "8f6c744f889",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa_engram.shared_expert.test.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_shared_expert.py"
+  ]
+ }
+}
