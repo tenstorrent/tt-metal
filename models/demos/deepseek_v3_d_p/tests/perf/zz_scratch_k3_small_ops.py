@@ -56,6 +56,25 @@ def test_small_ops(mesh_device):
     x = torch.randn(S, 7168).bfloat16()
     a = run(mesh_device, "layout_ops untilize P2 [320,7168]", lambda: until2(dev(x, ttnn.TILE_LAYOUT)))
     logger.info(f"SMALLOP check P2: {tuple(a.shape)} exact {torch.equal(ttnn.to_torch(a).reshape(S, 7168), x)}")
+    # rms_norm [320, 3584]: DRAM interleaved (as the block) vs block-sharded L1 (8 x 10: 1 row tile x 14 tiles a core)
+    xr_ = torch.randn(S, 3584).bfloat16()
+    g_ = dev(torch.randn(1, 1, 112, 32).bfloat16(), ttnn.ROW_MAJOR_LAYOUT)
+    xt_ = dev(xr_, ttnn.TILE_LAYOUT)
+    hi = ttnn.types.BlackholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True)
+    ref_ = run(mesh_device, "rms_norm DRAM interleaved", lambda: ttnn.rms_norm(xt_, epsilon=1e-5, weight=g_, compute_kernel_config=hi))
+    for gx, gy in ((8, 10), (4, 10), (7, 10)):
+        bw = 112 // gx
+        mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))]), [32, bw * 32], ttnn.ShardOrientation.ROW_MAJOR))
+        xs = run(mesh_device, f"to block-sharded {gx}x{gy}", lambda: ttnn.to_memory_config(xt_, mc))
+        pc = ttnn.LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy), subblock_w=max(d_ for d_ in (1, 2, 4, 7) if bw % d_ == 0 and d_ <= 4), block_h=1, block_w=bw, inplace=False)
+        try:
+            o_ = run(mesh_device, f"rms_norm block-sharded {gx}x{gy}", lambda: ttnn.rms_norm(xs, epsilon=1e-5, weight=g_, program_config=pc, memory_config=mc, compute_kernel_config=hi))
+            a_, b_ = ttnn.to_torch(o_).float(), ttnn.to_torch(ref_).float()
+            logger.info(f"SMALLOP rms check {gx}x{gy}: PCC {torch.corrcoef(torch.stack([a_.flatten(), b_.flatten()]))[0, 1].item():.6f}")
+            run(mesh_device, f"sharded -> interleaved {gx}x{gy}", lambda: ttnn.sharded_to_interleaved(o_, ttnn.DRAM_MEMORY_CONFIG))
+        except Exception as e:  # noqa: BLE001
+            logger.info(f"SMALLOP rms_norm block-sharded {gx}x{gy} FAILED {str(e).splitlines()[0][:160]}")
     E = 448
     logits = dev(torch.randn(S, E).bfloat16(), ttnn.TILE_LAYOUT)
     bias = dev(torch.randn(S, E).bfloat16() * 0.01, ttnn.TILE_LAYOUT)

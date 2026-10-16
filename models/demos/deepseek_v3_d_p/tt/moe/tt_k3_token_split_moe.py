@@ -152,6 +152,16 @@ class TtK3TokenSplitMoE:
         )
         # shared expert: K3_SE=flat (default) runs it as the flat routed expert with one expert every own token goes
         # to (bf8 weights in its bank layout, fused gate/up + SiTU + down); dense: three ttnn.linear + situ_glu
+        # latent norm: the combine's rows tilized straight into an 8 x 10 block-sharded L1 tensor (1 row tile x 14 tiles a
+        # core), the sharded rms_norm (7 us vs 58 interleaved), back to DRAM interleaved for the latent up
+        gx_ln = 8
+        self.ln_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx_ln - 1, S // 32 - 1))]),
+            [32, d.latent // gx_ln], ttnn.ShardOrientation.ROW_MAJOR))
+        self.ln_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(gx_ln, S // 32), subblock_w=2, block_h=1,
+            block_w=d.latent // gx_ln // 32, inplace=False)
+        self.tilize_ln = layout_op_prepare(mesh_device, "tilize", out_memory_config=self.ln_mc)
         self.tilize = layout_op_prepare(mesh_device, "tilize")
         self.untilize = layout_op_prepare(mesh_device, "untilize")
         self.untilize7 = layout_op_prepare(mesh_device, "untilize", pages_per_row=7)
@@ -423,9 +433,12 @@ class TtK3TokenSplitMoE:
         )
 
     def latent_up(self):
-        o = self.tilize(ttnn.reshape(self.out, [self.S, self.d.latent]))  # (layout_ops: 19 us vs ttnn's 53)
-        n = ttnn.rms_norm(o, epsilon=self.d.eps, weight=self.g_ln, compute_kernel_config=self.cfg_hi)
+        o = self.tilize_ln(ttnn.reshape(self.out, [self.S, self.d.latent]))  # (layout_ops: 19 us vs ttnn's 53)
+        ns = ttnn.rms_norm(o, epsilon=self.d.eps, weight=self.g_ln, program_config=self.ln_pc, memory_config=self.ln_mc,
+                           compute_kernel_config=self.cfg_hi)
         ttnn.deallocate(o)
+        n = ttnn.sharded_to_interleaved(ns, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(ns)
         y = self._linear(n, self.w_lu, self.cfg)
         ttnn.deallocate(n)
         return y

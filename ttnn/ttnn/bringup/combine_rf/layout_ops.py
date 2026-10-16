@@ -112,7 +112,7 @@ void kernel_main() {
 """
 
 
-def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1):
+def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_config=None):
     """kind "tilize": run(src [rows, W] bf16 ROW_MAJOR) -> [rows, W] bf16 TILE; "untilize": the reverse. DRAM
     interleaved in and out; rows % 32 == 0, W % (32 * cw) == 0. pages_per_row P: the row-major side stores each row as
     P pages ([rows * P, W / P], e.g. P 2 at W 7168: pages that fit a fabric packet)."""
@@ -129,6 +129,7 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1):
     state = {}
 
     P = pages_per_row
+    out_mc = out_memory_config or ttnn.DRAM_MEMORY_CONFIG  # (e.g. a block-sharded L1 output: the accessor handles it)
 
     def build(src, dst, rows, W):
         Wt, nt = W // 32, rows // 32
@@ -174,7 +175,7 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1):
         rows, W = int(src.shape[-2]), int(src.shape[-1])
         if kind == "tilize":  # (src [rows * P, W / P])
             rows, W = rows // P, W * P
-            dst = ttnn.allocate_tensor_on_device(ttnn.Shape([rows, W]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG)
+            dst = ttnn.allocate_tensor_on_device(ttnn.Shape([rows, W]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, out_mc)
         else:
             dst = ttnn.allocate_tensor_on_device(ttnn.Shape([rows * P, W // P]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG)
         k = (int(src.buffer_address()), int(dst.buffer_address()), rows, W)
