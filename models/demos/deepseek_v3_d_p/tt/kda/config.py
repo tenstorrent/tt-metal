@@ -112,6 +112,9 @@ class KDAProgramConfig:
     # Use the projection matmul schedules tuned at _TUNED_PROJECTION_ROWS; False keeps the
     # auto-selected ttnn.linear configs.
     tuned_projection_matmuls: bool = False
+    # Compute the output gate's projection columns in their own matmul (GateMatmulProgram), run on the worker rows
+    # the SP ring relay leaves idle (the gate is only read by the gated norm). Taken only with the ring relay.
+    overlap_output_gate: bool = False
 
     def __post_init__(self) -> None:
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:
@@ -146,16 +149,21 @@ def tuned_projection_matmul_configs(
     per_core_m = math.ceil(row_tiles / grid.y)
     per_core_n = math.ceil(output_n // ttnn.TILE_SIZE / grid.x)
     input_per_core_n = math.ceil(math.ceil(input_n / ttnn.TILE_SIZE) / grid.x)
-    if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8 or (output_n // ttnn.TILE_SIZE) % 4 or input_per_core_n % 3:
+    if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8 or (output_n // ttnn.TILE_SIZE) % 4:
         return None, None
+    # 1x3 output subblocks when the per-core width allows, else 2x2 over a width padded to even (the input projection
+    # without the output gate's columns: 293 tiles, 26 per core).
+    input_subblock = (1, 3) if input_per_core_n % 3 == 0 else (2, 2)
+    if input_subblock == (2, 2):
+        input_per_core_n += input_per_core_n % 2
     # One output block per core: each core keeps its whole [per_core_m, input_per_core_n] block resident and
     # streams K in 4-tile blocks (K3 at 640 rows: 2 x 33 tiles per core, 56 K blocks), the widest that fits in
     # L1 next to the L1 output with bf16 weights. At HiFi2 the bf16 weight stream from DRAM bounds it.
     input_projection = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=3,
+        out_subblock_h=input_subblock[0],
+        out_subblock_w=input_subblock[1],
         out_block_h=per_core_m,
         out_block_w=input_per_core_n,
         per_core_M=per_core_m,
@@ -205,6 +213,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
+        overlap_output_gate=active_seq_len_local == _TUNED_PROJECTION_ROWS,
     )
 
 
