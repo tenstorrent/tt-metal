@@ -1638,24 +1638,19 @@ def build_eltwise_unary_sfpu_config(
     )
 
 
-# Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false
-@pytest.mark.parametrize("clamp_negative", [True, False])
-def test_exponential_clamp_negative(clamp_negative: bool):
-    torch.manual_seed(0)
-    input_dimensions = [32, 32]
+# The two exp tests below share one 32x32 bf16 Dest run; each keeps only its stimuli and
+# its asserts. Returns (res_tensor, golden_tensor) for MathOperation.Exp on src_A.
+def _run_exp_on_bf16_tile(
+    src_A: torch.Tensor,
+    input_dimensions: list[int],
+    approx_mode: ApproximationMode,
+    fast_mode: FastMode,
+    clamp_negative: bool,
+):
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     dest_acc = DestAccumulation.No
 
-    # Generate custom stimuli with range [-5, 0.7]
     num_elements = input_dimensions[0] * input_dimensions[1]
-    src_A = torch.rand(num_elements, dtype=torch.bfloat16) * 5.7 - 5.0
-    # Set some values to be large and negative:
-    src_A[0] = -10000
-    src_A[1] = -1000
-    src_A[2] = -200
-    src_A[3] = -100
-    src_A[4] = -88.5
-
     src_B = torch.zeros(num_elements, dtype=torch.bfloat16)
 
     generate_golden = get_golden_generator(UnarySFPUGolden)
@@ -1671,9 +1666,9 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     res_from_L1 = eltwise_unary_sfpu(
         formats=formats,
         dest_acc=dest_acc,
-        approx_mode=ApproximationMode.Yes,
+        approx_mode=approx_mode,
         mathop=MathOperation.Exp,
-        fast_mode=FastMode.Yes,
+        fast_mode=fast_mode,
         input_dimensions=input_dimensions,
         src_A=src_A,
         src_B=src_B,
@@ -1687,6 +1682,28 @@ def test_exponential_clamp_negative(clamp_negative: bool):
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    return res_tensor, golden_tensor
+
+
+# Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false
+@pytest.mark.parametrize("clamp_negative", [True, False])
+def test_exponential_clamp_negative(clamp_negative: bool):
+    torch.manual_seed(0)
+    input_dimensions = [32, 32]
+
+    # Generate custom stimuli with range [-5, 0.7]
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    src_A = torch.rand(num_elements, dtype=torch.bfloat16) * 5.7 - 5.0
+    # Set some values to be large and negative:
+    src_A[0] = -10000
+    src_A[1] = -1000
+    src_A[2] = -200
+    src_A[3] = -100
+    src_A[4] = -88.5
+
+    res_tensor, golden_tensor = _run_exp_on_bf16_tile(
+        src_A, input_dimensions, ApproximationMode.Yes, FastMode.Yes, clamp_negative
+    )
 
     # clamp_negative=False: require inputs < -88 to be negative (not necessarily
     # correct) and exclude them from the isclose check.
@@ -1715,83 +1732,29 @@ def test_exponential_clamp_negative(clamp_negative: bool):
 def test_exponential_accurate_unclamped_large_negative():
     torch.manual_seed(0)
     input_dimensions = [32, 32]
-    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
-    dest_acc = DestAccumulation.No
 
     num_elements = input_dimensions[0] * input_dimensions[1]
     src_A = torch.rand(num_elements, dtype=torch.bfloat16) * 10.0 - 5.0
     # exp(x) for every one of these is far below the smallest bf16 subnormal, so the
-    # only correct bf16 output is 0.0.
+    # only correct bf16 output is 0.0. The kernel records its body on the first 32-lane
+    # iteration and replays it for the other 31, so the sentinels go on every 8th
+    # element: each 16-wide face row then carries two, in both column halves, and every
+    # iteration -- recorded and replayed -- sees a negative xlog2.
     large_negative = [-10000.0, -1000.0, -226.0, -200.0, -176.0, -150.0, -120.0, -100.0]
-    for i, value in enumerate(large_negative):
-        src_A[i] = value
-    num_large_negative = len(large_negative)
+    sentinel_indices = list(range(0, num_elements, 8))
+    for n, i in enumerate(sentinel_indices):
+        src_A[i] = large_negative[n % len(large_negative)]
 
-    src_B = torch.zeros(num_elements, dtype=torch.bfloat16)
-    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
-    tile_cnt_B = tile_cnt_A
-
-    generate_golden = get_golden_generator(UnarySFPUGolden)
-    golden_tensor = generate_golden(
-        MathOperation.Exp,
-        src_A,
-        formats.output_format,
-        dest_acc,
-        formats.input_format,
-        input_dimensions,
+    res_tensor, golden_tensor = _run_exp_on_bf16_tile(
+        src_A, input_dimensions, ApproximationMode.No, FastMode.No, clamp_negative=False
     )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(False),
-            MATH_OP(mathop=MathOperation.Exp),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=False,
-    )
-
-    res_from_L1 = configuration.run().result
-
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
-
-    large_negative_results = res_tensor[:num_large_negative].float()
-    assert torch.all(large_negative_results == 0.0), (
+    sentinel_results = res_tensor[sentinel_indices].float()
+    nonzero = (sentinel_results != 0.0).nonzero().flatten()
+    assert len(nonzero) == 0, (
         "Accurate exp of inputs below -88 must be 0.0 on a bf16 Dest regardless of "
-        f"CLAMP_NEGATIVE; got {large_negative_results.tolist()} for {large_negative}"
+        f"CLAMP_NEGATIVE; {len(nonzero)} of {len(sentinel_indices)} sentinels are not, e.g. "
+        f"{[(src_A[sentinel_indices[k]].item(), sentinel_results[k].item()) for k in nonzero[:8].tolist()]}"
     )
 
     atol, rtol = 0.02, 0.02
