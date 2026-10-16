@@ -3,6 +3,7 @@ model:
   num_layers: 61
   max_seq_len: 56320
   chunk_size: 5120
+  forward_chunks: 1
 
 transport:
   sp: 8
