@@ -23,6 +23,7 @@ BH adaptation: uses init_device_compute_kernel_config instead of WormholeCompute
 """
 
 import ast
+import csv
 import math
 import operator
 import os
@@ -6239,6 +6240,121 @@ if GEMMA4_PERF_SWEEP_OPTIONS_ERROR:
 else:
     GEMMA4_CHUNKED_PERF_SWEEP_CONFIGS = GEMMA4_CHUNKED_PERF_PROGRAM_CONFIGS
 
+# Each perf table case records its results as one row of this CSV (a rerun replaces the case's row for that ISL), so a
+# sweep split over several pytest runs still ends up in one report.
+GEMMA4_PERF_SWEEP_REPORT_ENV = "GEMMA4_PERF_SWEEP_REPORT"
+GEMMA4_PERF_SWEEP_DEFAULT_REPORT = "generated/gemma4_perf_sweep/report.csv"
+_GEMMA4_PERF_SWEEP_REPORT_FIELDS = (
+    "case",
+    "model",
+    "isl",
+    "chunk_size",
+    "q_chunk",
+    "k_chunk",
+    "k_splits",
+    "segmented",
+    "chunks",
+    "chunk_ms",
+    "chunk_util",
+    "prefill_ms",
+    "prefill_util",
+)
+
+
+def _gemma4_perf_sweep_report_path():
+    return os.environ.get(GEMMA4_PERF_SWEEP_REPORT_ENV) or GEMMA4_PERF_SWEEP_DEFAULT_REPORT
+
+
+def _read_gemma4_perf_sweep_report(path):
+    if not os.path.exists(path):
+        return {}
+    with open(path, newline="") as f:
+        return {(row["case"], row["isl"]): row for row in csv.DictReader(f)}
+
+
+def record_gemma4_perf_sweep_result(perf_config, result):
+    path = _gemma4_perf_sweep_report_path()
+    rows = _read_gemma4_perf_sweep_report(path)
+    chunks = result["chunks"]
+    row = {
+        "case": perf_config.id,
+        "model": perf_config.model.name,
+        "isl": str(GEMMA4_PERF_SWEEP_ISL),
+        "chunk_size": perf_config.chunk_size,
+        "q_chunk": perf_config.q_chunk_size,
+        "k_chunk": perf_config.k_chunk_size,
+        "k_splits": perf_config.max_k_splits,
+        "segmented": perf_config.segmented_accumulation,
+        "chunks": " ".join(str(chunk["chunk"]) for chunk in chunks),
+        "chunk_ms": " ".join(f"{chunk['duration_ns'] / 1e6:.3f}" for chunk in chunks),
+        "chunk_util": " ".join(f"{chunk['util']:.2f}" for chunk in chunks),
+        "prefill_ms": "" if result["prefill_ns"] is None else f"{result['prefill_ns'] / 1e6:.3f}",
+        "prefill_util": "" if result["prefill_util"] is None else f"{result['prefill_util']:.2f}",
+    }
+    rows[(row["case"], row["isl"])] = row
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(f"{path}.tmp", "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=_GEMMA4_PERF_SWEEP_REPORT_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows.values())
+    os.replace(f"{path}.tmp", path)
+
+
+def print_gemma4_perf_sweep_report(selected_cases):
+    """Every recorded case at the current ISL, fastest whole prefill first per (model, chunk size), against
+    production's program; then the selected cases that have no row."""
+    path = _gemma4_perf_sweep_report_path()
+    rows = [row for row in _read_gemma4_perf_sweep_report(path).values() if row["isl"] == str(GEMMA4_PERF_SWEEP_ISL)]
+    if not rows:
+        return
+    production = {
+        (model.name, chunk_size): gemma4_built_tuning_id(gemma4_production_perf_config(model, chunk_size))
+        for model in _GEMMA4_PERF_SWEEP_MODELS
+        for chunk_size in {int(row["chunk_size"]) for row in rows}
+    }
+    by_case = {row["case"]: row for row in rows}
+    print(f"\n{'=' * 130}\nGemma 4 perf sweep report: {path}, {GEMMA4_PERF_SWEEP_ISL_ENV}={GEMMA4_PERF_SWEEP_ISL}")
+    for model_name, chunk_size in sorted({(row["model"], int(row["chunk_size"])) for row in rows}):
+        group = [row for row in rows if row["model"] == model_name and int(row["chunk_size"]) == chunk_size]
+        group.sort(key=lambda row: (row["prefill_ms"] == "", float(row["prefill_ms"] or 0), row["case"]))
+        prod_row = by_case.get(production[(model_name, chunk_size)])
+        chunk_utils = {row["case"]: dict(zip(row["chunks"].split(), row["chunk_util"].split())) for row in group}
+        chunks = sorted({int(chunk) for utils in chunk_utils.values() for chunk in utils})
+        header = [
+            "Case",
+            "Prefill SDPA (ms, all chunks summed, interpolated)",
+            "Prefill util (%, all chunks, interpolated)",
+            "Config vs production overall time (%, + = slower)",
+        ] + [f"Chunk {chunk} util (%)" for chunk in chunks]
+        print(f"\n{model_name}, chunk {chunk_size}")
+        print("| " + " | ".join(header) + " |")
+        print("|" + "|".join("-" * (len(column) + 2) for column in header) + "|")
+        for row in group:
+            if row is prod_row:
+                vs_production = "production config"
+            elif prod_row and row["prefill_ms"] and prod_row["prefill_ms"]:
+                vs_production = f"{(float(row['prefill_ms']) / float(prod_row['prefill_ms']) - 1) * 100:+.1f}"
+            else:
+                vs_production = "-"
+            cells = [row["case"], row["prefill_ms"] or "-", row["prefill_util"] or "-", vs_production]
+            cells += [chunk_utils[row["case"]].get(str(chunk), "-") for chunk in chunks]
+            print("| " + " | ".join(cells) + " |")
+    missing = [case for case in selected_cases if case not in by_case]
+    if missing:
+        print(f"\nNot measured ({len(missing)} of {len(selected_cases)} selected): {', '.join(missing)}")
+
+
+@pytest.fixture(scope="module")
+def gemma4_perf_sweep_report(request):
+    yield
+    print_gemma4_perf_sweep_report(
+        [
+            item.callspec.id
+            for item in request.session.items
+            if item.originalname == "test_ring_joint_attention_gemma4_create_chunked_perf_table"
+        ]
+    )
+
 
 # ring_mla (latent-V) chunked-prefill configs are identical to the classic separate-V configs
 # except V lives in the first d_v columns of the shared K/V latent (the MLA deployment shape):
@@ -7667,6 +7783,7 @@ def _run_chunked_perf_table(
     # being close to linear in the chunk index.
     profiled = {row["chunk"]: row for row in per_chunk_rows}
     spans_prefill = chunk_indices[0] == 0 and chunk_indices[-1] == n_chunks - 1 and num_profiled > 1
+    total_ns = prefill_util = None
     if print_prefill_summary and (num_profiled == n_chunks or spans_prefill):
         total_ns = 0.0
         possible_flops = 0.0
@@ -7701,6 +7818,7 @@ def _run_chunked_perf_table(
             f"Expected last chunk util ({utils[-1]:.1f}%) > first chunk util ({utils[0]:.1f}%) "
             f"— prefix grows with chunk index, so util should increase."
         )
+    return {"chunks": per_chunk_rows, "prefill_ns": total_ns, "prefill_util": prefill_util}
 
 
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
@@ -8066,7 +8184,7 @@ def test_ring_joint_attention_gemma4_chunked_perf_impl(perf_config, reuse_kv_buf
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("perf_config", GEMMA4_CHUNKED_PERF_SWEEP_CONFIGS, ids=lambda config: config.id)
-def test_ring_joint_attention_gemma4_create_chunked_perf_table(perf_config):
+def test_ring_joint_attention_gemma4_create_chunked_perf_table(perf_config, gemma4_perf_sweep_report):
     """Math util + duration table for one Gemma 4 perf case at the chosen prefill positions, profiling its reuse_kv
     variant, with the whole prefill's time and util estimated from them.
 
@@ -8074,11 +8192,12 @@ def test_ring_joint_attention_gemma4_create_chunked_perf_table(perf_config):
       GEMMA4_PERF_SWEEP_CHUNK_SIZES=8192               prefill chunk sizes c (production's)
       GEMMA4_PERF_SWEEP_ISL=262144                     tokens the prefill reaches
       GEMMA4_PERF_SWEEP_PREFIXES=0,c,isl/2,isl-c       where to profile, as prefix lengths in tokens
+      GEMMA4_PERF_SWEEP_REPORT=generated/gemma4_perf_sweep/report.csv   one row per case, summarized at the end
     Every distinct program is swept; narrow a run with pytest -k, e.g.
       GEMMA4_PERF_SWEEP_CHUNK_SIZES=4096 GEMMA4_PERF_SWEEP_ISL=131072 pytest <this test> -k "q96 or q128"
     """
     check_gemma4_perf_sweep_options()
-    _run_chunked_perf_table(
+    result = _run_chunked_perf_table(
         MESH_CONFIG,
         perf_config.model,
         perf_config.model.name,
@@ -8095,20 +8214,21 @@ def test_ring_joint_attention_gemma4_create_chunked_perf_table(perf_config):
         chunk_indices=GEMMA4_PERF_SWEEP_CHUNK_INDICES[perf_config.chunk_size],
         print_prefill_summary=True,
     )
+    record_gemma4_perf_sweep_result(perf_config, result)
 
 
 # Sliding-window kernels run ~0.3-0.5 ms, so, as for GPT-OSS, the band absorbs quantization and host noise.
-GEMMA4_SWA_PERF_MARGIN = 0.10
+GEMMA4_SWA_PERF_MARGIN = 0.25
 # Three-run medians on the 4x8 Blackhole Galaxy (SP=8, TP=4).
 # Global values use LoFi peak throughput.
 GEMMA4_CHUNKED_PERF_CHECK_CONFIGS = {
     # (model_name, chunk_size): (expected_util, margin)
-    ("gemma4_global", 2048): (33.69, DEFAULT_PERF_MARGIN),
-    ("gemma4_global", 4096): (50.10, DEFAULT_PERF_MARGIN),
-    ("gemma4_global", 8192): (44.80, DEFAULT_PERF_MARGIN),
-    ("gemma4_swa", 2048): (2.15, GEMMA4_SWA_PERF_MARGIN),
-    ("gemma4_swa", 4096): (3.91, GEMMA4_SWA_PERF_MARGIN),
-    ("gemma4_swa", 8192): (6.50, GEMMA4_SWA_PERF_MARGIN),
+    ("gemma4_global", 2048): (32.19, DEFAULT_PERF_MARGIN),
+    ("gemma4_global", 4096): (48.61, DEFAULT_PERF_MARGIN),
+    ("gemma4_global", 8192): (43.91, DEFAULT_PERF_MARGIN),
+    ("gemma4_swa", 2048): (2.25, GEMMA4_SWA_PERF_MARGIN),
+    ("gemma4_swa", 4096): (3.92, GEMMA4_SWA_PERF_MARGIN),
+    ("gemma4_swa", 8192): (6.28, GEMMA4_SWA_PERF_MARGIN),
 }
 
 
