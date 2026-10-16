@@ -14,7 +14,7 @@ namespace nb = nanobind;
 
 namespace ttnn::bringup {
 
-void py_module(nb::module_& mod) {
+void py_module([[maybe_unused]] nb::module_& mod) {  // unused until a fork registers (-Werror)
     // BEGIN FORKED OPS (fork_op.py)
     // END FORKED OPS (fork_op.py)
 }
