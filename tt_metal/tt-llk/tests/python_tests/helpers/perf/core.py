@@ -28,6 +28,9 @@ from ..test_config import BuildMode, ProfilerBuild, TestConfig
 from ..test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
 from .phases import CANONICAL_PHASE, release_phases
 from .schema import (
+    COUPLING_BASE,
+    COUPLING_PIPELINE_RUN_TYPE,
+    COUPLING_STAGE_RUN_TYPES,
     FLAG_HEADERS,
     FORMAT_HEADERS,
     LOOP_FACTOR_COLUMN,
@@ -39,6 +42,7 @@ from .schema import (
     TILE_CNT_COLUMN,
     PerfSchemaError,
     assert_unique_columns,
+    stat_column,
     stat_prefix,
     text_size_column,
 )
@@ -86,6 +90,25 @@ _CODE_SIZE_COMPONENTS = {
 }
 
 # Common postprocessing
+
+
+def add_pipeline_coupling(frame: pd.DataFrame) -> pd.DataFrame:
+    """mean(COUPLING) on TILE_LOOP rows: mean(L1_TO_L1) minus the slowest isolate stage measured alone.
+    Left out when a run has no L1_TO_L1 or no isolate (LLK_PERF_RUN_TYPES), so a test's cases keep one schema.
+    """
+    pipeline = stat_column(COUPLING_PIPELINE_RUN_TYPE, MEAN)
+    stages = [
+        stat_column(rt, MEAN)
+        for rt in COUPLING_STAGE_RUN_TYPES
+        if stat_column(rt, MEAN) in frame.columns
+    ]
+    if frame.empty or pipeline not in frame.columns or not stages:
+        return frame
+    slowest = frame[stages].max(axis=1, skipna=True)
+    frame[stat_column(COUPLING_BASE, MEAN)] = (frame[pipeline] - slowest).where(
+        frame[MARKER] == TILE_LOOP_MARKER
+    )
+    return frame
 
 
 def postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
@@ -725,27 +748,33 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
     if zones.empty:
         return
     # Plain Python over the launch's few zones: a phased row runs this check once per launch (perf/phases.py), and
-    # pandas' groupby made it the costliest step of a launch. Identity is the name: marker_id is a per-callsite hash,
-    # different on every thread.
-    spans = {}  # (thread, name) -> (first begin, last finish)
+    # pandas' groupby made it the costliest step of a launch. A phased L1_CONGESTION launch repeats INIT and TILE_LOOP:
+    # the k-th zone of a name is its own phase. Identity is the name: marker_id is a per-callsite hash, different on
+    # every thread.
+    count = {}
+    spans = []  # (thread, name, occurrence, begin, finish)
     for thread, name, begin, duration in zip(
         zones["thread"], zones[MARKER], zones["timestamp"], zones["duration"]
     ):
-        first, last = spans.get((thread, name), (begin, begin + duration))
-        spans[(thread, name)] = (min(first, begin), max(last, begin + duration))
+        occurrence = count.get((name, thread), 0)
+        count[(name, thread)] = occurrence + 1
+        spans.append((thread, name, occurrence, begin, begin + duration))
     wrappers = {
         a[1]
-        for a, (a_begin, a_finish) in spans.items()
-        for b, (b_begin, b_finish) in spans.items()
-        if a != b and a[0] == b[0] and a_begin <= b_begin <= b_finish <= a_finish
+        for i, a in enumerate(spans)
+        for j, b in enumerate(spans)
+        if i != j and a[0] == b[0] and a[3] <= b[3] <= b[4] <= a[4]
     }
     phases = {}
-    for (thread, name), (begin, finish) in spans.items():
+    for thread, name, occurrence, begin, finish in spans:
         if name not in wrappers:
-            first_open, last_close = phases.get(name, (begin, finish))
-            phases[name] = (min(first_open, begin), max(last_close, finish))
+            first_open, last_close = phases.get((name, occurrence), (begin, finish))
+            phases[(name, occurrence)] = (
+                min(first_open, begin),
+                max(last_close, finish),
+            )
     prev = None
-    for name, (first_open, last_close) in sorted(
+    for (name, _), (first_open, last_close) in sorted(
         phases.items(), key=lambda phase: (phase[1][0], phase[0])
     ):
         if (
@@ -764,10 +793,36 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
         prev = (name, last_close)
 
 
+# Release phases of a Wormhole L1_CONGESTION launch (barrier.h L1_CONGESTION_PHASES, brisc.cpp serve_phases).
+L1_CONGESTION_PHASES = 32
+
+
+def assert_one_zone_per_phase(profiler_data: ProfilerData) -> None:
+    """A phased L1_CONGESTION launch records one TILE_LOOP zone per release phase on every thread."""
+    zones = profiler_data.zones().marker(TILE_LOOP_MARKER).raw()
+    counts = zones[zones["type"] == "ZONE_START"].groupby("thread").size()
+    if counts.empty or (counts != L1_CONGESTION_PHASES).any():
+        raise AssertionError(
+            f"L1_CONGESTION recorded {counts.to_dict()} TILE_LOOP zones per thread, "
+            f"expected {L1_CONGESTION_PHASES} (one per BRISC release phase)"
+        )
+
+
 RUN_TYPE_PRESETS = {
     "ALL_ISOLATION_MODES": ("UNPACK_ISOLATE", "MATH_ISOLATE", "PACK_ISOLATE"),
     "ALL_MODES": ("L1_TO_L1", "UNPACK_ISOLATE", "MATH_ISOLATE", "PACK_ISOLATE"),
+    "ALL_MODES_AND_CONGESTION": (
+        "L1_TO_L1",
+        "UNPACK_ISOLATE",
+        "MATH_ISOLATE",
+        "PACK_ISOLATE",
+        "L1_CONGESTION",
+    ),
 }
+
+# Measured only when LLK_PERF_RUN_TYPES names them. L1_CONGESTION's uncoupled streams are a case production never runs;
+# mean(COUPLING) and the L1 counter metrics (helpers/perf/l1_contention.py) carry what it showed.
+OPT_IN_RUN_TYPES = frozenset({PerfRunType.L1_CONGESTION})
 
 
 def _expand_run_types(text):
@@ -796,10 +851,10 @@ _ISOLATE_RUN_TYPES = (
 
 
 def _selected_run_types(run_types):
-    """LLK_PERF_RUN_TYPES narrows what a run measures. Empty means all of them."""
+    """LLK_PERF_RUN_TYPES narrows what a run measures. Empty means all of them except the opt-in ones."""
     wanted = os.environ.get("LLK_PERF_RUN_TYPES", "").strip()
     if not wanted:
-        return list(run_types)
+        return [rt for rt in run_types if rt not in OPT_IN_RUN_TYPES]
     names = _expand_run_types(wanted)
     return [rt for rt in run_types if rt.name in names]
 
@@ -967,7 +1022,7 @@ class PerfConfig(TestConfig):
             passed_templates,
             passed_runtimes,
         )
-        combined = sweep.merge(run_results, how="cross")
+        combined = add_pipeline_coupling(sweep.merge(run_results, how="cross"))
 
         text_size_cols = [c for c in combined.columns if c.startswith(TEXT_SIZE_PREFIX)]
         other_cols = [c for c in combined.columns if not c.startswith(TEXT_SIZE_PREFIX)]
@@ -1105,6 +1160,8 @@ class PerfConfig(TestConfig):
                     self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
                 )
                 assert_zones_dont_overlap(profiler_data)
+                if self._l1_congestion_phases():
+                    assert_one_zone_per_phase(profiler_data)
 
                 if TestConfig.ENABLE_PERF_COUNTERS:
                     try:
@@ -1245,9 +1302,10 @@ class PerfConfig(TestConfig):
                             target.loc[target[MARKER] == "INIT", column] = row[
                                 column
                             ].values[0]
-                        elif run_type in phased_run_types and column.startswith(
-                            stat_prefix(STD)
-                        ):
+                        elif (
+                            run_type == PerfRunType.L1_CONGESTION
+                            or run_type in phased_run_types
+                        ) and column.startswith(stat_prefix(STD)):
                             # one INIT launch has no spread (the phased launches ran INIT once per phase)
                             target.loc[target[MARKER] == "INIT", column] = float("nan")
             finally:
