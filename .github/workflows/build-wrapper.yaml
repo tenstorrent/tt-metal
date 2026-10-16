@@ -17,6 +17,7 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         TT_FROM_PRECOMPILED_DIR: /work
         PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        TT_MODEL_CLASS_OVERRIDES: "TTGptOssForCausalLM=models.demos.gpt_oss_120b_qb2.tt.generator_vllm:TTGptOssForCausalLM"
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - ${{ github.workspace }}/plugin:/plugin
