@@ -138,8 +138,9 @@ class TtV4Transformer(LightweightModule):
         self.layers = []
         for local_idx, layer_idx in enumerate(layer_ids):
             hash_layer = config.mlp_layer_types[layer_idx] == "hash_moe"
+            mode_matches_layer_kind = (gate_fallback_mode in _HASH_GATE_MODES) == hash_layer
             # None lets the block pick the gate its layer kind routes with.
-            layer_gate = gate_fallback_mode if (gate_fallback_mode in _HASH_GATE_MODES) == hash_layer else None
+            layer_gate = gate_fallback_mode if mode_matches_layer_kind else None
             weights = layers[local_idx]
             self.layers.append(
                 TtV4Block(
@@ -274,6 +275,11 @@ class TtV4Transformer(LightweightModule):
             raise NotImplementedError("DeepSeek-V4 supports host layer acks (on_layer_complete) only")
         if cache_user_id not in (None, 0):
             raise ValueError(f"DeepSeek-V4 attention state is single-user; got cache_user_id={cache_user_id}")
+        if self.position is None:
+            raise RuntimeError(
+                "a previous chunk failed mid-stack and left the layers' attention state at mixed positions; "
+                "call reset_streams() to start a new request"
+            )
         if actual_start is not None and actual_start != self.position:
             raise ValueError(
                 f"chunk starts at {actual_start}, but the attention state is at {self.position}; "
@@ -298,6 +304,8 @@ class TtV4Transformer(LightweightModule):
 
         chunk_tokens = h.shape[-2] * self.mesh_device.shape[self.sp_axis]
         actual_isl = chunk_tokens if actual_isl is None else actual_isl
+        # A layer that raises leaves the layers before it advanced; no position is right until a reset.
+        start, self.position = self.position, None
         for local_idx, layer in enumerate(self.layers):
             layer_idx = self.first_layer_idx + local_idx
             out = layer(h, actual_isl=actual_isl, input_ids=input_ids)
@@ -308,7 +316,7 @@ class TtV4Transformer(LightweightModule):
                 on_layer_complete(layer_idx)
             if layer_tap is not None:
                 layer_tap(layer_idx, h)
-        self.position += actual_isl
+        self.position = start + actual_isl
 
         if not self.is_last_rank:
             return h

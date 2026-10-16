@@ -96,6 +96,27 @@ def test_forward_rejects_a_chunk_that_does_not_continue_the_state(expect_error):
         model.forward(object(), actual_start=0)
 
 
+def test_a_chunk_that_fails_mid_stack_makes_the_next_forward_demand_a_reset(expect_error):
+    def failing_layer(h, **kwargs):
+        raise RuntimeError("layer 1 failed")
+
+    model = object.__new__(TtV4Transformer)
+    model.position = 5120
+    model.is_first_rank, model.is_last_rank, model.has_hash_layers = False, False, False
+    model.mesh_device, model.sp_axis, model.first_layer_idx = SimpleNamespace(shape=(4, 8)), 0, 0
+    model.layers = [Mock(return_value=object()), failing_layer]
+    with expect_error(RuntimeError, "layer 1 failed"):
+        model.forward(SimpleNamespace(shape=(1, 1, 1280, 64)), actual_start=5120)
+
+    for actual_start in (5120, None):
+        with expect_error(RuntimeError, "reset_streams"):
+            model.forward(object(), actual_start=actual_start)
+
+    model.layers = [Mock(), Mock()]
+    model.reset_streams()
+    assert model.position == 0
+
+
 @pytest.mark.parametrize(
     "config, message",
     [
