@@ -81,7 +81,15 @@ inline void calculate_lgamma_adjusted(
         sfpi::vFloat result = res_stirling;
 
         // For x < 0.5: lgamma(x) = reflection_adj - lgamma(1-x); otherwise use res_stirling.
-        v_if(in < 0.5f) { result = reflection_adj - res_stirling; }
+        v_if(in < 0.5f) {
+            result = reflection_adj - res_stirling;
+            // At a pole (x a non-positive integer) log|sin| is -inf, so reflection_adj is +inf and
+            // lgamma is +inf whatever res_stirling holds. For x <= about -4e36 (every float that
+            // large is an integer) res_stirling itself overflows to +inf, and inf - inf is NaN:
+            // let the pole win.
+            v_if(sfpi::is_inf(reflection_adj)) { result = reflection_adj; }
+            v_endif;
+        }
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
