@@ -864,10 +864,14 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         result = warmup_decode_buckets(self, super().warmup_model_decode, *args, **kwargs)
         if kwargs.get("enable_trace"):
             self._capture_gdn_slot_write_traces()
-        if kwargs.get("enable_trace") and os.environ.get("QWEN36_FORBID_POST_CAPTURE_COMPILE") == "1":
+        self._maybe_forbid_post_capture_compile(kwargs.get("enable_trace"))
+        return result
+
+    def _maybe_forbid_post_capture_compile(self, enable_trace):
+        """Arm the post-capture compile guard (QWEN36_FORBID_POST_CAPTURE_COMPILE=1, traced warmup only)."""
+        if enable_trace and os.environ.get("QWEN36_FORBID_POST_CAPTURE_COMPILE") == "1":
             self.mesh_device.set_program_cache_misses_allowed(False)
             logger.info("post-capture program compiles are now forbidden")
-        return result
 
     def _capture_gdn_slot_write_traces(self):
         """After the decode traces, before the post-capture compile guard: capture the per-slot GDN slot-write traces. The
@@ -1077,6 +1081,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         if enable_trace:
             if not eng.captured:
                 eng.capture_decode()
+            # all spec traces (prefill record, verify, drafter) are parked by now
+            self._maybe_forbid_post_capture_compile(enable_trace)
         elif not eng.prepared:
             eng.prepare_decode()
 
