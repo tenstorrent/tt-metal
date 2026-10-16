@@ -86,8 +86,8 @@ def _run_pack_untilize(
     formats,
     dest_acc,
     input_dimensions,
-    dest_sync,
-    tile_dst_ct_offset,
+    dest_sync=DestSync.Half,
+    tile_dst_ct_offset=0,
     tile_dimensions=list(TILE_DIMENSIONS),
     narrow_row=False,
     row_num_datums=DEFAULT_TILE_C_DIM,
@@ -97,6 +97,8 @@ def _run_pack_untilize(
 
     ``narrow_row`` packs only the first ``row_num_datums`` datums of every tile row, so the
     untilized output row of a tile-row is ``full_ct_dim * row_num_datums`` datums wide.
+    dest_sync / tile_dst_ct_offset default to the only values test_pack_untilize sweeps (see
+    its DestSync::Full and non-zero offset notes).
     """
     data_formats = infer_data_formats(
         formats.input_format,
@@ -252,16 +254,12 @@ def test_pack_untilize(
     # Dest splits the tile-row into two blocks (block_ct_dim < full_ct_dim).
     input_dimensions=[[32, 32], [64, 32], [64, 64], [32, 128], [32, 256]],
     row_num_datums=[4, 8, 16],
-    dest_sync=[DestSync.Half],
-    tile_dst_ct_offset=[0],
 )
 def test_pack_untilize_narrow_row(
     formats,
     dest_acc,
     input_dimensions,
     row_num_datums,
-    dest_sync,
-    tile_dst_ct_offset,
 ):
     """Narrow-row untilize: every tile of the block must contribute its first row_num_datums
     datums to each untilized output row, for blocks wider than one tile."""
@@ -269,8 +267,6 @@ def test_pack_untilize_narrow_row(
         formats,
         dest_acc,
         input_dimensions,
-        dest_sync,
-        tile_dst_ct_offset,
         narrow_row=True,
         row_num_datums=row_num_datums,
     )
@@ -288,22 +284,16 @@ def test_pack_untilize_narrow_row(
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     # [64, 128] with a 32-bit Dest splits the tile-row into two blocks (block_ct_dim < full_ct_dim).
     input_dimensions=[[32, 64], [64, 128]],
-    dest_sync=[DestSync.Half],
-    tile_dst_ct_offset=[0],
 )
 def test_pack_untilize_single_face_tile(
     formats,
     dest_acc,
     input_dimensions,
-    dest_sync,
-    tile_dst_ct_offset,
 ):
     """16x16 tiles (num_faces == 1, face_r_dim == 16): all 16 rows of every tile must be packed."""
     _run_pack_untilize(
         formats,
         dest_acc,
         input_dimensions,
-        dest_sync,
-        tile_dst_ct_offset,
         tile_dimensions=[16, 16],
     )
