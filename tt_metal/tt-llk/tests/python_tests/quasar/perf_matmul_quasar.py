@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.constraints import get_valid_math_fidelities
 from helpers.llk_params import PERF_LOOP_FACTOR_QUASAR, PERF_RUN_TYPES_QUASAR, Transpose
 from helpers.param_config import parametrize, runtime
 from quasar.test_matmul_quasar import (
@@ -12,8 +13,6 @@ from quasar.test_matmul_quasar import (
     matmul_dest_acc_modes,
     matmul_dest_sync_modes,
     matmul_enable_direct_indexing,
-    matmul_implied_math_formats,
-    matmul_math_fidelities,
     matmul_register_format_hints,
     matmul_tile_dimensions,
 )
@@ -25,7 +24,7 @@ from quasar.test_matmul_quasar import test_matmul as run_matmul
 @parametrize(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
     format=MATMUL_FORMAT,
-    math_fidelity=lambda format: matmul_math_fidelities(format, is_perf=True),
+    math_fidelity=lambda format: get_valid_math_fidelities(format),
     dest_sync_mode=lambda: matmul_dest_sync_modes(is_perf=True),
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(
@@ -35,9 +34,6 @@ from quasar.test_matmul_quasar import test_matmul as run_matmul
             exact_dest_fill=True,
             is_perf=True,
         )
-    ),
-    implied_math_format=lambda format: matmul_implied_math_formats(
-        format, is_perf=True
     ),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=matmul_enable_direct_indexing,
@@ -54,7 +50,6 @@ def test_perf_matmul_quasar(
     dest_sync_mode,
     dest_acc,
     format,
-    implied_math_format,
     register_format_hint,
     enable_direct_indexing,
     transpose,
@@ -69,7 +64,6 @@ def test_perf_matmul_quasar(
         dest_sync_mode,
         dest_acc,
         format,
-        implied_math_format,
         register_format_hint,
         enable_direct_indexing,
         transpose,
@@ -85,7 +79,7 @@ def test_perf_matmul_quasar(
 @parametrize(
     input_tile_dimensions=runtime(TINY_MATMUL_SHAPE_CASES),
     format=TINY_MATMUL_FORMATS,
-    math_fidelity=lambda format: matmul_math_fidelities(format, is_perf=True),
+    math_fidelity=lambda format: get_valid_math_fidelities(format),
     dest_sync_mode=lambda: matmul_dest_sync_modes(is_perf=True),
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(
@@ -95,9 +89,6 @@ def test_perf_matmul_quasar(
             exact_dest_fill=True,
             is_perf=True,
         )
-    ),
-    implied_math_format=lambda format: matmul_implied_math_formats(
-        format, is_perf=True
     ),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=matmul_enable_direct_indexing,
@@ -114,7 +105,6 @@ def test_perf_matmul_tiny_quasar(
     dest_acc,
     matmul_tile_dims,
     format,
-    implied_math_format,
     register_format_hint,
     enable_direct_indexing,
     transpose,
@@ -129,7 +119,6 @@ def test_perf_matmul_tiny_quasar(
         dest_sync_mode,
         dest_acc,
         format,
-        implied_math_format,
         register_format_hint,
         enable_direct_indexing,
         transpose,

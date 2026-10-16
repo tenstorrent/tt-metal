@@ -120,10 +120,97 @@ INSTANTIATE_TEST_SUITE_P(
                         }
                 },
             .expected_err_msg = "Shard height 16 must match physical height 32 for width sharded"
+        },
+        // HEIGHT sharded: Zero shard height
+        IllegalShardSpecParams{
+            .shape = Shape{64, 64},
+            .page_config = PageConfig(Layout::TILE),
+            .memory_config =
+                MemoryConfig{
+                    TensorMemoryLayout::HEIGHT_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
+                            num_cores_to_corerangeset(1, grid_size, /*row_wise=*/true),
+                            {0, 64},
+                            ShardOrientation::ROW_MAJOR,
+                        }
+                },
+            .expected_err_msg = "Shard shape must be greater than 0 in each sharded dim"
+        },
+        // WIDTH sharded: Zero shard width
+        IllegalShardSpecParams{
+            .shape = Shape{64, 64},
+            .page_config = PageConfig(Layout::TILE),
+            .memory_config =
+                MemoryConfig{
+                    TensorMemoryLayout::WIDTH_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
+                            num_cores_to_corerangeset(1, grid_size, /*row_wise=*/true),
+                            {64, 0},
+                            ShardOrientation::ROW_MAJOR,
+                        }
+                },
+            .expected_err_msg = "Shard shape must be greater than 0 in each sharded dim"
+        },
+        // BLOCK sharded: Zero shard height
+        IllegalShardSpecParams{
+            .shape = Shape{64, 64},
+            .page_config = PageConfig(Layout::TILE),
+            .memory_config =
+                MemoryConfig{
+                    TensorMemoryLayout::BLOCK_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
+                            num_cores_to_corerangeset(1, grid_size, /*row_wise=*/true),
+                            {0, 64},
+                            ShardOrientation::ROW_MAJOR,
+                        }
+                },
+            .expected_err_msg = "Shard shape must be greater than 0 in each sharded dim"
+        },
+        // BLOCK sharded: Zero shard width
+        IllegalShardSpecParams{
+            .shape = Shape{64, 64},
+            .page_config = PageConfig(Layout::TILE),
+            .memory_config =
+                MemoryConfig{
+                    TensorMemoryLayout::BLOCK_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
+                            num_cores_to_corerangeset(1, grid_size, /*row_wise=*/true),
+                            {64, 0},
+                            ShardOrientation::ROW_MAJOR,
+                        }
+                },
+            .expected_err_msg = "Shard shape must be greater than 0 in each sharded dim"
         }
     )  // Values
     // clang-format on
 );
+
+// A row-major tensor takes its width alignment from the shard width, so a zero width is rejected while the
+// TensorLayout is built, ahead of the TensorSpec check.
+class ZeroRowMajorShardWidthTests : public ::testing::TestWithParam<TensorMemoryLayout> {};
+
+TEST_P(ZeroRowMajorShardWidthTests, ExpectFailAndCheckErrMsg) {
+    const auto memory_config = MemoryConfig{
+        GetParam(),
+        BufferType::L1,
+        ShardSpec{num_cores_to_corerangeset(1, grid_size, /*row_wise=*/true), {64, 0}, ShardOrientation::ROW_MAJOR},
+    };
+    EXPECT_THAT(
+        std::function<void()>([&memory_config]() {
+            auto tensor_spec = TensorSpec(
+                Shape{64, 64}, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config));
+        }),
+        ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Row Major width alignment must be greater than 0")));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorShardingTests,
+    ZeroRowMajorShardWidthTests,
+    ::testing::Values(TensorMemoryLayout::WIDTH_SHARDED, TensorMemoryLayout::BLOCK_SHARDED));
 
 class MemoryConfigEqualityTest : public ::testing::Test {
 protected:

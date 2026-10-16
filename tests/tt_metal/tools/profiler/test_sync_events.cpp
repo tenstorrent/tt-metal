@@ -21,7 +21,6 @@
 #include <string>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/streaming_profiler.hpp>
 #include "tt_metal/impl/kernels/kernel.hpp"
@@ -50,8 +49,6 @@ void RunApiTest(
         risc_names[(int)consumer_risc],
         use_remote_core ? ", different core" : "");
 
-    IDevice* device = mesh_device->get_devices()[0];
-
     CoreCoord producer_core = {0, 0};
     CoreCoord consumer_core = use_remote_core ? CoreCoord{1, 0} : CoreCoord{0, 0};
 
@@ -78,7 +75,7 @@ void RunApiTest(
 
     if (use_remote_core) {
         consumer_sem_id = CreateSemaphore(program, consumer_core, 0);
-        auto noc_coords = device->worker_core_from_logical_core(consumer_core);
+        auto noc_coords = mesh_device->worker_core_from_logical_core(consumer_core);
         remote_noc_x = noc_coords.x;
         remote_noc_y = noc_coords.y;
     }
@@ -151,9 +148,9 @@ int main(int argc, char* argv[]) {
     bool pass = true;
 
     try {
-        const char* sync_events_env = std::getenv("TT_METAL_DEVICE_PROFILER_SYNC_EVENTS");
+        const char* sync_events_env = std::getenv("TT_METAL_STREAMING_PROFILER_SYNC_EVENTS");
         if (!sync_events_env || std::string(sync_events_env) != "1") {
-            fmt::print(stderr, "WARNING: Run with TT_METAL_DEVICE_PROFILER_SYNC_EVENTS=1\n");
+            fmt::print(stderr, "WARNING: Run with TT_METAL_STREAMING_PROFILER_SYNC_EVENTS=1\n");
         }
 
         int device_id = 0;
@@ -176,20 +173,24 @@ int main(int argc, char* argv[]) {
         };
 
         // Check if running on Quasar (ckernel::Semaphore is Quasar-only)
-        IDevice* device = mesh_device->get_devices()[0];
-        bool is_quasar = device->arch() == tt::ARCH::QUASAR;
+        bool is_quasar = mesh_device->arch() == tt::ARCH::QUASAR;
 
         TestConfig tests[] = {
             // Raw CB APIs
             {0, 1, false, "CB wait", Risc::BRISC, Risc::NCRISC, false},
             {7, 8, false, "CB reserve", Risc::BRISC, Risc::NCRISC, false},
 
-            // Raw Semaphore APIs
+            // Raw Semaphore APIs. The noc 1 cases are produced from NCRISC; every other case is noc 0.
             {2, 3, false, "Raw: sem_set + sem_wait", Risc::BRISC, Risc::NCRISC, false},
             {4, 5, true, "Raw: sem_inc remote", Risc::BRISC, Risc::NCRISC, false},
             {2, 6, false, "Raw: sem_set + sem_wait_min", Risc::BRISC, Risc::NCRISC, false},
             {11, 12, true, "Raw: sem_inc_multicast", Risc::BRISC, Risc::NCRISC, false},
             {13, 14, true, "Raw: sem_set_multicast", Risc::BRISC, Risc::NCRISC, false},
+            {31, 5, true, "Raw: sem_set_remote", Risc::BRISC, Risc::NCRISC, false},
+            {33, 5, true, "Raw: sem_set_multicast_loopback_src", Risc::BRISC, Risc::NCRISC, false},
+            {4, 5, true, "Raw: sem_inc remote (noc 1)", Risc::NCRISC, Risc::BRISC, false},
+            {11, 12, true, "Raw: sem_inc_multicast (noc 1)", Risc::NCRISC, Risc::BRISC, false},
+            {13, 14, true, "Raw: sem_set_multicast (noc 1)", Risc::NCRISC, Risc::BRISC, false},
 
             // Semaphore class APIs (dataflow)
             {20, 21, false, "Class: set() + wait()", Risc::BRISC, Risc::NCRISC, false},

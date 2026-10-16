@@ -58,7 +58,7 @@ bool run_l2_flush_test(distributed::MeshDevice& mesh_device, const L2FlushTestCo
                 .runtime_arg_names = {"base_addr", "test_mode"},
                 .common_runtime_arg_names = {"value", "num_words"},
             },
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -140,7 +140,7 @@ bool run_l1_dcache_test(distributed::MeshDevice& mesh_device, const L1DCacheTest
                 .runtime_arg_names = {"base_addr", "test_mode"},
                 .common_runtime_arg_names = {"value", "num_words"},
             },
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::WorkUnitSpec main_wu{

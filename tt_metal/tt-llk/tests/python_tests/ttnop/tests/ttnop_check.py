@@ -20,7 +20,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PYTHON_TESTS = HERE.parents[1]
-sys.path[:0] = [str(HERE.parent), str(PYTHON_TESTS)]
+TTNOP_RUNTIME = HERE.parent / "runtime"
+sys.path[:0] = [str(TTNOP_RUNTIME), str(PYTHON_TESTS)]
 os.environ.setdefault("LLK_HOME", str(PYTHON_TESTS.parents[1]))
 
 import torch

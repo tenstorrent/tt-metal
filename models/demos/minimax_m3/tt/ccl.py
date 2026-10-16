@@ -126,6 +126,17 @@ class CCLManager:
         self.barrier_idx = (cur_idx + 1) % 2
         return self.barrier_semaphore[cur_idx]
 
+    def release_scratch_buffers(self) -> None:
+        """Free every persistent ring-gather / high_bw-gather scratch buffer and forget it; each is lazily
+        re-created at its next use. The buffers are keyed by shape, and the cache-read ones are sized by the
+        KV-cache capacity, so a resident model that re-targets its capacity (TtPrefillRuntime.
+        reconfigure_capacity) would otherwise keep ~0.7 GB/chip of dead scratch per distinct capacity at 1M.
+        Safe between prefill calls: gathered tensors alias these buffers only inside one layer's attention."""
+        for cache in (self._ring_gather_buffers, self._high_bw_gather_buffers):
+            for t in cache.values():
+                ttnn.deallocate(t)
+            cache.clear()
+
     def get_ring_gather_buffer(self, key, n_kv, seq, head_dim, dtype):
         """Persistent ring-gather scratch for ``ring_joint`` SDPA — allocated ONCE and reused across every
         layer/chunk (replaces the per-call ``from_torch(zeros)`` that churned host + DRAM on every dense
@@ -151,13 +162,15 @@ class CCLManager:
     def get_high_bw_gather_buffer(self, key, shape, dtype, layout=ttnn.TILE_LAYOUT):
         """Persistent replicated DRAM output for ``high_bw_all_gather``, sized for the worst-case gathered
         shape (rank r lands at the fixed slot r*input_rows regardless of ``gathered_dim_size``). ``key``
-        separates buffers live at the same time (K / V / index_k). Allocated on device, uninitialised: the
-        never-written tail is never read (indexer bounded by ``kv_len``, top-k by ``valid_length``).
-        Mirrors DeepSeek's ``get_mla_high_bw_all_gather_buffer``.
+        separates buffers live at the same time (K / V / index_k). Zeroed once at allocation: the rows past a
+        rank's gathered prefix then always hold zeros or stale finite KV from an earlier gather. The consumers
+        read them only as positions that are future to every query (a mid-slab chunk's block-rounded tail,
+        masked causally), so they must be finite, never uninitialised NaN/Inf. Mirrors DeepSeek's
+        ``get_mla_high_bw_all_gather_buffer``.
         """
         cache_key = (key, tuple(shape), str(dtype), str(layout))
         if cache_key not in self._high_bw_gather_buffers:
-            self._high_bw_gather_buffers[cache_key] = ttnn.empty(
+            self._high_bw_gather_buffers[cache_key] = ttnn.zeros(
                 list(shape),
                 dtype=dtype,
                 layout=layout,

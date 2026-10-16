@@ -16,6 +16,7 @@ import torch
 from typing import Optional, List, Dict, Any
 
 from .tt_spatial_cross_attention import TTSpatialCrossAttention, build_rebatch_plan
+from .tt_common import layer_norm
 from .tt_temporal_self_attention import TTTemporalSelfAttention
 from .tt_point_sampling_3d_2d import point_sampling_3d_to_2d_ttnn
 from ..reference.point_sampling_3d_2d import generate_reference_points
@@ -123,7 +124,6 @@ class TTBEVFormerLayer:
     def forward(
         self,
         bev_query,
-        key=None,
         value=None,
         bev_pos=None,
         prev_bev=None,
@@ -139,8 +139,8 @@ class TTBEVFormerLayer:
 
         Args:
             bev_query: Current BEV query features [B, num_queries, embed_dims]
-            key: Multi-camera features [num_cams, H*W, B, embed_dims]
-            value: Same as key
+            value: Batch-first multi-camera features [B, num_cams, H*W, embed_dims], shared by
+                every layer.
             bev_pos: BEV positional encoding [B, num_queries, embed_dims]
             prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
             shift: Camera shift information for temporal alignment
@@ -172,19 +172,15 @@ class TTBEVFormerLayer:
             signpost(header="BEVLayer TSA Complete")
 
         # Layer normalization (norm1)
-        temp_query = ttnn.layer_norm(temp_query, weight=self.params.norm1.weight, bias=self.params.norm1.bias)
+        temp_query = layer_norm(temp_query, self.params.norm1)
         bev_query = temp_query
 
         if use_signpost:
             signpost(header="BEVLayer SCA Start")
 
         # Spatial Cross-Attention
-        if value is None:
-            value = key
-
         spatial_query = self.spatial_cross_attention(
             query=bev_query,
-            key=key,
             value=value,
             residual=bev_query,
             query_pos=bev_pos,
@@ -198,7 +194,7 @@ class TTBEVFormerLayer:
             signpost(header="BEVLayer SCA Complete")
 
         # Layer normalization (norm2)
-        spatial_query = ttnn.layer_norm(spatial_query, weight=self.params.norm2.weight, bias=self.params.norm2.bias)
+        spatial_query = layer_norm(spatial_query, self.params.norm2)
         bev_query = spatial_query
 
         if use_signpost:
@@ -212,9 +208,7 @@ class TTBEVFormerLayer:
 
         # Layer normalization and residual connection (norm3)
         ffn_output_with_residual = ttnn.add(bev_query, ffn_output)
-        bev_query = ttnn.layer_norm(
-            ffn_output_with_residual, weight=self.params.norm3.weight, bias=self.params.norm3.bias
-        )
+        bev_query = layer_norm(ffn_output_with_residual, self.params.norm3)
 
         if use_signpost:
             signpost(header="TTNN BEVFormerLayer Forward End")
@@ -296,8 +290,8 @@ class TTBEVFormerEncoder:
             different grid needs a new encoder instance.
         bev_w (int): BEV grid width. See bev_h.
         spatial_shapes: Multi-scale feature shapes [num_levels, 2]. Fixed for the lifetime
-            of the encoder and its attention modules, which build their offset normalizers
-            from it at construction. Feeding features at a different resolution requires a
+            of the encoder and its attention modules, which fold it into their sampling-offset
+            Linear at construction. Feeding features at a different resolution requires a
             new encoder instance; it cannot be changed between forwards.
         **kwargs: Additional arguments
 
@@ -428,7 +422,7 @@ class TTBEVFormerEncoder:
         Args:
             bev_query: Initial BEV query features [B, num_queries, embed_dims]
             key: Multi-camera features [num_cams, H*W, B, embed_dims]
-            value: Same as key (optional)
+            value: Same as key (optional); falls back to ``key`` when omitted
             bev_pos: BEV positional encoding [B, num_queries, embed_dims]
             prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
             shift: Camera shift for temporal alignment
@@ -461,12 +455,13 @@ class TTBEVFormerEncoder:
         )
 
         shapes = self.spatial_shapes
-        if key is not None:
+        camera_features = value if value is not None else key
+        if camera_features is not None:
             expected_L = shapes.prod(dim=1).sum().item()
-            L = key.shape[1]
+            L = camera_features.shape[1]
             assert expected_L == L, (
-                f"Spatial shapes mismatch: spatial_shapes total ({expected_L}) != key spatial dimension ({L}). "
-                f"spatial_shapes: {shapes.tolist()}, key.shape: {key.shape}"
+                f"Spatial shapes mismatch: spatial_shapes total ({expected_L}) != camera spatial dimension ({L}). "
+                f"spatial_shapes: {shapes.tolist()}, camera features shape: {camera_features.shape}"
             )
 
         if use_signpost:
@@ -515,14 +510,15 @@ class TTBEVFormerEncoder:
             )
 
         # Camera projection is per-frame, so the SCA rebatch plan is too. Layers only gather query.
-        rebatch_plan = (
-            build_rebatch_plan(reference_points_cam, bev_mask, self.embed_dims, self.device)
-            if bev_mask is not None
-            else None
-        )
+        rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.device) if bev_mask is not None else None
 
         if use_signpost:
             signpost(header="BEVEncoder Reference Points Complete")
+
+        # Every layer reads the same camera features, so SCA takes them batch-first and this
+        # runs once per forward, not once per layer.
+        if camera_features is not None:
+            camera_features = ttnn.permute(camera_features, (2, 0, 1, 3))
 
         # Process through transformer layers
         for lid, layer in enumerate(self.layers):
@@ -531,8 +527,7 @@ class TTBEVFormerEncoder:
 
             output = layer(
                 bev_query=output,
-                key=key,
-                value=value,
+                value=camera_features,
                 bev_pos=bev_pos,
                 prev_bev=prev_bev,
                 shift=shift,
@@ -550,6 +545,9 @@ class TTBEVFormerEncoder:
 
         if bev_reference_points is not self._bev_reference_points:
             ttnn.deallocate(bev_reference_points)
+
+        if camera_features is not None:
+            ttnn.deallocate(camera_features)
 
         if use_signpost:
             signpost(header="TTNN BEVFormerEncoder Forward End")

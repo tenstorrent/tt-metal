@@ -11,7 +11,7 @@ import transformers
 import ttnn
 from ttnn.tracer import trace, visualize, get_graph
 
-from models.common.utility_functions import is_wormhole_b0, is_blackhole
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0, is_blackhole
 
 from models.demos.bert.tt import ttnn_bert
 from models.demos.bert.tt import ttnn_optimized_bert

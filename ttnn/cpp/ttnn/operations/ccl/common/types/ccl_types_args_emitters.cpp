@@ -25,34 +25,7 @@ args_list_t emit_runtime_args(WorkerEdmInterfaceArgs const& edm_interface_args) 
 
 args_list_t emit_compile_time(const WorkerEdmInterfaceArgs& /*edm_interface_args*/) { return {}; }
 
-args_list_t legacy_emit_address_generator_runtime_args(const tt::tt_metal::IDevice* const d, const ttnn::Tensor& t) {
-    args_list_t args;
-    switch (t.buffer()->buffer_layout()) {
-        case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
-        case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:
-        case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED:
-            return ShardedAddrGenArgBuilder::emit_rt_args(d, t);
-            break;
-
-        case tt::tt_metal::TensorMemoryLayout::INTERLEAVED:
-            TT_ASSERT(t.buffer()->page_size() != 1024);
-            // For now we won't emit args for interleaved here... assume these are passed in elsewhere
-            // This is during some transitionary period
-            return {};
-
-            break;
-
-        default:
-            TT_ASSERT(
-                false,
-                "Tried emitting address generator args for an unsupported type{}. Consider adding the missing support "
-                "or using a supported tensor memory layout (width sharded, height sharded, block sharded, interleaved",
-                t.buffer()->buffer_layout());
-            return {};
-    };
-}
-
-args_list_t emit_address_generator_runtime_args(const tt::tt_metal::IDevice* const /*d*/, const ttnn::Tensor& t) {
+args_list_t emit_address_generator_runtime_args(const ttnn::Tensor& t) {
     args_list_t args;
     switch (t.buffer()->buffer_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
@@ -75,25 +48,6 @@ args_list_t emit_address_generator_runtime_args(const tt::tt_metal::IDevice* con
                 t.buffer()->buffer_layout());
             return {};
     };
-}
-
-args_list_t legacy_emit_address_generator_compile_time_args(const ttnn::Tensor& t) {
-    switch (t.buffer()->buffer_layout()) {
-        case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
-        case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:
-        case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: return ShardedAddrGenArgBuilder::emit_ct_args(t); break;
-
-        case tt::tt_metal::TensorMemoryLayout::INTERLEAVED: return {}; break;
-
-        default:
-            TT_ASSERT(
-                false,
-                "Tried emitting address generator args for an unsupported type{}. Consider adding the missing support "
-                "or using a supported tensor memory layout (width sharded, height sharded, block sharded, interleaved",
-                t.buffer()->buffer_layout());
-            return {};
-    }
-    TT_ASSERT(false);
 }
 
 args_list_t emit_address_generator_compile_time_args(const ttnn::Tensor& t) {
@@ -129,44 +83,6 @@ std::pair<CoreCoord, CoreCoord> shard_grid_from_shard_spec(const ShardSpec& shar
     log_trace(tt::LogOp, "grid_size: {}", shard_spec.grid.num_cores());
 
     return {core_range.start_coord, core_range.end_coord};
-}
-
-// non-transposed - always row-major layout
-// vec<logical row -> noc row>, vec<logicacal col -> noc col>
-static std::pair<std::vector<uint32_t>, std::vector<uint32_t>> shard_noc_cores_from_shard_spec(
-    IDevice const* d, const ShardSpec& shard_spec) {
-    TT_ASSERT(d != nullptr);
-    auto const& core_range = shard_spec.grid.bounding_box();
-    std::vector<uint32_t> logical_to_noc_row_map;
-    logical_to_noc_row_map.reserve(core_range.end_coord.y - core_range.start_coord.y + 1);
-    std::vector<uint32_t> logical_to_noc_col_map;
-    logical_to_noc_col_map.reserve(core_range.end_coord.x - core_range.start_coord.x + 1);
-    for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-        CoreCoord noc_core = d->virtual_core_from_logical_core(CoreCoord(0, y), tt::CoreType::WORKER);
-        logical_to_noc_row_map.push_back(noc_core.y);
-    }
-    for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-        CoreCoord noc_core = d->virtual_core_from_logical_core(CoreCoord(x, 0), tt::CoreType::WORKER);
-        logical_to_noc_col_map.push_back(noc_core.x);
-    }
-
-    return {std::move(logical_to_noc_row_map), std::move(logical_to_noc_col_map)};
-}
-
-std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(IDevice const* d, Tensor const& t) {
-    std::vector<uint32_t> args;
-    auto const& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, t.shard_spec().value());
-    args.reserve(row_map.size() + col_map.size() + 2);
-    args.push_back(row_map.size());
-    for (unsigned int row : row_map) {
-        args.push_back(row);
-    }
-    args.push_back(col_map.size());
-    for (unsigned int col : col_map) {
-        args.push_back(col);
-    }
-
-    return args;
 }
 
 std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_ct_args(Tensor const& t) {

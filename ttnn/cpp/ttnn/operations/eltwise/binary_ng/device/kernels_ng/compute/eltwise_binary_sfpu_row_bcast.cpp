@@ -26,6 +26,8 @@
 #include "api/compute/isclose.h"
 #include "api/compute/atan2.h"
 #include "api/compute/nextafter.h"
+#include "api/compute/logaddexp.h"
+#include "api/compute/logaddexp2.h"
 #include "api/compute/bcast.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp"

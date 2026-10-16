@@ -456,3 +456,11 @@ enum DfbInitTimingWord : uint8_t {
 };
 
 }  // namespace dfb
+
+// Return value of setup_local_dfb_interfaces()
+// Contiguous packer remapper pairs programmed this launch ([lo, hi); lo==0xFF if none).
+// Pack trisc.cc tears this range down after the kernel. DM/unpack ignore the return.
+struct DfbPackerRemapperRange {
+    uint8_t lo = 0xFFu;
+    uint8_t hi = 0;
+};

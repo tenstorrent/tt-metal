@@ -1,0 +1,13 @@
+{
+    "repo": "tenstorrent/tt-llk",
+    "watermark": "2026-09-25T20:51:54Z",
+    "tree_commit": null,
+    "written": "2026-09-28T22:42:21Z",
+    "counts": {
+        "issues": 790,
+        "prs": 2222,
+        "dump_files": 4,
+        "deep_read": 68,
+        "held_out": 15
+    }
+}

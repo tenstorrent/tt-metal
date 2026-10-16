@@ -53,6 +53,31 @@ Optional:
     --skip-version-check                     Skip the tt-smi/KMD/firmware version checks run on all hosts
                                             before recovery (see minimum versions in utils/host_utils.sh)
     --skip-mpi-stress-test                  Skip the MPI packet stress test run before recovery
+    --skip-sys-triage                       Skip the sys-triage bundle. By default, right after the version check
+                                            and before anything resets, every host runs sys-triage (the syseng
+                                            system and per-tray triage dump: FW stack, FRU, CPLD DIAG, lspci,
+                                            kernel logs, per-chip vuart) into <output>/sys_triage/<host>/, with
+                                            its log beside it as <output>/sys_triage/<host>.log. With --use-docker
+                                            it runs as root inside that image, which must ship sys-triage;
+                                            otherwise (or with --sys-triage-on-host) from the host. Each host
+                                            gets its own address from --bmc-ip. A host without sys-triage is named
+                                            and skipped. Never affects the outcome.
+    --sys-triage-on-host                    Run sys-triage from the host (the syseng .deb) via plain mpirun even
+                                            with --use-docker, which then still applies to everything else
+    --sys-triage-path <path>                The sys-triage executable; must be at the same path on every host, or
+                                            in the image when it runs there (default: the one on PATH)
+    --bmc-ip <ip>[,<ip>...]                 BMC address for sys-triage, one per host in --hosts order, since every
+                                            Galaxy has its own BMC (default: \$BMC_IP)
+    --bmc-api-url <url>                     BMC API URL for sys-triage, given to it as --bmc-api and as
+                                            \$TT_BMC_API_URL (default: \$TT_BMC_API_URL)
+    --bmc-user <user>                       BMC user for sys-triage (default: \$BMC_USER)
+    --bmc-password <password>               BMC password for sys-triage, given to it as --bmc-password and as
+                                            \$TT_BMC_API_TOKEN (default: \$BMC_PASSWORD, which is preferred: a flag
+                                            value is visible in this script's process list). Reaches the hosts
+                                            through the environment.
+                                            Without all four BMC values, sys-triage is skipped.
+    --skip-cross-host-port-down             Skip quiescing cross-host Ethernet ports before each reset
+                                            (required for non-Blackhole systems)
     --no-send-traffic                       Disable --send-traffic in cluster validation
     --check                                 Dry run: verify MPI can reach all hosts via hostname, then exit
     --mpi-if <interface>                    Network interface for MPI TCP transport
@@ -131,7 +156,7 @@ EOF
 HOSTS=""
 CONFIG="4x32"
 DOCKER_IMAGE=""
-DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20260922-17-g86b55b92d0d"
+DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/exabox-tools:latest"
 NUM_ITERATIONS=5
 MAX_ATTEMPTS=1
 MAX_RETRAINS=5
@@ -141,6 +166,7 @@ SKIP_RESET=false
 SKIP_VALIDATION=false
 SKIP_VERSION_CHECK=false
 SKIP_MPI_STRESS_TEST=false
+SKIP_CROSS_HOST_PORT_DOWN=false
 SEND_TRAFFIC=true
 CHECK=false
 MPI_IF=""
@@ -158,6 +184,16 @@ CLUSTER_DEBUG_TOOL=""
 CLUSTER_DEBUG_TOOL_NAME="tt-bh-glx-cluster-debug"
 CLUSTER_DEBUG_LOG_ROOT_DEFAULT="/data/dcamp/cluster-debug/logs"
 CLUSTER_DEBUG_LOG_ROOT="$CLUSTER_DEBUG_LOG_ROOT_DEFAULT"
+SKIP_SYS_TRIAGE=false
+SYS_TRIAGE_ON_HOST=false
+SYS_TRIAGE_PATH=""
+BMC_IP_LIST="${BMC_IP:-}"
+BMC_API_URL="${TT_BMC_API_URL:-}"
+BMC_USER="${BMC_USER:-}"
+BMC_PASSWORD="${BMC_PASSWORD:-}"
+# A backstop per host, not the expected duration: CPLD DIAG self-bounds at 180 s and the
+# per-chip tt-fw-terminal drains run 8 at a time.
+SYS_TRIAGE_TIMEOUT_S=900
 
 # Minimum required tt-smi/KMD/firmware versions (TT_SMI_MIN_VERSION, KMD_MIN_VERSION,
 # FW_MIN_VERSION) and the check itself live in utils/host_utils.sh, shared with run_validation.sh.
@@ -288,6 +324,58 @@ while [[ $# -gt 0 ]]; do
             SKIP_MPI_STRESS_TEST=true
             shift
             ;;
+        --skip-cross-host-port-down)
+            SKIP_CROSS_HOST_PORT_DOWN=true
+            shift
+            ;;
+        --skip-sys-triage)
+            SKIP_SYS_TRIAGE=true
+            shift
+            ;;
+        --sys-triage-on-host)
+            SYS_TRIAGE_ON_HOST=true
+            shift
+            ;;
+        --sys-triage-path)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --sys-triage-path requires a non-empty value"
+                exit 1
+            fi
+            SYS_TRIAGE_PATH="$2"
+            shift 2
+            ;;
+        --bmc-ip)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --bmc-ip requires a non-empty value"
+                exit 1
+            fi
+            BMC_IP_LIST="$2"
+            shift 2
+            ;;
+        --bmc-api-url)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --bmc-api-url requires a non-empty value"
+                exit 1
+            fi
+            BMC_API_URL="$2"
+            shift 2
+            ;;
+        --bmc-user)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --bmc-user requires a non-empty value"
+                exit 1
+            fi
+            BMC_USER="$2"
+            shift 2
+            ;;
+        --bmc-password)
+            if [[ -z "$2" ]]; then
+                echo "Error: --bmc-password requires a non-empty value"
+                exit 1
+            fi
+            BMC_PASSWORD="$2"
+            shift 2
+            ;;
         --no-send-traffic)
             SEND_TRAFFIC=false
             shift
@@ -369,6 +457,12 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             read -ra _extra <<< "$2"
+            for _a in "${_extra[@]}"; do
+                if [[ "$_a" == "--cross-host-port-down" || "$_a" == "--cross-host-port-down="* ]]; then
+                    echo "Error: --cross-host-port-down is not allowed in --validation-args; it is handled automatically before each reset (disable with --skip-cross-host-port-down)."
+                    exit 1
+                fi
+            done
             VALIDATION_EXTRA_ARGS+=("${_extra[@]}")
             shift 2
             ;;
@@ -535,6 +629,67 @@ for _darg in "${DOCKER_EXTRA_ARGS[@]}"; do
     DOCKER_ARG_FLAGS+=(--docker-arg "$_darg")
 done
 
+# Quiesce all expected cross-host Ethernet ports (from the FSD) before a reset. Mirrors the
+# run_cluster_validation launcher below (docker keyed on -n "$DOCKER_IMAGE"), just swapping the
+# validation args for --cross-host-port-down, which makes the binary port-down and exit.
+# Backstop so a hung port down (e.g. an unanswered ETH mailbox) ends in the cleanup reset below
+# instead of stalling recovery forever.
+CROSS_HOST_PORT_DOWN_TIMEOUT_S=300
+run_cross_host_port_down() {
+    if [[ -n "$DOCKER_IMAGE" ]]; then
+        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+            --empty-entrypoint \
+            --tag-host \
+            --mpi-interface "$MPI_IF" \
+            --volume /data/scaleout_configs \
+            "${DOCKER_ARG_FLAGS[@]}" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            --host "$HOSTS" \
+            --timeout "$CROSS_HOST_PORT_DOWN_TIMEOUT_S" \
+            ./build/tools/scaleout/run_cluster_validation \
+            "${DESCRIPTOR_ARGS[@]}" \
+            --cross-host-port-down
+    else
+        local _bin_cmd
+        _bin_cmd=$(printf '%q ' ./build/tools/scaleout/run_cluster_validation \
+            "${DESCRIPTOR_ARGS[@]}" \
+            --cross-host-port-down)
+        timeout --signal=TERM --kill-after=30s "$CROSS_HOST_PORT_DOWN_TIMEOUT_S" mpirun --host "$HOSTS" \
+            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            bash -c "set -o pipefail; h=\$(hostname); $_bin_cmd 2>&1 | while IFS= read -r l; do printf '[%s] %s\n' \"\$h\" \"\$l\"; done"
+    fi
+}
+
+# The image sys-triage runs in; empty means from the host via plain mpirun.
+SYS_TRIAGE_IMAGE="$DOCKER_IMAGE"
+[[ "$SYS_TRIAGE_ON_HOST" == true ]] && SYS_TRIAGE_IMAGE=""
+
+# Why sys-triage will not run, or empty. Every Galaxy has its own BMC, so --bmc-ip pairs with
+# --hosts by position; SYS_TRIAGE_BMC_MAP carries the pairs to the ranks as host=ip,...
+SYS_TRIAGE_SKIP_REASON=""
+SYS_TRIAGE_BMC_MAP=""
+if [[ "$SKIP_SYS_TRIAGE" == true ]]; then
+    SYS_TRIAGE_SKIP_REASON="--skip-sys-triage"
+else
+    _missing=()
+    [[ -z "$BMC_IP_LIST" ]] && _missing+=("--bmc-ip/\$BMC_IP")
+    [[ -z "$BMC_API_URL" ]] && _missing+=("--bmc-api-url/\$TT_BMC_API_URL")
+    [[ -z "$BMC_USER" ]] && _missing+=("--bmc-user/\$BMC_USER")
+    [[ -z "$BMC_PASSWORD" ]] && _missing+=("--bmc-password/\$BMC_PASSWORD")
+    IFS=',' read -ra _st_hosts <<< "$HOSTS"
+    IFS=',' read -ra _st_ips <<< "$BMC_IP_LIST"
+    if [[ ${#_missing[@]} -gt 0 ]]; then
+        SYS_TRIAGE_SKIP_REASON="BMC details incomplete, which sys-triage refuses to run without; missing: ${_missing[*]}"
+    elif [[ ${#_st_ips[@]} -ne ${#_st_hosts[@]} ]]; then
+        SYS_TRIAGE_SKIP_REASON="--bmc-ip has ${#_st_ips[@]} address(es) for ${#_st_hosts[@]} host(s); it takes one per host, in --hosts order"
+    else
+        for _i in "${!_st_hosts[@]}"; do
+            SYS_TRIAGE_BMC_MAP+="${SYS_TRIAGE_BMC_MAP:+,}${_st_hosts[$_i]}=${_st_ips[$_i]}"
+        done
+    fi
+fi
+
 # Print summary
 echo "=========================================="
 echo "Cluster recovery"
@@ -565,6 +720,13 @@ echo "Skip reset: $SKIP_RESET"
 echo "Skip validation: $SKIP_VALIDATION"
 echo "Skip version check: $SKIP_VERSION_CHECK"
 echo "Skip MPI stress test: $SKIP_MPI_STRESS_TEST"
+if [[ -n "$SYS_TRIAGE_SKIP_REASON" ]]; then
+    echo "sys-triage: skipped ($SYS_TRIAGE_SKIP_REASON)"
+else
+    echo "sys-triage: every host before recovery, $([[ -n "$SYS_TRIAGE_IMAGE" ]] && echo "in $SYS_TRIAGE_IMAGE" || echo "from the host"), into $OUTPUT_DIR/sys_triage"
+    echo "sys-triage BMC: user $BMC_USER, API $BMC_API_URL, ${SYS_TRIAGE_BMC_MAP//,/ }"
+fi
+echo "Skip cross-host port down: $SKIP_CROSS_HOST_PORT_DOWN"
 echo "Output directory: $OUTPUT_DIR"
 echo "Log file: $LOG_FILE"
 echo "Invocation: ${EXABOX_RECOVER_HELPER:-direct}"
@@ -593,6 +755,201 @@ if [[ "$SKIP_VERSION_CHECK" == false ]]; then
     fi
 else
     echo "Skipping version check (--skip-version-check)"
+    echo ""
+fi
+
+# Step 0.2: the sys-triage bundle on every host, taken before anything resets so its vuart and
+# scratch reads still describe the state that sent the cluster to recovery. With --use-docker it
+# runs inside the image, which must ship sys-triage; otherwise, or with --sys-triage-on-host, it
+# runs from the syseng .deb on the host via plain mpirun. Every host has its own BMC, so each rank
+# picks its address out of the --bmc-ip list; the shared user and password reach the ranks through
+# the environment. Forensics for a person, never a verdict: each host reports PASS, WARN (sections
+# missing) or SKIP with the reason, and only an interrupt stops recovery here.
+SYS_TRIAGE_DIR="$OUTPUT_DIR/sys_triage"
+
+# Args: <bundle root> <sys-triage path or ""> <budget s> <where, for messages> <uid:gid to write
+# the bundle as, when running as root in a container, or ""> <true if this rank tags its own lines
+# with [host]> <host=bmc-ip,...> <BMC API URL>. BMC_USER and BMC_PASSWORD come in the environment.
+read -r -d '' SYS_TRIAGE_RANK_CMD <<'SYS_TRIAGE_CMD' || true
+h=$(hostname)
+root="$1"
+bin="$2"
+budget="$3"
+where="$4"
+owner="$5"
+bmc_map="$7"
+bmc_api="$8"
+if [[ "$6" == true ]]; then
+    say() { printf '[%s] sys-triage: %s\n' "$h" "$*"; }
+else
+    say() { printf 'sys-triage: %s\n' "$*"; }
+fi
+# sys-triage hands the password on to cpld-dump.sh as an argument, so an error from that
+# script could carry it. Nothing written or printed here may.
+scrub() {
+    local l
+    while IFS= read -r l || [[ -n "$l" ]]; do
+        printf '%s\n' "${l//"$BMC_PASSWORD"/***}"
+    done
+}
+
+if [[ -n "$bin" ]]; then
+    if [[ ! -f "$bin" || ! -x "$bin" ]]; then
+        say "SKIP: $bin is not an executable file $where"
+        exit 0
+    fi
+elif ! bin=$(command -v sys-triage); then
+    say "SKIP: not installed $where (it ships in the syseng .deb)"
+    exit 0
+fi
+
+# Root in a container is squashed to nobody on an NFS output tree, where it could neither write
+# as the caller nor chown to them afterwards. So nothing reaches the output as root: sys-triage
+# writes to a local staging directory, and the bundle and log are written out as the caller.
+if [[ -n "$owner" ]]; then
+    if ! command -v setpriv >/dev/null 2>&1; then
+        say "SKIP: setpriv not found $where; it is needed to write the bundle as ${owner}"
+        exit 0
+    fi
+    as_owner() { setpriv --reuid="${owner%%:*}" --regid="${owner##*:}" --clear-groups "$@"; }
+else
+    as_owner() { "$@"; }
+fi
+
+# --hosts may name a host short or fully qualified, and hostname may answer either way.
+bmc_ip=""
+IFS=',' read -ra pairs <<< "$bmc_map"
+for p in "${pairs[@]}"; do
+    k="${p%%=*}"
+    if [[ "${k%%.*}" == "${h%%.*}" ]]; then
+        bmc_ip="${p#*=}"
+        break
+    fi
+done
+if [[ -z "$bmc_ip" ]]; then
+    say "SKIP: no --bmc-ip entry for this host ($bmc_map)"
+    exit 0
+fi
+
+out="$root/$h"
+log="$root/$h.log"
+# A bundle left by an earlier run into the same output would be read as this run's state.
+as_owner rm -rf "$out"
+if ! as_owner mkdir -p "$out" 2>/dev/null; then
+    say "SKIP: cannot create $out on this host"
+    exit 0
+fi
+work="$out"
+if [[ -n "$owner" ]] && ! work=$(mktemp -d); then
+    say "SKIP: cannot create a staging directory $where"
+    exit 0
+fi
+
+stdout_f=$(mktemp)
+stderr_f=$(mktemp)
+start=$SECONDS
+TT_BMC_API_URL="$bmc_api" TT_BMC_API_TOKEN="$BMC_PASSWORD" \
+    timeout --signal=TERM --kill-after=30s "$budget" "$bin" \
+    --bmc-ip "$bmc_ip" --bmc-user "$BMC_USER" --bmc-password "$BMC_PASSWORD" --bmc-api "$bmc_api" \
+    "$work" </dev/null >"$stdout_f" 2>"$stderr_f"
+rc=$?
+dur=$((SECONDS - start))
+if [[ "$work" != "$out" ]]; then
+    chown -R "$owner" "$work"
+    as_owner cp -r "$work/." "$out/" || say "could not copy the bundle from $work into $out"
+    rm -rf "$work"
+fi
+{
+    printf '$ TT_BMC_API_URL=%s TT_BMC_API_TOKEN=*** %s --bmc-ip %s --bmc-user %s --bmc-password *** --bmc-api %s %s\n' \
+        "$bmc_api" "$bin" "$bmc_ip" "$BMC_USER" "$bmc_api" "$work"
+    printf 'rc=%s  duration=%ss\n' "$rc" "$dur"
+    [[ "$work" != "$out" ]] && printf 'bundle copied to %s as %s\n' "$out" "$owner"
+    printf '\n--- stdout ---\n'
+    scrub <"$stdout_f"
+    printf '\n--- stderr ---\n'
+    scrub <"$stderr_f"
+} | as_owner tee "$log" >/dev/null 2>&1 || say "could not write $log"
+
+# sys-triage carries on past a section it cannot collect and says so on stderr, so its
+# warnings are the only record of what the bundle lacks.
+warnings=$(grep '^[[:space:]]*warning:' "$stderr_f" | scrub)
+last_err=$(grep -v '^[[:space:]]*$' "$stderr_f" | tail -n1 | scrub)
+rm -f "$stdout_f" "$stderr_f"
+files=$(( $(find "$out" -type f 2>/dev/null | wc -l) ))
+
+if [[ $rc -eq 124 || $rc -eq 137 ]]; then
+    say "SKIP: timed out after ${budget}s; $files partial file(s) kept in $out (log: $log)"
+elif [[ ! -f "$out/triage.txt" ]]; then
+    say "SKIP: rc=$rc but no triage.txt written${last_err:+: ${last_err:0:200}} (log: $log)"
+elif [[ -n "$warnings" ]]; then
+    say "WARN: $files file(s) in $out, $(grep -c . <<<"$warnings") section(s) incomplete (${dur}s, log: $log)"
+    while IFS= read -r w; do
+        say "  $w"
+    done <<<"$warnings"
+else
+    say "PASS: $files file(s) in $out (${dur}s, log: $log)"
+fi
+exit 0
+SYS_TRIAGE_CMD
+
+run_sys_triage() {
+    if [[ -n "$SYS_TRIAGE_IMAGE" ]]; then
+        # mpi-docker runs the image as the caller's uid over the host's /etc/passwd, where the
+        # image's passwordless sudo does not apply, and sys-triage needs root for ipmitool and
+        # the CPLD dump: root it is, writing the bundle out as the caller. mpi-docker joins and
+        # re-parses the command once on each rank, hence the %q on every argument. /var/log,
+        # not /var/log/journal: a missing bind source is created on the host, and journald
+        # would start persisting into it.
+        local q=()
+        local a
+        for a in "$SYS_TRIAGE_RANK_CMD" "$SYS_TRIAGE_DIR" "$SYS_TRIAGE_PATH" "$SYS_TRIAGE_TIMEOUT_S" \
+            "in image $SYS_TRIAGE_IMAGE" "$(id -u):$(id -g)" false "$SYS_TRIAGE_BMC_MAP" "$BMC_API_URL"; do
+            q+=("$(printf '%q' "$a")")
+        done
+        BMC_USER="$BMC_USER" BMC_PASSWORD="$BMC_PASSWORD" \
+            ./tools/scaleout/exabox/mpi-docker --image "$SYS_TRIAGE_IMAGE" \
+            --empty-entrypoint \
+            --tag-host \
+            --mpi-interface "$MPI_IF" \
+            --volume "$SYS_TRIAGE_DIR" \
+            --docker-arg --user=0:0 \
+            --docker-arg --volume=/var/log:/var/log:ro \
+            --docker-arg --volume=/etc/machine-id:/etc/machine-id:ro \
+            --docker-arg --volume=/lib/modules:/lib/modules:ro \
+            "${DOCKER_ARG_FLAGS[@]}" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            --host "$HOSTS" \
+            -x BMC_USER -x BMC_PASSWORD \
+            --timeout "$((SYS_TRIAGE_TIMEOUT_S + 300))" \
+            bash -c "${q[0]}" _ "${q[@]:1}"
+    else
+        BMC_USER="$BMC_USER" BMC_PASSWORD="$BMC_PASSWORD" \
+            timeout --signal=TERM --kill-after=30s "$((SYS_TRIAGE_TIMEOUT_S + 120))" mpirun --host "$HOSTS" \
+            --mca btl_tcp_if_include "$MPI_IF" \
+            -x BMC_USER -x BMC_PASSWORD \
+            "${MPI_EXTRA_ARGS[@]}" \
+            bash -c "$SYS_TRIAGE_RANK_CMD" _ "$SYS_TRIAGE_DIR" "$SYS_TRIAGE_PATH" "$SYS_TRIAGE_TIMEOUT_S" \
+            "on this host" "" true "$SYS_TRIAGE_BMC_MAP" "$BMC_API_URL"
+    fi
+}
+
+if [[ -n "$SYS_TRIAGE_SKIP_REASON" ]]; then
+    echo "Skipping sys-triage: $SYS_TRIAGE_SKIP_REASON"
+    echo ""
+else
+    echo "Collecting the sys-triage bundle on every host into $SYS_TRIAGE_DIR (up to ${SYS_TRIAGE_TIMEOUT_S}s per host)..."
+    SYS_TRIAGE_EXIT=0
+    if ! mkdir -p "$SYS_TRIAGE_DIR"; then
+        echo "Warning: cannot create $SYS_TRIAGE_DIR; skipping sys-triage, recovery continues"
+    else
+        run_sys_triage || SYS_TRIAGE_EXIT=$?
+        if [[ $SYS_TRIAGE_EXIT -eq 130 || $SYS_TRIAGE_EXIT -eq 143 ]]; then
+            echo "sys-triage collection was interrupted; stopping recovery."
+            exit "$SYS_TRIAGE_EXIT"
+        elif [[ $SYS_TRIAGE_EXIT -ne 0 ]]; then
+            echo "Warning: sys-triage collection failed (exit code $SYS_TRIAGE_EXIT, see above); recovery continues"
+        fi
+    fi
     echo ""
 fi
 
@@ -738,34 +1095,76 @@ echo "=========================================="
 # regenerate descriptors from evidence produced by the current (latest post-reset) attempt.
 rm -f "$UNRETRAINABLE_YAML"
 
-# Step 1: tt-smi reset
+# Step 0.9: bring down all expected cross-host Ethernet ports before the reset. This quiesces the
+# whole cross-host fabric (including links that failed to train) so the reset does not race an
+# active training walkdown. A failure runs a cleanup glx_reset and retries port-down once;
+# validation runs only if port-down and the following reset both succeed.
+PORT_DOWN_EXIT=0
 RESET_EXIT=0
-if [[ "$SKIP_RESET" == false ]]; then
-    echo "Running tt-smi -glx_reset..."
-    # Capture the status without tripping `set -e` (the `if` context suspends it) so a reset
-    # failure retries the attempt instead of aborting the whole script.
-    if run_glx_reset "$HOSTS"; then RESET_EXIT=0; else RESET_EXIT=$?; fi
-
-    if [[ $RESET_EXIT -ne 0 ]]; then
-        echo ""
-        echo "Reset failed on one or more hosts (exit code $RESET_EXIT)."
+if [[ "$SKIP_RESET" == false && "$SKIP_CROSS_HOST_PORT_DOWN" == false ]]; then
+    echo "Bringing down cross-host Ethernet ports before reset..."
+    if run_cross_host_port_down; then
+        echo "Cross-host Ethernet ports are down on all hosts."
     else
-        echo ""
-        echo "Sleeping ${SLEEP_DURATION}s..."
-        sleep "$SLEEP_DURATION"
+        PORT_DOWN_EXIT=$?
+        echo "WARNING: cross-host port down FAILED (exit code $PORT_DOWN_EXIT); running cleanup reset then retrying port down."
+        echo "Running tt-smi -glx_reset (cleanup after failed port down)..."
+        if run_glx_reset "$HOSTS"; then
+            RESET_EXIT=0
+            echo ""
+            echo "Sleeping ${SLEEP_DURATION}s..."
+            sleep "$SLEEP_DURATION"
+            echo "Retrying cross-host Ethernet port down..."
+            if run_cross_host_port_down; then
+                echo "Cross-host Ethernet ports are down on all hosts."
+                PORT_DOWN_EXIT=0
+            else
+                PORT_DOWN_EXIT=$?
+                echo "WARNING: retry cross-host port down FAILED (exit code $PORT_DOWN_EXIT); skipping validation."
+            fi
+        else
+            RESET_EXIT=$?
+            echo "Cleanup reset failed on one or more hosts (exit code $RESET_EXIT); skipping port-down retry and validation."
+        fi
+    fi
+    echo ""
+fi
+
+# Step 1: tt-smi reset after a successful (or skipped) port-down. Skipped when port-down
+# still failed after retry, or when the cleanup reset already failed.
+if [[ "$SKIP_RESET" == false ]]; then
+    if [[ $PORT_DOWN_EXIT -eq 0 && $RESET_EXIT -eq 0 ]]; then
+        echo "Running tt-smi -glx_reset..."
+        # Capture the status without tripping `set -e` (the `if` context suspends it) so a reset
+        # failure retries the attempt instead of aborting the whole script.
+        if run_glx_reset "$HOSTS"; then RESET_EXIT=0; else RESET_EXIT=$?; fi
+
+        if [[ $RESET_EXIT -ne 0 ]]; then
+            echo ""
+            echo "Reset failed on one or more hosts (exit code $RESET_EXIT)."
+        else
+            echo ""
+            echo "Sleeping ${SLEEP_DURATION}s..."
+            sleep "$SLEEP_DURATION"
+        fi
     fi
 else
     echo "Skipping tt-smi reset (--skip-reset)"
 fi
 
 # Step 2: Cluster validation
-# VALIDATION_EXIT carries the whole attempt's outcome: a failed reset short-circuits validation and
-# fails the attempt so the outer loop retries (or the script exits non-zero once attempts run out).
+# VALIDATION_EXIT carries the whole attempt's outcome: a failed port-down or reset
+# short-circuits validation and fails the attempt so the outer loop retries (or the
+# script exits non-zero once attempts run out).
 VALIDATION_EXIT=0
 if [[ $RESET_EXIT -ne 0 ]]; then
     echo ""
     echo "Skipping validation because reset failed on this attempt."
     VALIDATION_EXIT=$RESET_EXIT
+elif [[ $PORT_DOWN_EXIT -ne 0 ]]; then
+    echo ""
+    echo "Skipping validation because port down failed on this attempt."
+    VALIDATION_EXIT=$PORT_DOWN_EXIT
 elif [[ "$SKIP_VALIDATION" == false ]]; then
     VALIDATION_ARGS=("${DESCRIPTOR_ARGS[@]}")
     if [[ "$SEND_TRAFFIC" == true ]]; then

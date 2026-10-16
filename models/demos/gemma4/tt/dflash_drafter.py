@@ -36,6 +36,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allgather, ccl_allreduce
+from models.demos.gemma4.tt.dflash_constants import VERIFY_WIDTH_MARGIN
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 _SHARD_ARGMAX_K = 32
@@ -898,7 +899,7 @@ class DFlashFusedDecoder:
     v1: B=1, greedy, single ctx bucket (ctx_len + block must stay <= ctx_cap).
     """
 
-    def __init__(self, target_model, drafter, kv_layers, page_table_torch, ctx_cap=2048):
+    def __init__(self, target_model, drafter, kv_layers, page_table_torch, ctx_cap=2048, *, verify_count=None):
         self.target = target_model
         self.drafter = drafter
         self.kv_layers = kv_layers
@@ -909,6 +910,13 @@ class DFlashFusedDecoder:
         self._tp = drafter.tp
         K = drafter.block_size - 1
         self.K = K
+        # The verify count decides how many target positions one packed verify
+        # writes (P_v = V + 1). An adapter that declared effective_k to the
+        # runner passes it here so the physical write extent matches the KV
+        # lookahead the runner reserved, whatever GEMMA4_DFLASH_VERIFY says.
+        self.use_packed = _os.environ.get("GEMMA4_DFLASH_PACKED", "1") == "1"
+        self.V = self._resolve_verify_count(K, self.use_packed, verify_count)
+        self.P_v = self.V + 1
         H = drafter.hidden
 
         mkT = dict(device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper)
@@ -927,14 +935,12 @@ class DFlashFusedDecoder:
         # forward), so fc_prev and the ctx-merge width are sized to P_v.
         # Truncation (V < K) requires the packed path -- the batch-dim verify
         # always runs K+1 rows.
-        self.use_packed = _os.environ.get("GEMMA4_DFLASH_PACKED", "1") == "1"
-        self.V = min(int(_os.environ.get("GEMMA4_DFLASH_VERIFY", str(K))), K) if self.use_packed else K
-        self.P_v = self.V + 1
         self.pv_pos = None  # allocated in capture() (needs the generation horizon)
         # Packed-verify WIDTH SET: {pv_sk: buffer set + its captured trace}. One
         # decoder serves every width, so the heavy per-session state is held
         # once; see _pv_width_install.
         self._pv_widths = {}
+        self._prepared_widths = set()
         self.pv_widx_all = None
         self.pv_mask_slide = None
         self.pv_tables = None
@@ -1062,6 +1068,18 @@ class DFlashFusedDecoder:
         self.anchor = None
 
     # ---------------------------------------------------------------- host I/O
+
+    @staticmethod
+    def _resolve_verify_count(K, use_packed, verify_count):
+        """The number of drafts one packed verify evaluates (``V``; it writes ``V + 1`` rows)."""
+        if verify_count is None:
+            return min(int(_os.environ.get("GEMMA4_DFLASH_VERIFY", str(K))), K) if use_packed else K
+        verify_count = int(verify_count)
+        if not 1 <= verify_count <= K:
+            raise ValueError(f"dFlash verify_count must be in [1, {K}], got {verify_count}")
+        if not use_packed and verify_count != K:
+            raise ValueError("dFlash verify_count below the drafter width requires packed verification")
+        return verify_count
 
     def _upload_iter_inputs(self, anchor_id, start):
         d = self.drafter
@@ -1404,6 +1422,21 @@ class DFlashFusedDecoder:
         self.win_first = n - keep
         self.ctx_len = n
         self._upload_ctx()
+        self._seed_ctx_cache()
+        self._mask_key = None  # fresh generation: ramp state differs, rebuild masks
+        # Fresh seed: the next replay's start-of-body merge must be a no-op
+        # (identity), not the previous generation's stale commit map.
+        h = ttnn.from_torch(
+            torch.arange(self.cap, dtype=torch.int64).reshape(1, self.cap),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+            mesh_mapper=self._mapper,
+        )
+        ttnn.copy_host_to_device_tensor(h, self.merge_idx)
+        h.deallocate(True)
+
+    def _seed_ctx_cache(self):
+        """Project the fixed-capacity context into the persistent drafter KV."""
         if self.ctx_cache:
             # One-time seed of the per-layer roped ctx K/V caches from the
             # freshly uploaded raw ctx (row r holds absolute position
@@ -1430,17 +1463,6 @@ class DFlashFusedDecoder:
                 ttnn.assign(v_new, self.ctx_v[li])
                 k_new.deallocate(True)
                 v_new.deallocate(True)
-        self._mask_key = None  # fresh generation: ramp state differs, rebuild masks
-        # Fresh seed: the next replay's start-of-body merge must be a no-op
-        # (identity), not the previous generation's stale commit map.
-        h = ttnn.from_torch(
-            torch.arange(self.cap, dtype=torch.int64).reshape(1, self.cap),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.uint32,
-            mesh_mapper=self._mapper,
-        )
-        ttnn.copy_host_to_device_tensor(h, self.merge_idx)
-        h.deallocate(True)
 
     def _pv_setup(self, start, max_new):
         """Allocate the packed-verify persistent inputs (see use_packed).
@@ -1452,7 +1474,7 @@ class DFlashFusedDecoder:
         width -- root cause #4 on the MTP side).
         """
         self._pv_ring_meta()
-        horizon = start + max_new + self.P_v + 64
+        horizon = start + max_new + self.P_v + VERIFY_WIDTH_MARGIN
         self._pv_width_install(((horizon + 1023) // 1024) * 1024)
 
     def _pv_ring_meta(self):
@@ -1686,46 +1708,84 @@ class DFlashFusedDecoder:
         self._replay_on_first = False
 
     # ── packed-verify width SET: capture at config time, select per step ─────
+    def prepare_widths(self, widths, anchor_id=1, start=0):
+        """Prepare every verify width before any width is captured.
+
+        The width set is the fixed, config-time set of packed-verify widths
+        derived from ``max_model_len`` (``dflash_pv_bucket_ladder``): every
+        width is known before the first request, so no capture happens during
+        serving and no captured shape depends on a request existing. Preparing
+        installs each width's persistent buffers, seeds the fixed-capacity
+        context cache, and runs one eager body per width, so every address a
+        later trace records already exists. New widths are refused once any
+        width is captured, because a later allocation could reuse an address a
+        recorded trace holds.
+        """
+        if not self.use_packed:
+            raise NotImplementedError("width-set capture is packed-verify only")
+        widths = sorted(set(int(width) for width in widths))
+        prepared = self._prepared_widths
+        missing = set(widths) - prepared
+        if not missing:
+            return
+        if any(record["trace"] is not None for record in self._pv_widths.values()):
+            raise RuntimeError("Cannot prepare new dFlash widths after trace capture")
+        self._pv_ring_meta()
+        # All width-specific buffers must survive before the first trace can
+        # record temporary addresses that a later allocation could reuse.
+        for width in widths:
+            self._pv_width_install(width)
+        try:
+            self._seed_ctx_cache()
+            for width in widths:
+                self._pv_width_activate(self._pv_widths[width])
+                self._pv_upload(start)
+                self.target.dflash_capture_taps(self.drafter.target_layer_ids, buffers=self.tap_bufs)
+                self._upload_iter_inputs(anchor_id, start)
+                self._body()
+                ttnn.synchronize_device(self.mesh_device)
+                prepared.add(width)
+        finally:
+            self.target.dflash_capture_taps(None)
+            self.restore_model_logits_mode()
+
     def capture_widths(self, widths, anchor_id=1, start=0):
-        """Capture one fused trace per verify WIDTH, before any request exists.
+        """Capture one fused trace per prepared verify width.
 
-        This is what makes the fused verify conformant with the plugin's
-        serving contract (vllm-tt-plugin#110 section 8): the set of widths is
-        derived from ``max_model_len`` at config time and every one of them is
-        captured here, so no capture happens during serving and no captured
-        shape depends on a request existing. Per step the narrowest covering
-        width is selected (``select_width``), and a request that outgrows its
-        width moves to the next one -- the largest covers ``max_model_len``, so
-        one always fits.
-
-        The taps and the anchor set the CONTENT of the first iteration, never a
-        shape, so capturing against their construction values is sound; every
-        request re-points the trace with ``reseed`` + ``prefill_ingest`` +
-        ``refresh_page_tables``. Returns {width: seconds}.
+        Per step ``select_width`` picks the narrowest captured width covering
+        the request's position; a request that outgrows its width moves to the
+        next one, and the largest covers ``max_model_len``. Returns
+        {width: seconds}.
         """
         import time as _time
 
-        if not self.use_packed:
-            raise NotImplementedError("width-set capture is packed-verify only")
-        self._pv_ring_meta()
+        widths = sorted(set(int(width) for width in widths))
+        self.prepare_widths(widths, anchor_id, start)
         cost = {}
-        for w in sorted(int(x) for x in widths):
-            t0 = _time.time()
-            self._pv_width_install(w)
-            if self._pv_widths[w]["trace"] is not None:
-                continue
-            self._pv_upload(start)
-            self.target.dflash_capture_taps(self.drafter.target_layer_ids, buffers=self.tap_bufs)
-            self._upload_iter_inputs(anchor_id, start)
-            self._body()  # compile pass
-            ttnn.synchronize_device(self.mesh_device)
-            tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-            self._out = self._body()
-            ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
-            self._pv_widths[w]["trace"] = tid
-            self.trace = tid
-            cost[w] = _time.time() - t0
-        self.target.dflash_capture_taps(None)
+        try:
+            for width in widths:
+                self._pv_width_activate(self._pv_widths[width])
+                if self._pv_widths[width]["trace"] is not None:
+                    continue
+                t0 = _time.time()
+                self._pv_upload(start)
+                self.target.dflash_capture_taps(self.drafter.target_layer_ids, buffers=self.tap_bufs)
+                self._upload_iter_inputs(anchor_id, start)
+                ttnn.synchronize_device(self.mesh_device)
+                tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+                try:
+                    self._out = self._body()
+                except BaseException:
+                    ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+                    ttnn.release_trace(self.mesh_device, tid)
+                    raise
+                ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+                self._pv_widths[width]["trace"] = tid
+                self.trace = tid
+                cost[width] = _time.time() - t0
+        finally:
+            self.target.dflash_capture_taps(None)
+            self.restore_model_logits_mode()
         # Nothing has run for a real request yet: the next one must replay
         # rather than read _out, and must reset the per-request buffers.
         self._replay_on_first = True
@@ -1738,7 +1798,7 @@ class DFlashFusedDecoder:
         error once the set is derived from ``max_model_len`` -- the caller falls
         back to a per-session capture rather than truncating the request.
         """
-        need = int(start) + self.P_v + 64
+        need = int(start) + self.P_v + VERIFY_WIDTH_MARGIN
         fits = [w for w, r in self._pv_widths.items() if r["trace"] is not None and w >= need]
         return min(fits) if fits else None
 
@@ -1815,7 +1875,7 @@ class DFlashFusedDecoder:
     def pv_bucket(self, start, max_new):
         """The packed-verify width bucket for a (start, horizon) -- decoders are
         reusable across requests that share it. Mirrors _pv_setup's pv_sk."""
-        horizon = start + max_new + self.P_v + 64
+        horizon = start + max_new + self.P_v + VERIFY_WIDTH_MARGIN
         return ((horizon + 1023) // 1024) * 1024
 
     def restore_model_logits_mode(self):

@@ -214,6 +214,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "sfpu/ckernel_sfpu_fill.h"
 #include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
 
 using namespace ckernel;
@@ -476,6 +477,29 @@ inline void topk_xl_chunk_base_init()
     }
 }
 
+// ZEROACC only sets Dest's zero flags; the words stay. The transpose CFG block
+// disables those flags, so the next kernel's FPU adds onto topk's leftovers.
+// Write real zeros once PACK has released Dest.
+inline void topk_xl_scrub_dest()
+{
+    ckernel::tensix_sync();
+    while (semaphore_read(semaphore::MATH_PACK) > 0)
+    {
+    } // Wait for PACK to release every Dest section before touching it
+
+    // Address Dest absolutely from row 0, whatever the sync mode.
+    reset_dest_offset_id();
+    math::set_dest_section_base<StartZero>();
+
+    constexpr std::uint32_t dest_tiles = get_dest_max_tiles<DstSync::SyncFull, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
+    for (std::uint32_t tile = 0; tile < dest_tiles; tile++)
+    {
+        _llk_math_eltwise_unary_sfpu_params_(
+            ckernel::sfpu::_calculate_fill_int_<false, InstrModLoadStore::INT32, 8>, tile, VectorMode::RC, 0u /* raw zero word */);
+    }
+    ckernel::tensix_sync();
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -561,6 +585,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
+
+    topk_xl_scrub_dest();
 }
 
 #endif // LLK_TRISC_MATH

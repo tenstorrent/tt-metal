@@ -29,6 +29,25 @@ def test_rotate_half(shape, device):
     assert eq
 
 
+@pytest.mark.parametrize("shape", [[1, 1, 128, 64], [1, 71, 128, 64]])
+def test_rotate_half_program_cache(shape, device):
+    spacers, input_addresses = [], set()
+    num_entries_before = device.num_program_cache_entries()
+    for i in range(3):
+        # A growing live allocation moves every tensor below to a new address on each cache hit, and fresh
+        # data per iteration makes a stale address show up as a mismatch.
+        spacers.append(ttnn.Tensor(torch.zeros(1, 1, 32, 32 * (i + 1)), ttnn.bfloat16).to(ttnn.Layout.TILE).to(device))
+        x = torch.randn(shape).bfloat16().float()
+        xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.Layout.TILE).to(device)
+        input_addresses.add(xt.buffer_address())
+        tt_got_back = ttnn.experimental.rotate_half(xt).cpu().to(ttnn.Layout.ROW_MAJOR).to_torch()
+
+        assert torch.equal(tt_got_back, rotate_half(x))
+
+    assert len(input_addresses) > 1
+    assert device.num_program_cache_entries() - num_entries_before == 1
+
+
 @pytest.mark.parametrize("shape", [[1, 1, 64, 64]])
 def test_rotate_half_row_major(shape, device):
     """Test rotate_half with row-major layout inputs."""

@@ -1128,6 +1128,7 @@ def test_topk_large_indices_valid_end_varies_across_trace_replays(device):
     runtime arg, or a compile-time flag), every replay would reuse the end that was live during capture
     and a multi-chunk traced prefill would score the wrong window with nothing failing.
     """
+    device.enable_program_cache()
     num_rows, n, k = 2, 2048, 64
     torch_input = _make_bf16_exact_input(num_rows, n)
     tt_input = _to_device(torch_input, device)

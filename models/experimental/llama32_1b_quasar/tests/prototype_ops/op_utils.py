@@ -32,7 +32,7 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.llama32_1b_quasar.auto_compose import to_torch_auto_compose
+from models.experimental.llama32_1b_quasar.auto_compose import _infer_mesh_composer_from_topology, to_torch_auto_compose
 from models.experimental.llama32_1b_quasar.utility_functions import comp_allclose, comp_pcc
 
 # =============================================================================
@@ -115,7 +115,15 @@ def to_tt(
 
 
 def from_tt(tt_tensor: ttnn.Tensor, mesh_device=None) -> torch.Tensor:
-    """ttnn -> torch (host), composing across the mesh. Returns float32."""
+    """ttnn -> torch (host). Returns float32.
+
+    Single-device / fully-replicated tensors read back with plain ``ttnn.to_torch`` — consistent with the e2e
+    test, which composes with ``ttnn.to_torch`` directly. Multi-device tensors (e.g. the (1,2) CCL op tests:
+    all_gather / reduce_scatter / all_gather_matmul) still route through ``to_torch_auto_compose``, which infers
+    the shard/replica composer. The two paths are identical on a (1,1) mesh (the composer is None there), so
+    this is a cosmetic alignment for the common single-device case, not a behavior change."""
+    if _infer_mesh_composer_from_topology(tt_tensor, device=mesh_device) is None:
+        return ttnn.to_torch(tt_tensor).float()
     return to_torch_auto_compose(tt_tensor, mesh_device).float()
 
 

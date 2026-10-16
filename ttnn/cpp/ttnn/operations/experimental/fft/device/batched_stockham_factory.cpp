@@ -78,25 +78,25 @@ ttnn::device_operation::ProgramArtifacts BatchedStockhamFactory::create_program_
         .source = "ttnn/cpp/ttnn/operations/experimental/fft/device/kernels/dataflow/batch_fft_reader.cpp",
         .compiler_options = {.defines = reader_defines},
         .dfb_bindings = shared::reader_bindings(is_bf16, false),
-        .tensor_bindings = {
-            {.tensor_parameter_name = shared::IN_R, .accessor_name = "in_r"},
-            {.tensor_parameter_name = shared::IN_I, .accessor_name = "in_i"},
-            {.tensor_parameter_name = shared::TW_R, .accessor_name = "tw_r"},
-            {.tensor_parameter_name = shared::TW_I, .accessor_name = "tw_i"}},
+        .tensor_bindings =
+            {{.tensor_parameter_name = shared::IN_R, .accessor_name = "in_r"},
+             {.tensor_parameter_name = shared::IN_I, .accessor_name = "in_i"},
+             {.tensor_parameter_name = shared::TW_R, .accessor_name = "tw_r"},
+             {.tensor_parameter_name = shared::TW_I, .accessor_name = "tw_i"}},
         .compile_time_args = {{"sub_n", N}, {"log2_sub_n", log2u_bs(N)}, {"bit_reverse_on_load", 1u}},
         .runtime_arg_schema = {.runtime_arg_names = {"base_tile_idx", "batch_per_core", "noc_x", "noc_y"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch())};
+        .hw_config = ttnn::create_reader_datamovement_config()};
     KernelSpec writer{
         .unique_id = shared::WRITER,
         .source = "ttnn/cpp/ttnn/operations/experimental/fft/device/kernels/dataflow/batch_fft_writer.cpp",
         .compiler_options = {.defines = writer_defines},
         .dfb_bindings = shared::writer_bindings(is_bf16, false),
-        .tensor_bindings = {
-            {.tensor_parameter_name = shared::OUT_R, .accessor_name = "out_r"},
-            {.tensor_parameter_name = shared::OUT_I, .accessor_name = "out_i"}},
+        .tensor_bindings =
+            {{.tensor_parameter_name = shared::OUT_R, .accessor_name = "out_r"},
+             {.tensor_parameter_name = shared::OUT_I, .accessor_name = "out_i"}},
         .compile_time_args = {{"sub_n", N}},
         .runtime_arg_schema = {.runtime_arg_names = {"base_tile_idx", "batch_per_core"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch())};
+        .hw_config = ttnn::create_writer_datamovement_config()};
     KernelSpec compute = shared::make_compute(log2u_bs(N));
 
     KernelRunArgs reader_args{.kernel = shared::READER};

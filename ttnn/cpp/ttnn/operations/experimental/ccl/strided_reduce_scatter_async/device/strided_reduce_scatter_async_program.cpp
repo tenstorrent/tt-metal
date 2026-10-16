@@ -240,7 +240,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             num_links,
             ring_size,
             num_directions_per_link,
-            num_mux_cores_per_direction_per_link));
+            num_mux_cores_per_direction_per_link,
+            core_grid_offset));
     log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 

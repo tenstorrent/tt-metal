@@ -8,14 +8,32 @@
 #include <variant>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "split_query_key_value_and_split_heads_device_operation_types.hpp"
-#include "split_query_key_value_and_split_heads_program_factory.hpp"
-#include "split_query_key_value_and_split_heads_sharded_program_factory.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
+
+// Interleaved input: the core grid and every per-core tile id derive from the input's padded shape
+// (hashed), so the input/q/k/v runtime-arg bindings are the whole cache-hit refresh.
+struct SplitFusedQKVAndSplitHeadsProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const SplitQueryKeyValueAndSplitHeadsParams& operation_attributes,
+        const SplitQueryKeyValueAndSplitHeadsInputs& tensor_args,
+        std::vector<Tensor>& output_tensors);
+};
+
+// Sharded input: no runtime args at all; the input and q/k/v shard buffers back globally-allocated
+// CBs, and those CB bindings are the whole cache-hit refresh.
+struct SplitFusedQKVAndSplitHeadsShardedProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const SplitQueryKeyValueAndSplitHeadsParams& operation_attributes,
+        const SplitQueryKeyValueAndSplitHeadsInputs& tensor_args,
+        std::vector<Tensor>& output_tensors);
+};
 
 struct SplitFusedQKVAndSplitHeadsDeviceOperation {
     using operation_attributes_t = SplitQueryKeyValueAndSplitHeadsParams;

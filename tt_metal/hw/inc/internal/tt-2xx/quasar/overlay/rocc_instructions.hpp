@@ -7,7 +7,7 @@
 
 #include <stdint.h>
 #include "xcustom_test.hpp"
-#include "meta/registers/overlay_reg.h"
+#include "registers/overlay_reg.h"
 /////////////////
 // MISC
 /////////////////
@@ -298,6 +298,10 @@
         ROCC_INSTRUCTION_D(0, result, ((cmdbuf) * 64 + 62)); \
         return result;                                       \
     }()
+
+// CMDBUF_GET_VC_SPACE without a destination register: a RoCC instruction that returns nothing. Used as a separator
+// between value-returning RoCC instructions (see overlay::rocc_nop).
+#define CMDBUF_GET_VC_SPACE_NO_RESULT(cmdbuf) ROCC_INSTRUCTION(0, ((cmdbuf) * 64 + 62))
 
 // Returns the amount of vc space for the specified VC
 #define CMDBUF_GET_VC_SPACE_VC(cmdbuf, vc)                          \

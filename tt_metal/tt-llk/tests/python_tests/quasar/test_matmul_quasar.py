@@ -4,7 +4,12 @@
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import (
+    ChipArchitecture,
+    get_chip_architecture,
+    is_4row_arch,
+)
+from helpers.constraints import get_valid_math_fidelities
 from helpers.data_format_inference import data_formats
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -18,7 +23,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathFidelity,
     PerfRunType,
     Transpose,
@@ -40,7 +44,6 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     ENABLE_2X_FORMAT,
     ENABLE_DIRECT_INDEXING,
-    IMPLIED_MATH_FORMAT,
     IN_FACE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
@@ -135,21 +138,6 @@ class IndependentMatmulStimuliConfig(StimuliConfig):
             )
 
 
-def matmul_math_fidelities(format, *, is_perf=False):
-    # Integer matmul is LoFi-only on Quasar. MX is already full precision at LoFi,
-    # so perf skips the extra HiFi phases.
-    if format.input_format == DataFormat.Int8 or (
-        is_perf and format.input_format.is_mx_format()
-    ):
-        return [MathFidelity.LoFi]
-    return [
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ]
-
-
 def matmul_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
@@ -183,14 +171,6 @@ def matmul_tile_dimensions(
         )
         for kt_dim in selected_kt_dims
     ]
-
-
-def matmul_implied_math_formats(format, *, is_perf=False):
-    if is_perf:
-        return [ImpliedMathFormat.Yes]
-    if format.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
-    return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
 def matmul_register_format_hints(format):
@@ -260,7 +240,7 @@ MATMUL_FORMAT = (
         ],
     )
     + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
-    + MATMUL_2X_FORMATS
+    + ([] if is_4row_arch() else MATMUL_2X_FORMATS)
     + quasar_mx_smoke(DataFormat.MxInt8, DataFormat.Float16_b)
 )
 
@@ -287,7 +267,7 @@ _ARCH = get_chip_architecture()
 @parametrize(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
     format=MATMUL_FORMAT,
-    math_fidelity=lambda format: matmul_math_fidelities(format),
+    math_fidelity=lambda format: get_valid_math_fidelities(format),
     dest_sync_mode=lambda: matmul_dest_sync_modes(),
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(
@@ -295,7 +275,6 @@ _ARCH = get_chip_architecture()
             dest_acc, dest_sync_mode
         )
     ),
-    implied_math_format=lambda format: matmul_implied_math_formats(format),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=matmul_enable_direct_indexing,
     transpose=matmul_transpose_modes,
@@ -310,7 +289,6 @@ def test_matmul(
     dest_sync_mode,
     dest_acc,
     format,
-    implied_math_format,
     register_format_hint,
     enable_direct_indexing,
     transpose,
@@ -430,12 +408,6 @@ def test_matmul(
             is_fp32_dest_acc_en=dest_acc,
             num_iterations=1,
             unpacking_to_dest=False,
-            # 2x register-format opt-in needs to flow through inference; only disable
-            # for plain MX formats where there's nothing to infer.
-            disable_format_inference=(
-                format.input_format.is_mx_format()
-                and format.register_format_hint is None
-            ),
             register_format_hint=format.register_format_hint,
         )[0]
         pack_src_format = formats_config.pack_src
@@ -489,14 +461,10 @@ def test_matmul(
         num_faces_r_dim=input_A_shape.num_faces_r_dim,
         num_faces_c_dim=input_B_shape.num_faces_c_dim,
     )
-    enable_2x_format = format.register_format_hint in (
-        DataFormat.MxFp4_2x_A,
-        DataFormat.MxFp4_2x_B,
-    )
+    enable_2x_format = format.register_format_hint is not None
 
     templates = [
         MATH_FIDELITY(math_fidelity),
-        IMPLIED_MATH_FORMAT(implied_math_format),
         ENABLE_2X_FORMAT(enable_2x_format),
         ENABLE_DIRECT_INDEXING(enable_direct_indexing),
         DEST_SYNC(dest_sync_mode),
@@ -542,10 +510,6 @@ def test_matmul(
         tile_dimensions=output_tile_dimensions,
         use_dense_tile_dimensions=True,
     )
-    disable_format_inference = (
-        format.input_format.is_mx_format() and format.register_format_hint is None
-    )
-
     if is_perf:
         if perf_report is None:
             raise ValueError("perf_report must be provided when is_perf=True")
@@ -558,7 +522,6 @@ def test_matmul(
         "variant_stimuli": variant_stimuli,
         "unpack_to_dest": False,
         "dest_acc": dest_acc,
-        "disable_format_inference": disable_format_inference,
     }
 
     configuration = create_test_or_perf_config(
@@ -608,7 +571,6 @@ def test_matmul(
             dest_acc, dest_sync_mode
         )
     ),
-    implied_math_format=lambda format: matmul_implied_math_formats(format),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=matmul_enable_direct_indexing,
     transpose=matmul_tiny_transpose_modes,
@@ -622,7 +584,6 @@ def test_matmul_tiny(
     dest_sync_mode,
     dest_acc,
     format,
-    implied_math_format,
     register_format_hint,
     enable_direct_indexing,
     transpose,
@@ -636,7 +597,56 @@ def test_matmul_tiny(
         dest_sync_mode,
         dest_acc,
         format,
-        implied_math_format,
+        register_format_hint,
+        enable_direct_indexing,
+        transpose,
+        run_types,
+        loop_factor,
+    )
+
+
+@pytest.mark.quasar
+@pytest.mark.skipif(
+    not is_4row_arch(),
+    reason="Int8_2x register format exists only on the 4-row Quasar variant",
+)
+@parametrize(
+    input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
+    format=[InputOutputFormat(DataFormat.Int8, DataFormat.Int32)],
+    math_fidelity=[MathFidelity.LoFi],
+    dest_sync_mode=lambda: matmul_dest_sync_modes(),
+    dest_acc=[DestAccumulation.Yes],
+    matmul_tile_dims=runtime(
+        lambda dest_acc, dest_sync_mode: matmul_tile_dimensions(
+            dest_acc, dest_sync_mode
+        )
+    ),
+    register_format_hint=[DataFormat.Int8_2x],
+    enable_direct_indexing=[True, False],
+    transpose=[Transpose.No],
+    run_types=[[PerfRunType.L1_TO_L1]],
+    loop_factor=[1],
+)
+def test_matmul_int8_2x(
+    input_tile_dimensions,
+    matmul_tile_dims,
+    math_fidelity,
+    dest_sync_mode,
+    dest_acc,
+    format,
+    register_format_hint,
+    enable_direct_indexing,
+    transpose,
+    run_types,
+    loop_factor,
+):
+    test_matmul(
+        input_tile_dimensions,
+        matmul_tile_dims,
+        math_fidelity,
+        dest_sync_mode,
+        dest_acc,
+        format,
         register_format_hint,
         enable_direct_indexing,
         transpose,

@@ -8,10 +8,6 @@
 
 #include <tt-metalium/buffer.hpp>
 
-#include "ttnn/operation.hpp"  // tt::tt_metal::operation::hash_operation
-
-#include "generalized_moe_gate_program_descriptor_builder.hpp"
-
 namespace ttnn::operations::experimental::deepseek::moe::generalized_moe_gate {
 
 void GeneralizedMoeGateDeviceOperation::validate_on_program_cache_hit(

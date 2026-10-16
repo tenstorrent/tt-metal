@@ -3,12 +3,13 @@
 
 """Tiny-tile (face_r_dim < 16) cross-op restore test for `_llk_unpack_tilize_uninit_`.
 
-This is the Phase 2 companion to ``test_unpack_tilize_uninit_restore.py``. Phase 1
-covers the ``num_faces`` (tile-descriptor Z-dim) restore for full 16-row faces.
-Phase 2 covers the orthogonal axis the PR actually changed on Wormhole: the
-``Tile_x_dim_cntx0`` restore, which is computed as
-``canonical_unpA_tile_x_dim_cntx(face_r_dim)`` and therefore only differs from the
-old hardcoded ``16 | (16 << 16)`` value when ``face_r_dim < 16``.
+Companion to ``test_unpack_tilize_uninit_restore.py``, which covers the
+``num_faces`` axis for full 16-row faces. This one covers ``Tile_x_dim_cntx0``,
+which uninit restores as ``canonical_unpA_tile_x_dim_cntx(face_r_dim)``, i.e.
+``face_r_dim*16`` packed into both halfwords. The restore it replaced read the
+``FACE_DIM_16x16`` GPR (``256 | (256 << 16)``), so the two agree only at
+``face_r_dim == 16`` and every tiny tile got full-tile geometry written into the
+next operand.
 
 No existing tilize test runs ``unpack_tilize`` with ``face_r_dim < 16``, so this
 also serves as the first end-to-end exercise of the tiny-tile tilize path.
@@ -21,14 +22,13 @@ Flow (same C++ source as Phase 1, ``face_r_dim`` is threaded through every call)
 
 Because there is no reconfig, the uninit is the only thing that restores
 ``Tile_x_dim_cntx0`` back to the tiny-tile baseline programmed by
-``configure_unpack_AB``. If uninit restored the old ``16|16`` value instead of
+``configure_unpack_AB``. If uninit restored the old ``256|256`` value instead of
 ``canonical_unpA_tile_x_dim_cntx(face_r_dim)``, the second datacopy reads the
 operand with the wrong per-row datum count and the result diverges from the
 tilized golden.
 """
 
 import torch
-from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
@@ -43,13 +43,6 @@ from helpers.utils import passed_test
 TINY_NUM_FACES = 2
 
 
-# Blackhole's `_llk_unpack_tilize_uninit_` does honor `face_r_dim` (via its
-# `TensorShape` param), but the BH test wrapper `_llk_unpack_tilize_uninit_wrapper_`
-# is 2-arg (`dst, num_faces`) and drops `face_r_dim` (WH's wrapper is 3-arg), so the
-# tiny-tile (face_r_dim < 16) restore branch under test here cannot be expressed on BH
-# without extending that wrapper. The num_faces axis (face_r_dim=16) still runs on BH
-# via test_unpack_tilize_uninit_restore.py.
-@skip_for_blackhole
 @parametrize(
     # Same input/output format for both ops so the second op needs NO data-format
     # reconfig — isolating the uninit restore as the only state reset.

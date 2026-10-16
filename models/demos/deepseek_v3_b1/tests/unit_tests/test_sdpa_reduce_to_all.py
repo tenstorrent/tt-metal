@@ -22,7 +22,7 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
 )
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
-NUM_DEVICES = 4
+NUM_DEVICES_4x1 = 4 * 1
 NUM_CORES = 8
 L_WIDTH = 512
 MS_WIDTH = 32
@@ -80,8 +80,8 @@ def build_sdpa_reduce_to_all_test_inputs(
     intermediate_shape = [2, BATCH_SIZE, (L_WIDTH + MS_WIDTH) * NUM_CORES]
 
     topology = ttnn.Topology.Torus
-    validate_test(NUM_DEVICES, topology, bh_2d_mesh_device.shape, 0)
-    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((NUM_DEVICES, 1)))
+    validate_test(NUM_DEVICES_4x1, topology, bh_2d_mesh_device.shape, 0)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((NUM_DEVICES_4x1, 1)))
 
     dtype = ttnn.bfloat16
     layout = ttnn.TILE_LAYOUT
@@ -121,16 +121,16 @@ def build_sdpa_reduce_to_all_test_inputs(
     mesh_mapper2 = ttnn.create_mesh_mapper(submesh_device, mesh_mapper_config2)
 
     torch.manual_seed(42)
-    l_data_per_device = [torch.randn(l_shape, dtype=torch.float32).to(torch.bfloat16) for _ in range(NUM_DEVICES)]
-    ms_data_per_device = [torch.randn(ms_shape, dtype=torch.float32).to(torch.bfloat16) for _ in range(NUM_DEVICES)]
+    l_data_per_device = [torch.randn(l_shape, dtype=torch.float32).to(torch.bfloat16) for _ in range(NUM_DEVICES_4x1)]
+    ms_data_per_device = [torch.randn(ms_shape, dtype=torch.float32).to(torch.bfloat16) for _ in range(NUM_DEVICES_4x1)]
 
     position_mask = torch.tensor(
-        [1.0 if position_id >= d * PER_DEVICE_CHUNK_SIZE else 0.0 for d in range(NUM_DEVICES)],
+        [1.0 if position_id >= d * PER_DEVICE_CHUNK_SIZE else 0.0 for d in range(NUM_DEVICES_4x1)],
         dtype=torch.bfloat16,
     )
     m_data_per_device = []
     s_data_per_device = []
-    for device_idx in range(NUM_DEVICES):
+    for device_idx in range(NUM_DEVICES_4x1):
         ms_device = ms_data_per_device[device_idx]
         m_device = torch.zeros((ms_shape[0], NUM_CORES), dtype=torch.bfloat16)
         s_device = torch.zeros((ms_shape[0], NUM_CORES), dtype=torch.bfloat16)
@@ -269,7 +269,7 @@ def build_sdpa_reduce_to_all_test_inputs(
     max_diff_check = 0.07 if (position_mask.sum() > 1.0).item() else 0.13
     return SdpaReduceToAllTestInputs(
         submesh_device=submesh_device,
-        num_devices=NUM_DEVICES,
+        num_devices=NUM_DEVICES_4x1,
         num_cores=NUM_CORES,
         batch_size=BATCH_SIZE,
         l_width=L_WIDTH,
@@ -361,6 +361,9 @@ def verify_sdpa_reduce_to_all_output(
 )
 @pytest.mark.parametrize("scatter_enabled", [False, True], ids=["reduce_only", "reduce_and_scatter"])
 @pytest.mark.parametrize("position_id", [500, 1500, 2500, 3500], ids=["pos500", "pos1500", "pos2500", "pos3500"])
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x1, reason=f"Requires at least {NUM_DEVICES_4x1} devices (4x1 mesh)"
+)
 def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id):
     inputs = build_sdpa_reduce_to_all_test_inputs(
         bh_2d_mesh_device,
@@ -387,6 +390,9 @@ def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id):
         }
     ],
     indirect=["device_params"],
+)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x1, reason=f"Requires at least {NUM_DEVICES_4x1} devices (4x1 mesh)"
 )
 def test_sdpa_reduce_to_all_trace(
     bh_2d_mesh_device,

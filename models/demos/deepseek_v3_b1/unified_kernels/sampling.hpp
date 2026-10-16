@@ -135,18 +135,11 @@ FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
 #if defined(TRISC_MATH)
 #include "experimental/llk_math_top32_rm_api.h"
 #include "sfpu/experimental/ckernel_sfpu_deepseek_top32_rm.h"
-template <bool legacy_compat = true>
 ALWI void sampling_recip_tile_scalar(uint32_t idst) {
-    // Programs the Newton-Raphson constant the legacy_compat=false path reads from
-    // vConstFloatPrgm0; compile-time no-op on the legacy path used here.
-    ckernel::sfpu::sampling_recip_init<legacy_compat>();
+    // Restore generic SFPU state and scalar constants, without programming full-tile LOADMACRO/replay state.
+    ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal>(ckernel::sfpu::sampling_recip_init);
     SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sampling_recip_scalar,
-        (legacy_compat, DST_ACCUM_MODE),
-        idst,
-        VectorMode::None);
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_recip_scalar, (DST_ACCUM_MODE), idst, VectorMode::None);
 }
 
 ALWI void sampling_clamp_max_tile_scalar(uint32_t idst, uint32_t param) {
@@ -340,7 +333,6 @@ void trisc_fused_softmax_top_p_sampling_block() {
         reduce_uninit();
         // Step 6: Compute DST[0, 0, 0] = 1/sum(exp(x_i - max(x_i, dim=0))), sum(exp(x_i - max(x_i, dim=0))) comes from
         // DST in Step 5
-        recip_tile_init();
         MATH((sampling_recip_tile_scalar(0)));
         // Step 7: Compute DST[0] = exp(x_i - max(x_i, dim=0)) * 1/sum(exp(x_i - max(x_i, dim=0))).
     }
@@ -440,7 +432,6 @@ void trisc_fused_softmax_top_p_sampling_block() {
         constexpr uint32_t SP_ONE_FP32 = 0x3F800000u;  // 1.0f
         MATH((sampling_clamp_max_tile_scalar(0, SP_ONE_FP32)));
         // Step 18: Compute DST[0] = 1/cum_kept
-        recip_tile_init();
         MATH((sampling_recip_tile_scalar(0)));
     }
     // Step 18.5: Compute DST[3] = probs * 1/cum_kept = rescaled (renormalized) PMF.
@@ -468,7 +459,6 @@ void trisc_fused_softmax_top_p_sampling_block() {
         // Same clamp as Step 17.5: see comment above.
         constexpr uint32_t SP_ONE_FP32 = 0x3F800000u;  // 1.0f
         MATH((sampling_clamp_max_tile_scalar(0, SP_ONE_FP32)));
-        recip_tile_init();
         MATH((sampling_recip_tile_scalar(0)));
     }
     // Step 19: Compute DST[2] = cumsum * 1/cum_kept (rescaled CDF over the kept set).

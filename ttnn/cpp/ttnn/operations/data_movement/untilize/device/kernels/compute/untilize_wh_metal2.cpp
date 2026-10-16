@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: This is the Metal 2.0 fork of untilize_wh.cpp, which lives beside it. Ops ported to Metal 2.0
-// bind this file; the original serves the consumers still on the legacy API. Until the last of them
-// migrates and the original is retired, changes here likely belong there too.
+// NOTE: This forked untilize_wh.cpp during the Metal 2.0 migration. Its last legacy binder has
+// migrated and the original is retired, so this is the only copy and the _metal2 suffix is historical.
 //
 // The binding names below (dfb::src, dfb::out) and named args are this fork's interface — shared with
 // the sibling untilize_metal2.cpp / untilize_variable_num_blocks_metal2.cpp forks so a factory can

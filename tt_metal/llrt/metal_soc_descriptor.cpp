@@ -4,6 +4,8 @@
 
 #include "llrt/metal_soc_descriptor.hpp"
 
+#include <algorithm>
+#include <optional>
 #include <tt_stl/assert.hpp>
 #include <yaml-cpp/yaml.h>
 
@@ -267,9 +269,12 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_dram_compute_grid_size() const 
     return tt::tt_metal::CoreCoord(this->get_num_dram_views(), get_grid_size(tt::CoreType::DRAM).y);
 }
 
-void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
+void metal_SocDescriptor::load_dram_metadata_from_device_descriptor(std::optional<uint64_t> dram_view_size_limit) {
     YAML::Node device_descriptor_yaml = YAML::LoadFile(this->device_descriptor_file_path);
     this->dram_view_size = device_descriptor_yaml["dram_view_size"].as<uint64_t>();
+    if (dram_view_size_limit.has_value()) {
+        this->dram_view_size = std::min(this->dram_view_size, *dram_view_size_limit);
+    }
     const size_t num_dram_views_in_descriptor = device_descriptor_yaml["dram_views"].size();
     this->dram_core_size = num_dram_views_in_descriptor * this->dram_view_size;
     this->dram_view_channels.clear();
@@ -413,9 +418,10 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
 // removing the harvested physical coordinates Metal needs the true harvesting state so we generate physical
 // descriptors from virtual coordinates We also initialize additional lookup tables to translate physical coordinates to
 // virtual coordinates because UMD APIs expect virtual coordinates.
-metal_SocDescriptor::metal_SocDescriptor(const SocDescriptor& other, const tt::BoardType& /*board_type*/) :
+metal_SocDescriptor::metal_SocDescriptor(
+    const SocDescriptor& other, const tt::BoardType& /*board_type*/, std::optional<uint64_t> dram_view_size_limit) :
     SocDescriptor(other) {
-    this->load_dram_metadata_from_device_descriptor();
+    this->load_dram_metadata_from_device_descriptor(dram_view_size_limit);
     this->generate_logical_eth_coords_mapping();
     this->generate_physical_routing_to_profiler_flat_id();
 }

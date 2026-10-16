@@ -157,6 +157,9 @@ static void test_sems_across_core_types(
 }
 
 TEST_F(MeshDispatchFixture, EthTestBlank) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     auto mesh_device = devices_[0];
     auto* device = mesh_device->get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -272,7 +275,12 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
     }
 }
 
-TEST_F(MeshDispatchFixture, TensixActiveEthTestSemaphores) { test_sems_across_core_types(this, this->devices_, true); }
+TEST_F(MeshDispatchFixture, TensixActiveEthTestSemaphores) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
+    test_sems_across_core_types(this, this->devices_, true);
+}
 
 TEST_F(MeshDispatchFixture, TensixIdleEthTestSemaphores) {
     if (not this->slow_dispatch_) {
@@ -285,6 +293,9 @@ TEST_F(MeshDispatchFixture, TensixIdleEthTestSemaphores) {
 // This test was written to cover issue #12738 (CBs for workers showing up on
 // active eth cores)
 TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     uint32_t intermediate_cb = 24;
     uint32_t out_cb = 16;
     std::map<uint8_t, tt::DataFormat> intermediate_and_out_data_format_spec = {
@@ -294,7 +305,7 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
     uint32_t num_tiles = 2;
     uint32_t cb_size = num_tiles * single_tile_size;
 
-    uint32_t cb_config_buffer_size = max_cbs_ * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t cb_config_buffer_size = max_dfbs_ * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const auto& mesh_device : devices_) {
         auto* device = mesh_device->get_devices()[0];
@@ -507,7 +518,7 @@ Program create_quasar_l1_write_program(
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::ProgramSpec spec{

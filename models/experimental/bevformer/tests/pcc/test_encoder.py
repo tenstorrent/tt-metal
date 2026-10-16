@@ -8,10 +8,8 @@ from typing import Dict, Any, List
 
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
 from models.experimental.bevformer.reference.encoder import BEVFormerEncoder
-from models.experimental.bevformer.config.encoder_config import (
-    get_preset_config,
-    img_metas_for_dataset,
-)
+from models.experimental.bevformer.config.encoder_config import get_preset_config
+from models.experimental.bevformer.tests.camera_rig import img_metas_for_dataset
 
 
 from models.experimental.bevformer.tests.test_utils import (

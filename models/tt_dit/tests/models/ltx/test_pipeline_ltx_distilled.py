@@ -107,6 +107,10 @@ def test_pipeline_distilled(
     num_frames = int(os.environ.get("NUM_FRAMES", "145"))
     height = int(os.environ.get("HEIGHT", "1088"))
     width = int(os.environ.get("WIDTH", "1920"))
+    # FPS conditions the model (audio latent length + A/V cross-PE temporal scaling), so it is
+    # fixed at create_pipeline. 6s lands on 145f@24 (6.04s) or 153f@25 (6.12s) -- (n-1)%8 == 0
+    # forbids the exact 144/150.
+    fps = float(os.environ.get("FPS", "24"))
 
     run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
     # Traced by default wherever the mesh param reserves a trace region; LTX_TRACED=0/1 overrides
@@ -139,6 +143,7 @@ def test_pipeline_distilled(
         num_frames=num_frames,
         height=height,
         width=width,
+        fps=fps,
         image_conditioning=bool(image_path),
     )
 
@@ -153,7 +158,7 @@ def test_pipeline_distilled(
     def run(*, prompt, number, seed):
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
         logger.info(f"Running LTX AV Fast: '{prompt[:80]}...'")
-        logger.info(f"Config: {height}x{width}, {num_frames} frames")
+        logger.info(f"Config: {height}x{width}, {num_frames} frames @ {fps}fps ({num_frames / fps:.4f}s)")
         if images:
             logger.info(f"I2V: conditioning image {images[0][0]} (strength={images[0][2]})")
 
@@ -169,6 +174,7 @@ def test_pipeline_distilled(
             height=height,
             width=width,
             seed=seed,
+            fps=fps,
         )
         logger.info(f"Saved video to: {output_filename}")
         print_ltx_timing_table(
@@ -193,7 +199,10 @@ def test_pipeline_distilled(
             # Averaged over VBENCH_SEEDS clips: dynamic_degree is near-binary per clip and this content
             # sits at ~0.8-1.0, so the floor requires ~4/5 seeds dynamic (1.0 would demand every seed).
             "dynamic_degree": 0.8,
-            "imaging_quality": 0.645,
+            # 0.645 was calibrated on the 145-frame / 24 fps config (#48657). #57265 moved the leg to 153 frames
+            # at 25 fps; the first five-seed measurement on that config (2026-10-02, bh_sc1) averaged 0.6313
+            # (0.6508 / 0.6724 / 0.6386 / 0.7186 / 0.4762) with healthy latents, so the floor follows the config.
+            "imaging_quality": 0.63,
         },
     }
 
@@ -261,6 +270,8 @@ def test_pipeline_distilled(
                     prompt=prompt,
                     thresholds=thresholds,
                     temporal_width=int(os.environ.get("VBENCH_TEMPORAL_WIDTH", "0")),
+                    # The clips must be exactly what this configuration rendered (NUM_FRAMES / HEIGHT / WIDTH).
+                    clip_shape=(num_frames, height, width),
                 )
             else:
                 assert_vbench_quality(vbench_dir, prompt=prompt, thresholds=thresholds)
