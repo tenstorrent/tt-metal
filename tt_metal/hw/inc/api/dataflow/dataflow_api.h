@@ -13,6 +13,7 @@
 #include <stdint.h>
 
 #include "internal/dataflow/dataflow_api_addrgen.h"
+#include "internal/dataflow/dataflow_api_raw.h"
 #include "core_config.h"
 #include "internal/circular_buffer_interface.h"
 #include "eth_l1_address_map.h"
@@ -23,7 +24,7 @@
 #include "api/tensor/tensor_accessor.h"
 #include "internal/tensor/transfer_noc_addr.h"
 #include "api/dataflow/buf_rw_note.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
 
@@ -517,27 +518,8 @@ FORCE_INLINE void noc_async_read_one_packet(
     uint32_t size,
     uint8_t noc = noc_index,
     uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) {
-#ifdef ARCH_BLACKHOLE
-    // A PCIe-routed src_noc_addr would be sent on-chip, since this does not write NOC_TARG_ADDR_MID.
-    // Use noc_async_read_pcie, or noc_async_read_set_pcie_state for a batch.
-    ASSERT(((src_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
-#endif
-    /*
-        Read requests - use static VC
-        Read responses - assigned VCs dynamically
-    */
-    if constexpr (enable_noc_tracing) {
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, dst_local_l1_addr, src_noc_addr, size, -1, false, noc);
-    }
-
-    WAYPOINT("RP2W");
-    while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-    WAYPOINT("RP2D");
-
-    WAYPOINT("NAOW");
-    DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-    ncrisc_noc_fast_read<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
-    WAYPOINT("NAOD");
+    tt_buf_rw::note_opaque();
+    noc_async_read_one_packet_impl<enable_noc_tracing>(src_noc_addr, dst_local_l1_addr, size, noc, read_req_vc);
 }
 
 // clang-format off
@@ -568,28 +550,8 @@ inline void noc_async_read(
     uint32_t size,
     uint8_t noc = noc_index,
     uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) {
-    /*
-        Read requests - use static VC
-        Read responses - assigned VCs dynamically
-    */
-    if constexpr (enable_noc_tracing) {
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, dst_local_l1_addr, src_noc_addr, size, -1, false, noc);
-    }
-
-    if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        // noc_async_read_one_packet runs this assert itself, so it is not repeated here.
-        noc_async_read_one_packet<false>(src_noc_addr, dst_local_l1_addr, size, noc, read_req_vc);
-    } else {
-#ifdef ARCH_BLACKHOLE
-        // A PCIe-routed src_noc_addr would be sent on-chip, since this does not write NOC_TARG_ADDR_MID.
-        // Use noc_async_read_pcie, or noc_async_read_set_pcie_state for a batch.
-        ASSERT(((src_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
-#endif
-        WAYPOINT("NARW");
-        DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-        ncrisc_noc_fast_read_any_len<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
-        WAYPOINT("NARD");
-    }
+    tt_buf_rw::note_opaque();
+    noc_async_read_impl<max_page_size, enable_noc_tracing>(src_noc_addr, dst_local_l1_addr, size, noc, read_req_vc);
 }
 
 // clang-format off
@@ -612,17 +574,8 @@ inline void noc_async_read(
 template <bool use_vc = false>
 FORCE_INLINE void noc_async_read_one_packet_set_state(
     uint64_t src_noc_addr, uint32_t size, const uint32_t vc = 0, uint8_t noc = noc_index) {
-    /*
-        Read requests - use static VC
-        Read responses - assigned VCs dynamically
-    */
-    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
-    RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::READ_SET_STATE, 0, src_noc_addr, size, (use_vc) ? static_cast<int8_t>(vc) : -1, false, noc);
-
-    WAYPOINT("NASW");
-    ncrisc_noc_read_set_state<noc_mode, true /* one_packet */, use_vc>(noc, read_cmd_buf, src_noc_addr, size, vc);
-    WAYPOINT("NASD");
+    tt_buf_rw::note_opaque();
+    noc_async_read_one_packet_set_state_impl<use_vc>(src_noc_addr, size, vc, noc);
 }
 
 // clang-format off
@@ -688,18 +641,9 @@ FORCE_INLINE void noc_async_read_one_packet_with_state(
  * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                                   | False    |
  */
 // clang-format on
-FORCE_INLINE
-void noc_async_read_set_state(uint64_t src_noc_addr, uint8_t noc = noc_index) {
-    /*
-        Read requests - use static VC
-        Read responses - assigned VCs dynamically
-    */
-    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE, 0, src_noc_addr, 0, -1, false, noc);
-
-    WAYPOINT("NAUW");
-    ncrisc_noc_read_set_state<noc_mode>(noc, read_cmd_buf, src_noc_addr);
-    WAYPOINT("NAUD");
+FORCE_INLINE void noc_async_read_set_state(uint64_t src_noc_addr, uint8_t noc = noc_index) {
+    tt_buf_rw::note_opaque();
+    noc_async_read_set_state_impl(src_noc_addr, noc);
 }
 
 // clang-format off
@@ -764,36 +708,6 @@ FORCE_INLINE void noc_async_read_with_state(
 
 // clang-format off
 /**
- * Programs read_cmd_buf for reads routed through the PCIe core. Issue the reads themselves with
- * \a noc_async_read_with_state. This does the same work as \a noc_async_read_set_state, which already
- * accepts a PCIe-routed address and already sets NOC_TARG_ADDR_MID. It exists so that the PCIe setup and
- * its teardown, \a noc_async_read_clear_pcie_state, read as a pair.
- *
- * Always follow a batch with \a noc_async_read_clear_pcie_state. NOC_TARG_ADDR_MID is sticky, so if it is
- * left set the next ordinary on-chip read on read_cmd_buf is misrouted to host memory.
- *
- *     noc_async_read_set_pcie_state(pcie_src_noc_addr);
- *     for (...) { noc_async_read_with_state(src_lo, l1_dst, size); }
- *     noc_async_read_clear_pcie_state();
- *
- * Do not issue an atomic such as \a noc_semaphore_inc between the set and the clear. Atomics program
- * NOC_TARG_ADDR_MID from their own on-chip address, and under DM_DYNAMIC_NOC they share the read command
- * buffer, so they reset the routing and the rest of the batch goes on-chip instead of to host memory.
- *
- * Return value: None
- *
- * | Argument     | Description                          | Data type | Valid range                    | required |
- * |--------------|--------------------------------------|-----------|--------------------------------|----------|
- * | src_noc_addr | PCIe-routed NOC address              | uint64_t  | Results of a PCIe NOC encoding | True     |
- * | noc          | Which NOC to use for the transaction | uint8_t   | 0 or 1                         | False    |
- */
-// clang-format on
-inline void noc_async_read_set_pcie_state(uint64_t src_noc_addr, uint8_t noc = noc_index) {
-    noc_async_read_set_state(src_noc_addr, noc);
-}
-
-// clang-format off
-/**
  * Returns a command buffer to non-PCIe routing by clearing NOC_TARG_ADDR_MID. Call this once at the end of
  * a batch opened with \a noc_async_read_set_pcie_state. The \a noc_async_read_set_state and
  * \a noc_async_read_one_packet_set_state functions also set MID when given a PCIe-routed address, so they
@@ -819,6 +733,37 @@ inline void noc_async_read_clear_pcie_state(uint8_t noc = noc_index, uint8_t cmd
 
 // clang-format off
 /**
+ * Programs read_cmd_buf for reads routed through the PCIe core. Issue the reads themselves with
+ * \a noc_async_read_with_state. This does the same work as \a noc_async_read_set_state, which already
+ * accepts a PCIe-routed address and already sets NOC_TARG_ADDR_MID. It exists so that the PCIe setup and
+ * its teardown, \a noc_async_read_clear_pcie_state, read as a pair.
+ *
+ * Always follow a batch with \a noc_async_read_clear_pcie_state. NOC_TARG_ADDR_MID is sticky, so if it is
+ * left set the next ordinary on-chip read on read_cmd_buf is misrouted to host memory.
+ *
+ *     noc_async_read_set_pcie_state(pcie_src_noc_addr);
+ *     for (...) { noc_async_read_with_state(src_lo, l1_dst, size); }
+ *     noc_async_read_clear_pcie_state();
+ *
+ * Do not issue an atomic such as \a noc_semaphore_inc between the set and the clear. Atomics program
+ * NOC_TARG_ADDR_MID from their own on-chip address, and under DM_DYNAMIC_NOC they share the read command
+ * buffer, so they reset the routing and the rest of the batch goes on-chip instead of to host memory.
+ *
+ * Return value: None
+ *
+ * | Argument     | Description                          | Data type | Valid range                    | required |
+ * |--------------|--------------------------------------|-----------|--------------------------------|----------|
+ * | src_noc_addr | PCIe-routed NOC address              | uint64_t  | Results of a PCIe NOC encoding | True     |
+ * | noc          | Which NOC to use for the transaction | uint8_t   | 0 or 1                         | False    |
+ */
+// clang-format on
+inline void noc_async_read_set_pcie_state(uint64_t src_noc_addr, uint8_t noc = noc_index) {
+    tt_buf_rw::note_opaque();
+    noc_async_read_set_pcie_state_impl(src_noc_addr, noc);
+}
+
+// clang-format off
+/**
  * Same as \a noc_async_read, but for a src_noc_addr routed through the PCIe core. This sets up PCIe
  * routing, issues the read, then tears the routing back down, so read_cmd_buf is left safe for ordinary
  * on-chip reads and the caller has nothing to clean up. Asynchronous, like \a noc_async_read: call
@@ -838,15 +783,17 @@ inline void noc_async_read_clear_pcie_state(uint8_t noc = noc_index, uint8_t cmd
 // clang-format on
 inline void noc_async_read_pcie(
     uint64_t src_noc_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
+    // Raw NoC address, not attributable to a bound accessor: conservatively OPAQUE (api/dataflow/buf_rw_note.h).
+    tt_buf_rw::note_opaque();
 #ifdef ARCH_BLACKHOLE
-    noc_async_read_set_pcie_state(src_noc_addr, noc);
+    noc_async_read_set_pcie_state_impl(src_noc_addr, noc);
     // The setup above already waited on read_cmd_buf, and the registers it wrote do not make the buffer
     // busy, so the first burst can skip its own poll. Later bursts still poll.
     noc_async_read_with_state</*inc_num_issued=*/true, /*skip_cmdbuf_chk=*/true>(
         (uint32_t)src_noc_addr, dst_local_l1_addr, size, noc);
     noc_async_read_clear_pcie_state(noc);
 #else
-    noc_async_read(src_noc_addr, dst_local_l1_addr, size, noc);
+    noc_async_read_impl(src_noc_addr, dst_local_l1_addr, size, noc);
 #endif
 }
 
@@ -896,32 +843,8 @@ FORCE_INLINE void noc_async_write_one_packet(
     std::uint32_t size,
     uint8_t noc = noc_index,
     uint32_t vc = NOC_UNICAST_WRITE_VC) {
-#ifdef ARCH_BLACKHOLE
-    // A PCIe-routed dst_noc_addr would be sent on-chip, since this does not write NOC_RET_ADDR_MID.
-    // Use noc_async_write_pcie, or noc_async_write_set_pcie_state for a batch.
-    ASSERT(((dst_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
-#endif
-    if constexpr (enable_noc_tracing) {
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, src_local_l1_addr, dst_noc_addr, size, vc, posted, noc);
-    }
-
-    WAYPOINT("NWPW");
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
-    WAYPOINT("NWPD");
-
-    ncrisc_noc_fast_write<noc_mode>(
-        noc,
-        write_cmd_buf,
-        src_local_l1_addr,
-        dst_noc_addr,
-        size,
-        vc,
-        false /* mcast */,
-        false /* linked */,
-        1 /* num_dests */,
-        true /* multicast_path_reserve */,
-        posted);
+    tt_buf_rw::note_opaque();
+    noc_async_write_one_packet_impl<enable_noc_tracing, posted>(src_local_l1_addr, dst_noc_addr, size, noc, vc);
 }
 
 // clang-format off
@@ -955,25 +878,8 @@ inline void noc_async_write(
     uint32_t size,
     uint8_t noc = noc_index,
     uint32_t vc = NOC_UNICAST_WRITE_VC) {
-    if constexpr (enable_noc_tracing) {
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, src_local_l1_addr, dst_noc_addr, size, vc, posted, noc);
-    }
-
-    if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        // noc_async_write_one_packet runs this assert itself, so it is not repeated here.
-        noc_async_write_one_packet<false, posted>(src_local_l1_addr, dst_noc_addr, size, noc, vc);
-    } else {
-#ifdef ARCH_BLACKHOLE
-        // A PCIe-routed dst_noc_addr would be sent on-chip, since this does not write NOC_RET_ADDR_MID.
-        // Use noc_async_write_pcie, or noc_async_write_set_pcie_state for a batch.
-        ASSERT(((dst_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
-#endif
-        WAYPOINT("NAWW");
-        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-        ncrisc_noc_fast_write_any_len<noc_mode>(
-            noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, vc, false, false, 1, true, posted);
-        WAYPOINT("NAWD");
-    }
+    tt_buf_rw::note_opaque();
+    noc_async_write_impl<max_page_size, enable_noc_tracing, posted>(src_local_l1_addr, dst_noc_addr, size, noc, vc);
 }
 
 // clang-format off
@@ -990,32 +896,9 @@ FORCE_INLINE void noc_async_write_multicast_one_packet(
     std::uint32_t num_dests,
     bool linked = false,
     uint8_t noc = noc_index) {
-    if constexpr (enable_noc_tracing) {
-        NOC_TRACE_QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
-        RECORD_NOC_EVENT_WITH_ADDR(
-            NocEventType::WRITE_MULTICAST,
-            src_local_l1_addr,
-            dst_noc_addr_multicast,
-            size,
-            NOC_MULTICAST_WRITE_VC,
-            false,
-            noc);
-    }
-    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
-    WAYPOINT("NWPD");
-
-    ncrisc_noc_fast_write<noc_mode>(
-        noc,
-        write_cmd_buf,
-        src_local_l1_addr,
-        dst_noc_addr_multicast,
-        size,
-        NOC_MULTICAST_WRITE_VC,
-        true /* mcast */,
-        linked,
-        num_dests,
-        true /* multicast_path_reserve */);
+    tt_buf_rw::note_opaque();
+    noc_async_write_multicast_one_packet_impl<enable_noc_tracing>(
+        src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked, noc);
 }
 
 // clang-format off
@@ -1067,29 +950,9 @@ inline void noc_async_write_multicast(
     bool linked = false,
     uint8_t noc = noc_index,
     uint8_t vc = NOC_MULTICAST_WRITE_VC) {
-    RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::WRITE_MULTICAST, src_local_l1_addr, dst_noc_addr_multicast, size, vc, false, noc);
-
-    if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_multicast_one_packet<false>(
-            src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked, noc);
-    } else {
-        WAYPOINT("NMWW");
-        NOC_TRACE_QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
-        DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-        ncrisc_noc_fast_write_any_len<noc_mode>(
-            noc,
-            write_cmd_buf,
-            src_local_l1_addr,
-            dst_noc_addr_multicast,
-            size,
-            vc,
-            true /* mcast */,
-            linked,
-            num_dests,
-            true /* multicast_path_reserve */);
-        WAYPOINT("NMWD");
-    }
+    tt_buf_rw::note_opaque();
+    noc_async_write_multicast_impl<max_page_size>(
+        src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked, noc, vc);
 }
 
 // clang-format off
@@ -1117,12 +980,8 @@ inline void noc_async_write_multicast(
 template <bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_set_state(
     uint64_t dst_noc_addr, uint32_t size, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
-    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, 0, dst_noc_addr, size, vc, posted, noc);
-
-    WAYPOINT("NWPW");
-    ncrisc_noc_write_set_state<posted, true /* one_packet */>(noc, write_cmd_buf, dst_noc_addr, size, vc);
-    WAYPOINT("NWPD");
+    tt_buf_rw::note_opaque();
+    noc_async_write_one_packet_set_state_impl<posted>(dst_noc_addr, size, noc, vc);
 }
 
 // clang-format off
@@ -1193,12 +1052,8 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
 template <bool posted = false>
 FORCE_INLINE void noc_async_write_set_state(
     uint64_t dst_noc_addr, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
-    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, 0, dst_noc_addr, 0, vc, posted, noc);
-
-    WAYPOINT("NWSW");
-    ncrisc_noc_write_set_state<posted, false /* one_packet */>(noc, write_cmd_buf, dst_noc_addr, 0, vc);
-    WAYPOINT("NWSD");
+    tt_buf_rw::note_opaque();
+    noc_async_write_set_state_impl<posted>(dst_noc_addr, noc, vc);
 }
 
 // clang-format off
@@ -1261,6 +1116,31 @@ FORCE_INLINE void noc_async_write_with_state(
 
 // clang-format off
 /**
+ * Returns a command buffer to non-PCIe routing by clearing NOC_RET_ADDR_MID. Call this once at the end of
+ * a batch opened with \a noc_async_write_set_pcie_state. The \a noc_async_write_set_state and
+ * \a noc_async_write_one_packet_set_state functions also set MID when given a PCIe-routed address, so they
+ * need this too. Nothing else clears MID, since the \a _with_state issuers never write it.
+ *
+ * Waits for NOC_CMD_CTRL to be ready, nothing else; no preceding barrier is required. No-op on
+ * architectures that do not encode PCIe routing in the NOC address.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                | Data type | Valid range | required |
+ * |----------|--------------------------------------------|-----------|-------------|----------|
+ * | noc      | Which NOC to use for the transaction       | uint8_t   | 0 or 1      | False    |
+ * | cmd_buf  | Which command buffer to clear MID on       | uint8_t   | 0 - 3       | False    |
+ */
+// clang-format on
+inline void noc_async_write_clear_pcie_state(uint8_t noc = noc_index, uint8_t cmd_buf = write_cmd_buf) {
+#ifdef ARCH_BLACKHOLE
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    noc_cmd_buf_clear_ret_addr_mid(noc, cmd_buf);
+#endif
+}
+
+// clang-format off
+/**
  * Programs write_cmd_buf for writes routed through the PCIe core. Issue the writes themselves with
  * \a noc_async_write_with_state. This does the same work as \a noc_async_write_set_state, which already
  * accepts a PCIe-routed address and already sets NOC_RET_ADDR_MID. It exists so that the PCIe setup and
@@ -1284,32 +1164,8 @@ FORCE_INLINE void noc_async_write_with_state(
 // clang-format on
 inline void noc_async_write_set_pcie_state(
     uint64_t dst_noc_addr, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
-    noc_async_write_set_state(dst_noc_addr, noc, vc);
-}
-
-// clang-format off
-/**
- * Returns a command buffer to non-PCIe routing by clearing NOC_RET_ADDR_MID. Call this once at the end of
- * a batch opened with \a noc_async_write_set_pcie_state. The \a noc_async_write_set_state and
- * \a noc_async_write_one_packet_set_state functions also set MID when given a PCIe-routed address, so they
- * need this too. Nothing else clears MID, since the \a _with_state issuers never write it.
- *
- * Waits for NOC_CMD_CTRL to be ready, nothing else; no preceding barrier is required. No-op on
- * architectures that do not encode PCIe routing in the NOC address.
- *
- * Return value: None
- *
- * | Argument | Description                                | Data type | Valid range | required |
- * |----------|--------------------------------------------|-----------|-------------|----------|
- * | noc      | Which NOC to use for the transaction       | uint8_t   | 0 or 1      | False    |
- * | cmd_buf  | Which command buffer to clear MID on       | uint8_t   | 0 - 3       | False    |
- */
-// clang-format on
-inline void noc_async_write_clear_pcie_state(uint8_t noc = noc_index, uint8_t cmd_buf = write_cmd_buf) {
-#ifdef ARCH_BLACKHOLE
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-    noc_cmd_buf_clear_ret_addr_mid(noc, cmd_buf);
-#endif
+    tt_buf_rw::note_opaque();
+    noc_async_write_set_pcie_state_impl(dst_noc_addr, noc, vc);
 }
 
 // True when none of this RISC's command buffers still hold PCIe routing. Asserted where a batch should
@@ -1346,15 +1202,17 @@ inline bool noc_cmd_bufs_mid_clear([[maybe_unused]] uint8_t noc = noc_index) {
 // clang-format on
 inline void noc_async_write_pcie(
     uint32_t src_local_l1_addr, uint64_t dst_noc_addr, uint32_t size, uint8_t noc = noc_index) {
+    // Raw NoC address, not attributable to a bound accessor: conservatively OPAQUE (api/dataflow/buf_rw_note.h).
+    tt_buf_rw::note_opaque();
 #ifdef ARCH_BLACKHOLE
-    noc_async_write_set_pcie_state(dst_noc_addr, noc);
+    noc_async_write_set_pcie_state_impl(dst_noc_addr, noc);
     // The setup above already waited on write_cmd_buf, and the registers it wrote do not make the buffer
     // busy, so the first burst can skip its own poll. Later bursts still poll.
     noc_async_write_with_state</*posted=*/false, /*update_counter=*/true, /*skip_cmdbuf_chk=*/true>(
         src_local_l1_addr, (uint32_t)dst_noc_addr, size, noc);
     noc_async_write_clear_pcie_state(noc);
 #else
-    noc_async_write(src_local_l1_addr, dst_noc_addr, size, noc);
+    noc_async_write_impl(src_local_l1_addr, dst_noc_addr, size, noc);
 #endif
 }
 
@@ -1402,7 +1260,7 @@ FORCE_INLINE void noc_async_read_page(
         RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, page_size, -1, false, noc);
     }
     tt_buf_rw::note_if_bound<tt_buf_rw::kRead, AddrGen>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
-    noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
+    noc_async_read_impl<NOC_MAX_BURST_SIZE + 1, false>(
         tensor_accessor::detail::transfer_noc_addr(addrgen, id, offset, noc), dst_local_l1_addr, page_size, noc);
 }
 
@@ -1587,7 +1445,7 @@ FORCE_INLINE void noc_async_write_page(
             noc);
     }
     tt_buf_rw::note_if_bound<tt_buf_rw::kWrite, AddrGen>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
-    noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
+    noc_async_write_impl<NOC_MAX_BURST_SIZE + 1, false, posted>(
         src_local_l1_addr,
         tensor_accessor::detail::transfer_noc_addr(addrgen, id, offset, noc),
         size ? size : page_size,
@@ -1770,7 +1628,7 @@ FORCE_INLINE void noc_async_read_shard(
         false,
         noc);
     tt_buf_rw::note_if_bound<tt_buf_rw::kRead, TensorAccessor<DSpec>>();  // op-to-op R/W inference
-    noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
+    noc_async_read_impl<NOC_MAX_BURST_SIZE + 1, false>(
         tensor_accessor::detail::transfer_shard_noc_addr(s, shard_id, /*offset=*/0, noc),
         dst_local_l1_addr,
         s.get_aligned_page_size() * shard_volume,
@@ -1808,7 +1666,7 @@ FORCE_INLINE void noc_async_write_shard(
         posted,
         noc);
     tt_buf_rw::note_if_bound<tt_buf_rw::kWrite, TensorAccessor<DSpec>>();  // op-to-op R/W inference
-    noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
+    noc_async_write_impl<NOC_MAX_BURST_SIZE + 1, false, posted>(
         src_local_l1_addr,
         tensor_accessor::detail::transfer_shard_noc_addr(s, shard_id, /*offset=*/0, noc),
         s.get_aligned_page_size() * shard_volume,
@@ -1946,6 +1804,7 @@ inline void noc_semaphore_set_multicast(
         /*posted=*/false);
     WAYPOINT("NSND");
 }
+
 // clang-format off
 /**
  * Initiates an asynchronous write from a source address in L1 memory on the
@@ -2040,32 +1899,9 @@ inline void noc_async_write_multicast_loopback_src(
     std::uint32_t num_dests,
     bool linked = false,
     uint8_t noc = noc_index) {
-    constexpr bool multicast_path_reserve = true;
-
-    NOC_TRACE_QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
-    RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::WRITE_MULTICAST,
-        src_local_l1_addr,
-        dst_noc_addr_multicast,
-        size,
-        NOC_MULTICAST_WRITE_VC,
-        false,
-        noc);
-
-    WAYPOINT("NMLW");
-    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-    ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
-        noc,
-        write_cmd_buf,
-        src_local_l1_addr,
-        dst_noc_addr_multicast,
-        size,
-        NOC_MULTICAST_WRITE_VC,
-        true,
-        linked,
-        num_dests,
-        multicast_path_reserve);
-    WAYPOINT("NMLD");
+    tt_buf_rw::note_opaque();
+    noc_async_write_multicast_loopback_src_impl(
+        src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked, noc);
 }
 
 /**
@@ -2373,6 +2209,9 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * ensuring no outstanding inline write uses that address before issuing another write.
  */
 // clang-format on
+
+// Raw NoC address, not attributable to a bound accessor: conservatively OPAQUE
+// (api/dataflow/buf_rw_note.h).
 template <InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool posted = false, bool flush = true>
 FORCE_INLINE void noc_inline_dw_write(
     uint64_t addr,
@@ -2381,35 +2220,10 @@ FORCE_INLINE void noc_inline_dw_write(
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC,
     uint32_t customized_src_addr = 0) {
-    WAYPOINT("NWIW");
-    // Inline dword write: 4-byte immediate value.
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_INLINE, 0, addr, 4, vc, posted, noc);
-    DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
-    DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
-#if defined(ARCH_BLACKHOLE) && defined(WATCHER_ENABLED)
-    if constexpr (dst_type == InlineWriteDst::L1) {
-        if constexpr (!flush) {
-            ASSERT(customized_src_addr != 0);
-            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, customized_src_addr, 4);
-        } else {
-            uint32_t src_addr = noc_get_interim_inline_value_addr(noc, addr);
-            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, src_addr, 4);
-        }
-    }
-#endif
-
-    noc_fast_write_dw_inline<noc_mode, dst_type, flush>(
-        noc,
-        write_at_cmd_buf,
-        val,
-        addr,
-        be,  // byte-enable
-        vc,
-        false,   // mcast
-        posted,  // posted
-        customized_src_addr);
-    WAYPOINT("NWID");
+    tt_buf_rw::note_opaque();
+    noc_inline_dw_write_impl<dst_type, posted, flush>(addr, val, be, noc, vc, customized_src_addr);
 }
+
 // clang-format off
 
 /**
@@ -2443,6 +2257,9 @@ FORCE_INLINE void noc_inline_dw_write(
  * ensuring no outstanding inline write uses that address before issuing another write.
  */
 // clang-format on
+
+// Raw NoC address, not attributable to a bound accessor: conservatively OPAQUE
+// (api/dataflow/buf_rw_note.h).
 template <InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool posted = false, bool flush = true>
 FORCE_INLINE void noc_inline_mcast_dw_write(
     uint64_t addr,
@@ -2452,34 +2269,8 @@ FORCE_INLINE void noc_inline_mcast_dw_write(
     uint8_t vc = NOC_MULTICAST_WRITE_VC,
     uint32_t customized_src_addr = 0,
     uint32_t num_dest = 1) {
-    WAYPOINT("NWIW");
-    DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
-    DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
-#if defined(ARCH_BLACKHOLE) && defined(WATCHER_ENABLED)
-    if constexpr (dst_type == InlineWriteDst::L1) {
-        if constexpr (!flush) {
-            ASSERT(customized_src_addr != 0);
-            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, customized_src_addr, 4);
-        } else {
-            uint32_t src_addr = noc_get_interim_inline_value_addr(noc, addr);
-            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, src_addr, 4);
-        }
-    }
-#endif
-
-    noc_fast_write_dw_inline_multicast<noc_mode, dst_type, flush>(
-        noc,
-        write_at_cmd_buf,
-        val,
-        addr,
-        be,  // byte-enable
-        vc,
-        true,    // mcast
-        posted,  // posted
-        customized_src_addr,
-        num_dest);
-
-    WAYPOINT("NWID");
+    tt_buf_rw::note_opaque();
+    noc_inline_mcast_dw_write_impl<dst_type, posted, flush>(addr, val, be, noc, vc, customized_src_addr, num_dest);
 }
 
 // clang-format off
@@ -2509,6 +2300,9 @@ FORCE_INLINE void noc_inline_mcast_dw_write(
  * | set_val (template parameter) | Whether to set the value for the write here                | bool     | true or false                    | False    |
  */
 // clang-format on
+
+// Raw NoC address, not attributable to a bound accessor: conservatively OPAQUE
+// (api/dataflow/buf_rw_note.h).
 template <bool posted = false, bool set_val = false>
 FORCE_INLINE void noc_inline_dw_write_set_state(
     uint64_t addr,
@@ -2517,9 +2311,8 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
     uint8_t cmd_buf = write_at_cmd_buf,
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC) {
-    WAYPOINT("NWIW");
-    noc_fast_write_dw_inline_set_state<posted, set_val>(noc, cmd_buf, addr, be, vc, val);
-    WAYPOINT("NWID");
+    tt_buf_rw::note_opaque();
+    noc_inline_dw_write_set_state_impl<posted, set_val>(addr, val, be, cmd_buf, noc, vc);
 }
 
 // clang-format off
@@ -2801,34 +2594,9 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
     uint8_t cmd_buf = write_cmd_buf,
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC) {
-    WAYPOINT("NAWW");
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_local_l1_addr, dst_noc_addr, size, -1, posted, noc);
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-
-#ifdef ARCH_BLACKHOLE
-    // Issue https://github.com/tenstorrent/tt-metal/issues/28758: always update counter for blackhole as a temporary
-    // workaround for avoiding hangs in fabric router, as counters will be checked inside the
-    // noc_fast_spoof_write_dw_inline, will remove this restriction once all inline write change to stream reg write.
-    constexpr bool update_counter_in_callee = true;
-#else
-    constexpr bool update_counter_in_callee = update_counter;
-#endif
-
-    ncrisc_noc_fast_write<noc_mode, true /* use_trid */, update_counter_in_callee>(
-        noc,
-        cmd_buf,
-        src_local_l1_addr,
-        dst_noc_addr,
-        size,
-        vc,
-        false,  // mcast
-        false,  // linked
-        1,      // num_dests
-        true,   // multicast_path_reserve
-        posted,
-        trid);
-    WAYPOINT("NWPD");
+    tt_buf_rw::note_opaque();
+    noc_async_write_one_packet_with_trid_impl<update_counter, posted>(
+        src_local_l1_addr, dst_noc_addr, size, trid, cmd_buf, noc, vc);
 }
 
 // clang-format off
@@ -2859,12 +2627,8 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
     uint8_t cmd_buf = write_cmd_buf,
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC) {
-    WAYPOINT("NAWW");
-    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, 0, dst_noc_addr, 0, vc, posted, noc);
-
-    ncrisc_noc_write_set_state<posted, false /* one_packet */>(noc, cmd_buf, dst_noc_addr, 0 /* len_bytes */, vc);
-    WAYPOINT("NAWD");
+    tt_buf_rw::note_opaque();
+    noc_async_write_one_packet_with_trid_set_state_impl<posted>(dst_noc_addr, cmd_buf, noc, vc);
 }
 
 // clang-format off
@@ -2908,7 +2672,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
         noc);
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc, dst_local_l1_addr, src_local_l1_addr, size);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE_ON(noc, cmd_buf, dst_local_l1_addr, src_local_l1_addr, size);
 
 #ifdef ARCH_BLACKHOLE
     // Issue https://github.com/tenstorrent/tt-metal/issues/28758: always update counter for blackhole as a temporary

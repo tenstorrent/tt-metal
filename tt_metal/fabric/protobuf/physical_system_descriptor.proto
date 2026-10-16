@@ -78,6 +78,8 @@ message AsicDescriptor {
     uint64 unique_id = 4;
     optional int32 umd_unique_id = 6;
     string host_name = 5;
+    // MPI rank that owns this chip. Host names are not unique when several ranks share a machine.
+    uint32 mpi_rank = 7;
 }
 
 // Map entry for ASIC ID to descriptor

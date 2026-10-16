@@ -20,7 +20,7 @@
 #include "metadata_scalar_read.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
+#include "../ring_joint_ksplit.hpp"  // relative, so its chunked_prefill_utils.hpp is the same file this kernel includes
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -608,7 +608,7 @@ void kernel_main() {
     // the physical (x, y) of its reducer (a sender) or of its senders in band order (the reducer).
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool ksplit_enabled = ksplit_count > 1;
-    static_assert(!ksplit_enabled || (!rotated_q_split_enabled && !has_sliding_window && use_streaming_compute));
+    static_assert(!ksplit_enabled || (!rotated_q_split_enabled && use_streaming_compute));
     static_assert(ksplit_count <= ring_joint::kKSplitMaxCount);
     const bool ksplit_active = ksplit_enabled && global_q_end - global_q_start == 1;
     // Segmented accumulation (see the compute kernel): the output is normalized after the ring loop.
@@ -820,8 +820,10 @@ void kernel_main() {
     // Track non-skipped iters so the first active iter starts with fresh accumulators (matches compute).
     bool seen_active_iter = false;
     auto arrival_preview = fused_op_receiver.seq;
-    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::packed_kv_schedule(
-        GROUPED_KV_SOURCE_COUNT,
+    // Chosen at compile time, and the guard below folds packed_sources to false in the classic ring's
+    // binary so it carries none of the packed-source path.
+    constexpr bool packed_kv_enabled = GROUPED_KV_SOURCE_COUNT > 1;
+    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::make_packed_kv_schedule<GROUPED_KV_SOURCE_COUNT>(
         ring_size,
         kv_local_padded_Nt,
         logical_nt,
@@ -834,7 +836,7 @@ void kernel_main() {
                 arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
         });
     const uint32_t source_group_size = packed_schedule.source_group_size;
-    const bool packed_sources = packed_schedule.packed();
+    const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
@@ -894,6 +896,10 @@ void kernel_main() {
                     cb_sig.pop_front(1);
                 }
 
+                // K-split bands hand their state to the reducer, which writes after the merge.
+                if (ksplit_active) {
+                    continue;
+                }
                 const auto& gen = [&]() -> const auto& {
                     if constexpr (has_joint_q) {
                         if (qi.is_joint_q) {

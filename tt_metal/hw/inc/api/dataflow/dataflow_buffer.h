@@ -18,13 +18,13 @@
 
 // PrefetcherPipe-relay checkpoint align, called from the RelayDFBBindingToken constructor on
 // TRISC (unpack/pack). DM aligns in PrefetcherPipe::bind_relay().
-#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH)
+#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_ISOLATE_SFPU)
 #include "internal/prefetcher_pipe_init.h"
 #endif
 
 #ifndef COMPILE_FOR_TRISC
 #include "api/dataflow/noc.h"
-#include "tools/profiler/noc_debugging_profiler.hpp"
+#include "internal/profiler/noc_debugging_profiler.hpp"
 
 class DataflowBuffer;
 template <>
@@ -97,7 +97,7 @@ public:
     // For PrefetcherPipe relays on TRISC, construction snaps the borrowed local iface to the
     // durable checkpoint via a launch-msg slot lookup keyed by token.prefetcher_pipe_id()
     DataflowBuffer(RelayDFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {
-#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH)
+#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_ISOLATE_SFPU)
         if (token.prefetcher_pipe_id() != RelayDFBBindingToken::NO_PREFETCHER_PIPE) {
             experimental::align_local_dfb_to_prefetcher_pipe_slot(logical_dfb_id_, token.prefetcher_pipe_id());
         }
@@ -343,7 +343,7 @@ public:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
     template <typename Operand>
     [[nodiscard]] Operand front() const {
-#ifdef UCK_CHLKC_MATH
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
         return Operand{0};
 #else
         return Operand{(get_read_ptr_impl() >> (4 - cb_addr_shift)) - 1};
@@ -357,7 +357,7 @@ public:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
     template <typename Operand>
     [[nodiscard]] Operand back() const {
-#ifdef UCK_CHLKC_MATH
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
         return Operand{0};
 #else
         return Operand{(get_write_ptr_impl() >> (4 - cb_addr_shift)) - 1};
@@ -462,9 +462,10 @@ private:
     uint16_t logical_dfb_id_;
 
     // MATH TRISC does not own fifo state (see trisc firmware: cb_interface / g_dfb_interface
-    // exist only on UNPACK/PACK). Compute kernels still construct DataflowBuffer on all TRISC
-    // threads; MATH carries logical_dfb_id_ only and no-ops sync / runtime-interface accessors.
-#if !(defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH))
+    // exist only on UNPACK/PACK). ISOLATE_SFPU does not either because DFB-credit
+    // support for it is not implemented yet. Compute kernels still construct DataflowBuffer on all TRISC threads
+    // these two carry logical_dfb_id_ only and no-op sync / runtime-interface accessors.
+#if !(defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)))
     DFBInterface& local_dfb_interface_;
 #endif
 

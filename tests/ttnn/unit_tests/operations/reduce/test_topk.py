@@ -918,7 +918,7 @@ def test_topk_multicore_values_beyond_first_tile_row(num_rows, largest, device):
 # (input[index] == value, in-range, unique), never index-order equality.
 # ---------------------------------------------------------------------------
 
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 
 def run_topk_large_k_routed_test(N, C, H, W, k, device):
@@ -932,9 +932,10 @@ def run_topk_large_k_routed_test(N, C, H, W, k, device):
     ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=True, sorted=True)
 
     # Index dtype contract must match the stock device op: UINT16 iff the
-    # tile-padded width fits 16 bits, else UINT32.
+    # tile-padded width fits 16 bits -- every width up to and including 65536,
+    # whose largest index is 65535 -- else UINT32.
     padded_w = 32 * ((W + 31) // 32)
-    uint16_expected = padded_w <= UINT16_MAX
+    uint16_expected = padded_w <= UINT16_MAX + 1
     assert ttnn_indices.dtype == (ttnn.uint16 if uint16_expected else ttnn.uint32)
 
     desired_shape = [N, C, H, k]
