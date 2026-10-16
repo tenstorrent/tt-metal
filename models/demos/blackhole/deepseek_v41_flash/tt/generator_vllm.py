@@ -445,7 +445,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 (),
             )
         ctx = getattr(getattr(vllm_config, "model_config", None), "max_model_len", None)
-        lim = spec_policy.SPEC_MAX_CTX.get(U, spec_policy.SPEC_MAX_CTX[8])
+        lim = spec_policy.spec_max_ctx(U)  # DSV41_SPEC_MAX_CTX, when set, is the final word (no second switch needed)
         if ctx is not None and int(ctx) > lim and os.environ.get("DSV41_VLLM_SPEC_GUARD", "1") != "0":
             return SpecReject(
                 f"max_model_len {ctx} exceeds the context the spec runners fit in DRAM at B={B} ({lim}). beyond that serve with plain decode (no speculative_config)",

@@ -177,3 +177,13 @@ def test_force_matmul_backend():
     env = {}
     c = sp.resolve_apply(4, 4, 70000, env)
     assert c.on and "DSV41_IDX_BACKEND" not in env
+
+
+def test_spec_max_ctx_env_is_the_final_word():
+    """DSV41_SPEC_MAX_CTX sets the cap for the policy and the vLLM guard (tt.generator_vllm uses spec_max_ctx)."""
+    assert sp.spec_max_ctx(4, {}) == 131584 and sp.spec_max_ctx(1, {}) == 1048832
+    assert sp.spec_max_ctx(4, {"DSV41_SPEC_MAX_CTX": "262144"}) == 262144
+    assert sp.spec_max_ctx(4, {"DSV41_SPEC_MAX_CTX": "65536"}) == 65536  # also lowers
+    assert sp.spec_max_ctx(4, {"DSV41_SPEC_MAX_CTX": ""}) == 131584
+    env = {"DSV41_SPEC_MAX_CTX": "262144"}
+    assert sp.resolve(16, 4, 262144, env).on and sp.resolve(16, 4, 262145, env).mode == "plain"

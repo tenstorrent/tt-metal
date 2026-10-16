@@ -37,6 +37,17 @@ SPEC_MAX_CTX = {
     8: 40000,
 }  # 131584 = 131072 + 256 rounded up to the 512-token prefill chunk (the 131072 ISL benchmark point needs ISL + OSL <= max_model_len)
 SPEC_MAX_CTX_BACKEND = 131584  # beyond this the indexer is not the matmul backend (n_entries = ctx / ratio 2 > 65536, tt/indexer.py default_backend): 'spec verify needs the matmul indexer backend'
+
+
+def spec_max_ctx(U, env=None):
+    """The context cap of speculative decoding for U users per mesh row: ``DSV41_SPEC_MAX_CTX`` when set (the final word: lifts or lowers the measured cap, for the policy AND the vLLM guard), else the measured
+    ``SPEC_MAX_CTX`` table. The runtime free-DRAM guard (SPEC_NEED_FREE_MIB) still applies when the runners are built.
+    """
+    env = os.environ if env is None else env
+    v = _get(env, "DSV41_SPEC_MAX_CTX")
+    return int(v) if v else SPEC_MAX_CTX.get(U, SPEC_MAX_CTX[8])
+
+
 # Runtime guard (free DRAM / bank right before the runners are built, after the prefills; the second prefill does not change it: measured 526.7 MiB before the build at B=32 ISL 30k,
 # identical to the plain pass). Measured cost of the runners + their trace capture: B=16 at 131072 first runner +113, trace +13 (126; at 70000 before the table sharing: +111 and +31), each further +0.7; B=32 (U=8) with the default set {0,1,3}:
 # +157 first, +34.5 each further runner, trace +19 = 280 MiB (527 -> 247 free). Need = measured cost + ~40 MiB headroom.
@@ -146,11 +157,7 @@ def resolve(batch, mesh_rows=4, max_seq_len=None, env=None):
             c = SpecChoice("fixed", k, [], rows, f"explicit DSV41_SPEC={k}", True)
     c.ring_rows = RING_ROWS_SPEC
     if not c.explicit and max_seq_len is not None:
-        lim = SPEC_MAX_CTX.get(U, SPEC_MAX_CTX[8])
-        if _get(
-            env, "DSV41_SPEC_MAX_CTX"
-        ):  # experiment: lift the measured context cap (DRAM / matmul-indexer bound) for this build
-            lim = int(_get(env, "DSV41_SPEC_MAX_CTX"))
+        lim = spec_max_ctx(U, env)
         if max_seq_len > lim:
             return SpecChoice(
                 "plain", reason=f"context too long for spec: max_seq_len {max_seq_len} > {lim} at B={batch}", rows=False
