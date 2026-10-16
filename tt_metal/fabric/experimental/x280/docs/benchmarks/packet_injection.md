@@ -118,40 +118,12 @@ and rejects a count exceeding either rather than clamping it — a rejected pref
 length. A `latency_count` above `phase_done` is a corruption check with no reachable trigger, since
 the producer retires only on the credit X280 returns after servicing.
 
-#### Measurement dispersion
-
-The only repeated-run figures in this document are the latency pair, and they
-are therefore the only estimate of how much any single number here can be
-trusted. Two runs of the identical N=1 configuration gave 2188 and 2199 ticks, a
-spread of **0.50%**; two of N=3 gave 3426 and 3416, a spread of 0.29%.
-
-That bounds a *single-request* measurement. It does not bound the throughput
-rows directly, which average over 1000 requests per worker — but it does explain
-them: 0.50% on one request implies roughly 0.016% once averaged over a thousand,
-which is the same order as the ~0.04% agreement observed between runs
-and between topologies. The two are consistent, so the sub-0.05% agreements in
-the throughput table are real rather than an artefact of a quiet instrument.
-Every figure in this document other than the latency pair is a single run.
-
 #### Packet-creation cost
 
 `latency-include` and `latency-exclude` differ only in whether the producer's
 start timestamp is taken before or after header construction, so the difference
-between them is the cost of constructing one 96-byte header:
-
-| N | include (2 runs) | exclude (2 runs) | difference |
-|---|---|---|---|
-| 1 | 2188, 2199 → 2193.5 ticks | 1704, 1728 → 1716.0 ticks | 477.5 ticks = 354 ns |
-| 3 | 3426, 3416 → 3421.0 ticks | 2961.7, 2958.7 → 2960.2 ticks | 460.8 ticks = 341 ns |
-
-So header construction costs roughly **341–354 ns**. Both ends of each
-difference are two runs, but two runs bound a spread only loosely: the observed
-spreads are 0.50% (include) against 1.39% (exclude) at N=1, and 0.29% against
-0.10% at N=3. The exclude side is the wider of the two at one N point and the
-narrower at the other, so these measurements do not support any claim that one
-side of the creation boundary is noisier than the other — with two runs per
-cell the spreads themselves are not resolvable. The range above is a range of
-two point estimates, not a confidence interval.
+between them is the cost of constructing one 96-byte header. Both latencies are in
+[results.md](../results.md#packet_injection).
 
 ### Throughput Measurement
 
@@ -263,12 +235,10 @@ both creation variants complete successfully and report `credit_stalls` and
 backpressure population at P=1 is a configuration artifact and must not be read as
 "no stalls observed".**
 
-At P=2 and above the consumer falls behind and both populations are fully
-exercised. A T=2 BRISC-only run recorded 1939 credit-stall and 1939 RTT samples,
-mean 768.8 ticks and 31256.3 ticks respectively — the stall is one episode's spin
-while the RTT spans a request's original start through the credit that released
-it, a full ring's queueing at S=16, which is why the two differ by three orders
-of magnitude.
+The published backpressure configurations run at P=1, so the 0 credit-stall episodes
+[results.md](../results.md#packet_injection) records for them are that artifact. A stall sample
+is one episode's spin, while an RTT sample spans a request's original start through the credit
+that released it, which includes a full ring's queueing.
 
 ### Mode-specific timer code
 
