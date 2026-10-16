@@ -169,7 +169,8 @@ void kernel_main() {
     constexpr uint32_t n_block = get_compile_time_arg_val(5);
     constexpr uint32_t k_block = get_compile_time_arg_val(6);
     constexpr uint32_t k_blocks = get_compile_time_arg_val(7);
-    constexpr uint32_t sub_w = get_compile_time_arg_val(8);  // output subblock: one tile row of sub_w tiles
+    constexpr uint32_t sub_w = get_compile_time_arg_val(8);  // output subblock: sub_h x sub_w tiles
+    constexpr uint32_t sub_h = get_compile_time_arg_val(9);
     constexpr uint32_t out_tiles = m_block * n_block;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_a, cb_w, cb_acc);
@@ -178,19 +179,21 @@ void kernel_main() {
         cb_wait_front(cb_a, m_block * k_block);
         cb_wait_front(cb_w, k_block * n_block);
         reconfig_data_format<SrcOrder::Reverse>(cb_a, cb_w);
-        matmul_block_init(cb_a, cb_w, false, sub_w, 1, k_block);
+        matmul_block_init(cb_a, cb_w, false, sub_w, sub_h, k_block);
         // The first K block overwrites the accumulator; later ones add to it in L1.
         pack_reconfig_l1_acc(kb == 0 ? 0 : 1);
-        for (uint32_t r = 0; r < m_block; ++r) {
+        for (uint32_t r0 = 0; r0 < m_block; r0 += sub_h) {
             for (uint32_t c0 = 0; c0 < n_block; c0 += sub_w) {
                 tile_regs_acquire();
                 for (uint32_t k = 0; k < k_block; ++k) {
-                    matmul_block(cb_a, cb_w, r * k_block + k, k * n_block + c0, 0, false, sub_w, 1, k_block);
+                    matmul_block(cb_a, cb_w, r0 * k_block + k, k * n_block + c0, 0, false, sub_w, sub_h, k_block);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t t = 0; t < sub_w; ++t) {
-                    pack_tile<true>(t, cb_acc, r * n_block + c0 + t);
+                for (uint32_t r = 0; r < sub_h; ++r) {
+                    for (uint32_t t = 0; t < sub_w; ++t) {
+                        pack_tile<true>(r * sub_w + t, cb_acc, (r0 + r) * n_block + c0 + t);
+                    }
                 }
                 tile_regs_release();
             }
@@ -265,7 +268,11 @@ class GateMatmulProgram:
         k_block = self.k_block
         assert Kt % k_block == 0, f"K={Kt} tiles must split into {k_block}-tile blocks"
         k_blocks = Kt // k_block
-        sub_w = max(s for s in (4, 3, 2, 1) if n_block % s == 0)
+        # The largest output subblock that fits the four FP32 DST tiles, widest first.
+        sub_h, sub_w = max(
+            ((h, w) for h in (1, 2, 4) for w in (4, 3, 2, 1) if h * w <= 4 and m_block % h == 0 and n_block % w == 0),
+            key=lambda hw: (hw[0] * hw[1], hw[1]),
+        )
         out_row_tiles = output.padded_shape[-1] // 32
         rect = ttnn.CoreRange(ttnn.CoreCoord(self.x0, self.y0), ttnn.CoreCoord(self.x1, self.y1))
         rect_set = ttnn.CoreRangeSet([rect])
@@ -382,7 +389,18 @@ class GateMatmulProgram:
                     kernel_source=_COMPUTE,
                     source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
                     core_ranges=rect_set,
-                    compile_time_args=[_CB_A, _CB_W, _CB_ACC, _CB_OUT, m_block, n_block, k_block, k_blocks, sub_w],
+                    compile_time_args=[
+                        _CB_A,
+                        _CB_W,
+                        _CB_ACC,
+                        _CB_OUT,
+                        m_block,
+                        n_block,
+                        k_block,
+                        k_blocks,
+                        sub_w,
+                        sub_h,
+                    ],
                     runtime_args=ttnn.RuntimeArgs(),
                     config=self.compute_config,
                 )

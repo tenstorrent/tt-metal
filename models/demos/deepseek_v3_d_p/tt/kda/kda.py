@@ -257,6 +257,10 @@ class ttKDA:
         self.overlap_output_gate = program_config.overlap_output_gate and self.recurrence.uses_ring_relay
         self.output_gate_weights = None
         self._output_gate_programs = None
+        # The relay's final carry (its own program on the last worker column, mostly waiting on the fabric) runs
+        # beside the output projection, a GateMatmulProgram on the other columns, instead of before the gated norm.
+        self.carry_with_output_projection = program_config.overlap_output_gate and self.recurrence.uses_ring_relay
+        self._output_projection_program = None
         if self.overlap_output_gate:
             fused = self.weights.input_projection
             hidden, width = tuple(fused.shape)[-2:]
@@ -264,10 +268,10 @@ class ttKDA:
             gate_end = gate_start + self.config.v_dim
             # The relay takes the first three quarters of the gate's columns (K3: 72 of 96 tiles, 116 us against the
             # relay's 127 us); the rest run beside the final carry, whose program mostly waits on the fabric.
-            relay_end = gate_start + self.config.v_dim * 3 // 4
-            self.output_gate_weights = (
-                ttnn.slice(fused, [0, gate_start], [hidden, relay_end]),
-                ttnn.slice(fused, [0, relay_end], [hidden, gate_end]),
+            # With the output projection beside the final carry, the relay takes all of the gate.
+            relay_end = gate_end if self.carry_with_output_projection else gate_start + self.config.v_dim * 3 // 4
+            self.output_gate_weights = (ttnn.slice(fused, [0, gate_start], [hidden, relay_end]),) + (
+                () if relay_end == gate_end else (ttnn.slice(fused, [0, relay_end], [hidden, gate_end]),)
             )
             leading = ttnn.slice(fused, [0, 0], [hidden, gate_start])
             trailing = ttnn.slice(fused, [0, gate_end], [hidden, width])
@@ -289,8 +293,16 @@ class ttKDA:
                     k_block=8,
                     math_fidelity=program_config.input_projection_math_fidelity,
                 )
-                for rows in (relay_rows, carry_rows)
+                for rows in (relay_rows, carry_rows)[: len(self.output_gate_weights)]
             )
+            if self.carry_with_output_projection:
+                self._output_projection_program = GateMatmulProgram(
+                    mesh_device,
+                    rows=(0, grid.y - 1),
+                    cols=(0, min(c.x for c in self.recurrence.final_carry_cores) - 1),
+                    k_block=4,
+                    math_fidelity=program_config.output_projection_math_fidelity,
+                )
         self.input_projection_program_config, self.output_projection_program_config = (
             tuned_projection_matmul_configs(
                 mesh_device.compute_with_storage_grid_size(),
@@ -492,6 +504,10 @@ class ttKDA:
             program_config=self.output_projection_program_config,
             compute_kernel_config=self.output_projection_compute_config,
         )
+        return self._reduce_scatter(output)
+
+    def _reduce_scatter(self, output: ttnn.Tensor) -> ttnn.Tensor:
+        """The TP reduction of the output projection's partial sums."""
         if self.tensor_parallel_size > 1:
             cluster_axis = self._tp_cluster_axis
             output = ttnn.experimental.reduce_scatter_minimal_async(
@@ -571,6 +587,8 @@ class ttKDA:
                 output_gates.append(output_gate)
                 return self._output_gate_programs[0](hidden_states, self.output_gate_weights[0], output_gate)
 
+        if self.overlap_output_gate and len(self.output_gate_weights) > 1:
+
             def carry_companion():
                 (output_gate,) = output_gates
                 return self._output_gate_programs[1](
@@ -593,6 +611,7 @@ class ttKDA:
             release_gate=True,
             prefix_companion=relay_companion,
             carry_companion=carry_companion,
+            defer_final_carry=self.carry_with_output_projection,
         )
         if self.overlap_output_gate:
             (output_gate,) = output_gates
@@ -602,5 +621,20 @@ class ttKDA:
             output = self._kda_rms_norm(result.output, inputs.projected, inputs.output_gate_offset)
         # The norm read the output gate, the projection's last columns in use.
         ttnn.deallocate(inputs.projected)
-        output = self._project_output(output)
-        return output, KdaState(recurrent=result.final_state, convolution=new_convolution)
+        if self.carry_with_output_projection:
+            normed = output
+            output = ttnn.allocate_tensor_on_device(
+                ttnn.Shape(list(normed.shape)[:-1] + [self.weights.output_projection.shape[-1]]),
+                normed.dtype,
+                ttnn.TILE_LAYOUT,
+                self.device,
+                self.partial_output_memory_config,
+            )
+            final_state = result.final_state.run(
+                lambda: self._output_projection_program(normed, self.weights.output_projection, output)
+            )
+            ttnn.deallocate(normed)
+            output = self._reduce_scatter(output)
+        else:
+            output, final_state = self._project_output(output), result.final_state
+        return output, KdaState(recurrent=final_state, convolution=new_convolution)
