@@ -4322,6 +4322,16 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 result_row = torch.tensor(
                     [float(v) for v in row_values], dtype=torch.float32
                 )
+                if (
+                    operation == MathOperation.SfpuElwmul
+                    and dest_acc == DestAccumulation.No
+                    and get_chip_architecture() != ChipArchitecture.QUASAR
+                ):
+                    # 16-bit Dest mul stores +0 when either input is zero, including 0 * inf.
+                    zero_input = (src1_row == 0) | (src2_row == 0)
+                    result_row = torch.where(
+                        zero_input, torch.zeros_like(result_row), result_row
+                    )
                 result_row, generated_row = self._canonicalise_emitted_nan(
                     operation, result_row
                 )

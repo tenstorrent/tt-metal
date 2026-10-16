@@ -1105,13 +1105,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_square,
-            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
-            dst_index,
-            vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::signbit)
     {
@@ -1222,13 +1216,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
         constexpr std::uint32_t RELU_MAX_THRESHOLD_BITS = 0x40A00000u; // 5.0f
 #endif
         SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _relu_max_,
-            (sfpi::vFloat, APPROX_MODE, ITERATIONS, std::uint32_t),
-            dst_index,
-            vector_mode,
-            RELU_MAX_THRESHOLD_BITS);
+            DST_SYNC_MODE, DST_ACCUM_MODE, _relu_max_, (sfpi::vFloat, APPROX_MODE, ITERATIONS, std::uint32_t), dst_index, vector_mode, RELU_MAX_THRESHOLD_BITS);
     }
     else if constexpr (OPERATION == SfpuType::relu_min)
     {
@@ -1884,6 +1872,12 @@ constexpr SfpuType get_binary_comp_sfpu_type()
  * DST_SYNC_MODE and DST_ACCUM_MODE are the first two template parameters (matching
  * the SFPU_BINARY_CALL / _sfpu_binary_check_ convention) so the dst-bound
  * LLK_ASSERTs run against the kernel's actual sync/accumulation mode.
+ *
+ * DST_ROUNDING is forwarded only on the generic float arm (ADD, SUB, RSUB,
+ * XLOGY, POW). The ckernel applies NearestEven only for ADD, SUB, and RSUB
+ * with a 16-bit Dest. DIV, MUL, the integer arms, and fp32 Dest drop it.
+ * MUL uses calculate_sfpu_binary_mul, which applies its own RNE and then
+ * stores +0 when either input is 0 on a 16-bit Dest.
  * @tparam SIGN_MAGNITUDE_FORMAT Int32 Dest holds SMAG32 (ADD/SUB only).
  */
 template <
@@ -1891,9 +1885,10 @@ template <
     bool DST_ACCUM_MODE,
     bool APPROXIMATION_MODE,
     BinaryOp BINOP,
-    int ITERATIONS             = 32,
-    std::uint32_t MATH_FORMAT  = 0,
-    bool SIGN_MAGNITUDE_FORMAT = true>
+    int ITERATIONS                        = 32,
+    std::uint32_t MATH_FORMAT             = 0,
+    bool SIGN_MAGNITUDE_FORMAT            = true,
+    ckernel::DstRoundingMode DST_ROUNDING = ckernel::DstRoundingMode::Default>
 void call_binary_sfpu_operation(
     const std::uint32_t dst_index_in0 = 0,
     const std::uint32_t dst_index_in1 = 1,
@@ -1908,6 +1903,9 @@ void call_binary_sfpu_operation(
     // matching how every production llk_math_eltwise_binary_sfpu_* wrapper
     // dispatches into _calculate_sfpu_binary_ / _calculate_*_shift_.
     static_assert(ITERATIONS == 8 || ITERATIONS == 32, "Binary SFPU tests support legacy 8/32 iteration values; execution uses 8 rows per face.");
+    static_assert(
+        DST_ROUNDING == ckernel::DstRoundingMode::Default || ((BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !DST_ACCUM_MODE),
+        "A non-Default DST_ROUNDING is applied only for ADD/SUB/RSUB with a 16-bit Dest");
     constexpr int PER_FACE_ITERATIONS = 8;
     if constexpr (BINOP == BinaryOp::DIV)
     {
@@ -1958,9 +1956,19 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
-    else if constexpr (
-        BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY ||
-        BINOP == BinaryOp::POW)
+    else if constexpr (BINOP == BinaryOp::MUL)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_binary_mul,
+            (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY || BINOP == BinaryOp::POW)
     {
         if constexpr (BINOP == BinaryOp::ADD && MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
         {
@@ -1995,7 +2003,7 @@ void call_binary_sfpu_operation(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 calculate_sfpu_binary,
-                (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+                (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS, DST_ACCUM_MODE, DST_ROUNDING),
                 dst_index_in0,
                 dst_index_in1,
                 dst_index_out,
