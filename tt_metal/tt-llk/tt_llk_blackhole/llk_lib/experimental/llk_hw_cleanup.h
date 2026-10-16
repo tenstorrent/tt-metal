@@ -38,6 +38,63 @@ constexpr std::uint32_t PACK_CONFIGURE    = 0x434C4E31;
 constexpr std::uint32_t PACK_CONFIGURED   = 0x434C4E32;
 constexpr std::uint32_t CLEANUP_DONE      = 0x434C4E40;
 
+// The canonical configuration is fixed per kernel build, so its writes are encoded at compile time. They skip the
+// hw_configure drains (start() leaves all three threads idle) and the REG_RMW mutex (each RMWCIB is atomic).
+template <std::uint32_t CfgAddr32, std::uint32_t Shamt, std::uint32_t Mask, std::uint32_t Val>
+inline void cfg_rmw()
+{
+    constexpr std::uint32_t data = Val << Shamt;
+    if constexpr ((Mask & 0xff) != 0)
+    {
+        TTI_RMWCIB0(Mask & 0xff, data & 0xff, CfgAddr32);
+    }
+    if constexpr (((Mask >> 8) & 0xff) != 0)
+    {
+        TTI_RMWCIB1((Mask >> 8) & 0xff, (data >> 8) & 0xff, CfgAddr32);
+    }
+    if constexpr (((Mask >> 16) & 0xff) != 0)
+    {
+        TTI_RMWCIB2((Mask >> 16) & 0xff, (data >> 16) & 0xff, CfgAddr32);
+    }
+    if constexpr (((Mask >> 24) & 0xff) != 0)
+    {
+        TTI_RMWCIB3((Mask >> 24) & 0xff, (data >> 24) & 0xff, CfgAddr32);
+    }
+}
+
+template <typename Fields>
+struct cfg_words
+{
+    std::uint32_t val[sizeof(Fields) / sizeof(std::uint32_t)];
+};
+
+// The register words of a configuration struct, folded at compile time.
+template <typename Fields>
+constexpr cfg_words<Fields> words_of(const Fields &fields)
+{
+    return __builtin_bit_cast(cfg_words<Fields>, fields);
+}
+
+inline volatile std::uint32_t tt_reg_ptr *bank0_cfg()
+{
+    return reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(TENSIX_CFG_BASE);
+}
+
+// ckernel_template(1, 1).program() without its mop_sync.
+inline void program_nop_mop()
+{
+    volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
+    mop_cfg[0]                      = 1;
+    mop_cfg[1]                      = 1;
+    mop_cfg[2]                      = TT_OP_NOP;
+    mop_cfg[3]                      = TT_OP_NOP;
+    mop_cfg[4]                      = TT_OP_NOP;
+    mop_cfg[5]                      = TT_OP_NOP;
+    mop_cfg[6]                      = TT_OP_NOP;
+    mop_cfg[7]                      = TT_OP_NOP;
+    mop_cfg[8]                      = TT_OP_NOP;
+}
+
 inline void select_cfg_state(const std::uint32_t state_id)
 {
     LLK_ASSERT(state_id <= 1, "Blackhole cleanup configuration state must be zero or one.");
@@ -101,8 +158,8 @@ inline void finish()
     static_assert(IS_TRISC_THREAD<thread_id>, "Hardware cleanup requires a TRISC thread.");
     LLK_ASSERT(cfg_state_id == 0, "Blackhole cleanup must exit with configuration state zero selected.");
 
-    // No thread may leave while buffered MOP / Tensix config work of another
-    // could overlap the caller's return into the next MicroOp.
+    // Do not hand off while buffered MOP / Tensix config work could overlap the
+    // next owner (or the caller's return into the next MicroOp).
     mop_sync();
     tensix_sync();
 
