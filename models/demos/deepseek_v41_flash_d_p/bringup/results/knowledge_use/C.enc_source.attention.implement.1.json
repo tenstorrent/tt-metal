@@ -1,0 +1,101 @@
+{
+ "overseer": [],
+ "used": [
+  {
+   "id": "DS41-18",
+   "how": "the compressed-layer attention keeps the window step's sparse_sdpa dtypes (high_precision + fp32_scores + bf16_probs, bf16 q / output, 512^-0.5 folded into q): TtSparseAttention subclasses TtWindowAttention (tt/sparse_attention.py)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-27",
+   "how": "sink passed as sink / 1 with the op scale 1.0 (the softmax scale folded into q), reused from tt/attention.py",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-18",
+   "how": "top-k ids mapped to table rows in fp32 and sent back as fp32 -> int32 -> bitcast uint32 so -1 stays the 0xFFFFFFFF sentinel (tt/sparse_attention.py:_topk_rows)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-17",
+   "how": "the window region (carry from the served cache + chunk, cache write) comes from TtWindowAttention._table / TtWindowCache unchanged",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-48",
+   "how": "the served compressed cache is in token units: the local slice [nb stripe, 256] is viewed as [nb stripe / 2, 512] compressed rows before the mesh gather; group j -> owner (2j / stripe) mod N",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-15",
+   "how": "q's RoPE stays the exact fp32 SFPU rope_heads, with interleave=True so q matches the stored (interleaved) compressed rows; output de-interleaved (new tt/rope.deinterleave_tail) before the inverse RoPE",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-28",
+   "how": "added attention to hooks DEVICE_STEPS['enc_source'] so the hybrid / contract test runs it",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "probes only as tests/ttnn/unit_tests/operations/ds41_sparse_attn/probes/probe_NNN.py",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-1",
+   "how": "explained the 'small' second-input miss: bf16 rounding of the attention output o flips 3.1 % of the fp8 values after it (rel 0.0329 on the CPU alone)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-16",
+   "how": "attributed the device's extra coherent shrink of o in the flat-softmax 'small' regime (-8.9e-4 vs the kernel model's -2.2e-4) to the FPU's in-tile partial-dot truncation in P@V; not fixable at normal settings (no split matmul)",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "K-31",
+   "evidence": "Fix says ttnn.bringup.sparse_sdpa(high_precision=True) has 'no sink' (and the components entry says it refuses attention_sink at sparse_sdpa_device_operation.cpp:132): out of date. The sdpa fork's INDEX.md row and CHANGELOG list 'sparse_sdpa high_precision with attention_sink'; sparse_sdpa_device_operation.cpp:126-133 only checks fp32 DEST and the q / kv dtypes; tt/attention.py:_sdpa and tt/sparse_attention.py call it with attention_sink and high_precision=True (C.swa.attention and this gate's golden check pass).",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "sparse_sdpa stops at the first 0xFFFFFFFF of an index row (sentinels must be a contiguous tail, sparse_sdpa_reader.cpp:9); a [window | top-k] list needs compaction for rows whose window is short (only in TtCSA.index_tables' docstring)",
+  "the component checks' second inputs (small, big, ...) get no official-arithmetic floor: a step whose official kernel rounds an internal value (DeepSeek sparse_attn's bf16 output before the fp8 q-dq) can miss the fixed 0.03 second-input floor at the reference's own precision (DS41-51)"
+ ],
+ "cited_only": [
+  "DS41-51"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.enc_source.attention",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T21:44:45",
+  "head": "5b4fecd976c",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.enc_source.attention.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/rope.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py",
+   "ttnn/ttnn/bringup/INDEX.md"
+  ]
+ }
+}
