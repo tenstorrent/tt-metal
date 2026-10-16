@@ -1,19 +1,20 @@
 # DeepSeek-V4.1-Flash on Blackhole Galaxy — tt-inference-server getting started
 
-Text generation (chat and completions) through an OpenAI-compatible vLLM server: 16 concurrent users, up to
-131,072 tokens of context (prompt + output), speculative decoding on (5 draft tokens per round), on-device
-sampling.
+Text generation (chat and completions, optionally with image input) through an OpenAI-compatible vLLM server. Three serving configurations, all with speculative decoding
+(5 draft tokens per round) and on-device sampling: 16 concurrent users with up to 131,072 tokens of context (the default), 16 users with up to 262,144 tokens, and 4 users with up
+to 1,048,576 tokens (see "Long context"). What changed in this release is in `RELEASE_NOTES.md`.
 
 ## Docker image
 
 | | |
 |---|---|
-| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-3dce07e-233b250` |
-| Size | 21.4 GB on disk (5.3 GB compressed), built 2026-10-14 |
+| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-799a223-ffd1a57` |
+| Size | 21.8 GB on disk (5.4 GB compressed), built 2026-10-16 |
 | Access | `docker run` pulls the image automatically on a new host. Pulling needs access to the `tenstorrent` packages on ghcr.io (check the digest with `docker image inspect <image> --format '{{.RepoDigests}}'`) |
-| tt-metal | `3dce07e379262731b410319f1cd4c90795d294e2` (branch `ssinghal/dsv4p1`; the routed-expert SwiGLU clamp, the multimodal (image input) processor port for vLLM 0.31, plus the guide-era assets and the GSM8K eval scripts) |
-| tt-inference-server | `233b250e85148bc25853786aff54c0949a994b76` (branch `ssinghal/dsv4p1`) |
-| vllm-tt-plugin | `6b9ef2ab6e23cbf86bdc9350eb2066f1adcef786` (branch `ssinghal/dsv4p1`; ported to vLLM 0.31, logprobs / structured-output requests no longer fail with HTTP 400) |
+| tt-metal | `799a223987c18909ced4bab280e4bccf673a73b0` (branch `ssinghal/dsv4p1`) |
+| tt-inference-server | `ffd1a57ceece25c02b668bbcc4682dba52dbd9da` (branch `ssinghal/dsv4p1`) |
+| vllm-tt-plugin | `8cb999ebf8579e0733e378d852bb2139f7cac064` (branch `ssinghal/dsv4p1`) |
+| How it was built | an overlay on the previous image (`0.24.0-3dce07e-233b250`): the compiled tt-metal and the Python environment are reused (no file outside `models/` differs in tt-metal between the two commits); `models/`, the tt-inference-server tree, the plugin package, `model_spec.json` and `BUILD_INFO` come from the shas above. `BUILD_INFO` in the image records them. |
 | vLLM | 0.31.0 (torch 2.11.0+cpu, transformers 5.12.1) |
 | Model | [`deepseek-ai/DeepSeek-V4.1-Flash`](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash) (476 GB of safetensors, 48 shards) |
 | Hardware | 1x Blackhole Galaxy (32 chips, 4x8 mesh) |
@@ -21,7 +22,7 @@ sampling.
 The image has no weights and no caches in it: the checkpoint, the converted-weight cache and the
 compiled-kernel cache are mounted from the host (step 3).
 
-What this build is configured for (the runtime spec in step 3 sets all of it):
+What this build is configured for (the runtime spec in step 3 sets all of it; the table shows the default 16-user spec, the other two are in "Long context"):
 
 | | |
 |---|---|
@@ -35,10 +36,47 @@ What this build is configured for (the runtime spec in step 3 sets all of it):
 
 ## Performance
 
-All numbers were measured on this image (`0.24.0-3dce07e-233b250`, vLLM 0.31.0), 16-user server above, GSM8K-style
-prompts of 1024 input tokens, 256 output tokens per request, `vllm bench serve` run by tt-inference-server's
-`benchmarks` workflow from the same image. "Greedy" is temperature 0; "sampled" is temperature 0.6, top-k 20,
+Method (all tables): GSM8K 8-shot prompts (about 700 tokens on average) with 256 output tokens per request, `vllm bench serve` run by tt-inference-server's
+`benchmarks` workflow from the same image as the server, a constant number of requests in flight. "Greedy" is temperature 0; "sampled" is temperature 0.6, top-k 20,
 top-p 0.95. TPOT and TTFT are the report means.
+
+### 16 users, 262,144-token context, image input on (this release)
+
+Image `0.24.0-799a223-ffd1a57`, vLLM 0.31.0, `assets/runtime_spec_b16_k5_262144_vision.json`, one persistent server (the sweeps ran after the functional tests, no restart):
+
+| Concurrent requests | Greedy TTFT | Greedy TPOT | Greedy tok/s/user | Sampled TTFT | Sampled TPOT | Sampled tok/s/user |
+|---|---|---|---|---|---|---|
+| 1 | 1.05 s | 26.4 ms | 37.8 | 1.09 s | 29.3 ms | 34.1 |
+| 2 | 1.26 s | 34.8 ms | 28.8 | 1.30 s | 35.2 ms | 28.4 |
+| 4 | 1.44 s | 36.1 ms | 27.7 | 1.40 s | 39.0 ms | 25.6 |
+| 8 | 1.74 s | 53.4 ms | 18.7 | 1.86 s | 52.2 ms | 19.2 |
+| 16 | 2.56 s | 71.0 ms | 14.1 | 2.63 s | 72.5 ms | 13.8 |
+
+Total output throughput (greedy): 32.8 / 50.0 / 94.4 / 120.7 / 189.4 tok/s at 1 / 2 / 4 / 8 / 16 requests.
+
+Compared with the table below (the previous image on the default 131,072-token spec, measured on other hosts and an earlier vLLM stack): TTFT is lower at every concurrency, TPOT is lower at 1, 4 and 16 requests and about 1 ms higher
+(inside the run-to-run noise of about 3-4 ms) at 2 and 8. The longer context and the loaded vision tower do not cost speed: TPOT follows the actual position, and the
+tower only runs for requests that carry images. The same server compared with the image before the two fixes of this release (RoPE per-row, scheduler limits), same host and spec:
+TPOT within noise (29.95 / 33.0 / 41.4 / 49.8 / 73.9 ms greedy against 26.4 / 34.8 / 36.1 / 53.4 / 71.0 ms).
+
+### 16 users, 131,072-token context, default spec (this release, no image input)
+
+Image `0.24.0-799a223-ffd1a57`, `assets/runtime_spec_b16_k5_131072.json`, same method, measured on the same host a few hours after the 262,144-token table above:
+
+| Concurrent requests | Greedy TTFT | Greedy TPOT | Greedy tok/s/user | Sampled TTFT | Sampled TPOT | Sampled tok/s/user |
+|---|---|---|---|---|---|---|
+| 1 | 1.03 s | 28.5 ms | 35.1 | 1.06 s | 28.0 ms | 35.8 |
+| 2 | 1.33 s | 32.2 ms | 31.1 | 1.25 s | 31.8 ms | 31.4 |
+| 4 | 1.38 s | 38.0 ms | 26.3 | 1.39 s | 37.5 ms | 26.6 |
+| 8 | 1.74 s | 49.1 ms | 20.3 | 1.80 s | 49.6 ms | 20.2 |
+| 16 | 2.40 s | 70.4 ms | 14.2 | 2.70 s | 68.0 ms | 14.7 |
+
+Total output throughput (greedy): 30.8 / 53.2 / 85.5 / 125.4 / 196.6 tok/s at 1 / 2 / 4 / 8 / 16 requests.
+
+Against the previous image's table below: TTFT is lower at every concurrency (1.03-2.40 s against 1.24-2.75 s), TPOT is lower at 2 to 16 requests (70.4 against 80.1 ms at 16) and 0.8 ms higher at one request, and the total throughput at 16 requests is 196.6 against 168.3 tok/s.
+The previous image's numbers were measured on other hosts, so part of the difference can be the hosts.
+
+### 16 users, 131,072-token context (previous image `0.24.0-3dce07e-233b250`, vLLM 0.31.0)
 
 | Concurrent requests | Greedy TTFT | Greedy TPOT | Greedy tok/s/user | Sampled TTFT | Sampled TPOT | Sampled tok/s/user |
 |---|---|---|---|---|---|---|
@@ -49,7 +87,7 @@ top-p 0.95. TPOT and TTFT are the report means.
 | 16 | 2.75 s | 80.1 ms | 12.5 | 2.96 s | 78.4 ms | 12.8 |
 
 Total output throughput (greedy): 30.9 / 50.0 / 72.4 / 121.4 / 168.3 tok/s at 1 / 2 / 4 / 8 / 16 requests.
-These are within noise of the previous image (vLLM 0.26): TPOT parity, no regression from vLLM 0.31.
+These are within noise of the image before it (vLLM 0.26): TPOT parity, no regression from vLLM 0.31.
 
 - **TPOT is a serving metric, not decode speed.** The benchmark keeps the number of requests in flight
   constant, so every finishing request is replaced by a new one, and that new request's prefill (about
@@ -83,6 +121,9 @@ Time from `docker run` until `GET /health` returns 200:
 | This image, both caches populated (16-user speculative server, 40,000-token context) | 14.0 min (`docker run` to `/health`) |
 | This image with the runtime spec of this guide (131,072-token context), weight cache populated, kernel cache from earlier runs on the host | 20.1 min (`docker run` 18:47:55, `/health` 19:07:59); 13.4 min on a repeat start of the same server (19:25:35 to 19:39:00) |
 | This image (vLLM 0.31) with the runtime spec of this guide, weight and kernel caches populated | 16.6-22 min over five starts on three hosts (first start on a host that had run another image: 20.2 min) |
+| Image `0.24.0-799a223-ffd1a57` with `assets/runtime_spec_b16_k5_131072.json` (16 users, 131,072 tokens), weight and kernel caches populated | 23.7 min (`docker run` 11:36:54, `/health` 12:00:35) |
+| Same image, `assets/runtime_spec_b16_k5_262144_vision.json` (16 users, 262,144 tokens, image input) | 24.7 min (09:03:44 to 09:28:26) |
+| Same image, `assets/runtime_spec_b4_k5_1048576.json` (4 users, 1,048,576 tokens) | 30.9 min (10:37:28 to 11:08:20): about 20 min for the model (40 layers and the Engram tables), 7 min for the speculative runner, 2 min for the warm-up and trace captures |
 | First start with nothing cached | not re-measured on this image; earlier first starts of the same weights took 60-90 min |
 
 Two caches make later starts fast; both are mounted in the `docker run` below:
@@ -309,25 +350,31 @@ answered correctly (arithmetic, a 20,000-token needle-in-a-haystack), GSM8K scor
 
 ### Request fields
 
+Checked against a live server of this image by `ctr2/serving_api_test.py`-style checks (23 of 23 passed at 16 users / 262,144 tokens; see "Tested on this image").
+
 | Field | Notes |
 |---|---|
-| `model` | `deepseek-ai/DeepSeek-V4.1-Flash` |
-| `max_tokens` | prompt + `max_tokens` must stay within 131,072 tokens |
-| `temperature`, `top_p`, `top_k` | sampled on the device; `temperature` 0 (or `top_k` 1) is greedy. The model card recommends temperature 1.0 and top-p 0.95. Top-k up to 32 takes the fastest path. |
-| `seed` | a seeded request gives the same output whatever slot or batch position it runs in |
-| `stop`, `stream` | work as usual |
-| `logprobs`, structured output | **not supported** with speculative decoding: the request is rejected with HTTP 400 and a message that says to drop the control or to run the server without speculative decoding |
+| `model` | `deepseek-ai/DeepSeek-V4.1-Flash`; an unknown name gets HTTP 404 (`NotFoundError`) |
+| `max_tokens` | prompt + `max_tokens` must stay within the server's `max_model_len`; a longer prompt, or a `max_tokens` above `max_model_len`, gets HTTP 400 with the limit in the message |
+| `temperature`, `top_p`, `top_k` | sampled on the device; `temperature` 0 (or `top_k` 1) is greedy (`top_k` 1 gave the same text as greedy). The model card recommends temperature 1.0 and top-p 0.95. Top-k up to 32 takes the fastest path. A negative `temperature` gets HTTP 400. |
+| `seed` | a seeded request gives the same output whatever slot or batch position it runs in (same seed twice: identical text; different seeds: different text) |
+| `stop`, `stream`, `stream_options.include_usage` | work as usual (`finish_reason` is `stop` / `length`, the stream ends with `[DONE]`, usage is sent when asked) |
+| `logprobs`, structured output | **not supported** with speculative decoding: the request is rejected with HTTP 400 and an OpenAI-style error body that says to drop the control or to run the server without speculative decoding |
 | `min_p`, `logit_bias` | **rejected** with HTTP 400 (`not yet supported with speculative decoding`) |
 | `presence_penalty`, `frequency_penalty`, `repetition_penalty` | accepted; per the server's own message these requests decode without speculation (slower) |
-| `n` | `n` 2 returned two choices in a test |
+| `n` | `n` 2 returns two choices |
+| `/v1/completions`, `/v1/models`, `/health` | work; `/health` stays 200 under overload and after a client disconnects mid-stream |
+| Images | up to 16 per prompt with the vision runtime specs (see "Image input"); more get HTTP 400 |
+
+More requests than `max_num_seqs` can be sent at once: the extra ones wait in vLLM's queue (tested with 4x the slot count, two waves, every answer correct).
 
 ## Image input (optional)
 
-The server can also take images in chat messages. This needs the vision runtime spec
-`assets/runtime_spec_b16_k5_131072_vision.json` instead of the text one (set `SPEC` to it in step 3; everything else in the
-launch is unchanged). It is the text spec plus `limit-mm-per-prompt {"image": 16}` (at most 16 images per request; a request with more images is refused with an OpenAI-style HTTP 400 error and the server keeps serving; an image is at most 1024 tokens, about 1302 x 1302 pixels),
-`mm-processor-cache-gb 0`, `chat-template-content-format openai`, `DSV41_VISION=1` and the modalities `text` + `image`.
-The vision tower costs extra device memory at start and a slightly longer start; text-only requests work as before.
+The server can also take images in chat messages. This needs a vision runtime spec instead of the text one (set `SPEC` to it in step 3; everything else in the
+launch is unchanged): `assets/runtime_spec_b16_k5_131072_vision.json` (16 users, 131,072 tokens), `assets/runtime_spec_b16_k5_262144_vision.json` (16 users, 262,144 tokens)
+or the 4-user long-context spec (see "Long context"). A vision spec is the text spec plus `limit-mm-per-prompt {"image": 16}`, `mm-processor-cache-gb 0`,
+`chat-template-content-format openai`, `DSV41_VISION=1` and the modalities `text` + `image`. The vision tower costs about 22 MB of device memory per DRAM bank
+(140 MiB of weights and about 40 MiB of input buffers per chip) and a slightly longer start; text-only requests work as before, with the same speed.
 
 ```bash
 IMG=$(base64 -w0 photo.png)
@@ -340,30 +387,76 @@ curl -s http://localhost:8000/v1/chat/completions -H "Content-Type: application/
 }'
 ```
 
-Checked on this image: text, one image (a red square labelled "CAT 42" was read correctly), two images, 4 image + 4 text requests at
-once, streaming, and a 16-concurrent stress run (48 of 48 number answers right, 47 of 48 colour answers; the miss was a reply cut by
-`max_tokens`).
-
-## 1M-token context (4 users, plain decode)
-
-`assets/runtime_spec_b4_1m_c512.json` configures a 1,048,576-token server for 4 concurrent users with plain decode (no speculation). Use it as `SPEC` in step 3; the
-launch is otherwise unchanged. It differs from the 131,072-token spec in: `max_model_len` 1,048,576, `max_num_seqs` 4, no `speculative_config`, `trace_region_size`
-800,000,000 (the tables of a 1M context leave no room for the 1.6 GB trace region), and `DSV41_VLLM_CHUNK` 512 (prefill chunk).
-
-What makes it fit (branch `ssinghal/dsv4p1`): compact RoPE position tables (768 B per position per chip, column-sharded from 262,144 positions), the prefill
-indexer's key FIFO, scores and visibility mask sharded over the 8 mesh columns (from 131,072 index entries; `DSV41_PIDX_SHARD`), dense prefill masks only for the layers that
-run the dense path, the kv-table FIFO shifted in place in row pieces (`DSV41_PF_FIFO_CHUNK`), and one extra eager chunk before the prefill trace capture
-(`DSV41_PF_PRECAPTURE_WARM`).
-
-Measured on one Galaxy (vLLM 0.31, 4 users, plain decode):
+Limits:
 
 | | |
 |---|---|
-| Server ready | 13 min (weight and kernel caches populated) |
-| Sanity requests | `17*23` -> 391, capital of France -> Paris |
-| 100,020-token prompt with a needle at the end | answered correctly (4817); prefill 163.8 s at chunk 512 (412 s at chunk 128) |
+| Images per prompt | **16** (`--limit-mm-per-prompt`; the model card sets no limit of its own). A request with more is refused with an OpenAI-style HTTP 400 error and the server keeps serving: `{"error": {"message": "At most 16 image(s) may be provided in one prompt. (parameter=image)", "type": "BadRequestError", "param": "image", "code": 400}}` |
+| Size of one image | at most 1,024 tokens in the model's input (`max_image_tokens`): a 31 x 31 token grid, one token per 42 x 42 pixels, about 1302 x 1302 pixels (8,649 ViT patches of 14 x 14); larger images are resized, keeping the aspect ratio. The smallest image is about 544 x 544 pixels (184 tokens). |
+| Tokens of 16 images | 16 small images (512 x 384) are about 3,150 prompt tokens, a full-size image about 1,000 |
 
-Other (users x context) points on the same tree, same method (vLLM 0.31, plain decode, chunk 512, trace region 800,000,000, 100,020-token needle at the end, 391 / Paris sanity):
+Checked on this image (16 users, 262,144 tokens, speculative decoding, vision on): text only; one image (a red square labelled "CAT 42" read correctly); two images; 4 image + 4 text requests at
+once; streaming; 16 numbered images in one prompt (all 16 labels returned in order); one 2400 x 1800 image resized to 1,019 tokens and answered correctly; 17 images refused with the 400 above and the server
+still serving; and a 16-concurrent stress run (number exact in 48 of 48 images, both colours right in 48 of 48).
+
+## Long context
+
+Two more serving configurations ship with this image. All three share one budget: about 1M tokens of context per mesh row (4 rows), users x context per row.
+Use the spec as `SPEC` in step 3; the launch is otherwise unchanged. Startup takes 25-31 minutes with both caches populated (table in "Startup time").
+
+| Configuration | Runtime spec | Users | Context | Speculative decoding | Image input |
+|---|---|---|---|---|---|
+| Default | `assets/runtime_spec_b16_k5_131072.json` (text), `assets/runtime_spec_b16_k5_131072_vision.json` | 16 | 131,072 | k = 5 | with the vision spec |
+| Long context, 16 users | `assets/runtime_spec_b16_k5_262144_vision.json` | 16 | 262,144 | k = 5 | yes (up to 16 images per prompt) |
+| Long context, 4 users | `assets/runtime_spec_b4_k5_1048576.json` | 4 | 1,048,576 | k = 5 | **no** (see below) |
+
+What differs from the default spec: `max_model_len` and `max_num_seqs`, `DSV41_VLLM_CHUNK` 512 (prefill chunk), a smaller `trace_region_size` (0.8e9 at 262,144 tokens, 0.65e9 at 1,048,576: the tables of a long context leave no room for the 1.6e9 default),
+and `DSV41_SPEC_MAX_CTX=262144` in the 16-user long-context spec (the measured context cap of speculative decoding at 16 users is 131,584 unless you set it; `DSV41_SPEC_MAX_CTX` is the final word, the vLLM-side guard follows it).
+Above 131,584 tokens the speculative verify step uses the matmul indexer backend (forced at build).
+
+What makes a long context fit (branch `ssinghal/dsv4p1`): compact RoPE position tables (768 B per position per chip, column-sharded from 262,144 positions), the prefill
+indexer's key FIFO, scores and visibility mask sharded over the 8 mesh columns (from 131,072 index entries; `DSV41_PIDX_SHARD`), dense prefill masks only for the layers that
+run the dense path, the kv-table FIFO shifted in place in row pieces (`DSV41_PF_FIFO_CHUNK`), one extra eager step before each trace capture (prefill, decode, spec), and the index-key hand-off
+and the speculative score computed in pieces (`DSV41_KEY_EXPORT_PIECE`, `DSV41_SPEC_SCORE_PIECE`). The prefill kv table is still replicated over the mesh columns.
+
+### 16 users, 262,144 tokens, with image input
+
+Tested on this image with `assets/runtime_spec_b16_k5_262144_vision.json` on one persistent server: sanity, a 20,020-token prompt (4817 found in 23.5 s), a 100,020-token needle at the end and at the start of the prompt (4817 both times, prefill 115.7 s and 117.1 s at chunk 512),
+the image checks of "Image input", 64 concurrent requests on the 16 slots (two waves, all correct, health 200), 23 of 23 API checks. Speed: the table in "Performance".
+
+### 4 users, 1,048,576 tokens (text)
+
+Tested on this image with `assets/runtime_spec_b4_k5_1048576.json` (text only, speculative decoding k = 5) on one persistent server: sanity, a 20,020-token prompt (4817 in 32.3 s), a 100,020-token needle at the end and at the start of the prompt (4817 both times,
+prefill 157.7 s and 159.2 s at chunk 512; a prompt that long is a long first token), 16 concurrent requests on the 4 slots (two waves, all correct), 23 of 23 API checks.
+
+| Concurrent requests | Greedy TTFT | Greedy TPOT | Greedy tok/s/user | Sampled TTFT | Sampled TPOT | Sampled tok/s/user |
+|---|---|---|---|---|---|---|
+| 1 | 1.49 s | 29.8 ms | 33.5 | 1.51 s | 30.9 ms | 32.4 |
+| 2 | 1.74 s | 35.2 ms | 28.4 | 1.78 s | 39.6 ms | 25.3 |
+| 4 | 1.86 s | 45.5 ms | 22.0 | 1.99 s | 44.8 ms | 22.3 |
+
+Total output throughput (greedy): 28.1 / 47.3 / 74.5 tok/s at 1 / 2 / 4 requests.
+
+The 1M server is slower than the 262,144-token one at the same concurrency (TPOT 45.5 against 36.1 ms at 4 requests, TTFT about 0.4 s higher): every decode step and every prefill chunk scores the index entries of a 1M context.
+Speculative decoding runs at this context (3.31 accepted drafts per round, 1.81x plain decode in the 4-user demo).
+
+**Image input does not fit at 4 users and about 1M tokens.** With the vision tower loaded (about 22 MB per DRAM bank), the server runs out of DRAM during the warm-up of the prefill trace: a 160 MiB buffer needs one contiguous block of 21 MB per bank and the largest block left is 17-19 MB (79-108 MB per bank are free in total, fragmented around the persistent tables).
+This happened at 1,048,576 tokens with chunk 512 and chunk 256, and at 1,000,448 tokens. Image input is available with 16 users up to 262,144 tokens (above) and with 4 users up to 524,288 tokens (next section).
+
+### 4 users, 524,288 tokens, with image input
+
+`assets/runtime_spec_b4_k5_524288_vision.json` (4 users, 524,288 tokens, speculative decoding k = 5, image input, trace region 0.65e9). Tested on this image on one persistent server: ready 26 minutes after the start (warm-up 123 s), sanity and a 20,020-token prompt (4817), a 100,020-token needle at the end and at the start of the prompt (4817 both times, prefill 132.4 s and 134.0 s),
+all the image checks of "Image input" (16 images in one prompt, the 17-image HTTP 400, 48 of 48 images in the stress run), 16 concurrent requests on the 4 slots (two waves, all correct), 23 of 23 API checks, and the sweeps:
+
+| Concurrent requests | Greedy TTFT | Greedy TPOT | Greedy tok/s/user | Sampled TTFT | Sampled TPOT | Sampled tok/s/user |
+|---|---|---|---|---|---|---|
+| 1 | 1.26 s | 31.8 ms | 31.4 | 1.27 s | 31.3 ms | 31.9 |
+| 2 | 1.61 s | 33.9 ms | 29.5 | 1.79 s | 33.3 ms | 30.0 |
+| 4 | 1.79 s | 40.4 ms | 24.7 | 1.67 s | 43.5 ms | 23.0 |
+
+Total output throughput (greedy): 27.3 / 48.2 / 81.2 tok/s at 1 / 2 / 4 requests.
+
+Other (users x context) points measured on the same code (plain decode, chunk 512, trace region 800,000,000, 100,020-token needle at the end, 391 / Paris sanity; earlier tree, not re-run on this image):
 
 | Users | Context | Tokens per mesh row | Ready | Needle (4817) prefill | |
 |---|---|---|---|---|---|
@@ -372,10 +465,9 @@ Other (users x context) points on the same tree, same method (vLLM 0.31, plain d
 | 16 | 262,144 | 1,048,576 | 27 min | 121 s | works |
 | 8 | 1,048,576 | 2,097,152 | - | - | out of DRAM during warm-up (32 MB free per bank at a 128 MiB allocation) |
 
-Users times context per mesh row is the budget that fits (the paged KV pool and the per-user prefill tables scale with it); the ready times of the later rows include three hosts reading the Engram tables from NFS at once. A 2-users-per-row decode at a 262,144-slot index needs the per-user ranking of the decode indexer (`SELECT_CONCAT_BYTES`): without it the score rows of two users do not fit a core's L1.
+Users times context per mesh row is the budget that fits (the paged KV pool and the per-user prefill tables scale with it). A 2-users-per-row decode at a 262,144-slot index needs the per-user ranking of the decode indexer (`SELECT_CONCAT_BYTES`): without it the score rows of two users do not fit a core's L1.
 
-Not measured: a prompt close to 1,000,000 tokens (estimated ~12 min of prefill from the 100k run), GSM8K accuracy and the speed table at this configuration, speculative
-decoding (it is off: its draft state does not fit at this context). The prefill kv table is still replicated over the mesh columns.
+Not measured: a prompt close to 1,000,000 tokens (estimated ~12 min of prefill from the 100k run).
 
 ## Run the GSM8K evaluation
 
@@ -414,10 +506,21 @@ IMAGE=$IMAGE CKPT=$CKPT SPEC=$PWD/assets/runtime_spec_b16_k5_131072.json STATE=$
   first-run setup (about 15 minutes measured: managed Python, the workflow environment and the dataset; later runs skip it).
 - **Quick check.** Extra arguments go to `run.py`: `./assets/run_gsm8k_eval.sh --limit-samples-mode smoke-test` runs 8 questions.
 
-Results with this protocol on this image (16 users, speculative decoding): **96.29 %** with a 40,000-token context (the same
-number from a host server and from the container run) and **95.45 %** with this guide's 131,072-token server run through
-`assets/run_gsm8k_eval.sh`; 95.75 ± 0.56 % on the previous image. Sampling at temperature 1.0 makes a
-run differ from the next by about half a percent, so compare scores within that margin.
+Results with this protocol on this image (`0.24.0-799a223-ffd1a57`, speculative decoding k = 5, flexible-extract in percent, all 1319 questions, the standard error is about 0.6):
+
+| Server | Concurrency | Flexible-extract | Strict-match |
+|---|---|---|---|
+| 16 users, 131,072 tokens (`assets/runtime_spec_b16_k5_131072.json`) | 16 | **95.22** | 73.9 |
+| 16 users, 131,072 tokens, image input on | 16 | **95.38** | 72.5 |
+| 4 users, 1,048,576 tokens (`assets/runtime_spec_b4_k5_1048576.json`) | 4 | **94.92** | 65.1 |
+| 16 users, 262,144 tokens, image input on (`assets/runtime_spec_b16_k5_262144_vision.json`) | 16 | **93.56** and **93.48** (two runs on the same server) | 70.1 and 70.5 |
+
+All pass the workflow's check (within 5 % of the model card's 93.0). The previous image scored 95.45 % (95.75 / 95.83 / 96.29 on earlier images); sampling at temperature 1.0 makes a run differ from the next by about half a percent.
+**The 16-user 262,144-token server scores about 2 points lower than the other configurations** (two runs, 93.5 each, about 3 standard errors below 95.4), so treat 262,144 tokens at 16 users as a configuration that has not reached the accuracy of the default.
+Checks made on this image to find the cause (16 users, text unless stated, same method): vision on or off makes no difference (131,072 tokens: 95.38 % with, 95.22 % without; 262,144 tokens: 93.5 % with, 93.18 % without and with the column-sharded RoPE tables switched off);
+the new code is not the cause at the default context (95.22 % at 131,072 tokens on this image); 163,840 tokens scored 94.54 %. The cause is **not identified yet**. The 262,144-token server passes every functional test (a code hidden in a 100,020-token prompt is found at both ends, 23 of 23 API checks, overload, image checks) and its speed is the same as the default's;
+where GSM8K-level accuracy matters, serve the default 131,072-token spec (or the 4-user 1,048,576-token spec, 94.92 %), and treat the 16-user 262,144-token configuration as one that scores about 2 points lower until this is resolved.
+
 
 ## Notes
 
