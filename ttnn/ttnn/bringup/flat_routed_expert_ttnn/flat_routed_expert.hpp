@@ -8,6 +8,7 @@
 #include <optional>
 
 #include "device/flat_routed_expert_plan.hpp"
+#include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/global_semaphore.hpp>
 
@@ -74,6 +75,38 @@ ttnn::Tensor flat_combine_overlap(
     bool h_bf16 = false,
     bool y_row_major = true,
     const std::optional<ttnn::Tensor>& y_out = std::nullopt);
+
+// The flat routed expert with another op's programs appended, one program per chip (device/
+// flat_with_program_device_operation.hpp): the flat expert's arguments as for flat_routed_expert, plus the caller's
+// arena (persistent, over the flat expert's cores and the other op's cells, >= the plan's arena_tiles * 32 rows per
+// core) and y ([rows, H] bf16 ROW_MAJOR, DRAM), the other op's MeshProgramDescriptor (`extra_key` identifies it for
+// the program cache), and where the y writers report each local expert: counts[e] (cumulative, +1 per writer and
+// call) at `counts_addr` on the logical `collector` core; `writers` is the number of y writers the caller expects.
+// Returns y.
+ttnn::Tensor flat_routed_expert_with_program(
+    const ttnn::Tensor& x,
+    const ttnn::Tensor& counts,
+    const ttnn::Tensor& regions,
+    const ttnn::Tensor& global_expert_ids,
+    const ttnn::Tensor& gate_up_weights,
+    const ttnn::Tensor& down_weights,
+    const std::optional<ttnn::Tensor>& reader_down_weights,
+    const ttnn::Tensor& done_words,
+    uint32_t intermediate,
+    uint32_t max_tokens_per_expert,
+    const ttnn::Tensor& arena,
+    const ttnn::Tensor& y,
+    const tt::tt_metal::experimental::MeshProgramDescriptor& extra,
+    uint64_t extra_key,
+    const tt::tt_metal::CoreCoord& collector,
+    uint32_t counts_addr,
+    uint32_t writers,
+    uint32_t activation,
+    uint32_t pin,
+    const std::optional<ttnn::Tensor>& token_index = std::nullopt,
+    bool down_fp32 = false,
+    bool x_bf16 = false,
+    bool h_bf16 = false);
 
 // The plan for a device / config (cached): what the weight layout and the done words need.
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(

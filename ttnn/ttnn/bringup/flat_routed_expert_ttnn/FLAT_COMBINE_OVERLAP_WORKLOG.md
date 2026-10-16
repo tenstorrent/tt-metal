@@ -664,3 +664,28 @@ baseline), `FLAT_CMB_ITERS`, `FLAT_CMB_LOG`, `TT_CMBF2D_IDLE`, `CMBF2D_RD_VC` / 
 `MIMO_FL_RD_SAMECOL`, `MIMO_FL_XDOWN`, `MIMO_FL_ND`, probes `MIMO_FL_W_NOREAD`, `MIMO_FL_XRD_SKIP`,
 `MIMO_FL_CMB_EARLY` (garbage output, perf only). Profile: `TT_METAL_DEVICE_PROFILER=1
 TT_METAL_PROFILER_MID_RUN_DUMP=1`, then `cmb_timeline.py <csv> <run group>` / `cmb_split.py`.
+
+## Flat expert + router-forwarded level-1 combine, one program per chip (2026-10-16, bh-lb-09 LoudBox 2x4 FABRIC_2D, 200G, 12x10 grid)
+
+What: `ttnn.bringup.flat_routed_expert_with_program` (device/flat_with_program_device_operation.cpp) builds the flat
+expert's program per chip (DRISC on, as standalone) and appends another op's MeshProgramDescriptor; the flat y writers
+report each local expert (se_cmb_done.hpp, slot order, cumulative counts, no go handshake: SE_CMB_NO_GO) to a
+collector core. The combine is `ttnn/ttnn/bringup/combine_rf` (port of tt-metal-dispatch's sparse_combine_rf: rows
+injected once as multi-hop 2D unicasts, the routers relay, home accumulators in L1) on the cells the flat plan leaves
+free (K3: 24 cells: row 8, most of row 9, 4 scattered; 9 port cells over the chips + 15 accumulators), its state, rings
+(depth 4) and CBs inside the flat expert's arena, which the caller now owns (persistent, zeroed once). Port readers read
+an expert's rows from y once its count covers the call; accumulators take their local rows as experts finish,
+interleaved with the rings.
+Test: models/demos/deepseek_v3_d_p/tests/perf/scratch_flat_combine_rf.py: K3 per-chip load (56 local experts x 8 chips,
+top-16, 320 home tokens/chip, ~5120 rows/chip, latent 3584, I 3072, bfp4, one random expert shared, FC_WEIGHTS=real);
+the first fused call checked against the sum of the y rows read back (y zeroed before). Device time, slowest chip,
+median of 10.
+| routing | flat alone | combine alone | serial | fused | combine hidden | fused / flat |
+| uniform | 2462 | 1013 | 3476 | 2674 | 79% | 1.086 |
+| Zipf spread 1.2 | 2730 | 1110 | 3840 | 3101 | 67% | 1.136 |
+| Zipf packed 1.2 | 5875 | 2422 | 8297 | 6106 | 90% | 1.039 |
+All exact (worst token 1.74-1.76e-3, bf16 rounding). Bugs on the way: (1) the Python build appended CBs to
+`program.cbs`, a copy through the binding: no CBs at all (kernel groups' local_cb_mask 0, every first reserve blocks;
+FLAT_WP_LOG=1 logs the merged program's kernel groups); (2) credit arrays for 15 accumulators were not 16-byte aligned.
+Next: where the remaining 4-14% goes (the tail after the last expert vs the flat slowed by the combine's NoC traffic),
+entry-order reporting instead of slot order, the L1 hand-off (no y writes).

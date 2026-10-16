@@ -87,6 +87,8 @@ nb::dict plan_dict(
     d["gu"] = cores(p->gu);
     d["relays"] = cores(p->relays);
     d["down"] = cores(p->down);
+    d["gu_idle"] = cores(p->gu_idle);
+    d["arena_cores"] = cores(p->arena_cores());
     {  // the wiring, for NoC models: reader tails (reader, chain tail), down chains (down -> successor)
         nb::list rdn, succ;
         for (const auto& [r, t] : p->rdn) {
@@ -209,6 +211,40 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("h_bf16") = false,
         nb::arg("y_row_major") = true,
         nb::arg("y_out") = nb::none());
+    ttnn::bind_function<"flat_routed_expert_with_program", "ttnn.bringup.">(
+        mod,
+        R"doc(
+        The flat routed expert with another op's programs appended, one program per chip: the flat expert's arguments
+        as for flat_routed_expert, plus the caller's persistent arena (over the flat expert's cores and the other op's
+        cells) and y ([rows, H] bf16 ROW_MAJOR, DRAM), the other op's MeshProgramDescriptor (extra_key: its cache key),
+        and where the y writers report each local expert (counts[e] += 1 per writer and call at counts_addr on the
+        logical collector core; writers: the expected writer count). Returns y.
+        )doc",
+        &fre::flat_routed_expert_with_program,
+        nb::arg("dispatched_buffer").noconvert(),
+        nb::arg("expert_token_counts").noconvert(),
+        nb::arg("expert_region_offsets").noconvert(),
+        nb::arg("global_expert_ids").noconvert(),
+        nb::arg("gate_up_weights").noconvert(),
+        nb::arg("down_weights").noconvert(),
+        nb::arg("reader_down_weights") = nb::none(),
+        nb::arg("done_words").noconvert(),
+        nb::arg("intermediate"),
+        nb::arg("max_tokens_per_expert"),
+        nb::kw_only(),
+        nb::arg("arena").noconvert(),
+        nb::arg("y").noconvert(),
+        nb::arg("extra"),
+        nb::arg("extra_key"),
+        nb::arg("collector"),
+        nb::arg("counts_addr"),
+        nb::arg("writers"),
+        nb::arg("activation") = 0,
+        nb::arg("pin") = 1,
+        nb::arg("token_index") = nb::none(),
+        nb::arg("down_fp32") = false,
+        nb::arg("x_bf16") = false,
+        nb::arg("h_bf16") = false);
     mod.def(
         "flat_routed_expert_plan",
         &plan_dict,

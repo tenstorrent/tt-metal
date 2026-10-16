@@ -9,6 +9,7 @@ target_include_directories(ttnn_op_bringup_flat_routed_expert_ttnn PRIVATE ${Fix
 # DRISC mode (device/flat_drisc.cpp) launches DRAM-core programs through tt_metal internals (slow dispatch, HAL)
 set_source_files_properties(
     device/flat_drisc.cpp
+    device/flat_with_program_device_operation.cpp
     PROPERTIES
         INCLUDE_DIRECTORIES
             "$<TARGET_PROPERTY:tt_metal,INCLUDE_DIRECTORIES>"
@@ -42,6 +43,7 @@ target_sources(
     PRIVATE
         device/flat_routed_expert_device_operation.cpp
         device/flat_combine_overlap_device_operation.cpp
+        device/flat_with_program_device_operation.cpp
         device/flat_drisc.cpp
         device/flat_routed_expert_plan.cpp
         device/flat_routed_expert_program_factory.cpp

@@ -286,6 +286,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         return args;
     };
     Defines cmb_def = cfg.cmb_rt ? Defines{{"SE_CMB_DONE_RT", std::to_string(cfg.cmb_rt)}} : Defines{};
+    if (cfg.cmb_rt && std::getenv("MIMO_FL_CMB_NO_GO")) {  // (flat_with_program: cumulative counts, no go)
+        cmb_def["SE_CMB_NO_GO"] = "1";
+    }
     if (cfg.cmb_rt && std::getenv("MIMO_FL_CMB_EARLY")) {  // (perf probe: combine released at launch, garbage)
         cmb_def["SE_CMB_EARLY"] = "1";
     }
