@@ -375,6 +375,7 @@ manifest::Arch describe_arch(const tt::tt_metal::Hal& hal, const PacketHeaderCon
                         : std::nullopt,
             },
         .types = std::move(types),
+        .unions = layout::described_union_types(),
     };
 }
 

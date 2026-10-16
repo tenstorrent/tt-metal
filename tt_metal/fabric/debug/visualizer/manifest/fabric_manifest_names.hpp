@@ -83,8 +83,10 @@ inline std::string router_key(eth_chan_directions direction, routing_plane_id_t 
 // The size in bytes of one of a type's elements.
 inline uint32_t element_size(const layout::Type& type) { return type.count == 0 ? type.size : type.size / type.count; }
 
-// The prefixes of a schema that names a struct in the arch's types or an enum in enums, before the type's name.
+// The prefixes of a schema that names a struct or a union in the arch's types or an enum in enums, before the type's
+// name.
 inline constexpr std::string_view k_struct_schema = "struct:";
+inline constexpr std::string_view k_union_schema = "union:";
 inline constexpr std::string_view k_enum_schema = "enum:";
 
 // The manifest's spelling of a type's element, which L1 contents and type layouts both use. An element carries no
@@ -102,6 +104,8 @@ inline std::string schema_name(const layout::Type& type) {
                 return fmt::format("{}{}", k_enum_schema, e.name);
             } else if constexpr (std::is_same_v<E, element::Struct>) {
                 return fmt::format("{}{}", k_struct_schema, e.name);
+            } else if constexpr (std::is_same_v<E, element::Union>) {
+                return fmt::format("{}{}", k_union_schema, e.name);
             } else if constexpr (std::is_same_v<E, element::Packed>) {
                 return fmt::format("packed:{}", e.table);
             } else if constexpr (std::is_same_v<E, element::Bytes>) {

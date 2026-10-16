@@ -8,12 +8,14 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <type_traits>
 #include <variant>
 #include <vector>
 
+#include <enchantum/enchantum.hpp>
 #include <enchantum/type_name.hpp>
 
 namespace tt::tt_fabric::layout {
@@ -41,6 +43,15 @@ struct Struct {
     std::string_view name;
     constexpr bool operator==(const Struct&) const = default;
 };
+// Tagged union.
+struct Union {
+    // The union type name
+    std::string_view name;
+    // The name of the enclosing struct's member that holds the tag. The tag
+    // represents the union's member that holds the bytes.
+    std::string_view tag;
+    constexpr bool operator==(const Union&) const = default;
+};
 // Raw bytes.
 struct Bytes {
     constexpr bool operator==(const Bytes&) const = default;
@@ -59,8 +70,15 @@ struct Packed {
 
 }  // namespace element
 
-using Element = std::
-    variant<element::Uint, element::Int, element::Enum, element::Struct, element::Bytes, element::Pad, element::Packed>;
+using Element = std::variant<
+    element::Uint,
+    element::Int,
+    element::Enum,
+    element::Struct,
+    element::Union,
+    element::Bytes,
+    element::Pad,
+    element::Packed>;
 
 // One element, or `count` of them. Examples:
 // - uint16_t counts[2]:         {element: Uint, size: 4, count: 2}
@@ -93,6 +111,20 @@ struct StructType {
     std::vector<Member> members;
 };
 
+// One member of a tagged union, and the name of the tag enumerator that picks it.
+struct UnionMember {
+    Member member;
+    std::optional<std::string_view> tag_value;
+};
+
+// A tagged union's name and size, the enum its tag holds, and its members, which all start at offset 0.
+struct UnionType {
+    std::string_view name;
+    uint32_t size = 0;
+    std::string_view tag_enum;
+    std::vector<UnionMember> members;
+};
+
 // Each described struct specializes StructLayout<T> with its member list. There is no primary definition, so if a
 // member of struct A is itself a struct B with no StructLayout, A's member list fails to compile in type_of().
 // B's StructLayout must come before A's.
@@ -103,6 +135,19 @@ struct StructLayout;
 // A struct is described if it has a StructLayout specialization.
 template <typename T>
 concept Described = requires { StructLayout<T>::members; };
+
+// Each described union specializes UnionLayout<U> with its tag enum, `using Tag = ...`, and an array named members of
+// UnionMember, built with LAYOUT_UNION_MEMBER and LAYOUT_UNION_DEFAULT. Like StructLayout, it has no primary
+// definition, and each member's type needs a StructLayout before it.
+template <typename U>
+struct UnionLayout;
+
+// A union is described if it has a UnionLayout specialization.
+template <typename U>
+concept DescribedUnion = requires {
+    typename UnionLayout<U>::Tag;
+    UnionLayout<U>::members;
+};
 
 namespace detail {
 
@@ -124,7 +169,23 @@ constexpr std::string_view struct_name() {
     }
 }
 
-// The Element for one element of type T: an integer, an enum or a described struct.
+// A described union's name
+template <typename U>
+constexpr std::string_view union_name() {
+    if constexpr (requires { UnionLayout<U>::name; }) {
+        return UnionLayout<U>::name;
+    } else {
+        return enchantum::type_name<U>;
+    }
+}
+
+// The name of tag_value, an enumerator of union U's Tag, or empty when tag_value is no enumerator.
+template <typename U>
+constexpr std::string_view tag_value_name(typename UnionLayout<U>::Tag tag_value) {
+    return enchantum::to_string(tag_value);
+}
+
+// The Element for one element of type T.
 template <typename T>
 constexpr Element element_of() {
     static_assert(
@@ -137,6 +198,8 @@ constexpr Element element_of() {
         } else {
             return element::Uint{};
         }
+    } else if constexpr (std::is_union_v<T>) { /* a union needs its tag, which only the enclosing struct knows */
+        static_assert(!sizeof(T*), "a union member needs LAYOUT_TAGGED_UNION, or LAYOUT_BYTES when nothing tags it");
     } else if constexpr (Described<T>) { /* defined struct type, via StructLayout<T> */
         return element::Struct{struct_name<T>()};
     } else { /* always fails if we get here */
@@ -188,6 +251,38 @@ constexpr bool validate_members(std::span<const Member> members, std::size_t siz
 template <typename T, std::size_t N>
 constexpr bool validate_struct_members(const std::array<Member, N>& members) {
     return validate_members(members, sizeof(T));
+}
+
+// Ensures decode can read union U from its members: each starts at 0, the widest fills the union, at most one is the
+// default, each tag value a member lists names an enumerator of UnionLayout<U>::Tag, and every enumerator picks
+// exactly one member, the one that lists it or else the default.
+template <typename U, std::size_t N>
+constexpr bool validate_union_members(const std::array<UnionMember, N>& members) {
+    static_assert(std::is_union_v<U>, "validate_union_members checks a union");
+    constexpr auto& tag_names = enchantum::names<typename UnionLayout<U>::Tag>;
+    uint32_t widest = 0;
+    std::size_t defaults = 0;
+    for (const auto& [member, tag_value] : members) {
+        if (member.offset != 0) {
+            return false;
+        }
+        widest = std::max(widest, member.type.size);
+        if (!tag_value.has_value()) {
+            ++defaults;
+        } else if (std::ranges::find(tag_names, *tag_value) == tag_names.end()) {
+            return false;
+        }
+    }
+    if (widest != sizeof(U) || defaults > 1) {
+        return false;
+    }
+    for (const std::string_view tag : tag_names) {
+        const auto listed = std::ranges::count(members, std::optional(tag), &UnionMember::tag_value);
+        if (listed > 1 || (listed == 0 && defaults == 0)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Member lists joined in order, for layouts that share a group of members.
@@ -294,6 +389,17 @@ inline constexpr std::string_view template_name{
         #member, offsetof(T, member), {::tt::tt_fabric::layout::element::Pad{}, sizeof(T::member), 0} \
     }
 
+// Layout of the padding the compiler adds after T's last member, last_member, which has no name to list. A member
+// added after last_member and not listed reads as this padding, so prefer a named pad member where adding one to T
+// leaves the code that uses T unchanged.
+#define LAYOUT_TAIL_PAD(T, last_member)                                                          \
+    [] {                                                                                         \
+        constexpr uint32_t end = offsetof(T, last_member) + sizeof(T::last_member);              \
+        static_assert(sizeof(T) > end, "LAYOUT_TAIL_PAD needs padding after " #last_member);     \
+        return ::tt::tt_fabric::layout::Member{                                                  \
+            "tail_padding", end, {::tt::tt_fabric::layout::element::Pad{}, sizeof(T) - end, 0}}; \
+    }()
+
 // Layout of a packed table member, whose type states its entry width as BITS_PER_COMPRESSED_ENTRY. `table` names the
 // format, which is used as a key by decode to find the binding function that reads the entries.
 #define LAYOUT_PACKED(T, member, table)                                                               \
@@ -315,3 +421,31 @@ inline constexpr std::string_view template_name{
     ::tt::tt_fabric::layout::Member {                                                                   \
         #member, offsetof(T, member), {::tt::tt_fabric::layout::element::Bytes{}, sizeof(T::member), 0} \
     }
+
+// Layout of union U's member, picked when the tag holds tag_value, an enumerator of UnionLayout<U>::Tag.
+#define LAYOUT_UNION_MEMBER(U, member, tag_value)                                               \
+    ::tt::tt_fabric::layout::UnionMember {                                                      \
+        LAYOUT_MEMBER(U, member), ::tt::tt_fabric::layout::detail::tag_value_name<U>(tag_value) \
+    }
+
+// Layout of union U's default member, picked by every tag value no other member lists.
+#define LAYOUT_UNION_DEFAULT(U, member) \
+    ::tt::tt_fabric::layout::UnionMember { LAYOUT_MEMBER(U, member), std::nullopt }
+
+// Layout of T's member, a described union whose member is picked by T's tag_member. tag_member must hold the union's
+// Tag enum, so decode can read it as one.
+#define LAYOUT_TAGGED_UNION(T, member, tag_member)                                                                   \
+    [] {                                                                                                             \
+        using U = decltype(T::member);                                                                               \
+        static_assert(                                                                                               \
+            std::is_same_v<                                                                                          \
+                std::remove_cv_t<decltype(T::tag_member)>,                                                           \
+                typename ::tt::tt_fabric::layout::UnionLayout<U>::Tag>,                                              \
+            "a tagged union's tag member must hold the Tag enum of the union's UnionLayout");                        \
+        return ::tt::tt_fabric::layout::Member{                                                                      \
+            #member,                                                                                                 \
+            offsetof(T, member),                                                                                     \
+            {::tt::tt_fabric::layout::element::Union{::tt::tt_fabric::layout::detail::union_name<U>(), #tag_member}, \
+             sizeof(U),                                                                                              \
+             0}};                                                                                                    \
+    }()

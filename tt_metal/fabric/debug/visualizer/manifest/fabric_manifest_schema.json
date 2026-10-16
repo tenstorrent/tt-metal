@@ -45,7 +45,7 @@
     "channel_status": { "enum": ["active", "vc_not_serviced", "mux", "trimmed"] },
     "schema": {
       "type": "string",
-      "pattern": "^([ui](8|16|32|64)|bytes|pad|struct:[A-Za-z_][A-Za-z0-9_]*(<([0-9]+|true|false)(,([0-9]+|true|false))*>)?|enum:[A-Za-z_][A-Za-z0-9_]*|packed:[a-z0-9_]+)$"
+      "pattern": "^([ui](8|16|32|64)|bytes|pad|struct:[A-Za-z_][A-Za-z0-9_]*(<([0-9]+|true|false)(,([0-9]+|true|false))*>)?|union:[A-Za-z_][A-Za-z0-9_]*|enum:[A-Za-z_][A-Za-z0-9_]*|packed:[a-z0-9_]+)$"
     },
 
     "run": {
@@ -145,6 +145,55 @@
       "required": ["stream_id", "register", "schema"]
     },
     "stream": { "$ref": "#/$defs/stream_keys", "unevaluatedProperties": false },
+    "member_keys": {
+      "description": "A struct or union member: its name, its offset in the type, and its type. A tagged union also names its tag, the sibling member whose value picks the union's member.",
+      "$ref": "#/$defs/type_keys",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "offset": { "$ref": "#/$defs/count" },
+        "tag": { "type": "string", "minLength": 1 }
+      },
+      "required": ["name", "offset"],
+      "if": { "properties": { "schema": { "pattern": "^union:" } } },
+      "then": { "required": ["tag"] },
+      "else": { "not": { "required": ["tag"] } }
+    },
+    "struct_type": {
+      "type": "object",
+      "properties": {
+        "size": { "$ref": "#/$defs/count" },
+        "members": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/member_keys", "unevaluatedProperties": false }
+        }
+      },
+      "required": ["size", "members"],
+      "additionalProperties": false
+    },
+    "union_type": {
+      "description": "A tagged union. Every member starts at offset 0. The tag's value picks the member whose tag_value it is, or default_member when no member has it.",
+      "type": "object",
+      "properties": {
+        "kind": { "const": "union" },
+        "size": { "$ref": "#/$defs/count" },
+        "tag_schema": { "$ref": "#/$defs/schema", "pattern": "^enum:" },
+        "default_member": { "type": "string", "minLength": 1 },
+        "members": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/member_keys",
+            "properties": {
+              "offset": { "const": 0 },
+              "tag_value": { "$ref": "#/$defs/name" }
+            },
+            "unevaluatedProperties": false
+          }
+        }
+      },
+      "required": ["kind", "size", "tag_schema", "members"],
+      "additionalProperties": false
+    },
 
     "arch": {
       "type": "object",
@@ -177,26 +226,7 @@
         },
         "types": {
           "type": "object",
-          "additionalProperties": {
-            "type": "object",
-            "properties": {
-              "size": { "$ref": "#/$defs/count" },
-              "members": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/type_keys",
-                  "properties": {
-                    "name": { "type": "string", "minLength": 1 },
-                    "offset": { "$ref": "#/$defs/count" }
-                  },
-                  "required": ["name", "offset"],
-                  "unevaluatedProperties": false
-                }
-              }
-            },
-            "required": ["size", "members"],
-            "additionalProperties": false
-          }
+          "additionalProperties": { "oneOf": [{ "$ref": "#/$defs/struct_type" }, { "$ref": "#/$defs/union_type" }] }
         }
       },
       "required": ["areas", "types"],

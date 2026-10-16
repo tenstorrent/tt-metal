@@ -47,7 +47,7 @@ packet header layout comes from `fabric_packet_header_layouts.cpp`.
 | `fabric_context` | Topology, the packet header type (`packet_header`, as `{size, schema}`), payload and channel buffer sizes, the route buffer size, `multi_txq` |
 | `vocabulary` | Every field `category` and `kind` |
 | `archs.<arch>.areas` | L1 areas the architecture fixes: heartbeat, telemetry, routing table, go and launch messages, Ethernet firmware mailbox |
-| `archs.<arch>.types` | Every struct a schema names, including the run's packet header, with its size and members in order |
+| `archs.<arch>.types` | Every struct and tagged union a schema names, including the run's packet header. A struct has its size and members in order, and a union its size, its tag's enum and its members |
 | `enums` | Every enum a schema names, with its values |
 | `meshes` | Each mesh, its chips, and each local chip's routers |
 
@@ -82,10 +82,15 @@ path:
   it before launch.
 - A **stream register** is `{stream_id, register, schema}`. `register` is `buf_space_available` (the
   increment-on-write count) or `remote_src` (a plain read-write register).
-- A **schema** is an integer (`u8` to `u32`, `i8` to `i32`), `struct:<Name>` (in `archs.<arch>.types`),
-  `enum:<Name>` (in `enums`), `packed:<name>`, `bytes` or `pad`. Every `struct:` and `enum:` schema resolves: the
-  writer throws otherwise. A class template's name includes its arguments, with no space after a comma, for example
-  `struct:HybridMeshPacketHeaderT<36>`.
+- A **schema** is an integer (`u8` to `u32`, `i8` to `i32`), `struct:<Name>` or `union:<Name>` (in
+  `archs.<arch>.types`), `enum:<Name>` (in `enums`), `packed:<name>`, `bytes` or `pad`. Every `struct:`, `union:` and
+  `enum:` schema resolves to a type of that kind: the writer throws otherwise. A class template's name includes its
+  arguments, with no space after a comma, for example `struct:HybridMeshPacketHeaderT<36>`.
+- A **tagged union** is a struct member whose bytes hold one of several types, picked by another member of the same
+  struct, its `tag`. The packet header's `command_fields` and `udm_control` are tagged by `noc_send_type`. The
+  union's entry in `types` has `"kind": "union"`, `tag_schema` (the `enum:` the tag holds), its members, each at
+  offset 0 with the `tag_value` that picks it, and `default_member`, the member every other tag value picks, when it
+  has one. To decode one, read the tag, then the member it picks; when it picks none, the bytes are raw.
 
 ### Fields
 
@@ -163,8 +168,10 @@ names what to update. By kind of change:
 | New struct in L1 | The build, when a field's content names a struct with no `StructLayout`; the writer, when its schema does not resolve | A `StructLayout<T>` and an entry in `DescribedStructs` (`fabric_struct_layouts.hpp`) |
 | New packet header size | Nothing: every header `PACKET_HEADER_CONFIGS` lists has its layout checked at compile time | Nothing |
 | New packet header type, or a member added to one | The build, for a type with no `StructLayout` or a layout that misses bytes | Its `StructLayout` in `fabric_packet_header_layouts.cpp`, and a `PacketHeaderStructs` entry if it holds a struct `DescribedStructs` leaves out |
+| New tagged union | The build, when a layout lists it with no `UnionLayout`; the writer, when its schema does not resolve | A `UnionLayout<U>` and an entry in `DescribedUnions` (`fabric_struct_layouts.hpp`), and `LAYOUT_TAGGED_UNION` in the enclosing layout |
+| A member added to a packet header command struct | The build, for a member that changes an offset or the size | Its `StructLayout` in `fabric_struct_layouts.hpp`. A member added in the tail padding of a struct that lists `LAYOUT_TAIL_PAD` is not detected: it reads as padding |
 | New enum | The writer, when a schema names it | An entry in `DescribedEnums` (`fabric_struct_layouts.hpp`) |
-| New enum value | Nothing for enums enchantum reads; the build for `EDMStatus` | `FABRIC_MANIFEST_EDM_STATUSES` for `EDMStatus` |
+| New enum value | Nothing for enums enchantum reads; the build for `EDMStatus`, and for `NocSendType` when no `NocCommandFields` member is picked by it | `FABRIC_MANIFEST_EDM_STATUSES` for `EDMStatus`; for `NocSendType`, the member it picks in `UnionLayout<NocCommandFields>`, and in `UnionLayout<UDMControlFields>` unless the default `write` is right |
 | New computed fact | Nothing | The model, the collector or chip pass, the writer, the tests, a paragraph above, and the schema |
 | A change to the JSON's shape | The schema check | `fabric_manifest_schema.json` |
 | A field table or unrecorded list change | `ManifestDocs.UpToDate` | Regenerate `FIELDS.md` (below) |

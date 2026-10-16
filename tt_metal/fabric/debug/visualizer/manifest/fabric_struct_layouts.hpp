@@ -224,6 +224,174 @@ struct StructLayout<ChannelTrimmingOverrides> {
 };
 static_assert(validate_struct_members<ChannelTrimmingOverrides>(StructLayout<ChannelTrimmingOverrides>::members));
 
+// ============ Packet header commands ============
+
+template <>
+struct StructLayout<NocUnicastCommandHeader> {
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(NocUnicastCommandHeader, noc_address),
+    };
+};
+static_assert(validate_struct_members<NocUnicastCommandHeader>(StructLayout<NocUnicastCommandHeader>::members));
+
+template <>
+struct StructLayout<NocUnicastInlineWriteCommandHeader> {
+    using T = NocUnicastInlineWriteCommandHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, noc_address),
+        LAYOUT_MEMBER(T, value),
+        LAYOUT_TAIL_PAD(T, value),
+    };
+};
+static_assert(validate_struct_members<NocUnicastInlineWriteCommandHeader>(
+    StructLayout<NocUnicastInlineWriteCommandHeader>::members));
+
+template <>
+struct StructLayout<NocUnicastAtomicIncCommandHeader> {
+    using T = NocUnicastAtomicIncCommandHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, noc_address),
+        LAYOUT_MEMBER(T, val),
+        LAYOUT_MEMBER(T, flush),
+        LAYOUT_TAIL_PAD(T, flush),
+    };
+};
+static_assert(
+    validate_struct_members<NocUnicastAtomicIncCommandHeader>(StructLayout<NocUnicastAtomicIncCommandHeader>::members));
+
+template <>
+struct StructLayout<NocUnicastAtomicIncFusedCommandHeader> {
+    using T = NocUnicastAtomicIncFusedCommandHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, noc_address),
+        LAYOUT_MEMBER(T, semaphore_noc_address),
+        LAYOUT_MEMBER(T, val),
+        LAYOUT_MEMBER(T, flush),
+        LAYOUT_TAIL_PAD(T, flush),
+    };
+};
+static_assert(validate_struct_members<NocUnicastAtomicIncFusedCommandHeader>(
+    StructLayout<NocUnicastAtomicIncFusedCommandHeader>::members));
+
+template <>
+struct StructLayout<NocUnicastScatterCommandHeader> {
+    using T = NocUnicastScatterCommandHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, noc_address),
+        LAYOUT_MEMBER(T, chunk_size),
+        LAYOUT_MEMBER(T, chunk_count),
+        LAYOUT_MEMBER(T, chunk_encoding),
+    };
+};
+static_assert(
+    validate_struct_members<NocUnicastScatterCommandHeader>(StructLayout<NocUnicastScatterCommandHeader>::members));
+
+template <>
+struct StructLayout<NocMulticastCommandHeader> {
+    using T = NocMulticastCommandHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, address),
+        LAYOUT_MEMBER(T, noc_x_start),
+        LAYOUT_MEMBER(T, noc_y_start),
+        LAYOUT_MEMBER(T, mcast_rect_size_x),
+        LAYOUT_MEMBER(T, mcast_rect_size_y),
+    };
+};
+static_assert(validate_struct_members<NocMulticastCommandHeader>(StructLayout<NocMulticastCommandHeader>::members));
+
+template <>
+struct StructLayout<NocMulticastAtomicIncCommandHeader> {
+    using T = NocMulticastAtomicIncCommandHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, address),
+        LAYOUT_MEMBER(T, val),
+        LAYOUT_MEMBER(T, noc_x_start),
+        LAYOUT_MEMBER(T, noc_y_start),
+        LAYOUT_MEMBER(T, size_x),
+        LAYOUT_MEMBER(T, size_y),
+    };
+};
+static_assert(validate_struct_members<NocMulticastAtomicIncCommandHeader>(
+    StructLayout<NocMulticastAtomicIncCommandHeader>::members));
+
+template <>
+struct StructLayout<NocSparseMulticastWriteCommandHeader> {
+    using T = NocSparseMulticastWriteCommandHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, noc_address),
+        LAYOUT_MEMBER(T, counts),
+        LAYOUT_MEMBER(T, num_dests),
+        LAYOUT_MEMBER(T, num_chips),
+        LAYOUT_MEMBER(T, write_idx),
+        LAYOUT_MEMBER(T, chip_idx),
+    };
+};
+static_assert(validate_struct_members<NocSparseMulticastWriteCommandHeader>(
+    StructLayout<NocSparseMulticastWriteCommandHeader>::members));
+
+// Each send type's member, as the header's to_noc_* setters write them.
+template <>
+struct UnionLayout<NocCommandFields> {
+    using Tag = NocSendType;
+    static constexpr std::array members = {
+        LAYOUT_UNION_MEMBER(NocCommandFields, unicast_write, NOC_UNICAST_WRITE),
+        LAYOUT_UNION_MEMBER(NocCommandFields, unicast_read, NOC_UNICAST_READ),
+        LAYOUT_UNION_MEMBER(NocCommandFields, unicast_inline_write, NOC_UNICAST_INLINE_WRITE),
+        LAYOUT_UNION_MEMBER(NocCommandFields, mcast_write, NOC_MULTICAST_WRITE),
+        LAYOUT_UNION_MEMBER(NocCommandFields, unicast_seminc, NOC_UNICAST_ATOMIC_INC),
+        LAYOUT_UNION_MEMBER(NocCommandFields, unicast_seminc_fused, NOC_FUSED_UNICAST_ATOMIC_INC),
+        LAYOUT_UNION_MEMBER(NocCommandFields, mcast_seminc, NOC_MULTICAST_ATOMIC_INC),
+        LAYOUT_UNION_MEMBER(NocCommandFields, unicast_scatter_write, NOC_UNICAST_SCATTER_WRITE),
+        LAYOUT_UNION_MEMBER(NocCommandFields, sparse_mcast_write, NOC_SPARSE_MCAST_WRITE),
+    };
+};
+static_assert(validate_union_members<NocCommandFields>(UnionLayout<NocCommandFields>::members));
+
+// ============ UDM control fields ============
+
+template <>
+struct StructLayout<UDMWriteControlHeader> {
+    using T = UDMWriteControlHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, src_chip_id),
+        LAYOUT_MEMBER(T, src_mesh_id),
+        LAYOUT_MEMBER(T, src_noc_x),
+        LAYOUT_MEMBER(T, src_noc_y),
+        LAYOUT_MEMBER(T, risc_id),
+        LAYOUT_MEMBER(T, transaction_id),
+        LAYOUT_MEMBER(T, posted),
+        LAYOUT_MEMBER(T, initial_direction),
+    };
+};
+static_assert(validate_struct_members<UDMWriteControlHeader>(StructLayout<UDMWriteControlHeader>::members));
+
+template <>
+struct StructLayout<UDMReadControlHeader> {
+    using T = UDMReadControlHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, src_chip_id),
+        LAYOUT_MEMBER(T, src_mesh_id),
+        LAYOUT_MEMBER(T, src_noc_x),
+        LAYOUT_MEMBER(T, src_noc_y),
+        LAYOUT_MEMBER(T, src_l1_address),
+        LAYOUT_MEMBER(T, size_bytes),
+        LAYOUT_MEMBER(T, risc_id),
+        LAYOUT_MEMBER(T, transaction_id),
+        LAYOUT_MEMBER(T, initial_direction),
+    };
+};
+static_assert(validate_struct_members<UDMReadControlHeader>(StructLayout<UDMReadControlHeader>::members));
+
+template <>
+struct UnionLayout<UDMControlFields> {
+    using Tag = NocSendType;
+    static constexpr std::array members = {
+        LAYOUT_UNION_DEFAULT(UDMControlFields, write),
+        LAYOUT_UNION_MEMBER(UDMControlFields, read, NOC_UNICAST_READ),
+    };
+};
+static_assert(validate_union_members<UDMControlFields>(UnionLayout<UDMControlFields>::members));
+
 // ============ All described structs ============
 
 // Every struct described at compile time. The manifest writes one type entry per element, which describes the
@@ -242,7 +410,17 @@ using DescribedStructs = std::tuple<
     StaticInfo,
     FabricTelemetry,
     CodeProfilingTimerResult,
-    ChannelTrimmingOverrides>;
+    ChannelTrimmingOverrides,
+    NocUnicastCommandHeader,
+    NocUnicastInlineWriteCommandHeader,
+    NocUnicastAtomicIncCommandHeader,
+    NocUnicastAtomicIncFusedCommandHeader,
+    NocUnicastScatterCommandHeader,
+    NocMulticastCommandHeader,
+    NocMulticastAtomicIncCommandHeader,
+    NocSparseMulticastWriteCommandHeader,
+    UDMWriteControlHeader,
+    UDMReadControlHeader>;
 
 template <Described T>
 StructType struct_type() {
@@ -254,6 +432,27 @@ inline std::vector<StructType> described_struct_types() {
     return []<typename... Ts>(std::type_identity<std::tuple<Ts...>>) {
         return std::vector<StructType>{struct_type<Ts>()...};
     }(std::type_identity<DescribedStructs>{});
+}
+
+// ============ All described unions ============
+
+// Every tagged union described at compile time. The manifest writes one type entry per element, beside the structs.
+using DescribedUnions = std::tuple<NocCommandFields, UDMControlFields>;
+
+template <DescribedUnion U>
+UnionType union_type() {
+    const auto& members = UnionLayout<U>::members;
+    return {
+        detail::union_name<U>(),
+        sizeof(U),
+        enchantum::type_name<typename UnionLayout<U>::Tag>,
+        {members.begin(), members.end()}};
+}
+
+inline std::vector<UnionType> described_union_types() {
+    return []<typename... Us>(std::type_identity<std::tuple<Us...>>) {
+        return std::vector<UnionType>{union_type<Us>()...};
+    }(std::type_identity<DescribedUnions>{});
 }
 
 // ============ HAL messages ============

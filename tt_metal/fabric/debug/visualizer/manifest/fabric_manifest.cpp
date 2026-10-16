@@ -80,8 +80,7 @@ json make_run_json(const ControlPlane& control_plane, const tt::Cluster& cluster
     return run;
 }
 
-// A type's size and schema. An array also gets its element count and the size of one element, and a packed table
-// its entry count and the bits in one entry.
+// A type's size and schema.
 void add_type_json(json& out, const layout::Type& type) {
     out["size"] = type.size;
     if (const auto* packed = std::get_if<layout::element::Packed>(&type.element)) {
@@ -92,6 +91,9 @@ void add_type_json(json& out, const layout::Type& type) {
         out["size_per_element"] = manifest::element_size(type);
     }
     out["schema"] = manifest::schema_name(type);
+    if (const auto* tagged = std::get_if<layout::element::Union>(&type.element)) {
+        out["tag"] = std::string(tagged->tag);
+    }
 }
 
 // Returns a JSON object with the fabric context block information.
@@ -165,22 +167,48 @@ json heartbeat_json(const manifest::Heartbeat& heartbeat) {
     return out;
 }
 
-// Each struct by name, with its members in order.
-json types_json(const std::vector<layout::StructType>& types) {
+// A struct or union member's name, offset and type.
+json member_json(const layout::Member& member) {
+    json out;
+    out["name"] = std::string(member.name);
+    out["offset"] = member.offset;
+    add_type_json(out, member.type);
+    return out;
+}
+
+// Each struct and union by name. A struct has its members in order. A union has its members, the enum its tag
+// holds, each member's tag value by its lower_name, and the member every other tag value picks, if it has one.
+json types_json(const std::vector<layout::StructType>& structs, const std::vector<layout::UnionType>& unions) {
     json out = json::object();
-    for (const auto& type : types) {
-        const std::string name(type.name);
-        TT_FATAL(!out.contains(name), "Fabric manifest: two structs are named {}, so its schema is ambiguous", name);
+    const auto add = [&](std::string_view type_name, json type) {
+        const std::string name(type_name);
+        TT_FATAL(!out.contains(name), "Fabric manifest: two types are named {}, so its schema is ambiguous", name);
+        out[name] = std::move(type);
+    };
+    for (const auto& type : structs) {
         json members = json::array();
         for (const auto& member : type.members) {
-            json entry;
-            entry["name"] = std::string(member.name);
-            entry["offset"] = member.offset;
-            add_type_json(entry, member.type);
-            members.push_back(std::move(entry));
+            members.push_back(member_json(member));
         }
-        out[name]["size"] = type.size;
-        out[name]["members"] = std::move(members);
+        add(type.name, json{{"size", type.size}, {"members", std::move(members)}});
+    }
+    for (const auto& type : unions) {
+        json entry{
+            {"kind", "union"},
+            {"size", type.size},
+            {"tag_schema", fmt::format("{}{}", manifest::k_enum_schema, type.tag_enum)}};
+        json members = json::array();
+        for (const auto& [member, tag_value] : type.members) {
+            json member_entry = member_json(member);
+            if (tag_value.has_value()) {
+                member_entry["tag_value"] = manifest::lower_name(*tag_value);
+            } else {
+                entry["default_member"] = std::string(member.name);
+            }
+            members.push_back(std::move(member_entry));
+        }
+        entry["members"] = std::move(members);
+        add(type.name, std::move(entry));
     }
     return out;
 }
@@ -198,7 +226,7 @@ json make_archs_json(const manifest::Arch& arch) {
     areas_json["eth_fw_mailbox"] = optional_l1_json(areas.eth_fw_mailbox);
     json archs;
     archs[lower_enum_name(arch.arch)]["areas"] = std::move(areas_json);
-    archs[lower_enum_name(arch.arch)]["types"] = types_json(arch.types);
+    archs[lower_enum_name(arch.arch)]["types"] = types_json(arch.types, arch.unions);
     return archs;
 }
 
@@ -222,8 +250,8 @@ json make_enums_json() {
     return out;
 }
 
-// Every struct and enum schema in `node` names a type in `types` or `enums`, so decode can read everything the
-// manifest hands it.
+// Every struct, union and enum schema in `node`, including a union's tag_schema, names a type of that kind in `types`
+// or `enums`, so decode can read everything the manifest hands it.
 void check_schemas_resolve(const json& node, const json& types, const json& enums) {
     if (node.is_array()) {
         for (const auto& element : node) {
@@ -235,20 +263,26 @@ void check_schemas_resolve(const json& node, const json& types, const json& enum
         return;
     }
     for (const auto& [key, value] : node.items()) {
-        if (key != "schema" || !value.is_string()) {
+        if ((key != "schema" && key != "tag_schema") || !value.is_string()) {
             check_schemas_resolve(value, types, enums);
             continue;
         }
         const auto& schema = value.get_ref<const std::string&>();
-        const auto names_missing = [&](std::string_view prefix, const json& described) {
-            return schema.starts_with(prefix) && !described.contains(schema.substr(prefix.size()));
+        // False when the schema has the prefix and names no type of that kind.
+        const auto resolves_as = [&](std::string_view prefix, const json& described, std::string_view kind) {
+            if (!schema.starts_with(prefix)) {
+                return true;
+            }
+            const auto it = described.find(schema.substr(prefix.size()));
+            return it != described.end() && it->value("kind", "") == kind;
         };
-        const bool unresolved =
-            names_missing(manifest::k_struct_schema, types) || names_missing(manifest::k_enum_schema, enums);
+        const bool resolved = resolves_as(manifest::k_struct_schema, types, "") &&
+                              resolves_as(manifest::k_union_schema, types, "union") &&
+                              resolves_as(manifest::k_enum_schema, enums, "");
         TT_FATAL(
-            !unresolved,
-            "Fabric manifest: the schema {} names a type the manifest does not describe; add it to "
-            "layout::DescribedStructs or layout::DescribedEnums (fabric_struct_layouts.hpp)",
+            resolved,
+            "Fabric manifest: the schema {} names no type of its kind that the manifest describes; add it to "
+            "layout::DescribedStructs, layout::DescribedUnions or layout::DescribedEnums (fabric_struct_layouts.hpp)",
             schema);
     }
 }

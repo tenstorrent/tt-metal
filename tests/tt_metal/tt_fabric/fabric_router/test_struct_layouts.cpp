@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Verifies the struct layout helper (the coverage check, and how member types are classified and named), the
-// go_msg_t and launch_msg_t layouts built from the HAL, the packet header layouts, and the hand-listed EDMStatus
-// enumerators.
+// Verifies the struct layout helper (the coverage check, the tagged union check, and how member types are classified
+// and named), the go_msg_t and launch_msg_t layouts built from the HAL, the packet header layouts and their send-type
+// unions, and the hand-listed EDMStatus enumerators.
 
 #include <gtest/gtest.h>
 
@@ -13,6 +13,7 @@
 #include <bit>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <set>
 #include <string_view>
 #include <tuple>
@@ -76,6 +77,24 @@ struct WithArrays {
     std::array<Inner, 2> points;
 };
 
+struct WordAndByte {
+    uint32_t word;
+    uint8_t byte;
+};
+
+enum class Shape : uint8_t { DOT, LINE, BOX };
+
+union ShapeFields {
+    Inner dot;
+    uint32_t line[2];
+    uint16_t box;
+};
+
+struct Tagged {
+    Shape shape;
+    ShapeFields fields;
+};
+
 }  // namespace tt::tt_fabric::layout_test
 
 namespace tt::tt_fabric::layout {
@@ -88,15 +107,29 @@ struct StructLayout<layout_test::Inner> {
     };
 };
 
+template <>
+struct UnionLayout<layout_test::ShapeFields> {
+    using Tag = layout_test::Shape;
+    static constexpr std::array members = {
+        LAYOUT_UNION_MEMBER(layout_test::ShapeFields, dot, Tag::DOT),
+        LAYOUT_UNION_MEMBER(layout_test::ShapeFields, line, Tag::LINE),
+        LAYOUT_UNION_MEMBER(layout_test::ShapeFields, box, Tag::BOX),
+    };
+};
+
 namespace {
 
 using layout_test::Color;
 using layout_test::HalvedWord;
 using layout_test::Inner;
 using layout_test::Outer;
+using layout_test::Shape;
+using layout_test::ShapeFields;
+using layout_test::Tagged;
 using layout_test::ThreeWords;
 using layout_test::WithArrays;
 using layout_test::WithTable;
+using layout_test::WordAndByte;
 
 TEST(StructLayout, CoverageAcceptsEveryByteListedOnce) {
     EXPECT_TRUE(validate_struct_members<ThreeWords>(std::array{
@@ -198,6 +231,98 @@ TEST(StructLayout, ArrayOfMatchesAFixedLengthArray) {
     EXPECT_TRUE(array_of<uint32_t>(5) == (Type{element::Uint{}, 20, 5}));
 }
 
+TEST(StructLayout, TailPadCoversTheBytesAfterTheLastMember) {
+    constexpr std::array members = {
+        LAYOUT_MEMBER(WordAndByte, word),
+        LAYOUT_MEMBER(WordAndByte, byte),
+        LAYOUT_TAIL_PAD(WordAndByte, byte),
+    };
+    static_assert(validate_struct_members<WordAndByte>(members));
+    EXPECT_EQ(members[2].offset, 5u);
+    EXPECT_TRUE(members[2].type == (Type{element::Pad{}, 3, 0}));
+}
+
+TEST(StructLayout, UnionAcceptsEveryTagPickingOneMember) {
+    EXPECT_TRUE(validate_union_members<ShapeFields>(UnionLayout<ShapeFields>::members));
+}
+
+TEST(StructLayout, UnionDefaultPicksTheTagsNoMemberLists) {
+    EXPECT_TRUE(validate_union_members<ShapeFields>(std::array{
+        LAYOUT_UNION_DEFAULT(ShapeFields, line),
+        LAYOUT_UNION_MEMBER(ShapeFields, dot, Shape::DOT),
+    }));
+}
+
+TEST(StructLayout, UnionRejectsATagPickedTwice) {
+    EXPECT_FALSE(validate_union_members<ShapeFields>(std::array{
+        LAYOUT_UNION_DEFAULT(ShapeFields, line),
+        LAYOUT_UNION_MEMBER(ShapeFields, dot, Shape::DOT),
+        LAYOUT_UNION_MEMBER(ShapeFields, box, Shape::DOT),
+    }));
+}
+
+TEST(StructLayout, UnionRejectsATagNothingPicks) {
+    EXPECT_FALSE(validate_union_members<ShapeFields>(std::array{
+        LAYOUT_UNION_MEMBER(ShapeFields, dot, Shape::DOT),
+        LAYOUT_UNION_MEMBER(ShapeFields, line, Shape::LINE),
+    }));
+}
+
+TEST(StructLayout, UnionRejectsTwoDefaults) {
+    EXPECT_FALSE(validate_union_members<ShapeFields>(std::array{
+        LAYOUT_UNION_DEFAULT(ShapeFields, dot),
+        LAYOUT_UNION_DEFAULT(ShapeFields, line),
+        LAYOUT_UNION_MEMBER(ShapeFields, box, Shape::BOX),
+    }));
+}
+
+TEST(StructLayout, UnionRejectsWhenNoMemberFillsIt) {
+    EXPECT_FALSE(validate_union_members<ShapeFields>(std::array{
+        LAYOUT_UNION_DEFAULT(ShapeFields, dot),
+        LAYOUT_UNION_MEMBER(ShapeFields, box, Shape::BOX),
+    }));
+}
+
+TEST(StructLayout, UnionRejectsAMemberNotAtOffsetZero) {
+    EXPECT_FALSE(validate_union_members<ShapeFields>(std::array{
+        UnionMember{Member{"dot", 2, type_of<Inner>()}, "DOT"},
+        LAYOUT_UNION_MEMBER(ShapeFields, line, Shape::LINE),
+        LAYOUT_UNION_MEMBER(ShapeFields, box, Shape::BOX),
+    }));
+}
+
+TEST(StructLayout, UnionRejectsATagValueThatIsNotAnEnumerator) {
+    EXPECT_FALSE(validate_union_members<ShapeFields>(std::array{
+        LAYOUT_UNION_DEFAULT(ShapeFields, line),
+        LAYOUT_UNION_MEMBER(ShapeFields, dot, Shape::DOT),
+        LAYOUT_UNION_MEMBER(ShapeFields, box, static_cast<Shape>(7)),
+    }));
+    EXPECT_FALSE(validate_union_members<ShapeFields>(std::array{
+        LAYOUT_UNION_DEFAULT(ShapeFields, line),
+        LAYOUT_UNION_MEMBER(ShapeFields, dot, Shape::DOT),
+        UnionMember{LAYOUT_MEMBER(ShapeFields, box), "SQUARE"},
+    }));
+}
+
+TEST(StructLayout, TaggedUnionNamesItsTag) {
+    constexpr Member fields = LAYOUT_TAGGED_UNION(Tagged, fields, shape);
+    EXPECT_EQ(fields.name, "fields");
+    EXPECT_EQ(fields.offset, offsetof(Tagged, fields));
+    EXPECT_TRUE(fields.type == (Type{element::Union{"ShapeFields", "shape"}, sizeof(ShapeFields), 0}));
+}
+
+TEST(StructLayout, UnionTypeNamesTagValues) {
+    const UnionType type = union_type<ShapeFields>();
+    EXPECT_EQ(type.name, "ShapeFields");
+    EXPECT_EQ(type.size, sizeof(ShapeFields));
+    EXPECT_EQ(type.tag_enum, "Shape");
+    ASSERT_EQ(type.members.size(), 3u);
+    EXPECT_EQ(type.members[0].member.name, "dot");
+    EXPECT_EQ(type.members[0].tag_value.value_or(""), "DOT");
+    EXPECT_EQ(type.members[2].member.name, "box");
+    EXPECT_EQ(type.members[2].tag_value.value_or(""), "BOX");
+}
+
 // go_msg_layout is built at run time, so this is where a change to go_msg_t fails, for each arch, with no device.
 TEST(StructLayout, GoMsgLayoutFromHal) {
     for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE}) {
@@ -285,10 +410,16 @@ TEST(StructLayout, LaunchMsgLayoutFromHal) {
     }
 }
 
-// For every header FabricContext can choose, the manifest names the header the visitor picks, and every struct and
-// enum its layouts name is described: by those layouts, or by DescribedStructs and DescribedEnums.
+const UnionType* find_union(const std::vector<UnionType>& unions, std::string_view name) {
+    const auto it = std::ranges::find(unions, name, &UnionType::name);
+    return it == unions.end() ? nullptr : &*it;
+}
+
+// For every header FabricContext can choose, the manifest names the header the visitor picks, and every struct, union
+// and enum its layouts name is described: by those layouts, or by DescribedStructs, DescribedUnions and DescribedEnums.
 TEST(PacketHeaderLayouts, EveryConfig) {
     const auto described = described_struct_types();
+    const auto unions = described_union_types();
     std::set<std::string_view> enums;
     [&]<typename... Es>(std::type_identity<std::tuple<Es...>>) {
         (enums.insert(enum_type<Es>().name), ...);
@@ -315,8 +446,50 @@ TEST(PacketHeaderLayouts, EveryConfig) {
                         << type.name << "." << member.name << " names " << s->name;
                 } else if (const auto* e = std::get_if<element::Enum>(&member.type.element)) {
                     EXPECT_TRUE(enums.contains(e->name)) << type.name << "." << member.name << " names " << e->name;
+                } else if (const auto* u = std::get_if<element::Union>(&member.type.element)) {
+                    EXPECT_NE(find_union(unions, u->name), nullptr)
+                        << type.name << "." << member.name << " names " << u->name;
+                    EXPECT_EQ(u->tag, "noc_send_type") << type.name << "." << member.name;
                 }
             }
+        }
+    }
+}
+
+// The send-type unions as the manifest writes them: each member's tag value is the enumerator's own name (enchantum
+// names NOC_SEND_TYPE_LAST's value NOC_SPARSE_MCAST_WRITE), and each member's struct is in DescribedStructs.
+TEST(PacketHeaderLayouts, SendTypeUnions) {
+    const auto described = described_struct_types();
+    const auto unions = described_union_types();
+    const auto tag_of = [](const UnionType& type, std::string_view member) -> std::optional<std::string_view> {
+        const auto it = std::ranges::find(type.members, member, [](const auto& m) { return m.member.name; });
+        EXPECT_NE(it, type.members.end()) << type.name << "." << member;
+        return it == type.members.end() ? std::nullopt : it->tag_value;
+    };
+
+    const UnionType* command = find_union(unions, "NocCommandFields");
+    ASSERT_NE(command, nullptr);
+    EXPECT_EQ(command->size, sizeof(NocCommandFields));
+    EXPECT_EQ(command->tag_enum, "NocSendType");
+    EXPECT_EQ(command->members.size(), enchantum::count<NocSendType>);
+    EXPECT_EQ(tag_of(*command, "unicast_write").value_or("none"), "NOC_UNICAST_WRITE");
+    EXPECT_EQ(tag_of(*command, "unicast_seminc_fused").value_or("none"), "NOC_FUSED_UNICAST_ATOMIC_INC");
+    EXPECT_EQ(tag_of(*command, "sparse_mcast_write").value_or("none"), "NOC_SPARSE_MCAST_WRITE");
+
+    const UnionType* udm = find_union(unions, "UDMControlFields");
+    ASSERT_NE(udm, nullptr);
+    EXPECT_EQ(udm->size, sizeof(UDMControlFields));
+    EXPECT_EQ(udm->tag_enum, "NocSendType");
+    EXPECT_FALSE(tag_of(*udm, "write").has_value());
+    EXPECT_EQ(tag_of(*udm, "read").value_or("none"), "NOC_UNICAST_READ");
+
+    for (const UnionType* type : {command, udm}) {
+        for (const auto& entry : type->members) {
+            const Member& member = entry.member;
+            const auto* s = std::get_if<element::Struct>(&member.type.element);
+            ASSERT_NE(s, nullptr) << type->name << "." << member.name;
+            EXPECT_NE(find_type(described, s->name), nullptr)
+                << type->name << "." << member.name << " names " << s->name;
         }
     }
 }

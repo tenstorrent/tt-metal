@@ -227,6 +227,20 @@ void check_top_level(
     const auto header_name = schema.substr(manifest::k_struct_schema.size());
     ASSERT_TRUE(types.contains(header_name)) << header_name;
     EXPECT_EQ(types.at(header_name).at("size"), header.at("size"));
+
+    // The header's command is a tagged union: noc_send_type picks its member, and its type lists every send type.
+    const auto& header_members = types.at(header_name).at("members");
+    const auto command = std::find_if(
+        header_members.begin(), header_members.end(), [](const json& m) { return m.at("name") == "command_fields"; });
+    ASSERT_TRUE(command != header_members.end());
+    EXPECT_EQ(command->at("schema"), "union:NocCommandFields");
+    EXPECT_EQ(command->at("tag"), "noc_send_type");
+    ASSERT_TRUE(types.contains("NocCommandFields"));
+    const auto& command_type = types.at("NocCommandFields");
+    EXPECT_EQ(command_type.at("kind"), "union");
+    EXPECT_EQ(command_type.at("tag_schema"), "enum:NocSendType");
+    EXPECT_FALSE(command_type.contains("default_member"));
+    EXPECT_EQ(command_type.at("members").size(), manifest.at("enums").at("NocSendType").at("values").size());
     EXPECT_EQ(
         header.at("size").get<uint32_t>() + block.at("max_payload_size_bytes").get<uint32_t>(),
         block.at("channel_buffer_size_bytes").get<uint32_t>());
@@ -1367,6 +1381,7 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(schema_name({element::Uint{}, 8, 2}), "u32");
     EXPECT_EQ(schema_name({element::Enum{"RouterState"}, 4, 0}), "enum:RouterState");
     EXPECT_EQ(schema_name({element::Struct{"WorkerXY"}, 4, 0}), "struct:WorkerXY");
+    EXPECT_EQ(schema_name({element::Union{"NocCommandFields", "noc_send_type"}, 40, 0}), "union:NocCommandFields");
     EXPECT_EQ((layout::template_name<"HybridMeshPacketHeaderT", 36>), "HybridMeshPacketHeaderT<36>");
     EXPECT_EQ((layout::template_name<"T", 1, false>), "T<1,false>");
     EXPECT_EQ(schema_name({element::Packed{"direction_table", 2}, 16, 64}), "packed:direction_table");
