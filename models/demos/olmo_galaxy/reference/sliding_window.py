@@ -270,9 +270,9 @@ def get_attention_pattern_summary(config: SlidingWindowConfig) -> dict:
         "sliding_count": len(sliding_layers),
         "full_count": len(full_layers),
         "sliding_window": config.sliding_window,
-        "sliding_layers": sliding_layers[:5] + ["..."] + sliding_layers[-5:]
-        if len(sliding_layers) > 10
-        else sliding_layers,
+        "sliding_layers": (
+            sliding_layers[:5] + ["..."] + sliding_layers[-5:] if len(sliding_layers) > 10 else sliding_layers
+        ),
         "full_layers": full_layers,
         "pattern": "3 sliding + 1 full, repeated",
     }

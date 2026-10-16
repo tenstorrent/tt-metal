@@ -121,9 +121,9 @@ def test_qwen_mlp_ttt_inference(seq_len, batch_size, mesh_device, reset_seeds):
                 mesh_shape=model_args.cluster_shape,
             ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
             dtype=ttnn.bfloat8_b,
-            memory_config=model_args.model_config["SHARDED_FF12_RING_MEMCFG"]
-            if mode == "decode"
-            else ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=(
+                model_args.model_config["SHARDED_FF12_RING_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+            ),
             layout=ttnn.TILE_LAYOUT,
         )
 

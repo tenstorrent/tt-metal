@@ -212,6 +212,19 @@ def run_olmo_demo(
 
         max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
+        # Debug: OLMO_FORCE_TOKENS=<json {"ids": [...], "prefill_len": N}> (batch 1, needs OLMO_HOST_SAMPLING=1) prefills the
+        # first N ids and then decodes the remaining ids teacher-forced, saving the device logits of every step to
+        # OLMO_FORCE_OUT, to compare decode against a reference model at long positions.
+        force_cfg = json.load(open(os.environ["OLMO_FORCE_TOKENS"])) if os.environ.get("OLMO_FORCE_TOKENS") else None
+        force_logits = []
+        if force_cfg is not None:
+            assert batch_size == 1
+            _ids, _n = force_cfg["ids"], force_cfg["prefill_len"]
+            encoded_prompts = [_ids[:_n]]
+            decoding_pos = [_n]
+            prefill_lens = [_n]
+            input_tokens_prefill_pt = torch.tensor([_ids[:_n]], dtype=input_tokens_prefill_pt.dtype).view(1, -1)
+            max_encoded_prompt_len = _n
 
         batch_size_per_device_group = 32 if batch_size == 32 else 1
         if paged_attention:
@@ -240,6 +253,10 @@ def run_olmo_demo(
         repetition_penalty = sampling_params.get("repetition_penalty", 1.0)
         # Debug: OLMO_SAMPLE_T=<temp> samples with the model-card settings (top_p 0.95, top_k 32) instead of the config's;
         # OLMO_SAMPLE_SEED=none leaves the lanes unseeded, like requests that carry no seed in the server.
+        if os.environ.get("OLMO_SEED"):  # debug: explicit request seed
+            seed = int(os.environ["OLMO_SEED"])
+        if os.environ.get("OLMO_GREEDY") == "1":  # debug: greedy on device, no seed
+            temperature, top_p, top_k, seed = 1.0, 1.0, 1, None
         if os.environ.get("OLMO_SAMPLE_T"):
             temperature, top_p, top_k = float(os.environ["OLMO_SAMPLE_T"]), 0.95, 32
             if os.environ.get("OLMO_SAMPLE_SEED") == "none":
@@ -327,6 +344,9 @@ def run_olmo_demo(
             prefilled_token = toks[:, :, :].argmax(dim=-1).view(-1, 1)
         if dump_logits_path and not prefill_device_sampling:
             dumped_logits["prefill"] = toks.reshape(toks.shape[0], -1)[:batch_size].to(torch.float32).clone()
+        if force_cfg is not None:
+            force_logits.append(toks.reshape(toks.shape[0], -1)[0].to(torch.float16).clone())
+            prefilled_token = torch.tensor([[force_cfg["ids"][force_cfg["prefill_len"]]]], dtype=torch.int64)
         profiler.end("inference_prefill", iteration=batch_idx)
         logger.info("Prefill finished")
 
@@ -414,6 +434,15 @@ def run_olmo_demo(
                                     step_logits[:batch_size].to(torch.float32).clone()
                                 )
                         out_tok = prefilled_token.reshape(-1).clone()
+                    elif force_cfg is not None:
+                        force_logits.append(step_logits[0].to(torch.float16).clone())
+                        if iteration + 1 >= int(os.environ.get("OLMO_FORCE_STOP", 10**9)):
+                            # past OLMO_FORCE_STOP steps the device feeds its own greedy token (host reload path)
+                            out_tok = torch.full((32,), int(step_logits[0].argmax()), dtype=torch.int64)
+                        else:
+                            out_tok = torch.full(
+                                (32,), force_cfg["ids"][force_cfg["prefill_len"] + 1 + iteration], dtype=torch.int64
+                            )
                     else:
                         out_tok = step_logits.argmax(dim=-1)
 
@@ -485,6 +514,9 @@ def run_olmo_demo(
                 f"REPEAT_STEP: {len(step_hashes)} replays of one decode step, {len(mismatch)} differ from replay 0; "
                 f"first mismatches (replay, users): {mismatch[:10]}"
             )
+        if force_cfg is not None and os.environ.get("OLMO_FORCE_OUT"):
+            torch.save(torch.stack(force_logits), os.environ["OLMO_FORCE_OUT"])
+            logger.info(f"Saved {len(force_logits)} teacher-forced logit rows to {os.environ['OLMO_FORCE_OUT']}")
         dump_path = os.environ.get("OLMO_DUMP_TOKENS")
         if dump_path:
             if num_batches > 1:

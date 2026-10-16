@@ -145,7 +145,21 @@ Under vLLM, prefill longer than 4096 tokens (padded 8192/16384/...) is unreliabl
   next to the KV cache (OOM allocating the per-length persistent buffers).
 - Prompts up to 4096 tokens (traced) were reliable in every test (2K x10 identical, 3.9K x10, mixed stress, 4K x32).
 - Capping prompts via `max_num_batched_tokens` does not work: the plugin bumps it back to max_model_len (no chunked prefill).
-- Pending (devices were lost first): `OLMO_EAGER_PREFILL_LAYER_SYNC=1` (drain the device between layers of an eager prefill),
-  to test whether the corruption is a CCL race that the first, compiling call hides.
-Opt-in switches left in the code: OLMO_TRACE_SEQLENS, OLMO_LOG_PT, OLMO_EAGER_PREFILL_LAYER_SYNC, demo OLMO_PERTURB_ALLOC /
+- (The per-layer sync experiment was run later and hung the device; see 2026-10-16 below. Removed.)
+Opt-in switches left in the code: OLMO_TRACE_SEQLENS, OLMO_LOG_PT, demo OLMO_PERTURB_ALLOC /
 OLMO_NO_KV_RESET / OLMO_NO_PROGRAM_CACHE / OLMO_TRACE_REGION / OLMO_REPEAT_BATCHES. Scripts: debug/serving/.
+
+## 2026-10-16 demo regression, accuracy localisation, and the per-layer sync option (REMOVED)
+- Demo regression on the final code (HEAD 7891fb822e2 + env-gated debug), no resets, all pass: batch-32 38.33 ms/token (26.1 tok/s/user),
+  batch-1 26.5, gate-b32 38.2, long-4k-b32 22.0, 8K 24.4, 16K 23.8, aime24-p1 25.3, 32K 22.5, 64K 20.5 tok/s/user (eager long prefill with the
+  program cache on); gate-b32 with on-device first-token sampling 39.1 ms, 24.7K words, 0 doubled words.
+- No perf change vs the earlier baseline (38.3 ms/token): this session was correctness only; the decode optimisation pass has not started.
+- One aime24-p1 run (seed 42) degraded to junk tokens from ~4.3K generated tokens. Localisation: scoring its tokens with the HF CPU model
+  put the collapse at position ~4096 (the sliding-window length). BUT: teacher-forced decode over 3600..4600 (true coherent text) matches HF
+  across the boundary (logit PCC ~0.99, top-1 agreement 93-97%); the paged SDPA decode op with window 4096 passes against torch at OLMo's
+  settings (16 configs incl. single active user); greedy / unseeded / seeds 7 and 123 / a re-run of seed 42 are all clean to 6200 tokens, and the
+  re-run of seed 42 diverges from the first run at token 237 (run-to-run nondeterminism). So the junk run was a one-off fault, not a
+  reproducible window or sampler bug. Left open; consistent with the machine's other flakiness (chip 14 bit flips, chips falling off PCIe).
+- `OLMO_EAGER_PREFILL_LAYER_SYNC=1` (sync the device between layers of an eager prefill) HUNG THE DEVICE: both server starts that used it
+  (21:46 and 00:24) hit "device timeout in fetch queue wait" within seconds of the first requests and lost all 32 chips (tt-triage then
+  reports PcieHangError on every device). Servers without it were fine. The option is removed; do not re-add it.

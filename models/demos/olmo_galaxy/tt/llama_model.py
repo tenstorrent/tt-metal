@@ -772,13 +772,6 @@ class TtTransformer(LightweightModule):
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
                 batch_size=batch_size,
             )
-            if (
-                mode == "prefill"
-                and _os.environ.get("OLMO_EAGER_PREFILL_LAYER_SYNC") == "1"
-                and not getattr(layer, "enable_trace", False)
-            ):
-                # debug: drain the device between layers of an eager (untraced) prefill
-                ttnn.synchronize_device(self.mesh_device)
         # ttnn.deallocate(h)
         if mode == "decode" and self.prefetcher_setup is not None:
             ttnn.deallocate(garbage_tensor)

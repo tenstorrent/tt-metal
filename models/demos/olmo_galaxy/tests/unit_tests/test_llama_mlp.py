@@ -111,12 +111,14 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
             ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
             dtype=ttnn.bfloat8_b,
             memory_config=(
-                model_args.model_config["SHARDED_FF12_RING_MEMCFG"]
-                if model_args.is_galaxy
-                else model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
-            )
-            if mode == "decode"
-            else ttnn.DRAM_MEMORY_CONFIG,
+                (
+                    model_args.model_config["SHARDED_FF12_RING_MEMCFG"]
+                    if model_args.is_galaxy
+                    else model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
+                )
+                if mode == "decode"
+                else ttnn.DRAM_MEMORY_CONFIG
+            ),
             layout=ttnn.TILE_LAYOUT,
         )
         logger.info("Run Llama_MLP")

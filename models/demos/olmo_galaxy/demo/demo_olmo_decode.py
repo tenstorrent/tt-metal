@@ -553,9 +553,11 @@ def run_olmo_demo(
     if not stress_test:
         ttnn.plus_one(
             current_pos_tensor,
-            sub_core_grids=model_args.sub_core_grids
-            if is_cur_pos_sharded
-            else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            sub_core_grids=(
+                model_args.sub_core_grids
+                if is_cur_pos_sharded
+                else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
+            ),
             skip_negative_entries=True,
         )
         ttnn.plus_one(
@@ -587,9 +589,11 @@ def run_olmo_demo(
     if not stress_test:
         ttnn.plus_one(
             current_pos_tensor,
-            sub_core_grids=model_args.sub_core_grids
-            if is_cur_pos_sharded
-            else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            sub_core_grids=(
+                model_args.sub_core_grids
+                if is_cur_pos_sharded
+                else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
+            ),
             skip_negative_entries=True,
         )
         ttnn.plus_one(

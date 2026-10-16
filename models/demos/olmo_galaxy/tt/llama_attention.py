@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 
 import ttnn
@@ -960,7 +962,9 @@ class TtLlamaAttention(LightweightModule):
                 cur_pos_tensor=current_pos,
                 page_table_tensor=page_table,
                 scale=self.scale,
-                sliding_window_size=self.sliding_window_size,  # OLMo: 4096 for sliding layers, None for full
+                sliding_window_size=(
+                    None if os.environ.get("OLMO_DECODE_NO_WINDOW") == "1" else self.sliding_window_size
+                ),  # debug switch
                 program_config=self.model_config["PAGED_SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
                 memory_config=sdpa_out_mem_cfg,
@@ -972,7 +976,9 @@ class TtLlamaAttention(LightweightModule):
                 values,
                 cur_pos_tensor=current_pos,
                 scale=self.scale,
-                sliding_window_size=self.sliding_window_size,  # OLMo: 4096 for sliding layers, None for full
+                sliding_window_size=(
+                    None if os.environ.get("OLMO_DECODE_NO_WINDOW") == "1" else self.sliding_window_size
+                ),  # debug switch
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
                 memory_config=sdpa_out_mem_cfg,

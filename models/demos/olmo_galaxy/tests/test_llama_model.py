@@ -342,9 +342,11 @@ def test_llama_model_inference(
                 dtype=ttnn.int32,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     mesh_device,
-                    dims=(None, 1 if is_cur_pos_sharded else 0)
-                    if (model_args.is_galaxy and batch_size > 1)
-                    else (None, None),
+                    dims=(
+                        (None, 1 if is_cur_pos_sharded else 0)
+                        if (model_args.is_galaxy and batch_size > 1)
+                        else (None, None)
+                    ),
                     mesh_shape=model_args.cluster_shape,
                 ),
                 memory_config=cur_pos_memory_config,
