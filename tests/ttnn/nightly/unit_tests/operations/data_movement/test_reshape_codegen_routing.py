@@ -132,7 +132,8 @@ def test_reshape_routes_tile_rows_case_under_trace(device):
 
 
 @pytest.mark.parametrize("placement", [ttnn.L1_MEMORY_CONFIG, _DRAM], ids=["l1", "dram"])
-def test_reshape_codegen_rm_program_key_is_frontier_invariant(device, placement):
+def test_reshape_codegen_rm_program_key_ignores_frontier_when_plan_fits(device, placement):
+    # The full plan fits at either frontier; under L1 pressure the key steps with the CB depth by design.
     shape, out_shape, dtype = [12, 100], [12, 10, 10], ttnn.bfloat16
     xt = _to_device(device, _make_input(shape, dtype), dtype, ttnn.ROW_MAJOR_LAYOUT, placement)
     golden = ttnn.to_torch(_force_native(xt, out_shape))
