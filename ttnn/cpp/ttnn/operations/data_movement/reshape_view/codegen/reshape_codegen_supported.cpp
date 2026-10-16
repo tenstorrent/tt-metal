@@ -416,7 +416,11 @@ bool is_demoted(
         RmGeometry geometry(input, logical_output_shape, output_mem_config, num_cores);
         const uint64_t static_budget = geometry.static_budget();
         return demotion_applies(
-            input, logical_output_shape, output_mem_config, static_budget, geometry.fit_stick(static_budget).has_value());
+            input,
+            logical_output_shape,
+            output_mem_config,
+            static_budget,
+            geometry.fit_stick(static_budget).has_value());
     }
     const auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
     return choice.has_value() && native_faster(input, *choice, reshape_core_grid(input, sub_core_grids).num_cores());
