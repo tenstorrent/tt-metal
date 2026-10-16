@@ -42,6 +42,7 @@ sharded role (tp / fsdp) goes on the smaller axis unless ``TTML_TEST_DP_AXIS=0``
 
 from __future__ import annotations
 
+import contextlib
 import os
 from typing import Optional
 
@@ -91,13 +92,6 @@ def _num_available_devices() -> int:
         return 0
 
 
-def _close_device_mesh_quietly() -> None:
-    try:
-        ttml.close_device_mesh()
-    except Exception:  # noqa: BLE001
-        pass
-
-
 def _restore_mgd_path(previous: Optional[str]) -> None:
     if previous is None:
         os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
@@ -118,59 +112,57 @@ def _two_axis_mesh(role: str) -> tuple[tuple[int, int], tuple[str, str]]:
     return (rows, cols), (("dp", role) if dp_first else (role, "dp"))
 
 
-def _open_named_mesh_or_skip(shape: tuple[int, ...], axis_names: tuple[str, ...]):
-    """Open ``shape`` with ``axis_names`` for a module-scoped fixture, or skip its tests; returns the previous MGD.
+@contextlib.contextmanager
+def _named_mesh_or_skip(fresh_device_mesh, shape: tuple[int, ...], axis_names: tuple[str, ...]):
+    """Open ``shape`` with ``axis_names`` on a fresh ``MetalEnv`` (the conftest's ``fresh_device_mesh``, which
+    releases the live one first: a ``MetalEnv`` reads ``TT_MESH_GRAPH_DESC_PATH`` only when it is created, and one
+    created for a line cannot hand out a 2x2) for a module-scoped fixture, or skip its tests.
 
-    A caller-set ``TT_MESH_GRAPH_DESC_PATH`` wins for a 2-device shape (the conftest fixtures' rule: the bench box
-    runs its own descriptor). For a larger shape the bundled descriptor is installed when one exists, as
-    test_ccl_topology.py does for its 2x2 mesh, since a path set for a line cannot describe it. With no descriptor at
-    all, a shape that is the whole host is tried with the runtime's default descriptor (2x4 on the eight-p150
-    loudbox); anything else skips."""
+    The conftest installs the arch's bundled descriptor only when ``TT_MESH_GRAPH_DESC_PATH`` is unset, and this
+    module's conftest-provided 1x2 fixtures leave their path set until module teardown, so a shape larger than a line
+    installs its own bundled descriptor here first (a path set for a line does not describe it); a 2-device shape
+    keeps whatever is set (the bench box runs its own descriptor). With no descriptor at all, a shape that is the
+    whole host is tried with the runtime's default descriptor; anything else skips."""
     needed = int(np.prod(shape))
-    available = _num_available_devices()
-    if available and available < needed:
-        pytest.skip(f"needs a {shape} mesh ({needed} chips); host has {available}.")
     previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
     arch = _detect_arch()
     candidate = _MGD_FOR_ARCH_AND_SHAPE.get((arch, shape)) if arch is not None else None
     if candidate and os.path.isfile(candidate) and (needed > 2 or not previous):
         os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
-    elif not os.environ.get("TT_MESH_GRAPH_DESC_PATH") and available != needed:
+    elif not os.environ.get("TT_MESH_GRAPH_DESC_PATH") and _num_available_devices() != needed:
         pytest.skip(f"needs a bundled MGD for arch={arch!r} shape={shape}, or TT_MESH_GRAPH_DESC_PATH.")
-    _close_device_mesh_quietly()
     try:
-        ttml.open_device_mesh(ttml.Mesh(shape, axis_names))
-    except Exception as e:  # noqa: BLE001
+        with contextlib.ExitStack() as stack:
+            try:
+                mesh = stack.enter_context(
+                    fresh_device_mesh(shape, axis_names, what=f"{axis_names} placements tests", require_mgd=False)
+                )
+            except Exception as e:  # noqa: BLE001
+                pytest.skip(f"needs a {shape} {axis_names} mesh: {e}")
+            yield mesh
+    finally:
         _restore_mgd_path(previous)
-        pytest.skip(f"needs a {shape} {axis_names} mesh: {e}")
-    return previous
 
 
 @pytest.fixture(scope="module")
-def ddp_mesh():
+def ddp_mesh(fresh_device_mesh):
     """``[1, 2]`` with axes ``("tp", "dp")``: TP of size 1, the data-parallel axis on the two devices."""
-    previous = _open_named_mesh_or_skip((1, 2), ("tp", "dp"))
-    yield ttml.mesh()
-    _close_device_mesh_quietly()
-    _restore_mgd_path(previous)
+    with _named_mesh_or_skip(fresh_device_mesh, (1, 2), ("tp", "dp")) as mesh:
+        yield mesh
 
 
 @pytest.fixture(scope="module")
-def dp_tp_mesh():
+def dp_tp_mesh(fresh_device_mesh):
     """``[2, 2]`` with axes ``("dp", "tp")`` (or the ``TTML_TEST_TWO_AXIS_MESH`` override)."""
-    previous = _open_named_mesh_or_skip(*_two_axis_mesh("tp"))
-    yield ttml.mesh()
-    _close_device_mesh_quietly()
-    _restore_mgd_path(previous)
+    with _named_mesh_or_skip(fresh_device_mesh, *_two_axis_mesh("tp")) as mesh:
+        yield mesh
 
 
 @pytest.fixture(scope="module")
-def hsdp_mesh():
+def hsdp_mesh(fresh_device_mesh):
     """``[2, 2]`` with axes ``("dp", "fsdp")`` (or the ``TTML_TEST_TWO_AXIS_MESH`` override)."""
-    previous = _open_named_mesh_or_skip(*_two_axis_mesh("fsdp"))
-    yield ttml.mesh()
-    _close_device_mesh_quietly()
-    _restore_mgd_path(previous)
+    with _named_mesh_or_skip(fresh_device_mesh, *_two_axis_mesh("fsdp")) as mesh:
+        yield mesh
 
 
 # --- models and helpers ----------------------------------------------------------------------------------------
