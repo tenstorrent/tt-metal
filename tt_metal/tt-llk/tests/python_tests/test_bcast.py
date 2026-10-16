@@ -147,6 +147,10 @@ def run_unpack_bcast(
             "Data copy mechanism for SFPU (expects in low-bits) and Packer (expects in high-bits) conflict"
         )
 
+    # Multi-tile input targets the 32-bit DEST slots of full tiles; tiny tiles run one tile.
+    if num_tiles_in_input > 1 and tile_dimensions != [32, 32]:
+        pytest.skip("Multi-tile input is swept for full 32x32 tiles only")
+
     # --- Skips from bugs --------------------------------------------------
 
     # TODO: pgardner - Column broadcast for tiny tiles needs kernel support
