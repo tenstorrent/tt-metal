@@ -4,8 +4,12 @@
 
 // RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -DENABLE_LLK_ASSERT -c %s -o %t.assert.o
 // RUN: %{blackhole_objdump} -dr %t.assert.o | FileCheck %s --check-prefix=ASSERT
-// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -c %s -o %t.release.o
-// RUN: %{blackhole_objdump} -d %t.release.o | FileCheck %s --check-prefix=RELEASE
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %s -o %t.release.o
+// RUN: %{blackhole_objdump} -drz %t.release.o > %t.release.dump
+// RUN: %{blackhole_compare_codegen} %t.release.dump
+
+// Release batches must match the raw instructions, without live-state reads or
+// assertion overhead. Compare adjacent functions with identical-code folding disabled.
 
 #include <cstdint>
 
@@ -27,9 +31,12 @@ extern "C" __attribute__((noinline, used)) void batch_pop()
 // ASSERT-DAG: ttatincgetptr 0,0,1,3,0,4,3
 // ASSERT-DAG: ebreak
 
-// RELEASE-LABEL: <batch_pop>:
-// RELEASE-NEXT: ttatincgetptr 0,0,1,3,0,4,3
-// RELEASE-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_batch_pop()
+{
+    TTI_ATINCGETPTR(0 /*MemHierSel*/, 0 /*NoIncr*/, 1 /*IncrVal*/, 3 /*WrapVal*/, 0 /*Sel32b*/, 4 /*DataRegIndex*/, 3 /*AddrRegIndex*/);
+}
+
+// ASSERT-LABEL: <reference_batch_pop>:
 
 extern "C" __attribute__((noinline, used)) void batch_push()
 {
@@ -45,9 +52,12 @@ extern "C" __attribute__((noinline, used)) void batch_push()
 // ASSERT-DAG: ttatincgetptr 0,0,1,3,1,4,3
 // ASSERT-DAG: ebreak
 
-// RELEASE-LABEL: <batch_push>:
-// RELEASE-NEXT: ttatincgetptr 0,0,1,3,1,4,3
-// RELEASE-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_batch_push()
+{
+    TTI_ATINCGETPTR(0 /*MemHierSel*/, 0 /*NoIncr*/, 1 /*IncrVal*/, 3 /*WrapVal*/, 1 /*Sel32b*/, 4 /*DataRegIndex*/, 3 /*AddrRegIndex*/);
+}
+
+// ASSERT-LABEL: <reference_batch_push>:
 
 // The assertion reads the address before the update can overwrite the aliased GPR.
 extern "C" __attribute__((noinline, used)) void batch_aliased_address()
@@ -62,9 +72,12 @@ extern "C" __attribute__((noinline, used)) void batch_aliased_address()
 // ASSERT-NOT: ttsetdmareg
 // ASSERT: ttatincgetptr 0,0,1,3,0,3,3
 
-// RELEASE-LABEL: <batch_aliased_address>:
-// RELEASE-NEXT: ttatincgetptr 0,0,1,3,0,3,3
-// RELEASE-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_batch_aliased_address()
+{
+    TTI_ATINCGETPTR(0 /*MemHierSel*/, 0 /*NoIncr*/, 1 /*IncrVal*/, 3 /*WrapVal*/, 0 /*Sel32b*/, 3 /*DataRegIndex*/, 3 /*AddrRegIndex*/);
+}
+
+// ASSERT-LABEL: <reference_batch_aliased_address>:
 
 extern "C" __attribute__((noinline, used)) void runtime_batch(const std::uint8_t increment)
 {
@@ -77,8 +90,9 @@ extern "C" __attribute__((noinline, used)) void runtime_batch(const std::uint8_t
 // ASSERT: fence
 // ASSERT: ebreak
 
-// RELEASE-LABEL: <runtime_batch>:
-// RELEASE-NOT: fence
-// RELEASE-NOT: ebreak
-// RELEASE: sw
-// RELEASE-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_runtime_batch(const std::uint8_t increment)
+{
+    TT_ATINCGETPTR(0 /*MemHierSel*/, 0 /*NoIncr*/, increment, 3 /*WrapVal*/, 0 /*Sel32b*/, 4 /*DataRegIndex*/, 3 /*AddrRegIndex*/);
+}
+
+// ASSERT-LABEL: <reference_runtime_batch>:
