@@ -2145,3 +2145,19 @@ pairs): bs16 cold 141.1 / 141.4 vs 139.8 / 140.2 ms, STS-B 0.8174 vs 0.8152; bs3
 ms (chip 3 drifting), STS-B 0.8155 vs 0.8153. Not landed (an accuracy trade; the user's call). K_block 80 (no
 partials) needs ~1.4 MB of CBs double-buffered; 4,80,4 with in0 single-buffered fits but 1×4 subblocks run 3.5% slower
 in the LLK and expose in0 reloads.
+
+## 81. The FF13 -> FF2 DRAM round trip is hidden: a fused FF13+FF2 op has a ~0.1 / 0.7 ms ceiling (2026-10-16)
+
+Before building a fused FF13+FF2 op (H kept on chip), the ceiling: `bench_mm_ablate.py` with the round trip's two ends
+removed, wall µs per call (traced, 8 calls):
+
+| | full | without the round trip | compute only |
+|---|---|---|---|
+| FF13 fused 4,40,8 bs16 / bs32 (no output write) | 1641.3 / 3129.6 | 1642.8 / 3114.2 | 1555.8 / 3059.3 |
+| FF2 8,8,8 bs16 / bs32 (no in0 read) | 723.6 / 1469.8 | 720.3 / 1466.0 | 712.9 / 1385.2 |
+
+The H write and read overlap the compute already (since the writer changes of §63): ~3 µs a layer at bs16, ~19 at bs32,
+i.e. ~0.1 / 0.7 ms a forward, against an op that would have to fit H beside FF13's 798 KB of CBs (at bs16 only with
+smaller FF13 blocks, which lose the SwiGLU hiding of §60). Not built. §77's "mostly the output write" was wrong: FF13's
+exposed data movement (full - compute only: 85 / 70 µs a call) and FF2's at bs32 (85 µs) are the reads (activations /
+weights), which is where the remaining matmul data-movement time is.
