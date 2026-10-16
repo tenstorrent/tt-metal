@@ -45,6 +45,31 @@ def _project_qkv(hidden_states, weights, batch_size, compute_kernel_config):
             output.deallocate(True)
 
 
+def _project_output(projection_input, weights, batch_size, activation_dtype, compute_kernel_config):
+    """Use singleton-sized matmuls for short independent prefill users."""
+    kwargs = dict(dtype=activation_dtype, compute_kernel_config=compute_kernel_config)
+    if batch_size <= 1 or tuple(projection_input.shape) != (1, 1, batch_size * 128, 1024):
+        return ttnn.matmul(projection_input, weights.o_proj, **kwargs)
+
+    outputs = []
+    try:
+        for user in range(batch_size):
+            slab = ttnn.slice(
+                projection_input,
+                [0, 0, user * 128, 0],
+                [1, 1, (user + 1) * 128, 1024],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            try:
+                outputs.append(ttnn.matmul(slab, weights.o_proj, **kwargs))
+            finally:
+                slab.deallocate(True)
+        return ttnn.concat(outputs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    finally:
+        for output in outputs:
+            output.deallocate(True)
+
+
 def prefill_forward(
     hidden_states,
     rope_mats,
@@ -465,11 +490,8 @@ def _finish_prefill(
         tt_out_result = apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size)
     else:
         projection_input = ttnn.typecast(tt_sdpa_out, projection_input_dtype)
-        tt_out = ttnn.matmul(
-            projection_input,
-            weights.o_proj,
-            dtype=activation_dtype,
-            compute_kernel_config=projection_compute_kernel_config,
+        tt_out = _project_output(
+            projection_input, weights, batch_size, activation_dtype, projection_compute_kernel_config
         )
         projection_input.deallocate(True)
         ttnn.add(tt_out, weights.o_proj_bias, output_tensor=tt_out)
