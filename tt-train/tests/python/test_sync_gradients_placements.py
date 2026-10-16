@@ -33,6 +33,11 @@ data-parallel axis on axis 1 so a DDP reduction really runs over two devices, an
 HSDP that open-or-skip like test_ccl_topology.py (4 devices and a bundled MGD needed). Every fixture is module-scoped
 and reopens the device, so each mesh's tests live in their own class, in fixture order: TestTP, TestFSDP, TestDDP,
 TestDPxTP, TestHSDP.
+
+Test-only knobs for a box whose two-axis mesh is not ``[2, 2]`` (the eight-p150 loudbox opens 2x4, not 2x2):
+``TTML_TEST_TWO_AXIS_MESH=2x4`` sets the DP x TP / HSDP shape and opens it with the runtime's default descriptor; the
+sharded role (tp / fsdp) goes on the smaller axis unless ``TTML_TEST_DP_AXIS=0`` puts dp first (the galaxy layout);
+``TTML_TEST_DIM=128`` widens the model so a 4-way shard stays tile-aligned.
 """
 
 from __future__ import annotations
@@ -49,7 +54,7 @@ from ttml.modules import AbstractModuleBase, ColumnParallelLinear, LinearLayer, 
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
-DIM = 64  # tile-aligned per device after a 2-way split
+DIM = int(os.environ.get("TTML_TEST_DIM", "64"))  # tile-aligned per device after a 2-way split (128 for 4-way)
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
 is_sharded_on_axis = ttml.core.distributed.is_sharded_on_axis
@@ -98,12 +103,27 @@ def _restore_mgd_path(previous: Optional[str]) -> None:
         os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
 
 
+def _two_axis_mesh(role: str) -> tuple[tuple[int, int], tuple[str, str]]:
+    """Shape and axis names for the DP x TP / HSDP fixtures: ``[2, 2]`` with ``("dp", role)`` unless
+    ``TTML_TEST_TWO_AXIS_MESH=RxC`` picks another shape. The sharded role (tp / fsdp) then goes on the smaller axis so
+    ``DIM`` stays tile-aligned per shard; ``TTML_TEST_DP_AXIS=0`` keeps dp on axis 0 (the galaxy layout)."""
+    override = os.environ.get("TTML_TEST_TWO_AXIS_MESH")
+    if not override:
+        return (2, 2), ("dp", role)
+    rows, cols = (int(v) for v in override.lower().split("x"))
+    dp_axis = os.environ.get("TTML_TEST_DP_AXIS")
+    dp_first = dp_axis == "0" if dp_axis is not None else rows > cols
+    return (rows, cols), (("dp", role) if dp_first else (role, "dp"))
+
+
 def _open_named_mesh_or_skip(shape: tuple[int, ...], axis_names: tuple[str, ...]):
     """Open ``shape`` with ``axis_names`` for a module-scoped fixture, or skip its tests; returns the previous MGD.
 
     A caller-set ``TT_MESH_GRAPH_DESC_PATH`` wins for a 2-device shape (the conftest fixtures' rule: the bench box
-    runs its own descriptor). For the 4-device shape the bundled descriptor is installed when one exists, as
-    test_ccl_topology.py does for its 2x2 mesh, since a path set for a line cannot describe it."""
+    runs its own descriptor). For a larger shape the bundled descriptor is installed when one exists, as
+    test_ccl_topology.py does for its 2x2 mesh, since a path set for a line cannot describe it. With no descriptor at
+    all, a shape that is the whole host is tried with the runtime's default descriptor (2x4 on the eight-p150
+    loudbox); anything else skips."""
     needed = int(np.prod(shape))
     available = _num_available_devices()
     if available and available < needed:
@@ -113,7 +133,7 @@ def _open_named_mesh_or_skip(shape: tuple[int, ...], axis_names: tuple[str, ...]
     candidate = _MGD_FOR_ARCH_AND_SHAPE.get((arch, shape)) if arch is not None else None
     if candidate and os.path.isfile(candidate) and (needed > 2 or not previous):
         os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
-    elif not os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
+    elif not os.environ.get("TT_MESH_GRAPH_DESC_PATH") and available != needed:
         pytest.skip(f"needs a bundled MGD for arch={arch!r} shape={shape}, or TT_MESH_GRAPH_DESC_PATH.")
     _close_device_mesh_quietly()
     try:
@@ -135,8 +155,8 @@ def ddp_mesh():
 
 @pytest.fixture(scope="module")
 def dp_tp_mesh():
-    """``[2, 2]`` with axes ``("dp", "tp")``."""
-    previous = _open_named_mesh_or_skip((2, 2), ("dp", "tp"))
+    """``[2, 2]`` with axes ``("dp", "tp")`` (or the ``TTML_TEST_TWO_AXIS_MESH`` override)."""
+    previous = _open_named_mesh_or_skip(*_two_axis_mesh("tp"))
     yield ttml.mesh()
     _close_device_mesh_quietly()
     _restore_mgd_path(previous)
@@ -144,8 +164,8 @@ def dp_tp_mesh():
 
 @pytest.fixture(scope="module")
 def hsdp_mesh():
-    """``[2, 2]`` with axes ``("dp", "fsdp")``."""
-    previous = _open_named_mesh_or_skip((2, 2), ("dp", "fsdp"))
+    """``[2, 2]`` with axes ``("dp", "fsdp")`` (or the ``TTML_TEST_TWO_AXIS_MESH`` override)."""
+    previous = _open_named_mesh_or_skip(*_two_axis_mesh("fsdp"))
     yield ttml.mesh()
     _close_device_mesh_quietly()
     _restore_mgd_path(previous)
@@ -437,7 +457,7 @@ class TestDPxTP:
         dp, tp = dp_tp_mesh.axis_index("dp"), dp_tp_mesh.axis_index("tp")
         model = TPBlock()
         params = model.parameters()
-        _backward(model, _input((2, 1, DIM, DIM), dp_tp_mesh.axis_mapper("dp", tdim=0)))
+        _backward(model, _input((dp_tp_mesh.axis_size("dp"), 1, DIM, DIM), dp_tp_mesh.axis_mapper("dp", tdim=0)))
 
         _assert_per_axis_labels(params, 2)
         before = {name: _shards(t.get_grad()) for name, t in params.items()}
@@ -461,23 +481,26 @@ class TestDPxTP:
 
 class TestHSDP:
     def _batch_mapper(self, mesh):
-        """The HSDP batch mapper train.py builds: Shard(0) along "dp", Shard(1) along "fsdp"."""
-        placements = [ttnn.PlacementReplicate() for _ in mesh.shape]
-        placements[mesh.axis_index("dp")] = ttnn.PlacementShard(0)
-        placements[mesh.axis_index("fsdp")] = ttnn.PlacementShard(1)
-        return ttnn.create_mesh_mapper(_device(), ttnn.MeshMapperConfig(placements))
+        """The HSDP batch mapper train.py builds: a whole-mesh Shard(0). Its collapsed label ``{D*F}, [Shard(0)]`` is
+        the exact description of a batch dim split hierarchically over both data axes, and the readers expand it to
+        Shard on every mesh axis (right here: both axes are data axes)."""
+        return ttml.core.distributed.shard_tensor_to_mesh_mapper(_device(), 0, None)
 
     def test_managed_params_are_reduced_on_dp_only(self, hsdp_mesh):
-        """The batch is [D, F, DIM, DIM] sharded dim 0 along "dp" and dim 1 along "fsdp" (one sample per device,
-        label [Shard(0), Shard(1)]). FSDP-managed parameters are Shard on "fsdp", so they are reduced on "dp" only;
+        """The batch is [D*F, 1, DIM, DIM] sharded on dim 0 over the whole mesh (one sample per device, the collapsed
+        label {D*F}, [Shard(0)] read as Shard on both axes). FSDP-managed parameters are Shard on "fsdp", so they are
+        reduced on "dp" only;
         the unmanaged head on both. After the dp reduction a managed gradient reads Replicate on "dp" and Shard on
         "fsdp" (the parameter's own label), the head's still Shard on "fsdp" until it is reduced there too."""
         dp, fsdp = hsdp_mesh.axis_index("dp"), hsdp_mesh.axis_index("fsdp")
         D, F = hsdp_mesh.axis_size("dp"), hsdp_mesh.axis_size("fsdp")
         model = _build_fsdp_model("eager")
         params = model.parameters()
-        x = _input((D, F, DIM, DIM), self._batch_mapper(hsdp_mesh))
-        assert list(x.get_value(NATIVE).shape) == [1, 1, DIM, DIM]
+        x = _input((D * F, 1, DIM, DIM), self._batch_mapper(hsdp_mesh))
+        batch = x.get_value(NATIVE)
+        assert list(batch.shape) == [1, 1, DIM, DIM]
+        assert len(_placements(batch)) == 1  # the collapsed whole-mesh label ...
+        assert is_sharded_on_axis(batch, dp) and is_sharded_on_axis(batch, fsdp)  # ... read as Shard on both axes
         _backward(model, x)
 
         _assert_per_axis_labels(params, 2)
@@ -504,9 +527,10 @@ class TestHSDP:
         assert not is_sharded_on_axis(reduced, fsdp)
         _assert_mean_over_axis(_shards(head.get_grad()), _shards(reduced), hsdp_mesh.shape, fsdp)
 
-    def test_causal_lm_collate_batch_split(self, hsdp_mesh):
-        """``causal_lm_collate_fn(batch_split=D)`` with the HSDP mapper: the standard per-device shapes, a label that
-        is Shard on both data axes, and device (d, f) holding examples d*B/D + f*B/(D*F) + j."""
+    def test_causal_lm_collate_hsdp(self, hsdp_mesh):
+        """``causal_lm_collate_fn`` with the HSDP mapper: the standard per-device shapes, the collapsed whole-mesh
+        label (one placement, read as Shard on both data axes) and device k, in mesh row-major order, holding
+        examples k*B/(D*F) + j."""
         from ttml.datasets import causal_lm_collate_fn
 
         dp, fsdp = hsdp_mesh.axis_index("dp"), hsdp_mesh.axis_index("fsdp")
@@ -520,7 +544,7 @@ class TestHSDP:
             for i in range(batch)
         ]
 
-        out = causal_lm_collate_fn(examples, seq_len=seq_len, mapper=self._batch_mapper(hsdp_mesh), batch_split=D)
+        out = causal_lm_collate_fn(examples, seq_len=seq_len, mapper=self._batch_mapper(hsdp_mesh))
 
         per_device = batch // (D * F)
         ids, labels, mask = (
@@ -533,18 +557,17 @@ class TestHSDP:
         assert list(mask.shape) == [per_device, 1, seq_len, 1]
         for tensor in (ids, labels, mask):
             assert is_sharded_on_axis(tensor, dp) and is_sharded_on_axis(tensor, fsdp)
-            assert len(_placements(tensor)) == 2
+            assert len(_placements(tensor)) == 1  # the collapsed label: the whole mesh shards dim 0
+            assert list(tensor.tensor_topology().distribution_shape()) == [D * F]
 
         shards = _shards(ids)
-        rows = batch // D
-        for index in range(len(shards)):  # shards are in mesh row-major order, like the label's coordinates
-            coord = np.unravel_index(index, tuple(hsdp_mesh.shape))
-            d, f = int(coord[dp]), int(coord[fsdp])
-            first = d * rows + f * per_device
+        assert len(shards) == D * F
+        for index, shard in enumerate(shards):  # mesh row-major order, like the label's coordinates
+            first = index * per_device
             expected = np.stack(
                 [np.array(examples[first + j]["input_ids"], dtype=np.float32) for j in range(per_device)]
             )
-            np.testing.assert_array_equal(shards[index][:, 0, 0, :], expected)
+            np.testing.assert_array_equal(shard[:, 0, 0, :], expected)
 
 
 if __name__ == "__main__":
