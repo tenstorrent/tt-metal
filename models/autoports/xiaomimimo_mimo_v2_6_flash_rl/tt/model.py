@@ -24,6 +24,7 @@ from ..reference.model import load_layer_weights
 from . import kv as kv_lib
 from .common import TILE, MeshPlan, as_weight, cache_name, compute_config, pad_to
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
+from .greedy_head import GreedyHead
 from .rope import MiMoRotarySetup
 
 
@@ -133,6 +134,8 @@ class TtMiMoModel:
         self.kv_caches = None
         self.page_table_tt = None
         self.decode_trace = None
+        self.greedy_head = None
+        self.decode_users = None
         # Chip c's vocab shard starts at c * vocab_local: added to its local top-k ids for the device greedy.
         offsets = (torch.arange(plan.tp, dtype=torch.int32) * self.vocab_local).reshape(plan.tp, 1, 1, 1)
         self.vocab_offset = ttnn.from_torch(
@@ -151,6 +154,7 @@ class TtMiMoModel:
         layer's chip pair splits the users (kv.py), so that page table differs per chip. Slots past
         ``num_users`` are never written (their position is -1)."""
         assert num_users <= self.max_batch
+        self.decode_users = num_users
         self.kv_caches, tables = [], {}
         for layer in self.layers:
             per_user = layer.attn.kv_tokens_per_user(self.max_seq_len)
@@ -263,9 +267,22 @@ class TtMiMoModel:
         )
 
     def decode_forward_device(
-        self, tokens_tt, cur_pos_tt, cos_swa, sin_swa, cos_full, sin_full, mask_tt, pos_owned_tt, owner_mask_tt
+        self,
+        tokens_tt,
+        cur_pos_tt,
+        cos_swa,
+        sin_swa,
+        cos_full,
+        sin_full,
+        mask_tt,
+        pos_owned_tt,
+        owner_mask_tt,
+        greedy_only=False,
     ):
-        """One decode step from device-resident inputs only (trace-capturable). Returns [1, 1, B, vocab / tp]."""
+        """One decode step from device-resident inputs only (trace-capturable). Returns [1, 1, B, vocab / tp].
+
+        ``greedy_only``: skip the per-chip top-k candidates; GreedyHead computes the greedy tokens and also writes
+        them into ``tokens_tt`` (the next step's input)."""
         x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         x = ttnn.reshape(x, (1, 1, self.max_batch, self.cfg.hidden_size))
         rot_mats = {
@@ -281,6 +298,9 @@ class TtMiMoModel:
         x.deallocate(True)
         for t in (*rot_mats[True], *rot_mats[False]):
             t.deallocate(True)
+        if greedy_only:
+            next_tokens = self.greedy_head(logits, token_input=tokens_tt)
+            return {"logits": logits, "next_tokens": next_tokens}
         # Each chip's top-k over its vocab shard: the host can merge 8 x k candidates per user instead of
         # reading 32 x 152576 logits every step.
         values, indices = ttnn.topk(logits, k=self.DECODE_TOPK, dim=-1, largest=True, sorted=True)
@@ -299,19 +319,24 @@ class TtMiMoModel:
         best.deallocate(True)
         return {"logits": logits, "values": values, "indices": indices, "next_tokens": next_tokens}
 
-    def _feed_back(self, inputs, output):
+    def _feed_back(self, inputs, output, tokens_written=False):
         """Device-side step advance: the greedy token becomes the next input; active positions move by one."""
         tokens_tt, cur_pos_tt, pos_owned_tt = inputs[0], inputs[1], inputs[7]
-        ttnn.copy(output["next_tokens"], tokens_tt)
+        if not tokens_written:
+            ttnn.copy(output["next_tokens"], tokens_tt)
         ttnn.plus_one(cur_pos_tt, skip_negative_entries=True)
         ttnn.plus_one(pos_owned_tt, skip_negative_entries=True)
 
-    def capture_decode_trace(self):
+    def capture_decode_trace(self, greedy_only=False):
         """Compile, then capture one decode step. Later decode calls refresh the inputs and replay it.
 
         Warm-up and capture run with every slot empty (position -1), so they write no KV-cache entries
-        and are safe to run after users have been prefilled."""
+        and are safe to run after users have been prefilled. ``greedy_only`` captures the device-greedy step
+        (GreedyHead, no top-k candidates): ``decode_steps_*`` work, ``decode_read_topk`` does not."""
         assert self.decode_trace is None
+        if greedy_only and self.greedy_head is None:
+            # Persistent buffers, allocated before any capture.
+            self.greedy_head = GreedyHead(self.plan, self.vocab_local, self.decode_users, self.max_batch)
         # Per-step token slots for device-resident runs, allocated before capture: buffers allocated after a
         # capture may overlap the trace's replayed intermediates.
         history = [
@@ -327,17 +352,24 @@ class TtMiMoModel:
         empty = torch.full((self.max_batch,), -1, dtype=torch.int32)
         host = self.prepare_decode_inputs_host(torch.zeros(self.max_batch, dtype=torch.int32), empty)
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
-        warm = self.decode_forward_device(*inputs)
-        self._feed_back(inputs, warm)  # every slot is empty: positions stay -1
-        for t in warm.values():
-            t.deallocate(True)
+        warm = self.decode_forward_device(*inputs, greedy_only=greedy_only)
+        self._feed_back(inputs, warm, tokens_written=greedy_only)  # every slot is empty: positions stay -1
+        for name, t in warm.items():
+            if not (greedy_only and name == "next_tokens"):  # GreedyHead's buffer is persistent
+                t.deallocate(True)
         ttnn.synchronize_device(self.mesh_device)
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        output = self.decode_forward_device(*inputs)
-        self._feed_back(inputs, output)
+        output = self.decode_forward_device(*inputs, greedy_only=greedy_only)
+        self._feed_back(inputs, output, tokens_written=greedy_only)
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.mesh_device)
-        self.decode_trace = {"id": trace_id, "inputs": inputs, "output": output, "history": history}
+        self.decode_trace = {
+            "id": trace_id,
+            "inputs": inputs,
+            "output": output,
+            "history": history,
+            "greedy_only": greedy_only,
+        }
 
     def release_decode_trace(self):
         if self.decode_trace is not None:

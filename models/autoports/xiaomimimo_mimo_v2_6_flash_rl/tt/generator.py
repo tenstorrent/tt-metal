@@ -100,11 +100,13 @@ class MiMoGalaxyGenerator:
             logits[user] = self.models[r].prefill_read(handle)[0]
         return [logits[u] for u in range(len(prompts))] if as_list else logits
 
-    def capture_decode_traces(self):
-        """Capture one decode trace per replica (each on its own row). Decode then replays them."""
+    def capture_decode_traces(self, greedy_only=False):
+        """Capture one decode trace per replica (each on its own row). Decode then replays them.
+        ``greedy_only``: the device-greedy step (decode_steps); decode(mode="topk"/"logits") needs the default."""
         for r, model in enumerate(self.models):
             t0 = time.time()
-            model.capture_decode_trace()
+            model.release_decode_trace()
+            model.capture_decode_trace(greedy_only=greedy_only)
             logger.info(f"replica {r}: decode trace captured in {time.time() - t0:.1f}s")
 
     def decode(self, tokens, positions, replicas=None, mode="logits"):

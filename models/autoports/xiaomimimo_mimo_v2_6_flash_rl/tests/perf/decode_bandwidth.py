@@ -108,20 +108,25 @@ def main():
             out = gen.decode_steps({u: start_tok[u] for u in users}, {u: start_pos[u] for u in users}, steps, replicas)
             return out, (time.time() - t0) / steps
 
-        # Same greedy tokens either way (both runs start from the prefill and rewrite the same KV positions).
+        # Host loop first, on the top-k trace (the host merges the per-chip candidates).
         check = 8
         ref_tokens, _ = host_loop(list(range(4)), check)
+        results = {}
+        host_loop([0], 4)  # warm
+        results[("host loop", "1 row")] = host_loop([0], args.steps)[1]
+        results[("host loop", "4 rows")] = host_loop(list(range(4)), args.steps)[1]
+
+        # Device loop on the greedy-only trace (GreedyHead: no per-chip top-k). Same greedy tokens either way (both
+        # runs start from the prefill and rewrite the same KV positions).
+        gen.capture_decode_traces(greedy_only=True)
         dev_tokens, _ = device_loop(list(range(4)), check)
         agree = sum(a == b for u in ref_tokens for a, b in zip(ref_tokens[u], dev_tokens[u]))
         total = sum(len(t) for t in ref_tokens.values())
         logger.info(f"device-loop greedy tokens vs host loop: {agree}/{total} equal")
         print(f"DECODE_DEVICE_LOOP_TOKENS_MATCH {agree}/{total}", flush=True)
-
-        results = {}
-        for name, loop in (("host loop", host_loop), ("device loop", device_loop)):
-            loop([0], 4)  # warm
-            results[(name, "1 row")] = loop([0], args.steps)[1]
-            results[(name, "4 rows")] = loop(list(range(4)), args.steps)[1]
+        device_loop([0], 4)  # warm
+        results[("device loop", "1 row")] = device_loop([0], args.steps)[1]
+        results[("device loop", "4 rows")] = device_loop(list(range(4)), args.steps)[1]
         positions = [start_pos[u] + args.steps for u in range(USERS)]
         nbytes = useful_bytes_per_chip(cfg, 8, USERS, positions)
         for (name, label), t in results.items():
