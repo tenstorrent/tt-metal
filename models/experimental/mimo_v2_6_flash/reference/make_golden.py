@@ -7,7 +7,7 @@ Layers are streamed one at a time (all prompts go through a layer before the nex
 so host memory stays at one layer of dequantized experts. Saves, per prompt: token ids, the
 hidden state after the embedding and after every decoder layer, and the final logits.
 
-    python -m models.autoports.xiaomimimo_mimo_v2_6_flash_rl.reference.make_golden --out <file.pt>
+    python -m models.experimental.mimo_v2_6_flash.reference.make_golden --out <file.pt>
 """
 
 import argparse
@@ -17,9 +17,9 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer
 
-from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.reference import model as ref
-from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.reference.checkpoint import MiMoCheckpoint, default_model_path
-from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.reference.config import MiMoConfig
+from models.experimental.mimo_v2_6_flash.reference import model as ref
+from models.experimental.mimo_v2_6_flash.reference.checkpoint import MiMoCheckpoint, default_model_path
+from models.experimental.mimo_v2_6_flash.reference.config import MiMoConfig
 
 DEFAULT_PROMPTS = [
     "The capital of France is",

@@ -16,8 +16,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.reference import model as ref
-from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tests.common import (
+from models.experimental.mimo_v2_6_flash.reference import model as ref
+from models.experimental.mimo_v2_6_flash.tests.common import (
     DP,
     GALAXY_DEVICE_PARAMS,
     TP,
@@ -26,10 +26,10 @@ from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tests.common import (
     load_config_and_ckpt,
     pcc,
 )
-from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tt import kv as kv_lib
-from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tt.common import MeshPlan
-from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tt.decoder import TtMiMoDecoderLayer
-from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tt.rope import MiMoRotarySetup
+from models.experimental.mimo_v2_6_flash.tt import kv as kv_lib
+from models.experimental.mimo_v2_6_flash.tt.common import MeshPlan
+from models.experimental.mimo_v2_6_flash.tt.decoder import TtMiMoDecoderLayer
+from models.experimental.mimo_v2_6_flash.tt.rope import MiMoRotarySetup
 
 MAX_SEQ = 1024
 MAX_BATCH = 32

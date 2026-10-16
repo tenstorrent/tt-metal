@@ -73,6 +73,8 @@ statistics (LSE) for a cross-chip merge, which it does not today.
 
 All tests open the 4x8 mesh (`FABRIC_1D_RING`), split it into four 1x8 rows and give every row its
 own users. References are fp32 torch (`reference/model.py`, bit-identical to HF on real weights).
+These numbers are for the MiMo-V2.6-Flash-RL checkpoint. MiMo-V2.6-Flash-MOPD, the target, has the same
+`config.json` and tensor layout; its numbers are not measured yet.
 `mimo-v2.6/dev` carries `test_decoder_tp8_dp4.py` and `test_model_tp8_dp4.py`; the MoE, traced-decode
 and 1M-capacity tests stay on `mimo-v2.6/tp8-dp4`.
 

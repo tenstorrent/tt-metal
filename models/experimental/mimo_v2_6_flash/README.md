@@ -1,6 +1,6 @@
 # MiMo-V2.6-Flash on Blackhole Galaxy (TP=8 x DP=4)
 
-TTNN implementation of [XiaomiMiMo/MiMo-V2.6-Flash-RL](https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Flash-RL)
+TTNN implementation of [XiaomiMiMo/MiMo-V2.6-Flash-MOPD](https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Flash-MOPD)
 (text only) for a 32-chip Blackhole Galaxy run as four independent TP=8 replicas, one per row of
 the 4x8 mesh. Tracking issue: tenstorrent/tt-metal#60807. The parallel plan and memory budget are
 in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md).
@@ -24,13 +24,13 @@ in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md).
 ## Running
 
 ```bash
-export MIMO_MODEL_PATH=/path/to/MiMo-V2.6-Flash-RL      # HF checkpoint
-export MIMO_TT_CACHE=/path/to/tensor-cache              # converted TTNN weights (~180 GB for 48 layers)
-python -m models.autoports.xiaomimimo_mimo_v2_6_flash_rl.reference.make_golden --out golden_48l.pt
+export MIMO_MODEL_PATH=/path/to/MiMo-V2.6-Flash-MOPD    # HF checkpoint
+export MIMO_TT_CACHE=/path/to/tensor-cache              # converted TTNN weights (~180 GB for 48 layers), one subdir per checkpoint
+python -m models.experimental.mimo_v2_6_flash.reference.make_golden --out golden_48l.pt
 export MIMO_GOLDEN=golden_48l.pt
 
-pytest models/autoports/xiaomimimo_mimo_v2_6_flash_rl/tests/test_decoder_tp8_dp4.py   # one layer per type
-pytest models/autoports/xiaomimimo_mimo_v2_6_flash_rl/tests/test_model_tp8_dp4.py     # 48 layers
+pytest models/experimental/mimo_v2_6_flash/tests/test_decoder_tp8_dp4.py   # one layer per type
+pytest models/experimental/mimo_v2_6_flash/tests/test_model_tp8_dp4.py     # 48 layers
 ```
 
 On a Galaxy whose CPLD firmware predates v1.16, reset with `tt-smi -glx_reset`: after `tt-smi -r`

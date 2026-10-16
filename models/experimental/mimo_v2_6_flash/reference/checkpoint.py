@@ -182,4 +182,4 @@ class MiMoCheckpoint:
 
 @lru_cache(maxsize=None)
 def default_model_path():
-    return os.environ.get("MIMO_MODEL_PATH", "/home/zni/models/MiMo-V2.6-Flash-RL")
+    return os.environ.get("MIMO_MODEL_PATH", "/home/zni/models/MiMo-V2.6-Flash-MOPD")

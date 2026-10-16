@@ -7,8 +7,8 @@ import pytest
 import torch
 
 import ttnn
-from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.reference.checkpoint import MiMoCheckpoint, default_model_path
-from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.reference.config import MiMoConfig
+from models.experimental.mimo_v2_6_flash.reference.checkpoint import MiMoCheckpoint, default_model_path
+from models.experimental.mimo_v2_6_flash.reference.config import MiMoConfig
 
 # CCL ops keep their semaphores for the program's lifetime. Without an L1_SMALL region they go in the
 # main L1 pool, and after enough distinct prefill shapes they fragment it badly enough to clash with
@@ -37,8 +37,9 @@ def load_config_and_ckpt():
 
 
 def cache_dir(tag):
+    """Converted TTNN weights for ``tag``, kept per checkpoint: MOPD and RL share tensor names, not values."""
     root = os.environ.get("MIMO_TT_CACHE", "/home/zni/models/mimo-tt-cache")
-    return os.path.join(root, tag)
+    return os.path.join(root, os.path.basename(os.path.normpath(model_path())), tag)
 
 
 def pcc(a, b):

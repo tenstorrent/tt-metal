@@ -4,7 +4,7 @@
 """Full 48-layer MiMo-V2.6-Flash on the Galaxy as TP=8 x DP=4, checked against the fp32 reference.
 
 Golden activations come from ``reference/make_golden.py`` (MIMO_GOLDEN, default
-/home/zni/models/mimo-golden/golden_48l.pt). Each replica (one Galaxy row) serves:
+/home/zni/models/mimo-golden/<checkpoint dir name>/golden_48l.pt). Each replica (one Galaxy row) serves:
 
 * slots 0-1: two golden prompts. Prefill all but the last 4 tokens, then teacher-force those 4
   through decode. Every logits row is compared with the reference (top-1 and PCC).
@@ -20,7 +20,7 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer
 
-from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tests.common import (
+from models.experimental.mimo_v2_6_flash.tests.common import (
     DP,
     GALAXY_DEVICE_PARAMS,
     cache_dir,
@@ -28,7 +28,7 @@ from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tests.common import (
     model_path,
     pcc,
 )
-from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tt.generator import MiMoGalaxyGenerator
+from models.experimental.mimo_v2_6_flash.tt.generator import MiMoGalaxyGenerator
 
 TEACHER_FORCED = 4
 GREEDY_TOKENS = 16
@@ -36,7 +36,8 @@ SHARED_PROMPT = "Tenstorrent Blackhole is a"
 
 
 def golden_path():
-    path = os.environ.get("MIMO_GOLDEN", "/home/zni/models/mimo-golden/golden_48l.pt")
+    ckpt_name = os.path.basename(os.path.normpath(model_path()))
+    path = os.environ.get("MIMO_GOLDEN", os.path.join("/home/zni/models/mimo-golden", ckpt_name, "golden_48l.pt"))
     if not os.path.exists(path):
         pytest.skip(f"golden file {path} not found; run reference/make_golden.py")
     return path
