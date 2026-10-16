@@ -53,8 +53,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
 
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /* transpose_of_faces */,
-        0 /* within_face_16x16_transpose */,
+        0 /*transpose_of_faces*/,
+        0 /*within_face_16x16_transpose*/,
         ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, TILE_NUM_FACES),
         formats.unpack_A_src,
         formats.unpack_A_dst);
@@ -89,17 +89,20 @@ constexpr std::uint8_t LOAD_ADDR_MOD  = ADDR_MOD_3;
 constexpr std::uint8_t STORE_ADDR_MOD = ADDR_MOD_2;
 #endif
 
+// Load / store pairs per face: each SFPLOAD / SFPSTORE moves 32 datums (four rows of the even or
+// odd columns), a 16x16 face holds 256.
+constexpr int iterations = 8;
+
 // Round the 16-bit Dest datums of the current face to integers in 0..65535 and store their low
-// 10 magnitude bits back as "integer 8" Dest datums, 8 load / store pairs per face.
+// 10 magnitude bits back as "integer 8" Dest datums.
 inline void round_face_to_int8_datums_in_place()
 {
-#pragma GCC unroll 8
-    for (int d = 0; d < 8; ++d)
+    for (int d = 0; d < iterations; ++d)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, LOAD_ADDR_MOD, 0);
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, LOAD_ADDR_MOD, 0 /*dest_reg_addr*/);
+        TTI_SFP_STOCH_RND(0 /*rnd_mode*/, 0 /*imm8_math*/, 0 /*lreg_src_b*/, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
         TTI_SFPNOP;
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT8, STORE_ADDR_MOD, 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT8, STORE_ADDR_MOD, 0 /*dest_reg_addr*/);
     }
 }
 
@@ -111,7 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool int8_out = is_int8_output(formats.pack_dst);
 
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /*is_int_fpu_en*/, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
@@ -172,7 +175,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(prev_format, prev_format, tile_size);
         _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, tile_size);
     }
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+    _llk_pack_init_wrapper_<PackMode::Default, false /*zero_output*/>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
     LLK_ASSERT(
         (params.NUM_TILES_IN_BLOCK <= get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
