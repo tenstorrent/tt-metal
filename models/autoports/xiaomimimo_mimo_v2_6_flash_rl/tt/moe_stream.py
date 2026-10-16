@@ -499,49 +499,141 @@ class ReduceExpand:
             cb(self.cb_sum, self.tiles_per_core),
             cb(self.cb_zero, 1),
         ]
+        # With a residual: the bf16-rounded sum, the residual rows packed like the compact tiles, the residual tiles.
+        self.cb_mid, self.cb_res, self.cb_x = 3, 4, 5
+        self.residual_cbs = [
+            cb(self.cb_in, chips * self.tiles_per_core),
+            cb(self.cb_sum, self.tiles_per_core),
+            cb(self.cb_mid, 2),
+            cb(self.cb_res, self.tiles_per_core),
+            cb(self.cb_x, self.tiles_per_core * self.row_blocks),
+        ]
 
-    def __call__(self, gathered, out):
+    def __call__(self, gathered, out, residual=None):
         """gathered [1, 1, 32, chips * hidden / 8], out [1, 1, 32, hidden] (bf16 DRAM interleaved tiles); returns
-        ``out``."""
-        for t in (gathered, out):
+        ``out``. ``residual`` [1, 1, 32, hidden] (bf16 DRAM interleaved tiles): out = residual + the bf16-rounded sum
+        in rows 0-3 and the residual's rows 4-31 (the all-reduce and the residual add in one program)."""
+        tensors = (gathered, out) + ((residual,) if residual is not None else ())
+        for t in tensors:
             assert t.layout == ttnn.TILE_LAYOUT and t.dtype == ttnn.bfloat16 and is_dram_interleaved(t)
             assert t.shape[-2] == TILE
         assert gathered.shape[-1] == self.chips * self.compact_width and out.shape[-1] == self.hidden
+        if residual is not None:
+            assert residual.shape[-1] == self.hidden
 
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        res_args = [residual.buffer_address()] if residual is not None else []
         for i, core in enumerate(self.cores):
-            reader_rt[core.x][core.y] = [gathered.buffer_address(), i * self.tiles_per_core]
-            writer_rt[core.x][core.y] = [out.buffer_address(), i * self.tiles_per_core]
+            reader_rt[core.x][core.y] = [gathered.buffer_address(), i * self.tiles_per_core] + res_args
+            writer_rt[core.x][core.y] = [out.buffer_address(), i * self.tiles_per_core] + res_args
             compute_rt[core.x][core.y] = []
 
+        if residual is None:
+            sources = ("moe_reduce_reader.cpp", "moe_expand_rows.cpp", "moe_reduce_compute.cpp")
+            reader_ct = [self.cb_in, self.tiles_per_core, self.compact_tiles, self.chips]
+            writer_ct = [self.cb_sum, self.cb_zero, self.tiles_per_core, self.compact_tiles, self.row_blocks]
+            compute_ct = [self.cb_in, self.cb_sum, self.tiles_per_core, self.chips]
+            cbs = self.cbs
+        else:
+            sources = ("moe_reduce_residual_reader.cpp", "moe_expand_residual.cpp", "moe_reduce_residual_compute.cpp")
+            reader_ct = [self.cb_in, self.cb_res, self.tiles_per_core, self.compact_tiles, self.chips, self.row_blocks]
+            writer_ct = [self.cb_sum, self.cb_x, self.tiles_per_core, self.compact_tiles, self.row_blocks]
+            compute_ct = [self.cb_in, self.cb_mid, self.cb_res, self.cb_sum, self.tiles_per_core, self.chips]
+            cbs = self.residual_cbs
+
         reader = ttnn.KernelDescriptor(
-            kernel_source=f"{KERNEL_DIR}/moe_reduce_reader.cpp",
+            kernel_source=f"{KERNEL_DIR}/{sources[0]}",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=self.core_ranges,
-            compile_time_args=[self.cb_in, self.tiles_per_core, self.compact_tiles, self.chips],
+            compile_time_args=reader_ct,
             runtime_args=reader_rt,
             config=ttnn.DataMovementConfigDescriptor(
                 processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_0_default
             ),
         )
         writer = ttnn.KernelDescriptor(
-            kernel_source=f"{KERNEL_DIR}/moe_expand_rows.cpp",
+            kernel_source=f"{KERNEL_DIR}/{sources[1]}",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=self.core_ranges,
-            compile_time_args=[self.cb_sum, self.cb_zero, self.tiles_per_core, self.compact_tiles, self.row_blocks],
+            compile_time_args=writer_ct,
             runtime_args=writer_rt,
             config=ttnn.DataMovementConfigDescriptor(
                 processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_1_default
             ),
         )
         compute = ttnn.KernelDescriptor(
-            kernel_source=f"{KERNEL_DIR}/moe_reduce_compute.cpp",
+            kernel_source=f"{KERNEL_DIR}/{sources[2]}",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=self.core_ranges,
-            compile_time_args=[self.cb_in, self.cb_sum, self.tiles_per_core, self.chips],
+            compile_time_args=compute_ct,
             runtime_args=compute_rt,
             config=self.compute_config,
         )
-        program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], cbs=self.cbs, semaphores=[])
-        ttnn.generic_op([gathered, out], program)
+        program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], cbs=cbs, semaphores=[])
+        io = [gathered] + ([residual] if residual is not None else []) + [out]
+        ttnn.generic_op(io, program)
+        return out
+
+
+class CompactRows:
+    """Rows 0-3 of a [1, 1, 32, hidden] bf16 tile tensor (L1 or DRAM interleaved) -> DownStream's compact
+    [1, 1, 32, hidden / 8] layout (rows 4c..4c+3 of compact tile t % compact_tiles hold rows 0-3 of tile column t,
+    c = t / compact_tiles), so a row all-gather and ``ReduceExpand`` all-reduce only the user rows. One data-movement
+    kernel on 16 cores, each moving the rows of hidden / 32 / 16 tile columns."""
+
+    ROWS = 4
+    GRID = (8, 2)
+
+    def __init__(self, plan, hidden):
+        nt = hidden // TILE
+        self.row_blocks = TILE // self.ROWS
+        assert nt % self.row_blocks == 0
+        self.hidden = hidden
+        self.compact_tiles = nt // self.row_blocks
+        self.compact_width = self.compact_tiles * TILE
+        gx, gy = self.GRID
+        self.cores = [ttnn.CoreCoord(x, y) for y in range(gy) for x in range(gx)]
+        assert nt % len(self.cores) == 0
+        self.tiles_per_core = nt // len(self.cores)
+        self.core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
+        tiny = ttnn.Tile([self.ROWS, TILE])
+        page = tiny.get_tile_size(ttnn.bfloat16)
+        fmt = ttnn.CBFormatDescriptor(
+            buffer_index=0, data_format=ttnn.bfloat16, page_size=page, tile=ttnn.TileDescriptor(tiny)
+        )
+        self.cbs = [
+            ttnn.CBDescriptor(
+                total_size=self.tiles_per_core * page, core_ranges=self.core_ranges, format_descriptors=[fmt]
+            )
+        ]
+
+    def output(self, plan):
+        """Persistent [1, 1, 32, hidden / 8] bf16 DRAM tiles; every call rewrites all of it."""
+        return zero_output(plan, self.compact_width)
+
+    def __call__(self, x, out):
+        """x [1, 1, 32, hidden] bf16 interleaved tiles -> ``out`` from ``output``; returns ``out``."""
+        mc = x.memory_config()
+        assert x.layout == ttnn.TILE_LAYOUT and x.dtype == ttnn.bfloat16
+        assert mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+        assert x.shape[-2] == TILE and x.shape[-1] == self.hidden
+        assert out.layout == ttnn.TILE_LAYOUT and out.dtype == ttnn.bfloat16 and is_dram_interleaved(out)
+        assert out.shape[-2] == TILE and out.shape[-1] == self.compact_width
+        in_dram = 1 if mc.buffer_type == ttnn.BufferType.DRAM else 0
+
+        rt = ttnn.RuntimeArgs()
+        for i, core in enumerate(self.cores):
+            rt[core.x][core.y] = [x.buffer_address(), out.buffer_address(), i * self.tiles_per_core]
+        kernel = ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/attn/attn_compact_rows.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=self.core_ranges,
+            compile_time_args=[0, self.tiles_per_core, self.compact_tiles, in_dram],
+            runtime_args=rt,
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_0_default
+            ),
+        )
+        program = ttnn.ProgramDescriptor(kernels=[kernel], cbs=self.cbs, semaphores=[])
+        ttnn.generic_op([x, out], program)
         return out

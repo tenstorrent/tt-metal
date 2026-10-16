@@ -200,8 +200,27 @@ class TtMiMoDecoderLayer:
         attn.deallocate(True)
         return x2
 
+    def _compact_decode(self):
+        """The MoE streaming decode serves users in rows 0-3 only: both block reductions then move only those rows."""
+        return self.is_moe and self.mlp.gate_up_stream is not None
+
     def forward_decode(self, x, rot_mats, cur_pos, page_table, kv_cache, token_mask=None):
-        x2 = self.attention_decode(x, rot_mats, cur_pos, page_table, kv_cache)
-        y = self._ffn(x2, token_mask, decode=True)
+        if not self._compact_decode():
+            x2 = self.attention_decode(x, rot_mats, cur_pos, page_table, kv_cache)
+            y = self._ffn(x2, token_mask, decode=True)
+            x2.deallocate(True)
+            return y
+        # Each block's row all-reduce is a compact all-gather; ReduceExpand sums the chips and adds the residual.
+        h = self.input_norm(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        gathered = self.attn.forward_decode(
+            h, rot_mats[self.is_swa], cur_pos, self._page_table(page_table), kv_cache, compact=True
+        )
+        h.deallocate(True)
+        x2 = self.mlp.reduce_residual(gathered, x)
+        if gathered is not self.attn.compact_buf:
+            gathered.deallocate(True)
+        h2 = self.post_norm(x2)
+        y = self.mlp.forward_decode(h2, token_mask, residual=x2)
+        h2.deallocate(True)
         x2.deallocate(True)
         return y

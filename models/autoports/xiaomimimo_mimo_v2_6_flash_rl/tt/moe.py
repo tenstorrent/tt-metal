@@ -223,7 +223,25 @@ class TtMiMoMoE:
                 self.plan, self.hidden, self.plan.tp, self.down_stream.compute_config, DownStream.TINY_ROWS
             )
 
-    def _forward_decode_stream(self, x, token_mask):
+    def reduce_residual(self, gathered, residual=None):
+        """Row all-gather of the chips' compact [1, 1, 32, H / 8] rows -> a new [1, 1, 32, H]: their chip-ordered sum
+        in rows 0-3 and zeros elsewhere, or with ``residual`` the residual plus that (bf16-rounded) sum."""
+        full = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, TILE, self.hidden]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.plan.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        res = residual
+        if residual is not None and not is_dram_interleaved(residual):
+            res = ttnn.to_memory_config(residual, ttnn.DRAM_MEMORY_CONFIG)
+        self.reduce_expand(gathered, full, residual=res)
+        if res is not residual:
+            res.deallocate(True)
+        return full
+
+    def _forward_decode_stream(self, x, token_mask, residual=None):
         """BFP4 decode: fp32 router logits, sigmoid and +bias, then one streaming program that selects every user's
         fp32 top-k, normalizes and masks the weights and computes gate|up + SwiGLU + routing weight; then the
         streaming down program (down and the sum over each user's pairs) on the expert ids that program wrote."""
@@ -252,26 +270,20 @@ class TtMiMoMoE:
         # same on every chip), then ReduceExpand sums the copies in that order. The persistent compact output is
         # rewritten every call, so it is not deallocated.
         gathered = plan.all_gather(out, dim=3)  # [1, 1, 32, tp * H / 8]
-        full = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, TILE, self.hidden]),
-            ttnn.bfloat16,
-            ttnn.TILE_LAYOUT,
-            plan.mesh_device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
-        self.reduce_expand(gathered, full)
+        full = self.reduce_residual(gathered, residual)
         if gathered is not self.out_buf:
             gathered.deallocate(True)
         return full
 
-    def forward_decode(self, x, token_mask):
+    def forward_decode(self, x, token_mask, residual=None):
         """Decode: x [1, 1, 32, hidden], users in rows [0, decode_users). Computes only the selected experts.
+        ``residual``: returns residual + the MoE output (fused into the streaming path's reduction).
 
         Each (user, k) pair is one entry of an indexed sparse_matmul over the 256 experts: gate|up for the
         pair's expert on all 32 rows, the routing weight applied to the pair's own row (the other rows are
         zeroed), down for the same expert, then a sum over pairs. Nothing is materialized per expert."""
         if self.gate_up_stream is not None:
-            return self._forward_decode_stream(x, token_mask)
+            return self._forward_decode_stream(x, token_mask, residual)
         U, k = self.decode_users, self.cfg.num_experts_per_tok
         pairs = U * k
         H, I = self.hidden, self.inter_local
@@ -331,7 +343,12 @@ class TtMiMoMoE:
         ids.deallocate(True)
         out = ttnn.sum(down, dim=1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, 32, H]
         down.deallocate(True)
-        return self.plan.all_reduce(out)
+        out = self.plan.all_reduce(out)
+        if residual is None:
+            return out
+        y = ttnn.add(residual, out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out.deallocate(True)
+        return y
 
     def _experts(self, x, dense):
         """x [1, 1, T, hidden], dense [1, 1, T, E] with T a multiple of 32 -> partial [1, 1, T, hidden]."""
