@@ -124,6 +124,7 @@ def encode_multimodal(prompt, image, processor):
             "P150x4": (1, 4),
             "P150x8": (1, 8),
             "T3K": (1, 8),
+            "BHGLX": (8, 4),
         }.get(os.environ.get("MESH_DEVICE"), (1, 8))
     ],
     indirect=True,
