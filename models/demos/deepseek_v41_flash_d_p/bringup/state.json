@@ -1897,6 +1897,43 @@
   "started": "2026-10-16T02:44:06",
   "status": "PASS"
  },
+ "C.swa_engram.router": {
+  "attempts": 0,
+  "duration_s": 20.6,
+  "history": [
+   {
+    "s": 20.6,
+    "status": "PASS",
+    "t": "2026-10-16T03:25:37"
+   }
+  ],
+  "last_run": "2026-10-16T03:25:37",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.swa_engram.router.log",
+  "metrics": {
+   "auto_router_L01_layer24_matched": 0.9990234375,
+   "auto_router_L01_layer24_overlap": 0.9998372793197632,
+   "auto_router_L01_layer24_rel": 7.14942580088973e-05,
+   "auto_router_L01_layer24_rowsum": 2.980232238769531e-07,
+   "auto_router_L01_mixed_matched": 0.9970703125,
+   "auto_router_L01_mixed_overlap": 0.9995116591453552,
+   "auto_router_L01_mixed_rel": 4.0464095945935696e-05,
+   "auto_router_L01_mixed_rowsum": 2.980232238769531e-07,
+   "auto_router_L01_vs_cpu_matched": 0.99609375,
+   "auto_router_L01_vs_cpu_overlap": 0.9993489384651184,
+   "auto_router_L01_vs_cpu_rel": 4.832869308302179e-05,
+   "auto_router_L01_vs_cpu_rowsum": 3.5762786865234375e-07,
+   "auto_router_L01_vs_golden_matched": 0.98974609375,
+   "auto_router_L01_vs_golden_overlap": 0.9982909560203552,
+   "auto_router_L01_vs_golden_rel": 0.0015867067268118262,
+   "auto_router_L01_vs_golden_rowsum": 0.001956939697265625,
+   "det_router_L01": 1.0,
+   "pcc_router_L01": 0.9987835275227476
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-16T03:25:16",
+  "status": "PASS"
+ },
  "G.s4096": {
   "attempts": 0,
   "duration_s": 542.0,
