@@ -117,15 +117,20 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    the evidence (the stage, its numbers vs the floor), say so in your summary (answer `disagree` on a note or fix
    that asks for more), and stop: the owner waives it (`tests.waivers`) and it is debugged once the model produces
    output tokens.
-   Never hand-compose a numerical path TTNN or a bring-up fork already has (an RMS norm from multiply / add / rsqrt,
-   a softmax from exp / sum / reciprocal): use the op, and when it does not fit as is (e.g. a row split over chips
-   needing only its statistic), extend the fork behind an option (bringup-fork-op skill) rather than rebuilding it;
-   ttnn/ttnn/bringup/INDEX.md lists the forks (rms_norm_ttnn is AI-generated and fast).
 15. Every box. When the brief has a "Boxes" section, the code must run on every box it lists, not only on this run's:
    read chip counts and the mesh shape from the mesh, never from constants that fit this box; size anything that
    depends on the chip count (cache stripes, a chip's share of a chunk, alignment) for every listed box (e.g. the least
    common multiple of the per-chip shares); and take any path that depends on a per-chip count (experts or heads per
    chip, alignment) as the plan's `conditions` say, keeping the deployment box's path wherever this box can run it.
+16. Ops: the bring-up forks first (owner). For every op a step needs, in this order:
+   1. `ttnn/ttnn/bringup/INDEX.md`: the bring-up forks (AI-generated or changed for earlier models, often faster and
+      more precise than the library op: e.g. rms_norm_ttnn; mhc_pre_ttnn's mhc_pre_xing, an fp32 SFPU Sinkhorn). Use
+      one that fits; one that nearly fits is extended behind an option, and one that is slow or imprecise for this
+      model is optimized or fixed there (bringup-fork-op skill), never worked around.
+   2. Only then the TTNN library (`ttnn.*`, `ttnn.experimental.*`); a library op that needs changing is forked into
+      `ttnn/ttnn/bringup/`, never edited in place.
+   3. Composing a path from smaller ops is the last resort: never for one a fork or TTNN already has (an RMS norm from
+      multiply / add / rsqrt, a softmax from exp / sum / reciprocal); record in BREADCRUMBS.md why 1 and 2 did not fit.
 
 ## Roles
 
