@@ -768,3 +768,19 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - OV-4: DS41-20 already states the F73 fix; nothing to change. DS41-25 extended with the layer-1 note.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_shared_expert.py`
   (CPU: `BRINGUP_IMPL=reference` / `stub` / `mutations` in front).
+
+## S.swa_engram.16 test review (layer 1, scaled, attempt 1)
+- Freeze failed: with BRINGUP_IMPL=reference only `swap_router_vs_golden` failed (0.984586 < 0.99, DS41-32): the
+  rendered test lacks tests 14 / 15's checks. Rebuilt from test_swap_swa_engram_15_experts.py (router and experts
+  checks unchanged, DS41-32 / DS41-33), SWAPPED + shared_expert.
+- Shared expert (DS41-34): mutate:bf16 failed the framework's fixed worst row 0.05 vs the CPU step (0.0546); now
+  SHARED_CPU_LIMITS row 0.109 / ratio 0.038 (2 x the control) via the `_Limits` proxy; rel (0.0553) and bias (0.01)
+  stay the framework's. noise1e-2 passed every framework check, so DS41-25's w2 span check (<= 0.003) runs after
+  the tail check (`component._check_tail` patched; `ref.w[1]["ffn.shared_experts.w2.weight"]`).
+- Results: reference PASS, stub FAIL, mutate:bf16 PASS, mutate:{noise1e-2 (span 0.0074), scale1.02 / 0.98 (bias),
+  halfswap, rowshift, quarterzero, sign} with BRINGUP_MUTATE_STEP=shared_expert all FAIL; gate (device) PASS:
+  pcc_swap_out 0.999781, shared vs CPU rel 0.0030 row 0.027 ratio [0.9887, 1.0041], tail 0.00054, span 0.00023
+  (the device also meets the framework's fixed row / ratio). Table in the test docstring.
+- OV-4: DS41-20 already states the F73 fix; nothing to change.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_16_shared_expert.py`
+  (CPU: `BRINGUP_IMPL=reference` / `stub` / `mutate:<kind> BRINGUP_MUTATE_STEP=shared_expert` in front).
