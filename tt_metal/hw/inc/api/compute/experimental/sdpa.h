@@ -289,6 +289,16 @@ inline void recip_sum(std::uint32_t curr_sum_index, std::uint32_t recip_dst_inde
 }
 #endif
 
+// compute_sdpa_chunk's P V init runs the replay program the Q K^T init recorded only with block-float V: with 16-bit V
+// the unpacker binds the chunk and skipping the load reads slower.
+ALWI bool sdpa_pv_init_reuses_replay([[maybe_unused]] std::uint32_t ov_cb) {
+#ifdef TRISC_UNPACK
+    return IS_BFP_FORMAT(unpack_src_format[get_operand_id(ov_cb)]);
+#else
+    return true;
+#endif
+}
+
 // First chunk controls whether we run the correction path with prev sum, max, out
 // Last chunk controls whether we signal out packer to start packing as output is produced
 //
@@ -464,7 +474,12 @@ void compute_sdpa_chunk(
     MATH(LLK_ASSERT(
         ov_kt_dim == chunk_size || exp_signal_granularity == chunk_size,
         "OV-trim (ov_kt_dim != chunk_size) requires exp_signal_granularity == chunk_size"));
-    sdpa_custom_mm_reuse_dest_srcb_block_init_short(cb_q, ov_cb, cb_out, transpose_v, chunk_size, num_tiles_v);
+    if (sdpa_pv_init_reuses_replay(ov_cb)) {
+        sdpa_custom_mm_reuse_dest_srcb_block_init_short<false /*load_replay*/>(
+            cb_q, ov_cb, cb_out, transpose_v, chunk_size, num_tiles_v);
+    } else {
+        sdpa_custom_mm_reuse_dest_srcb_block_init_short(cb_q, ov_cb, cb_out, transpose_v, chunk_size, num_tiles_v);
+    }
     sdpa_custom_mm_reuse_dest_srcb_block<output_granularity, exp_signal_granularity>(
         cb_q,
         ov_cb,
@@ -487,6 +502,184 @@ void compute_sdpa_chunk(
     cb_pop_front(cb_k, num_tiles_k * chunk_size);
     if constexpr (separate_v) {
         cb_pop_front(cb_v, num_tiles_v * chunk_size);
+    }
+}
+
+// The unpack adds index * page size in 32 bits, so a chunk that wraps to the CB start is a negative index from the read
+// pointer.
+ALWI std::uint32_t sdpa_next_chunk_tile_index(std::uint32_t cb, std::uint32_t chunk_tiles) {
+    std::uint32_t index = chunk_tiles;
+#ifdef TRISC_UNPACK
+    const auto& cb_interface = get_local_cb_interface(cb);
+    const std::uint32_t chunk_words = chunk_tiles * cb_interface.fifo_page_size;
+    LLK_ASSERT(
+        cb_interface.fifo_size % chunk_words == 0 && cb_interface.fifo_size >= 2 * chunk_words,
+        "sdpa: cb_k must hold a whole number of chunks, at least two");
+    if (cb_interface.fifo_rd_ptr + chunk_words >= cb_interface.fifo_limit) {
+        index -= cb_interface.fifo_size / cb_interface.fifo_page_size;
+    }
+#endif
+    return index;
+}
+
+// compute_sdpa_chunk over num_chunks chunks of one head, with chunk c + 1's Q K^T issued before chunk c's P V.
+// mm1_dst_offset and mm1_dst_offset_alt are the score buffers of even and odd chunks and must not overlap; the mask
+// spans one SrcB face, so mask_last_chunk needs a last chunk of at most 4 tiles. cb_k holds a whole number of chunks,
+// two or more when num_chunks > 1, because a chunk stays at the front until its P V is done.
+template <
+    std::uint32_t chunk_size,
+    std::uint32_t num_tiles_k,
+    std::uint32_t num_tiles_v,
+    std::uint32_t scale_fp32,
+    bool transpose_k,
+    bool transpose_v,
+    std::uint32_t packed_tile_size,
+    bool exp_approx_mode = false,
+    std::uint32_t qk_signal_granularity = 1,
+    std::uint32_t exp_signal_granularity = 1,
+    std::uint32_t output_granularity = 1,
+    bool mm_pack_init = true,
+    bool separate_v = false>
+void compute_sdpa_chunks_pipelined(
+    std::uint32_t cb_q,
+    std::uint32_t cb_k,
+    std::uint32_t cb_v,
+    std::uint32_t cb_mask,
+    std::uint32_t cb_out,
+    std::uint32_t mm1_dst_offset,
+    std::uint32_t mm1_dst_offset_alt,
+    std::uint32_t mm2_dst_offset,
+    std::uint32_t max_dst_offset,
+    std::uint32_t sum_dst_offset,
+    std::uint32_t corr_exp_dst_offset,
+    std::uint32_t num_chunks,
+    bool mask_last_chunk,
+    bool signal_last_chunk) {
+    constexpr std::uint16_t scale_bf16 = scale_fp32 >> 16;
+    constexpr std::uint32_t k_chunk_tiles = num_tiles_k * chunk_size;
+    constexpr std::uint32_t v_chunk_tiles = num_tiles_v * chunk_size;
+    static_assert(
+        DST_ACCUM_MODE == false, "compute_sdpa_chunks_pipelined: FP32 destination accumulation mode is not supported");
+    static_assert(num_tiles_v % output_granularity == 0, "num_tiles_v must be divisible by output_granularity");
+    static_assert(chunk_size % qk_signal_granularity == 0, "chunk_size must be divisible by qk_signal_granularity");
+    static_assert(chunk_size % exp_signal_granularity == 0, "chunk_size must be divisible by exp_signal_granularity");
+    static_assert(chunk_size >= 2 && chunk_size % 2 == 0, "chunk_size (the OV matmul's kt_dim) must be even and >= 2");
+    static_assert(
+        num_tiles_k >= 2 && num_tiles_k % 2 == 0, "num_tiles_k (the QK matmul's kt_dim) must be even and >= 2");
+    // A chunk's posts and token stay outstanding with the next chunk's Q K^T posts.
+    static_assert(
+        chunk_size / exp_signal_granularity + 1 + chunk_size / qk_signal_granularity <= semaphore::SEMAPHORE_MAX_VALUE,
+        "compute_sdpa_chunks_pipelined: outstanding FPU->SFPU posts must fit the 4-bit semaphore");
+    static_assert(
+        num_tiles_v / output_granularity <= semaphore::SEMAPHORE_MAX_VALUE,
+        "num_tiles_v / output_granularity must fit the semaphore");
+    static_assert(
+        separate_v || num_tiles_v <= num_tiles_k, "compute_sdpa_chunks_pipelined: V must fit inside the shared K row");
+    MATH(LLK_ASSERT(
+        !mask_last_chunk || chunk_size <= 4,
+        "compute_sdpa_chunks_pipelined: the mask spans one SrcB face, so a masked chunk is at most 4 tiles"));
+    constexpr std::uint32_t in1_k_stride = separate_v ? num_tiles_v : num_tiles_k;
+    if (num_chunks == 0) {
+        return;
+    }
+
+    auto scores = [&](std::uint32_t chunk) { return (chunk & 1) ? mm1_dst_offset_alt : mm1_dst_offset; };
+    auto qk = [&](std::uint32_t chunk) {
+        sdpa_custom_mm_block_init_short<transpose_k, mm_pack_init>(cb_q, cb_k, cb_out, chunk_size);
+        // The previous chunk stays at the front of cb_k until its P V is done.
+        const std::uint32_t k_index = chunk == 0 ? 0 : sdpa_next_chunk_tile_index(cb_k, k_chunk_tiles);
+        cb_wait_front(cb_k, (chunk == 0 ? 1 : 2) * k_chunk_tiles);
+        sdpa_custom_mm_block<transpose_k, qk_signal_granularity>(
+            cb_q,
+            cb_k,
+            cb_mask,
+            0,
+            k_index,
+            scores(chunk),
+            num_tiles_k,
+            chunk_size,
+            mask_last_chunk && chunk + 1 == num_chunks);
+    };
+    auto max_sub_corr = [&](std::uint32_t chunk) {
+        const bool first = chunk == 0;
+        PACK((ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_()));
+        PACK((llk_math_sfpu_sdpa_reduce_max_row<
+              false,
+              DST_ACCUM_MODE,
+              DataFormat::Float16_b,
+              chunk_size,
+              false,
+              qk_signal_granularity>(scores(chunk), max_dst_offset, !first)));
+        sdpa_sub_bcast_col_srca_srcb_reuse_tiles_init<chunk_size>(cb_q);
+        MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
+        sdpa_bcast_col_srca_srcb_reuse_preamble(max_dst_offset);
+        sdpa_sub_bcast_col_srca_srcb_reuse_tiles<chunk_size, false, exp_signal_granularity>(scores(chunk));
+        if (!first) {
+            PACK((non_approx_exp_mul_prev<exp_approx_mode, scale_bf16>(sum_dst_offset, corr_exp_dst_offset)));
+            PACK((t6_semaphore_post<p_stall::WAIT_SFPU>(SFPU_FPU)));
+#ifdef TRISC_MATH
+            constexpr bool skip_addrmod = !is_high_fidelity(MATH_FIDELITY);
+#else
+            constexpr bool skip_addrmod = false;
+#endif
+            sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init<num_tiles_v, skip_addrmod>(cb_q);
+            MATH((t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU)));
+            sdpa_bcast_col_srca_srcb_reuse_preamble(corr_exp_dst_offset);
+            sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, true, 1>(mm2_dst_offset);
+            MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
+            MATH((t6_semaphore_get<p_stall::NONE>(SFPU_FPU)));
+        } else {
+            MATH((t6_semaphore_post<p_stall::NONE>(semaphore::FPU_SFPU)));
+        }
+    };
+
+    MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
+    qk(0);
+    max_sub_corr(0);
+    for (std::uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+        const bool last = chunk + 1 == num_chunks;
+        for (std::uint32_t i = 0; i < chunk_size; i++) {
+            if (i % exp_signal_granularity == 0) {
+                PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
+            }
+            PACK((fast_approx_exp(scores(chunk) + i * packed_tile_size)));
+            if (i % exp_signal_granularity == exp_signal_granularity - 1) {
+                PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
+                PACK((t6_semaphore_post<p_stall::NONE>(SFPU_FPU)));
+            }
+        }
+        if (!last) {
+            qk(chunk + 1);
+        }
+        if constexpr (separate_v) {
+            cb_wait_front(cb_v, v_chunk_tiles);
+        }
+        const std::uint32_t ov_cb = separate_v ? cb_v : cb_k;
+        sdpa_custom_mm_reuse_dest_srcb_block_init_short<false /*load_replay*/>(
+            cb_q, ov_cb, cb_out, transpose_v, chunk_size, num_tiles_v);
+        sdpa_custom_mm_reuse_dest_srcb_block<output_granularity, exp_signal_granularity>(
+            cb_q,
+            ov_cb,
+            0,
+            0,
+            scores(chunk),
+            mm2_dst_offset,
+            transpose_v,
+            chunk_size,
+            num_tiles_v,
+            in1_k_stride,
+            last && signal_last_chunk);
+        PACK((ckernel::sfpu::_init_sdpa_reduce_sum_row_8x32_replay_buffers_()));
+        PACK((llk_math_sfpu_sdpa_reduce_sum_row<false, DST_ACCUM_MODE, DataFormat::Float16_b, chunk_size, true>(
+            scores(chunk), sum_dst_offset, chunk != 0)));
+        PACK((llk_math_sdpa_sfpu_signal_chunk_done()));
+        cb_pop_front(cb_k, k_chunk_tiles);
+        if constexpr (separate_v) {
+            cb_pop_front(cb_v, v_chunk_tiles);
+        }
+        if (!last) {
+            max_sub_corr(chunk + 1);
+        }
     }
 }
 
