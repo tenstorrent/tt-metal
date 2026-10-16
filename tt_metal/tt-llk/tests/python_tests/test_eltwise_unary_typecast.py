@@ -12,6 +12,7 @@ and the ``int32<->uint32`` pair (not a kernel pair) are excluded.
 
 import math
 import struct
+from typing import Callable
 
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
@@ -142,8 +143,12 @@ def _uint16_full_range_spec() -> StimuliSpec:
     256 is the last integer bfloat16 holds exactly; 257, 0x8000 and 0xFFFF have to
     be rounded, so the int -> bf16 rounding is exercised and not just the load. (The
     matrix caps integer inputs at 255 for the sake of its integer outputs.)
+
+    Pinned ties: 257 and 0x8080 sit halfway between two bf16 values with the lower
+    one even, so nearest-even gives 256 / 0x8000 where the kernel's ties-away gives
+    258 / 0x8100; 259 is a tie whose truncation (258) differs from both.
     """
-    pinned = torch.tensor([256, 257, 0x8000, 0xFFFF])
+    pinned = torch.tensor([256, 257, 259, 0x8000, 0x8080, 0xFFFF])
 
     def dist(size, dtype, generator):
         values = torch.randint(0, 1 << 16, (size,), generator=generator)
@@ -151,6 +156,21 @@ def _uint16_full_range_spec() -> StimuliSpec:
         return values.to(dtype)
 
     return StimuliSpec(distribution=dist, seed=0)
+
+
+def _uint16_to_fp16b_ties_away_golden(src: torch.Tensor) -> torch.Tensor:
+    """bfloat16 of a non-negative integer tensor, ties rounded away from zero.
+
+    The kernel rounds with SFPSTOCHRND's round-to-nearest mode, which breaks a tie
+    upward in magnitude; torch's float32 -> bfloat16 cast breaks it to even (257 is
+    258 on the device and 256 in torch). Every UInt16 value is exact in fp32, so
+    round its bit pattern: add half of the dropped range and clear the dropped bits.
+    """
+    rounded = [
+        (b + _BF16_HALF_ULP) & ~_BF16_DROPPED_BITS_MASK
+        for b in _tensor_to_fp32_bits(src.flatten())
+    ]
+    return _fp32_bits_to_tensor(rounded).to(torch.bfloat16)
 
 
 def _preserve_fp32_precision(formats: InputOutputFormat) -> bool:
@@ -231,14 +251,24 @@ def test_eltwise_unary_typecast_uint16_to_fp16b_32bit_dest(
     # mask it, as every other UInt16-input typecast does.
     #
     # Float16_b output takes the full UInt16 range so the bf16 rounding of values
-    # above 256 is exercised too; the block-float outputs keep the matrix's small
-    # ints (large ints would differ from the golden by more than 1 bfp ULP).
-    spec_A = (
-        _uint16_full_range_spec()
-        if formats.output_format == DataFormat.Float16_b
-        else _matrix_spec(formats)
-    )
-    _run_typecast(formats, dest_acc, approx_mode, input_dimensions, spec_A)
+    # above 256 is exercised too, bit-exact against a ties-away golden (the shared
+    # golden rounds ties to even and the default tolerance, ~6 bf16 steps, would
+    # pass a truncation); the block-float outputs keep the matrix's small ints
+    # (large ints would differ from the golden by more than 1 bfp ULP).
+    if formats.output_format == DataFormat.Float16_b:
+        _run_typecast(
+            formats,
+            dest_acc,
+            approx_mode,
+            input_dimensions,
+            _uint16_full_range_spec(),
+            max_ulp=0,
+            golden=_uint16_to_fp16b_ties_away_golden,
+        )
+    else:
+        _run_typecast(
+            formats, dest_acc, approx_mode, input_dimensions, _matrix_spec(formats)
+        )
 
 
 @parametrize(
@@ -401,8 +431,9 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
 
 
 _FP32_EXP_MASK = 0xFF << _FP32_MANTISSA_BITS
-# The fp32 mantissa bits a bfloat16 does not keep.
+# The fp32 mantissa bits a bfloat16 does not keep, and half of their range (a tie).
 _BF16_DROPPED_BITS_MASK = 0xFFFF
+_BF16_HALF_ULP = 0x8000
 
 
 def _fp32_is_nan(bits: int) -> bool:
@@ -624,7 +655,13 @@ def _run_typecast(
     spec_A: StimuliSpec,
     *,
     max_ulp: int | None = None,
+    golden: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ):
+    """Run one typecast variant and judge it against the shared TypecastGolden.
+
+    ``golden`` replaces the shared golden with one computed from the generated
+    input tensor, for a cell whose rounding the shared model does not reproduce.
+    """
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -634,13 +671,16 @@ def _run_typecast(
         spec_B=spec_A,
     )
 
-    generate_golden = get_golden_generator(TypecastGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        formats.input_format,
-        formats.output_format,
-        input_dimensions,
-    )
+    if golden is None:
+        generate_golden = get_golden_generator(TypecastGolden)
+        golden_tensor = generate_golden(
+            src_A,
+            formats.input_format,
+            formats.output_format,
+            input_dimensions,
+        )
+    else:
+        golden_tensor = golden(src_A)
 
     configuration = _build_typecast_config(
         formats,
