@@ -26,7 +26,10 @@ It takes DCNv2's offset conv output as it is: the offsets, in pixels and (y, x) 
 position, then the mask logits, whose sigmoid it applies itself.
 """
 
+import math
+
 import ttnn
+from models.experimental.bevformer.model_config import DCN_MATMUL_IN0_BLOCK_W
 
 
 class TTModulatedDeformConv2dDevice:
@@ -72,7 +75,22 @@ class TTModulatedDeformConv2dDevice:
         H_out = (H_in + 2 * self.padding[0] - self.dilation[0] * (self.K - 1) - 1) // self.stride[0] + 1
         W_out = (W_in + 2 * self.padding[1] - self.dilation[1] * (self.K - 1) - 1) // self.stride[1] + 1
         self.io_shape = (batch, H_in, W_in, H_out, W_out)
-        self.relu = relu
+        # Each core takes a run of column rows and the whole output width; the weight is
+        # multicast, the columns are read once.
+        grid = device.compute_with_storage_grid_size()
+        row_tiles = math.ceil(batch * H_out * W_out / ttnn.TILE_SIZE)
+        out_tiles = self.C_out // ttnn.TILE_SIZE
+        self.program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(grid.x, grid.y),
+            in0_block_w=DCN_MATMUL_IN0_BLOCK_W[self.C_in],
+            out_subblock_h=1,
+            out_subblock_w=math.gcd(out_tiles, 4),
+            per_core_M=math.ceil(row_tiles / (grid.x * grid.y)),
+            per_core_N=out_tiles,
+            fuse_batch=True,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU) if relu else None,
+            mcast_in0=False,
+        )
 
     def __call__(self, x_nhwc, offset_mask_nhwc):
         """``x_nhwc`` (B, H_in, W_in, C_in) and ``offset_mask_nhwc`` (B, H_out, W_out, 3*K*K), the
@@ -99,7 +117,7 @@ class TTModulatedDeformConv2dDevice:
             columns,
             self.weight,
             bias=self.bias,
-            activation="relu" if self.relu else None,
+            program_config=self.program_config,
             compute_kernel_config=self.compute_kernel_config,
         )
         ttnn.deallocate(columns)

@@ -232,6 +232,11 @@ _TTNN_DTYPES["BOX_DTYPE"] = _TTNN_DTYPES["GRID_DTYPE"]
 # suffice, the rest is margin.
 CODER_BISECTION_STEPS = 22
 
+# in0_block_w of the DCN matmul's 1D program config, by the DCN's input channels: the width
+# measured fastest on Blackhole for layer3 (C=256) and layer4 (C=512). The matmul streams its
+# K*K*C_in-wide columns from DRAM and multicasts the weight.
+DCN_MATMUL_IN0_BLOCK_W = {256: 2, 512: 12}
+
 
 # The backbone and FPN, for 6 cameras at 1600x928. Layer indices count the ResNet layers from 0
 # (layer1); level indices the FPN levels from 0 (C3).
