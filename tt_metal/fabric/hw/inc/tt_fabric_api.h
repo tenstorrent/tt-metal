@@ -193,64 +193,6 @@ inline std::uint8_t fabric_set_2d_mcast_route(
     return maps.bytes()[root_y];
 }
 
-// Anchored/skipped multicast producer. Like fabric_set_2d_mcast_route, but on the same mesh the
-// target rectangle is measured around anchor_dev_id rather than the sender's own coordinates, while
-// pruning this chip's reverse trees so the packet transits from the sender to the anchor rectangle
-// before delivering.
-inline std::uint8_t fabric_set_2d_anchored_mcast_route(
-    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
-    uint16_t anchor_dev_id,
-    uint16_t dst_mesh_id,
-    uint16_t e_num_hops,
-    uint16_t w_num_hops,
-    uint16_t n_num_hops,
-    uint16_t s_num_hops) {
-    tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
-    if (dst_mesh_id < MAX_NUM_MESHES && routing_table->my_mesh_id != dst_mesh_id) {
-        return fabric_set_2d_mcast_route(
-            packet_header, anchor_dev_id, dst_mesh_id, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
-    }
-
-    const uint8_t mesh_y_size = routing_table->mesh_y_size;
-    const uint8_t mesh_x_size = routing_table->mesh_x_size;
-    ASSERT(mesh_y_size > 0 && mesh_x_size > 0);
-    ASSERT(anchor_dev_id < (uint32_t)mesh_y_size * mesh_x_size);
-    ASSERT((uint32_t)mesh_y_size + mesh_x_size <= sizeof(packet_header->route_buffer));
-
-    const uint32_t root_y = routing_table->my_mesh_coord_y;
-    const uint32_t root_x = routing_table->my_mesh_coord_x;
-    const uint32_t anchor_y = anchor_dev_id / mesh_x_size;
-    const uint32_t anchor_x = anchor_dev_id % mesh_x_size;
-    if (anchor_y == root_y && anchor_x == root_x) {
-        return fabric_set_2d_mcast_route(
-            packet_header, anchor_dev_id, dst_mesh_id, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
-    }
-
-    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)anchor_dev_id;
-    packet_header->mcast_params_64 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
-                                     ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
-    packet_header->routing_fields.value = 0;
-
-    constexpr uint32_t route_buffer_bytes = sizeof(HybridMeshPacketHeader::route_buffer);
-    const uint32_t map_bytes = (uint32_t)mesh_y_size + mesh_x_size;
-    route_2d_detail::Route2DMapStaging<route_buffer_bytes> maps(map_bytes);
-    encode_2d_mcast_maps<route_2d_detail::AlignedMcastTreeEdgeReader>(
-        maps.bytes(),
-        routing_table->route_table_2d.mcast_trees,
-        mesh_y_size,
-        mesh_x_size,
-        anchor_y,
-        anchor_x,
-        root_x,
-        n_num_hops,
-        s_num_hops,
-        e_num_hops,
-        w_num_hops);
-
-    route_2d_detail::copy_2d_map_to_l1(packet_header->route_buffer, maps.word_data(), map_bytes);
-    return Routing2DCodec::decode_action_y_first(maps.bytes(), root_y, root_x, mesh_y_size);
-}
-
 // Intermesh landing encode. Runs on the boundary-facing router before ordinary decode, replacing the
 // incoming source-mesh maps with ones built from this mesh's destination-major route table:
 //
