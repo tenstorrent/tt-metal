@@ -311,21 +311,14 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
-        // Snapshot the env once: includes() runs separately for firmware and
-        // kernel builds, and a mid-process env change must not compile them
-        // against different maps.
-        static const char* const quasar_variant = std::getenv("TT_METAL_QUASAR_VARIANT");
-        // TODO: Use UMD supplied variant instead of env var
-        // defaults to Quasar if no variant is set
-        if (quasar_variant != nullptr && (std::string(quasar_variant) == "horizon" || std::string(quasar_variant) == "2.0.1")) {
-            log_info(LogMetal, "Using variant: Horizon");
-            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.1/meta");
-        } else if (quasar_variant != nullptr && (std::string(quasar_variant) == "trinity" || std::string(quasar_variant) == "2.0.2")){
-            log_info(LogMetal, "Using variant: Trinity");
-            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.2/meta");
-        } else {
-            log_info(LogMetal, "Using variant: Quasar");
+        // defaults to Grendel if no variant is set
+        auto variant = hal_.get_quasar_arch_variant().value_or(IpVariant::GRENDEL);
+        if (variant == IpVariant::GRENDEL) {
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");
+        } else if (variant == IpVariant::HORIZON) {
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.1/meta");
+        } else if (variant == IpVariant::TRINITY) {
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.2/meta");
         }
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/");

@@ -405,6 +405,7 @@ public:
 
 private:
     tt::ARCH arch_;
+    std::optional<IpVariant> quasar_arch_variant_;
     std::vector<HalCoreInfoType> core_info_;
     std::vector<DeviceAddr> dram_bases_;
     std::vector<uint32_t> dram_sizes_;
@@ -509,9 +510,11 @@ public:
         bool enable_dram_backed_cq,
         bool is_simulator = false,
         bool enable_blackhole_dram_programmable_cores = false,
-        bool enable_aerisc_ptp_trace = false);
+        bool enable_aerisc_ptp_trace = false,
+        std::optional<IpVariant> quasar_arch_variant = std::nullopt);
 
     tt::ARCH get_arch() const { return arch_; }
+    std::optional<IpVariant> get_quasar_arch_variant() const { return quasar_arch_variant_; }
 
     bool has_mpsc_ring_buffer() const { return arch_ == tt::ARCH::QUASAR || arch_ == tt::ARCH::BLACKHOLE; }
     uint32_t get_ring_buffer_capacity() const {
