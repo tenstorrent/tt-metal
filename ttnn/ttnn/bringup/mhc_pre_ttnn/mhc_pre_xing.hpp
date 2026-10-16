@@ -23,6 +23,9 @@ namespace ttnn::operations::bringup::mhc_pre_ttnn {
 //     pre = sigmoid(z[0:n]); post = 2 sigmoid(z[n:2n]); L = clamp(z[2n:], clamp_min, clamp_max) (L[i][j] = [i n + j])
 //     comb = exp(L - rowmax); sinkhorn_iters x { m / (rowsum + hc_eps), then m / (colsum + hc_eps) }
 //   -> hc (..., T, n(n+2)) fp32 = [pre | post | comb row-major].
+// deepseek = true (default false): DeepSeek-V4's math (inference/kernel.py hc_split_sinkhorn_kernel): pre = sigmoid(z)
+//   + hc_eps; L not clamped (clamp_min / clamp_max ignored); comb = exp(L - rowmax) / rowsum + hc_eps, then
+//   m / (colsum + hc_eps), then (sinkhorn_iters - 1) x { rows, columns } as above. Needs the coefficients.
 // coefficients_given = true: `input` is a finished hc (..., T, n(n+2)) fp32 (only pre, columns 0..n-1, is read).
 // streams (..., T, n*C) fp32, optional: y = sum_i pre_i * streams[..., i*C:(i+1)*C] (..., T, C) fp32.
 // Returns (hc or None, y or None): hc when the coefficients are computed, y when streams are given.
@@ -39,7 +42,8 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
     double clamp_min = -30.0,
     double clamp_max = 30.0,
     bool coefficients_given = false,
-    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config = std::nullopt);
+    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config = std::nullopt,
+    bool deepseek = false);
 
 // ttnn.bringup.mhc_pre_xing_pack: the row mhc_pre_xing reduces, from the caller's partial projection. `mix` (..., T,
 // 32) fp32 (partial x @ fn^T in columns 0 .. n(n+2)-1, zero elsewhere) and the local streams (..., T, n*C) fp32 -> mix

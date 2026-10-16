@@ -67,6 +67,18 @@ ttsl::hash::hash_t MhcPreXingDeviceOperation::compute_program_hash(
     // The scalars (scale, base, eps, clamp, iterations) are runtime args patched on every call.
     const auto& cc = attrs.compute_config;
     const bool has_streams = tensor_args.streams.has_value();
+    if (attrs.deepseek) {  // a separate program (compute define); the off hash is the one it always was
+        return tt::tt_metal::operation::hash_operation<MhcPreXingDeviceOperation>(
+            attrs.n,
+            attrs.compute_coef,
+            attrs.pack_stats,
+            has_streams,
+            static_cast<uint32_t>(cc.math_fidelity),
+            cc.math_approx_mode,
+            tensor_args.input.tensor_spec(),
+            has_streams ? tensor_args.streams->tensor_spec() : tensor_args.input.tensor_spec(),
+            attrs.deepseek);
+    }
     return tt::tt_metal::operation::hash_operation<MhcPreXingDeviceOperation>(
         attrs.n,
         attrs.compute_coef,
