@@ -78,6 +78,7 @@
 #include "llk_sfpu/ckernel_sfpu_trigonometry.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
 #include "llk_sfpu/ckernel_sfpu_unary_comp.h"
+#include "llk_sfpu/ckernel_sfpu_unary_max_min.h"
 #include "llk_sfpu/ckernel_sfpu_unary_power.h"
 #include "llk_sfpu/ckernel_sfpu_unary_shift.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
@@ -113,6 +114,7 @@
 #include "llk_sfpu/ckernel_sfpu_gcd.h"              // calculate_gcd / calculate_gcd_init
 #include "llk_sfpu/ckernel_sfpu_int_sum.h"          // add_int (Dest tile += the next tile) / sum_int_init
 #include "llk_sfpu/ckernel_sfpu_isclose.h"          // calculate_sfpu_isclose / isclose_init
+#include "llk_sfpu/ckernel_sfpu_lcm.h"              // calculate_lcm / calculate_lcm_init
 #include "llk_sfpu/ckernel_sfpu_logaddexp.h"        // calculate_sfpu_logaddexp / calculate_sfpu_logaddexp_init
 #include "llk_sfpu/ckernel_sfpu_logaddexp2.h"       // calculate_sfpu_logaddexp2 / calculate_sfpu_logaddexp2_init
 #include "llk_sfpu/ckernel_sfpu_logsigmoid.h"       // calculate_logsigmoid (x, exp(-x) -> logsigmoid(x))
@@ -799,6 +801,45 @@ void call_unary_sfpu_operation_quasar(
             static_cast<std::uint32_t>(0xBF800000),  // min = -1.0 (fp32)
             static_cast<std::uint32_t>(0x3F800000)); // max = +1.0 (fp32)
     }
+    else if constexpr (OPERATION == SfpuType::unary_max || OPERATION == SfpuType::unary_min)
+    {
+        // Defaults match UnarySFPUGolden UNARY_MAX_MIN_VALUE; Float32 serves every float Dest width.
+#ifdef SFPU_UNARY_MAX_MIN_SCALAR
+        constexpr std::uint32_t UNARY_MAX_MIN_FLOAT_SCALAR = SFPU_UNARY_MAX_MIN_SCALAR;
+#else
+        constexpr std::uint32_t UNARY_MAX_MIN_FLOAT_SCALAR = 0x00000000; // 0.0 (fp32)
+#endif
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_unary_max_min,
+            (OPERATION == SfpuType::unary_max /* IS_MAX_OP */, DataFormat::Float32, APPROX, ITERATIONS),
+            dst_index,
+            VectorMode::RC,
+            UNARY_MAX_MIN_FLOAT_SCALAR);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_max_int32 || OPERATION == SfpuType::unary_min_int32)
+    {
+        // Defaults match UnarySFPUGolden INT_MAXMIN_SCALAR and a two's-complement Dest.
+#ifdef SFPU_UNARY_MAX_MIN_SCALAR
+        constexpr std::uint32_t UNARY_MAX_MIN_INT32_SCALAR = SFPU_UNARY_MAX_MIN_SCALAR;
+#else
+        constexpr std::uint32_t UNARY_MAX_MIN_INT32_SCALAR = 1000;
+#endif
+#ifdef SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE
+        constexpr bool UNARY_MAX_MIN_SIGN_MAGNITUDE = true;
+#else
+        constexpr bool UNARY_MAX_MIN_SIGN_MAGNITUDE = false;
+#endif
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_unary_max_min,
+            (OPERATION == SfpuType::unary_max_int32 /* IS_MAX_OP */, DataFormat::Int32, APPROX, ITERATIONS, UNARY_MAX_MIN_SIGN_MAGNITUDE),
+            dst_index,
+            VectorMode::RC,
+            UNARY_MAX_MIN_INT32_SCALAR);
+    }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
         call_zero_comp_operation_quasar<OPERATION, DST_SYNC, is_fp32_dest_acc_en, ITERATIONS>(dst_index, sfpu_format);
@@ -1282,7 +1323,7 @@ constexpr ckernel::sfpu::QuantVariant quant_variant_of()
  * @tparam OP The binary op (compile-time `ckernel::BinaryOp` constant).
  * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode. Must match the calculate step;
  *         atan2 uses it to select the reciprocal variant its polynomial expects.
- * @tparam SIGN_MAGNITUDE_FORMAT Int32 Dest holds SMAG32 (quant family, ADD/MUL, signed comparisons and GCD).
+ * @tparam SIGN_MAGNITUDE_FORMAT Int32 Dest holds SMAG32 (quant family, ADD/MUL, signed comparisons, GCD and LCM).
  *         Must match the calculate step.
  * @tparam APPROXIMATION_MODE Whether to use the operation's approximate path. Must match the
  *         calculate step; atan2 uses it to select the LUT-only reciprocal path.
@@ -1332,6 +1373,10 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
     else if constexpr (OP == BinaryOp::ISCLOSE)
     {
         isclose_init();
+    }
+    else if constexpr (OP == BinaryOp::LCM)
+    {
+        calculate_lcm_init();
     }
     else if constexpr (OP == BinaryOp::FMOD)
     {
@@ -1421,7 +1466,7 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
  *         NearestEven applies software RNE before the store. Ignored for MUL (no narrowing)
  *         and DIV (always rounds RNE regardless). No-op when is_fp32_dest_acc_en is true.
  * @tparam ITERATIONS Number of SFPU loop iterations.
- * @tparam SIGN_MAGNITUDE_FORMAT Int32 Dest holds SMAG32 (quant family, ADD/MUL, signed comparisons and GCD).
+ * @tparam SIGN_MAGNITUDE_FORMAT Int32 Dest holds SMAG32 (quant family, ADD/MUL, signed comparisons, GCD and LCM).
  *         Must match the init step.
  * @tparam APPROXIMATION_MODE Whether to use the operation's approximate path. Must match the
  *         init step; atan2 uses it to select the LUT-only reciprocal path.
@@ -1579,6 +1624,19 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             is_fp32_dest_acc_en,
             calculate_sfpu_atan2,
             (APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            VectorMode::RC);
+    }
+    else if constexpr (OP == BinaryOp::LCM)
+    {
+        // Compute-API lcm contract: |operand| <= 2^LCM_MAX_INPUT_BITS - 1.
+        SFPU_BINARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_lcm,
+            (SIGN_MAGNITUDE_FORMAT, LCM_MAX_INPUT_BITS, ITERATIONS),
             src0_tile,
             src1_tile,
             dst_tile,
