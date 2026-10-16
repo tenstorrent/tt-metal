@@ -8,8 +8,13 @@
 The model hook ``official_taps(spec, layers, tokens, chunk, chunk_size)`` runs the official implementation (its own
 modeling code, its shipped dtypes; e.g. through hooks.hf_model) over the first ``chunk + 1`` chunks of ``tokens`` and
 returns, for the chunk ``chunk``, ``{layer: {step: {"inputs": [the step's inputs, in the framework step's input order,
-as the official code held them], "output": its output}}}``. The reference role writes it together with
-official_taps.yaml (the official dtypes of every step's inputs and output, testing/noise_floor.py).
+as the official code held them], "output": its output}}}``, plus per layer ``"_state": {"start": ..., "end": ...}``:
+the layer's state as the official run had it at the chunk's start and end, in the reference's own state format (what
+``ref.state_tensors`` returns, the names of ``spec.state_names(layer)``). A stateful step (attention, a compressor)
+reads its prefix from that state, and a layer that reads another layer's state reads the source's end state: the
+golden's state would mix the official run's drift into the comparison (DeepSeek-V4.1 R.5: attention 2-5x its floor at
+layers 20-24 with the golden's caches). The reference role writes the hook together with official_taps.yaml (the
+official dtypes of every step's inputs and output, testing/noise_floor.py).
 
 For every tapped step this runs the fp32 CPU step on the official inputs and records, next to the component goldens
 (official_floor.json, read by noise_floor.arith):
@@ -39,10 +44,31 @@ def _stats(got: torch.Tensor, want: torch.Tensor) -> dict:
     return e
 
 
+def _ctx(ref, layer: int, g, c: int, s, taps: dict):
+    """The reference context of chunk c for ``layer`` with the official run's state (taps[layer]["_state"]: its own
+    at the chunk start, its sources' at the chunk end); the golden's where the hook gives none. (ctx, whose state)."""
+    from models.demos.common.bringup.testing.harness import reference_ctx, sources
+
+    own = (taps.get(layer) or {}).get("_state") or {}
+    srcs = list(sources(layer, s))
+    if not own and not any((taps.get(j) or {}).get("_state") for j in srcs):
+        return reference_ctx(ref, layer, g, c, s), "golden"
+    start, end = c * g.chunk, (c + 1) * g.chunk
+    state = ref.new_state(g.seq)
+    if start:
+        ref.load_state(state, layer, own["start"] if own.get("start") is not None else g.state(layer, at=start), start)
+    for j in srcs:
+        js = (taps.get(j) or {}).get("_state") or {}
+        ref.load_state(state, j, js["end"] if js.get("end") is not None else g.state(j, at=end), end)
+    ctx = ref.chunk_context(layer, start, g.chunk, state)
+    ctx.extra.setdefault("tokens", g.tokens()[start:end])
+    return ctx, "official"
+
+
 def generate(s, write: bool = True) -> dict:
     from models.demos.common.bringup.testing import component_checks as CC
     from models.demos.common.bringup.testing import noise_floor as NF
-    from models.demos.common.bringup.testing.harness import component_golden, reference_ctx
+    from models.demos.common.bringup.testing.harness import component_golden
 
     hooks = s.hooks()
     if not hasattr(hooks, "official_taps"):
@@ -57,6 +83,9 @@ def generate(s, write: bool = True) -> dict:
         bt = s.block_type_of(L)
         for st in ref.block_graph(L):
             t = (taps.get(L) or {}).get(st.name)
+            whose = _ctx(ref, L, g, c, s, taps)[1]
+            if st.stateful and whose == "golden" and t is not None:
+                print(f"note L{L:02d}.{st.name}: stateful, but the hook gives no official state; the golden's is used")
             if t is None:
                 unmapped.append(f"L{L:02d}.{st.name}")
                 continue
@@ -65,9 +94,8 @@ def generate(s, write: bool = True) -> dict:
             cpu = ref.component(L, st.name)
 
             def run(*inp, L=L, cpu=cpu):
-                return cpu(
-                    reference_ctx(ref, L, g, c, s), *[x.clone() if isinstance(x, torch.Tensor) else x for x in inp]
-                )
+                ctx = _ctx(ref, L, g, c, s, taps)[0]  # fresh per run: a stateful step writes its state
+                return cpu(ctx, *[x.clone() if isinstance(x, torch.Tensor) else x for x in inp])
 
             try:
                 y32 = run(*xs)
@@ -82,7 +110,7 @@ def generate(s, write: bool = True) -> dict:
                 )
                 continue
             official = official.float().reshape(y32.shape)
-            rec = {"vs_step": _stats(official, y32)}
+            rec = {"vs_step": _stats(official, y32), "state": whose}
             want = g.layer(c, L).get(st.output)
             if want is not None and want.is_floating_point() and want.numel() == official.numel():
                 gs = _stats(official, want.float().reshape(official.shape))

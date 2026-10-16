@@ -25,9 +25,11 @@ reference: |
   e.g. an fp8-valued kv; `<block type>.<step>` where block types differ), and (b) the hook `official_taps(spec,
   layers, tokens, chunk, chunk_size)` in hooks.py: the official modeling code at its shipped dtypes (hf_model) run
   over the first chunk + 1 chunks, tapped with forward hooks or wrapped methods, returning for that chunk `{layer:
-  {step: {"inputs": [...in the step's input order, as the official code held them], "output": ...}}}` for every
-  step of every layer (testing/official_floor.py checks the map: the fp32 step on the tapped inputs must give the
-  official output within its input-nudge floor).
+  {step: {"inputs": [...in the step's input order, as the official code held them], "output": ...}, "_state":
+  {"start": ..., "end": ...}}}` for every step of every layer, `_state` being the layer's state as the official run
+  had it at the chunk's start and end in the reference's own state format (what `state_tensors` returns): stateful
+  steps read their prefix from it (testing/official_floor.py checks the map: the fp32 step on the tapped inputs and
+  state must give the official output within its input-nudge floor).
 plan: |
   Role: plan. Map every component to TTNN and shard the model over the $mesh mesh ($chips chips, $dram GB each). Write
   `$bringup_dir/plan.yaml` (schema in `models/demos/common/bringup/plan/memory.py`), `$bringup_dir/plan.md`, and

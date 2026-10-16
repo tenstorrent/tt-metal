@@ -105,7 +105,7 @@ def test_an_fp32_output_has_no_bf16_resolution_floor(tmp_path):
     )
 
 
-def _fake_official(s, wrong: str | None = None, skip: str | None = None):
+def _fake_official(s, wrong: str | None = None, skip: str | None = None, state: str | None = None):
     """official_taps for the fixture: each step on the golden's inputs rounded to bf16, its output in bf16 (the
     'official code' at bf16); ``wrong`` hands that step another step's output, ``skip`` leaves a step out."""
     from models.demos.common.bringup.testing.harness import reference_ctx
@@ -127,6 +127,16 @@ def _fake_official(s, wrong: str | None = None, skip: str | None = None):
                 ]
                 y = ref.component(L, st.name)(reference_ctx(ref, L, g, c, spec), *xs)
                 out[L][st.name] = {"inputs": xs, "output": y.to(torch.bfloat16) if y.is_floating_point() else y}
+            if state is not None:  # the official run's state: the golden's ("same") or another chunk's ("stale")
+                st0 = g.state(L, at=c * g.chunk)
+                if state != "same":  # another run's state: the prefix the step reads is not the official one
+                    st0 = {
+                        k: (v + v.float().std() * torch.randn_like(v.float())).to(v.dtype)
+                        if v.is_floating_point()
+                        else v
+                        for k, v in st0.items()
+                    }
+                out[L]["_state"] = {"start": st0, "end": g.state(L, at=(c + 1) * g.chunk)}
             if wrong:
                 other = next(
                     n for n in out[L] if n != wrong and out[L][n]["output"].shape == out[L][wrong]["output"].shape
@@ -168,3 +178,17 @@ def test_the_official_floor_command_reads_the_spec_from_the_gate_env(gspec, monk
     monkeypatch.setattr(s.hooks(), "official_taps", _fake_official(s), raising=False)
     monkeypatch.setenv("BRINGUP_SPEC", str(s.path))
     assert OF.main([]) == 0
+
+
+def test_a_stateful_step_reads_the_official_runs_state(gspec, monkeypatch):  # noqa: F811
+    """The official taps' own state (here: the golden's, then a wrong one) is what the fp32 step reads."""
+    from models.demos.common.bringup.testing import official_floor as OF
+
+    s = gspec()
+    hooks = s.hooks()
+    monkeypatch.setattr(hooks, "official_taps", _fake_official(s, state="same"), raising=False)
+    doc = OF.generate(s, write=False)
+    assert not doc["errors"] and all(v[str(doc["chunk"])]["state"] == "official" for v in doc["steps"].values())
+    monkeypatch.setattr(hooks, "official_taps", _fake_official(s, state="stale"), raising=False)
+    bad = OF.generate(s, write=False)["errors"]
+    assert bad and all("attention" in e for e in bad), bad  # the stateful step read a prefix that is not its own
