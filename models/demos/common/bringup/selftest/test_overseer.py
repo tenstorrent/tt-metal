@@ -199,3 +199,11 @@ def test_metrics_land_in_the_record_task(monkeypatch, tmp_path):
     M.record("pcc_attention_L00", 0.999)
     assert M.task_id() == "C.swa.attention" and M.load("FIX.2", tmp_path)["pcc_attention_L00"]["value"] == 0.999
     assert not (tmp_path / "C.swa.attention.json").exists()
+
+
+def test_an_overseer_status_is_shown_until_the_run_starts(tmp_path):
+    """F84: why the overseer has the run stopped; the dashboard shows it, the orchestrator clears it at start."""
+    rec = OV.set_status(tmp_path, "re-verifying passed steps, 12/42")
+    assert OV.status(tmp_path)["text"] == rec["text"]
+    OV.clear_status(tmp_path)
+    assert OV.status(tmp_path) is None

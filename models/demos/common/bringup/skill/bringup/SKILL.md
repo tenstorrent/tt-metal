@@ -213,7 +213,14 @@ and never below one rounding of the output to its official dtype. A selection fl
 gated metrics are errors (rel L2 for float outputs, the missed fraction for integer ones, `err_*` `<= limit`); PCC is
 recorded as a diagnostic only, being blind to a scale or an offset. After a change of limits, rerun every passed step's
 gates once without touching the run (`python -m models.demos.common.bringup.core.verify --spec <spec> --tasks 'C.*'
-...`) and queue a fix job for each failure. The gate metrics read `>= limit` (the `<metric>_limit` the test
+...`) and queue a fix job for each failure.
+
+**Numerics that cannot be fixed: leave them, with a note (owner's general guidance).** When a step misses its noise
+floor and no bug or lower-precision choice explains it at the device's normal settings, do not chase it with
+emulation (multi-pass or split matmuls, exact kernels, CPU-side arithmetic): no production run would ever allow
+them, and a model brought up that way is useless. Leave the step as it is, with a note (a known_issues entry with
+the evidence; the owner's waiver in `tests.waivers`, reported on the dashboard and in the end-of-run report), keep
+the run going, and debug it once the full bring-up produces output tokens, where its real effect shows. The gate metrics read `>= limit` (the `<metric>_limit` the test
 records). A fixed bar either lets real errors through or, when the reference's own dtypes cannot meet it, makes the
 agents raise the device precision above the reference to clear it, which the owner rejects: match the reference's
 precision, never exceed it to pass a test. When a gate fails on a fixed number, the number is the bug: fix the

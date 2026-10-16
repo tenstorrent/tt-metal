@@ -163,6 +163,7 @@ _EXPECT = {}  # (layer, step, chunk, mode, thr) -> Expect; reused only with the 
 def _run_auto(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
     from models.demos.common.bringup.plan.op_request import deferred_steps
     from models.demos.common.bringup.testing import component_checks as CC
+    from models.demos.common.bringup.testing import noise_floor as NF
 
     g, c = component_golden(s)
     layer = s.representative_layer(s.block_type_of(layer)) if layer is None else layer
@@ -201,6 +202,7 @@ def _run_auto(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
     elif outs["golden"].numel() == want.numel():
         metrics.record(name, CC.gate_value(outs["golden"], want, ex.kind, compare_mode))  # PCC: a diagnostic only
     ok = not ex.evaluate(outs) and ok
+    ok = NF.waive(s, s.block_type_of(layer), step, ok, outs["golden"], err_name)  # F85: an owner waiver, recorded
     # A, B, A: the second inputs above already ran after the golden (B); run the golden again and compare its bytes
     gold = next(x for x in ex.cases if x.name == "golden")
     other = [x for x in ex.cases if x.name != "golden"]
@@ -358,6 +360,12 @@ def _calib(s, kind) -> float:
 _STEP_CTX: dict = {}  # step -> (floor, chain) of the running swap test (F79: frozen tests wrap _check_step)
 
 
+def CC_rel(a, b) -> float:
+    from models.demos.common.bringup.testing.component_checks import rel
+
+    return rel(a, b)
+
+
 def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: bool, model=None, chain=None) -> bool:
     """F80: model = the step's noise floor on the same inputs ({"outs": nudged fp32 runs, "scores": ...}, limits vs
     the CPU step), chain = the step's outputs when every swapped step runs nudged from the golden block input, one per
@@ -467,8 +475,17 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
         rel_lim = lim["swap_step_calib"] * max(err, res_e["rel"]) if err is not None else lim["swap_step_rel"]
     metrics.record(f"{tag}_rel_limit", rel_lim)
     e = step_errors(got, cpu)
-    for k, v in e.items():
-        metrics.record(f"{tag}_{k}", v)
+    own = None
+    if outs and all(isinstance(o, torch.Tensor) and o.is_floating_point() for o in outs):
+        # F83: each row and column against its own floor, and the additive bias per column, replace the worst-row and
+        # row-ratio limits (they divided by small norms behind a fixed 1e-6 floor)
+        lim["swap_step_row"] = lim["swap_step_ratio"] = math.inf
+        nud = max(CC_rel(o, cpu) for o in outs)
+        ar_rel = (ar.get("vs_step") or {}).get("rel") or 0.0
+        own = NF.own_floor(got, cpu, outs, out_dtype, max(1.0, ar_rel / nud) if nud > 0 else 1.0)
+        e.update(own)
+    for key, v in e.items():
+        metrics.record(f"{tag}_{key}", v)
     dev = max(1 - e["ratio_min"], e["ratio_max"] - 1)
     bad = [
         f"rel {e['rel']:.5f} > {rel_lim:.5f}" if not e["rel"] <= rel_lim else "",
@@ -489,6 +506,20 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
             else ""
         ),
         f"{fl['unexplained']} rows select an entry the nudge does not explain" if fl and fl["unexplained"] else "",
+        f"row {own['row_at']} is {own['row_floor']:.3g} x its own floor (limit {k:g})"
+        if own and own["row_floor"] > k
+        else "",
+        (
+            f"column {own['col_at']} is {own['col_floor']:.3g} x its own floor (limit {k:g})"
+            if own and own.get("col_floor", 0) > k
+            else ""
+        ),
+        (
+            f"column {own['bias_at']} has an additive bias of {own['bias_signed']:+.3g} of its rms, "
+            f"{own['bias_floor']:.3g} x its floor (limit {k:g})"
+            if own and own.get("bias_floor", 0) > k and fl is None
+            else ""
+        ),
     ]
     bad = [b for b in bad if b]
     print(
@@ -497,9 +528,14 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
         f"ratio=[{e['ratio_min']:.5f}, {e['ratio_max']:.5f}] bias={e['bias']:+.6f}"
         + (f" reselected={e['reselected']:.4f}" if "reselected" in e else "")
         + (f" flips={fl['rows']} unexplained={fl['unexplained']}" if fl else "")
+        + (
+            f" own-floor row={own['row_floor']:.3g} col={own.get('col_floor', 0):.3g} bias={own.get('bias_floor', 0):.3g}"
+            if own
+            else ""
+        )
         + (f" ({'; '.join(bad)})" if bad else "")
     )
-    return ok and not bad
+    return NF.waive(s, block_type, st.name, ok and not bad, got, tag)  # F85: an owner waiver, recorded
 
 
 def _check_tail(s, ref, layer: int, steps, last, seen: dict, cpu, snapshot: dict) -> bool:
@@ -550,7 +586,9 @@ def _check_tail(s, ref, layer: int, steps, last, seen: dict, cpu, snapshot: dict
         f"{'ok  ' if ok else 'FAIL'} {tag}: block out vs the same block with the CPU {last.name} output: "
         f"rel={e['rel']:.6f} (<= {lim:.6f}, {how}) worst row={e['row']:.6f}"
     )
-    return ok
+    from models.demos.common.bringup.testing import noise_floor as NF
+
+    return NF.waive(s, s.block_type_of(layer), last.name, ok, seen["out"], tag)  # F85: the last step's waiver
 
 
 def _model_chain(s, ref, hooks, steps, layer: int, g, c: int, swapped, block_type: str) -> list | None:

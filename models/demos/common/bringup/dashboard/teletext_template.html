@@ -240,6 +240,7 @@ function pIndex(){
   const fact = (lab, val, rows) => { if (!val) return; wrap(val, 32).slice(0, rows).forEach((l, i) => { if (!i) b.t(y, 0, lab, YEL); b.t(y, 7, l, WHT); y++; }); };
   fact("MODEL", D.model, 1); fact("TARGET", D.target, 2); fact("BOX", D.box, 2);
   if (D.generated){ b.t(y, 0, "SNAP", YEL); b.t(y, 7, trunc(`${D.generated}  ${D.branch || ""}`, 33), CYN); y++; }
+  if (D.overseer_status){ b.t(y, 0, "HOLD", RED); b.t(y, 7, trunc(D.overseer_status, 33), WHT); y++; }
   y = Math.max(y, 10);
   // progress
   const n = D.tasks.length, cnt = statusCounts(), pass = cnt.PASS || 0;

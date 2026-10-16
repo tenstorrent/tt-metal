@@ -110,6 +110,13 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    reference's precision, find the device error that exceeds the noise floor (a truncation, a bias, a wrong dtype);
    if there is none, stop and report the check, its value and its limit (answer `disagree` on a note asking for it)
    instead of raising the precision. The owner rejects a model made accurate above its reference to pass a test.
+   Numerics that cannot be fixed (owner's general guidance): when a step misses its noise floor and you find no bug
+   and no lower-precision choice to undo at the device's normal settings (HiFi4, fp32 accumulation, approximations
+   off, TF32 weight rounding at load), never emulate: no multi-pass or split (hi + lo) matmuls, no exact kernels, no
+   CPU-side arithmetic. No production run would allow them. Leave the step as it is, write a known_issues entry with
+   the evidence (the stage, its numbers vs the floor), say so in your summary (answer `disagree` on a note or fix
+   that asks for more), and stop: the owner waives it (`tests.waivers`) and it is debugged once the model produces
+   output tokens.
 15. Every box. When the brief has a "Boxes" section, the code must run on every box it lists, not only on this run's:
    read chip counts and the mesh shape from the mesh, never from constants that fit this box; size anything that
    depends on the chip count (cache stripes, a chip's share of a chunk, alignment) for every listed box (e.g. the least
