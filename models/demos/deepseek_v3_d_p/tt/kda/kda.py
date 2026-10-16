@@ -274,8 +274,8 @@ class ttKDA:
             hidden, width = tuple(fused.shape)[-2:]
             gate_start = self._convolution_width + self.config.head_k_dim
             gate_end = gate_start + self.config.v_dim
-            self.input_projection_gate_columns = (
-                self._idle_projection_heads(grid, program_config, width - self.config.v_dim) * self.config.head_v_dim
+            self.input_projection_gate_columns = self._input_projection_gate_tiles(grid, program_config, width) * (
+                ttnn.TILE_SIZE
             )
             kept_end = gate_start + self.input_projection_gate_columns
             self.output_gate_weight = ttnn.slice(fused, [0, kept_end], [hidden, gate_end])
@@ -356,6 +356,23 @@ class ttKDA:
             packer_l1_acc=True,
         )
         self._history_exchange = _HistoryExchange.shared(mesh_device, self._convolution_width)
+
+    def _input_projection_gate_tiles(self, grid: ttnn.CoreCoord, program_config, width: int) -> int:
+        """Output-gate tile columns the input projection keeps: its per-core width without the gate's columns plus
+        one tile (K3 at 640 rows: 293 tiles fill 25 of 26 per core column; at 27, 31 gate tiles fit). The extra
+        tile column costs the input projection less than the 15 tiles it takes from the gate, whose matmul sets the
+        relay's window."""
+        if not program_config.tuned_projection_matmuls:
+            return 0
+        out_k, out_n = tuple(self.weights.output_projection.shape)[-2:]
+        base_tiles = -(-(width - self.config.v_dim) // ttnn.TILE_SIZE)
+        base = tuned_projection_matmul_configs(
+            grid, self.active_seq_len_local, width - self.config.v_dim, out_k, out_n
+        )[0]
+        if base is None:
+            return 0
+        per_core = base.per_core_N + 1
+        return max(0, min(self.config.v_dim // ttnn.TILE_SIZE, per_core * grid.x - base_tiles))
 
     def _idle_projection_heads(self, grid: ttnn.CoreCoord, program_config, base_width: int) -> int:
         """Output-gate heads that fit in the input projection's per-core width without widening it."""
