@@ -75,8 +75,8 @@ statistics (LSE) for a cross-chip merge, which it does not today.
 
 All tests open the 4x8 mesh (`FABRIC_1D_RING`), split it into four 1x8 rows and give every row its
 own users. References are fp32 torch (`reference/model.py`, bit-identical to HF on real weights).
-These numbers are for the MiMo-V2.6-Flash-RL checkpoint. MiMo-V2.6-Flash-MOPD, the target, has the same
-`config.json` and tensor layout; its numbers are not measured yet.
+The first table is for the MiMo-V2.6-Flash-RL checkpoint. MiMo-V2.6-Flash-MOPD, the target, has the same
+`config.json` and tensor layout; its baseline and chunked-prefill numbers follow.
 `mimo-v2.6/dev` carries `test_decoder_tp8_dp4.py` and `test_model_tp8_dp4.py`; the MoE, traced-decode
 and 1M-capacity tests stay on `mimo-v2.6/tp8-dp4`.
 
@@ -89,6 +89,20 @@ and 1M-capacity tests stay on `mimo-v2.6/tp8-dp4`.
 | `test_model_tp8_dp4.py` | 48 layers, BFP4 experts, 4 rows x 3 users | 40 logits rows vs fp32 reference: top-1 97.5%, PCC mean 0.9924 (min 0.9686). Shared prompt identical on all 4 rows (PCC 1.0, same greedy text) |
 | `test_model_traced_tp8_dp4.py` | traced decode, 4 rows x 2 users | traced == eager tokens (logits PCC 1.000000). Step: 1 row 164 ms, 4 rows 228 ms -> 35.1 tok/s aggregate vs 12.2 tok/s on one row (eager: 690 ms for 4 rows) |
 | `test_capacity_1m_tp8_dp4.py` | 4 rows x 4 users, max_seq_len 1M, traced decode | fits (above). 16 users: 261 ms/step at 4K, 278 ms at 128K, 449 ms at ~1M |
+
+MOPD baseline, measured 2026-10-16 on one BH Galaxy with `mimo-v2.6/dev` at 650497c08d3 (before chunked
+prefill), the MOPD fp32 golden and a weight cache converted fresh from the MOPD checkpoint (first row
+1373 s, the other rows 13-17 s from the cache):
+
+| Test | What | Result |
+|---|---|---|
+| `test_decoder_tp8_dp4.py` layer 0 (global, dense) | same inputs as the RL rows | output PCC 0.99999 / 0.99999; block-delta PCC prefill 0.9982, decode 0.9977 |
+| layer 1 (SWA + sink, MoE) | same | output 0.9996 / 0.9990; delta 0.9925 / 0.9933 |
+| layer 5 (global, MoE) | same | output 0.9987 / 0.9965; delta 0.9979 / 0.9999 |
+| `test_model_tp8_dp4.py` | 48 layers, BFP4 experts, 4 rows x 3 users | 40 logits rows vs the MOPD fp32 reference: top-1 95.0%, PCC mean 0.9928 (min 0.9615). Shared prompt identical on all 4 rows (PCC 1.0, same greedy text) |
+
+Against this baseline, chunked prefill leaves the single-layer worst cases unchanged and the 48-layer
+top-1 at 95.0% (PCC mean 0.9925 vs 0.9928, min 0.9604 vs 0.9615).
 
 Chunked prefill (#60808), measured 2026-10-16 on one BH Galaxy with the MOPD checkpoint, branch
 `mimo-v2.6/chunked-prefill` (padded V, `SlidingWindowSpec` SWA layout, owner-chip global prefill):
