@@ -440,6 +440,13 @@ void kernel_main() {
     }
     flush();
     misc[1] = returned;
+    // drain: every row this port injected is consumed (its credit snapshot landed), so nothing of this call reaches
+    // this core after the program ends (the arena may be per call: its L1 is another op's after this)
+    for (bool open_ = true; open_;) {
+        invalidate_l1_cache();
+        open_ = false;
+        for (uint32_t ci = 0; ci < N * AP; ++ci) open_ |= cred[ci] != used[ci];
+    }
     if constexpr (__TPROF__) {
         const uint32_t tdbg = get_arg_val<uint32_t>(a_dbg + 2), tpage = get_arg_val<uint32_t>(a_dbg + 3);
         volatile tt_l1_ptr uint32_t* d = misc + 192;
@@ -901,13 +908,38 @@ def sparse_combine_rf_prepare(
         acc_xy += [v.x, v.y]
     state = {}
 
-    def build(y, out):
+    def arena_cbs(placed, arena_t):
+        cbs = []
+        for cb, crs, off, total, fmt, page in placed:
+            d_ = ttnn.cb_descriptor_from_sharded_tensor(cb, arena_t, address_offset=off, total_size=total, core_ranges=crs)
+            d_.format_descriptors = [ttnn.CBFormatDescriptor(cb, fmt, page)]
+            cbs.append(d_)
+        return cbs
+
+    def rebind(arena_t):
+        """The last build's descriptor with its CBs on arena_t (a per-call arena at the same address): what a
+        program-cache miss needs (the CBs bind the buffer, a freed one is no use)."""
+        assert int(arena_t.buffer_address()) == area, "the arena moved: the kernels bake its address"
+        mesh_desc = ttnn.MeshProgramDescriptor()
+        for ch, program, placed in state["placed"]:
+            program.cbs = arena_cbs(placed, arena_t)
+            mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(*ch), ttnn.MeshCoordinate(*ch))] = program
+        return mesh_desc
+
+    def build(y, out, arena_t=None):
+        nonlocal area_t
+        if arena_t is not None:  # (a per-call arena: the same address, its buffer bound by the CBs)
+            assert int(arena_t.buffer_address()) == area, "the arena moved: the kernels bake its address"
+            area_t = arena_t
         y_ct = list(ttnn.TensorAccessorArgs(y).get_compile_time_args())
         t_ct = list(ttnn.TensorAccessorArgs(tab_t).get_compile_time_args())
         o_ct = list(ttnn.TensorAccessorArgs(out).get_compile_time_args())
         mesh_desc = ttnn.MeshProgramDescriptor()
+        state["placed"] = []
         for ch, ports in chips.items():
             program = ttnn.ProgramDescriptor()
+            placed = []  # (the arena-backed CBs: rebind(arena) rebuilds them on another arena tensor)
+            state["placed"].append((ch, program, placed))
             my = [(d, li, port_core[(ch, d, li)]) for d, p in ports.items() for li in range(len(p["links"]))]
             pset = ttnn.CoreRangeSet([ttnn.CoreRange(k, k) for _, _, k in my])
             aset = ttnn.CoreRangeSet([ttnn.CoreRange(k, k) for k in acc_cores])
@@ -937,20 +969,13 @@ def sparse_combine_rf_prepare(
                 for cb, crs, total, fmt, page in specs:
                     kinds = ("p", "a") if cb == CB_TAB else (("p",) if cb == CB_INJ else ("a",))
                     if l1 is not None and cb == CB_INJ:  # (the hand-off ring: the writers address it directly)
-                        d_ = ttnn.cb_descriptor_from_sharded_tensor(
-                            cb, area_t, address_offset=RINGS, total_size=QP * ISLOT, core_ranges=crs
-                        )
-                        d_.format_descriptors = [ttnn.CBFormatDescriptor(cb, fmt, page)]
-                        cbs.append(d_)
+                        placed.append((cb, crs, RINGS, QP * ISLOT, fmt, page))
                         continue
                     off = max(ends[k] for k in kinds)
                     for k in kinds:
                         ends[k] = al(off + total)
-                    d_ = ttnn.cb_descriptor_from_sharded_tensor(
-                        cb, area_t, address_offset=off, total_size=total, core_ranges=crs
-                    )
-                    d_.format_descriptors = [ttnn.CBFormatDescriptor(cb, fmt, page)]
-                    cbs.append(d_)
+                    placed.append((cb, crs, off, total, fmt, page))
+                cbs = arena_cbs(placed, area_t)
                 assert (
                     max(ends.values()) <= arena_bytes
                 ), f"combine needs {max(ends.values()) >> 10} KB per core, the arena has {arena_bytes >> 10} KB"
@@ -1105,17 +1130,27 @@ def sparse_combine_rf_prepare(
             state["key"], state["desc"] = k, build(y, out)
         return ttnn.generic_op([y, tab_t, out], state["desc"])
 
-    def build_l1(y, out):  # (the descriptor and, per chip in its order, the y writers' hand-off args)
+    def build_l1(y, out, arena_t=None):  # (the descriptor and, per chip in its order, the y writers' hand-off args)
         l1_args.clear()
-        desc = build(y, out)
+        desc = build(y, out, arena_t)
         return desc, [list(v) for v in l1_args]
+
+    # what a fresh (uninitialized) arena needs zeroed for a call to start from scratch: per core (logical x, y), runs of
+    # (offset in the arena, bytes, stride, count): the state block, and at the accumulators every ring slot's piece
+    # trailers (a slot is taken when its trailer flags are set)
+    trl = [pc * PS + (row_bytes - pc * PD if pc + 1 == NP else PD) for pc in range(NP)]
+    zero_runs = {c: [(0, RINGS, 0, 1)] for c in used_cores}
+    for c in acc_cores:
+        zero_runs[(c.x, c.y)] = [(0, RINGS, 0, 1)] + [(RINGS + t, 32, SLOT, N * L * D) for t in trl]
 
     run.build = build
     run.build_l1 = build_l1
+    run.rebind = rebind
     run.tdbg = tdbg_t
     run.tab = tab_t
     run.collector = dict(core=coll, counts_addr=area + cnt_off, writers=writers)
     run.counts = dict(n_inj={k: len(v) for k, v in inj.items()}, n_ret=n_ret)
     run.cells = run_cells
+    run.zero_runs = zero_runs
     run.dbg = dbg_t
     return run

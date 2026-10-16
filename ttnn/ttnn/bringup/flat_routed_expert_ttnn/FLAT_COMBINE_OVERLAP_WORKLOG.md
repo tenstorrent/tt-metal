@@ -759,3 +759,36 @@ Bit-exact vs the host model on all 8 chips, 3 routings, after every step. Slowes
 Probe that did not help: multicast all-to-all exchanges (every core multicasting into one rectangle at once): 187 us.
 Phases now (32 cores, uniform): read 5, sort 14, counts exchange 2, totals + placement 14-19, rows + home 6, core 0
 final 4. With the planner on 32 cores, fused (device tables): uniform 2425, spread 2714, packed 5896 us, exact.
+
+### The whole Kimi K3 MoE block, token-split (2026-10-16) — `models/demos/deepseek_v3_d_p/tt/moe/tt_k3_token_split_moe.py`
+Per chip S = 320 own tokens, K3 widths (H 7168, latent 3584, I 3072, shared I 6144, top-16 sigmoid + bias, SiTU),
+56 experts per chip (the K3 4 x 4 stage's per-chip load; 448 on the LoudBox's 8 chips, from a pool of 8 random
+experts). Stages: router (gate matmul + moe_grouped_topk) -> routing all-gather (single-page rows for the planner) ->
+planner (32 cores) -> latent down -> arena + state zero -> dense all-gather dispatch -> fused flat + combine (L1
+hand-off, device tables, gate weights) -> RMSNorm + latent up -> shared expert (replicated, own rows) -> add.
+Test: `tests/perf/scratch_k3_moe_layer.py`. Exact: PCC 0.99623 vs the host model with the device's routing (0.99592
+with host routing; 99.41% of the top-16 picks equal, the rest near-ties in bf16 logits); a repeat call is bit-identical.
+
+Bring-up problems and decisions:
+- A persistent arena (~1.06 MB per core, lockstep) leaves the dense ops ~360 KB: the gate matmul's static CBs clash.
+  The arena is now per call, allocated after the dense ops and freed after the experts. What made that safe:
+  * the combine's state (22 KB block at the arena base: credits, used / ret / misc counters, collector counts) and
+    every ring slot's piece trailer (a slot is taken when its trailer flags are set) are zeroed on the device
+    (`combine_rf/l1_zero.py`, 5.6 us), and the writers' words; a call then starts like the first one;
+  * the dispatch all-gather between the zeroing and the experts is the cross-chip barrier (no chip's rows land in a
+    chip that has not zeroed);
+  * the ports drain at the end (wait until every injected row's credit is back), so nothing lands in a chip's L1
+    after its program ends (it is another op's by then);
+  * the arena must land at one address (the kernels bake it): the writers' words go above it, and the dense ops run
+    once at build (CCL semaphores are allocated on first use and kept, 256 B that moved the arena);
+  * a program-cache miss rebuilds the combine's CBs on the call's arena (`run.rebind`), not the freed first one.
+- The planner reads the routing as one page [1, N S K]: row-major uint16 has no reshape, so ids go
+  typecast u32 -> row-major -> reshape -> u16 and both gather along the last dim (columns, then rows).
+
+Per stage, slowest chip, median of 5 (us; stage = the programs between two syncs):
+| router | routing gather | planner | latent down | arena zero | dispatch (dense AG) | experts + combine | latent norm + up | shared expert | add | total |
+| 252 | 312 | 53 | 305 | 6 | 394 | 2538 | 286 | 1055 | 34 | 5233 |
+The fused op is where expected (2425-2530 uniform). Every dense op is far from its floor (the gate matmul is 12.8 MB
+of bf16 weights at 896 experts; latent down 27 MB bf8 ~53 us; shared 3 x 47 MB ~274 us): default configs, row-major
+round trips, tiny all-gathers at ~60 us each. Next: dense op configs, the routing gather in one op, the sparse 2D
+dispatch, the shared expert in its own lane (parallel with the experts).
