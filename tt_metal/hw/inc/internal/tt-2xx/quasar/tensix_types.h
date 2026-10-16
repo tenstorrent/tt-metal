@@ -260,10 +260,10 @@ enum class DataFormat : std::uint8_t {
     Int4 = 23,
     UInt4 = 25,
     // Special-case encodings used only for int 2x-packed Src Reg Storage :
-    MxFp4_2x_A = 27,  // store MXFP4 in Src Regs as 2x-packed format with 5-bit exp this is supported in Quasar only
-                      // (not supported on other architectures)
-    MxFp4_2x_B = 24,  // store MXFP4 in Src Regs as 2x-packed format with 8-bit exp this is supported in Quasar only
-                      // (not supported on other architectures)
+    MxFp4_2x_A = 27,  // store MXFP4 in Src Regs as 2x-packed format with 5-bit exp; supported on base Quasar only
+                      // (not on the 4-row variant or other architectures)
+    MxFp4_2x_B = 24,  // store MXFP4 in Src Regs as 2x-packed format with 8-bit exp; supported on base Quasar only
+                      // (not on the 4-row variant or other architectures)
     Int8_2x = 26,     // store INT8 in Src Regs as 2x-Packed INT8;   supported on the 4-row Quasar variant only (not on
                       // base Quasar)
     UInt8_2x = 28,    // store UINT8 in Src Regs as 2x Packed UINT8; supported on the 4-row Quasar variant only (not on
@@ -281,7 +281,8 @@ constexpr bool is_bfp4_b_format([[maybe_unused]] DataFormat format) { return fal
 
 // True for the 2x-packed, src-register-only DataFormats (one Src register lane holds two packed
 // sub-elements, driving the matmul EN_X2 traversal). These never appear as L1/CB formats — only as
-// an unpack_dst (Src register) format. MxFp4_2x_A/B are Quasar-only; Int8_2x/UInt8_2x are 4-row-variant-only.
+// an unpack_dst (Src register) format. MxFp4_2x_A/B are base-Quasar-only (not 4-row); Int8_2x/UInt8_2x
+// are 4-row-variant-only.
 constexpr inline bool is_2x_format(DataFormat format) {
     return format == DataFormat::MxFp4_2x_A || format == DataFormat::MxFp4_2x_B || format == DataFormat::Int8_2x ||
            format == DataFormat::UInt8_2x;
