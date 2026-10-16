@@ -5,6 +5,10 @@
 # The X280 (Blackhole L2CPU) runtime and its firmware images. Built only with
 # -DTT_METAL_BUILD_X280=ON; not part of the fabric library or of Metalium.
 
+option(TT_METAL_BUILD_X280 "Enables build of the X280 runtime (needs TT_METAL_BUILD_TESTS)" OFF)
+if(NOT TT_METAL_BUILD_X280)
+    return()
+endif()
 if(NOT TT_METAL_BUILD_TESTS)
     message(FATAL_ERROR "TT_METAL_BUILD_X280 requires TT_METAL_BUILD_TESTS: x280 links test_metal_common_libs")
 endif()

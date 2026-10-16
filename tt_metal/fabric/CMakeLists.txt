@@ -118,6 +118,4 @@ install(
     "*.proto"
 )
 
-if(TT_METAL_BUILD_X280)
-    add_subdirectory(experimental/x280)
-endif()
+add_subdirectory(experimental/x280)
