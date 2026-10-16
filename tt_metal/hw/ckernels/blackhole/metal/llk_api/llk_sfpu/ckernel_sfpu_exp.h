@@ -952,20 +952,14 @@ void exp_init() {
         constexpr float A_scaled = A * scale_fp32;
 
         // Load constant A into LREG[12]
-        TTI_SFPLOADI(0, 0xA, lo16(A_scaled));
-        TTI_SFPLOADI(0, 0x8, hi16(A_scaled));
-        TTI_SFPCONFIG(0, 12, 0);
+        __builtin_rvtt_sfpconfig_value(12, __builtin_bit_cast(unsigned, A_scaled));
 
         // Load constant (B-C) into LREG[13]
-        TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
-        TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
-        TTI_SFPCONFIG(0, 13, 0);
+        __builtin_rvtt_sfpconfig_value(13, __builtin_bit_cast(unsigned, B_minus_C));
 
         // Load shift amount (15) into LREG[14] for SFPSHFT2
         // SFPSHFT2 mode 5 reads shift amount from VC register
-        TTI_SFPLOADI(0, 0xA, 15);  // Lower 16 bits = 15
-        TTI_SFPLOADI(0, 0x8, 0);   // Upper 16 bits = 0
-        TTI_SFPCONFIG(0, 14, 0);   // Store in LREG[14]
+        __builtin_rvtt_sfpconfig_value(14, 15);
 
 #ifndef DISABLE_SFPLOADMACRO
         // ===================================================================
@@ -999,9 +993,7 @@ void exp_init() {
         //   - STOCHRND delay 3: 0x1E
         //   - SETSGN delay 5: 0xEF
         //   - STORE delay 6: 0x73
-        TTI_SFPLOADI(0, 0xA, 0x85EF);  // Slots 1-2: Simple=0xEF (delay 5), MAD=0x85
-        TTI_SFPLOADI(0, 0x8, 0x731E);  // Slots 3-4: Round=0x1E (delay 3), Store=0x73 (delay 6)
-        TTI_SFPCONFIG(0, 4, 0);        // Load into Macro Sequence Register 0 (dest=4)
+        __builtin_rvtt_sfpconfig_value(4, 0x731E85EF);  // Macro Sequence Register 0
 
         // Reset LoadMacroConfig[Lane].Misc for all lanes
         // Sets StoreMod0=0 (SRCB), UsesLoadMod0ForStore=0, UnitDelayKind=0xF
@@ -1075,14 +1067,10 @@ void exp_init() {
                 .set(ADDR_MOD_6);
 
             // LREG12 = 1/ln2
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3fb8);
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xaa3b);
-            TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+            __builtin_rvtt_sfpconfig_value(p_sfpu::LREG12, 0x3fb8aa3b);
 
             // LREG13 = c2 = 4.791750143340323e-15f (0x27aca418)
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x27ac);
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
-            TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+            __builtin_rvtt_sfpconfig_value(p_sfpu::LREG13, 0x27aca418);
         } else {
             // fp32 scalar path (_sfpu_exp_fp32_accurate_) — uses the scalar
             // reciprocal LLK for negative inputs, so its constants must be
