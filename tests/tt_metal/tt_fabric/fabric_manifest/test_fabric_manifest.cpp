@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <hostdevcommon/fabric_common.h>
 #include <tt_stl/overloaded.hpp>
 
 #include <algorithm>
@@ -40,6 +41,7 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 namespace {
@@ -179,8 +181,17 @@ void check_top_level(
     EXPECT_EQ(
         keys_of(manifest),
         (std::set<std::string>{
-            "manifest_version", "kind", "run", "fabric_context", "vocabulary", "archs", "enums", "meshes"}));
+            "manifest_version",
+            "kind",
+            "run",
+            "fabric_context",
+            "vocabulary",
+            "archs",
+            "enums",
+            "routing_encodings",
+            "meshes"}));
     EXPECT_EQ(keys_of(manifest.at("vocabulary")), (std::set<std::string>{"categories", "kinds"}));
+    EXPECT_EQ(manifest.at("routing_encodings"), json(make_routing_encodings_json()));
     EXPECT_EQ(manifest.at("manifest_version"), FABRIC_MANIFEST_VERSION);
     EXPECT_EQ(manifest.at("kind"), "fabric_manifest");
     EXPECT_GE(std::filesystem::last_write_time(manifest_path), suite_start);
@@ -1300,6 +1311,12 @@ void check_enums(const json& manifest) {
         static_cast<uint32_t>(TerminationSignal::IMMEDIATELY_TERMINATE));
     EXPECT_EQ(value_of("RouterState", "running"), static_cast<uint32_t>(RouterState::RUNNING));
     EXPECT_EQ(value_of("NocCmdBuf", "at_cmd_buf"), static_cast<uint32_t>(manifest::NocCmdBuf::AT_CMD_BUF));
+    EXPECT_EQ(
+        value_of("compressed_routing_values", "compressed_invalid_routing_table_entry"),
+        static_cast<uint32_t>(compressed_routing_values::COMPRESSED_INVALID_ROUTING_TABLE_ENTRY));
+    EXPECT_EQ(
+        value_of("NocScatterWriteChunkEncoding", "chunk_encoding_seminc_flush"),
+        static_cast<uint32_t>(CHUNK_ENCODING_SEMINC_FLUSH));
 }
 
 }  // namespace
@@ -1357,6 +1374,12 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(lower_enum_name(NocSendType::NOC_UNICAST_READ), "noc_unicast_read");
     // NOC_SEND_TYPE_LAST names the same value; the manifest writes the name declared first.
     EXPECT_EQ(lower_enum_name(NocSendType::NOC_SPARSE_MCAST_WRITE), "noc_sparse_mcast_write");
+
+    EXPECT_EQ(
+        lower_enum_name(compressed_routing_values::COMPRESSED_INVALID_ROUTING_TABLE_ENTRY),
+        "compressed_invalid_routing_table_entry");
+    // CHUNK_ENCODING_LAST names the same value; the manifest writes the name declared first.
+    EXPECT_EQ(lower_enum_name(CHUNK_ENCODING_SEMINC_FLUSH), "chunk_encoding_seminc_flush");
 
     EXPECT_EQ(lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_0), "riscv_0");
     EXPECT_EQ(lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_1), "riscv_1");
@@ -1421,6 +1444,103 @@ TEST(ManifestArgs, KernelInputsAccounted) {
     auto new_define = kernel;
     new_define.defines["SOME_NEW_DEFINE"] = "";
     EXPECT_THROW(check_kernel_inputs_accounted(new_define), std::exception);
+}
+
+// routing_encodings holds the fabric's constants, and a reader that uses only its values reads back what the fabric's
+// encoders write.
+TEST(RoutingEncodings, Values) {
+    using LowLatency = RoutingFieldsConstants::LowLatency;
+    using Codec = Routing2DCodec;
+    const json encodings = make_routing_encodings_json();
+    EXPECT_EQ(keys_of(encodings), (std::set<std::string>{"1d", "2d", "scatter"}));
+    const auto field = [](uint64_t word, uint32_t shift, uint32_t bits) {
+        return static_cast<uint32_t>((word >> shift) & ((uint64_t{1} << bits) - 1));
+    };
+
+    // 1D: a multicast that starts 3 hops away and writes 2 chips forwards twice, writes and forwards, then writes.
+    const auto& one_d = encodings.at("1d");
+    EXPECT_EQ(one_d.at("bits_per_hop"), LowLatency::FIELD_WIDTH);
+    EXPECT_EQ(one_d.at("hops_per_word"), LowLatency::BASE_HOPS);
+    const auto& hop = one_d.at("hop");
+    EXPECT_EQ(
+        hop,
+        (json{
+            {"noop", LowLatency::NOOP},
+            {"write_only", LowLatency::WRITE_ONLY},
+            {"forward_only", LowLatency::FORWARD_ONLY},
+            {"write_and_forward", LowLatency::WRITE_AND_FORWARD}}));
+    uint32_t word = 0;
+    routing_encoding::encode_1d_multicast(3, 2, &word, 1);
+    const auto hop_at = [&](uint32_t index) {
+        const auto bits = one_d.at("bits_per_hop").get<uint32_t>();
+        return field(word, index * bits, bits);
+    };
+    EXPECT_EQ(hop_at(0), hop.at("forward_only"));
+    EXPECT_EQ(hop_at(1), hop.at("forward_only"));
+    EXPECT_EQ(hop_at(2), hop.at("write_and_forward"));
+    EXPECT_EQ(hop_at(3), hop.at("write_only"));
+    EXPECT_EQ(hop_at(4), hop.at("noop"));
+
+    // 2D: each direction's action bit, and each table code widens to the bit of the direction it names.
+    const auto& two_d = encodings.at("2d");
+    const auto& action_bits = two_d.at("action_bits");
+    EXPECT_EQ(keys_of(action_bits), (std::set<std::string>{"east", "west", "north", "south", "z", "local_deliver"}));
+    for (const auto direction :
+         {eth_chan_directions::EAST,
+          eth_chan_directions::WEST,
+          eth_chan_directions::NORTH,
+          eth_chan_directions::SOUTH,
+          eth_chan_directions::Z}) {
+        const auto name = lower_enum_name(direction);
+        EXPECT_EQ(action_bits.at(name), Codec::action_bit(direction)) << name;
+    }
+    EXPECT_EQ(action_bits.at("local_deliver"), Codec::ACTION_LOCAL_DELIVER);
+    const auto bit = [&](const char* name) { return action_bits.at(name).get<uint32_t>(); };
+
+    EXPECT_EQ(two_d.at("table_entry_bits"), Codec::BITS_PER_ACTION);
+    EXPECT_EQ(two_d.at("table_entries_per_byte"), Codec::ACTIONS_PER_BYTE);
+    const auto y_codes = two_d.at("y_code_action").get<std::vector<uint32_t>>();
+    ASSERT_EQ(y_codes.size(), 1u << Codec::BITS_PER_ACTION);
+    EXPECT_EQ(y_codes[Codec::Y2_STOP], 0u);
+    EXPECT_EQ(y_codes[Codec::Y2_NORTH], bit("north"));
+    EXPECT_EQ(y_codes[Codec::Y2_SOUTH], bit("south"));
+    EXPECT_EQ(y_codes[Codec::Y2_Z], bit("z"));
+    const auto x_codes = two_d.at("x_code_action").get<std::vector<uint32_t>>();
+    ASSERT_EQ(x_codes.size(), 1u << Codec::BITS_PER_ACTION);
+    EXPECT_EQ(x_codes[Codec::X2_STOP], 0u);
+    EXPECT_EQ(x_codes[Codec::X2_EAST], bit("east"));
+    EXPECT_EQ(x_codes[Codec::X2_WEST], bit("west"));
+    EXPECT_EQ(x_codes[Codec::X2_INVALID], 0u);
+
+    // A multicast tree edge's fields read back what mcast_edge_pack packs. Each value sets every bit of its field.
+    const auto& edge = two_d.at("mcast_tree_edge");
+    EXPECT_EQ(edge.at("bytes"), Codec::MCAST_TREE_EDGE_BYTES);
+    const uint16_t packed = Codec::mcast_edge_pack(63, 42, Codec::Y2_Z);
+    const auto edge_field = [&](const char* name) {
+        const auto& bit_field = edge.at(name);
+        return field(packed, bit_field.at("shift").get<uint32_t>(), bit_field.at("bits").get<uint32_t>());
+    };
+    EXPECT_EQ(edge_field("child"), 63u);
+    EXPECT_EQ(edge_field("parent"), 42u);
+    EXPECT_EQ(edge_field("output"), Codec::Y2_Z);
+    const auto& output = edge.at("output");
+    EXPECT_LE(
+        output.at("shift").get<uint32_t>() + output.at("bits").get<uint32_t>(), 8 * edge.at("bytes").get<uint32_t>());
+
+    // Scatter: chunk_encoding_bits reads back each chunk's encoding as set_chunk_encoding writes it.
+    const auto& scatter = encodings.at("scatter");
+    EXPECT_EQ(scatter.at("max_chunks"), NOC_SCATTER_WRITE_MAX_CHUNKS);
+    const auto chunk_bits = scatter.at("chunk_encoding_bits").get<uint32_t>();
+    const std::array<NocScatterWriteChunkEncoding, NOC_SCATTER_WRITE_MAX_CHUNKS> chunks = {
+        CHUNK_ENCODING_SEMINC_FLUSH, CHUNK_ENCODING_UNICAST_WRITE, CHUNK_ENCODING_SEMINC_NO_FLUSH, CHUNK_ENCODING_NOP};
+    uint8_t chunk_encoding = 0;
+    for (uint32_t chunk = 0; chunk < chunks.size(); ++chunk) {
+        set_chunk_encoding(chunk_encoding, chunks[chunk], chunk);
+    }
+    for (uint32_t chunk = 0; chunk < chunks.size(); ++chunk) {
+        EXPECT_EQ(field(chunk_encoding, chunk * chunk_bits, chunk_bits), static_cast<uint32_t>(chunks[chunk]))
+            << "chunk " << chunk;
+    }
 }
 
 TEST_F(Fabric1DManifestFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config, suite_start_); }

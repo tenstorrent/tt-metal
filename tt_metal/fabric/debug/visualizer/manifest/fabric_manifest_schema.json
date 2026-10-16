@@ -19,6 +19,7 @@
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/enum" }
     },
+    "routing_encodings": { "$ref": "#/$defs/routing_encodings" },
     "meshes": {
       "type": "object",
       "minProperties": 1,
@@ -26,7 +27,9 @@
       "additionalProperties": { "$ref": "#/$defs/mesh" }
     }
   },
-  "required": ["manifest_version", "kind", "run", "fabric_context", "vocabulary", "archs", "enums", "meshes"],
+  "required": [
+    "manifest_version", "kind", "run", "fabric_context", "vocabulary", "archs", "enums", "routing_encodings", "meshes"
+  ],
   "additionalProperties": false,
 
   "$defs": {
@@ -243,6 +246,90 @@
         }
       },
       "required": ["values"],
+      "additionalProperties": false
+    },
+
+    "routing_encodings": {
+      "description": "The values the fabric encodes routes with. The same in every run.",
+      "type": "object",
+      "properties": {
+        "1d": {
+          "type": "object",
+          "properties": {
+            "bits_per_hop": { "$ref": "#/$defs/count" },
+            "hops_per_word": { "$ref": "#/$defs/count" },
+            "hop": {
+              "type": "object",
+              "properties": {
+                "noop": { "$ref": "#/$defs/count" },
+                "write_only": { "$ref": "#/$defs/count" },
+                "forward_only": { "$ref": "#/$defs/count" },
+                "write_and_forward": { "$ref": "#/$defs/count" }
+              },
+              "required": ["noop", "write_only", "forward_only", "write_and_forward"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["bits_per_hop", "hops_per_word", "hop"],
+          "additionalProperties": false
+        },
+        "2d": {
+          "type": "object",
+          "properties": {
+            "action_bits": {
+              "type": "object",
+              "propertyNames": { "$ref": "#/$defs/name" },
+              "additionalProperties": { "$ref": "#/$defs/count" },
+              "required": ["east", "west", "north", "south", "z", "local_deliver"]
+            },
+            "table_entry_bits": { "$ref": "#/$defs/count" },
+            "table_entries_per_byte": { "$ref": "#/$defs/count" },
+            "y_code_action": { "$ref": "#/$defs/code_actions" },
+            "x_code_action": { "$ref": "#/$defs/code_actions" },
+            "mcast_tree_edge": {
+              "type": "object",
+              "properties": {
+                "bytes": { "$ref": "#/$defs/count" },
+                "child": { "$ref": "#/$defs/bit_field" },
+                "parent": { "$ref": "#/$defs/bit_field" },
+                "output": { "$ref": "#/$defs/bit_field" }
+              },
+              "required": ["bytes", "child", "parent", "output"],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "action_bits", "table_entry_bits", "table_entries_per_byte", "y_code_action", "x_code_action",
+            "mcast_tree_edge"
+          ],
+          "additionalProperties": false
+        },
+        "scatter": {
+          "type": "object",
+          "properties": {
+            "chunk_encoding_bits": { "$ref": "#/$defs/count" },
+            "max_chunks": { "$ref": "#/$defs/count" }
+          },
+          "required": ["chunk_encoding_bits", "max_chunks"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["1d", "2d", "scatter"],
+      "additionalProperties": false
+    },
+    "code_actions": {
+      "description": "The action byte each 2-bit table code widens to, indexed by code. 0 moves nowhere.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/count" },
+      "minItems": 1
+    },
+    "bit_field": {
+      "type": "object",
+      "properties": {
+        "shift": { "$ref": "#/$defs/count" },
+        "bits": { "type": "integer", "minimum": 1 }
+      },
+      "required": ["shift", "bits"],
       "additionalProperties": false
     },
 

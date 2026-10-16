@@ -48,7 +48,8 @@ packet header layout comes from `fabric_packet_header_layouts.cpp`.
 | `vocabulary` | Every field `category` and `kind` |
 | `archs.<arch>.areas` | L1 areas the architecture fixes: heartbeat, telemetry, routing table, go and launch messages, Ethernet firmware mailbox |
 | `archs.<arch>.types` | Every struct and tagged union a schema names, including the run's packet header. A struct has its size and members in order, and a union its size, its tag's enum and its members |
-| `enums` | Every enum a schema names, with its values |
+| `enums` | Every enum a schema names, and the enums routes are encoded with, with their values |
+| `routing_encodings` | The values routes are encoded with: 1D hop values, 2D action bits and the codes that widen to them, the multicast tree edge layout, and the scatter chunk encoding's width |
 | `meshes` | Each mesh, its chips, and each local chip's routers |
 
 ### Paths
@@ -91,6 +92,25 @@ path:
   union's entry in `types` has `"kind": "union"`, `tag_schema` (the `enum:` the tag holds), its members, each at
   offset 0 with the `tag_value` that picks it, and `default_member`, the member every other tag value picks, when it
   has one. To decode one, read the tag, then the member it picks; when it picks none, the bytes are raw.
+
+### Routing encodings
+
+`routing_encodings` holds the values the fabric encodes routes with, read from the constants the fabric encodes them
+with, so a decoder does not copy them. They are the same in every run; the run's route buffer sizes are in
+`fabric_context`. Every packed field below starts at the lowest bits.
+
+- `1d`: a 1D route word holds `hops_per_word` hop fields of `bits_per_hop` bits each, hop 0 first. `hop` names each
+  value a field holds.
+- `2d`: `action_bits` is the bit each direction, and `local_deliver`, sets in a 2D action byte. The routing table's
+  action vectors hold codes of `table_entry_bits` bits, `table_entries_per_byte` to a byte. `y_code_action[code]` and
+  `x_code_action[code]` are the action byte a Y or X code widens to: 0 for stop, and for X's reserved code 3.
+  `mcast_tree_edge` is one multicast tree edge: `bytes` long, with `child`, `parent` and `output` fields, each
+  `{shift, bits}`. `output` is a code of the edge's axis.
+- `scatter`: a scatter write's `chunk_encoding` holds one `NocScatterWriteChunkEncoding` per chunk, of
+  `chunk_encoding_bits` bits each, for at most `max_chunks` chunks.
+
+`enums` also lists `compressed_routing_values`, the values of the first-hop direction tables, and
+`NocScatterWriteChunkEncoding`.
 
 ### Fields
 
@@ -172,6 +192,8 @@ names what to update. By kind of change:
 | A member added to a packet header command struct | The build, for a member that changes an offset or the size | Its `StructLayout` in `fabric_struct_layouts.hpp`. A member added in the tail padding of a struct that lists `LAYOUT_TAIL_PAD` is not detected: it reads as padding |
 | New enum | The writer, when a schema names it | An entry in `DescribedEnums` (`fabric_struct_layouts.hpp`) |
 | New enum value | Nothing for enums enchantum reads; the build for `EDMStatus`, and for `NocSendType` when no `NocCommandFields` member is picked by it | `FABRIC_MANIFEST_EDM_STATUSES` for `EDMStatus`; for `NocSendType`, the member it picks in `UnionLayout<NocCommandFields>`, and in `UnionLayout<UDMControlFields>` unless the default `write` is right |
+| A routing encoding value changes, or a direction is added | Nothing: `routing_encodings` reads the constants, and lists every direction | Nothing |
+| A wider 1D hop field | The build, until `RoutingFieldsConstants::LowLatency::HopAction` names every value the field holds; then the schema check | `HopAction` (`fabric_common.h`), and the schema's `hop` names |
 | New computed fact | Nothing | The model, the collector or chip pass, the writer, the tests, a paragraph above, and the schema |
 | A change to the JSON's shape | The schema check | `fabric_manifest_schema.json` |
 | A field table or unrecorded list change | `ManifestDocs.UpToDate` | Regenerate `FIELDS.md` (below) |

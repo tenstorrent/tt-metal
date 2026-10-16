@@ -6,12 +6,14 @@
 
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <enchantum/enchantum.hpp>
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <hostdevcommon/fabric_common.h>
 
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
@@ -22,6 +24,7 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 
 #include <algorithm>
@@ -672,6 +675,7 @@ void serialize_fabric_manifest_to_file(
         describe_arch(tt::tt_metal::MetalContext::instance().hal(), fabric_context.get_packet_header_config());
     manifest["archs"] = make_archs_json(arch);
     manifest["enums"] = make_enums_json();
+    manifest["routing_encodings"] = make_routing_encodings_json();
 
     auto mesh_ids = control_plane.get_mesh_graph().get_all_mesh_ids();
     std::ranges::sort(mesh_ids, {}, [](const MeshId& mesh_id) { return *mesh_id; });
@@ -733,6 +737,67 @@ void write_fabric_manifest(const ControlPlane& control_plane, const tt::llrt::Ru
             manifest_path.string(),
             e.what());
     }
+}
+
+// ============ Routing encodings ============
+
+json make_routing_encodings_json() {
+    using LowLatency = RoutingFieldsConstants::LowLatency;
+    using Codec = Routing2DCodec;
+
+    static_assert(
+        enchantum::count<LowLatency::HopAction> == (1u << LowLatency::FIELD_WIDTH),
+        "every value a 1D hop field holds must be a HopAction");
+    json hop = json::object();
+    for (const auto action : enchantum::values<LowLatency::HopAction>) {
+        hop[lower_enum_name(action)] = static_cast<uint32_t>(action);
+    }
+    json one_d;
+    one_d["bits_per_hop"] = LowLatency::FIELD_WIDTH;
+    one_d["hops_per_word"] = LowLatency::BASE_HOPS;
+    one_d["hop"] = std::move(hop);
+
+    // COUNT is not a direction: its bit is local delivery's.
+    json action_bits = json::object();
+    for (const auto direction : enchantum::values<eth_chan_directions>) {
+        if (direction < eth_chan_directions::COUNT) {
+            action_bits[lower_enum_name(direction)] = Codec::action_bit(direction);
+        }
+    }
+    action_bits["local_deliver"] = Codec::ACTION_LOCAL_DELIVER;
+
+    // The action each table code widens to, indexed by code.
+    json y_code_action = json::array();
+    json x_code_action = json::array();
+    for (uint8_t code = 0; code < (1u << Codec::BITS_PER_ACTION); ++code) {
+        y_code_action.push_back(Codec::widen_y(code));
+        x_code_action.push_back(Codec::widen_x(code));
+    }
+
+    const auto bit_field = [](uint32_t shift, uint32_t bits) { return json{{"shift", shift}, {"bits", bits}}; };
+    json mcast_tree_edge;
+    mcast_tree_edge["bytes"] = Codec::MCAST_TREE_EDGE_BYTES;
+    mcast_tree_edge["child"] = bit_field(0, Codec::MCAST_EDGE_COORD_BITS);
+    mcast_tree_edge["parent"] = bit_field(Codec::MCAST_EDGE_PARENT_SHIFT, Codec::MCAST_EDGE_COORD_BITS);
+    mcast_tree_edge["output"] = bit_field(Codec::MCAST_EDGE_OUTPUT_SHIFT, Codec::BITS_PER_ACTION);
+
+    json two_d;
+    two_d["action_bits"] = std::move(action_bits);
+    two_d["table_entry_bits"] = Codec::BITS_PER_ACTION;
+    two_d["table_entries_per_byte"] = Codec::ACTIONS_PER_BYTE;
+    two_d["y_code_action"] = std::move(y_code_action);
+    two_d["x_code_action"] = std::move(x_code_action);
+    two_d["mcast_tree_edge"] = std::move(mcast_tree_edge);
+
+    json scatter;
+    scatter["chunk_encoding_bits"] = NOC_SCATTER_CHUNK_ENCODING_BITS;
+    scatter["max_chunks"] = NOC_SCATTER_WRITE_MAX_CHUNKS;
+
+    json out;
+    out["1d"] = std::move(one_d);
+    out["2d"] = std::move(two_d);
+    out["scatter"] = std::move(scatter);
+    return out;
 }
 
 }  // namespace tt::tt_fabric
