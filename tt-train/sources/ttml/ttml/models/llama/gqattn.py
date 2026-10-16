@@ -51,6 +51,9 @@ class GroupedQueryAttention(AbstractModuleBase):
         self.use_composite_sdpa = use_composite_sdpa
 
         head_dim = embedding_size // num_heads
+        # Fused Q+K+V: on one device the rows are [Q | K | V]. Under TP, device d takes a contiguous
+        # slice and reads it as [Q_d | K_d | V_d], so the full weight is
+        # [Q_0 | K_0 | V_0 | Q_1 | K_1 | V_1 | ...] and its row order changes with the TP size.
         qkv_dim = (num_heads + 2 * num_groups) * head_dim  # == embedding_size + 2 * num_groups * head_dim
 
         # Head/group counts stored here are LOCAL (per-device) so that splitting

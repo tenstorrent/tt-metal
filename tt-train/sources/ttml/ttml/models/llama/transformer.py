@@ -80,7 +80,9 @@ class LlamaMLP(AbstractModuleBase):
         if intermediate_size is None:
             intermediate_size = compute_swiglu_intermediate_size(embedding_size)
 
-        # Fused gate+up: one [2*I, E] weight, rows [0:I) = gate, [I:2*I) = up.
+        # Fused gate+up: on one device the rows are [gate | up]. Under TP, device d takes a contiguous
+        # slice and reads it as [gate_d | up_d], so the full weight is
+        # [gate_0 | up_0 | gate_1 | up_1 | ...] and its row order changes with the TP size.
         gate_up_size = 2 * intermediate_size
 
         # Each device's gate|up half is I/tp wide and must stay tile-aligned, or the packed
