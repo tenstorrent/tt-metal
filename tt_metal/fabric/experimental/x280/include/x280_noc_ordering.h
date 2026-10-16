@@ -18,7 +18,7 @@
  *
  * Counted Writes (3) is not a member. One store through such a window leaves
  * the L2CPU tile's later non-posted stores returning before their NoC
- * acknowledgement until an ASIC reset (x280_to_tensix.hpp initialize); noc.h's
+ * acknowledgement until an ASIC reset; noc.h's
  * raw `posted`/`strict_order` entry points still reach it.
  */
 typedef enum {

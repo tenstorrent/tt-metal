@@ -38,7 +38,6 @@ set(_x280_abi_headers
     x280_hart_protocol.h
     x280.h
     noc.h
-    socket_layout.h
     rt/measurement.h
     rt/x280_atomic.h
     rt/x280_hw.h

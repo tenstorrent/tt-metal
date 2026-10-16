@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // TileImpl's resident-idle image, per-hart protocol, trap, and reset-vector operations.
-// Shared PLL and reset-register sequencing stays on ChipImpl.
+// Shared PLL and reset-register sequencing is on ChipImpl.
 
 #include "x280_tile_impl.hpp"
 

@@ -66,8 +66,8 @@ std::shared_ptr<X280MetalTransport> X280MetalTransport::bind(const MeshDevice& m
     require_open(mesh, "cannot bind the Metal transport");
 
     // Silicon has one default context. MeshDeviceImpl does not expose its
-    // context id in an installed header, so the deprecated borrow remains
-    // confined here until MetalEnv exposes the same route.
+    // context id in an installed header, so the deprecated borrow is
+    // confined here.
     auto& context = tt::tt_metal::MetalContext::instance();
     const auto& cluster = context.get_cluster();
     if (context.rtoptions().get_watcher_enabled()) {

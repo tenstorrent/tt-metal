@@ -4,7 +4,7 @@
 
 // Host-side X280 hardware map: the addresses a host needs to program an L2CPU
 // that the firmware itself never sees, so they do not belong in the shared
-// x280/include/x280.h ABI header.
+// include/x280_address_map.h ABI header.
 //
 // Two address spaces, and mixing them up silently targets the wrong thing:
 //
@@ -29,7 +29,7 @@ constexpr uint64_t kResetUnitBase = 0x80030000ull;
 constexpr uint64_t kL2cpuResetReg = kResetUnitBase + 0x14;
 
 // PLL4 drives all four L2CPU tiles. Direct MMIO programming through the ARC
-// tile is the documented bring-up method, not a workaround. CMFW also owns this
+// tile is the bring-up method, not a workaround. CMFW also owns this
 // PLL via its power-setting message, so no such message may be issued while a
 // slew is in flight.
 constexpr uint64_t kPll4Base = 0x80020500ull;

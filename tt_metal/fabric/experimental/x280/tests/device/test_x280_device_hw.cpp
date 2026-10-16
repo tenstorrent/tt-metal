@@ -255,7 +255,7 @@ void expect_inventory_matches_devices(const X280Runtime& runtime, const std::vec
 
 // The physical chip id must come from build_id(), not id(): the latter is a
 // process-global mesh counter that happens to be 0 for the first mesh a process
-// opens, which is exactly how that bug hides on a single-card box.
+// opens, so using id() goes unnoticed on a single-card system.
 TEST_F(X280DeviceHw, RuntimeInventoryUsesTheMeshsPhysicalChipId) {
     const auto tiles = runtime_->tile_ids();
     ASSERT_FALSE(tiles.empty());
@@ -727,7 +727,7 @@ TEST_F(X280DeviceHw, OversizedActiveImageIsRejectedWithoutWritingLim) {
 // Outbound NOC windows
 // ---------------------------------------------------------------------------
 
-// The lean runtime retains read-only NOC diagnostics but no public NOC
+// The runtime exposes read-only NOC diagnostics but no public NOC
 // mutator. Reading both ownership classes establishes the dynamic-TLB route
 // without perturbing firmware state.
 TEST_F(X280DeviceHw, ReadsOutboundNocWindowsWithoutMutation) {

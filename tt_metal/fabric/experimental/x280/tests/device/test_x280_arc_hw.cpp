@@ -50,7 +50,7 @@ TEST(X280Arc, ArcMessageRoundTrip) {
             const std::string what = error.what();
             if (what.find("not recognized by ARC firmware") != std::string::npos) {
                 printf(
-                    "%s: arc_msg(NOP) rejected by CMFW (expected on this bundle): %s\n",
+                    "%s: arc_msg(NOP) rejected by CMFW (expected on CMFW bundles without NOP): %s\n",
                     chip_label(chip).c_str(),
                     what.c_str());
             } else {

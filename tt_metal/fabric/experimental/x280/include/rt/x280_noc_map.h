@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * rt/x280_noc_map.h -- CPU NOC TLB slot reservations and destination tiles.
+ * rt/x280_noc_map.h -- CPU NOC TLB slot reservations.
  *
  * The 224 2 MiB TLB entries are per-tile state, and only one firmware image is
  * resident at a time, so the ranges below overlap harmlessly. The invariant is
@@ -23,23 +23,13 @@
 /* 2 MiB CPU NOC TLB slots
  *
  *   slots     owner                      declared in
- *   16..23    NOC write/read tests       X280_TLB_NOC_TEST_BASE, below
  *   16..155   packet-injection credits   X280_TLB_PACKET_INJECTION_CREDIT_BASE, below
  *   16..19    eth_credit forwarders      X280_TLB_ETH_CREDIT_BASE, below
- *   24..28    NOC read + ordering        X280_TLB_NOC_PHASE5_BASE, below
- *   32, 33    integration write/read     X280_TLB_INT_*, below
- *   34..38    benchmark suite            X280_TLB_BENCH_*, below
- *   40..43    per-hart DDR bandwidth     X280_TLB_DDR_MULTIHART_BASE, below
- *   47, 48    DDR fill / read windows    X280_TLB_DDR_FILL / _READ, below
- *   50        PCIe pinned-host write     X280_TLB_PCIE_SPIKE, below
- *   60..71    socket data/notify/DRAM    socket_layout.h (X280_SOCKET_TLB_*)
+ *   34        firmware posted write      X280_TLB_BENCH_WRITE, below
  *   120..127  paired-case outbound       X280_TLB_PAIRED_BASE, below
  *   156       packet-injection timer      X280_TLB_PACKET_INJECTION_TIMER, below
  *   157..160  core-sync barrier          X280_TLB_CORE_SYNC_BASE, below
  *   192..223  host-programmed            X280_TLB_HOST_BASE, below
- *
- * The socket block lives in socket_layout.h because those indices are part of
- * the host-visible layout contract that file defines.
  */
 
 /* Windows the host may program on a tile's behalf, so a case can be handed a
@@ -152,49 +142,7 @@ _Static_assert(
     "eth_credit forwarder windows must stay below the core-sync block its director uses");
 #endif
 
-/* NOC write tests: four targets x 2 modes (posted, non-posted), base + idx * 2. */
-#define X280_TLB_NOC_TEST_BASE 16
-
-/* NOC read tests: roundtrip and ordering, base + 0..4. */
-#define X280_TLB_NOC_PHASE5_BASE 24
-
-/* Integration tests */
-#define X280_TLB_INT_WRITE 32 /* posted     */
-#define X280_TLB_INT_READ 33  /* non-posted */
-
-/* NOC benchmarks */
-#define X280_TLB_BENCH_WRITE 34       /* posted write                */
-#define X280_TLB_BENCH_READ 35        /* non-posted read             */
-#define X280_TLB_BENCH_WRITE2 36      /* dual-window interleave      */
-#define X280_TLB_BENCH_READ_SCALAR 37 /* non-posted, scalar read BW  */
-#define X280_TLB_BENCH_READ_VECTOR 38 /* non-posted, vector read BW  */
-
-/* Per-hart DDR bandwidth: one slot per hart, base + hartid. */
-#define X280_TLB_DDR_MULTIHART_BASE 40
-
-/* Bandwidth-matrix and concurrent-DDR tests: the DDR-side windows
- * used to prime and then read back a region over the NOC. */
-#define X280_TLB_DDR_FILL 47
-#define X280_TLB_DDR_READ 48
-
-/* PCIe NoC-write spike: window onto pinned host RAM via the PCIe tile. */
-#define X280_TLB_PCIE_SPIKE 50u
-
-/* NOC destination tiles, as (x, y); pack with x280_noc_xy_pack from x280_noc_coord.h.
- *
- * Only DRAM (9,3) and (9,8) are reachable from L2CPU0 -- every other bank
- * hangs the access. Tensix y=0 is router-only and y=1 is the ethernet
- * row, so the first worker on any column is at y=2.
- */
-
-#define X280_NOC_DRAM_L2CPU0_X 9 /* paired DRAM bank, reachable */
-#define X280_NOC_DRAM_L2CPU0_Y 3
-#define X280_NOC_DRAM_L2CPU1_X 9 /* peer DRAM bank,   reachable */
-#define X280_NOC_DRAM_L2CPU1_Y 8
-
-#define X280_NOC_TENSIX_A_X 1 /* Tensix worker (1,11)  */
-#define X280_NOC_TENSIX_A_Y 11
-#define X280_NOC_TENSIX_B_X 16 /* Tensix worker (16,2)  */
-#define X280_NOC_TENSIX_B_Y 2
+/* A firmware-owned posted-write window, outside the host block. */
+#define X280_TLB_BENCH_WRITE 34
 
 #endif /* X280_RT_NOC_MAP_H */

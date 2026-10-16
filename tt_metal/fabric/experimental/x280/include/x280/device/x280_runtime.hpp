@@ -75,7 +75,7 @@ enum class RuntimeOpenOutcome {
 enum class LimEccPrimingPolicy {
     // Prime unprepared reset-held hardware and return ResetRequired.
     AutoPrime,
-    // Return Failed on unprimed hardware without increasing WayEnable.
+    // Return PreparationRequired on unprimed hardware without increasing WayEnable.
     RequirePrepared,
 };
 

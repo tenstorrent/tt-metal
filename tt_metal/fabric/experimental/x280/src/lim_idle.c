@@ -35,13 +35,6 @@
  * we leave behind here is dead. __builtin_unreachable() also tells
  * the compiler that control flow does not return, which lets it
  * elide the function epilogue entirely. */
-/* RISC-V Zihintpause `pause` (FENCE pred=W,succ=0,fm=0 == 0x0100000F).
- * Emitted as a raw word because the stock binutils in our toolchain does
- * not assemble the `pause` mnemonic without an explicit arch option, but
- * the X280 silicon *does* implement it: measured ~30 core cycles of stall
- * per `pause` vs ~0 for a NOP on this part. Using it in the spin loop keeps
- * the core quiescent (far fewer LIM accesses / loop iterations) without
- * depending on an interrupt to wake. */
 
 static inline __attribute__((noreturn)) void boot_jump_to_active_fw(uint64_t entry) {
     x280_fence_ow();

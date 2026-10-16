@@ -23,7 +23,7 @@ ENTRY(_start)
  *   [0x08130000, 0x08131B00)   per-hart protocol at 0x08131800
  *                              (x280_hart_protocol.h)
  *   [0x08131B00, 0x081E0000)   host runtime available_lim() (Legacy layout)
- * Active-FW capacity ~1.121 MiB; current builds use < 64 KiB. */
+ * Active-FW capacity ~1.121 MiB. */
 LIM_BASE = 0x08001000;
 LIM_SIZE = 0x0011F000;   /* ~1.121 MiB */
 STACK_SIZE = 0x8000;     /* 32 KiB per-hart */
@@ -92,8 +92,8 @@ SECTIONS {
 ASSERT(_bss_end <= (_stack_top - NUM_HARTS * STACK_SIZE),
        "x280.ld: active-FW code/data/bss overflow into stack/trap-diag")
 
-/* Images built with X280_PER_HART_PROTOCOL zero no .bss -- entry.S drops the
- * hart-0 loop, because nothing held the other harts behind it. Their link
+/* Images built with X280_PER_HART_PROTOCOL zero no .bss -- entry.S has no
+ * hart-0 zeroing loop for them, because nothing holds the other harts behind it. Their link
  * rules pass --defsym=X280_REQUIRE_NO_BSS=1 to hold the precondition here. */
 ASSERT(DEFINED(X280_REQUIRE_NO_BSS) ? (_bss_end == _bss_start) : 1,
        "x280.ld: per-hart images must carry no .bss -- entry.S zeroes none")

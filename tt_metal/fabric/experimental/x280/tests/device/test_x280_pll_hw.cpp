@@ -16,21 +16,18 @@
 // restoration does not undo a CMFW that stopped accepting power messages
 // mid-slew -- that needs `tt-smi -r <device>`.
 //
-// A second case here unclocked hardware L2CPU 0 (postdiv0 = 0) to prove the
-// all-ones guard fires. It is gone because it cannot be undone. It assumed that
-// PLL4 living in the ARC tile kept restoration reachable; measured on a
-// Blackhole Galaxy, the host NOC read of the unclocked tile wedges the path to
-// the ARC as well, so every subsequent register access -- including the restore
-// -- times out around 220 ms and the chip stays unclocked. Recovering it needs
-// a chassis reset, and the PCIe error stream in the meantime is enough to take
-// the host down. A guard that is only reachable when it is not needed is not a
-// guard, so no scope-guard rework brings the case back.
+// No case here unclocks hardware L2CPU 0 (postdiv0 = 0): that cannot be undone.
+// PLL4 lives in the ARC tile, but on a Blackhole Galaxy the host NOC read of
+// the unclocked tile wedges the path to the ARC as well, so every subsequent
+// register access -- including a restore -- times out around 220 ms and the
+// chip stays unclocked. Recovering it needs a chassis reset, and the PCIe error
+// stream in the meantime is enough to take the host down.
 //
 // Run with:
 //   X280_ALLOW_PLL_SLEW=1 TT_METAL_RUNTIME_ROOT=<tt-metal> TT_VISIBLE_DEVICES=N
 //   build/test/tt_metal/x280/x280_pll_test
 // Omit TT_VISIBLE_DEVICES to sweep the whole mesh. Prefer a host where nothing
-// else holds /dev/tenstorrent/*; a fleet telemetry agent counts.
+// else holds /dev/tenstorrent/*; a telemetry daemon counts.
 
 #include "x280_device_test_support.hpp"
 
@@ -243,8 +240,7 @@ uint32_t poll_l2cpuclk(tt::umd::TTDevice* dev, uint32_t expect_mhz, int tries = 
 //
 // Route is tt::Cluster::write_reg to the ARC core (the NOC path), not
 // write_to_arc_apb, which resolves to bar_write32 on Galaxy where ARC is
-// reachable over AXI -- the access class implicated in the documented chassis
-// hang.
+// reachable over AXI -- an access class that can hang the chassis.
 TEST(X280Pll, X280PllSlew) {
     if (std::string why; skip_unless_allowed(why)) {
         GTEST_SKIP() << why;

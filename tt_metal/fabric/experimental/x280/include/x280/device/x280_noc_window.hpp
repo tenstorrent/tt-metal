@@ -49,7 +49,7 @@ struct NocWindowWords {
 //
 // Only the fields noc_configure_tlb_2m exposes. The wider bitfield —
 // multicast, striding, exclusion, virtual channel — is reachable from firmware
-// via noc_configure_tlb_2m_ext and has no host-side consumer yet.
+// via noc_configure_tlb_2m_ext and has no host-side consumer.
 struct NocWindow2M {
     // Aligned base of the destination's 2 MiB NOC address span.
     uint64_t target_addr = 0;

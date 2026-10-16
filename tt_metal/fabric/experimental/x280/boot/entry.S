@@ -1,5 +1,5 @@
 /*
- * entry.S - Level 2 bare-metal boot stub for SiFive X280 on Blackhole
+ * entry.S - bare-metal boot stub for SiFive X280 on Blackhole
  *
  * Boot sequence (SiFive coreip_21G3.04.00 manual §5.17):
  *   1. Initialize gp (global pointer for relaxation)
@@ -20,10 +20,6 @@
  *   NORMAL MODE: write trap diagnostics for host readback, CEASE. Under
  *     X280_PER_HART_PROTOCOL that is this hart's trap record; otherwise this
  *     hart's linker-placed trap block.
- *
- * Level 1: SP + BSS + call main (minimum viable boot)
- * Level 2: + gp + mtvec + Feature Disable CSR (practical boot)
- * Level 3: + .data copy + FP init (full boot -- future)
  */
 
 #include "x280_hart_protocol.h"
@@ -54,11 +50,10 @@ _start:
 
     /* sp = _stack_top - hartid * _stack_size. The stride is the linking
      * script's own STACK_SIZE, because the regions differ by two orders of
-     * magnitude: 32 KiB per hart in the DRAM and active-FW images, 256 B in
+     * magnitude: 32 KiB per hart in the active-FW images, 256 B in
      * the 4 KiB resident idle. A fixed stride puts three of the idle image's
      * four stacks outside its region. %hi/%lo rather than `la`, since the
-     * stride is a small absolute value and the DRAM images link two orders of
-     * magnitude away from it -- further than auipc can reach. */
+     * stride is an absolute value, not an address. */
     /* a0 = mhartid (preserved through BSS zero; passed to main as first argument) */
     csrr  a0, mhartid
     la    sp, _stack_top
@@ -126,7 +121,6 @@ _trap_handler:
     /* Check for machine software interrupt (IPI) first -- mcause has bit 63 set for interrupts */
     /* Machine software interrupt = interrupt bit (bit 63) set + cause 3 */
     csrr  t0, mcause
-    /* Use lui+slli+addi sequence to build 0x8000000000000003 */
     li    t1, 3
     bltu  t0, t1, _trap_probe_check  /* if mcause < 3, not MSI (also handles synchronous) */
     beq   t0, t1, _trap_probe_check  /* if mcause == 3 exactly (synchronous cause 3), check probe */
@@ -231,7 +225,7 @@ _trap_skip:
  *
  * Protocol:
  *   1. Disable MSIE (mie bit 3) via CSR clear -- prevents re-fire without touching CLINT MMIO.
- *      The CLINT msip register at 0x02000000 may not be mapped via NOC TLB for DRAM-hosted code;
+ *      The CLINT msip register at 0x02000000 may not be mapped;
  *      clearing via MMIO store risks a store access fault (double-trap -> CEASE).
  *      Clearing mie.MSIE (bit 3) is a CSR write -- always accessible, same effect: suppresses MSI.
  *   2. Write X280_IPI_ACK_FLAG to X280_IPI_ACK_ADDR[hartid].

@@ -170,16 +170,14 @@ typedef union {
  * two destinations:
  *
  *   phys[36:28] (9 bits)   -> bits [8:0] of the outbound DMA TLB
- *                              slot value the caller writes into
- *                              X280_DMA_TLB[slot] before kicking
- *                              the channel
+ *                              slot value the caller writes
+ *                              before kicking the channel
  *   phys[27:0]  (28 bits)  -> the DMA SAR/DAR (passed through to
  *                              phys[27:0] by the outbound DMA TLB)
  *
  * The DMA-side base of the slot is `(window - SYSTEM_PORT) >> 28`
  * (e.g. 0x8040 for index 0, 0x8240 for index 1, before the phys
- * [36:28] addend is added). See dma_engine_noc_to_noc for the
- * complete recipe.
+ * [36:28] addend is added).
  *
  * Per-kick byte ceiling for a transfer that uses this TLB is
  * 256 MiB (one outbound DMA TLB slot's DMA-address window). A
@@ -236,7 +234,7 @@ static inline uint64_t noc_configure_tlb_128g(
  *
  * Programs TLB entry `index` to route accesses to (noc_x, noc_y, addr).
  * Full fences (fence iorw, iorw) are issued before and after the 4-word
- * config register write to prevent store buffer reordering (Pitfall 3).
+ * config register write to prevent store buffer reordering.
  *
  * @param index       Window index 0-223. Entries 0-8 may be overwritten by ARC;
  *                    use the reservations in rt/x280_noc_map.h rather than
@@ -558,8 +556,7 @@ static inline noc_window_status_t noc_open_window_2m(
 /**
  * Write a 64-bit value through a NOC window as two 32-bit stores.
  *
- * No fence: callers batch these and fence once, and fence spacing is itself
- * under measurement. Use noc_write_verify_u64 for a single fenced, confirmed
+ * No fence: callers batch these and fence once. Use noc_write_verify_u64 for a single fenced, confirmed
  * write. Two u32 stores rather than one u64 is the measured shape; memcpy()
  * does not work through a NOC window.
  *

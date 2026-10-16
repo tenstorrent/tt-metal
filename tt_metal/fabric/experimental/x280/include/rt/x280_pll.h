@@ -5,15 +5,9 @@
 /*
  * rt/x280_pll.h -- measure the X280 core clock on the device.
  *
- * This is the honest alternative to a host writing a PLL value into a mailbox
- * and the firmware trusting it with a hardcoded fallback:
- *
- *     uint64_t pll_mhz = *X_PLL_INPUT_ADDR;
- *     if (pll_mhz == 0 || pll_mhz > 10000) pll_mhz = 1750;   // or 1000
- *
- * A fallback constant standing in for a measurement is how a mis-set mailbox
- * turns into plausible-but-wrong bandwidth numbers. Firmwares that call
- * x280_measure_pll_khz() report what the clock actually was.
+ * x280_measure_pll_khz() reports the clock the hart actually ran at, measured
+ * on the device; it takes no frequency from the host and substitutes no
+ * fallback constant.
  */
 #ifndef X280_RT_PLL_H
 #define X280_RT_PLL_H

@@ -9,8 +9,8 @@
  * WHAT THIS IS FOR
  * ======================================================================
  *
- * Prototype for the real use case: 4 X280 harts on one L2CPU tile all
- * pushing packets into a *single* downstream queue (e.g. an erisc queue)
+ * The use case: 4 X280 harts on one L2CPU tile all
+ * pushing packets into a *single* downstream queue
  * and each needing to bump a shared write-pointer without colliding.
  * The correctness primitive for that is an atomic read-modify-write:
  * each producer atomically adds its packet count to the shared write
@@ -111,14 +111,12 @@
  * ----------------------------------------------------------------------
  * A dedicated region well clear of everything else in LIM:
  *   - firmware .text/.data/.bss           < 0x120000
- *   - migration control + boot handshake  0x130000..0x131FFF
- *   - bank table / slots / staging / fifo  0x132000..0x153FFF
+ *   - per-hart protocol records           0x131800..0x131AFF
  * We claim [0x160000, 0x163000). It is above the stacks (below 0x120000) and
- * does NOT overlap the idle-FW boot-handshake mailboxes (0x130200..),
+ * does NOT overlap the per-hart protocol records (0x131800..),
  * so priming these lines can never wipe the idle heartbeat.
  *
- * Every field lives on its OWN 64-byte cache line. Two reasons, both the
- * same as the migration worker's mailboxes:
+ * Every field lives on its OWN 64-byte cache line, for two reasons:
  *   - ECC: LIM SRAM is ECC-protected; a partial-word write to a cold
  *     line needs valid ECC in the rest of the line. The host primes each
  *     line with a full 64 B zero write before any partial write.
@@ -206,7 +204,7 @@
 /* Firmware-measured X280 PLL frequency in kHz (fw->host). Measured once at
  * startup by counting rdcycle ticks against the fixed 50 MHz CLINT mtime
  * reference -- so the host can convert cycle counts and CONFIRM the real
- * clock instead of trusting --mhz. Its own 64 B line. */
+ * clock. Its own 64 B line. */
 #define AB_MEASURED_PLL_KHZ_ADDR ((volatile uint32_t*)(ATOMIC_BASE + 0x1540UL))
 
 /* --- protocol constants ------------------------------------------- */
@@ -235,12 +233,6 @@
 /* ======================================================================
  * Low-level primitives
  * ====================================================================== */
-
-/* Measure the X280 PLL frequency (kHz) by counting rdcycle ticks over a
- * fixed mtime window. PLL_hz = (dcyc / dtick) * 50e6, so
- * PLL_kHz = dcyc * 50000 / dtick. Window = 100000 mtime ticks (~2 ms at
- * 50 MHz) -- long enough that fixed read overhead is negligible. Called once by hart 0 before the phases;
- * cost (~2 ms) is outside every timed region. */
 
 /* ---- the increment kernels ---------------------------------------- *
  * Each does exactly ONE increment-by-1 of *p and RETURNS THE OLD VALUE
@@ -601,8 +593,8 @@ static uint64_t fill_iters(unsigned section, unsigned num, uint64_t iters, uint6
 int main(uint64_t hartid) {
     /* Workers peel off immediately into their wait loop. */
     if (hartid != 0) {
-        atomic_worker_loop((uint32_t)hartid); /* noreturn */
-        return 0;                             /* unreachable */
+        atomic_worker_loop((uint32_t)hartid);
+        return 0;
     }
 
     /* --- hart 0 --- */
@@ -663,7 +655,7 @@ int main(uint64_t hartid) {
 
     /* Measure the actual PLL (against the 50 MHz mtime ref) and publish it,
      * so the host converts cycle counts with the REAL clock and can confirm
-     * whether we're at 1000 or 1750 MHz -- no reliance on --mhz. One-time,
+     * whether we're at 1000 or 1750 MHz. One-time,
      * before any timed region. */
     *AB_MEASURED_PLL_KHZ_ADDR = x280_measure_pll_khz();
     __asm__ volatile("fence ow, ow");

@@ -131,9 +131,8 @@ TEST(ActiveImage, EndsAtTheRecordedPrimedLimBoundary) {
 }
 
 // A marker with no extent word is bounded by kLimEccUnrecordedPrimeBytes,
-// however far the current prime walks. The four-tier route_compute image that
-// faulted at main's first instruction on such a tile is 17 680 bytes: refused
-// against the unrecorded extent, admitted once the recorded one covers it.
+// however far the current prime walks. A 17 680-byte image is refused against
+// the unrecorded extent and admitted once a recorded one covers it.
 TEST(ActiveImage, UnrecordedExtentBoundsConservatively) {
     constexpr uint64_t kAssumedEnd = X280_LIM_BASE + kLimEccUnrecordedPrimeBytes;
     constexpr size_t kMaximumBytes = kAssumedEnd - X280_ACTIVE_FW_LOAD_ADDR;
@@ -277,7 +276,7 @@ TEST(Describe, TrapIsPrintedOnlyWhenSet) {
     EXPECT_TRUE(mentions(text, "mepc=0x8001234"));
 }
 
-TEST(Describe, OldGlobalOnlyStateDoesNotRepresentResidentIdle) {
+TEST(Describe, TileStateWithoutHartRecordsIsNotResidentIdle) {
     TileState state;
     state.observation_valid = true;
     state.reset_released = true;

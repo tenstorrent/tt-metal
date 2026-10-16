@@ -171,14 +171,6 @@ front port, and three outbound NOC paths.
 | 2 | (8, 5) |
 | 3 | (8, 7) |
 
-Release destinations are resolved in input order through
-`X280Runtime::virtual_core_from_logical_core` by the shared host release
-selector, `select_release`. It releases a Tensix selection whose logical
-coordinates fill one rectangle by one multicast and every other participant by
-its own unicast endpoint. Core-sync's multicast cases require the multicast
-(`ReleaseMode::RequireMulticast`) and fail before launch without it; packet
-injection takes the selector's choice (`ReleaseMode::Auto`).
-
 **Memory map (X280 view):**
 
 | Range | Region |
@@ -201,17 +193,16 @@ injection takes the selector's choice (`ReleaseMode::Auto`).
 
 ### C++ host runtime boundary
 
-The approved reusable C++ path is rooted at `X280Runtime::open(mesh, config)`.
+The reusable C++ path is rooted at `X280Runtime::open(mesh, config)`.
 `RuntimeOpenConfig` defaults to automatic ECC priming and the reset cache/LIM
 partition: fifteen 128 KiB LIM ways (`WayEnable=0`, 1.875 MiB backed). A caller
 can select `LimEccPrimingPolicy::RequirePrepared` and a smaller `LimShape`.
 The component reservation ends at the per-hart protocol block (`0x08131B00`) and
-requires at least ten LIM ways; the socket and migration regions in
-`socket_layout.h` lie inside `available_lim()`.
+requires at least ten LIM ways.
 
 `open` is Metal's stateful X280 initialization entry point, not a read-only
 factory: it binds the caller-owned Metal mesh and discovers and inspects every
-selected chip. `AutoPrime` runs the temporary host PLL/LIM-ECC bootstrap when
+selected chip. `AutoPrime` runs the host PLL/LIM-ECC bootstrap when
 hardware state requires it. `RequirePrepared` performs the same readiness path
 but returns `PreparationRequired` instead of committing `WayEnable` when LIM is
 unprimed.
@@ -251,15 +242,14 @@ resident idle has no protocol to quiesce every hart and cache master.
 
 ### Prepared pipeline inputs (X280 only)
 
-The X280 pipeline benchmarks share a fixed 4288-byte cached Zero Device region at
+`X280Tile::prepare_pinned_input` pins a fixed 4288-byte cached Zero Device region at
 `[0x0A000000, 0x0A0010C0)` on each participating L2CPU tile. Way 1 holds the
 reserved lines; way 0 remains general-purpose. The required partition is
 `WAYENABLE=1` (14 LIM ways). Preparation does not create this partition, prime
 ECC, boot resident idle, reset the ASIC, or flush caches.
 
 An operator must first establish that partition and resident idle, and
-exclusive device ownership covering the entire sequence of benchmark
-executables. Neither matching input bytes nor mask readback proves fresh cache
+exclusive device ownership covering the whole prepared sequence. Neither matching input bytes nor mask readback proves fresh cache
 placement for the reserved addresses, so the runtime records preparation in the
 tile's 64 B general-purpose scratch (`0x2001_0100`), which survives Metal and
 runtime opens and is cleared by an ASIC reset (observed; the hardware
@@ -284,13 +274,9 @@ resident idle, then records the prepared region. A record already prepared at
 this shape returns `AlreadyPrepared`, so each later executable calls it and
 reuses the region. An aborted, corrupt or unreadable record, or one prepared at
 another shape, returns `ResetRequired`. `X280Tile::pinned_input_state` reads the
-record. Run the compatible pipeline configurations on the prepared tile.
+record.
 Concurrent calls on one tile in one process are serialised; nothing serialises
 across processes.
-
-ID 7 uses the first 96-byte header in this region at `0x0A000AC0`. Its
-`decide_plain` configuration reseeds that complete header before warmup; it
-does not allocate a source region or change the prepared policy.
 
 The operation is compiled into the image instead of supplied through a
 firmware control block. The trusted
@@ -304,10 +290,7 @@ hierarchy. Individual configurations do not allocate cache leases, invalidate
 the region, change masks, or restore cache state when their fixtures close.
 The ordinary active-session STOP/cleanup and NoC-window cleanup still run.
 
-Both pipeline executables always require this prepared profile. The latency
-members and both transport-bandwidth executables run at the reset shape, so a
-chip left at 14 LIM ways skips them until an ASIC reset. Prepare every
-participating tile under the same external ownership.
+Prepare every participating tile under the same external ownership.
 
 There is no teardown: an ASIC reset (`tt-smi -r <device>`) clears the pinning,
 the 14-way partition and the record together. Do not run cache-flush, repartition, ECC-priming, or
@@ -416,20 +399,18 @@ session and the tile in a warning, and the tile runs active firmware until an
 ASIC reset. A running or result timeout does not change tile health. Failed restoration marks the runtime-owned tile unhealthy, and later
 enqueue attempts return `Unhealthy` without hardware writes.
 
-Topology, register, and LIM traffic stays on Metal's `tt::Cluster` wrapper so
-the component remains a staging boundary for eventual Metal runtime
-integration. Raw UMD is restricted to ARC telemetry, which the wrapper does
+Topology, register, and LIM traffic stays on Metal's `tt::Cluster` wrapper.
+Raw UMD is restricted to ARC telemetry, which the wrapper does
 not expose. With Metal watcher enabled, `X280MetalTransport::bind()` warns and
 continues: the host-NOC sanitizer admits no ARC or L2CPU coordinate, so the
-first such access fails until upstream adds a route. It does not bypass the
+first such access fails. It does not bypass the
 wrapper. Wrapper I/O also scopes UMD's thread-local physical fabric selector
 to NOC0; coordinate translation alone does not select the fabric.
 
-The private host PLL/ECC bootstrap is temporary. When system firmware or Metal
-owns those operations, the safe-clock and prime branches are removed from
-private `initialize_chip()`. Until then, runtime open may establish the safe
-probe clock, a cold `boot()` establishes the safe reset-release clock, and
-runtime owners use `set_pll()` for later operating-clock changes. There is no
+The host PLL/ECC bootstrap is private to `open()`: runtime open may establish
+the safe probe clock and, under `AutoPrime`, prime LIM ECC. A cold `boot()`
+establishes the safe reset-release clock, and runtime owners use `set_pll()`
+for later operating-clock changes. There is no
 tile `launch()`, public hart facade, or writable
 outbound-NOC API.
 
@@ -473,8 +454,7 @@ safely support it. Source: tt-isa-documentation
 | `ld/x280-lim-idle.ld` | Linker script for resident idle, at the start of LIM (`0x08000000`). |
 | `include/x280_address_map.h` | Canonical LIM, DDR, CLINT, image, trap, sentinel, and ECC addresses; safe for C, C++, and preprocessed assembly. |
 | `include/x280_hart_protocol.h` | Canonical per-hart commands, phases, record offsets, wire structs, and layout assertions; safe for C, C++, and preprocessed assembly. |
-| `include/socket_layout.h` | Migration and socket mailbox placement, values, and wire-layout guards. |
-| `include/x280.h` | Compatibility umbrella for characterization firmware constants. |
+| `include/x280.h` | Umbrella over `x280_address_map.h` and `x280_hart_protocol.h`, plus `HART_STACK_SIZE`. |
 | `include/noc.h` | NOC TLB programming and address encoding helpers. |
 | `src/x280_active_start.c` | The lifecycle harness every active image runs (`entry_active.o` calls it; it calls the image's `main`). |
 | `src/main.c` | Runtime-owned active success image (`firmware.bin`). |
@@ -520,7 +500,7 @@ obligations are left to the image, and `X280ActiveContract` in
    indefinitely (a config wait, a command wait, a worker's dispatch poll) must
    poll it, or the host cannot end that hart at all. This is the load-bearing
    one: it also makes obligation 2 non-fatal, because a coordinator that
-   forgets to release its workers no longer strands them.
+   forgets to release its workers does not strand them.
    `X280ActiveContract` checks it on hardware.
 2. **Every hart reaches `return`.** One hart that never returns blocks every
    aggregate wait.
@@ -717,8 +697,8 @@ build/test/tt_metal/x280/x280_runtime_device_tests --gtest_filter='*X280ActiveCo
 opens all eight chips, and a fault on any one of them surfaces as a fault on
 the one under test. `TT_VISIBLE_DEVICES` and `tt-smi -r` take UMD chip ids;
 `/dev/tenstorrent/N` takes PCIe ids. UMD prints the mapping at open
-— `Opening local chip ids/PCIe ids: {0..7}/[2,3,1,0,6,7,5,4]` on the p150b host
-these suites ran on, where UMD chip 0 is `/dev/tenstorrent/2`. Record that line
+— `Opening local chip ids/PCIe ids: {0..7}/[2,3,1,0,6,7,5,4]` on an 8-chip
+p150b host, where UMD chip 0 is `/dev/tenstorrent/2`. Record that line
 from each log; a bare "card 0" is ambiguous.
 
 A failure here is a firmware obligation (§ 3), not a runtime bug. The failure
@@ -742,9 +722,8 @@ a silent skip:
 
 ## 7. Cross-hart atomics micro-benchmark
 
-Prototype for the case where all 4 harts on one L2CPU tile push into a
-single downstream (erisc) queue and each must bump a shared write
-pointer without colliding. The correctness primitive is an atomic
+Models all 4 harts on one L2CPU tile pushing into a single downstream
+queue, where each must bump a shared write pointer without colliding. The correctness primitive is an atomic
 read-modify-write; this ubench measures its cost and contention.
 
 - Firmware: [`src/atomic_bench.c`](src/atomic_bench.c) — a **ping-pong
@@ -782,8 +761,8 @@ wall-time across hart counts means the atomic is fully serialized).
    that producer just claimed (`my_slot = atomic_add(&wptr, 1)`), which is
    what the real code consumes. If every slot `0..total-1` was issued
    exactly once, the sum of all returned slots equals `total*(total-1)/2`.
-   The firmware sums the returned slots per hart and the host verifies that
-   total — a direct proof that **no two harts got the same slot** (the exact
+   The firmware sums the returned slots per hart and publishes each sum in
+   its phase record; that total is a direct proof that **no two harts got the same slot** (the exact
    guarantee the write pointer needs), stronger than the counter check alone.
 
 The non-atomic mode is the racy `ld/add/sd` control — you can watch it
@@ -802,7 +781,7 @@ handed to two producers). That's the "why atomics are required" demo.
    *through* stalls — so the measured cost includes time blocked waiting on
    the atomic subsystem, which is what a producer actually pays. We
    deliberately do **not** use `rdcycle`: on this X280 it freezes during
-   memory stalls (see `socket_layout.h` "UNITS NOTE"), so it would hide the very atomic-latency
+   memory stalls (see `x280_rdcycle()` in `rt/x280_hw.h`), so it would hide the very atomic-latency
    cost we want to see.
 
 ### Safety: AMO-to-LIM probe
@@ -811,7 +790,8 @@ Whether AMOs work against *uncached* LIM is silicon-specific. Before any
 untrapped atomic runs, hart 0 arms `entry.S` **probe mode** and issues a
 single test op: if it faults, the handler skips it (instead of `CEASE`,
 which would permanently halt the hart and strand the L2CPU) and the run
-aborts cleanly with `AMO-to-LIM supported: False`.
+aborts cleanly, writing 0 to its AMO-supported word and status
+`AB_STATUS_AMO_UNSUP`.
 
 ## 8. Useful constants cheat-sheet
 

@@ -22,8 +22,8 @@
  * All four harts run the idle FW's C: entry.S calls main(mhartid) on
  * each, and each polls its own lifecycle record. It has no recursion
  * and no FP, and its four stacks are 256 B apiece inside the region.
- * The ASSERTs at the bottom guard against future code growth silently
- * overflowing the budget or reintroducing .bss.
+ * The ASSERTs at the bottom refuse a build that overflows the budget or
+ * carries .bss.
  */
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
@@ -109,8 +109,8 @@ SECTIONS {
 ASSERT(_bss_end <= (_stack_top - NUM_HARTS * STACK_SIZE),
        "x280-lim-idle: code/data/bss overflow the 4 KiB idle region")
 
-/* Images built with X280_PER_HART_PROTOCOL zero no .bss -- entry.S drops the
- * hart-0 loop, because nothing held the other harts behind it. Their link
+/* Images built with X280_PER_HART_PROTOCOL zero no .bss -- entry.S has no
+ * hart-0 zeroing loop for them, because nothing holds the other harts behind it. Their link
  * rules pass --defsym=X280_REQUIRE_NO_BSS=1 to hold the precondition here. */
 ASSERT(DEFINED(X280_REQUIRE_NO_BSS) ? (_bss_end == _bss_start) : 1,
        "x280-lim-idle: per-hart images must carry no .bss -- entry.S zeroes none")

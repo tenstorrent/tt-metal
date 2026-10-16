@@ -52,7 +52,7 @@ std::vector<std::string> split_image_list(const std::string& list) {
 }
 
 // The images the contract suite was asked to run. X280_ACTIVE_FW_IMAGES names them; when it is
-// unset, the single-image variable the sentinel tests use keeps existing invocations working; when
+// unset, the single-image variable the sentinel tests use names them; when
 // both are unset or empty, the build's contract set (the sentinel and atomic-bench) is requested.
 // An X280_ACTIVE_FW_IMAGES that is set but names no path opts the suite out.
 struct RequestedImages {

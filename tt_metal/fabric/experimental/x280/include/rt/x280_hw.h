@@ -8,8 +8,8 @@
  * The one place that knows how to issue memory-ordering fences, read a cycle
  * counter, read wall-clock time, hint a spin loop, and halt a hart.
  *
- * Header-only and static inline, deliberately: these are fully inlined at -O2
- * today, and a real call boundary inside a measured loop would change the
+ * Header-only and static inline, deliberately: these are fully inlined at -O2,
+ * and a real call boundary inside a measured loop would change the
  * numbers this suite exists to report. It also means C++ firmware can use it
  * without linkage games.
  */
@@ -45,8 +45,7 @@ static inline __attribute__((always_inline)) void x280_fence_ow(void) { __asm__ 
  * advance while the hart is stalled on memory, a NoC transaction or a BRESP
  * (SiFive X280 MC Manual 21G3.04.00 §3.10.2.1, "clock cycles the hart has
  * executed"), so use it only for executed-cycle cost. For elapsed time and timeouts -- and in
- * particular for cross-hart overlap -- use x280_mtime() instead. See the units
- * note in socket_layout.h.
+ * particular for cross-hart overlap -- use x280_mtime() instead.
  */
 static inline uint64_t x280_rdcycle(void) {
     uint64_t c;

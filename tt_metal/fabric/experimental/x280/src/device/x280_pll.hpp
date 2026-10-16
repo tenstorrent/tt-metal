@@ -6,7 +6,7 @@
 //
 // PLL4 serves all four L2CPU tiles from one VCO, so a frequency change is
 // chip-global even though the post-dividers are per-output. Direct MMIO
-// programming through the ARC tile is the documented bring-up method.
+// programming through the ARC tile is the bring-up method.
 
 #pragma once
 
