@@ -75,13 +75,15 @@ all_broadcast_types = [
 # Tiny tiles have fewer faces (num_faces=2) and variable face_r_dim;
 # full 32x32 tiles have 4 faces with face_r_dim=16.
 # BroadcastType.None_ is a datacopy (unpack A -> DEST -> pack to L1).
-# num_tiles_in_input=NUM_TILES_32BIT_FULL_DEST stacks tiles along rows so math writes DEST tile slots past 0;
+# num_tiles_in_input=NUM_TILES_32BIT_FULL_DEST (32x32 tiles only) stacks tiles along rows so math writes DEST tile slots past 0;
 # for 32-bit / dest-accumulation variants under DestSync.Half it also spans two blocks, using both DEST halves.
 
 
 @parametrize(
     tile_dimensions=[[1, 32], [2, 32], [4, 32], [8, 32], [16, 32], [32, 32]],
-    num_tiles_in_input=[1, NUM_TILES_32BIT_FULL_DEST],
+    num_tiles_in_input=lambda tile_dimensions: (
+        [1, NUM_TILES_32BIT_FULL_DEST] if tile_dimensions == [32, 32] else [1]
+    ),
     formats=input_output_formats(supported_formats, same=True),
     broadcast_type=all_broadcast_types,
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
@@ -146,10 +148,6 @@ def run_unpack_bcast(
         pytest.skip(
             "Data copy mechanism for SFPU (expects in low-bits) and Packer (expects in high-bits) conflict"
         )
-
-    # Multi-tile input targets the 32-bit DEST slots of full tiles; tiny tiles run one tile.
-    if num_tiles_in_input > 1 and tile_dimensions != [32, 32]:
-        pytest.skip("Multi-tile input is swept for full 32x32 tiles only")
 
     # --- Skips from bugs --------------------------------------------------
 

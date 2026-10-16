@@ -22,7 +22,7 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
 /**
  * @brief Column-broadcast one face pair of a 32-bit tile already unpacked into DEST.
  *
- * @tparam face_base: Intra-tile DEST row of the face pair, values = <0 (faces 0+1)/32 (faces 2+3)>
+ * @tparam face_base: Intra-tile DEST row of the face pair, values = <0 (faces 0+1)/2 * FACE_R_DIM (faces 2+3)>
  * @note Point the math dest offset at the target tile (@ref math::set_dst_write_addr) before calling:
  *       the move operands are intra-tile rows only.
  */
@@ -30,6 +30,7 @@ template <std::uint32_t face_base>
 inline void eltwise_unary_bcast_col_32b_face_pair()
 {
     static_assert(face_base == 0 || face_base == 2 * FACE_R_DIM, "face_base must be the first row of a face pair");
+    constexpr std::uint32_t right_face_base = face_base + FACE_R_DIM;
 
     // Extract all 16 source rows from dest into B register (4 rows at a time)
     TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 0);         // hi16 rows 0-3
@@ -44,28 +45,28 @@ inline void eltwise_unary_bcast_col_32b_face_pair()
     // SrcA=Tf32: MOVB2D(DEST_NORM) writes hi16 of 32-bit dest
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
 
-    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 0);       // left face rows 0-3
-    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 4);   // left face rows 4-7
-    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 8);   // left face rows 8-11
-    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 12); // left face rows 12-15
-    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 16);      // right face rows 0-3
-    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 20);  // right face rows 4-7
-    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 24);  // right face rows 8-11
-    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 28); // right face rows 12-15
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 0);             // left face rows 0-3
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 4);         // left face rows 4-7
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 8);         // left face rows 8-11
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 12);       // left face rows 12-15
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, right_face_base + 0);       // right face rows 0-3
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, right_face_base + 4);   // right face rows 4-7
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, right_face_base + 8);   // right face rows 8-11
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, right_face_base + 12); // right face rows 12-15
 
     // BH HW bug: MOVB2D(DEST_32B_LOW) is ignored when Fp32 dest mode is active.
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
     // SrcA=Float32 (non-Tf32): MOVB2D(DEST_32B_LOW) writes lo16 of 32-bit dest
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
 
-    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 0);       // left face rows 0-3
-    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 4);   // left face rows 4-7
-    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 8);   // left face rows 8-11
-    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 12); // left face rows 12-15
-    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 16);      // right face rows 0-3
-    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 20);  // right face rows 4-7
-    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 24);  // right face rows 8-11
-    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 28); // right face rows 12-15
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 0);             // left face rows 0-3
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 4);         // left face rows 4-7
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 8);         // left face rows 8-11
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 12);       // left face rows 12-15
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, right_face_base + 0);       // right face rows 0-3
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, right_face_base + 4);   // right face rows 4-7
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, right_face_base + 8);   // right face rows 8-11
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, right_face_base + 12); // right face rows 12-15
 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
 }
@@ -88,20 +89,20 @@ inline void eltwise_unary_bcast_row_32b_src_row()
     // SrcA=Tf32: MOVB2D(DEST_NORM) writes hi16 of 32-bit dest
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
 
-    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, src_row + 0);  // top face rows 0-7
-    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, src_row + 8);  // top face rows 8-15
-    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, src_row + 32); // bottom face rows 0-7
-    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, src_row + 40); // bottom face rows 8-15
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, src_row + 0);                  // top face rows 0-7
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, src_row + 8);                  // top face rows 8-15
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, src_row + 2 * FACE_R_DIM);     // bottom face rows 0-7
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, src_row + 2 * FACE_R_DIM + 8); // bottom face rows 8-15
 
     // BH HW bug: MOVB2D(DEST_32B_LOW) is ignored when Fp32 dest mode is active.
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
     // SrcA=Float32 (non-Tf32): MOVB2D(DEST_32B_LOW) writes lo16 of 32-bit dest
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
 
-    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, src_row + 0);  // top face rows 0-7
-    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, src_row + 8);  // top face rows 8-15
-    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, src_row + 32); // bottom face rows 0-7
-    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, src_row + 40); // bottom face rows 8-15
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, src_row + 0);                  // top face rows 0-7
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, src_row + 8);                  // top face rows 8-15
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, src_row + 2 * FACE_R_DIM);     // bottom face rows 0-7
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, src_row + 2 * FACE_R_DIM + 8); // bottom face rows 8-15
 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
 }
