@@ -1250,3 +1250,12 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F89 (owner): the own-floor row / column / additive-bias checks (F83) print WARN and record <tag>_floor_warn; only the
   overall error (and the other existing checks) gate. S.swa.15 failed on kv's column bias 2.27 x (limit 2) and the
   router's own floor (1e3 x, likely a flaw for selection outputs: review later).
+- F90 (owner): noise1e-2 dropped from the mistake sweep (within the noise limit by design).
+- F91 (owner): the sweep marks an uncaught mistake "within limit", not SLIPPED, when its own size (rel vs the CPU
+  output) is within the step's rel limit on every input: a correct step may be that far off. DeepSeek-V4.1
+  compressor: scale1.02 / 0.98 vs rel limits 0.031-0.042 started a test-role agent for nothing.
+- F92: the block-out check after the last swapped step (_check_tail) takes the noise floor for int outputs too (a
+  top-k): the nudged fp32 step's own selection flips. Was the fixed 0.01, which the CPU's own nudged indexer misses
+  (0.026); DeepSeek-V4.1 S.enc_source.07 failed 6 attempts at 0.023 (DS41-50, the debugger's probe_006).
+- F93 (owner): the watch is a 30-minute heartbeat (default --timeout 1800); the skill says to check the run on every
+  wake and re-arm after every event. A stop at 20:33 went unseen: a DASHBOARD STALE wake was not re-armed.
