@@ -82,6 +82,15 @@ MATMUL_GROUP_DIMS += [dims for dims in PERF_GROUP_DIMS if dims not in MATMUL_GRO
 # The kernel runs FPU -> SFPU -> PACK on half-Dest sections.
 DEST_SYNC_MODE = DestSync.Half
 
+# Realistic symmetric scales: absmax / 127 for activations up to ~2.5, absmax / 7 for weight
+# groups up to ~0.35. Neither is a power of two, so every scale multiply rounds.
+S_A_RANGE = (0.005, 0.02)
+S_W_RANGE = (0.01, 0.05)
+
+# Allowed error per fp32 rounding step, relative to sum(|terms|): 2**-21 is 8x the 2**-24
+# worst case of one round-to-nearest, leaving room for HW vs torch operation order.
+FP32_ERR_BOUND_REL = 2**-21
+
 
 def matmul_group_dims():
     # 32-bit Dest halves the tile capacity.
@@ -150,9 +159,9 @@ def test_matmul_int4_dequant_quasar(
     num_groups = kt_dim // group_kt_dim
     group_k = group_kt_dim * TILE_DIM
     generator = torch.Generator().manual_seed(3)
-    s_a = torch.empty(output_dimensions[0]).uniform_(0.005, 0.02, generator=generator)
+    s_a = torch.empty(output_dimensions[0]).uniform_(*S_A_RANGE, generator=generator)
     s_w = torch.empty(num_groups, output_dimensions[1]).uniform_(
-        0.01, 0.05, generator=generator
+        *S_W_RANGE, generator=generator
     )
     A = src_A.to(torch.int64).view(input_A_dimensions)
     B = src_B.to(torch.int64).view(input_B_dimensions)
@@ -281,9 +290,9 @@ def test_matmul_int4_dequant_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[format.output_format])
 
     # Every int32 -> fp32 cast is exact (|partial| < 2^24); each scale multiply and each
-    # fp32 accumulation rounds by <= 1/2 ulp, so bound the error by a few ulp of the sum of
-    # |terms| (robust to cancellation) - far tighter than the Float32 default tolerance.
-    tolerance = 2**-21 * (kt_dim // group_kt_dim + 2) * error_bound
+    # One rounding per group accumulation plus two (cast * s_w, * s_a), each bounded relative to
+    # sum(|terms|) so cancellation can't hide error - far tighter than the Float32 default.
+    tolerance = FP32_ERR_BOUND_REL * (num_groups + 2) * error_bound
     max_excess = ((res_tensor - golden_tensor).abs() - tolerance).max()
     assert (
         max_excess <= 0
