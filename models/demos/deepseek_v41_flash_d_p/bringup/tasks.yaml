@@ -2142,6 +2142,14 @@ tasks:
     kind: residual
     layer: 1
     stateful: false
+  frozen:
+    at: '2026-10-16T05:43:15'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_moe_add.py: 6bf7c11b99ced78d307466641dbf169139c339df2a8bd6a0287d3c45c1625adf
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.swa_engram.17
   title: 'swa_engram block with steps 1-17 on device (last: moe_add)'
   step: implement
