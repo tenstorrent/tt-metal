@@ -1705,3 +1705,97 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     assert torch.all(
         is_valid
     ), f"Test failed: {(~is_valid).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
+
+
+# Accurate (APPROX_MODE=false) exp on a bf16 Dest with CLAMP_NEGATIVE=false. The approximate
+# path's clamp is the one InputClamping::None switches off; the accurate bf16 kernel forms
+# 2^int(x/ln2) from the bit pattern of x/ln2 + 127, which is only meaningful for a
+# non-negative value, so it must keep its own lower clamp whatever the flag says. Without
+# it, inputs below ~-88 (where exp is 0 in bf16) come out as positive garbage, up to ~1e21.
+def test_exponential_accurate_unclamped_large_negative():
+    torch.manual_seed(0)
+    input_dimensions = [32, 32]
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    dest_acc = DestAccumulation.No
+
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    src_A = torch.rand(num_elements, dtype=torch.bfloat16) * 10.0 - 5.0
+    # exp(x) for every one of these is far below the smallest bf16 subnormal, so the
+    # only correct bf16 output is 0.0.
+    large_negative = [-10000.0, -1000.0, -226.0, -200.0, -176.0, -150.0, -120.0, -100.0]
+    for i, value in enumerate(large_negative):
+        src_A[i] = value
+    num_large_negative = len(large_negative)
+
+    src_B = torch.zeros(num_elements, dtype=torch.bfloat16)
+    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+    tile_cnt_B = tile_cnt_A
+
+    generate_golden = get_golden_generator(UnarySFPUGolden)
+    golden_tensor = generate_golden(
+        MathOperation.Exp,
+        src_A,
+        formats.output_format,
+        dest_acc,
+        formats.input_format,
+        input_dimensions,
+    )
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(False),
+            MATH_OP(mathop=MathOperation.Exp),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=False,
+    )
+
+    res_from_L1 = configuration.run().result
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
+
+    torch_format = format_dict[formats.output_format]
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+
+    large_negative_results = res_tensor[:num_large_negative].float()
+    assert torch.all(large_negative_results == 0.0), (
+        "Accurate exp of inputs below -88 must be 0.0 on a bf16 Dest regardless of "
+        f"CLAMP_NEGATIVE; got {large_negative_results.tolist()} for {large_negative}"
+    )
+
+    atol, rtol = 0.02, 0.02
+    is_close = torch.isclose(golden_tensor, res_tensor, rtol=rtol, atol=atol)
+    assert torch.all(
+        is_close
+    ), f"Test failed: {(~is_close).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
