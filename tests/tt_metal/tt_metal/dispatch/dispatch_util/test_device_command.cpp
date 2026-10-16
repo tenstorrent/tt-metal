@@ -104,7 +104,7 @@ TEST_F(DeviceCommandTest, CPU_AddDispatchGoSignalMcast) {
     calculator.add_dispatch_go_signal_mcast();
 
     HostMemDeviceCommand command(ctx_, calculator.write_offset_bytes());
-    command.add_dispatch_go_signal_mcast(0, 0, 0, 0, DispatcherSelect::DISPATCH_MASTER);
+    command.add_dispatch_go_signal_mcast(0, 0, 0, 0, 0, DispatcherSelect::DISPATCH_MASTER);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 

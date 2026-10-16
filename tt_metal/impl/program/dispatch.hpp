@@ -30,6 +30,7 @@
 namespace tt::tt_metal {
 class Device;
 class IDevice;
+class LaunchMessageRingBufferState;
 class MetalContext;
 class Program;
 class Semaphore;
@@ -253,6 +254,7 @@ void reset_worker_dispatch_state_on_device(
     SystemMemoryManager& manager,
     uint8_t cq_id,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
+    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
     bool reset_launch_msg_state,
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands);
 

@@ -118,6 +118,7 @@ public:
         uint32_t go_signal,
         uint32_t wait_stream,
         uint8_t multicast_go_offset,
+        uint32_t go_ring_slot,
         DispatcherSelect dispatcher_type);
 
     void add_notify_dispatch_s_go_signal_cmd(uint8_t wait, uint16_t index_bitmask);
