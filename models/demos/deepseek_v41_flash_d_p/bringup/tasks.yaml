@@ -3155,6 +3155,13 @@ tasks:
     - ffn_collapse
     - ffn_norm
     layer: 2
+  frozen:
+    at: '2026-10-16T22:44:37'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_12_ffn_norm.py: d80dcc6f296c2c7f2966d813cb5a77525468e19d848679da67abed23c337d730
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.enc_source.router
   title: enc_source router (router) on device, layer 2
   step: implement
