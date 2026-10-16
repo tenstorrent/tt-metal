@@ -7,9 +7,7 @@ These do not import SFPU test modules. The comparer itself loads those, and
 that import needs a device stack this host does not have.
 """
 
-import enum
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
 import compare_test_and_perf as cmp
@@ -28,14 +26,11 @@ def test_normalize_strips_prefix_and_quasar_suffix():
     )
 
 
-def test_ignore_set_includes_implied_math_format_separately_from_measurement():
-    assert "implied_math_format" in cmp.IGNORED_AXES
-    assert "implied_math_format" not in cmp.MEASUREMENT_AXES
+def test_ignore_set_is_the_measurement_axes():
+    assert cmp.IGNORED_AXES == cmp.MEASUREMENT_AXES
     for axis in ("iterations", "loop_factor", "run_types", "is_perf"):
         assert axis in cmp.IGNORED_AXES
-        assert axis in cmp.MEASUREMENT_AXES
     assert cmp.ignored_reason("loop_factor") == "ignored measurement axis"
-    assert cmp.ignored_reason("implied_math_format") == "ignored"
 
 
 def test_cross_arch_pairs_quasar_suffix(tmp_path: Path):
@@ -309,38 +304,6 @@ def test_left_parametrize_survives_the_right_arch_reload(tmp_path: Path, monkeyp
         assert reloaded["test_probe"][0].args[1] == ["blackhole"]
     finally:
         _forget_module(root, "test_probe")
-
-
-def test_packed_implied_math_format_does_not_change_coverage():
-    class ImpliedMathFormat(enum.Enum):
-        No = 0
-        Yes = 1
-
-    @dataclass
-    class Packed:
-        formats: str
-        implied_math_format: ImpliedMathFormat
-
-    class Mark:
-        def __init__(self, values):
-            self.args = ("bundle", values)
-
-    functional = cmp.axis_value_sets(
-        [
-            Mark(
-                [
-                    Packed("Float16", ImpliedMathFormat.No),
-                    Packed("Float16", ImpliedMathFormat.Yes),
-                ]
-            )
-        ]
-    )
-    perf = cmp.axis_value_sets([Mark([Packed("Float16", ImpliedMathFormat.Yes)])])
-    assert functional.axes["bundle"] == perf.axes["bundle"]
-    params = cmp.parameter_values(functional, cmp.IGNORED_AXES)
-    assert "ImpliedMathFormat" not in params.values
-    assert "bundle.implied_math_format" not in params.values
-    assert params.values["bundle.formats"] == ["'Float16'"]
 
 
 def test_pair_with_no_parametrized_functions_is_skipped(tmp_path: Path, monkeypatch):

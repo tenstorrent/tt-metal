@@ -93,7 +93,13 @@ def test_every_forward_call_binds_to_the_transformer():
 
 @pytest.mark.parametrize(
     "mtp_kwargs",
-    [{"mtp_union": object()}, {"on_mtp_complete": Mock()}, {"input_is_embedded": True}, {"provided_levels": 1}],
+    [
+        {"mtp_union": object()},
+        {"on_mtp_complete": Mock()},
+        {"input_is_embedded": True},
+        {"provided_levels": 1},
+        {"mtp_geometry": object()},
+    ],
 )
 def test_forward_rejects_mtp_arguments_before_device_work(expect_error, mtp_kwargs):
     model = object.__new__(TtKimiK3Transformer)

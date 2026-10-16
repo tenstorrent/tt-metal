@@ -230,7 +230,7 @@ class FSDPState:
             # then set_grad to the reduced shard. Order matters: set_grad
             # shape-checks against m_value, so m_value must be shard-shape
             # before we install a shard-shape grad.
-            gathered_value = param_tensor.get_value()
+            gathered_value = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
             shard = self._cached_shards.get(id(param_tensor))
             if shard is not None:
                 param_tensor.set_value(shard)
@@ -253,9 +253,10 @@ class FSDPState:
         """
         for parameter, shard_dim in self.managed:
             param_tensor = parameter.tensor
-            current = param_tensor.get_value()
-            self._cached_shards[id(param_tensor)] = current
-            gathered = ttml.core.distributed.all_gather(current, shard_dim, self.axis_index)
+            # Cache the shard as stored (NATIVE), so restoring it keeps the parameter's dtype. Gather the bf16 view:
+            # forward and backward read it anyway, and it is half the bytes of an fp32 shard.
+            self._cached_shards[id(param_tensor)] = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
+            gathered = ttml.core.distributed.all_gather(param_tensor.get_value(), shard_dim, self.axis_index)
             param_tensor.set_value(gathered)
 
     def _gather_accumulated_grads(self) -> None:
@@ -292,7 +293,7 @@ class FSDPState:
             shard = self._cached_shards.get(id(param_tensor))
             if shard is None:
                 raise RuntimeError("FSDP: managed parameter has no cached shard. This should never happen.")
-            gathered = param_tensor.get_value()
+            gathered = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
             param_tensor.set_value(shard)
             ttnn.deallocate(gathered)
 

@@ -20,7 +20,6 @@ from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathOperation,
     PerfRunType,
     UnpackerEngine,
@@ -53,7 +52,6 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
@@ -78,8 +76,7 @@ def _seed_rng():
     torch.manual_seed(42)
 
 
-# Formats swept by every op (none are MX formats, so the implied-math-format
-# guard below is a no-op for this list — kept for forward-compatibility).
+# Formats swept by every op.
 SFPU_UNARY_FORMATS = input_output_formats(
     [
         DataFormat.Float16,
@@ -961,14 +958,14 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
     """
     Build the unary-SFPU sweep across all operations and their format matrices.
 
-    Functional mode sweeps dest-sync, implied-math, and both [32, 32]/[64, 64]
+    Functional mode sweeps dest-sync and both [32, 32]/[64, 64]
     dimensions. Performance mode intentionally keeps the complete op, format,
-    dest_acc, and approximation coverage while pinning those three axes to
-    DestSync.Half, ImpliedMathFormat.Yes, and the largest functional matrix
+    dest_acc, and approximation coverage while pinning those two axes to
+    DestSync.Half and the largest functional matrix
     because none of the preferred perf matrices are supported.
 
     Returns: list of (mathop, resolved format variant, dest_sync,
-    implied_math_format, approx_mode, input_dimensions) tuples.
+    approx_mode, input_dimensions) tuples.
     """
     combinations = []
     for cfg in OP_CONFIGS:
@@ -993,18 +990,12 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
         ]
         if cfg.mathop == MathOperation.Signbit and not is_perf:
             # The extra FPU routes only check the datacopy keeps the sign bit, so they run at one
-            # dest-sync / size point (still both implied-math modes) instead of the full matrix.
+            # dest-sync / size point instead of the full matrix.
             format_variants += [(v, True) for v in signbit_fpu_route_variants()]
         for variant, route_only in format_variants:
             dest_sync_modes = (
                 (DestSync.Half,) if (is_perf or route_only) else cfg.dest_sync_modes
             )
-            if cfg.mathop == MathOperation.Typecast:
-                implied_math_formats = (ImpliedMathFormat.No,)
-            elif is_perf:
-                implied_math_formats = (ImpliedMathFormat.Yes,)
-            else:
-                implied_math_formats = (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
             if is_perf:
                 input_dims = select_perf_input_dimensions(cfg.input_dims)
             elif route_only:
@@ -1012,29 +1003,27 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
             else:
                 input_dims = cfg.input_dims
             for dest_sync in dest_sync_modes:
-                for implied_math_format in implied_math_formats:
-                    for approx_mode in approx_modes:
-                        for input_dimensions in input_dims:
-                            combinations.append(
-                                (
-                                    cfg.mathop,
-                                    variant,
-                                    dest_sync,
-                                    implied_math_format,
-                                    approx_mode,
-                                    runtime(input_dimensions),
-                                )
+                for approx_mode in approx_modes:
+                    for input_dimensions in input_dims:
+                        combinations.append(
+                            (
+                                cfg.mathop,
+                                variant,
+                                dest_sync,
+                                approx_mode,
+                                runtime(input_dimensions),
                             )
+                        )
 
     return combinations
 
 
 @pytest.mark.quasar
 @parametrize(
-    mathop_formats_dest_acc_sync_implied_math_input_dims=generate_sfpu_unary_combinations(),
+    mathop_formats_dest_acc_sync_input_dims=generate_sfpu_unary_combinations(),
 )
 def test_eltwise_unary_sfpu_quasar(
-    mathop_formats_dest_acc_sync_implied_math_input_dims,
+    mathop_formats_dest_acc_sync_input_dims,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -1054,10 +1043,9 @@ def test_eltwise_unary_sfpu_quasar(
         mathop,
         format_variant,
         dest_sync,
-        implied_math_format,
         approx_mode,
         input_dimensions,
-    ) = mathop_formats_dest_acc_sync_implied_math_input_dims[0]
+    ) = mathop_formats_dest_acc_sync_input_dims[0]
 
     assert isinstance(format_variant, QuasarSfpuVariant)
     formats = format_variant.formats
@@ -1146,7 +1134,6 @@ def test_eltwise_unary_sfpu_quasar(
         "templates": [
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
@@ -1307,7 +1294,6 @@ def test_cumsum_tilized_dest_quasar(cumsum_formats_dest_acc):
             "templates": [
                 MATH_OP(mathop=MathOperation.Cumsum),
                 APPROX_MODE(ApproximationMode.No),
-                IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
                 DATA_COPY_TYPE(DataCopyType.A2D),
                 UNPACKER_ENGINE_SEL(UnpackerEngine.UnpA),
                 DEST_SYNC(DestSync.Half),
@@ -1489,9 +1475,6 @@ def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
             "templates": [
                 MATH_OP(mathop=MathOperation.Typecast),
                 APPROX_MODE(ApproximationMode.No),
-                # Typecast names every Dest access format explicitly, so the implied
-                # math format must be off — same as the sweep.
-                IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
                 DATA_COPY_TYPE(DataCopyType.A2D),
                 UNPACKER_ENGINE_SEL(
                     UnpackerEngine.UnpDest
