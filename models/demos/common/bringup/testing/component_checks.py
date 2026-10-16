@@ -80,6 +80,7 @@ COMPONENT_DEFAULTS = {
 }
 LOW_PRECISION_KINDS = tuple(defaults.get("tests.low_precision_kinds"))
 SPARSE_ZEROS = 0.75
+SCALED_PROBES = ("small", "big")  # second inputs at synthetic scales (cases()): no own-floor checks (F83)
 COL_FLOOR = 1e-6  # a column is measured against at least this fraction of the mean column norm (as rows are)
 PAD_SENTINEL = 0xFFFFFFFF
 SMALL_RMS = 1e-3
@@ -561,7 +562,10 @@ class Expect:
             # limits, which divided by small norms behind a fixed 1e-6 floor
             L.update(row=math.inf, ratio=math.inf, col=None)
             e, bad = float_fails(got, ref, L)
-            if got.numel() == ref.numel() and not bad:
+            # F83 on inputs with real value scales only: the scaled probes (small: RMS 1e-3, big: x 2) are for
+            # structural bugs, where a correct device's absolute limits (an fp8 scale floor, an epsilon) dominate and
+            # the relative nudge does not model them (DeepSeek-V4.1 attention on `small`: one row 36x its floor)
+            if got.numel() == ref.numel() and not bad and case.name not in SCALED_PROBES:
                 outs = self.floor["golden"] if vs_golden else self.floor[case.name]
                 base = self.gold_model["rel"] if vs_golden else self.model_err[case.name]["rel"]
                 ar = (
