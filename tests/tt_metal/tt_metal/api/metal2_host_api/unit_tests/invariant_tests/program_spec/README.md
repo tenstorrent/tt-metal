@@ -23,7 +23,8 @@ struct WorkUnitSpec {
     //   unless both set config_1xx->dedicated_noc_sharing to SHARED_DISJOINT_TRAFFIC.
     // - For each DataflowBufferSpec these kernels bind, exactly one of them binds it as PRODUCER and
     //   exactly one binds it as CONSUMER. (The producer and consumer may be the same kernel.)
-    // - For each ScratchpadSpec, at most one of these kernels binds it.
+    // - For each ScratchpadSpec, at most one of these kernels binds it,
+    //   unless its advanced_options.allow_multi_kernel_binding is enabled.
     // - These kernels bind at most 32 distinct DataflowBufferSpecs on Wormhole, 64 on Blackhole, or 32 on
     //   Quasar. Subject to additional constraints during build.
     Group<KernelSpecName> kernels;
