@@ -69,14 +69,27 @@ class Gemma4Experts:
 
     def __call__(self, hidden_states, dense_routing):
         lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
-        if lane_sharded:
+        # With EP=1 every lane holds the full expert set, so lane-local rows need no exchange.
+        if lane_sharded and self.ep > 1:
             # Lanes hold different rows: gather every lane's rows (and their routing), run the
             # local experts on all of them, then reduce_scatter the rows back to their lanes
             # (summing the ep partials) and all-reduce over tp -- the SharedMLP choreography.
+            # Decode hands each lane 1..32 rows; the gathered tensor then has lanes*rows rows and
+            # takes the (tile-granular) prefill path, so pad every lane to a tile of rows first and
+            # slice the lane's own rows back after the scatter. Zero routing on the pad rows keeps
+            # them out of the expert sums.
+            rows = hidden_states.shape[2]
+            pad_rows = (-rows) % 32
+            if pad_rows:
+                hidden_states = ttnn.pad(hidden_states, [(0, 0), (0, 0), (0, pad_rows), (0, 0)], value=0.0)
+                dense_routing = ttnn.pad(dense_routing, [(0, 0), (0, 0), (0, pad_rows), (0, 0)], value=0.0)
             hidden_states = ccl_lane_gather_rows(hidden_states, self.mesh_config)
             dense_routing = ccl_lane_gather_rows(dense_routing, self.mesh_config)
             out = self._forward(hidden_states, dense_routing, combine=False)
-            return ccl_lane_scatter_rows(out, self.mesh_config)
+            out = ccl_lane_scatter_rows(out, self.mesh_config)
+            if pad_rows:
+                out = ttnn.slice(out, [0, 0, 0, 0], [1, 1, rows, out.shape[-1]])
+            return out
         return self._forward(hidden_states, dense_routing, combine=True)
 
     def _forward(self, hidden_states, dense_routing, combine=True):

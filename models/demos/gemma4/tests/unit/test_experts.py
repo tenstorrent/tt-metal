@@ -26,7 +26,7 @@ from ...tests.test_factory import (
 
 
 @skip_if_not_moe
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 2), (1, 4), (2, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 2), (1, 4), (2, 4), (8, 4)])
 @parametrize_batch_seq()
 def test_experts(batch_size, seq_len, mesh_device, reset_seeds, request):
     """Test MoE experts against HF reference.
@@ -36,8 +36,11 @@ def test_experts(batch_size, seq_len, mesh_device, reset_seeds, request):
     """
     from models.demos.gemma4.config import MeshConfig, ModeConfig
 
-    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
     is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    # (8,4): the Galaxy one-instance orientation (TP on the size-8 axis 0, fractured dense weights,
+    # EP over the 4 columns); every other 2-D mesh: TP over axis 1, EP over axis 0.
+    galaxy = is_mesh and tuple(mesh_device.shape) == (8, 4)
+    tp = (mesh_device.shape[0] if galaxy else mesh_device.shape[1]) if hasattr(mesh_device, "shape") else 1
 
     if tp > 1:
         # Multi-device: real model dims, TP-sharded, HF reference layer for weights
@@ -72,8 +75,18 @@ def test_experts(batch_size, seq_len, mesh_device, reset_seeds, request):
 
     expert_config = Gemma4ExpertConfig(hf_config)
     # 2-D meshes: TP over axis 1, expert parallelism over axis 0 (one local-expert slice per row)
-    ep = mesh_device.shape[0] if hasattr(mesh_device, "shape") and mesh_device.shape[0] > 1 else 1
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp, ep=ep), prefill=ModeConfig(tp=tp, ep=ep))
+    if galaxy:
+        ep = mesh_device.shape[1]
+        mesh_config = MeshConfig(
+            mesh_device.shape,
+            decode=ModeConfig(tp=tp, ep=ep),
+            prefill=ModeConfig(tp=tp, ep=ep),
+            tp_axis=0,
+            weight_fracture=True,
+        )
+    else:
+        ep = mesh_device.shape[0] if hasattr(mesh_device, "shape") and mesh_device.shape[0] > 1 else 1
+        mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp, ep=ep), prefill=ModeConfig(tp=tp, ep=ep))
     ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
 
     tt_experts = Gemma4Experts(
