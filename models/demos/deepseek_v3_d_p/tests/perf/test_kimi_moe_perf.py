@@ -40,7 +40,6 @@ from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceCo
 _SEQ_LEN_PER_CHIP = PREFILL_CHUNK_TOKENS_PER_CHIP
 # K3 halves the routed row width and doubles top-k, so per-chip dispatch bytes match K2.7.
 _DISPATCH_BUFFER_CAPACITY_FACTOR = 5
-_FABRIC_PAYLOAD_SIZE = KimiK27Config.FABRIC_PAYLOAD_SIZE  # 7168 for both generations
 # One forward uses ~0.26 MiB per chip (3 segments); the test logs the actual size.
 _TRACE_REGION_SIZE = 8 * 1024 * 1024
 
@@ -85,11 +84,33 @@ _K3 = _MoEPerfCase(
     ),
 )
 
-# Disjoint ids: pytest -k matches substrings, so a bare "kimi" would select both.
-_CASES = [
-    pytest.param("kimi_k2_7", _K2_7, id="k2_7"),
-    pytest.param("kimi_k3", _K3, id="k3"),
+# (variant, case, id). Disjoint ids: pytest -k matches substrings, so a bare "kimi" would select both.
+_CASES = [("kimi_k2_7", _K2_7, "k2_7"), ("kimi_k3", _K3, "k3")]
+
+# (id, mesh shape, fabric profile, topology mark). Only the galaxy row gates; the LoudBox row records.
+_MESHES = [
+    ("galaxy-torus-xy-8x4", (8, 4), torus_xy_device_params, "mesh-8x4"),
+    ("loudbox-fabric2d-2x4", (2, 4), fabric2d_device_params, "mesh-2x4"),
 ]
+
+
+def _perf_params():
+    """Every generation on every mesh, each opening the fabric with its own config's payload size."""
+    return [
+        pytest.param(
+            variant,
+            case,
+            mesh_shape,
+            make_device_params(
+                fabric_payload_size=case.config.FABRIC_PAYLOAD_SIZE, trace_region_size=_TRACE_REGION_SIZE
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=mesh_shape, topology=topology),
+            id=f"{case_id}-{mesh_id}",
+        )
+        for variant, case, case_id in _CASES
+        for mesh_id, mesh_shape, make_device_params, topology in _MESHES
+    ]
 
 
 def _replay_ns(mesh_device, copy_tid, controller):
@@ -104,26 +125,10 @@ def _replay_ns(mesh_device, copy_tid, controller):
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi prefill MoE requires Blackhole")
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
-    [
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(fabric_payload_size=_FABRIC_PAYLOAD_SIZE, trace_region_size=_TRACE_REGION_SIZE),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="galaxy-torus-xy-8x4",
-        ),
-        pytest.param(
-            (2, 4),
-            fabric2d_device_params(fabric_payload_size=_FABRIC_PAYLOAD_SIZE, trace_region_size=_TRACE_REGION_SIZE),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="loudbox-fabric2d-2x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
+    "variant, case, mesh_device, device_params, num_links",
+    _perf_params(),
+    indirect=["variant", "mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant, case", _CASES, indirect=["variant"])
 def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, num_links, request):
     """Traced E2E of one MoE forward at the 5k production chunk, per Kimi generation."""
     is_galaxy = tuple(mesh_device.shape) == (8, 4)
