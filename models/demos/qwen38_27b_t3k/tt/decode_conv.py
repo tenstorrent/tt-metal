@@ -24,13 +24,17 @@ def row_selector(device, batch):
 
     Every other row is zero, matching what tilizing a single live row per user produced.
     bfloat16 keeps the product exact: each output row is one input row scaled by 1.0.
+
+    The users are stacked along rows rather than carried as a batch dimension. A batched
+    matmul splits over N tiles and walks the batch serially, which caps it at width/32 cores;
+    stacked, the same work fills the grid.
     """
     import torch
 
     mesh_kwargs = {"mesh_mapper": ttnn.ReplicateTensorToMesh(device)} if hasattr(device, "get_num_devices") else {}
-    host = torch.zeros(batch, 32, batch * 4, dtype=torch.float32)
+    host = torch.zeros(batch * 32, batch * 4, dtype=torch.float32)
     for user in range(batch):
-        host[user, 0, user * 4 + 3] = 1.0
+        host[user * 32, user * 4 + 3] = 1.0
     return ttnn.from_torch(
         host,
         device=device,
@@ -65,5 +69,16 @@ def packed_decode_conv(row_qkv, history, taps, widths, actual_start, selector, c
     )
     # The one-hot read never leaves tile layout. Reaching the live rows through row-major
     # instead costs a tilize per output, and tilize splits work by tile row, so eight users
-    # mean eight cores however wide the projection is.
-    return [ttnn.matmul(selector, output, compute_kernel_config=compute_kernel_config) for output in outputs]
+    # mean eight cores however wide the projection is. Both reshapes are views: the row count
+    # is tile-aligned and the width never changes.
+    return [
+        ttnn.reshape(
+            ttnn.matmul(
+                selector,
+                ttnn.reshape(output, [batch * 4, width]),
+                compute_kernel_config=compute_kernel_config,
+            ),
+            [batch, 32, width],
+        )
+        for output, width in zip(outputs, widths)
+    ]
