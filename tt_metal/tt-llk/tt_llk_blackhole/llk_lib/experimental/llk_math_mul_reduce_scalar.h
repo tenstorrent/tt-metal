@@ -47,21 +47,6 @@ using namespace ckernel;
     MOVD2A_4_ROWS(base_offset, (face) * 4 + 2) \
     MOVD2A_4_ROWS(base_offset, (face) * 4 + 3)
 
-// A whole slot moves in eight-row steps; a one- or two-face tile keeps four-row moves, which read faster there.
-#define MOVD2A_FACES(base_offset, num_faces) \
-    if ((num_faces) > 2)                     \
-    {                                        \
-        MOVD2A_16_ROWS(base_offset)          \
-    }                                        \
-    else                                     \
-    {                                        \
-        MOVD2A_FACE(base_offset, 0)          \
-        if ((num_faces) > 1)                 \
-        {                                    \
-            MOVD2A_FACE(base_offset, 1)      \
-        }                                    \
-    }
-
 /**
  * @brief Execute GAPOOL operations with optional high fidelity phases
  *
@@ -167,6 +152,20 @@ inline void _llk_math_mul_reduce_scalar_move_faces_to_srca_(const std::uint32_t 
     }
 
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
+// A whole slot moves in eight-row steps; a one- or two-face tile keeps four-row moves, which read faster there.
+#define MOVD2A_FACES(base_offset, num_faces) \
+    if ((num_faces) > 2)                     \
+    {                                        \
+        MOVD2A_16_ROWS(base_offset)          \
+    }                                        \
+    else                                     \
+    {                                        \
+        MOVD2A_FACE(base_offset, 0)          \
+        if ((num_faces) > 1)                 \
+        {                                    \
+            MOVD2A_FACE(base_offset, 1)      \
+        }                                    \
+    }
     switch (idst)
     {
         case 0:
@@ -196,6 +195,7 @@ inline void _llk_math_mul_reduce_scalar_move_faces_to_srca_(const std::uint32_t 
         default:
             break;
     }
+#undef MOVD2A_FACES
 }
 
 // A 16x32 product takes 32 rows, so two fit one 64-row DEST slot.
@@ -453,16 +453,6 @@ inline void _llk_math_mul_reduce_scalar_mul_two_faces_()
     TTI_ELWMUL(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_4, dst + 24);
 }
 
-// Moves the two faces at DEST row src to SrcA rows 32 to 63.
-template <std::uint32_t src, std::uint32_t last_addr_mod>
-inline void _llk_math_mul_reduce_scalar_move_two_faces_()
-{
-    TTI_MOVD2A(0, 32, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, src);
-    TTI_MOVD2A(0, 40, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, src + 8);
-    TTI_MOVD2A(0, 48, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, src + 16);
-    TTI_MOVD2A(0, 56, last_addr_mod, p_movd2a::MOV_8_ROWS, src + 24);
-}
-
 // Fills pool rows 0 to 3 and 8 to 11 with the scaler once product 0's first two faces have left them; only pool row 0
 // reaches the result.
 inline void _llk_math_mul_reduce_scalar_fill_scaler_(const float scaler)
@@ -485,10 +475,16 @@ inline void _llk_math_mul_reduce_scalar_interleaved_turn_(const float scaler)
     if constexpr (i > 0)
     {
         constexpr std::uint32_t prev = cur - 64;
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+        // MATH: until the SETRWC that clears the last bank lands, the valid bits still name that bank.
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+        // The same faces of product i - 1 to SrcA rows 32 to 63.
+        constexpr std::uint32_t last_move_addr_mod = i == 1 ? ADDR_MOD_0 : ADDR_MOD_5;
+        TTI_MOVD2A(0, 32, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, prev);
+        TTI_MOVD2A(0, 40, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, prev + 8);
+        TTI_MOVD2A(0, 48, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, prev + 16);
+        TTI_MOVD2A(0, 56, last_move_addr_mod, p_movd2a::MOV_8_ROWS, prev + 24);
         if constexpr (i == 1)
         {
-            _llk_math_mul_reduce_scalar_move_two_faces_<prev, ADDR_MOD_0>();
             if constexpr (h == 0)
             {
                 _llk_math_mul_reduce_scalar_fill_scaler_(scaler);
@@ -499,10 +495,6 @@ inline void _llk_math_mul_reduce_scalar_interleaved_turn_(const float scaler)
             {
                 TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, 0);
             }
-        }
-        else
-        {
-            _llk_math_mul_reduce_scalar_move_two_faces_<prev, ADDR_MOD_5>();
         }
         // The second pool waits for the first one's DEST write either way, so the multiply goes between them.
         TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_5, p_gpool::INDEX_DIS, 0);
@@ -543,7 +535,7 @@ inline void _llk_math_mul_reduce_scalar_interleaved_row_(const float scaler)
 // Pools the last product in the bank the unpacker zeroed, then collapses the pool row to the scalar.
 inline void _llk_math_mul_reduce_scalar_interleaved_tail_(const std::uint32_t num_tiles)
 {
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
     TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET, ADDR_MOD_0, p_movd2b::MOV_4_ROWS, 8);
     _llk_math_mul_reduce_scalar_move_faces_to_srca_(num_tiles - 1, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_math_mul_reduce_column_<MathFidelity::LoFi, false>(0, ckernel::DEFAULT_TENSOR_SHAPE);
