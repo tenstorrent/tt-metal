@@ -46,10 +46,9 @@ STIMULI = {
 
 # Has a compilation error on coverage, https://github.com/tenstorrent/tt-llk/issues/884
 @skip_for_coverage
-@parametrize(stimuli=list(STIMULI))
-def test_sfpu_reduce_sdpa(stimuli):
-    (stimuli,) = stimuli
-
+# mathop stays a parameter so `--op ReduceColumn` still selects these cases.
+@parametrize(stimuli=list(STIMULI), mathop=[MATHOP])
+def test_sfpu_reduce_sdpa(stimuli, mathop):
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=FORMATS.input_format,
         input_dimensions_A=INPUT_DIMENSIONS,
@@ -87,7 +86,7 @@ def test_sfpu_reduce_sdpa(stimuli):
             generate_input_dim(
                 INPUT_DIMENSIONS, INPUT_DIMENSIONS, block_ct_dim=2, block_rt_dim=4
             ),
-            MATH_OP(mathop=MATHOP, pool_type=REDUCE_POOL),
+            MATH_OP(mathop=mathop, pool_type=REDUCE_POOL),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
