@@ -8,7 +8,8 @@ inside the input projection. Each core of the rectangle owns an [m_block, n_bloc
 K in k_block-tile blocks: the first core of each row reads that row's A blocks and multicasts them along the row on
 NoC 1, the first core of each column reads that column's W blocks and multicasts them down the column on NoC 0
 (ttnn.Mcast line pipes, the 2D multicast matmul's NoC split; the other assignment takes 251 us instead of 155 us at the
-K3 gate's shape); each reads the next block into a two-slot staging buffer while the current one goes out.
+K3 gate's shape). A and W blocks are double-buffered: a sender reads straight into its circular buffer, multicasts the
+block to the same address on the receivers, then reads the next block into the other slot while compute runs.
 Compute accumulates the K blocks in an FP32 buffer with packer L1 accumulation and packs the result once.
 """
 
@@ -16,7 +17,7 @@ from __future__ import annotations
 
 import ttnn
 
-_CB_A, _CB_W, _CB_ACC, _CB_OUT, _CB_A_STAGE, _CB_W_STAGE = 16, 17, 18, 19, 20, 21
+_CB_A, _CB_W, _CB_ACC, _CB_OUT = 16, 17, 18, 19
 
 _A_READER = r"""
 #include <cstdint>
@@ -30,8 +31,7 @@ void kernel_main() {
     constexpr uint32_t k_blocks = get_compile_time_arg_val(3);
     constexpr uint32_t a_row_tiles = get_compile_time_arg_val(4);  // Kt
     constexpr bool sends = get_compile_time_arg_val(5) != 0;
-    constexpr uint32_t cb_stage = get_compile_time_arg_val(6);
-    constexpr auto a_args = TensorAccessorArgs<7>();
+    constexpr auto a_args = TensorAccessorArgs<6>();
     constexpr auto mc =
         dataflow_kernel_lib::McastArgs<get_named_compile_time_arg_val("a_ct_offset"), get_named_compile_time_arg_val("a_rt_offset")>();
     const uint32_t a_addr = get_arg_val<uint32_t>(0);
@@ -42,27 +42,30 @@ void kernel_main() {
     const auto a = TensorAccessor(a_args, a_addr, tile_bytes);
     Noc noc;
     if constexpr (sends) {
-        // The row's first core reads block kb + 1 into the other staging slot while block kb goes out.
+        // The row's first core reads straight into its two-block circular buffer: block kb + 1 into one slot while
+        // block kb goes out of the other to the same address on the receivers.
         auto pipe = mc.sender(noc);
-        cb_reserve_back(cb_stage, 2 * block_tiles);
-        const uint32_t stage = get_write_ptr(cb_stage);
+        const uint32_t base = get_write_ptr(cb_a);
+        const uint32_t block_bytes = block_tiles * tile_bytes;
         const auto issue = [&](uint32_t kb) {
-            const uint32_t slot = stage + (kb & 1) * block_tiles * tile_bytes;
+            const uint32_t slot = base + (kb & 1) * block_bytes;
             for (uint32_t r = 0; r < m_valid; ++r) {
                 for (uint32_t k = 0; k < k_block; ++k) {
                     noc_async_read_page((m0 + r) * a_row_tiles + kb * k_block + k, a, slot + (r * k_block + k) * tile_bytes);
                 }
             }
         };
+        cb_reserve_back(cb_a, block_tiles);
         issue(0);
         for (uint32_t kb = 0; kb < k_blocks; ++kb) {
             noc_async_read_barrier();
+            const uint32_t slot = base + (kb & 1) * block_bytes;
+            pipe.send(slot, slot, block_bytes);
+            cb_push_back(cb_a, block_tiles);
             if (kb + 1 < k_blocks) {
+                cb_reserve_back(cb_a, block_tiles);
                 issue(kb + 1);
             }
-            cb_reserve_back(cb_a, block_tiles);
-            pipe.send(stage + (kb & 1) * block_tiles * tile_bytes, get_write_ptr(cb_a), block_tiles * tile_bytes);
-            cb_push_back(cb_a, block_tiles);
         }
     } else {
         auto pipe = mc.receiver(noc);
@@ -90,8 +93,7 @@ void kernel_main() {
     constexpr uint32_t w_row_tiles = get_compile_time_arg_val(6);    // Nt of W
     constexpr uint32_t out_row_tiles = get_compile_time_arg_val(7);  // Nt of the output
     constexpr bool sends = get_compile_time_arg_val(8) != 0;
-    constexpr uint32_t cb_stage = get_compile_time_arg_val(9);
-    constexpr auto w_args = TensorAccessorArgs<10>();
+    constexpr auto w_args = TensorAccessorArgs<9>();
     constexpr auto out_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto mc =
         dataflow_kernel_lib::McastArgs<get_named_compile_time_arg_val("w_ct_offset"), get_named_compile_time_arg_val("w_rt_offset")>();
@@ -107,27 +109,29 @@ void kernel_main() {
     const auto w = TensorAccessor(w_args, w_addr, w_tile_bytes);
     Noc noc;
     if constexpr (sends) {
-        // The column's first core reads block kb + 1 into the other staging slot while block kb goes out.
+        // As the A reader: straight into the two-block circular buffer, the next block while this one goes out.
         auto pipe = mc.sender(noc);
-        cb_reserve_back(cb_stage, 2 * block_tiles);
-        const uint32_t stage = get_write_ptr(cb_stage);
+        const uint32_t base = get_write_ptr(cb_w);
+        const uint32_t block_bytes = block_tiles * w_tile_bytes;
         const auto issue = [&](uint32_t kb) {
-            const uint32_t slot = stage + (kb & 1) * block_tiles * w_tile_bytes;
+            const uint32_t slot = base + (kb & 1) * block_bytes;
             for (uint32_t k = 0; k < k_block; ++k) {
                 for (uint32_t n = 0; n < n_valid; ++n) {
                     noc_async_read_page((kb * k_block + k) * w_row_tiles + n0 + n, w, slot + (k * n_block + n) * w_tile_bytes);
                 }
             }
         };
+        cb_reserve_back(cb_w, block_tiles);
         issue(0);
         for (uint32_t kb = 0; kb < k_blocks; ++kb) {
             noc_async_read_barrier();
+            const uint32_t slot = base + (kb & 1) * block_bytes;
+            pipe.send(slot, slot, block_bytes);
+            cb_push_back(cb_w, block_tiles);
             if (kb + 1 < k_blocks) {
+                cb_reserve_back(cb_w, block_tiles);
                 issue(kb + 1);
             }
-            cb_reserve_back(cb_w, block_tiles);
-            pipe.send(stage + (kb & 1) * block_tiles * w_tile_bytes, get_write_ptr(cb_w), block_tiles * w_tile_bytes);
-            cb_push_back(cb_w, block_tiles);
         }
     } else {
         auto pipe = mc.receiver(noc);
@@ -243,15 +247,11 @@ def _cset(cores):
 class GateMatmulProgram:
     """A @ W on the rectangle [x0, x1] x [y0, y1] of every device of a mesh (no communication)."""
 
-    def __init__(
-        self, mesh_device, *, rows: tuple[int, int], cols: tuple[int, int], k_block: int, math_fidelity, depth: int = 2
-    ):
+    def __init__(self, mesh_device, *, rows: tuple[int, int], cols: tuple[int, int], k_block: int, math_fidelity):
         self.mesh_device = mesh_device
         self.y0, self.y1 = rows
         self.x0, self.x1 = cols
         self.k_block = k_block
-        # Operand blocks each core's A and W circular buffers hold.
-        self.depth = depth
         self.compute_config = ttnn.ComputeConfigDescriptor(math_fidelity=math_fidelity, fp32_dest_acc_en=True)
 
     @property
@@ -285,14 +285,14 @@ class GateMatmulProgram:
                 program = ttnn.ProgramDescriptor()
                 program.cbs = [
                     ttnn.CBDescriptor(
-                        total_size=self.depth * m_block * k_block * a_tile,
+                        total_size=2 * m_block * k_block * a_tile,
                         core_ranges=rect_set,
                         format_descriptors=[
                             ttnn.CBFormatDescriptor(buffer_index=_CB_A, data_format=a.dtype, page_size=a_tile)
                         ],
                     ),
                     ttnn.CBDescriptor(
-                        total_size=self.depth * k_block * n_block * w_tile,
+                        total_size=2 * k_block * n_block * w_tile,
                         core_ranges=rect_set,
                         format_descriptors=[
                             ttnn.CBFormatDescriptor(buffer_index=_CB_W, data_format=w.dtype, page_size=w_tile)
@@ -343,7 +343,7 @@ class GateMatmulProgram:
                             kernel_source=_A_READER,
                             source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
                             core_ranges=_cset(cores),
-                            compile_time_args=[_CB_A, m_block, k_block, k_blocks, Kt, sends, _CB_A_STAGE] + a_ct,
+                            compile_time_args=[_CB_A, m_block, k_block, k_blocks, Kt, sends] + a_ct,
                             runtime_args=rt,
                             config=ttnn.DataMovementConfigDescriptor(
                                 processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1
@@ -360,7 +360,7 @@ class GateMatmulProgram:
                             source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
                             core_ranges=_cset(cores),
                             compile_time_args=[_CB_W, _CB_OUT, m_block, n_block, k_block, k_blocks, Nt, out_row_tiles]
-                            + [sends, _CB_W_STAGE]
+                            + [sends]
                             + w_ct
                             + out_ct,
                             runtime_args=rt,
@@ -369,22 +369,6 @@ class GateMatmulProgram:
                             ),
                         )
                     )
-                program.cbs = list(program.cbs) + [
-                    ttnn.CBDescriptor(
-                        total_size=2 * m_block * k_block * a_tile,
-                        core_ranges=_cset(a_senders),
-                        format_descriptors=[
-                            ttnn.CBFormatDescriptor(buffer_index=_CB_A_STAGE, data_format=a.dtype, page_size=a_tile)
-                        ],
-                    ),
-                    ttnn.CBDescriptor(
-                        total_size=2 * k_block * n_block * w_tile,
-                        core_ranges=_cset(w_senders),
-                        format_descriptors=[
-                            ttnn.CBFormatDescriptor(buffer_index=_CB_W_STAGE, data_format=w.dtype, page_size=w_tile)
-                        ],
-                    ),
-                ]
                 compute = ttnn.KernelDescriptor(
                     kernel_source=_COMPUTE,
                     source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,

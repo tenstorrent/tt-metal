@@ -300,7 +300,7 @@ class ttKDA:
                     mesh_device,
                     rows=(0, grid.y - 1),
                     cols=(0, min(c.x for c in self.recurrence.final_carry_cores) - 1),
-                    k_block=4,
+                    k_block=8,
                     math_fidelity=program_config.output_projection_math_fidelity,
                 )
         self.input_projection_program_config, self.output_projection_program_config = (
