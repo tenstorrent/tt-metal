@@ -324,6 +324,56 @@ inline void _llk_math_eltwise_unary_datacopy_(
 }
 
 /**
+ * @brief First half of a 32-bit unpack-to-dest copy without broadcast: hand the DEST slot to the unpacker and return.
+ *
+ * Math work issued between this call and @ref _llk_math_unpack_to_dest_wait_ runs while the unpacker fills the slot, so
+ * it must not use the slot.
+ *
+ * @tparam wait_for_math: Wait for the math and SFPU work issued so far, as the full copy does. Without it, call only
+ * after the wait for an earlier request: the unpacker fills the slot once that wait has run, and that wait follows the
+ * math work issued before it, so only work issued after it must keep off the slot.
+ * @param dst_index: Tile index into the destination register.
+ */
+template <bool wait_for_math = true>
+inline void _llk_math_unpack_to_dest_request_(const std::uint32_t dst_index)
+{
+    if constexpr (wait_for_math)
+    {
+        math_unpack_to_dest_math_ready();
+    }
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
+}
+
+/**
+ * @brief Second half of a 32-bit unpack-to-dest copy without broadcast: wait for the tile requested for the slot.
+ *
+ * The request and the wait issue what @ref _llk_math_eltwise_unary_datacopy_ issues for that copy.
+ *
+ * @param dst_index: Tile index into the destination register, as passed to the request.
+ * @param dst_format: Destination data format (DataFormat enum underlying value).
+ * @param num_faces: Number of faces in the tile (must be 1, 2, or 4).
+ */
+inline void _llk_math_unpack_to_dest_wait_(const std::uint32_t dst_index, const std::uint32_t dst_format, const std::uint32_t num_faces = 4)
+{
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+
+    math::math_unpack_to_dest_tile_ready();
+
+    // The zero flag clear of _llk_math_eltwise_unary_datacopy_ (budabackend#2730).
+    const std::uint32_t dst_format_masked = masked_data_format(dst_format);
+    const int clear_fp32                  = static_cast<int>(
+        dst_format_masked == (std::uint32_t)DataFormat::Float32 || dst_format_masked == (std::uint32_t)DataFormat::Int32 ||
+        dst_format_masked == (std::uint32_t)DataFormat::UInt32);
+    const std::uint32_t tiles_per_bank = clear_fp32 ? 4 : 8;
+    const std::uint32_t local_tile     = dst_index & (tiles_per_bank - 1);
+#pragma GCC unroll 0
+    for (std::uint32_t i = 0; i < num_faces; i++)
+    {
+        TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_3, get_dest_index_in_faces(local_tile, i));
+    }
+}
+
+/**
  * @brief Program the address-mod slots for a datacopy: single-row and 8-row (or 4-row for UInt16) dest/source steps.
  *
  * The increment pattern depends on the datacopy direction (A2D walks SrcA, B2D walks SrcB) and broadcast type;

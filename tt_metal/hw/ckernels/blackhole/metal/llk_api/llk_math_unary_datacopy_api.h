@@ -66,6 +66,25 @@ inline void llk_math_eltwise_unary_datacopy(std::uint32_t dst_index, std::uint32
         dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
 }
 
+// The two halves of llk_math_eltwise_unary_datacopy<A2D, ..., NONE, true> for a 32-bit operand.
+template <bool wait_for_math = true>
+inline void llk_math_unpack_to_dest_request(std::uint32_t dst_index) {
+    LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
+    _llk_math_unpack_to_dest_request_<wait_for_math>(dst_index);
+}
+
+inline void llk_math_unpack_to_dest_wait(std::uint32_t dst_index, std::uint32_t operand) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    SAN_HOOK(execute<OperationFpuEltwiseUnaryDatacopy>(
+        StateVal<OperationFpuEltwiseUnaryDatacopy::DataCopyType>(to_underlying(DataCopyType::A2D)),
+        StateVal<OperationFpuEltwiseUnaryDatacopy::BroadcastType>(to_underlying(BroadcastType::NONE)),
+        StateVal<OperationFpuEltwiseUnaryDatacopy::NumFaces>(get_operand_num_faces(operand_id)),
+        StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[operand_id]),
+        StateDiscard<std::uint32_t>(dst_index)));
+
+    _llk_math_unpack_to_dest_wait_(dst_index, unpack_dst_format[operand_id]);
+}
+
 template <
     DataCopyType type,
     bool is_fp32_dest_acc_en,

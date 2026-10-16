@@ -28,7 +28,14 @@ void kernel_main() {
     constexpr uint32_t block_size = get_compile_time_arg_val(2);
 
     // True iff the factory flagged cb_inp (c_0) UnpackToDestFp32 (FP32 input + fp32_dest_acc_en).
-    constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
+    [[maybe_unused]] constexpr bool welford_unpack_fp32_active =
+        get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
+#ifdef ARCH_BLACKHOLE
+    // The Blackhole Welford record (replay slots 0 to 15) and the 32-bit transpose record (16 to 31) are disjoint.
+    constexpr bool welford_rerecord_per_tile = false;
+#else
+    constexpr bool welford_rerecord_per_tile = welford_unpack_fp32_active;
+#endif
 
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
@@ -44,6 +51,12 @@ void kernel_main() {
         constexpr uint32_t dst0 = 0;
         constexpr uint32_t dst1 = 1;
         constexpr uint32_t dst2 = 2;
+#ifdef ARCH_BLACKHOLE
+        // The Float32 Welford loop alternates its input between dst0 and dst1, so its statistics go to dst2 and dst3.
+        constexpr uint32_t dst_stats = welford_unpack_fp32_active ? dst2 : dst1;
+#else
+        constexpr uint32_t dst_stats = dst1;
+#endif
 
         reconfig_data_format(cb_inp, cb_inp);
         pack_reconfig_data_format(cb_x2);
@@ -67,42 +80,69 @@ void kernel_main() {
         // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_tile routes
         // through SrcA without touching the math-thread replay buffer, so the recovery is
         // gated out.
-        for (uint32_t wt = 0; wt < Wt; wt += block_size) {
+#ifdef ARCH_BLACKHOLE
+        if constexpr (welford_unpack_fp32_active) {
+            // Each tile unpacks to DEST while the previous one updates, so the input alternates dst0 and dst1.
             cb_wait_front(cb_inp, block_size);
-            uint32_t r;
-            for (r = 0; r < block_size && wt + r < Wt - 1; r++) {
-                if constexpr (welford_unpack_fp32_active) {
-                    transpose_init(cb_inp);
+            transpose_tile_start(cb_inp, 0, dst0);
+            uint32_t r = 0;
+            for (uint32_t wt = 0; wt < Wt; wt++) {
+                const uint32_t dst = (wt & 1) ? dst1 : dst0;
+                transpose_tile_finish(cb_inp, dst);
+                if (wt + 1 < Wt) {
+                    if (++r == block_size) {
+                        cb_pop_front(cb_inp, block_size);
+                        cb_wait_front(cb_inp, block_size);
+                        r = 0;
+                    }
+                    transpose_tile_start<true>(cb_inp, r, (wt & 1) ? dst0 : dst1);
+                    welford_update<W>(dst, start_N, *p_reciprocals);
+                } else {
+                    welford_update_rows<W>(dst, start_N, 0, last_tile_rows, *p_reciprocals);
                 }
-                transpose_tile(cb_inp, r, dst0);
-                if constexpr (welford_unpack_fp32_active) {
-                    welford_init<WelfordInitMode::PreserveStats>();
-                }
-                welford_update<W>(dst0, start_N, *p_reciprocals);
                 start_N += 32;
             }
-            // r == block_size: the block ran out first, and the last tile is in the next block.
-            if (r < block_size && wt + r == Wt - 1) {
-                // This block contains the last tile
-                if constexpr (welford_unpack_fp32_active) {
-                    transpose_init(cb_inp);
-                }
-                transpose_tile(cb_inp, r, dst0);
-                if constexpr (welford_unpack_fp32_active) {
-                    welford_init<WelfordInitMode::PreserveStats>();
-                }
-                welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
-            }
             cb_pop_front(cb_inp, block_size);
+        } else
+#endif
+        {
+            for (uint32_t wt = 0; wt < Wt; wt += block_size) {
+                cb_wait_front(cb_inp, block_size);
+                uint32_t r;
+                for (r = 0; r < block_size && wt + r < Wt - 1; r++) {
+                    if constexpr (welford_rerecord_per_tile) {
+                        transpose_init(cb_inp);
+                    }
+                    transpose_tile(cb_inp, r, dst0);
+                    if constexpr (welford_rerecord_per_tile) {
+                        welford_init<WelfordInitMode::PreserveStats>();
+                    }
+                    welford_update<W>(dst0, start_N, *p_reciprocals);
+                    start_N += 32;
+                }
+                // r == block_size: the block ran out first, and the last tile is in the next block.
+                if (r < block_size && wt + r == Wt - 1) {
+                    // This block contains the last tile
+                    if constexpr (welford_rerecord_per_tile) {
+                        transpose_init(cb_inp);
+                    }
+                    transpose_tile(cb_inp, r, dst0);
+                    if constexpr (welford_rerecord_per_tile) {
+                        welford_init<WelfordInitMode::PreserveStats>();
+                    }
+                    welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
+                }
+                cb_pop_front(cb_inp, block_size);
+            }
         }
 
-        welford_finalize_to_row<W>(dst1, W - 1, *p_reciprocals);
+        welford_finalize_to_row<W>(dst_stats, W - 1, *p_reciprocals);
 
         cb_reserve_back(cb_x2, 2);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(dst1, cb_x2);
-        pack_tile(dst2, cb_x2);
+        pack_tile(dst_stats, cb_x2);
+        pack_tile(dst_stats + 1, cb_x2);
         cb_push_back(cb_x2, 2);
         tile_regs_release();
         reconfig_data_format(cb_x2, cb_x2);

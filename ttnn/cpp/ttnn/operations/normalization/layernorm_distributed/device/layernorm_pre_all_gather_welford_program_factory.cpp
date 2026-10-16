@@ -325,6 +325,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
     // The Welford spill buffers hold the FP32 accumulator between block iterations and are reloaded
     // into DEST via copy_tile. On the SrcA/B path that round-trip truncates FP32 to TF32 on every
     // block iteration. Force UnpackToDest on them so the FP32 precision survives the spill cycle.
+    // The Blackhole kernel keeps the accumulator in the SFPU registers and leaves them unused.
     if (fuse_pre_add && fp32_dest_acc_en) {
         unpack_via_dest(compute_gen1, PREWF_MEAN_SPILL);
         unpack_via_dest(compute_gen1, PREWF_M2_SPILL);

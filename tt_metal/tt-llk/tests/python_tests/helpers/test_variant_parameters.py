@@ -934,6 +934,17 @@ class WELFORD_RECIP_SIZE(TemplateParameter):
 
 
 @dataclass
+class WELFORD_LOOP(TemplateParameter):
+    """L1_TO_L1 loop of sfpu_welford_perf.cpp: 0 a DEST section per tile, 1 a section per tile loop, 2 as 1 with the
+    32-bit input alternating DEST tiles 0 and 1."""
+
+    welford_loop: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t WELFORD_LOOP = {self.welford_loop}u;"
+
+
+@dataclass
 class WELFORD_RECIP_BASE(RuntimeParameter):
     """First index whose reciprocal sfpu_welford_recip_test.cpp computes."""
 
