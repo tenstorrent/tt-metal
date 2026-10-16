@@ -316,7 +316,7 @@ inline void custom_mm_configure_group_mop(const std::uint32_t operandB_face_r_di
         });
 
     // The per-tile program's MOP: its first three entries are the same MVMULs
-    const std::uint32_t mvmul_base      = lltt::replay_insn(ckernel::math::replay_buf_offset + 0, 3);
+    const std::uint32_t mvmul_base      = lltt::replay_insn(ckernel::math::replay_buf_offset + 0, custom_mm_mvmul_prefix_len);
     const std::uint32_t mvmul_end_tile  = TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0);
     const std::uint32_t mvmul_end_block = TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);
     ckernel_template tmp                = ckernel_template(1, ct_dim, mvmul_base, mvmul_end_tile);
