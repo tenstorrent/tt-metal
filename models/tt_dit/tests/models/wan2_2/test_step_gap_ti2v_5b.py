@@ -46,7 +46,16 @@ from loguru import logger
 import ttnn
 from models.tt_dit.pipelines.wan.pipeline_wan_ti2v_5b import WanTI2V5BPipeline
 from models.tt_dit.pipelines.wan.quant_config import set_quant_config_from_env
-from models.tt_dit.utils.test import ring_params_req_exact_devices, skip_if_unsupported_num_links
+from models.tt_dit.utils.test import (
+    ring_params_8k_req_exact_devices,
+    ring_params_req_exact_devices,
+    skip_if_unsupported_num_links,
+)
+
+# Same router config as the 5B perf tests: 8 KiB fabric payload unless WAN5B_FABRIC_8K=0.
+_RING_PARAMS_5B = (
+    ring_params_req_exact_devices if os.environ.get("WAN5B_FABRIC_8K") == "0" else ring_params_8k_req_exact_devices
+)
 
 _PROMPT = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
 
@@ -150,7 +159,7 @@ def _summarise(tag, records):
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, device_params, topology",
     [
-        [(4, 8), (4, 8), ring_params_req_exact_devices, ttnn.Topology.Ring],
+        [(4, 8), (4, 8), _RING_PARAMS_5B, ttnn.Topology.Ring],
     ],
     ids=["bh_4x8"],
     indirect=["mesh_device", "device_params"],
