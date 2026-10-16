@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import json
 from types import SimpleNamespace
 
@@ -71,6 +72,18 @@ def test_migration_stages_preserve_each_tensor_and_semantic_layer(caches_and_mes
     layouts[0][0]["base_addr"] += 32
     with expect_error(ValueError, "does not match"):
         runtime.build_kv_chunk_table(caches, "unused.pb", stage_layouts=layouts)
+
+
+def test_bounded_swa_caches_report_no_migration_stage(caches_and_mesh, monkeypatch, expect_error):
+    caches, mesh = caches_and_mesh
+    caches = dataclasses.replace(caches, bounded_sliding_window_attention=True)
+    runtime = Gemma4PrefillRuntime.__new__(Gemma4PrefillRuntime)
+    runtime.config = SimpleNamespace(num_layers=6, chunk_size=256)
+    runtime.mesh_device = mesh
+    monkeypatch.setattr(runtime, "_check_cache", lambda supplied: None)
+    assert runtime.kv_migration_stages(caches, 0, 6) == []
+    with expect_error(ValueError, "no migration table"):
+        build_kv_chunk_address_table(mesh_device=mesh, kv_caches=caches, chunk_size=256)
 
 
 def test_loopback_byte_check_covers_all_configs_and_detects_corruption(caches_and_mesh, monkeypatch, tmp_path):

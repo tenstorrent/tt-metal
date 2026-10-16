@@ -30,6 +30,7 @@ class Gemma4DecoderLayer:
         ring_kv_cache=None,
         ring_layer_idx=0,
         ring_num_layers=1,
+        circular_kv_cache=False,
     ):
         # Per-module dtype overrides default to the model-wide ``dtype`` so
         # callers that don't care about precision config see no change.
@@ -78,6 +79,7 @@ class Gemma4DecoderLayer:
             ring_kv_cache=ring_kv_cache,
             ring_layer_idx=ring_layer_idx,
             ring_num_layers=ring_num_layers,
+            circular_kv_cache=circular_kv_cache,
             max_seq_len=max_seq_len,
             max_batch_size=max_local_batch_size,
         )

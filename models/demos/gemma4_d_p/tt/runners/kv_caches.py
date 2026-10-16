@@ -11,6 +11,7 @@ import ttnn
 from models.demos.common.prefill.adapter import KvCaches
 from models.demos.gemma4_d_p.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import (
+    bounded_sliding_cache_capacity,
     init_global_ring_kv_cache,
     init_sliding_ring_kv_cache,
     ring_cache_capacity,
@@ -19,7 +20,11 @@ from models.demos.gemma4_d_p.tt.attention.ring_prefill import (
 
 @dataclass
 class Gemma4KvCaches(KvCaches):
-    """One durable migration-ready ring cache per semantic model layer."""
+    """One durable migration-ready ring cache per semantic model layer.
+
+    With ``bounded_sliding_window_attention`` the sliding caches hold only two chunks, written circularly, and
+    cannot be migrated yet.
+    """
 
     layers: list = field(repr=False)
     layer_types: tuple[str, ...]
@@ -27,6 +32,7 @@ class Gemma4KvCaches(KvCaches):
     max_seq_len: int
     cp: int
     tp: int
+    bounded_sliding_window_attention: bool = False
 
     def __len__(self):
         return len(self.layers)
@@ -52,14 +58,21 @@ def allocate_ring_kv_caches(
     prefill_chunk_size: int = 8192,
     num_layers: int | None = None,
     cache_dtype=ttnn.bfloat8_b,
+    bounded_sliding_window_attention: bool = False,
 ) -> Gemma4KvCaches:
-    """Allocate the sole compute+migration cache family for a CP prefill model."""
+    """Allocate the sole compute+migration cache family for a CP prefill model.
+
+    ``bounded_sliding_window_attention`` sizes every sliding cache to two chunks, independent of ``max_seq_len``.
+    """
     num_layers = num_layers or hf_config.num_hidden_layers
     if num_users <= 0 or num_layers <= 0:
         raise ValueError(f"num_users and num_layers must be positive, got {num_users}, {num_layers}")
     if mesh_config.cp_degree <= 1:
         raise ValueError("migration-ready Gemma 4 caches require context parallel prefill")
     max_seq_len = ring_cache_capacity(max_seq_len, prefill_chunk_size)
+    sliding_seq_len = (
+        bounded_sliding_cache_capacity(prefill_chunk_size) if bounded_sliding_window_attention else max_seq_len
+    )
     layer_types = tuple(hf_config.layer_types[:num_layers])
     caches = []
     for layer_idx, layer_type in enumerate(layer_types):
@@ -78,7 +91,7 @@ def allocate_ring_kv_caches(
                 mesh_config,
                 local_heads,
                 config.head_dim,
-                max_seq_len,
+                sliding_seq_len,
                 num_users=num_users,
                 cache_dtype=cache_dtype,
             )
@@ -92,4 +105,5 @@ def allocate_ring_kv_caches(
         max_seq_len=max_seq_len,
         cp=mesh_config.cp_degree,
         tp=mesh_config.tp_degree,
+        bounded_sliding_window_attention=bounded_sliding_window_attention,
     )

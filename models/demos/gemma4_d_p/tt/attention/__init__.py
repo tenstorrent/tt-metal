@@ -72,6 +72,7 @@ class Gemma4Attention:
         ring_kv_cache=None,
         ring_layer_idx=0,
         ring_num_layers=1,
+        circular_kv_cache=False,
     ):
         mesh_device = mesh_config.device
         self.mesh_device = mesh_device
@@ -79,11 +80,20 @@ class Gemma4Attention:
         self.ccl_manager = ccl_manager
         self.mesh_config = mesh_config
         self.layer_idx = layer_idx
+        self.circular_kv_cache = circular_kv_cache
 
         if ring_kv_cache is not None:
             cache = ring_kv_cache.k if config.is_sliding else ring_kv_cache.kv
-            if cache.shape[-2] * mesh_config.cp_degree < max_seq_len:
+            seq_local = cache.shape[-2]
+            capacity = seq_local * mesh_config.cp_degree
+            if capacity < max_seq_len:
                 raise ValueError("External ring cache is too small for the configured prefill capacity")
+            # PrefillMetadata wraps the write offset at max_seq_len, so a circular cache must hold exactly that.
+            if circular_kv_cache and capacity != max_seq_len:
+                raise ValueError(
+                    f"External circular sliding cache holds {capacity} tokens; bounded sliding attention needs "
+                    f"{max_seq_len}"
+                )
 
         self.weights = load_attention_weights(
             mesh_config=mesh_config,
@@ -96,7 +106,7 @@ class Gemma4Attention:
         self.ring_kv_cache = ring_kv_cache
         self.ring_layer_idx = ring_layer_idx
         self.ring_num_layers = ring_num_layers
-        self.ring_max_seq_len = cache.shape[-2] * mesh_config.cp_degree if ring_kv_cache is not None else None
+        self.ring_max_seq_len = seq_local * mesh_config.cp_degree if ring_kv_cache is not None else None
         if self.ring_kv_cache is None:
             num_local_kv_heads = (
                 1 if self.weights.kv_replicated else config.num_key_value_heads // mesh_config.tp_degree
@@ -246,6 +256,7 @@ class Gemma4Attention:
                 layer_idx=self.ring_layer_idx,
                 num_layers=self.ring_num_layers,
                 prefill_metadata=prefill_metadata,
+                circular_kv_cache=self.circular_kv_cache,
             )
 
         sdpa_compute_config = ttnn.init_device_compute_kernel_config(
@@ -293,6 +304,7 @@ class Gemma4Attention:
                 compute_kernel_config=sdpa_compute_config,
                 layer_idx=self.ring_layer_idx,
                 num_layers=self.ring_num_layers,
+                circular_kv_cache=self.circular_kv_cache,
             )
         tt_q.deallocate(True)
         if tt_k is not None:
