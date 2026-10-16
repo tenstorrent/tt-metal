@@ -6,6 +6,8 @@ TP axis (all_gather + SFPU ttnn.add, K-30: the FPU in all_reduce reads fp32 at a
 
 from __future__ import annotations
 
+import torch
+
 import ttnn
 
 from .settings import settings
@@ -24,6 +26,20 @@ def compute_config(mesh):
         fp32_dest_acc_en=bool(settings.get("FP32_DEST_ACC")),
         packer_l1_acc=False,
     )
+
+
+def fpu_weight(w: torch.Tensor) -> torch.Tensor:
+    """An fp32 matmul weight as the FPU will read it (load time, host). The FPU reads fp32 operands at TF32 (10
+    mantissa bits) by truncation (K-30): a coherent -2^-11 bias over a long dot product (hc_fn, host: mixes rel
+    3.5e-4, all of it bias). FP32_WEIGHT_ROUND=rne rounds the weight to TF32 to nearest-even here, so the FPU's read
+    is exact and the error unbiased (host 1.5e-5; DS41-31); truncate leaves it to the FPU."""
+    w = w.float().contiguous()
+    if settings.get("FP32_WEIGHT_ROUND") != "rne":
+        return w
+    i = w.view(torch.int32)
+    lsb = (i >> 13) & 1
+    r = ((i + 0xFFF + lsb) >> 13) << 13
+    return torch.where(torch.isfinite(w), r.view(torch.float32), w)
 
 
 def tp_sum(mesh, t: ttnn.Tensor, how: str | None = None) -> ttnn.Tensor:

@@ -30,7 +30,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import build_consts
 
-from .common import DRAM, compute_config, tp_sum
+from .common import DRAM, compute_config, fpu_weight, tp_sum
 from .layout import HC, streams_cols_to_chip_major
 
 W = 32  # one tile row: 24 coefficient columns, the sum of squares in column SS_COL, the rest zero
@@ -58,7 +58,7 @@ class TtHcMixes:
         fn_t = torch.zeros(HC * hidden, W, dtype=torch.float32)
         fn_t[:, :NG] = streams_cols_to_chip_major(fn, hidden, tp).T
         self.fn_t = ttnn.from_torch(
-            fn_t.reshape(1, 1, HC * hidden, W),
+            fpu_weight(fn_t).reshape(1, 1, HC * hidden, W),  # TF32, rounded to nearest (DS41-31)
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             device=mesh,

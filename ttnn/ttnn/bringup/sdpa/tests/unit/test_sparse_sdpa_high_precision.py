@@ -21,6 +21,12 @@ keeps 1/sum in Float32 and takes the exact exp. Covered here:
 - fp32_output=True (with high_precision; deepseek_v41_flash_d_p window attention): a Float32 output, the fp32 DEST
   value untilized exactly (not on the bf16 or TF32 grid), within one bf16 step of the bf16 output and closer to the
   float32 golden; its own program; refused without high_precision.
+- fp32_scores=True (with high_precision and fp32_output; deepseek_v41_flash_d_p S.swa.11): Float32 scores and
+  probabilities, every Float32 value the FPU reads rounded to TF32 (nearest) in DEST, a float32 q accepted: vs float32
+  on the float32 q, closer than the bf16 scores with a bf16 q and much closer with the float32 q (rel 0.0026-0.0068 ->
+  0.0009-0.0022), one chunk with a sink, 4 chunks (eltwise max, SALAD), 6 query tile-rows in 2 DST groups; its own
+  program; refused without high_precision + fp32_output, and a float32 q without it. (A math-thread SFPU add in the
+  row-sum, racing the pack thread's SFPU rounding, failed the 2-group cases with rel 2-400 during development.)
 """
 
 import pytest
@@ -312,3 +318,91 @@ def test_fp32_output_program_and_refusal(device, expect_error):
     assert n2 > n1, "fp32_output must be a separate program"
     with expect_error(RuntimeError, "fp32_output requires high_precision"):
         _fork(device, q, kv, idx, v_dim, scale, kc, _ckc(), fp32_output=True)
+
+
+# ---------------------------------------------------------------- fp32_scores (deepseek_v41_flash_d_p S.swa.11)
+# fp32_scores=True (with high_precision and fp32_output): the scores and the softmax probabilities stay in a Float32 CB
+# (default: rounded to bf16) and q may be float32. Golden: float32 on the float32 q. Cases: the DS41 window (sink,
+# short rows), 4 chunks (the running max's eltwise max and the SALAD combine), and 6 query tile-rows in 2 DST groups
+# (the per-group format restore).
+FP32_SCORES_CASES = {
+    "ds41_window_scale1": SINK_CASES["ds41_window_scale1"][0],
+    "ds_h32_k576_chunks": SINK_CASES["ds_h32_k576_chunks"][0],
+    "h192_k128_groups": (192, 32, 1024, 256, 128, 1 / 8, 128, lambda s: [256, 200, 129, 7][s % 4], 2.0, (1.0, 0.0)),
+}
+
+
+def _fp32_scores_inputs(case, seed=11):
+    H, S, T, topk, k_dim, scale, kc, nv, qs, (spread, offset) = FP32_SCORES_CASES[case]
+    g = torch.Generator().manual_seed(seed)
+    _, kv, idx = _inputs(H, S, T, topk, k_dim, nv, qs, seed=seed)
+    q = torch.randn(1, H, S, k_dim, generator=g) * qs  # float32, off the bf16 grid
+    logit = torch.randn(H, generator=g) * spread
+    logit = logit.abs() + offset if offset else logit
+    v_dim = min(512, k_dim)
+    return q, kv, idx, v_dim, scale, kc, (logit / scale).to(torch.bfloat16)
+
+
+@pytest.mark.parametrize("case", list(FP32_SCORES_CASES))
+def test_fp32_scores(device, case):
+    q, kv, idx, v_dim, scale, kc, sink = _fp32_scores_inputs(case)
+    want = _golden(q, kv, idx, scale, v_dim, sink)
+    tkv, ti = _dev(kv, device, ttnn.bfloat16), _dev(idx.to(torch.int32), device, ttnn.uint32)
+    call = dict(
+        kv_format=ttnn.bringup.SparseKVFormat.BF16,
+        scale=scale,
+        k_chunk_size=kc,
+        compute_kernel_config=_ckc(),
+        attention_sink=_sink(device, sink),
+        high_precision=True,
+        fp32_output=True,
+    )
+    q16, q32 = _dev(q.to(torch.bfloat16), device, ttnn.bfloat16), _dev(q, device, ttnn.float32)
+    base = ttnn.to_torch(ttnn.bringup.sparse_sdpa(q16, tkv, ti, v_dim, **call)).float()
+    s16 = ttnn.to_torch(ttnn.bringup.sparse_sdpa(q16, tkv, ti, v_dim, fp32_scores=True, **call)).float()
+    o32 = ttnn.bringup.sparse_sdpa(q32, tkv, ti, v_dim, fp32_scores=True, **call)
+    assert o32.dtype == ttnn.float32
+    s32 = ttnn.to_torch(o32).float()
+    r_base, r_s16, r_s32 = (_stats(x, want) for x in (base, s16, s32))
+    fmt = "rel {:.5f} ratio [{:.4f}, {:.4f}] coef {:.5f}"
+    print(
+        f"{case}: bf16 scores, bf16 q "
+        + fmt.format(*r_base)
+        + " | fp32 scores, bf16 q "
+        + fmt.format(*r_s16)
+        + " | fp32 scores, fp32 q "
+        + fmt.format(*r_s32)
+    )
+    for r in (r_s16, r_s32):
+        assert torch.isfinite(torch.tensor(r)).all()
+        assert 0.98 <= r[1] and r[2] <= 1.02, f"per-row norm ratio [{r[1]:.4f}, {r[2]:.4f}]"
+        assert abs(r[3] - 1) <= 0.003, f"coefficient {r[3]:.5f}"
+    # bf16 q: the only change is the scores / probabilities buffer; fp32 q adds q's own rounding
+    assert r_s16[0] < r_base[0], f"fp32 scores rel {r_s16[0]:.5f} not below the bf16 scores' {r_base[0]:.5f}"
+    assert r_s32[0] < 0.6 * r_base[0], f"fp32 scores + fp32 q rel {r_s32[0]:.5f} vs bf16 {r_base[0]:.5f}"
+
+
+def test_fp32_scores_program_and_refusal(device, expect_error):
+    q, kv, idx, v_dim, scale, kc, _ = _case_inputs("ds_h32_k576")
+    device.clear_program_cache()
+    _fork(device, q, kv, idx, v_dim, scale, kc, _ckc(), high_precision=True, fp32_output=True)
+    n1 = device.num_program_cache_entries()
+    _fork(device, q, kv, idx, v_dim, scale, kc, _ckc(), high_precision=True, fp32_output=True, fp32_scores=True)
+    n2 = device.num_program_cache_entries()
+    assert n2 > n1, "fp32_scores must be a separate program"
+    with expect_error(RuntimeError, "fp32_scores requires high_precision"):
+        _fork(device, q, kv, idx, v_dim, scale, kc, _ckc(), high_precision=True, fp32_scores=True)
+    with expect_error(RuntimeError, "float32 only with fp32_scores"):
+        tq = _dev(q.float(), device, ttnn.float32)
+        ttnn.bringup.sparse_sdpa(
+            tq,
+            _dev(kv, device, ttnn.bfloat16),
+            _dev(idx.to(torch.int32), device, ttnn.uint32),
+            v_dim,
+            kv_format=ttnn.bringup.SparseKVFormat.BF16,
+            scale=scale,
+            k_chunk_size=kc,
+            compute_kernel_config=_ckc(),
+            high_precision=True,
+            fp32_output=True,
+        )

@@ -97,7 +97,9 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     // fp8 inputs require fp32_dest_acc_en (the unpack-to-dest path); enforced below.
     const bool kv_is_fp8 = (kv.dtype() == DataType::FP8_E4M3);
     const bool q_is_fp8 = (q.dtype() == DataType::FP8_E4M3);
-    TT_FATAL(q.dtype() == DataType::BFLOAT16 || q_is_fp8, "q must be bf16 or fp8_e4m3");
+    TT_FATAL(
+        q.dtype() == DataType::BFLOAT16 || q_is_fp8 || (q.dtype() == DataType::FLOAT32 && attrs.fp32_scores),
+        "q must be bf16 or fp8_e4m3 (float32 only with fp32_scores)");
     TT_FATAL(kv.dtype() == DataType::BFLOAT16 || kv_is_fp8, "kv must be bf16 or fp8_e4m3");
     switch (attrs.kv_format) {
         case transformer::bringup::SparseKVFormat::BF16:
@@ -127,10 +129,14 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
             get_fp32_dest_acc_en(attrs.compute_kernel_config),
             "sparse_sdpa high_precision requires fp32_dest_acc_en=true");
         TT_FATAL(
-            q.dtype() == DataType::BFLOAT16 && attrs.kv_format == transformer::bringup::SparseKVFormat::BF16,
-            "sparse_sdpa high_precision supports bf16 q and a BF16 kv only");
+            (q.dtype() == DataType::BFLOAT16 || (q.dtype() == DataType::FLOAT32 && attrs.fp32_scores)) &&
+                attrs.kv_format == transformer::bringup::SparseKVFormat::BF16,
+            "sparse_sdpa high_precision supports bf16 q and a BF16 kv only (a float32 q with fp32_scores)");
     }
     TT_FATAL(!attrs.fp32_output || attrs.high_precision, "sparse_sdpa fp32_output requires high_precision=true");
+    TT_FATAL(
+        !attrs.fp32_scores || (attrs.high_precision && attrs.fp32_output),
+        "sparse_sdpa fp32_scores requires high_precision=true and fp32_output=true");
 
     const auto qs = q.logical_shape();
     const auto is = idx.logical_shape();
@@ -280,7 +286,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         t.indices.dtype(),
         t.attention_sink,
         attrs.high_precision,
-        attrs.fp32_output);
+        attrs.fp32_output,
+        attrs.fp32_scores);
 }
 
 Tensor sparse_sdpa(
@@ -296,7 +303,8 @@ Tensor sparse_sdpa(
     std::optional<BlockCyclicLayout> block_cyclic,
     const std::optional<Tensor>& attention_sink,
     bool high_precision,
-    bool fp32_output) {
+    bool fp32_output,
+    bool fp32_scores) {
     using OperationType = ttnn::prim::bringup::SparseSDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -309,6 +317,7 @@ Tensor sparse_sdpa(
             .block_cyclic = block_cyclic,
             .high_precision = high_precision,
             .fp32_output = fp32_output,
+            .fp32_scores = fp32_scores,
         },
         OperationType::tensor_args_t{
             .q = q,
