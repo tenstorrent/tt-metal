@@ -13,7 +13,7 @@ import ttnn
 from .decode import decode_forward
 from .prefill import create_local_expert_mask, create_prefill_sparsity, prefill_forward
 from .weights import ExpertWeights, load_expert_weights
-from models.demos.gemma4.tt.ccl import ccl_lane_gather_rows, ccl_lane_scatter_rows
+from models.demos.gemma4.tt.ccl import ccl_allreduce, ccl_lane_gather_rows, ccl_lane_scatter_rows
 
 
 class Gemma4ExpertConfig:
@@ -85,8 +85,29 @@ class Gemma4Experts:
                 dense_routing = ttnn.pad(dense_routing, [(0, 0), (0, 0), (0, pad_rows), (0, 0)], value=0.0)
             hidden_states = ccl_lane_gather_rows(hidden_states, self.mesh_config)
             dense_routing = ccl_lane_gather_rows(dense_routing, self.mesh_config)
-            out = self._forward(hidden_states, dense_routing, combine=False)
-            out = ccl_lane_scatter_rows(out, self.mesh_config)
+            owner = getattr(self.mesh_config, "_g4_single_lane_prefill_owner", None)
+            if owner is not None:
+                # Single-user prefill: only the owner lane's rows are real. Every lane still needs
+                # them (the experts are sharded over the lanes), but running the local experts on
+                # the other lanes' scratch rows would be 1 - 1/lanes wasted work. Slice the owner's
+                # block out of the gather, compute 1x rows, and all-reduce the ep partials so every
+                # lane ends up holding the owner's result (the other lanes' rows are discarded
+                # downstream anyway).
+                block = int(hidden_states.shape[2]) // self.mesh_config.lanes
+                lo, hi = owner * block, (owner + 1) * block
+                hidden_owner = ttnn.slice(hidden_states, [0, 0, lo, 0], [1, 1, hi, hidden_states.shape[-1]])
+                routing_owner = ttnn.slice(dense_routing, [0, 0, lo, 0], [1, 1, hi, dense_routing.shape[-1]])
+                hidden_states.deallocate(True)
+                dense_routing.deallocate(True)
+                out = self._forward(hidden_owner, routing_owner, combine=False)
+                out = ccl_allreduce(
+                    out, self.mesh_config, self.ccl_manager, axis=self.mesh_config.ep_axis, group_size=self.ep
+                )
+                if self.mesh_config.tp > 1:
+                    out = ccl_allreduce(out, self.mesh_config, self.ccl_manager)
+            else:
+                out = self._forward(hidden_states, dense_routing, combine=False)
+                out = ccl_lane_scatter_rows(out, self.mesh_config)
             if pad_rows:
                 out = ttnn.slice(out, [0, 0, 0, 0], [1, 1, rows, out.shape[-1]])
             return out

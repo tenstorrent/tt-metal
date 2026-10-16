@@ -1908,6 +1908,13 @@ class Gemma4Model:
 
         prefill_start = int(start_pos or 0)
         del start_pos, last_token_idx, batched_prefill, kwargs
+        # Single-user lane prefill (one page-table row: the owner lane holds the real rows, the other
+        # lanes compute on scratch): tell the EP experts which lane's rows are real so they skip the
+        # other lanes' padding (see Gemma4Experts.__call__). Lane-parallel prefill keeps every lane.
+        if self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False):
+            self.mesh_config._g4_single_lane_prefill_owner = (
+                None if lane_parallel else int(getattr(self, "_g4_active_owner_lane", 0) or 0) % self.mesh_config.lanes
+            )
 
         device = None if trace_enabled else self.mesh_device
         mesh_mapper = self._replicate_to_mesh_mapper()
@@ -2571,6 +2578,8 @@ class Gemma4Model:
         """Wrapper: prepare_decode_inputs_host + copy to device."""
         from models.tt_transformers.tt.common import copy_host_to_device
 
+        if self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False):
+            self.mesh_config._g4_single_lane_prefill_owner = None  # decode: every lane's rows are real
         host_inputs = self.prepare_decode_inputs_host(tokens, current_pos, page_table)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
         self.bind_decode_trace_inputs(device_inputs)
