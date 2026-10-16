@@ -511,6 +511,13 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     # QWEN_FUSED_ADD_NORM_PREALLOC=0 (bs16) / QWEN_QKV_CHUNKS=2 or 1 (bs32).
     if batch_size == 16 and seq_len == 512:
         os.environ.setdefault("QWEN_FUSED_ADD_NORM_PREALLOC", "1")
+    # bs32: the fused FF1+FF3 matmul with M over the grid's x axis and N over y (MinimalMatmulConfig
+    # transpose_core_grid; the op transposes only when M > N): padded work per core 43 x 31 gate/up pairs instead of
+    # 52 x 26, 3122 -> 3076 us standalone. Cold best, 4 chips, on / off: 277.4 / 288.9 (chip 0), 288.1 / 289.6,
+    # 287.4 / 290.1, 284.6 / 285.3 ms; STS-B 0.8911 unchanged (NEGATIVE_RESULTS 79). QKV bs8 / the bs32 chunks / FF13
+    # bs16 already run untransposed (M < N), their faster layout; WO / FF2 transposed. Opt out: QWEN_FF13_TRANSPOSE_GRID=0.
+    if batch_size == 32 and seq_len == 512:
+        os.environ.setdefault("QWEN_FF13_TRANSPOSE_GRID", "1")
     if batch_size == 32 and seq_len == 512:
         os.environ.setdefault("QWEN_QKV_CHUNKS", "4")
         if os.getenv("QWEN_QKV_CHUNKS") in ("2", "4"):

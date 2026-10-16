@@ -2084,3 +2084,42 @@ sum in L1 141.7 / 141.7 ms (+0.9 ms on both chips; sustained follows each chip's
 saving is smaller than what the lower placement costs (not broken down). Not pursued; the Mode fix alone was neutral at
 bs16 (140.6 / 141.0 vs 140.9 before) but changes bs1's L1 layout (sharded L1 residual), untested, so it was reverted
 with the rest.
+
+## 79. The matmul K loop runs at the LLK rate; the leftover is padding / grid orientation (2026-10-16)
+
+**Zones** (`perf_tools/bench_mm_zones.py <batch> [preset[@blocks][+compute]]`: device zones patched into
+compute_metal2.cpp around each output block's init, each K block and the epilogue; per RISC, plus a whole-call
+breakdown of the slowest and a median core). bs16, 8,8,8 1×8, cycles:
+
+| | K block (full 8 rows) | gap between K blocks | init | epilogue per block | first K block |
+|---|---|---|---|---|---|
+| QKV / WO / FF2 | 8,829-8,845 (ideal 8,909 at 17.4) | 30-43 | 126-210 | 3,610-3,960 | QKV / WO ≈ rest; FF2 +2.5k (DRAM in0) |
+
+A K block costs exactly 1,105 cycles per row of 8 output tiles (8, 6, 4 and 3 rows: 8,844 / 6,627 / 4,490 / 3,360),
+17.27 cycles per tile product, so partial blocks cost nothing extra. QKV compute-only on the median core: kernel
+657.6k cycles = K blocks 618.1k + epilogues 34.0k + gaps 2.7k + init 1.3k + between 1.2k + before / after 0.3k: the
+zones account for the whole kernel; there is no hidden per-block structure cost. The K blocks are high because the core
+computes **440 output tiles where 409.6 is the even share**: the op pads each grid axis to a multiple of its core count
+(transposed when M > N: QKV bs16's 256 x 192 tiles on 12 x 10 cores is 22 x 20 per core, 7.4% padding). So §77's ~50 µs
+of "other per-block structure" in QKV is padding work (~31 µs) plus the first-block fill, init and gaps (~7 µs) and data
+movement exposure.
+
+**Grid orientation** (`MinimalMatmulConfig.transpose_core_grid`, new: unset keeps the op's M > N rule). Standalone
+device µs per call, transposed / untransposed (default in bold):
+
+| op | transposed | untransposed | padded work per core, T / U |
+|---|---|---|---|
+| QKV bs16 | **528.2** | 530.3 (compute only 493.9 / 467.0) | 440 / 416 |
+| QKV bs8, bs32 chunk (M 128 tiles) | 340.3, 322.0 | **259.4, 254.0** | 220 / 208 |
+| WO bs16 | **320.0** | 372.2 | 176 / 182 |
+| FF13 fused bs16 4,40,8 | 1669.4 | **1637.2** | 682 / 676 pairs x 2 |
+| FF13 fused bs32 4,40,8 | 3076 | **3122** | 1333 / 1352 |
+
+The op's rule is right everywhere except FF13 at bs32 (M 512 < N 608 tiles, but 43 x 31 pairs per core transposed vs
+52 x 26). A "least padded work" rule picks the faster layout in every row (QKV bs16 a tie: untransposed it computes 5.5%
+less but exposes ~29 µs more data movement). E2e, `TT_MM_GRID_ORIENT=pad` (an experiment-only env, not kept) vs the op
+default, cold best, 2 rounds on chips 0-3: bs1 13.9 / 13.9 vs 13.9 / 13.9, bs8 75.1 / 75.1 vs 75.1 / 75.1, bs16 141.1 /
+140.8 vs 140.8 / 140.9, bs32 284.4 / 285.7 vs 287.4 / 287.4 ms; STS-B (128 pairs) bs8 0.8862 vs 0.8862, bs16 0.8906,
+bs32 0.8907. **Landed** as `QWEN_FF13_TRANSPOSE_GRID=1` at bs32 (tt/mlp.py, `apply_workload_env`): cold best on / off,
+4 chips concurrently: 277.4 / 288.9, 288.1 / 289.6, 287.4 / 290.1, 284.6 / 285.3 ms; STS-B bs32 0.8911 unchanged.
+Open: QKV bs16 untransposed is worth ~27 µs per call (~1 ms per forward) if its data movement can be hidden.

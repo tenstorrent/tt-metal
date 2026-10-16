@@ -276,6 +276,18 @@ class PplxFusedSwigluMLP(MLP):
                 return super().forward(x, mode)
             pc = self._bs1_fused_config(ckc)
 
+        # QWEN_FF13_TRANSPOSE_GRID=1: M over the grid's x axis, N over y (the op's default only when M > N). At bs32
+        # (M 512 x 304 gate/up pairs on 12 x 10) that is 43 x 31 pairs per core instead of 52 x 26: 3122 -> 3076 us.
+        if os.getenv("QWEN_FF13_TRANSPOSE_GRID", "0") == "1":
+            pc = ttnn.MinimalMatmulConfig(
+                M_block_size=pc.M_block_size,
+                K_block_size=pc.K_block_size,
+                N_block_size=pc.N_block_size,
+                subblock_h=pc.subblock_h,
+                subblock_w=pc.subblock_w,
+                compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+                transpose_core_grid=True,
+            )
         prefill_mem_seq = int(seq_len)
         w2_in = ttnn.experimental.minimal_matmul(
             x,
