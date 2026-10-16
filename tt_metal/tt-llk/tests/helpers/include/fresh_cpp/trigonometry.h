@@ -52,15 +52,9 @@ sfpi_inline sfpi::vFloat fresh_sqrt_ge0(const sfpi::vFloat x)
         y = y * (1.5f - half_x * y * y);
     }
 
+    // At zero the seed is finite, so every step stays finite and a is 0.
     sfpi::vFloat a = x * y;
     a              = a + 0.5f * (x - a * a) * y;
-
-    // The reciprocal seed produces inf * 0 = NaN at zero.
-    v_if (x == 0.0f)
-    {
-        a = 0.0f;
-    }
-    v_endif;
     return a;
 }
 
@@ -163,12 +157,9 @@ __attribute__((noinline)) void calculate_acosh_fresh_cpp()
         }
         v_endif;
 
-        // Domain fix-ups: x == 1 -> +0, x < 1 -> NaN.
-        v_if (x == 1.0f)
-        {
-            res = 0.0f;
-        }
-        v_elseif (x < 1.0f)
+        // Domain fix-up: x < 1 -> NaN.  At x == 1 the argument is 0 and
+        // log1p already returns +0.
+        v_if (x < 1.0f)
         {
             res = std::numeric_limits<float>::quiet_NaN();
         }
