@@ -1314,7 +1314,7 @@ def test_eltwise_unary_sfpu_quasar(
 
 
 # Unary max/min with negative scalars (the main sweep's 0.0 / 1000 never compare two negatives).
-# Dest sync and implied math format are pinned: the main sweep already crosses them.
+# Dest sync is pinned: the main sweep already crosses it.
 UNARY_MAX_MIN_FLOAT_SCALARS = (-0.5, 1.5)
 UNARY_MAX_MIN_INT32_SCALARS = (-1000, -1)
 
@@ -1367,7 +1367,6 @@ def test_unary_max_min_scalar_quasar(unary_max_min_scalar_combination):
                 mathop,
                 format_variant,
                 DestSync.Half,
-                ImpliedMathFormat.No,
                 ApproximationMode.No,
                 input_dimensions,
             )
