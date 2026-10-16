@@ -448,16 +448,17 @@ Host packs a **DM0 ISR blob** into the DFB config region. Layout:
 
 At kernel launch DM0 runs `setup_dfb_implicit_sync`:
 
-1. If no implicit sync: `disable_dfb_tile_isr()`, set `dm0_isr_ready`, return.
-2. Else load the config into DTCM `g_txn_dfb_descriptor[txn_id]` (ISR indexes by trid, not dense slot).
-3. For each txn id in `producer ∪ consumer` masks:
+1. `disarm_dfb_implicit_sync()`: ISR off, and the DFB halves of the per-trid interrupt enables cleared (RD cmdbuf `PER_TR_ID_IE_1` upper 32 bits, WR cmdbuf `PER_TR_ID_IE_2` lower 32 bits), which also drops any pending bit a prior launch latched. Every launch starts here, so nothing armed by an earlier program carries over.
+2. If no implicit sync: set `dm0_isr_ready`, return.
+3. Else load the config into DTCM `g_txn_dfb_descriptor[txn_id]` (ISR indexes by trid, not dense slot).
+4. For each txn id in `producer ∪ consumer` masks:
   - **Producer bit:** clear RD cmdbuf tiles-to-process for that trid, then `__builtin_riscv_ttrocc_wr_tiles_to_process_thres_tr_ack(txn_id, threshold)` — IRQ when that many **read TR_ACKs** accumulate on the overlay RD cmdbuf for that trid.
   - **Consumer bit:** clear WR cmdbuf tiles-to-process, then `__builtin_riscv_ttrocc_wr_tiles_to_process_thres_wr_sent(txn_id, threshold)` — IRQ when that many **writes have been sent** on the WR cmdbuf for that trid.
-4. **Arm per-trid interrupt enables (IE):**
+5. **Arm per-trid interrupt enables (IE):**
   - RD cmdbuf `PER_TR_ID_IE_1` upper 32 bits ← `producer_txn_id_mask` (TR_ACK path)
   - WR cmdbuf `PER_TR_ID_IE_2` lower 32 bits ← `consumer_txn_id_mask` (WR_SENT path)
-5. If either mask is non-empty: `enable_dfb_tile_isr()` (ROCC IRQ in `mie` + `mstatus.MIE`); else leave ISR disabled.
-6. Publish `dm0_isr_ready = 1` so other harts’ `DataflowBuffer` ctors can proceed.
+6. If either mask is non-empty: `enable_dfb_tile_isr()` (ROCC IRQ in `mie` + `mstatus.MIE`); otherwise it stays off from step 1.
+7. Publish `dm0_isr_ready = 1` so other harts’ `DataflowBuffer` ctors can proceed.
 
 When HW hits a threshold it sets the corresponding bit in the IP (interrupt pending) register; the ISR walks pending trids, credits the TCs from `g_txn_dfb_descriptor[trid]`, clears tiles-to-process for that trid (re-arms the next batch), then W0C-clears the IP bit.
 
