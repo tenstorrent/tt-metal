@@ -208,15 +208,25 @@ void kernel_main() {
         weight_receiver_sem.set(VALID);
     }
 
-    // Loads one kernel position's C x C_out slice of the weight, tiles in row-major order. Every
-    // core reserves the same slot in the same order, so the slot's address matches on all of them.
-    auto load_weight_slice = [&](uint32_t kk) {
+    // Loads one kernel position's C x C_out slice of the weight, tiles in row-major order, in two
+    // steps so the wait for it can trail the position's corners: begin reserves the slot and, on a
+    // receiver, reports it free; finish reads or awaits the data and hands it to compute, which
+    // needs it only after the position's last block. Every core reserves the same slot in the same
+    // order, so the slot's address matches on all of them.
+    uint32_t weight_slot_l1 = 0;
+    auto begin_weight_slice = [&]() {
         conv_weight_cb.reserve_back(WEIGHT_SLICE_TILES);
-        const uint32_t dst_l1 = conv_weight_cb.get_write_ptr();
+        weight_slot_l1 = conv_weight_cb.get_write_ptr();
+        if (MCAST_WEIGHT && !is_weight_sender) {
+            weight_receiver_sem.set(INVALID);
+            weight_sender_sem.up(noc, sender_noc_x, sender_noc_y, 1);
+        }
+    };
+    auto finish_weight_slice = [&](uint32_t kk) {
         if (!MCAST_WEIGHT || is_weight_sender) {
             const uint32_t first_tile = kk * WEIGHT_SLICE_TILES;
             for (uint32_t t = 0; t < WEIGHT_SLICE_TILES; ++t) {
-                CoreLocalMem<uint32_t> dst(dst_l1 + t * tile_nbytes);
+                CoreLocalMem<uint32_t> dst(weight_slot_l1 + t * tile_nbytes);
                 noc.async_read(weight_acc, dst, tile_nbytes, {.page_id = first_tile + t}, {.offset_bytes = 0});
             }
             noc.async_read_barrier();
@@ -226,7 +236,7 @@ void kernel_main() {
                 weight_sender_sem.set(0);
                 const MulticastEndpoint mcast_dst;
                 noc.async_write_multicast(
-                    CoreLocalMem<uint32_t>(dst_l1),
+                    CoreLocalMem<uint32_t>(weight_slot_l1),
                     mcast_dst,
                     WEIGHT_SLICE_TILES * tile_nbytes,
                     MCAST_NUM_DESTS,
@@ -235,17 +245,19 @@ void kernel_main() {
                      .noc_y_start = mcast_y0,
                      .noc_x_end = mcast_x1,
                      .noc_y_end = mcast_y1,
-                     .addr = dst_l1},
+                     .addr = weight_slot_l1},
                     true);
                 noc.async_writes_flushed();
                 weight_receiver_sem.set_multicast(noc, mcast_x0, mcast_y0, mcast_x1, mcast_y1, MCAST_NUM_DESTS);
             }
         } else {
-            weight_receiver_sem.set(INVALID);
-            weight_sender_sem.up(noc, sender_noc_x, sender_noc_y, 1);
             weight_receiver_sem.wait(VALID);
         }
         conv_weight_cb.push_back(WEIGHT_SLICE_TILES);
+    };
+    auto load_weight_slice = [&](uint32_t kk) {
+        begin_weight_slice();
+        finish_weight_slice(kk);
     };
 
     uint32_t offset_mask_l1 = 0;
@@ -366,7 +378,7 @@ void kernel_main() {
         if constexpr (LOADS_WEIGHT) {
             // The next slice loads while compute works through this one; the CB holds two.
             if (kk + 1 < kernel_positions) {
-                load_weight_slice(kk + 1);
+                begin_weight_slice();
             }
         }
         uint32_t slot = 0;  // this copy's blocks, in order; their geometry stays in its CBs
@@ -443,6 +455,11 @@ void kernel_main() {
             }
             noc.async_read_barrier();
             corner_block_cb.push_back(CORNERS * CHANNEL_TILES);
+        }
+        if constexpr (LOADS_WEIGHT) {
+            if (kk + 1 < kernel_positions) {
+                finish_weight_slice(kk + 1);
+            }
         }
     }
 
