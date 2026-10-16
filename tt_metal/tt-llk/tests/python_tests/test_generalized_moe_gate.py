@@ -410,6 +410,47 @@ def test_generalized_moe_gate(topk, softmax, approx):
     _assert_gate_output(faces, golden, topk, **_weight_tolerance(approx))
 
 
+# The >256-expert path uploads GLOBAL ids (block b carries b*256 + i), and finalize_ungrouped's topk-6
+# rank mask rewrites the rank 4-7 id row in place to zero ranks 6 and 7. Every id in the 0..255 face
+# except 0 has a nonzero low byte, so that mask never meets the id it has to carry through raw: one
+# whose low byte is zero -- 256, 512, ... A float round trip reads a DEST word's low byte as a bf16
+# exponent and stores an exponent of zero as zero, which routes the token to expert 0 with expert
+# 256's weight. topk=8 has no mask and topk=4 drops the whole half, so only topk=6 reaches it;
+# expert 256 is placed at each of the two kept ranks the mask rewrites.
+@parametrize(rank=[4, 5])
+def test_generalized_moe_gate_topk_mask_keeps_block_ids(rank):
+    rank = _one(rank)
+    payload, bias, keys = _gate_stimuli(seed=41)
+    # Block 1's ids: flat position i is expert 256 + i, so position 0 is expert 256.
+    ids = _ids_face() + 256
+
+    # Put expert 256's key at `rank` by swapping it with the key that sits there, and rebuild the
+    # bias so the FPU's payload+bias still lands exactly on the intended key (see _gate_stimuli).
+    flat = keys.reshape(-1).to(torch.float32)
+    holder = int(flat.argsort(descending=True)[rank])
+    flat[[0, holder]] = flat[[holder, 0]]
+    keys = flat.reshape(16, 16).to(torch.bfloat16)
+    bias = (keys.to(torch.float32) - payload.to(torch.float32)).to(torch.bfloat16)
+
+    faces = _run(
+        _config(
+            GENERALIZED_MOE_GATE(
+                mode=MODE_GATE, topk=6, eps=_bits(EPS), scale=_bits(SCALE)
+            ),
+            _gate_tiles(payload, ids),
+            src_b=bias,
+        )
+    )
+
+    golden = get_golden_generator(GeneralizedMoeGateGolden)(
+        keys, payload, ids, topk=6, eps=EPS, scale=SCALE
+    )
+    assert (
+        int(golden[1][rank]) == 256
+    ), "stimulus does not place expert 256 at the rank under test"
+    _assert_gate_output(faces, golden, 6, **_weight_tolerance(ApproximationMode.No))
+
+
 def _sigmoid_stimuli(seed, grouped):
     """A payload/bias pair for the sigmoid front-end, with eight winners the bias alone decides.
 

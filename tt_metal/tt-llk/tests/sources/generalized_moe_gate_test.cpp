@@ -233,8 +233,7 @@ static inline void gmg_sanitize_scratch()
     }
     // Mask each answer row-half to the top-8: with columns split even/odd, cols 0..7 are the first four
     // even and first four odd columns -> lanes 0..3 -> vConstTileId < 8; zero the residue past them.
-    // (Same vFloat mod-0 raw-bit round-trip finalize_ungrouped uses for the idx row -- kept ids survive.)
-    for (const int dreg : {SCORES_LO, SCORES_HI, IDS_LO, IDS_HI})
+    for (const int dreg : {SCORES_LO, SCORES_HI})
     {
         sfpi::vFloat v = sfpi::dst_reg[dreg];
         v_if (sfpi::vConstTileId >= 8)
@@ -243,6 +242,19 @@ static inline void gmg_sanitize_scratch()
         }
         v_endif;
         sfpi::dst_reg[dreg] = v;
+    }
+    // The id rows hold raw uint16 words and go through the 16-bit integer layout: a float round trip
+    // reads the word's low byte as a bf16 exponent and stores an exponent of zero as zero, which would
+    // erase an id such as 256 here and hide the same defect in the kernel under test.
+    for (const int dreg : {IDS_LO, IDS_HI})
+    {
+        sfpi::vUInt v = sfpi::dst_reg[dreg].mode<sfpi::DataLayout::U16>();
+        v_if (sfpi::vConstTileId >= 8)
+        {
+            v = 0;
+        }
+        v_endif;
+        sfpi::dst_reg[dreg].mode<sfpi::DataLayout::U16>() = v;
     }
 }
 
