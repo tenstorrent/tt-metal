@@ -1298,6 +1298,58 @@ def test_eltwise_binary_sfpu_int_uniform(mathop, dest_acc, **run_kwargs):
     )
 
 
+_DIV_INT32_SIGNED_DIVIDENDS = [
+    *integer_specials(DataFormat.Int32),
+    -7,
+    7,
+    -100,
+    100,
+    -(2**24 + 1),
+    2**24 + 1,
+    -0x55555555,
+    0x55555555,
+]
+_DIV_INT32_SIGNED_DIVISORS = [
+    v for v in integer_specials(DataFormat.Int32) if v != 0
+] + [-2, 2, -3, 3, -7, 7, -(2**16 + 1), 2**16 + 1]
+_DIV_INT32_BOUNDARY_DIVISORS = [-3, 3, -7, 7, -12345, 12345, -(2**16 + 1), 2**16 + 1]
+_DIV_INT32_BOUNDARY_QUOTIENTS = [-1000, -1, 1, 1000]
+
+
+def _build_div_int32_signed_src():
+    """Two-tile Int32 signed (dividend, divisor) pairs, including mixed signs the positive sweep misses.
+
+    Also places q*b-1, q*b, and q*b+1 so floor and trunc disagree on one side of each exact quotient.
+    """
+    pairs = list(
+        itertools.product(_DIV_INT32_SIGNED_DIVIDENDS, _DIV_INT32_SIGNED_DIVISORS)
+    )
+    pairs += [
+        (q * b + off, b)
+        for b in _DIV_INT32_BOUNDARY_DIVISORS
+        for q in _DIV_INT32_BOUNDARY_QUOTIENTS
+        for off in (-1, 0, 1)
+    ]
+    return _build_paired_tile_override(pairs, torch.int32)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuDivInt32, MathOperation.SfpuDivInt32Floor],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_div_int32_signed(formats, dest_acc, mathop):
+    # twos_complement=True for the same reason as test_eltwise_binary_sfpu_int_extremes: the
+    # kernel reads two's-complement Dst, and sign-magnitude stimuli cannot carry INT32_MIN.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_div_int32_signed_src(),
+        twos_complement=True,
+    )
+
+
 RSUB_INT32_SWEEP = dict(
     formats=input_output_formats([DataFormat.Int32]),
     mathop=[MathOperation.SfpuRsubInt32],
