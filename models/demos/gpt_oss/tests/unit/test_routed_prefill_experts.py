@@ -559,3 +559,22 @@ def test_routed_prefill_placement(mesh_device, device_params, seq_len, routed_en
     assert ok_ref, f"calibrated placement MoE vs HF MLP PCC {pcc_ref} < {thresholds['mlp']}"
     assert ok_e, f"calibrated placement experts vs HF experts PCC {pcc_e} < {thresholds['experts']}"
     assert ok_s, f"calibrated placement skewed experts vs HF PCC {pcc_s} < {thresholds['experts']}"
+
+
+@pytest.mark.parametrize("nb", [2, 32, 33], ids=["nb2", "nb32", "nb33"])
+def test_prefix_bmm_config_one_block_per_core(nb):
+    """_prefix_bmm_config guards a ttnn matmul bug: a MatmulMultiCoreReuseProgramConfig with more than one output block
+    per core returned wrong sums (tt-ops runs/gpt-oss-20b-prefill-b32/team-note-matmul-multiblock-wrong-sums.md). The
+    blocked prefix sum's within / totals configs (shapes as in RoutedPrefillExperts) must exist while the nb blocks fit
+    one per core of the grid (nb 2..32 on the 8x8 / 8x4 grids) and fall back to the ttnn default (None) above that."""
+    from ...tt.experts import prefill_routed as pr
+
+    device_grid = ttnn.CoreCoord(11, 10)  # Blackhole compute grid
+    bt, et = pr.ROUTED_PREFIX_BLOCK // ttnn.TILE_SIZE, 1  # E = 32 experts: one tile column
+    within = pr._prefix_bmm_config(pr._PREFIX_WITHIN_GRID, device_grid, nb, bt, bt, et, pr._PREFIX_WITHIN_PCM)
+    totals = pr._prefix_bmm_config(pr._PREFIX_TOTALS_GRID, device_grid, nb, 1, bt, et, 1)
+    if nb > 32:
+        assert within is None and totals is None, f"nb={nb}: blocks exceed one per core but a config was returned"
+    else:
+        assert within is not None and totals is not None, f"nb={nb}: blocks fit one per core but no config"
+        assert within.per_core_M == pr._PREFIX_WITHIN_PCM and totals.per_core_M == 1
