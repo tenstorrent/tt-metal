@@ -622,10 +622,6 @@ def build_talker_decode_trace_h2d_constants(
     the incremental pattern: prefill columns ``0:real_seq_len`` plus decode columns
     ``real_seq_len : T+1`` set to 0; remainder ``-inf``.
     """
-    cos_h: list = []
-    sin_h: list = []
-    mask_h: list = []
-    pos_h: list = []
     # The mask is BFLOAT16 and single-head on purpose. It holds only 0.0 and -inf,
     # both exact in bf16, and fused SDPA typecasts an fp32 mask to bf16 anyway
     # (prepare_fused_sdpa_mask) — so this is the same bytes SDPA already saw, minus a
@@ -633,19 +629,61 @@ def build_talker_decode_trace_h2d_constants(
     # copies were uploaded per frame where one broadcasts. Together they cut the
     # largest single H2D transfer in the AR loop by an order of magnitude.
     _mask_heads = 1
-    for T in range(real_seq_len, max_talker_seq_len):
+
+    # Built on first use: a request only reaches as many positions as it generates
+    # frames, and building all max_talker_seq_len - real_seq_len (~350) up front cost
+    # ~46 ms per request. cos / sin / position rows depend only on T, so they are shared
+    # across requests; the mask also depends on real_seq_len.
+    key = (id(talker_cos_table), id(talker_sin_table), tuple(talker_cos_table.shape), str(talker_cos_table.dtype))
+
+    def cos_at(T):
+        cs = talker_cos_table[T : T + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+        return ttnn.from_torch(cs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    def sin_at(T):
+        sn = talker_sin_table[T : T + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+        return ttnn.from_torch(sn, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    def mask_at(T):
         mh = torch.full((1, _mask_heads, 1, max_talker_seq_len), float("-inf"), dtype=torch.float32)
         mh[0, :, 0, :real_seq_len] = 0.0
         mh[0, :, 0, real_seq_len : T + 1] = 0.0
-        cs = talker_cos_table[T : T + 1].unsqueeze(0).unsqueeze(0).bfloat16()
-        sn = talker_sin_table[T : T + 1].unsqueeze(0).unsqueeze(0).bfloat16()
-        cos_h.append(ttnn.from_torch(cs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
-        sin_h.append(ttnn.from_torch(sn, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
-        mask_h.append(ttnn.from_torch(mh.bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
-        pos_h.append(
-            ttnn.from_torch(torch.tensor([T], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        )
-    return cos_h, sin_h, mask_h, pos_h
+        return ttnn.from_torch(mh.bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    def pos_at(T):
+        return ttnn.from_torch(torch.tensor([T], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    shared = _TALKER_H2D_ROWS.setdefault(key, ({}, {}, {}))
+    n = max_talker_seq_len - real_seq_len
+    return (
+        _LazyRows(real_seq_len, n, cos_at, shared[0]),
+        _LazyRows(real_seq_len, n, sin_at, shared[1]),
+        _LazyRows(real_seq_len, n, mask_at, {}),
+        _LazyRows(real_seq_len, n, pos_at, shared[2]),
+    )
+
+
+# Position-only talker H2D rows (cos, sin, cur_pos) shared across requests, per RoPE table.
+_TALKER_H2D_ROWS: dict = {}
+
+
+class _LazyRows:
+    """Sequence of host tensors for decode positions T = start + i, each built on first access."""
+
+    def __init__(self, start, n, build, cache):
+        self._start, self._n, self._build, self._cache = start, n, build, cache
+
+    def __len__(self):
+        return self._n
+
+    def __getitem__(self, i):
+        if not 0 <= i < self._n:
+            raise IndexError(i)
+        T = self._start + i
+        row = self._cache.get(T)
+        if row is None:
+            row = self._cache[T] = self._build(T)
+        return row
 
 
 def _alloc_token_buf(device, shape=(1, 1, 1)) -> ttnn.Tensor:
