@@ -25,6 +25,39 @@ def test_mesh_device_open_close_explicit(silicon_arch_name, silicon_arch_wormhol
     ttnn.close_mesh_device(multi_device)
 
 
+def test_submesh_keeps_parent_alive(silicon_arch_name, silicon_arch_wormhole_b0):
+    """A submesh keeps its parent alive (not the other way round), for both create_submesh and create_submeshes."""
+    import gc
+    import sys
+
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+    baseline = sys.getrefcount(mesh)
+
+    submesh = mesh.create_submesh(ttnn.MeshShape(1, 1))
+    submeshes = mesh.create_submeshes(ttnn.MeshShape(1, 1))
+    assert len(submeshes) == 1
+
+    # Counts are taken outside the asserts: pytest's assertion rewriting keeps evaluated operands alive.
+    # Each submesh holds one reference to the parent...
+    parent_refs = sys.getrefcount(mesh)
+    # ...and nothing holds the submeshes except their owners (the name or the list, plus the call's own argument).
+    submesh_refs = sys.getrefcount(submesh)
+    listed_submesh = submeshes[0]
+    listed_submesh_refs = sys.getrefcount(listed_submesh) - 1  # minus the local name just taken
+    del listed_submesh
+    assert parent_refs == baseline + 2
+    assert submesh_refs == 2
+    assert listed_submesh_refs == 2
+
+    # Dropping the submeshes releases their hold on the parent.
+    del submesh, submeshes
+    gc.collect()
+    released_refs = sys.getrefcount(mesh)
+    assert released_refs == baseline
+
+    ttnn.close_mesh_device(mesh)
+
+
 def test_multi_device_subset_mesh(silicon_arch_name, silicon_arch_wormhole_b0):
     """Manually open and close multi-device"""
     num_pcie_devices = ttnn.get_num_pcie_devices()

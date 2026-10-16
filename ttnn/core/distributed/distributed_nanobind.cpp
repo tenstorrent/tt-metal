@@ -304,12 +304,25 @@ void py_module(nb::module_& mod) {
             &MeshDevice::create_submesh,
             nb::arg("submesh_shape"),
             nb::arg("offset") = nb::none(),
-            nb::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevice is alive
+            // Nurse = the returned submesh (0), patient = the parent (1): the parent stays alive for as long as the
+            // submesh does. (<1, 0> would be the reverse: the parent would pin the submesh.)
+            nb::keep_alive<0, 1>())
         .def(
             "create_submeshes",
-            &MeshDevice::create_submeshes,
-            nb::arg("submesh_shape"),
-            nb::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevices are alive
+            [](nb::handle self_obj, const MeshShape& submesh_shape) {
+                auto& self = nb::cast<MeshDevice&>(self_obj);
+                // Same lifetime tie as create_submesh, applied per element: nb::keep_alive<0, 1> cannot be used
+                // here because the return value is a Python list, which is not weak-referenceable, so nanobind
+                // would raise at call time.
+                nb::list out;
+                for (auto& submesh : self.create_submeshes(submesh_shape)) {
+                    nb::object submesh_obj = nb::cast(std::move(submesh));
+                    nb::detail::keep_alive(submesh_obj.ptr(), self_obj.ptr());
+                    out.append(std::move(submesh_obj));
+                }
+                return out;
+            },
+            nb::arg("submesh_shape"))
         .def(
             "get_submeshes",
             &MeshDevice::get_submeshes,
