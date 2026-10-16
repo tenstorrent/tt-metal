@@ -4,6 +4,7 @@
 
 #include "all_gather_multicast_factory.hpp"
 #include "all_gather_geometry.hpp"
+#include "all_gather_policy.hpp"
 #include "kernels/gather_args.hpp"
 
 #include <algorithm>
@@ -12,7 +13,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -149,8 +149,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // be skipped even for a persistent output buffer: that buffer may be reused across invocations of this CCL,
     // and the caller may write into it between invocations.
 
-    const auto& tuning = operation_attributes.tuning;  // TEST HOOK (all_gather_tuning.hpp)
-    const uint32_t packet_size = tuning.packet_size_override.value_or(operation_attributes.packet_size);
+    const uint32_t packet_size = operation_attributes.packet_size;
 
     ////////////////////////////////////////////////////////////////
     // Core selection
@@ -197,104 +196,46 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     ////////////////////////////////////////////////////////////////
     // Page indexing (glossary and copy modes: all_gather_geometry.hpp, walk terms: kernels/gather_walk.hpp)
     //
-    // GatherGeometry is in walk pages and independent of k, so the heuristics below key on it and k cannot
-    // perturb one. WalkGeometry (k, stride, xfer, run sources, CB entry) is computed once from it and handed to
-    // both kernels as CT args: they share one CB, so they must walk identically.
+    // GatherGeometry is in walk pages and independent of k, so the policy keys on it and k cannot perturb a
+    // tier. WalkGeometry (k, stride, xfer, run sources, CB entry) is computed once from it and handed to both
+    // kernels as CT args: they share one CB, so they must walk identically.
     ////////////////////////////////////////////////////////////////
 
-    const auto arch = input_tensor.device()->arch();
-
-    // --- Geometry: copy mode, walk pages, stripe (see all_gather_geometry.hpp) ---
     // Multicast never reads the output back, so unlike unicast it has no relay precondition.
     const auto geom =
         GatherGeometry::make(input_tensor, output_tensor.tensor_spec(), operation_attributes.dim_from_end);
-    // The heuristics' keys, in walk pages / bytes (k-independent):
-    const uint32_t stripe_pages = geom.chunks_per_stripe;  // walk pages per stripe row
-    const uint32_t page_bytes = geom.chunk_size;           // walk page bytes
 
     ////////////////////////////////////////////////////////////////
     // Circular Buffer and Kernel creation
     ////////////////////////////////////////////////////////////////
 
-    // --- Per-arch tuning ---
-    // Two CB entries is the floor on any arch: the reader runs one entry ahead of the sender, so a single
-    // entry deadlocks.
-    uint32_t cb_depth = 2;
-    uint32_t packets_per_cb_entry = 1;
-    uint32_t run_cap_bytes = 0;
-    if (arch == tt::ARCH::WORMHOLE_B0) {
-        // The defaults above are WH's calibrated values:
-        // - cb_depth 2: depth is also the reader's in-flight trid count, but deeper is perf-neutral here, so
-        //   keep the L1.
-        // - packets_per_cb_entry 1: packing several packets per entry amortises the reader/sender CB
-        //   handshake, which is what the store-and-forward writer wants -- but here the reader sends the
-        //   packets itself, off transaction ids and with no per-entry flush to stall on, so a one-packet entry
-        //   just pipelines finer and wins on a line and on small row-major pages.
-        // - No run cap: the best run length lands at the hardware ceiling (7616 B), so any value settable
-        //   here is already above it and would only cost payload.
-    } else if (arch == tt::ARCH::BLACKHOLE) {
-        // Calibrated at 8 devices x 2 links, and at 1, 2 and 4 links. cb_depth and the run cap were both
-        // already at their optimum -- every other value measured fell inside the run-to-run spread.
-        cb_depth = 3;
-        // packets_per_cb_entry: four amortises the reader/sender handshake and is right almost everywhere,
-        // but not on a line carrying a long stripe: there the sender is already serialised per hop, and a
-        // four-packet entry just delays the first send behind three more packet loads. A ring, sending in
-        // both directions at once, wants the amortisation even at a long stripe, so the rule is line-only.
-        // The stripe boundary does not move with volume.
-        bool any_ring = false;
-        for (uint32_t ax = 0; ax < 2; ++ax) {
-            any_ring = any_ring || (operation_attributes.axis_num_devices[ax] > 1 &&
-                                    tt::tt_fabric::is_ring_or_torus(operation_attributes.axis_topology[ax]));
-        }
-        // Keyed on walk pages (k-independent).
-        const bool long_stripe = stripe_pages >= 32;
-        // ...and only while the link count is low. With 4 links the per-hop send is no longer the
-        // serialising step, so the amortisation a four-packet entry buys comes back.
-        const bool few_links = min_num_links <= 2;
-        packets_per_cb_entry = (!any_ring && long_stripe && few_links) ? 1 : 4;  // unicast differs here
-        // Past ~8 KB a run gains little packet fill but keeps the walk in one DRAM bank longer. Only pages
-        // big enough to still span a few runs are worth capping; below that the packet's own limit wins.
-        // Keyed on the walk page (k-independent); the cap itself is bytes, so it bounds a run whatever k is,
-        // and choose_k fills min(packet, cap) -- under this cap k stays 1 for pages >= 1 KB.
-        run_cap_bytes = page_bytes >= 1024 ? 8192 : 0;
+    // --- Policy (all_gather_policy.cpp), at the link count this op runs ---
+    bool any_ring = false;
+    for (uint32_t ax = 0; ax < 2; ++ax) {
+        any_ring = any_ring || (operation_attributes.axis_num_devices[ax] > 1 &&
+                                tt::tt_fabric::is_ring_or_torus(operation_attributes.axis_topology[ax]));
     }
-
-    // TEST HOOK overrides (all_gather_tuning.hpp), after the per-arch defaults.
-    run_cap_bytes = tuning.run_cap_bytes.value_or(run_cap_bytes);
-    cb_depth = tuning.mcast_cb_depth.value_or(cb_depth);  // parse() enforces >= 2
+    PolicyInputs policy_in;
+    policy_in.arch = input_tensor.device()->arch();
+    policy_in.is_ring = any_ring;
+    policy_in.num_devices = num_devices;
+    policy_in.num_links = min_num_links;
+    policy_in.per_link_bytes = per_link_bytes(output_tensor.tensor_spec(), min_num_links);
+    policy_in.stripe_pages = geom.walk_pages_per_stripe;
+    policy_in.page_bytes = geom.walk_page_bytes;
+    const MulticastPolicy policy = tune_multicast(policy_in);
+    const uint32_t cb_depth = policy.shared.cb_depth;
 
     // --- Walk and CB sizing (see WalkGeometry::make) ---
-    const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
-    const auto walk = WalkGeometry::make(
-        geom,
-        *input_tensor.buffer(),
-        *output_tensor.buffer(),
-        packet_size,
-        run_cap_bytes,
-        WalkPolicy::from(tuning),
-        packets_per_cb_entry,
-        cb_depth,
-        max_l1_space);
-    const uint32_t cb_page_size = walk.cb_entry_bytes;
-    log_debug(
-        tt::LogOp,
-        "all_gather multicast walk: k {} chunk {} slot {} stride {} xfer {} entry {} in_runs {}/{} out_runs {}/{}",
-        walk.k,
-        walk.chunk_size,
-        walk.slot_bytes,
-        walk.stride,
-        walk.xfer,
-        walk.chunks_per_entry,
-        walk.in_runs.whole_page,
-        walk.in_runs.cross_page,
-        walk.out_runs.whole_page,
-        walk.out_runs.cross_page);
+    const auto walk = WalkGeometry::make(geom, policy.shared, input_tensor, output_tensor, packet_size);
+    const uint32_t cb_entry_bytes = walk.cb_entry_bytes;
 
     // Input CB
     uint32_t cb0_id = tt::CB::c_in0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(cb_depth * cb_page_size, {{cb0_id, df}}).set_page_size(cb0_id, cb_page_size);
+        tt::tt_metal::CircularBufferConfig(cb_depth * cb_entry_bytes, {{cb0_id, df}})
+            .set_page_size(cb0_id, cb_entry_bytes);
 
     CreateCircularBuffer(program, worker_core_range, cb_src0_config);
 
@@ -312,7 +253,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     reader_compile_args[mcr::ct::num_devices] = num_devices;
     reader_compile_args[mcr::ct::cb_id] = cb0_id;
     reader_compile_args[mcr::ct::cb_depth] = cb_depth;
-    reader_compile_args[mcr::ct::cb_page_size] = cb_page_size;
+    reader_compile_args[mcr::ct::cb_entry_bytes] = cb_entry_bytes;
     reader_compile_args[mcr::ct::packet_size] = packet_size;
     reader_compile_args[mcr::ct::alt_routes] = load_balance_across_alt_routes;
     reader_compile_args[mcr::ct::num_connections] = (e_hops > 0) + (s_hops > 0);
@@ -332,7 +273,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     writer_compile_args[mcw::ct::cps] = walk.cps;
     writer_compile_args[mcw::ct::num_devices] = num_devices;
     writer_compile_args[mcw::ct::cb_id] = cb0_id;
-    writer_compile_args[mcw::ct::cb_page_size] = cb_page_size;
+    writer_compile_args[mcw::ct::cb_entry_bytes] = cb_entry_bytes;
     writer_compile_args[mcw::ct::packet_size] = packet_size;
     writer_compile_args[mcw::ct::alt_routes] = load_balance_across_alt_routes;
     writer_compile_args[mcw::ct::num_connections] = (w_hops > 0) + (n_hops > 0);
@@ -364,14 +305,8 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         CoreCoord core = worker_cores[link];
         CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
 
-        // This link's slice of input pages, in chunks (see GatherGeometry::slice_of, WalkGeometry::in_chunks).
-        const Slice pages = geom.slice_of(link, min_num_links);
-        const Slice slice = walk.in_chunks(pages);
-        const uint32_t local_output_start = slice.first_chunk;
-        const uint32_t num_worker_output_chunks = slice.num_chunks;
-        // One rot for both kernels: they fill and drain one CB, so they must walk in the same order (direction 0;
-        // the direction stagger is unicast-only).
-        const uint32_t rot = walk.rot(pages, link, min_num_links, 0);
+        // This link's slice of input pages, in chunks (see GatherGeometry::slice_of, WalkGeometry::chunks_of).
+        const ChunkSlice slice = walk.chunks_of(geom.slice_of(link, min_num_links));
 
         // Per-link barrier fan-in = N-1 in every case. Every other chip sends me one atomic_inc:
         //   1D: e_hops + w_hops (or n_hops + s_hops) along the active axis = axis_size - 1.
@@ -382,17 +317,16 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         std::vector<uint32_t> reader_rt_args(mcr::rt::fabric_args);
         reader_rt_args[mcr::rt::input_addr] = input_tensor.buffer()->address();
         reader_rt_args[mcr::rt::output_addr] = output_tensor.buffer()->address();
-        reader_rt_args[mcr::rt::slice_first] = local_output_start;
-        reader_rt_args[mcr::rt::slice_chunks] = num_worker_output_chunks;
+        reader_rt_args[mcr::rt::slice_first] = slice.first;
+        reader_rt_args[mcr::rt::slice_count] = slice.count;
         reader_rt_args[mcr::rt::device_idx] = device_idx;  // initial stripe
         reader_rt_args[mcr::rt::barrier_sem] = barrier_sem.address();
         reader_rt_args[mcr::rt::barrier_noc_x] = virtual_core.x;
         reader_rt_args[mcr::rt::barrier_noc_y] = virtual_core.y;
         reader_rt_args[mcr::rt::barrier_wait_value] = barrier_wait_value;
-        reader_rt_args[mcr::rt::rot] = rot;
         {
             // McastRouteArgs, in kernel read order: line then rect, as (hops, hops_alt, dir).
-            const std::array<uint32_t, 12> route = {
+            const std::array<uint32_t, gather_args::mcast_route_words> route = {
                 e_hops,                             // line_hops
                 e_hops,                             // rect_e_hops
                 w_hops,                             // rect_w_hops
@@ -430,15 +364,14 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
 
         std::vector<uint32_t> writer_rt_args(mcw::rt::fabric_args);
         writer_rt_args[mcw::rt::output_addr] = output_tensor.buffer()->address();
-        writer_rt_args[mcw::rt::slice_first] = local_output_start;
-        writer_rt_args[mcw::rt::slice_chunks] = num_worker_output_chunks;
+        writer_rt_args[mcw::rt::slice_first] = slice.first;
+        writer_rt_args[mcw::rt::slice_count] = slice.count;
         writer_rt_args[mcw::rt::device_idx] = device_idx;
         writer_rt_args[mcw::rt::barrier_sem] = barrier_sem.address();
         writer_rt_args[mcw::rt::barrier_noc_x] = virtual_core.x;
         writer_rt_args[mcw::rt::barrier_noc_y] = virtual_core.y;
-        writer_rt_args[mcw::rt::rot] = rot;
         {
-            const std::array<uint32_t, 12> route = {
+            const std::array<uint32_t, gather_args::mcast_route_words> route = {
                 w_hops,                             // line_hops
                 e_hops,                             // rect_e_hops
                 w_hops,                             // rect_w_hops

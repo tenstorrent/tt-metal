@@ -2,12 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Host proof of the all_gather packet packer and run loops (ttnn/.../all_gather/device/kernels/):
-//   - PacketPacker (gather_packer.hpp) emits exactly the packet sequence of BOTH writers it replaced: the
-//     unicast FabricWriter (runtime while-loop split of oversized segments, tail left pending) and the
-//     multicast FabricWriter (compile-time `oversized` path), on random segment streams covering normal
-//     packing, the 4-chunk scatter cap, chunk == packet, and oversized chunks.
-//   - emit_runs / read_input_runs (gather_walk.hpp) visit the same runs as the inline loops they replaced.
+// Host proof of the all_gather packet packer (ttnn/.../all_gather/device/kernels/gather_packer.hpp):
+//   - PacketPacker emits exactly the packet sequence of BOTH writers it replaced: the unicast FabricWriter
+//     (runtime while-loop split of oversized segments, tail left pending) and the multicast FabricWriter
+//     (compile-time `oversized` path), on random segment streams covering normal packing, the 4-chunk scatter
+//     cap, chunk == packet, and oversized chunks.
+//   - Properties, independent of any oracle: every packet's payload fits the packet; a scatter write carries
+//     2..4 segments and its sizes add up to the payload; a packet's bytes are one contiguous stretch of L1;
+//     every queued byte is sent exactly once, to the destination it was queued for; a flush leaves nothing
+//     pending.
 //
 // No device: the packer is driven through a recording Sink.
 
@@ -21,7 +24,7 @@
 #define HOST_KERNEL_SHIM_KEEP_MACROS  // the kernel headers need FORCE_INLINE / ASSERT
 #include "host_kernel_shim.hpp"
 
-#include "ttnn/operations/ccl/all_gather/device/kernels/gather_walk.hpp"
+#include "ttnn/operations/ccl/all_gather/device/kernels/gather_rules.hpp"
 #include "ttnn/operations/ccl/all_gather/device/kernels/gather_packer.hpp"
 
 namespace {
@@ -178,7 +181,7 @@ StreamStats stats(const Log& log) {
 // destinations; a flush closes each entry, as the kernels do before pop_front.
 template <uint32_t chunk_size, uint32_t packet_size, bool short_runs = false>
 StreamStats packer_equivalence(uint32_t seed) {
-    constexpr uint32_t xfer = chunks_per_transfer(packet_size, chunk_size, 0, 16384);
+    constexpr uint32_t xfer = max_xfer(packet_size, chunk_size, 0, 16384);
     std::mt19937 rng(seed);
     MockSink sink;
     OldUnicastWriter<packet_size> old_u;
@@ -224,85 +227,96 @@ StreamStats packer_equivalence_seeds() {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// emit_runs / read_input_runs vs the inline loops they replaced
+// Properties
 // ---------------------------------------------------------------------------------------------------
 
-// Contiguous runs of `run_pages` pages (models DRAM-bank / shard contiguity).
-struct MockAccessor {
-    uint32_t run_pages;
-    uint32_t num_contiguous_pages(uint32_t page, uint32_t end_page) const {
-        const uint32_t to_edge = run_pages - page % run_pages;
-        const uint32_t room = end_page - page;
-        return to_edge < room ? to_edge : room;
-    }
+// Replays a sink log byte by byte: every packet's (l1 range, destination) pairs, in order.
+struct Byte {
+    uint32_t l1;
+    uint64_t dst;
+    bool operator<(const Byte& o) const { return l1 != o.l1 ? l1 < o.l1 : dst < o.dst; }
+    bool operator==(const Byte& o) const { return l1 == o.l1 && dst == o.dst; }
 };
 
-struct Run {
-    uint32_t l1, page, off, run;
-    bool operator==(const Run& o) const { return l1 == o.l1 && page == o.page && off == o.off && run == o.run; }
-};
-
-template <uint32_t cpp, uint32_t chunk_size, uint32_t cps, uint32_t ndev>
-void emit_equivalence(uint32_t stride, uint32_t xfer, uint32_t run_pages, bool whole_page, bool cross_page) {
-    MockAccessor acc{run_pages};
-    const RunSource src{whole_page, cross_page};
-    const uint32_t first = 3, count = 4 * cps + 5, batch = 7;
-    const uint32_t end_chunk = first + count;
-    StripeMap<cps, ndev> map;
-    map.init(1, end_chunk);
-    auto addr = [](uint32_t page, uint32_t off) { return uint64_t(page) * cpp * chunk_size + off; };
-
-    // k = 1, rot = 0, runtime stride/xfer: the v1 emission order (test_all_gather_walk.cpp MatchesLegacy).
-    TiledWalk<1> w_old, w_new;
-    w_old.init(end_chunk, stride, xfer, 0, walk_start(first));
-    w_new = w_old;
-    std::vector<Run> got_old, got_new;
-    for (uint32_t done = 0; done < count; done += batch) {
-        const uint32_t n = std::min(batch, count - done);
-        // old inline loop (unicast_writer / multicast_writer / multicast_reader send_entry)
-        uint32_t l1 = 0x1000;
-        for (uint32_t left = n; left > 0;) {
-            const auto pos = map.at(w_old.chunk());
-            const uint32_t page = page_of<cpp>(pos.global);
-            const uint32_t off = byte_off_of<cpp, chunk_size>(pos.global);
-            const uint32_t run = next_run<1, cpp>(w_old, acc, src, pos.global, pos.bound, left);
-            got_old.push_back({l1, page, off, run});
-            l1 += run * chunk_size;
-            left -= run;
-            w_old.advance(run);
+template <uint32_t chunk_size, uint32_t packet_size, bool short_runs = false>
+void packer_properties(uint32_t seed) {
+    SCOPED_TRACE(
+        "chunk " + std::to_string(chunk_size) + " packet " + std::to_string(packet_size) + " seed " +
+        std::to_string(seed));
+    constexpr uint32_t xfer = max_xfer(packet_size, chunk_size, 0, 16384);
+    std::mt19937 rng(seed);
+    MockSink sink;
+    std::vector<Byte> queued;
+    std::vector<size_t> flush_at;  // log size after each flush_packet_and_wait()
+    {
+        PacketPacker<packet_size, chunk_size, MockSink> packer(sink);
+        for (int entry = 0; entry < 40; ++entry) {
+            uint32_t l1 = 0x10000 + (entry % 3) * 0x40000;
+            uint32_t left = 1 + rng() % 24;
+            while (left > 0) {
+                const uint32_t max_run = short_runs ? std::min<uint32_t>(xfer, 3) : xfer;
+                const uint32_t run = std::min<uint32_t>(1 + rng() % max_run, left);
+                // Distinct, 64 B-aligned destinations so a byte's destination identifies it.
+                const uint64_t dst = (uint64_t(entry) << 40) | (uint64_t(rng() % 4096) << 24) | (uint64_t(l1) << 0);
+                packer.queue_segment(l1, dst, run * chunk_size);
+                for (uint32_t b = 0; b < run * chunk_size; b += 16) {
+                    queued.push_back({l1 + b, dst + b});
+                }
+                l1 += run * chunk_size;
+                left -= run;
+            }
+            packer.flush_packet_and_wait();
+            flush_at.push_back(sink.log.size());
         }
-        const uint32_t end = emit_runs<cpp, chunk_size, chunk_size>(
-            w_new, map, acc, src, 0x1000u, n, addr, [&](uint32_t l1, uint32_t page, uint32_t off, uint32_t run) {
-                got_new.push_back({l1, page, off, run});
-            });
-        EXPECT_EQ(end, l1);
     }
-    EXPECT_TRUE(got_old == got_new);
-
-    // read_input_runs vs the old input loops (unicast_reader from_input / multicast_reader fill_entry)
-    constexpr uint32_t split = cpp;
-    auto in_addr = [](uint32_t chunk) { return uint64_t(chunk) * chunk_size; };
-    w_old.init(end_chunk, stride, xfer, 0, walk_start(first));
-    w_new = w_old;
-    std::vector<Run> in_old, in_new;
-    for (uint32_t done = 0; done < count; done += batch) {
-        const uint32_t n = std::min(batch, count - done);
-        uint32_t l1 = 0x2000;
-        for (uint32_t left = n; left > 0;) {
-            const uint32_t chunk = w_old.chunk();
-            const uint32_t run = next_run<1, split>(w_old, acc, src, chunk, end_chunk, left);
-            in_old.push_back({l1, uint32_t(in_addr(chunk)), 0, run});
-            l1 += run * chunk_size;
-            left -= run;
-            w_old.advance(run);
+    std::vector<Byte> sent;
+    for (const auto& e : sink.log) {
+        if (e.kind == 'F') {
+            continue;
         }
-        const uint32_t end = read_input_runs<split, chunk_size, chunk_size>(
-            w_new, acc, src, end_chunk, 0x2000u, n, in_addr, [&](uint64_t s, uint32_t l1, uint32_t run) {
-                in_new.push_back({l1, uint32_t(s), 0, run});
-            });
-        EXPECT_EQ(end, l1);
+        ASSERT_GT(e.bytes, 0u);
+        ASSERT_LE(e.bytes, packet_size) << "payload larger than a packet";
+        if (e.kind == 'U') {
+            ASSERT_EQ(e.dst.size(), 1u);
+            for (uint32_t b = 0; b < e.bytes; b += 16) {
+                sent.push_back({e.l1 + b, e.dst[0] + b});
+            }
+            continue;
+        }
+        // Scatter: 2..4 segments; the header's sizes cover all but the last, implied by the payload.
+        ASSERT_GE(e.dst.size(), gather_scatter_min_chunks);
+        ASSERT_LE(e.dst.size(), gather_scatter_max_chunks);
+        ASSERT_EQ(e.sizes.size(), e.dst.size() - 1);
+        uint32_t off = 0;
+        for (size_t i = 0; i < e.dst.size(); ++i) {
+            const uint32_t sz = i + 1 < e.dst.size() ? e.sizes[i] : e.bytes - off;
+            ASSERT_GT(sz, 0u);
+            ASSERT_LE(off + sz, e.bytes);
+            // One payload from e.l1: segment i's bytes follow segment i - 1's in L1.
+            for (uint32_t b = 0; b < sz; b += 16) {
+                sent.push_back({e.l1 + off + b, e.dst[i] + b});
+            }
+            off += sz;
+        }
+        ASSERT_EQ(off, e.bytes);
     }
-    EXPECT_TRUE(in_old == in_new);
+    // A flush leaves nothing behind: everything queued before it was sent before it.
+    for (size_t f = 0; f < flush_at.size(); ++f) {
+        ASSERT_EQ(sink.log[flush_at[f] - 1].kind, 'F');
+    }
+    std::sort(queued.begin(), queued.end());
+    std::sort(sent.begin(), sent.end());
+    ASSERT_EQ(sent, queued) << "a byte was dropped, duplicated or sent to the wrong address";
+}
+
+template <uint32_t chunk_size, uint32_t packet_size, bool short_runs = false>
+void packer_properties_seeds() {
+    for (uint32_t seed = 1; seed <= 20; ++seed) {
+        packer_properties<chunk_size, packet_size, short_runs>(seed);
+        if (::testing::Test::HasFatalFailure()) {
+            return;
+        }
+    }
 }
 
 }  // namespace
@@ -331,9 +345,13 @@ TEST(AllGatherPacker, MatchesOldWritersOversized) {
     packer_equivalence_seeds<32768, 15232>();  // BH packet size
 }
 
-TEST(AllGatherPacker, EmitRunsMatchInlineLoops) {
-    emit_equivalence<1, 2048, 6, 4>(1, 2, 3, false, true);
-    emit_equivalence<1, 2048, 6, 4>(3, 2, 1, false, false);
-    emit_equivalence<4, 512, 8, 2>(1, 4, 2, true, true);
-    emit_equivalence<4, 512, 8, 2>(1, 3, 1, true, false);
+TEST(AllGatherPacker, Properties) {
+    packer_properties_seeds<2048, 4096>();
+    packer_properties_seeds<2048, 15232>();
+    packer_properties_seeds<64, 4096, /*short_runs=*/true>();
+    packer_properties_seeds<64, 15232>();
+    packer_properties_seeds<4096, 4096>();
+    packer_properties_seeds<8192, 4096>();
+    packer_properties_seeds<10240, 4096>();
+    packer_properties_seeds<32768, 15232>();
 }

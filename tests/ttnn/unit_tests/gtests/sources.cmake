@@ -63,6 +63,7 @@ set(UNIT_TESTS_TTNN_ACCESSOR_SOURCES
     accessor/common.cpp
     accessor/test_accessor_benchmarks.cpp
     accessor/test_all_gather_packer.cpp
+    accessor/test_all_gather_schedule.cpp
     accessor/test_all_gather_walk.cpp
     accessor/test_tensor_accessor.cpp
     accessor/test_tensor_accessor_on_device.cpp

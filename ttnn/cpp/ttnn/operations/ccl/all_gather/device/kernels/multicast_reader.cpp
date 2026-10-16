@@ -31,7 +31,7 @@ void kernel_main() {
     constexpr uint32_t num_devices = get_compile_time_arg_val(ct::num_devices);
     constexpr uint32_t cb0_id = get_compile_time_arg_val(ct::cb_id);
     constexpr uint32_t cb_depth = get_compile_time_arg_val(ct::cb_depth);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(ct::cb_page_size);
+    constexpr uint32_t cb_entry_bytes = get_compile_time_arg_val(ct::cb_entry_bytes);
     constexpr uint32_t packet_size = get_compile_time_arg_val(ct::packet_size);
     constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(ct::alt_routes) != 0;
     constexpr uint32_t num_connections = get_compile_time_arg_val(ct::num_connections);
@@ -45,26 +45,21 @@ void kernel_main() {
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
     constexpr bool enable_fabric = (num_connections > 0);
-    static_assert(in_cpp % k == 0 && out_cpp % k == 0 && cps % k == 0, "pages and stripes are whole walk pages");
-    static_assert(chunk_size <= slot_bytes && cb_page_size % slot_bytes == 0, "a CB entry is whole slots");
-    static_assert(slot_bytes == chunk_size || (out_cpp == 1 && k == 1), "a padded slot is one chunk per page");
-    static_assert(walk_xfer == 1 || walk_xfer * slot_bytes <= packet_size, "a column fits one packet");
-    static_assert(walk_xfer == 1 || walk_xfer * slot_bytes <= NOC_MAX_BURST_SIZE, "a column is one NoC command");
-    constexpr uint32_t chunks_per_cb_entry = cb_page_size / slot_bytes;
+    check_walk_ct<k, in_cpp, out_cpp, cps, chunk_size, slot_bytes, cb_entry_bytes, walk_xfer, packet_size>();
+    constexpr uint32_t chunks_per_entry = cb_entry_bytes / slot_bytes;
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
     ///////////////////////////////////////////////////
     const address_t input_tensor_address = get_arg_val<address_t>(rt::input_addr);
     const address_t output_tensor_address = get_arg_val<address_t>(rt::output_addr);
-    const uint32_t slice_first_chunk = get_arg_val<uint32_t>(rt::slice_first);
-    const uint32_t slice_chunks = get_arg_val<uint32_t>(rt::slice_chunks);
+    const uint32_t slice_first = get_arg_val<uint32_t>(rt::slice_first);
+    const uint32_t slice_count = get_arg_val<uint32_t>(rt::slice_count);
     const uint32_t device_idx = get_arg_val<uint32_t>(rt::device_idx);
     const address_t barrier_sem = get_arg_val<uint32_t>(rt::barrier_sem);
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(rt::barrier_noc_x);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(rt::barrier_noc_y);
     const uint32_t barrier_wait_value = get_arg_val<uint32_t>(rt::barrier_wait_value);
-    const uint32_t rot = get_arg_val<uint32_t>(rt::rot);
     size_t arg_idx = rt::route_args;
     const auto route_args = McastRouteArgs::from_args(arg_idx);
     size_t arg_for_fab = arg_idx;
@@ -131,22 +126,21 @@ void kernel_main() {
     // after every reserve_back when using NOC transaction IDs, so get_read/write_ptr()
     // will return stale values.
     auto l1_base_addr = cb.get_write_ptr();
-    auto l1_end_addr = l1_base_addr + (cb_depth * cb_page_size);
+    auto l1_end_addr = l1_base_addr + (cb_depth * cb_entry_bytes);
     auto l1_write_addr = l1_base_addr;
     auto l1_read_addr = l1_base_addr;
 
-    // The walk stride was derived on the host from the output accessor's contiguous_page_stride().
-    ASSERT(out_cpp > k || output_tensor_accessor.contiguous_page_stride() == walk_stride);
-    const RunSource in_src = checked_run_source<k, in_cpp>(in_runs, input_tensor_accessor, walk_stride);
-    const RunSource out_src = checked_run_source<k, out_cpp>(out_runs, output_tensor_accessor, walk_stride);
-    const uint32_t input_end_chunk = slice_first_chunk + slice_chunks;
+    check_walk_stride(output_tensor_accessor, k, out_cpp, walk_stride);
+    const RunSource in_src = checked_run_source(in_runs, input_tensor_accessor, k, in_cpp, walk_stride);
+    const RunSource out_src = checked_run_source(out_runs, output_tensor_accessor, k, out_cpp, walk_stride);
+    const uint32_t slice_end = slice_first + slice_count;
 
     StripeMap<cps, num_devices> map;
-    map.init(device_idx, input_end_chunk);
+    map.init(device_idx, slice_end);
     // Same walk, one CB entry apart: reads stay in flight while the entry before them is sent. The writer
-    // drains the CB with the same walk (same rot), so every entry holds the same seqnos on both sides.
+    // drains the CB with the same walk, so every entry holds the same seqnos on both sides.
     TiledWalk<k, walk_stride, walk_xfer> read_walk;
-    read_walk.init(input_end_chunk, rot, walk_start(slice_first_chunk));
+    read_walk.init(slice_end, walk_start(slice_first));
     auto send_walk = read_walk;
     uint32_t chunks_read = 0;
     uint32_t chunks_sent = 0;
@@ -162,12 +156,12 @@ void kernel_main() {
 
     // Read input tensor and fill CB page
     auto fill_entry = [&]() __attribute__((always_inline)) {
-        const uint32_t batch = std::min(chunks_per_cb_entry, slice_chunks - chunks_read);
+        const uint32_t batch = std::min(chunks_per_entry, slice_count - chunks_read);
         l1_write_addr = read_input_runs<in_cpp, chunk_size, slot_bytes>(
             read_walk,
             input_tensor_accessor,
             in_src,
-            input_end_chunk,
+            slice_end,
             l1_write_addr,
             batch,
             input_addr,
@@ -183,7 +177,7 @@ void kernel_main() {
     // Send Fabric data in our dir
     auto send_entry = [&]() __attribute__((always_inline)) {
         if constexpr (enable_fabric) {
-            const uint32_t batch = std::min(chunks_per_cb_entry, slice_chunks - chunks_sent);
+            const uint32_t batch = std::min(chunks_per_entry, slice_count - chunks_sent);
             l1_read_addr = emit_runs<out_cpp, chunk_size, slot_bytes>(
                 send_walk,
                 map,
@@ -208,7 +202,7 @@ void kernel_main() {
 
     // We reserve two to kick start the pipeline, and then it is steady state
     cb.reserve_back(2);
-    while (chunks_read < slice_chunks) {
+    while (chunks_read < slice_count) {
         fill_entry();
 
         curr_trid = (curr_trid == max_trid) ? 1 : curr_trid + 1;

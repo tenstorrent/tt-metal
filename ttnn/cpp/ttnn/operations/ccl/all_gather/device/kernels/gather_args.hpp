@@ -16,23 +16,26 @@
 
 namespace gather_args {
 
+// McastRouteArgs (gather_fabric.hpp): line then rect, each as (hops, hops_alt, dir) -- 12 words.
+constexpr uint32_t mcast_route_words = 12;
+
 namespace unicast_reader {
 namespace ct {
 enum : uint32_t {
-    in_cpp = 0,    // input chunks per input page (split_factor * k)
-    chunk_size,    // content bytes per chunk (min page / k)
-    out_cpp,       // output chunks per output page (concat ratio * k)
-    cps,           // chunks per stripe row (stripe walk pages * k)
-    num_devices,   // stripe indexing
-    cb_id,         // the CB
-    cb_page_size,  // CB entry bytes (chunks_per_entry * slot_bytes)
-    k,             // chunks per walk page (power of 2)
-    walk_stride,   // TiledWalk stride (walk pages)
-    walk_xfer,     // TiledWalk xfer (chunks per column)
-    slot_bytes,    // CB slot bytes
-    in_runs,       // run_source_bits() of the input
-    out_runs,      // run_source_bits() of the output (the relay reads it back)
-    tensor_args,   // TensorAccessorArgs(input), then TensorAccessorArgs(output)
+    in_cpp = 0,      // input chunks per input page (split_factor * k)
+    chunk_size,      // content bytes per chunk (min page / k)
+    out_cpp,         // output chunks per output page (concat ratio * k)
+    cps,             // chunks per stripe row (stripe walk pages * k)
+    num_devices,     // stripe indexing
+    cb_id,           // the CB
+    cb_entry_bytes,  // CB entry bytes (chunks_per_entry * slot_bytes): the CB page
+    k,               // chunks per walk page (power of 2)
+    walk_stride,     // TiledWalk stride (walk pages)
+    walk_xfer,       // TiledWalk xfer (chunks per column)
+    slot_bytes,      // CB slot bytes
+    in_runs,         // run_source_bits() of the input
+    out_runs,        // run_source_bits() of the output (the relay reads it back)
+    tensor_args,     // TensorAccessorArgs(input), then TensorAccessorArgs(output)
 };
 }  // namespace ct
 namespace rt {
@@ -44,12 +47,11 @@ enum : uint32_t {
     num_iters,       // iterations this direction runs
     total_chunks,    // chunks upstream delivers (completion wait)
     slice_first,     // slice start (chunk id)
-    slice_chunks,    // slice length (chunks)
-    final_skip,      // last-iteration seqno offset (even-ring split); the data_valid base
+    slice_count,     // slice length (chunks)
+    final_skip,      // last-iteration seqno offset (even-ring split); the data_valid base (UnicastSchedule)
     final_take,      // last-iteration seqno count
-    rot,             // lane rotation of full tiles (this slice and direction)
     final_pos_base,  // walk_seek(.., final_skip, ..): the last iteration's start
-    final_pos_slot,
+    final_pos_lane,
     final_pos_i,
     barrier_sem,     // L1 address
     data_valid_sem,  // L1 address
@@ -66,9 +68,9 @@ enum : uint32_t {
     cps,
     num_devices,
     cb_id,
-    cb_page_size,
+    cb_entry_bytes,
     packet_size,
-    data_valid_granularity,  // signal data_valid once per this many CB entries
+    data_valid_granularity,  // signal data_valid once per this many CB entries (UnicastPolicy::signals_per_stripe)
     k,
     walk_stride,
     walk_xfer,
@@ -84,12 +86,11 @@ enum : uint32_t {
     stripe_step,
     num_iters,
     slice_first,
-    slice_chunks,
+    slice_count,
     final_skip,
     final_take,
-    rot,
     final_pos_base,
-    final_pos_slot,
+    final_pos_lane,
     final_pos_i,
     do_local_write,  // write local data into local output on iteration 0
     barrier_sem,     // L1 address
@@ -116,7 +117,7 @@ enum : uint32_t {
     num_devices,
     cb_id,
     cb_depth,  // also the in-flight transaction id count
-    cb_page_size,
+    cb_entry_bytes,
     packet_size,
     alt_routes,       // load_balance_across_alt_routes
     num_connections,  // forward fabric connections (E line + S rect)
@@ -134,15 +135,14 @@ enum : uint32_t {
     input_addr = 0,
     output_addr,
     slice_first,
-    slice_chunks,
+    slice_count,
     device_idx,
     barrier_sem,
     barrier_noc_x,
     barrier_noc_y,
     barrier_wait_value,
-    rot,
-    route_args,                     // McastRouteArgs::from_args: 12 words
-    fabric_args = route_args + 12,  // routing-plane connection args
+    route_args,                                    // McastRouteArgs::from_args
+    fabric_args = route_args + mcast_route_words,  // routing-plane connection args
 };
 }  // namespace rt
 }  // namespace multicast_reader
@@ -155,7 +155,7 @@ enum : uint32_t {
     cps,
     num_devices,
     cb_id,
-    cb_page_size,
+    cb_entry_bytes,
     packet_size,
     alt_routes,
     num_connections,  // backward fabric connections (W line + N rect)
@@ -171,14 +171,13 @@ namespace rt {
 enum : uint32_t {
     output_addr = 0,
     slice_first,
-    slice_chunks,
+    slice_count,
     device_idx,
     barrier_sem,
     barrier_noc_x,
     barrier_noc_y,
-    rot,
-    route_args,                     // McastRouteArgs::from_args: 12 words
-    fabric_args = route_args + 12,  // routing-plane connection args
+    route_args,                                    // McastRouteArgs::from_args
+    fabric_args = route_args + mcast_route_words,  // routing-plane connection args
 };
 }  // namespace rt
 }  // namespace multicast_writer

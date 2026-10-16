@@ -2,21 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Host proof of the all_gather page walk (ttnn/.../all_gather/device/kernels/gather_walk.hpp, v2) and of the
+// Host proof of the all_gather page walk (ttnn/.../all_gather/device/kernels/gather_walk.hpp) and of the
 // integer rules the host and kernels share (kernels/gather_rules.hpp):
-//   - the k = 1, rot = 0 order is the v1 TiledWalk (LegacyTiledWalk, a verbatim copy of it, is the oracle);
-//   - the walk is a bijection for every k and rot, and walk_seek() resumes exactly;
+//   - the k = 1 order is the plain column-major tile order (LegacyTiledWalk, a copy of the k-less walk the
+//     current one replaced, is the oracle);
+//   - the walk is a bijection for every k, including strides far above the slice (64, 110, 140), and
+//     walk_seek() resumes exactly;
 //   - every run next_run() forms is one linear stretch of memory on interleaved (mock) and sharded (real
 //     TensorAccessor) tensors, on the input (split) and output (StripeMap, concat) sides;
-//   - reader and writer group a CB entry the same way (packed CB), including k > 1, rot and resume;
-//   - the even-ring halves partition the slice under the antipode rule; StripeMap scales by k;
-//   - the host policy rules (choose_k, xfer_for_segments, rotation targets, the antipode rule, run-source CT
-//     encoding, the padded-slot run loops) and the kernel arg tables.
+//   - reader and writer group a CB entry the same way (packed CB), including k > 1 and resume;
+//   - StripeMap scales by k;
+//   - the host rules (choose_k, max_xfer, slot and stride, run sources and their CT encoding, the padded-slot
+//     run loops, the relay rule at k > 1) and the kernel arg tables.
 //
 // No device: the walk, StripeMap and run queries are pure integer code. Contiguity comes from a mock of the
 // interleaved accessor (whose real specialization only exists under KERNEL_BUILD) and from real sharded
-// TensorAccessor instances, checked against their own get_bank_and_offset(). WalkGeometry::make (which needs
-// Buffers and hal) is not built here; the rules it applies are.
+// TensorAccessor instances, checked against their own get_bank_and_offset(). WalkGeometry::make itself is tested
+// in test_all_gather_geometry.cpp.
 
 #include <gtest/gtest.h>
 
@@ -38,7 +40,7 @@
 namespace {
 
 // ---------------------------------------------------------------------------------------------------
-// LegacyTiledWalk: verbatim copy of v1 TiledWalk (gather_walk.hpp at 34d37d84a89), renamed only.
+// LegacyTiledWalk: verbatim copy of the k-less TiledWalk (gather_walk.hpp at 34d37d84a89), renamed only.
 // ---------------------------------------------------------------------------------------------------
 class LegacyTiledWalk {
 public:
@@ -106,7 +108,7 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------------
-// Spec: the v2 order by definition, independent of the incremental walk.
+// Spec: the walk order by definition, independent of the incremental walk.
 // ---------------------------------------------------------------------------------------------------
 uint32_t chunk_at(uint32_t first, uint32_t lane, uint32_t q, uint32_t stride, uint32_t k) {
     return (first / k + lane + (q / k) * stride) * k + q % k;
@@ -126,14 +128,12 @@ uint32_t full_tiles(uint32_t count, uint32_t stride, uint32_t xfer, uint32_t k) 
 }
 
 std::vector<std::vector<uint32_t>> spec_columns(
-    uint32_t first, uint32_t count, uint32_t stride, uint32_t xfer, uint32_t k, uint32_t rot) {
+    uint32_t first, uint32_t count, uint32_t stride, uint32_t xfer, uint32_t k) {
     const auto lens = lane_lens(count, stride, k);
-    const uint32_t F = full_tiles(count, stride, xfer, k);
     std::vector<std::vector<uint32_t>> cols;
     for (uint32_t t = 0; t * xfer < lens[0]; ++t) {
         const uint32_t q0 = t * xfer;
-        for (uint32_t j = 0; j < stride; ++j) {
-            const uint32_t l = t < F ? (j + rot) % stride : j;
+        for (uint32_t l = 0; l < stride; ++l) {
             std::vector<uint32_t> col;
             for (uint32_t q = q0; q < std::min(q0 + xfer, lens[l]); ++q) {
                 col.push_back(chunk_at(first, l, q, stride, k));
@@ -158,16 +158,15 @@ uint32_t lane_room(uint32_t c, uint32_t end, uint32_t stride) {
 }
 
 template <uint32_t K>
-TiledWalk<K> make_walk(uint32_t first, uint32_t count, uint32_t skip, uint32_t stride, uint32_t xfer, uint32_t rot) {
+TiledWalk<K> make_walk(uint32_t first, uint32_t count, uint32_t skip, uint32_t stride, uint32_t xfer) {
     TiledWalk<K> w;
-    w.init(first + count, stride, xfer, rot, walk_seek(first, count, skip, stride, xfer, K));
+    w.init(first + count, stride, xfer, walk_seek(first, count, skip, stride, xfer, K));
     return w;
 }
 
 template <uint32_t K>
-std::vector<uint32_t> trace(
-    uint32_t first, uint32_t count, uint32_t skip, uint32_t stride, uint32_t xfer, uint32_t rot) {
-    auto w = make_walk<K>(first, count, skip, stride, xfer, rot);
+std::vector<uint32_t> trace(uint32_t first, uint32_t count, uint32_t skip, uint32_t stride, uint32_t xfer) {
+    auto w = make_walk<K>(first, count, skip, stride, xfer);
     std::vector<uint32_t> out;
     for (uint32_t s = skip; s < count; ++s) {
         out.push_back(w.chunk());
@@ -176,11 +175,9 @@ std::vector<uint32_t> trace(
     return out;
 }
 
-std::string ctx(
-    uint32_t first, uint32_t count, uint32_t skip, uint32_t stride, uint32_t xfer, uint32_t k, uint32_t rot) {
+std::string ctx(uint32_t first, uint32_t count, uint32_t skip, uint32_t stride, uint32_t xfer, uint32_t k) {
     return "first=" + std::to_string(first) + " count=" + std::to_string(count) + " skip=" + std::to_string(skip) +
-           " stride=" + std::to_string(stride) + " xfer=" + std::to_string(xfer) + " k=" + std::to_string(k) +
-           " rot=" + std::to_string(rot);
+           " stride=" + std::to_string(stride) + " xfer=" + std::to_string(xfer) + " k=" + std::to_string(k);
 }
 
 constexpr uint32_t kStrides[] = {1, 2, 3, 7, 8, 12};
@@ -190,7 +187,7 @@ constexpr uint32_t kXfers[] = {1, 2, 3, 4, 7, 9, 14};
 }  // namespace
 
 // ---------------------------------------------------------------------------------------------------
-// (a) k = 1, rot = 0: same chunks as LegacyTiledWalk; run_limit clipped at end == Legacy's run_limit;
+// (a) k = 1: same chunks as LegacyTiledWalk; run_limit clipped at end == Legacy's run_limit;
 // resuming at every skip lands in the stepped walk's exact state (=> same suffix), and on Legacy's chunk.
 // ---------------------------------------------------------------------------------------------------
 TEST(AllGatherWalk, MatchesLegacy) {
@@ -198,11 +195,11 @@ TEST(AllGatherWalk, MatchesLegacy) {
         for (uint32_t xfer : kXfers) {
             for (uint32_t first : {0u, 5u, 1000u}) {
                 for (uint32_t count = 0; count < 300; ++count) {
-                    SCOPED_TRACE(ctx(first, count, 0, stride, xfer, 1, 0));
+                    SCOPED_TRACE(ctx(first, count, 0, stride, xfer, 1));
                     const uint32_t end = first + count;
                     LegacyTiledWalk legacy;
                     legacy.init(first, count, 0, stride, xfer);
-                    auto w = make_walk<1>(first, count, 0, stride, xfer, 0);
+                    auto w = make_walk<1>(first, count, 0, stride, xfer);
                     std::vector<TiledWalk<1>> states;
                     states.reserve(count);
                     for (uint32_t s = 0; s < count; ++s) {
@@ -214,7 +211,7 @@ TEST(AllGatherWalk, MatchesLegacy) {
                         legacy.advance(1);
                     }
                     for (uint32_t skip = 0; skip < count; ++skip) {
-                        const auto resumed = make_walk<1>(first, count, skip, stride, xfer, 0);
+                        const auto resumed = make_walk<1>(first, count, skip, stride, xfer);
                         ASSERT_TRUE(resumed == states[skip]) << "skip " << skip;
                         LegacyTiledWalk lg;
                         lg.init(first, count, skip, stride, xfer);
@@ -227,54 +224,85 @@ TEST(AllGatherWalk, MatchesLegacy) {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// (b) + (c): for k in {1,2,4,8} and every rot: the walk is the spec's column order (so a bijection onto
-// the slice), run_limit is the column room (exact once clipped at end), whole-column steps land on
-// column starts, and walk_seek at every skip reproduces the stepped state.
+// (b) + (c): for k in {1,2,4,8}: the walk is the spec's column order (so a bijection onto the slice),
+// run_limit is the column room (exact once clipped at end), whole-column steps land on column starts, and
+// walk_seek at every skip reproduces the stepped state.
 // ---------------------------------------------------------------------------------------------------
 namespace {
+template <uint32_t K>
+void bijection_and_seek_one(
+    uint32_t first, uint32_t count, uint32_t stride, uint32_t xfer, uint64_t& walks, uint64_t& seeks) {
+    SCOPED_TRACE(ctx(first, count, 0, stride, xfer, K));
+    const uint32_t end = first + count;
+    const auto cols = spec_columns(first, count, stride, xfer, K);
+    std::vector<uint32_t> flat;
+    for (const auto& c : cols) {
+        flat.insert(flat.end(), c.begin(), c.end());
+    }
+    std::vector<uint32_t> sorted = flat;
+    std::sort(sorted.begin(), sorted.end());
+    std::vector<uint32_t> want(count);
+    std::iota(want.begin(), want.end(), first);
+    ASSERT_EQ(sorted, want) << "spec is not a permutation";
+
+    auto w = make_walk<K>(first, count, 0, stride, xfer);
+    std::vector<TiledWalk<K>> states;
+    for (const auto& col : cols) {
+        for (size_t j = 0; j < col.size(); ++j) {
+            ASSERT_EQ(w.chunk(), col[j]);
+            ASSERT_LE(w.run_limit(), xfer);
+            ASSERT_EQ(std::min(w.run_limit(), lane_room<K>(w.chunk(), end, stride)), col.size() - j);
+            states.push_back(w);
+            w.advance(1);
+        }
+    }
+    auto w2 = make_walk<K>(first, count, 0, stride, xfer);
+    for (const auto& col : cols) {
+        ASSERT_EQ(w2.chunk(), col[0]);
+        w2.advance(col.size());
+    }
+    ++walks;
+    for (uint32_t skip = 0; skip < count; ++skip) {
+        ASSERT_TRUE(make_walk<K>(first, count, skip, stride, xfer) == states[skip]) << "skip " << skip;
+        ++seeks;
+    }
+}
+
 template <uint32_t K>
 void bijection_and_seek(uint64_t& walks, uint64_t& seeks) {
     for (uint32_t stride : kStrides) {
         for (uint32_t xfer : kXfers) {
             for (uint32_t first_page : {0u, 3u}) {
                 for (uint32_t pages = 0; pages < 40; ++pages) {
-                    const uint32_t first = first_page * K, count = pages * K, end = first + count;
-                    for (uint32_t rot = 0; rot < stride; ++rot) {
-                        SCOPED_TRACE(ctx(first, count, 0, stride, xfer, K, rot));
-                        const auto cols = spec_columns(first, count, stride, xfer, K, rot);
-                        std::vector<uint32_t> flat;
-                        for (const auto& c : cols) {
-                            flat.insert(flat.end(), c.begin(), c.end());
-                        }
-                        std::vector<uint32_t> sorted = flat;
-                        std::sort(sorted.begin(), sorted.end());
-                        std::vector<uint32_t> want(count);
-                        std::iota(want.begin(), want.end(), first);
-                        ASSERT_EQ(sorted, want) << "spec is not a permutation";
+                    bijection_and_seek_one<K>(first_page * K, pages * K, stride, xfer, walks, seeks);
+                    if (::testing::Test::HasFatalFailure()) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
 
-                        auto w = make_walk<K>(first, count, 0, stride, xfer, rot);
-                        std::vector<TiledWalk<K>> states;
-                        for (const auto& col : cols) {
-                            for (size_t j = 0; j < col.size(); ++j) {
-                                ASSERT_EQ(w.chunk(), col[j]);
-                                ASSERT_LE(w.run_limit(), xfer);
-                                ASSERT_EQ(
-                                    std::min(w.run_limit(), lane_room<K>(w.chunk(), end, stride)), col.size() - j);
-                                states.push_back(w);
-                                w.advance(1);
-                            }
-                        }
-                        auto w2 = make_walk<K>(first, count, 0, stride, xfer, rot);
-                        for (const auto& col : cols) {
-                            ASSERT_EQ(w2.chunk(), col[0]);
-                            w2.advance(col.size());
-                        }
-                        ++walks;
-                        for (uint32_t skip = 0; skip < count; ++skip) {
-                            ASSERT_TRUE(make_walk<K>(first, count, skip, stride, xfer, rot) == states[skip])
-                                << "skip " << skip;
-                            ++seeks;
-                        }
+// Strides far above the slice: a BH L1 interleaved output has 110-140 banks, a sharded one up to its core count,
+// so a slice can be shorter than one stride (some lanes empty from the start) or than one tile.
+template <uint32_t K>
+void large_strides(uint64_t& walks, uint64_t& seeks) {
+    for (uint32_t stride : {7u, 64u, 110u, 140u}) {
+        for (uint32_t xfer : {1u, 3u, 7u}) {
+            for (uint32_t pages :
+                 {1u,
+                  stride / 2,
+                  stride - 1,
+                  stride,
+                  stride + 1,
+                  stride * xfer - 1,
+                  stride * xfer + 5,
+                  2 * stride * xfer + 3}) {
+                for (uint32_t first_page : {0u, 5u}) {
+                    bijection_and_seek_one<K>(first_page * K, pages * K, stride, xfer, walks, seeks);
+                    if (::testing::Test::HasFatalFailure()) {
+                        return;
                     }
                 }
             }
@@ -282,6 +310,15 @@ void bijection_and_seek(uint64_t& walks, uint64_t& seeks) {
     }
 }
 }  // namespace
+
+TEST(AllGatherWalk, LargeStrides) {
+    uint64_t walks = 0, seeks = 0;
+    large_strides<1>(walks, seeks);
+    large_strides<2>(walks, seeks);
+    large_strides<4>(walks, seeks);
+    EXPECT_GT(walks, 0u);
+    EXPECT_GT(seeks, 0u);
+}
 
 TEST(AllGatherWalk, BijectionAndSeek) {
     uint64_t walks = 0, seeks = 0;
@@ -296,31 +333,29 @@ TEST(AllGatherWalk, BijectionAndSeek) {
 // CT stride/xfer (the kernels' form) is the same walk as runtime stride/xfer.
 TEST(AllGatherWalk, CompileTimeParamsMatchRuntime) {
     for (uint32_t pages = 0; pages < 100; ++pages) {
-        for (uint32_t rot = 0; rot < 8; ++rot) {
-            const uint32_t count = pages * 4;
-            TiledWalk<4, 8, 7> ct;
-            ct.init(count, rot, walk_start(0));
-            auto rt = make_walk<4>(0, count, 0, 8, 7, rot);
-            for (uint32_t s = 0; s < count; ++s) {
-                ASSERT_EQ(ct.chunk(), rt.chunk());
-                ASSERT_EQ(ct.run_limit(), rt.run_limit());
-                const uint32_t n = std::min(ct.run_limit(), lane_room<4>(ct.chunk(), count, 8));
-                ct.advance(n);
-                rt.advance(n);
-                s += n - 1;
-            }
+        const uint32_t count = pages * 4;
+        TiledWalk<4, 8, 7> ct;
+        ct.init(count, walk_start(0));
+        auto rt = make_walk<4>(0, count, 0, 8, 7);
+        for (uint32_t s = 0; s < count; ++s) {
+            ASSERT_EQ(ct.chunk(), rt.chunk());
+            ASSERT_EQ(ct.run_limit(), rt.run_limit());
+            const uint32_t n = std::min(ct.run_limit(), lane_room<4>(ct.chunk(), count, 8));
+            ct.advance(n);
+            rt.advance(n);
+            s += n - 1;
         }
     }
 }
 
 TEST(AllGatherWalk, AdvancePreconditionAsserts) {
-    auto w = make_walk<2>(0, 40, 0, 3, 4, 1);
+    auto w = make_walk<2>(0, 40, 0, 3, 4);
     EXPECT_THROW(w.advance(0), std::out_of_range);
     EXPECT_THROW(w.advance(w.run_limit() + 1), std::out_of_range);
     EXPECT_NO_THROW(w.advance(w.run_limit()));
     // A run past the slice end (a caller bound that was not the slice end) is caught.
     // stride 3, xfer 4, 10 chunks: lane 1 is 1, 4, 7 -- at 7 the column has room 2 but the lane 1.
-    auto t = make_walk<1>(0, 10, 6, 3, 4, 0);
+    auto t = make_walk<1>(0, 10, 6, 3, 4);
     ASSERT_EQ(t.chunk(), 7u);
     ASSERT_GT(t.run_limit(), 1u);
     EXPECT_THROW(t.advance(2), std::out_of_range);
@@ -336,10 +371,10 @@ TEST(AllGatherWalk, Bijection) {
         for (uint32_t xfer : kXfers) {
             for (uint32_t first : {0u, 5u, 1000u}) {
                 for (uint32_t count = 0; count <= 300; ++count) {
-                    SCOPED_TRACE(ctx(first, count, 0, stride, xfer, 1, 0));
+                    SCOPED_TRACE(ctx(first, count, 0, stride, xfer, 1));
                     const uint32_t end = first + count;
                     std::vector<uint32_t> chunks, limits;
-                    auto w = make_walk<1>(first, count, 0, stride, xfer, 0);
+                    auto w = make_walk<1>(first, count, 0, stride, xfer);
                     for (uint32_t s = 0; s < count; ++s) {
                         chunks.push_back(w.chunk());
                         limits.push_back(std::min(w.run_limit(), lane_room<1>(w.chunk(), end, stride)));
@@ -360,7 +395,7 @@ TEST(AllGatherWalk, Bijection) {
                         }
                     }
                     // Whole-column steps (advance(n > 1)) land on the same chunks.
-                    auto w2 = make_walk<1>(first, count, 0, stride, xfer, 0);
+                    auto w2 = make_walk<1>(first, count, 0, stride, xfer);
                     for (uint32_t s = 0; s < count;) {
                         ASSERT_EQ(w2.chunk(), chunks[s]) << "seqno " << s;
                         const uint32_t n = limits[s];
@@ -385,8 +420,8 @@ TEST(AllGatherWalk, Seek) {
                 for (uint32_t count = 0; count <= 80; ++count) {
                     const uint32_t end = first + count;
                     for (uint32_t skip = 0; skip < count; ++skip) {
-                        SCOPED_TRACE(ctx(first, count, skip, stride, xfer, 1, 0));
-                        auto w = make_walk<1>(first, count, skip, stride, xfer, 0);
+                        SCOPED_TRACE(ctx(first, count, skip, stride, xfer, 1));
+                        auto w = make_walk<1>(first, count, skip, stride, xfer);
                         LegacyTiledWalk lg;
                         lg.init(first, count, skip, stride, xfer);
                         for (uint32_t s = skip; s < count; ++s) {
@@ -447,9 +482,9 @@ TEST(AllGatherWalk, StripeMap) {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// chunks_per_transfer: min(packet, burst, cap) / unit, at least 1, for both arch bursts.
+// max_xfer: min(packet, burst, cap) / unit, at least 1, for both arch bursts.
 // ---------------------------------------------------------------------------------------------------
-TEST(AllGatherWalk, ChunksPerTransfer) {
+TEST(AllGatherWalk, MaxXfer) {
     for (uint32_t burst : {host_kernel_shim::kNocMaxBurstSizeWormhole, host_kernel_shim::kNocMaxBurstSizeBlackhole}) {
         for (uint32_t packet : {2048u, 4096u, 7616u, 15232u, 16384u, 32768u}) {
             for (uint32_t chunk : {16u, 32u, 1024u, 2048u, 4096u, 8192u, 16384u, 32768u}) {
@@ -459,14 +494,14 @@ TEST(AllGatherWalk, ChunksPerTransfer) {
                         limit = std::min(limit, cap);
                     }
                     const uint32_t want = std::max(1u, limit / chunk);
-                    EXPECT_EQ(chunks_per_transfer(packet, chunk, cap, burst), want)
+                    EXPECT_EQ(max_xfer(packet, chunk, cap, burst), want)
                         << "burst " << burst << " packet " << packet << " chunk " << chunk << " cap " << cap;
                 }
             }
         }
     }
-    static_assert(chunks_per_transfer(15232, 2048, 0, host_kernel_shim::kNocMaxBurstSizeBlackhole) == 7);
-    static_assert(chunks_per_transfer(15232, 2048, 0, host_kernel_shim::kNocMaxBurstSizeWormhole) == 4);
+    static_assert(max_xfer(15232, 2048, 0, host_kernel_shim::kNocMaxBurstSizeBlackhole) == 7);
+    static_assert(max_xfer(15232, 2048, 0, host_kernel_shim::kNocMaxBurstSizeWormhole) == 4);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -533,11 +568,10 @@ void check_runs(
     uint32_t skip,
     uint32_t stride,
     uint32_t xfer,
-    uint32_t rot,
     uint32_t batch_size,
     ToAcc to_acc,
     RunStats& stats) {
-    auto walk = make_walk<K>(first, count, skip, stride, xfer, rot);
+    auto walk = make_walk<K>(first, count, skip, stride, xfer);
     std::vector<uint32_t> seen;
     const uint32_t take = count - skip;
     for (uint32_t sent = 0; sent < take;) {
@@ -545,7 +579,7 @@ void check_runs(
         for (uint32_t left = batch; left > 0;) {
             const Target t = to_acc(walk.chunk());
             const uint32_t limit = walk.run_limit();
-            const uint32_t run = next_run<K, cpp>(walk, acc, src, t.chunk, t.bound, left);
+            const uint32_t run = next_run<cpp>(walk, acc, src, t.chunk, t.bound, left);
             ASSERT_GE(run, 1u);
             ASSERT_LE(run, limit);
             ASSERT_LE(run, left);
@@ -569,7 +603,7 @@ void check_runs(
         }
         sent += batch;
     }
-    std::vector<uint32_t> want = trace<K>(first, count, skip, stride, xfer, rot);
+    std::vector<uint32_t> want = trace<K>(first, count, skip, stride, xfer);
     std::sort(want.begin(), want.end());
     std::sort(seen.begin(), seen.end());
     ASSERT_EQ(seen, want) << "runs do not cover the walk exactly once";
@@ -591,7 +625,9 @@ void sweep_input(const Accessor& acc, uint32_t in_pages, RunStats& stats) {
     strides.erase(std::unique(strides.begin(), strides.end()), strides.end());
     const uint32_t walk_pages = in_pages * split;
     for (uint32_t stride : strides) {
-        const RunSource src = run_source(packed, K, cpp, page_stride, stride);
+        // As WalkGeometry::make derives it (slot == chunk).
+        const RunSource src =
+            input_run_source(acc.get_aligned_page_size(), kChunk, kChunk, K, cpp, page_stride, stride);
         for (uint32_t workers : {1u, 3u}) {
             for (uint32_t w = 0; w < workers; ++w) {
                 // Slices are cut in input pages.
@@ -600,21 +636,17 @@ void sweep_input(const Accessor& acc, uint32_t in_pages, RunStats& stats) {
                 const uint32_t first = fp * K, count = (ep - fp) * K, end = first + count;
                 auto to_acc = [end](uint32_t local) { return Target{local, end}; };
                 for (uint32_t xfer : kRunXfers) {
-                    for (uint32_t rot : {0u, stride - 1, stride / 2}) {
-                        for (uint32_t skip : {0u, count / 2, count ? count - 1 : 0u}) {
-                            if (count != 0 && skip >= count) {
-                                continue;
-                            }
-                            for (uint32_t batch : kBatches) {
-                                SCOPED_TRACE(
-                                    "input split=" + std::to_string(split) + " packed=" + std::to_string(packed) +
-                                    " batch=" + std::to_string(batch) + " " +
-                                    ctx(first, count, skip, stride, xfer, K, rot));
-                                check_runs<K, cpp>(
-                                    acc, src, first, count, skip, stride, xfer, rot, batch, to_acc, stats);
-                                if (::testing::Test::HasFatalFailure()) {
-                                    return;
-                                }
+                    for (uint32_t skip : {0u, count / 2, count ? count - 1 : 0u}) {
+                        if (count != 0 && skip >= count) {
+                            continue;
+                        }
+                        for (uint32_t batch : kBatches) {
+                            SCOPED_TRACE(
+                                "input split=" + std::to_string(split) + " packed=" + std::to_string(packed) +
+                                " batch=" + std::to_string(batch) + " " + ctx(first, count, skip, stride, xfer, K));
+                            check_runs<K, cpp>(acc, src, first, count, skip, stride, xfer, batch, to_acc, stats);
+                            if (::testing::Test::HasFatalFailure()) {
+                                return;
                             }
                         }
                     }
@@ -633,10 +665,10 @@ void sweep_output_one(const Accessor& acc, uint32_t out_pages, RunStats& stats) 
     if (total % (cps * N) != 0) {
         return;
     }
-    const uint32_t stride = m > 1 ? 1u : acc.contiguous_page_stride();
+    const uint32_t stride = walk_stride_for(cpp, K, acc.contiguous_page_stride());
     // As WalkGeometry::make derives it (slot == chunk).
     const RunSource src =
-        run_source(acc.get_aligned_page_size() == cpp * kChunk, K, cpp, acc.contiguous_page_stride(), stride);
+        output_run_source(acc.get_aligned_page_size(), kChunk, K, cpp, acc.contiguous_page_stride(), stride);
     const uint32_t local_pages = total / N / K;
     for (uint32_t stripe : {0u, N - 1}) {
         for (uint32_t workers : {1u, 3u}) {
@@ -650,21 +682,18 @@ void sweep_output_one(const Accessor& acc, uint32_t out_pages, RunStats& stats) 
                     return Target{pos.global, pos.bound};
                 };
                 for (uint32_t xfer : kRunXfers) {
-                    for (uint32_t rot : {0u, stride - 1}) {
-                        for (uint32_t skip : {0u, count / 2}) {
-                            if (count != 0 && skip >= count) {
-                                continue;
-                            }
-                            for (uint32_t batch : {3u, 1u << 20}) {
-                                SCOPED_TRACE(
-                                    "output m=" + std::to_string(m) + " cps_pages=" + std::to_string(cps_pages) +
-                                    " N=" + std::to_string(N) + " stripe=" + std::to_string(stripe) + " batch=" +
-                                    std::to_string(batch) + " " + ctx(first, count, skip, stride, xfer, K, rot));
-                                check_runs<K, cpp>(
-                                    acc, src, first, count, skip, stride, xfer, rot, batch, to_acc, stats);
-                                if (::testing::Test::HasFatalFailure()) {
-                                    return;
-                                }
+                    for (uint32_t skip : {0u, count / 2}) {
+                        if (count != 0 && skip >= count) {
+                            continue;
+                        }
+                        for (uint32_t batch : {3u, 1u << 20}) {
+                            SCOPED_TRACE(
+                                "output m=" + std::to_string(m) + " cps_pages=" + std::to_string(cps_pages) +
+                                " N=" + std::to_string(N) + " stripe=" + std::to_string(stripe) +
+                                " batch=" + std::to_string(batch) + " " + ctx(first, count, skip, stride, xfer, K));
+                            check_runs<K, cpp>(acc, src, first, count, skip, stride, xfer, batch, to_acc, stats);
+                            if (::testing::Test::HasFatalFailure()) {
+                                return;
                             }
                         }
                     }
@@ -763,55 +792,6 @@ TEST(AllGatherWalk, RunLinearitySharded) {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// (e) ANTIPODE: fwd emits seqnos [0, h) of its walk (rot_f), bwd [h, count) of its own (rot_b). With
-// rot_f != rot_b they partition the slice iff h is on a tile boundary or inside the unrotated tail; the
-// off-boundary case is shown to break, so the rule is necessary, not just sufficient.
-// ---------------------------------------------------------------------------------------------------
-namespace {
-template <uint32_t K>
-void antipode(uint64_t& ok, uint64_t& off_bad) {
-    for (uint32_t stride : {2u, 3u, 7u, 8u, 12u}) {
-        for (uint32_t xfer : {1u, 2u, 3u, 7u}) {
-            const uint32_t tile = stride * xfer;
-            for (uint32_t pages = 1; pages < 40; ++pages) {
-                const uint32_t count = pages * K;
-                const uint32_t tail_start = full_tiles(count, stride, xfer, K) * tile;
-                const std::pair<uint32_t, uint32_t> rots[] = {
-                    {0, stride - 1}, {1 % stride, stride / 2}, {stride - 1, 0}};
-                for (auto [rf, rb] : rots) {
-                    const auto fw = trace<K>(0, count, 0, stride, xfer, rf);
-                    for (uint32_t h = 0; h <= count; ++h) {
-                        std::vector<uint32_t> got(fw.begin(), fw.begin() + h);
-                        const auto bw = trace<K>(0, count, h, stride, xfer, rb);
-                        got.insert(got.end(), bw.begin(), bw.end());
-                        std::sort(got.begin(), got.end());
-                        std::vector<uint32_t> want(count);
-                        std::iota(want.begin(), want.end(), 0u);
-                        const bool part = got == want;
-                        if (h % tile == 0 || h >= tail_start || rf == rb) {
-                            ASSERT_TRUE(part) << ctx(0, count, h, stride, xfer, K, rf) << " rot_b=" << rb;
-                            ++ok;
-                        } else {
-                            off_bad += !part;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-}  // namespace
-
-TEST(AllGatherWalk, AntipodeSplitPartitions) {
-    uint64_t ok = 0, off_bad = 0;
-    antipode<1>(ok, off_bad);
-    antipode<2>(ok, off_bad);
-    antipode<4>(ok, off_bad);
-    EXPECT_GT(ok, 0u);
-    EXPECT_GT(off_bad, 0u) << "the off-boundary case should break, else the rule is vacuous";
-}
-
-// ---------------------------------------------------------------------------------------------------
 // (f) STRIPE_MAP: StripeMap at cps * k is k * StripeMap at cps plus the sub-chunk (rows are whole
 // pages); it is a bijection onto the output; bound = min(row end, slice end).
 // ---------------------------------------------------------------------------------------------------
@@ -867,61 +847,10 @@ TEST(AllGatherWalk, StripeMapScalesByK) {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// (g) P6 SCATTER CAP: without cross-page runs (page stride != walk stride) a column of the capped xfer
-// holds at most 4 runs, measured through next_run; one chunk more makes some column hold 5. The
-// general form agrees with the simple one at contig_pages == 1 and is uncapped at 0.
-// ---------------------------------------------------------------------------------------------------
-namespace {
-template <uint32_t K>
-uint32_t worst_column_runs(uint32_t xfer, uint32_t stride, uint32_t pages) {
-    const MockInterleavedAccessor acc{5, K * kChunk};
-    const RunSource src = run_source(true, K, K, 5, stride);
-    EXPECT_TRUE(src.whole_page && !src.cross_page);
-    const uint32_t count = pages * K;
-    auto walk = make_walk<K>(0, count, 0, stride, xfer, 0);
-    uint32_t worst = 0;
-    for (const auto& col : spec_columns(0, count, stride, xfer, K, 0)) {
-        uint32_t segs = 0;
-        for (uint32_t left = col.size(); left > 0;) {
-            const uint32_t run = next_run<K, K>(walk, acc, src, walk.chunk(), count, left);
-            walk.advance(run);
-            left -= run;
-            ++segs;
-        }
-        worst = std::max(worst, segs);
-    }
-    return worst;
-}
-template <uint32_t K>
-void scatter_cap() {
-    const uint32_t cap = xfer_cap_for_segments(K, false);
-    EXPECT_EQ(cap, 4 * K);
-    EXPECT_EQ(xfer_cap_for_segments(K, true), 0u);
-    EXPECT_EQ(xfer_for_segments(1000, K, 1), cap);
-    EXPECT_EQ(xfer_for_segments(1000, K, 0), 1000u);
-    for (uint32_t stride : {2u, 3u}) {
-        for (uint32_t pages : {37u, 64u}) {
-            EXPECT_LE(worst_column_runs<K>(cap, stride, pages), 4u) << "K=" << K;
-        }
-    }
-    EXPECT_GT(worst_column_runs<K>(cap + 1, 2, 64), 4u) << "K=" << K;
-    // contig_pages == 2: a column may span (4 - 1) * 2 + 1 = 7 pages.
-    EXPECT_EQ(column_segments(xfer_for_segments(1000, K, 2), K, 2), 4u);
-}
-}  // namespace
-
-TEST(AllGatherWalk, ScatterCap) {
-    scatter_cap<1>();
-    scatter_cap<2>();
-    scatter_cap<4>();
-    scatter_cap<8>();
-}
-
-// ---------------------------------------------------------------------------------------------------
 // (h) GROUPING: the CB producer and consumer group the same walk into runs independently -- the reader by
 // input contiguity, the writer by output contiguity -- and only agree because the CB is packed. Emulate
 // both over the same slice and check every CB entry holds the same seqnos, chunk j at j * chunk_size.
-// k > 1, rot, resume (the even-ring halves), padded input pages, interleaved and sharded outputs.
+// k > 1, resume (the even-ring halves), padded input pages, interleaved and sharded outputs.
 //
 // Mirrored kernel loops (ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/): the unicast reader's
 // iteration-0 batch loop (read_input_runs on the input, in_src, the slice end) and the unicast writer's
@@ -945,19 +874,18 @@ std::vector<std::vector<Placed>> emulate_side(
     uint32_t take,
     uint32_t stride,
     uint32_t xfer,
-    uint32_t rot,
     uint32_t cpe,
     ToAcc to_acc,
     uint64_t& runs) {
     std::vector<std::vector<Placed>> out;
-    auto walk = make_walk<K>(first, count, skip, stride, xfer, rot);
+    auto walk = make_walk<K>(first, count, skip, stride, xfer);
     for (uint32_t done = 0; done < take;) {
         const uint32_t batch = std::min(cpe, take - done);
         std::vector<Placed> entry;
         uint32_t l1 = 0;  // cb.get_write_ptr() / cb.get_read_ptr()
         for (uint32_t left = batch; left > 0;) {
             const Target t = to_acc(walk.chunk());
-            const uint32_t run = next_run<K, cpp>(walk, acc, src, t.chunk, t.bound, left);
+            const uint32_t run = next_run<cpp>(walk, acc, src, t.chunk, t.bound, left);
             if (run == 0 || run > left) {
                 ADD_FAILURE() << "bad run " << run << " with " << left << " left";
                 return out;
@@ -993,11 +921,11 @@ void grouping_case(const InAcc& in, const OutAcc& out, uint32_t rows, GroupingSt
     if (local_pages % split != 0 || (rows * N * cps) % out_cpp != 0) {
         return;
     }
-    const uint32_t stride = m > 1 ? 1u : out.contiguous_page_stride();
+    const uint32_t stride = walk_stride_for(out_cpp, K, out.contiguous_page_stride());
     const RunSource out_src =
-        run_source(out.get_aligned_page_size() == out_cpp * kChunk, K, out_cpp, out.contiguous_page_stride(), stride);
+        output_run_source(out.get_aligned_page_size(), kChunk, K, out_cpp, out.contiguous_page_stride(), stride);
     const RunSource in_src =
-        run_source(in.get_aligned_page_size() == in_cpp * kChunk, K, in_cpp, in.contiguous_page_stride(), stride);
+        input_run_source(in.get_aligned_page_size(), kChunk, kChunk, K, in_cpp, in.contiguous_page_stride(), stride);
     for (uint32_t stripe : {0u, N - 1}) {
         for (uint32_t workers : {1u, 3u}) {
             for (uint32_t w = 0; w < workers; ++w) {
@@ -1013,41 +941,39 @@ void grouping_case(const InAcc& in, const OutAcc& out, uint32_t rows, GroupingSt
                 };
                 auto in_t = [end](uint32_t l) { return Target{l, end}; };
                 for (uint32_t xfer : {1u, 3u, 8u}) {
-                    for (uint32_t rot : {0u, stride - 1}) {
-                        const auto order = trace<K>(first, count, 0, stride, xfer, rot);
-                        for (uint32_t cpe : {1u, 3u, xfer, 2 * xfer, 7u}) {
-                            // (skip, take): whole stripe, even-ring prefix half, even-ring suffix half.
-                            const std::pair<uint32_t, uint32_t> iters[] = {
-                                {0, count}, {0, count / 2}, {count / 2, count - count / 2}};
-                            for (auto [skip, take] : iters) {
-                                if (count != 0 && skip >= count) {
-                                    continue;
-                                }
-                                SCOPED_TRACE(
-                                    "split=" + std::to_string(split) + " m=" + std::to_string(m) +
-                                    " cps_pages=" + std::to_string(cps_pages) + " N=" + std::to_string(N) +
-                                    " stripe=" + std::to_string(stripe) + " cpe=" + std::to_string(cpe) + " take=" +
-                                    std::to_string(take) + " " + ctx(first, count, skip, stride, xfer, K, rot));
-                                uint64_t rr = 0, rw = 0;
-                                const auto r = emulate_side<K, in_cpp>(
-                                    in, in_src, first, count, skip, take, stride, xfer, rot, cpe, in_t, rr);
-                                const auto wr = emulate_side<K, out_cpp>(
-                                    out, out_src, first, count, skip, take, stride, xfer, rot, cpe, out_t, rw);
-                                if (::testing::Test::HasFailure()) {
-                                    return;
-                                }
-                                ASSERT_EQ(r.size(), (take + cpe - 1) / cpe);
-                                ASSERT_EQ(r, wr);
-                                for (size_t e = 0; e < r.size(); ++e) {
-                                    ASSERT_EQ(r[e].size(), std::min<uint32_t>(cpe, take - e * cpe)) << "entry " << e;
-                                    for (size_t j = 0; j < r[e].size(); ++j) {
-                                        ASSERT_EQ(r[e][j].l1, j * kChunk);
-                                        ASSERT_EQ(r[e][j].chunk, order[skip + e * cpe + j]) << "wrong seqno";
-                                    }
-                                }
-                                stats.differing += rr != rw;
-                                ++stats.cases;
+                    const auto order = trace<K>(first, count, 0, stride, xfer);
+                    for (uint32_t cpe : {1u, 3u, xfer, 2 * xfer, 7u}) {
+                        // (skip, take): whole stripe, even-ring prefix half, even-ring suffix half.
+                        const std::pair<uint32_t, uint32_t> iters[] = {
+                            {0, count}, {0, count / 2}, {count / 2, count - count / 2}};
+                        for (auto [skip, take] : iters) {
+                            if (count != 0 && skip >= count) {
+                                continue;
                             }
+                            SCOPED_TRACE(
+                                "split=" + std::to_string(split) + " m=" + std::to_string(m) +
+                                " cps_pages=" + std::to_string(cps_pages) + " N=" + std::to_string(N) +
+                                " stripe=" + std::to_string(stripe) + " cpe=" + std::to_string(cpe) +
+                                " take=" + std::to_string(take) + " " + ctx(first, count, skip, stride, xfer, K));
+                            uint64_t rr = 0, rw = 0;
+                            const auto r = emulate_side<K, in_cpp>(
+                                in, in_src, first, count, skip, take, stride, xfer, cpe, in_t, rr);
+                            const auto wr = emulate_side<K, out_cpp>(
+                                out, out_src, first, count, skip, take, stride, xfer, cpe, out_t, rw);
+                            if (::testing::Test::HasFailure()) {
+                                return;
+                            }
+                            ASSERT_EQ(r.size(), (take + cpe - 1) / cpe);
+                            ASSERT_EQ(r, wr);
+                            for (size_t e = 0; e < r.size(); ++e) {
+                                ASSERT_EQ(r[e].size(), std::min<uint32_t>(cpe, take - e * cpe)) << "entry " << e;
+                                for (size_t j = 0; j < r[e].size(); ++j) {
+                                    ASSERT_EQ(r[e][j].l1, j * kChunk);
+                                    ASSERT_EQ(r[e][j].chunk, order[skip + e * cpe + j]) << "wrong seqno";
+                                }
+                            }
+                            stats.differing += rr != rw;
+                            ++stats.cases;
                         }
                     }
                 }
@@ -1131,32 +1057,8 @@ TEST(AllGatherWalk, ReaderWriterGrouping) {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// Host rules: chunks_per_transfer (unchanged) and the k choice.
-// ---------------------------------------------------------------------------------------------------
-TEST(AllGatherWalk, HostRules) {
-    static_assert(chunks_per_transfer(15232, 2048, 0, host_kernel_shim::kNocMaxBurstSizeBlackhole) == 7);
-    static_assert(chunks_per_transfer(15232, 2048, 0, host_kernel_shim::kNocMaxBurstSizeWormhole) == 4);
-    constexpr uint32_t bh = host_kernel_shim::kNocMaxBurstSizeBlackhole;
-    // fill(k): 8192 -> k=1 0.54, k=2 0.81, k=4 0.94; 4096 -> k=1 0.81, k=2 0.94; 2048 -> k=1 0.94.
-    static_assert(choose_k(8192, 15232, bh, 64) == 4);
-    static_assert(choose_k(4096, 15232, bh, 64) == 2);
-    static_assert(choose_k(2048, 15232, bh, 64) == 1);
-    static_assert(choose_k(64, 15232, bh, 64) == 1);  // cannot split below the alignment
-    // 1088 B (bfp8 tile): 13 * 1088 = 14144 -> 0.93 at k = 1.
-    static_assert(choose_k(1088, 15232, bh, 64) == 1);
-    // A page that cannot reach 0.9 with aligned chunks falls back to the best fill.
-    static_assert(choose_k(96, 15232, bh, 32) == 1);
-    for (uint32_t page : {64u, 128u, 1024u, 1088u, 2048u, 4096u, 8192u, 16384u, 32768u}) {
-        const uint32_t k = choose_k(page, 15232, bh, 64);
-        EXPECT_EQ(page % k, 0u);
-        EXPECT_EQ((page / k) % 64, 0u);
-    }
-}
-
-// ---------------------------------------------------------------------------------------------------
-// (j) HOST POLICY RULES (gather_rules.hpp): what WalkGeometry::make and the factories compute from the walk
-// geometry. WalkGeometry::make itself needs real Buffers (contiguous_page_stride, hal), so it is not built
-// here; every integer rule it applies is, from the same header the kernels include.
+// (j) HOST RULES (gather_rules.hpp): the integer rules WalkGeometry::make and the factories apply, from the same
+// header the kernels include. WalkGeometry::make itself is tested in test_all_gather_geometry.cpp.
 // ---------------------------------------------------------------------------------------------------
 
 // choose_k on both archs (BH packet 15232 / burst 16384, WH packet 7616 / burst 8192), with the run-cap
@@ -1196,133 +1098,7 @@ TEST(AllGatherWalk, ChooseK) {
     EXPECT_TRUE(k_is_valid(2, 128, 64));
 }
 
-// xfer under the scatter cap: what XferPolicy::Segments computes from xfer_max, k and the contig pages.
-TEST(AllGatherWalk, XferForSegments) {
-    // No cross-page runs (contig 1): 4 pages per column at xfer % k == 0.
-    EXPECT_EQ(xfer_for_segments(7, 1, 1), 4u);
-    EXPECT_EQ(xfer_for_segments(3, 1, 1), 3u);
-    EXPECT_EQ(xfer_for_segments(16, 4, 1), 16u);  // 4k: 4 whole pages
-    EXPECT_EQ(xfer_for_segments(28, 4, 1), 16u);
-    EXPECT_EQ(column_segments(16, 4, 1), 4u);
-    EXPECT_EQ(column_segments(17, 4, 1), 5u);  // starts mid-page: one page more
-    // Concat (whole_page, m walk pages per output page): contig m.
-    EXPECT_EQ(xfer_for_segments(7, 1, 4), 7u);
-    // Cross-page with a long stripe: no cap; with a 1-page lane run per row: the contig-1 cap.
-    EXPECT_EQ(xfer_for_segments(7, 1, 0), 7u);
-    EXPECT_EQ(xfer_for_segments(7, 1, 100), 7u);
-    // Every capped xfer keeps <= 4 segments, and the next one up would not.
-    for (uint32_t k : {1u, 2u, 4u, 8u}) {
-        for (uint32_t contig : {1u, 2u, 3u, 5u}) {
-            for (uint32_t xmax : {1u, 2u, 7u, 13u, 28u, 64u}) {
-                const uint32_t x = xfer_for_segments(xmax, k, contig);
-                EXPECT_GE(x, 1u);
-                EXPECT_LE(x, xmax);
-                EXPECT_TRUE(x == 1 || column_segments(x, k, contig) <= gather_scatter_max_chunks);
-                if (x < xmax) {
-                    EXPECT_GT(column_segments(x + 1, k, contig), gather_scatter_max_chunks)
-                        << "k " << k << " contig " << contig << " xmax " << xmax;
-                }
-            }
-        }
-    }
-}
-
-// Rotation targets: slices spread over the lanes; the stagger moves only direction 1; rot_for_target puts
-// the walk's first full-tile lane on the target, which the walk then really starts on.
-TEST(AllGatherWalk, RotationRules) {
-    EXPECT_EQ(rot_target(0, 4, 1, true, 1), 0u);  // stride 1: nothing to rotate
-    EXPECT_EQ(rot_target(3, 4, 8, false, 0), 6u);
-    EXPECT_EQ(rot_target(3, 4, 8, false, 1), 6u);  // no stagger
-    EXPECT_EQ(rot_target(3, 4, 8, true, 0), 6u);
-    EXPECT_EQ(rot_target(3, 4, 8, true, 1), 7u);   // + 8 / 8
-    EXPECT_EQ(rot_target(0, 8, 8, true, 1), 1u);   // + max(1, 8 / 16)
-    EXPECT_EQ(rot_target(7, 8, 8, true, 1), 0u);   // wraps
-    EXPECT_EQ(rot_target(1, 2, 12, true, 1), 9u);  // 6 + 3
-    for (uint32_t stride : {2u, 3u, 7u, 8u, 12u}) {
-        for (uint32_t n : {1u, 2u, 3u, 4u, 8u, 16u}) {
-            std::vector<uint32_t> targets;
-            for (uint32_t i = 0; i < n; ++i) {
-                for (uint32_t dir : {0u, 1u}) {
-                    const uint32_t t = rot_target(i, n, stride, true, dir);
-                    ASSERT_LT(t, stride);
-                    if (dir == 0) {
-                        targets.push_back(t);
-                    }
-                }
-            }
-            // Non-decreasing and spread: n <= stride slices land on distinct lanes.
-            ASSERT_TRUE(std::is_sorted(targets.begin(), targets.end()));
-            if (n <= stride) {
-                ASSERT_EQ(std::set<uint32_t>(targets.begin(), targets.end()).size(), n) << "stride " << stride;
-            }
-            for (uint32_t first_page : {0u, 1u, 5u, 1000u}) {
-                for (uint32_t t = 0; t < stride; ++t) {
-                    const uint32_t rot = rot_for_target(t, first_page, stride);
-                    ASSERT_LT(rot, stride);
-                    ASSERT_EQ((first_page + rot) % stride, t);
-                    // The walk's first chunk (a full tile exists) sits on absolute lane t.
-                    for (uint32_t k : {1u, 4u}) {
-                        const uint32_t pages = 3 * stride;
-                        const uint32_t first = first_page * k;
-                        uint32_t c = 0;
-                        if (k == 1) {
-                            c = make_walk<1>(first, pages * k, 0, stride, 2, rot).chunk();
-                        } else {
-                            c = make_walk<4>(first, pages * k, 0, stride, 2, rot).chunk();
-                        }
-                        ASSERT_EQ((c / k) % stride, t) << "stride " << stride << " k " << k << " first " << first;
-                    }
-                }
-            }
-        }
-    }
-}
-
-// The antipode rule as the unicast factory applies it: antipode_split_ok is exactly "the halves partition the
-// slice" wherever the walk tests showed that (tile boundary, tail, equal rots), and antipode_rot_b only ever
-// replaces rot_b where that fails -- after which the halves always partition.
-namespace {
-template <uint32_t K>
-void antipode_rule(uint64_t& changed) {
-    for (uint32_t stride : {2u, 3u, 8u}) {
-        for (uint32_t xfer : {1u, 3u, 7u}) {
-            for (uint32_t pages = 1; pages < 30; ++pages) {
-                const uint32_t count = pages * K;
-                for (uint32_t rf = 0; rf < stride; ++rf) {
-                    for (uint32_t rb = 0; rb < stride; ++rb) {
-                        const auto fw = trace<K>(0, count, 0, stride, xfer, rf);
-                        for (uint32_t h : {count / 2, count / 3, count - count / 4}) {
-                            const uint32_t rb2 = antipode_rot_b(count, h, stride, xfer, K, rf, rb);
-                            changed += rb2 != rb;
-                            ASSERT_TRUE(rb2 == rb || rb2 == rf);
-                            if (antipode_split_ok(count, h, stride, xfer, K, rf, rb)) {
-                                ASSERT_EQ(rb2, rb);
-                            }
-                            std::vector<uint32_t> got(fw.begin(), fw.begin() + h);
-                            const auto bw = trace<K>(0, count, h, stride, xfer, rb2);
-                            got.insert(got.end(), bw.begin(), bw.end());
-                            std::sort(got.begin(), got.end());
-                            std::vector<uint32_t> want(count);
-                            std::iota(want.begin(), want.end(), 0u);
-                            ASSERT_EQ(got, want) << ctx(0, count, h, stride, xfer, K, rf) << " rot_b " << rb2;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-}  // namespace
-
-TEST(AllGatherWalk, AntipodeRule) {
-    uint64_t changed = 0;
-    antipode_rule<1>(changed);
-    antipode_rule<2>(changed);
-    antipode_rule<4>(changed);
-    EXPECT_GT(changed, 0u) << "the rule never had to step in: the sweep proves nothing";
-}
-
-// full_tile_seqnos is the spec's full-tile prefix; walk_seek of a tile boundary is the tile anchor.
+// walk_seek of a full-tile boundary is the tile anchor; of seqno 0 is walk_start.
 TEST(AllGatherWalk, SeekRules) {
     for (uint32_t k : {1u, 2u, 4u}) {
         for (uint32_t stride : {1u, 3u, 8u}) {
@@ -1330,15 +1106,14 @@ TEST(AllGatherWalk, SeekRules) {
                 for (uint32_t pages = 0; pages < 40; ++pages) {
                     const uint32_t count = pages * k;
                     const uint32_t F = full_tiles(count, stride, xfer, k);
-                    ASSERT_EQ(full_tile_seqnos(count, stride, xfer, k), F * stride * xfer);
                     for (uint32_t t = 0; t < F; ++t) {
                         const WalkPos p = walk_seek(8 * k, count, t * stride * xfer, stride, xfer, k);
-                        ASSERT_EQ(p.slot, 0u);
+                        ASSERT_EQ(p.lane, 0u);
                         ASSERT_EQ(p.i, 0u);
                         ASSERT_EQ(p.base, chunk_at(8 * k, 0, t * xfer, stride, k));
                     }
                     const WalkPos z = walk_seek(8 * k, count, 0, stride, xfer, k);
-                    ASSERT_TRUE(z.base == 8 * k && z.slot == 0 && z.i == 0) << "skip 0 is walk_start";
+                    ASSERT_TRUE(z.base == 8 * k && z.lane == 0 && z.i == 0) << "skip 0 is walk_start";
                 }
             }
         }
@@ -1354,13 +1129,51 @@ TEST(AllGatherWalk, RunSourceBits) {
             EXPECT_EQ(s.cross_page, cp);
         }
     }
-    // k = 1 is step 1's rule for cross_page; whole_page no longer needs `packed` (a padded page's own bytes are
-    // contiguous), which only matters for split inputs at stride 1.
+    // cross_page needs `packed`; whole_page does not (a padded page's own bytes are contiguous), which only
+    // matters for split inputs at stride 1.
     EXPECT_TRUE(run_source(true, 1, 1, 8, 8).cross_page);
     EXPECT_FALSE(run_source(false, 1, 1, 8, 8).cross_page);
     EXPECT_TRUE(run_source(false, 1, 4, 8, 1).whole_page);
     EXPECT_FALSE(run_source(true, 1, 4, 8, 8).whole_page);  // split input at stride 8: walk-page runs only
     EXPECT_TRUE(run_source(true, 4, 4, 8, 8).whole_page);   // k = page: in-page runs at any stride
+    // output_run_source: packed against the slot. A padded 32 B chunk in a 64 B page is packed only at slot 64.
+    EXPECT_TRUE(output_run_source(64, 64, 1, 1, 8, 8).cross_page);
+    EXPECT_FALSE(output_run_source(64, 32, 1, 1, 8, 8).cross_page);
+    // input_run_source: with a padded slot, a split input page (cpp > 1) reads one chunk at a time; a one-chunk
+    // input page merges across pages only if its aligned page is the slot, and never runs within a page.
+    EXPECT_FALSE(input_run_source(128, 32, 64, 1, 4, 8, 8).whole_page);
+    EXPECT_FALSE(input_run_source(128, 32, 64, 1, 4, 8, 8).cross_page);
+    EXPECT_FALSE(input_run_source(32, 32, 64, 1, 1, 8, 8).cross_page);
+    EXPECT_TRUE(input_run_source(64, 32, 64, 1, 1, 8, 8).cross_page);
+    EXPECT_FALSE(input_run_source(64, 32, 64, 1, 1, 8, 8).whole_page);
+    // At slot == chunk both reduce to run_source.
+    for (uint32_t k : {1u, 2u}) {
+        for (uint32_t cpp : {k, 2 * k}) {
+            for (uint32_t ps : {1u, 8u}) {
+                for (uint32_t st : {1u, 8u}) {
+                    const RunSource a = input_run_source(cpp * 32, 32, 32, k, cpp, ps, st);
+                    const RunSource b = run_source(true, k, cpp, ps, st);
+                    EXPECT_TRUE(a.whole_page == b.whole_page && a.cross_page == b.cross_page);
+                }
+            }
+        }
+    }
+}
+
+// Slot and stride rules: a padded slot only for one chunk per output page at k = 1; Concat walks at stride 1.
+TEST(AllGatherWalk, SlotAndStrideRules) {
+    EXPECT_TRUE(slot_is_valid(32, 32, 4, 2));
+    EXPECT_TRUE(slot_is_valid(32, 64, 1, 1));
+    EXPECT_FALSE(slot_is_valid(32, 64, 2, 1));  // a shared output page cannot take a padded slot
+    EXPECT_FALSE(slot_is_valid(32, 64, 1, 2));  // nor can a k > 1 chunk
+    EXPECT_FALSE(slot_is_valid(64, 32, 1, 1));  // a slot never shrinks the chunk
+    EXPECT_EQ(walk_stride_for(4, 1, 8), 1u);    // concat (4 walk pages per output page)
+    EXPECT_EQ(walk_stride_for(4, 4, 8), 8u);    // matched at k = 4: the output's page stride
+    EXPECT_EQ(walk_stride_for(1, 1, 140), 140u);
+    static_assert(gather_noc_write_alignment == 16);
+    // choose_k never cuts below the NoC write alignment, whatever the read alignment says.
+    EXPECT_FALSE(k_is_valid(4, 32, 1));
+    EXPECT_TRUE(k_is_valid(2, 32, 1));
 }
 
 // The kernels' run loops themselves (gather_walk.hpp emit_runs / read_input_runs), host-built: their
@@ -1373,11 +1186,12 @@ TEST(AllGatherWalk, PaddedSlotRunLoops) {
         const MockInterleavedAccessor in{banks, chunk};  // matched, L1 input: aligned == chunk
         const MockInterleavedAccessor out{banks, slot};  // DRAM output: 32 B content in a 64 B page
         const uint32_t stride = out.contiguous_page_stride();
-        // WalkGeometry::make: out packed against the slot; in runs only where in_aligned == slot.
-        const RunSource out_src = run_source(out.get_aligned_page_size() == 1 * slot, 1, 1, stride, stride);
-        const RunSource in_src = run_source(in.get_aligned_page_size() == 1 * slot, 1, 1, stride, stride);
+        // As WalkGeometry::make derives them.
+        const RunSource out_src = output_run_source(out.get_aligned_page_size(), slot, 1, 1, stride, stride);
+        const RunSource in_src = input_run_source(in.get_aligned_page_size(), chunk, slot, 1, 1, stride, stride);
         ASSERT_TRUE(out_src.cross_page);
         ASSERT_FALSE(in_src.cross_page);
+        ASSERT_FALSE(in_src.whole_page);
         for (uint32_t rows : {1u, 4u}) {
             const uint32_t count = rows * cps;
             for (uint32_t xfer : {1u, 5u, 16u}) {
@@ -1395,7 +1209,7 @@ TEST(AllGatherWalk, PaddedSlotRunLoops) {
                         const auto m = in.get_bank_and_offset(c);
                         return pack(Loc{m.bank_id, m.bank_page_offset * chunk});
                     };
-                    auto rw = make_walk<1>(0, count, 0, stride, xfer, 0);
+                    auto rw = make_walk<1>(0, count, 0, stride, xfer);
                     auto ww = rw;
                     std::vector<uint32_t> cb_in, cb_out;  // chunk id per CB slot
                     uint64_t out_multi = 0;
@@ -1444,13 +1258,19 @@ TEST(AllGatherWalk, PaddedSlotRunLoops) {
 TEST(AllGatherWalk, ArgTables) {
     namespace ga = gather_args;
     static_assert(ga::unicast_reader::ct::tensor_args == 13);
-    static_assert(ga::unicast_reader::rt::count == 16);
+    static_assert(ga::unicast_reader::rt::count == 15);
     static_assert(ga::unicast_writer::ct::tensor_args == 13);
-    static_assert(ga::unicast_writer::rt::num_granular_sends == 19 && ga::unicast_writer::rt::fabric_args == 22);
+    static_assert(ga::unicast_writer::rt::num_granular_sends == 18 && ga::unicast_writer::rt::fabric_args == 21);
     static_assert(ga::multicast_reader::ct::tensor_args == 17);
-    static_assert(ga::multicast_reader::rt::route_args == 10 && ga::multicast_reader::rt::fabric_args == 22);
+    static_assert(ga::multicast_reader::rt::route_args == 9 && ga::multicast_reader::rt::fabric_args == 21);
     static_assert(ga::multicast_writer::ct::tensor_args == 14);
-    static_assert(ga::multicast_writer::rt::route_args == 8 && ga::multicast_writer::rt::fabric_args == 20);
+    static_assert(ga::multicast_writer::rt::route_args == 7 && ga::multicast_writer::rt::fabric_args == 19);
+    // The route words the host packs (std::array<uint32_t, mcast_route_words>) are what McastRouteArgs reads.
+    static_assert(ga::mcast_route_words == 12);
+    static_assert(
+        ga::multicast_reader::rt::fabric_args - ga::multicast_reader::rt::route_args == ga::mcast_route_words);
+    static_assert(
+        ga::multicast_writer::rt::fabric_args - ga::multicast_writer::rt::route_args == ga::mcast_route_words);
 }
 
 // Host-only: the unicast relay rule (gather_rules.hpp relay_read_ok) and the relay predicate, on the nightly
@@ -1479,6 +1299,21 @@ TEST(AllGatherWalk, RelayRules) {
         EXPECT_EQ(relay_read_ok(c.chunk, c.out_cpp, c.out_aligned_page, c.out_align), c.ok) << c.name;
         EXPECT_EQ(relay_needs_padded_slot(c.chunk, c.out_cpp, c.out_aligned_page), c.padded) << c.name;
     }
+    // At the walk's chunk (k > 1, Matched): out_cpp = k and every chunk offset must stay read-aligned; choose_k cuts
+    // against max(in, out read alignment), so a valid k keeps the relay legal, and a k that cut below the output's
+    // read alignment would not be.
+    for (uint32_t page : {2048u, 4096u, 8192u}) {
+        for (uint32_t align : {16u, 32u, 64u}) {
+            for (uint32_t k = 1; k <= 8; k *= 2) {
+                if (!k_is_valid(k, page, align)) {
+                    continue;
+                }
+                EXPECT_TRUE(relay_read_ok(page / k, k, page, align)) << "page " << page << " k " << k;
+            }
+        }
+    }
+    EXPECT_FALSE(relay_read_ok(32, 2, 64, 64));           // 64 B page cut in two: chunk 1 at +32 is misaligned for 64 B
+    EXPECT_FALSE(relay_read_ok(1024, 4, 4096 + 64, 64));  // a padded page is not tiled by k chunks
     // Relaying topologies: a line from 3 devices, a ring from 4 (N / 2 stripes per direction, the first local).
     EXPECT_FALSE(unicast_relays(2, false));
     EXPECT_TRUE(unicast_relays(3, false));

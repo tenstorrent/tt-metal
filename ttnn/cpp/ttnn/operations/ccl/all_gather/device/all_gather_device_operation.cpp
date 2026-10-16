@@ -344,8 +344,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             num_devices,
             packet_size,
             subdevice_id,
-            sub_core_grid,
-            Tuning::from_env()},  // TEST HOOK — remove before merge
+            sub_core_grid},
         AllGatherInputs{.input_tensor = input_tensor, .persistent_output_tensor = persistent_output_tensor}};
 }
 

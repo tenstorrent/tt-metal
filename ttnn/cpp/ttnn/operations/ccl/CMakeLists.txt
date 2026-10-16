@@ -80,7 +80,6 @@ target_sources(
             all_gather/device/all_gather_device_operation.hpp
             all_gather/device/all_gather_device_operation_types.hpp
             all_gather/device/all_gather_multicast_factory.hpp
-            all_gather/device/all_gather_tuning.hpp # TEST HOOK
             all_gather/device/all_gather_unicast_factory.hpp
             # all_reduce/
             all_reduce/all_reduce.hpp

@@ -14,7 +14,7 @@
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include "all_gather_tuning.hpp"                  // EntryPolicy, XferPolicy, RotationMode
+#include "all_gather_policy.hpp"                  // WalkPolicy, SharedPolicy
 #include "all_gather_device_operation_types.hpp"  // AllGatherParams (route_all_gather)
 #include "kernels/gather_rules.hpp"               // RunSource and the walk's integer rules, shared with the kernels
 
@@ -24,17 +24,19 @@
 // Host-side all_gather geometry, computed once and shared by select_program_factory and both program
 // factories. Two layers:
 //
-//   GatherGeometry -- what the tensors are: copy mode, pages, and counts in *walk pages* (k = 1 chunks). It
-//                     does not depend on k or on any tuning value, so the factories' per-arch heuristics key on
-//                     it and k never perturbs them.
+//   GatherGeometry -- what the tensors are: copy mode, pages, and counts in *walk pages* (the k = 1 unit). It
+//                     does not depend on k or on any policy value, so the per-arch policies (all_gather_policy.hpp)
+//                     key on it and k never perturbs them.
 //   WalkGeometry   -- how the kernels walk it: k, the chunk and CB slot, stride, xfer, run sources, CB entry.
 //                     Every value is in chunks (k included) and goes to the kernels as a CT arg.
 //
 // Glossary (same as kernels/gather_walk.hpp):
 //   input/output page -- one page of the input/output tensor buffer.
-//   walk page         -- min(input page, output page). An input page is in_chunks_per_page walk pages; an
-//                        output page is out_chunks_per_page walk pages.
-//   chunk             -- a walk page / k: the transfer unit.
+//   walk page         -- the k = 1 transfer unit, by copy mode: Matched and Concat walk the input's *aligned* page
+//                        (the kernels read whole aligned input pages; an output page holds
+//                        out_walk_pages_per_page of them), Split walks the output's *content* page (an input page
+//                        holds in_walk_pages_per_page of them).
+//   chunk             -- a walk page / k: the transfer unit (WalkGeometry and the kernels only).
 //   stripe            -- the walk pages (chunks) this device contributes per row of the output.
 //   slice             -- the range one (link, worker) owns, cut in whole input pages.
 ////////////////////////////////////////////////////////////////
@@ -43,59 +45,62 @@ namespace ttnn::operations::ccl {
 
 // Picked by input vs output *content* (unaligned) page sizes.
 //   Matched (in == out): 1 walk page per input page, 1 per output page.
-//   Concat  (out > in) : 1 walk page per input page, out_chunks_per_page > 1; each lands at a byte offset
+//   Concat  (out > in) : 1 walk page per input page, out_walk_pages_per_page > 1; each lands at a byte offset
 //                        within a shared output page.
-//   Split   (in > out) : in_chunks_per_page walk pages per input page, 1 per output page.
+//   Split   (in > out) : in_walk_pages_per_page walk pages per input page, 1 per output page.
 enum class CopyMode : uint8_t { Matched, Concat, Split };
 
-// One (link, worker)'s share of this device's contribution, in walk pages (k = 1 chunks).
-struct Slice {
-    uint32_t first_chunk = 0;
-    uint32_t num_chunks = 0;
+// One (link, worker)'s share of this device's contribution, in walk pages.
+struct WalkPageSlice {
+    uint32_t first = 0;
+    uint32_t count = 0;
+};
+
+// The same share in chunks (walk pages * k): what the kernels walk.
+struct ChunkSlice {
+    uint32_t first = 0;
+    uint32_t count = 0;
 };
 
 struct GatherGeometry {
     CopyMode mode = CopyMode::Matched;
 
     // --- Pages ---
-    uint32_t in_page = 0;          // input content page size (Buffer::page_size)
-    uint32_t in_aligned_page = 0;  // input page as laid out in memory (Buffer::aligned_page_size)
-    uint32_t out_page = 0;         // output content page size
-    uint32_t out_aligned_page = 0;
+    uint32_t in_page = 0;           // input content page size (Buffer::page_size)
+    uint32_t in_aligned_page = 0;   // input page as laid out in memory (Buffer::aligned_page_size)
+    uint32_t out_page = 0;          // output content page size
+    uint32_t out_aligned_page = 0;  // the spec's page aligned to its memory; checked against the buffer (WalkGeometry)
     // NoC read alignment of each side's memory: hal DRAM alignment (64 B Blackhole, 32 B Wormhole) or hal L1
     // alignment (16 B). A chunk must stay a multiple of both (choose_k); the relay reads the output back.
     uint32_t in_read_alignment = 0;
     uint32_t out_read_alignment = 0;
 
-    // --- Walk pages (k = 1 chunks) ---
-    uint32_t chunk_size = 0;           // walk page bytes
-    uint32_t in_chunks_per_page = 1;   // split_factor
-    uint32_t out_chunks_per_page = 1;  // concat ratio
+    // --- Walk pages ---
+    uint32_t walk_page_bytes = 0;
+    uint32_t in_walk_pages_per_page = 1;   // split ratio
+    uint32_t out_walk_pages_per_page = 1;  // concat ratio
     uint32_t num_input_pages = 0;
-    uint32_t num_chunks = 0;         // this device's contribution, in walk pages
-    uint32_t chunks_per_stripe = 0;  // walk pages per stripe row
+    uint32_t num_walk_pages = 0;         // this device's contribution
+    uint32_t walk_pages_per_stripe = 0;  // per stripe row
 
     // --- Predicates ---
-    // The output's aligned page is exactly tiled by walk pages (slot == chunk). Informational since step 3:
-    // nothing routes on it (relay_ok does), the walk derives its own slot-aware version.
-    bool out_packed = false;
-    // Unicast's relay read-back is legal: gather_rules.hpp relay_read_ok() -- the ONE definition. True for
-    // every one-chunk-per-page output (relay_needs_padded_slot widens the CB slot to the output's aligned page
-    // where it is padded), and for Concat only when the page is exactly tiled by chunks AND every chunk offset
-    // is aligned to the output's read alignment. Consumers: route_all_gather (all_gather() and
-    // select_program_factory) and the unicast factory's require_relay_ok().
+    // Unicast's relay read-back is legal at k = 1: gather_rules.hpp relay_read_ok() -- the ONE definition. True for
+    // every one-walk-page-per-page output (relay_needs_padded_slot widens the CB slot to the output's aligned page
+    // where it is padded), and for Concat only when the page is exactly tiled by walk pages AND every walk-page
+    // offset is aligned to the output's read alignment. Consumers: route_all_gather (all_gather() and
+    // select_program_factory) and the unicast factory's require_relay_ok(); the factory re-checks the chunk it
+    // actually walks with WalkGeometry::relay_ok.
     bool relay_ok = false;
-    // The relay needs the padded CB slot (slot = out_aligned_page). The unicast factory forces the padded-slot
-    // walk policy on whenever this holds; the multicast factory keeps it behind TT_AG_TUNING padded_slot.
+    // The relay needs the padded CB slot (slot = out_aligned_page). Unicast's policy turns the padded-slot walk on
+    // always (a no-op wherever this is false); multicast's leaves it off.
     bool relay_needs_padded_slot = false;
 
     // One derivation for everyone: select_program_factory passes the persistent output's spec when there is
     // one, else AllGatherParams::output_spec; the factories pass the output tensor's spec (the same tensor).
     // The aligned output page is the spec's page aligned to its memory's hal alignment, which is what
-    // Buffer::aligned_page_size() gives once the buffer exists.
-    // Also TT_FATALs unless every local device of the mesh reports the mesh allocator's bank count for the
-    // input's and the output's buffer types (require_uniform_bank_counts): the walk stride is derived once on
-    // the host and every device's kernels walk with it.
+    // Buffer::aligned_page_size() gives once the buffer exists (WalkGeometry::make TT_FATALs otherwise).
+    // TT_FATALs unless the larger content page is a whole number of the smaller (route_all_gather's layout check
+    // routes those to composite first).
     static GatherGeometry make(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec, int32_t dim_from_end);
 
     // Unicast-only relay precondition: TT_FATALs unless relay_ok, or `relays` is false (no device reads its
@@ -103,13 +108,13 @@ struct GatherGeometry {
     // FATAL means the op was built through ttnn::prim::all_gather with a hand-made program factory choice.
     void require_relay_ok(bool relays) const;
 
-    // Slice `slice_idx` of `num_slices`. The split is over *input pages*, then scaled by in_chunks_per_page, so
-    // a slice never cuts an input page.
-    Slice slice_of(uint32_t slice_idx, uint32_t num_slices) const;
+    // Slice `slice_idx` of `num_slices`. The split is over *input pages*, then scaled by in_walk_pages_per_page,
+    // so a slice never cuts an input page.
+    WalkPageSlice slice_of(uint32_t slice_idx, uint32_t num_slices) const;
 
     // Walk pages per whole input page (split) or output page (concat); one of the two is always 1.
-    uint32_t chunks_per_group() const {
-        return in_chunks_per_page > out_chunks_per_page ? in_chunks_per_page : out_chunks_per_page;
+    uint32_t walk_pages_per_group() const {
+        return in_walk_pages_per_page > out_walk_pages_per_page ? in_walk_pages_per_page : out_walk_pages_per_page;
     }
 };
 
@@ -131,16 +136,16 @@ std::optional<std::string> gather_dim_padding_reason(const Tensor& input, int32_
 // Everything else, in this order:
 //   1. layout   -- shapes/pages the native kernels cannot address (formerly all_gather.cpp's
 //                  use_composite_all_gather body)                                         -> Composite
-//   2. TT_AG_TUNING factory= (TEST HOOK): forced; TT_FATALs on an illegal force (incl. unicast with
-//                  !relay_ok on a relaying topology)                                      -> forced factory
-//   3. topology -- true 2D                                                                -> Multicast
+//   2. topology -- true 2D                                                                -> Multicast
 //                  bent 2D axis / FABRIC_1D_NEIGHBOR_EXCHANGE (unicast only)              -> Unicast if
 //                  relay_ok || !relays, else TT_FATAL (see the .cpp: composite's all_broadcast multicasts
 //                  N-1 hops, which these topologies forbid, so it is not a fallback there)
-//   4. heuristic (per arch), then unicast only if relay_ok || !relays                     -> Unicast/Multicast
+//   3. heuristic (prefers_unicast, all_gather_policy.hpp), then unicast only if relay_ok || !relays
+//                                                                                         -> Unicast/Multicast
 // `output_spec` is the persistent output's own spec when there is one, else AllGatherParams::output_spec; it feeds
-// the relay rule and the heuristic (what the factories will see). Stage 1 uses AllGatherParams::output_spec, as
-// the old use_composite_all_gather did, so an invalid persistent output still reaches the op's validate.
+// the page checks of stage 1, the relay rule and the heuristic (what the factories will see). Stage 1's shape check
+// uses AllGatherParams::output_spec, so a persistent output of the wrong shape still reaches the op's validate and
+// its specific error rather than composite.
 RouteDecision route_all_gather(
     const AllGatherParams& args, const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
 
@@ -158,15 +163,23 @@ uint64_t per_link_bytes(const tt::tt_metal::TensorSpec& output_spec, uint32_t nu
 // mirror the kernel's value (see the .cpp for why the bank counts agree).
 uint32_t contiguous_page_stride(const tt::tt_metal::Buffer& buffer);
 
-// The walk policies the tuning knobs select (defaults: step-1 behaviour).
-struct WalkPolicy {
-    uint32_t k = 1;  // Tuning::kAutoK = choose_k
-    XferPolicy xfer = XferPolicy::Legacy;
-    EntryPolicy entry = EntryPolicy::Legacy;
-    bool padded_slot = false;
-    RotationMode rotation = RotationMode::None;
+// Its sharded half, on the dspec's shapes in pages: tensor_strides[contiguous_dim()] (dspec.h precompute_strides_ct
+// and TensorAccessor::contiguous_dim). Separate so the host gtest can hold it against a real TensorAccessor.
+uint32_t sharded_contiguous_page_stride(
+    const tt::tt_metal::Shape& tensor_shape_in_pages, const tt::tt_metal::Shape& shard_shape_in_pages);
 
-    static WalkPolicy from(const Tuning& tuning);
+// What WalkGeometry::make needs from the buffers and the hal, gathered so the walk itself is a pure function (the
+// host gtest builds it from these numbers alone).
+struct WalkInputs {
+    uint32_t in_page_stride = 1;           // contiguous_page_stride(input buffer)
+    uint32_t out_page_stride = 1;          // contiguous_page_stride(output buffer)
+    uint32_t out_buffer_aligned_page = 0;  // output Buffer::aligned_page_size(), what the kernels' accessor steps by
+    uint32_t packet_size = 0;              // fabric payload bytes
+    uint32_t burst = 0;                    // hal::get_noc_max_burst_size_bytes()
+    uint32_t run_cap_bytes = 0;            // SharedPolicy::run_cap_bytes
+    uint32_t packets_per_cb_entry = 1;     // SharedPolicy::packets_per_cb_entry (packet-load entry only)
+    uint32_t cb_depth = 2;                 // SharedPolicy::cb_depth (packet-load entry's L1 clamp)
+    uint32_t max_l1_space = 0;             // get_max_l1_space(input) (packet-load entry's L1 clamp)
 };
 
 struct WalkGeometry {
@@ -177,35 +190,35 @@ struct WalkGeometry {
     uint32_t in_cpp = 1;      // input chunks per input page
     uint32_t out_cpp = 1;     // output chunks per output page
     uint32_t cps = 0;         // chunks per stripe row
-    uint32_t stride = 1;      // walk stride: 1 for Concat, else the output's contiguous_page_stride
+    uint32_t stride = 1;      // walk stride (gather_rules.hpp walk_stride_for)
     uint32_t xfer = 1;        // chunks per column
     RunSource in_runs{};      // the input's run source
     RunSource out_runs{};     // the output's run source
     uint32_t chunks_per_entry = 1;
     uint32_t cb_entry_bytes = 0;  // chunks_per_entry * slot_bytes
-    RotationMode rotation = RotationMode::None;
 
-    // `packets_per_cb_entry` and `max_l1_space` only matter for EntryPolicy::Legacy (the factories' tuned value
-    // and get_max_l1_space(input)); Legacy logs the same L1-pressure warning as step 1. `run_cap_bytes` bounds
-    // xfer and is the transfer budget choose_k fills.
+    // The pure walk: k from the policy (kAutoK = choose_k over min(packet, run cap)), slot, stride, xfer, run
+    // sources and the CB entry. TT_FATALs where `in` contradicts `geom` (the output buffer's aligned page), or
+    // the policy asks for something the geometry cannot do. A packet-load entry logs the L1-pressure warning
+    // when max_l1_space clamps packets_per_cb_entry.
+    static WalkGeometry make(const GatherGeometry& geom, const WalkPolicy& policy, const WalkInputs& in);
+
+    // The factories' form: fills WalkInputs from the tensors' buffers and the hal, then also TT_FATALs unless every
+    // local device reports the mesh allocator's bank count for each interleaved side whose runs cross pages (those
+    // runs are linear only if the host's stride is every device's contiguity).
     static WalkGeometry make(
         const GatherGeometry& geom,
-        const tt::tt_metal::Buffer& in,
-        const tt::tt_metal::Buffer& out,
-        uint32_t packet_size,
-        uint32_t run_cap_bytes,
-        const WalkPolicy& policy,
-        uint32_t packets_per_cb_entry,
-        uint32_t cb_depth,
-        uint32_t max_l1_space);
+        const SharedPolicy& policy,
+        const Tensor& input,
+        const Tensor& output,
+        uint32_t packet_size);
 
     // A walk-page slice in chunks.
-    Slice in_chunks(const Slice& s) const { return {s.first_chunk * k, s.num_chunks * k}; }
+    ChunkSlice chunks_of(const WalkPageSlice& s) const { return {s.first * k, s.count * k}; }
 
-    // The rot of slice `slice_idx` of `num_slices` (walk-page slice `s`) in direction `dir` (0 = forward;
-    // multicast passes 0: its reader and writer share one CB, hence one walk). Device-independent, so the
-    // upstream writer and the downstream relaying reader of a stripe always agree.
-    uint32_t rot(const Slice& s, uint32_t slice_idx, uint32_t num_slices, uint32_t dir) const;
+    // relay_read_ok on the chunk this walk actually moves, and the padded slot where the relay needs it: what the
+    // unicast relay reads back. GatherGeometry::relay_ok is the k = 1 form routing uses.
+    bool relay_ok(const GatherGeometry& geom) const;
 };
 
 // Worker cores the op may use: subdevice's TENSIX cores, intersected with sub_core_grid. Pass

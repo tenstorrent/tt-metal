@@ -756,33 +756,16 @@ def test_ag_page_size(
 
 
 ####################################################################################
-# TUNING SCAFFOLD (temporary): env-driven knob sweep, so one build + one pytest
-# process covers many (shape, knob-tuple) cells.
+# SWEEP: env-driven shape x topology sweep on the op's own defaults, so one build + one pytest
+# process covers many cells (profile with tracy, analyse with ag_analyze.py).
 #
 #   AG_SHAPES      comma-separated ids from _SHAPES below     (default "512K,2M,25M")
-#   AG_KNOBS       ';'-separated TT_AG_TUNING strings, one test case each (default "" =
-#                  one case with the op's defaults). An empty entry (or "default") is the
-#                  defaults case. Each entry is "key=value,key=value" with the keys of
-#                  ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_tuning.hpp:
-#                    factory=multicast|unicast  k=auto|<power of 2>  xfer=legacy|segments
-#                    rotation=none|absolute|absolute_dir_stagger
-#                    entry=legacy|scatter_aware|one_packet  padded_slot=0|1  run_cap=<bytes>
-#                    workers=<n>  signals=<n>  mcast_cb_depth=<n>  packet=<bytes>
-#                  e.g. AG_KNOBS="factory=unicast;factory=unicast,rotation=absolute;"
-#   AG_KNOBS_FILE  path to a file with one tuning string per line ('#' comments and blank
-#                  lines ignored; write "default" for the defaults case). Its entries are
-#                  appended to AG_KNOBS's when both are set.
 #   AG_TOPO        ring | linear | both                       (default "ring")
 #   AG_ITERS       profiled iterations                        (default 20)
 #   AG_PACKET      fabric router max packet payload bytes     (default 15232)
 #   AG_CHECK       1 = functional path (no trace, PCC checked) instead of perf
-#
-# The op reads TT_AG_TUNING on every call and the parsed struct is part of the program-cache
-# hash, so test_ag_knobs sets it for the whole case (compile run, trace capture, replays,
-# readback) and restores the previous value afterwards.
 ####################################################################################
 
-import contextlib as _contextlib
 import os as _os
 
 # id -> (output_shape, dim, layout)
@@ -883,90 +866,6 @@ _SHAPES = {
 }
 
 _AG_SHAPE_IDS = [s for s in _os.environ.get("AG_SHAPES", "512K,2M,25M").split(",") if s]
-# Mirror of Tuning::parse (all_gather_tuning.cpp), so a typo fails at collection time instead of
-# after the mesh is opened. Order = Tuning::attribute_names, so equal tunings get equal strings.
-_AG_TUNING_KEYS = {
-    "factory": ("multicast", "unicast"),
-    "k": None,  # "auto" or a power of 2
-    "xfer": ("legacy", "segments"),
-    "rotation": ("none", "absolute", "absolute_dir_stagger"),
-    "entry": ("legacy", "scatter_aware", "one_packet"),
-    "padded_slot": ("0", "1", "true", "false"),
-    "run_cap": None,
-    "workers": None,
-    "signals": None,
-    "mcast_cb_depth": None,
-    "packet": None,
-}
-
-
-def _canonical_ag_tuning(spec):
-    """'rotation = absolute, factory=unicast' -> 'factory=unicast,rotation=absolute'; '' / 'default' -> ''."""
-    spec = spec.strip()
-    if spec.lower() == "default":
-        return ""
-    kv = {}
-    for item in spec.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        if "=" not in item:
-            raise ValueError(f"AG_KNOBS: '{item}' in '{spec}' is not key=value")
-        k, v = (s.strip() for s in item.split("=", 1))
-        if k not in _AG_TUNING_KEYS:
-            raise ValueError(f"AG_KNOBS: unknown key '{k}' in '{spec}' (known: {', '.join(_AG_TUNING_KEYS)})")
-        allowed = _AG_TUNING_KEYS[k]
-        if (allowed is not None and v not in allowed) or (
-            allowed is None and not (v.isdigit() or (k == "k" and v == "auto"))
-        ):
-            want = "|".join(allowed) if allowed else ("auto|<uint>" if k == "k" else "<uint>")
-            raise ValueError(f"AG_KNOBS: {k}={v} in '{spec}' (want {want})")
-        if k in kv:
-            raise ValueError(f"AG_KNOBS: key '{k}' repeated in '{spec}'")
-        kv[k] = v
-    return ",".join(f"{k}={kv[k]}" for k in _AG_TUNING_KEYS if k in kv)
-
-
-def _ag_tuning_id(spec):
-    """Test-id form of a canonical tuning string: 'factory=unicast,run_cap=0' -> 't_factory-unicast+run_cap-0'."""
-    return "t_" + (spec.replace("=", "-").replace(",", "+") if spec else "default")
-
-
-def _load_ag_knobs():
-    entries = []
-    if "AG_KNOBS" in _os.environ or "AG_KNOBS_FILE" not in _os.environ:
-        entries += _os.environ.get("AG_KNOBS", "").split(";")
-    knobs_file = _os.environ.get("AG_KNOBS_FILE")
-    if knobs_file:
-        with open(knobs_file) as fh:
-            lines = [ln.split("#", 1)[0].strip() for ln in fh]
-        entries += [ln for ln in lines if ln]
-    out = []
-    for e in entries:
-        c = _canonical_ag_tuning(e)
-        if c not in out:
-            out.append(c)
-    return out
-
-
-@_contextlib.contextmanager
-def _ag_tuning_env(spec):
-    """Set TT_AG_TUNING to spec ('' -> unset) for the duration, then restore the previous value."""
-    prev = _os.environ.get("TT_AG_TUNING")
-    if spec:
-        _os.environ["TT_AG_TUNING"] = spec
-    else:
-        _os.environ.pop("TT_AG_TUNING", None)
-    try:
-        yield
-    finally:
-        if prev is None:
-            _os.environ.pop("TT_AG_TUNING", None)
-        else:
-            _os.environ["TT_AG_TUNING"] = prev
-
-
-_AG_KNOBS = _load_ag_knobs()
 _AG_ITERS = int(_os.environ.get("AG_ITERS", "20"))
 _AG_TOPO = _os.environ.get("AG_TOPO", "ring")
 _AG_PACKET = int(_os.environ.get("AG_PACKET", "15232"))
@@ -994,55 +893,53 @@ _AG_TOPO_IDS = ["ring", "linear"] if _AG_TOPO == "both" else [_AG_TOPO]
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("shape_id", _AG_SHAPE_IDS)
-@pytest.mark.parametrize("ag_tuning", _AG_KNOBS, ids=_ag_tuning_id)
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [_TOPOS[t] for t in _AG_TOPO_IDS],
     indirect=["device_params"],
     ids=_AG_TOPO_IDS,
 )
-def test_ag_knobs(mesh_device, shape_id, ag_tuning, device_params, all_gather_topology):
+def test_ag_sweep(mesh_device, shape_id, device_params, all_gather_topology):
     ag_output_shape, dim, layout = _SHAPES[shape_id]
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     # AG_CHECK=1 swaps the perf loop for the functional path (no trace, device skew injected,
-    # PCC compared) so the same shape/knob matrix can be used to check correctness.
+    # PCC compared) so the same shape matrix can be used to check correctness.
     check = _os.environ.get("AG_CHECK") == "1"
-
-    logger.info(f"TT_AG_TUNING={ag_tuning!r} ({'defaults' if not ag_tuning else 'override'})")
-    with _ag_tuning_env(ag_tuning):
-        run_all_gather_impl(
-            mesh_device,
-            mesh_device.get_num_devices(),
-            ag_output_shape,
-            dim,
-            2,  # num_links (ignored by the blaze path; it auto-detects)
-            ttnn.bfloat16,
-            layout,
-            mem_config,
-            mem_config,
-            all_gather_topology=all_gather_topology,
-            enable_trace=not check,
-            num_iters=1 if check else _AG_ITERS,
-            use_barrier=False,
-            use_persistent_buffers=True,
-            use_semaphore_free_all_gather_impl=False,
-            skip_check=not check,
-            use_blaze=True,
-        )
+    run_all_gather_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        ag_output_shape,
+        dim,
+        2,  # num_links (ignored by the blaze path; it auto-detects)
+        ttnn.bfloat16,
+        layout,
+        mem_config,
+        mem_config,
+        all_gather_topology=all_gather_topology,
+        enable_trace=not check,
+        num_iters=1 if check else _AG_ITERS,
+        use_barrier=False,
+        use_persistent_buffers=True,
+        use_semaphore_free_all_gather_impl=False,
+        skip_check=not check,
+        use_blaze=True,
+    )
 
 
 ####################################################################################
-# Device cases for the walk-v2 step (functional only; every case compares bit-exactly).
-#   concat_relay_32B_*   concat: 32 B chunks into a packed 256 B DRAM output page on the 8-device line.
-#                        A unicast relay would read 32 B chunks back from DRAM at 32 B offsets, which
-#                        breaks the BH NoC read congruence ((l1 ^ dram) & 63 == 0). Defaults route it to
-#                        multicast; forced unicast must TT_FATAL (relay_read_ok).
-#   bfp8_16x32_*         16x32 bfloat8_b tiles (544 B page, 576 B DRAM aligned page) DRAM -> DRAM.
-#   ring_ragged_*        even ring, row-major, 997 pages per device: per-slice chunk counts are not a
-#                        multiple of xfer * stride, so slices end in a ragged unrotated tail.
-#   nd_sharded_*         ND-sharded output (3 non-unit shard dims) on both factories.
-#   persistent_twice_*   two calls with persistent outputs (and inputs) at different addresses: the
-#                        second is a program-cache hit, so only override_runtime_arguments moves it.
+# Functional device cases (every case compares bit-exactly), on the op's own routing and policies.
+#   concat_relay_32B     concat: 32 B chunks into a packed 128 B DRAM output page on the 8-device line. A
+#                        unicast relay would read 32 B chunks back from DRAM at 32 B offsets, which breaks
+#                        the BH NoC read congruence ((l1 ^ dram) & 63 == 0); routing sends it to multicast.
+#   bfp8_16x32           16x32 bfloat8_b tiles (544 B page, 576 B DRAM aligned page) DRAM -> DRAM on the ring.
+#   ring_ragged_p*K      even ring, row-major, 997 pages per device: per-slice chunk counts are not a
+#                        multiple of xfer * stride, so slices end in a ragged tail; 4 KB rows get k = 2 on BH.
+#   nd_sharded_*         ND-sharded output (3 non-unit shard dims) on the 8-device line (BH: multicast).
+#   nd_sharded_line4_big the same output layout, larger, on a 4-device sub-line: BH routes it to unicast,
+#                        which relays through the sharded output.
+#   persistent_twice_*   two calls with persistent outputs (and inputs) at different addresses: the second is
+#                        a program-cache hit, so only override_runtime_arguments moves it. [1,1,512,4096]
+#                        routes to unicast on the BH 8-ring (2 MB per link), [1,1,128,4096] to multicast.
 ####################################################################################
 
 _LINE_PARAMS = {
@@ -1098,99 +995,67 @@ def _ag_case_check(tt_out, expected, label):
         assert got.shape == expected.shape and torch.equal(got, expected), f"{label}: device {d} mismatch ({pcc})"
 
 
-def _ag_case_simple(mesh_device, tuning, full_shape, dim, layout, dtype, in_mc, out_mc, tile=None):
+def _ag_case_simple(mesh_device, full_shape, dim, layout, dtype, in_mc, out_mc, tile=None):
     torch.manual_seed(0)
     full = torch.randn(full_shape, dtype=torch.float32).to(torch.bfloat16)
     tt_in, expected = _ag_case_input(mesh_device, full, dim, layout, dtype, in_mc, tile)
-    with _ag_tuning_env(tuning):
-        tt_out = ttnn.all_gather(tt_in, dim=dim, memory_config=out_mc)
+    tt_out = ttnn.all_gather(tt_in, dim=dim, memory_config=out_mc)
     ttnn.synchronize_device(mesh_device)
-    _ag_case_check(tt_out, expected, f"TT_AG_TUNING={tuning!r}")
+    _ag_case_check(tt_out, expected, f"all_gather {full_shape} dim {dim}")
 
 
-def _ag_case_persistent_twice(mesh_device, tuning):
-    full_shape, dim = [1, 1, 512, 8 * 512], 3
+def _ag_case_persistent_twice(mesh_device, full_shape):
+    dim = 3
     outs = []
-    with _ag_tuning_env(tuning):
-        for call in range(2):
-            torch.manual_seed(call)
-            full = torch.randn(full_shape, dtype=torch.float32).to(torch.bfloat16)
-            tt_in, expected = _ag_case_input(mesh_device, full, dim, ttnn.TILE_LAYOUT, ttnn.bfloat16, _DRAM_INTERLEAVED)
-            if call == 1:
-                # Shift the allocator so the second input and output land at new addresses.
-                spacer = ttnn.from_torch(
-                    torch.zeros([1, 1, 96, 1024], dtype=torch.bfloat16),
-                    device=mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16,
-                    memory_config=_DRAM_INTERLEAVED,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                )
-            persistent = ttnn.from_torch(
-                torch.zeros(full_shape, dtype=torch.bfloat16),
+    for call in range(2):
+        torch.manual_seed(call)
+        full = torch.randn(full_shape, dtype=torch.float32).to(torch.bfloat16)
+        tt_in, expected = _ag_case_input(mesh_device, full, dim, ttnn.TILE_LAYOUT, ttnn.bfloat16, _DRAM_INTERLEAVED)
+        if call == 1:
+            # Shift the allocator so the second input and output land at new addresses.
+            spacer = ttnn.from_torch(
+                torch.zeros([1, 1, 96, 1024], dtype=torch.bfloat16),
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat16,
                 memory_config=_DRAM_INTERLEAVED,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
-            entries_before = mesh_device.num_program_cache_entries()
-            tt_out = ttnn.all_gather(tt_in, dim=dim, output_tensor=persistent)
-            ttnn.synchronize_device(mesh_device)
-            entries_after = mesh_device.num_program_cache_entries()
-            logger.info(
-                f"call {call}: output buffer 0x{persistent.buffer_address():x}, cache {entries_before}->{entries_after}"
-            )
-            outs.append((tt_out, persistent, expected, persistent.buffer_address(), entries_after - entries_before))
+        persistent = ttnn.from_torch(
+            torch.zeros(full_shape, dtype=torch.bfloat16),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=_DRAM_INTERLEAVED,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        entries_before = mesh_device.num_program_cache_entries()
+        tt_out = ttnn.all_gather(tt_in, dim=dim, output_tensor=persistent)
+        ttnn.synchronize_device(mesh_device)
+        entries_after = mesh_device.num_program_cache_entries()
+        logger.info(
+            f"call {call}: output buffer 0x{persistent.buffer_address():x}, cache {entries_before}->{entries_after}"
+        )
+        outs.append((tt_out, persistent, expected, persistent.buffer_address(), entries_after - entries_before))
     assert outs[0][3] != outs[1][3], "the two persistent outputs must be at different addresses"
     assert outs[1][4] == 0, "the second call must be a program-cache hit (override_runtime_arguments)"
     for call, (tt_out, persistent, expected, _, _) in enumerate(outs):
-        _ag_case_check(persistent, expected, f"TT_AG_TUNING={tuning!r} call {call}")
+        _ag_case_check(persistent, expected, f"persistent {full_shape} call {call}")
 
 
-def _ag_case_expect_fatal(expect_error, message, runner, *args):
-    with expect_error(RuntimeError, message):
-        runner(*args)
-
-
-# id -> (device_params, runner); runner(mesh_device, expect_error) gets the conftest expect_error fixture
+# id -> (device_params, runner); runner(mesh_device)
 _AG_CASES = {
-    # Defaults: the relay rule (relay_read_ok) routes this to multicast, which never reads the output back.
-    "concat_relay_32B_default": (
+    # The relay rule (relay_read_ok) routes this to multicast, which never reads the output back.
+    "concat_relay_32B": (
         _LINE_PARAMS,
-        lambda m, ee: _ag_case_simple(
-            m,
-            "",
-            [1, 1, 4096, 8 * 16],
-            3,
-            ttnn.ROW_MAJOR_LAYOUT,
-            ttnn.bfloat16,
-            _L1_INTERLEAVED,
-            _DRAM_INTERLEAVED,
+        lambda m: _ag_case_simple(
+            m, [1, 1, 4096, 8 * 16], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, _L1_INTERLEAVED, _DRAM_INTERLEAVED
         ),
     ),
-    # Forced unicast cannot relay it: routing must TT_FATAL clearly instead of running and corrupting.
-    "concat_relay_32B_unicast": (
-        _LINE_PARAMS,
-        lambda m, ee: _ag_case_expect_fatal(
-            ee,
-            "TT_AG_TUNING factory=unicast: all_gather unicast cannot relay this output",
-            _ag_case_simple,
-            m,
-            "factory=unicast",
-            [1, 1, 4096, 8 * 16],
-            3,
-            ttnn.ROW_MAJOR_LAYOUT,
-            ttnn.bfloat16,
-            _L1_INTERLEAVED,
-            _DRAM_INTERLEAVED,
-        ),
-    ),
-    "bfp8_16x32_default": (
+    "bfp8_16x32": (
         _RING_PARAMS,
-        lambda m, ee: _ag_case_simple(
+        lambda m: _ag_case_simple(
             m,
-            "",
             [1, 1, 256, 8 * 512],
             3,
             ttnn.TILE_LAYOUT,
@@ -1200,65 +1065,54 @@ _AG_CASES = {
             tile=ttnn.Tile((16, 32)),
         ),
     ),
-    "bfp8_16x32_multicast_padded_slot": (
-        _RING_PARAMS,
-        lambda m, ee: _ag_case_simple(
-            m,
-            "factory=multicast,padded_slot=1",
-            [1, 1, 256, 8 * 512],
-            3,
+    "nd_sharded_line4_big": (
+        _LINE_PARAMS,
+        lambda m: _ag_case_simple(
+            m.create_submesh(ttnn.MeshShape(1, 4)),
+            [2, 4, 512, 256],
+            1,
             ttnn.TILE_LAYOUT,
-            ttnn.bfloat8_b,
+            ttnn.bfloat16,
             _DRAM_INTERLEAVED,
-            _DRAM_INTERLEAVED,
-            tile=ttnn.Tile((16, 32)),
+            _nd_sharded(ttnn.BufferType.DRAM, [1, 2, 64, 128]),
         ),
     ),
 }
-for _page in (1024, 2048):  # 2 KB and 4 KB row-major pages (k=auto gives k=2 at 4 KB on BH)
-    for _tuning in (
-        "factory=unicast",
-        "factory=unicast,xfer=segments",
-        "factory=unicast,k=auto,rotation=absolute_dir_stagger,entry=one_packet,xfer=segments",
-    ):
-        _AG_CASES[f"ring_ragged_p{_page * 2 // 1024}K_{_ag_tuning_id(_tuning)}"] = (
-            _RING_PARAMS,
-            lambda m, ee, p=_page, t=_tuning: _ag_case_simple(
-                m, t, [8, 1, 997, p], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, _DRAM_INTERLEAVED, _DRAM_INTERLEAVED
-            ),
-        )
-for _bt, _bname in ((ttnn.BufferType.L1, "l1"), (ttnn.BufferType.DRAM, "dram")):
-    for _tuning in ("factory=unicast", "factory=multicast"):
-        _AG_CASES[f"nd_sharded_{_bname}_{_ag_tuning_id(_tuning)}"] = (
-            _LINE_PARAMS,
-            lambda m, ee, bt=_bt, t=_tuning: _ag_case_simple(
-                m,
-                t,
-                [2, 8, 128, 256],
-                1,
-                ttnn.TILE_LAYOUT,
-                ttnn.bfloat16,
-                _DRAM_INTERLEAVED,
-                _nd_sharded(bt, [1, 2, 64, 128]),
-            ),
-        )
-for _tuning in ("factory=unicast", "factory=multicast"):
-    _AG_CASES[f"persistent_twice_{_ag_tuning_id(_tuning)}"] = (
+for _page in (1024, 2048):  # 2 KB and 4 KB row-major pages (k = auto gives k = 2 at 4 KB on BH)
+    _AG_CASES[f"ring_ragged_p{_page * 2 // 1024}K"] = (
         _RING_PARAMS,
-        lambda m, ee, t=_tuning: _ag_case_persistent_twice(m, t),
+        lambda m, p=_page: _ag_case_simple(
+            m, [8, 1, 997, p], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, _DRAM_INTERLEAVED, _DRAM_INTERLEAVED
+        ),
     )
-
-_AG_CASE_XFAIL = {}
+for _bt, _bname in ((ttnn.BufferType.L1, "l1"), (ttnn.BufferType.DRAM, "dram")):
+    _AG_CASES[f"nd_sharded_{_bname}"] = (
+        _LINE_PARAMS,
+        lambda m, bt=_bt: _ag_case_simple(
+            m,
+            [2, 8, 128, 256],
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            _DRAM_INTERLEAVED,
+            _nd_sharded(bt, [1, 2, 64, 128]),
+        ),
+    )
+for _shape in ([1, 1, 512, 8 * 512], [1, 1, 128, 8 * 512]):
+    _AG_CASES[f"persistent_twice_{_shape[2]}x{_shape[3]}"] = (
+        _RING_PARAMS,
+        lambda m, sh=_shape: _ag_case_persistent_twice(m, sh),
+    )
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params, case_id",
-    [pytest.param(p, cid, id=cid, marks=_AG_CASE_XFAIL.get(cid, ())) for cid, (p, _) in _AG_CASES.items()],
+    [pytest.param(p, cid, id=cid) for cid, (p, _) in _AG_CASES.items()],
     indirect=["device_params"],
 )
-def test_ag_cases(mesh_device, device_params, case_id, expect_error):
-    _AG_CASES[case_id][1](mesh_device, expect_error)
+def test_ag_cases(mesh_device, device_params, case_id):
+    _AG_CASES[case_id][1](mesh_device)
 
 
 ####################################################################################
@@ -1267,9 +1121,9 @@ def test_ag_cases(mesh_device, device_params, case_id, expect_error):
 # relay-legal and runs unicast).
 #   matched_32B_l1_to_dram       one chunk per output page, padded page: relayed through the padded CB slot
 #   split_32B_out_page           likewise, split into a DRAM width-sharded output
-#   concat_48B_page              concat into a padded, shared output page: no relay possible
+#   concat_48B_page              concat into a padded, shared output page: no relay possible -> multicast
 #   concat_32B_l1_to_128B_dram   packed (128 == 4 x 32) but chunk 1 starts at +32, not a multiple of 64
-# TT_AG_TUNING is read every time the op's params are built, so _ag_tuning_env applies per call.
+#                                -> multicast
 ####################################################################################
 
 
@@ -1285,46 +1139,18 @@ def _relay_cases():
     }
 
 
-_RELAY_FATAL = "TT_AG_TUNING factory=unicast: all_gather unicast cannot relay this output"
-# (case, TT_AG_TUNING, expected error substring or None)
-_RELAY_MATRIX = [
-    # heuristic: unicast where relay_ok (now including the padded-slot cases), else multicast
-    ("matched_32B_l1_to_dram", "", None),
-    ("split_32B_out_page", "", None),
-    ("concat_48B_page", "", None),
-    ("concat_32B_l1_to_128B_dram", "", None),
-    # forced unicast: legal for the padded one-chunk-per-page outputs; a clear TT_FATAL otherwise
-    ("matched_32B_l1_to_dram", "factory=unicast", None),
-    ("split_32B_out_page", "factory=unicast", None),
-    ("concat_48B_page", "factory=unicast", _RELAY_FATAL),
-    ("concat_32B_l1_to_128B_dram", "factory=unicast", _RELAY_FATAL),
-    # forced multicast: always legal on a straight 1D line
-    ("matched_32B_l1_to_dram", "factory=multicast", None),
-    ("concat_32B_l1_to_128B_dram", "factory=multicast", None),
-    # padded slot + other walk knobs on unicast
-    ("matched_32B_l1_to_dram", "factory=unicast,xfer=segments", None),
-    ("matched_32B_l1_to_dram", "factory=unicast,entry=one_packet", None),
-    ("split_32B_out_page", "factory=unicast,rotation=absolute_dir_stagger", None),
-]
+_RELAY_CASES = ["matched_32B_l1_to_dram", "split_32B_out_page", "concat_48B_page", "concat_32B_l1_to_128B_dram"]
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("device_params", [_LINE_PARAMS], indirect=True, ids=["line"])
-@pytest.mark.parametrize(
-    "case, ag_tuning, error",
-    _RELAY_MATRIX,
-    ids=[f"{c}-{_ag_tuning_id(t)}" for c, t, _ in _RELAY_MATRIX],
-)
-def test_ag_relay_routing(mesh_device, device_params, case, ag_tuning, error, expect_error):
+@pytest.mark.parametrize("case", _RELAY_CASES)
+def test_ag_relay_routing(mesh_device, device_params, case):
     if ttnn.get_arch_name() != "blackhole":
         pytest.skip("expectations assume Blackhole's 64 B DRAM read alignment")
     num_devices, full_shape, dim, in_mc, out_mc = _relay_cases()[case]
     submesh = mesh_device.create_submesh(ttnn.MeshShape(1, num_devices))
-    args = (submesh, ag_tuning, full_shape, dim, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, in_mc, out_mc)
-    if error is None:
-        _ag_case_simple(*args)
-    else:
-        _ag_case_expect_fatal(expect_error, error, _ag_case_simple, *args)
+    _ag_case_simple(submesh, full_shape, dim, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, in_mc, out_mc)
 
 
 ####################################################################################

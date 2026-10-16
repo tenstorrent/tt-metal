@@ -21,7 +21,7 @@ set(TTNN_OP_CCL_SRCS
     all_gather/device/all_gather_device_operation.cpp
     all_gather/device/all_gather_geometry.cpp
     all_gather/device/all_gather_multicast_factory.cpp
-    all_gather/device/all_gather_tuning.cpp
+    all_gather/device/all_gather_policy.cpp
     all_gather/device/all_gather_unicast_factory.cpp
     all_reduce/all_reduce.cpp
     all_to_all_combine/all_to_all_combine.cpp

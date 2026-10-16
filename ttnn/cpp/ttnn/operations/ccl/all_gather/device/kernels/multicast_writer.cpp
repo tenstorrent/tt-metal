@@ -29,7 +29,7 @@ void kernel_main() {
     constexpr uint32_t cps = get_compile_time_arg_val(ct::cps);
     constexpr uint32_t num_devices = get_compile_time_arg_val(ct::num_devices);
     constexpr uint32_t cb0_id = get_compile_time_arg_val(ct::cb_id);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(ct::cb_page_size);
+    constexpr uint32_t cb_entry_bytes = get_compile_time_arg_val(ct::cb_entry_bytes);
     constexpr uint32_t packet_size = get_compile_time_arg_val(ct::packet_size);
     constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(ct::alt_routes) != 0;
     constexpr uint32_t num_connections = get_compile_time_arg_val(ct::num_connections);
@@ -41,28 +41,19 @@ void kernel_main() {
     constexpr auto output_tensor_args = TensorAccessorArgs<ct::tensor_args>();
 
     constexpr bool enable_fabric = (num_connections > 0);
-    static_assert(out_cpp % k == 0 && cps % k == 0, "pages and stripes are whole walk pages");
-    static_assert(chunk_size <= slot_bytes && cb_page_size % slot_bytes == 0, "a CB entry is whole slots");
-    static_assert(slot_bytes == chunk_size || (out_cpp == 1 && k == 1), "a padded slot is one chunk per page");
-    static_assert(walk_xfer == 1 || walk_xfer * slot_bytes <= packet_size, "a column fits one packet");
-    static_assert(walk_xfer == 1 || walk_xfer * slot_bytes <= NOC_MAX_BURST_SIZE, "a column is one NoC command");
-    constexpr uint32_t chunks_per_cb_entry = cb_page_size / slot_bytes;
-    // A run is emitted as one scatter chunk starting at its source offset within the packet, so every chunk
-    // size has to keep source and destination NoC-write aligned.
-    static_assert(
-        chunk_size % 16 == 0 && slot_bytes % 16 == 0, "chunk size must be a multiple of the NoC write alignment");
+    check_walk_ct<k, /*in_cpp=*/k, out_cpp, cps, chunk_size, slot_bytes, cb_entry_bytes, walk_xfer, packet_size>();
+    constexpr uint32_t chunks_per_entry = cb_entry_bytes / slot_bytes;
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
     ///////////////////////////////////////////////////
     const address_t output_tensor_address = get_arg_val<address_t>(rt::output_addr);
-    const uint32_t slice_first_chunk = get_arg_val<uint32_t>(rt::slice_first);
-    const uint32_t slice_chunks = get_arg_val<uint32_t>(rt::slice_chunks);
+    const uint32_t slice_first = get_arg_val<uint32_t>(rt::slice_first);
+    const uint32_t slice_count = get_arg_val<uint32_t>(rt::slice_count);
     const uint32_t device_idx = get_arg_val<uint32_t>(rt::device_idx);
     const address_t barrier_sem = get_arg_val<uint32_t>(rt::barrier_sem);
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(rt::barrier_noc_x);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(rt::barrier_noc_y);
-    const uint32_t rot = get_arg_val<uint32_t>(rt::rot);
     size_t arg_idx = rt::route_args;
     const auto route_args = McastRouteArgs::from_args(arg_idx);
     size_t arg_for_fab = arg_idx;
@@ -113,14 +104,13 @@ void kernel_main() {
     // MAIN
     ///////////////////////////////////////////////////
 
-    // The walk stride was derived on the host from this accessor's contiguous_page_stride().
-    ASSERT(out_cpp > k || output_tensor_accessor.contiguous_page_stride() == walk_stride);
-    const RunSource out_src = checked_run_source<k, out_cpp>(out_runs, output_tensor_accessor, walk_stride);
-    const uint32_t slice_end = slice_first_chunk + slice_chunks;
+    check_walk_stride(output_tensor_accessor, k, out_cpp, walk_stride);
+    const RunSource out_src = checked_run_source(out_runs, output_tensor_accessor, k, out_cpp, walk_stride);
+    const uint32_t slice_end = slice_first + slice_count;
 
-    // The reader fills the CB with this same walk (same rot), so every entry holds the same seqnos.
+    // The reader fills the CB with this same walk, so every entry holds the same seqnos.
     TiledWalk<k, walk_stride, walk_xfer> walk;
-    walk.init(slice_end, rot, walk_start(slice_first_chunk));
+    walk.init(slice_end, walk_start(slice_first));
     StripeMap<cps, num_devices> map;
     map.init(device_idx, slice_end);
 
@@ -128,8 +118,8 @@ void kernel_main() {
         return output_tensor_accessor.get_noc_addr(page, off, noc.get_noc_id());
     };
 
-    for (uint32_t chunks_sent = 0; chunks_sent < slice_chunks;) {
-        const uint32_t batch = std::min(chunks_per_cb_entry, slice_chunks - chunks_sent);
+    for (uint32_t chunks_sent = 0; chunks_sent < slice_count;) {
+        const uint32_t batch = std::min(chunks_per_entry, slice_count - chunks_sent);
         cb.wait_front(1);
         emit_runs<out_cpp, chunk_size, slot_bytes>(
             walk,

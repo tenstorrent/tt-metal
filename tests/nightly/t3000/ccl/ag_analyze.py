@@ -5,9 +5,10 @@ Everything (configs, iteration counts, device count) is derived from the CSV its
 
 Method, per config:
   * config key  = topology|layout|dtype|memory|output shape|dim|links|op|pkt<packet_size>[|tuning],
-    all parsed from the INPUT_0_* columns, ATTRIBUTES and OP CODE. `tuning` is the op's
-    TT_AG_TUNING test-hook struct (ATTRIBUTES 'tuning'), printed in TT_AG_TUNING syntax with only
-    the non-default keys ('-' = all defaults). So rows that differ in packet size or tuning never
+    all parsed from the INPUT_0_* columns, ATTRIBUTES and OP CODE. `tuning` exists only in
+    reports from builds that still had the (since removed) all_gather tuning test hook: its
+    ATTRIBUTES 'tuning' struct, printed as key=value with only the non-default keys ('-' = all
+    defaults, and always '-' for current builds). So rows that differ in packet size or tuning never
     pool. The `config` column shows the key without the pkt/tuning parts; they get their own
     `pkt` and `tuning` columns.
   * iteration   = rank of a row within (config, device), ordered by GLOBAL CALL COUNT and
@@ -34,8 +35,8 @@ ATTRIBUTES are listed in a NOTE). verdict = "noise" when |delta| < --min-delta (
 only captures within-run variation, run-to-run drift is larger) OR the two bootstrap 95% CIs of the
 median overlap, else "B faster" / "B slower".
 
---vs-default A/Bs tunings WITHIN one run (e.g. test_ag_knobs, which runs several TT_AG_TUNING variants
-of the same shapes into one report): per (config, pkt) the all-defaults row ('-') is A and every other
+--vs-default A/Bs tunings WITHIN one run (only meaningful for reports from the removed tuning hook,
+where one report held several tuning variants of the same shapes): per (config, pkt) the all-defaults row ('-') is A and every other
 tuning is B, with the same verdict rule. --vs TUNING uses that compact tuning string (exact match, as
 shown in the `tuning` column) as A instead. A summary per B tuning follows: configs faster / slower /
 noise and the geometric-mean delta over the non-noise rows.
@@ -93,11 +94,12 @@ OUT_COLUMNS = [
     "config", "packet_size", "tuning", "ci_lo_us", "ci_hi_us",
 ]  # fmt: skip
 
-# ----------------------------------------------------------------------------- tuning hook
-# ATTRIBUTES prints AllGatherParams::tuning via ttsl reflection, e.g.
-#   Tuning(force_factory=AllGatherAlgorithm::Unicast;rotation=RotationMode::None;...;packet_size_override=std::nullopt)
-# (possibly namespace-qualified; the profiler turns ',' into ';'). Field -> TT_AG_TUNING key, in
-# Tuning::attribute_names order (ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_tuning.hpp).
+# ----------------------------------------------------------------------------- legacy tuning hook
+# Reports from builds with the removed all_gather tuning test hook carry an ATTRIBUTES 'tuning' struct
+# (ttsl reflection, e.g. `<struct>(force_factory=AllGatherAlgorithm::Unicast;...;packet_size_override=std::nullopt)`,
+# possibly namespace-qualified; the profiler turns ',' into ';'). Parsed only so those older reports still
+# key and compare correctly; current builds have no such attribute. Field -> short key, in the hook's
+# field order.
 TUNING_FIELDS = {
     "force_factory": "factory", "walk_k": "k", "xfer_policy": "xfer", "rotation": "rotation", "entry_policy": "entry", "padded_slot": "padded_slot",
     "run_cap_bytes": "run_cap", "workers_per_dir": "workers", "signals_per_stripe": "signals",
@@ -111,7 +113,7 @@ TUNING_FIELD_VALUES = {"walk_k": {"0": "auto"}}
 
 
 def compact_tuning(raw: str | None) -> str:
-    """Reflection string of Tuning -> non-default keys in TT_AG_TUNING syntax ('' = all defaults).
+    """Reflection string of the legacy tuning struct -> non-default keys as key=value ('' = all defaults).
 
     Unparseable input is returned raw (with ';' put back to ',') rather than dropped, so it still
     separates configs."""

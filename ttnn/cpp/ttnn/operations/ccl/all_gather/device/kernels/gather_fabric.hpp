@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "gather_args.hpp"  // mcast_route_words
 #include "gather_packer.hpp"
 
 static_assert(gather_scatter_max_chunks == NOC_SCATTER_WRITE_MAX_CHUNKS, "gather_rules.hpp is out of date");
@@ -120,8 +121,8 @@ private:
 // McastSink
 ////////////////////////////////////////////////////////////////
 
-// The 12 runtime args that describe a worker's multicast routes, in host order: line then rect, each
-// as (hops, hops_alt, dir).
+// The gather_args::mcast_route_words runtime args that describe a worker's multicast routes, in host order: line
+// then rect, each as (hops, hops_alt, dir).
 struct McastRouteArgs {
     uint8_t line_hops, rect_e_hops, rect_w_hops, rect_spine_hops;
     uint8_t line_hops_alt, rect_e_hops_alt, rect_w_hops_alt, rect_spine_hops_alt;
@@ -144,6 +145,7 @@ struct McastRouteArgs {
         return a;
     }
 };
+static_assert(sizeof(McastRouteArgs) == gather_args::mcast_route_words, "one byte per route word");
 
 // Build the line then rect ranges, in connection order (matches the host). Each hop count is placed at
 // its physical slot; an absent branch (hop == 0) is skipped so it can't clobber a live slot.

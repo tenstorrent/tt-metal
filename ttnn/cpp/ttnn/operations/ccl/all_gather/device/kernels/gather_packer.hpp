@@ -58,7 +58,7 @@ public:
     // in L1. The packed CB gives that; a CB with gaps would need a send() here.
     FORCE_INLINE void queue_segment(uint32_t l1_addr, uint64_t remote_noc_addr, uint32_t bytes) {
         if constexpr (oversized) {
-            // A chunk bigger than a packet always walks as a run of one (chunks_per_transfer() is 1 when
+            // A chunk bigger than a packet always walks as a run of one (max_xfer() is 1 when
             // the chunk exceeds the packet), so each segment is exactly one chunk, sent as a train of
             // full packets and a tail -- the same packets the old unicast while-loop sent, but with
             // the tail sent here rather than at the next segment or flush.

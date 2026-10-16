@@ -11,14 +11,15 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"  // tt_fabric::addrgen_detail::get_noc_address
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
 
 #include <cstdint>
 #include <algorithm>
 #include <type_traits>
 
-#include "cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_common.hpp"
-
 using address_t = uint32_t;
+
+namespace fabric_api = tt::tt_fabric::linear::experimental;
 
 // Direct (one-shot) reduce-scatter writer: owns the fabric, sends this core's tile range of local input
 // slice j to device j for every remote j, then writes the locally reduced output slice.

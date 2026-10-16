@@ -5,13 +5,15 @@
 #pragma once
 
 // The all_gather walk's integer rules, shared verbatim by the kernels (via gather_walk.hpp) and the host
-// (all_gather_geometry.cpp, the host gtest). Macro-free and dependency-free on purpose: only <cstdint>, every
-// function constexpr, so both sides compile the same text and nothing is derived twice.
+// (all_gather_geometry.cpp, all_gather_unicast_factory.cpp, the host gtests). Macro-free and dependency-free on
+// purpose: only <cstdint>, every function constexpr, so both sides compile the same text and nothing is derived
+// twice.
 //
 // Units (see gather_walk.hpp for the full glossary):
-//   walk page -- min(input page, output page): the k = 1 chunk.
+//   walk page -- the k = 1 transfer unit: the input's aligned page (Matched, Concat) or the output's content page
+//                (Split).
 //   chunk     -- a walk page / k, the transfer unit. Chunk ids count chunks.
-//   slot      -- a CB slot: chunk bytes, or the output's aligned page under the padded-slot policy.
+//   slot      -- a CB slot: chunk bytes, or the output's aligned page (padded slot).
 //   stride    -- lanes per tile, in walk pages. xfer -- chunks per column.
 
 #include <cstdint>
@@ -22,15 +24,14 @@
 constexpr uint32_t gather_scatter_max_chunks = 4;
 constexpr uint32_t gather_scatter_min_chunks = 2;
 
+// NoC write alignment (NOC_{L1,DRAM}_WRITE_ALIGNMENT_BYTES), 16 B on Wormhole and Blackhole. Every chunk and slot
+// is a multiple of it: a run is sent as one scatter chunk starting at its source offset in the packet, so source
+// and destination must stay write-aligned. The host cannot query it from TTNN (Hal::get_write_alignment is not
+// reachable there), so this one constant serves the host's layout check, choose_k's chunk floor and the kernels'
+// static_asserts (check_walk_ct).
+constexpr uint32_t gather_noc_write_alignment = 16;
+
 namespace gather_rules_detail {
-constexpr uint32_t gcd(uint32_t a, uint32_t b) {
-    while (b != 0) {
-        const uint32_t t = a % b;
-        a = b;
-        b = t;
-    }
-    return a;
-}
 // Chunk id of lane `lane`'s position q (page-major, sub-chunk-minor) in the walk from `first`.
 constexpr uint32_t chunk_at(uint32_t first, uint32_t lane, uint32_t q, uint32_t stride, uint32_t k) {
     return (first / k + lane + (q / k) * stride) * k + q % k;
@@ -41,17 +42,19 @@ constexpr uint32_t lane_len(uint32_t count, uint32_t stride, uint32_t k, uint32_
     const uint32_t pages = count / k;
     return lane < pages ? k * ((pages - lane + stride - 1) / stride) : 0u;
 }
+constexpr uint32_t chunk_align(uint32_t read_align) {
+    return read_align > gather_noc_write_alignment ? read_align : gather_noc_write_alignment;
+}
 }  // namespace gather_rules_detail
 
 ////////////////////////////////////////////////////////////////
-// Transfer size
+// xfer
 ////////////////////////////////////////////////////////////////
 
-// Units of `unit_size` bytes (a chunk, or a padded slot) in one transfer: the most that fits a packet, a single
-// NOC command (`burst` = NOC_MAX_BURST_SIZE / hal::get_noc_max_burst_size_bytes()) and the host's run cap
+// The largest xfer for units of `unit_size` bytes (a chunk, or a padded slot): the most that fits a packet, a
+// single NOC command (`burst` = NOC_MAX_BURST_SIZE / hal::get_noc_max_burst_size_bytes()) and the host's run cap
 // (0 = no cap). At least 1: a unit bigger than the packet is split by the packer.
-constexpr uint32_t chunks_per_transfer(
-    uint32_t packet_size, uint32_t unit_size, uint32_t run_cap_bytes, uint32_t burst) {
+constexpr uint32_t max_xfer(uint32_t packet_size, uint32_t unit_size, uint32_t run_cap_bytes, uint32_t burst) {
     uint32_t cap = packet_size < burst ? packet_size : burst;
     if (run_cap_bytes != 0 && run_cap_bytes < cap) {
         cap = run_cap_bytes;
@@ -60,52 +63,13 @@ constexpr uint32_t chunks_per_transfer(
 }
 
 ////////////////////////////////////////////////////////////////
-// Scatter-segment cap (P6)
-////////////////////////////////////////////////////////////////
-
-// Worst-case walk pages one column touches. Tiles start page-aligned, so a column starts at sub-chunk
-// (t * xfer) % k, which is a multiple of gcd(xfer, k): at most k - gcd into a page.
-constexpr uint32_t column_pages(uint32_t xfer, uint32_t k) {
-    return (xfer + k - gather_rules_detail::gcd(xfer, k) + k - 1) / k;
-}
-
-// Worst-case runs (scatter segments) in one column when a lane's run is guaranteed only `contig_pages`
-// lane pages at a time (at an unknown phase); contig_pages == 0 means unbounded.
-constexpr uint32_t column_segments(uint32_t xfer, uint32_t k, uint32_t contig_pages) {
-    if (contig_pages == 0) {
-        return 1;
-    }
-    const uint32_t pages = column_pages(xfer, k);
-    return (pages - 1 + contig_pages - 1) / contig_pages + 1;
-}
-
-// The simple form: without cross-page runs every walk page in a column is its own segment, so
-// xfer <= max_segments * k. Cross-page runs leave xfer uncapped here (0 = no cap).
-constexpr uint32_t xfer_cap_for_segments(
-    uint32_t k, bool cross_page, uint32_t max_segments = gather_scatter_max_chunks) {
-    return cross_page ? 0u : max_segments * k;
-}
-
-// The general form: the largest xfer <= xfer_max whose worst column holds <= max_segments runs, given
-// `contig_pages` (1 = no cross-page runs; the shortest guaranteed lane run otherwise; 0 = unbounded).
-constexpr uint32_t xfer_for_segments(
-    uint32_t xfer_max, uint32_t k, uint32_t contig_pages, uint32_t max_segments = gather_scatter_max_chunks) {
-    for (uint32_t x = xfer_max; x > 1; --x) {
-        if (column_segments(x, k, contig_pages) <= max_segments) {
-            return x;
-        }
-    }
-    return 1;
-}
-
-////////////////////////////////////////////////////////////////
 // k
 ////////////////////////////////////////////////////////////////
 
 // The smallest power-of-2 k that fills a transfer to >= fill_num / fill_den while the chunk stays a whole
-// number of NoC words (chunk % max(read_align, 16) == 0, chunk * k == page). Falls back to the best-filling
-// valid k. `packet_size` is the transfer budget: pass min(packet, run cap) so a run cap is respected.
-// Fill = floor(cap / chunk) * chunk / cap; a chunk larger than the cap is split by the packer, fill =
+// number of NoC words (chunk % max(read_align, gather_noc_write_alignment) == 0, chunk * k == page). Falls back
+// to the best-filling valid k. `packet_size` is the transfer budget: pass min(packet, run cap) so a run cap is
+// respected. Fill = floor(cap / chunk) * chunk / cap; a chunk larger than the cap is split by the packer, fill =
 // chunk / (packets * cap).
 constexpr uint32_t choose_k(
     uint32_t page,
@@ -115,7 +79,7 @@ constexpr uint32_t choose_k(
     uint32_t max_k = 64,
     uint32_t fill_num = 9,
     uint32_t fill_den = 10) {
-    const uint32_t align = read_align > 16 ? read_align : 16;
+    const uint32_t align = gather_rules_detail::chunk_align(read_align);
     const uint32_t cap = packet_size < burst ? packet_size : burst;
     uint32_t best_k = 1;
     uint64_t best_num = 0, best_den = 1;
@@ -140,8 +104,26 @@ constexpr uint32_t choose_k(
 
 // A legal k for `page`: a power of 2 whose chunk is a whole number of NoC words.
 constexpr bool k_is_valid(uint32_t k, uint32_t page, uint32_t read_align) {
-    const uint32_t align = read_align > 16 ? read_align : 16;
+    const uint32_t align = gather_rules_detail::chunk_align(read_align);
     return k != 0 && (k & (k - 1)) == 0 && page % k == 0 && (page / k) % align == 0;
+}
+
+////////////////////////////////////////////////////////////////
+// Slot and stride
+////////////////////////////////////////////////////////////////
+
+// A CB slot is the chunk, or -- only for one chunk per output page at k = 1 -- the output's padded aligned page,
+// so that L1 steps like the output. Checked by the host (WalkGeometry::make) and the kernels (check_walk_ct).
+constexpr bool slot_is_valid(uint32_t chunk, uint32_t slot, uint32_t out_cpp, uint32_t k) {
+    return slot == chunk || (slot > chunk && out_cpp == 1 && k == 1);
+}
+
+// The walk stride: walk pages between neighbours in memory. Concat packs several walk pages into one output page
+// (out_cpp > k), so neighbours are one walk page apart; otherwise it is the output accessor's
+// contiguous_page_stride(). The host derives it from its mirror of that value; the kernels ASSERT it against
+// their accessor (check_walk_stride).
+constexpr uint32_t walk_stride_for(uint32_t out_cpp, uint32_t k, uint32_t out_page_stride) {
+    return out_cpp > k ? 1u : out_page_stride;
 }
 
 ////////////////////////////////////////////////////////////////
@@ -169,6 +151,31 @@ constexpr RunSource run_source(bool packed, uint32_t k, uint32_t cpp, uint32_t p
     return {whole_page, cross_page};
 }
 
+// The output's run source: packed when its aligned page is exactly its chunks' slots.
+constexpr RunSource output_run_source(
+    uint32_t out_aligned_page, uint32_t slot, uint32_t k, uint32_t out_cpp, uint32_t out_page_stride, uint32_t stride) {
+    return run_source(out_aligned_page == out_cpp * slot, k, out_cpp, out_page_stride, stride);
+}
+
+// The input's run source. A run may merge chunks only where L1 (slot stride) and the input step alike: with a
+// padded slot (slot != chunk) the chunks inside an input page sit at chunk stride, so there is one read per chunk,
+// and in-page runs are off.
+constexpr RunSource input_run_source(
+    uint32_t in_aligned_page,
+    uint32_t chunk,
+    uint32_t slot,
+    uint32_t k,
+    uint32_t in_cpp,
+    uint32_t in_page_stride,
+    uint32_t stride) {
+    if (slot != chunk && in_cpp != 1) {
+        return {false, false};
+    }
+    RunSource s = run_source(in_aligned_page == in_cpp * slot, k, in_cpp, in_page_stride, stride);
+    s.whole_page = s.whole_page && slot == chunk;
+    return s;
+}
+
 // The CT encoding of a RunSource (the host computes it; kernels decode it).
 constexpr uint32_t run_source_bits(RunSource s) { return (s.whole_page ? 1u : 0u) | (s.cross_page ? 2u : 0u); }
 constexpr RunSource run_source_from_bits(uint32_t bits) { return {(bits & 1u) != 0, (bits & 2u) != 0}; }
@@ -180,20 +187,15 @@ constexpr RunSource run_source_from_bits(uint32_t bits) { return {(bits & 1u) !=
 // Where a walk (re)starts. Host-computed by walk_seek(); a walk from seqno 0 is walk_start(first).
 struct WalkPos {
     uint32_t base;  // chunk id of lane 0 at the tile's first position (the tile's anchor)
-    uint32_t slot;  // lane slot in the tile's lane order (lane = slot + rot, wrapped; rot = 0 off full tiles)
+    uint32_t lane;  // lane in the tile
     uint32_t i;     // chunks into the column
 };
 
 constexpr WalkPos walk_start(uint32_t first) { return {first, 0, 0}; }
 
-// Seqnos in the walk's full tiles: they form a prefix, and only they are rotated.
-constexpr uint32_t full_tile_seqnos(uint32_t count, uint32_t stride, uint32_t xfer, uint32_t k) {
-    return (gather_rules_detail::min_lane_len(count, stride, k) / xfer) * stride * xfer;
-}
-
 // The WalkPos of seqno `skip` in the walk of [first, first + count). first and count are whole walk pages.
-// Full tiles in closed form; the clipped tail by a loop. skip == count gives a position past the end.
-// The slot is rot-relative, so the result does not depend on rot.
+// Full tiles (every lane holds xfer chunks) in closed form; the clipped tail by a loop. skip == count gives a
+// position past the end.
 constexpr WalkPos walk_seek(uint32_t first, uint32_t count, uint32_t skip, uint32_t stride, uint32_t xfer, uint32_t k) {
     using namespace gather_rules_detail;
     const uint32_t full = min_lane_len(count, stride, k) / xfer;
@@ -222,48 +224,7 @@ constexpr WalkPos walk_seek(uint32_t first, uint32_t count, uint32_t skip, uint3
 }
 
 ////////////////////////////////////////////////////////////////
-// Rotation (host policy; the kernels only take the resulting rot)
-////////////////////////////////////////////////////////////////
-
-// The absolute lane slice `slice` of `num_slices` should start its full tiles on: slices spread evenly over
-// the stride's lanes, so concurrent workers open different banks. `stagger_dir` offsets direction 1 by half a
-// slice spacing (at least one lane), so a slice's two directions do not start on the same bank either.
-constexpr uint32_t rot_target(uint32_t slice, uint32_t num_slices, uint32_t stride, bool stagger_dir, uint32_t dir) {
-    if (stride <= 1 || num_slices == 0) {
-        return 0;
-    }
-    uint64_t t = (static_cast<uint64_t>(slice) * stride) / num_slices;
-    if (stagger_dir && dir != 0) {
-        const uint32_t half = stride / (2 * num_slices);
-        t += half > 0 ? half : 1u;
-    }
-    return static_cast<uint32_t>(t % stride);
-}
-
-// The rot that starts a walk whose first walk page is `first_page` on absolute lane `target`.
-constexpr uint32_t rot_for_target(uint32_t target, uint32_t first_page, uint32_t stride) {
-    return stride <= 1 ? 0u : (target % stride + stride - first_page % stride) % stride;
-}
-
-// Even ring: forward emits seqnos [0, h) of its walk (rot_f), backward [h, count) of its own (rot_b). The two
-// partition the slice iff rot_f == rot_b, h is on a full-tile boundary, or h is inside the unrotated tail.
-constexpr bool antipode_split_ok(
-    uint32_t count, uint32_t h, uint32_t stride, uint32_t xfer, uint32_t k, uint32_t rot_f, uint32_t rot_b) {
-    if (rot_f == rot_b) {
-        return true;
-    }
-    const uint32_t tile = stride * xfer;
-    return h % tile == 0 || h >= full_tile_seqnos(count, stride, xfer, k);
-}
-
-// rot_b, or rot_f where rot_b would break the even-ring split.
-constexpr uint32_t antipode_rot_b(
-    uint32_t count, uint32_t h, uint32_t stride, uint32_t xfer, uint32_t k, uint32_t rot_f, uint32_t rot_b) {
-    return antipode_split_ok(count, h, stride, xfer, k, rot_f, rot_b) ? rot_b : rot_f;
-}
-
-////////////////////////////////////////////////////////////////
-// Relay (unicast) -- host-only consumers, kept here so the rule is one integer function the gtest can sweep
+// Relay (unicast)
 ////////////////////////////////////////////////////////////////
 
 // Unicast relays by reading back, from this device's own output, what upstream delivered there, into CB
@@ -275,13 +236,13 @@ constexpr uint32_t antipode_rot_b(
 //   out_cpp == 1 -- every chunk is its own output page, which starts aligned. With slot == out_aligned_page
 //                   (the padded slot: relay_needs_padded_slot) every slot is aligned too, and the pad bytes
 //                   ride into the output page's own pad. Legal whenever the chunk fits the page.
-//   out_cpp  > 1 -- (Concat) chunk j sits at j * chunk inside a page *shared with other devices*, so the slot
-//                   cannot be widened (a whole-page relay would clobber a neighbour's chunks): the CB stays at
-//                   chunk stride, which needs the page exactly tiled by chunks (`packed`) and every chunk
-//                   offset aligned (chunk % out_read_alignment == 0).
+//   out_cpp  > 1 -- (Concat, or k > 1) chunk j sits at j * chunk inside the page, which for Concat is *shared with
+//                   other devices*, so the slot cannot be widened (a whole-page relay would clobber a neighbour's
+//                   chunks): the CB stays at chunk stride, which needs the page exactly tiled by chunks (`packed`)
+//                   and every chunk offset aligned (chunk % out_read_alignment == 0).
 //
-// `chunk` is the k = 1 walk page: a k > 1 chunk is cut with choose_k / k_is_valid against max(in, out read
-// alignment), so it stays aligned whenever the walk page is.
+// Routing evaluates it on the k = 1 walk page (GatherGeometry::relay_ok); the unicast factory re-checks it on the
+// chunk it actually walks (WalkGeometry::relay_ok).
 constexpr bool relay_read_ok(uint32_t chunk, uint32_t out_cpp, uint32_t out_aligned_page, uint32_t out_read_alignment) {
     if (chunk == 0 || out_read_alignment == 0) {
         return false;
@@ -298,9 +259,75 @@ constexpr bool relay_needs_padded_slot(uint32_t chunk, uint32_t out_cpp, uint32_
     return out_cpp == 1 && out_aligned_page > chunk;
 }
 
+////////////////////////////////////////////////////////////////
+// Unicast schedule
+////////////////////////////////////////////////////////////////
+
+// Stripes a direction sends from device `dev`: ring -> N / 2; line forward -> dev + 1, backward -> N - dev; 0 at a
+// line's dead end (a sink direction).
+constexpr uint32_t relay_iters(uint32_t num_devices, bool is_ring, uint32_t dev, bool is_forward) {
+    if (is_ring) {
+        return num_devices / 2;
+    }
+    if (is_forward) {
+        return dev + 1 < num_devices ? dev + 1 : 0u;
+    }
+    return dev > 0 ? num_devices - dev : 0u;
+}
+
 // Whether any unicast device reads its output back at all: the most stripes one direction sends is N / 2 on a
 // ring and N - 1 on a line, and only stripes after the first are relayed. With no relay (2 devices; a 3-device
 // ring) the relay rule above does not apply.
 constexpr bool unicast_relays(uint32_t num_devices, bool is_ring) {
     return (is_ring ? num_devices / 2 : (num_devices > 0 ? num_devices - 1 : 0)) > 1;
+}
+
+// One (device, direction, slice)'s part of the store-and-forward schedule, at seqno level. The kernels run it as:
+//   iteration i sends stripe (dev + i * stripe_step) % N, seqnos [skip, skip + take) of the slice's walk, where
+//   (skip, take) = (final_skip, final_take) on the last iteration and (0, slice_count) otherwise; iteration 0 also
+//   writes the same seqnos into our own output iff do_local_write. The reader of iteration i >= 1 waits for
+//   data_valid >= (i - 1) * slice_count + skip + (chunks read so far), and finishes with a wait for total_chunks.
+// The host gtest test_all_gather_schedule.cpp simulates every device and direction from this function: every output
+// chunk written exactly once, no relay read of an unwritten chunk, no deadlock, total_chunks == chunks delivered.
+struct UnicastSchedule {
+    uint32_t num_iters = 0;       // stripes this direction sends; 0 = sink direction
+    uint32_t stripe_step = 0;     // forward N - 1 (i.e. -1), backward +1
+    bool do_local_write = false;  // iteration 0 also writes its seqnos into our own output
+    uint32_t num_granular = 0;    // leading iterations the downstream relays (data_valid at granularity)
+    uint32_t final_skip = 0;      // last iteration: seqnos [final_skip, final_skip + final_take)
+    uint32_t final_take = 0;
+    uint32_t total_chunks = 0;  // chunks upstream delivers into our output: the reader's completion wait
+};
+
+constexpr UnicastSchedule unicast_schedule(
+    uint32_t num_devices, bool is_ring, uint32_t dev, bool is_forward, uint32_t slice_count) {
+    UnicastSchedule s{};
+    // Even ring: the antipode device receives the antipode stripe as halves, one from each direction. The split is
+    // by seqno, not chunk id, so the positions data_valid counts still line up downstream.
+    const bool ring_even_split = is_ring && (num_devices % 2 == 0);
+    const uint32_t fwd_iters = relay_iters(num_devices, is_ring, dev, true);
+    s.num_iters = relay_iters(num_devices, is_ring, dev, is_forward);
+    s.stripe_step = is_forward ? num_devices - 1 : 1u;
+    // Our own stripe goes into our output once: forward writes it unless forward is a sink, then backward does.
+    // On a 2-device ring the one iteration is also the split one, so each direction sends only its half and both
+    // must write it locally.
+    s.do_local_write = is_forward ? fwd_iters > 0 : (fwd_iters == 0 || (ring_even_split && s.num_iters == 1));
+    if (s.num_iters > 0) {
+        // Downstream relays all but its last stripe; a mid-stripe signal to a sink costs ~2% on an 8-device line
+        // (measured), and nothing reads it early.
+        const uint32_t down_dev = is_ring ? 0u : (is_forward ? dev + 1 : dev - 1);
+        const uint32_t down_iters = relay_iters(num_devices, is_ring, down_dev, is_forward);
+        s.num_granular = down_iters > 0 ? down_iters - 1 : 0u;
+    }
+    s.final_take = slice_count;
+    if (ring_even_split) {
+        const uint32_t half = slice_count / 2;
+        s.final_skip = is_forward ? 0u : half;
+        s.final_take = is_forward ? half : slice_count - half;
+    }
+    const uint32_t num_recv = is_ring ? num_devices / 2 : (is_forward ? dev : num_devices - 1 - dev);
+    // The even-ring antipode stripe arrives as a half: the upstream runs this same direction, so it delivers our
+    // final_take, not a whole stripe.
+    s.total_chunks = num_recv * slice_count - (ring_even_split ? slice_count - s.final_take : 0u);
+    return s;
 }

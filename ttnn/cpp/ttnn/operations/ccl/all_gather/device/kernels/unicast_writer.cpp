@@ -11,16 +11,21 @@
 
 #include <cstdint>
 
-#include "unicast_common.hpp"
+#include "gather_walk.hpp"
+#include "gather_noc.hpp"
+#include "gather_args.hpp"
 #include "gather_fabric.hpp"
 
 using address_t = uint32_t;
 
+// Store-and-forward AllGather: every fabric send is a single 1-hop unicast to the neighbor (HopSink in
+// gather_fabric.hpp). Runs on any effectively-1D topology (both Fabric 1D and 2D).
+//
 // Store-and-forward writer: CB consumer, owns all fabric. It only ever sends (never waits on a semaphore --
 // its sole backpressure is wait_front). Each iteration drains the CB and unicasts the stripe one hop to the
 // neighbor's output (same address); iteration 0 also writes this device's local data into local output.
-// Maintains the downstream reader's data_valid (= chunks delivered; see the note in unicast_common.hpp), and
-// sends its one-shot "alive" barrier inc up front.
+// Maintains the downstream reader's data_valid (= chunks delivered; see the protocol note in
+// unicast_reader.cpp), and sends its one-shot "alive" barrier inc up front.
 void kernel_main() {
     namespace ct = gather_args::unicast_writer::ct;
     namespace rt = gather_args::unicast_writer::rt;
@@ -33,7 +38,7 @@ void kernel_main() {
     constexpr uint32_t cps = get_compile_time_arg_val(ct::cps);
     constexpr uint32_t num_devices = get_compile_time_arg_val(ct::num_devices);
     constexpr uint32_t cb0_id = get_compile_time_arg_val(ct::cb_id);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(ct::cb_page_size);
+    constexpr uint32_t cb_entry_bytes = get_compile_time_arg_val(ct::cb_entry_bytes);
     constexpr uint32_t packet_size = get_compile_time_arg_val(ct::packet_size);
     constexpr uint32_t data_valid_granularity = get_compile_time_arg_val(ct::data_valid_granularity);
     constexpr uint32_t k = get_compile_time_arg_val(ct::k);
@@ -43,16 +48,8 @@ void kernel_main() {
     constexpr RunSource out_runs = run_source_from_bits(get_compile_time_arg_val(ct::out_runs));
     constexpr auto output_tensor_args = TensorAccessorArgs<ct::tensor_args>();
 
-    static_assert(out_cpp % k == 0 && cps % k == 0, "pages and stripes are whole walk pages");
-    static_assert(chunk_size <= slot_bytes && cb_page_size % slot_bytes == 0, "a CB entry is whole slots");
-    static_assert(slot_bytes == chunk_size || (out_cpp == 1 && k == 1), "a padded slot is one chunk per page");
-    static_assert(walk_xfer == 1 || walk_xfer * slot_bytes <= packet_size, "a column fits one packet");
-    static_assert(walk_xfer == 1 || walk_xfer * slot_bytes <= NOC_MAX_BURST_SIZE, "a column is one NoC command");
-    constexpr uint32_t chunks_per_cb_entry = cb_page_size / slot_bytes;
-    // A run is emitted as one scatter chunk starting at its source offset within the packet, so every chunk
-    // size has to keep source and destination NoC-write aligned.
-    static_assert(
-        chunk_size % 16 == 0 && slot_bytes % 16 == 0, "chunk size must be a multiple of the NoC write alignment");
+    check_walk_ct<k, /*in_cpp=*/k, out_cpp, cps, chunk_size, slot_bytes, cb_entry_bytes, walk_xfer, packet_size>();
+    constexpr uint32_t chunks_per_entry = cb_entry_bytes / slot_bytes;
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
@@ -61,14 +58,13 @@ void kernel_main() {
     const uint32_t initial_stripe = get_arg_val<uint32_t>(rt::initial_stripe);
     const uint32_t stripe_step = get_arg_val<uint32_t>(rt::stripe_step);
     const uint32_t num_iters = get_arg_val<uint32_t>(rt::num_iters);
-    const uint32_t slice_first_chunk = get_arg_val<uint32_t>(rt::slice_first);
-    const uint32_t slice_chunks = get_arg_val<uint32_t>(rt::slice_chunks);
+    const uint32_t slice_first = get_arg_val<uint32_t>(rt::slice_first);
+    const uint32_t slice_count = get_arg_val<uint32_t>(rt::slice_count);
     const uint32_t final_skip = get_arg_val<uint32_t>(rt::final_skip);
     const uint32_t final_take = get_arg_val<uint32_t>(rt::final_take);
-    const uint32_t rot = get_arg_val<uint32_t>(rt::rot);
     const WalkPos final_pos = {
         get_arg_val<uint32_t>(rt::final_pos_base),
-        get_arg_val<uint32_t>(rt::final_pos_slot),
+        get_arg_val<uint32_t>(rt::final_pos_lane),
         get_arg_val<uint32_t>(rt::final_pos_i)};
     const uint32_t do_local_write = get_arg_val<uint32_t>(rt::do_local_write);
     const address_t barrier_sem = get_arg_val<uint32_t>(rt::barrier_sem);
@@ -132,10 +128,9 @@ void kernel_main() {
     // RUN SETUP
     ///////////////////////////////////////////////////
 
-    // The walk stride was derived on the host from this accessor's contiguous_page_stride().
-    ASSERT(out_cpp > k || output_tensor_accessor.contiguous_page_stride() == walk_stride);
-    const RunSource out_src = checked_run_source<k, out_cpp>(out_runs, output_tensor_accessor, walk_stride);
-    const uint32_t slice_end = slice_first_chunk + slice_chunks;
+    check_walk_stride(output_tensor_accessor, k, out_cpp, walk_stride);
+    const RunSource out_src = checked_run_source(out_runs, output_tensor_accessor, k, out_cpp, walk_stride);
+    const uint32_t slice_end = slice_first + slice_count;
 
     TiledWalk<k, walk_stride, walk_xfer> walk;
     StripeMap<cps, num_devices> map;
@@ -154,18 +149,18 @@ void kernel_main() {
         // An even ring splits the antipode stripe between the two directions. The split is by seqno, not chunk
         // id, so that the positions data_valid counts still line up downstream.
         const uint32_t skip = last ? final_skip : 0;
-        const uint32_t take = last ? final_take : slice_chunks;
+        const uint32_t take = last ? final_take : slice_count;
         // The walk does not stop itself: past the slice it would send another worker's chunks.
-        ASSERT(skip + take <= slice_chunks);
+        ASSERT(skip + take <= slice_count);
         const bool local_copy = (iter == 0) && (do_local_write != 0);
         const bool granular = (iter < num_granular_sends);  // downstream relays this stripe -> signal fine-grained
         map.init(stripe, slice_end);
         // final_pos is the host's walk_seek(final_skip); every other iteration starts at seqno 0.
-        walk.init(slice_end, rot, last ? final_pos : walk_start(slice_first_chunk));
+        walk.init(slice_end, last ? final_pos : walk_start(slice_first));
 
-        uint32_t pending_chunks = 0, pending_pages = 0;
+        uint32_t pending_chunks = 0, pending_entries = 0;
         for (uint32_t chunks_sent = 0; chunks_sent < take;) {
-            const uint32_t batch = std::min(chunks_per_cb_entry, take - chunks_sent);
+            const uint32_t batch = std::min(chunks_per_entry, take - chunks_sent);
             cb.wait_front(1);
             emit_runs<out_cpp, chunk_size, slot_bytes>(
                 walk,
@@ -192,10 +187,10 @@ void kernel_main() {
             cb.pop_front(1);
 
             pending_chunks += batch;
-            if (granular && ++pending_pages == data_valid_granularity) {
+            if (granular && ++pending_entries == data_valid_granularity) {
                 signal(pending_chunks);
                 pending_chunks = 0;
-                pending_pages = 0;
+                pending_entries = 0;
             }
             chunks_sent += batch;
         }
