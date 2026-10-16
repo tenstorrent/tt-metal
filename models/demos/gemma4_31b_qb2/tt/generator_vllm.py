@@ -2,6 +2,10 @@
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Translate vLLM scheduler updates into the Gemma4 TP4 generator's inputs."""
 
+import os
+import json
+import time
+
 import torch
 
 import ttnn
@@ -24,6 +28,7 @@ class Gemma4ForCausalLM:
             "router_config": _router,
         },
     }
+    supports_prefill_history_finality = True
     decode_input_update_contract = 1
     MAX_PREFILL_TOKENS = 8192
 
@@ -100,38 +105,202 @@ class Gemma4ForCausalLM:
         # in-flight prefill tokens globally, in addition to the per-request tails.
         # The plugin separately adds one output page per request.
         tails = Decoder.SLIDING_WINDOW_PAGES * Decoder.PAGE_SIZE * max_num_seqs
-        return 262144 + 5 * (tails + 2 * cls.MAX_PREFILL_TOKENS)
+        pool_tokens = int(os.environ.get("GEMMA_EXPERIMENT_KV_POOL_TOKENS", "262144"))
+        if pool_tokens < 262144 or pool_tokens % Decoder.PAGE_SIZE:
+            raise ValueError("Experimental pool must preserve context and page alignment")
+        return pool_tokens + 5 * (tails + 2 * cls.MAX_PREFILL_TOKENS)
 
     def allocate_kv_cache_per_layer(self, per_layer_specs):
-        pools, kv, scratch = {}, [], {}
+        before = ttnn.get_memory_view(self.generator.mesh, ttnn.BufferType.DRAM)
+        print("KV_POOL_MEMORY " + json.dumps({"phase":"before","banks":before.num_banks,"allocated_per_bank":before.total_bytes_allocated_per_bank,"free_per_bank":before.total_bytes_free_per_bank}), flush=True)
+        if os.environ.get("GEMMA_EXPERIMENT_NATIVE_ALIAS") != "1":
+            raise RuntimeError("Experimental backing reinterpretation requires explicit opt-in")
+        if len(per_layer_specs) != len(self.generator.model.layers):
+            raise ValueError("The allocator must supply exactly one spec per layer")
+        grouped = {}
         for i, (layer, (shape, dtype, pool_id)) in enumerate(zip(self.generator.model.layers, per_layer_specs)):
             if tuple(shape[1:]) != (layer.kv_heads, 128, layer.head_dim) or dtype != torch.bfloat16:
                 raise ValueError(f"Unexpected allocator geometry or accounting dtype: {shape}, {dtype}")
-            key = (pool_id, tuple(shape[1:]))
-            if key not in pools:
-                pools[key] = layer.allocate_cache(physical_pages=shape[0] + self.max_batch_size)
-            kv.append(pools[key])
-            scratch[i] = list(range(shape[0], shape[0] + self.max_batch_size))
-        if len(kv) != len(self.generator.model.layers):
-            raise ValueError("The allocator must supply one spec per layer")
+            grouped.setdefault(pool_id, []).append((i, layer, int(shape[0])))
+        pools, full_views, native_factors, scheduler_bounds = {}, {}, {}, {}
+        for pool_id, members in grouped.items():
+            sizes = {n for _, _, n in members}
+            if len(sizes) != 1 or len(members) != 6 or sum(not layer.sliding for _, layer, _ in members) != 1:
+                raise ValueError("Alias requires one full and five sliding layers with identical global block bounds")
+            n = sizes.pop()
+            if n <= 1:
+                raise ValueError("Alias pool must contain null and live block IDs")
+            wide_layer = next(layer for _, layer, _ in members if layer.sliding)
+            pair = wide_layer.allocate_cache(physical_pages=n + self.max_batch_size)
+            pools[pool_id] = pair
+            full_views[pool_id] = tuple(self._reinterpret_kv_backing(t) for t in pair)
+            if pair[0].buffer_unique_id() == pair[1].buffer_unique_id():
+                raise ValueError("K and V root allocations must be distinct")
+            for i, layer, _ in members:
+                native_factors[i] = 1 if layer.sliding else 2
+                scheduler_bounds[i] = n
+        # Explicit roots outlive every native view and every trace using cache.
+        self._kv_alias_pool_members = {pool: [i for i, _, _ in members] for pool, members in grouped.items()}
+        print("KV_ALIAS_ROOTS " + json.dumps({"pools":len(pools), "roots":[{"pool":str(pool),"root_id":root.buffer_unique_id(),"view_id":full_views[pool][index].buffer_unique_id(),"address":root.buffer_address(),"wide_rows":int(root.shape[0]),"logical_backing_bytes":int(root.shape[0])*128*1088} for pool,pair in pools.items() for index,root in enumerate(pair)]}), flush=True)
+        self._kv_alias_roots = pools
+        self._kv_alias_factors = native_factors
+        self._kv_alias_bounds = scheduler_bounds
+        kv, scratch = [], {}
+        for i, (layer, (shape, dtype, pool_id)) in enumerate(zip(self.generator.model.layers, per_layer_specs)):
+            factor = native_factors[i]
+            kv.append(pools[pool_id] if layer.sliding else full_views[pool_id])
+            scratch[i] = [factor * (int(shape[0]) + j) for j in range(self.max_batch_size)]
         tables = {
             i: torch.zeros(self.max_batch_size, self.max_seq_len // 128, dtype=torch.int32) for i in range(len(kv))
         }
         self.cache = CacheState(
             kv, tables, self.max_batch_size, self.max_seq_len, scratch_pages=scratch, vllm_owned=True
         )
+        after = ttnn.get_memory_view(self.generator.mesh, ttnn.BufferType.DRAM)
+        print("KV_POOL_MEMORY " + json.dumps({"phase":"after","banks":after.num_banks,"allocated_per_bank":after.total_bytes_allocated_per_bank,"free_per_bank":after.total_bytes_free_per_bank,"unique_pools":len(pools),"pool_full_tokens":int(os.environ.get("GEMMA_EXPERIMENT_KV_POOL_TOKENS", "262144"))}), flush=True)
         return self.cache
 
-    def _tables(self, cache, page_tables_per_layer, *, slots=None):
+    @staticmethod
+    def _reinterpret_kv_backing(root):
+        # Experimental pinned-runtime raw tile alias. This does NOT preserve
+        # tensor values under ordinary reshape semantics. Full scheduler IDs
+        # must be doubled, and global group ownership must remain exclusive.
+        shape = tuple(int(x) for x in root.shape)
+        if (len(shape) != 4 or shape[1:] != (4, 128, 256)
+                or root.dtype != ttnn.bfloat8_b or root.layout != ttnn.TILE_LAYOUT
+                or root.memory_config() != ttnn.DRAM_MEMORY_CONFIG
+                or root.buffer_aligned_page_size() != 1088):
+            raise ValueError("Unsupported root backing geometry")
+        view = ttnn.experimental.view(root, [2 * shape[0], 1, 128, 512])
+        if (view.buffer_unique_id() != root.buffer_unique_id()
+                or view.buffer_address() != root.buffer_address()
+                or view.buffer_aligned_page_size() != root.buffer_aligned_page_size()
+                or tuple(view.padded_shape) != (2 * shape[0], 1, 128, 512)):
+            raise RuntimeError("Pinned runtime did not produce the required zero-copy tile alias")
+        return view
+
+    def _audit_alias_consumers(self, sources, ranges):
+        # Diagnostic of actual scheduler-provided pages consumed by this update.
+        # It complements global allocator source proof; it is not an independent
+        # snapshot of every idle hash or every previously submitted device op.
+        began = time.perf_counter()
+        if ranges is None:
+            raise ValueError("Alias diagnostic requires current active token ranges")
+        maximum_full = maximum_sliding = 0
+        for members in self._kv_alias_pool_members.values():
+            full_ids, sliding_ids = set(), set()
+            for i in members:
+                full = self._kv_alias_factors[i] == 2
+                target = full_ids if full else sliding_ids
+                source = sources[i]
+                for row, limits in enumerate(ranges):
+                    if limits is None:
+                        continue
+                    sliding_begin, end = limits
+                    begin_page = 0 if full else sliding_begin // 128
+                    end_page = (end + 127) // 128
+                    target.update(int(v) for v in source[row, begin_page:end_page].tolist() if int(v) > 0)
+            overlap = full_ids & sliding_ids
+            if overlap:
+                raise RuntimeError(f"Full/sliding live consumer block collision: {sorted(overlap)[:16]}")
+            maximum_full = max(maximum_full, len(full_ids))
+            maximum_sliding = max(maximum_sliding, len(sliding_ids))
+        self._alias_audit_count = getattr(self, "_alias_audit_count", 0) + 1
+        self._alias_audit_seconds = getattr(self, "_alias_audit_seconds", 0.0) + time.perf_counter() - began
+        if self._alias_audit_count <= 3 or self._alias_audit_count % 64 == 0:
+            print("KV_ALIAS_CONSUMER_AUDIT " + json.dumps({"calls":self._alias_audit_count,
+                "full_live_ids":maximum_full,"sliding_live_ids":maximum_sliding,
+                "cross_geometry_overlap":0,"host_seconds":self._alias_audit_seconds}), flush=True)
+
+    def _allocation_probe_begin(self):
+        limit = int(os.environ.get("GEMMA_ALLOCATION_EVENT_PROBES", "0"))
+        if not limit or getattr(self, "_allocation_probe_count", 0) >= limit:
+            return
+        histories = getattr(self.cache, "prefill_history", {})
+        required = int(os.environ.get("GEMMA_PEAK_MIN_HISTORIES", str(self.max_batch_size - 1)))
+        if len(histories) < required:
+            return
+        view = ttnn.get_memory_view(self.generator.mesh, ttnn.BufferType.DRAM)
+        self._allocation_probe_active = {"before_bytes":view.total_bytes_allocated_per_bank * view.num_banks,
+            "banks":view.num_banks,"before_block_table":view.block_table,
+            "history_count":len(histories),"started":time.perf_counter()}
+        ttnn._ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+
+    def _allocation_probe_end(self):
+        state = getattr(self, "_allocation_probe_active", None)
+        if state is None:
+            return
+        self._allocation_probe_active = None
+        graph = ttnn._ttnn.graph.end_graph_capture()
+        if isinstance(graph, str):
+            graph = json.loads(graph)
+        events = [e for e in graph if e.get("node_type") in ("buffer_allocate", "buffer_deallocate")]
+        view = ttnn.get_memory_view(self.generator.mesh, ttnn.BufferType.DRAM)
+        after = view.total_bytes_allocated_per_bank * view.num_banks
+        delta, peak = {}, {}
+        for event in events:
+            p = event["params"]
+            if int(p["buffer_type"]) != 0:  # Exclude TRACE (4) from ordinary DRAM.
+                continue
+            device = str(p["device_id"])
+            size = int(p["max_size_per_bank"]) * state["banks"]
+            sign = 1 if event["node_type"] == "buffer_allocate" else -1
+            delta[device] = delta.get(device, 0) + sign * size
+            peak[device] = max(peak.get(device, 0), delta[device])
+        self._allocation_probe_count = getattr(self, "_allocation_probe_count", 0) + 1
+        probe = self._allocation_probe_count
+        result = {"probe":probe,"before_bytes":state["before_bytes"],"after_bytes":after,
+            "history_count":state["history_count"],"delta_by_virtual_device":delta,
+            "peak_extra_by_virtual_device":peak,"event_count":len(events),
+            "boundary_reconciles":bool(delta) and all(v == after-state["before_bytes"] for v in delta.values()),
+            "scope":"one adapter prefill including sampling; common mesh allocator, not independent physical-chip samples",
+            "instrumented_host_seconds":time.perf_counter()-state["started"]}
+        # Preserve raw allocation events and the allocator endpoints for an
+        # independent reconstruction. Chunked lines avoid log line truncation.
+        import base64, hashlib, zlib
+        raw = json.dumps({"summary":result,"before_block_table":state["before_block_table"],
+            "after_block_table":view.block_table,"events":events},separators=(",",":")).encode()
+        encoded = base64.b64encode(zlib.compress(raw)).decode()
+        chunks = [encoded[i:i+12000] for i in range(0,len(encoded),12000)]
+        result.update(raw_sha256=hashlib.sha256(raw).hexdigest(),raw_bytes=len(raw),chunks=len(chunks))
+        print("KV_ALLOCATION_EVENT_PEAK " + json.dumps(result),flush=True)
+        for index, chunk in enumerate(chunks):
+            print("KV_ALLOCATION_EVENT_DATA " + json.dumps({"probe":probe,"index":index,"count":len(chunks),"base64_zlib":chunk}),flush=True)
+
+    def _sample_pool_memory(self, phase):
+        # Host allocator snapshots at operation boundaries: NOT a device peak.
+        started = time.perf_counter()
+        view = ttnn.get_memory_view(self.generator.mesh, ttnn.BufferType.DRAM)
+        allocated = view.total_bytes_allocated_per_bank
+        previous_high = getattr(self, "_pool_observed_high", 0)
+        high = max(previous_high, allocated)
+        self._pool_observed_high = high
+        self._pool_memory_samples = getattr(self, "_pool_memory_samples", 0) + 1
+        self._pool_memory_host_s = getattr(self, "_pool_memory_host_s", 0.0) + time.perf_counter() - started
+        if allocated > previous_high or self._pool_memory_samples % 64 == 0:
+            trace_view = ttnn.get_memory_view(self.generator.mesh, ttnn.BufferType.TRACE)
+            print("KV_POOL_MEMORY_BOUNDARY " + json.dumps({"phase": phase, "banks": view.num_banks,
+                "allocated_per_bank": allocated, "free_per_bank": view.total_bytes_free_per_bank,
+                "trace_allocated_per_bank": trace_view.total_bytes_allocated_per_bank, "trace_banks": trace_view.num_banks,
+                "trace_free_per_bank": trace_view.total_bytes_free_per_bank,
+                "largest_contiguous_free_per_bank": view.largest_contiguous_bytes_free_per_bank,
+                "observed_high_per_bank": high, "samples": self._pool_memory_samples,
+                "query_host_s_total": self._pool_memory_host_s}), flush=True)
+
+    def _tables(self, cache, page_tables_per_layer, *, slots=None, audit_ranges=None):
         if cache is not self.cache:
             raise ValueError("Serving must use the cache allocated by vLLM")
         if page_tables_per_layer is None or len(page_tables_per_layer) != len(cache.kv):
             raise ValueError("Hybrid attention requires a page table for every layer")
+        if os.environ.get("GEMMA_EXPERIMENT_NATIVE_ALIAS_AUDIT") == "1":
+            self._audit_alias_consumers(page_tables_per_layer, audit_ranges)
         result, translated = {}, {}
         for i, source in enumerate(page_tables_per_layer):
             # Share immutable host rows only within this update: vLLM mutates
             # its source tensors in place between scheduler steps.
-            key = id(source)
+            factor = self._kv_alias_factors[i]
+            bound = self._kv_alias_bounds[i]
+            key = (id(source), factor, bound)
             if key not in translated:
                 dest = torch.zeros_like(cache.page_tables[i])
                 rows, cols = source.shape
@@ -142,7 +311,10 @@ class Gemma4ForCausalLM:
                     raise ValueError("Page table has fewer rows than prefill requests")
                 # Prefill rows are compact, then padded to the decode batch.
                 # Scatter only the live prefix into its assigned state slots.
-                dest[indices, :cols] = source[: len(indices)].to(torch.int32).clamp_min(0)
+                live = source[: len(indices)].to(torch.int32).clamp_min(0)
+                if live.numel() and int(live.max()) >= bound:
+                    raise ValueError("Scheduler ID enters private warmup storage")
+                dest[indices, :cols] = live if factor == 1 else live * 2
                 translated[key] = dest
             result[i] = translated[key]
         return result
@@ -184,12 +356,13 @@ class Gemma4ForCausalLM:
         page_tables_per_layer=None,
         start_pos=None,
         empty_slots=None,
+        retain_prefill_history=None,
         **kwargs,
     ):
         starts = [0] * len(prompt_lens) if start_pos is None else [int(x) for x in start_pos]
         lengths = [int(x) for x in prompt_lens]
         slots = list(range(len(lengths))) if empty_slots is None else list(empty_slots)
-        tables = self._tables(kv_cache, page_tables_per_layer, slots=slots)
+        tables = self._tables(kv_cache, page_tables_per_layer, slots=slots, audit_ranges=[(max(0, (start // 128) * 128 - 1024), end) for start, end in zip(starts, lengths)])
         self.entry = None
         # Prefix pages can be shared by several live requests. History belongs
         # to a request's stable state slot, never to a shared physical page.
@@ -199,20 +372,27 @@ class Gemma4ForCausalLM:
                 self.prefill_slot_keys[slot] = self.next_prefill_key
                 self.next_prefill_key += 1
             keys.append(self.prefill_slot_keys[slot])
-        outputs = self.generator.prefill_forward(
-            tokens,
-            page_table=tables,
-            kv_cache=kv_cache,
-            prompt_lens=lengths,
-            slots=slots,
-            return_device=sampling_params is not None,
-            start_positions=starts,
-            history_keys=keys,
-        )
-        if sampling_params is None:
-            return outputs
-        params = self._sampling(sampling_params, len(lengths), [n - 1 for n in lengths])
-        return self.generator.sample_prefill_outputs(outputs, kv_cache, params)
+        self._allocation_probe_begin()
+        try:
+            self._sample_pool_memory("before_prefill")
+            outputs = self.generator.prefill_forward(
+                tokens,
+                page_table=tables,
+                kv_cache=kv_cache,
+                prompt_lens=lengths,
+                slots=slots,
+                return_device=sampling_params is not None,
+                start_positions=starts,
+                history_keys=keys,
+                retain_prefill_history=retain_prefill_history,
+            )
+            self._sample_pool_memory("after_prefill")
+            if sampling_params is None:
+                return outputs
+            params = self._sampling(sampling_params, len(lengths), [n - 1 for n in lengths])
+            return self.generator.sample_prefill_outputs(outputs, kv_cache, params)
+        finally:
+            self._allocation_probe_end()
 
     def decode_forward(
         self,
@@ -242,7 +422,7 @@ class Gemma4ForCausalLM:
             raise ValueError("Serving must use the cache allocated by vLLM")
         sample = sampling_params is not None
         if reload_inputs:
-            tables = self._tables(kv_cache, page_tables_per_layer)
+            tables = self._tables(kv_cache, page_tables_per_layer, audit_ranges=[(max(0, int(pos) - 1023), int(pos) + 1) if int(pos) >= 0 else None for pos in start_pos])
             # A row entering decode no longer needs its private prefill tail.
             # The plugin notifies slot moves after submission succeeds, so
             # histories still use source slots when a decode row is gathered.
@@ -251,10 +431,11 @@ class Gemma4ForCausalLM:
                     slot = row if slot_remap is None else int(slot_remap[row])
                     self.release_request(slot)
             self.entry = self.generator.prepare_decode(tokens, start_pos, page_table=tables, kv_cache=kv_cache)
+            self._sample_pool_memory("after_prepare_decode")
         elif self.entry is None or self.generator.traces.get(id(kv_cache)) is not self.entry:
             raise ValueError("A retired decode trace requires current scheduler inputs")
         elif reload_page_table:
-            tables = self._tables(kv_cache, page_tables_per_layer)
+            tables = self._tables(kv_cache, page_tables_per_layer, audit_ranges=[(max(0, int(pos) - 1023), int(pos) + 1) if int(pos) >= 0 else None for pos in start_pos])
             self.generator._tables(kv_cache, tables)
         if sample and (reload_sampling_params or reset_sampling_state):
             params = self._sampling(sampling_params, self.max_batch_size, start_pos, reset_seed=reset_sampling_state)

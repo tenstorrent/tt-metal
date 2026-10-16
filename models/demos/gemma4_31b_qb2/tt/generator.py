@@ -6,6 +6,7 @@ The optimized loop replays two traces. Only the sampling trace writes the next
 token; position advances in the model trace. Host sampling is opt-in compatibility.
 """
 
+import json
 import math
 import time
 from dataclasses import dataclass, field
@@ -49,6 +50,9 @@ class Gemma4Generator:
         self.initial_capacity = max_seq_len
         self.states = {}
         self.traces = {}
+        # Keep explicit decode/sampler IO across conservative trace retirement.
+        # The next capture gets a new entry object, so old handles stay invalid.
+        self._entry_storage = None
         self.prefill_shapes = set()
         self.counters = {
             k: 0
@@ -84,6 +88,7 @@ class Gemma4Generator:
         if not 1 <= batch <= 32 or not 1 <= capacity <= self.max_seq_len:
             raise ValueError("Expected batch1..32 and context1..262144")
         self._retire_traces()
+        self._entry_storage = None
         # All accepted decode SDPA chunks are64/128: one128-token page covers
         # the rounded read window. No power-of-two capacity restriction.
         pages = (capacity + 127) // 128
@@ -363,6 +368,7 @@ class Gemma4Generator:
         return_device=False,
         start_positions=None,
         history_keys=None,
+        retain_prefill_history=None,
         **kwargs,
     ):
         state = kv_cache
@@ -381,13 +387,19 @@ class Gemma4Generator:
         self._validate_tokens(tokens)
         if any(not isinstance(n, int) or not 0 < n <= min(state.capacity, tokens.shape[1]) for n in prompt_lens):
             raise ValueError("Invalid logical prompt length")
+        if retain_prefill_history is not None:
+            if history_keys is None or len(retain_prefill_history) != len(prompt_lens) or any(
+                type(flag) is not bool for flag in retain_prefill_history
+            ):
+                raise ValueError("Expected one explicit history retention bool per prefill row")
         starts = [0] * len(prompt_lens) if start_positions is None else list(start_positions)
         if len(starts) != len(prompt_lens) or any(s < 0 or s >= n for s, n in zip(starts, prompt_lens)):
             raise ValueError("Prefill must advance each request from its current position")
         shape_key = (state.batch, state.capacity, tuple(prompt_lens), tuple(starts), bool(return_all_logits))
-        if shape_key not in self.prefill_shapes:
-            # A new prefill signature may create cached protocol semaphores or
-            # norm buffers. Retire old traces before those persistent allocations.
+        if history_keys is not None or shape_key not in self.prefill_shapes:
+            # Request histories allocate persistent K/V tails even for a seen
+            # signature. Unseen signatures can also allocate native cached state.
+            # Both must be created before the next trace capture.
             self._retire_traces()
         self._tables(state, page_table)
         outputs = []
@@ -417,17 +429,26 @@ class Gemma4Generator:
                             f"key={key}, saved_end={previous['end']}, start={start}"
                         )
                     rewind = start - aligned_start
-                    histories = []
-                    for tail in previous["layers"]:
+                    # Never leave a partially consumed list under its old end
+                    # position if a later device operation raises. Successful
+                    # prefill publishes the completed history below.
+                    state.prefill_history.pop(key, None)
+                    # This request owns the list; other requests never borrow it.
+                    # Replace each consumed tail as soon as its CQ0 slice has
+                    # been enqueued. Bank tensors may have another root owner,
+                    # so use normal reference release, never forced deallocation.
+                    histories = previous["layers"]
+                    for index, tail in enumerate(histories):
                         if tail is None:
-                            histories.append(None)
                             continue
                         valid = tail[0].shape[2] - rewind
                         if valid == 0:
-                            histories.append(None)
-                            continue
-                        begin = max(0, valid - 1024)
-                        histories.append(tuple(t[:, :, begin:valid, :] for t in tail))
+                            histories[index] = None
+                        else:
+                            begin = max(0, valid - 1024)
+                            histories[index] = tuple(t[:, :, begin:valid, :] for t in tail)
+                        del tail
+                    del previous
             ids = torch.zeros(1, (chunk_length + 31) // 32 * 32, dtype=torch.int32)
             ids[0, :chunk_length] = tokens[row, aligned_start:length]
             tt_ids = self._upload(ids, ttnn.uint32)
@@ -455,7 +476,14 @@ class Gemma4Generator:
                 histories=histories,
             )
             if history_keys is not None:
-                state.prefill_history[history_keys[row]] = {"end": length, "layers": histories}
+                if retain_prefill_history is None or retain_prefill_history[row]:
+                    state.prefill_history[history_keys[row]] = {"end": length, "layers": histories}
+                else:
+                    state.prefill_history.pop(history_keys[row], None)
+                # Final prefill rows cannot consume BF16 chunk tails again.
+                # Native KV owners persist; CQ0 orders all preceding consumers
+                # before later allocations may reuse these tail addresses.
+                del histories
             outputs.append(
                 out if return_device else self._host_logits(out).reshape(1, -1, self.model.config.vocab_size)
             )
@@ -518,61 +546,95 @@ class Gemma4Generator:
                     "Captured cache/table tensors were replaced; retire traces before replacing backing storage"
                 )
             return self.traces[key]
+        trace_entry_start = time.perf_counter()
         self._retire_traces()
+        cache_ids = tuple(id(t) for pair in state.kv for t in pair)
+        table_ids = {k: id(v) for k, v in state.device_tables.items()}
+        cache_buffer_ids = tuple(t.buffer_unique_id() for pair in state.kv for t in pair)
+        table_buffer_ids = {k: v.buffer_unique_id() for k, v in state.device_tables.items()}
+        storage = self._entry_storage
+        if (storage is None or storage["state"] is not state or
+                storage["cache_ids"] != cache_ids or storage["table_ids"] != table_ids or
+                storage["cache_buffer_ids"] != cache_buffer_ids or
+                storage["table_buffer_ids"] != table_buffer_ids):
+            storage = {
+                "state": state,
+                "cache_ids": cache_ids,
+                "table_ids": table_ids,
+                "cache_buffer_ids": cache_buffer_ids,
+                "table_buffer_ids": table_buffer_ids,
+                "tokens": self._upload(torch.zeros(1, 1, 1, 32, dtype=torch.int32), ttnn.uint32),
+                "positions": self._upload(torch.zeros(state.batch, dtype=torch.int32)),
+                "rope_positions": self._upload(torch.zeros(state.batch, dtype=torch.int32)),
+                "logits": self.model.tensor(
+                    torch.zeros(1, 1, 32, self.model.config.vocab_size),
+                    dim=3,
+                    dtype=ttnn.bfloat16,
+                ),
+            }
+            self._entry_storage = storage
+            prepared = False
+        else:
+            prepared = True
         entry = {
-            "tokens": self._upload(
-                torch.zeros(1, 1, 1, 32, dtype=torch.int32),
-                ttnn.uint32,
-            ),
-            "positions": self._upload(torch.zeros(state.batch, dtype=torch.int32)),
-            "rope_positions": self._upload(torch.zeros(state.batch, dtype=torch.int32)),
-            "logits": self.model.tensor(
-                torch.zeros(1, 1, 32, self.model.config.vocab_size),
-                dim=3,
-                dtype=ttnn.bfloat16,
-            ),
+            **storage,
             "state": state,
             "cache_owners": tuple(t for pair in state.kv for t in pair),
             "table_owners": tuple(state.device_tables.values()),
-            "cache_ids": tuple(id(t) for pair in state.kv for t in pair),
-            "table_ids": {k: id(v) for k, v in state.device_tables.items()},
             "remaining_steps": 0,
         }
-        for kind, table in state.device_tables.items():
-            scratch_table = (
-                torch.tensor(state.scratch_pages[kind])[:, None]
-                .expand(state.batch, state.capacity // 128)
-                .int()
-                .contiguous()
-            )
-            self._refresh(scratch_table, table, "page_table_refreshes")
-        logger.info("Warming model trace")
-        self._model_step(entry, state)
-        logger.info("Warming sampling trace")
-        # Setup must not consume a caller's random stream. Preserve the actual
-        # on-device seed state even if a previous request already advanced it.
-        saved_seeds = ttnn.clone(self.sampler.seeds_tt_tensor)
-        self._sample_step(entry)
-        ttnn.copy(saved_seeds, self.sampler.seeds_tt_tensor)
-        ttnn.synchronize_device(self.mesh)
-        ttnn.deallocate(saved_seeds)
-        self.counters["synchronizations"] += 1
+        if not prepared:
+            for kind, table in state.device_tables.items():
+                scratch_table = (
+                    torch.tensor(state.scratch_pages[kind])[:, None]
+                    .expand(state.batch, state.capacity // 128)
+                    .int()
+                    .contiguous()
+                )
+                self._refresh(scratch_table, table, "page_table_refreshes")
+            logger.info("Warming model trace")
+            self._model_step(entry, state)
+            logger.info("Warming sampling trace")
+            # Setup must not consume a caller's random stream. Preserve the actual
+            # on-device seed state even if a previous request already advanced it.
+            saved_seeds = ttnn.clone(self.sampler.seeds_tt_tensor)
+            self._sample_step(entry)
+            ttnn.copy(saved_seeds, self.sampler.seeds_tt_tensor)
+            ttnn.synchronize_device(self.mesh)
+            ttnn.deallocate(saved_seeds)
+            self.counters["synchronizations"] += 1
+        else:
+            # Prefill can still be queued after conservative retirement.
+            ttnn.synchronize_device(self.mesh)
+            self.counters["synchronizations"] += 1
         for kind, table in state.device_tables.items():
             self._refresh(state.uploaded_tables[kind], table, "page_table_refreshes")
         self._refresh(torch.zeros(state.batch, dtype=torch.int32), entry["positions"], "position_refreshes")
         self._refresh(torch.zeros(state.batch, dtype=torch.int32), entry["rope_positions"], "rope_refreshes")
         self._refresh(torch.zeros(1, 1, 1, 32, dtype=torch.int32), entry["tokens"], "token_refreshes")
-        logger.info("Capturing model trace")
-        with corruptible_allocation_scope(self.mesh):
-            entry["model_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
-            self._model_step(entry, state)
-            ttnn.end_trace_capture(self.mesh, entry["model_trace"], cq_id=0)
-        logger.info("Capturing sampling trace")
-        with corruptible_allocation_scope(self.mesh):
-            entry["sampling_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
-            self._sample_step(entry)
-            ttnn.end_trace_capture(self.mesh, entry["sampling_trace"], cq_id=0)
+        programs_before = self.mesh.num_program_cache_entries()
+        self.mesh.set_program_cache_misses_allowed(False)
+        try:
+            logger.info("Capturing model trace")
+            with corruptible_allocation_scope(self.mesh):
+                entry["model_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                self._model_step(entry, state)
+                ttnn.end_trace_capture(self.mesh, entry["model_trace"], cq_id=0)
+            logger.info("Capturing sampling trace")
+            with corruptible_allocation_scope(self.mesh):
+                entry["sampling_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                self._sample_step(entry)
+                ttnn.end_trace_capture(self.mesh, entry["sampling_trace"], cq_id=0)
+        finally:
+            # Unseen eager prefill shapes still need to compile before the
+            # existing conservative prefill retirement and next capture.
+            self.mesh.set_program_cache_misses_allowed(True)
+        programs_after = self.mesh.num_program_cache_entries()
+        if programs_before != programs_after:
+            raise RuntimeError("Native program cache grew during trace capture")
         self.traces[key] = entry
+        logger.info("TRACE_ENTRY_COST " + json.dumps({"seconds": time.perf_counter() - trace_entry_start,
+            "prepared": prepared, "programs_before": programs_before, "programs_after": programs_after}))
         return entry
 
     def replay(self, entry, *, sample=True):
@@ -768,6 +830,7 @@ class Gemma4Generator:
 
     def close(self):
         self._retire_traces()
+        self._entry_storage = None
 
 
 def build_generator(mesh_device, *, checkpoint=None, layer_indices=None, max_seq_len=2048):

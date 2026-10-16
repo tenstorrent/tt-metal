@@ -1,0 +1,12 @@
+{
+  "research_only": true,
+  "upstream_supported_width_changing_view": false,
+  "files": {
+    "sdpa_l1.py": "473d098d7cdf97e81e323c0c93b9308b3b77173f257c32a8d4646252f0c75710",
+    "generator_vllm.py": "e93d40c99bacc8ff05cb77d6181c0ace9329b911d9e45e8b74a62ae43a9f8fd4",
+    "model.py": "f7a4035f61b5e9744d474214879fc50604d3d1e1e50ac3240ac1dfbf7f199797",
+    "decoder.py": "a49b0c99633683c876a0e894bc16dfbacd1a78166d822382cf1638acd5e964bf",
+    "generator.py": "7598886c36e3df61adac78cbe55f0a5e98be7b27307415ed6d423d449855c7e5",
+    "__init__.py": "d0926f1fbdd7958aba9856477e9997552f2d67e75e4412955b9df1f47a98f159"
+  }
+}
