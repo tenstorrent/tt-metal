@@ -72,31 +72,39 @@ the env config value. The delegate fix makes the whole process consistent.
 | 3-mesh **M_Y=TORUS_Y + M_X=TORUS_X + M_Y=TORUS_Y** | `topology: Torus` | ✅ intra+inter, 2 executed 0 failed (all ranks), exit 0 |
 | 4-config **TORUS_XY + TORUS_X + TORUS_Y + FABRIC_2D** (incl. **mesh↔torus** boundaries) | `topology: Torus` | ✅ 2 executed 0 failed (all 4 ranks), exit 0 |
 | **2×4 mesh split across 2 processes** (TORUS_X) + TORUS_Y mesh | `topology: Torus` | ✅ 2 executed 0 failed, exit 0 |
+| **4×4 TORUS_X split across 2 processes** + 2×2 TORUS_Y + 2×2 FABRIC_2D, all inter-linked (`single_galaxy_bigmesh_multirank_combo`) | `topology: Torus` | ✅ 2 executed 0 failed (all 4 ranks incl. both 4×4 halves), intra+inter, exit 0 |
 | single M_X 2×4 TORUS_X, **direct** `topology: TorusX` | TORUS_X | ✅ pass |
 | single M_X 2×4 TORUS_X, `topology: Mesh`+adopt (pre-delegate-fix) | Mesh→adopt | ❌ hung (the bug) |
 
 The warning fires as designed, e.g. *"Fabric config set in two places: SetFabricConfig requested
 FABRIC_2D_TORUS_XY, but the MGD declares FABRIC_2D_TORUS_Y for mesh 2 … MGD takes precedence."*
 
-#### Characterized out-of-scope limitation — multi-host **4×4** TORUS_X intra-mesh traffic hangs (NOT a per-mesh-config bug)
-A deliberate stress MGD (`single_galaxy_bigmesh_multirank_combo`: a **4×4** TORUS_X mesh split across 2
-host ranks + a 2×2 TORUS_Y + a 2×2 FABRIC_2D, all inter-linked) **hangs**, but the hang is isolated to the
-**multi-host torus data path at scale**, not the per-mesh config logic:
-- With global sync off, ranks 2 & 3 (the single-host 2×2 TORUS_Y and FABRIC_2D meshes) **finish** the
-  intra-mesh neighbor exchange; ranks 0 & 1 (the two halves of the 4×4 TORUS_X mesh) stall at
-  *"Waiting for programs"*.
-- The **identical topology at 2×4** (same TORUS_X, same 1×2 host split, same per-mesh configs) **passes**
-  (row above). The only change is the non-ring LINE dim 2→4 (8→16 chips), i.e. pure scale — so this is a
-  multi-host TORUS_X **routing-plane/placement** issue (`control_plane.cpp:1683` warns *"4 eth channels,
-  but only 2 routing planes available"* on the 4×4 mesh), independent of per-mesh heterogeneous config.
-- With global sync **on**, the test infra aborts earlier in `TestDevice::register_fabric_connection`
-  (*"No active fabric eth channels in direction …"*, `tt_fabric_test_device_setup.cpp:729`) — the global
-  sync pattern picks a wrap direction that does not exist on every node of a heterogeneous+split topology;
-  that is a **test-harness** limitation, also orthogonal to the product.
+#### The 4×4 multirank+multimesh combo PASSES — earlier "hang" was a test-harness error (CORRECTION)
+An earlier revision of this report wrongly characterized the `single_galaxy_bigmesh_multirank_combo` MGD
+(4×4 TORUS_X split across 2 host ranks + 2×2 TORUS_Y + 2×2 FABRIC_2D, all inter-linked) as a multi-host
+4×4-torus *scale hang*. That was a **methodology error in the test yaml, not a fabric bug.** A full debug
+on BH galaxy established:
+- The "stall at *Waiting for programs*" happened only because the probe yaml used **`fabric_setup.topology:
+  Mesh`** on a TORUS_X fabric. `test_tt_fabric` derives the packet routing style from the **yaml topology**
+  (`is_torus_2d_unicast`, `tt_fabric_test_device_setup.cpp:482`), so `topology: Mesh` sends packets
+  **mesh-style into a torus** → the X-wrap edge deadlocks. This is the same harness mismatch already noted
+  for the single-mesh Mesh cases below — the 2×4 row "passed" only because it was run with `topology: Torus`.
+- Re-run with the **correct `topology: Torus`**, the 4×4 combo **passes**: 4×4 TORUS_X intra (both
+  multi-host halves), inter-mesh (4×4↔TORUS_Y↔FABRIC_2D), and both-in-one-run all report **2 executed,
+  0 failed on all 4 ranks**, exit 0 (table row above). No scale/routing-plane issue. The
+  `control_plane.cpp:1683` "4 eth channels, 2 routing planes" line is an informational warning, not the
+  cause.
+- An intermittent **ethernet handshake timeout** at fabric init (*"Fabric Router Sync: Timeout …"*,
+  `fabric_firmware_initializer.cpp`) appears only when a run follows an **aborted** run — it is a board
+  eth-core wedge (link health), cleared by `tt-smi -glx_reset_auto` (sometimes twice); a clean board runs
+  pass deterministically.
 
-The per-mesh heterogeneous-config feature this PR delivers is fully proven by the three passing rows above
-(3-mesh, 4-config incl. mesh↔torus, and the 2×4 multi-host split). Fixing multi-host 4×4 torus routing-plane
-allocation is a separate fabric-router effort, tracked outside this PR.
+**Only genuine limitation here (test-harness, not fabric):** with **`sync: true`**, the global-sync setup
+aborts in `TestDevice::register_fabric_connection` (*"No active fabric eth channels in direction …"*,
+`tt_fabric_test_device_setup.cpp:729`) because the global-sync pattern picks a wrap direction absent on some
+node of a *heterogeneous+split* topology. Run heterogeneous combos with `sync: false` (traffic is still
+fully data-validated at 0 failed). Making global sync topology-aware for heterogeneous meshes is a
+test-infra follow-up, outside this PR.
 
 ### Traffic utilization (benchmark_mode telemetry, 3-mesh TORUS_Y/X/Y, 100k packets × 4 KB, neighbor exchange)
 Beyond the 0-failed data-correctness runs, a `benchmark_mode: true` run gives real per-link bandwidth:
