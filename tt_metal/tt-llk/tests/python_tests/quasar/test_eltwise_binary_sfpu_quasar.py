@@ -124,7 +124,8 @@ def _run_sfpu_binary_llk_golden(
     returns ``(src_A, tile_cnt_A, src_B)``; both operands live in ``src_A`` at
     tiles ``src0_idx`` / ``src1_idx``. ``post_check(res_tensor)`` is an optional
     extra assertion (e.g. div's x/x special-case lanes). ``broadcast_type``
-    broadcasts the ``src1_idx`` tile in the golden.
+    broadcasts the ``src1_idx`` tile in the golden. ``sign_magnitude`` stages the
+    operands in Dest as SMAG32 and encodes the golden the same way.
     """
     src0_idx, src1_idx, dst_idx = tile_indices
     input_dimensions = [(max(src0_idx, src1_idx, dst_idx) + 1) * 32, 32]
@@ -183,7 +184,7 @@ def _run_sfpu_binary_llk_golden(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(),
-            # 2's-complement datapath (default); read by the quant family and int ADD.
+            # 2's-complement datapath (default); read by every int op that takes SIGN_MAGNITUDE_FORMAT.
             SIGN_MAGNITUDE_FORMAT(sign_magnitude),
             SFPU_DST_ROUNDING_MODE(dst_rounding_mode),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast

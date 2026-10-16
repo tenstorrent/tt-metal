@@ -153,18 +153,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_ISOLATE_SFPU
 
-#include "cmath_common.h"
-#include "llk_bfd_alloc.h"
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_sfpu/ckernel_sfpu_exp.h"
 #include "llk_sfpu/ckernel_sfpu_srcs.h"
 #include "llk_sfpu_srcs_api.h"
-#include "llk_srcs.h"
 #include "params.h"
 
 using namespace ckernel;
-using namespace ckernel::math;
 using namespace ckernel::sfpu;
 
 // SFPU_IMPL_LOADMACRO comes from the test's SfpuImpl parameter.

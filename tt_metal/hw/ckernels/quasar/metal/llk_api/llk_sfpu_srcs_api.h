@@ -124,7 +124,7 @@ inline void llk_sfpu_srcs_binary_init(
 
     cfg_rmw(DISABLE_IMPLIED_SRCS_FORMAT_RMW, !implied_math_format);
 
-    _llk_unpack_srcs_config_<1, 1>();
+    _llk_unpack_srcs_config_<1 /*INSTRN_COUNT*/, 1 /*INSTRN_LOOP_COUNT*/>();
     _llk_unpack_srcs_binary_mop_config_(bfd_a, bfd_b);
     _llk_pack_srcs_config_for_tile_<INSTRN_COUNT>(srcs_32bit_mode);
     _llk_math_eltwise_sfpu_init_();
@@ -149,7 +149,9 @@ inline void llk_sfpu_srcs_unary_impl(
         for (std::uint32_t slice = 0; slice < slice_count; slice++) {
             per_slice();
             if constexpr (CLEAR_VALIDS) {
-                _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();  // Clears dvalid for SFPU read and write
+                _llk_math_eltwise_sfpu_srcs_clear_vlds_<
+                    true /*SRCS_RD_DONE*/,
+                    true /*SRCS_WR_DONE*/>();  // Clears dvalid for SFPU read and write
             }
         }
     }
@@ -174,7 +176,9 @@ inline void llk_sfpu_srcs_binary_impl(
             _llk_unpack_srcs_binary_();
             per_slice();
             if constexpr (CLEAR_VALIDS) {
-                _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();  // Clears dvalid for SFPU read and write
+                _llk_math_eltwise_sfpu_srcs_clear_vlds_<
+                    true /*SRCS_RD_DONE*/,
+                    true /*SRCS_WR_DONE*/>();  // Clears dvalid for SFPU read and write
             }
         }
     }

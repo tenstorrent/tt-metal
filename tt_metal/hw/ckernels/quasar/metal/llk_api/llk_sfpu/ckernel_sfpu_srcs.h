@@ -22,7 +22,7 @@ static_assert(sfpi::SFP_SRCSREG_STRIDE == ckernel::math::SFP_ROWS, "one sfpi ind
 /**
  * @brief Slot offsets (SFPI steps) and formats of one SrcS slice.
  *
- * @note Offsets must match the base addresses in llk_sfpu_srcs_api.h.
+ * @note Slot order must match the SrcS slice convention in llk_sfpu_srcs_api.h: in0 slice 0, in1 slice 1, out slice 2.
  */
 template <sfpi::DataLayout LAYOUT>
 struct SrcsLayout {
@@ -31,7 +31,6 @@ struct SrcsLayout {
             LAYOUT == sfpi::DataLayout::I32,
         "SrcS SFPI adapters support F16a, F16b, F32 and I32 layouts");
 
-    static constexpr sfpi::DataLayout layout = LAYOUT;
     static constexpr bool is_32bit = LAYOUT == sfpi::DataLayout::F32 || LAYOUT == sfpi::DataLayout::I32;
     static constexpr int rows = static_cast<int>(trisc::srcs_dims::ydim(is_32bit));
     static_assert(
@@ -111,6 +110,7 @@ struct SfpuSrcsBinaryOp {
 
     static void init_op() {}
 
+    // Takes only the L1 formats; the SrcS register format comes from Op::Layout.
     template <std::uint8_t INSTRN_COUNT = 1>
     static void init(
         const std::uint32_t l1_in0_addr_16B,
