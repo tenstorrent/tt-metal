@@ -92,11 +92,13 @@ void py_module_types(nb::module_& mod) {
         .def_rw("gate_mode_offset_bytes", &D2DStageGateConfig::gate_mode_offset_bytes);
 
     nb::class_<D2DStageGateDescriptor>(mod, "D2DStageGateDescriptor", R"doc(
-        Location of one coord's stage gates: gate i is the uint32 at gate_base_addr + 4 * i.
+        Location of one coord's stage gates: gate i is the uint32 at
+        gate_base_addr + gate_stride_bytes * i.
     )doc")
         .def_ro("fabric_node_id", &D2DStageGateDescriptor::fabric_node_id)
         .def_ro("service_core_noc", &D2DStageGateDescriptor::service_core_noc)
-        .def_ro("gate_base_addr", &D2DStageGateDescriptor::gate_base_addr);
+        .def_ro("gate_base_addr", &D2DStageGateDescriptor::gate_base_addr)
+        .def_ro("gate_stride_bytes", &D2DStageGateDescriptor::gate_stride_bytes);
 
     // ----- Sender handle (created only via D2DStreamService factories) -----
     nb::class_<D2DStreamServiceSender>(mod, "D2DStreamServiceSender")

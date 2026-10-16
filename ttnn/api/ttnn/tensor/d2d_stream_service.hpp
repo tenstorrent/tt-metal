@@ -39,11 +39,13 @@ struct D2DStageGateConfig {
     uint32_t gate_mode_offset_bytes = 0;  // d2d_stream::GateMode
 };
 
-// Location of one coord's gates: gate i is the uint32 at gate_base_addr + 4 * i.
+// Location of one coord's gates: gate i is the uint32 at gate_base_addr + gate_stride_bytes * i.
+// The stride is the L1 alignment, so any NoC write can open a gate.
 struct D2DStageGateDescriptor {
     tt::tt_fabric::FabricNodeId fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
     tt::tt_metal::CoreCoord service_core_noc;  // virtual NoC coords
     tt::tt_metal::DeviceAddr gate_base_addr = 0;
+    uint32_t gate_stride_bytes = 0;
 };
 
 // Persistent device-to-device streaming service backed by a fixed device tensor

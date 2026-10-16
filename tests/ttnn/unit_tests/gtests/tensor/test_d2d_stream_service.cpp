@@ -449,6 +449,8 @@ void verify_stage_gate_descriptor(
     for (const auto& coord : receiver->get_backing_tensor().tensor_topology().mesh_coords()) {
         const auto desc = receiver->get_stage_gate_descriptor(coord);
         EXPECT_NE(desc.gate_base_addr, 0u);
+        EXPECT_EQ(desc.gate_stride_bytes, tt::tt_metal::hal::get_l1_alignment());
+        EXPECT_EQ(desc.gate_base_addr % desc.gate_stride_bytes, 0u);
         EXPECT_EQ(
             desc.service_core_noc,
             receiver_mesh->get_device(coord)->worker_core_from_logical_core(receiver->get_service_core(coord)));
@@ -567,7 +569,7 @@ MeshWorkload make_remote_gate_opener_workload(
         mode,
         static_cast<uint32_t>(desc.service_core_noc.x),
         static_cast<uint32_t>(desc.service_core_noc.y),
-        static_cast<uint32_t>(desc.gate_base_addr + gate * sizeof(uint32_t)),
+        static_cast<uint32_t>(desc.gate_base_addr + gate * desc.gate_stride_bytes),
         dst_node.chip_id,
         *dst_node.mesh_id,
         static_cast<uint32_t>(ttnn::d2d_stream::GateState::Open),
@@ -593,7 +595,9 @@ void verify_stage_gate_remote_opener(
 
     uint32_t expected = 0;
     for (const auto& [gate, mode, name] :
-         {std::tuple{1u, 0u, "inline write"}, std::tuple{2u, 1u, "flushed atomic inc"}}) {
+         {std::tuple{1u, 0u, "inline write"},
+          std::tuple{2u, 1u, "flushed atomic inc"},
+          std::tuple{3u, 2u, "payload write"}}) {
         h.send(gate, GateMode::CloseOnTransit);
         std::this_thread::sleep_for(kGateHeldWindow);
         ASSERT_EQ(h.released(coord), expected) << "transfer for closed gate " << gate << " was released";

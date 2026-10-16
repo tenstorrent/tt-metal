@@ -89,22 +89,28 @@ using stream_service_common::WorkerSyncArgs;
 // Allocate `num_words` zero-initialised uint32 L1 words on a service core, recording the
 // address per coord. Used for the per-coord counters and termination words that
 // can't be GlobalSemaphores (service cores differ per device, and
-// GlobalSemaphore's reset path requires a MeshBuffer-backed buffer).
+// GlobalSemaphore's reset path requires a MeshBuffer-backed buffer). Words are
+// word_stride_bytes apart.
 std::map<distributed::MeshCoordinate, DeviceAddr> allocate_service_core_words(
     const std::shared_ptr<distributed::MeshDevice>& mesh,
     const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
-    uint32_t num_words = 1) {
+    uint32_t num_words = 1,
+    uint32_t word_stride_bytes = sizeof(uint32_t)) {
     auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
-    std::vector<uint32_t> zero_words(num_words, 0);
+    std::vector<uint32_t> zero_words(num_words * word_stride_bytes / sizeof(uint32_t), 0);
     std::map<distributed::MeshCoordinate, DeviceAddr> addrs;
     for (const auto& [coord, core] : service_cores) {
         auto* d = mesh->get_device(coord);
-        const DeviceAddr addr = svc.allocate_l1(d, core, num_words * sizeof(uint32_t));
+        const DeviceAddr addr = svc.allocate_l1(d, core, num_words * word_stride_bytes);
         tt::tt_metal::detail::WriteToDeviceL1(d, core, static_cast<uint32_t>(addr), zero_words);
         addrs.emplace(coord, addr);
     }
     return addrs;
 }
+// Gates are spaced by the L1 alignment so any NoC write (not just inline writes and
+// atomic incs) can open one.
+uint32_t stage_gate_stride_bytes() { return tt::tt_metal::hal::get_l1_alignment(); }
+
 static_assert(
     static_cast<uint32_t>(d2d_stream::GateState::Closed) == 0,
     "allocate_service_core_words zero-fills the stage-gate array");
@@ -491,7 +497,7 @@ struct D2DStreamServiceReceiver::Impl {
             stage_gate->num_gates);
         auto it = stage_gate_addrs.find(coord);
         TT_FATAL(it != stage_gate_addrs.end(), "D2DStreamServiceReceiver::{}: no stage gate at coord {}", fn, coord);
-        return it->second + (gate * sizeof(uint32_t));
+        return it->second + (gate * CMAKE_UNIQUE_NAMESPACE::stage_gate_stride_bytes());
     }
 
     // Persistent receiver workload, launched once at create_pair.
@@ -815,6 +821,7 @@ D2DStageGateDescriptor D2DStreamServiceReceiver::get_stage_gate_descriptor(
         .fabric_node_id = mesh->get_fabric_node_id(coord),
         .service_core_noc = mesh->get_device(coord)->worker_core_from_logical_core(impl_->service_cores.at(coord)),
         .gate_base_addr = base,
+        .gate_stride_bytes = CMAKE_UNIQUE_NAMESPACE::stage_gate_stride_bytes(),
     };
 }
 
@@ -929,6 +936,7 @@ Program build_receiver_program(
                     {"terminate_value", kTerminateValue},
                     {"num_stage_gates", stage_gate ? stage_gate->num_gates : 0},
                     {"stage_gate_addr", stage_gate_addr},
+                    {"stage_gate_stride", stage_gate_stride_bytes()},
                     {"stage_gate_slot_offset", stage_gate ? stage_gate->slot_id_offset_bytes : 0},
                     {"stage_gate_mode_offset", stage_gate ? stage_gate->gate_mode_offset_bytes : 0},
                     {"gate_open_value", static_cast<uint32_t>(d2d_stream::GateState::Open)},
@@ -1336,7 +1344,7 @@ ReceiverSideResources build_receiver_side(
             gate->slot_id_offset_bytes != gate->gate_mode_offset_bytes,
             "D2DStreamService: stage-gate slot_id and gate_mode must be distinct metadata words (both at offset {})",
             gate->slot_id_offset_bytes);
-        stage_gate_addrs = allocate_service_core_words(mesh, service_cores, gate->num_gates);
+        stage_gate_addrs = allocate_service_core_words(mesh, service_cores, gate->num_gates, stage_gate_stride_bytes());
     }
 
     auto data_ready_sem = ttnn::global_semaphore::create_global_semaphore(

@@ -81,6 +81,7 @@ constexpr auto output_tensor_accessor_args = TensorAccessorArgs<22>();
 // Stage gate. num_stage_gates == 0 compiles it out.
 constexpr uint32_t num_stage_gates = get_named_compile_time_arg_val("num_stage_gates");
 constexpr uint32_t stage_gate_addr = get_named_compile_time_arg_val("stage_gate_addr");
+constexpr uint32_t stage_gate_stride = get_named_compile_time_arg_val("stage_gate_stride");
 constexpr uint32_t stage_gate_slot_word = get_named_compile_time_arg_val("stage_gate_slot_offset") / sizeof(uint32_t);
 constexpr uint32_t stage_gate_mode_word = get_named_compile_time_arg_val("stage_gate_mode_offset") / sizeof(uint32_t);
 // Gate word and mode values, from the host's d2d_stream::GateState / GateMode.
@@ -100,7 +101,8 @@ FORCE_INLINE bool pass_stage_gate(uint32_t metadata_addr) {
     }
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
-    volatile tt_l1_ptr uint32_t* gate = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage_gate_addr) + slot;
+    volatile tt_l1_ptr uint32_t* gate =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage_gate_addr + slot * stage_gate_stride);
     while (true) {
         invalidate_l1_cache();
         if (termination_semaphore[0] == terminate_value) {
