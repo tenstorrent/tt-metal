@@ -13,6 +13,8 @@ Every (user, j) row is a "virtual user": ``paged_kv_step`` is called with ``nq =
 The block compression of ratio-2 layers (previous-token chain inside the block, ``prev_cs`` commit by the accepted count) is ``SpecCompressedAttention``'s.
 """
 
+import os
+
 import torch
 
 import ttnn
@@ -69,6 +71,28 @@ class SpecIndexer(DSV41DecodeIndexer):
             kc = own.__dict__.get("_kc_view")
             if kc is None:
                 kc = ttnn.slice(self.k_cache, [0, 0, 0, 0], [U, 1, self.k_cache.shape[2], self.k_cache.shape[3]])
+        NS = self.n_score
+        SP = int(os.environ.get("DSV41_SPEC_SCORE_PIECE", "131072"))
+        if NS > SP and NS % 32 == 0:
+            # long slab: the [U,1,n * heads,NS] score matrix of the whole slab takes 384 MiB per chip at 1M entries (OOM at the spec trace capture): score the slab in pieces of SP entries
+            # (static offsets, one program per piece shape) and join the small per-block scores [R,1,1,SP]
+            outs = []
+            for j0 in range(0, NS, SP):
+                j1 = min(NS, j0 + SP)
+                kp = ttnn.slice(kc, [0, 0, j0, 0], [U, 1, j1, DIM])
+                sp = ttnn.matmul(q, kp, transpose_b=True, activation="relu", compute_kernel_config=self.ckc)
+                ttnn.deallocate(kp)
+                sp = ttnn.reshape(sp, (R, 1, HEADS, j1 - j0))
+                sp = ttnn.matmul(w, sp, compute_kernel_config=self.ckc)  # [R,1,32,piece]: row 0 valid
+                sp = ttnn.to_layout(ttnn.slice(sp, [0, 0, 0, 0], [R, 1, 1, j1 - j0]), ttnn.ROW_MAJOR_LAYOUT)
+                # the R rows move to the row axis of ONE tile (a tile tensor [R,1,1,n] pads every block row to 32 rows: 400 MiB at 1M entries; a row-major concat along the entries
+                # needs a page of the whole slab, 2 MiB > L1)
+                outs.append(ttnn.to_layout(ttnn.reshape(sp, (1, 1, R, j1 - j0)), ttnn.TILE_LAYOUT))
+            s_all = ttnn.concat(outs, dim=3)  # [1,1,32 (R valid),NS]
+            for o in outs:
+                ttnn.deallocate(o)
+            s_all = ttnn.to_layout(ttnn.slice(s_all, [0, 0, 0, 0], [1, 1, R, NS]), ttnn.ROW_MAJOR_LAYOUT)
+            return ttnn.reshape(s_all, (R, 1, 1, NS))
         if self.nb is not None:  # position bucket (``set_pos_bucket``): the first nb entries of every user's slab
             kc = ttnn.slice(kc, [0, 0, 0, 0], [U, 1, self.nb, DIM])
         s = ttnn.matmul(q, kc, transpose_b=True, activation="relu", compute_kernel_config=self.ckc)  # [U,1,32n,T]
