@@ -6,11 +6,10 @@ intake:
   note: ''
 plan:
   by: dnijemcevic
-  at: '2026-10-16T07:38:07'
+  at: '2026-10-16T10:24:30'
   files:
     models/demos/deepseek_v41_flash_d_p/bringup/plan.yaml: d14f97080020eb21633212f60a1c9155323686fee61ee09475626dd2e9cfbd5b
     models/demos/deepseek_v41_flash_d_p/bringup/plan.md: b92b4487dbb48f9a4902c58fde561b7e9fac782a654d11f8883c2713166a6b23
     models/demos/deepseek_v41_flash_d_p/bringup/components.yaml: c62167a984ebe2fa673477098f4b9dc2bc17162ade4f7f9fd69e886b696238c6
-  note: 'overseer: F76 gates read >= limit (the noise floor; owner: no fixed bars,
-    match the reference precision)'
-  ledger: 86d92bd541973a099cbd7a899fce0ec68ee060f711c5ed50873f38ffa4d00d99
+  note: 'overseer: R.5 (official taps, F80) added before the remaining component steps'
+  ledger: c38e16e6db2df510c0294f276019ef6a66a7f86114a235b635556db6cd0e403a

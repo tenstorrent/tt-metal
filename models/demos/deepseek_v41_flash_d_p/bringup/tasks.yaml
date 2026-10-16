@@ -2494,6 +2494,19 @@ tasks:
     - S.swa.11
     - S.swa.15
     - S.swa_engram.18
+- id: R.5
+  title: Official arithmetic per step (official_taps hook + official_taps.yaml; the noise floor's reference term)
+  step: reference
+  deps:
+  - G.s4096
+  - R.3
+  gate:
+    cmd: python -m models.demos.common.bringup.testing.official_floor
+    metrics:
+      official_taps_steps: '>= 1'
+      official_taps_errors: == 0
+      official_taps_unmapped: == 0
+  paths: *id001
 - id: S.enc_source.03
   title: 'enc_source block with steps 1-3 on device (last: attn_norm)'
   step: implement
@@ -2523,6 +2536,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_q_a.py
     metrics:
@@ -2567,6 +2581,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_kv.py
     metrics:
@@ -2612,6 +2627,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_compressor.py
     metrics:
@@ -2658,6 +2674,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_indexer.py
     metrics:
@@ -2705,6 +2722,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attention.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
@@ -2754,6 +2772,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_residual.py
     metrics:
@@ -2803,6 +2822,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_hc.py
     metrics:
@@ -2853,6 +2873,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_collapse.py
     metrics:
@@ -2904,6 +2925,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_norm.py
     metrics:
@@ -2956,6 +2978,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_router.py
     metrics:
@@ -3009,6 +3032,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_experts.py
     metrics:
@@ -3063,6 +3087,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_shared_expert.py
     metrics:
@@ -3118,6 +3143,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_moe_add.py
     metrics:
@@ -3174,6 +3200,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_residual.py
     metrics:
@@ -3231,6 +3258,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_engram_rows.py
     metrics:
@@ -3271,6 +3299,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_engram_kv.py
     metrics:
@@ -3313,6 +3342,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_engram_add.py
     metrics:
@@ -3356,6 +3386,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_hc.py
     metrics:
@@ -3400,6 +3431,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_collapse.py
     metrics:
@@ -3445,6 +3477,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_norm.py
     metrics:
@@ -3491,6 +3524,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_q_a.py
     metrics:
@@ -3538,6 +3572,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_kv.py
     metrics:
@@ -3586,6 +3621,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_compressor.py
     metrics:
@@ -3635,6 +3671,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_indexer.py
     metrics:
@@ -3685,6 +3722,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attention.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
@@ -3737,6 +3775,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_residual.py
     metrics:
@@ -3789,6 +3828,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_hc.py
     metrics:
@@ -3842,6 +3882,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_collapse.py
     metrics:
@@ -3896,6 +3937,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_norm.py
     metrics:
@@ -3951,6 +3993,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_router.py
     metrics:
@@ -4007,6 +4050,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_experts.py
     metrics:
@@ -4064,6 +4108,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_shared_expert.py
     metrics:
@@ -4122,6 +4167,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_moe_add.py
     metrics:
@@ -4181,6 +4227,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_residual.py
     metrics:
@@ -4241,6 +4288,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_hc.py
     metrics:
@@ -4281,6 +4329,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_collapse.py
     metrics:
@@ -4323,6 +4372,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_norm.py
     metrics:
@@ -4366,6 +4416,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_q_a.py
     metrics:
@@ -4410,6 +4461,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_kv.py
     metrics:
@@ -4455,6 +4507,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attention.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
@@ -4502,6 +4555,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_residual.py
     metrics:
@@ -4549,6 +4603,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_hc.py
     metrics:
@@ -4597,6 +4652,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_collapse.py
     metrics:
@@ -4646,6 +4702,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_norm.py
     metrics:
@@ -4696,6 +4753,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_router.py
     metrics:
@@ -4747,6 +4805,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_experts.py
     metrics:
@@ -4799,6 +4858,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_shared_expert.py
     metrics:
@@ -4852,6 +4912,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_moe_add.py
     metrics:
@@ -4906,6 +4967,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_residual.py
     metrics:
@@ -4961,6 +5023,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_hc.py
     metrics:
@@ -5001,6 +5064,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_collapse.py
     metrics:
@@ -5043,6 +5107,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_norm.py
     metrics:
@@ -5086,6 +5151,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_q_a.py
     metrics:
@@ -5130,6 +5196,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_kv.py
     metrics:
@@ -5175,6 +5242,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_compressor.py
     metrics:
@@ -5221,6 +5289,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_indexer.py
     metrics:
@@ -5268,6 +5337,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attention.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
@@ -5317,6 +5387,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_residual.py
     metrics:
@@ -5366,6 +5437,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_hc.py
     metrics:
@@ -5416,6 +5488,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_collapse.py
     metrics:
@@ -5467,6 +5540,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_norm.py
     metrics:
@@ -5519,6 +5593,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_router.py
     metrics:
@@ -5572,6 +5647,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_experts.py
     metrics:
@@ -5626,6 +5702,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_shared_expert.py
     metrics:
@@ -5681,6 +5758,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_moe_add.py
     metrics:
@@ -5737,6 +5815,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_residual.py
     metrics:
@@ -5794,6 +5873,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_hc.py
     metrics:
@@ -5834,6 +5914,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_collapse.py
     metrics:
@@ -5876,6 +5957,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_norm.py
     metrics:
@@ -5919,6 +6001,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_q_a.py
     metrics:
@@ -5963,6 +6046,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_kv.py
     metrics:
@@ -6008,6 +6092,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_indexer.py
     metrics:
@@ -6054,6 +6139,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attention.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
@@ -6102,6 +6188,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_residual.py
     metrics:
@@ -6150,6 +6237,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_hc.py
     metrics:
@@ -6199,6 +6287,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_collapse.py
     metrics:
@@ -6249,6 +6338,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_norm.py
     metrics:
@@ -6300,6 +6390,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_router.py
     metrics:
@@ -6352,6 +6443,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_experts.py
     metrics:
@@ -6405,6 +6497,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_shared_expert.py
     metrics:
@@ -6459,6 +6552,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_moe_add.py
     metrics:
@@ -6514,6 +6608,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_residual.py
     metrics:
@@ -6570,6 +6665,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_hc.py
     metrics:
@@ -6610,6 +6706,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_collapse.py
     metrics:
@@ -6652,6 +6749,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_norm.py
     metrics:
@@ -6695,6 +6793,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_q_a.py
     metrics:
@@ -6739,6 +6838,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_kv.py
     metrics:
@@ -6784,6 +6884,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attention.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
@@ -6831,6 +6932,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_residual.py
     metrics:
@@ -6878,6 +6980,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_hc.py
     metrics:
@@ -6926,6 +7029,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_collapse.py
     metrics:
@@ -6975,6 +7079,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_norm.py
     metrics:
@@ -7025,6 +7130,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_router.py
     metrics:
@@ -7076,6 +7182,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_experts.py
     metrics:
@@ -7128,6 +7235,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_shared_expert.py
     metrics:
@@ -7181,6 +7289,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_moe_add.py
     metrics:
@@ -7235,6 +7344,7 @@ tasks:
   deps:
   - PL.1
   - G.s4096
+  - R.5
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_residual.py
     metrics:
