@@ -1,0 +1,46 @@
+{
+ "used": [
+  {
+   "id": "K-42",
+   "how": "measured the device top-k vs the CPU by set overlap (0.9945), not the positional match the swap check prints (0.0014)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "probed with tt-probe.sh under the existing ds41_indexer probes dir (probe_NNN.py, ignored by the path check)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-49",
+   "how": "kept the indexer module as built in C.enc_source.indexer (ratio 2, natural blocks); no change",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the swap tail check (_check_tail) falls back to a fixed 0.01 when the last swapped step's output is an integer (top-k), though the nudged CPU step's own tail is 0.026 (DS41-50)"
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-50"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "S.enc_source.07",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T20:07:35",
+  "head": "9eb223ec8c7",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.enc_source.07.implement.1.json"
+  ]
+ }
+}

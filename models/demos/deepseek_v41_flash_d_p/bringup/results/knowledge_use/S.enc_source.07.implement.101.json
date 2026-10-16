@@ -1,0 +1,37 @@
+{
+ "used": [
+  {
+   "id": "DS41-50",
+   "how": "took its probe_003 numbers as the starting point, then tested its one open claim (same-set rows differ only by order) with probe_004: confirmed, no duplicates or count mismatches; made no device change",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-49",
+   "how": "left the indexer module (ratio 2, natural query blocks) unchanged",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "_check_tail has no noise floor for int step outputs (falls back to fixed swap_out_rel 0.01), and the nudged CPU indexer itself fails that limit; the brief re-dispatches an implement attempt with no agent-side path (needs an owner waiver or a framework change, both outside the allowed files)"
+ ],
+ "overseer": [],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "S.enc_source.07",
+  "role": "implement",
+  "attempt": 101,
+  "agent": "ttnn-expert-debugger",
+  "t": "2026-10-16T20:30:00",
+  "head": "9eb223ec8c7",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.enc_source.07.implement.101.json"
+  ]
+ }
+}
