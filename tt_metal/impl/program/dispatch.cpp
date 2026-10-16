@@ -2359,9 +2359,6 @@ public:
             0,
             metal_ctx.hal().make_go_msg_u32(
                 dev_msgs::RUN_MSG_GO,
-                // Dispatch X/Y resolved when the program is enqueued
-                0,
-                0,
                 metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index)),
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
             has_multicast_launch_cmds ? sub_device_index : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
@@ -2738,7 +2735,6 @@ void update_program_dispatch_commands(
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
@@ -2901,13 +2897,7 @@ void update_program_dispatch_commands(
     for (auto* launch_msg_cmd_ptr : cached_program_command_sequence.launch_msg_write_packed_cmd_ptrs) {
         launch_msg_cmd_ptr->addr = multicast_cores_launch_msg_addr;
     }
-    // Update go signal to reflect potentially modified dispatch core and new wait count
-    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = hal.make_go_msg_u32(
-        dev_msgs::RUN_MSG_GO,
-        dispatch_core.x,
-        dispatch_core.y,
-        metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(*sub_device_id) +
-            metal_ctx.dispatch_mem_map().get_completion_counter_offset(cq_id));
+    // Update go signal to reflect the new wait count
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
 }
 
@@ -2916,7 +2906,6 @@ void update_traced_program_dispatch_commands(
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     ProgramBinaryStatus program_binary_status,
     uint8_t cq_id) {
@@ -3093,13 +3082,7 @@ void update_traced_program_dispatch_commands(
     for (auto* launch_msg_cmd_ptr : cached_program_command_sequence.launch_msg_write_packed_cmd_ptrs) {
         launch_msg_cmd_ptr->addr = multicast_cores_launch_msg_addr;
     }
-    // Update go signal to reflect potentially modified dispatch core and new wait count
-    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = hal.make_go_msg_u32(
-        dev_msgs::RUN_MSG_GO,
-        dispatch_core.x,
-        dispatch_core.y,
-        metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(*sub_device_id) +
-            metal_ctx.dispatch_mem_map().get_completion_counter_offset(cq_id));
+    // Update go signal to reflect the new wait count
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
 }
 
@@ -3412,7 +3395,6 @@ void reset_worker_dispatch_state_on_device(
     distributed::MeshDevice* mesh_device,
     SystemMemoryManager& manager,
     uint8_t cq_id,
-    CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     bool reset_launch_msg_state,
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands) {
@@ -3460,10 +3442,7 @@ void reset_worker_dispatch_state_on_device(
                 expected_num_workers_completed[i],
                 metal_ctx.hal().make_go_msg_u32(
                     dev_msgs::RUN_MSG_RESET_READ_PTR,
-                    dispatch_core.x,
-                    dispatch_core.y,
-                    metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(i) +
-                        metal_ctx.dispatch_mem_map().get_completion_counter_offset(cq_id)),
+                    metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(i)),
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(i),
                 mesh_device->impl().has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
                 dispatcher_for_go_signal);

@@ -527,7 +527,6 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
     const uint32_t mcast_launch_msg_wptr =
         cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_mcast_wptr();
-    const CoreCoord dispatch_core = this->virtual_program_dispatch_core();
     const SubDeviceRecorder sub_device_recorder(mesh_device_, sub_device_id);
 #if defined(TRACY_ENABLE)
     const bool tag_tracy_zones = !tt::tt_metal::getDeviceProfilerState(mesh_device_->impl().metal_env());
@@ -549,7 +548,6 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             program_cmd_seq,
             mcast_launch_msg_wptr,
             expected_num_workers_completed,
-            dispatch_core,
             sub_device_id,
             dispatch_metadata,
             program_binary_status,
@@ -1239,7 +1237,6 @@ void FDMeshCommandQueue::reset_worker_state(
             mesh_device_,
             devices[i]->sysmem_manager(),
             id_,
-            this->virtual_program_dispatch_core(),
             expected_num_workers_completed_,
             reset_launch_msg_state,
             cached->device_batches[i]);
@@ -1308,7 +1305,6 @@ void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(
                 sub_device_id,
                 device->sysmem_manager(),
                 expected_num_workers_completed,
-                this->virtual_program_dispatch_core(),
                 mcast_go_signals,
                 dispatch_md,
                 config_ring_sync_count);
@@ -1372,7 +1368,7 @@ void FDMeshCommandQueue::submit_replay_buffer(
 
     for (auto* device : mesh_device_->get_devices()) {
         trace_dispatch::issue_trace_commands(
-            mesh_device_, device->sysmem_manager(), dispatch_md, id_, expected_num_workers_completed_, dispatch_core_);
+            mesh_device_, device->sysmem_manager(), dispatch_md, id_, expected_num_workers_completed_);
     }
 
     // The replayed exec buffer bypasses normal host cache tracking, so subsequent program enqueues must start from an
@@ -1519,7 +1515,6 @@ void FDMeshCommandQueue::record_end() {
                     sub_device,
                     sysmem_manager_for_trace,
                     trace_worker_descriptor.num_completion_worker_cores,
-                    this->virtual_program_dispatch_core(),
                     /*send_mcast=*/true,
                     go_signal_md,
                     std::nullopt);
@@ -1593,7 +1588,6 @@ void FDMeshCommandQueue::record_end() {
                 cached_program_command_sequence,
                 worker_launch_msg_state.get_mcast_wptr(),
                 trace_worker_descriptors[sub_device_id].num_completion_worker_cores,
-                this->virtual_program_dispatch_core(),
                 sub_device_id,
                 ProgramBinaryStatus::Committed,
                 static_cast<uint8_t>(this->id()));
@@ -1709,7 +1703,6 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
                 mesh_device_,
                 device->sysmem_manager(),
                 id_,
-                this->virtual_program_dispatch_core(),
                 expected_num_workers_completed_,
                 reset_launch_msg_state,
                 /*setup_commands=*/{});

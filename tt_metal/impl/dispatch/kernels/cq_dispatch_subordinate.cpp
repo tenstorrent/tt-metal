@@ -44,6 +44,8 @@ constexpr uint32_t upstream_dispatch_cb_sem_id = UPSTREAM_DISPATCH_CB_SEM_ID;
 constexpr uint32_t dispatch_d_shutdown_sem_id = DISPATCH_D_SHUTDOWN_SEM_ID;
 constexpr uintptr_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
 constexpr uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
+constexpr uint32_t go_done_noc_x = GO_DONE_NOC_X;
+constexpr uint32_t go_done_noc_y = GO_DONE_NOC_Y;
 constexpr uint32_t distributed_dispatcher =
     DISTRIBUTED_DISPATCHER;  // dispatch_s and dispatch_d running on different cores
 constexpr uint32_t first_stream_used = FIRST_STREAM_USED;
@@ -681,7 +683,8 @@ void process_go_signal_mcast_cmd() {
     // the NOC then reads the same physical location via the cached-form source address.
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile uint32_t tt_l1_ptr*)cmd_ptr;
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage_uncached = uncached_l1_ptr<uint32_t>(cmd_ptr);
-    uint32_t go_signal_value = load_aligned<uint32_t>(&cmd->mcast.go_signal);
+    uint32_t go_signal_value = add_go_signal_done_target(
+        load_aligned<uint32_t>(&cmd->mcast.go_signal), go_done_noc_x, go_done_noc_y, completion_counter_offset);
     uint32_t multicast_go_offset = cmd->mcast.multicast_go_offset;
     uint32_t wait_count = load_aligned<uint32_t>(&cmd->mcast.wait_count);
     uint32_t wait_stream = load_aligned<uint32_t>(&cmd->mcast.wait_stream);
