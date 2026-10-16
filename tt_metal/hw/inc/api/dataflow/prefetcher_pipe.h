@@ -824,7 +824,8 @@ private:
         // it does not drain payload already in flight at the peer's old entry size.
         // Multi-DM: only tid 0 mutates shared config; others re-setup after the barrier.
         // Drop any cached copy of this core's credit words before anyone touches them, so a
-        // host reset / the previous program's flushed values in TL1 are what every hart sees.
+        // host reset / the previous program's flushed values in TL1 are what every hart sees
+        // (as long as the lines are clean, as the previous pipe's dtor flush leaves them).
         // Not multi-DM specific: it is the Quasar cost of reading credit words through the
         // cache at all (P == 1 included). Compiles out on WH/BH, and sync_threads() returns
         // immediately when the kernel has one thread, so the single-thread path only pays
@@ -1021,8 +1022,9 @@ private:
     // remote_dfb_config_layout.h): Quasar's DM L2 writes back whole 64B lines, so a dirty line
     // may only ever contain words this core wrote. Peer-written words are always read through
     // load_remote_l1_credit. Cached copies are dropped at construction
-    // (invalidate_local_credit_lines) so a host reset in TL1 is observed, and written back at
-    // destruction (flush_local_credit_lines) so the values persist into the next program.
+    // (invalidate_local_credit_lines) so a host reset in TL1 is observed while the lines are clean,
+    // and written back at destruction (flush_local_credit_lines) so the values persist into the next
+    // program.
 
     // Byte offset of (receiver_idx, lane)'s slot within either credit block. Layout stride is
     // credit_lane_capacity() (allocated slots); active P only selects which are used.
