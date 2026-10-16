@@ -341,40 +341,19 @@ def test_where_ttt(device, pattern, include_spl_values):
     back unaltered. With finite branches it does, on all 4,194,304 pairs and
     every predicate layout.
 
-    Carrying special values is where it stops being a pure copy. Two encodings
-    do not survive the selection, both verified to be the kernel rather than the
-    host round-trip (from_torch/to_torch returns 0x7FC0 and 0x8000 unchanged):
-
-      * a selected NaN comes back as an infinity of the same sign -- the
-        mantissa that distinguishes the two is dropped (0x7FC0 -> 0x7F80).
-      * a selected -0 comes back as +0 (0x8000 -> 0x0000). This one is the
-        usual SFPU pack canonicalisation and is numerically harmless, so the
-        ULP comparison below already tolerates it.
+    The same holds with special values: a selected NaN keeps its sign and
+    payload (0x7FC0, 0x7F81, 0xFFC0 and 0xFF81 come back unchanged) and a
+    selected -0 stays -0, so both grids use the same encoding check.
     """
     input_true, input_false = pairwise_inputs(include_spl_values=include_spl_values, include_zero=True)
     predicate = build_predicate(pattern, input_true.shape)
     golden, result = run_ternary(device, ttnn.where, predicate, input_true, input_false)
 
-    if not include_spl_values:
-        # Pure copy: compare encodings, which is stricter than any ULP budget.
-        # This grid is +0 and finite normals only -- -0 and NaN live in the
-        # include_spl_values branch below -- so what this catches is a selected
-        # value whose bits came back altered at all, however slightly.
-        assert torch.equal(
-            golden.view(torch.uint16), result.view(torch.uint16)
-        ), "where is expected to carry finite values through bit-for-bit"
-        return
-
-    # NaN -> same-signed inf. Check the sign survives before excusing it, so a
-    # regression that drops the sign as well still fails.
-    nan_to_inf = torch.isnan(golden) & torch.isinf(result)
-    assert nan_to_inf.any(), "expected the selected NaN to reach the device as an infinity"
+    # Pure copy: compare encodings, which is stricter than any ULP budget and
+    # also covers NaN payloads and the sign of zero.
     assert torch.equal(
-        torch.signbit(golden[nan_to_inf]), torch.signbit(result[nan_to_inf])
-    ), "the sign of a selected NaN is expected to survive the conversion to infinity"
-    result = torch.where(nan_to_inf, golden, result)
-
-    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=0, allow_nonfinite=True)
+        golden.view(torch.uint16), result.view(torch.uint16)
+    ), "where is expected to carry every selected value through bit-for-bit"
 
 
 @pytest.mark.parametrize("ttnn_op", [ttnn.lerp])

@@ -203,20 +203,19 @@ def test_isclose(device, rtol, atol, equal_nan):
 def test_minmax_special_values(device, ttnn_op, is_max, dtype):
     """Cross product of ±0, ±1, ±inf, NaN for ttnn.minimum / ttnn.maximum.
 
-    bfloat16 dest uses SFPSWAP (sign-magnitude, NaN as +inf). Operand order
-    does not change this: minimum(nan, x) matches minimum(x, nan). Dest packing
-    also drops the zero sign bit.
+    minimum still uses SFPSWAP (sign-magnitude, one-sided NaN as +inf) in both
+    dtypes, and operand order does not change this. maximum propagates NaN.
 
     call                                  torch    ttnn bf16    ttnn fp32
     ------------------------------------  -------  -----------  -----------
     minimum(x, nan)   x finite or -inf    NaN      x            x
     minimum(+inf, nan)                    NaN      +inf         +inf
-    minimum(nan, nan)                     NaN      +inf         NaN
-    maximum(x, nan)   any x               NaN      +inf         NaN
+    minimum(nan, nan)                     NaN      NaN          NaN
+    maximum(x, nan)   any x               NaN      NaN          NaN
 
-    float32 maximum matches torch (IEEE NaN-propagate). float32 minimum still
-    treats one-sided NaN as +inf; both-NaN stays NaN. IEEE min(+0, -0) is -0
-    and max(-0, -0) is -0; bf16 dest writes +0, fp32 dest keeps a sign bit.
+    bf16 keeps the zero sign: min of a ±0 pair is -0 unless both are +0, max is
+    +0 unless both are -0. torch keeps the first operand on that tie, so the
+    bf16 zero signs are built explicitly.
     """
     torch_dtype = getattr(torch, dtype)
     ttnn_dtype = getattr(ttnn, dtype)
@@ -232,14 +231,19 @@ def test_minmax_special_values(device, ttnn_op, is_max, dtype):
     a_cmp = torch.where(torch.isnan(input_a), inf, input_a)
     b_cmp = torch.where(torch.isnan(input_b), inf, input_b)
 
-    if dtype == "float32" and is_max:
+    if is_max:
         expected = torch.maximum(input_a, input_b)
     else:
-        expected = torch.maximum(a_cmp, b_cmp) if is_max else torch.minimum(a_cmp, b_cmp)
-        if dtype == "float32":
-            expected = torch.where(torch.isnan(input_a) & torch.isnan(input_b), input_a, expected)
-        else:
-            expected = torch.where(expected == 0, torch.zeros_like(expected), expected)
+        expected = torch.minimum(a_cmp, b_cmp)
+        expected = torch.where(torch.isnan(input_a) & torch.isnan(input_b), input_a, expected)
+
+    if dtype == "bfloat16":
+        # A pair of zeros follows the IEEE sign rule, where torch would keep the first operand.
+        zero_pair = (input_a == 0) & (input_b == 0)
+        sign_a, sign_b = torch.signbit(input_a), torch.signbit(input_b)
+        negative = (sign_a & sign_b) if is_max else (sign_a | sign_b)
+        signed_zero = torch.where(negative, -torch.zeros_like(expected), torch.zeros_like(expected))
+        expected = torch.where(zero_pair, signed_zero, expected)
 
     tt_a = ttnn.from_torch(input_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_b = ttnn.from_torch(input_b, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -247,8 +251,9 @@ def test_minmax_special_values(device, ttnn_op, is_max, dtype):
 
     assert_with_ulp(expected_result=expected, actual_result=result, ulp_threshold=0, allow_nonfinite=True)
     if dtype == "bfloat16":
-        zero = result == 0
-        assert not torch.signbit(result[zero]).any()
+        # assert_with_ulp treats +0 and -0 as equal, so check the zero encodings directly.
+        zero = expected == 0
+        assert torch.equal(expected[zero].view(torch.uint16), result[zero].view(torch.uint16))
 
 
 @pytest.mark.parametrize(
