@@ -38,12 +38,11 @@ FORCE_INLINE float perform_reduction(float input, uint16_t source_value, Scatter
     }
 }
 
-// performs scatter on data loaded to dfb with load_to_dfb
+// performs scatter on data loaded to scratchpads with load_to_scratchpad
 template <typename index_type>
 FORCE_INLINE void scatter_along_chunk(
-    const DataflowBuffer& input_dfb,
-    const DataflowBuffer& index_dfb,
-    const DataflowBuffer& source_dfb,
+    const Scratchpad<volatile index_type>& index_page,
+    const Scratchpad<volatile uint16_t>& source_page,
     const DataflowBuffer& output_dfb,
     const Scratchpad<volatile float>& fp32_temp,
     const uint32_t& input_stick_size,
@@ -51,15 +50,7 @@ FORCE_INLINE void scatter_along_chunk(
     const uint32_t& input_chunk_size,
     const uint32_t& index_chunk_size,
     const ScatterReductionType& scatter_reduction_type = ScatterReductionType::INVALID) {
-    const uint32_t input_l1_read_addr = input_dfb.get_read_ptr();
-    const uint32_t index_l1_read_addr = index_dfb.get_read_ptr();
-    const uint32_t source_l1_read_addr = source_dfb.get_read_ptr();
     const uint32_t output_l1_write_addr = output_dfb.get_write_ptr();
-    volatile tt_l1_ptr uint16_t* input_l1_read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_read_addr);
-    volatile tt_l1_ptr index_type* index_l1_read_ptr =
-        reinterpret_cast<volatile tt_l1_ptr index_type*>(index_l1_read_addr);
-    volatile tt_l1_ptr uint16_t* source_l1_read_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(source_l1_read_addr);
     volatile tt_l1_ptr uint16_t* output_l1_write_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(output_l1_write_addr);
 
@@ -67,14 +58,14 @@ FORCE_INLINE void scatter_along_chunk(
     // to any of the elements in the current output range (defined by
     // partial stick length and offset)
     for (uint32_t index_in_index_chunk = 0; index_in_index_chunk < index_chunk_size; ++index_in_index_chunk) {
-        volatile index_type& index_value = index_l1_read_ptr[index_in_index_chunk];
+        volatile index_type& index_value = index_page[index_in_index_chunk];
         if (index_value < input_offset || index_value >= input_offset + input_chunk_size) {
             continue;
         }
         if (index_value >= input_stick_size) {
             continue;
         }
-        volatile uint16_t& source_value = source_l1_read_ptr[index_in_index_chunk];
+        volatile uint16_t& source_value = source_page[index_in_index_chunk];
         const uint32_t& output_index = index_value - input_offset;
         fp32_temp[output_index] = perform_reduction(fp32_temp[output_index], source_value, scatter_reduction_type);
     }
@@ -82,11 +73,11 @@ FORCE_INLINE void scatter_along_chunk(
 
 // copies source stick to destination stick (first phase of scatter)
 FORCE_INLINE void copy_input_to_fp32_temp(
-    const DataflowBuffer& input_dfb, const Scratchpad<volatile float>& fp32_temp, uint32_t input_chunk_size) {
-    const uint32_t input_l1_read_addr = input_dfb.get_read_ptr();
-    volatile tt_l1_ptr uint16_t* input_l1_read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_read_addr);
+    const Scratchpad<volatile uint16_t>& input_page,
+    const Scratchpad<volatile float>& fp32_temp,
+    uint32_t input_chunk_size) {
     for (uint32_t index_in_input_chunk = 0; index_in_input_chunk < input_chunk_size; ++index_in_input_chunk) {
-        fp32_temp[index_in_input_chunk] = bf16_to_fp32(input_l1_read_ptr[index_in_input_chunk]);
+        fp32_temp[index_in_input_chunk] = bf16_to_fp32(input_page[index_in_input_chunk]);
     }
 }
 
@@ -125,8 +116,8 @@ void kernel_main() {
     const auto index_addr_gtor = TensorAccessor(tensor::index);
     const auto source_addr_gtor = TensorAccessor(tensor::source);
 
-    using input_std_type = std_type_t<get_dataformat(dfb::input)>;
-    using index_std_type = std_type_t<get_dataformat(dfb::index)>;
+    using input_std_type = uint16_t;  // this factory only runs bfloat16 input
+    using index_std_type = element_type_t<get_arg(args::index_element_size)>;
 
     constexpr uint32_t N = input_rank - 1;
     // generate 2 stick shape counters
@@ -137,11 +128,11 @@ void kernel_main() {
 
     std::array<uint32_t, N> coord{from_id<N>(start_stick_id, input_dims)};
 
-    DataflowBuffer input_dfb(dfb::input);
+    Scratchpad<volatile uint16_t> input_page(scratch::input);
     Scratchpad<volatile float> fp32_temp(scratch::fp32_temp);
     DataflowBuffer output_dfb(dfb::output);
-    DataflowBuffer index_dfb(dfb::index);
-    DataflowBuffer source_dfb(dfb::source);
+    Scratchpad<volatile index_std_type> index_page(scratch::index);
+    Scratchpad<volatile uint16_t> source_page(scratch::source);
 
     for (uint32_t input_stick_id = start_stick_id; input_stick_id < start_stick_id + sticks_for_core;
          ++input_stick_id) {
@@ -150,16 +141,18 @@ void kernel_main() {
             const uint32_t input_chunk_length = std::min(input_stick_size - input_offset, input_and_output_chunk_size);
 
             // first phase: copy input data to output
-            load_to_dfb(
+            load_to_scratchpad(
                 noc,
-                dfb::input,
+                input_page,
                 input_addr_gtor,
                 input_offset * sizeof(input_std_type),
                 input_chunk_length * sizeof(input_std_type),
                 input_stick_id);
-            input_dfb.wait_front(ONE_PAGE);
-
-            copy_input_to_fp32_temp(input_dfb, fp32_temp, input_chunk_length);
+            {
+                // the NoC wrote this page behind the CPU's cache (Quasar DM); no-op on WH/BH
+                auto input_lock = input_page.scoped_lock(0, input_chunk_length);
+                copy_input_to_fp32_temp(input_page, fp32_temp, input_chunk_length);
+            }
 
             if (in_bounds<N>(coord, index_dims)) {
                 const uint32_t index_stick_id = to_id<N>(coord, index_strides);
@@ -170,28 +163,28 @@ void kernel_main() {
                     const uint32_t index_chunk_length = std::min(index_stick_size - index_offset, index_chunk_size);
                     const uint32_t source_chunk_length = std::min(source_stick_size - source_offset, source_chunk_size);
 
-                    load_to_dfb(
+                    load_to_scratchpad(
                         noc,
-                        dfb::index,
+                        index_page,
                         index_addr_gtor,
                         index_offset * sizeof(index_std_type),
                         index_chunk_length * sizeof(index_std_type),
                         index_stick_id);
                     // source tensor is sliced beforehand to match index tensor's dimensions, therefore their stick ids
                     // map 1:1
-                    load_to_dfb(
+                    load_to_scratchpad(
                         noc,
-                        dfb::source,
+                        source_page,
                         source_addr_gtor,
                         source_offset * sizeof(input_std_type),
                         source_chunk_length * sizeof(input_std_type),
                         index_stick_id);
-                    index_dfb.wait_front(ONE_PAGE);
-                    source_dfb.wait_front(ONE_PAGE);
+                    // the NoC wrote these pages behind the CPU's cache (Quasar DM); no-op on WH/BH
+                    auto index_lock = index_page.scoped_lock(0, index_chunk_length);
+                    auto source_lock = source_page.scoped_lock(0, source_chunk_length);
                     scatter_along_chunk<index_std_type>(
-                        input_dfb,
-                        index_dfb,
-                        source_dfb,
+                        index_page,
+                        source_page,
                         output_dfb,
                         fp32_temp,
                         input_stick_size,
@@ -199,12 +192,9 @@ void kernel_main() {
                         input_chunk_length,
                         index_chunk_length,
                         scatter_reduction_type);
-                    source_dfb.pop_front(ONE_PAGE);
-                    index_dfb.pop_front(ONE_PAGE);
                 }
             }
 
-            input_dfb.pop_front(ONE_PAGE);
             output_dfb.reserve_back(ONE_PAGE);
 
             // third phase: push to the output dfb with fp32->bf16 conversion

@@ -360,11 +360,12 @@ struct SemaphoreAdvancedOptions {
     // Unpack stages of a single compute kernel instance (e.g. to hand tiles from Pack back to Unpack
     // through an L1 ring, without a DFB). Data-movement kernels and other nodes cannot reach it.
     //
-    // Rules: Blackhole only. At most one compute semaphore per Program. It cannot also be bound by a
-    // data-movement kernel, and its initial value is always 0. For kernel-side usage, see api/semaphore.h.
+    // Rules: Not available on 11x architectures (Wormhole). At most one compute semaphore per Program. It cannot
+    // also be bound by a data-movement kernel, and its initial value is always 0. For kernel-side usage, see
+    // api/semaphore.h.
     //
     // max_value is the compute semaphore's capacity, in credits: typically the number of slots in the ring
-    // it guards. Semaphore::wait_not_full() blocks while the semaphore is at capacity.
+    // it guards. Waiting on not_full blocks when max_value is reached.
     // Range 1..15; 0 (the default) means 15. Must be 0 for a semaphore not bound by compute kernels.
     //
     // CAUTION: Compute semaphores are experimental, and may change or be removed.
