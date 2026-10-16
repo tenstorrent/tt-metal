@@ -4,14 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#ifdef ARCH_QUASAR
-#include "llk_math_eltwise_ternary_sfpu_where.h"
-#else
-#include "sfpu/ckernel_sfpu_where.h"
-#include "llk_math_eltwise_ternary_sfpu_macros.h"
-#endif
+#include "ckernel_sfpu_where.h"
 #endif
 
 namespace ckernel {
@@ -36,32 +32,13 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void where_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst) {
-#ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_ternary_sfpu_where<APPROX, data_format>(idst0, idst1, idst2, odst)));
-#else
-    MATH((SFPU_TERNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _calculate_where_,
-        (APPROX, data_format, 8 /* ITERATIONS */),
-        idst0,
-        idst1,
-        idst2,
-        odst,
-        VectorMode::RC)));
-#endif
+ALWI void where_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t idst2, std::uint32_t odst) {
+    MATH((sfpu::Where<APPROX, data_format>::run(idst0, idst1, idst2, odst)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void where_tile_init() {
-#ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_ternary_sfpu_where_init<APPROX>()));
-#else
-    MATH((SFPU_TERNARY_INIT_FN(where, sfpu::_init_where_, (APPROX))));
-#endif
-}
+ALWI void where_tile_init() { MATH((sfpu::Where<APPROX>::init())); }
 
 }  // namespace ckernel
