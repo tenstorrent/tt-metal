@@ -20,7 +20,12 @@ threads take the compute threads' shares of C; Wormhole / Blackhole have one rea
 several C slices keep two in flight. Extra reader threads and the second C slice in flight only use L1 that the
 C slice, subblock and K chunk leave. When each
 core produces one C slice on a rectangle laid out like the C slices, A is multicast along rows of cores and B down
-columns, each reader thread multicasting its own K chunks.
+columns, each reader thread multicasting its own K chunks; when C is one row (column) of C slices, A (B) is multicast
+to every core.
+
+Bias and activation are applied to the finished sum in DST before the final pack. Without cores, a
+MatmulUnifiedProgramConfig asks for its placement to be chosen by a cost estimate; on Quasar a matmul without a
+program config does the same.
 
 Run on Wormhole / Blackhole:
     pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py
@@ -180,6 +185,9 @@ def test_repr_and_fields():
     assert "MatmulUnifiedProgramConfig(" in repr(cfg) and "num_compute_threads=0" in repr(cfg)
     cfg.num_compute_threads = 2
     assert cfg.num_compute_threads == 2
+    assert cfg.fused_activation is None
+    cfg.fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+    assert "fused_activation=" in repr(cfg) and cfg.fused_activation.op_type == ttnn.UnaryOpType.RELU
 
 
 AUTO_C_SLICE_GRIDS = [
@@ -285,10 +293,11 @@ def test_auto_C_slice_shrinks_to_fit_l1(device):
     _check(out, _golden(a, b))
 
 
-def test_small_C_slice_takes_all_of_K(device):
-    """A 1x1-tile C slice is not capped at 8 K tiles per chunk: K = 16 tiles goes through in one K chunk
-    (fp32 accumulation, since 512 products in 16-bit DST drift past the 2% bound)."""
-    M, K, N = TILE, 16 * TILE, TILE
+def test_small_C_slice_takes_long_K_chunks(device):
+    """A 1x1-tile C slice is not capped at 8 K tiles per chunk but leaves a K chunk per reader thread: K = 64 tiles
+    goes through in K chunks of 16 on Quasar, 32 elsewhere (fp32 accumulation, since 2048 products in 16-bit DST
+    drift past the 2% bound)."""
+    M, K, N = TILE, 64 * TILE, TILE
     torch.manual_seed(14)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
     config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), C_slice_M_tiles=1, C_slice_N_tiles=1)
@@ -643,18 +652,126 @@ def test_packer_l1_acc(device, C_slice_M_tiles, C_slice_N_tiles, subblock):
     _check(out, _golden(a, b))
 
 
-def test_bias_is_applied_as_separate_add(device):
-    M, K, N = 4 * TILE, 4 * TILE, 4 * TILE
-    torch.manual_seed(12)
-    a, b, bias = _randn(1, 1, M, K), _randn(1, 1, K, N), _randn(1, 1, 1, N)
+# ----------------------------------------------------------------------------------------------------
+# Fused bias and activation: applied to the finished sum in DST, once, before the final pack
+# ----------------------------------------------------------------------------------------------------
+
+
+def _run_linear(device, a, b, bias, config, *, packer_l1_acc=False, fp32_dest_acc_en=False, bias_dtype=ttnn.bfloat16):
     a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
-    bias_t = ttnn.from_torch(bias, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
-    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 1), C_slice_M_tiles=2, C_slice_N_tiles=2)
+    bias_t = None
+    if bias is not None:
+        bias_t = ttnn.from_torch(bias, layout=ttnn.TILE_LAYOUT, dtype=bias_dtype, device=device)
     out = ttnn.experimental.quasar.linear(
-        a_t, b_t, bias=bias_t, program_config=config, compute_kernel_config=_hifi4(device)
+        a_t,
+        b_t,
+        bias=bias_t,
+        program_config=config,
+        compute_kernel_config=_hifi4(device, fp32_dest_acc_en, packer_l1_acc),
     )
-    _check(ttnn.to_torch(out), _golden(a, b) + bias.to(torch.float32))
+    return ttnn.to_torch(out)
+
+
+def _bias_row(N):
+    # Larger than a typical A @ B entry, so a bias applied per K chunk or after the activation stands out.
+    return (torch.rand(1, 1, 1, N) * 8 - 4).to(torch.bfloat16)
+
+
+# name, (M, K, N) in tiles, C slice, K_chunk_tiles, cores (x1, y1), packer_l1_acc
+BIAS_CASES = [
+    ("single_K_chunk", (4, 4, 4), (2, 2), 0, (1, 1), False),
+    ("K_spill", (2, 6, 4), (2, 2), 1, (1, 0), False),
+    ("K_spill_packer_l1_acc", (2, 8, 4), (2, 4), 2, (0, 0), True),
+    ("several_C_slices_per_core", (8, 2, 8), (2, 2), 0, (1, 0), False),
+    ("several_C_slices_K_spill", (4, 4, 6), (2, 3), 1, (0, 0), False),
+    ("ragged_N_padded_subblock", (3, 3, 5), (3, 5), 0, (0, 0), False),
+]
+
+
+@pytest.mark.parametrize(
+    "name,MKN,C_slice,K_chunk_tiles,cores,packer_l1_acc", BIAS_CASES, ids=[c[0] for c in BIAS_CASES]
+)
+def test_fused_bias(device, name, MKN, C_slice, K_chunk_tiles, cores, packer_l1_acc):
+    M, K, N = (d * TILE for d in MKN)
+    torch.manual_seed(12)
+    a, b, bias = _randn(1, 1, M, K), _randn(1, 1, K, N), _bias_row(N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, *cores), C_slice_M_tiles=C_slice[0], C_slice_N_tiles=C_slice[1], K_chunk_tiles=K_chunk_tiles
+    )
+    out = _run_linear(device, a, b, bias, config, packer_l1_acc=packer_l1_acc)
+    _check(out, _golden(a, b) + bias.to(torch.float32))
+
+
+def test_fused_bias_is_exact_on_zero_A(device):
+    # C = 0 @ B + bias: every row of C is the bias row exactly, through two K chunks and ragged edges.
+    M, K, N = 2 * TILE + 5, 2 * TILE, 3 * TILE + 7
+    a, b, bias = torch.zeros(1, 1, M, K, dtype=torch.bfloat16), _randn(1, 1, K, N), _bias_row(N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 1, 0), C_slice_M_tiles=3, C_slice_N_tiles=2, K_chunk_tiles=1
+    )
+    out = _run_linear(device, a, b, bias, config)
+    assert torch.equal(out.to(torch.float32), bias.to(torch.float32).expand(1, 1, M, N))
+
+
+@pytest.mark.parametrize("K_chunk_tiles", [0, 1], ids=["single_K_chunk", "K_spill"])
+def test_fused_bias_batched_A(device, K_chunk_tiles):
+    M, K, N = 2 * TILE, 2 * TILE, 4 * TILE
+    torch.manual_seed(5)
+    a, b, bias = _randn(3, 1, M, K), _randn(1, 1, K, N), _bias_row(N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 1, 0), C_slice_M_tiles=2, C_slice_N_tiles=2, K_chunk_tiles=K_chunk_tiles
+    )
+    out = _run_linear(device, a, b, bias, config)
+    _check(out, _golden(a, b) + bias.to(torch.float32))
+
+
+def test_bias_with_fp32_dest_acc_is_added_separately(device):
+    # The row broadcast into DST needs a 16-bit DST, so with fp32 accumulation ttnn.linear adds the bias after.
+    M, K, N = 2 * TILE, 4 * TILE, 4 * TILE
+    torch.manual_seed(6)
+    a, b, bias = _randn(1, 1, M, K), _randn(1, 1, K, N), _bias_row(N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 0, 0), C_slice_M_tiles=2, C_slice_N_tiles=4, K_chunk_tiles=2
+    )
+    out = _run_linear(device, a, b, bias, config, fp32_dest_acc_en=True)
+    _check(out, _golden(a, b) + bias.to(torch.float32))
+
+
+def test_fused_bias_bfp8(device):
+    M, K, N = 2 * TILE, 2 * TILE, 4 * TILE
+    torch.manual_seed(7)
+    a, b, bias = _randn(1, 1, M, K), _randn(1, 1, K, N), _bias_row(N)
+    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 0), C_slice_M_tiles=2, C_slice_N_tiles=2)
+    out = _run_linear(device, a, b, bias, config, bias_dtype=ttnn.bfloat8_b)
+    _check(out, _golden(a, b) + _quantized(bias, ttnn.bfloat8_b).to(torch.float32))
+
+
+ACTIVATIONS = [
+    ("relu", ttnn.UnaryOpType.RELU, torch.relu, 0.02),
+    ("gelu", ttnn.UnaryOpType.GELU, torch.nn.functional.gelu, 0.03),
+    ("silu", ttnn.UnaryOpType.SILU, torch.nn.functional.silu, 0.03),
+]
+
+
+@pytest.mark.parametrize("with_bias", [True, False], ids=["bias", "no_bias"])
+@pytest.mark.parametrize("K_chunk_tiles", [0, 1], ids=["single_K_chunk", "K_spill"])
+@pytest.mark.parametrize("name,op,torch_op,rtol", ACTIVATIONS, ids=[a[0] for a in ACTIVATIONS])
+def test_fused_activation(device, name, op, torch_op, rtol, K_chunk_tiles, with_bias):
+    M, K, N = 4 * TILE, 3 * TILE, 4 * TILE
+    torch.manual_seed(8)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    bias = _bias_row(N) if with_bias else None
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 1, 1),
+        C_slice_M_tiles=2,
+        C_slice_N_tiles=2,
+        K_chunk_tiles=K_chunk_tiles,
+        fused_activation=ttnn.UnaryWithParam(op),
+    )
+    out = _run_linear(device, a, b, bias, config)
+    golden = _golden(a, b) + (bias.to(torch.float32) if with_bias else 0)
+    _check(out, torch_op(golden), rtol=rtol, pcc=0.999)
 
 
 # ----------------------------------------------------------------------------------------------------
@@ -891,6 +1008,205 @@ def test_multicast(device, name, grid, K_chunks):
     )
     out = _run(device, a, b, config)
     _check(out, _golden(a, b))
+
+
+MULTICAST_TO_ALL_GRIDS = [
+    # name, cores (columns, rows), C slice spans all of M (A to all cores) or all of N (B to all cores)
+    ("A_to_all_of_4x2", (4, 2), "M"),
+    ("B_to_all_of_2x4", (2, 4), "N"),
+    ("A_to_all_of_3x3", (3, 3), "M"),
+]
+
+
+@pytest.mark.parametrize("name,grid,spans", MULTICAST_TO_ALL_GRIDS, ids=[g[0] for g in MULTICAST_TO_ALL_GRIDS])
+def test_multicast_to_all_cores(device, name, grid, spans):
+    """C is one row of C slices (one column): every core of the rectangle needs the same A (B) slices, which its
+    first core multicasts to all of them, over several K chunks and with ragged edges and a batched B."""
+    gx, gy = _grid(device)
+    columns, rows = grid
+    if columns > gx or rows > gy:
+        pytest.skip(f"needs a {columns}x{rows} grid, device has {gx}x{gy}")
+    num_cores = columns * rows
+    B, K = 2, 7 * TILE + 9
+    M, N = (3 * TILE - 5, num_cores * 2 * TILE - 13) if spans == "M" else (num_cores * 2 * TILE - 13, 3 * TILE - 5)
+    torch.manual_seed(27)
+    a, b = _randn(1, B, M, K), _randn(1, B, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, columns - 1, rows - 1),
+        C_slice_M_tiles=3 if spans == "M" else 2,
+        C_slice_N_tiles=2 if spans == "M" else 3,
+        K_chunk_tiles=2,
+    )
+    out = _run(device, a, b, config)
+    _check(out, _golden(a, b))
+
+
+# ----------------------------------------------------------------------------------------------------
+# Auto placement: MatmulUnifiedProgramConfig() without cores, which is also what Quasar takes without a config
+# ----------------------------------------------------------------------------------------------------
+
+AUTO_PLACEMENT_SHAPES = [
+    # name, batch, M, K, N (elements), PCC and relative error bounds: each favours a different placement. A 16-bit
+    # DST summing 128 K tiles is off by up to ~8% on every path.
+    ("decode", 1, 32, 1024, 2048, 0.9998, 0.03),
+    ("prefill", 1, 512, 512, 1024, 0.9998, 0.03),
+    ("skinny_N", 1, 2048, 256, 64, 0.9998, 0.03),
+    ("long_K", 1, 64, 4096, 64, 0.998, 0.1),
+    ("ragged", 1, 3 * TILE + 5, 5 * TILE - 3, 7 * TILE + 9, 0.9998, 0.03),
+    ("batched_A_folded_into_M", 4, 2 * TILE, 256, 512, 0.9998, 0.03),
+]
+
+
+def _auto_config(device, auto):
+    # None takes the unified matmul only on Quasar; an empty MatmulUnifiedProgramConfig takes it everywhere.
+    return None if auto == "none" else qsr.MatmulUnifiedProgramConfig()
+
+
+@pytest.mark.parametrize("auto", ["empty_unified_config", "none"])
+@pytest.mark.parametrize("name,batch,M,K,N,pcc,rtol", AUTO_PLACEMENT_SHAPES, ids=[s[0] for s in AUTO_PLACEMENT_SHAPES])
+def test_auto_placement(device, name, batch, M, K, N, pcc, rtol, auto):
+    torch.manual_seed(31)
+    a, b = _randn(1, batch, M, K), _randn(1, 1, K, N)
+    out = _run(device, a, b, _auto_config(device, auto))
+    _check(out, _golden(a, b), rtol=rtol, pcc=pcc)
+
+
+@pytest.mark.parametrize(
+    "out_layout",
+    [
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
+    ids=["height", "width", "block"],
+)
+def test_auto_placement_sharded_output(device, out_layout):
+    """A sharded output without a shard spec gets the layout asked for, the C slices tiling it one per core."""
+    M, K, N = 8 * TILE, 4 * TILE, 8 * TILE
+    torch.manual_seed(32)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    out_mem = ttnn.MemoryConfig(out_layout, ttnn.BufferType.L1)
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    out = ttnn.experimental.quasar.matmul(
+        a_t,
+        b_t,
+        program_config=qsr.MatmulUnifiedProgramConfig(),
+        memory_config=out_mem,
+        compute_kernel_config=_hifi4(device),
+    )
+    assert out.memory_config().memory_layout == out_layout
+    _check(ttnn.to_torch(out), _golden(a, b))
+
+
+def test_auto_placement_keeps_explicit_fields(device):
+    # K chunk and subblock stay as given; only the cores, C slice and orientation are chosen.
+    M, K, N = 4 * TILE, 6 * TILE, 4 * TILE
+    torch.manual_seed(33)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(K_chunk_tiles=2, subblock_M_tiles=1, subblock_N_tiles=2)
+    _check(_run(device, a, b, config), _golden(a, b))
+
+
+@pytest.mark.parametrize("auto", ["empty_unified_config", "none"])
+def test_auto_placement_linear_bias_and_activation(device, auto):
+    M, K, N = 2 * TILE, 4 * TILE, 8 * TILE
+    torch.manual_seed(34)
+    a, b, bias = _randn(1, 1, M, K), _randn(1, 1, K, N), _bias_row(N)
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    bias_t = ttnn.from_torch(bias, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    config = _auto_config(device, auto)
+    if config is not None:
+        config.fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+    out = ttnn.experimental.quasar.linear(
+        a_t,
+        b_t,
+        bias=bias_t,
+        program_config=config,
+        activation=None if config is not None else "relu",
+        compute_kernel_config=_hifi4(device),
+    )
+    _check(ttnn.to_torch(out), torch.relu(_golden(a, b) + bias.to(torch.float32)))
+
+
+@pytest.mark.parametrize("auto", ["empty_unified_config", "none"])
+def test_auto_placement_resnet50_fc(device, auto):
+    """ResNet-50's fc as the Quasar model calls it: a width-sharded L1 activation, DRAM weights and bias, a
+    width-sharded L1 output and LoFi with packer L1 accumulation."""
+    gx, gy = _grid(device)
+    K, N, M = 2048, 1024, 32
+    num_cores = max(c for c in range(1, gx * gy + 1) if (N // TILE) % c == 0 and (K // TILE) % c == 0)
+    columns = max(c for c in range(1, gx + 1) if num_cores % c == 0 and num_cores // c <= gy)
+    activation_grid = _rect(0, 0, columns - 1, num_cores // columns - 1)
+    torch.manual_seed(35)
+    a, b, bias = _randn(1, 1, M, K), _randn(1, 1, K, N), _randn(1, 1, 1, N)
+    a_t = ttnn.from_torch(
+        a,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            _shard(activation_grid, [M, K // num_cores]),
+        ),
+    )
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    bias_t = ttnn.from_torch(bias, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    out = ttnn.experimental.quasar.linear(
+        a_t,
+        b_t,
+        bias=bias_t,
+        program_config=_auto_config(device, auto),
+        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        ),
+    )
+    assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    _check(ttnn.to_torch(out), _golden(a, b) + bias.to(torch.float32), rtol=0.05, pcc=0.999)
+
+
+@pytest.mark.parametrize("auto", ["empty_unified_config", "none"])
+def test_auto_placement_sharded_inputs(device, auto):
+    """A height-sharded L1 A can be bound in place by the placement that keeps it where it is; a DRAM-sharded B is
+    read by the cores next to its banks."""
+    if auto == "none" and not _on_quasar(device):
+        pytest.skip("without a config Wormhole / Blackhole take the legacy picker, which rejects a DRAM-sharded B")
+    gx, gy = _grid(device)
+    rows = min(gy, 4)
+    dram = device.dram_grid_size()
+    num_banks = dram.x * dram.y
+    M, K, N = rows * 2 * TILE, 4 * TILE, num_banks * 2 * TILE
+    torch.manual_seed(36)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    in0_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard(_rect(0, 0, 0, rows - 1), [2 * TILE, K])
+    )
+    dram_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram.x - 1, dram.y - 1))])
+    in1_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, _shard(dram_grid, [K, 2 * TILE])
+    )
+    out = _run(device, a, b, _auto_config(device, auto), in0_mem=in0_mem, in1_mem=in1_mem)
+    _check(out, _golden(a, b))
+
+
+def test_auto_placement_rejects_a_C_slice(device, expect_error):
+    a_t = ttnn.from_torch(_randn(1, 1, 64, 64), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_t = ttnn.from_torch(_randn(1, 1, 64, 64), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    with expect_error(RuntimeError, "the C slice is chosen with the placement"):
+        ttnn.experimental.quasar.matmul(
+            a_t,
+            b_t,
+            program_config=qsr.MatmulUnifiedProgramConfig(C_slice_M_tiles=1),
+            compute_kernel_config=_hifi4(device),
+        )
 
 
 # ----------------------------------------------------------------------------------------------------

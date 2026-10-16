@@ -10,8 +10,9 @@
 // Reader thread t (Quasar DM cores; one thread elsewhere) reads K chunks t, t + num_reader_threads, ... of every
 // C slice into its own part of the A and B DFBs, and the compute's waits take the threads' parts in turn.
 // K_chunks_per_C_slice_padded rounds the K chunks up to the reader threads; the extra ones carry credits only.
-// With multicast, the first core of a row reads the row's A slices and multicasts them to the rest of the row,
-// and the first core of a column does the same with B; a receiving core reads none of that operand.
+// With multicast, the first core of a row (or of all the cores) reads the A slices and multicasts them to the rest,
+// and the first core of a column (or of all) does the same with B; a receiving core reads none of that operand.
+// FUSE_BIAS: before a C slice's K chunks, one reader thread pushes the bias tiles of the C slice's columns.
 // Compile-time args are the template parameters, runtime args the function parameters.
 
 #include <stdint.h>
@@ -50,13 +51,15 @@ template <
 TT_KERNEL void reader(
     uint32_t first_C_slice,
     uint32_t num_C_slices,
-    uint32_t A_mcast_receiver,  // 1 when this core's A slices come from the first core of its row
-    uint32_t A_mcast_sender_x,  // NoC coordinates of that core, which multicasts along the row to A_mcast_end_x
+    uint32_t A_mcast_receiver,  // 1 when this core's A slices come from the first core of its multicast group
+    uint32_t A_mcast_sender_x,  // NoC coordinates of that core, which multicasts to the rectangle up to A_mcast_end_x/y
     uint32_t A_mcast_sender_y,
     uint32_t A_mcast_end_x,
-    uint32_t B_mcast_receiver,  // the same for B and the first core of this core's column, down to B_mcast_end_y
+    uint32_t A_mcast_end_y,
+    uint32_t B_mcast_receiver,  // the same for B
     uint32_t B_mcast_sender_x,
     uint32_t B_mcast_sender_y,
+    uint32_t B_mcast_end_x,
     uint32_t B_mcast_end_y) {
     // first_C_slice: this core's first C slice in the row-major walk over C (across N, then down M);
     // num_C_slices: how many consecutive ones it produces, per batch.
@@ -73,6 +76,11 @@ TT_KERNEL void reader(
 
     [[maybe_unused]] const auto A = TensorAccessor(tensor::A);
     [[maybe_unused]] const auto B = TensorAccessor(tensor::B);
+#ifdef FUSE_BIAS
+    DataflowBuffer bias_row(dfb::bias);
+    const auto bias = TensorAccessor(tensor::bias);
+    const uint32_t bias_tile_bytes = get_tile_size(dfb::bias);
+#endif
 
     // A borrowed operand's DFB IS its resident L1 shard: hand the whole DFB to the compute once and never
     // read it. (A: the single K chunk covers all of K; B: the compute consumes it one K chunk at a time.)
@@ -119,6 +127,23 @@ TT_KERNEL void reader(
             // Origin of this C slice, in tiles, from its position in the walk.
             const uint32_t C_slice_first_M_tile = ((first_C_slice + MN_chunk) / C_slices_across_N) * C_slice_M_tiles;
             const uint32_t C_slice_first_N_tile = ((first_C_slice + MN_chunk) % C_slices_across_N) * C_slice_N_tiles;
+#ifdef FUSE_BIAS
+            // The compute's bias waits take the reader threads' parts of the DFB in turn, one per C slice.
+            if ((batch * num_C_slices + MN_chunk) % num_reader_threads == thread) {
+                bias_row.reserve_back(C_slice_N_padded_tiles);
+                for (uint32_t n_tile = 0; n_tile < C_slice_N_tiles && C_slice_first_N_tile + n_tile < N_tiles;
+                     ++n_tile) {
+                    noc.async_read(
+                        bias,
+                        bias_row,
+                        bias_tile_bytes,
+                        {.page_id = C_slice_first_N_tile + n_tile},
+                        {.offset_bytes = n_tile * bias_tile_bytes});
+                }
+                noc.async_read_barrier();
+                bias_row.push_back(C_slice_N_padded_tiles);
+            }
+#endif
             for (uint32_t K_chunk = thread; K_chunk < K_chunks_per_C_slice_padded; K_chunk += num_reader_threads) {
                 if (K_chunk >= K_chunks_per_C_slice) {
                     A_slice.reserve_back(A_slice_tiles);
@@ -205,16 +230,11 @@ TT_KERNEL void reader(
                             {.noc_x_start = A_mcast_sender_x,
                              .noc_y_start = A_mcast_sender_y,
                              .noc_x_end = A_mcast_end_x,
-                             .noc_y_end = A_mcast_sender_y,
+                             .noc_y_end = A_mcast_end_y,
                              .addr = A_slice.get_write_ptr()},
                             /*linked=*/true);
                         A_data_ready.set_multicast(
-                            noc,
-                            A_mcast_sender_x,
-                            A_mcast_sender_y,
-                            A_mcast_end_x,
-                            A_mcast_sender_y,
-                            A_mcast_num_dests);
+                            noc, A_mcast_sender_x, A_mcast_sender_y, A_mcast_end_x, A_mcast_end_y, A_mcast_num_dests);
                     }
                 }
                 if constexpr (B_mcast_num_dests > 0) {
@@ -231,17 +251,12 @@ TT_KERNEL void reader(
                             {},
                             {.noc_x_start = B_mcast_sender_x,
                              .noc_y_start = B_mcast_sender_y,
-                             .noc_x_end = B_mcast_sender_x,
+                             .noc_x_end = B_mcast_end_x,
                              .noc_y_end = B_mcast_end_y,
                              .addr = B_slice.get_write_ptr()},
                             /*linked=*/true);
                         B_data_ready.set_multicast(
-                            noc,
-                            B_mcast_sender_x,
-                            B_mcast_sender_y,
-                            B_mcast_sender_x,
-                            B_mcast_end_y,
-                            B_mcast_num_dests);
+                            noc, B_mcast_sender_x, B_mcast_sender_y, B_mcast_end_x, B_mcast_end_y, B_mcast_num_dests);
                     }
                 }
 
