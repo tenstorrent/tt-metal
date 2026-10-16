@@ -32,6 +32,17 @@ inline void _calculate_tanh_derivative_(const int iterations)
 
         if constexpr (!WITH_PRECOMPUTED_TANH)
         {
+            // The tail pair is (A=0, B=1.0) and the lut evaluates A*|x| + B, so +-inf would
+            // come out of it as 0 * inf + 1 = NaN. Move them onto the finite tail first: the
+            // lut returns exactly 1.0 there and the result is 0 = sech^2(+-inf), as for every
+            // finite |x| >= 3. A NaN input stays NaN. Guarding the input rather than the
+            // result because the six table registers leave no LReg to keep it live past the lut.
+            v_if (sfpi::is_inf(val))
+            {
+                val = 4.0f;
+            }
+            v_endif;
+
             val = sfpi::lut(val, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Retain);
         }
 

@@ -1962,6 +1962,9 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.Square,  # +/-inf -> +inf, NaN -> NaN
         MathOperation.I0,  # +/-inf -> +inf (even, unbounded); torch.special.i0 gives NaN there
         MathOperation.Hardshrink,  # NaN -> NaN, not shrunk to zero
+        # +/-inf -> 0: the lut saturates to 1.0 and 1 - 1 = 0, so the golden's tail arm already
+        # says it; the kernel guards the infinities itself, since the table evaluates A*|x| + B.
+        MathOperation.TanhDerivativeLut,  # NaN -> NaN
         # The comparison family answers on the SFPU's total order, not IEEE's unordered compare:
         # +NaN ranks above every finite value, so a clamp lands on its upper bound rather than
         # propagating. sfpu_total_order_key models that. UnaryLt/Le/Max sit in the block above,
@@ -2157,6 +2160,9 @@ GENERATED_NAN_SIGN_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.Sin,
         MathOperation.Softsign,
         MathOperation.Tan,
+        # Forwards a NaN through the lut and one SFPMAD; Wormhole returned it sign-set for a
+        # positive NaN input, so its bf16 narrowing lands on -inf against the golden's +inf.
+        MathOperation.TanhDerivativeLut,
     }
 )
 
