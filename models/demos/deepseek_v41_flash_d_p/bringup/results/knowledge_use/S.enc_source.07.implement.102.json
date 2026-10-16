@@ -1,0 +1,38 @@
+{
+ "used": [
+  {
+   "id": "DS41-50",
+   "how": "started from its probe_003 / probe_004 numbers; probe_005 tested the one option the entry left open (an fp32-score path): bf16 scores alone make the 0.023, and fp32 scores with the score op's bf16 gates still give 0.0102 > 0.01, so I made no device change and added the numbers to the entry",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-49",
+   "how": "left the indexer module (ratio 2, natural query blocks) unchanged",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "_check_tail has no noise floor for int step outputs (it falls back to the fixed swap_out_rel 0.01), and the nudged CPU indexer fails that limit too. This is the 5th implement attempt on the same deterministic result. Passing needs an owner waiver, a framework change, or an owner decision on an fp32 gates + scores + new fp32 top-k path; all of these are outside the allowed files or rules."
+ ],
+ "overseer": [],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "S.enc_source.07",
+  "role": "implement",
+  "attempt": 102,
+  "agent": "ttnn-expert-debugger",
+  "t": "2026-10-16T21:00:00",
+  "head": "9eb223ec8c7",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.enc_source.07.implement.102.json"
+  ]
+ }
+}

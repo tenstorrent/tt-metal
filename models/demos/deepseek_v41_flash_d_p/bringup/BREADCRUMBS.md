@@ -1256,3 +1256,67 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_indexer.py`;
   op test `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/indexer_score/tests/unit/test_natural_query_blocks.py`;
   hybrid `scripts/tt-probe.sh ds41_indexer < tests/ttnn/unit_tests/operations/ds41_indexer/probes/probe_002.py`.
+
+## S.enc_source.07 implement (attempt 1)
+- No code change. The indexer module (C.enc_source.indexer) is already a device step of enc_source
+  (hooks.py DEVICE_STEPS, device_component "indexer"); the gate fails only `swap_indexer_out` rel 0.022992 <= 0.01
+  ("fixed"); err_swap_out 0.0304 <= 0.0632 and every step check pass.
+- Why fixed: `_check_tail` takes its limit from the nudged noise-floor outputs only when they are float; the top-k is
+  int32, so it falls back to swap_out_rel 0.01 (DS41-50).
+- Probe 003 (ds41_indexer): the same tail from the framework's own nudged CPU indexer runs is 0.0255-0.0263 (it fails
+  0.01 too); bf16-rounded CPU scores (the official index_score dtype) 0.0234; device 0.0230, overlap vs CPU 0.9945.
+  The device is at its noise floor; no truncation / bias / wrong dtype found (rule 14). Raising the scores to fp32
+  would exceed the reference (bf16 index_score, model.py:557), so not done. Needs an owner waiver for
+  swap_indexer_out (tests.waivers indexer) or a framework floor for int outputs. Detail: known_issues_detail.md DS41-50.
+- Re-run: gate `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_07_indexer.py`;
+  probe `PYTHONPATH=$PWD scripts/tt-probe.sh ds41_indexer < tests/ttnn/unit_tests/operations/ds41_indexer/probes/probe_003.py`
+  (its random-tie variants crash on -inf + inf after the lowest-tie row; the rows above it are the evidence).
+
+## S.enc_source.07 implement (attempt 2)
+- Fixed the attempt-1 knowledge-check failure: the DS41-50 detail section heading in known_issues_detail.md now equals
+  the bullet title ("The tail check after an index step uses a fixed 0.01; its noise floor is 0.026"); `knowledge.check`
+  is clean (NEXT ID DS41-51).
+- No code change (rule 14, DS41-50). Gate re-run: identical to attempt 1, deterministic: err_swap_out 0.030351 <= 0.063240,
+  every step check ok, only `swap_indexer_out` FAIL rel 0.022992 <= 0.010000 (fixed), worst row 0.145.
+  `_check_tail` (testing/component.py:552-580) uses the noise-floor limit only for float step outputs; the top-k is int,
+  so it falls back to swap_out_rel 0.01. The bf16-score reference arithmetic (model.py:557) gives 0.0234 and the nudged
+  CPU indexer gives 0.0255-0.0263, so the step cannot pass without an owner waiver (spec tests.waivers: enc_source indexer,
+  read by NF.waive at component.py:597) or a framework floor for int outputs.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_07_indexer.py`.
+
+## S.enc_source.07 implement (attempt 3)
+- No code change (rule 14, DS41-50). Checked `hf/inference/model.py:551-558` again: q, index_k, the einsum and
+  weights_proj run in the default bf16, so bf16 scores are the reference's precision and fp32 scores would exceed it.
+- Gate re-run, identical (deterministic, 3rd time): err_swap_out 0.030351 <= 0.063240, all step checks ok, only
+  `swap_indexer_out` FAIL rel 0.022992 <= 0.010000 (fixed; `_check_tail` component.py:552/580 skips the noise model for
+  the int top-k). The nudged CPU indexer gives 0.0255-0.0263 on this check, so it needs an owner waiver
+  (spec tests.waivers indexer) or a framework floor for int outputs; nothing in tt/ can move it at the reference's precision.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_07_indexer.py`.
+
+## S.enc_source.07 implement (attempt 101, expert debugger)
+- Fresh check of DS41-50, no code change. Probe `tests/ttnn/unit_tests/operations/ds41_indexer/probes/probe_004.py`:
+  device top-k has no duplicates, valid counts equal on all 2048 rows; the 101 same-set rows differ only in order
+  (their tail rel goes 3.9e-4 -> 0 in the CPU order). The 0.023 is all near-tie flips, below the nudged CPU
+  indexer's own 0.0255-0.0263 (probe_003). No device bug; `swap_indexer_out` needs an owner waiver
+  (spec tests.waivers, enc_source indexer) or a framework noise floor for int step outputs in `_check_tail`.
+- Re-run: `PYTHONPATH=$PWD scripts/tt-probe.sh ds41_indexer < tests/ttnn/unit_tests/operations/ds41_indexer/probes/probe_004.py`.
+
+## S.enc_source.07 implement (attempt 102)
+- No code change (rule 14, DS41-50). Probe `tests/ttnn/unit_tests/operations/ds41_indexer/probes/probe_005.py` splits
+  the device's two bf16 points: bf16 scores alone 0.0234, bf16 gates + bf16 scores 0.0224 (device 0.0230), and
+  bf16 gates + fp32 scores (the device with an fp32 top-k) 0.0102, still over the fixed 0.01. No fp32 top-k exists
+  (topk_large_indices / ttnn.topk are BFLOAT16-only). Passing would need fp32 gates + scores + a new fp32 top-k,
+  which is the CPU's arithmetic and finer than model.py's bf16, and that is an owner decision. Otherwise the check
+  needs a waiver (spec tests.waivers, enc_source indexer) or a framework int-output floor in `_check_tail`.
+- Gate re-run (4th time, deterministic): err_swap_out 0.030351 <= 0.063240; only `swap_indexer_out` FAIL 0.022992 <= 0.01 (fixed).
+- Re-run: `PYTHONPATH=$PWD scripts/tt-probe.sh ds41_indexer < tests/ttnn/unit_tests/operations/ds41_indexer/probes/probe_005.py`.
+
+## S.enc_source.07 implement (attempt 103, expert debugger)
+- No code change (rule 14, DS41-50). Checked that the framework's nudged runs (`_capturing`, component.py:330-345)
+  use the same device-chain inputs as the device indexer, so their 0.0255-0.0263 tail is a valid floor; model.py:551-558
+  computes index_score in bf16, and FIX.2 forbids raising precision above the reference to pass a fixed bar.
+- Probe `tests/ttnn/unit_tests/operations/ds41_indexer/probes/probe_006.py`: the frozen gate with only the
+  `is_floating_point()` filter lifted in `_check_tail` (component.py:600) passes every check: swap_indexer_out
+  0.022992 <= 0.052679 (2 x floor 0.026339), err_swap_out 0.030351 <= 0.063240, run_swap_test True. The step needs
+  that framework change (int step outputs get the nudged tail floor) or the owner waiver (spec tests.waivers, indexer).
+- Re-run: `PYTHONPATH=$PWD scripts/tt-probe.sh ds41_indexer < tests/ttnn/unit_tests/operations/ds41_indexer/probes/probe_006.py`.

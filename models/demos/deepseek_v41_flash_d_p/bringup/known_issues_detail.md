@@ -275,3 +275,56 @@ large fraction of a TF32 ulp: x^2 is summed by an FPU reduce (x^2 read at TF32, 
 DS41-16; the cross-chunk carry reloaded through srcA, its CHANGELOG entry 3). A `return_sum_sq` option would remove the
 r rounding but not the FPU sum, so it is not "at least as accurate" as today's SFPU fp32 statistic (4.7e-7, and the
 rsqrt inside mhc_pre_xing 5e-7, REPORT.md). The overseer's OV-10 (closed) reached the same decision from REPORT.md.
+
+## The tail check after an index step uses a fixed 0.01; its noise floor is 0.026
+
+`testing/component.py:_check_tail` re-runs the steps after the last swapped one from the CPU step's output and
+compares the block out. Its limit is 2 x the same tail run from the step's nudged noise-floor outputs, but only
+when those are floating point; the indexer's are int32 top-k, so it falls back to `swap_out_rel` = 0.01 ("fixed").
+Probe `tests/ttnn/unit_tests/operations/ds41_indexer/probes/probe_003.py` (the gate's run_swap_test with
+`_check_tail` wrapped; layer 2, golden chunk 1, 2048 rows, start 2048, 2048 keys visible to the last row), tail rel
+vs the block with the CPU indexer output:
+
+| top-k fed to the tail | tail rel | worst row | overlap vs CPU (mean / worst) | rows with a flip |
+|---|---|---|---|---|
+| device (bf16 scores, fp32 DEST head sum) | 0.02299 | 0.145 | 0.99447 / 0.97852 | 1947 |
+| CPU fp32, inputs nudged in their bf16 cells, seed 0 | 0.02634 | 0.187 | 0.98637 / 0.94922 | 2046 |
+| same, seed 1 | 0.02554 | 0.146 | 0.98633 / 0.95117 | 2048 |
+| same, seed 2 | 0.02615 | 0.133 | 0.98604 / 0.94727 | 2048 |
+| CPU, final score rounded to bf16, lowest-index ties | 0.02339 | 0.186 | 0.99474 / 0.97852 | 1882 |
+
+Rows without a flip: device 3.9e-4 (top-k order: device descending score, CPU ascending index), flipped rows ~0.020.
+A flipped key swaps one sparse-attention input whose attention weight the index score does not bound, so each flip
+moves its row by ~2 %. The official code computes `index_score` in bf16 (`hf/inference/model.py:557-558`: bf16 q,
+bf16 k_cache, einsum out bf16, bf16 weights_proj), so bf16 scores are the reference's precision; the device's fp32
+DEST head sum is already finer. The F72 rule applied to the int case would give 2 x 0.0263 = 0.0527 >= 0.0230.
+
+Confirmed by the debugger (S.enc_source.07 debug, probe_004.py): 2048 rows, no duplicate index on either side, the
+valid (>= 0) count equal on every row, 101 rows with the same index set (0 rows in the same order). Putting those
+101 rows in the CPU's order takes their tail row rel from 3.9e-4 to exactly 0 (total 0.022992 -> 0.022991). So the
+whole 0.023 comes from near-tie flips; no index is lost, duplicated or out of range on the device.
+
+Which rounding makes the 0.023 (S.enc_source.07 implement attempt 102, probe
+`tests/ttnn/unit_tests/operations/ds41_indexer/probes/probe_005.py`: the CPU indexer with the device's two bf16
+points switched on one at a time, fed to the same tail):
+
+| top-k fed to the tail | tail rel | worst row | rows with a different index set |
+|---|---|---|---|
+| device (bf16 gates, bf16 scores) | 0.02299 | 0.145 | 1947 |
+| CPU, bf16 gates + bf16 scores | 0.02245 | 0.146 | 1883 |
+| CPU, fp32 gates + bf16 scores | 0.02339 | 0.186 | 1882 |
+| CPU, bf16 gates + fp32 scores (= the device with an fp32 top-k) | 0.01017 | 0.132 | 395 |
+
+The bf16 score rounding before the top-k accounts for all of the 0.023. Rounding the gates to bf16 adds nothing.
+An fp32 top-k does not exist (`topk_large_indices` and `ttnn.topk` reject anything but BFLOAT16). Even if it did,
+with the score op's bf16 gates it still gives 0.0102 > 0.01. Only fp32 gates plus fp32 scores plus an fp32 top-k,
+which is the CPU's arithmetic and finer than model.py's bf16, could pass the fixed limit. That trades speed for
+exactness, so it is the owner's decision (brief rule). The remaining paths are still a waiver or a framework floor
+for int outputs.
+
+The framework fix, measured (S.enc_source.07 implement attempt 103, probe
+`tests/ttnn/unit_tests/operations/ds41_indexer/probes/probe_006.py`): the frozen gate's `run_swap_test` with only the
+`is_floating_point()` filter lifted in `_check_tail` (component.py:600; int nudged outputs fed to the tail as they
+are). Every check passes: `swap_indexer_out` 0.022992 <= 0.052679 (2 x the nudged floor 0.026339), err_swap_out
+0.030351 <= 0.063240, every step check ok, `run_swap_test` True. That one-line change in
+`models/demos/common/bringup/testing/component.py` (read-only for model steps), or the owner waiver, closes the step.

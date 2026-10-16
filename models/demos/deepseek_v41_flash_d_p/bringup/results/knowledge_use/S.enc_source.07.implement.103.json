@@ -1,0 +1,37 @@
+{
+ "used": [
+  {
+   "id": "DS41-50",
+   "how": "took its claim (device at the noise floor, check fixed at 0.01 for int outputs) as a hypothesis, verified that the nudged noise-floor runs share the device chain's inputs (component.py _capturing), then measured the framework fix directly: probe_006 lifts only the float filter in _check_tail and the whole gate passes (0.0230 <= 0.0527); added that to the detail section",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "OV FIX.2",
+   "how": "owner rule 'match the reference precision, never above it to pass a test' ruled out fp32 scores / fp32 top-k as a fix",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "No framework noise floor for int step outputs in _check_tail (component.py:600); the measured one-line change (allow int model outputs, feed them to run_tail unconverted) makes S.enc_source.07 pass. This is the 6th attempt on the same deterministic result; the orchestrator should route it to the framework / owner instead of re-running implement."
+ ],
+ "overseer": [],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "S.enc_source.07",
+  "role": "implement",
+  "attempt": 103,
+  "agent": "ttnn-expert-debugger",
+  "t": "2026-10-16T21:30:00",
+  "head": "9eb223ec8c7",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.enc_source.07.implement.103.json"
+  ]
+ }
+}
