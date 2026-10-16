@@ -33,11 +33,11 @@ inline bool bf16_dest_atan() {
 }
 template <int ITERATIONS = 8>
 inline void calculate_atan_bf16() {
-    ckernel::sfpu::bf16::calculate_reciprocal_complement<ckernel::sfpu::AtanBf16Config, ITERATIONS>();
+    ckernel::sfpu::bf16::atan::calculate_reciprocal_complement<ckernel::sfpu::AtanBf16Config, ITERATIONS>();
 }
 inline void init_atan_bf16() {
     if (bf16_dest_atan()) {
-        ckernel::sfpu::bf16::init_reciprocal_complement<ckernel::sfpu::AtanBf16Config>();
+        ckernel::sfpu::bf16::atan::init_reciprocal_complement<ckernel::sfpu::AtanBf16Config>();
     }
 }
 

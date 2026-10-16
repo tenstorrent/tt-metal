@@ -10,7 +10,7 @@
 #include "ckernel_sfpu_atan_bf16_reciprocal_complement_core.h"
 #include "sfpi.h"
 
-namespace ckernel::sfpu::bf16
+namespace ckernel::sfpu::bf16::atan
 {
 // Replay slots of one BH row: 12 ahead of the Horner rungs, two per rung (a gap slot,
 // then the MAD), one more where degree seven reloads LREG3, and the 4-slot tail.
@@ -36,6 +36,7 @@ inline void init_reciprocal_complement()
     sfpi::vConstFloatPrgm1 = Config::kCoefficients[Config::kDegree];
     sfpi::vConstFloatPrgm2 = Config::kCoefficients[Config::kDegree - 1];
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+#if !defined(DISABLE_SFPLOADMACRO)
     // The body's load macro: its two instruction templates, its sequence and its misc settings.
     TTI_SFPSETSGN(0, p_sfpu::LREG2, 15, 0);
     TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG0, p_sfpu::LREG0, 13, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
@@ -44,6 +45,7 @@ inline void init_reciprocal_complement()
     TTI_SFPCONFIG(0, 4, 0);
     TTI_SFPCONFIG(0xf00, 8, 1);
     TTI_SFPNOP;
+#endif
 }
 
 template <class Config, int Iterations = 32>
@@ -75,8 +77,16 @@ inline void calculate_reciprocal_complement()
     TTI_SFPLOADI(6, sfpi::SFPLOADI_MOD0_LOWER, Config::kCoefficientBits[1] & 0xffffu);
     TTI_SFPLOADI(4, sfpi::SFPLOADI_MOD0_UPPER, Config::kComplementBits >> 16);
     TTI_SFPLOADI(4, sfpi::SFPLOADI_MOD0_LOWER, Config::kComplementBits & 0xffffu);
+#if defined(DISABLE_SFPLOADMACRO)
+    // The same rows without the load macro or the replay buffer: identical results.
+#pragma GCC unroll 1
+    for (int d = 0; d < 32; ++d)
+    {
+        ttpoly::atan::reciprocal_complement_body<Config, ADDR_MOD_7, ADDR_MOD_6, false>();
+    }
+#else
     TTI_REPLAY(0, Config::kBodySlots, 1, 1);
-    ttpoly::reciprocal_complement_body<Config, ADDR_MOD_7, ADDR_MOD_6>();
+    ttpoly::atan::reciprocal_complement_body<Config, ADDR_MOD_7, ADDR_MOD_6>();
 #pragma GCC unroll 8
     for (int d = 1; d < 32; ++d)
     {
@@ -87,7 +97,8 @@ inline void calculate_reciprocal_complement()
     TTI_SFPNOP;
     TTI_SFPNOP;
     TTI_SFPNOP;
-    // The body's macro stored every row rounded to BF16, so only a NaN row is rewritten,
+#endif
+    // The body stored every row rounded to BF16, so only a NaN row is rewritten,
     // to +Inf for either sign. The traversal restarts at row 0, independently of caller cleanup.
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     sfpi::vInt nan_flags = sfpi::l_reg[sfpi::LRegs::LReg5];
@@ -96,10 +107,10 @@ inline void calculate_reciprocal_complement()
     {
         v_if (nan_flags < 0)
         {
-            sfpi::dst_reg[d] = ttpoly::target_raw_terminal_value<1>(sfpi::vFloat(0.0f));
+            sfpi::dst_reg[d] = ttpoly::atan::target_raw_terminal_value<1>(sfpi::vFloat(0.0f));
         }
         v_endif;
         nan_flags <<= 1;
     }
 }
-} // namespace ckernel::sfpu::bf16
+} // namespace ckernel::sfpu::bf16::atan

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-namespace ckernel::sfpu::ttpoly
+namespace ckernel::sfpu::ttpoly::atan
 {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
@@ -40,4 +40,4 @@ inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f)
         return vFloat(constant);
     }
 }
-} // namespace ckernel::sfpu::ttpoly
+} // namespace ckernel::sfpu::ttpoly::atan

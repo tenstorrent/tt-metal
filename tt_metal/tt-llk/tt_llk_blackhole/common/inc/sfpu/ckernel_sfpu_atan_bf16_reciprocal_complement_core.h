@@ -4,7 +4,7 @@
 
 // Selected reciprocal coordinate and reconstruction. Callers retain terminals,
 // coefficient ownership, rounding and traversal.
-namespace ckernel::sfpu::ttpoly
+namespace ckernel::sfpu::ttpoly::atan
 {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
@@ -61,7 +61,9 @@ inline void reciprocal_complement_short_rung()
     }
 }
 
-template <class Config, unsigned Hold, unsigned Advance>
+// LoadMacro false issues what the load macro schedules (init_reciprocal_complement) as plain instructions,
+// for builds without SFPLOADMACRO.
+template <class Config, unsigned Hold, unsigned Advance, bool LoadMacro = true>
 inline void reciprocal_complement_body()
 {
     TTI_SFPLOAD(0, 0, Hold, 0);
@@ -80,6 +82,18 @@ inline void reciprocal_complement_body()
     TTI_SFPSETCC(0, 0, 0, 0);
     TTI_SFPMAD(ckernel::p_sfpu::LCONST_neg1, 2, 4, 2, 0);
     TTI_SFPENCC(3, 0, 0, 10);
-    TTI_SFPLOADMACRO(3, 0, Advance, 0);
+    if constexpr (LoadMacro)
+    {
+        TTI_SFPLOADMACRO(3, 0, Advance, 0);
+    }
+    else
+    {
+        // x's sign onto the result, Nearest to BF16, stored over x.
+        TTI_SFPLOAD(3, 0, Hold, 0);
+        TTI_SFPNOP;
+        TTI_SFPSETSGN(0, 2, 3, 0);
+        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, 3, 3, SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        TTI_SFPSTORE(3, 0, Advance, 0);
+    }
 }
-} // namespace ckernel::sfpu::ttpoly
+} // namespace ckernel::sfpu::ttpoly::atan
