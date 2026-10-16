@@ -18,6 +18,13 @@ namespace {
 // Bounded so a producer that correctly blocks cannot deadlock the controller.
 constexpr uint32_t kObservationSpins = 65536;
 
+// The test ends with this thread's tile counter full; ~DataflowBuffer() waits until every posted entry is acked.
+void pop_remaining(DataflowBuffer& dfb) {
+    const uint32_t remaining = dfb.get_local_num_entries();
+    dfb.wait_front(remaining);
+    dfb.pop_front(remaining);
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -52,6 +59,7 @@ void kernel_main() {
 
     if (get_my_thread_id() != 0) {
         second_returned.wait_min(1);
+        pop_remaining(dfb);
         return;
     }
 
@@ -73,4 +81,5 @@ void kernel_main() {
     credit_released.up(1);
 
     second_returned.wait_min(1);
+    pop_remaining(dfb);
 }
