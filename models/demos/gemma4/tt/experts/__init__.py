@@ -64,6 +64,34 @@ class Gemma4Experts:
         self.local_expert_mask = None
         # Prefill sparsity: all-ones over the local experts (reused for every prefill call)
         self.prefill_sparsity = create_prefill_sparsity(mesh_device, self.num_local_experts)
+        # Optional token-dispatch prefill (DeepSeek dispatch/combine + fused GeGLU experts): prompts of at
+        # least GEMMA4_MOE_DISPATCH_MIN_TOKENS rows route tokens to the chips owning their experts instead of
+        # running every chip's experts on every token; shorter calls (the traced decode frame) keep the
+        # sparse_matmul path above.
+        self.dispatch_experts = None
+        self.dispatch_min_tokens = int(os.environ.get("GEMMA4_MOE_DISPATCH_MIN_TOKENS", "256"))
+        is_mesh = hasattr(mesh_device, "shape")
+        if os.environ.get("GEMMA4_MOE_DISPATCH_PREFILL", "0") == "1" and is_mesh and mesh_device.get_num_devices() > 1:
+            # imported here: the DeepSeek stack needs the GeluTanhGlu ttnn build, which the default path does not
+            from models.demos.gemma4.tt.experts.dispatch_prefill import Gemma4DispatchExperts
+
+            placeholder = bool(getattr(state_dict, "is_placeholder", False))
+            hf_list = (
+                None
+                if placeholder
+                else Gemma4DispatchExperts.hf_expert_list(state_dict["gate_up_proj"], state_dict["down_proj"])
+            )
+            self.dispatch_experts = Gemma4DispatchExperts(
+                mesh_device, config, hf_list, tensor_cache_path=tensor_cache_path, weights_dtype=weight_dtype
+            )
+        # Optional decode MoE kernel for the lane decode frame (token dispatch within the column, moe_compute):
+        # calls of at most the frame's rows take it; longer prefill calls keep the paths above.
+        self.moe_decode = None
+        if os.environ.get("GEMMA4_MOE_DECODE_KERNEL", "0") == "1" and is_mesh and mesh_device.get_num_devices() > 1:
+            from models.demos.gemma4.tt.experts.moe_decode import Gemma4MoEDecode
+
+            assert not getattr(state_dict, "is_placeholder", False), "the decode MoE kernel needs real expert weights"
+            self.moe_decode = Gemma4MoEDecode(mesh_device, config, state_dict["gate_up_proj"], state_dict["down_proj"])
 
     def __call__(self, hidden_states, dense_routing):
         lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
@@ -97,19 +125,42 @@ class Gemma4Experts:
                 routing_owner = ttnn.slice(dense_routing, [0, 0, lo, 0], [1, 1, hi, dense_routing.shape[-1]])
                 hidden_states.deallocate(True)
                 dense_routing.deallocate(True)
-                out = self._forward(hidden_owner, routing_owner, combine=False)
-                out = ccl_allreduce(
-                    out, self.mesh_config, self.ccl_manager, axis=self.mesh_config.ep_axis, group_size=self.ep
-                )
-                if self.mesh_config.tp > 1:
-                    out = ccl_allreduce(out, self.mesh_config, self.ccl_manager)
+                if self._use_decode_kernel(hidden_owner):
+                    out = self.moe_decode.forward(hidden_owner, routing_owner)  # full sum on every chip
+                elif self._use_dispatch(hidden_owner):
+                    # already the full sum on every chip
+                    out = self.dispatch_experts.forward(hidden_owner, routing_owner)
+                else:
+                    out = self._forward(hidden_owner, routing_owner, combine=False)
+                    out = ccl_allreduce(
+                        out, self.mesh_config, self.ccl_manager, axis=self.mesh_config.ep_axis, group_size=self.ep
+                    )
+                    if self.mesh_config.tp > 1:
+                        out = ccl_allreduce(out, self.mesh_config, self.ccl_manager)
+            elif self._use_dispatch(hidden_states) or self._use_decode_kernel(hidden_states):
+                # full sum of every lane's rows on every chip: each lane keeps its own block of rows
+                if self._use_decode_kernel(hidden_states):
+                    out = self.moe_decode.forward(hidden_states, dense_routing)
+                else:
+                    out = self.dispatch_experts.forward(hidden_states, dense_routing)
+                out = ttnn.mesh_partition(out, dim=2, cluster_axis=self.mesh_config.ep_axis)
             else:
                 out = self._forward(hidden_states, dense_routing, combine=False)
                 out = ccl_lane_scatter_rows(out, self.mesh_config)
             if pad_rows:
                 out = ttnn.slice(out, [0, 0, 0, 0], [1, 1, rows, out.shape[-1]])
             return out
+        if self._use_decode_kernel(hidden_states):
+            return self.moe_decode.forward(hidden_states, dense_routing)
+        if self._use_dispatch(hidden_states):
+            return self.dispatch_experts.forward(hidden_states, dense_routing)
         return self._forward(hidden_states, dense_routing, combine=True)
+
+    def _use_decode_kernel(self, hidden_states):
+        return self.moe_decode is not None and 1 < int(hidden_states.shape[2]) <= self.moe_decode.frame_rows
+
+    def _use_dispatch(self, hidden_states):
+        return self.dispatch_experts is not None and int(hidden_states.shape[2]) >= self.dispatch_min_tokens
 
     def _forward(self, hidden_states, dense_routing, combine=True):
         """

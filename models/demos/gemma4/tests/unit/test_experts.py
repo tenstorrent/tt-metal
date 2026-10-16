@@ -9,6 +9,7 @@
     pytest -k "prefill"    # prefill only
 """
 
+import pytest
 import torch
 
 import ttnn
@@ -29,6 +30,30 @@ from ...tests.test_factory import (
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 2), (1, 4), (2, 4), (8, 4)])
 @parametrize_batch_seq()
 def test_experts(batch_size, seq_len, mesh_device, reset_seeds, request):
+    run_experts(batch_size, seq_len, mesh_device, request)
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4), (8, 4)])
+@pytest.mark.parametrize("seq_len", [128, 1024, 4096 + 128], ids=["prefill_128", "prefill_1024", "prefill_4224"])
+def test_experts_dispatch(seq_len, mesh_device, reset_seeds, request, monkeypatch):
+    """Token-dispatch prefill (DeepSeek dispatch/combine + fused GeGLU experts) vs the HF reference; 4224 tokens
+    exercise a partial second dispatch chunk."""
+    monkeypatch.setenv("GEMMA4_MOE_DISPATCH_PREFILL", "1")
+    monkeypatch.setenv("GEMMA4_MOE_DISPATCH_MIN_TOKENS", "128")
+    run_experts(1, seq_len, mesh_device, request)
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4), (8, 4)])
+@pytest.mark.parametrize("seq_len", [64, 128, 256], ids=["frame_64", "frame_128", "frame_256"])
+def test_experts_decode_kernel(seq_len, mesh_device, reset_seeds, request, monkeypatch):
+    """Decode-frame routed experts on the decode MoE kernel (dispatch within the column, moe_compute, bfp4 experts)
+    vs the HF reference; the frame is the call size so each mesh row takes seq_len / rows tokens."""
+    monkeypatch.setenv("GEMMA4_MOE_DECODE_KERNEL", "1")
+    monkeypatch.setenv("GEMMA4_MOE_DECODE_FRAME", str(seq_len))
+    run_experts(1, seq_len, mesh_device, request)
+
+
+def run_experts(batch_size, seq_len, mesh_device, request):
     """Test MoE experts against HF reference.
 
     1x1: Uses reduced experts (8) and bfloat16 weights for fast single-card test.
