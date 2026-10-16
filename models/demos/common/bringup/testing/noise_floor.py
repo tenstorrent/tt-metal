@@ -298,16 +298,20 @@ def waiver(s, block_type: str | None, step: str) -> str:
     return str(w.get(f"{block_type}.{step}") or w.get(step) or "").strip()
 
 
-def waive(s, block_type, step: str, ok: bool, out, tag: str) -> bool:
-    """A waived step passes its noise-floor checks when its output is whole (finite, the right size); the failure is
-    printed and recorded (<tag>_waived = 1), never hidden."""
+def waive(s, block_type, step: str, ok: bool, out, tag: str, ref=None) -> bool:
+    """A waived step passes its noise-floor checks when its output is whole (finite, the right size) and, given the
+    reference ``ref``, within the structural limit (component_scaled_rel, F97: a waiver covers a precision gap, never
+    a wrong module such as a zero stub); the failure is printed and recorded (<tag>_waived = 1), never hidden."""
     why = waiver(s, block_type, step)
     if ok or not why:
         return ok
     whole = isinstance(out, torch.Tensor) and (not out.is_floating_point() or bool(torch.isfinite(out.float()).all()))
+    note = "" if whole else " (but the output is not whole: FAIL)"
+    if whole and isinstance(ref, torch.Tensor) and out.is_floating_point() and ref.is_floating_point():
+        lim = s.threshold("component_scaled_rel", 0.2)
+        r = ((out.float().reshape(ref.shape) - ref.float()).norm() / ref.float().norm().clamp_min(1e-30)).item()
+        if r > lim:
+            whole, note = False, f" (but rel {r:.3g} > {lim} vs the reference, a structural error: FAIL)"
     metrics.record(f"{tag}_waived", 1)
-    print(
-        f"WAIVED {tag}: the noise-floor checks above failed; owner waiver: {why}"
-        + ("" if whole else " (but the output is not whole: FAIL)")
-    )
+    print(f"WAIVED {tag}: the noise-floor checks above failed; owner waiver: {why}{note}")
     return whole
