@@ -1159,3 +1159,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   contract's pcc_producer_kv_*); judging a step at the next stored tensor; the fp8 flip rule at attention.
 - Selftests: test_noise_floor.py (nudge, dtypes, flips, no-topk selections, the official floor and its check);
   test_component_checks.py, test_swap_checks.py updated.
+- R.5's first run (DeepSeek-V4.1): 129 of 136 steps within the check, 7 out: every stateful one past the first layers
+  (compressors 1.04-1.23x, attention 1.04-2.3x at layers 3-24): the fp32 step read the golden's prefix caches while
+  the official output came from the official run's own. The hook now also returns each layer's official state
+  (`_state`: start / end, the reference's format); official_floor uses it (and the sources' end state) when given.
