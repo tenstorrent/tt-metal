@@ -278,6 +278,17 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
 
 
 @dataclass
+class SFPU_CLOBBER_LREGS(TemplateParameter):
+    """Fill the SFPU registers with garbage before the op's init (``clobber_sfpu_lregs()``).
+
+    Honoured by ``sfpu_ternary_test.cpp`` only; other harnesses ignore it.
+    """
+
+    def convert_to_cpp(self) -> str:
+        return "#define SFPU_CLOBBER_LREGS"
+
+
+@dataclass
 class SFPU_BINOP_MODE(TemplateParameter):
     """Select the float unary-with-scalar binop at compile time.
 
