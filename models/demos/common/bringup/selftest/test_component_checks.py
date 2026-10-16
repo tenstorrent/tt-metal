@@ -96,10 +96,22 @@ def test_the_sweep_passes_for_the_fixture_steps(gspec, monkeypatch, capsys, step
 def test_the_sweep_fails_when_a_mistake_slips_through(gspec, monkeypatch, capsys):
     s = gspec()
     monkeypatch.setenv(IMPL_ENV, "mutations")
-    loose = dict(CC.COMPONENT_DEFAULTS, component_calib=1000.0, component_bias_share=1.0)  # F76: limits = calib x model
-    monkeypatch.setattr(CC, "COMPONENT_DEFAULTS", loose)
+    monkeypatch.setattr(CC.Expect, "evaluate", lambda self, outs, quiet=False, stop_early=False: [])  # checks blind
+    monkeypatch.setattr(CC, "error_gate", lambda *a, **k: True)
     assert not run_component_test(s, "mlp", 0, checks="auto")
     assert "scale1.02                    SLIPPED" in capsys.readouterr().out
+
+
+def test_a_mistake_within_the_steps_own_limit_does_not_slip(gspec, monkeypatch, capsys):
+    # F91 (owner): DeepSeek-V4.1 compressor, rel limit 0.031-0.042: a 2 % scale is a size a correct step may reach
+    s = gspec()
+    monkeypatch.setenv(IMPL_ENV, "mutations")
+    loose = dict(CC.COMPONENT_DEFAULTS, component_calib=1000.0, component_bias_share=1.0)  # F76: limits = calib x model
+    monkeypatch.setattr(CC, "COMPONENT_DEFAULTS", loose)
+    assert run_component_test(s, "mlp", 0, checks="auto")
+    out = capsys.readouterr().out
+    assert "scale1.02                    within limit" in out and "SLIPPED" not in out
+    assert got()["sweep_mlp_L00_slipped"] == 0
 
 
 def test_output_kinds():
