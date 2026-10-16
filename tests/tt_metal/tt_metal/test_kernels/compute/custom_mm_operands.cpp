@@ -17,7 +17,7 @@ void kernel_main() {
     constexpr std::uint32_t blocks = get_compile_time_arg_val(0);
     constexpr std::uint32_t rows = get_compile_time_arg_val(1);
     constexpr bool mixed = get_compile_time_arg_val(2);
-    constexpr std::uint32_t mode = get_compile_time_arg_val(3);  // plain, compressed, DEST reuse
+    constexpr std::uint32_t mode = get_compile_time_arg_val(3);  // plain, compressed, DEST reuse, banked plain
     constexpr std::uint32_t input_block_tiles = mode == 2 ? 5 : 3;
     constexpr std::uint32_t producer_ct = mode == 2 ? 2 : 1;
     constexpr auto weight_format = mode == 1 ? DataFormat::Bfp8_b : DataFormat::Float16_b;
@@ -67,7 +67,21 @@ void kernel_main() {
                 compressed_custom_mm_block<false>(a, b, metadata_address, 0, 2);
             }
         } else {
-            if constexpr (mixed) {
+            if constexpr (mode == 3) {
+                // Banked: the two K tiles of the plain call as two one-tile calls into the same DEST tile.
+                if constexpr (mixed) {
+                    custom_mm_block_init_short<false, false, true>(tt::CBIndex::c_0, Weight(b_base), producer_ct);
+                    custom_mm_block_bank_init(tt::CBIndex::c_0, Weight(0));
+                    custom_mm_block<false, false, true>(tt::CBIndex::c_0, Weight(b_base), 1, 1, 0, 1, producer_ct);
+                    custom_mm_block<false, false, true>(tt::CBIndex::c_0, Weight(b_base), 2, 2, 0, 1, producer_ct);
+                } else {
+                    custom_mm_block_init_short<false, false, true>(Activation(a_base), Weight(b_base), producer_ct);
+                    custom_mm_block_bank_init(Activation(0), Weight(0));
+                    custom_mm_block<false, false, true>(Activation(a_base), Weight(b_base), 1, 1, 0, 1, producer_ct);
+                    custom_mm_block<false, false, true>(Activation(a_base), Weight(b_base), 2, 2, 0, 1, producer_ct);
+                }
+                custom_mm_block_bank_end();
+            } else if constexpr (mixed) {
                 custom_mm_block_init_short<false, false, true>(tt::CBIndex::c_0, Weight(b_base), producer_ct);
                 custom_mm_block<false>(tt::CBIndex::c_0, Weight(b_base), 1, 1, 0, 2, producer_ct);
             } else {

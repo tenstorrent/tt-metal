@@ -58,10 +58,11 @@ inline void llk_unpack_AB_custom_mm_init(
  * @param tile_index_1: First weight tile, relative to operand1's read pointer.
  * @param kt_dim: Inner dimension in tiles, 1 to 256.
  * @param ct_dim: Output width in tiles, 1 to 16.
+ * @tparam banked: Alternate the configuration banks; the calls of a sequence use weight CBs of one page size.
  * @note Call @ref llk_unpack_AB_custom_mm_init first.
  * @note On the math thread, pair with @ref llk_math_custom_mm.
  */
-template <bool read_transposed = false>
+template <bool read_transposed = false, bool banked = false>
 inline void llk_unpack_AB_custom_mm(
     const std::uint32_t operand0,
     const std::uint32_t operand1,
@@ -79,6 +80,43 @@ inline void llk_unpack_AB_custom_mm(
     const std::uint32_t tile_index_B = tile_index_0;
     const std::uint32_t tile_size_A = get_local_cb_interface(operandA_id).fifo_page_size;
     const std::uint32_t tile_size_B = get_local_cb_interface(operandB_id).fifo_page_size;
-    _llk_unpack_AB_custom_mm_<read_transposed>(
+    _llk_unpack_AB_custom_mm_<read_transposed, banked>(
         base_address_A, base_address_B, tile_index_A, tile_index_B, tile_size_A, tile_size_B, kt_dim, ct_dim);
 }
+
+// A is the weights, B the activations; call after the init and the format configuration, outside a banked sequence
+template <bool transpose = false>
+inline void llk_unpack_AB_custom_mm_bank_init(
+    const std::uint32_t unpA_src_format,
+    const std::uint32_t unpA_dst_format,
+    const std::uint32_t unpA_face_r_dim,
+    const std::uint32_t unpA_num_faces,
+    const std::uint32_t unpB_src_format,
+    const std::uint32_t unpB_dst_format,
+    const std::uint32_t unpB_face_r_dim,
+    const std::uint32_t unpB_num_faces) {
+    // One byte per field: the four formats in the low word, face rows and faces in the high word, bit 63 transpose
+    const std::uint32_t formats =
+        unpA_src_format | (unpA_dst_format << 8) | (unpB_src_format << 16) | (unpB_dst_format << 24);
+    const std::uint32_t geometry = unpA_face_r_dim | (unpA_num_faces << 8) | (unpB_face_r_dim << 16) |
+                                   (unpB_num_faces << 24) | (static_cast<std::uint32_t>(transpose) << 31);
+    _llk_unpack_AB_custom_mm_bank_init_((static_cast<std::uint64_t>(geometry) << 32) | formats);
+}
+
+// Call after llk_unpack_AB_custom_mm_init with its operands and transpose, outside a banked sequence
+template <bool transpose = false>
+inline void llk_unpack_AB_custom_mm_bank_init(const std::uint32_t operand0, const std::uint32_t operand1) {
+    const std::uint32_t operandA_id = get_operand_id(operand1);
+    const std::uint32_t operandB_id = get_operand_id(operand0);
+    llk_unpack_AB_custom_mm_bank_init<transpose>(
+        unpack_src_format[operandA_id],
+        unpack_dst_format[operandA_id],
+        get_operand_face_r_dim(operandA_id),
+        get_operand_num_faces(operandA_id),
+        unpack_src_format[operandB_id],
+        unpack_dst_format[operandB_id],
+        get_operand_face_r_dim(operandB_id),
+        get_operand_num_faces(operandB_id));
+}
+
+inline void llk_unpack_AB_custom_mm_bank_end() { _llk_unpack_AB_custom_mm_bank_end_(); }

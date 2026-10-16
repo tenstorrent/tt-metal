@@ -18,7 +18,14 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-template <bool read_transposed = false, bool configure_mask_extent = false>
+// Posts of 8 or more tiles, or per tile at 4 or more columns and 8 or more K tiles, reach the consumer in bursts that the
+// next call's early start slows, so those calls drain first
+constexpr bool sdpa_custom_mm_unpack_waits_at_end(const std::uint32_t signal_granularity, const std::uint32_t ct_dim = 1, const std::uint32_t kt_dim = 2)
+{
+    return signal_granularity >= 8 || (signal_granularity == 1 && ct_dim >= 4 && kt_dim >= 8);
+}
+
+template <bool read_transposed = false, bool configure_mask_extent = false, bool wait_at_end = false>
 inline void _llk_unpack_AB_sdpa_custom_mm_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -65,5 +72,12 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
         }
     }
 
-    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
+    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim, wait_at_end);
+
+    if (mask_chunk)
+    {
+        // The mask unpack read unpacker 1's context-1 base: end on context 0 so a two-context follower cannot rewrite it.
+        wait_for_next_context(1);
+        reset_config_context();
+    }
 }
