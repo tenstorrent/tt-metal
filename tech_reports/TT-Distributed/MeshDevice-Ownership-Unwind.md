@@ -3,30 +3,26 @@
 Header under review: [`tt_metal/api/tt-metalium/mesh_device.hpp`](../../tt_metal/api/tt-metalium/mesh_device.hpp) (`MeshDevice::create`, `create_unit_mesh`, `create_unit_meshes`, `create_submesh(es)`).
 Related: [`MetalEnv-API-Review.md`](../TT-Fabric/MetalEnv-API-Review.md) (end state: the env always owns its context).
 
-Status: analysis only, no code changed. Line numbers are as of 2026-10-15.
+Status: prerequisites 0–4 are implemented on branch `ruizhang/meshdevice-ownership`; steps 5–7 are pending. D2 (`UnitMeshGroup`, §4), D3 (non-owning `tensor.device()`) and D5 (raw-pointer `get_parent_mesh()` / `get_submeshes()`) are decided. Line numbers are as of 2026-10-15, before those commits.
 
 ## Summary
 
 - **Accretion, not necessity.** `shared_ptr` and `enable_shared_from_this` arrived in Sep 2024 (`7738225beda`, #12719) so that `initialize()` could store `shared_from_this()` in the `SystemMesh` singleton's map of strong references. That registry caused use-after-free bugs and was downgraded to `weak_ptr` within two months (`919d46aeb7c`, `0e5fb148837`). The return type stayed, and later features were built on top of it.
 - **Only one step was motivated by Python.** Submesh ownership was inverted so that a submesh keeps its parent alive (`dbe14d445ad`, #18694), "because the parent mesh device must be kept alive longer than the children devices, however the current python code wasn't designed to handle that."
-- **Most uses are superficial:**
+- **Most uses are superficial, and all of these can be references or raw pointers:**
   - the `shared_ptr` parameters on sockets, services and `MeshWorkload`;
   - `IDevice::get_mesh_device()`, which is a downcast in disguise;
   - the `Device` → `MeshDevice` back-pointer (`TODO #20966`);
   - the owning fields in streaming services.
-
-  All of these can be references or raw pointers.
 - **Three structural dependencies remain. None of them needs `shared_ptr<MeshDevice>` as the public return type.**
   1. **Tensors observe the device weakly.** `MeshBuffer` holds a `weak_ptr<MeshDevice>` so that deallocating after the device is destroyed becomes a no-op. That needs an expiry signal, not ownership. A liveness token, already used by `PersistentL1Arena`, does the same job.
-  2. **Unit meshes jointly own a hidden parent.** This covers every result of `create_unit_mesh(es)`, and therefore `ttnn.open_device`, `ttnn.CreateDevices` and `MetalEnv::create_unit_meshes`. Each result is a 1x1 submesh of an uninitialized parent that only the submeshes own, and on the `MetalEnv` path that parent destroys the `MetalContext`. This is the one case that genuinely needs a reference count, but the count belongs on internal shared state (or on `MetalEnv`), not on the user's handle.
+  2. **Unit meshes jointly own a hidden parent.** This covers every result of `create_unit_mesh(es)`, and therefore `ttnn.open_device`, `ttnn.CreateDevices` and `MetalEnv::create_unit_meshes`. Each result is a 1x1 submesh of an uninitialized parent that only the submeshes own, and on the `MetalEnv` path that parent destroys the `MetalContext`. This is the one case that genuinely needs shared lifetime, but it belongs on the group, not on each device handle. **Decided (D2):** make the group explicit as a `UnitMeshGroup` type that owns its members. The existing `create_unit_meshes` becomes a deprecated wrapper over it, and `MetalEnv` owning the context is the later cleanup (§4).
   3. **A submesh keeps its parent alive.** In C++ this is an ordinary "parent outlives child" precondition; in Python it is a `keep_alive`.
 - **The Python `keep_alive` on `create_submesh` is backwards.** `keep_alive<1, 0>` makes the parent pin the child, which contradicts its own comment. It is left over from the Oct 2024 design, and the C++ `parent_mesh_` hides the mistake. Fix it regardless of the rest.
 - **Every Python device handle owns the device.** That includes `tensor.device()` and `ttnn.open_device`, even though both are bound with `rv_policy::reference`, because nanobind upgrades raw pointers to `enable_shared_from_this` types into shared ownership. As a result, when a device gets destroyed depends on Python reference counts.
-- **Two end states, same prerequisites.** Once nothing inside tt_metal needs shared ownership, there are two ways to finish:
+- **Two end states, same prerequisites.** Once nothing inside tt_metal needs shared ownership, there are two ways to finish. They complement each other: the recommendation is B first, then A's `unique_ptr` signatures as the replacement for the `shared_ptr` factories (see "Comparing Path A and Path B").
   - **Path A, `unique_ptr`:** the factories return `unique_ptr`. It is a small change that keeps today's construction code, but it makes heap allocation part of the API and changes existing signatures.
   - **Path B, plain object:** `MeshDevice` gets public constructors and becomes a plain, still non-movable object. Callers can keep it on the stack, as a member, in a `std::optional`, or behind any smart pointer. It changes no existing signature, but initialization has to move into the constructors.
-
-  The two complement each other. The recommendation is B first, then A's `unique_ptr` signatures as the replacement for the `shared_ptr` factories. See "Comparing Path A and Path B".
 - **Non-movability does not block Path B.** C++17 guaranteed copy elision lets an object be built directly in its final storage, and the repo returned a non-movable `DeviceMesh` by value in March 2024. Non-movability is required anyway, because command queues, buffers, programs and Python all capture the wrapper's address.
 
 ## Unwind plan
@@ -49,9 +45,9 @@ Each step can land on its own. They are listed in dependency order.
 | 2 | Add a liveness token to `MeshDeviceImpl`. `MeshBuffer` stores `MeshDevice*` plus a weak token. FFT plan caches key on `id()` instead of `weak_ptr` (§3) | M | The token must be reset first thing in `~MeshDevice`. You lose "`lock()` pins the device during deallocation", which only matters for a race that is already a bug. |
 | 3 | Change `shared_ptr<MeshDevice>` parameters to `MeshDevice&`. **Public:** sockets, stream services, `MeshWorkload`, socket nanobind bindings. **Internal, used during initialization:** `init_realtime_profiler_socket`, `init_streaming_profiler`, `RealtimeProfilerManager`, `streaming_profiler::Receiver::create`. The internal ones already store only raw pointers (§2.1). | M, mechanical | The public part is an API change: add `MeshDevice&` overloads first and deprecate the `shared_ptr` ones. The internal part must land before either end state, because neither a `unique_ptr`-owned object nor an object still under construction can produce a `shared_ptr` to itself. |
 | 4 | Owning `shared_ptr<MeshDevice>` fields (H2D/D2H/D2D stream services, tt-train `core::MeshDevice` and `core::Device`) become borrowed, with a documented precondition (§2.1) | S–M | Use-after-close becomes the caller's responsibility. The services already check `is_initialized()` in their destructors. |
-| 5 | Unit meshes: replace the hidden owning parent with internal shared group state, or have `MetalEnv` own the context (§4) | M–L | Needs a design decision (D2). Touches `close_impl`, the parent-chain checks for a command queue still in use, and the root walk in `dispatch_context`. |
-| 6 | A submesh holds a non-owning pointer to its parent. The parent's list of children becomes raw pointers, and children unregister in their destructor (§5) | M | C++ gains the precondition "the parent outlives its submeshes". Python is covered by step 0. |
-| 7 | Remove `enable_shared_from_this` from `MeshDevice` | XS once 1–6 land | The factories can keep returning `shared_ptr`. In Python, `tensor.device()` stops creating new owning handles and returns the existing wrapper instead (D3). |
+| 5 | Unit meshes: add `UnitMeshGroup`, which owns its members and the shared state (today, the hidden parent). `MetalEnv::create_unit_meshes` returns it directly. `MeshDevice::create_unit_meshes` / `create_unit_mesh` keep their signatures and are reimplemented on top of it with `shared_ptr`s whose control block owns the group, then deprecated (§4.1) | M | Additive: existing callers keep compiling and keep today's behavior. Members of a group cannot outlive it. Coupled with step 6 (§4.1, "Sequencing"). Touches `close_impl`, the parent-chain checks for a command queue still in use, and the root walk in `dispatch_context`. |
+| 6 | A submesh holds a non-owning pointer to its parent. The parent's list of children becomes raw pointers, and children unregister in their destructor. **`get_parent_mesh()` and `get_submeshes()` change to raw pointers** (`MeshDevice*`, `std::vector<MeshDevice*>`): an accepted API break (D5), since once the parent is not shared-owned there is no `shared_ptr` left to return (§5) | M | C++ gains the precondition "the parent outlives its submeshes". Python is covered by step 0. For unit meshes, the group (step 5) is what owns the parent. In-repo users of the two accessors: `dispatch_context.cpp`, `unit_mesh_utils.cpp`, `metal_env.cpp`, `test_mesh_device.cpp`, `test_dispatch_context.cpp`. `get_submeshes()` is also bound in Python (the conftests iterate it); it would return non-owning references to the live children. |
+| 7 | Remove `enable_shared_from_this` from `MeshDevice` | XS once 1–6 land | The factories can keep returning `shared_ptr`. In Python, `tensor.device()` stops creating new owning handles and returns the existing wrapper instead (D3, confirmed). Needs the full Python CI, not only single-chip. |
 
 Steps 1–4 are worth doing even if neither end state is pursued. They remove fragile code (§8) and are mostly mechanical.
 
@@ -59,7 +55,7 @@ Steps 1–4 are worth doing even if neither end state is pursued. They remove fr
 
 | # | Change | Size | Breaks / risk |
 | --- | --- | --- | --- |
-| A1 | New return types:<br>• `create`, `create_unit_mesh`, `create_submesh` → `std::unique_ptr<MeshDevice>`<br>• `create_unit_meshes` → `std::map<int, std::unique_ptr<MeshDevice>>`<br>• `create_submeshes` → `std::vector<std::unique_ptr<MeshDevice>>`<br>• the same for `MetalEnv::create_*`<br>In the implementation, `shared_ptr<MeshDevice>(new ...)` becomes `unique_ptr`. The two-phase initialization stays. | S | Callers that copy the result, or that spell out the container types (§7.2). |
+| A1 | New return types:<br>• `create`, `create_submesh` → `std::unique_ptr<MeshDevice>`<br>• `create_submeshes` → `std::vector<std::unique_ptr<MeshDevice>>`<br>• the same for `MetalEnv::create_mesh_device`<br>Unit meshes are not part of this step: they move to `UnitMeshGroup` in step 5, and `create_unit_mesh(es)` stay as deprecated wrappers until removed.<br>In the implementation, `shared_ptr<MeshDevice>(new ...)` becomes `unique_ptr`. The two-phase initialization stays. | S | Callers that copy the result, or that spell out the container types (§7.2). |
 | A2 | `get_parent_mesh()` → `MeshDevice*`, `get_submeshes()` → `std::vector<MeshDevice*>` | S | Callers that stored the result. |
 | A3 | nanobind: include `nanobind/stl/unique_ptr.h`. Python takes ownership of returned devices. | S | None for Python user code. |
 
@@ -69,7 +65,7 @@ Steps 1–4 are worth doing even if neither end state is pursued. They remove fr
 | --- | --- | --- | --- |
 | B1 | Public root-mesh constructors (config plus options, and a `MetalEnv&` variant) that do everything the factory does today, with a guard that runs `close_impl` if initialization throws (§7.3) | M | Nothing; it is additive. The work is moving the post-wrap half of `MeshDeviceImpl::create` into the constructor. |
 | B2 | Submesh constructor `MeshDevice(MeshDevice& parent, shape, offset)`. It registers with the parent and unregisters in its destructor. A parent destroyed with live submeshes aborts with a diagnostic. | M | Nothing; additive. |
-| B3 | Unit meshes: a heap convenience `create_unit_meshes` → `map<int, unique_ptr>`, and optionally a by-value variant `std::map<int, MeshDevice>` built with a pass-key constructor (§7.3) | S–M | Depends on prerequisite 5. |
+| B3 | Unit meshes: nothing new for users beyond step 5's `UnitMeshGroup`. Internally, the group can hold its members by value (node-based storage with a pass-key constructor) instead of through `unique_ptr` (§7.3) | S | Depends on prerequisite 5. |
 | B4 | nanobind: bind the constructors with `nb::init<...>`, the submesh one with `keep_alive<1, 2>`. `ttnn.open_mesh_device` and the other Python entry points construct `ttnn.MeshDevice(...)`. | S | None for Python user code. |
 | B5 | Deprecate the `shared_ptr`-returning factories. Either remove them or replace them with Path A's `unique_ptr` signatures as a heap convenience. | — | The normal deprecation schedule (D4). |
 
@@ -92,7 +88,7 @@ Path A changes how the existing factories hand out a device. Path B changes what
 | Construction code | Unchanged: wrap the impl, then initialize | The post-wrap half of `MeshDeviceImpl::create` moves into the constructors |
 | Cleanup when initialization throws | Automatic. The `unique_ptr` owns the object before initialization starts, so `~MeshDevice` runs `close_impl`, as it does today. | Has to be written. A constructor that throws never runs `~MeshDevice`, so a guard must call `close_impl`. |
 | Submesh | `create_submesh` returns `unique_ptr` | Constructed from `MeshDevice& parent` |
-| Unit meshes | `std::map<int, std::unique_ptr<MeshDevice>>` | The same, plus an optional by-value `std::map<int, MeshDevice>` |
+| Unit meshes | `UnitMeshGroup` (step 5), the same in both paths | `UnitMeshGroup`; internally it may hold members by value |
 | Python binding | Factories return `unique_ptr`; nanobind hands ownership to the Python object | `nb::init` constructs the device inside the Python object |
 | **Using a device** | | |
 | Where a device can live | Heap only | Stack, member, `std::optional`, `std::deque`/`std::map` node, `unique_ptr`, `shared_ptr` |
@@ -141,8 +137,9 @@ If only one path is funded, A is cheaper. But it builds heap allocation into the
 | # | Question | Options | Recommendation |
 | --- | --- | --- | --- |
 | D1 | End-state handle type | (a) Path A only; (b) Path B only; (c) B, then A's signatures as the heap convenience; (d) keep the `shared_ptr` factories and only do the prerequisites | (c). A constructor supports stack, member, `optional::emplace`, `make_unique`, `make_shared` and `nb::init`, whereas a factory forces one ownership model on everyone. See "Comparing Path A and Path B". |
-| D2 | Unit-mesh shared state | (a) each child's impl holds an internal `shared_ptr<UnitMeshGroup>`; (b) `create_unit_meshes` returns an explicit group object; (c) `MetalEnv` owns the context | (a) now, which keeps today's "last one out" behaviour without users seeing it. (c) as the end state, which matches the MetalEnv review. |
-| D3 | Should a Python handle obtained from `tensor.device()` keep the device alive? | Yes (today, by accident) / No | No. Explicit `close()` is the documented model, and tensors already observe the device weakly. |
+| D2 | How unit meshes share their lifetime once `MeshDevice` stops being shared-owned | (b) an explicit `UnitMeshGroup` type that owns its members, with the old `create_unit_meshes` kept as a deprecated wrapper; alternative (a): an internal shared owner behind the hidden parent, with no API change. Separately, (c) `MetalEnv` owns the context. | **Decided: (b)**, with (c) as the end-state cleanup. (a) is the alternative. (c) is not a competing option: it removes the context-teardown duty from whichever of (a)/(b) is chosen. See §4. |
+| D3 | Should a Python handle obtained from `tensor.device()` keep the device alive? | Yes (today, by accident) / No | **Confirmed: No.** Explicit `close()` is the documented model, and tensors already observe the device weakly. Takes effect in step 7. Code that kept a device alive only through such a handle (for example `d = tensor.device()` after dropping the original) will see it destroyed. |
+| D5 | Accept the `get_parent_mesh()` / `get_submeshes()` change to raw pointers in step 6? | Accept / keep `shared_ptr` accessors | **Accepted.** There is no compatibility path once the parent is not shared-owned. |
 | D4 | Deprecation window for public APIs that take `shared_ptr<MeshDevice>` | — | Add the `MeshDevice&` overloads first, then follow the usual deprecation schedule. |
 
 ---
@@ -263,15 +260,104 @@ Every unit mesh is a submesh of a parent that the caller never sees ([`mesh_devi
 - **Command-queue checks.** It is consulted by the parent-chain checks for a command queue still in use ([`:1054-1080, 1169-1177`](../../tt_metal/distributed/mesh_device.cpp)) and by the root walk in `dispatch_context` ([`dispatch_context.cpp:192-195`](../../tt_metal/distributed/dispatch_context.cpp)).
 - **It is never initialized.** The physical devices themselves are already shared separately, through `shared_ptr<ScopedDevices>`.
 
-**Why this one genuinely needs a reference count.** N handles are owned independently. The shared teardown (the context, and the final device close) has to run when the last of them goes away, in any order.
+**Why this one genuinely needs shared lifetime.** Today N handles are owned independently. The shared teardown (the context, and the final device close) has to run when the last of them goes away, in any order. Once steps 6–7 stop children from sharing ownership of the parent, something else has to provide that.
 
-**But the count belongs on the resource, not the handle.** The options:
+**Decision (D2): make the group explicit.**
+- **Chosen, (b):** a `UnitMeshGroup` type owns its members and the shared state. The existing `create_unit_meshes` stays, reimplemented on top of the group, and goes through the formal deprecation process (§4.1).
+- **End-state cleanup, (c):** `MetalEnv` owns the context ([#21500](https://github.com/tenstorrent/tt-metal/issues/21500), the MetalEnv review's end state). This is not a competing option. It removes one duty, the context teardown, from whichever owner is chosen, and it can't happen until the global-registry scaffolding is gone.
+- **Alternative, (a):** an internal shared owner behind the hidden parent, with no API change (§4.2).
 
-| Option | User-visible change | Notes |
+### 4.1 `UnitMeshGroup` (chosen)
+
+**Why a type and not just an owner.** The group is a real concept that today is only implicit:
+- **Unit meshes are opened and closed together.** That is why the hidden parent exists at all: "Creating MeshDevices 1 by 1 for each device id is not equivalent to creating/closing them at the same time" (`dbe14d445ad`). A group-level `close()` says this directly. Today it is a side effect of whichever handle happens to die last.
+- **The group outlives (c).** After `MetalEnv` owns the context, the group stops driving context teardown, but it is still the unit that is opened and closed together and the home for membership and metadata. So it is not an API commitment that (c) would undo.
+- **`std::map<int, std::shared_ptr<MeshDevice>>` is rigid.** It hard-codes an `int` key, chip-id ordering, and shared ownership of each element, and it has no room for metadata or group-level operations.
+- **Code already rediscovers the group by hand.** ttnn's `unit_mesh::aggregate` / `disaggregate` find it through `get_parent_mesh()` and `get_submeshes()` ([`unit_mesh_utils.cpp:56-67, 115`](../../ttnn/core/tensor/unit_mesh/unit_mesh_utils.cpp)).
+
+**Invariant and name.** Exactly one 1x1 member per chip, hence `UnitMeshGroup`. Members are borrowed from the group and **must not outlive it**.
+
+**Interface sketch:**
+
+```cpp
+// Owns its members. Movable: members live on the heap or in node-based storage, so their addresses (which the
+// runtime captures, §7.1) never change. Not copyable.
+class UnitMeshGroup {
+public:
+    static UnitMeshGroup open(const std::vector<ChipId>& chip_ids, const MeshDeviceOptions& options = {});
+
+    bool contains(ChipId chip) const;
+    MeshDevice& at(ChipId chip) const;
+    std::size_t size() const;
+    std::vector<ChipId> chip_ids() const;
+    /* begin()/end() over (ChipId, MeshDevice&) */
+
+    void close();  // closes all members together
+};
+```
+
+`MetalEnv::create_unit_meshes` returns a `UnitMeshGroup` directly. It is experimental and has only test callers, so no deprecation is needed there.
+
+**What the type deliberately does not promise.** These keep later changes (including (c)) non-breaking:
+- **No parent accessor.** How the shared state is held (today a hidden, never-initialized parent `MeshDevice`) is an implementation detail.
+- **The chip-id key is not the core contract.** `at(ChipId)` matches today's map. A lookup by coordinate may be needed later (see "Scope"), because a member of a carved multi-host mesh can sit on a remote chip.
+- **No promise that destroying the group destroys the `MetalContext`.** That stops being true after (c).
+
+**Transition: the old API becomes a thin wrapper.** `MeshDevice::create_unit_meshes` keeps its signature (`std::map<int, std::shared_ptr<MeshDevice>>`) and builds a group. Dropping *shared ownership of `MeshDevice`* does not prevent returning `shared_ptr<MeshDevice>`: a `shared_ptr` may point at one object while its control block owns another. Here each returned pointer points at a member, and its control block keeps the whole group alive. Nothing inside tt_metal depends on these handles (they exist only for old callers), and they go away when the old API is removed.
+
+```cpp
+auto group = std::make_shared<UnitMeshGroup>(UnitMeshGroup::open(chip_ids, options));
+std::map<int, std::shared_ptr<MeshDevice>> result;
+for (ChipId id : group->chip_ids()) {
+    MeshDevice* member = &group->at(id);
+    // The captured `group` keeps the group (and so the chips) alive until the last member's handle is gone.
+    // The deleter closes the member when ITS last handle goes away, like destroying a unit mesh does today.
+    result[id] = std::shared_ptr<MeshDevice>(member, [group](MeshDevice* m) { m->close(); });
+}
+```
+
+- **Why a custom deleter and not the plain aliasing constructor.** `std::shared_ptr<MeshDevice>(group, &group->at(id))` would be simpler, but it changes behavior. Today, when the last handle to one unit mesh goes away, that child is destroyed and its `close_impl` runs (command queues and allocators released), even while its siblings live; the chips close only when the hidden parent dies. With plain aliasing a member would live until *all* handles are gone. The deleter keeps today's per-member teardown, and gives each member its own `use_count()`. Explicit `close()` on a device works either way. The group's own destruction still closes everything together.
+- This is exactly today's "last one out tears everything down", with no hidden-parent ownership trick and no other internal machinery. It is why (b) makes (a) unnecessary.
+- **Keep these handles out of Python.** While `MeshDevice` still derives from `enable_shared_from_this`, nanobind may try to attach its own control block when such a pointer is passed back into C++. The Python API binds `UnitMeshGroup` instead, as below.
+- All in-repo callers keep compiling and behaving the same. That is about 48 C++ call sites, almost all test fixtures, benchmarks and tools; ttnn's binding and `cluster_validation_utils.cpp` are the only non-test product code. It includes fixtures that store the map in explicitly typed members and copy the `shared_ptr`s into `devices_` vectors (about 1,200 uses in tests).
+- `create_unit_mesh` (single device) becomes one of these handles onto a one-member group.
+- Deprecate both with the repo's convention: a `deprecated` attribute whose message names the removal date, as the existing ones in `mesh_device.hpp` do ("... will be removed after September 9th, 2026"). The repo builds with `-Wno-deprecated-declarations` ([`CMakeLists.txt:211`](../../CMakeLists.txt)), so in-repo callers won't be warned and have to be migrated by hand. External users see the warning unless they also silence it.
+
+**Python.**
+- Bind `UnitMeshGroup` with the mapping protocol: `__getitem__`, `__iter__`, `__len__`, `keys` / `values` / `items`, plus `close()`. Dict-style code keeps working.
+- `__getitem__` returns members with `rv_policy::reference_internal`, so a member's Python handle keeps its group alive. This is the "N handles → hidden parent" relationship that `keep_alive` could not express before (§6).
+- `ttnn.CreateDevices` has no in-repo callers. It can return the group directly, or follow the same deprecation as the C++ API.
+
+**Sequencing with step 6.** Steps 5 and 6 are coupled:
+- The group has to own the hidden parent, so unit-mesh members must stop owning it through `parent_mesh_`. That is step 6's change, applied to unit meshes.
+- These handles carry no `enable_shared_from_this` state, so `shared_from_this()` on such a member throws. After steps 1–3a, its only remaining caller is `create_submesh(es)`, which uses it to share ownership of the parent.
+
+So either land steps 5 and 6 together, or land step 5 first while the group still creates its members through `std::shared_ptr` internally, so `shared_from_this()` keeps working until step 7.
+
+**Scope: only `create_unit_meshes` for now.** There is a second, incompatible kind of "unit mesh group" today: an opened, initialized mesh carved with `create_submeshes(MeshShape(1, 1))`. It is the only kind `unit_mesh::aggregate` works with, because `aggregate` needs the parent's allocator. On `create_unit_meshes` results it throws, with a misleading "remote-only MeshDevice" message, because the hidden parent was never initialized.
+- **Possible later extension:** something like `mesh.create_unit_mesh_group()` could return the same type. All its members would still be 1x1, so the name still fits. The group would *borrow* the parent instead of owning it, which is why the type doesn't expose its parent.
+- **Not this type:** general `create_submeshes(shape)` / `create_submesh(shape, offset)` results (1x4, 2x2, possibly overlapping) are not unit meshes. Arbitrary submesh sets are already modeled by the parent/submesh tree. A uniform tiling into equal tiles would be a separate type, of which `UnitMeshGroup` could become the 1x1 special case. It would not be a rename.
+
+**Open points.**
+- The deprecation date for `create_unit_mesh(es)`.
+- The end-state form of the single-device `create_unit_mesh`: a one-member `UnitMeshGroup`, or a plain 1x1 mesh.
+- Whether `get_parent_mesh()` on unit meshes stays public. It becomes a raw `MeshDevice*` accessor in step 6 (D5, accepted). If the group replaces it, the hidden parent can become a pure implementation detail, or disappear after (c).
+- How exposed external consumers (tt-mlir, tt-xla, ...) are. The in-repo footprint is small, which suggests they are lightly affected, but the formal deprecation process applies regardless.
+
+### 4.2 Alternative: an internal shared owner (a)
+
+Each unit-mesh child's impl holds an internal `shared_ptr` to a private group object that owns the hidden parent and its duties. The public API is unchanged.
+
+| | (a) internal shared owner | (b) `UnitMeshGroup` (chosen) |
 | --- | --- | --- |
-| (a) Each child's impl holds an internal `shared_ptr<UnitMeshGroup>` that owns the context-teardown duty | None | Keeps today's "last one out" semantics. `MeshDevice` itself can be uniquely owned. |
-| (b) `create_unit_meshes` returns an explicit group object that owns the parent and the children | `CreateDevices` and `create_unit_meshes` change shape | Makes the lifetime explicit, but breaks the "dict of independent devices" usage. |
-| (c) `MetalEnv` owns the context ([#21500](https://github.com/tenstorrent/tt-metal/issues/21500), MetalEnv review end state) | None for meshes | Removes the context reason entirely. Device close ordering is still handled by `ScopedDevices`. |
+| Public API change | None | Additive: a new type; the old API becomes a deprecated wrapper |
+| Internal machinery | A private group object behind the hidden parent | None beyond the group itself; aliasing provides the shared semantics for the old API |
+| Group-level operations (close together, membership) | Stay implicit | Explicit |
+| Hidden parent and `get_parent_mesh()` on unit meshes | Stay | Can be retired along with the old API |
+| After (c) | Shrinks, but still has to own the parent object while `get_parent_mesh()` is public | Stays useful as the group |
+| Transition burden | None | Migrate about 48 call sites by hand (deprecation warnings are silenced in-repo); the old API lingers until removed |
+
+(a) is the right choice only if no public API change is acceptable at all. It keeps the map's rigidity and the implicit group, and its machinery does not fully go away after (c).
 
 ## 5. Structural problem 3: a submesh keeps its parent alive
 
@@ -312,7 +398,7 @@ Every unit mesh is a submesh of a parent that the caller never sees ([`mesh_devi
 | Submesh → parent | Yes | `keep_alive<0, 1>` (§5) |
 | Service or socket → device | Yes | `keep_alive<1, 2>` on the constructor, or a documented precondition |
 | Tensor → device | Not needed | Tensors must *observe*, not own (§3). This is solved in C++ and does not depend on the bindings. Per-op `keep_alive` would be impractical anyway, because tensors are created inside ops. |
-| N returned unit meshes → hidden parent | No | `keep_alive` only relates arguments and return values. Solved in C++ by §4 option (a) or (c). |
+| N returned unit meshes → hidden parent | No | `keep_alive` only relates arguments and return values. With `UnitMeshGroup` (§4.1) the group is one Python object, and members returned by `__getitem__` with `rv_policy::reference_internal` keep it alive. |
 | C++ globals (default device, tt-train `AutoContext`) | No | The default device is already a raw pointer that callers reset. |
 
 **After prerequisite 7** (no more `enable_shared_from_this`):
@@ -369,15 +455,15 @@ C++17 guaranteed elision constructs the object directly in the caller's storage,
 
 ```cpp
 static std::unique_ptr<MeshDevice> create(const MeshDeviceConfig& config, /* ... */);
-static std::unique_ptr<MeshDevice> create_unit_mesh(int device_id, /* ... */);
-static std::map<int, std::unique_ptr<MeshDevice>> create_unit_meshes(const std::vector<int>& device_ids, /* ... */);
 std::unique_ptr<MeshDevice> create_submesh(const MeshShape& shape, const std::optional<MeshCoordinate>& offset = std::nullopt);
 std::vector<std::unique_ptr<MeshDevice>> create_submeshes(const MeshShape& shape);
 MeshDevice* get_parent_mesh() const;
 std::vector<MeshDevice*> get_submeshes() const;
 ```
 
-**Implementation.** In the construction sites ([`mesh_device.cpp:508, 763`](../../tt_metal/distributed/mesh_device.cpp); the hidden parent at `:622` goes away with prerequisite 5), `std::shared_ptr<MeshDevice>(new MeshDevice(...))` becomes `std::unique_ptr<MeshDevice>(new MeshDevice(...))`. The rest of each factory stays as it is.
+Unit meshes are covered by `UnitMeshGroup` (§4.1). `create_unit_mesh(es)` keep their `shared_ptr` signatures as deprecated wrappers until they are removed.
+
+**Implementation.** In the construction sites ([`mesh_device.cpp:508, 763`](../../tt_metal/distributed/mesh_device.cpp); the hidden parent at `:622` moves into `UnitMeshGroup` with prerequisite 5), `std::shared_ptr<MeshDevice>(new MeshDevice(...))` becomes `std::unique_ptr<MeshDevice>(new MeshDevice(...))`. The rest of each factory stays as it is.
 
 That includes cleanup when initialization fails. The `unique_ptr` owns the object before `initialize_impl` runs, so a throw destroys it, and `~MeshDevice` runs `close_impl`, exactly as today.
 
@@ -388,12 +474,12 @@ That includes cleanup when initialization fails. The `unique_ptr` owns the objec
 | `std::shared_ptr<MeshDevice> d = MeshDevice::create(...);` | Compiles. `unique_ptr` converts implicitly to `shared_ptr`. |
 | `auto d = MeshDevice::create(...); d->foo(); f(d.get()); g(*d);` | Compiles. |
 | `auto d = ...; other = d;`, or passing `d` by value | Breaks. Use `std::move`, or borrow with `*d` / `d.get()`. |
-| `std::map<int, std::shared_ptr<MeshDevice>> m = MeshDevice::create_unit_meshes(...);` | Breaks: the container types do not convert. Use `auto`. |
+| `std::map<int, std::shared_ptr<MeshDevice>> m = MeshDevice::create_unit_meshes(...);` | Unaffected: `create_unit_meshes` keeps its signature (a deprecated wrapper over `UnitMeshGroup`) until it is removed. |
 | `std::vector<std::shared_ptr<MeshDevice>> s = mesh->create_submeshes(...);` | Breaks for the same reason. |
 
 **Python.**
 - With `nanobind/stl/unique_ptr.h` included, a returned `unique_ptr` hands ownership to the Python object.
-- `ttnn.CreateDevices` returns a dict built from a `map<int, unique_ptr<MeshDevice>>`. Check that nanobind's map caster accepts move-only values; if it doesn't, build the dict by hand in the binding.
+- `ttnn.CreateDevices` returns a `UnitMeshGroup` bound with the mapping protocol (§4.1), or keeps its current form through the deprecation period.
 - `create_submesh` keeps `keep_alive<0, 1>`.
 
 **Limit.** The device is always on the heap. Keeping one by value needs Path B.
@@ -454,9 +540,7 @@ Notes on the sketch:
 - "The parent outlives its submeshes" is a precondition. The parent's destructor should abort with a diagnostic if children are still registered, which turns a use-after-free into a clear error. This applies to Path A too.
 - For a by-value `create_submeshes`, return a `std::deque<MeshDevice>` filled with `emplace_back(parent, shape, offset)`. A `deque` never relocates its elements and can itself be moved. Otherwise keep the heap convenience, `std::vector<std::unique_ptr<MeshDevice>>`.
 
-**Unit meshes.** With prerequisite 5 done, internal group state replaces the hidden parent, and each child is constructed with a reference to it. There are two forms:
-- **Heap convenience:** `std::map<int, std::unique_ptr<MeshDevice>>`. Python uses this one.
-- **By value:** `std::map<int, MeshDevice>`, built with `try_emplace(id, PassKey{}, group, id)`. Map nodes never relocate, and a map can be returned by value without moving its elements. Access goes through `.at()`, since `operator[]` needs a default constructor.
+**Unit meshes.** Users see `UnitMeshGroup` (§4.1) in both paths. What Path B changes is how the group may hold its members internally: by value instead of through `unique_ptr`, for example in a `std::map<ChipId, MeshDevice>` filled with `try_emplace(id, PassKey{}, *this, id)`. Map nodes never relocate, so members keep stable addresses, and the group stays movable because moving a map does not move its elements.
 
 The pass key makes a constructor callable only from inside tt_metal, while still letting `std::map` and `std::deque` construct elements in place:
 
@@ -467,9 +551,10 @@ public:
         PassKey() {}  // user-provided, so PassKey{} cannot bypass it via aggregate initialization
         friend class MeshDevice;
         friend class MeshDeviceImpl;
+        friend class UnitMeshGroup;
     };
     // Public, but only tt_metal can produce a PassKey.
-    MeshDevice(PassKey, std::shared_ptr<detail::UnitMeshGroup> group, ChipId chip);
+    MeshDevice(PassKey, UnitMeshGroup& group, ChipId chip);
 };
 ```
 
@@ -484,7 +569,7 @@ nb::class_<MeshDevice>(mod, "MeshDevice", nb::dynamic_attr())
 
 - `ttnn.open_mesh_device(...)` constructs `ttnn.MeshDevice(...)`. That is what `e7dade43c26` did with `py::init` in March 2024.
 - `mesh.create_submesh(...)` can stay as a Python method that calls the submesh constructor.
-- `ttnn.CreateDevices` uses the heap convenience.
+- `ttnn.CreateDevices` returns a `UnitMeshGroup` (§4.1).
 - No binding ever has to return a `MeshDevice` by value, which nanobind cannot do for a non-movable type.
 
 **What callers write if they opt in:**
