@@ -78,11 +78,10 @@ void kernel_main() {
         cb_wait_front(cb_in, chips);
         tile_regs_acquire();
         copy_tile_to_dst_init_short(cb_in);
+        add_binary_tile_init();
         copy_tile(cb_in, 0, 0);
         for (uint32_t c = 1; c < chips; c++) {
-            copy_tile_to_dst_init_short(cb_in);
             copy_tile(cb_in, c, 1);
-            add_binary_tile_init();
             add_binary_tile(0, 1, 0);
         }
         tile_regs_commit();

@@ -97,8 +97,10 @@ class BankStreamMatmul:
     MAX_DEST = 4  # fp32 tiles in half-sync Dest
     CB_X, CB_W, CB_OUT, CB_ZERO = 0, 1, 2, 3
     SEM_X = 0  # tiles of x the bank's loader has landed
-    PREFETCH_CHUNK_ROWS = 8  # weight rows per transaction id of prefetch_section
-    PREFETCH_CHUNKS = 2  # chunks in flight per core (12-24 rows in flight stream at ~400 GB/s)
+    # prefetch_section: weight rows per transaction id and chunks in flight per core. 16 rows in flight stream at
+    # ~400 GB/s alone; inside the fabric reductions 4 rows (2 x 2) keep the reduction from stretching.
+    PREFETCH_CHUNK_ROWS = 2
+    PREFETCH_CHUNKS = 2
 
     def __init__(self, plan, k, n, compute_kernel_config, skip_bank_core=False):
         """``skip_bank_core``: use the GROUP cores after each bank core in its row, so the bank cores stay free and
