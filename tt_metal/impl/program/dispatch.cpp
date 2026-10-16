@@ -715,8 +715,7 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
         CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
         0,
         metal_ctx.dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
-        0,
-        /*cq_id=*/0);
+        0);
     // Empty wait command initialized here. Will get updated when program is enqueued.
     program_command_sequence.stall_command_sequences[CachedStallSequenceIdx] =
         HostMemDeviceCommand(metal_ctx, cached_stall_cmd_seqB);
@@ -724,8 +723,7 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
         0,
         metal_ctx.dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
-        0,
-        /*cq_id=*/0);
+        0);
 }
 
 // Watcher only: pre-fill an RTA payload region with 0xBEEF0000 | rand16 so unused runtime-arg slots are
@@ -2348,9 +2346,7 @@ public:
         } else {
             // Wait Noc Write Barrier, wait for binaries/configs and launch_msg to be written to worker cores
             if (program_transfer_info.num_active_cores > 0) {
-                // cq_id is unused here: add_dispatch_wait only consults it for WAIT_STREAM/CLEAR_STREAM waits,
-                // and this is a plain barrier wait.
-                device_command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, /*cq_id=*/0);
+                device_command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
             }
         }
         uint32_t write_offset_bytes = device_command_sequence.write_offset_bytes();
@@ -2513,10 +2509,8 @@ void assemble_device_commands(
         calculator.add_dispatch_wait();
         program_command_sequence.wait_barrier_command_sequence =
             HostMemDeviceCommand(metal_ctx, calculator.write_offset_bytes());
-        // cq_id is unused here: add_dispatch_wait only consults it for WAIT_STREAM/CLEAR_STREAM waits, and this
-        // is a plain barrier wait.
         program_command_sequence.wait_barrier_command_sequence.add_dispatch_wait(
-            CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, /*cq_id=*/0);
+            CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
         TT_ASSERT(
             program_command_sequence.wait_barrier_command_sequence.size_bytes() ==
             program_command_sequence.wait_barrier_command_sequence.write_offset_bytes());
@@ -2735,15 +2729,12 @@ void update_program_dispatch_commands(
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
-    ProgramBinaryStatus program_binary_status,
-    uint8_t cq_id) {
+    ProgramBinaryStatus program_binary_status) {
     TT_ASSERT(cached_program_command_sequence.ctx != nullptr);
     MetalContext& metal_ctx = *cached_program_command_sequence.ctx;
 
     static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
-    static constexpr uint32_t wait_addr_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.addr));
     static constexpr uint32_t write_offsets_offset = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
     static constexpr uint32_t tensix_l1_write_offset_offset = write_offsets_offset + sizeof(uint32_t);
     static constexpr uint32_t tensix_l1_binary_write_offset_offset = write_offsets_offset + (sizeof(uint32_t) * 2);
@@ -2763,17 +2754,6 @@ void update_program_dispatch_commands(
     auto& curr_stall_seq_idx = cached_program_command_sequence.current_stall_seq_idx;
     cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
         wait_count_offset, &(dispatch_md.sync_count), sizeof(uint32_t));
-    // insert_stall_cmds baked in a placeholder wait.addr; patch in the real completion address for cq_id here. Unused
-    // when this arch waits via a NOC stream register instead of an L1 address.
-    if (!metal_ctx.hal().has_stream_registers()) {
-        const auto& mem_map = metal_ctx.dispatch_mem_map();
-        const uint32_t wait_addr =
-            mem_map.get_dispatch_message_addr_start() +
-            mem_map.get_completion_counter_offset(cq_id) * metal_ctx.hal().get_alignment(HalMemType::L1) +
-            mem_map.get_sync_offset(*sub_device_id);
-        cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
-            wait_addr_offset, &wait_addr, sizeof(uint32_t));
-    }
 
     // Update preamble based on kernel config ring buffer slot
     const auto& hal = metal_ctx.hal();
@@ -2906,9 +2886,7 @@ void update_traced_program_dispatch_commands(
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    SubDeviceId sub_device_id,
-    ProgramBinaryStatus program_binary_status,
-    uint8_t cq_id) {
+    ProgramBinaryStatus program_binary_status) {
     TT_ASSERT(cached_program_command_sequence.ctx != nullptr);
     MetalContext& metal_ctx = *cached_program_command_sequence.ctx;
     uint32_t i = 0;
@@ -2921,7 +2899,6 @@ void update_traced_program_dispatch_commands(
     const ProgramConfig& program_config = program.get_program_config(tensix_index);
 
     static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
-    static constexpr uint32_t wait_addr_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.addr));
     static constexpr uint32_t write_offsets_offset = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
     static constexpr uint32_t tensix_l1_write_offset_offset = write_offsets_offset + sizeof(uint32_t);
     static constexpr uint32_t tensix_l1_binary_write_offset_offset = write_offsets_offset + (sizeof(uint32_t) * 2);
@@ -2941,16 +2918,6 @@ void update_traced_program_dispatch_commands(
     auto& curr_stall_seq_idx = cached_program_command_sequence.current_stall_seq_idx;
     cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
         wait_count_offset, &(dispatch_md.sync_count), sizeof(uint32_t));
-    // insert_stall_cmds baked in a placeholder wait.addr; patch in the real completion address for cq_id here. Unused
-    // when this arch waits via a NOC stream register instead of an L1 address.
-    if (!hal.has_stream_registers()) {
-        const auto& mem_map = metal_ctx.dispatch_mem_map();
-        const uint32_t wait_addr = mem_map.get_dispatch_message_addr_start() +
-                                   mem_map.get_completion_counter_offset(cq_id) * hal.get_alignment(HalMemType::L1) +
-                                   mem_map.get_sync_offset(*sub_device_id);
-        cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
-            wait_addr_offset, &wait_addr, sizeof(uint32_t));
-    }
 
     // Update preamble based on kernel config ring buffer slot
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
@@ -3464,15 +3431,13 @@ void reset_worker_dispatch_state_on_device(
                 0,
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(i),
                 expected_num_workers,
-                cq_id,
                 1);
         }
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(i),
-            expected_num_workers,
-            cq_id);
+            expected_num_workers);
     }
     TT_ASSERT(command_sequence.write_offset_bytes() == reset_size);
     if (combine_setup && first_setup_size != 0) {
@@ -3555,7 +3520,6 @@ void reset_expected_num_workers_completed_on_device(
             0,
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
             num_expected_workers,
-            cq_id,
             dispatcher_type);
     };
 
@@ -3593,7 +3557,7 @@ static_assert(
     "Max number of dispatch message entries + 1 must be equal to the number of go message entries");
 
 static HostMemDeviceCommand build_set_core_go_message_mapping_on_device(
-    Device* device, const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping, uint8_t cq_id) {
+    Device* device, const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) {
     MetalContext& metal_ctx = MetalContext::instance(device->get_context_id());
     tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     uint32_t go_msg_size = metal_ctx.hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
@@ -3657,7 +3621,7 @@ static HostMemDeviceCommand build_set_core_go_message_mapping_on_device(
         go_msg_size,
         go_data.data());
     // Wait for previous writes before updating index.
-    command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, cq_id);
+    command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
 
     // Write go index to all cores.
     if (!sub_cmds.empty()) {
@@ -3685,14 +3649,13 @@ static HostMemDeviceCommand build_set_core_go_message_mapping_on_device(
         }
     }
     // Ensure go message index is received before writing out data for the next program.
-    command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, cq_id);
+    command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
     TT_ASSERT(command_sequence.size_bytes() == command_sequence.write_offset_bytes());
     return command_sequence;
 }
 
 std::vector<vector_aligned<uint32_t>> build_sub_device_setup_commands(
     Device* device,
-    uint8_t cq_id,
     ttsl::Span<const uint32_t> workers_per_sub_device,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
     bool reset_launch_msg_state) {
@@ -3709,7 +3672,7 @@ std::vector<vector_aligned<uint32_t>> build_sub_device_setup_commands(
     };
     append(build_set_num_worker_sems_on_dispatch(manager, workers_per_sub_device.size(), workers_per_sub_device));
     if (reset_launch_msg_state) {
-        append(build_set_core_go_message_mapping_on_device(device, core_go_message_mapping, cq_id));
+        append(build_set_core_go_message_mapping_on_device(device, core_go_message_mapping));
     }
     return batches;
 }
