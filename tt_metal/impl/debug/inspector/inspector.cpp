@@ -30,15 +30,6 @@
 namespace tt::tt_metal {
 
 namespace {
-inspector::Data* get_inspector_data() {
-    // TODO: we assume inspector only works on the silicon context
-    // https://github.com/tenstorrent/tt-metal/issues/39745
-    if (tt::tt_metal::MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
-        return tt::tt_metal::MetalContext::instance(DEFAULT_CONTEXT_ID).get_inspector_data();
-    }
-    return nullptr;
-}
-
 // The session of the context an object belongs to, or nullptr if the inspector is not active on that context.
 inspector::Data* session_of(const distributed::MeshDeviceImpl& mesh_device) {
     return mesh_device.metal_context().get_inspector_data();
@@ -69,18 +60,6 @@ bool warn_on_write_exceptions() { return g_warn_on_write_exceptions.load(std::me
 
 }  // namespace inspector
 
-// Inspector is not used on mock devices
-bool Inspector::is_enabled() {
-    if (tt::tt_metal::MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
-        auto& ctx = tt::tt_metal::MetalContext::instance(DEFAULT_CONTEXT_ID);
-        if (ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-            return false;
-        }
-        return ctx.rtoptions().get_inspector_enabled();
-    }
-    return false;
-}
-
 std::unique_ptr<inspector::Data> Inspector::initialize(
     MetalContext& context, std::optional<int> rank, uint64_t fw_compile_hash) {
     const auto& rtoptions = context.rtoptions();
@@ -98,6 +77,13 @@ std::unique_ptr<inspector::Data> Inspector::initialize(
         TT_INSPECTOR_LOG("Failed to initialize Inspector: {}", e.what());
         throw;
     }
+}
+
+bool Inspector::is_enabled(const MetalContext& context) { return context.get_inspector_data() != nullptr; }
+
+bool Inspector::capture_tensor_specs(const MetalContext& context) {
+    const auto* data = context.get_inspector_data();
+    return data != nullptr && data->capture_tensor_specs();
 }
 
 void Inspector::serialize_rpc(const MetalContext& context) {
@@ -459,17 +445,14 @@ void Inspector::global_semaphore_reset(const distributed::MeshBuffer* buffer, ui
 }
 
 void Inspector::emit_debug_entry(
+    const MetalContext& context,
     const distributed::MeshWorkloadImpl* mesh_workload,
     uint64_t runtime_id,
     std::string_view operation_name,
     std::vector<TensorSpec> tensor_specs,
     std::optional<distributed::MeshTraceId> trace_id) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+    auto* data = context.get_inspector_data();
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
@@ -509,11 +492,8 @@ void Inspector::emit_debug_entry(
     }
 }
 
-void Inspector::release_trace(distributed::MeshTraceId trace_id) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+void Inspector::release_trace(const MetalContext& context, distributed::MeshTraceId trace_id) noexcept {
+    auto* data = context.get_inspector_data();
     if (!data) {
         return;
     }
@@ -623,33 +603,37 @@ std::string Inspector::get_kernel_elf_path(
 
 namespace experimental::inspector {
 
-bool IsEnabled() { return Inspector::is_enabled(); }
+bool IsEnabled(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    return tt::tt_metal::Inspector::is_enabled(mesh_device.impl().metal_context());
+}
 
-bool ShouldCaptureTensorSpecs() {
-    return tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_capture_tensor_specs();
+bool ShouldCaptureTensorSpecs(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    return tt::tt_metal::Inspector::capture_tensor_specs(mesh_device.impl().metal_context());
 }
 
 std::optional<tt::tt_metal::distributed::MeshTraceId> GetCurrentMeshTraceId(
     tt::tt_metal::distributed::MeshDevice* mesh_device) {
     // mesh_command_queue().trace_id() is only supported in fast dispatch and would throw otherwise.
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (!mesh_device->impl().metal_env().get_rtoptions().get_fast_dispatch()) {
         return std::nullopt;
     }
     return mesh_device->mesh_command_queue().trace_id();
 }
 
 void EmitMeshWorkloadDebugEntry(
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload,
     uint64_t runtime_id,
     std::string_view operation_name,
     std::vector<TensorSpec> tensor_specs,
     std::optional<tt::tt_metal::distributed::MeshTraceId> trace_id) {
     tt::tt_metal::Inspector::emit_debug_entry(
-        &workload.impl(), runtime_id, operation_name, std::move(tensor_specs), trace_id);
-}
-
-void ReleaseTraceDebugEntries(tt::tt_metal::distributed::MeshTraceId trace_id) {
-    tt::tt_metal::Inspector::release_trace(trace_id);
+        mesh_device.impl().metal_context(),
+        &workload.impl(),
+        runtime_id,
+        operation_name,
+        std::move(tensor_specs),
+        trace_id);
 }
 
 }  // namespace experimental::inspector
