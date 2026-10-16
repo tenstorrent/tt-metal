@@ -23,9 +23,11 @@ namespace ckernel {
  * SFPU operations must reinitialize it as needed.
  * On Wormhole, this operation also programs LREG12 and LREG13. Callers must
  * restore those programmable constants before another SFPU operation relies on them.
- * This operation programs its own dest address mode on every call, so it may follow
+ * This operation overwrites ADDR_MOD_6 (dest incr 2) on every call, so it may follow
  * another SFPU op's init without a rand_tile_init in the same kernel (the PRNG stream
- * seeded by an earlier rand_tile_init or ttnn.manual_seed continues).
+ * seeded by an earlier rand_tile_init or ttnn.manual_seed continues); ops relying on
+ * ADDR_MOD_6 from their own init (topk_tile_init, square, sfpu reduce) must re-run
+ * that init after rand_tile.
  *
  * Return value: None
  *
