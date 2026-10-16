@@ -37,9 +37,6 @@ namespace sfpu {
  * - base < 0, pow = non-integer: Returns NaN (complex result)
  * - Overflow/underflow: Clamped to appropriate limits
  *
- * Parity: whether pow is an integer, and whether it is odd, is read from its mantissa (see
- * the body), so a negative base with an integer exponent gets its sign at every magnitude.
- *
  * @note This function assumes that the programmable constants are set to the following values:
  * - vConstFloatPrgm0 = 1.4426950408889634f;
  * - vConstFloatPrgm1 = -127.0f;
@@ -111,8 +108,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
         sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vSMag>(sfpi::vInt(0x560e) + zif), sfpi::RoundMode::Nearest);
 
     d2 = d1 * d2;
-    // d2 * d3 lies in [2^13, 2^23) for every zif in [0, 2^23), so _float_to_int32_positive_'s
-    // underflow and saturation arms are never taken: the conversion is its right shift alone.
+    // d2 * d3 is in [2^13, 2^23): the conversion is a right shift.
     sfpi::vFloat d23 = d2 * d3;
     zif = sfpi::exman(d23, sfpi::MantissaMode::ImplicitOne);
     zif = sfpi::shft(zif, sfpi::exexp(d23) - 23, sfpi::ShiftMode::Logical);
@@ -124,22 +120,19 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
 
     // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
     // Check valid base range
-    // Integer-ness and parity of pow, read from its mantissa at every magnitude: clamping |pow| to
-    // [1/2, 2^24] keeps exexp in [-1, 24] (every |pow| >= 2^24 is an even integer), and shifting the
-    // mantissa left by exexp + 7, then doubling, leaves the units bit at bit 31 and the fraction below it.
+    // Integer-ness and parity of pow from its mantissa.
     sfpi::vFloat abs_pow = sfpi::abs(pow);
     sfpi::vFloat pow_x = sfpi::min(sfpi::max(sfpi::vFloat(0.5f), abs_pow), 16777216.0f);
     sfpi::vInt pow_bits = sfpi::exman(pow_x, sfpi::MantissaMode::ImplicitOne);
     pow_bits = sfpi::shft(pow_bits, sfpi::exexp(pow_x) + 7, sfpi::ShiftMode::Logical);
     pow_bits = pow_bits + pow_bits;
 
-    // A negative base (sign bit set, as v_if(base < 0) reads it) takes the parity as the result's sign;
-    // y is non-negative here, so any other base keeps it.
+    // Negative base: the parity bit becomes the sign of y.
     y = sfpi::copysgn(y, sfpi::as<sfpi::vFloat>(pow_bits & sfpi::as<sfpi::vInt>(base)));
 
     v_if(base < 0.0f) {  // negative base
         // Check for integer power, if it is not then overwrite result with NaN
-        // The clamp reads zero as 1/2, so zero is excluded (on |pow|: SFPSETCC's == 0 does not match -0).
+        // The clamp reads zero as 1/2: exclude it.
         v_if((pow_bits + pow_bits) != 0 && abs_pow != 0.0f) {  // non-integer power: NaN
             y = std::numeric_limits<float>::quiet_NaN();
         }
@@ -203,8 +196,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
  * - base < 0, pow = integer: Returns proper signed result (negative if odd power)
  * - base < 0, pow = non-integer: Returns NaN (complex result)
  * - Overflow/underflow: Clamped to appropriate limits
- *
- * Parity: read from the mantissa, as in _sfpu_binary_power_21f_ above.
  */
 sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat pow) {
     // The algorithm works in two steps:
@@ -304,8 +295,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     sfpi::vFloat frac = (s - k) + e;
 
     // 2**frac via the accurate exp helper (frac is small), then scale by 2**k.
-    // For s below 128 (larger s is clamped to inf below), |frac| is at most 1/2 plus the tail e, inside
-    // the exp's range, so its guards are not needed (as in the Quasar copy of this kernel).
+    // |frac| stays inside the exp's range here (as in the Quasar copy).
     sfpi::vFloat y = _sfpu_exp_fp32_accurate_unsafe_(frac * LN2);
     // setexp writes the 8-bit exponent field and wraps instead of saturating, so an
     // overflowing magnitude silently becomes a finite value. Detect overflow from the
@@ -318,12 +308,11 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
     v_endif;
 
-    // Read by the parity test, the zero-exponent exclusion and the zero-base block below.
     sfpi::vFloat abs_pow = sfpi::abs(pow);
 
     // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
     // Check valid base range
-    // Integer-ness and parity of pow, and the sign of a negative base: as in _sfpu_binary_power_21f_ above.
+    // Parity and sign: as in _sfpu_binary_power_21f_.
     sfpi::vFloat pow_x = sfpi::min(sfpi::max(sfpi::vFloat(0.5f), abs_pow), 16777216.0f);
     sfpi::vInt pow_bits = sfpi::exman(pow_x, sfpi::MantissaMode::ImplicitOne);
     pow_bits = sfpi::shft(pow_bits, sfpi::exexp(pow_x) + 7, sfpi::ShiftMode::Logical);
