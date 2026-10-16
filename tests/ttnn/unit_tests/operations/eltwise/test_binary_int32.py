@@ -931,6 +931,10 @@ def test_div_edge_cases(rounding_mode, device):
         # in fp32 and the quotient is 1.0; trunc/floor: exact int64 golden, 0)
         (-2147483647, -2147483648),
     ]
+    if rounding_mode is None:
+        # INT32_MIN / -1 = 2^31: representable in the fp32 quotient (the int32 -> fp32 conversion must
+        # see the dividend as -2^31, not -0.0); it overflows the int32 result of trunc/floor.
+        pairs.append((-2147483648, -1))
 
     numerators, denominators = zip(*pairs)
     torch_input_tensor_a = torch.tensor(numerators, dtype=torch.int32)
