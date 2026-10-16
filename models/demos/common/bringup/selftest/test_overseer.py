@@ -115,6 +115,7 @@ def test_an_aborted_attempt_does_not_spend_the_budget(orch, sandbox):  # noqa: F
     assert any("ABORTED by the overseer (implement attempt 1)" in x for x in orch.lines)
     brief2 = (o.run_dir / "briefs" / "C.1.implement.2.md").read_text()
     assert "aborted by the overseer: stop: wrong approach" in brief2 and "OV-1" in brief2
+    assert "outside the allowed paths" not in brief2  # F77: the abort's own state.json entry is not the agent's
     assert not (o.run_dir / OV.AGENT_FILE).exists() and not (o.run_dir / OV.ABORT_FILE).exists()
 
 
@@ -127,3 +128,60 @@ def test_watch_can_skip_passes():
         "  [C.3] OVERSEER NOTE OV-1 unanswered",
     ]
     assert W.events(lines) == lines and W.events(lines, quiet_passes=True) == lines[1:]
+
+
+def test_a_queued_fix_runs_next_with_an_agent_and_the_gates_it_names(orch):  # noqa: F811
+    """F77: a fix the overseer queues runs at the next task boundary, its agent always starts (no precheck), its
+    gate is the named tasks' gates, and it keeps the plan approval's ledger signature."""
+    from models.demos.common.bringup.plan import approvals as A
+
+    o = orch(
+        [impl_task(), impl_task(id="C.2", deps=["C.1"])],
+        {
+            "C.1.implement.1.md": {"write": {"src/impl.txt": "0.999"}},
+            "FIX.1.overseer.1.md": {"write": {"src/impl.txt": "0.9995"}},
+        },
+    )
+    sig = A.ledger_signature(o.spec)
+    real = o.run_agent
+
+    def overseer_queues_meanwhile(task, role, attempt, brief, **kw):
+        if task["id"] == "C.1":
+            led = {t: o.led.task(t) for t in o.led.tasks()}
+            OV.queue_fix(o.spec.bringup_dir, "Store the weights at load. Not per chunk.", ["C.1"], tasks=led)
+        return real(task, role, attempt, brief, **kw)
+
+    o.run_agent = overseer_queues_meanwhile
+    assert o.run() == DONE
+    order = [x.split("]")[0].strip("[ ") for x in orch.lines if x.startswith("[")]
+    assert order.index("FIX.1") < order.index("C.2"), order
+    fix = o.led.task("FIX.1")
+    assert fix["step"] == OV.FIX_STEP and fix["precheck"] is False and fix["gate"] == o.led.task("C.1")["gate"]
+    assert o.led.state()["FIX.1"]["status"] == "PASS"
+    brief = (o.run_dir / "briefs" / "FIX.1.overseer.1.md").read_text()
+    assert "Role: overseer fix" in brief and "Store the weights at load" in brief and "C.1" in brief
+    assert (o.spec.repo / "src/impl.txt").read_text() == "0.9995"
+    assert OV.fixes(o.spec.bringup_dir)[0]["status"] == "placed"
+    assert A.ledger_signature(o.spec) == sig
+
+
+def test_a_fix_needs_known_gate_tasks(tmp_path):
+    with pytest.raises(SystemExit):
+        OV.queue_fix(tmp_path, "x", [])
+    with pytest.raises(SystemExit):
+        OV.queue_fix(tmp_path, "x", ["C.9"], tasks={"C.1": {}})
+    a = OV.queue_fix(tmp_path, "first", ["C.1"], tasks={"C.1": {}, "FIX.3": {}})
+    OV.add(tmp_path, "a note keeps the fixes")
+    assert a["id"] == "FIX.4" and OV.fixes(tmp_path)[0]["id"] == "FIX.4" and OV.load(tmp_path)[0]["id"] == "OV-1"
+    assert [x["id"] for x in OV.take_fixes(tmp_path)] == ["FIX.4"] and OV.take_fixes(tmp_path) == []
+
+
+def test_a_held_fix_is_on_record_but_waits_for_its_release(tmp_path):
+    a = OV.queue_fix(tmp_path, "attention back to the reference", ["C.1"], hold="F76 installed")
+    assert a["status"] == "held" and OV.take_fixes(tmp_path) == []
+    with pytest.raises(SystemExit):
+        OV.release(tmp_path, "FIX.9")
+    OV.release(tmp_path, a["id"])
+    assert [x["id"] for x in OV.take_fixes(tmp_path)] == [a["id"]]
+    with pytest.raises(SystemExit):
+        OV.release(tmp_path, a["id"])  # placed, not held

@@ -74,9 +74,23 @@ def test_steps_catch_every_mutation_of_a_swapped_step(gspec, monkeypatch, kind, 
     assert not run_swap_test(s, "blk", SWAPPED, checks="steps")
     m = got()
     assert m["swap_attn_norm_rel"] == 0, "only the named step is mutated"
-    # F73: 2 x the step's own noise floor (its component error, at least its output's bf16 resolution), no fixed floor
+    # F76: 2 x the step's noise floor (its precision model on the same inputs, at least its component error and its
+    # output's bf16 resolution); every other limit from the same model, none fixed
     lim, err = m[f"swap_{step}_rel_limit"], m[f"swap_{step}_component_err"]
-    assert 2.0 * err <= lim + 1e-12 and lim <= 2.0 * max(err, 2.0**-8) + 1e-12
+    assert 2.0 * err <= lim + 1e-12 and lim < 0.03
+    assert m[f"swap_{step}_vs_cpu_limit"] < 0.9999 + 1e-4 and f"swap_{step}_bias_limit" in m
+
+
+def test_every_swap_limit_comes_from_the_noise_floor(gspec, monkeypatch):
+    """F76: pcc_swap_out and every swapped step's vs-golden PCC are gated against the same block run with its swapped
+    steps as their precision models (the reference's dtypes), not a fixed 0.98 / 0.99."""
+    s = gspec()
+    monkeypatch.setenv(IMPL_ENV, "reference")
+    assert run_swap_test(s, "blk", SWAPPED, checks="steps")
+    m = got()
+    assert 0.999 < m["pcc_swap_out_limit"] < 1.0 and m["pcc_swap_out"] >= m["pcc_swap_out_limit"]
+    for n in SWAPPED:
+        assert 0.999 < m[f"swap_{n}_vs_golden_limit"] < 1.0, n
 
 
 def test_the_bf16_control_passes_and_limits_fall_back_without_a_component_result(gspec, monkeypatch):
@@ -84,7 +98,7 @@ def test_the_bf16_control_passes_and_limits_fall_back_without_a_component_result
     monkeypatch.setenv(IMPL_ENV, "mutate:bf16")  # every swapped step on bf16-rounded inputs, bf16 output
     assert run_swap_test(s, "blk", SWAPPED, checks="steps")
     m = got()
-    assert 0 < m["swap_attention_rel"] < 0.01 and m["swap_attention_rel_limit"] == 0.02
+    assert 0 < m["swap_attention_rel"] < m["swap_attention_rel_limit"] < 0.03  # F76: the model, not a fixed 0.02
     assert "swap_attention_component_err" not in m
 
 
@@ -227,7 +241,9 @@ def test_the_tail_limit_follows_the_precision_model(gspec, noise, monkeypatch):
         2.0 * max(m["swap_attn_residual_out_model_rel"], 1e-9), rel=0.5
     )
     real = CC.precision_model
-    monkeypatch.setattr(CC, "precision_model", lambda ref, cpu, case: real(ref, cpu, case) * 1.05)  # a 5 % model
+    monkeypatch.setattr(
+        CC, "precision_model", lambda ref, cpu, case, prec=None: real(ref, cpu, case, prec) * 1.05
+    )  # 5 %
     M.reset("T")
     assert run_swap_test(s, "blk", SWAPPED, checks="steps")
     m2 = got()
