@@ -5,6 +5,7 @@ set(TT_METAL_PUBLIC_API
     api/internal/disaggregation/layer_completion_queue.hpp
     api/internal/disaggregation/layer_completion_reorder_buffer.hpp
     api/internal/disaggregation/layer_completion_router.hpp
+    api/internal/descriptor_file.hpp
     api/internal/reload_table.hpp
     api/tt-metalium/allocator.hpp
     api/tt-metalium/base_types.hpp
@@ -116,6 +117,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/sockets/hd_socket_descriptor.hpp
     api/tt-metalium/experimental/sockets/mesh_socket.hpp
     api/tt-metalium/experimental/sockets/named_shm.hpp
+    api/tt-metalium/experimental/sockets/pcie_core_location.hpp
     api/tt-metalium/experimental/sockets/shm_resource_tracker.hpp
     api/tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp
     api/tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp
