@@ -57,6 +57,7 @@ from torch.overrides import TorchFunctionMode
 
 from models.demos.common.bringup.core import defaults, metrics
 from models.demos.common.bringup.testing import mutate as MU
+from models.demos.common.bringup.testing import noise_floor as NF
 from models.demos.common.bringup.testing.harness import compare, default_mode, device_ctx, reference_ctx
 
 COMPONENT_DEFAULTS = {
@@ -162,33 +163,69 @@ class _Bf16Everywhere(TorchFunctionMode):
         return out
 
 
-def precision_model(ref, cpu, case) -> torch.Tensor:
-    """The CPU step on bf16 inputs with every float32 intermediate that depends on them rounded to bf16, output bf16.
-    The reference object's attributes (one level of dicts too) are restored afterwards: a cache filled in this mode
-    would otherwise hand its values to every later exact run."""
+PRECISION_FILE = "precision.yaml"
+DTYPES = ("bf16", "fp32")
+
+
+def step_precision(s, block_type: str | None, step: str) -> dict:
+    """F78: the reference's own dtypes for a step, from <bringup_dir>/precision.yaml (the reference role writes it
+    from the official code; owner rule: match the reference precision):
+
+        steps:
+          router: {compute: fp32, out: fp32}        # every block type
+          swa.attn_norm: {compute: fp32, out: bf16} # one block type
+
+    compute fp32: the reference computes the step in fp32 from its bf16 inputs (no intermediate rounding); bf16: its
+    intermediates are bf16 (a step that mixes the two, e.g. fp32 scores and bf16 probabilities, is bf16: the looser
+    floor). out: the dtype it hands on. Default {compute: bf16, out: bf16}."""
+    import yaml
+
+    p = s.bringup_dir / PRECISION_FILE
+    steps = ((yaml.safe_load(p.read_text()) if p.exists() else None) or {}).get("steps") or {}
+    e = steps.get(f"{block_type}.{step}") or steps.get(step) or {}
+    out = {"compute": e.get("compute", "bf16"), "out": e.get("out", "bf16")}
+    bad = [v for v in out.values() if v not in DTYPES]
+    if bad:
+        raise ValueError(f"{p}: {step}: dtypes {bad} not in {DTYPES}")
+    return out
+
+
+def precision_model(ref, cpu, case, prec: dict | None = None) -> torch.Tensor:
+    """The CPU step at the reference's own dtypes (prec, step_precision): bf16 inputs; with compute bf16 every
+    float32 intermediate that depends on them rounded to bf16, with fp32 none; the output rounded to bf16 unless out
+    is fp32. The reference object's attributes (one level of dicts too) are restored afterwards: a cache filled in
+    this mode would otherwise hand its values to every later exact run."""
+    prec = prec or {"compute": "bf16", "out": "bf16"}
     saved = {k: (dict(v) if isinstance(v, dict) else v) for k, v in vars(ref).items()}
     x = [MU.bf16(t) for t in _clone(case.inputs)]
     try:
-        with _Bf16Everywhere(x):
+        if prec["compute"] == "fp32":
             y = cpu(case.rctx(), *x)
+        else:
+            with _Bf16Everywhere(x):
+                y = cpu(case.rctx(), *x)
     finally:
         vars(ref).clear()
         vars(ref).update(saved)
-    return MU.bf16(y)
+    return y if prec["out"] == "fp32" else MU.bf16(y)
 
 
 def rel(a, b) -> float:
     return ((a.float().reshape(b.shape) - b.float()).norm() / b.float().norm().clamp_min(1e-30)).item()
 
 
-def rel_limit(lim, e, low: bool):
-    """calib x e within [floor, cap], but never below component_margin x e: a correct bf16 step must pass (when the
-    cap would cut it, the looser limit may let a mistake through, and the sweep then sends the test to a review).
-    e is one error (the whole output) or a tensor of them (one per column)."""
-    k = lim["component_calib_low"] if low else lim["component_calib"]
-    if isinstance(e, torch.Tensor):  # per column: no cap (the worst of thousands of columns sits above the mean)
-        return torch.maximum((k * e).clamp_min(lim["component_floor"]), lim["component_margin"] * e)
-    return max(lim["component_floor"], min(lim["component_rel"], k * e), lim["component_margin"] * e)
+def calib(lim, low: bool) -> float:
+    return lim["component_calib_low"] if low else lim["component_calib"]
+
+
+def rel_limit(lim, e, low: bool, res=None):
+    """F76: calib x the precision model's error e, never below calib x res, what one bf16 rounding of the output
+    shows (an exact step); no fixed floor or cap (owner: limits come from the noise floor, never a fixed bar). e (and
+    res) is one error (the whole output) or a tensor of them (one per column)."""
+    k = calib(lim, low)
+    if isinstance(e, torch.Tensor):
+        return k * (e if res is None else torch.maximum(e, res))
+    return k * max(e, res or 0.0)
 
 
 def col_errors(got, want) -> torch.Tensor | None:
@@ -223,7 +260,9 @@ def float_errors(got, want) -> dict:
     }
 
 
-def float_limits(lim, f: float, rel_lim: float, model: dict | None, second: bool = False, col_lim=None) -> dict:
+def float_limits(
+    lim, f: float, rel_lim: float, model: dict | None, second: bool = False, col_lim=None, res=None, k=None
+) -> dict:
     """The float limits of one input: rel from the precision model (rel_limit), the fixed ones x f; each at least
     component_margin x what the precision model itself reaches (a correct bf16 step must pass). A second input is
     there for structural bugs (a wrong epsilon, stream order, a clamp: errors of 0.1 and more), not for precision: its
@@ -239,7 +278,18 @@ def float_limits(lim, f: float, rel_lim: float, model: dict | None, second: bool
         # a systematic scale may use at most half of the step's error budget (GLM KDA attention: -0.45 % of 0.68 %)
         "bias": math.inf if second else max(lim["component_bias"], lim["component_bias_share"] * rel_lim),
     }
-    if model:
+    if model and res is not None:
+        # F76: every limit from the noise floor: calib (k) x the precision model's statistic, never below what one
+        # bf16 rounding of the output shows; the bias may use half the rel budget. A second input keeps its probe
+        # floors (they only loosen: structural probes, where a correct device drifts from the model on synthetic scales)
+        dev = lambda e: max(1 - e["ratio_min"], e["ratio_max"] - 1)  # noqa: E731
+        row = k * max(model["row"], res["row"])
+        ratio = k * max(dev(model), dev(res))
+        bias = max(k * abs(model["bias"]), k * abs(res["bias"]), lim["component_bias_share"] * rel_lim)
+        out["row"] = max(f * row, lim["component_second_row"]) if second else row
+        out["ratio"] = max(f * ratio, lim["component_second_ratio"]) if second else ratio
+        out["bias"] = math.inf if second else bias
+    elif model:  # no bf16 resolution known (direct callers): the margin over the model
         m = lim["component_margin"]
         out["row"] = max(out["row"], m * model["row"])
         out["ratio"] = max(out["ratio"], m * max(1 - model["ratio_min"], model["ratio_max"] - 1))
@@ -284,8 +334,20 @@ def f_lim(overlap_lim: float, f: float) -> float:
     return 1 - f * (1 - overlap_lim)
 
 
-def selection_fails(got, want, lim, f=1.0, slack: dict | None = None) -> tuple[dict, list[str]]:
-    """slack: added to the rel and row-sum limits (vs the golden: the fp32 step's own error vs the bf16 golden)."""
+def selection_limits(lim, k: float, f: float, model: dict, res: dict, n: int) -> dict:
+    """F76: the selection limits from the precision model's own selection stats (model) and one bf16 rounding of
+    the output (res): overlap miss, rel L2 and row sums on matched rows, each calib (k) x f x the larger, the miss
+    never below one of the n selected entries."""
+    return {
+        "overlap": 1 - f * k * max(1 - model.get("overlap", 1.0), 1 - res.get("overlap", 1.0), 1.0 / max(n, 1)),
+        "rel": f * k * max(model.get("rel", 0.0), res.get("rel", 0.0)),
+        "rowsum": f * k * max(model.get("rowsum", 0.0), res.get("rowsum", 0.0)),
+    }
+
+
+def selection_fails(got, want, lim, f=1.0, slack: dict | None = None, L: dict | None = None) -> tuple[dict, list[str]]:
+    """slack: added to the rel and row-sum limits (vs the golden: the fp32 step's own error vs the bf16 golden).
+    L: the noise-floor limits (selection_limits); without it the fixed component_select* limits (no model)."""
     slack = slack or {}
     if got.numel() != want.numel():
         return {}, [f"{got.numel()} elements, want {tuple(want.shape)}"]
@@ -302,17 +364,17 @@ def selection_fails(got, want, lim, f=1.0, slack: dict | None = None) -> tuple[d
     overlap = ((gs & ws).sum(1).float() / ws.sum(1).clamp_min(1)).mean().item()
     m = (gs == ws).all(1)
     e = {"overlap": overlap, "matched": m.float().mean().item()}
-    if overlap < f_lim(lim["component_select"], f):
-        bad.append(f"selection overlap {overlap:.5f} < {f_lim(lim['component_select'], f):.4f}")
+    ol = L["overlap"] if L else f_lim(lim["component_select"], f)
+    if overlap < ol:
+        bad.append(f"selection overlap {overlap:.5f} < {ol:.4f}")
     if m.any():
         gm, wm = g[m], w[m]
         e["rel"] = ((gm - wm).norm() / wm.norm().clamp_min(1e-30)).item()
         sw = wm.sum(1)
         nz = sw.abs() > 1e-30
         e["rowsum"] = ((gm.sum(1)[nz] / sw[nz]) - 1).abs().max().item() if nz.any() else 0.0
-        rl, sl = f * lim["component_select_rel"] + slack.get("rel", 0.0), f * lim["component_rowsum"] + slack.get(
-            "rowsum", 0.0
-        )
+        rl = (L["rel"] if L else f * lim["component_select_rel"]) + slack.get("rel", 0.0)
+        sl = (L["rowsum"] if L else f * lim["component_rowsum"]) + slack.get("rowsum", 0.0)
         if e["rel"] > rl:
             bad.append(f"rel L2 on matched rows {e['rel']:.5f} > {rl:.4f}")
         if e["rowsum"] > sl:
@@ -322,7 +384,8 @@ def selection_fails(got, want, lim, f=1.0, slack: dict | None = None) -> tuple[d
     return e, bad
 
 
-def index_fails(got, want, start: int, lim, thr: float, f=1.0) -> tuple[dict, list[str]]:
+def index_fails(got, want, start: int, lim, thr: float, f=1.0, L: dict | None = None) -> tuple[dict, list[str]]:
+    """L (F76): {overlap, worst_row} limits from the precision model; without it thr and component_index_row."""
     if got.is_floating_point():
         return {}, [f"integer positions expected, got {got.dtype}"]
     if got.numel() != want.numel():
@@ -349,10 +412,12 @@ def index_fails(got, want, start: int, lim, thr: float, f=1.0) -> tuple[dict, li
         [torch.isin(b[b >= 0], a[a >= 0]).float().mean().item() if (b >= 0).any() else 1.0 for a, b in zip(g, w)]
     )
     e = {"overlap": rows.mean().item(), "worst_row": rows.min().item()}
-    if e["overlap"] < f_lim(thr, f):
-        bad.append(f"set overlap {e['overlap']:.5f} < {f_lim(thr, f):.4f}")
-    if e["worst_row"] < f_lim(lim["component_index_row"], f):
-        bad.append(f"worst row overlap {e['worst_row']:.5f} < {f_lim(lim['component_index_row'], f):.4f}")
+    ol = L["overlap"] if L else f_lim(thr, f)
+    wl = L["worst_row"] if L else f_lim(lim["component_index_row"], f)
+    if e["overlap"] < ol:
+        bad.append(f"set overlap {e['overlap']:.5f} < {ol:.4f}")
+    if e["worst_row"] < wl:
+        bad.append(f"worst row overlap {e['worst_row']:.5f} < {wl:.4f}")
     return e, bad
 
 
@@ -452,45 +517,101 @@ class Expect:
         self.kind = output_kind(want)
         self.lim = limits(s)
         self.low = st.kind in tuple(s.get("tests.low_precision_kinds") or LOW_PRECISION_KINDS)
+        self.k = calib(self.lim, self.low)
         self.cpu_step = ref.component(layer, st.name)
         self.cases = cases(s, ref, layer, st, g, c, self.kind)
         self.cpu = {x.name: run_cpu(self.cpu_step, x) for x in self.cases}
-        self.rel_lim, self.model, self.model_err, self.col_lim = {}, {}, {}, {}
+        # F76: the precision model on every input, for every output kind: each limit is calib x its statistic
+        self.prec = step_precision(s, s.block_type_of(layer), st.name)  # F78: the reference's own dtypes
+        self.model = {x.name: precision_model(ref, self.cpu_step, x, self.prec) for x in self.cases}
+        self.rel_lim, self.model_err, self.res, self.col_lim, self.L = {}, {}, {}, {}, {}
+        for x in self.cases:
+            cpu, m = self.cpu[x.name], self.model[x.name]
+            f = 1.0 if x.name == "golden" else self.lim["component_probe"]
+            if self.kind == "float":
+                self.model_err[x.name] = float_errors(m, cpu)
+                self.res[x.name] = float_errors(MU.bf16(cpu), cpu)
+                self.rel_lim[x.name] = rel_limit(
+                    self.lim, self.model_err[x.name]["rel"], self.low, self.res[x.name]["rel"]
+                )
+                mc, rc = col_errors(m, cpu), col_errors(MU.bf16(cpu), cpu)
+                self.col_lim[x.name] = None if mc is None else rel_limit(self.lim, mc, self.low, rc)
+            elif self.kind == "selection":
+                me, re_ = selection_fails(m, cpu, self.lim)[0], selection_fails(MU.bf16(cpu), cpu, self.lim)[0]
+                self.L[x.name] = selection_limits(self.lim, self.k, f, me, re_, int((cpu != 0).sum().item()))
+            elif self.kind == "index":
+                self.L[x.name] = self._index_limits(m, cpu, x.start, f)
         if self.kind == "float":
-            for x in self.cases:
-                self.model[x.name] = precision_model(ref, self.cpu_step, x)
-                self.model_err[x.name] = float_errors(self.model[x.name], self.cpu[x.name])
-                self.rel_lim[x.name] = rel_limit(self.lim, self.model_err[x.name]["rel"], self.low)
-                mc = col_errors(self.model[x.name], self.cpu[x.name])
-                self.col_lim[x.name] = None if mc is None else rel_limit(self.lim, mc, self.low)
             self.golden_err = rel(self.cpu["golden"], want)
             self.golden_col_err = col_errors(self.cpu["golden"], want)
-        if self.kind == "selection":  # the fp32 step's own error vs the bf16 golden (Gemma router row sums: 0.0044)
-            self.golden_sel = selection_fails(self.cpu["golden"], want, self.lim)[0]
+            # vs the golden: the precision model's own statistics vs the bf16 golden (its rounding included)
+            self.gold_model = float_errors(self.model["golden"], want)
+            self.gold_res = float_errors(MU.bf16(self.cpu["golden"]), want)
+        if self.kind == "selection":  # vs the golden: the precision model's own stats vs the bf16 golden
+            gm = selection_fails(self.model["golden"], want, self.lim)[0]
+            gr = selection_fails(MU.bf16(self.cpu["golden"]), want, self.lim)[0]
+            self.golden_L = selection_limits(self.lim, self.k, 1.0, gm, gr, int((want != 0).sum().item()))
+        if self.kind == "index":
+            self.golden_L = self._index_limits(self.model["golden"], want, self.cases[0].start, 1.0)
+        # the gate vs the golden (the template's metric): the frozen test's literal THRESHOLD, else the noise floor
+        self.thr_how = "the frozen test's THRESHOLD"
+        if thr is None:
+            gm = (
+                "topk_overlap"
+                if self.kind == "index" and mode in (None, "topk_overlap")
+                else (mode or default_mode(want))
+            )
+            mv = gate_value(self.model["golden"], want, self.kind, mode)
+            rv = (
+                gate_value(MU.bf16(self.cpu["golden"]), self.cpu["golden"], self.kind, mode)
+                if want.is_floating_point()
+                else 1.0
+            )
+            thr = NF.gate_limit(gm, mv, rv, self.k, want.numel())
+            self.thr_how = f"{self.k} x the precision model's miss {1 - mv:.3g} (bf16 resolution {1 - rv:.3g})"
+        self.thr = thr
+
+    def _index_limits(self, m, want, start: int, f: float) -> dict:
+        e = index_fails(m, want, start, self.lim, 0.0, L={"overlap": 0.0, "worst_row": 0.0})[0]
+        valid = normalize_index(want) >= 0
+        n, per_row = max(int(valid.sum().item()), 1), max(int(valid.sum(1).max().item()), 1)
+        return {
+            "overlap": 1 - f * self.k * max(1 - e.get("overlap", 1.0), 1.0 / n),
+            "worst_row": 1 - f * self.k * max(1 - e.get("worst_row", 1.0), 1.0 / per_row),
+        }
 
     def describe(self) -> str:
         lims = ", ".join(f"{k} {v:.4f}" for k, v in self.rel_lim.items())
-        return f"{self.st.name} L{self.layer}: output kind {self.kind}, inputs {[x.name for x in self.cases]}" + (
-            f"; rel limits ({'low precision, ' if self.low else ''}calibrated) {lims}" if lims else ""
+        return (
+            f"{self.st.name} L{self.layer}: output kind {self.kind}, reference dtypes {self.prec}, inputs {[x.name for x in self.cases]}"
+            + (f"; rel limits ({'low precision, ' if self.low else ''}calibrated) {lims}" if lims else "")
         )
 
     def check(self, tag, got, ref, case, vs_golden, quiet):
         f = 1.0 if case.name == "golden" else self.lim["component_probe"]
         if self.kind == "float":
             rl = self.rel_lim[case.name] + (self.golden_err if vs_golden else 0.0)
+            model, res = self.model_err[case.name], self.res[case.name]
+            if vs_golden:
+                model, res = self.gold_model, self.gold_res
+                rl = max(rl, self.k * max(model["rel"], res["rel"]))
             second = case.name != "golden"
             cl = self.col_lim[case.name]
             if cl is not None and vs_golden and self.golden_col_err is not None:
                 cl = cl + self.golden_col_err
             if cl is not None:  # never tighter than col_factor x the whole-output limit (Gemma mlp: one column 1.06 x)
                 cl = cl.clamp_min(self.lim["component_col_factor"] * rl)
-            e, bad = float_fails(got, ref, float_limits(self.lim, f, rl, self.model_err[case.name], second, cl))
+            L = float_limits(self.lim, f, rl, model, second, cl, res, self.k)
+            e, bad = float_fails(got, ref, L)
         elif self.kind == "selection":
-            e, bad = selection_fails(got, ref, self.lim, f, self.golden_sel if vs_golden else None)
+            e, bad = selection_fails(got, ref, self.lim, f, L=self.golden_L if vs_golden else self.L[case.name])
         elif self.kind == "index":
-            e, bad = index_fails(got, ref, case.start, self.lim, self.thr, f)
+            L = self.golden_L if vs_golden else self.L[case.name]
+            e, bad = index_fails(got, ref, case.start, self.lim, self.thr, f, L=L)
         else:
-            e, bad = int_fails(got, ref, self.thr)
+            m = self.model[case.name] if not vs_golden else self.model["golden"]
+            mm = int_fails(m, ref, 0.0)[0].get("match", 1.0)
+            e, bad = int_fails(got, ref, 1 - f * self.k * max(1 - mm, 1.0 / max(ref.numel(), 1)))
         if not quiet:
             for k, v in e.items():
                 metrics.record(f"{tag}_{k}", v)
@@ -519,8 +640,23 @@ class Expect:
         return failed
 
 
-def golden_gate(name, out, want, kind, mode, thr) -> bool:
-    """The template's gate (compare vs golden); index outputs are normalized and compared order-free."""
+def gate_value(out, want, kind, mode) -> float:
+    """The golden gate's metric of ``out`` vs ``want`` (golden_gate's comparison, no print, no record)."""
+    if out.numel() != want.numel():
+        return 0.0
+    out = out.reshape(want.shape)
+    if kind == "index" and mode in (None, "topk_overlap") and not out.is_floating_point():
+        g, w = normalize_index(out), normalize_index(want)
+        return NF.value("topk_overlap", g, w)
+    return NF.value(mode or default_mode(want), out, want)
+
+
+def golden_gate(name, out, want, kind, mode, thr, how: str = "") -> bool:
+    """The template's gate (compare vs golden); index outputs are normalized and compared order-free. The limit is
+    recorded as ``<name>_limit`` (F76: the ledger gates ``>= limit``)."""
+    metrics.record(f"{name}_limit", thr)
+    if how:
+        print(f"note {name}: limit {thr:.6f} = {how}")
     if (
         kind == "index"
         and mode in (None, "topk_overlap")

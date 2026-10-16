@@ -72,19 +72,28 @@ def check_metrics(spec: dict[str, str], got: dict) -> tuple[bool, list[str]]:
     ok, lines = True, []
     for glob, cond in (spec or {}).items():
         op_s, val_s = str(cond).split()
-        want = float(val_s)
-        matched = {k: v["value"] for k, v in got.items() if fnmatch.fnmatchcase(k, glob)}
+        # F76: "limit" = the <metric>_limit the test recorded (its noise floor; testing/noise_floor.py)
+        from_test = val_s == "limit"
+        matched = {
+            k: v["value"]
+            for k, v in got.items()
+            if fnmatch.fnmatchcase(k, glob) and not (from_test and k.endswith("_limit"))
+        }
         if not matched:
             ok = False
             lines.append(f"  MISSING  {glob} (need {cond})")
             continue
         for k, v in sorted(matched.items()):
+            want = (got.get(f"{k}_limit") or {}).get("value") if from_test else float(val_s)
             try:
-                good = v is not None and OPS[op_s](float(v), want)
+                good = v is not None and want is not None and OPS[op_s](float(v), float(want))
             except (TypeError, ValueError):
                 good = False
             ok &= good
-            lines.append(f"  {'ok  ' if good else 'FAIL'}     {k} = {v} (need {cond})")
+            need = f"{op_s} {want} (its noise floor)" if from_test else cond
+            if from_test and want is None:
+                need = f"{cond}: no {k}_limit recorded"
+            lines.append(f"  {'ok  ' if good else 'FAIL'}     {k} = {v} (need {need})")
     return ok, lines
 
 
@@ -218,6 +227,7 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
         "supervision.md",
         "serving_contract.md",  # F58: the serving contract (SC.1) and its test list
         "contract_tests.yaml",
+        "precision.yaml",  # F78: the reference's dtypes per step (testing/component_checks.step_precision)
         "results/knowledge_use",  # the agents' knowledge-use reports (knowledge/usage.py)
     ):
         if (ledger.dir / extra).exists():

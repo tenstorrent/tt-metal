@@ -18,7 +18,10 @@ reference: |
   full model (the HF sanity gate: smoke and next-token accuracy), so keep what does not fit packed and dequantize it
   when it runs. For a layer subset, task R.4 trims the checkpoint once R.2 passes (only layers up to the last subset
   layer stay; mixed shards become `subset-<shard>`): read every tensor through `model.safetensors.index.json`, never
-  by a shard file name.
+  by a shard file name. Record the official implementation's precision per block step in `$bringup_dir/precision.yaml`
+  (schema: testing/component_checks.step_precision): `compute: fp32` for a step it computes in fp32 from its bf16
+  inputs (e.g. a router doing `linear(x.float(), w.float())`), `out: fp32` when it hands on fp32; every accuracy
+  limit of the device steps derives from these dtypes (the owner's rule: match the reference precision, never more).
 plan: |
   Role: plan. Map every component to TTNN and shard the model over the $mesh mesh ($chips chips, $dram GB each). Write
   `$bringup_dir/plan.yaml` (schema in `models/demos/common/bringup/plan/memory.py`), `$bringup_dir/plan.md`, and
@@ -39,13 +42,22 @@ implement: |
   Register the module in `$model_dir/bringup/hooks.py` (`device_component`, and `device_model` for the ladder).
   Everything not swapped stays on the CPU reference.
   $defer
+  $details
 contract: |
   Role: contract. Make $model servable by the prefill engine: adapter, runtime, KV layout and address table (see
   `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md` and the repo map). You may change the prefill engine
   (`models/demos/common/prefill`) where the model's layout needs it; prefer a generic adapter hook to a name branch.
 fix: |
   Role: fix. The scripted gate below failed. Find the component whose layer first broke the PCC trail (or the contract
-  check that failed), fix it in its module, and re-run the gate. The log is quoted below.
+  check that failed), fix it in its module, and re-run the gate. The log is quoted below. $details
+overseer: |
+  Role: overseer fix. The steps this gate reruns pass today; the overseer asks for a change to the code they run, now,
+  not when some later test fails. Make exactly the change below, in the model's code (and a fork behind an option, if
+  it needs one), and record it in BREADCRUMBS.md (what changed, why, the numbers you measured). The gate reruns the
+  frozen tests of the passed steps the change touches ($gate_tasks); all of them must still pass. If the request is
+  wrong (the evidence of a test, a probe or the reference says so), answer `disagree` on it in your knowledge-use
+  report under `"overseer"` with id $task_id and that evidence, and change nothing. The request:
+  $details
 perf: |
   Role: perf. Make one performance change to $model and keep it correct:
   $details

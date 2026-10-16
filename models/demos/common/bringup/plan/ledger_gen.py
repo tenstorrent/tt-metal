@@ -300,7 +300,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
                 "implement",
                 ["PL.1", comp_golden],
                 f"{SAFE} {ctest}" + contract_cmds(st.name),
-                {metric: thr(spec, "component")},
+                {metric: ">= limit"},  # F76: the noise floor the test records (testing/noise_floor.py)
                 device=True,
                 tests=[ctest],
                 freeze_extra=manifest,
@@ -315,7 +315,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
                 "implement",
                 [cid] + ([prev_swap] if prev_swap else []),
                 f"{SAFE} {stest}",
-                {"pcc_swap_out": thr(spec, "block")},
+                {"pcc_swap_out": ">= limit"},  # F76
                 device=True,
                 tests=[stest],
                 freeze_extra=manifest,

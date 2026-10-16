@@ -104,6 +104,12 @@ You start with no memory of earlier steps. Everything you need is in the brief a
 14. Precision. Bring every step up at maximum precision (HiFi4, fp32 accumulation, bf16 KV). Component and swap
    tests always run at that precision (testing/model_precision.py), whatever the shipped defaults are; a later perf
    pick that lowers precision is judged end to end (ladder, contract tests), never by the component limits.
+   Maximum precision means the device's full precision for the reference's own dtypes, never more: no fp32 where the
+   reference computes in bf16, no exact or emulated paths to beat a limit. Every accuracy limit is 2 x the noise floor
+   of those dtypes (the gate prints it as `limit ... = 2.0 x the precision model's miss`). When a check fails at the
+   reference's precision, find the device error that exceeds the noise floor (a truncation, a bias, a wrong dtype);
+   if there is none, stop and report the check, its value and its limit (answer `disagree` on a note asking for it)
+   instead of raising the precision. The owner rejects a model made accurate above its reference to pass a test.
 15. Every box. When the brief has a "Boxes" section, the code must run on every box it lists, not only on this run's:
    read chip counts and the mesh shape from the mesh, never from constants that fit this box; size anything that
    depends on the chip count (cache stripes, a chip's share of a chunk, alignment) for every listed box (e.g. the least

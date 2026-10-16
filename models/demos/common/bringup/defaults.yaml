@@ -20,6 +20,7 @@ agents:
     serving: {attempts: 2, escalate: stop}
     settings: {attempts: 2, escalate: stop}
     scale: {attempts: 3, escalate: stop}
+    overseer: {attempts: 3, escalate: debugger, debugger_attempts: 3}  # F77: a fix the overseer queued
 
 thresholds:                # accuracy gates (PCC lower limits unless named otherwise)
   component: 0.99

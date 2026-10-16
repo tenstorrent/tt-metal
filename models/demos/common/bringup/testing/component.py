@@ -170,7 +170,7 @@ def _run_auto(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
     st = _step(ref, layer, step)
     want = g.layer(c, layer)[st.output]
     want = want.float() if want.is_floating_point() else want
-    thr = threshold(s, "component") if thr is None else thr
+    # F76: thr None = the noise floor (CC.Expect: calib x the precision model's miss vs the golden); a literal is kept
     name = metric or f"pcc_{step}_L{layer:02d}"
     if impl_mode() == "device" and (s.block_type_of(layer), step) in deferred_steps(s):
         print(f"FAIL {step}: deferred to op-gen (task DEFERRED); it runs on the CPU until the op is delivered")
@@ -194,7 +194,7 @@ def _run_auto(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
                 raise
             outs[case.name] = e
     print(ex.describe())
-    ok = CC.golden_gate(name, outs["golden"], want, ex.kind, compare_mode, thr)
+    ok = CC.golden_gate(name, outs["golden"], want, ex.kind, compare_mode, ex.thr, ex.thr_how)
     ok = not ex.evaluate(outs) and ok
     # A, B, A: the second inputs above already ran after the golden (B); run the golden again and compare its bytes
     gold = next(x for x in ex.cases if x.name == "golden")
@@ -289,28 +289,43 @@ def _isolated(ctx):
     return c
 
 
-def _capturing(st, mut, cpu, dctx, into: dict, snapshot: dict | None = None, ref=None):
+def _capturing(
+    st, mut, cpu, dctx, into: dict, snapshot: dict | None = None, ref=None, models: dict | None = None, prec=None
+):
     """Override for a swapped step that first runs the CPU step on the same inputs (into[step]). With ``snapshot``,
     the context as the steps after this one see it is kept too (snapshot["ctx"], its state a deep copy), and with
-    ``ref`` the step's bf16 precision model on the same inputs (snapshot["model"], F72: the tail check's limit)."""
+    ``ref`` the step's bf16 precision model on the same inputs (snapshot["model"], F72: the tail check's limit). With
+    ``ref`` and ``models``, every swapped step's precision model on its inputs (models[step], F76: its limits)."""
 
     def fn(ctx, *x):
-        pre = _isolated(ctx) if snapshot is not None and ref is not None else None
+        pre = _isolated(ctx) if ref is not None and (snapshot is not None or models is not None) else None
         try:
             cctx = _isolated(ctx) if st.stateful else ctx
             into[st.name] = cpu(cctx, *[t.clone() if isinstance(t, torch.Tensor) else t for t in x])
         except Exception as e:  # noqa: BLE001 - reported as a failed check, not a crash of the block
             into[st.name] = e
         y = mut(ctx, dctx, *x)
+        if models is not None and pre is not None and isinstance(into[st.name], torch.Tensor):
+            from models.demos.common.bringup.testing import component_checks as CC
+
+            try:
+                xs = [t.clone() if isinstance(t, torch.Tensor) else t for t in x]
+                models[st.name] = CC.precision_model(
+                    ref, cpu, CC.Case("swap", xs, 0, lambda: _isolated(pre), None), prec
+                )
+            except Exception as e:  # noqa: BLE001 - no model: that step's limits fall back (printed)
+                print(f"note: no precision model for {st.name} ({type(e).__name__}: {e})")
         if snapshot is not None:
             snapshot["ctx"] = _isolated(ctx)
-            if pre is not None and isinstance(into[st.name], torch.Tensor) and into[st.name].is_floating_point():
+            if models is not None and st.name in models:
+                snapshot["model"] = models[st.name]
+            elif pre is not None and isinstance(into[st.name], torch.Tensor) and into[st.name].is_floating_point():
                 from models.demos.common.bringup.testing import component_checks as CC
 
                 xs = [t.clone() if isinstance(t, torch.Tensor) else t for t in x]
                 try:
                     snapshot["model"] = CC.precision_model(
-                        ref, cpu, CC.Case("tail", xs, 0, lambda: _isolated(pre), None)
+                        ref, cpu, CC.Case("tail", xs, 0, lambda: _isolated(pre), None), prec
                     )
                 except Exception as e:  # noqa: BLE001 - no model: the tail check keeps its fixed limit
                     print(
@@ -321,7 +336,18 @@ def _capturing(st, mut, cpu, dctx, into: dict, snapshot: dict | None = None, ref
     return fn
 
 
-def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: bool) -> bool:
+def _calib(s, kind) -> float:
+    from models.demos.common.bringup.testing import component_checks as CC
+
+    low = kind in tuple(s.get("tests.low_precision_kinds") or CC.LOW_PRECISION_KINDS)
+    return CC.calib(CC.limits(s), low)
+
+
+def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: bool, model=None, chain=None) -> bool:
+    """F76: model = the step's precision model on the same inputs (limits vs the CPU step), chain = the step's output
+    when every swapped step runs as its precision model from the golden block input (limit vs the golden)."""
+    from models.demos.common.bringup.testing import noise_floor as NF
+
     tag, ok = f"swap_{st.name}", True
     if bridged:
         metrics.record(f"{tag}_cpu_bridge", 1)
@@ -332,10 +358,21 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
         return False
     mode, thr = component_test_limits(s, block_type, st.name)
     mode = mode or default_mode(cpu)
-    thr = threshold(s, "component") if thr is None else thr
-    ok = compare(f"{tag}_vs_cpu", got, cpu, mode, thr)[1] and ok
+    k = _calib(s, st.kind)
+
+    def lim(name, m, want):  # a literal THRESHOLD of the step's frozen test, else the noise floor
+        if thr is not None:
+            return thr
+        if m is None:
+            print(f"note {name}: no precision model; limit {threshold(s, 'component')} (spec thresholds.component)")
+            return threshold(s, "component")
+        v = NF.gate_limit(mode, NF.value(mode, m, want), NF.bf16_res(mode, want), k, want.numel())
+        metrics.record(f"{name}_limit", v)
+        return v
+
+    ok = compare(f"{tag}_vs_cpu", got, cpu, mode, lim(f"{tag}_vs_cpu", model, cpu))[1] and ok
     if golden is not None:
-        ok = compare(f"{tag}_vs_golden", got, golden, mode, thr)[1] and ok
+        ok = compare(f"{tag}_vs_golden", got, golden, mode, lim(f"{tag}_vs_golden", chain, golden))[1] and ok
     if not cpu.is_floating_point():
         return ok
     if got.numel() != cpu.numel():
@@ -346,14 +383,28 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
     if not finite:
         print(f"FAIL {tag}: non-finite output")
         return False
-    lim = {k: s.threshold(k, v) for k, v in SWAP_STEP_DEFAULTS.items()}
-    rel_lim, err = lim["swap_step_rel"], component_error(s, block_type, st.name, layer) if mode == "pcc" else None
-    if err is not None:  # as accurate in the block as in its own gate: the step's own noise floor, no fixed cap (F73)
+    lim = {k_: s.threshold(k_, v) for k_, v in SWAP_STEP_DEFAULTS.items()}
+    err = component_error(s, block_type, st.name, layer) if mode == "pcc" else None
+    if err is not None:
         metrics.record(f"{tag}_component_err", err)
-        res = (cpu.float().to(torch.bfloat16).float() - cpu.float()).norm().item() / max(
-            cpu.float().norm().item(), 1e-30
-        )
-        rel_lim = lim["swap_step_calib"] * max(err, res)  # an exact step: the bf16 resolution of its output
+    res_e = step_errors(cpu.float().to(torch.bfloat16).float(), cpu)  # one bf16 rounding: an exact step's floor
+    if isinstance(model, torch.Tensor) and model.is_floating_point():
+        # F76: every limit is calib x the precision model's statistic on the same inputs (or the bf16 rounding, or
+        # the step's own component-gate error, whichever is larger): no fixed number
+        me = step_errors(model, cpu)
+        dev = lambda e_: max(1 - e_["ratio_min"], e_["ratio_max"] - 1)  # noqa: E731
+        rel_lim = k * max(me["rel"], res_e["rel"], err or 0.0)
+        lim["swap_step_row"] = k * max(me["row"], res_e["row"])
+        lim["swap_step_ratio"] = k * max(dev(me), dev(res_e))
+        share = s.threshold("component_bias_share", 0.5)
+        lim["swap_step_bias"] = max(k * abs(me["bias"]), k * abs(res_e["bias"]), share * rel_lim)
+        if "reselected" in me:
+            lim["swap_step_reselect"] = k * max(me["reselected"], 1.0 / max(cpu.shape[0], 1))
+        for k_ in ("swap_step_row", "swap_step_ratio", "swap_step_bias", "swap_step_reselect"):
+            metrics.record(f"{tag}_{k_[len('swap_step_'):]}_limit", lim[k_])
+    else:  # no precision model: the step's own component-gate error (F73), else the spec's fixed limits (printed)
+        print(f"note {tag}: no precision model; spec swap_step_* limits")
+        rel_lim = lim["swap_step_calib"] * max(err, res_e["rel"]) if err is not None else lim["swap_step_rel"]
     metrics.record(f"{tag}_rel_limit", rel_lim)
     e = step_errors(got, cpu)
     for k, v in e.items():
@@ -361,19 +412,19 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
     dev = max(1 - e["ratio_min"], e["ratio_max"] - 1)
     bad = [
         f"rel {e['rel']:.5f} > {rel_lim:.5f}" if not e["rel"] <= rel_lim else "",
-        f"worst row {e['row']:.5f} > {lim['swap_step_row']}" if not e["row"] <= lim["swap_step_row"] else "",
+        f"worst row {e['row']:.5f} > {lim['swap_step_row']:.5f}" if not e["row"] <= lim["swap_step_row"] else "",
         (
-            f"row norm ratio [{e['ratio_min']:.5f}, {e['ratio_max']:.5f}] outside 1 +- {lim['swap_step_ratio']}"
+            f"row norm ratio [{e['ratio_min']:.5f}, {e['ratio_max']:.5f}] outside 1 +- {lim['swap_step_ratio']:.5f}"
             if not dev <= lim["swap_step_ratio"]
             else ""
         ),
         (
-            f"median row norm ratio off by {e['bias']:+.5f} (limit {lim['swap_step_bias']})"
+            f"median row norm ratio off by {e['bias']:+.5f} (limit {lim['swap_step_bias']:.5f})"
             if not abs(e["bias"]) <= lim["swap_step_bias"]
             else ""
         ),
         (
-            f"{e['reselected']:.4f} of the rows select another support (limit {lim['swap_step_reselect']})"
+            f"{e['reselected']:.4f} of the rows select another support (limit {lim['swap_step_reselect']:.4f})"
             if not e.get("reselected", 0.0) <= lim["swap_step_reselect"]
             else ""
         ),
@@ -439,6 +490,41 @@ def _check_tail(s, ref, layer: int, steps, last, seen: dict, cpu, snapshot: dict
     return ok
 
 
+def _model_chain(s, ref, hooks, steps, layer: int, g, c: int, swapped) -> dict | None:
+    """F76: the block from the golden input with every swapped step run as its precision model (the reference's
+    dtypes) and every other step on the fp32 CPU: each output's noise floor vs the golden. The reference object's
+    attributes are restored afterwards (a per-chunk record must not leak into the block under test). None when it
+    cannot run (printed)."""
+    from models.demos.common.bringup.testing import component_checks as CC
+
+    saved = {k: (dict(v) if isinstance(v, dict) else v) for k, v in vars(ref).items()}
+    try:
+        rctx, dctx = reference_ctx(ref, layer, g, c, s), device_ctx(layer, g, c, s)
+        if hasattr(hooks, "swap_context"):
+            hooks.swap_context(s, ref, layer, g, c, rctx, dctx)
+
+        def as_model(name):
+            cpu, prec = ref.component(layer, name), CC.step_precision(s, s.block_type_of(layer), name)
+            return lambda ctx, *x: CC.precision_model(ref, cpu, CC.Case("chain", list(x), 0, lambda: ctx, None), prec)
+
+        out = {}
+        run_block(
+            steps,
+            lambda n: ref.component(layer, n),
+            rctx,
+            g.layer(c, layer)["in"].float(),
+            rec=lambda n, t: out.__setitem__(n, t.float() if t.is_floating_point() else t),
+            overrides={n: as_model(n) for n in swapped},
+        )
+        return out
+    except Exception as e:  # noqa: BLE001
+        print(f"note: the precision-model block raised {type(e).__name__}: {e}; fixed limits")
+        return None
+    finally:
+        vars(ref).clear()
+        vars(ref).update(saved)
+
+
 def run_swap_test(
     s, block_type: str, swapped: list[str], mesh=None, thr: float | None = None, checks: str | None = None
 ) -> bool:
@@ -459,7 +545,7 @@ def run_swap_test(
     rctx, dctx = reference_ctx(ref, layer, g, c, s), device_ctx(layer, g, c, s)
     if hasattr(hooks, "swap_context"):
         hooks.swap_context(s, ref, layer, g, c, rctx, dctx)
-    overrides, same_input, bridged, snapshot = {}, {}, {}, {}
+    overrides, same_input, bridged, snapshot, models = {}, {}, {}, {}, {}
     names = [st.name for st in steps]
     last = max((_step(ref, layer, n) for n in swapped), key=lambda st: names.index(st.name), default=None)
     for name in swapped:
@@ -468,9 +554,10 @@ def run_swap_test(
         bridged[name] = impl_mode() == "device" and getattr(mut, "cpu_bridge", False)
         if checks:
             snap = snapshot if st.name == last.name else None
-            overrides[name] = _capturing(
-                st, mut, ref.component(layer, name), dctx, same_input, snap, ref if snap is not None else None
-            )
+            from models.demos.common.bringup.testing import component_checks as CC
+
+            prec = CC.step_precision(s, block_type, name)  # F78: the reference's own dtypes
+            overrides[name] = _capturing(st, mut, ref.component(layer, name), dctx, same_input, snap, ref, models, prec)
         else:
             overrides[name] = lambda ctx, *x, mut=mut: mut(ctx, dctx, *x)
     gl = g.layer(c, layer)
@@ -486,13 +573,39 @@ def run_swap_test(
     for n, t in seen.items():
         if n not in ("in", "out") and n in gl:
             compare(f"pcc_swap_{n}", t, gl[n], default_mode(gl[n]), 0.0)  # the trail, for diagnosis; not gated
-    _, ok = compare("pcc_swap_out", seen["out"], gl["out"], "pcc", threshold(s, "block") if thr is None else thr)
+    chain = _model_chain(s, ref, hooks, steps, layer, g, c, swapped) if thr is None else None
+    if thr is None and chain is not None:  # F76: the noise floor of the same block with its swapped steps
+        from models.demos.common.bringup.testing import noise_floor as NF
+
+        k = max(_calib(s, _step(ref, layer, n).kind) for n in swapped) if swapped else _calib(s, None)
+        mv, rv = NF.value("pcc", chain["out"], gl["out"].float()), NF.bf16_res("pcc", gl["out"].float())
+        thr = NF.gate_limit("pcc", mv, rv, k, gl["out"].numel())
+        print(f"note pcc_swap_out: limit {thr:.6f} = {k} x the precision model's miss {1 - mv:.3g} (bf16 {1 - rv:.3g})")
+    elif thr is None:
+        thr = threshold(s, "block")
+        print(f"note pcc_swap_out: no precision-model block; limit {thr} (spec thresholds.block)")
+    metrics.record("pcc_swap_out_limit", thr)
+    _, ok = compare("pcc_swap_out", seen["out"], gl["out"], "pcc", thr)
     if checks == "steps":
         for name in swapped:
             st = _step(ref, layer, name)
             golden = gl[st.output] if st.output in gl else None
             golden = golden.float() if golden is not None and golden.is_floating_point() else golden
-            ok = _check_step(s, block_type, layer, st, seen[st.output], same_input[name], golden, bridged[name]) and ok
+            ok = (
+                _check_step(
+                    s,
+                    block_type,
+                    layer,
+                    st,
+                    seen[st.output],
+                    same_input[name],
+                    golden,
+                    bridged[name],
+                    models.get(name),
+                    (chain or {}).get(st.output),
+                )
+                and ok
+            )
         if last is not None:
             ok = _check_tail(s, ref, layer, steps, last, seen, same_input[last.name], snapshot) and ok
     accuracy_guard.note(s, ok)
