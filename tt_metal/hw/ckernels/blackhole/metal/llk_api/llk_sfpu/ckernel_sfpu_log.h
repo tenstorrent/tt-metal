@@ -40,6 +40,15 @@
 namespace ckernel {
 namespace sfpu {
 
+/**
+ * @tparam FAST_APPROX Ignored. The only code it ever selected was skipping the input
+ *   normalisation below, which returned NaN for -0.0 and for positive subnormals, so
+ *   fast mode now runs the same instructions as accurate mode.
+ * @tparam HAS_BASE_SCALING If true, scale the natural log by log_base_scale_factor
+ * @tparam is_fp32_dest_acc_en If true, use the fp32 polynomial; otherwise the bf16 one
+ * @tparam IS_BASE_TWO If true, apply the base change to the mantissa term only, so log2 of a
+ *   power of two is exact
+ */
 template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, bool IS_BASE_TWO = false>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
     // Normalise a (-0.0 and subnormals become +0.0): SFPMAD treats subnormal
@@ -47,8 +56,8 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
     // Wormhole and Blackhole (Wormhole also makes every zero result +0.0;
     // Blackhole keeps the sign of a zero only when both addends share it).
     // This must run before the exponent read below so that -0.0 follows the
-    // same path as +0.0 and log(±0.0) returns -inf, matching torch. It runs in
-    // the fast path too:
+    // same path as +0.0 and log(±0.0) returns -inf, matching torch. Fast mode
+    // used to skip it, and that was the only thing FAST_APPROX selected:
     // without it the sign test below excludes the -0.0 lane, which then keeps
     // the NaN that result is initialised with, and a positive subnormal reaches
     // addexp(a, -1) with a zero exponent field and a non-zero mantissa, where
@@ -140,6 +149,14 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
     return result;
 }
 
+/**
+ * @tparam APPROXIMATION_MODE Ignored
+ * @tparam FAST_APPROX Ignored (see calculate_log_body)
+ * @tparam HAS_BASE_SCALING If true, scale the natural log by log_base_scale_factor
+ * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
+ * @tparam ITERATIONS Number of iterations for given face
+ * @tparam IS_BASE_TWO If true, take the exact log2 path
+ */
 template <
     bool APPROXIMATION_MODE,
     bool FAST_APPROX,
@@ -160,6 +177,11 @@ inline void calculate_log(uint log_base_scale_factor) {
     }
 }
 
+/**
+ * @tparam APPROXIMATION_MODE Ignored
+ * @tparam FAST_APPROX Ignored (see calculate_log_body)
+ * @tparam is_fp32_dest_acc_en If true, program the fp32 polynomial coefficients; otherwise the bf16 ones
+ */
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
