@@ -10,11 +10,13 @@
 // The binding and argument names below are this fork's interface: every factory that later ports
 // onto it inherits them and cannot rename them.
 //
-// This fork carries the path the Metal 2.0 gather_in0 factory builds: one weight, every in0 shard
-// holding the same unpadded K / ring_size tiles, and in1 consumed front to back, one K-block per
-// ring step, as its reader publishes it. The legacy kernel's batched GlobalCircularBuffer read (in1
-// fully resident, addressed by rewriting the read pointer) and its resident L1-sharded in1 are not
-// carried.
+// This fork carries the path the Metal 2.0 gather_in0 factory builds: one weight, consumed one K-block
+// per ring step, in the ring order the in0 shards arrive in, this core's own first. in1 arrives either
+// in that order, a K-block at a time, or in K order, the whole layer staying in in1 until this kernel
+// is done with it; then this kernel walks the layer in ring order by stepping over the K-blocks it does
+// not need yet (see below), where the legacy kernel rewrites the read pointer. in0 shards may be padded:
+// shard p holds the K tiles from p * in0_block_w up to K, and compute accumulates only those. The legacy
+// kernel's multi-weight batch and its resident L1-sharded in1 are not carried.
 
 #include <cstdint>
 
@@ -24,10 +26,20 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/operations/matmul/device/kernels/gather_in0_shard_k.hpp"
 
 #ifdef SFPU_ACTIVATION
 #include "bmm_fused_activation.hpp"
 #endif
+
+// Moves in1's front past num_blocks K-blocks without reading them, once they are published. One K-block
+// at a time: in1's ring holds whole K-blocks, so no single pop then runs past its end.
+FORCE_INLINE void step_over_in1_blocks(DataflowBuffer& in1_dfb, uint32_t num_blocks, uint32_t in1_block_num_tiles) {
+    for (uint32_t block = 0; block < num_blocks; ++block) {
+        in1_dfb.wait_front(in1_block_num_tiles);
+        in1_dfb.pop_front(in1_block_num_tiles);
+    }
+}
 
 FORCE_INLINE void reload_from_dfb_to_dst(
     uint32_t in0_dfb_id,
@@ -72,6 +84,16 @@ void kernel_main() {
     constexpr auto out_subblock_num_tiles = get_arg(args::out_subblock_num_tiles);  // out_subblock_h * out_subblock_w
     constexpr auto out_block_num_tiles = get_arg(args::out_block_num_tiles);        // number of tiles in out_block
     constexpr bool untilize_out = get_arg(args::untilize_out);
+    constexpr uint32_t ring_size = num_blocks;
+    // The activation's K, without the padding of its last shards when K does not fill the ring.
+    constexpr auto k_tiles = get_arg(args::k_tiles);
+    // Whether in1's K-blocks arrive in ring order, this core's own first, or in K order, a whole layer.
+    constexpr bool in1_in_ring_order = get_arg(args::in1_in_ring_order);
+    // In K order: the K-blocks of in1's ring past the layer.
+    constexpr auto rest_of_ring_blocks = get_arg(args::rest_of_ring_blocks);
+
+    // This core's position in the ring: it holds activation shard ring_idx.
+    const uint32_t ring_idx = get_arg(args::ring_idx);
 
 #ifdef SFPU_ACTIVATION
     constexpr KernelActivation activation_type = static_cast<KernelActivation>(get_arg(args::activation_type));
@@ -105,10 +127,21 @@ void kernel_main() {
 
     matmul_block_init(in0_dfb_id, in1_dfb_id, /*transpose=*/false, out_subblock_w, out_subblock_h, in0_block_w);
 
+    // In K order the layer starts at in1's front. This kernel steps over its first ring_idx K-blocks to
+    // reach its own, and after the layer's last K-block over the rest of the ring, which holds none of
+    // this layer, to come back round to the layer's first. The in1 reader publishes both spans for this
+    // kernel to step over.
+    if constexpr (!in1_in_ring_order) {
+        step_over_in1_blocks(in1_dfb, ring_idx, in1_block_num_tiles);
+    }
+
     bool enable_reload = false;
     for (uint32_t block = 0; block < num_blocks; block++) {
-        // The in1 reader publishes K-blocks in the ring-rotated order the in0 shards arrive in, so
-        // block `block` of in1 pairs with whichever in0 shard this step holds.
+        // The in1 K-block at the front pairs with the in0 shard this step holds, that of ring position
+        // ring_pos. A padded shard holds fewer K tiles, or none.
+        const uint32_t ring_pos = (ring_idx + block) % ring_size;
+        const uint32_t unpadded_in0_block_w = in0_shard_k_tiles(ring_pos, in0_block_w, k_tiles);
+
         in1_dfb.wait_front(in1_block_num_tiles);
 
         const uint32_t input0_dfb_id = block == 0 ? in0_dfb_id : in2_dfb_id;
@@ -144,8 +177,8 @@ void kernel_main() {
                 const uint32_t dst_index = 0;  // start at 0, each call to matmul_block internally increments dst_index
                 uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
                 uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
-                // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
-                for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
+                // inner dim that we accumulate is the inner dim of in0/in1: the shard's unpadded width
+                for (uint32_t inner_dim_idx = 0; inner_dim_idx < unpadded_in0_block_w; ++inner_dim_idx) {
                     // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                     // accumulation is done by iterating matmul_block across inner dim
                     // in0_block_w is passed as inner dim (kt) to matmul_block, internally used to stride in0
@@ -247,5 +280,10 @@ void kernel_main() {
         // Popping in1 is what lets the reader hand this K-block's ring entry back to the sender:
         // the pop publishes the consumer ack only after the unpacker has drained the block.
         in1_dfb.pop_front(in1_block_num_tiles);
+        if constexpr (!in1_in_ring_order) {
+            if (ring_pos == ring_size - 1 && ring_idx > 0) {
+                step_over_in1_blocks(in1_dfb, rest_of_ring_blocks, in1_block_num_tiles);
+            }
+        }
     }
 }
