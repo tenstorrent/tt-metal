@@ -57,6 +57,7 @@ def useful_bytes_per_chip(cfg, tp, users, positions):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps", type=int, default=32)
+    parser.add_argument("--repeats", type=int, default=1, help="device-loop runs per measurement; reports the median")
     args = parser.parse_args()
 
     ttnn.set_fabric_config(
@@ -125,8 +126,14 @@ def main():
         logger.info(f"device-loop greedy tokens vs host loop: {agree}/{total} equal")
         print(f"DECODE_DEVICE_LOOP_TOKENS_MATCH {agree}/{total}", flush=True)
         device_loop([0], 4)  # warm
-        results[("device loop", "1 row")] = device_loop([0], args.steps)[1]
-        results[("device loop", "4 rows")] = device_loop(list(range(4)), args.steps)[1]
+
+        # Fabric timing varies a little run to run (chip skew), so the device loop can be repeated (median).
+        def median_loop(replicas):
+            times = sorted(device_loop(replicas, args.steps)[1] for _ in range(args.repeats))
+            return times[len(times) // 2]
+
+        results[("device loop", "1 row")] = median_loop([0])
+        results[("device loop", "4 rows")] = median_loop(list(range(4)))
         positions = [start_pos[u] + args.steps for u in range(USERS)]
         nbytes = useful_bytes_per_chip(cfg, 8, USERS, positions)
         for (name, label), t in results.items():
