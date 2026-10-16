@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 
+#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -18,18 +19,19 @@ namespace tt::tt_metal::experimental {
 //  ScratchpadSpec API
 // ============================================================================
 //
-// A ScratchpadSpec is a descriptor for a kernel scratchpad: a private,
-// uninitialized region of node-local SRAM ("L1") for a kernel to use as
-// working memory.
+// A ScratchpadSpec is a descriptor for a kernel scratchpad: an uninitialized region of node-local SRAM ("L1") for a
+// kernel to use as working memory.
 //
-// A scratchpad is private to its bound kernel. Both DM and compute kernels may use
+// A scratchpad is private to its bound kernel by default. Both DM and compute kernels may use
 // scratchpads. The kernel accesses it via the device-side accessor:
 //   Scratchpad<uint32_t> s(scratch::<accessor_name>);
 // The template argument is the element type the kernel views the region as.
 //
 // KERNEL BINDING: By default, a scratchpad instance is private to a single kernel
 //   instance. It is legal for more than one KernelSpec to bind to the same
-//   ScratchpadSpec only if they occupy disjoint node sets.
+//   ScratchpadSpec only if they occupy disjoint node sets, unless
+//   advanced_options.allow_multi_kernel_binding is enabled. With that option,
+//   kernels on the same node share its backing memory and must synchronize access.
 //
 // LIFETIME: Program-scope. The backing memory is allocated for the Program's
 //   execution lifetime, alongside DFBs (and from the same region of L1).
@@ -76,6 +78,11 @@ struct ScratchpadSpec {
     // The tile format is optional; if unspecified, the default tile format (32x32) is assumed.
     // Tile format includes the tile's "face" layout (sub-block arrangement within the tile).
     std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
+
+    ////////////////////////////////////
+    // Advanced options (see advanced_options.hpp)
+    ////////////////////////////////////
+    ScratchpadAdvancedOptions advanced_options;
 };
 
 }  // namespace tt::tt_metal::experimental

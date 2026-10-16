@@ -2227,82 +2227,101 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
         return;
     }
 
-    const uint32_t alignment = device->allocator()->get_alignment(BufferType::DRAM);
+    // Collect the complete node union before allocating: reusing the first binder's address
+    // could collide with an existing allocation on nodes reached only by a later binder.
+    struct ScratchpadAllocation {
+        CoreRangeSet cores;
+        std::vector<std::pair<Kernel*, ScratchpadBindingHandle*>> bindings;
+    };
+    std::vector<ScratchpadAllocation> allocations;
+    std::unordered_map<std::string, size_t> shared_allocations;
     for (auto& kernels_of_core_type : this->kernels_) {
         for (auto& [kernel_handle, kernel] : kernels_of_core_type) {
-            auto& scratchpad_handles = kernel->scratchpad_binding_handles();
-            if (scratchpad_handles.empty()) {
-                continue;
+            for (auto& handle : kernel->scratchpad_binding_handles()) {
+                size_t index = allocations.size();
+                if (handle.shared_allocation_id) {
+                    auto [it, inserted] = shared_allocations.try_emplace(*handle.shared_allocation_id, index);
+                    index = it->second;
+                }
+                if (index == allocations.size()) {
+                    allocations.push_back({kernel->core_range_set(), {}});
+                } else {
+                    allocations[index].cores = allocations[index].cores.merge(kernel->core_range_set());
+                }
+                allocations[index].bindings.emplace_back(kernel.get(), &handle);
             }
-            const CoreRangeSet& kernel_cores = kernel->core_range_set();
-            const DeviceAddr persistent_base = reserve_program_local_l1(device, kernel_cores);
+        }
+    }
 
-            for (auto& handle : scratchpad_handles) {
-                // A scratchpad bumps onto the program-scope L1 region, stacking on top of any DFBs.
-                // (DFBs and CBs are mutually exclusive, so dfb_allocators_ own the whole region.)
-                // Ensure a CircularBufferAllocator exists for each of the kernel's core ranges:
-                // a scratchpad-bearing kernel may have no DFBs, so the allocators may not exist yet.
-                for (const CoreRange& core_range : kernel_cores.ranges()) {
-                    bool exists = false;
-                    for (const CircularBufferAllocator& a : this->dfb_allocators_) {
-                        if (a.core_range == core_range) {
-                            exists = true;
-                            break;
-                        }
-                    }
-                    if (!exists) {
-                        this->dfb_allocators_.emplace_back(core_range);
-                    }
+    const uint32_t alignment = device->allocator()->get_alignment(BufferType::DRAM);
+    for (auto& allocation : allocations) {
+        const DeviceAddr persistent_base = reserve_program_local_l1(device, allocation.cores);
+        // A scratchpad bumps onto the program-scope L1 region, stacking on top of any DFBs.
+        // (DFBs and CBs are mutually exclusive, so dfb_allocators_ own the whole region.)
+        // Ensure a CircularBufferAllocator exists for each of the allocation's core ranges:
+        // a scratchpad-bearing kernel may have no DFBs, so the allocators may not exist yet.
+        for (const CoreRange& core_range : allocation.cores.ranges()) {
+            bool exists = false;
+            for (const CircularBufferAllocator& a : this->dfb_allocators_) {
+                if (a.core_range == core_range) {
+                    exists = true;
+                    break;
                 }
+            }
+            if (!exists) {
+                this->dfb_allocators_.emplace_back(core_range);
+            }
+        }
 
-                // Uniform per-node base address: the scratchpad address is delivered as a CRTA.
-                // It must sit at the same L1 offset everywhere that it exists.
-                // Take the max region-end over EVERY allocator that intersects the kernel's cores
-                // (not just exact-range matches), so the scratchpad cannot overlap a DFB on
-                // an overlapping-but-different core range. Mark each such allocator exactly once.
-                std::vector<CircularBufferAllocator*> touched;
-                touched.reserve(this->dfb_allocators_.size());
-                for (CircularBufferAllocator& a : this->dfb_allocators_) {
-                    for (const CoreRange& core_range : kernel_cores.ranges()) {
-                        if (a.core_range.intersects(core_range)) {
-                            touched.push_back(&a);
-                            break;
-                        }
-                    }
+        // Uniform per-node base address: the scratchpad address is delivered as a CRTA.
+        // It must sit at the same L1 offset everywhere that it exists.
+        // Take the max region-end over EVERY allocator that intersects the allocation's cores
+        // (not just exact-range matches), so the scratchpad cannot overlap a DFB on
+        // an overlapping-but-different core range. Mark each such allocator exactly once.
+        std::vector<CircularBufferAllocator*> touched;
+        touched.reserve(this->dfb_allocators_.size());
+        for (CircularBufferAllocator& a : this->dfb_allocators_) {
+            for (const CoreRange& core_range : allocation.cores.ranges()) {
+                if (a.core_range.intersects(core_range)) {
+                    touched.push_back(&a);
+                    break;
                 }
-                uint64_t addr = persistent_base;
-                for (const CircularBufferAllocator* a : touched) {
-                    addr = std::max<uint64_t>(addr, a->get_cb_region_end());
-                }
-                addr = align(addr, alignment);
-                for (CircularBufferAllocator* a : touched) {
-                    const uint64_t allocator_base = reserve_program_local_l1(device, CoreRangeSet(a->core_range));
-                    a->mark_address(addr, handle.size_bytes, allocator_base);
-                }
+            }
+        }
+        uint64_t addr = persistent_base;
+        for (const CircularBufferAllocator* a : touched) {
+            addr = std::max<uint64_t>(addr, a->get_cb_region_end());
+        }
+        addr = align(addr, alignment);
+        for (CircularBufferAllocator* a : touched) {
+            const uint64_t allocator_base = reserve_program_local_l1(device, CoreRangeSet(a->core_range));
+            a->mark_address(addr, allocation.bindings.front().second->size_bytes, allocator_base);
+        }
 
-                handle.allocated_address = static_cast<uint32_t>(addr);
+        for (auto& [kernel, binding] : allocation.bindings) {
+            auto& handle = *binding;
+            handle.allocated_address = static_cast<uint32_t>(addr);
 
-                TT_FATAL(
-                    handle.allocated_address != 0,
-                    "Internal error: scratchpad '{}' on kernel '{}' "
-                    "has a 0 allocated address (allocation failed or was skipped).",
-                    handle.accessor_name,
-                    kernel->name());
+            TT_FATAL(
+                handle.allocated_address != 0,
+                "Internal error: scratchpad '{}' on kernel '{}' "
+                "has a 0 allocated address (allocation failed or was skipped).",
+                handle.accessor_name,
+                kernel->name());
 
-                // Patch the allocated address into the kernel's CRTA buffer if it exists.
-                // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
-                // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
-                // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
-                // handle.allocated_address into the scratchpad section when it builds the buffer.
-                // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
-                //
-                // Usage of the CRTA buffer:
-                //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
-                //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
-                if (!kernel->common_runtime_args().empty()) {
-                    RuntimeArgsData& crta = kernel->common_runtime_args_data();
-                    crta[handle.addr_crta_word] = handle.allocated_address;
-                }
+            // Patch the allocated address into the kernel's CRTA buffer if it exists.
+            // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
+            // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
+            // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
+            // handle.allocated_address into the scratchpad section when it builds the buffer.
+            // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
+            //
+            // Usage of the CRTA buffer:
+            //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
+            //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
+            if (!kernel->common_runtime_args().empty()) {
+                RuntimeArgsData& crta = kernel->common_runtime_args_data();
+                crta[handle.addr_crta_word] = handle.allocated_address;
             }
         }
     }
