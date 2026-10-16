@@ -805,6 +805,11 @@ void D2DStreamServiceReceiver::release_fabric_links() {
     EnqueueMeshWorkload(mesh->mesh_command_queue(), *impl_->lease_release_workload, /*blocking=*/false);
 }
 
+// Gates are spaced by the L1 alignment so any NoC write can open one.
+DeviceAddr D2DStageGateDescriptor::gate_addr(uint32_t gate) const {
+    return gate_base_addr + (gate * tt::tt_metal::hal::get_l1_alignment());
+}
+
 uint32_t D2DStreamServiceReceiver::get_num_stage_gates() const {
     return impl_->stage_gate ? impl_->stage_gate->num_gates : 0;
 }
@@ -817,7 +822,6 @@ D2DStageGateDescriptor D2DStreamServiceReceiver::get_stage_gate_descriptor(
         .fabric_node_id = mesh->get_fabric_node_id(coord),
         .service_core_noc = mesh->get_device(coord)->worker_core_from_logical_core(impl_->service_cores.at(coord)),
         .gate_base_addr = base,
-        .gate_stride_bytes = tt::tt_metal::hal::get_l1_alignment(),
     };
 }
 

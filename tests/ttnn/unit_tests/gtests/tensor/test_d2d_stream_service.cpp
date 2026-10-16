@@ -449,8 +449,9 @@ void verify_stage_gate_descriptor(
     for (const auto& coord : receiver->get_backing_tensor().tensor_topology().mesh_coords()) {
         const auto desc = receiver->get_stage_gate_descriptor(coord);
         EXPECT_NE(desc.gate_base_addr, 0u);
-        EXPECT_EQ(desc.gate_stride_bytes, tt::tt_metal::hal::get_l1_alignment());
-        EXPECT_EQ(desc.gate_base_addr % desc.gate_stride_bytes, 0u);
+        for (uint32_t g = 0; g < kGateNumGates; ++g) {
+            EXPECT_EQ(desc.gate_addr(g) % tt::tt_metal::hal::get_l1_alignment(), 0u) << "gate " << g;
+        }
         EXPECT_EQ(
             desc.service_core_noc,
             receiver_mesh->get_device(coord)->worker_core_from_logical_core(receiver->get_service_core(coord)));
@@ -569,7 +570,7 @@ MeshWorkload make_remote_gate_opener_workload(
         mode,
         static_cast<uint32_t>(desc.service_core_noc.x),
         static_cast<uint32_t>(desc.service_core_noc.y),
-        static_cast<uint32_t>(desc.gate_base_addr + gate * desc.gate_stride_bytes),
+        static_cast<uint32_t>(desc.gate_addr(gate)),
         dst_node.chip_id,
         *dst_node.mesh_id,
         static_cast<uint32_t>(ttnn::d2d_stream::GateState::Open),
