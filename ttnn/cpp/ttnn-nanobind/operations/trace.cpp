@@ -117,13 +117,6 @@ void py_module(nb::module_& mod) {
             ``trace_id`` is interpreted under the currently active sub-device manager. The manager under which the
             trace was captured must be active for this call.
 
-            Warning:
-                The optional allocation checker checks tracked, non-exempt buffers before replay submission.
-                Accounting includes allocations on other subdevices of the capture manager. Released temporary
-                allocations are no longer tracked or compared across traces. Allocations made after this check
-                are still recorded, but cannot stop an already submitted replay. These cases require separate
-                analysis of memory ownership and synchronization.
-
             Args:
                 mesh_device (ttnn.MeshDevice): Mesh device on which the trace was captured.
                 trace_id (ttnn.MeshTraceId): ID of the trace under the active sub-device manager.

@@ -6,15 +6,6 @@
 Tracks device buffer allocations made while traces are active, to catch
 buffers that would be silently corrupted on trace replay.
 
-Accounting includes allocations across subdevices of the capture manager.
-Validation checks tracked, non-exempt buffers still allocated before replay submission.
-
-Warning: released temporary allocations are no longer tracked. The checker does
-not compare their memory ranges across traces. Allocations made after the check
-are still recorded, without an immediate warning or error. They cannot stop a
-replay already submitted. If freed before the next check, they are not reported.
-These cases require separate code analysis of memory ownership and synchronization.
-
 Controlled by environment variables:
   TT_METAL_TRACE_ALLOC_TRACKING=1       Enable accounting and fail when unsafe
                                          buffers survive until execute_trace.
@@ -141,12 +132,6 @@ class TraceAllocationTracker:
         Call before execute_trace. Checks for unsafe buffers and only triggers
         GC when the first check finds candidates, then checks again. Raises
         RuntimeError with details if any remain.
-
-        Accounting includes allocations on other subdevices of the capture manager.
-        This check does not compare released temporary allocations across traces
-        or monitor a running replay. Allocations made after this check are still
-        recorded, but cannot stop an already submitted replay. Allocations freed
-        before the next check are not reported.
 
         Reports allocation context (op name + compile args) and Python-side referrers.
         """
