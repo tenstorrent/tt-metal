@@ -45,7 +45,7 @@ bool is_collapsed(const TensorTopology& in, const MeshShape& mesh_shape) {
 std::optional<size_t> single_non_trivial_axis(const MeshShape& mesh_shape) {
     std::optional<size_t> found;
     for (size_t axis = 0; axis < mesh_shape.dims(); ++axis) {
-        if (mesh_shape[static_cast<int32_t>(axis)] > 1) {
+        if (mesh_shape[axis] > 1) {
             if (found.has_value()) {
                 return std::nullopt;
             }
@@ -142,7 +142,7 @@ std::optional<TopologyPlacements> uncollapse_placements(
         // offset), so its axes are the mesh's; one that does not fit was laid out row-major over the mesh.
         bool fits = true;
         for (size_t axis = 0; axis < mesh_dims; ++axis) {
-            fits &= distribution_shape[static_cast<int32_t>(axis)] <= mesh_shape[static_cast<int32_t>(axis)];
+            fits &= distribution_shape[axis] <= mesh_shape[axis];
         }
         const bool coordinates_are_the_distributions = in.mesh_coords().size() == distribution_shape.mesh_size();
         if (!fits || (coordinates_are_the_distributions &&
@@ -179,7 +179,7 @@ std::optional<TopologyPlacements> uncollapse_placements(
     TopologyPlacements out(mesh_dims, TopologyPlacement{Replicate{}});
     if (const auto* shard = std::get_if<Shard>(&placements.front())) {
         for (size_t axis = 0; axis < mesh_dims; ++axis) {
-            if (mesh_shape[static_cast<int32_t>(axis)] > 1) {
+            if (mesh_shape[axis] > 1) {
                 out[axis] = *shard;
             }
         }
@@ -218,16 +218,15 @@ std::optional<std::string> coverage_gap(
     if (label_shape.dims() != mesh_shape.dims()) {
         return std::nullopt;
     }
-    const auto a = static_cast<int32_t>(*axis);
-    if (label_shape[a] != mesh_shape[a]) {
+    if (label_shape[*axis] != mesh_shape[*axis]) {
         return fmt::format(
             "{} along mesh axis {} spans {} devices but the label {} covers {} along that axis: the groups reach "
             "devices the label does not describe",
             what,
             *axis,
-            mesh_shape[a],
+            mesh_shape[*axis],
             describe(in),
-            label_shape[a]);
+            label_shape[*axis]);
     }
     return std::nullopt;
 }
@@ -262,7 +261,7 @@ std::optional<TensorTopology> finalise(
     };
     for (size_t axis = 0; axis < out.size(); ++axis) {
         const auto* shard = std::get_if<Shard>(&out[axis]);
-        if (shard != nullptr && axis_shape[static_cast<int32_t>(axis)] == 1 && shards_same_dim_as(axis, *shard)) {
+        if (shard != nullptr && axis_shape[axis] == 1 && shards_same_dim_as(axis, *shard)) {
             out[axis] = Replicate{};
         }
     }
@@ -282,7 +281,7 @@ std::optional<TensorTopology> finalise(
     bool row_major_hierarchical = true;
     for (size_t axis = 0; axis < out.size(); ++axis) {
         const bool shards_duplicated_dim = placement_shards_tensor_dim(out[axis], *duplicated_dim, rank);
-        if (axis_shape[static_cast<int32_t>(axis)] > 1) {
+        if (axis_shape[axis] > 1) {
             row_major_hierarchical &= shards_duplicated_dim;
             if (new_shard_axis.has_value() && axis > *new_shard_axis) {
                 row_major_hierarchical = false;
@@ -358,8 +357,7 @@ std::optional<TensorTopology> all_gather_output_topology(
     if (require_contiguous_gather && gathered.has_value() &&
         placement_shards_tensor_dim((*expanded)[axis], *gathered, tensor_rank)) {
         for (size_t inner = axis + 1; inner < expanded->size(); ++inner) {
-            if (axis_shape[static_cast<int32_t>(inner)] > 1 &&
-                placement_shards_tensor_dim((*expanded)[inner], *gathered, tensor_rank)) {
+            if (axis_shape[inner] > 1 && placement_shards_tensor_dim((*expanded)[inner], *gathered, tensor_rank)) {
                 return refuse(
                     fmt::format(
                         "all_gather of tensor dim {} along mesh axis {} would interleave the shards of a tensor that "
@@ -510,7 +508,7 @@ std::optional<TensorTopology> scatter_output_topology(
         if (kind == ScatterKind::Partition) {
             for (size_t axis = 0; axis < placements.size(); ++axis) {
                 const auto* other_shard = std::get_if<Shard>(&placements[axis]);
-                if (other_shard != nullptr && label_shape[static_cast<int32_t>(axis)] > 1 &&
+                if (other_shard != nullptr && label_shape[axis] > 1 &&
                     !placement_shards_tensor_dim(placements[axis], *normalized_dim, tensor_rank)) {
                     return refuse(
                         fmt::format(
