@@ -29,16 +29,21 @@ def compute_config(mesh):
 
 
 def fpu_weight(w: torch.Tensor) -> torch.Tensor:
-    """An fp32 matmul weight as the FPU will read it (load time, host). The FPU reads fp32 operands at TF32 (10
-    mantissa bits) by truncation (K-30): a coherent -2^-11 bias over a long dot product (hc_fn, host: mixes rel
-    3.5e-4, all of it bias). FP32_WEIGHT_ROUND=rne rounds the weight to TF32 to nearest-even here, so the FPU's read
-    is exact and the error unbiased (host 1.5e-5; DS41-31); truncate leaves it to the FPU."""
+    """An fp32 matmul weight (matmul in1) as the FPU will multiply it (load time, host). The unpacker reads fp32 at
+    TF32 (10 mantissa bits) by truncation (K-30), and at HiFi4 the FPU multiplies only 9 explicit mantissa bits of
+    in1 (srcA: 2 fidelity phases x 5 bits incl. the hidden bit; in0 / srcB keeps all 10): a coherent truncation bias
+    over a long dot product (hc_fn: mixes -3.46e-4 with a TF32 weight, DS41-42). FP32_WEIGHT_ROUND rounds the weight
+    to nearest-even at load so what the FPU multiplies is exact and the error unbiased: srca = to the 9 bits srcA
+    keeps at HiFi4 (mixes +3.0e-5), rne = to TF32 (its 10th bit is still truncated on the device); truncate leaves
+    it all to the FPU."""
     w = w.float().contiguous()
-    if settings.get("FP32_WEIGHT_ROUND") != "rne":
+    mode = settings.get("FP32_WEIGHT_ROUND")
+    if mode == "truncate":
         return w
+    sh = 23 - {"srca": 9, "rne": 10}[mode]  # dropped low mantissa bits
     i = w.view(torch.int32)
-    lsb = (i >> 13) & 1
-    r = ((i + 0xFFF + lsb) >> 13) << 13
+    lsb = (i >> sh) & 1
+    r = ((i + ((1 << (sh - 1)) - 1) + lsb) >> sh) << sh
     return torch.where(torch.isfinite(w), r.view(torch.float32), w)
 
 

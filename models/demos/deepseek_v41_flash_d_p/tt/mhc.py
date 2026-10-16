@@ -13,12 +13,16 @@ part) on the SP x TP mesh, all fp32:
 
 Per chip (r, c) the streams are [1, 1, S/SP, 4 x H/TP] (tt/layout.py). The RMS has no weight, so its rsqrt commutes
 past the linear: each chip computes its partial mixes (one HiFi4 fp32-acc matmul with its 4 x H/TP rows of hc_fn^T,
-permuted on the host to the chip's stream-column order, padded to 32 output columns) and the exact partial sum of
+permuted on the host to the chip's stream-column order, padded to 32 output columns, rounded at load to the 9
+mantissa bits HiFi4 multiplies of in1, DS41-42) and the exact partial sum of
 squares (ttnn.bringup.mhc_pre_xing_pack, SFPU fp32) in column 24 of the same [S/SP, 32] row; one exchange over axis 1
-(all_gather + ttnn.add, exact, K-30; tt/common.py:tp_sum) completes both. Then mixes x rsqrt(sum / 4H + norm_eps)
-and ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn (DeepSeek-V4's own kernel: K-20, the same sequence as
-reference/kernels.py:sinkhorn_split; it caps logits at 80 instead of subtracting the row max, equal in range) on
-every chip of the row: the output is replicated over TP.
+(all_gather + ttnn.add, exact, K-30; tt/common.py:tp_sum) completes both. Then, on every chip of the row (the
+output is replicated over TP), setting HC_SINKHORN:
+  sfpu_fp32 (default) = ttnn.bringup.mhc_pre_xing(deepseek=True): one program from the exchanged row, mixes x
+    rsqrt(sum / 4H + norm_eps), the sigmoids and the Sinkhorn in DeepSeek's order (reference/kernels.py:sinkhorn_split)
+    lane-wise fp32 on the SFPU (FIX.4);
+  fpu = the composed rsqrt chain, then ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn (DeepSeek-V4's kernel,
+    K-20; logits capped at 80 instead of the row max), whose FPU steps read fp32 at TF32 (DS41-40).
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import build_consts
 
 from .common import DRAM, compute_config, fpu_weight, tp_sum
 from .layout import HC, streams_cols_to_chip_major
+from .settings import settings
 
 W = 32  # one tile row: 24 coefficient columns, the sum of squares in column SS_COL, the rest zero
 NC = HC * HC
@@ -58,14 +63,21 @@ class TtHcMixes:
         fn_t = torch.zeros(HC * hidden, W, dtype=torch.float32)
         fn_t[:, :NG] = streams_cols_to_chip_major(fn, hidden, tp).T
         self.fn_t = ttnn.from_torch(
-            fpu_weight(fn_t).reshape(1, 1, HC * hidden, W),  # TF32, rounded to nearest (DS41-31)
+            fpu_weight(fn_t).reshape(1, 1, HC * hidden, W),  # in1 = srcA: 9 mantissa bits at HiFi4, RNE (DS41-42)
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             device=mesh,
             memory_config=DRAM,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(None, 2)),
         )
-        # The Sinkhorn kernel's constants (SEL_pre / post / comb with the scales folded in, the bases, RB / CB).
+        self.sinkhorn = settings.get("HC_SINKHORN")
+        # sfpu_fp32: the fork's scalars (runtime args of one program shared by every layer; fp32 values, exact)
+        self.scale = [float(v) for v in scale.float().reshape(-1)]
+        self.base = [float(v) for v in base.float().reshape(-1)]
+        self.consts = None
+        if self.sinkhorn == "sfpu_fp32":
+            return
+        # fpu: the Sinkhorn kernel's constants (SEL_pre / post / comb with the scales folded in, the bases, RB / CB).
         consts = build_consts(SimpleNamespace(n=HC), scale.float().reshape(-1), base.float().reshape(-1))
         self.consts = ttnn.from_torch(
             consts.reshape(8, W, W).contiguous(),
@@ -83,6 +95,21 @@ class TtHcMixes:
         ttnn.deallocate(mix)
         red = tp_sum(self.mesh, packed)
         ttnn.deallocate(packed)
+        if self.sinkhorn == "sfpu_fp32":
+            hc, _ = ttnn.bringup.mhc_pre_xing(
+                red,
+                None,
+                scale=self.scale,
+                base=self.base,
+                norm_width=float(HC * self.hidden),
+                n=HC,
+                norm_eps=self.norm_eps,
+                hc_eps=self.hc_eps,
+                sinkhorn_iters=self.iters,
+                deepseek=True,
+            )
+            ttnn.deallocate(red)
+            return hc
         ss = ttnn.slice(red, [0, 0, 0, SS_COL], [1, 1, rows, SS_COL + 1])
         ms = ttnn.multiply(ss, self.inv_n, dtype=ttnn.float32)
         ttnn.deallocate(ss)

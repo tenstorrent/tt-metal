@@ -27,12 +27,18 @@ TABLE = {
         "value; exact stays selectable for comparison only",
     ),
     "FP32_WEIGHT_ROUND": Setting(
-        "rne",
-        ("rne", "truncate"),
-        "fp32 matmul weights the FPU reads (mHC hc_fn, tt/common.fpu_weight): rne = rounded to TF32 to nearest-even at "
-        "load, so the FPU's TF32 read is exact and unbiased (host: the weight's share of the mixes error 3.5e-4, all "
-        "bias -> 1.5e-5; device attn_hc vs CPU 6.5e-4 -> 6.1e-4, the rest is the in-tile rounding, DS41-16); "
-        "truncate = uploaded as fp32 and truncated by the FPU (K-30, DS41-31). Load time only, no per-chunk cost",
+        "srca",
+        ("srca", "rne", "truncate"),
+        "fp32 matmul weights the FPU reads as matmul in1 (mHC hc_fn, tt/common.fpu_weight), rounded to nearest-even "
+        "at load so what the FPU multiplies is exact and the error unbiased. srca = to the 9 explicit mantissa bits "
+        "HiFi4 multiplies of in1 (srcA; in0 / srcB keeps TF32's 10), FIX.4 / DS41-42; rne = to TF32 (the device then "
+        "truncates the 10th bit: mixes bias -3.46e-4); truncate = uploaded as fp32 and truncated by the FPU (K-30, "
+        "DS41-31). Load time only, no per-chunk cost. Measured FIX.4 attempt 5 (golden inputs, 2x2, L0 attn / L0 ffn / "
+        "L1 attn / L1 ffn / L2 attn; Sinkhorn sfpu_fp32): device mixes vs fp64 rne 3.4e-4..3.9e-4 (bias -2.8e-4.."
+        "-3.4e-4), srca 7.5e-5..1.5e-4 (bias +1.9e-5..+6.6e-5); step vs the CPU step rne 6.1e-5 / 1.1e-4 / 1.4e-4 / "
+        "1.5e-4 / 1.0e-4, srca 1.1e-5 / 4.4e-5 / 6.0e-5 / 6.6e-5 / 5.9e-5 (limits 3.5e-5 / 1.5e-4 / 3.9e-4 / 2.8e-4 / "
+        "4.1e-4). Either rounding leaves a fixed per-column error (host alone: worst column bias tf32 9e-5..1.7e-3, "
+        "srca 1.9e-4..1.8e-3 of rms) that only an exact fp32 weight (a split matmul, owner: no) removes",
     ),
     "ENGRAM_KV_QDQ": Setting(
         "qdq",
@@ -124,6 +130,19 @@ TABLE = {
         "the mHC residual post * y + comb^T x (tt/residual.py): fused = ttnn.bringup.mhc_post in one program; addcmul "
         "= per output stream multiply + 4 x addcmul; both fp32 on the SFPU",
     ),
+    "HC_SINKHORN": Setting(
+        "sfpu_fp32",
+        ("sfpu_fp32", "fpu"),
+        "the mHC mixes after the axis-1 exchange (tt/mhc.py): rsqrt scale, split, sigmoids and Sinkhorn. sfpu_fp32 = "
+        "ttnn.bringup.mhc_pre_xing(deepseek=True): one program, every step lane-wise fp32 on the SFPU (accurate exp, "
+        "Newton reciprocal / rsqrt). fpu = the composed rsqrt chain + ttnn.experimental.deepseek_prefill."
+        "mhc_split_sinkhorn, whose FPU steps read fp32 at TF32 (K-20, DS41-40). Measured FIX.4 (golden inputs, 2x2, "
+        "1024 rows per chip; L0 attn / L0 ffn / L1 attn / L1 ffn / L2 attn): Sinkhorn alone vs a CPU fp32 Sinkhorn "
+        "on the device's mixes sfpu_fp32 rel 6.5e-8..7.6e-8, fpu 5.9e-4..1.2e-3; whole step vs the CPU step "
+        "sfpu_fp32 6.1e-5 / 1.1e-4 / 1.4e-4 / 1.5e-4 / 1.0e-4 = 3.4 / 1.5 / 0.69 / 1.1 / 0.50 x the noise floor (the "
+        "rest is the linear, DS41-41), fpu 6.1e-4 / 1.3e-3 / 7.0e-4 / 8.2e-4 / 7.8e-4 = 35 / 17 / 3.5 / 5.8 / 3.9 x; "
+        "time (wall, per call) rsqrt + Sinkhorn sfpu_fp32 0.031 ms, fpu 0.45 ms; whole step 0.41 vs 0.77 ms",
+    ),
     "HC_TP_SUM": Setting(
         "gather_add",
         ("gather_add", "all_reduce"),
@@ -137,8 +156,9 @@ MAX_PRECISION = {
     "MATMUL_FIDELITY": "HiFi4",
     "FP32_DEST_ACC": True,
     "HC_TP_SUM": "gather_add",
+    "HC_SINKHORN": "sfpu_fp32",  # FIX.4: the official kernel computes the Sinkhorn in fp32
     "ENGRAM_KV_QDQ": "qdq",
-    "FP32_WEIGHT_ROUND": "rne",
+    "FP32_WEIGHT_ROUND": "srca",  # FIX.4: what HiFi4 multiplies of in1 (DS41-42)
     "ATTN_IN_MM": "fpu",  # owner 2026-10-15 (OV-3): accuracy against the noise floor, not exactness
     "WINDOW_SDPA": "high_precision",  # owner 2026-10-15 (OV-3); "exact" only for comparison
     "WINDOW_SDPA_OUT": "bf16",  # FIX.2: the reference kernel's dtypes (owner rule: never above the reference)
