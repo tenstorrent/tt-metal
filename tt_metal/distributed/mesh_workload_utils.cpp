@@ -32,7 +32,6 @@ struct GoSignalSequenceConfig {
     MeshDevice* mesh_device;
     SubDeviceId sub_device_id;
     uint32_t expected_num_workers_completed;
-    CoreCoord dispatch_core;
     bool send_mcast;
     const program_dispatch::ProgramDispatchMetadata& dispatch_metadata;
     std::optional<uint32_t> config_ring_sync_count;
@@ -81,11 +80,7 @@ void populate_go_signal_sequence(DeviceCommand<HugepageWrite>& commands, const G
 
     const uint8_t sub_device_index = *config.sub_device_id;
     const uint32_t go_message = hal.make_go_msg_u32(
-        dev_msgs::RUN_MSG_GO,
-        config.dispatch_core.x,
-        config.dispatch_core.y,
-        metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index) +
-            metal_ctx.dispatch_mem_map().get_completion_counter_offset(config.cq_id));
+        dev_msgs::RUN_MSG_GO, metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index));
 
     // When running with dispatch_s enabled:
     //   - dispatch_d must notify dispatch_s that a go signal can be sent.
@@ -119,7 +114,6 @@ HostMemDeviceCommand build_go_signal_sequence(
     MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
     bool send_mcast,
     const program_dispatch::ProgramDispatchMetadata& dispatch_metadata,
     std::optional<uint32_t> config_ring_sync_count) {
@@ -128,7 +122,6 @@ HostMemDeviceCommand build_go_signal_sequence(
         .mesh_device = mesh_device,
         .sub_device_id = sub_device_id,
         .expected_num_workers_completed = expected_num_workers_completed,
-        .dispatch_core = dispatch_core,
         .send_mcast = send_mcast,
         .dispatch_metadata = dispatch_metadata,
         .config_ring_sync_count = config_ring_sync_count};
@@ -146,7 +139,6 @@ void write_go_signal_sequence(
     SubDeviceId sub_device_id,
     SystemMemoryManager& sysmem_manager,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
     bool send_mcast,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md,
     std::optional<uint32_t> config_ring_sync_count) {
@@ -155,7 +147,6 @@ void write_go_signal_sequence(
         .mesh_device = mesh_device,
         .sub_device_id = sub_device_id,
         .expected_num_workers_completed = expected_num_workers_completed,
-        .dispatch_core = dispatch_core,
         .send_mcast = send_mcast,
         .dispatch_metadata = dispatch_md,
         .config_ring_sync_count = config_ring_sync_count};

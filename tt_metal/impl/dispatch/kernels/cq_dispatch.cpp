@@ -52,6 +52,8 @@ constexpr uint32_t packed_write_max_unicast_sub_cmds =
 constexpr uintptr_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
 constexpr uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;  // maximum number of worker semaphores
 constexpr uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
+constexpr uint32_t go_done_noc_x = GO_DONE_NOC_X;
+constexpr uint32_t go_done_noc_y = GO_DONE_NOC_Y;
 constexpr uint32_t distributed_dispatcher = DISTRIBUTED_DISPATCHER;
 constexpr uint32_t host_completion_q_wr_ptr = HOST_COMPLETION_Q_WR_PTR;
 constexpr uintptr_t dev_completion_q_wr_ptr = DEV_COMPLETION_Q_WR_PTR;
@@ -1188,7 +1190,8 @@ void process_go_signal_mcast_cmd() {
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(cmd_ptr);
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage_uncached =
         reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
-    uint32_t go_signal_value = load_aligned<uint32_t>(&cmd->mcast.go_signal);
+    uint32_t go_signal_value = add_go_signal_done_target(
+        load_aligned<uint32_t>(&cmd->mcast.go_signal), go_done_noc_x, go_done_noc_y, completion_counter_offset);
     uint32_t multicast_go_offset = cmd->mcast.multicast_go_offset;
     uint32_t wait_count = load_aligned<uint32_t>(&cmd->mcast.wait_count);
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
