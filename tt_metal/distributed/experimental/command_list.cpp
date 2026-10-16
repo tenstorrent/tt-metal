@@ -111,13 +111,21 @@ void append_go_signal_sequence(
     MeshDevice& mesh_device,
     SubDeviceId sub_device,
     uint32_t expected_workers,
-    bool send_multicast) {
+    bool send_multicast,
+    uint32_t go_ring_slot) {
     program_dispatch::ProgramDispatchMetadata dispatch_metadata;
     // GO-signal-only sequences carry no kernel binary; marking them cached skips the prefetcher ring-buffer offset
     // command.
     dispatch_metadata.prefetcher_cache_info.is_cached = true;
     HostMemDeviceCommand commands = build_go_signal_sequence(
-        cq_id, &mesh_device, sub_device, expected_workers, send_multicast, dispatch_metadata, std::nullopt);
+        cq_id,
+        &mesh_device,
+        sub_device,
+        expected_workers,
+        send_multicast,
+        go_ring_slot,
+        dispatch_metadata,
+        std::nullopt);
     append_command_bytes(output, commands.data(), commands.size_bytes());
 }
 
@@ -433,7 +441,8 @@ CommandListData CommandListBuilderImpl::serialize_range(
                 mesh_device,
                 sub_device,
                 expected_workers[sub_device_idx],
-                /*send_multicast=*/true);
+                /*send_multicast=*/true,
+                launch_state[sub_device_idx].get_mcast_wptr());
             launch_state[sub_device_idx].inc_mcast_wptr(1);
             expected_workers[sub_device_idx] += staged_node.num_workers;
         }

@@ -580,7 +580,12 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // Send go signals to devices not running a program to ensure consistent global state
     if (!covers_entire_mesh) {
         this->write_go_signal_sequences_to_unused_sub_grids(
-            chip_ids_in_workload, sub_device_id, expected_num_workers_completed, mcast_go_signals, dispatch_metadata);
+            chip_ids_in_workload,
+            sub_device_id,
+            expected_num_workers_completed,
+            mcast_go_signals,
+            mcast_launch_msg_wptr,
+            dispatch_metadata);
     }
     // Increment Launch Message Buffer Write Pointers
     if (mcast_go_signals) {
@@ -1235,6 +1240,7 @@ void FDMeshCommandQueue::reset_worker_state(
             devices[i]->sysmem_manager(),
             id_,
             expected_num_workers_completed_,
+            cq_shared_state_->worker_launch_message_buffer_state,
             reset_launch_msg_state,
             cached->device_batches[i]);
     }
@@ -1286,6 +1292,7 @@ void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(
     const SubDeviceId& sub_device_id,
     uint32_t expected_num_workers_completed,
     bool mcast_go_signals,
+    uint32_t go_ring_slot,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
     // The config-buffer manager is mesh-global. Covered devices receive this stall through their program sequence;
     // unused devices must receive it here before a later workload can overwrite the globally freed ring region.
@@ -1303,6 +1310,7 @@ void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(
                 device->sysmem_manager(),
                 expected_num_workers_completed,
                 mcast_go_signals,
+                go_ring_slot,
                 dispatch_md,
                 config_ring_sync_count);
         }
@@ -1365,7 +1373,12 @@ void FDMeshCommandQueue::submit_replay_buffer(
 
     for (auto* device : mesh_device_->get_devices()) {
         trace_dispatch::issue_trace_commands(
-            mesh_device_, device->sysmem_manager(), dispatch_md, id_, expected_num_workers_completed_);
+            mesh_device_,
+            device->sysmem_manager(),
+            dispatch_md,
+            id_,
+            expected_num_workers_completed_,
+            cq_shared_state_->worker_launch_message_buffer_state);
     }
 
     // The replayed exec buffer bypasses normal host cache tracking, so subsequent program enqueues must start from an
@@ -1504,6 +1517,7 @@ void FDMeshCommandQueue::record_end() {
             for (uint32_t i = 0; i < unused_nodes[sub_device_id].unused_nodes_multicast; i++) {
                 SubDeviceId sub_device{static_cast<uint8_t>(sub_device_id)};
                 auto& trace_worker_descriptor = trace_worker_descriptors[sub_device];
+                auto& worker_launch_msg_state = worker_launch_message_buffer_state[sub_device_id];
                 program_dispatch::ProgramDispatchMetadata go_signal_md;
                 go_signal_md.prefetcher_cache_info.is_cached = true;
                 write_go_signal_sequence(
@@ -1513,10 +1527,10 @@ void FDMeshCommandQueue::record_end() {
                     sysmem_manager_for_trace,
                     trace_worker_descriptor.num_completion_worker_cores,
                     /*send_mcast=*/true,
+                    worker_launch_msg_state.get_mcast_wptr(),
                     go_signal_md,
                     std::nullopt);
 
-                auto& worker_launch_msg_state = worker_launch_message_buffer_state[sub_device_id];
                 trace_worker_descriptor.num_completion_worker_cores +=
                     mesh_device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device);
                 worker_launch_msg_state.inc_mcast_wptr(1);
@@ -1699,6 +1713,7 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
                 device->sysmem_manager(),
                 id_,
                 expected_num_workers_completed_,
+                cq_shared_state_->worker_launch_message_buffer_state,
                 reset_launch_msg_state,
                 /*setup_commands=*/{});
         }

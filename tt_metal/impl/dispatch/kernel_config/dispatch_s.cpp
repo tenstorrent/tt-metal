@@ -319,6 +319,9 @@ void DispatchSKernel::CreateKernel() {
         // Workers report done for a go to the dispatcher that sent it.
         {"GO_DONE_NOC_X", std::to_string(my_virtual_core.x)},
         {"GO_DONE_NOC_Y", std::to_string(my_virtual_core.y)},
+        {"MCAST_GO_RING_SIZE",
+         std::to_string(
+             descriptor_.hal().get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).size_of<dev_msgs::go_ring_t>())},
         {"DISTRIBUTED_DISPATCHER", std::to_string(static_config_.distributed_dispatcher.value())},
         {"FIRST_STREAM_USED", std::to_string(static_config_.first_stream_used.value())},
         {"COMPLETION_COUNTER_OFFSET", std::to_string(static_config_.completion_counter_offset.value())},
