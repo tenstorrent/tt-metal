@@ -51,7 +51,8 @@ TABLE = {
     "COMPRESSOR_X": Setting(
         "round_tf32",
         ("round_tf32", "truncate"),
-        "the fp32 matmul inputs of the compressor (attn_norm into [wkv | wgate], the latent into wk; matmul in0, which "
+        "the fp32 matmul inputs of the compressor (attn_norm into [wkv | wgate], the latent into wk; and attn_norm into "
+        "the indexer's weights_proj, tt/indexer.py, which the plan fuses into the compressor's projection; matmul in0, which "
         "the FPU reads at TF32 by truncation, K-30): round_tf32 = rounded to TF32 to nearest even first "
         "(tt/quant.round_tf32, DS41-31: an unbiased read, same bits); truncate = the FPU's own truncation",
     ),
