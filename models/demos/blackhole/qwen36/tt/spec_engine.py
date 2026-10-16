@@ -642,6 +642,8 @@ class MTPSpecEngine:
                 dn.seed_spec_rows(range(0, B, 2))
                 dn.seed_spec_rows(range(1, B, 2))
                 dn.remap_spec_slots(list(range(B))[::-1])  # a full reversal slices every row offset once
+                if B % 2 == 1:  # odd B: the reversal fixes the middle row; a cyclic shift moves every row
+                    dn.remap_spec_slots([(i + 1) % B for i in range(B)])
             z = ttnn.zeros(
                 [1, 1, B * T, self._dim_frac],
                 device=self.mesh,
