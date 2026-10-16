@@ -663,6 +663,12 @@ def test_ledger_of_a_scaled_run(fx, tmp_path, monkeypatch):
     goldens = [i for i in t if i.startswith("G.")]
     assert goldens and t[goldens[0]]["deps"] == ["SG.1"]
     assert all("BRINGUP_SCALED=0" in t[i]["gate"]["cmd"] for i in ("R.1", "R.2", "R.3", "PL.1"))
+    # F80: the official taps run on the scaled checkpoint, like the goldens they are compared with
+    assert (
+        "R.5" in t
+        and "BRINGUP_SCALED=0" not in t["R.5"]["gate"]["cmd"]
+        and "R.5" in t[next(i for i in t if i.startswith("C."))]["deps"]
+    )
     assert "BRINGUP_SCALED" not in t[goldens[0]]["gate"]["cmd"] and t["X.2"]["deps"] == ["X.1"]
     early = {x["id"] for x in generate(s, early=True)["tasks"]}
     assert not any(i.startswith("G.") for i in early)  # no golden before the scaled model exists
