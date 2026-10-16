@@ -432,13 +432,6 @@ class GRPOMonitor(TrainerCallback):
         for key, value in metrics.items():
             if key in _NON_CSV_KEYS:
                 continue
-            # ``step`` is the row identifier, always passed positionally to
-            # this hook and consumed by _log_console / _write_csv_row / wandb
-            # directly. Skip it here so it does not get cast to float by the
-            # aggregator (which would make the console log show ``step: 4.0``
-            # and wandb receive a float ``grpo/step``).
-            if key == "step":
-                continue
             if isinstance(value, (bool, int, float)) and not (isinstance(value, float) and math.isnan(value)):
                 self._running[key].push(float(value))
 
@@ -882,6 +875,7 @@ class GRPOTrainer:
         # (e.g. an eval callback writing ``trainer.metrics["eval_similarity"]``)
         # and later callbacks (notably ``GRPOMonitor``) read the merged view.
         self.metrics: dict = {}
+        self.global_step: int = 0
 
         # Transient timing state used to bracket ``step_time_s`` — written by
         # ``train()``, read by ``_publish_step_metrics``.
@@ -1439,25 +1433,14 @@ class GRPOTrainer:
         fold into ``self.metrics`` via ``_time_callback``), save a checkpoint
         if due, seal ``step_time_s``, and finally fire the monitor callback's
         ``on_step_end`` OUTSIDE the ``step_time_s`` window.
-
-        Reads step from ``self.metrics["step"]`` and passes it positionally to
-        callbacks so the ``on_step_end(trainer, step, **metrics)`` signature
-        is unchanged.
         """
-        step = self.metrics["step"]
+        step = self.global_step
         monitor_cb = next((cb for cb in self.callbacks if isinstance(cb, GRPOMonitor)), None)
-
-        # ``step`` lives on ``self.metrics`` but is also passed positionally to
-        # match the callback signature ``on_step_end(trainer, step, **metrics)``.
-        # Filter it out of the splat so we don't hit "got multiple values for
-        # argument 'step'".
-        def _step_kwargs() -> dict:
-            return {k: v for k, v in self.metrics.items() if k != "step"}
 
         for cb in self.callbacks:
             if cb is monitor_cb:
                 continue
-            self._time_callback(cb, "on_step_end", self, step, **_step_kwargs())
+            self._time_callback(cb, "on_step_end", self, step, **self.metrics)
 
         self._maybe_checkpoint()
 
@@ -1468,13 +1451,13 @@ class GRPOTrainer:
         self.metrics["step_time_s"] = time.perf_counter() - self._step_start_time
 
         if monitor_cb is not None:
-            self._time_callback(monitor_cb, "on_step_end", self, step, **_step_kwargs())
+            self._time_callback(monitor_cb, "on_step_end", self, step, **self.metrics)
 
     def _maybe_checkpoint(self) -> None:
         """Save a checkpoint on interval + fire ``on_save`` for non-monitor
         callbacks (their timings fold into ``self.metrics``).
         """
-        step = self.metrics["step"]
+        step = self.global_step
         cfg = self.config
         if not cfg.checkpointing or step % cfg.checkpoint_interval != 0:
             return
@@ -1508,10 +1491,9 @@ class GRPOTrainer:
         self._setup()
         for cb in self.callbacks:
             cb.on_train_begin(self)
-        self.metrics = {"step": 0}
 
         for prompts, extra_cols in self._iter_prompt_batches():
-            self.metrics = {"step": self.metrics["step"]}
+            self.metrics = {}
             self._step_start_time = time.perf_counter()
             completions = self._rollout(prompts)
             prompts_x, cols_x = self._expand_prompts_and_columns(prompts, extra_cols)
@@ -1528,7 +1510,7 @@ class GRPOTrainer:
                         self._step_start_time = time.perf_counter()
                     self._optimize(prompts_x, completions, advantages_np, ref_logprobs)
                     self._apply_gradients()
-                    self.metrics["step"] += 1
+                    self.global_step += 1
                     self._publish_step_metrics()
             finally:
                 for nlog, mask in ref_logprobs:
