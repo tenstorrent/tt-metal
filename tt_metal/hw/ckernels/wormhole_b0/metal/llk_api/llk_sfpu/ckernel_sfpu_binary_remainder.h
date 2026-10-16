@@ -314,15 +314,19 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     }
     v_endif;
 
-    // Magnitude correction: reciprocal imprecision can cause floor() to be greater than the true floor value.
-    v_if(b > sfpi::vFloat(0.0f) && a > sfpi::vFloat(0.0f)) {
-        sfpi::vFloat diff = result - b;
+    // Magnitude correction: reciprocal imprecision can leave floor() one below the true floor, so
+    // |result| >= |b|. After the sign correction result carries b's sign (or is zero), so the check
+    // is the same for either sign of a; for an exact multiple with opposite signs the raw result is
+    // b itself. Recompute the remainder from the quotient instead of subtracting b from result: for
+    // an exact multiple (floor_div + 1) * b is a and the difference is exactly zero, whereas
+    // result - b keeps the rounding of the earlier product and can land just inside |b|.
+    sfpi::vFloat diff = a - (floor_div + sfpi::vFloat(1.0f)) * b;
+    v_if(b > sfpi::vFloat(0.0f)) {
         v_if(diff >= sfpi::vFloat(0.0f)) { result = diff; }
         v_endif;
     }
     v_endif;
-    v_if(b < sfpi::vFloat(0.0f) && a < sfpi::vFloat(0.0f)) {
-        sfpi::vFloat diff = result - b;
+    v_if(b < sfpi::vFloat(0.0f)) {
         v_if(diff <= sfpi::vFloat(0.0f)) { result = diff; }
         v_endif;
     }
