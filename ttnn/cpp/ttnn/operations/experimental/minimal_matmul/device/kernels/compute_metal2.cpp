@@ -487,17 +487,18 @@ void matmul_blocks_swiglu(
                 in1_index += full_N_block_tiles;
             }
             if (add_partials) {
-                // DST -> SrcB, partial-sum tile -> SrcA
-                reconfig_data_format_srca(in1_dfb, interm_dfb);
-                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(interm_dfb);
+                // DST -> SrcA, partial-sum tile -> SrcB (the matmul's SrcB operand is in0). Bit-identical to the
+                // DEST_TO_SRCB form and ~0.3% faster for the whole op (FF13 bs32 3123 -> 3114 us).
+                reconfig_data_format_srcb(in0_dfb, interm_dfb);
+                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(interm_dfb);
                 uint32_t dst = 0;
                 for (uint32_t h = 0; h < subblock_h; h++) {
                     for (uint32_t w = 0; w < subblock_w; w++) {
-                        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
                             interm_dfb, (M_start + h) * full_N_block_tiles + N_start + w, dst++);
                     }
                 }
-                reconfig_data_format_srca(interm_dfb, in1_dfb);
+                reconfig_data_format_srcb(interm_dfb, in0_dfb);
                 matmul_block_init(in0_dfb, in1_dfb, false /*transpose*/, subblock_w, subblock_h, K_block_tiles);
             }
             tile_regs_commit();

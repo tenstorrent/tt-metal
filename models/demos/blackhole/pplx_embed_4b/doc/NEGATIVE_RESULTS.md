@@ -2123,3 +2123,25 @@ default, cold best, 2 rounds on chips 0-3: bs1 13.9 / 13.9 vs 13.9 / 13.9, bs8 7
 bs32 0.8907. **Landed** as `QWEN_FF13_TRANSPOSE_GRID=1` at bs32 (tt/mlp.py, `apply_workload_env`): cold best on / off,
 4 chips concurrently: 277.4 / 288.9, 288.1 / 289.6, 287.4 / 290.1, 284.6 / 285.3 ms; STS-B bs32 0.8911 unchanged.
 Open: QKV bs16 untransposed is worth ~27 µs per call (~1 ms per forward) if its data movement can be hidden.
+
+## 80. FF13's partial-sum add: the per-tile add is the cost; a DST preload trades accuracy for 1-2 ms (2026-10-16)
+
+The fused FF1+FF3 matmul (4,40,8 1×8, two K blocks) adds K block 0's packer-L1-accumulated partial sums into DST in
+the last K block, per 8-tile subblock: SrcA reconfig, add_reuse_dest_init, 8 dest-reuse adds, reconfig back,
+matmul_block_init. `perf_tools/bench_ff13_partials.py <batch> [arm ...]`, device µs per call (bs16 / bs32):
+
+| arm | bs16 | bs32 | values |
+|---|---|---|---|
+| shipped before (DEST_TO_SRCB) | 1637.1 | 3123.0 | |
+| re-inits only (no adds) | 1583.3 | | wrong |
+| no partials at all | 1569.9 | 2981.0 | wrong |
+| **DEST_TO_SRCA** (partial unpacked to SrcB) | **1634.0** | **3114.4** | bit-identical, **landed** |
+| preload (partials copied into DST, the last K block's matmul accumulates on top) | 1610.9 | 3067.4 | rel. RMSE vs float 0.174 -> 0.192 |
+
+The adds cost ~53 cycles a tile; the re-inits only ~14 µs a call, so amortising them cannot help. The adds without
+their init hang. Preload removes the DST move but accumulates 40 products onto the large partial in bf16 DST, which
+rounds more than the pairwise half-sum add. E2e (landed kernel vs preload, 2 alternating rounds, full STS-B 1379
+pairs): bs16 cold 141.1 / 141.4 vs 139.8 / 140.2 ms, STS-B 0.8174 vs 0.8152; bs32 cold 278.5 / 284.7 vs 273.8 / 283.0
+ms (chip 3 drifting), STS-B 0.8155 vs 0.8153. Not landed (an accuracy trade; the user's call). K_block 80 (no
+partials) needs ~1.4 MB of CBs double-buffered; 4,80,4 with in0 single-buffered fits but 1×4 subblocks run 3.5% slower
+in the LLK and expose in0 reloads.
