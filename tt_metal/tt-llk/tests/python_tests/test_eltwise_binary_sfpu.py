@@ -8,7 +8,6 @@ from typing import Dict
 
 import pytest
 import torch
-from conftest import skip_for_quasar
 from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -26,6 +25,7 @@ from helpers.llk_params import BroadcastType as LlkBroadcastType
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
+    DstRoundingMode,
     MathOperation,
     PerfRunType,
     format_dict,
@@ -64,11 +64,13 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
     SFPU_BCAST_DIM,
+    SFPU_DST_ROUNDING_MODE,
     TILE_COUNT,
     generate_input_dim,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.tilize_untilize import tilize
+from helpers.utils import assert_bf16_separates_rne, assert_bit_exact, bf16_from_bits
 
 # =============================================================================
 # Shared skip helpers
@@ -455,6 +457,8 @@ def sfpu_binary(
     loop_factor=1,
     iterations=32,
     approx_mode=ApproximationMode.No,
+    dst_rounding_mode=DstRoundingMode.Default,
+    check_contract=True,
 ):
     """*unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
 
@@ -531,8 +535,8 @@ def sfpu_binary(
         )
 
     # The kernel runs with a 32-bit Dest where the hardware needs one -- an exponent-B
-    # input packed to Float16 on every arch but Quasar (`effective_dest_acc`, the rule
-    # TestConfig applies silently), a Float16/Float32 input on Blackhole -- so dest_acc
+    # input packed to Float16 (`effective_dest_acc`, the rule TestConfig applies
+    # silently), a Float16/Float32 input on Blackhole -- so dest_acc
     # is promoted here too. Hoisted above the golden, which models the Dest width from
     # it, and above the contract, whose `dest: "Yes"` rows describe the kernel that ran.
     # Left at No, both would describe a variant that never executed.
@@ -594,6 +598,7 @@ def sfpu_binary(
             ITERATIONS(iterations),
             BROADCAST_TYPE(bcast),
             SFPU_BCAST_DIM(LlkBroadcastType.None_),
+            SFPU_DST_ROUNDING_MODE(dst_rounding_mode),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -635,6 +640,11 @@ def sfpu_binary(
     assert len(res_tensor) == len(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
+
+    # The contract tolerance cannot tell truncation from round-to-nearest-even.
+    # Callers that pass check_contract=False compare bit-exactly themselves.
+    if not check_contract:
+        return res_tensor, golden_tensor
 
     if unspecified_nonfinite_sign and generated_nan_chunks:
         # Clear the sign only on lanes that held a generated NaN and where both sides are
@@ -809,6 +819,83 @@ def test_eltwise_binary_sfpu_float(
         broadcast_type=bcast_dim,
         **run_kwargs,
     )
+
+
+def _tile_from_pairs(pairs):
+    """Row-major operand tiles from cycled (a, b) pairs. One tile each."""
+    src = _build_paired_tile_override(pairs, torch.float32)
+    a = src[:_ELEMENTS_PER_TILE].to(torch.bfloat16)
+    b = src[_ELEMENTS_PER_TILE:].to(torch.bfloat16)
+    return src, a, b
+
+
+# One in0/in1 pair. The golden's first tile is the result in row-major order.
+_EXACT_DIMS = [64, 32]
+_BF16_FORMATS = InputOutputFormat(
+    input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b
+)
+# Sums whose low 16 bits are a tie and whose kept mantissa bit is odd, so
+# round-to-nearest-even steps up and truncation does not.
+_RNE_ADD_PAIRS = (
+    (0x3F00, 0x3F03),
+    (0x3F00, 0x3F0F),
+    (0x3F00, 0x3F1B),
+    (0x3F00, 0x3F27),
+)
+# Finite products that separate RNE from truncation, then 0 * +inf, stored as +0.
+_PRODUCTION_MUL_PAIRS = (
+    (0x0000, 0x7F80),
+    (0x3F01, 0x3F42),
+    (0x3F01, 0x3F45),
+    (0x3F01, 0x3F48),
+)
+
+
+def test_eltwise_binary_sfpu_bf16_rne_exact():
+    """NearestEven ADD on Float16_b with a 16-bit Dest, bit-exact against RNE.
+
+    The contract tolerance also passes a truncated store, so this compares
+    the device result to the golden with torch.equal.
+    """
+    src, a, b = _tile_from_pairs(
+        [(bf16_from_bits(x), bf16_from_bits(y)) for x, y in _RNE_ADD_PAIRS]
+    )
+    assert_bf16_separates_rne(a.float() + b.float())
+    res, golden = sfpu_binary(
+        _BF16_FORMATS,
+        DestAccumulation.No,
+        MathOperation.SfpuElwadd,
+        src_A_override=src,
+        input_dimensions=_EXACT_DIMS,
+        dst_rounding_mode=DstRoundingMode.NearestEven,
+        check_contract=False,
+    )
+    assert_bit_exact(res, golden, "NearestEven ADD")
+
+
+def test_eltwise_binary_sfpu_mul_production_exact():
+    """Production mul is RNE, and 0 * inf stores 0 rather than a NaN."""
+    src, a, b = _tile_from_pairs(
+        [(bf16_from_bits(x), bf16_from_bits(y)) for x, y in _PRODUCTION_MUL_PAIRS]
+    )
+    finite = torch.isfinite(a.float() * b.float())
+    assert_bf16_separates_rne((a.float() * b.float())[finite])
+    res, golden = sfpu_binary(
+        _BF16_FORMATS,
+        DestAccumulation.No,
+        MathOperation.SfpuElwmul,
+        src_A_override=src,
+        input_dimensions=_EXACT_DIMS,
+        check_contract=False,
+    )
+    zero = (a == 0) | (b == 0)
+    if not bool(zero.any()):
+        raise AssertionError("production mul stimulus has no zero input")
+    # IEEE 0 * inf is not +0, so a golden that keeps it does not check the store.
+    got_zero = golden[:_ELEMENTS_PER_TILE][zero]
+    if not torch.equal(got_zero, torch.zeros_like(got_zero)):
+        raise AssertionError("golden did not model production 0 * x = +0")
+    assert_bit_exact(res, golden, "production mul")
 
 
 @parametrize(**DIV_SWEEP)
@@ -1674,6 +1761,7 @@ def _run_sfpu_add_top_row(
             ITERATIONS(iterations),
             BROADCAST_TYPE(LlkBroadcastType.None_),
             SFPU_BCAST_DIM(LlkBroadcastType.None_),
+            SFPU_DST_ROUNDING_MODE(),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -1850,6 +1938,8 @@ def _run_sfpu_binary_bcast(
             ITERATIONS(iterations),
             BROADCAST_TYPE(LlkBroadcastType.None_),
             SFPU_BCAST_DIM(bcast_dim),
+            # Unread by this kernel. Present so the report columns match sfpu_binary.
+            SFPU_DST_ROUNDING_MODE(),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A + tile_cnt_B),
@@ -1895,7 +1985,6 @@ def _run_sfpu_binary_bcast(
     assert_against_contract(mathop, formats, dest_acc, golden_tensor, res_tensor)
 
 
-@skip_for_quasar
 @parametrize(**BCAST_SWEEP)
 def test_eltwise_binary_sfpu_bcast(
     formats,
