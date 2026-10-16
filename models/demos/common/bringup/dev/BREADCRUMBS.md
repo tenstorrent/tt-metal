@@ -1121,3 +1121,15 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   The reference role writes it from the official code; only the reference and overseer roles may change it (it sets
   how strict every limit is); gates commit it. A step mixing both (fp32 scores, bf16 probabilities) stays bf16.
 - Selftests: test_component_checks.py::test_the_precision_model_follows_the_references_dtypes.
+
+## F79 (2026-10-16): a fix job's gate runs each step's tests as that step; F76 fixes from the first device gate
+
+- FIX.2 (DeepSeek-V4.1 run1) reran C.swa.attention's gate under BRINGUP_TASK=FIX.2: its contract test picks its layers
+  by `C.<block type>.attention` in BRINGUP_TASK, fell back to every layer and hit the half-built layer 2. Now each
+  segment of a fix job's gate runs with `BRINGUP_TASK=<its task>`, and the gate runner's BRINGUP_RECORD_TASK (=
+  FIX.<n>) decides the results file (core/metrics.record_task; profile.py writes under it too).
+- Frozen swap tests (swa_engram 14-18) patch component._check_step with an eight-argument wrapper: F76's two new
+  arguments now travel in component._STEP_CTX; the call keeps the old signature.
+- The bf16-resolution floor came from the golden (already bf16: 0) and set a vs-golden limit of PCC 1.0 for an exact
+  step (engram_kv); it now comes from the fp32 CPU output (the step on the same inputs; the block's last step).
+- Selftests: test_overseer.py (record task, the fix gate's prefixes), test_swap_checks.py (eight-argument wrapper).

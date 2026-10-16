@@ -18,12 +18,19 @@ import time
 from pathlib import Path
 
 TASK_ENV = "BRINGUP_TASK"
+# F79: the task whose results file a metric lands in, when it is not the task whose test runs (an overseer fix job
+# reruns C.swa.attention's gate as FIX.2: the test sees BRINGUP_TASK=C.swa.attention, its metrics go to FIX.2)
+RECORD_ENV = "BRINGUP_RECORD_TASK"
 RESULTS_ENV = "BRINGUP_RESULTS_DIR"
 _REPO = Path(__file__).resolve().parents[5]
 
 
 def task_id(default: str = "adhoc") -> str:
     return os.environ.get(TASK_ENV) or default
+
+
+def record_task(default: str = "adhoc") -> str:
+    return os.environ.get(RECORD_ENV) or task_id(default)
 
 
 def results_dir() -> Path:
@@ -54,7 +61,7 @@ def record(name: str, value, task: str | None = None, **extra) -> None:
     """Record one metric for the active task. The last write of a name wins. Ignored in the precompile collect pass."""
     if in_precompile_collect_pass():
         return
-    task = task or task_id()
+    task = task or record_task()
     p = _path(task)
     p.parent.mkdir(parents=True, exist_ok=True)
     data = json.loads(p.read_text()) if p.exists() else {"task": task, "metrics": {}}
@@ -71,7 +78,7 @@ def record_json(suffix: str, data: dict, task: str | None = None) -> Path | None
     committed with it). Ignored in the precompile collect pass."""
     if in_precompile_collect_pass():
         return None
-    task = task or task_id()
+    task = task or record_task()
     p = results_dir() / f"{task}_{suffix}.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(f".{os.getpid()}.tmp")

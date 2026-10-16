@@ -231,6 +231,31 @@ def boxes_summary(spec, res: Path) -> dict | None:
     }
 
 
+def resolve_thresholds(thr: dict, vals: dict, recorded: dict) -> tuple[dict, str | None]:
+    """F76: a '>= limit' gate shows the limit its run recorded (<metric>_limit in state.json, else results/<task>.json).
+    A step gated before F76 recorded none: its metric is shown without a limit (it passed a fixed bar)."""
+    import fnmatch
+
+    out, note = {}, None
+    for g, cond in (thr or {}).items():
+        op, v = str(cond).split()
+        if v != "limit":
+            out[g] = cond
+            continue
+        hits = [k for k in vals if fnmatch.fnmatchcase(k, g) and not k.endswith("_limit")]
+        if not hits:
+            out[g] = cond  # not run yet: the page shows "missing" only for a task that should have it
+            continue
+        for k in hits:
+            lim = vals.get(f"{k}_limit")
+            lim = (recorded.get(f"{k}_limit") or {}).get("value") if lim is None else lim
+            if isinstance(lim, (int, float)):
+                out[k] = f"{op} {lim:.6g}"
+            else:
+                note = "gated before the noise-floor limits (F76): passed a fixed bar"
+    return out, note
+
+
 def build(spec) -> dict:
     led = Ledger(spec.bringup_dir)
     tasks_spec, state = led.tasks(), led.state()
@@ -248,6 +273,9 @@ def build(spec) -> dict:
     tasks = []
     for tid in led.topo_order():
         t, s = tasks_spec[tid], state.get(tid, {})
+        thresholds, thr_note = resolve_thresholds(
+            t["gate"].get("metrics") or {}, s.get("metrics", {}), M.load(tid, res)
+        )
         fr = t.get("frozen") or {}
         runs = s.get("agent_runs") or []
         tasks.append(
@@ -257,7 +285,8 @@ def build(spec) -> dict:
                 "step": t.get("step", "other"),
                 "deps": t.get("deps", []),
                 "cmd": t["gate"]["cmd"],
-                "thresholds": t["gate"].get("metrics") or {},
+                "thresholds": thresholds,
+                "thresholds_note": thr_note,
                 "status": s.get("status", "TODO"),
                 "last_run": s.get("last_run"),
                 "duration_s": s.get("duration_s"),

@@ -65,6 +65,7 @@ def state_metrics(spec: dict[str, str], got: dict) -> dict:
     if len(vals) <= STATE_METRICS_MAX:
         return vals
     globs = list(spec or {})
+    globs += [f"{g}_limit" for g in globs]  # F76: a '>= limit' gate's limit, for the dashboard
     return {k: v for k, v in vals.items() if any(fnmatch.fnmatchcase(k, g) for g in globs)}
 
 
@@ -178,6 +179,7 @@ def gate_env(spec: Spec, ledger: Ledger, tid: str) -> dict:
     # modules from two checkouts. The model spec rides along so generic tests know what they test.
     env = dict(os.environ, PYTHONPATH=str(CODE_ROOT))
     env[M.TASK_ENV] = tid
+    env[M.RECORD_ENV] = tid  # F79: a fix job's segments override BRINGUP_TASK only
     env[M.RESULTS_ENV] = str(ledger.results_dir)
     if spec.path:
         env["BRINGUP_SPEC"] = str(spec.path)
