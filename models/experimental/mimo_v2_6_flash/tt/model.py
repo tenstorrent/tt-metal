@@ -23,6 +23,7 @@ import ttnn
 from ..reference.model import load_layer_weights
 from . import kv as kv_lib
 from .common import TILE, MeshPlan, as_weight, cache_name, compute_config, pad_to
+from .attention import SWA_BLOCKS_PER_USER
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .greedy_head import GreedyHead
 from .moe_stream import zero_output
@@ -139,6 +140,7 @@ class TtMiMoModel:
         self.decode_users = None
         self.norm_buffers = None
         self.qkv_staging = None
+        self.swa_table = None
         self.swa_qkv = None
         # Chip c's vocab shard starts at c * vocab_local: added to its local top-k ids for the device greedy.
         offsets = (torch.arange(plan.tp, dtype=torch.int32) * self.vocab_local).reshape(plan.tp, 1, 1, 1)
@@ -154,24 +156,59 @@ class TtMiMoModel:
     def setup_kv_cache(self, num_users):
         """Allocate paged KV for ``num_users`` users in decode slots [0, num_users).
 
-        SWA layers get a 512-token ring per user, global layers the full ``max_seq_len``; on TP=8 a global
-        layer's chip pair splits the users (kv.py), so that page table differs per chip. Slots past
-        ``num_users`` are never written (their position is -1)."""
+        Every page table is indexed by absolute position over ``max_seq_len``. Global layers back every block; on
+        TP=8 a global layer's chip pair splits the users (kv.py), so that page table differs per chip. SWA layers
+        back only the blocks a sliding window can still read (kv.SwaBlockTable, shared by the SWA layers and
+        updated before each prefill and decode step). Slots past ``num_users`` are never written (position -1)."""
         assert num_users <= self.max_batch
+        assert self.max_seq_len % self.block_size == 0
         self.decode_users = num_users
         self.kv_caches, tables = [], {}
+        max_blocks = self.max_seq_len // self.block_size
         for layer in self.layers:
-            per_user = layer.attn.kv_tokens_per_user(self.max_seq_len)
-            assert per_user % self.block_size == 0
-            table, num_blocks = kv_lib.page_tables(
-                num_users, self.max_batch, per_user // self.block_size, self.plan.tp, layer.attn.rep
-            )
+            if layer.is_swa and os.environ.get("MIMO_SWA_DENSE") != "1":  # MIMO_SWA_DENSE=1: back every block
+                if self.swa_table is None:
+                    self.swa_table = kv_lib.SwaBlockTable(
+                        num_users,
+                        self.max_batch,
+                        max_blocks,
+                        self.block_size,
+                        layer.attn.sliding_window,
+                        SWA_BLOCKS_PER_USER,
+                    )
+                table, num_blocks = self.swa_table.host_table(self.plan.tp), self.swa_table.num_blocks
+            else:
+                table, num_blocks = kv_lib.page_tables(
+                    num_users, self.max_batch, max_blocks, self.plan.tp, layer.attn.rep
+                )
             self.kv_caches.append(layer.attn.allocate_kv_cache(num_blocks, self.block_size, self.kv_dtype))
             tables.setdefault(layer.is_swa, table)
             if layer.is_moe:
                 layer.mlp.set_decode_users(num_users)
         self.set_page_tables(tables)
+        if self.swa_table is not None:
+            self.swa_table.dirty = False
         self._setup_fused_norms()
+
+    def _sync_swa_table(self):
+        """Copy the SWA block table to its device tensor in place if it changed (ordered with the queued work, so
+        it lands between trace replays)."""
+        if self.swa_table is None or not self.swa_table.dirty:
+            return
+        host = kv_lib.per_chip(
+            self.plan, self.swa_table.host_table(self.plan.tp), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, False
+        )
+        ttnn.copy_host_to_device_tensor(host, self.page_table_tt[True])
+        self.swa_table.dirty = False
+
+    def _advance_swa(self, positions):
+        """Before a decode step at ``positions`` ([max_batch], -1 = idle slot): blocks for the written positions."""
+        if self.swa_table is None:
+            return
+        for slot, p in enumerate(positions.tolist()):
+            if p >= 0:
+                self.swa_table.advance(slot, int(p))
+        self._sync_swa_table()
 
     def _setup_fused_norms(self):
         """Let every compact-decode layer's block reductions also compute the following RMSNorm (the post-attention
@@ -269,6 +306,9 @@ class TtMiMoModel:
         padded = prefill_padded_len(seq_len)
         assert padded <= self.max_seq_len
         toks = torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - seq_len))
+        if self.swa_table is not None:
+            self.swa_table.prefill(slot, seq_len, padded)
+            self._sync_swa_table()
         x = self._embed(toks)
         hidden = []
         for i, layer in enumerate(self.layers):
@@ -441,6 +481,7 @@ class TtMiMoModel:
         """tokens, positions: torch [max_batch]; position -1 marks an empty slot. Non-blocking.
         Returns a handle for ``decode_read`` (full logits) or ``decode_read_topk`` (per-chip candidates)."""
         host = self.prepare_decode_inputs_host(tokens, positions)
+        self._advance_swa(positions)
         if self.decode_trace is not None:
             for h, d in zip(host, self.decode_trace["inputs"]):
                 ttnn.copy_host_to_device_tensor(h, d)
@@ -481,18 +522,20 @@ class TtMiMoModel:
         first = self.prepare_decode_inputs_host(tokens, positions)
         later = []
         active = positions >= 0
+        step_positions = [torch.where(active, positions + s, positions) for s in range(steps)]
         for s in range(1, steps):
-            p = torch.where(active, positions + s, positions)
+            p = step_positions[s]
             later.append(
                 (*self.rope_setups["swa"].decode_host_inputs(p), *self.rope_setups["full"].decode_host_inputs(p))
             )
-        return first, later
+        return first, later, step_positions
 
     def decode_steps_enqueue(self, host_inputs, step):
         """Enqueue step ``step`` of a device-resident greedy run (non-blocking): refresh what the host owns
         (everything at step 0, cos/sin later), replay the trace, keep the step's tokens in a history slot.
         At most DECODE_HISTORY steps between ``decode_steps_read``."""
-        first, later = host_inputs
+        first, later, step_positions = host_inputs
+        self._advance_swa(step_positions[step])
         inputs = self.decode_trace["inputs"]
         if step == 0:
             for h, d in zip(first, inputs):

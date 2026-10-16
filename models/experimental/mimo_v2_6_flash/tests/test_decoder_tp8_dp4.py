@@ -27,6 +27,7 @@ from models.experimental.mimo_v2_6_flash.tests.common import (
     pcc,
 )
 from models.experimental.mimo_v2_6_flash.tt import kv as kv_lib
+from models.experimental.mimo_v2_6_flash.tt.attention import SWA_BLOCKS_PER_USER
 from models.experimental.mimo_v2_6_flash.tt.common import MeshPlan
 from models.experimental.mimo_v2_6_flash.tt.decoder import TtMiMoDecoderLayer
 from models.experimental.mimo_v2_6_flash.tt.rope import MiMoRotarySetup
@@ -76,10 +77,21 @@ def test_decoder_layer_tp8_dp4(mesh_device, layer_idx):
         layer = TtMiMoDecoderLayer(
             plan, cfg, layer_idx, weights if r == 0 else None, ropes, cache_dir=cache_dir("layer_bfp8")
         )
-        # SWA layers address a 512-token ring per user, global layers the whole context. Global layers split
-        # each chip pair's users, so their page table differs per chip (kv.py).
+        # Page tables are indexed by absolute position. Global layers back the whole context and split each chip
+        # pair's users, so their table differs per chip (kv.py). SWA layers back only the blocks a window can
+        # read (kv.SwaBlockTable: a long prompt's early positions go to the scratch block), updated before the
+        # prefill and every decode step.
         layer_blocks = layer.attn.kv_tokens_per_user(MAX_SEQ) // BLOCK
-        tables, num_blocks = kv_lib.page_tables(USERS_PER_REPLICA, MAX_BATCH, layer_blocks, TP, layer.attn.rep, seed=r)
+        swa_table = None
+        if layer.attn.is_swa:
+            swa_table = kv_lib.SwaBlockTable(
+                USERS_PER_REPLICA, MAX_BATCH, layer_blocks, BLOCK, layer.attn.sliding_window, SWA_BLOCKS_PER_USER
+            )
+            tables, num_blocks = swa_table.host_table(TP), swa_table.num_blocks
+        else:
+            tables, num_blocks = kv_lib.page_tables(
+                USERS_PER_REPLICA, MAX_BATCH, layer_blocks, TP, layer.attn.rep, seed=r
+            )
         kv = layer.attn.allocate_kv_cache(num_blocks, BLOCK, KV_DTYPE)
         if layer.is_moe:
             layer.mlp.set_decode_users(USERS_PER_REPLICA)
@@ -90,11 +102,20 @@ def test_decoder_layer_tp8_dp4(mesh_device, layer_idx):
                 layer=layer,
                 kv=kv,
                 page_table=kv_lib.per_chip(plan, tables, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+                swa_table=swa_table,
             )
         )
 
-    # Users: replica r, slot u; lengths 128..640, so SWA layers see the window, the sink and (past 512)
-    # the ring buffer wrapping in both the prefill fill and decode.
+    def sync_swa(rep):
+        """Copy a replica's SWA block table to its device page table if it changed."""
+        tbl = rep["swa_table"]
+        if tbl is not None and tbl.dirty:
+            host = kv_lib.per_chip(rep["plan"], tbl.host_table(TP), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, False)
+            ttnn.copy_host_to_device_tensor(host, rep["page_table"])
+            tbl.dirty = False
+
+    # Users: replica r, slot u; lengths 128..640, so SWA layers see the window, the sink and (past 192) prefill
+    # positions that land in the scratch block.
     users = {}
     for r in range(DP):
         for u in range(USERS_PER_REPLICA):
@@ -111,6 +132,9 @@ def test_decoder_layer_tp8_dp4(mesh_device, layer_idx):
         for r, rep in enumerate(replicas):
             usr = users[(r, u)]
             x_tt = to_tt(usr["x"], rep["plan"])
+            if rep["swa_table"] is not None:
+                rep["swa_table"].prefill(u, usr["seq_len"], usr["seq_len"])
+                sync_swa(rep)
             pending[(r, u)] = rep["layer"].forward_prefill(x_tt, u, rep["page_table"], rep["kv"])
     worst = {"prefill": 1.0, "prefill_delta": 1.0, "decode": 1.0, "decode_delta": 1.0}
     for (r, u), out in pending.items():
@@ -137,6 +161,9 @@ def test_decoder_layer_tp8_dp4(mesh_device, layer_idx):
                     usr["ref_decode"] = ref_layer(xu[None], torch.tensor([p]), usr["hist"])[0]
                 usr["x_decode"] = xu
                 x[u], pos[u] = xu, p
+                if rep["swa_table"] is not None:
+                    rep["swa_table"].advance(u, p)
+            sync_swa(rep)
             rot = {
                 True: rep["ropes"]["swa"].get_rot_mats(pos.clamp(min=0)),
                 False: rep["ropes"]["full"].get_rot_mats(pos.clamp(min=0)),

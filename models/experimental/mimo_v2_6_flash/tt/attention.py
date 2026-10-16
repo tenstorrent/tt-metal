@@ -5,7 +5,8 @@
 
 SWA layers (8 KV heads): each chip has 8 Q heads and one KV head, in prefill and decode. V has
 128 dims; it is zero-padded to 192 (and so are the matching ``o_proj`` rows) so the SDPA kernels see
-one head dim. The SWA cache is a 512-token ring per user, so the padding costs ~nothing. Decode drops the
+one head dim. The SWA cache keeps only the in-window blocks per user (kv.SwaBlockTable), so the padding costs
+~nothing. Decode drops the
 padding columns after SDPA and uses an unpadded copy of ``o_proj`` (the dropped rows only ever multiplied
 zeros).
 
@@ -28,16 +29,17 @@ from .kv import kv_replication
 from .moe_stream import KERNEL_DIR, CompactRows
 from .rope import permute_heads_for_rope
 
-# SWA layers keep a per-user ring of this many tokens (``cache_position_modulo``) instead of the full context.
-# It must hold the 128-token window plus the prefill padding tail, which the fill writes into the ring
-# after the real tokens (prefill pads by up to 255 tokens), and be a multiple of the block size.
-SWA_RING_TOKENS = 512
+# SWA layers page by absolute position (kv.SwaBlockTable, the layout of vLLM's SlidingWindowSpec block tables):
+# only the blocks a window can still read are real, from a pool of this many blocks per user. It must cover the
+# 128-token window plus the prefill padding tail the fill writes after the real tokens (up to 255 tokens), plus
+# the block the next decode step starts.
+SWA_BLOCKS_PER_USER = 8
 
 
 class SwaDecodeQkv:
     """SWA decode, users in rows 0-3: the fused qkv row [1, 1, 32, (nh + 2) * D] (L1 tiles) -> the RoPE'd query in
     the height-sharded layout paged SDPA decode reads ([1, 32, nh, D], one [32, D] shard per user) and the RoPE'd key
-    and the value written into the users' ring slots of the BFP8 paged caches, in one launch in place of
+    and the value written into the users' positions of the BFP8 paged caches, in one launch in place of
     nlp_create_qkv_heads_decode, two rotary_embedding_llama and two paged_update_cache.
 
     One core per query head (it reads rows 0-3 of its head's D / 32 tiles: every user at once, so RoPE is
@@ -47,13 +49,13 @@ class SwaDecodeQkv:
     CB_X, CB_COS, CB_SIN, CB_TRANS, CB_TMP, CB_ROT, CB_CACHE, CB_C16, CB_SIG, CB_OUT8, CB_META = range(11)
     ROLE_Q, ROLE_K, ROLE_V = 0, 1, 2
 
-    def __init__(self, plan, num_heads, head_dim, users, ring, block_size, trans_mat, sample_qkv):
+    def __init__(self, plan, num_heads, head_dim, users, block_size, trans_mat, sample_qkv):
         """``trans_mat``: the decode RoPE transformation tile (torch [32, 32]); ``sample_qkv``: a fused qkv tensor of
         the decode shape, used once to take the query layout nlp_create_qkv_heads_decode produces."""
         device = plan.mesh_device
         self.device = device
-        self.nh, self.d, self.users, self.ring, self.block_size = num_heads, head_dim, users, ring, block_size
-        assert head_dim % TILE == 0 and ring % block_size == 0 and block_size % TILE == 0
+        self.nh, self.d, self.users, self.block_size = num_heads, head_dim, users, block_size
+        assert head_dim % TILE == 0 and block_size % TILE == 0
         self.d_tiles = head_dim // TILE
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             sample_qkv, num_heads=num_heads, num_kv_heads=1, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
@@ -144,6 +146,7 @@ class SwaDecodeQkv:
         cache_tile = ttnn.Tile([TILE, TILE]).get_tile_size(cache_dtype)
         pos_page = pos.shape[-1] * 4
         pt_page = page_table.shape[-1] * 4
+        assert pt_page % 64 == 0, "the reader fetches the 64 B of the page table row that holds the entry"
         n = self.d_tiles
         kernels = []
         roles = (
@@ -184,7 +187,6 @@ class SwaDecodeQkv:
                 self.CB_CACHE,
                 self.CB_META,
                 n,
-                self.ring,
                 self.block_size,
                 pos_page,
                 pt_page,
@@ -409,7 +411,7 @@ class TtMiMoAttention:
         self.head_dim = dims.head_dim
         self.scale = dims.scaling
         self.sliding_window = dims.sliding_window
-        self.cache_modulo = SWA_RING_TOKENS if dims.is_swa else None
+        self.is_swa = dims.is_swa
         self.rep = kv_replication(tp, dims.num_kv_heads)
         self.split_users = self.rep > 1  # global layers on TP=8: the chip pair splits the users
         self.v_head_dim = dims.v_head_dim
@@ -541,8 +543,9 @@ class TtMiMoAttention:
 
     # ---------------------------------------------------------------- KV cache
     def kv_tokens_per_user(self, max_seq_len):
-        """Cache capacity per user: the SWA ring, or the whole context for global layers."""
-        return self.cache_modulo if self.cache_modulo is not None else max_seq_len
+        """Positions a user's page table row addresses: the whole context (SWA layers too: their table is indexed
+        by absolute position, and kv.SwaBlockTable keeps only the in-window blocks real)."""
+        return max_seq_len
 
     def allocate_kv_cache(self, num_blocks, block_size, dtype=ttnn.bfloat8_b):
         """[K, V] caches ``[num_blocks, kv_heads, block_size, dim]`` per chip; V is 128 wide when users are split."""
@@ -581,7 +584,7 @@ class TtMiMoAttention:
 
     def make_swa_qkv(self, users, block_size):
         """A SwaDecodeQkv for this (SWA) layer's shapes, to share between the SWA layers."""
-        assert not self.split_users and self.nkv_local == 1 and self.cache_modulo is not None
+        assert not self.split_users and self.nkv_local == 1 and self.is_swa
         sample = ttnn.from_torch(
             torch.zeros(1, 1, TILE, self.qkv_width),
             device=self.plan.mesh_device,
@@ -591,9 +594,7 @@ class TtMiMoAttention:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         trans = ttnn.to_torch(ttnn.get_device_tensors(self.rope.transformation_mat)[0]).float().reshape(-1, TILE, TILE)
-        op = SwaDecodeQkv(
-            self.plan, self.nh_local, self.head_dim, users, self.cache_modulo, block_size, trans[0], sample
-        )
+        op = SwaDecodeQkv(self.plan, self.nh_local, self.head_dim, users, block_size, trans[0], sample)
         sample.deallocate(True)
         return op
 
@@ -657,11 +658,8 @@ class TtMiMoAttention:
             v_real.deallocate(True)
         else:
             v_fill = ttnn.typecast(v, v_cache.dtype)
-        if self.cache_modulo is not None:
-            assert seq_len - real_len < self.cache_modulo - self.sliding_window, "padding would wrap over the window"
-        fill = dict(batch_idx=user_id, cache_position_modulo=self.cache_modulo)
-        ttnn.experimental.paged_fill_cache(k_cache, k_fill, page_table, **fill)
-        ttnn.experimental.paged_fill_cache(v_cache, v_fill, page_table, **fill)
+        ttnn.experimental.paged_fill_cache(k_cache, k_fill, page_table, batch_idx=user_id)
+        ttnn.experimental.paged_fill_cache(v_cache, v_fill, page_table, batch_idx=user_id)
         k_fill.deallocate(True)
         v_fill.deallocate(True)
 
@@ -760,7 +758,7 @@ class TtMiMoAttention:
             q.deallocate(True)
             k.deallocate(True)
 
-            update = dict(update_idxs_tensor=cur_pos, page_table=page_table, cache_position_modulo=self.cache_modulo)
+            update = dict(update_idxs_tensor=cur_pos, page_table=page_table)
             ttnn.experimental.paged_update_cache(k_cache, k_rot, **update)
             ttnn.experimental.paged_update_cache(v_cache, v, **update)
             k_rot.deallocate(True)
@@ -775,7 +773,6 @@ class TtMiMoAttention:
             scale=self.scale,
             sliding_window_size=self.sliding_window,
             attention_sink=self.decode_sinks,
-            cache_position_modulo=self.cache_modulo,
             program_config=self.decode_sdpa_program,
             compute_kernel_config=self.sdpa_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,

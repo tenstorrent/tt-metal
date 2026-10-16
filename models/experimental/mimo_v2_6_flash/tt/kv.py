@@ -11,6 +11,10 @@ cache update and SDPA skip. Prefill computes K/V on both chips; the non-owner's 
 points every block of a foreign slot at one scratch block, so its writes land nowhere useful.
 
 Layers with ``rep == 1`` (SWA: one KV head per chip) use the same table on every chip.
+
+SWA layers page by absolute position as well, like vLLM's SlidingWindowSpec block tables (``SwaBlockTable``):
+block j of a slot holds positions [j * block_size, (j + 1) * block_size), but only the blocks some sliding window
+can still read are real; the others point at a scratch block.
 """
 
 import torch
@@ -67,3 +71,55 @@ def per_chip(plan, t, dtype, layout, device=True):
         layout=layout,
         mesh_mapper=plan.shard(0),
     )
+
+
+class SwaBlockTable:
+    """Host-side block table of the SWA layers (shared by them: every SWA layer's cache uses the same block ids).
+
+    Entry [slot, j] is the physical block of positions [j * block_size, (j + 1) * block_size) of that slot, indexed
+    by absolute position (no ring). Block 0 is a scratch block: entries no window can read point at it, so writes
+    there (a long prompt's early positions) land in it and nothing reads them back. Each user owns a pool of
+    ``blocks_per_user`` real blocks: one is taken when a position in its range is about to be written, and it goes
+    back once every later window starts past it. ``dirty`` marks changes not yet copied to the device."""
+
+    def __init__(self, num_users, max_batch, max_blocks, block_size, window, blocks_per_user):
+        self.block_size, self.window = block_size, window
+        self.table = torch.zeros(max_batch, max_blocks, dtype=torch.int32)
+        self.num_blocks = 1 + num_users * blocks_per_user
+        self.free = {
+            u: list(range(1 + (u + 1) * blocks_per_user - 1, u * blocks_per_user, -1)) for u in range(num_users)
+        }
+        self.dirty = True
+
+    def _take(self, slot, lo, hi):
+        """Real blocks for positions [lo, hi) of ``slot``."""
+        for j in range(lo // self.block_size, (hi - 1) // self.block_size + 1):
+            if self.table[slot, j] == 0:
+                assert self.free[slot], f"slot {slot}: no free SWA block for position {j * self.block_size}"
+                self.table[slot, j] = self.free[slot].pop()
+                self.dirty = True
+
+    def _release_below(self, slot, pos):
+        """Give back the blocks of ``slot`` that end before the window of position ``pos`` starts."""
+        first = max(0, pos - self.window + 1) // self.block_size
+        for j in range(first):
+            b = int(self.table[slot, j])
+            if b != 0:
+                self.free[slot].append(b)
+                self.table[slot, j] = 0
+                self.dirty = True
+
+    def prefill(self, slot, real_len, padded_len):
+        """Before a prefill of ``real_len`` tokens padded to ``padded_len``: the fill writes positions
+        [0, padded_len); only [real_len - window, padded_len) can be read later (decode windows start there)."""
+        self._release_below(slot, self.table.shape[1] * self.block_size)  # the slot's previous user, all of it
+        self._take(slot, max(0, real_len - self.window), padded_len)
+
+    def advance(self, slot, pos):
+        """Before a decode step writes position ``pos`` of ``slot``."""
+        self._release_below(slot, pos)
+        self._take(slot, pos, pos + 1)
+
+    def host_table(self, tp):
+        """[tp, max_batch, max_blocks] int32 (the same table on every chip)."""
+        return self.table.unsqueeze(0).repeat(tp, 1, 1)
