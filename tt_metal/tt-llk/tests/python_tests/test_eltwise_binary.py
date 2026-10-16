@@ -252,16 +252,19 @@ def get_dest_reuse_formats(math_op):
     )
 
 
-def get_dest_reuse_dest_acc(formats):
-    """Float32 operands also run with a 32-bit Dest on Wormhole.
+def get_dest_reuse_dest_acc(formats, math_op):
+    """ELWMUL also runs with a 32-bit Dest on Wormhole.
 
     The dest-reuse kernel passes clear_fp32_dst_acc=false, so the 32-bit Dest
     rows carry the ELWMUL accumulation across folds and the face clear must
-    follow the Dest geometry on its own. Blackhole still keys that clear on
-    clear_fp32_dst_acc, so the 32-bit cases stay Wormhole-only until it does.
+    follow the Dest geometry on its own. Float16_b operands reach the LoFi and
+    HiFi2 ELWMUL paths, Float32 the HiFi3 and HiFi4 ones; ELWADD/ELWSUB never
+    clear. Blackhole still keys that clear on clear_fp32_dst_acc, so the 32-bit
+    cases stay Wormhole-only until it does.
     """
     if (
-        formats.input_format == DataFormat.Float32
+        math_op == MathOperation.Elwmul
+        and formats.input_format in (DataFormat.Float16_b, DataFormat.Float32)
         and get_chip_architecture() == ChipArchitecture.WORMHOLE
     ):
         return [DestAccumulation.No, DestAccumulation.Yes]
@@ -1041,7 +1044,7 @@ def _run_eltwise_binary_dest_reuse_test(
     ],
     math_op=DEST_REUSE_MATH_OPS,
     formats=get_dest_reuse_formats,
-    dest_acc=get_dest_reuse_dest_acc,
+    dest_acc=lambda formats, math_op: get_dest_reuse_dest_acc(formats, math_op),
     dest_sync=[DestSync.Half],
     unpack_to_dest=[False],
     math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
