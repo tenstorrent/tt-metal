@@ -4,7 +4,7 @@
 
 #pragma once
 
-namespace ckernel::sfpu::ttpoly {
+namespace ckernel::sfpu::ttpoly::lgamma {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
 template <int CODE>
@@ -127,4 +127,4 @@ inline void zero_class_terminal(vFloat input, vFloat& result) {
         v_endif;
     }
 }
-}  // namespace ckernel::sfpu::ttpoly
+}  // namespace ckernel::sfpu::ttpoly::lgamma

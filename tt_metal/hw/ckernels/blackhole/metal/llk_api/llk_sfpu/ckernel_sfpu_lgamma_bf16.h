@@ -69,8 +69,8 @@ namespace ckernel::sfpu {
 
 template <int ITERATIONS = 8>
 inline void calculate_lgamma_bf16() {
-    ckernel::sfpu::bf16::calculate_root_native_log<ckernel::sfpu::LgammaBf16Config, ITERATIONS>();
+    ckernel::sfpu::bf16::lgamma::calculate_root_native_log<ckernel::sfpu::LgammaBf16Config, ITERATIONS>();
 }
-inline void init_lgamma_bf16() { ckernel::sfpu::bf16::init_root_native_log<ckernel::sfpu::LgammaBf16Config>(); }
+inline void init_lgamma_bf16() { ckernel::sfpu::bf16::lgamma::init_root_native_log<ckernel::sfpu::LgammaBf16Config>(); }
 
 }  // namespace ckernel::sfpu

@@ -6,7 +6,7 @@
 
 // SFPI deleted vec_min_max; retain its former in-place implementation exactly.
 // Both results come from one SFPSWAP, preserving operand and assignment order.
-namespace ckernel::sfpu::ttpoly {
+namespace ckernel::sfpu::ttpoly::lgamma {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
 inline void ordered_min_max(vFloat& a, vFloat& b) {
@@ -14,4 +14,4 @@ inline void ordered_min_max(vFloat& a, vFloat& b) {
     a = r.first;
     b = r.second;
 }
-}  // namespace ckernel::sfpu::ttpoly
+}  // namespace ckernel::sfpu::ttpoly::lgamma

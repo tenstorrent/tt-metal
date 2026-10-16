@@ -12,7 +12,7 @@
 // coefficients) live in the programmable constant registers, which the caller's
 // reciprocal leaves free. The op's init sets them: other ops' calls read those registers.
 
-namespace ckernel::sfpu::ttpoly {
+namespace ckernel::sfpu::ttpoly::lgamma {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
 template <class Config>
@@ -125,4 +125,4 @@ inline void root_native_log_tile(Finalize finalize, Encoded encoded, Reciprocal 
         dst_reg[d] = y;
     }
 }
-}  // namespace ckernel::sfpu::ttpoly
+}  // namespace ckernel::sfpu::ttpoly::lgamma
