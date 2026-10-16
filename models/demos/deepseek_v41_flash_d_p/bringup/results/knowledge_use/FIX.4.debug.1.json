@@ -1,0 +1,25 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [],
+ "cited_only": [
+  "DS41-43"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.4",
+  "role": "debug",
+  "attempt": 1,
+  "agent": "ttnn-expert-debugger",
+  "t": "2026-10-16T16:34:24",
+  "head": "880421ffdb2",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.4.fix.101.json",
+   "tests/ttnn/unit_tests/operations/mhc_ds41_fix4/cpu/weight_floor_cpu.py"
+  ]
+ }
+}
