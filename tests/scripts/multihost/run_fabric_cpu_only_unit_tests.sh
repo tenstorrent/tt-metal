@@ -717,6 +717,9 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${FSD
 FSD_QUAD_HOST_STRICT_INTERMESH_MGD="${MGD_CUSTOM}/fsd_quad_host_strict_intermesh_mesh_graph_descriptor.textproto"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${FSD_QUAD_HOST_STRICT_INTERMESH_MGD}" --mock-cluster-rank-binding "${FSD_MISSING_LINKS_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.StrictIntermeshAllowsAnUnusedHoleWhenBothDescriptorsCoverTheCount"
 
+# Virtual cables: the same pod with every hole bridged through the hosts instead of routed around.
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_E2H_BRIDGE_DOWNED_LINKS=1 tt-run --mesh-graph-descriptor "${FSD_QUAD_HOST_MGD}" --mock-cluster-rank-binding "${FSD_MISSING_LINKS_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.DownedCablesAreBridgedAndCloseEveryHole"
+
 # Aisle C host against the aisle D FSD: no common host, refused at ingest.
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=$FSD_AISLEC_DIR/SC16_32x4_revC_aisleC_cluster_desc/SC16_32x4_revC_aisleC_cluster_desc_bh-glx-110-c01u02_rank_38.yaml TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=$FSD_SUBTORUS_POD_DIR/SC16_32x4_revC_subtorus_aisleD_factory_system_descriptor.textproto TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.AnIncompatibleDescriptorFailsAtIngest"
 

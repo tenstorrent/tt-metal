@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>         // Topology
 #include <hostdevcommon/fabric_common.h>                                // chan_id_t
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"          // ChipRoutingFacts
+#include "tt_metal/fabric/bridged_cables.hpp"                           // BridgedCableEnd
 #include <umd/device/types/core_coordinates.hpp>                        // CoreType
 
 namespace tt::tt_metal {
@@ -35,6 +36,7 @@ struct RouterLocation {
     FabricNodeId remote_node;
     RoutingDirection direction;  // Use RoutingDirection, convert to eth_chan_directions when needed
     bool is_dispatch_link;
+    std::optional<experimental::BridgedCableEnd> virtual_cable;  // set when this channel is a bridged cable end
 };
 
 // ============ Kernel Creation Context ============

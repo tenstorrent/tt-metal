@@ -185,6 +185,8 @@ constexpr bool e2h_bridge_no_far_receiver = NAMED_CT_ARG("E2H_BRIDGE_NO_FAR_RECE
 constexpr bool enable_e2h_bridge_recv = NAMED_CT_ARG("ENABLE_E2H_BRIDGE_RECV") != 0;
 constexpr uint32_t e2h_bridge_recv_channel = NAMED_CT_ARG("E2H_BRIDGE_RECV_CHANNEL");
 constexpr uint32_t e2h_bridge_recv_credits_addr = NAMED_CT_ARG("E2H_BRIDGE_RECV_CREDITS_ADDR");
+// Virtual cable: no handshake over the wire, and every receiver channel is fed by the host.
+constexpr bool e2h_bridge_skip_eth_handshake = NAMED_CT_ARG("E2H_BRIDGE_SKIP_ETH_HANDSHAKE") != 0;
 constexpr bool is_handshake_sender = NAMED_CT_ARG("IS_HANDSHAKE_SENDER") != 0;
 constexpr size_t handshake_addr = NAMED_CT_ARG("HANDSHAKE_ADDR");
 
@@ -396,7 +398,7 @@ constexpr bool receiver_channel_uses_counter_credits(size_t receiver_channel) {
 // Asked by VC like the transports above, but answered by the link: a bridged upstream has no cable
 // to return credits on, whichever transport the VC would otherwise have picked.
 constexpr bool receiver_channel_uses_e2h(size_t receiver_channel) {
-    return enable_e2h_bridge_recv && receiver_channel == e2h_bridge_recv_channel;
+    return enable_e2h_bridge_recv && (e2h_bridge_skip_eth_handshake || receiver_channel == e2h_bridge_recv_channel);
 }
 
 // A VC whose two ends pick different transports cannot return credits at all: the receiver writes

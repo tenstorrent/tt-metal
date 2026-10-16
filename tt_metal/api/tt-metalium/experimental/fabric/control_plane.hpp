@@ -103,6 +103,10 @@ struct PortDescriptor {
 // Keyed src_mesh -> neighbor_mesh -> one PortDescriptor per physical cable channel.
 using PortDescriptorTable = std::unordered_map<MeshId, std::unordered_map<MeshId, std::vector<PortDescriptor>>>;
 
+namespace experimental {
+struct BridgedCables;  // internal: tt_metal/fabric/bridged_cables.hpp
+}  // namespace experimental
+
 class ControlPlane {
 public:
     // Create control plane with auto-discovery
@@ -398,6 +402,9 @@ public:
     // Invalidates every reference handed out by the accessors above.
     void refresh_connectivity_diff();
 
+    // Virtual cables (experimental); the type is internal. The router builder records layouts into it.
+    experimental::BridgedCables& bridged_cables() const;
+
     // Exit fabric nodes on `src_mesh_id` with inter-mesh connectivity to `dst_mesh_id` (as assigned during intermesh
     // setup). Inter-mesh connectivity is merged across hosts during setup, so multi-host runs can query any mesh pair
     // with connectivity (empty when there is no inter-mesh link for that pair).
@@ -482,6 +489,7 @@ private:
     // first. Null when no factory descriptor is configured.
     std::unique_ptr<experimental::LinkHealth> link_health_;
     std::vector<experimental::LinkInfo> locally_unhealthy_;
+    std::unique_ptr<experimental::BridgedCables> bridged_cables_;
 
     std::map<FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
 
@@ -551,6 +559,11 @@ private:
     // instead would disagree with its peers about which cables exist, and any collective gated on that
     // deadlocks.
     void ingest_factory_system_descriptor();
+
+    // Picks bridged_cables_ and records downed ones in the live descriptor and Cluster; throws if ranks disagree.
+    void select_bridged_cables();
+    // Names both ends of each bridged cable by fabric node, once the mesh is placed.
+    void index_bridged_cable_ends();
 
     // A STRICT mesh graph may run with relaxed system health. A RELAXED mesh graph may not run with
     // STRICT system health.

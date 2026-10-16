@@ -352,6 +352,8 @@ class RunTimeOptions {
     bool e2h_bridge_no_far_receiver = false;
     bool e2h_bridge_relay_credits = false;
     std::uint32_t e2h_bridge_force_chip = 0;
+    bool e2h_bridge_downed_links = false;
+    std::string e2h_bridge_break_links;
 
     // Only Blackhole acts on this; resolved down when base FW predates debug_buf_t::scratchpad.
     bool eth_ptp_trace = true;
@@ -904,6 +906,12 @@ public:
 
     std::uint32_t get_e2h_bridge_force_chip() const { return e2h_bridge_force_chip; }
     void set_e2h_bridge_force_chip(std::uint32_t c) { e2h_bridge_force_chip = c; }
+
+    bool get_e2h_bridge_downed_links() const { return e2h_bridge_downed_links; }
+    void set_e2h_bridge_downed_links(bool v) { e2h_bridge_downed_links = v; }
+
+    const std::string& get_e2h_bridge_break_links() const { return e2h_bridge_break_links; }
+    void set_e2h_bridge_break_links(const std::string& spec) { e2h_bridge_break_links = spec; }
 
     bool get_eth_ptp_trace() const { return eth_ptp_trace; }
 
