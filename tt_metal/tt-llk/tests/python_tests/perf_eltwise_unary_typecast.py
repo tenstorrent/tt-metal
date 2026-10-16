@@ -69,6 +69,13 @@ _TYPECAST_PERF_CASES = [
     (DataFormat.UInt16, DataFormat.UInt32, DestAccumulation.No),
     # int32_to_uint16, macro mode-agnostic; Int32 needs 32-bit Dest.
     (DataFormat.Int32, DataFormat.UInt16, DestAccumulation.Yes),
+    # The two plain-loop (no macro) paths below are here for their own cost: the
+    # fp32_to_fp16b rounding loop carries a NaN guard, and uint16_to_fp16b has a
+    # separate 32-bit-Dest arm that loads the whole Dest word.
+    # fp32_to_fp16b; Float32 needs 32-bit Dest.
+    (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+    # uint16_to_fp16b, 32-bit-Dest arm (the 16-bit-Dest macro arm is production's).
+    (DataFormat.UInt16, DataFormat.Float16_b, DestAccumulation.Yes),
 ]
 
 
