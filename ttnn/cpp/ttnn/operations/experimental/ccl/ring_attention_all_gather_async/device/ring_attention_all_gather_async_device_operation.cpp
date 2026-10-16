@@ -157,20 +157,11 @@ RingAttentionAllGatherAsyncDeviceOperation::create_output_tensors(
 
 std::vector<tt::tt_metal::TensorTopology> RingAttentionAllGatherAsyncDeviceOperation::compute_output_topologies(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // One output per input (or the caller's persistent buffers, which ARE those outputs when all are given), each
-    // input gathered along `dim` on `cluster_axis`: Replicate on the cluster axis, that input's placements elsewhere;
-    // a collapsed 1-D label is expanded per mesh axis first (all_gather_async convention). The count must match
-    // create_output_tensors, which takes the persistent buffers when the first is present; a count that differs from
-    // the inputs is rejected by validation right after this hook, and no per-slot input label exists for it, so {}
-    // rather than a partial label. No honest label for an input (nullopt, already reported): that output keeps its
-    // input's label (returning {} would hand the framework the union over every input and persistent buffer).
+    // One output per input (validation requires one persistent buffer per input when buffers are given, so they are
+    // those outputs), each input gathered along `dim` on `cluster_axis`: Replicate on the cluster axis, that input's
+    // placements elsewhere, a collapsed 1-D label expanded per mesh axis first. No honest label for an input (nullopt,
+    // already reported): that output keeps its input's label.
     const auto& inputs = tensor_args.input_tensor;
-    const auto& persistent = tensor_args.persistent_output_buffer;
-    const size_t num_outputs =
-        (!persistent.empty() && persistent.front().has_value()) ? persistent.size() : inputs.size();
-    if (num_outputs != inputs.size()) {
-        return {};
-    }
     std::vector<tt::tt_metal::TensorTopology> topologies;
     topologies.reserve(inputs.size());
     for (const auto& input : inputs) {
