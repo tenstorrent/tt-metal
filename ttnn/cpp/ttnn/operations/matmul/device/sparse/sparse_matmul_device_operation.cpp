@@ -495,11 +495,13 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     const auto& input_tensors = tensor_args.input_tensors;
     // A compact output is fully written by the in1 writer (one block per non-zero sparsity entry),
     // so it skips the zero-fill below; expanded outputs rely on it to zero the skipped blocks.
-    const bool compact_output = !optional_output_tensors.empty() && optional_output_tensors[0].has_value() &&
-                                operation_attributes.nnz.has_value() &&
-                                optional_output_tensors[0]->logical_shape() ==
-                                    compute_sparse_matmul_compact_output_shape(
-                                        input_tensors.at(0), input_tensors.at(1), operation_attributes.nnz.value());
+    // Indexed/gather mode is compact too: every one of the num_active groups is computed and written.
+    const bool compact_output = operation_attributes.use_indices ||
+                                (!optional_output_tensors.empty() && optional_output_tensors[0].has_value() &&
+                                 operation_attributes.nnz.has_value() &&
+                                 optional_output_tensors[0]->logical_shape() ==
+                                     compute_sparse_matmul_compact_output_shape(
+                                         input_tensors.at(0), input_tensors.at(1), operation_attributes.nnz.value()));
 
     if (!optional_output_tensors.empty() and optional_output_tensors[0].has_value()) {
         output_tensors.reserve(optional_output_tensors.size());
@@ -528,7 +530,9 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     for (const auto& output_spec : output_specs) {
         output_tensors.emplace_back(create_device_tensor(output_spec, device));
     }
-    // Compact output requires a caller-supplied tensor, so this path is never compact.
+    if (compact_output) {
+        return output_tensors;
+    }
     for (auto& output_tensor : output_tensors) {
         output_tensor = ttnn::zeros_like(
             output_tensor,
