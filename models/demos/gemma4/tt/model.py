@@ -1917,9 +1917,14 @@ class Gemma4Model:
         # Single-user lane prefill (one page-table row: the owner lane holds the real rows, the other
         # lanes compute on scratch): tell the EP experts which lane's rows are real so they skip the
         # other lanes' padding (see Gemma4Experts.__call__). Lane-parallel prefill keeps every lane.
+        # Eager prefill only: a captured prefill trace would bake one lane's row slice, and the owner
+        # lane changes per request (served text prefill replays the trace for whichever lane the
+        # request landed on). Lane-parallel prefill keeps every lane.
         if self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False):
             self.mesh_config._g4_single_lane_prefill_owner = (
-                None if lane_parallel else int(getattr(self, "_g4_active_owner_lane", 0) or 0) % self.mesh_config.lanes
+                None
+                if (lane_parallel or trace_enabled)
+                else int(getattr(self, "_g4_active_owner_lane", 0) or 0) % self.mesh_config.lanes
             )
 
         device = None if trace_enabled else self.mesh_device
