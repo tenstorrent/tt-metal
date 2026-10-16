@@ -250,10 +250,28 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
         v_endif;
     }
     v_endif;
-    // A quotient of 2^24 or more cannot be stepped by one in float, so diff above is just the raw
-    // result and the lane still holds |result| >= |b|. Fall back to the subtraction, which does
-    // not depend on the quotient's precision; it never fires on a correct remainder.
-    v_if(sfpi::abs(result) >= sfpi::abs(b)) { result -= b; }
+    // A floor two above the true quotient leaves result opposite-signed after the single sign
+    // correction above (or equal to -b for an exact multiple): step once more towards b's sign. A
+    // correct remainder is zero or already carries b's sign, so this never fires on one.
+    v_if(result != sfpi::vFloat(0.0f)) {
+        sfpi::vInt signs = sfpi::as<sfpi::vInt>(result) ^ sfpi::as<sfpi::vInt>(b);
+        v_and(signs < 0);
+        result += b;
+    }
+    v_endif;
+
+    // Quotients of 2^24 and above: floor_div + 1 ties or vanishes in float, so diff above is just
+    // the raw result and a floor one below the true quotient still leaves |result| >= |b|. Step
+    // by b in the direction of b's sign there. The step is gated on the quotient because at small
+    // quotients the recompute above is exact and a correctly rounded remainder can legitimately
+    // equal b (a = -1, b = 2^26), which must be kept.
+    constexpr float kQuotientStepLimit = 16777216.0f;  // 2^24
+    v_if(sfpi::abs(floor_div) >= sfpi::vFloat(kQuotientStepLimit) && sfpi::abs(result) >= sfpi::abs(b)) {
+        sfpi::vInt signs = sfpi::as<sfpi::vInt>(result) ^ sfpi::as<sfpi::vInt>(b);
+        v_if(signs < 0) { result += b; }
+        v_else { result -= b; }
+        v_endif;
+    }
     v_endif;
 
     // Handle division by zero - return NaN

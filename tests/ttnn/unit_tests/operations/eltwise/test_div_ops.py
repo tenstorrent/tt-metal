@@ -548,6 +548,31 @@ def test_remainder_large_quotient(testing_dtype, pairs, device):
     assert torch.equal(output_tensor, golden), f"device {output_tensor.tolist()} vs torch {golden.tolist()}"
 
 
+# Small quotients whose correctly rounded remainder equals the divisor: a = -1, b = 2^26 gives
+# floor(a / b) = -1 and a - (-1) * b = 2^26 - 1, which rounds to b itself in float32 (torch returns
+# b too). The remainder must be left alone: a |result| >= |b| repair applied here returned 0. The
+# last pair is an exact multiple of a divisor whose approximate reciprocal can be far off (2^126 on
+# Blackhole, where the hardware seed returns 0 for |b| >= 2^126); the floor then lands two above
+# the true quotient and a single sign correction leaves -b. Blackhole is not run locally.
+@pytest.mark.parametrize("testing_dtype", ["bfloat16", "float32"])
+def test_remainder_result_equal_to_divisor(testing_dtype, device):
+    torch_dtype = getattr(torch, testing_dtype)
+    ttnn_dtype = getattr(ttnn, testing_dtype)
+
+    torch_input_a = torch.tensor([-1.0, 1.0, -(2.0**-25), 2.0**-25, -(2.0**127), 2.0**127], dtype=torch_dtype)
+    torch_input_b = torch.tensor([2.0**26, -(2.0**26), 1.0, -1.0, 2.0**126, -(2.0**126)], dtype=torch_dtype)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    golden = golden_function(torch_input_a, torch_input_b, device=device)
+    assert torch.equal(golden, torch.tensor([2.0**26, -(2.0**26), 1.0, -1.0, 0.0, 0.0], dtype=torch_dtype))
+
+    tt_in_a = ttnn.from_torch(torch_input_a, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_in_b = ttnn.from_torch(torch_input_b, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn.remainder(tt_in_a, tt_in_b))
+
+    assert torch.equal(output_tensor, golden), f"device {output_tensor.tolist()} vs torch {golden.tolist()}"
+
+
 _INF = float("inf")
 
 
