@@ -29,8 +29,17 @@ constexpr float CW_NEG_LN2_LO = -3.19461832987e-05f;
 
 sfpi_inline sfpi::vFloat expm1_cw_clamped(sfpi::vFloat x)
 {
-    // Clamp to prevent exponent underflow (k < -127 wraps setexp)
-    x = sfpi::max(x, -87.0f);
+    // Clamp to prevent exponent underflow (k < -127 wraps setexp). sfpi::max is an SFPSWAP
+    // total-order max, which ranks a sign-set NaN below -87.0 and would replace it with a
+    // finite value; keep NaN lanes as they came in so the result stays NaN. -inf still
+    // clamps (expm1(-inf) = -1). is_nan tests exponent/mantissa, not a float compare.
+    const sfpi::vFloat x_in = x;
+    x                       = sfpi::max(x, -87.0f);
+    v_if (sfpi::is_nan(x_in))
+    {
+        x = x_in;
+    }
+    v_endif;
 
     // Cody-Waite range reduction: x = k*ln(2) + r
     const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);

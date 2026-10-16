@@ -593,6 +593,121 @@ def test_sqrt_custom_infinity_regression(request):
     )
 
 
+# expm1_cw_clamped's underflow clamp, sfpi::max(x, -87.0f), is an SFPSWAP total-order max:
+# it ranks a sign-set NaN (0xFFC00000, the default quiet NaN x86 produces for 0/0 and
+# inf-inf) below -87.0 and replaces it, so without a NaN guard ELU/CELU/SELU returned the
+# finite -alpha for a -NaN input while a +NaN input survived. Outside the edge sweep because
+# FLOAT_SPECIALS carries only the positive NaN. Float32 -> Float32 at dest_acc=Yes, where the
+# unpack-to-dest path hands the kernel the signed NaN and a NaN result reaches L1 as a NaN;
+# the sign of the NaN out is not asserted (SFPMAD leaves it unspecified on Wormhole).
+#
+# CELU scales its input before the clamp, so on Wormhole the NaN it hands the helper may
+# already carry either sign; it is kept here as a regression check on the shared helper, not
+# as the probe that demonstrates the defect -- ELU and SELU pass x straight through and do.
+_EXPM1_CW_NAN_OPS = [MathOperation.Elu, MathOperation.Celu, MathOperation.Selu]
+
+
+@pytest.mark.nightly
+@pytest.mark.parametrize("mathop", _EXPM1_CW_NAN_OPS, ids=lambda op: op.name)
+def test_expm1_cw_negative_nan_regression(mathop):
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 32]
+
+    # If this ever goes False the pipeline stopped delivering the NaN and the assertions
+    # below would fail for the wrong reason -- fail loudly instead.
+    assert specials_safe(formats.input_format, formats.output_format, dest_acc), (
+        "Float32 -> Float32 at dest_acc=Yes no longer carries specials; re-derive the "
+        "combination this regression test runs on before editing it."
+    )
+
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    # Controls alongside the probe: -inf and -100.0 both land below the clamp and must
+    # still be clamped (expm1 -> -1), so a guard widened to catch every non-finite shows
+    # up here; -2.0 and 1.5 are the ordinary negative and positive arms.
+    src_A = torch.full((num_elements,), -2.0, dtype=torch.float32)
+    src_A[0] = _NEGATIVE_NAN
+    src_A[1] = float("nan")
+    src_A[2] = float("-inf")
+    src_A[3] = -100.0
+    src_A[4] = 1.5
+    src_B = torch.zeros(num_elements, dtype=torch.float32)
+    tile_cnt = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+
+    generate_golden = get_golden_generator(UnarySFPUGolden)
+    golden = torch.as_tensor(
+        generate_golden(
+            mathop,
+            src_A,
+            formats.output_format,
+            dest_acc,
+            formats.input_format,
+            input_dimensions,
+        ),
+        dtype=torch.float32,
+    )
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=mathop),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+    )
+
+    res = torch.tensor(configuration.run().result, dtype=torch.float32)
+
+    assert torch.isnan(res[0]), (
+        f"{mathop.name}(-NaN) returned {res[0].item()!r}, expected NaN. The NaN guard around "
+        "the underflow clamp in ckernel_sfpu_expm1_cw.h is what keeps a sign-set NaN out of "
+        "sfpi::max; a finite value close to -alpha means the clamp absorbed it."
+    )
+    assert torch.isnan(res[1]), (
+        f"{mathop.name}(+NaN) returned {res[1].item()!r}, expected NaN; the clamp never "
+        "replaced a positive NaN, so this is a new regression."
+    )
+    assert torch.isnan(
+        golden[:2]
+    ).all(), "the golden stopped returning NaN for a NaN input"
+    # Tolerance, not equality: the Cody-Waite expm1 is an approximation, so the band only has
+    # to separate the right arm from the wrong one (and -1 from a passed-through -inf).
+    assert torch.allclose(res[2:], golden[2:], rtol=1e-3, atol=1e-6), (
+        f"{mathop.name} finite/-inf lanes no longer match the golden "
+        f"(max deviation {(res[2:] - golden[2:]).abs().max().item():.6g}); either the clamp "
+        "stopped applying to -inf / below -87, or the NaN guard diverts finite lanes."
+    )
+
+
 # sqrt(-0) and rsqrt(-0), read back as raw bit patterns. Outside the edge sweep because
 # passed_test() treats -0.0 and +0.0 as equal, so only an integer comparison can tell them
 # apart, and because the sweep runs ApproximationMode.No while _calculate_sqrt_body_ has a
