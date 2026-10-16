@@ -439,6 +439,9 @@ class Gemma4Model:
         # table, chunk and APC handling is reused unchanged. Installed per call by
         # ``Gemma4Generator._prefill_single_user_with_embeds``.
         self._g4_mm_prefill_embeds = None
+        # Host block ids ([prompt_len], -1 = text) of the prompt behind the embeds override; turns into
+        # the per-layer-type image-span attention masks for a single-chunk prefill (GEMMA4_MM_BIDIR_MASK=1).
+        self._g4_mm_prefill_blocks = None
 
         # Stash for the per-layer-input (PLI) device tensor produced in
         # ``prepare_decode_inputs_host``. ``Generator``'s decode path
@@ -917,6 +920,7 @@ class Gemma4Model:
         chunk_page_table=None,
         valid_seq_lens=None,
         keep_sharded_for_sampling=False,
+        mm_attn_masks=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -1134,6 +1138,7 @@ class Gemma4Model:
                 packed=layer_packed,
                 chunk_start_idx=chunk_start_idx,
                 chunk_page_table=chunk_page_table,
+                mm_attn_mask=(mm_attn_masks or {}).get(self.hf_config.layer_types[i]),
             )
 
             # For KV source layers during prefill, capture the K/V from the attention
@@ -2156,23 +2161,67 @@ class Gemma4Model:
         if page_tables_per_layer is None:
             page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
         page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
-        return self(
-            hidden_states=x,
-            position_idx=None,
-            page_table=page_table,
-            kv_caches=kv_cache,
-            is_decode=False,
-            input_ids_torch=input_ids_torch,
-            embeds_torch=embeds_torch,
-            pli_device_tensors=pli_device_tensors,
-            get_last_token=get_last_token,
-            page_tables_per_layer=page_tables_per_layer,
-            batch_size=batch_size,
-            user_id=user_id,
-            chunk_start_idx=chunk_start_idx,
-            chunk_page_table=chunk_page_table,
-            valid_seq_lens=valid_seq_lens,
-        )
+        mm_attn_masks = self._g4_mm_prefill_attn_masks(x, chunk_page_table, chunk_start_idx)
+        try:
+            return self(
+                hidden_states=x,
+                position_idx=None,
+                page_table=page_table,
+                kv_caches=kv_cache,
+                is_decode=False,
+                input_ids_torch=input_ids_torch,
+                embeds_torch=embeds_torch,
+                pli_device_tensors=pli_device_tensors,
+                get_last_token=get_last_token,
+                page_tables_per_layer=page_tables_per_layer,
+                batch_size=batch_size,
+                user_id=user_id,
+                chunk_start_idx=chunk_start_idx,
+                chunk_page_table=chunk_page_table,
+                valid_seq_lens=valid_seq_lens,
+                mm_attn_masks=mm_attn_masks,
+            )
+        finally:
+            for m in (mm_attn_masks or {}).values():
+                m.deallocate(True)
+
+    def _g4_mm_prefill_attn_masks(self, x, chunk_page_table, chunk_start_idx):
+        """Device image-span masks for this prefill, or None (plain causal attention).
+
+        Only for a whole-prompt single-chunk prefill: the chunked paged SDPA masks internally and
+        refuses an explicit mask, so multi-chunk and cached-prefix continuations keep causal attention.
+        """
+        blocks = getattr(self, "_g4_mm_prefill_blocks", None)
+        if blocks is None:
+            return None
+        from models.demos.gemma4.tt.common import gemma4_env_flag
+
+        if not gemma4_env_flag("GEMMA4_MM_BIDIR_MASK"):
+            return None
+        start = 0 if chunk_start_idx is None or isinstance(chunk_start_idx, ttnn.Tensor) else int(chunk_start_idx)
+        if chunk_page_table is not None or start > 0:
+            logger.warning(
+                "GEMMA4_MM_BIDIR_MASK: chunked / cached-prefix prefill keeps causal attention over image spans"
+            )
+            return None
+        from models.demos.gemma4.tt.mm_attention_mask import build_mm_prefill_masks
+
+        seq_len = int(x.shape[-2])
+        host_masks = build_mm_prefill_masks(blocks, seq_len, getattr(self.hf_config, "sliding_window", None))
+        if host_masks is None:
+            return None
+        is_mesh = hasattr(self.mesh_device, "shape")
+        return {
+            lt: ttnn.from_torch(
+                m,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None,
+            )
+            for lt, m in host_masks.items()
+        }
 
     def process_output_prefill(self, tt_out, last_token_idx):
         """Read prefill logits to host and slice to the last token's vocab row.

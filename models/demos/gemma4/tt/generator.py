@@ -1386,12 +1386,19 @@ class ChunkedPrefillPageTableGuardMixin:
         if int(suffix.shape[0]) == 0:
             raise ValueError(f"cached prefix {base} covers the whole merged prompt ({int(mm_embeds.shape[0])} rows)")
         model._g4_mm_prefill_embeds = (suffix.contiguous(), base)
+        # Image-span bidirectional attention (HF ``use_bidirectional_attention="vision"``): block ids of the
+        # prompt's vision placeholders; the model turns them into masks for a whole-prompt single-chunk prefill.
+        if base == 0 and getattr(self, "image_token_id", None) is not None:
+            from models.demos.gemma4.tt.mm_attention_mask import vision_block_ids
+
+            model._g4_mm_prefill_blocks = vision_block_ids(tokens.reshape(-1), self.image_token_id)
         try:
             return self.prefill_forward_single_user_text(
                 tokens, page_table, kv_cache=kv_cache, num_cached_tokens=num_cached_tokens, **kwargs
             )
         finally:
             model._g4_mm_prefill_embeds = None
+            model._g4_mm_prefill_blocks = None
 
     def _prefill_forward_single_user_text_eager(
         self,
@@ -2625,15 +2632,22 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         )
         get_last_token = (last_token_idx // 32) * 32
         _llm_t0 = time.perf_counter()
-        logits_tt = model.ttnn_prefill_forward(
-            x=merged_tt,
-            page_table=tt_page_table,
-            kv_cache=model_kv_cache,
-            get_last_token=get_last_token,
-            batch_size=1,
-            input_ids_torch=None,
-            embeds_torch=None,
-        )
+        # Image-span bidirectional attention masks for this whole-prompt prefill (GEMMA4_MM_BIDIR_MASK=1).
+        from models.demos.gemma4.tt.mm_attention_mask import vision_block_ids
+
+        model._g4_mm_prefill_blocks = vision_block_ids(input_ids, self.image_token_id)
+        try:
+            logits_tt = model.ttnn_prefill_forward(
+                x=merged_tt,
+                page_table=tt_page_table,
+                kv_cache=model_kv_cache,
+                get_last_token=get_last_token,
+                batch_size=1,
+                input_ids_torch=None,
+                embeds_torch=None,
+            )
+        finally:
+            model._g4_mm_prefill_blocks = None
         ttnn.synchronize_device(self.mesh_device)
         llm_prefill_ms = (time.perf_counter() - _llm_t0) * 1000.0
         logger.info(

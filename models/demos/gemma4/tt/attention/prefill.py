@@ -473,6 +473,33 @@ def flush_deferred_bounded_fills(layers):
                     pass
 
 
+def _sdpa_single_chunk(tt_q, tt_k, tt_v, config, seq_len, sliding_window, compute_kernel_config, mm_attn_mask=None):
+    """Single-chunk prefill SDPA. With ``mm_attn_mask`` (image-span bidirectional mask, see
+    ``mm_attention_mask.py``) the op takes the explicit additive mask instead of ``is_causal`` and
+    ``sliding_window_size`` (the op forbids combining them; the window is baked into the mask)."""
+    if mm_attn_mask is not None:
+        return ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            attn_mask=mm_attn_mask,
+            is_causal=False,
+            scale=1.0,
+            program_config=prefill_sdpa_program_config(config.head_dim, seq_len, sliding_window=None),
+            compute_kernel_config=compute_kernel_config,
+        )
+    return ttnn.transformer.scaled_dot_product_attention(
+        tt_q,
+        tt_k,
+        tt_v,
+        is_causal=True,
+        scale=1.0,
+        sliding_window_size=sliding_window,
+        program_config=prefill_sdpa_program_config(config.head_dim, seq_len, sliding_window=sliding_window),
+        compute_kernel_config=compute_kernel_config,
+    )
+
+
 def _prefill_forward_single(
     hidden_states,
     cos_cache,
@@ -491,6 +518,7 @@ def _prefill_forward_single(
     chunk_page_table=None,
     sliding_tail_in=None,
     sliding_tail_end=None,
+    mm_attn_mask=None,
 ):
     """Single-user prefill — matches arg/gemma4_optimizations.
 
@@ -902,15 +930,15 @@ def _prefill_forward_single(
                     "K/V for this chunk.",
                     chunk_offset,
                 )
-            tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
+            tt_sdpa = _sdpa_single_chunk(
                 tt_q,
                 tt_k,
                 tt_v,
-                is_causal=True,
-                scale=1.0,
-                sliding_window_size=sliding_window,
-                program_config=prefill_sdpa_program_config(config.head_dim, seq_len, sliding_window=sliding_window),
-                compute_kernel_config=sdpa_ckc,
+                config,
+                seq_len,
+                sliding_window,
+                sdpa_ckc,
+                mm_attn_mask=mm_attn_mask if not is_chunked else None,
             )
         # Save this chunk's last ``hist`` K/V tokens as the next chunk's tail.
         # Slices may be views of tt_k/tt_v; clone (+ left-pad if short) so the
@@ -1001,15 +1029,15 @@ def _prefill_forward_single(
             fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
             packer_l1_acc=False,
         )
-        tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
+        tt_sdpa = _sdpa_single_chunk(
             tt_q,
             tt_k,
             tt_v,
-            is_causal=True,
-            scale=1.0,
-            sliding_window_size=sliding_window,
-            program_config=prefill_sdpa_program_config(config.head_dim, seq_len, sliding_window=sliding_window),
-            compute_kernel_config=sdpa_compute_kernel_config,
+            config,
+            seq_len,
+            sliding_window,
+            sdpa_compute_kernel_config,
+            mm_attn_mask=mm_attn_mask if not is_chunked else None,
         )
     # Persist sliding-window K/V tail after *any* sliding prefill, not only
     # generator-level ``sliding_chunked``. vLLM token-chunked prefill
@@ -1082,6 +1110,7 @@ def prefill_forward(
     chunk_page_table=None,
     sliding_tail_in=None,
     sliding_tail_end=None,
+    mm_attn_mask=None,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -1123,6 +1152,7 @@ def prefill_forward(
             chunk_page_table=chunk_page_table,
             sliding_tail_in=sliding_tail_in,
             sliding_tail_end=sliding_tail_end,
+            mm_attn_mask=mm_attn_mask,
         )
 
     tp = mesh_config.tp if mesh_config else 1
