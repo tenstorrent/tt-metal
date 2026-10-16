@@ -87,6 +87,10 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     // exp(G_last - G) per key channel, from the suffix sum gate_strict_upper @ g formed in DST.
     const m2::DFBSpecName key_suffix_decay_dfb{"key_suffix_decay"};
     const m2::DFBSpecName gate_strict_upper_dfb{"gate_strict_upper"};
+    // Gate-scaled exponent masks: ones/2, tril - ones/2 and its negation.
+    const m2::DFBSpecName gate_half_ones_dfb{"gate_half_ones"};
+    const m2::DFBSpecName gate_centered_dfb{"gate_centered"};
+    const m2::DFBSpecName gate_centered_negated_dfb{"gate_centered_negated"};
     const m2::DFBSpecName normalized_q_dfb{"normalized_q"};
     const m2::DFBSpecName normalized_k_dfb{"normalized_k"};
     const m2::DFBSpecName tile_workspace_0_dfb{"tile_workspace_0"};
@@ -150,6 +154,9 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         make_dfb(anchor_decay_dfb, kv, fp32),
         make_dfb(key_suffix_decay_dfb, ck, fp32),
         make_dfb(gate_strict_upper_dfb, cc, fp32),
+        make_dfb(gate_half_ones_dfb, cc, fp32),
+        make_dfb(gate_centered_dfb, cc, fp32),
+        make_dfb(gate_centered_negated_dfb, cc, fp32),
         make_dfb(normalized_q_dfb, ck, fp32),
         make_dfb(normalized_k_dfb, ck, fp32),
         // Row workspaces publish whole Kt-tile rows. Keep one-tile reductions and
@@ -258,6 +265,9 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     unpack_modes[anchor_decay_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[key_suffix_decay_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[gate_strict_upper_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[gate_half_ones_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[gate_centered_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[gate_centered_negated_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[normalized_q_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[normalized_k_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tile_workspace_0_dfb] = UnpackMode::UnpackToSrc;
@@ -301,6 +311,12 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                 m2::DFBBinding{key_suffix_decay_dfb, "key_suffix_decay", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{gate_strict_upper_dfb, "gate_strict_upper", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{gate_strict_upper_dfb, "gate_strict_upper", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{gate_half_ones_dfb, "gate_half_ones", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{gate_half_ones_dfb, "gate_half_ones", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{gate_centered_dfb, "gate_centered", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{gate_centered_dfb, "gate_centered", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{gate_centered_negated_dfb, "gate_centered_negated", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{gate_centered_negated_dfb, "gate_centered_negated", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{normalized_q_dfb, "normalized_q", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{normalized_q_dfb, "normalized_q", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{normalized_k_dfb, "normalized_k", m2::DFBEndpointType::PRODUCER},
