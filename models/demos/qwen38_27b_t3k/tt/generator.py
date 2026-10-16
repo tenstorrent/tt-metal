@@ -569,8 +569,7 @@ class Qwen38Generator:
         )
         self._slot_prefix_len = [0] * self.cache.batch_size
         self._reserve_snapshot_pool()
-        for layer in self.model.layers:
-            layer.prime_conv_selectors(batch)
+        self.model.prime_conv_selectors(batch)
         self.positions = self.model.upload(
             torch.zeros(batch, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
         )
@@ -1241,8 +1240,7 @@ class Qwen38Generator:
         self.cache = cache
         self._slot_prefix_len = [0] * cache.batch_size
         self._reserve_snapshot_pool()
-        for layer in self.model.layers:
-            layer.prime_conv_selectors(cache.batch_size)
+        self.model.prime_conv_selectors(cache.batch_size)
         self.owns_cache = False
         self.positions = self.model.upload(
             torch.zeros(cache.batch_size, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
