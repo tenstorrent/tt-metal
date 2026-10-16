@@ -132,7 +132,8 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_pre` on 
      the reference == kernels.py:sinkhorn_split element-wise <= 2e-5, and differs from the Xing math).
      Regression, option off (2026-10-16, 2x2 box): model cases 103 passed (86 xing40 cases on the box's 2x2, 10
      glm53, the 5 new, 2 CPU reference checks); unit + golden 321 passed, 1 skipped (= unit 115 + 1 skipped,
-     golden 206: the recorded counts).
+     golden 206: the recorded counts). Re-run on a fresh build of the committed tree (c50953498f6, 2026-10-16,
+     FIX.4 overseer.1): model cases 103 passed, unit + golden 321 passed / 1 skipped (= baseline).
    - Needed by: deepseek_v41_flash_d_p FIX.4 (tt/mhc.py, setting HC_SINKHORN=sfpu_fp32).
    - Files: `kernels/mhc_pre_xing_compute.cpp`, `device/mhc_pre_xing_device_operation.{hpp,cpp}`,
      `device/mhc_pre_xing_program_factory.cpp`, `mhc_pre_xing.{hpp,cpp}`, `mhc_pre_ttnn_nanobind.cpp`,
