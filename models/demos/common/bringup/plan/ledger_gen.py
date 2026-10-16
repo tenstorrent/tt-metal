@@ -285,6 +285,19 @@ def generate(spec, ref=None, early: bool = False) -> dict:
     comp_rung = spec.get("tests.component_rung") or next(r["name"] for r in ladder if r.get("full_dumps"))
     comp_golden = golden_task[comp_rung]
     manifest = [str(rung_dir(spec, spec.rung(comp_rung)) / "manifest.json")]
+    # F80: the official code tapped per step on the component golden's chunk: the reference arithmetic of every
+    # component and swap limit (official_floor.json next to the goldens) and the check of the tap map
+    floor_dep = []
+    if spec.get("tests.official_floor"):
+        add(
+            "R.5",
+            "Official arithmetic per step (official_taps hook + official_taps.yaml; the noise floor's reference term)",
+            "reference",
+            [comp_golden, "R.3"],
+            f"{real}{PY}.testing.official_floor",
+            {"official_taps_steps": ">= 1", "official_taps_errors": "== 0", "official_taps_unmapped": "== 0"},
+        )
+        floor_dep = ["R.5"]
     last_swaps = []
     for bt in spec.data["block_types"]:
         layer = spec.representative_layer(bt)
@@ -298,7 +311,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
                 cid,
                 f"{bt} {st.name} ({st.kind}) on device, layer {layer}",
                 "implement",
-                ["PL.1", comp_golden],
+                ["PL.1", comp_golden, *floor_dep],
                 f"{SAFE} {ctest}" + contract_cmds(st.name),
                 {metric: ">= limit"},  # F76: the noise floor the test records (testing/noise_floor.py)
                 device=True,

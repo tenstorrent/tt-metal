@@ -1133,3 +1133,29 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - The bf16-resolution floor came from the golden (already bf16: 0) and set a vs-golden limit of PCC 1.0 for an exact
   step (engram_kv); it now comes from the fp32 CPU output (the step on the same inputs; the block's last step).
 - Selftests: test_overseer.py (record task, the fix gate's prefixes), test_swap_checks.py (eight-argument wrapper).
+
+## F80 (2026-10-16): the noise floor = max(the official arithmetic, the input nudge); explained selection flips
+
+- The precision brainstorm (DeepSeek-V4.1 run1, owner-approved; /localdev/dnijemcevic/bringup/
+  handoff_precision_noise_floor_2026-10-16.md sections 6-9) measured F76's bf16-everywhere model as wrong both ways:
+  2x too loose on norms, ~10^4x on the hc mixes (the official code is fp32 there), and near-empty for the router
+  (PCC limit 0.27). The target stays the fp32 CPU step; its floor, per statistic, is the larger of
+  - the reference arithmetic: the official code at its shipped dtypes on the same inputs vs the fp32 step, tapped per
+    step by the model hook official_taps and cached next to the component goldens (testing/official_floor.py,
+    official_floor.json; task R.5, which also checks the tap map: the fp32 step on the tapped inputs must give the
+    official output within calib x its input-nudge floor), and
+  - the input nudge: the fp32 step on its inputs moved uniformly inside their rounding cell, in the dtype the official
+    code holds each input (official_taps.yaml `inputs`: bf16 / fp32 / fixed for a quantizer's output), 3 seeds, the
+    worst (defaults.yaml noise_floor.seeds).
+  The vs-CPU resolution floor is one rounding to the official output dtype (`out`: bf16 / fp32; none for fp32).
+- Selections: the CPU step's own top-k is tapped (noise_floor.TopkTap); a device flip must be explained (both swapped
+  entries within noise_floor.flip_spread = 2x the nudge's score spread of the cutoff) and the flipped rows are at
+  most calib x the nudge's. A selection step without torch.topk keeps the count limit only.
+- Swap tests: every swapped step's floor is its nudge on the same inputs (+ the cached official term); the vs-golden
+  limits and pcc_swap_out come from the block run with every swapped step nudged, once per seed. The freeze sweep's
+  controls are now a fresh-seed nudge and (bf16 outputs only) a bf16 output; the bf16-everywhere control is gone.
+- Removed: F76's _Bf16Everywhere precision model and F78's precision.yaml / step_precision.
+- Not yet (handoff section 7): end-to-end limits from the official run's drift (pcc_layer, pcc_state_min, top5, the
+  contract's pcc_producer_kv_*); judging a step at the next stored tensor; the fp8 flip rule at attention.
+- Selftests: test_noise_floor.py (nudge, dtypes, flips, no-topk selections, the official floor and its check);
+  test_component_checks.py, test_swap_checks.py updated.

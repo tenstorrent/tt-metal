@@ -38,7 +38,12 @@ thresholds:                # accuracy gates (PCC lower limits unless named other
   swap_step_reselect: 0.02 # selection outputs: fraction of rows whose selected support moved
   swap_out_rel: 0.01       # block out with the last swapped step vs with the CPU step's output: rel L2
 
+noise_floor:               # F80: the floor of every component / swap limit (testing/noise_floor.py)
+  seeds: 3                 # input-nudge runs per floor (the worst counts)
+  flip_spread: 2.0         # a selection flip is explained when both entries sit within this x the nudge's score spread of the cutoff
+
 tests:
+  official_floor: true        # F80: task R.5 taps the official code per step (the reference arithmetic of every limit)
   component_max_precision: true  # component and swap tests run at the model's max precision (tt/settings.py
                                  # max_precision); shipped precision is judged by the ladder and contract tests
   low_precision_kinds: [moe]  # step kinds with a looser precision factor (bfp8 expert weights, F56)
