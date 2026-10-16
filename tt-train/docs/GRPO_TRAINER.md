@@ -195,6 +195,8 @@ from ttml.trainers import GRPOConfig
 | `prompts_to_train` | `int` | — | *(use `max_steps`)* | Total number of prompts to train on. Unlike TRL which uses `max_steps`, this directly specifies the data budget. Equivalent to `max_steps * (per_device_train_batch_size * num_devices * gradient_accumulation_steps / num_generations)`. **Currently, `prompts_to_train` must be divisible by the generation batch size in prompts (`per_device_train_batch_size * num_devices * gradient_accumulation_steps / num_generations`) to avoid a ragged final batch.** |
 | `temperature` | `float` | — | `temperature` | Sampling temperature for completion generation. |
 | `warmup_steps` | `int` | — | `warmup_steps` | Number of linear learning rate warmup steps. |
+| `lr_scheduler_type` | `str` | `"constant_with_warmup"` | `lr_scheduler_type` | Same values and semantics as TRL: `"constant"` (flat; ignores `warmup_steps`), `"constant_with_warmup"`, `"cosine"` (decays to 0), `"cosine_with_min_lr"` (decays to `base_lr * min_lr_rate`). Other TRL values are not supported. Warmup is `(i + 1) / warmup_steps` for 0-indexed step `i`; TRL's is `i / warmup_steps`. |
+| `min_lr_rate` | `float` | `0.0` | `lr_scheduler_kwargs={"min_lr_rate": ...}` | Final LR as a fraction of the base LR for `"cosine_with_min_lr"`; ignored otherwise. |
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |
 | `checkpointing` | `bool` | — | *(use `save_steps`)* | Whether to save checkpoints during training. |
 | `checkpoint_interval` | `int` | — | *(use `save_steps`)* | Save a checkpoint every *N* optimizer steps (when `checkpointing=True`). |
