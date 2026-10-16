@@ -2002,6 +2002,20 @@ def test_ring_joint_golden_with_circular_kv_cache():
 
     torch.testing.assert_close(actual, expected)
 
+    # The metadata form passes the start as a tensor and only a placeholder logical_n.
+    metadata_kwargs = {
+        "is_causal": True,
+        "sliding_window_size": window,
+        "slot_id": torch.tensor([0]),
+        "kv_actual_isl_tensor": torch.tensor([written - chunk]),
+        "kv_cache_num_layers": 1,
+        "kv_cache_layer_idx": 0,
+        "logical_n": num_slabs * chunk,
+    }
+    actual, _, _ = golden_function(query, physical_k, physical_v, circular_kv_cache=True, **metadata_kwargs)
+
+    torch.testing.assert_close(actual, expected)
+
 
 @pytest.mark.requires_fast_runtime_mode_off
 def test_moe_expert_token_remap_in_comparison_mode(device):
