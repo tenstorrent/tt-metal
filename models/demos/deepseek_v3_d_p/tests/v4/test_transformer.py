@@ -39,25 +39,12 @@ from models.demos.deepseek_v3_d_p.tt.v4 import TtV4Transformer
 
 # Pro's floor is the lower one, as in the block test: 128 heads and a 7168-wide hidden make every bf16
 # reduction longer.
-_CASES = [
-    pytest.param(DeepSeekV4ProConfig, 0.98, 1, id="pro-L1"),
-    pytest.param(DeepSeekV4ProConfig, 0.98, 3, id="pro-L3"),
-    pytest.param(DeepSeekV4FlashConfig, 0.99, 1, id="flash-L1"),
-    pytest.param(DeepSeekV4FlashConfig, 0.99, 3, id="flash-L3"),
-]
+_PRO_FLOOR, _FLASH_FLOOR = 0.98, 0.99
+_NUM_LAYERS = [pytest.param(1, id="L1"), pytest.param(3, id="L3")]
 _SEED = 42
 
 
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
-    mesh_params(DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE),
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
-@pytest.mark.parametrize("model_config, floor, num_layers", _CASES)
-@pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
-@pytest.mark.timeout(0)
-def test_v4_transformer(mesh_device, device_params, num_links, seq_len, model_config, floor, num_layers):
+def run_transformer(mesh_device, device_params, num_links, seq_len, model_config, floor, num_layers):
     """The first ``num_layers`` layers of a V4 model and its tail vs the composed CPU reference, unchunked."""
     config = v4_hf_config(model_config, num_layers, max_seq_len=seq_len)
     logger.info(
@@ -100,3 +87,29 @@ def test_v4_transformer(mesh_device, device_params, num_links, seq_len, model_co
         floor,
         f"{model_config.__name__} L{num_layers}",
     )
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    mesh_params(DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
+@pytest.mark.parametrize("num_layers", _NUM_LAYERS)
+@pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
+@pytest.mark.timeout(0)
+def test_v4_pro_transformer(mesh_device, device_params, num_links, seq_len, num_layers):
+    run_transformer(mesh_device, device_params, num_links, seq_len, DeepSeekV4ProConfig, _PRO_FLOOR, num_layers)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    mesh_params(DeepSeekV4FlashConfig.FABRIC_PAYLOAD_SIZE),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
+@pytest.mark.parametrize("num_layers", _NUM_LAYERS)
+@pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
+@pytest.mark.timeout(0)
+def test_v4_flash_transformer(mesh_device, device_params, num_links, seq_len, num_layers):
+    run_transformer(mesh_device, device_params, num_links, seq_len, DeepSeekV4FlashConfig, _FLASH_FLOOR, num_layers)

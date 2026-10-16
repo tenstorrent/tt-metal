@@ -34,24 +34,12 @@ from models.demos.deepseek_v3_d_p.tt.v4 import TtV4Transformer
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 
 CHUNK = PREFILL_CHUNK_TOKENS
-_CASES = [
-    pytest.param(DeepSeekV4ProConfig, 0.98, id="pro-L3"),
-    pytest.param(DeepSeekV4FlashConfig, 0.99, id="flash-L3"),
-]
+_PRO_FLOOR, _FLASH_FLOOR = 0.98, 0.99
 _NUM_LAYERS = 3
 _SEED = 7
 
 
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
-    mesh_params(DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE),
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("n_chunks", [2], ids=["chunks2"])
-@pytest.mark.parametrize("model_config, floor", _CASES)
-@pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
-@pytest.mark.timeout(0)
-def test_v4_transformer_chunked(mesh_device, device_params, num_links, n_chunks, model_config, floor):
+def run_transformer_chunked(mesh_device, device_params, num_links, n_chunks, model_config, floor):
     total = n_chunks * CHUNK
     config = v4_hf_config(model_config, _NUM_LAYERS, max_seq_len=total)
     ref = build_v4_model_reference(config, seed=_SEED)
@@ -103,3 +91,27 @@ def test_v4_transformer_chunked(mesh_device, device_params, num_links, n_chunks,
         floor,
         f"{model_config.__name__} L{_NUM_LAYERS} x{n_chunks} chunks",
     )
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    mesh_params(DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("n_chunks", [2], ids=["chunks2"])
+@pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
+@pytest.mark.timeout(0)
+def test_v4_pro_transformer_chunked(mesh_device, device_params, num_links, n_chunks):
+    run_transformer_chunked(mesh_device, device_params, num_links, n_chunks, DeepSeekV4ProConfig, _PRO_FLOOR)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    mesh_params(DeepSeekV4FlashConfig.FABRIC_PAYLOAD_SIZE),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("n_chunks", [2], ids=["chunks2"])
+@pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
+@pytest.mark.timeout(0)
+def test_v4_flash_transformer_chunked(mesh_device, device_params, num_links, n_chunks):
+    run_transformer_chunked(mesh_device, device_params, num_links, n_chunks, DeepSeekV4FlashConfig, _FLASH_FLOOR)

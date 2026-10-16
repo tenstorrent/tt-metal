@@ -33,25 +33,13 @@ from models.demos.deepseek_v3_d_p.tests.v4.helpers import (
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v4 import TtV4Transformer
 
-_CASES = [
-    pytest.param(DeepSeekV4ProConfig, 0.98, id="pro"),
-    pytest.param(DeepSeekV4FlashConfig, 0.99, id="flash"),
-]
+_PRO_FLOOR, _FLASH_FLOOR = 0.98, 0.99
 _NUM_LAYERS = 3
 _BOUNDARY = 1
 _SEED = 11
 
 
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
-    mesh_params(DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE),
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
-@pytest.mark.parametrize("model_config, floor", _CASES)
-@pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
-@pytest.mark.timeout(0)
-def test_v4_transformer_pipeline_split(mesh_device, device_params, num_links, seq_len, model_config, floor):
+def run_transformer_pipeline_split(mesh_device, device_params, num_links, seq_len, model_config, floor):
     config = v4_hf_config(model_config, _NUM_LAYERS, max_seq_len=seq_len)
     ref = build_v4_model_reference(config, seed=_SEED)
     input_ids = torch.randint(0, config.vocab_size, (1, seq_len))
@@ -100,3 +88,27 @@ def test_v4_transformer_pipeline_split(mesh_device, device_params, num_links, se
         floor,
         f"{model_config.__name__} split@{_BOUNDARY}",
     )
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    mesh_params(DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
+@pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
+@pytest.mark.timeout(0)
+def test_v4_pro_transformer_pipeline_split(mesh_device, device_params, num_links, seq_len):
+    run_transformer_pipeline_split(mesh_device, device_params, num_links, seq_len, DeepSeekV4ProConfig, _PRO_FLOOR)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    mesh_params(DeepSeekV4FlashConfig.FABRIC_PAYLOAD_SIZE),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
+@pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
+@pytest.mark.timeout(0)
+def test_v4_flash_transformer_pipeline_split(mesh_device, device_params, num_links, seq_len):
+    run_transformer_pipeline_split(mesh_device, device_params, num_links, seq_len, DeepSeekV4FlashConfig, _FLASH_FLOOR)

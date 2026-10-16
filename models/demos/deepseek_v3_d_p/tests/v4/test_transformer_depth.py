@@ -62,7 +62,9 @@ _HANDOFF = Path(os.getenv("V4_DEPTH_HANDOFF_DIR", "generated/v4_depth_handoff"))
 # without an entry logs its last-layer PCC ungraded.
 _LAST_LAYER_FLOOR = {DeepSeekV4FlashConfig: 0.62}
 
-_GALAXY = [p for p in mesh_params(DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE) if p.id == "torus-xy-8x4"]
+
+def _galaxy(model_config):
+    return [p for p in mesh_params(model_config.FABRIC_PAYLOAD_SIZE) if p.id == "torus-xy-8x4"]
 
 
 def _handoff_file(layer: int, chunk: int) -> Path:
@@ -202,7 +204,9 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
     assert not failures, ", ".join(failures)
 
 
-@pytest.mark.parametrize("mesh_device, device_params, num_links", _GALAXY, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links", _galaxy(DeepSeekV4FlashConfig), indirect=["mesh_device", "device_params"]
+)
 @pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
 @pytest.mark.timeout(0)
 def test_v4_flash_transformer_depth(mesh_device, device_params, num_links):
@@ -212,7 +216,9 @@ def test_v4_flash_transformer_depth(mesh_device, device_params, num_links):
     )
 
 
-@pytest.mark.parametrize("mesh_device, device_params, num_links", _GALAXY, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links", _galaxy(DeepSeekV4ProConfig), indirect=["mesh_device", "device_params"]
+)
 @pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
 @pytest.mark.timeout(0)
 def test_v4_pro_transformer_depth_head(mesh_device, device_params, num_links):
@@ -229,7 +235,9 @@ def test_v4_pro_transformer_depth_head(mesh_device, device_params, num_links):
     )
 
 
-@pytest.mark.parametrize("mesh_device, device_params, num_links", _GALAXY, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links", _galaxy(DeepSeekV4ProConfig), indirect=["mesh_device", "device_params"]
+)
 @pytest.mark.parametrize("first, count", _PRO_TAIL, ids=[f"layers{f}to{f + c - 1}" for f, c in _PRO_TAIL])
 @pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
 @pytest.mark.timeout(0)
