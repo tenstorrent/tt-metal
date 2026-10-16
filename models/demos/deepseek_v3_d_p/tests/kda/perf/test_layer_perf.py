@@ -50,9 +50,9 @@ _PERF_SKU = "bh_loudbox"
 _PERF_MARGIN = 0.03
 # LoudBox targets.
 _PERF_REFERENCE_MS = {
-    "SP1xTP8": 7.379,
-    "SP2xTP4": 7.436,
-    "SP4xTP2": 6.755,
+    "SP1xTP8": 6.447,
+    "SP2xTP4": 6.452,
+    "SP4xTP2": 5.593,
 }
 # Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
 # prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and

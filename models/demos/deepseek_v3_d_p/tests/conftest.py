@@ -200,7 +200,7 @@ def pytest_collection_modifyitems(config, items):
         CT.P150_X8: {
             (8, 1): [FC.FABRIC_1D, FC.FABRIC_2D_TORUS_Y],
             (4, 2): [FC.FABRIC_2D],
-            (2, 4): [FC.FABRIC_2D],
+            (2, 4): [FC.FABRIC_1D, FC.FABRIC_2D],  # KDA's LoudBox SP2xTP4 runs on a 1D fabric
             (1, 8): [FC.FABRIC_2D_TORUS_X],
         },
         CT.T3K: {
