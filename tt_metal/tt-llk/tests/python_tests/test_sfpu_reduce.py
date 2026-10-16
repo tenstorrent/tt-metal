@@ -323,17 +323,6 @@ def test_sfpu_reduce(
         )
 
     if (
-        mathop == MathOperation.ReduceRow
-        and reduce_pool in (ReducePool.Max, ReducePool.Min)
-        and formats.input_format == DataFormat.UInt16
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-    ):
-        pytest.skip(
-            reason="Blackhole routes UInt16 row MAX/MIN in a 32-bit dest through the Int32 "
-            "sign-magnitude row path, which does not mask UInt16's high bits and returns garbage."
-        )
-
-    if (
         formats.input_format == DataFormat.UInt16
         and formats.output_format.is_32_bit()
         and dest_acc == DestAccumulation.No
