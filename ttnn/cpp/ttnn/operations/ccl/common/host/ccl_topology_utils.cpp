@@ -115,8 +115,6 @@ MeshShape mesh_shape_of(const Tensor& input, std::string_view op) {
     return input.device()->shape();
 }
 
-uint32_t rank_of(const Tensor& input) { return static_cast<uint32_t>(input.logical_shape().rank()); }
-
 }  // namespace
 
 CallerRelabelsScope::CallerRelabelsScope() { ++caller_relabels_depth; }
@@ -400,7 +398,7 @@ std::optional<TensorTopology> all_gather_output_topology(
         input.tensor_topology(),
         cluster_axis,
         mesh_shape_of(input, "all_gather"),
-        rank_of(input),
+        input.logical_shape().rank(),
         gathered_dim,
         require_contiguous_gather);
 }
@@ -422,7 +420,7 @@ std::optional<TensorTopology> all_reduce_output_topology(
 
 std::optional<TensorTopology> all_reduce_output_topology(const Tensor& input, std::optional<uint32_t> cluster_axis) {
     return all_reduce_output_topology(
-        input.tensor_topology(), cluster_axis, mesh_shape_of(input, "all_reduce"), rank_of(input));
+        input.tensor_topology(), cluster_axis, mesh_shape_of(input, "all_reduce"), input.logical_shape().rank());
 }
 
 // all_broadcast reuses the all_gather rule on purpose, once per output. The op returns one tensor per device on
@@ -439,7 +437,7 @@ std::optional<TensorTopology> all_broadcast_output_topology(
 
 std::optional<TensorTopology> all_broadcast_output_topology(const Tensor& input, std::optional<uint32_t> cluster_axis) {
     return all_broadcast_output_topology(
-        input.tensor_topology(), cluster_axis, mesh_shape_of(input, "all_broadcast"), rank_of(input));
+        input.tensor_topology(), cluster_axis, mesh_shape_of(input, "all_broadcast"), input.logical_shape().rank());
 }
 
 // The scatter family's shared rule, next to its first caller.
@@ -642,7 +640,11 @@ std::optional<TensorTopology> reduce_scatter_output_topology(
     const Tensor& input, std::optional<uint32_t> cluster_axis, int32_t scatter_dim) {
     return over_storage_ring_order(
         reduce_scatter_output_topology(
-            input.tensor_topology(), cluster_axis, mesh_shape_of(input, "reduce_scatter"), rank_of(input), scatter_dim),
+            input.tensor_topology(),
+            cluster_axis,
+            mesh_shape_of(input, "reduce_scatter"),
+            input.logical_shape().rank(),
+            scatter_dim),
         input,
         cluster_axis,
         "reduce_scatter");
@@ -666,7 +668,11 @@ std::optional<TensorTopology> mesh_partition_output_topology(
     // value along that axis and the label's coordinates, a block uncollapse_placements has checked, are kept.
     return over_storage_ring_order(
         mesh_partition_output_topology(
-            input.tensor_topology(), cluster_axis, mesh_shape_of(input, "mesh_partition"), rank_of(input), out_dim),
+            input.tensor_topology(),
+            cluster_axis,
+            mesh_shape_of(input, "mesh_partition"),
+            input.logical_shape().rank(),
+            out_dim),
         input,
         cluster_axis,
         "mesh_partition");
@@ -685,7 +691,11 @@ std::optional<TensorTopology> all_to_all_output_topology(
 std::optional<TensorTopology> all_to_all_output_topology(
     const Tensor& input, std::optional<uint32_t> cluster_axis, int32_t out_dim) {
     return all_to_all_output_topology(
-        input.tensor_topology(), cluster_axis, mesh_shape_of(input, "all_to_all"), rank_of(input), out_dim);
+        input.tensor_topology(),
+        cluster_axis,
+        mesh_shape_of(input, "all_to_all"),
+        input.logical_shape().rank(),
+        out_dim);
 }
 
 }  // namespace ttnn::operations::ccl::common
