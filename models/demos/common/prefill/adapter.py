@@ -210,11 +210,9 @@ class PrefillModelAdapter(ABC):
 
     def layer_split_boundaries(self, num_layers: int) -> Optional[set]:
         """Layer indices at which a pipeline rank may START (its ``first_layer_idx`` must be one of
-        these). ``None`` => unconstrained (dense models — any split is fine). A DSA cross-layer-reuse
-        model returns its ``full`` layer indices: each rank must begin on a layer that seeds that rank's
-        indexer-reuse chain (a rank starting on a ``shared`` layer has no prior top-k — see
-        ``tt_prefill_transformer``). The runner (``compute_layer_split``) snaps the default even split
-        onto these and rejects any split whose rank starts fall off them."""
+        these). ``None`` => unconstrained (dense models — any split is fine). The runner
+        (``compute_layer_split``) snaps the default even split onto these and rejects any split whose
+        rank starts fall off them."""
         return None
 
     @abstractmethod

@@ -154,6 +154,17 @@ def d2d_activation_width(hidden_size: int, *, dflash: bool = False) -> int:
     return hidden_size * (2 if dflash else 1)
 
 
+def indexer_indices_global_spec(per_chip_shape, mesh_shape) -> ttnn.TensorSpec:
+    _, _, rows, k = per_chip_shape
+    sp, tp = mesh_shape
+    return ttnn.TensorSpec(
+        shape=ttnn.Shape([1, 1, sp * rows, tp * k]),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        buffer_type=ttnn.BufferType.DRAM,
+    )
+
+
 def resolve_trace_dir(path) -> Path:
     path = Path(path)
     if (path / "metadata.json").exists():
@@ -221,7 +232,7 @@ def compute_layer_split(
             )
     else:
         base, rem = divmod(num_layers + mtp_levels, num_ranks)
-        counts = [base + (1 if r < rem else 0) for r in range(num_ranks)]
+        counts = [base + (1 if r >= num_ranks - rem else 0) for r in range(num_ranks)]
         counts[-1] -= mtp_levels
         if counts[-1] < 1:
             raise ValueError(
