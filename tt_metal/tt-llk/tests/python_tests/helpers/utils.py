@@ -1248,6 +1248,32 @@ def passed_test(
     return is_within_tolerance and (pcc > target_pcc)
 
 
+def bf16_from_bits(bits: int) -> float:
+    """One bfloat16 value, as a Python float, from its 16-bit pattern."""
+    return float(torch.tensor([bits], dtype=torch.int16).view(torch.bfloat16).item())
+
+
+def assert_bf16_separates_rne(wide: torch.Tensor) -> None:
+    """Fail when every lane rounds the same under truncation and round-to-nearest-even.
+
+    A bit-exact NearestEven check is vacuous on values that are already bf16.
+    """
+    rne = wide.to(torch.bfloat16)
+    trunc = (wide.view(torch.int32) & 0xFFFF0000).view(torch.float32).to(torch.bfloat16)
+    if torch.equal(rne.view(torch.int16), trunc.view(torch.int16)):
+        raise AssertionError("stimulus does not separate NearestEven from truncation")
+
+
+def assert_bit_exact(got: torch.Tensor, want: torch.Tensor, what: str) -> None:
+    """Fail unless two 16-bit tensors have the same dtype and the same bits."""
+    if got.dtype != want.dtype:
+        raise AssertionError(f"{what}: dtype {got.dtype} vs {want.dtype}")
+    if torch.equal(got, want):
+        return
+    differ = int((got.view(torch.int16) != want.view(torch.int16)).sum())
+    raise AssertionError(f"{what}: {differ} of {got.numel()} lanes differ")
+
+
 def create_directories(dirs: list[Path]):
     """Create directories with file lock to handle race conditions in parallel execution."""
 
