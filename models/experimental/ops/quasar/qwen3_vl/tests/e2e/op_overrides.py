@@ -394,23 +394,24 @@ FALLBACKS = {
 
 # target -> where it matched the real op (PCC >= 0.999 on every captured case, bf16, HiFi4, bf16 dest acc).
 # Certified on ttsim WH at af544975e4d (37be61a6ea7 after the 2026-10-06 rebase onto 6a3ecc02796, f6d9256507f after the
-# 2026-10-09 rebase onto a27fa47c28b; the op code under it changed with each rebase).
+# 2026-10-09 rebase onto a27fa47c28b, 5e83042c98a after the 2026-10-16 rebase onto a7a3bc8f603; the op code under it
+# changed with each rebase and the certification has not been rerun since).
 CERTIFIED: dict = {
-    "ttnn.linear": "test_fallbacks.py[test_linear-*] (12 cases) @ ttsim WH f6d9256507f",
-    "ttnn.rms_norm": "test_fallbacks.py[test_rms_norm-*] (8 cases) @ ttsim WH f6d9256507f",
-    "ttnn.layer_norm": "test_fallbacks.py[test_layer_norm-*] (3 cases) @ ttsim WH f6d9256507f",
-    "ttnn.add": "test_fallbacks.py[test_add-*] (9 cases) @ ttsim WH f6d9256507f",
-    "ttnn.multiply": "test_fallbacks.py[test_multiply-*] (3 cases) @ ttsim WH f6d9256507f",
-    "ttnn.transformer.scaled_dot_product_attention": "test_fallbacks.py[test_scaled_dot_product_attention-*] (2 cases) @ ttsim WH f6d9256507f",
-    "ttnn.transformer.paged_scaled_dot_product_attention_decode": "test_fallbacks.py[test_paged_scaled_dot_product_attention_decode-*] (1 cases) @ ttsim WH f6d9256507f",
-    "ttnn.experimental.minimal_matmul": "test_fallbacks.py[test_minimal_matmul-*] (2 cases) @ ttsim WH f6d9256507f",
-    "ttnn.experimental.nlp_create_qkv_heads": "test_fallbacks.py[test_nlp_create_qkv_heads-*] (2 cases) @ ttsim WH f6d9256507f",
-    "ttnn.experimental.nlp_create_qkv_heads_decode": "test_fallbacks.py[test_nlp_create_qkv_heads_decode-*] (1 cases) @ ttsim WH f6d9256507f",
-    "ttnn.experimental.nlp_concat_heads": "test_fallbacks.py[test_nlp_concat_heads-*] (2 cases) @ ttsim WH f6d9256507f",
-    "ttnn.experimental.nlp_concat_heads_decode": "test_fallbacks.py[test_nlp_concat_heads_decode-*] (1 cases) @ ttsim WH f6d9256507f",
-    "ttnn.experimental.rotary_embedding_llama": "test_fallbacks.py[test_rotary_embedding_llama-*] (5 cases) @ ttsim WH f6d9256507f",
-    "ttnn.experimental.paged_update_cache": "test_fallbacks.py[test_paged_update_cache-*] (1 cases) @ ttsim WH f6d9256507f",
-    "ttnn.experimental.paged_fill_cache": "test_fallbacks.py[test_paged_fill_cache-*] (1 cases) @ ttsim WH f6d9256507f",
+    "ttnn.linear": "test_fallbacks.py[test_linear-*] (12 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.rms_norm": "test_fallbacks.py[test_rms_norm-*] (8 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.layer_norm": "test_fallbacks.py[test_layer_norm-*] (3 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.add": "test_fallbacks.py[test_add-*] (9 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.multiply": "test_fallbacks.py[test_multiply-*] (3 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.transformer.scaled_dot_product_attention": "test_fallbacks.py[test_scaled_dot_product_attention-*] (2 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.transformer.paged_scaled_dot_product_attention_decode": "test_fallbacks.py[test_paged_scaled_dot_product_attention_decode-*] (1 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.experimental.minimal_matmul": "test_fallbacks.py[test_minimal_matmul-*] (2 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.experimental.nlp_create_qkv_heads": "test_fallbacks.py[test_nlp_create_qkv_heads-*] (2 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.experimental.nlp_create_qkv_heads_decode": "test_fallbacks.py[test_nlp_create_qkv_heads_decode-*] (1 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.experimental.nlp_concat_heads": "test_fallbacks.py[test_nlp_concat_heads-*] (2 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.experimental.nlp_concat_heads_decode": "test_fallbacks.py[test_nlp_concat_heads_decode-*] (1 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.experimental.rotary_embedding_llama": "test_fallbacks.py[test_rotary_embedding_llama-*] (5 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.experimental.paged_update_cache": "test_fallbacks.py[test_paged_update_cache-*] (1 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.experimental.paged_fill_cache": "test_fallbacks.py[test_paged_fill_cache-*] (1 cases) @ ttsim WH 5e83042c98a",
 }
 
 
