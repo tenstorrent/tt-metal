@@ -23,6 +23,9 @@ namespace ckernel {
  * SFPU operations must reinitialize it as needed.
  * On Wormhole, this operation also programs LREG12 and LREG13. Callers must
  * restore those programmable constants before another SFPU operation relies on them.
+ * This operation programs its own dest address mode on every call, so it may follow
+ * another SFPU op's init without a rand_tile_init in the same kernel (the PRNG stream
+ * seeded by an earlier rand_tile_init or ttnn.manual_seed continues).
  *
  * Return value: None
  *
@@ -46,13 +49,5 @@ ALWI void rand_tile_init(uint32_t seed = 0, uint32_t stream_id = 0) {
     constexpr uint32_t stream_seed_multiplier = 0x9E3779B9U;
     MATH(SFPU_UNARY_INIT_FN_ARGS(unused, sfpu::rand_init, (APPROX), seed + stream_id * stream_seed_multiplier));
 }
-
-/**
- * Programs the address mode rand_tile stores under without touching the PRNG seed, so a stream
- * started by an earlier rand_tile_init (e.g. ttnn.manual_seed) continues. Required before every
- * rand_tile that follows another SFPU init in the same kernel, because other inits (topk_tile_init
- * among them) reprogram the same address-mode slot.
- */
-ALWI void rand_tile_addrmod_init() { MATH(SFPU_UNARY_INIT_FN(unused, sfpu::rand_addrmod_init, (APPROX))); }
 
 }  // namespace ckernel
