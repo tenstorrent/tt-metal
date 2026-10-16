@@ -1937,6 +1937,29 @@ TEST(MeshGraphDescriptorTests, InterMeshDifferentTorusAxesAreCompatible) {
     std::filesystem::remove(test_file);
 }
 
+// All four 2D fabric configs (FABRIC_2D_TORUS_XY / _X / _Y / FABRIC_2D) inter-linked in one graph must
+// build a MeshGraph without error and each mesh must resolve to its own declared per-mesh config. This is
+// the CPU guard for the heterogeneous combo validated on BH galaxy (TORUS_XY + TORUS_X + TORUS_Y + 2D
+// route intra- and inter-mesh with 0 failures): all 2D configs share the same packet/channel geometry, so
+// mesh<->torus and every torus-axis pairing is mutually compatible across an inter-mesh link
+// (validate_inter_mesh_fabric_config_compatibility). Uses the same MGD the hardware e2e consumes.
+TEST(MeshGraphDescriptorTests, InterMeshAllFourTwoDConfigsAreCompatible) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path desc_path = std::filesystem::path(tt_metal_home) /
+                                            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/"
+                                            "single_galaxy_per_mesh_config_combo_mesh_graph_descriptor.textproto";
+
+    EXPECT_NO_THROW(
+        tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string()));
+
+    tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string());
+    EXPECT_EQ(mesh_graph.get_fabric_config(MeshId{0}), tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);  // M_XY
+    EXPECT_EQ(mesh_graph.get_fabric_config(MeshId{1}), tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X);   // M_X
+    EXPECT_EQ(mesh_graph.get_fabric_config(MeshId{2}), tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y);   // M_Y
+    EXPECT_EQ(mesh_graph.get_fabric_config(MeshId{3}), tt::tt_fabric::FabricConfig::FABRIC_2D);           // M_2D
+}
+
 TEST(MeshGraphDescriptorTests, AssignZDirectionGraphTopologyInMeshGraph) {
     // Test that assign_z_direction flag from graph topology is properly tracked in MeshGraph
     const std::string text_proto = R"proto(

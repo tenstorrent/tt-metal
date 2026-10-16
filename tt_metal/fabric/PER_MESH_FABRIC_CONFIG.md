@@ -78,6 +78,26 @@ the env config value. The delegate fix makes the whole process consistent.
 The warning fires as designed, e.g. *"Fabric config set in two places: SetFabricConfig requested
 FABRIC_2D_TORUS_XY, but the MGD declares FABRIC_2D_TORUS_Y for mesh 2 … MGD takes precedence."*
 
+#### Characterized out-of-scope limitation — multi-host **4×4** TORUS_X intra-mesh traffic hangs (NOT a per-mesh-config bug)
+A deliberate stress MGD (`single_galaxy_bigmesh_multirank_combo`: a **4×4** TORUS_X mesh split across 2
+host ranks + a 2×2 TORUS_Y + a 2×2 FABRIC_2D, all inter-linked) **hangs**, but the hang is isolated to the
+**multi-host torus data path at scale**, not the per-mesh config logic:
+- With global sync off, ranks 2 & 3 (the single-host 2×2 TORUS_Y and FABRIC_2D meshes) **finish** the
+  intra-mesh neighbor exchange; ranks 0 & 1 (the two halves of the 4×4 TORUS_X mesh) stall at
+  *"Waiting for programs"*.
+- The **identical topology at 2×4** (same TORUS_X, same 1×2 host split, same per-mesh configs) **passes**
+  (row above). The only change is the non-ring LINE dim 2→4 (8→16 chips), i.e. pure scale — so this is a
+  multi-host TORUS_X **routing-plane/placement** issue (`control_plane.cpp:1683` warns *"4 eth channels,
+  but only 2 routing planes available"* on the 4×4 mesh), independent of per-mesh heterogeneous config.
+- With global sync **on**, the test infra aborts earlier in `TestDevice::register_fabric_connection`
+  (*"No active fabric eth channels in direction …"*, `tt_fabric_test_device_setup.cpp:729`) — the global
+  sync pattern picks a wrap direction that does not exist on every node of a heterogeneous+split topology;
+  that is a **test-harness** limitation, also orthogonal to the product.
+
+The per-mesh heterogeneous-config feature this PR delivers is fully proven by the three passing rows above
+(3-mesh, 4-config incl. mesh↔torus, and the 2×4 multi-host split). Fixing multi-host 4×4 torus routing-plane
+allocation is a separate fabric-router effort, tracked outside this PR.
+
 ### The `topology: Mesh` sanity cases are a TEST-HARNESS mismatch, not a fabric bug
 `test_tt_fabric` computes `is_torus_2d_unicast` from the **yaml** `topology` (`tt_fabric_test_device_setup.cpp:482`),
 so `topology: Mesh` routes packets **mesh-style into a torus fabric** → deadlock. A per-mesh-**torus** MGD
@@ -115,8 +135,19 @@ the original `galaxy-fabric-per-mesh-torus-yx` on the common (Mesh-first) sanity
 - **`MeshGraph::validate_inter_mesh_fabric_config_compatibility()`** (`mesh_graph.cpp`): for every declared
   inter-mesh link, asserts the two meshes' resolved configs have the **same routing dimensionality**
   (errors out on a 1D↔2D link instead of corrupting; allows all 2D↔2D incl. mesh↔torus). CPU-level, runs
-  at MGD build; no regression (74/74 MeshGraph tests pass).
+  at MGD build; no regression (MeshGraph tests pass).
 - Plus the existing **1D-multimesh rule** and the new **"config set in two places" warning**.
+
+### CPU regression tests (`test_mesh_graph_descriptor.cpp`, run in `fabric_unit_tests`)
+- **`InterMeshAllFourTwoDConfigsAreCompatible`** (new) — builds the 4-config combo MGD
+  (`single_galaxy_per_mesh_config_combo`, the same file the hardware e2e consumes) and asserts it builds
+  with no throw and each mesh resolves to its own declared config (XY/X/Y/2D). CPU guard for the hardware
+  4-config pass.
+- **`InterMeshDifferentTorusAxesAreCompatible`** — all-2D (TORUS_Y↔TORUS_X) inter-mesh link builds cleanly.
+- **`FabricConfigResolutionMultiMesh` / `…SingleMesh`** — per-mesh resolution precedence (MGD field >
+  process-wide override > derived default) and the **1D-single-mesh-only** rejection on a multi-mesh MGD.
+- The cross-rank env-parity guard is exercised by **`MultiHost.BHDualGalaxyNonUniformFabricEnvAcrossRanksFatal`**
+  (CI, ≥2 ranks) and was validated on the BH galaxy (section above).
 
 ### Inter-mesh mismatch audit — complete (no MGD-reachable mismatch)
 A full audit of every per-process value that must agree across an inter-mesh link (18 values) concluded:
