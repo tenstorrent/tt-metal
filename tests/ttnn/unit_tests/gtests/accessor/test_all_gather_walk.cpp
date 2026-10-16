@@ -1452,3 +1452,38 @@ TEST(AllGatherWalk, ArgTables) {
     static_assert(ga::multicast_writer::ct::tensor_args == 14);
     static_assert(ga::multicast_writer::rt::route_args == 8 && ga::multicast_writer::rt::fabric_args == 20);
 }
+
+// Host-only: the unicast relay rule (gather_rules.hpp relay_read_ok) and the relay predicate, on the nightly
+// alignment cases (BH: DRAM 64 B, L1 16 B; WH: DRAM 32 B).
+TEST(AllGatherWalk, RelayRules) {
+    struct Case {
+        const char* name;
+        uint32_t chunk, out_cpp, out_aligned_page, out_align;
+        bool ok, padded;
+    };
+    const Case cases[] = {
+        // name                               chunk cpp aligned align  ok     padded
+        {"matched_32B_l1_to_dram BH", 32, 1, 64, 64, true, true},
+        {"matched_32B_l1_to_l1", 32, 1, 32, 16, true, false},
+        {"matched_32B_dram_to_dram BH", 64, 1, 64, 64, true, false},  // chunk = the input's aligned page
+        {"split_32B_out_page BH", 32, 1, 64, 64, true, true},
+        {"concat_48B_page BH", 16, 3, 64, 64, false, false},
+        {"concat_48B_page WH", 16, 3, 64, 32, false, false},
+        {"concat 32B L1 -> 128B DRAM BH", 32, 4, 128, 64, false, false},  // packed, offset misaligned
+        {"concat 32B L1 -> 128B DRAM WH", 32, 4, 128, 32, true, false},
+        {"concat 16B L1 -> 64B L1", 16, 4, 64, 16, true, false},
+        {"concat 64B DRAM -> 256B DRAM BH", 64, 4, 256, 64, true, false},
+        {"degenerate chunk > page", 128, 1, 64, 64, false, false},
+    };
+    for (const auto& c : cases) {
+        EXPECT_EQ(relay_read_ok(c.chunk, c.out_cpp, c.out_aligned_page, c.out_align), c.ok) << c.name;
+        EXPECT_EQ(relay_needs_padded_slot(c.chunk, c.out_cpp, c.out_aligned_page), c.padded) << c.name;
+    }
+    // Relaying topologies: a line from 3 devices, a ring from 4 (N / 2 stripes per direction, the first local).
+    EXPECT_FALSE(unicast_relays(2, false));
+    EXPECT_TRUE(unicast_relays(3, false));
+    EXPECT_FALSE(unicast_relays(2, true));
+    EXPECT_FALSE(unicast_relays(3, true));
+    EXPECT_TRUE(unicast_relays(4, true));
+    EXPECT_TRUE(unicast_relays(8, true));
+}

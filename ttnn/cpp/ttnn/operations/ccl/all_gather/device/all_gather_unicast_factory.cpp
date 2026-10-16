@@ -147,10 +147,10 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // The heuristics' keys, in walk pages / bytes (k-independent):
     const uint32_t stripe_pages = geom.chunks_per_stripe;  // walk pages per stripe row
 
-    // Relay reads our own output back into the CB, which is packed at slot stride, so the output's aligned
-    // page must be exactly tiled by chunks.
-    // step 3: geom.relay_ok (and accept the padded-slot case), see require_relay_packed().
-    geom.require_relay_packed();
+    // Relay reads our own output back into the CB, so every chunk's output offset must be NoC-read congruent
+    // with its CB slot (gather_rules.hpp relay_read_ok). route_all_gather only picks unicast where that holds
+    // or nothing is relayed; this is the precondition for any other way in.
+    geom.require_relay_ok(unicast_relays(operation_attributes));
 
     ////////////////////////////////////////////////////////////////
     // Core selection
@@ -337,13 +337,19 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // --- Walk and CB sizing (see WalkGeometry::make) ---
     // k, xfer, run sources and the CB entry are chosen once here and passed to both kernels as CT args.
     const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
+    // The padded slot is not optional here: a one-chunk-per-page output whose aligned page is padded can only be
+    // relayed with slot == out_aligned_page (geom.relay_needs_padded_slot). Forced on always -- it is a no-op
+    // wherever the output's aligned page is the chunk -- so the 2-device / no-relay case walks the same way.
+    // On multicast it stays behind TT_AG_TUNING padded_slot.
+    WalkPolicy walk_policy = WalkPolicy::from(tuning);
+    walk_policy.padded_slot = true;
     const auto walk = WalkGeometry::make(
         geom,
         *input_tensor.buffer(),
         *output_tensor.buffer(),
         packet_size,
         run_cap_bytes,
-        WalkPolicy::from(tuning),
+        walk_policy,
         packets_per_cb_entry,
         cb_depth,
         max_l1_space);

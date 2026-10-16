@@ -1033,9 +1033,10 @@ def test_ag_knobs(mesh_device, shape_id, ag_tuning, device_params, all_gather_to
 
 ####################################################################################
 # Device cases for the walk-v2 step (functional only; every case compares bit-exactly).
-#   concat_relay_32B_*   concat: 32 B chunks into a packed 256 B DRAM output page, relayed by forced
-#                        unicast on the 8-device line. The relay reads 32 B chunks back from DRAM at
-#                        32 B offsets, which breaks the BH NoC read congruence ((l1 ^ dram) & 63 == 0).
+#   concat_relay_32B_*   concat: 32 B chunks into a packed 256 B DRAM output page on the 8-device line.
+#                        A unicast relay would read 32 B chunks back from DRAM at 32 B offsets, which
+#                        breaks the BH NoC read congruence ((l1 ^ dram) & 63 == 0). Defaults route it to
+#                        multicast; forced unicast must TT_FATAL (relay_read_ok).
 #   bfp8_16x32_*         16x32 bfloat8_b tiles (544 B page, 576 B DRAM aligned page) DRAM -> DRAM.
 #   ring_ragged_*        even ring, row-major, 997 pages per device: per-slice chunk counts are not a
 #                        multiple of xfer * stride, so slices end in a ragged unrotated tail.
@@ -1147,11 +1148,34 @@ def _ag_case_persistent_twice(mesh_device, tuning):
         _ag_case_check(persistent, expected, f"TT_AG_TUNING={tuning!r} call {call}")
 
 
-# id -> (device_params, runner)
+def _ag_case_expect_fatal(expect_error, message, runner, *args):
+    with expect_error(RuntimeError, message):
+        runner(*args)
+
+
+# id -> (device_params, runner); runner(mesh_device, expect_error) gets the conftest expect_error fixture
 _AG_CASES = {
+    # Defaults: the relay rule (relay_read_ok) routes this to multicast, which never reads the output back.
+    "concat_relay_32B_default": (
+        _LINE_PARAMS,
+        lambda m, ee: _ag_case_simple(
+            m,
+            "",
+            [1, 1, 4096, 8 * 16],
+            3,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            _L1_INTERLEAVED,
+            _DRAM_INTERLEAVED,
+        ),
+    ),
+    # Forced unicast cannot relay it: routing must TT_FATAL clearly instead of running and corrupting.
     "concat_relay_32B_unicast": (
         _LINE_PARAMS,
-        lambda m: _ag_case_simple(
+        lambda m, ee: _ag_case_expect_fatal(
+            ee,
+            "TT_AG_TUNING factory=unicast: all_gather unicast cannot relay this output",
+            _ag_case_simple,
             m,
             "factory=unicast",
             [1, 1, 4096, 8 * 16],
@@ -1164,7 +1188,7 @@ _AG_CASES = {
     ),
     "bfp8_16x32_default": (
         _RING_PARAMS,
-        lambda m: _ag_case_simple(
+        lambda m, ee: _ag_case_simple(
             m,
             "",
             [1, 1, 256, 8 * 512],
@@ -1178,7 +1202,7 @@ _AG_CASES = {
     ),
     "bfp8_16x32_multicast_padded_slot": (
         _RING_PARAMS,
-        lambda m: _ag_case_simple(
+        lambda m, ee: _ag_case_simple(
             m,
             "factory=multicast,padded_slot=1",
             [1, 1, 256, 8 * 512],
@@ -1199,7 +1223,7 @@ for _page in (1024, 2048):  # 2 KB and 4 KB row-major pages (k=auto gives k=2 at
     ):
         _AG_CASES[f"ring_ragged_p{_page * 2 // 1024}K_{_ag_tuning_id(_tuning)}"] = (
             _RING_PARAMS,
-            lambda m, p=_page, t=_tuning: _ag_case_simple(
+            lambda m, ee, p=_page, t=_tuning: _ag_case_simple(
                 m, t, [8, 1, 997, p], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, _DRAM_INTERLEAVED, _DRAM_INTERLEAVED
             ),
         )
@@ -1207,7 +1231,7 @@ for _bt, _bname in ((ttnn.BufferType.L1, "l1"), (ttnn.BufferType.DRAM, "dram")):
     for _tuning in ("factory=unicast", "factory=multicast"):
         _AG_CASES[f"nd_sharded_{_bname}_{_ag_tuning_id(_tuning)}"] = (
             _LINE_PARAMS,
-            lambda m, bt=_bt, t=_tuning: _ag_case_simple(
+            lambda m, ee, bt=_bt, t=_tuning: _ag_case_simple(
                 m,
                 t,
                 [2, 8, 128, 256],
@@ -1221,14 +1245,10 @@ for _bt, _bname in ((ttnn.BufferType.L1, "l1"), (ttnn.BufferType.DRAM, "dram")):
 for _tuning in ("factory=unicast", "factory=multicast"):
     _AG_CASES[f"persistent_twice_{_ag_tuning_id(_tuning)}"] = (
         _RING_PARAMS,
-        lambda m, t=_tuning: _ag_case_persistent_twice(m, t),
+        lambda m, ee, t=_tuning: _ag_case_persistent_twice(m, t),
     )
 
-_AG_CASE_XFAIL = {
-    "concat_relay_32B_unicast": pytest.mark.xfail(
-        strict=True, raises=AssertionError, reason="relay read congruence; fixed in step 3"
-    ),
-}
+_AG_CASE_XFAIL = {}
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
@@ -1237,8 +1257,74 @@ _AG_CASE_XFAIL = {
     [pytest.param(p, cid, id=cid, marks=_AG_CASE_XFAIL.get(cid, ())) for cid, (p, _) in _AG_CASES.items()],
     indirect=["device_params"],
 )
-def test_ag_cases(mesh_device, device_params, case_id):
-    _AG_CASES[case_id][1](mesh_device)
+def test_ag_cases(mesh_device, device_params, case_id, expect_error):
+    _AG_CASES[case_id][1](mesh_device, expect_error)
+
+
+####################################################################################
+# Unicast relay routing (route_all_gather + relay_read_ok), on 3- and 4-device sub-lines of the
+# 8-device line. Blackhole alignments: DRAM 64 B, L1 16 B (on Wormhole, 32 B DRAM, concat_32B is
+# relay-legal and runs unicast).
+#   matched_32B_l1_to_dram       one chunk per output page, padded page: relayed through the padded CB slot
+#   split_32B_out_page           likewise, split into a DRAM width-sharded output
+#   concat_48B_page              concat into a padded, shared output page: no relay possible
+#   concat_32B_l1_to_128B_dram   packed (128 == 4 x 32) but chunk 1 starts at +32, not a multiple of 64
+# TT_AG_TUNING is read every time the op's params are built, so _ag_tuning_env applies per call.
+####################################################################################
+
+
+def _relay_cases():
+    from tests.nightly.t3000.ccl.test_all_gather import _dram_width_sharded
+
+    # name -> (num_devices, gathered shape, dim, input memory config, output memory config)
+    return {
+        "matched_32B_l1_to_dram": (4, [4, 1, 32768, 16], 0, _L1_INTERLEAVED, _DRAM_INTERLEAVED),
+        "split_32B_out_page": (4, [1, 1, 65536, 32], 2, _L1_INTERLEAVED, _dram_width_sharded(65536, 16, 2)),
+        "concat_48B_page": (3, [1, 1, 32768, 24], 3, _L1_INTERLEAVED, _DRAM_INTERLEAVED),
+        "concat_32B_l1_to_128B_dram": (4, [1, 1, 32768, 64], 3, _L1_INTERLEAVED, _DRAM_INTERLEAVED),
+    }
+
+
+_RELAY_FATAL = "TT_AG_TUNING factory=unicast: all_gather unicast cannot relay this output"
+# (case, TT_AG_TUNING, expected error substring or None)
+_RELAY_MATRIX = [
+    # heuristic: unicast where relay_ok (now including the padded-slot cases), else multicast
+    ("matched_32B_l1_to_dram", "", None),
+    ("split_32B_out_page", "", None),
+    ("concat_48B_page", "", None),
+    ("concat_32B_l1_to_128B_dram", "", None),
+    # forced unicast: legal for the padded one-chunk-per-page outputs; a clear TT_FATAL otherwise
+    ("matched_32B_l1_to_dram", "factory=unicast", None),
+    ("split_32B_out_page", "factory=unicast", None),
+    ("concat_48B_page", "factory=unicast", _RELAY_FATAL),
+    ("concat_32B_l1_to_128B_dram", "factory=unicast", _RELAY_FATAL),
+    # forced multicast: always legal on a straight 1D line
+    ("matched_32B_l1_to_dram", "factory=multicast", None),
+    ("concat_32B_l1_to_128B_dram", "factory=multicast", None),
+    # padded slot + other walk knobs on unicast
+    ("matched_32B_l1_to_dram", "factory=unicast,xfer=segments", None),
+    ("matched_32B_l1_to_dram", "factory=unicast,entry=one_packet", None),
+    ("split_32B_out_page", "factory=unicast,rotation=absolute_dir_stagger", None),
+]
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", [_LINE_PARAMS], indirect=True, ids=["line"])
+@pytest.mark.parametrize(
+    "case, ag_tuning, error",
+    _RELAY_MATRIX,
+    ids=[f"{c}-{_ag_tuning_id(t)}" for c, t, _ in _RELAY_MATRIX],
+)
+def test_ag_relay_routing(mesh_device, device_params, case, ag_tuning, error, expect_error):
+    if ttnn.get_arch_name() != "blackhole":
+        pytest.skip("expectations assume Blackhole's 64 B DRAM read alignment")
+    num_devices, full_shape, dim, in_mc, out_mc = _relay_cases()[case]
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(1, num_devices))
+    args = (submesh, ag_tuning, full_shape, dim, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, in_mc, out_mc)
+    if error is None:
+        _ag_case_simple(*args)
+    else:
+        _ag_case_expect_fatal(expect_error, error, _ag_case_simple, *args)
 
 
 ####################################################################################

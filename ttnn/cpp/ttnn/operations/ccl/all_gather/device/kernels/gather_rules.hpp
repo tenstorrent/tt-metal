@@ -261,3 +261,46 @@ constexpr uint32_t antipode_rot_b(
     uint32_t count, uint32_t h, uint32_t stride, uint32_t xfer, uint32_t k, uint32_t rot_f, uint32_t rot_b) {
     return antipode_split_ok(count, h, stride, xfer, k, rot_f, rot_b) ? rot_b : rot_f;
 }
+
+////////////////////////////////////////////////////////////////
+// Relay (unicast) -- host-only consumers, kept here so the rule is one integer function the gtest can sweep
+////////////////////////////////////////////////////////////////
+
+// Unicast relays by reading back, from this device's own output, what upstream delivered there, into CB
+// slots. A NoC read needs its source and destination congruent mod the source memory's read alignment
+// (`out_read_alignment`: hal DRAM alignment, 64 B Blackhole / 32 B Wormhole, or hal L1 alignment, 16 B). The
+// CB base is DRAM-aligned (program.cpp allocates CBs at the DRAM alignment) and every slot sits at a multiple
+// of the slot size, so the rule is about the output offset of a chunk versus its slot offset:
+//
+//   out_cpp == 1 -- every chunk is its own output page, which starts aligned. With slot == out_aligned_page
+//                   (the padded slot: relay_needs_padded_slot) every slot is aligned too, and the pad bytes
+//                   ride into the output page's own pad. Legal whenever the chunk fits the page.
+//   out_cpp  > 1 -- (Concat) chunk j sits at j * chunk inside a page *shared with other devices*, so the slot
+//                   cannot be widened (a whole-page relay would clobber a neighbour's chunks): the CB stays at
+//                   chunk stride, which needs the page exactly tiled by chunks (`packed`) and every chunk
+//                   offset aligned (chunk % out_read_alignment == 0).
+//
+// `chunk` is the k = 1 walk page: a k > 1 chunk is cut with choose_k / k_is_valid against max(in, out read
+// alignment), so it stays aligned whenever the walk page is.
+constexpr bool relay_read_ok(uint32_t chunk, uint32_t out_cpp, uint32_t out_aligned_page, uint32_t out_read_alignment) {
+    if (chunk == 0 || out_read_alignment == 0) {
+        return false;
+    }
+    if (out_cpp == 1) {
+        return out_aligned_page >= chunk;
+    }
+    return out_aligned_page == out_cpp * chunk && chunk % out_read_alignment == 0;
+}
+
+// The padded slot the relay needs (and the only case it changes anything): one chunk per output page, and
+// that page is padded past the chunk.
+constexpr bool relay_needs_padded_slot(uint32_t chunk, uint32_t out_cpp, uint32_t out_aligned_page) {
+    return out_cpp == 1 && out_aligned_page > chunk;
+}
+
+// Whether any unicast device reads its output back at all: the most stripes one direction sends is N / 2 on a
+// ring and N - 1 on a line, and only stripes after the first are relayed. With no relay (2 devices; a 3-device
+// ring) the relay rule above does not apply.
+constexpr bool unicast_relays(uint32_t num_devices, bool is_ring) {
+    return (is_ring ? num_devices / 2 : (num_devices > 0 ? num_devices - 1 : 0)) > 1;
+}

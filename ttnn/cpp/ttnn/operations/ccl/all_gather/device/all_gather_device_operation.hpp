@@ -41,6 +41,18 @@ tt::tt_metal::TensorSpec compute_output_specs_helper(
     uint32_t num_devices,
     const std::optional<MemoryConfig>& memory_config);
 
+// Builds the op's params (fabric/topology queries, the output spec, TT_AG_TUNING) exactly as ttnn::prim::all_gather
+// does. ttnn::all_gather() calls it once to route (route_all_gather) and then launches with the same params.
+// Builds the output spec: run gather_dim_padding_reason() first (see all_gather.cpp).
+std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
+    const Tensor& input_tensor,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor,
+    int32_t dim,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<CoreRangeSet>& sub_core_grid);
+
 }  // namespace ttnn::operations::ccl
 
 namespace ttnn::prim {

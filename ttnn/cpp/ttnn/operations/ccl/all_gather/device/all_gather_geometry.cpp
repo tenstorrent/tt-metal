@@ -5,6 +5,7 @@
 #include "all_gather_geometry.hpp"
 
 #include <algorithm>
+#include <fmt/format.h>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
@@ -20,6 +21,51 @@ namespace {
 
 uint32_t ag_read_alignment(bool is_dram) {
     return is_dram ? tt::tt_metal::hal::get_dram_alignment() : tt::tt_metal::hal::get_l1_alignment();
+}
+
+// Every local device must report the mesh allocator's bank count for `type`. The host derives the interleaved
+// walk stride once (contiguous_page_stride: the mesh allocator's count) and hands the same CT value to every
+// device's kernels, so a device whose own NUM_*_BANKS differed would walk its pages with a stride that is not
+// its contiguity: its cross-page runs would not be linear (no release fallback) and the debug stride ASSERT
+// would fire. Unicast additionally relies on every device emitting the same seqno order.
+// Only DRAM and L1 have a kernel NUM_*_BANKS define. Cost: one allocator query per local device per call.
+void require_uniform_bank_counts(tt::tt_metal::distributed::MeshDevice* mesh_device, tt::tt_metal::BufferType type) {
+    if (mesh_device == nullptr || (type != tt::tt_metal::BufferType::DRAM && type != tt::tt_metal::BufferType::L1)) {
+        return;
+    }
+    const uint32_t mesh_banks = mesh_device->allocator()->get_num_banks(type);
+    for (const auto* device : mesh_device->get_devices()) {
+        const uint32_t banks = device->allocator()->get_num_banks(type);
+        TT_FATAL(
+            banks == mesh_banks,
+            "all_gather: device {} has {} {} banks but the mesh allocator (which sets the walk stride every device "
+            "uses) has {}. all_gather needs the same bank count on every device of the mesh.",
+            device->id(),
+            banks,
+            type == tt::tt_metal::BufferType::DRAM ? "DRAM" : "L1",
+            mesh_banks);
+    }
+}
+
+// The user-facing explanation of a failed relay_read_ok.
+std::string relay_problem(const GatherGeometry& g) {
+    if (g.out_chunks_per_page > 1 && g.out_aligned_page != g.out_chunks_per_page * g.chunk_size) {
+        return fmt::format(
+            "the output page ({} B of content, {} B aligned) is shared by {} chunks of {} B and is padded, so a "
+            "chunk-stride CB cannot mirror it (a padded slot would clobber the other devices' chunks of the page)",
+            g.out_page,
+            g.out_aligned_page,
+            g.out_chunks_per_page,
+            g.chunk_size);
+    }
+    return fmt::format(
+        "the output page ({} B) holds {} chunks of {} B, and a {} B chunk offset is not a multiple of the output "
+        "memory's {} B NoC read alignment, so reading a chunk back out of the output would be misaligned",
+        g.out_aligned_page,
+        g.out_chunks_per_page,
+        g.chunk_size,
+        g.chunk_size,
+        g.out_read_alignment);
 }
 
 }  // namespace
@@ -41,6 +87,8 @@ GatherGeometry GatherGeometry::make(
     g.out_read_alignment = ag_read_alignment(out_is_dram);
     g.out_aligned_page = tt::align(g.out_page, g.out_read_alignment);
     g.in_read_alignment = ag_read_alignment(in_buf.is_dram());
+    require_uniform_bank_counts(input.device(), in_buf.buffer_type());
+    require_uniform_bank_counts(input.device(), output_spec.memory_config().buffer_type());
 
     // --- Copy mode ---
     // The kernel always reads whole *aligned* input pages into L1 (required by the input's NoC read alignment,
@@ -58,7 +106,8 @@ GatherGeometry GatherGeometry::make(
 
     // --- Predicates ---
     g.out_packed = g.out_aligned_page == g.out_chunks_per_page * g.chunk_size;
-    g.relay_ok = g.out_packed && (!out_is_dram || g.chunk_size % g.out_read_alignment == 0);
+    g.relay_ok = relay_read_ok(g.chunk_size, g.out_chunks_per_page, g.out_aligned_page, g.out_read_alignment);
+    g.relay_needs_padded_slot = ::relay_needs_padded_slot(g.chunk_size, g.out_chunks_per_page, g.out_aligned_page);
 
     // --- Walk-page count ---
     g.num_input_pages = in_buf.num_pages();
@@ -99,21 +148,15 @@ GatherGeometry GatherGeometry::make(
     return g;
 }
 
-void GatherGeometry::require_relay_packed() const {
-    // Relay reads our own output back into the CB, which is packed at chunk stride, so the output's aligned page
-    // must be exactly tiled by chunks. select_program_factory routes these away; reaching here means unicast was
-    // forced (2D bent axis, neighbour-exchange fabric, or TT_AG_TUNING factory=unicast).
-    // step 3: check relay_ok instead (also rejects a DRAM output whose chunk misses the DRAM read alignment), and
-    // accept a padded output under the padded-slot policy (slot == out_aligned_page tiles it exactly).
+void GatherGeometry::require_relay_ok(bool relays) const {
+    // route_all_gather never picks unicast for !relay_ok on a relaying topology (it routes to multicast, or
+    // TT_FATALs where the topology leaves no alternative), so reaching this means the factory was chosen by
+    // something other than route_all_gather.
     TT_FATAL(
-        out_packed,
-        "all_gather unicast cannot relay a padded output page: {} B of content in a {} B page holding {} chunk(s) of "
-        "{} B. Use a row size that is a multiple of the output's memory alignment, or the same buffer type on both "
-        "sides.",
-        out_page,
-        out_aligned_page,
-        out_chunks_per_page,
-        chunk_size);
+        relay_ok || !relays,
+        "all_gather unicast cannot relay this output: {}. Use a row size that is a multiple of the output memory's "
+        "alignment, or the same buffer type on both sides.",
+        relay_problem(*this));
 }
 
 Slice GatherGeometry::slice_of(uint32_t slice_idx, uint32_t num_slices) const {
@@ -208,8 +251,7 @@ WalkGeometry WalkGeometry::make(
     // the CB steps like the output and output runs may cross pages (pad included). A run may merge n chunks only
     // where the L1 slot stride equals the memory stride: true for this output by construction, and for the input
     // only when its aligned page is the slot (see in_runs below).
-    const bool padded_slot =
-        policy.padded_slot && geom.out_chunks_per_page == 1 && geom.out_aligned_page > geom.chunk_size;
+    const bool padded_slot = policy.padded_slot && geom.relay_needs_padded_slot;
 
     // --- k ---
     // Only Matched with unpadded pages on both sides: a padded page cannot be cut into aligned chunks that tile
@@ -373,6 +415,244 @@ std::vector<tt::tt_metal::GlobalSemaphore> create_semaphores_and_sync(
     tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
     return out;
+}
+
+////////////////////////////////////////////////////////////////
+// Routing
+////////////////////////////////////////////////////////////////
+
+std::optional<std::string> gather_dim_padding_reason(const Tensor& input, int32_t dim_from_end) {
+    // Gather-dim padding would need the output's gather-dim extent to be num_devices * the input's padded
+    // extent, but it is num_devices * the logical one. dim_from_end indexes both shapes (see
+    // AllGatherParams::dim_from_end).
+    const auto& logical_shape = input.logical_shape();
+    const auto& padded_shape = input.padded_shape();
+    if (logical_shape[dim_from_end] != padded_shape[dim_from_end]) {
+        return fmt::format(
+            "gather dim {} is padded from {} to {}; size must be a multiple of the tile/shard extent",
+            logical_shape.get_normalized_index(dim_from_end),
+            logical_shape[dim_from_end],
+            padded_shape[dim_from_end]);
+    }
+    return std::nullopt;
+}
+
+namespace {
+
+// Native implementation only handles cases where every output write is an aligned NoC write into the output
+// buffer, computed with index math alone -- the bytes are never rearranged on-device first. If it needs a
+// transpose, untilize, re-pad, or re-shard ("massaged op"), it goes to composite.
+// (Moved verbatim from all_gather.cpp use_composite_all_gather, minus the padding check above and the spec
+// build: the caller passes the spec, and num_devices is AllGatherParams::num_devices, the count that spec was
+// built with.)
+std::optional<std::string> layout_reason(
+    const Tensor& input, int32_t dim_from_end, uint32_t num_devices, const tt::tt_metal::TensorSpec& output_spec) {
+    if (auto padded = gather_dim_padding_reason(input, dim_from_end)) {
+        return padded;
+    }
+
+    // The kernel walks the output page grid as the input's with only the gather dim scaled, so any other
+    // difference breaks it -- e.g. an output shard width that doesn't divide the row, which pads the last dim.
+    auto gathered_padded_shape = input.padded_shape();
+    gathered_padded_shape[dim_from_end] *= num_devices;
+    if (output_spec.padded_shape() != gathered_padded_shape) {
+        return fmt::format(
+            "output stored as {} instead of {}; its shard shape must divide the gathered shape evenly",
+            output_spec.padded_shape(),
+            gathered_padded_shape);
+    }
+
+    // Page sizes are UNALIGNED (content) sizes, so a matched-but-padded gather reads as matched, not concat.
+    // The page checks below are no-ops for tile, whose pages are always aligned and equally sized on both sides.
+    const uint32_t input_page_size = input.buffer()->page_size();
+    const uint32_t input_aligned_page_size = input.buffer()->aligned_page_size();
+    const uint32_t output_page_size = output_spec.compute_page_size_bytes();
+
+    // The factory derives chunks-per-page (concat) and split-factor (split) with a truncating division, so a
+    // non-integer page ratio would silently mis-place every write.
+    if (std::max(input_page_size, output_page_size) % std::min(input_page_size, output_page_size) != 0) {
+        return fmt::format(
+            "input and output rows are {} B and {} B; one shard width must be a whole multiple of the other",
+            input_page_size,
+            output_page_size);
+    }
+    // concat and split move data at content granularity, so the input page must have no padding.
+    if (input_page_size != output_page_size && input_page_size != input_aligned_page_size) {
+        return fmt::format(
+            "input rows ({} B) are padded to the {} B memory alignment; resharding needs unpadded rows",
+            input_page_size,
+            input.buffer()->alignment());
+    }
+    // NoC write alignment (NOC_{L1,DRAM}_WRITE_ALIGNMENT_BYTES): 16 B on Wormhole/Blackhole, 1 B on Quasar.
+    // Ideally this should be queried (Hal::get_write_alignment(HalMemType) is currently unreachable from TTNN).
+    constexpr uint32_t noc_write_alignment = 16;
+    // Split moves output-row sized chunks, written to the output and read at those offsets inside an input
+    // page, so the row must suit the write alignment and the input's own (DRAM reads need 32/64 B). With that,
+    // a padded CB slot (relay, out_cpp == 1) is also congruent with every input chunk offset: a slot is
+    // padded only when the output alignment exceeds the chunk's, so it is a multiple of the input's.
+    const uint32_t split_chunk_alignment = std::max(noc_write_alignment, input.buffer()->alignment());
+    if (input_page_size > output_page_size && output_page_size % split_chunk_alignment != 0) {
+        return fmt::format(
+            "output is sharded finer than the input; its rows ({} B) must be a multiple of {} B",
+            output_page_size,
+            split_chunk_alignment);
+    }
+    // matched and concat write a whole *aligned* input page into each output page slot, so the slot must be at
+    // least that large. They differ only across memories with unequal alignments.
+    const uint32_t output_aligned_page_size =
+        tt::align(output_page_size, ag_read_alignment(output_spec.memory_config().is_dram()));
+    if (input_page_size <= output_page_size && output_aligned_page_size < input_aligned_page_size) {
+        return fmt::format(
+            "input rows pad to {} B but the output reserves {} B; use the same buffer type, or a row size that is a "
+            "multiple of both DRAM and L1 alignments",
+            input_aligned_page_size,
+            output_aligned_page_size);
+    }
+    return std::nullopt;
+}
+
+// Per-arch heuristic (no limitation applies): does unicast beat multicast here?
+bool heuristic_prefers_unicast(const AllGatherParams& args, const Tensor& input, const tt::tt_metal::TensorSpec& spec) {
+    const uint32_t axis = args.get_1d_axis();
+    const bool is_ring = tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis]);
+    // Packed bytes of the gathered output crossing one link.
+    const uint64_t link_bytes = per_link_bytes(spec, args.axis_num_links[axis]);
+
+    switch (input.device()->arch()) {
+        case tt::ARCH::WORMHOLE_B0: {
+            // Multicast's packets are copied onward by the fabric; unicast re-reads and re-sends at every hop,
+            // but its relay splits the sending across devices. So hop count decides, and device count sets hop
+            // count -- non-monotonically:
+            //   ring       always multicast; the fabric does the relay for free.
+            //   2 devices  one hop, so unicast never relays while multicast still pays its barrier fan-in and
+            //              packet setup.
+            //   3-6        multicast, its edge shrinking as N grows.
+            //   7+         near tie, so size decides: unicast's split sending pays once the link saturates.
+            // Calibrated on T3000 at 2-8 devices; the shrinking-edge trend makes the size test the safer
+            // extrapolation above 8.
+            if (is_ring) {
+                return false;
+            }
+            if (args.num_devices <= 2) {
+                return true;
+            }
+            if (args.num_devices <= 6) {
+                return false;
+            }
+            return link_bytes >= 3'000'000;
+        }
+        case tt::ARCH::BLACKHOLE: {
+            // Multicast buys the hops unicast's store-and-forward relay must pay (N/2 on a ring, N-1 on a
+            // line), so the crossover moves sharply with device count: at 4 devices a ring is 2 hops and
+            // unicast wins outright; at 8, multicast takes a wide band at the small end. Neither page size nor
+            // stripe length moves it.
+            // Linear in device count is a two-point fit (4 and 8 devices), not a law: re-measure before
+            // trusting it beyond 8. Both thresholds floor at zero, which is also right for the 2- and 3-device
+            // cases they extrapolate to -- one or two hops of relay is never worth a multicast.
+            const int64_t dev = static_cast<int64_t>(args.num_devices);
+            const int64_t threshold_kb = std::max<int64_t>(
+                0,
+                is_ring ? 320 * (dev / 2 - 2)      // 4 dev -> 0,      8 dev -> 640 KB
+                        : 384 + 544 * (dev - 4));  // 4 dev -> 384 KB, 8 dev -> 2560 KB
+            return link_bytes >= static_cast<uint64_t>(threshold_kb) * 1024u;
+        }
+        default: return false;  // uncalibrated arch
+    }
+}
+
+}  // namespace
+
+bool unicast_relays(const AllGatherParams& args) {
+    const uint32_t axis = args.get_1d_axis();
+    return ::unicast_relays(args.num_devices, tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis]));
+}
+
+RouteDecision route_all_gather(
+    const AllGatherParams& args, const Tensor& input, const tt::tt_metal::TensorSpec& output_spec) {
+    // 1. Layout: nothing native can address it. Judged on args.output_spec (built from the persistent output's
+    // memory config when there is one), NOT on the persistent tensor's own spec: a persistent output of the wrong
+    // shape/dtype must reach validate_on_program_cache_miss and its specific errors, not be diverted to composite.
+    if (auto reason = layout_reason(input, args.dim_from_end, args.num_devices, args.output_spec)) {
+        return {GatherRoute::Composite, std::move(*reason)};
+    }
+
+    // From here the native kernels can address the tensors; the remaining question is unicast vs multicast.
+    // The relay rule needs the geometry, built only when unicast is still a candidate.
+    const bool true_2d = args.is_true_2d();
+    auto relay_fine = [&]() -> std::pair<bool, std::string> {
+        if (!unicast_relays(args)) {
+            return {true, {}};  // no device reads its output back
+        }
+        const auto geom = GatherGeometry::make(input, output_spec, args.dim_from_end);
+        return {geom.relay_ok, geom.relay_ok ? std::string{} : relay_problem(geom)};
+    };
+
+    // 2. TEST HOOK -- remove before merge. A forced factory still has to respect the topology limitations, and
+    // a forced unicast the relay rule: it forces, so it fails loudly instead of rerouting.
+    args.tuning.require_only_wired_keys();
+    if (args.tuning.force_factory.has_value()) {
+        if (*args.tuning.force_factory == AllGatherAlgorithm::Unicast) {
+            TT_FATAL(
+                !true_2d, "TT_AG_TUNING factory=unicast: the unicast algorithm does not support true 2D topologies");
+            const auto [ok, problem] = relay_fine();
+            TT_FATAL(
+                ok,
+                "TT_AG_TUNING factory=unicast: all_gather unicast cannot relay this output: {}. Without the override "
+                "this shape routes to multicast.",
+                problem);
+            return {GatherRoute::Unicast, "TT_AG_TUNING factory=unicast"};
+        }
+        TT_FATAL(
+            true_2d || !tt::tt_fabric::is_2d_fabric_config(args.fabric_config) ||
+                args.axis_is_straight[args.get_1d_axis()],
+            "TT_AG_TUNING factory=multicast: multicast cannot handle a 2D topology view that bends the axis");
+        TT_FATAL(
+            args.fabric_config != tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE,
+            "TT_AG_TUNING factory=multicast: NeighborExchange fabric only permits 1-hop unicast");
+        return {GatherRoute::Multicast, "TT_AG_TUNING factory=multicast"};
+    }
+
+    // 3. Topology limitations.
+    if (true_2d) {
+        // Limitation: Unicast algorithm currently does not support true 2D topologies
+        return {GatherRoute::Multicast, "true 2D topology (unicast unsupported)"};
+    }
+    const char* unicast_only = nullptr;
+    if (tt::tt_fabric::is_2d_fabric_config(args.fabric_config) && !args.axis_is_straight[args.get_1d_axis()]) {
+        // Limitation: Multicast cannot handle 2D topology reshapes/views that bend an axis
+        unicast_only = "a 2D topology view that bends the gather axis (multicast cannot follow it)";
+    } else if (args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) {
+        // Limitation: NeighborExchange only permits 1-hop unicast
+        unicast_only = "FABRIC_1D_NEIGHBOR_EXCHANGE (only 1-hop unicast is permitted)";
+    }
+    if (unicast_only != nullptr) {
+        const auto [ok, problem] = relay_fine();
+        // No fallback exists here. The composite path is all_broadcast + concat, and all_broadcast line-
+        // multicasts every device's input over N-1 hops on a line (ceil((N-1)/2) on a ring) -- exactly what
+        // these topologies forbid -- while !ok implies the unicast relay is in play, i.e. N >= 3 on a line or
+        // N >= 4 on a ring, so the composite would need multi-hop multicast too. Fail clearly instead of
+        // handing composite a route it cannot take.
+        TT_FATAL(
+            ok,
+            "all_gather cannot run on {}: the only algorithm it permits is unicast, and unicast cannot relay this "
+            "output: {}. The composite fallback needs multi-hop multicast, which this topology does not permit "
+            "either. Use a row size that is a multiple of the output memory's alignment, or the same buffer type "
+            "on both sides.",
+            unicast_only,
+            problem);
+        return {GatherRoute::Unicast, unicast_only};
+    }
+
+    // 4. Heuristic, then the relay rule: unicast relays by reading its own output back into the CB, and that
+    // read must be NoC-read aligned (relay_read_ok). Multicast never reads the output.
+    if (!heuristic_prefers_unicast(args, input, output_spec)) {
+        return {GatherRoute::Multicast, "heuristic"};
+    }
+    const auto [ok, problem] = relay_fine();
+    if (!ok) {
+        return {GatherRoute::Multicast, fmt::format("heuristic chose unicast, but {}", problem)};
+    }
+    return {GatherRoute::Unicast, "heuristic"};
 }
 
 }  // namespace ttnn::operations::ccl

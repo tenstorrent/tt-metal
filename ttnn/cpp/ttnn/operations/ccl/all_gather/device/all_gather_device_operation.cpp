@@ -100,8 +100,9 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
 
     // NOTE: implementation-specific constraints (row-major page alignment, tile
     // padding on the gather dim, input/output page-size ratios, concat vs multi-shard,
-    // etc.) are not checked here. use_composite_all_gather() checks those and routes
-    // to composite path if needed.
+    // the unicast relay rule, etc.) are not checked here. route_all_gather()
+    // (all_gather_geometry.hpp) checks those; ttnn::all_gather() routes to the
+    // composite path on them, and select_program_factory() TT_FATALs on them.
 }
 
 AllGatherDeviceOperation::spec_return_value_t AllGatherDeviceOperation::compute_output_specs(
@@ -241,111 +242,26 @@ AllGatherDeviceOperation::create_op_performance_model(
 
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
-    // TEST HOOK — remove before merge. A forced factory still has to respect the topology limitations below.
-    args.tuning.require_only_wired_keys();
-    if (args.tuning.force_factory.has_value()) {
-        const bool force_unicast = *args.tuning.force_factory == AllGatherAlgorithm::Unicast;
-        if (force_unicast) {
-            TT_FATAL(
-                !args.is_true_2d(),
-                "TT_AG_TUNING factory=unicast: the unicast algorithm does not support true 2D topologies");
-        } else {
-            TT_FATAL(
-                args.is_true_2d() || !tt::tt_fabric::is_2d_fabric_config(args.fabric_config) ||
-                    args.axis_is_straight[args.get_1d_axis()],
-                "TT_AG_TUNING factory=multicast: multicast cannot handle a 2D topology view that bends the axis");
-            TT_FATAL(
-                args.fabric_config != tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE,
-                "TT_AG_TUNING factory=multicast: NeighborExchange fabric only permits 1-hop unicast");
-        }
-        return force_unicast ? program_factory_t{AllGatherUnicastFactory{}}
-                             : program_factory_t{AllGatherMulticastFactory{}};
-    }
-
-    // Pick the kernel algorithm based on limitations and heuristics
-    bool use_unicast = false;
-    if (args.is_true_2d()) {
-        // Limitation: Unicast algorithm currently does not support true 2D topologies
-        use_unicast = false;
-        // NOLINTNEXTLINE(bugprone-branch-clone) - one branch per limitation, kept separate to document each
-    } else if (tt::tt_fabric::is_2d_fabric_config(args.fabric_config) && !args.axis_is_straight[args.get_1d_axis()]) {
-        // Limitation: Multicast cannot handle 2D topology reshapes/views that bend an axis
-        use_unicast = true;
-    } else if (args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) {
-        // Limitation: NeighborExchange only permits 1-hop unicast
-        use_unicast = true;
-    } else {
-        // Heuristics: Decide between multicast or unicast algorithm
-        const auto& input_tensor = tensor_args.input_tensor;
-        const uint32_t axis = args.get_1d_axis();
-        const bool is_ring = tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis]);
-        // The output's spec as the factories will see it: a persistent output's own spec (its sharding may
-        // differ from args.output_spec -- validate does not compare shard specs), else the one we would create.
-        // Both per_link_bytes and the geometry below derive from it, as they do in the factories.
-        const tt::tt_metal::TensorSpec& out_spec = tensor_args.persistent_output_tensor.has_value()
-                                                       ? tensor_args.persistent_output_tensor->tensor_spec()
-                                                       : args.output_spec;
-        // Packed bytes of the gathered output crossing one link.
-        const uint64_t per_link_bytes = ::ttnn::operations::ccl::per_link_bytes(out_spec, args.axis_num_links[axis]);
-
-        switch (input_tensor.device()->arch()) {
-            case tt::ARCH::WORMHOLE_B0: {
-                // Multicast's packets are copied onward by the fabric; unicast re-reads and re-sends at
-                // every hop, but its relay splits the sending across devices. So hop count decides, and
-                // device count sets hop count -- non-monotonically:
-                //   ring       always multicast; the fabric does the relay for free.
-                //   2 devices  one hop, so unicast never relays while multicast still pays its barrier
-                //              fan-in and packet setup.
-                //   3-6        multicast, its edge shrinking as N grows.
-                //   7+         near tie, so size decides: unicast's split sending pays once the link
-                //              saturates.
-                // Calibrated on T3000 at 2-8 devices; the shrinking-edge trend makes the size test the
-                // safer extrapolation above 8.
-                if (is_ring) {
-                    use_unicast = false;
-                } else if (args.num_devices <= 2) {
-                    use_unicast = true;
-                } else if (args.num_devices <= 6) {
-                    use_unicast = false;
-                } else {
-                    use_unicast = per_link_bytes >= 3'000'000;
-                }
-                break;
-            }
-            case tt::ARCH::BLACKHOLE: {
-                // Multicast buys the hops unicast's store-and-forward relay must pay (N/2 on a ring,
-                // N-1 on a line), so the crossover moves sharply with device count: at 4 devices a ring
-                // is 2 hops and unicast wins outright; at 8, multicast takes a wide band at the small
-                // end. Neither page size nor stripe length moves it.
-                // Linear in device count is a two-point fit (4 and 8 devices), not a law: re-measure
-                // before trusting it beyond 8. Both thresholds floor at zero, which is also right for
-                // the 2- and 3-device cases they extrapolate to -- one or two hops of relay is never
-                // worth a multicast.
-                const int64_t dev = static_cast<int64_t>(args.num_devices);
-                const int64_t threshold_kb = std::max<int64_t>(
-                    0,
-                    is_ring ? 320 * (dev / 2 - 2)      // 4 dev -> 0,      8 dev -> 640 KB
-                            : 384 + 544 * (dev - 4));  // 4 dev -> 384 KB, 8 dev -> 2560 KB
-                use_unicast = per_link_bytes >= static_cast<uint64_t>(threshold_kb) * 1024u;
-                break;
-            }
-            default: break;  // uncalibrated arch
-        }
-
-        // Limitation: unicast relays by reading its own output back into a CB packed at chunk
-        // stride, and a NoC read needs local and remote congruent mod the output's read alignment
-        // (64 B DRAM on Blackhole, 32 B on Wormhole). So an aligned output page must be exactly
-        // tiled by chunks. Multicast never reads the output.
-        // Heuristic branch only: the branches above have no alternative, and the unicast factory
-        // TT_FATALs there instead.
-        // step 3: route on relay_ok instead (also sends a DRAM output whose chunk misses the DRAM read alignment to
-        // multicast), together with require_relay_packed().
-        if (use_unicast) {
-            use_unicast = GatherGeometry::make(input_tensor, out_spec, args.dim_from_end).out_packed;
-        }
-    }
-
-    return use_unicast ? program_factory_t{AllGatherUnicastFactory{}} : program_factory_t{AllGatherMulticastFactory{}};
+    // The output's spec as the factories will see it: a persistent output's own spec (its sharding may differ
+    // from args.output_spec -- validate does not compare shard specs), else the one we would create.
+    // ttnn::all_gather() routes with exactly this spec and these params before launching, so the decision here
+    // is the one it already made (route_all_gather is the only place it is made).
+    const tt::tt_metal::TensorSpec& out_spec = tensor_args.persistent_output_tensor.has_value()
+                                                   ? tensor_args.persistent_output_tensor->tensor_spec()
+                                                   : args.output_spec;
+    const auto decision = route_all_gather(args, tensor_args.input_tensor, out_spec);
+    log_debug(
+        tt::LogOp,
+        "all_gather route: {} ({})",
+        decision.route == GatherRoute::Unicast ? "unicast" : "multicast",
+        decision.reason);
+    // Only reachable through ttnn::prim::all_gather called directly: ttnn::all_gather() takes composite itself.
+    TT_FATAL(
+        decision.route != GatherRoute::Composite,
+        "all_gather cannot run natively: {}. Call ttnn::all_gather, which falls back to the composite path.",
+        decision.reason);
+    return decision.route == GatherRoute::Unicast ? program_factory_t{AllGatherUnicastFactory{}}
+                                                  : program_factory_t{AllGatherMulticastFactory{}};
 }
 
 tt::tt_metal::TensorSpec compute_output_specs_helper(

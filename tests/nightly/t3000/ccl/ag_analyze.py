@@ -34,10 +34,17 @@ ATTRIBUTES are listed in a NOTE). verdict = "noise" when |delta| < --min-delta (
 only captures within-run variation, run-to-run drift is larger) OR the two bootstrap 95% CIs of the
 median overlap, else "B faster" / "B slower".
 
+--vs-default A/Bs tunings WITHIN one run (e.g. test_ag_knobs, which runs several TT_AG_TUNING variants
+of the same shapes into one report): per (config, pkt) the all-defaults row ('-') is A and every other
+tuning is B, with the same verdict rule. --vs TUNING uses that compact tuning string (exact match, as
+shown in the `tuning` column) as A instead. A summary per B tuning follows: configs faster / slower /
+noise and the geometric-mean delta over the non-noise rows.
+
 Usage:
   ag_analyze.py [REPORT_DIR_OR_CSV ...] [--warmup N] [--devices N] [--csv OUT]
                 [--link-gbps G] [--aiclk-mhz F] [--num-cores C]
   ag_analyze.py --compare A B [--bootstrap N] [--min-delta PCT]   (A/B: dirs or CSVs)
+  ag_analyze.py [REPORT_DIR_OR_CSV ...] --vs-default [--vs TUNING] [--min-delta PCT] [--csv OUT]
 """
 
 from __future__ import annotations
@@ -92,12 +99,15 @@ OUT_COLUMNS = [
 # (possibly namespace-qualified; the profiler turns ',' into ';'). Field -> TT_AG_TUNING key, in
 # Tuning::attribute_names order (ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_tuning.hpp).
 TUNING_FIELDS = {
-    "force_factory": "factory", "rotation": "rotation", "entry_policy": "entry", "padded_slot": "padded_slot",
+    "force_factory": "factory", "walk_k": "k", "xfer_policy": "xfer", "rotation": "rotation", "entry_policy": "entry", "padded_slot": "padded_slot",
     "run_cap_bytes": "run_cap", "workers_per_dir": "workers", "signals_per_stripe": "signals",
     "mcast_cb_depth": "mcast_cb_depth", "packet_size_override": "packet",
 }  # fmt: skip
 # unset optionals, rotation None, entry Legacy, padded_slot 0
 TUNING_DEFAULTS = {"nullopt", "none", "legacy", "0", "false"}
+# fields whose default is not in TUNING_DEFAULTS, and per-field value spellings (walk_k: 1 = default, 0 = auto)
+TUNING_FIELD_DEFAULTS = {"walk_k": {"1"}}
+TUNING_FIELD_VALUES = {"walk_k": {"0": "auto"}}
 
 
 def compact_tuning(raw: str | None) -> str:
@@ -116,7 +126,10 @@ def compact_tuning(raw: str | None) -> str:
         v = v.strip().split("::")[-1]
         v = re.sub(r"(?<!^)(?=[A-Z])", "_", v).lower()  # AbsoluteDirStagger -> absolute_dir_stagger
         v = {"true": "1"}.get(v, v)
-        if v not in TUNING_DEFAULTS:
+        if v in TUNING_FIELD_DEFAULTS.get(k, ()):
+            continue
+        v = TUNING_FIELD_VALUES.get(k, {}).get(v, v)
+        if k in TUNING_FIELD_VALUES or v not in TUNING_DEFAULTS:
             out.append(f"{TUNING_FIELDS[k]}={v}")
     return ",".join(out)
 
@@ -620,6 +633,15 @@ def join_keys(a: pd.DataFrame, b: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
     return a, b
 
 
+def verdict(a_med, a_lo, a_hi, b_med, b_lo, b_hi, min_delta: float) -> tuple[float, str]:
+    """(delta% of B vs A, verdict). noise if below the run-to-run floor, or if the bootstrap 95% CIs of
+    the two medians overlap."""
+    delta = (b_med - a_med) / a_med * 100
+    ci_overlap = a_lo <= b_hi and b_lo <= a_hi
+    noise = abs(delta) < min_delta or ci_overlap
+    return delta, "noise" if noise else ("B faster" if delta < 0 else "B slower")
+
+
 def print_compare(a: pd.DataFrame, b: pd.DataFrame, la: str, lb: str, min_delta: float = 5.0) -> None:
     a, b = join_keys(a, b)
     m = a.merge(b, on="jkey", how="outer", suffixes=("_a", "_b"), indicator=True)
@@ -640,17 +662,15 @@ def print_compare(a: pd.DataFrame, b: pd.DataFrame, la: str, lb: str, min_delta:
         print(hdr)
         print("-" * len(hdr))
         for r in both.itertuples():
-            delta = (r.median_us_b - r.median_us_a) / r.median_us_a * 100
-            # noise if below the run-to-run floor, or if the bootstrap 95% CIs of the two medians overlap
-            ci_overlap = r.ci_lo_us_a <= r.ci_hi_us_b and r.ci_lo_us_b <= r.ci_hi_us_a
-            noise = abs(delta) < min_delta or ci_overlap
-            verdict = "noise" if noise else ("B faster" if delta < 0 else "B slower")
+            delta, verd = verdict(
+                r.median_us_a, r.ci_lo_us_a, r.ci_hi_us_a, r.median_us_b, r.ci_lo_us_b, r.ci_hi_us_b, min_delta
+            )
             print(
                 f"{r.key:<{kw}}  {fmt_bytes(r.out_bytes_a):>8}  {int(r.n_a):>3} {int(r.n_b):>3}  {r.median_us_a:9.2f}  "
                 f"{r.median_us_b:9.2f}  {delta:+7.1f}  {f(r.spread_pct_a, '6.1f')}  {f(r.spread_pct_b, '6.1f')}  "
                 f"{f(ci_pct(r.ci_lo_us_a, r.ci_hi_us_a, r.median_us_a), '5.1f')}  "
                 f"{f(ci_pct(r.ci_lo_us_b, r.ci_hi_us_b, r.median_us_b), '5.1f')}  "
-                f"{f(r.eff_pct_a, '6.1f')}  {f(r.eff_pct_b, '6.1f')}  {verdict}"
+                f"{f(r.eff_pct_a, '6.1f')}  {f(r.eff_pct_b, '6.1f')}  {verd}"
             )
         # differences in ATTRIBUTES between joined rows (packet_size / tuning when joined on config)
         diffs = {}
@@ -670,6 +690,80 @@ def print_compare(a: pd.DataFrame, b: pd.DataFrame, la: str, lb: str, min_delta:
                 print(f"  {k}")
 
 
+def vs_tuning(res: pd.DataFrame, ref: str, min_delta: float) -> tuple[pd.DataFrame, list[str]]:
+    """Within-report A/B: per (config, pkt), A = the row whose tuning == ref, B = every other tuning.
+
+    Returns (one row per B, sorted by config/pkt/tuning; groups that have other tunings but no ref row)."""
+    rows, no_ref = [], []
+    pkt = res["packet_size"].map(pkt_s)
+    for (config, pk), g in res.assign(_pkt=pkt).groupby(["config", "_pkt"], sort=True):
+        a = g[g["tuning"] == ref]
+        others = g[g["tuning"] != ref]
+        if others.empty:
+            continue
+        if a.empty:
+            no_ref.append(f"{config}|pkt{pk}: " + ", ".join(t or "-" for t in sorted(others["tuning"])))
+            continue
+        a = a.iloc[0]
+        for b in others.itertuples():
+            delta, verd = verdict(
+                a.median_us, a.ci_lo_us, a.ci_hi_us, b.median_us, b.ci_lo_us, b.ci_hi_us, min_delta
+            )  # fmt: skip
+            rows.append(
+                dict(
+                    config=config, packet_size=pk, out_bytes=a.out_bytes, tuning_a=ref or "-", tuning=b.tuning or "-",
+                    n_a=int(a.n), n_b=int(b.n), median_us_a=a.median_us, median_us_b=b.median_us, delta_pct=delta,
+                    ci_lo_us_a=a.ci_lo_us, ci_hi_us_a=a.ci_hi_us, ci_lo_us_b=b.ci_lo_us, ci_hi_us_b=b.ci_hi_us,
+                    ci_pct_a=ci_pct(a.ci_lo_us, a.ci_hi_us, a.median_us),
+                    ci_pct_b=ci_pct(b.ci_lo_us, b.ci_hi_us, b.median_us), verdict=verd,
+                )
+            )  # fmt: skip
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values(["config", "packet_size", "tuning"]).reset_index(drop=True)
+    return out, no_ref
+
+
+def print_vs_tuning(vs: pd.DataFrame, no_ref: list[str], ref: str) -> None:
+    print(f"A = tuning {ref or '-'} (per config, pkt)\nB = every other tuning")
+    if no_ref:
+        print(f"\nno reference row (tuning {ref or '-'}) for {len(no_ref)} config(s); skipped:")
+        for s in no_ref:
+            print(f"  {s}")
+    if vs.empty:
+        print("\nnothing to compare." if no_ref else f"\nno non-{'default' if not ref else 'reference'} tuning rows.")
+        return
+    kw = max(len("config"), vs["config"].str.len().max())
+    tw = max(len("tuning"), vs["tuning"].str.len().max())
+    hdr = (
+        f"{'config':<{kw}}  {'pkt':>5}  {'tuning':<{tw}}  {'nA':>3} {'nB':>3}  {'A_us':>9}  {'B_us':>9}  "
+        f"{'delta%':>7}  {'ciA%':>5}  {'ciB%':>5}  verdict"
+    )
+    print()
+    print(hdr)
+    print("-" * len(hdr))
+    for r in vs.itertuples():
+        print(
+            f"{r.config:<{kw}}  {r.packet_size:>5}  {r.tuning:<{tw}}  {r.n_a:>3} {r.n_b:>3}  {r.median_us_a:9.2f}  "
+            f"{r.median_us_b:9.2f}  {r.delta_pct:+7.1f}  {f(r.ci_pct_a, '5.1f')}  {f(r.ci_pct_b, '5.1f')}  "
+            f"{r.verdict}"
+        )
+    # per B tuning: verdict counts and geometric-mean delta over the non-noise rows
+    print(f"\nsummary per tuning (vs {ref or '-'}; geomean delta over non-noise rows):")
+    hdr = f"{'tuning':<{tw}}  {'configs':>7}  {'faster':>6}  {'slower':>6}  {'noise':>5}  {'geomean%':>8}"
+    print(hdr)
+    print("-" * len(hdr))
+    for t, g in vs.groupby("tuning", sort=True):
+        sig = g[g["verdict"] != "noise"]
+        ratio = sig["median_us_b"] / sig["median_us_a"]
+        gm = (float(np.exp(np.log(ratio).mean())) - 1) * 100 if len(sig) else float("nan")
+        cnt = g["verdict"].value_counts()
+        print(
+            f"{t:<{tw}}  {len(g):>7}  {cnt.get('B faster', 0):>6}  {cnt.get('B slower', 0):>6}  "
+            f"{cnt.get('noise', 0):>5}  {f(gm, '+8.1f'):>8}"
+        )
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("inputs", nargs="*", help="report dirs or ops_perf_results CSVs (default: newest report dir)")
@@ -679,8 +773,16 @@ def main() -> int:
     p.add_argument("--desync-ns", type=float, default=1e8, help="durations above this are excluded (default 1e8)")
     p.add_argument("--csv", metavar="PATH", help="write the per-config table to PATH")
     p.add_argument(
+        "--vs-default", action="store_true",
+        help="A/B every tuning against the all-defaults tuning of the same config+pkt, within the input report(s)",
+    )  # fmt: skip
+    p.add_argument(
+        "--vs", metavar="TUNING", default=None,
+        help="with --vs-default (implied): use this compact tuning string (as in the `tuning` column) as A",
+    )  # fmt: skip
+    p.add_argument(
         "--min-delta", type=float, default=5.0, metavar="PCT",
-        help="--compare: |delta%%| below this is 'noise' regardless of the CIs (default 5.0)",
+        help="--compare / --vs-default: |delta%%| below this is 'noise' regardless of the CIs (default 5.0)",
     )  # fmt: skip
     p.add_argument(
         "--bootstrap", type=int, default=2000, metavar="N",
@@ -713,6 +815,9 @@ def main() -> int:
         resolve_csv(path), args.warmup, args.devices, args.desync_ns, model_opts, n_boot=args.bootstrap
     )
 
+    vs_mode = args.vs_default or args.vs is not None
+    if args.compare and vs_mode:
+        p.error("--compare and --vs-default/--vs are mutually exclusive")
     if args.compare:
         if args.inputs:
             p.error("--compare takes its own two inputs; do not also pass positional inputs")
@@ -749,6 +854,14 @@ def main() -> int:
         res["config"] = src_tag + res["config"]
         res = res.sort_values(["out_bytes", "topology", "key"]).reset_index(drop=True)
     print()
+    if vs_mode:
+        ref = "" if args.vs in (None, "-") else args.vs
+        vs, no_ref = vs_tuning(res, ref, args.min_delta)
+        print_vs_tuning(vs, no_ref, ref)
+        if args.csv and not vs.empty:
+            vs.to_csv(args.csv, index=False)
+            print(f"\nwrote {args.csv}")
+        return 0
     print_table(res, alt_label)
     if args.csv:
         res[OUT_COLUMNS + (["source"] if multi else [])].rename(columns=csv_names).to_csv(args.csv, index=False)

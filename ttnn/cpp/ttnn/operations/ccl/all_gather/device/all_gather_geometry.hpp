@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
@@ -13,8 +14,9 @@
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include "all_gather_tuning.hpp"     // EntryPolicy, XferPolicy, RotationMode
-#include "kernels/gather_rules.hpp"  // RunSource and the walk's integer rules, shared with the kernels
+#include "all_gather_tuning.hpp"                  // EntryPolicy, XferPolicy, RotationMode
+#include "all_gather_device_operation_types.hpp"  // AllGatherParams (route_all_gather)
+#include "kernels/gather_rules.hpp"               // RunSource and the walk's integer rules, shared with the kernels
 
 // Internal to the all_gather op: include from .cpp files only (it is not an installed header).
 
@@ -74,24 +76,32 @@ struct GatherGeometry {
     uint32_t chunks_per_stripe = 0;  // walk pages per stripe row
 
     // --- Predicates ---
-    // The output's aligned page is exactly tiled by walk pages: the relay precondition today, and what
-    // select_program_factory routes on.
+    // The output's aligned page is exactly tiled by walk pages (slot == chunk). Informational since step 3:
+    // nothing routes on it (relay_ok does), the walk derives its own slot-aware version.
     bool out_packed = false;
-    // The TRUE precondition for unicast's relay read-back: out_packed, AND the read of a chunk out of the output
-    // is NoC-read aligned. out_packed alone is insufficient: in Concat the chunk is the *input's* aligned page,
-    // which is only L1-aligned (16 B) when the input is in L1, so chunk j of a DRAM output page starts at
-    // j * chunk -- not a multiple of the DRAM read alignment -- and the relay's NoC read of it is misaligned.
-    // No consumer yet: step 3 switches select_program_factory and require_relay_packed() to it.
+    // Unicast's relay read-back is legal: gather_rules.hpp relay_read_ok() -- the ONE definition. True for
+    // every one-chunk-per-page output (relay_needs_padded_slot widens the CB slot to the output's aligned page
+    // where it is padded), and for Concat only when the page is exactly tiled by chunks AND every chunk offset
+    // is aligned to the output's read alignment. Consumers: route_all_gather (all_gather() and
+    // select_program_factory) and the unicast factory's require_relay_ok().
     bool relay_ok = false;
+    // The relay needs the padded CB slot (slot = out_aligned_page). The unicast factory forces the padded-slot
+    // walk policy on whenever this holds; the multicast factory keeps it behind TT_AG_TUNING padded_slot.
+    bool relay_needs_padded_slot = false;
 
     // One derivation for everyone: select_program_factory passes the persistent output's spec when there is
     // one, else AllGatherParams::output_spec; the factories pass the output tensor's spec (the same tensor).
     // The aligned output page is the spec's page aligned to its memory's hal alignment, which is what
     // Buffer::aligned_page_size() gives once the buffer exists.
+    // Also TT_FATALs unless every local device of the mesh reports the mesh allocator's bank count for the
+    // input's and the output's buffer types (require_uniform_bank_counts): the walk stride is derived once on
+    // the host and every device's kernels walk with it.
     static GatherGeometry make(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec, int32_t dim_from_end);
 
-    // Unicast-only relay precondition. Checks out_packed, NOT relay_ok (step 3).
-    void require_relay_packed() const;
+    // Unicast-only relay precondition: TT_FATALs unless relay_ok, or `relays` is false (no device reads its
+    // output back: 2 devices, a 3-device ring). route_all_gather never picks unicast otherwise; reaching the
+    // FATAL means the op was built through ttnn::prim::all_gather with a hand-made program factory choice.
+    void require_relay_ok(bool relays) const;
 
     // Slice `slice_idx` of `num_slices`. The split is over *input pages*, then scaled by in_chunks_per_page, so
     // a slice never cuts an input page.
@@ -102,6 +112,40 @@ struct GatherGeometry {
         return in_chunks_per_page > out_chunks_per_page ? in_chunks_per_page : out_chunks_per_page;
     }
 };
+
+// --- Algorithm routing: the ONE place unicast / multicast / composite is decided ---
+// ttnn::all_gather() calls route_all_gather() to choose composite vs native, and select_program_factory calls
+// it again (same params, same spec) to pick the factory, so the two cannot disagree.
+enum class GatherRoute : uint8_t { Unicast, Multicast, Composite };
+
+struct RouteDecision {
+    GatherRoute route = GatherRoute::Multicast;
+    std::string reason;  // why; for Composite this is the user-facing log line
+};
+
+// A gather-dim-padded input needs composite. Kept separate because it must run BEFORE an output spec is built:
+// compute_output_specs_helper can TT_FATAL on a legacy output config that cannot hold the gathered shape, and
+// such an input has to route to composite instead. route_all_gather() re-checks it (cheap) for prim callers.
+std::optional<std::string> gather_dim_padding_reason(const Tensor& input, int32_t dim_from_end);
+
+// Everything else, in this order:
+//   1. layout   -- shapes/pages the native kernels cannot address (formerly all_gather.cpp's
+//                  use_composite_all_gather body)                                         -> Composite
+//   2. TT_AG_TUNING factory= (TEST HOOK): forced; TT_FATALs on an illegal force (incl. unicast with
+//                  !relay_ok on a relaying topology)                                      -> forced factory
+//   3. topology -- true 2D                                                                -> Multicast
+//                  bent 2D axis / FABRIC_1D_NEIGHBOR_EXCHANGE (unicast only)              -> Unicast if
+//                  relay_ok || !relays, else TT_FATAL (see the .cpp: composite's all_broadcast multicasts
+//                  N-1 hops, which these topologies forbid, so it is not a fallback there)
+//   4. heuristic (per arch), then unicast only if relay_ok || !relays                     -> Unicast/Multicast
+// `output_spec` is the persistent output's own spec when there is one, else AllGatherParams::output_spec; it feeds
+// the relay rule and the heuristic (what the factories will see). Stage 1 uses AllGatherParams::output_spec, as
+// the old use_composite_all_gather did, so an invalid persistent output still reaches the op's validate.
+RouteDecision route_all_gather(
+    const AllGatherParams& args, const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
+
+// gather_rules.hpp unicast_relays() for these params (1D axis only).
+bool unicast_relays(const AllGatherParams& args);
 
 // Packed bytes of the gathered output crossing one link. Pass the same spec as GatherGeometry::make.
 uint64_t per_link_bytes(const tt::tt_metal::TensorSpec& output_spec, uint32_t num_links);
