@@ -317,15 +317,12 @@ class DSV41Attention:
 
     def _rope_rows(self, x, c, s, name="SW"):
         """x [..., 512] (any leading dims): x * C + (x @ P) * S with full-width tables broadcast over rows."""
-        # The fused rows-layout kernel rotates every row by the angle of table row 0 (tests/test_attn_fused_rope.py: "all users share row 0"): only valid when all rows
-        # share ONE position. Paged decode with per-user positions (ragged) and spec verify blocks (n rows at different positions, > 32 rows) need per-row angles:
-        # the unfused path is the default now; DSV41_ROPE_ROWS_FUSED=1 restores the fused kernel (uniform single-position decode only).
-        # Choice: plain decode keeps the fused kernel (near-identical streams, 4.6 ms/token faster at B=16); spec verify views set ``per_row_rope`` (rows at different
-        # positions). DSV41_ROPE_ROWS_FUSED=1 forces fused everywhere, =0 forces the per-row path everywhere.
-        fused_rows = os.environ.get("DSV41_ROPE_ROWS_FUSED", "auto")
-        if AF.flag("DSV41_ATTN_FUSED_ROPE", "1") and (
-            fused_rows == "1" or (fused_rows == "auto" and not getattr(self, "per_row_rope", False))
-        ):
+        # The fused rows-layout kernel rotates EVERY row by the angle of table row 0 (tests/test_attn_fused_rope.py: "all users share row 0"): it is only valid when all rows share ONE position.
+        # In plain decode the users of a mesh row sit at DIFFERENT positions (ragged batch), so with the fused kernel the compressed latent of every user was rotated by the angle of the
+        # FIRST user of its row and written to the pool that way: the decode of a user then depended on the position of its row-mates (logit shifts of 3-9 on a 4-layer / 40-layer model
+        # when a row-mate's position changed by one token, tests/test_decode_batch_sensitivity.py), i.e. on arrival timing. The per-row path (3 ops, ~4.6 ms/token at B=16) is therefore the
+        # default everywhere; DSV41_ROPE_ROWS_FUSED=1 restores the fused kernel (uniform single-position decode only: benchmarks with all users at the same position).
+        if AF.flag("DSV41_ATTN_FUSED_ROPE", "1") and os.environ.get("DSV41_ROPE_ROWS_FUSED", "0") == "1":
             return AF.rope_inplace(x, c, s, 1, rows_layout=True)
         return ttnn.addcmul(ttnn.multiply(x, c), self._lin(x, self.Pf, name), s)
 
