@@ -1,190 +1,119 @@
 name: "Build TT-Metalium across all configs"
-
 on:
-  workflow_call:
-    inputs:
-      # Pre-built Docker image tags (optional - if provided, skips docker build)
-      ubuntu-2204-ci-build-tag:
-        required: false
-        type: string
-        default: ""
-      ubuntu-2204-dev-tag:
-        required: false
-        type: string
-        default: ""
-      ubuntu-2204-manylinux-tag:
-        required: false
-        type: string
-        default: ""
-      ubuntu-2404-ci-build-tag:
-        required: false
-        type: string
-        default: ""
-      ubuntu-2404-dev-tag:
-        required: false
-        type: string
-        default: ""
-      ubuntu-2404-manylinux-tag:
-        required: false
-        type: string
-        default: ""
-      # Single-platform build options (alternative to matrix build with docker tags)
-      platform:
-        required: false
-        type: string
-        default: ""
-        description: "Platform to target (Ubuntu 22.04, Ubuntu 24.04). If set, runs single-platform build instead of matrix."
-      build-type:
-        required: false
-        type: string
-        default: "Release"
-        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
-      runs-on:
-        required: false
-        type: string
-        default: "tt-ubuntu-2204-large-stable"
-        description: "Runner label for build-artifact jobs"
-      enable-lto:
-        required: false
-        type: boolean
-        default: false
-        description: "Enable Link Time Optimization (LTO)"
-      ref:
-        required: false
-        type: string
-        default: ""
-        description: "Git ref to checkout (defaults to github.sha if not provided)"
-      fetch-depth:
-        required: false
-        type: number
-        default: 500
-        description: "Git fetch depth passed through to build-artifact"
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
-        description: "Harbor pull-through prefix for CI images (empty to use canonical refs)"
   workflow_dispatch:
-    inputs:
-      platform:
-        required: false
-        type: choice
-        default: "Ubuntu 22.04"
-        options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Platform to target"
-      build-type:
-        required: false
-        type: choice
-        default: Release
-        options:
-          - Release
-          - Debug
-          - RelWithDebInfo
-          - ASan
-          - TSan
-        description: "Build type configuration"
-      runs-on:
-        required: false
-        type: string
-        default: "tt-ubuntu-2204-large-stable"
-        description: "Runner label for build-artifact jobs"
-      enable-lto:
-        required: false
-        type: boolean
-        default: false
-        description: "Enable Link Time Optimization (LTO)"
-
 permissions:
   contents: read
-  packages: write
-
+  actions: read
+  packages: read
 jobs:
-  # =============================================================================
-  # NOTE: This workflow has two modes:
-  # 1. workflow_dispatch: Single platform build via build-dispatch job
-  # 2. workflow_call: Matrix build across multiple configs via build job
-  #
-  # Platform parsing is handled by build-artifact.yaml internally.
-  # =============================================================================
-
-  check-harbor:
-    uses: ./.github/workflows/check-harbor.yaml
-
-  # build-dispatch is for direct workflow_dispatch calls only
-  build-dispatch:
-    needs: check-harbor
-    if: ${{ inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != '' }}
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      contents: read
-      packages: write
-    secrets: inherit
-    with:
-      harbor-prefix: ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}
-      platform: ${{ inputs.platform }}
-      build-type: ${{ inputs.build-type || 'Release' }}
-      enable-lto: ${{ inputs.enable-lto || false }}
-      publish-artifact: false
-      publish-package: false
-      skip-tt-train: false
-      tracy: false
-      runs-on: ${{ inputs['runs-on'] }}
-      ref: ${{ inputs.ref }}
-      fetch-depth: ${{ github.event_name == 'workflow_dispatch' && 500 || inputs.fetch-depth }}
-
-  # build job runs the matrix - either when called from merge-gate with pre-built tags,
-  # or when called via workflow_call without the platform dropdown
-  build:
-    needs: check-harbor
-    if: ${{ inputs.ubuntu-2204-ci-build-tag != '' || inputs.platform == '' }}
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      contents: read
-      packages: write
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        config:
-          - platform: "Ubuntu 22.04"
-            toolchain: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
-            build-type: "Debug"
-          - platform: "Ubuntu 22.04"
-            toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake"
-            build-type: "Release"
-          - platform: "Ubuntu 22.04"
-            toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
-            build-type: "Release"
-          - platform: "Ubuntu 24.04"
-            toolchain: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
-            build-type: "Release"
-            enable-lto: true
-          - platform: "Ubuntu 24.04"
-            toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
-            build-type: "Release"
-    with:
-      harbor-prefix: ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}
-      platform: ${{ matrix.config.platform }}
-      toolchain: ${{ matrix.config.toolchain }}
-      build-type: ${{ matrix.config.build-type }}
-      # Enable LTO only when explicitly set in the matrix config
-      enable-lto: ${{ matrix.config.enable-lto || false }}
-      publish-artifact: false
-      publish-package: false
-      skip-tt-train: false
-      tracy: false
-      runs-on: ${{ inputs['runs-on'] }}
-      ref: ${{ inputs.ref }}
-      fetch-depth: ${{ github.event_name == 'workflow_dispatch' && 500 || inputs.fetch-depth }}
-      # Pass pre-built docker image tags based on platform
-      ci-build-docker-image: ${{
-        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-ci-build-tag) ||
-        inputs.ubuntu-2204-ci-build-tag }}
-      dev-docker-image: ${{
-        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-dev-tag) ||
-        inputs.ubuntu-2204-dev-tag }}
-      manylinux-docker-image: ${{
-        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-manylinux-tag) ||
-        inputs.ubuntu-2204-manylinux-tag }}
+  gpt-host-contracts:
+    runs-on: tt-ubuntu-2204-large-stable
+    timeout-minutes: 35
+    container:
+      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-dev-amd64@sha256:01621216c5a6d2cc661550ff007d1d1c51ea1e9ba5808286d0c79ab325a03a61
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work:/work/ttnn
+        LD_LIBRARY_PATH: /work/build/lib
+        TT_FROM_PRECOMPILED_DIR: /work
+        PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - ${{ github.workspace }}/plugin:/plugin
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          submodules: recursive
+          path: docker-job
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: "11904909423"
+          run-id: "38584722221"
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: /work
+      - name: Admit exact compiled artifact and interpreter
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          git fetch --depth=1 origin 0b315cc07f0fe4d99a5bfee256549bfbb7337112
+          git diff --exit-code 0b315cc07f0fe4d99a5bfee256549bfbb7337112 HEAD -- tt_metal ttnn tt_stl
+          git fetch --depth=1 origin 8f150801e7c29f3e4e0a1e721093dc0d378950b7
+          git diff --exit-code 8f150801e7c29f3e4e0a1e721093dc0d378950b7 HEAD -- models ':!models/demos/gpt_oss_120b_qb2/tt/generator_vllm.py' ':!models/demos/gpt_oss_120b_qb2/tests/test_serving_host.py' ':!models/demos/gpt_oss_120b_qb2/README.md'
+          echo "29e69618b7c138a81bd1b5210f3fb107caf15e21d95c51b5d9d2357f90e80e96  ttm_any.tar.zst" | sha256sum -c -
+          tar --zstd -xf ttm_any.tar.zst
+          /opt/venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3,12), sys.version; print(sys.version)'
+          uv pip install --python /opt/venv/bin/python --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match -r tt_metal/python_env/requirements-dev.txt
+          uv pip install --python /opt/venv/bin/python -e .
+          uv pip freeze --python /opt/venv/bin/python > /work/host-environment.txt
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: tenstorrent/vllm-tt-plugin
+          ref: d84049edcece77c64772a39e92f920f5679efce4
+          path: plugin
+      - name: Install exact merged plugin and its supported empty vLLM target
+        timeout-minutes: 15
+        working-directory: /plugin
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = d84049edcece77c64772a39e92f920f5679efce4
+          source /opt/venv/bin/activate
+          source docs/install-vllm-tt.sh
+          uv pip freeze > /work/host-environment.txt
+      - name: Real supported-profile imports and CPU contracts
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          git diff --exit-code HEAD
+          cat > /tmp/gpt-supported-host.py <<'PY'
+          import hashlib,json,os,sys,time
+          from pathlib import Path
+          assert sys.version_info[:2]==(3,12)
+          root=Path('/work');out=root/'gpt-host-results';out.mkdir()
+          def fds():
+              result=[]
+              for p in Path('/proc/self/fd').iterdir():
+                  try: name=os.readlink(p)
+                  except FileNotFoundError: continue
+                  if name.startswith('/dev/tenstorrent/'):result.append(name)
+              return result
+          assert not fds()
+          import ttnn
+          def refuse(*a,**kw):raise AssertionError('CPU contracts must not open devices')
+          for name in ('open_device','open_mesh_device','CreateDevice','CreateDevices'):
+              if hasattr(ttnn,name):setattr(ttnn,name,refuse)
+          from models.demos.gpt_oss_120b_qb2.tt.generator_vllm import TTGptOssForCausalLM
+          import vllm,pytest
+          from vllm_tt_plugin.entrypoints import register
+          register()
+          from vllm.model_executor.models.registry import ModelRegistry
+          assert ModelRegistry.models['TTGptOssForCausalLM'].load_model_cls() is TTGptOssForCausalLM
+          assert TTGptOssForCausalLM.tt_supported_decode_batch_sizes==(1,)
+          rc=pytest.main(['--noconftest','-q','models/demos/gpt_oss_120b_qb2/tests/test_serving_host.py','--junitxml=/work/gpt-host-results/host.xml'])
+          assert not fds()
+          origins={}
+          for name,module in tuple(sys.modules.items()):
+              if name=='ttnn' or name.startswith(('ttnn.','models.')):
+                  path=getattr(module,'__file__',None)
+                  if path:
+                      p=Path(path).resolve();assert p.is_relative_to(root)
+                      origins[name]={'path':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
+          (out/'import-proof.json').write_text(json.dumps(origins,indent=2))
+          (out/'host-result.json').write_text(json.dumps({'pytest_exit':rc,'zero_device_fds':True,'python':sys.version,'utc_unix':time.time(),'scope':'Maintained serving host tests, qualified1active/2049block profile; no hardware or quality claim'}))
+          raise SystemExit(rc)
+          PY
+          timeout --signal=TERM --kill-after=15s 600s /opt/venv/bin/python /tmp/gpt-supported-host.py
+      - name: Preserve host evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: gpt-supported-host-contracts
+          path: |
+            /work/gpt-host-results
+            /work/host-environment.txt
+          if-no-files-found: warn
