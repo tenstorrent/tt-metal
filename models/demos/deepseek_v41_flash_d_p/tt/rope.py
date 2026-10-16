@@ -124,6 +124,28 @@ def interleave_tail(t: ttnn.Tensor, half: int) -> ttnn.Tensor:
     return out
 
 
+def deinterleave_tail(t: ttnn.Tensor, half: int) -> ttnn.Tensor:
+    """[B, H, R, W] TILE whose last 2 * half columns are interleaved (e_0, o_0, e_1, ...) -> the same with the tail
+    [even | odd] (``rope_heads``' input order): a ROW_MAJOR transpose of [half, 2] per row (data movement only,
+    exact). Does not consume ``t``."""
+    b, h, rows, width = t.shape
+    r0 = width - 2 * half
+    tail = ttnn.slice(t, [0, 0, 0, r0], [b, h, rows, width], memory_config=DRAM)
+    rm = ttnn.to_layout(tail, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+    ttnn.deallocate(tail)
+    tr = ttnn.transpose(ttnn.reshape(rm, [b * h, rows, half, 2]), -2, -1, memory_config=DRAM)
+    ttnn.deallocate(rm)
+    de = ttnn.to_layout(ttnn.reshape(tr, [b, h, rows, 2 * half]), ttnn.TILE_LAYOUT, memory_config=DRAM)
+    ttnn.deallocate(tr)
+    if r0 == 0:
+        return de
+    head = ttnn.slice(t, [0, 0, 0, 0], [b, h, rows, r0], memory_config=DRAM)
+    out = ttnn.concat([head, de], dim=-1, memory_config=DRAM)
+    ttnn.deallocate(head)
+    ttnn.deallocate(de)
+    return out
+
+
 def rope_heads(
     x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, inverse: bool = False, interleave: bool = False
 ) -> ttnn.Tensor:

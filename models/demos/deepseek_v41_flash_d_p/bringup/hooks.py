@@ -119,8 +119,9 @@ DEVICE_STEPS = {
         "attention",
     },
     # attn_hc .. kv: the swa modules (C.enc_source.* and S.enc_source.01-05 passed on them, DS41-28); the compressor
-    # writes the served compressed caches and updates the reference state the CPU attention reads; the indexer reads
-    # its keys from the served index-key cache and updates the reference state's topk_idx
+    # writes the served compressed caches and updates the reference state; the indexer reads its keys from the
+    # served index-key cache and updates the reference state's topk_idx; the attention (tt/sparse_attention.py)
+    # reads the served compressed cache and writes the served window cache
     "enc_source": {
         "attn_hc",
         "attn_collapse",
@@ -129,6 +130,7 @@ DEVICE_STEPS = {
         "kv",
         "compressor",
         "indexer",
+        "attention",
     },
 }
 
@@ -351,6 +353,68 @@ def _attention_host_fn(mesh, module):
             ttnn.deallocate(t)
         if own:
             cache.free()
+        return out
+
+    fn.module = module
+    return fn
+
+
+def _sparse_attention_host_fn(mesh, module, cfg, layer):
+    """fn(ctx, q_resid_host [S, 1280], kv_host [S, 512], compressed_host [S / r, head_dim + index_dim], topk_host
+    [S, topk] int32) -> attn_out host [S, H] fp32, for a layer that is its own KV and top-k source (enc_source;
+    harness boundary: q_resid, kv and the top-k row-split over axis 0, replicated over axis 1; the output's rows over
+    axis 0, hidden over axis 1). The window cache as _attention_host_fn. The compressed rows are read on the device
+    from the layer's served compressed cache ctx.extra["compress_cache"].ckv (the hybrid model's, which the device
+    compressor wrote this chunk into); without one (component tests) a cache for the call is made and loaded with
+    the golden prefix (state_prefix compress_kv) and this chunk's rows (``compressed``'s first head_dim columns)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.attention import TtWindowCache
+    from models.demos.deepseek_v41_flash_d_p.tt.compressor import TtServedRows
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import hidden_split_to_host, row_split_to_device
+
+    r, hd = cfg.ratio(layer), cfg.head_dim
+    assert cfg.is_kv_source(layer) and cfg.is_index_source(layer), layer
+
+    def fn(ctx, qr, kv, compressed, topk):
+        start, s = int(ctx.start), qr.shape[0]
+        end = ctx.extra.get("end")
+        end = start + s if end is None else int(end)
+        max_seq = max(int(ctx.extra.get("max_seq") or 0), start + s)
+        prefix = ctx.extra.get("state_prefix") or {}
+        cache = ctx.extra.get("window_cache")
+        own = cache is None
+        if own:
+            cache = TtWindowCache(mesh, module.tables, max_seq)
+            if start and "window_kv" in prefix:
+                cache.load_ring(prefix["window_kv"], start)
+        caches = ctx.extra.get("compress_cache")
+        own_c = caches is None
+        if own_c:
+            ckv = TtServedRows(mesh, module.tables, max_seq, hd, r, dedup=True)
+            rows = [prefix["compress_kv"][: start // r].float()] if start else []
+            rows.append(compressed[:, :hd].float())
+            ckv.load_host(torch.cat(rows), 0)
+        else:
+            ckv = caches.ckv
+        qd = row_split_to_device(mesh, qr)
+        kd = row_split_to_device(mesh, kv, dtype=ttnn.bfloat16)
+        sp = mesh.shape[0]
+        td = ttnn.from_torch(
+            topk.to(torch.int32).reshape(sp, 1, s // sp, -1).contiguous(),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(0, None)),
+        )
+        od = module(qd, kd, start, end, cache, ckv, td)
+        out = hidden_split_to_host(mesh, od).float()
+        for t in (qd, kd, td, od):
+            ttnn.deallocate(t)
+        if own:
+            cache.free()
+        if own_c:
+            ckv.free()
         return out
 
     fn.module = module
@@ -645,6 +709,18 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
         from models.demos.deepseek_v41_flash_d_p.tt.engram_add import build_engram_add
 
         return _engram_add_host_fn(mesh, build_engram_add(mesh, ck, cfg, layer), cfg.dim)
+    if step == "attention" and cfg.ratio(layer):
+        from models.demos.deepseek_v41_flash_d_p.tt.sparse_attention import SparseIndexTables, build_sparse_attention
+
+        if not (cfg.is_kv_source(layer) and cfg.is_index_source(layer)):
+            return None  # only a layer attending over its own compressed rows with its own top-k (enc_source) so far
+        tables = _window_tables(mesh, spec, shared)
+        if "sparse_index_tables" not in shared:
+            shared["sparse_index_tables"] = SparseIndexTables(mesh, tables, cfg.index_topk)
+        module = build_sparse_attention(
+            mesh, ck, cfg, layer, _max_seq(spec), _chunk(spec), tables=tables, sparse=shared["sparse_index_tables"]
+        )
+        return _sparse_attention_host_fn(mesh, module, cfg, layer)
     if step == "attention":
         from models.demos.deepseek_v41_flash_d_p.tt.attention import build_attention
 
