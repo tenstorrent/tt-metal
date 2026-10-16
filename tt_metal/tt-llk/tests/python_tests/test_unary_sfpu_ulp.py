@@ -6,7 +6,9 @@ op: one device run per variant. A gated cell is held to its row's figure (entry 
 entry for a ``domains`` list); a tolerance cell is measured and skipped, and the
 headroom report (``python -m helpers.ulp_budget_diff headroom`` over ``--ulp-measure``)
 holds it to its row's recorded figure. ``--ulp-emit`` writes the table instead of gating
-against it. Marked ``accuracy``; see SFPU_ULP.md for the commands."""
+against it. Marked ``accuracy``, which every LLK workflow deselects; llk-e2e runs it by
+path every night on a Wormhole and a Blackhole card (llk-sfpu-ulp-sweep.yaml). See
+SFPU_ULP.md for the commands."""
 
 import pytest
 import torch
