@@ -740,6 +740,11 @@ def within_ulp(
         flush_subnormals=flush_subnormals,
         # Only with a floor configured: otherwise every verdict in the suite would grow a
         # "0 held by the floor" that says nothing.
-        rescued=None if near_zero_atol is None else rescued & selected,
+        # Counted only past the step budget: a covered lane within it needed no rescue.
+        rescued=(
+            None
+            if near_zero_atol is None
+            else rescued & selected & ((distance < 0) | (distance > max_ulp))
+        ),
     )
     return bool(torch.all(is_valid | ~selected)), message
