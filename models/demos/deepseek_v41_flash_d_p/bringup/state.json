@@ -2800,6 +2800,26 @@
   "started": "2026-10-16T02:41:42",
   "status": "PASS"
  },
+ "S.swa_engram.07": {
+  "attempts": 0,
+  "duration_s": 81.6,
+  "history": [
+   {
+    "s": 81.6,
+    "status": "PASS",
+    "t": "2026-10-16T02:47:57"
+   }
+  ],
+  "last_run": "2026-10-16T02:47:57",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/S.swa_engram.07.log",
+  "metrics": {
+   "pcc_swap_out": 0.9997763279528644
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-16T02:46:35",
+  "status": "PASS"
+ },
  "SC.1": {
   "agent": {
    "defs": {
