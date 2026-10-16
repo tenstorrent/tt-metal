@@ -8,6 +8,7 @@ import torch
 import pytest
 import ttnn
 from ttnn.comparison import ulp
+from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_allclose, assert_equal, assert_with_ulp
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     assert_ftz_band,
@@ -61,7 +62,8 @@ Accuracy criteria (FTZ = flush-to-zero, SNB = smallest normal bfloat16)
 |                          | scale * alpha = 1              | ULP ≤ 1                        |
 | rdiv                     | x = 0                          | ±inf                           |
 |                          | |x| > 1/SNB                    | exactly 0                      |
-|                          | rounding_mode None             | ULP ≤ 1                        |
+|                          | |x| = 1/SNB                    | 0 or golden                    |
+|                          | rounding_mode None             | ULP ≤ 1; BH 2 for value ≠ ±1   |
 |                          | floor, trunc                   | abs ≤ max(1, 2 ULP) vs float64 |
 | tanh, sigmoid_accurate,  | golden < SNB                   | exactly 0                      |
 | sigmoid Accurate         | accurate                       | ULP ≤ 2                        |
@@ -79,7 +81,9 @@ Accuracy criteria (FTZ = flush-to-zero, SNB = smallest normal bfloat16)
 |                          | |golden| >= 1                  | ULP ≤ 1                        |
 | polygamma                | x > 0                          | rtol 1e-6 (k ≤ 4) to 6e-3      |
 |                          |                                | (k = 10) vs float64            |
-|                          | [1, 10]                        | ULP ≤ 2 (k = 1) to 11 (k = 10) |
+|                          | x = 2^126 (k = 1)              | 0 or golden                    |
+|                          | [1, 10]                        | WH ULP ≤ 2 (k = 1) to 11       |
+|                          |                                | (k = 10); BH 3 to 20           |
 | unary_chain              | [RELU, EXP, POWER(2)]          | ULP ≤ 3                        |
 |                          | [SQUARE, SQRT]                 | exact for 2^-63 <= |x| < 2^64  |
 |                          | [RELU, TYPECAST(bfloat16)]     | exact                          |
@@ -428,6 +432,12 @@ def test_selu(device, scale, alpha, ulp_threshold):
 RDIV_RECIP_FTZ = 1.0 / SMALLEST_NORMAL_BF16
 
 
+def _assert_zero_or_golden(golden, result, mask, label):
+    """Where 1/x is exactly SNB (|x| = 2^126), Blackhole flushes it to 0 and Wormhole keeps it."""
+    ok = (result[mask] == 0) | (result[mask] == golden[mask])
+    assert ok.all(), f"{label}: |x| = 2^126 returned neither 0 nor the golden for {int((~ok).sum())} elements"
+
+
 def _assert_rdiv_edges(input_tensor, result, value):
     """value / 0 is the infinity with the sign of value; |x| > 1/SNB gives exactly 0."""
     zeros = input_tensor == 0
@@ -436,17 +446,29 @@ def _assert_rdiv_edges(input_tensor, result, value):
     assert_ftz_band(result, input_tensor.abs() > RDIV_RECIP_FTZ, "|x| > 1/SNB")
 
 
-@pytest.mark.parametrize("value", [1.0, -1.0, 2.5, 100.0])
+# value -> (Wormhole, Blackhole) ULP threshold
+RDIV_ULP = {1.0: (1, 1), -1.0: (1, 1), 2.5: (1, 2), 100.0: (1, 2)}
+
+
+@pytest.mark.parametrize("value", list(RDIV_ULP))
 def test_rdiv(device, value):
     """rdiv(x, value) = value / x, no rounding.
 
-    | Input range   | Check     | Reason                                         |
-    |---------------|-----------|------------------------------------------------|
-    | x = 0         | ±inf      | sign of value                                  |
-    | |x| > 1/SNB   | exactly 0 | value * reciprocal(x); the reciprocal is FTZ'd |
-    | elsewhere     | ULP ≤ 1   | one reciprocal and one multiply; value / x     |
-    |               |           | overflows to ±inf on both sides for tiny x     |
+    | value | Input range   | Check        | Reason                                     |
+    |-------|---------------|--------------|--------------------------------------------|
+    | all   | x = 0         | ±inf         | sign of value                              |
+    |       | |x| > 1/SNB   | exactly 0    | value * reciprocal(x); the reciprocal is   |
+    |       |               |              | FTZ'd                                      |
+    |       | |x| = 1/SNB   | 0 or golden  | the reciprocal is exactly SNB: Blackhole   |
+    |       |               |              | flushes it, Wormhole keeps it              |
+    | ±1    | elsewhere     | ULP ≤ 1      | only the reciprocal rounds                 |
+    | other | elsewhere     | WH ULP ≤ 1   | reciprocal and multiply each round; on BH  |
+    |       |               | BH ULP ≤ 2   | 1512 (2.5) and 496 (100) elements reach 2  |
+
+    value / x overflows to ±inf on both sides for tiny x.
     """
+    wh_ulp, bh_ulp = RDIV_ULP[value]
+    ulp_threshold = bh_ulp if is_blackhole() else wh_ulp
     input_tensor = generate_float32_bits()
 
     tt_in = to_float32_tt_tensor(input_tensor, device)
@@ -456,8 +478,12 @@ def test_rdiv(device, value):
     result = ttnn.to_torch(ttnn.rdiv(tt_in, value, rounding_mode=None))
 
     _assert_rdiv_edges(input_tensor, result, value)
-    keep = (input_tensor != 0) & (input_tensor.abs() <= RDIV_RECIP_FTZ)
-    assert_with_ulp(expected_result=golden[keep], actual_result=result[keep], ulp_threshold=1, allow_nonfinite=True)
+    recip_snb = input_tensor.abs() == RDIV_RECIP_FTZ
+    _assert_zero_or_golden(golden, result, recip_snb, f"rdiv({value})")
+    keep = (input_tensor != 0) & (input_tensor.abs() < RDIV_RECIP_FTZ)
+    assert_with_ulp(
+        expected_result=golden[keep], actual_result=result[keep], ulp_threshold=ulp_threshold, allow_nonfinite=True
+    )
 
 
 @pytest.mark.parametrize("value", [1.0, -1.0, 2.5, 100.0])
@@ -752,29 +778,40 @@ def test_logit(device, eps):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# k -> (Wormhole, Blackhole) ULP threshold on [1, 10]
+POLYGAMMA_WINDOW_ULP = {1: (2, 3), 2: (4, 6), 3: (5, 7), 4: (5, 7), 5: (7, 7), 10: (11, 20)}
+
+
 @pytest.mark.parametrize(
-    "k, rtol, window_ulp",
-    [(1, 1e-6, 2), (2, 1e-6, 4), (3, 1e-6, 5), (4, 1e-6, 5), (5, 1e-5, 7), (10, 6e-3, 11)],
+    "k, rtol",
+    [(1, 1e-6), (2, 1e-6), (3, 1e-6), (4, 1e-6), (5, 1e-5), (10, 6e-3)],
 )
-def test_polygamma(device, k, rtol, window_ulp):
+def test_polygamma(device, k, rtol):
     """polygamma(k, x) for x > 0.
 
-    | k   | Input range        | Check     | Reason                                     |
-    |-----|--------------------|-----------|--------------------------------------------|
-    | all | overflow           | +inf      | ~k!/x^(k+1) as x -> 0 (25% of the sweep    |
-    |     |                    |           | at k = 1, 46% at k = 10)                   |
-    |     | reference < SNB    | exactly 0 | FTZ                                        |
-    | 1-4 | elsewhere          | rtol 1e-6 | max 6.5e-7 (k = 4)                         |
-    | 5   | elsewhere          | rtol 1e-5 | 6.3e-6 for x >= 1e6                        |
-    | 10  | elsewhere          | rtol 6e-3 | 5.4e-3 for x in [1e3, 1e6)                 |
-    | all | [1, 10]            | ULP ≤ 2,  | k = 1, 2, 3, 4, 5, 10 respectively         |
-    |     |                    | 4, 5, 5,  |                                            |
-    |     |                    | 7, 11     |                                            |
+    | k   | Input range        | Check       | Reason                                   |
+    |-----|--------------------|-------------|------------------------------------------|
+    | all | overflow           | +inf        | ~k!/x^(k+1) as x -> 0 (25% of the sweep  |
+    |     |                    |             | at k = 1, 46% at k = 10)                 |
+    |     | reference < SNB    | exactly 0   | FTZ                                      |
+    | 1   | x = 2^126          | 0 or golden | trigamma ≈ 1/x is exactly SNB: Blackhole |
+    |     |                    |             | flushes it, Wormhole keeps it            |
+    | 1-4 | elsewhere          | rtol 1e-6   | max 8.5e-7 (k = 4, BH)                   |
+    | 5   | elsewhere          | rtol 1e-5   | 6.3e-6 for x >= 1e6                      |
+    | 10  | elsewhere          | rtol 6e-3   | 5.4e-3 for x in [1e3, 1e6)               |
+    | all | [1, 10]            | WH ULP ≤ 2, | k = 1, 2, 3, 4, 5, 10                    |
+    |     |                    | 4, 5, 5, 7, |                                          |
+    |     |                    | 11          |                                          |
+    |     |                    | BH ULP ≤ 3, |                                          |
+    |     |                    | 6, 7, 7, 7, |                                          |
+    |     |                    | 20          |                                          |
 
     The reference is float64: torch's float32 polygamma is 18% off at k = 10,
     x = 22272. The [1, 10] window keeps a tight bound where a correlation over
     the whole range, dominated by the huge values near 0, would not notice.
     """
+    wh_ulp, bh_ulp = POLYGAMMA_WINDOW_ULP[k]
+    window_ulp = bh_ulp if is_blackhole() else wh_ulp
     input_tensor = generate_float32_bits_in_range(SMALLEST_NORMAL_BF16, MAX_BF16)
 
     tt_in = to_float32_tt_tensor(input_tensor, device)
@@ -785,7 +822,9 @@ def test_polygamma(device, k, rtol, window_ulp):
     _assert_inf_matches(golden, result, f"polygamma(k={k})")
     ftz = golden.abs() < SMALLEST_NORMAL_BF16
     assert_ftz_band(result, ftz, "reference < SNB")
-    keep = torch.isfinite(golden) & ~ftz
+    recip_snb = (input_tensor == RDIV_RECIP_FTZ) & ~ftz
+    _assert_zero_or_golden(golden, result, recip_snb, f"polygamma(k={k})")
+    keep = torch.isfinite(golden) & ~ftz & ~recip_snb
     assert_allclose(expected_result=golden[keep], actual_result=result[keep], rtol=rtol, atol=0)
 
     window = (input_tensor >= 1.0) & (input_tensor <= 10.0)
