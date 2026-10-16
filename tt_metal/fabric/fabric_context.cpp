@@ -356,11 +356,12 @@ std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines(cons
         // 2D routing: inject route buffer size
         defines["FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE"] = std::to_string(routing_2d_buffer_size_);
 
-        // Express routing is a compile-time choice on the device (FabricExpressConfig): worker
-        // connection-manager capacity, and which axis a Z-facing router decodes. When any locally bound
-        // mesh uses express routing, compile every local kernel for it and name the axis the chords run
-        // along (0 = N/S, 1 = E/W). One define serves the whole configuration, so the local meshes must
-        // agree; exact mesh shape remains per-device runtime metadata in routing_l1_info_t.
+        // Express routing is a compile-time choice on the device. When any locally bound mesh uses
+        // express routing, compile every local kernel for it: FABRIC_EXPRESS_ENABLED gates express
+        // support (e.g. worker connection-manager capacity), and FABRIC_EXPRESS_AXIS names the axis the
+        // chords run along (0 = N/S, 1 = E/W) for FabricExpressConfig. The defines serve the whole
+        // configuration, so the local meshes must agree on the axis; exact mesh shape remains
+        // per-device runtime metadata in routing_l1_info_t.
         std::optional<int> express_axis;
         for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
             if (!control_plane.express_routing_enabled(mesh_id)) {
@@ -378,6 +379,7 @@ std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines(cons
             express_axis = express_rings->axis_dim;
         }
         if (express_axis.has_value()) {
+            defines["FABRIC_EXPRESS_ENABLED"] = "1";
             defines["FABRIC_EXPRESS_AXIS"] = std::to_string(*express_axis);
         }
     } else {
