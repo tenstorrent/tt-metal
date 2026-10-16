@@ -90,7 +90,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
-        PARTIAL_SHAPE, 0 /* acc_to_dest */);
+        PARTIAL_SHAPE, 0 /*acc_to_dest*/);
 
     if constexpr (REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::NONE)
     {
@@ -104,7 +104,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 dest_sync,
                 is_fp32_dest_acc_en,
                 MathFidelity::LoFi,
-                EltwiseBinaryReuseDestType::NONE>(PARTIAL_SHAPE, 0 /* dst_index */, false /* clear_fp32_dst_acc */);
+                EltwiseBinaryReuseDestType::NONE>(PARTIAL_SHAPE, 0 /*dst_index*/, false /*clear_fp32_dst_acc*/);
             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
     }
@@ -113,12 +113,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Seed dest index 0 with tile 0, then fold tiles 1..TILE_CNT-1 into it through the reuse op.
         _llk_math_wait_for_dest_available_<dest_sync>();
         _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, dest_sync, is_fp32_dest_acc_en, MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
-            PARTIAL_SHAPE, 0 /* dst_index */, false /* clear_fp32_dst_acc */);
-        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, MathFidelity::LoFi, REUSE_DEST_TYPE>(PARTIAL_SHAPE, 0 /* acc_to_dest */);
+            PARTIAL_SHAPE, 0 /*dst_index*/, false /*clear_fp32_dst_acc*/);
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, MathFidelity::LoFi, REUSE_DEST_TYPE>(PARTIAL_SHAPE, 0 /*acc_to_dest*/);
         for (std::uint32_t i = 1; i < TILE_CNT; ++i)
         {
             _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, dest_sync, is_fp32_dest_acc_en, MathFidelity::LoFi, REUSE_DEST_TYPE>(
-                PARTIAL_SHAPE, 0 /* dst_index */, false /* clear_fp32_dst_acc */);
+                PARTIAL_SHAPE, 0 /*dst_index*/, false /*clear_fp32_dst_acc*/);
         }
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
@@ -146,7 +146,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, tile_size, FULL_SHAPE.face_r_dim, FULL_SHAPE.total_col_dim(), num_faces, partial_face, narrow_tile);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
+    _llk_pack_init_wrapper_<PackMode::Default, false /*zero_output*/>(
         formats.pack_dst, FULL_SHAPE.face_r_dim, FULL_SHAPE.total_col_dim(), num_faces, partial_face, narrow_tile);
     _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(FULL_SHAPE.face_r_dim, narrow_tile);
 
@@ -155,7 +155,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t i = 0; i < output_tiles; ++i)
     {
         _llk_packer_wait_for_math_done_();
-        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* dst_index */, L1_ADDRESS(buffer_Res[i]));
+        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /*dst_index*/, L1_ADDRESS(buffer_Res[i]));
         _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
 }
