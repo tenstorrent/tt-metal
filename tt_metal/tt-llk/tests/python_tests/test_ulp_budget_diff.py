@@ -16,9 +16,14 @@ from pathlib import Path
 import pytest
 from helpers.ulp_budget_diff import (
     _MAX_ROWS,
+    CONTRACT_FIELDS,
     KEY_FIELDS,
+    RECORDED_SKIP,
+    ULP_GATED_OUTPUTS,
+    _gates,
     _measured_cells,
     _nonfinite_cells,
+    _readings,
     _resolve,
     compare,
     junit_completed,
@@ -358,12 +363,6 @@ _FLOOR_CASES = [
         "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 1.0e-07}  # max 1 ULP",
         None,
     ),
-    # On a tolerance row nothing consults the floor.
-    (
-        "{in: Float16_b, out: Float16_b, metric: tolerance}  # max 393 ULP",
-        "{in: Float16_b, out: Float16_b, metric: tolerance, near_zero_atol: 0.5}  # max 393 ULP",
-        None,
-    ),
 ]
 
 
@@ -375,7 +374,6 @@ _FLOOR_CASES = [
         "introduced",
         "wider-floor-tighter-budget",
         "narrowed",
-        "tolerance-row",
     ],
 )
 def test_the_near_zero_floor_is_part_of_the_gate(base_row, head_row, kind):
@@ -583,14 +581,12 @@ def test_the_headroom_report_lists_every_failure_and_caps_only_the_slack():
     extra = 5
     n = _MAX_ROWS + extra
     table = "Abs:\n" + "".join(
-        f'  - {{in: Float16_b, out: Float16_b, dest: "{i}", max_ulp: 8}}\n'
-        for i in range(2 * n)
+        f"  - {{in: F{i}, out: Float16_b, max_ulp: 8}}\n" for i in range(2 * n)
     )
     rows = [
-        {"op": "Abs", "in": "Float16_b", "out": "Float16_b", "dest": str(i), "max": 99}
-        for i in range(n)
+        {"op": "Abs", "in": f"F{i}", "out": "Float16_b", "max": 99} for i in range(n)
     ] + [
-        {"op": "Abs", "in": "Float16_b", "out": "Float16_b", "dest": str(i), "max": 0}
+        {"op": "Abs", "in": f"F{i}", "out": "Float16_b", "max": 0}
         for i in range(n, 2 * n)
     ]
     report, over = render_headroom(parse_table(table), _measured_cells(rows))
@@ -608,12 +604,9 @@ def test_the_guard_lists_every_loosened_cell_and_caps_only_the_improvements():
 
     def table(raised, tightened):
         return _head(
+            *(f"{{in: F{i}, out: Float16_b, max_ulp: {raised}}}" for i in range(n)),
             *(
-                f'{{in: Float16_b, out: Float16_b, dest: "{i}", max_ulp: {raised}}}'
-                for i in range(n)
-            ),
-            *(
-                f'{{in: Float16_b, out: Float16_b, dest: "{i}", max_ulp: {tightened}}}'
+                f"{{in: F{i}, out: Float16_b, max_ulp: {tightened}}}"
                 for i in range(n, 2 * n)
             ),
         )
@@ -711,12 +704,15 @@ def test_this_resolution_agrees_with_the_registry_on_every_swept_cell():
         _TABLE_PATH,
         MEASURED_ARCH,
         BudgetKey,
+        Metric,
         _winner,
     )
+    from helpers.ulp import has_ulp_gate
     from helpers.ulp_sweep import sweep_cells
 
     table = parse_table(_TABLE_PATH.read_text(encoding="utf-8"))
-    cells = sweep_cells()
+    # The Wormhole grid, whatever CHIP_ARCH this host has: the one headroom judges.
+    cells = sweep_cells(MEASURED_ARCH)
     compared = 0
     for op, rows in _SFPU_ACCURACY_BUDGET.items():
         for in_fmt, out_fmt, approx, dest in cells:
@@ -745,6 +741,13 @@ def test_this_resolution_agrees_with_the_registry_on_every_swept_cell():
             )
             mine = _resolve(table, *asked)
             assert (mine.key if mine else None) == theirs, asked
+            # And whether that row's step budget binds, which the output decides too.
+            binds = (
+                found is not None
+                and found[1].metric is Metric.ULP
+                and has_ulp_gate(out_fmt)
+            )
+            assert _gates(mine, asked[1]) == binds, asked
             compared += 1
     assert cells and _SFPU_ACCURACY_BUDGET, "nothing to compare"
     assert compared == len(cells) * len(_SFPU_ACCURACY_BUDGET) > 0
@@ -1020,3 +1023,164 @@ def test_a_named_junit_report_that_is_missing_fails_the_comparison(tmp_path, cap
     ]
     assert main(argv) == 1
     assert "No JUnit report" in capsys.readouterr().out
+
+
+# ── What the registry refuses, and what it binds ───────────────────────────────
+
+
+def test_the_spelled_out_sets_are_the_registrys():
+    """The tool cannot import the registry, so its copies are held equal here."""
+    from helpers.format_config import DataFormat
+    from helpers.sfpu_accuracy_budget import _CONTRACT_FIELDS
+    from helpers.ulp import has_ulp_gate
+
+    assert CONTRACT_FIELDS == frozenset(_CONTRACT_FIELDS)
+    assert ULP_GATED_OUTPUTS == {f.name for f in DataFormat if has_ulp_gate(f)}
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        "{in: Float16_b, out: Float16_b, max_ulp: true}",
+        "{in: Float16_b, out: Float16_b, max_ulp: -1}",
+        "{in: Float16_b, out: Float16_b, max_ulp: 1.5}",
+        "{in: Float16_b, out: Float16_b, metric: tolerance, atol: .nan}",
+        "{in: Float16_b, out: Float16_b, max_ulp: 1, colour: red}",
+        "{in: Float16_b, out: Float16_b, max_ulp: 1, atol: 0.1}",
+        "{in: Float16_b, out: Float16_b, metric: tolerance, near_zero_atol: 0.5}",
+        "{in: Float16_b, out: Float16_b, metric: tolerance, max_ulp: 1}",
+        "{in: Float16_b, out: Float16_b, metric: ulps, max_ulp: 1}",
+        "{in: Float16_b, out: Float16_b, approx: Maybe, max_ulp: 1}",
+        "{in: Float16_b, in: Float16, out: Float16_b, max_ulp: 1}",
+    ],
+)
+def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, capsys, row):
+    head = _head(row)
+    argv = [
+        "diff",
+        "--base",
+        _write(tmp_path, "base.yaml", _BASE),
+        "--head",
+        _write(tmp_path, "head.yaml", head),
+        "--allow-raises",
+    ]
+    assert main(argv) == 2
+    assert "cannot load" in capsys.readouterr().out
+
+
+def test_deleting_a_parent_row_is_seen_on_the_flag_value_no_row_pins():
+    """`{approx: Yes}` alone pins one value; the `No` cells fell back to the broad row,
+    and deleting it leaves them on nothing."""
+    for flag in ("approx", "dest"):
+        base = _head(
+            "{in: Float16_b, out: Float32, metric: tolerance}  # max 9 ULP",
+            f'{{in: Float16_b, out: Float32, {flag}: "Yes", metric: tolerance}}'
+            "  # max 9 ULP",
+        )
+        head = _head(
+            f'{{in: Float16_b, out: Float32, {flag}: "Yes", metric: tolerance}}'
+            "  # max 9 ULP"
+        )
+        kinds = {c.kind for c in _changes(base, head)}
+        assert kinds == {"baseline_dropped"}, flag
+
+
+def test_deleting_a_row_that_records_only_a_nonfinite_count_drops_a_baseline():
+    base = _head(
+        "{in: Float32, out: Float16, metric: tolerance}  "
+        "# not measurable: 3 lane(s) disagreeing with the golden about being finite"
+    )
+    head = _head("{in: Float16_b, out: Float16_b, max_ulp: 1}  # a")
+    assert "baseline_dropped" in {c.kind for c in _changes(base, head)}
+
+
+@pytest.mark.parametrize(
+    "base_row, head_row",
+    [
+        (
+            "{in: Bfp8_b, out: Bfp8_b, metric: tolerance, atol: 0.13}",
+            "{in: Bfp8_b, out: Bfp8_b, metric: tolerance, atol: 0.13, rtol: 0.9}",
+        ),
+        (
+            "{in: Bfp8_b, out: Bfp8_b, metric: tolerance}",
+            "{in: Bfp8_b, out: Bfp8_b, metric: tolerance, atol: 100}",
+        ),
+    ],
+)
+def test_a_bound_that_appears_may_be_looser_than_the_default(base_row, head_row):
+    kinds = {c.kind for c in _changes(_head(base_row), _head(head_row))}
+    assert kinds == {"tolerance_widened"}
+
+
+def test_a_new_row_without_a_comment_of_its_own_is_not_remeasured():
+    base = "Abs:  # measured by: sweep A\n  - {max_ulp: 2}  # exact\n"
+    head = base + "  - {in: Float32, max_ulp: 1000}\n"
+    (change,) = _changes(base, head)
+    assert change.kind == "raised" and not change.remeasured
+
+
+def test_a_step_row_on_an_output_with_no_per_element_ulp_does_not_gate():
+    """The registry hands such a cell its tolerance; the tool must not judge it."""
+    table = parse_table(_head("{in: Float16_b, out: Bfp4_b, max_ulp: 25}"))
+    (row,) = table.values()
+    assert not _gates(row, (("in", "Float16_b"), ("out", "Bfp4_b")))
+    report, over = render_headroom(table, _measured(("Float16_b", "Bfp4_b", 393)))
+    assert over == 0 and "over budget" not in report
+
+
+def test_a_measured_cell_no_row_covers_is_counted_not_dropped():
+    table = parse_table(
+        _head("{in: Float16_b, out: Float16_b, max_ulp: 1}  # max 1 ULP")
+    )
+    report, over = render_headroom(table, _measured(("Float16", "Float32", 10**6)))
+    assert over == 0
+    assert "1 covered by no row at all" in report
+
+
+def test_a_tolerance_cell_that_ranked_no_lane_regresses_against_its_figure():
+    table = parse_table(
+        _head("{in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # max 393 ULP")
+    )
+    rows = [
+        {"op": "Abs", "in": "Bfp8_b", "out": "Bfp8_b", "max": 0, "lanes": 0},
+    ]
+    worst, nonfinite, empty = _readings(rows)
+    report, regressed = render_headroom(table, worst, nonfinite, empty=empty)
+    assert regressed == 1 and "no lane measurable" in report
+
+
+def test_only_a_skip_that_recorded_counts_as_completed():
+    junit = (
+        '<testsuites><testsuite name="pytest">'
+        '<testcase name="t[Abs-in:Float16_b-out:Float16_b-approx:No-dest_acc:Yes]">'
+        f'<skipped message="x: {RECORDED_SKIP} -- on the tolerance metric"/></testcase>'
+        '<testcase name="t[Abs-in:Float16-out:Float16-approx:No-dest_acc:Yes]">'
+        '<skipped message="the table\'s budgets are WORMHOLE measurements"/></testcase>'
+        "</testsuite></testsuites>"
+    )
+    assert junit_completed(junit) == [("Abs", "Float16_b", "Float16_b", "No", "Yes")]
+
+
+@pytest.mark.parametrize(
+    "measured, junit, says",
+    [
+        ('{"op": "Abs", "in": "Float16_b"\n', None, "is not JSON"),
+        ('{"op": "Abs"}\n', None, "malformed"),
+        ("", "<testsuites><testcase", "not well-formed"),
+    ],
+)
+def test_an_unreadable_input_is_named_not_blamed_on_the_table(
+    tmp_path, capsys, measured, junit, says
+):
+    argv = [
+        "headroom",
+        "--table",
+        _write(tmp_path, "t.yaml", _BASE),
+        "--measured",
+        _write(tmp_path, "m.jsonl", measured),
+    ]
+    if junit is not None:
+        argv += ["--junit", _write(tmp_path, "j.xml", junit)]
+    assert main(argv) == 2
+    out = capsys.readouterr().out
+    assert says in out and "cannot load" not in out

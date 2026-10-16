@@ -40,6 +40,19 @@ KEY_FIELDS = ("in", "out", "approx", "dest", "arch")
 #: out because this module may not import the registry; a host test ties them together.
 MEASURED_ARCH = "WORMHOLE"
 
+#: The output formats a step budget can bind on: ``ulp.has_ulp_gate`` is true for exactly
+#: these. A block float with no per-element ULP keeps its lattice compare, so a step row
+#: on one is inert in the registry. Spelled out for the same reason as MEASURED_ARCH; a
+#: host test ties it to ``has_ulp_gate``.
+ULP_GATED_OUTPUTS = frozenset({"Float16_b", "Float16", "Float32", "Bfp8_b"})
+
+#: The fields a row may carry beyond its key: ``sfpu_accuracy_budget._CONTRACT_FIELDS``.
+CONTRACT_FIELDS = frozenset({"metric", "max_ulp", "atol", "rtol", "near_zero_atol"})
+
+#: The sweep's skip reasons for a cell it measured and recorded but does not gate. A
+#: skip that does not carry it (off Wormhole, ``--compile-producer``) wrote nothing.
+RECORDED_SKIP = "measured, not gated"
+
 #: A cell identity: the op plus whichever key dimensions the row pins.
 Cell = Tuple[str, Tuple[Tuple[str, str], ...]]
 
@@ -92,6 +105,8 @@ class Row:
     #: tolerance cell with them, so widening one loosens that cell.
     atol: Optional[float] = None
     rtol: Optional[float] = None
+    #: The row's own comment, without the op header it falls back to.
+    comment: str = ""
 
     @property
     def gated(self) -> bool:
@@ -200,11 +215,77 @@ def _number(value) -> Optional[float]:
     return value if isinstance(value, (int, float)) and value is not True else None
 
 
+class _NoDuplicateKeys(yaml.SafeLoader):
+    """``SafeLoader`` refusing a repeated mapping key, which PyYAML lets the last one
+    win and the registry's ``_read_yaml`` refuses."""
+
+    def construct_mapping(self, node, deep=False):
+        # On the node's own keys, before a `<<` merge folds in the anchor's: an explicit
+        # key overriding a merged one is YAML, a key written twice is not.
+        seen = set()
+        for key_node, _ in node.value:
+            if (
+                isinstance(key_node, yaml.ScalarNode)
+                and key_node.tag != "tag:yaml.org,2002:merge"
+            ):
+                if key_node.value in seen:
+                    raise ValueError(
+                        f"line {key_node.start_mark.line + 1}: repeated key "
+                        f"{key_node.value!r}"
+                    )
+                seen.add(key_node.value)
+        return super().construct_mapping(node, deep=deep)
+
+
+def _check_number(where: str, name: str, value, *, integer: bool = False) -> None:
+    """The registry's ``_check_number``: a bool, a non-number, a non-finite or a
+    negative value is refused there, so the table cannot load."""
+    kinds = int if integer else (int, float)
+    if isinstance(value, bool) or not isinstance(value, kinds):
+        raise ValueError(f"{where}: {name} must be a number, got {value!r}")
+    if value != value or value in (float("inf"), float("-inf")) or value < 0:
+        raise ValueError(
+            f"{where}: {name} must be finite and not negative, got {value}"
+        )
+
+
+def _check_row(where: str, fields: dict) -> None:
+    """What the registry refuses in one row, so a table it cannot load gets no verdict:
+    an unknown field, a metric that is neither, a bad number, or the two metrics' fields
+    mixed in one row."""
+    unknown = set(fields) - set(KEY_FIELDS) - CONTRACT_FIELDS
+    if unknown:
+        raise ValueError(f"{where}: unknown field(s) {sorted(unknown)}")
+    metric = fields.get("metric", "ulp")
+    if metric not in ("ulp", "tolerance"):
+        raise ValueError(f"{where}: metric must be ulp or tolerance, got {metric!r}")
+    for name in ("atol", "rtol", "near_zero_atol"):
+        if fields.get(name) is not None:
+            _check_number(where, name, fields[name])
+    if metric == "ulp":
+        if fields.get("max_ulp") is None:
+            raise ValueError(f"{where}: a ulp row needs max_ulp")
+        _check_number(where, "max_ulp", fields["max_ulp"], integer=True)
+        if fields.get("atol") is not None or fields.get("rtol") is not None:
+            raise ValueError(f"{where}: atol/rtol belong to the tolerance metric")
+    elif fields.get("max_ulp") is not None or fields.get("near_zero_atol") is not None:
+        raise ValueError(f"{where}: max_ulp/near_zero_atol belong to the ulp metric")
+    for flag in ("approx", "dest"):
+        if fields.get(flag) is not None and _key_value(flag, fields[flag]) not in (
+            "Yes",
+            "No",
+        ):
+            raise ValueError(f"{where}: {flag} must be Yes or No, got {fields[flag]!r}")
+
+
 def parse_table(text: str) -> Dict[Cell, Row]:
     """Every row of the table, keyed by the cell it governs: values through PyYAML, so
     anchors and ``<<`` merge keys mean what they mean, and comments through a positional
-    scan zipped with the loaded rows (sound while every row is one inline mapping)."""
-    loaded = yaml.safe_load(text) or {}
+    scan zipped with the loaded rows (sound while every row is one inline mapping).
+    Refuses, as the registry does, a table it could not load."""
+    loaded = yaml.load(text, Loader=_NoDuplicateKeys) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError("expected a mapping of op names at the top level")
     comments = _provenance_by_op(text)
     rows: Dict[Cell, Row] = {}
     for op, entries in loaded.items():
@@ -215,9 +296,10 @@ def parse_table(text: str) -> Dict[Cell, Row]:
         # rather than mislabel provenance, drop it for that op and keep the budgets.
         if len(found) != len(entries):
             found = [""] * len(entries)
-        for fields, comment in zip(entries, found):
+        for index, (fields, comment) in enumerate(zip(entries, found)):
             if not isinstance(fields, dict):
-                continue
+                raise ValueError(f"{op}: row {index + 1} is not a mapping")
+            _check_row(f"{op} row {index + 1}", fields)
             key = tuple(
                 (k, _key_value(k, fields[k]))
                 for k in KEY_FIELDS
@@ -237,15 +319,31 @@ def parse_table(text: str) -> Dict[Cell, Row]:
             rows[(op, key)] = Row(
                 op=op,
                 key=key,
-                max_ulp=max_ulp if isinstance(max_ulp, int) else None,
+                max_ulp=max_ulp,
                 # A row's own comment wins; one without inherits the op header's run
                 # identity, so updating either registers as a re-measurement.
                 provenance=comment or header,
+                comment=comment,
                 near_zero_atol=_number(fields.get("near_zero_atol")),
                 atol=_number(fields.get("atol")),
                 rtol=_number(fields.get("rtol")),
             )
     return rows
+
+
+#: Each table's rows grouped by op, built once per table: resolving a cell scanned all
+#: 4,000-odd rows, several times per variant.
+_BY_OP: Dict[int, Tuple[Dict[Cell, Row], Dict[str, List[Row]]]] = {}
+
+
+def _rows_of(table: Dict[Cell, Row], op: str) -> List[Row]:
+    cached = _BY_OP.get(id(table))
+    if cached is None or cached[0] is not table:
+        grouped: Dict[str, List[Row]] = {}
+        for row in table.values():
+            grouped.setdefault(row.op, []).append(row)
+        cached = _BY_OP[id(table)] = (table, grouped)
+    return cached[1].get(op, [])
 
 
 def _resolve(
@@ -262,10 +360,8 @@ def _resolve(
     asked = dict(key)
     matched = [
         row
-        for (row_op, row_key), row in table.items()
-        if row_op == op
-        and all(asked.get(k) == v for k, v in row_key)
-        and (only is None or only(row))
+        for row in _rows_of(table, op)
+        if all(asked.get(k) == v for k, v in row.key) and (only is None or only(row))
     ]
     if not matched:
         return None
@@ -281,14 +377,16 @@ def _resolve(
 
 
 def _gates(row: Optional[Row], key: Tuple[Tuple[str, str], ...]) -> bool:
-    """Whether *row* holds the cell *key* names to a step budget: it carries one, and
-    the cell is on the arch the budget was measured on -- :data:`MEASURED_ARCH` for a
-    row that names none (an unset arch is that one), or the arch the row names."""
+    """Whether *row* holds the cell *key* names to a step budget: it carries one, the
+    output has a per-element ULP (:data:`ULP_GATED_OUTPUTS`), and the cell is on the
+    arch the budget was measured on -- :data:`MEASURED_ARCH` for a row that names none
+    (an unset arch is that one), or the arch the row names."""
     if row is None or not row.gated:
         return False
-    return dict(key).get("arch", MEASURED_ARCH) == MEASURED_ARCH or "arch" in dict(
-        row.key
-    )
+    asked = dict(key)
+    if asked.get("out") is not None and asked["out"] not in ULP_GATED_OUTPUTS:
+        return False
+    return asked.get("arch", MEASURED_ARCH) == MEASURED_ARCH or "arch" in dict(row.key)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -310,6 +408,12 @@ def _variants(base: Dict[Cell, Row], head: Dict[Cell, Row], op: str):
             if row_op == op:
                 for k, v in key:
                     values[k].add(v)
+    for flag in ("approx", "dest"):
+        # Pinning one value of a two-valued flag splits the other off a broader row,
+        # so both are asked: deleting `{approx: No}`'s parent leaves `approx: Yes` cells
+        # covered and the `No` ones on nothing.
+        if values[flag]:
+            values[flag] |= {"No", "Yes"}
     axes = [
         (
             sorted(values[k] | {MEASURED_ARCH})
@@ -399,14 +503,15 @@ def _held(table: Dict[Cell, Row], op: str, key, open_dims=frozenset()) -> _Held:
 
 
 def _widened(was: Optional[Row], now: Optional[Row]) -> bool:
-    """Whether a tolerance compare got looser: a bound went up, or a declared bound went
-    away and left the cell on a default this tool cannot see."""
+    """Whether a tolerance compare may have got looser: a bound went up, went away, or
+    appeared. The last two replace a per-format default this tool cannot see with
+    another bound, which can be looser; only a lower bound is a sure tightening."""
     if was is None:
-        return False
+        return now is not None
     if now is None:
         return True
     return any(
-        old is not None and (new is None or new > old)
+        (old is None) != (new is None) or (old is not None and new > old)
         for old, new in ((was.atol, now.atol), (was.rtol, now.rtol))
     )
 
@@ -435,7 +540,11 @@ def _classify(was: _Held, now: _Held) -> Optional[str]:
     # same re-measurement a raised budget does.
     if _widened(was.declared, now.declared):
         return "tolerance_widened"
-    if was.baseline is not None and now.baseline is None:
+    if (was.baseline is not None and now.baseline is None) or (
+        was.nonfinite and now.row is None
+    ):
+        # A non-finite count is a baseline too: with no row left, the headroom report
+        # has nothing to hold the cell's non-finite lanes to.
         return "baseline_dropped"
     if (
         was.baseline is not None
@@ -502,11 +611,14 @@ def compare(base: Dict[Cell, Row], head: Dict[Cell, Row]) -> List[Change]:
 
 def _remeasured(base: Dict[Cell, Row], row: Optional[Row]) -> bool:
     """Whether *row*, the head row deciding a cell, carries a provenance comment the base
-    table's same row did not -- a new row's comment is new by definition."""
+    table's same row did not. A new row counts only with a comment of its own: one that
+    leans on the op header carries no measurement of its own."""
     if row is None:
         return False
     was = base.get((row.op, row.key))
-    return was is None or was.provenance != row.provenance
+    if was is None:
+        return bool(row.comment)
+    return was.provenance != row.provenance
 
 
 _KIND_TEXT = {
@@ -625,27 +737,38 @@ def _measured_cell(row: dict) -> Cell:
     )
 
 
-def _measured_cells(rows: Iterable[dict]) -> Dict[Cell, int]:
-    """The worst lane each variant reached, from ``--ulp-measure`` rows. A driver
-    enumerates axes the budget key does not, so several rows land on one cell and the
-    worst wins, as in ``ulp_sweep.record``."""
+def _readings(rows: Iterable[dict]) -> Tuple[Dict[Cell, int], Dict[Cell, int], set]:
+    """From ``--ulp-measure`` rows, per cell: the worst lane, the most lanes where the
+    hardware and the golden disagree about being finite, and whether every reading of it
+    ranked no lane at all. A driver enumerates axes the budget key does not, so several
+    rows land on one cell and the worst wins, as in ``ulp_sweep.record``."""
     worst: Dict[Cell, int] = {}
+    nonfinite: Dict[Cell, int] = {}
+    ranked: Dict[Cell, bool] = {}
     for row in rows:
-        cell = _measured_cell(row)
-        worst[cell] = max(worst.get(cell, 0), int(row["max"]))
-    return worst
+        try:
+            cell = _measured_cell(row)
+            reading, lost = int(row["max"]), int(row.get("nonfinite", 0))
+        except (KeyError, TypeError, ValueError) as bad:
+            raise Unreadable(
+                f"a --ulp-measure row is malformed ({bad!r}): {row}"
+            ) from None
+        worst[cell] = max(worst.get(cell, 0), reading)
+        nonfinite[cell] = max(nonfinite.get(cell, 0), lost)
+        ranked[cell] = ranked.get(cell, False) or int(row.get("lanes", 1)) > 0
+    empty = {cell for cell, any_lane in ranked.items() if not any_lane}
+    return worst, nonfinite, empty
+
+
+def _measured_cells(rows: Iterable[dict]) -> Dict[Cell, int]:
+    """The worst lane each variant reached (:func:`_readings`)."""
+    return _readings(rows)[0]
 
 
 def _nonfinite_cells(rows: Iterable[dict]) -> Dict[Cell, int]:
-    """Per cell, the most lanes any measurement saw where the hardware and the golden
-    disagree about being finite: an inf/NaN against a finite golden, a finite answer to
-    an infinite one, or infinities of opposite sign (0 for rows written before the sweep
-    recorded the count)."""
-    worst: Dict[Cell, int] = {}
-    for row in rows:
-        cell = _measured_cell(row)
-        worst[cell] = max(worst.get(cell, 0), int(row.get("nonfinite", 0)))
-    return worst
+    """Per cell, the most lanes where the hardware and the golden disagree about being
+    finite (:func:`_readings`)."""
+    return _readings(rows)[1]
 
 
 def recorded_nonfinite(row: Row) -> int:
@@ -694,13 +817,25 @@ class Failure:
     cell: Optional[Tuple[str, str, str, str, str]] = None
 
 
+class Unreadable(Exception):
+    """An input other than the table cannot be read: a malformed ``--ulp-measure`` row or
+    JUnit report. Reported as what it is, never as a table that cannot load."""
+
+
+def _junit_cases(text: str):
+    try:
+        return list(ElementTree.fromstring(text).iter("testcase"))
+    except ElementTree.ParseError as bad:
+        raise Unreadable(f"the JUnit report is not well-formed XML: {bad}") from None
+
+
 def junit_failures(text: str) -> List[Failure]:
     """Every failed or errored test case in a JUnit report. The measurements say which
     cells went over a budget; this says which tests failed for any other reason -- a
     gated cell with no measurable lane, a stale known-lane excuse, a crash -- which
     write no measurement at all."""
     failures = []
-    for case in ElementTree.fromstring(text).iter("testcase"):
+    for case in _junit_cases(text):
         bad = case.find("failure")
         if bad is None:
             bad = case.find("error")
@@ -720,13 +855,19 @@ def junit_failures(text: str) -> List[Failure]:
 
 
 def junit_completed(text: str) -> List[Tuple[str, str, str, str, str]]:
-    """The cell of every sweep test case in a JUnit report that neither failed nor
-    errored. Each wrote a measurement -- a gated cell from ``passed_test``, a tolerance
-    cell before its skip -- so one with none means the recorder lost it, and nothing
-    judged that cell."""
+    """The cell of every sweep test case in a JUnit report that wrote a measurement: it
+    passed (a gated cell records from ``passed_test``), or skipped with
+    :data:`RECORDED_SKIP` (a tolerance cell records before its skip). One with no row
+    means the recorder lost it, and nothing judged that cell. Any other skip -- off
+    Wormhole, under ``--compile-producer`` -- measured nothing and is not counted."""
     cells = []
-    for case in ElementTree.fromstring(text).iter("testcase"):
+    for case in _junit_cases(text):
         if case.find("failure") is not None or case.find("error") is not None:
+            continue
+        skipped = case.find("skipped")
+        if skipped is not None and RECORDED_SKIP not in (
+            (skipped.get("message") or "") + (skipped.text or "")
+        ):
             continue
         found = _SWEEP_ID.search(case.get("name", ""))
         if found:
@@ -746,6 +887,7 @@ def render_headroom(
     nonfinite: Optional[Dict[Cell, int]] = None,
     failures: Iterable[Failure] = (),
     completed: Iterable[Tuple[str, str, str, str, str]] = (),
+    empty: Iterable[Cell] = (),
 ) -> Tuple[str, int]:
     """The report, and the regression count the command fails on.
 
@@ -760,7 +902,10 @@ def render_headroom(
     already listed as over budget or regressed is not repeated; the rest -- failures no
     measurement describes -- get a section of their own and count as regressions.
 
-    *completed* are the sweep's tests that did not fail (:func:`junit_completed`). Each
+    *empty* are measured cells that ranked no lane at all. One whose row records a
+    figure has lost every lane it was measured on, which is a regression, not a pass.
+
+    *completed* are the sweep's tests that recorded (:func:`junit_completed`). Each
     should have written a measurement; one that did not was judged by nothing, since
     the recorder swallows a failed write, so it is listed and counts as a regression.
     An empty comparison -- nothing measured, nothing failed -- fails too: it is a sweep
@@ -771,6 +916,8 @@ def render_headroom(
     tight: List[str] = []
     slack: List[str] = []
     unjudged = 0
+    uncovered = 0
+    empty = set(empty)
     listed = set()  # the cells a section above already names, as failures key them
     for cell, count in sorted((nonfinite or {}).items()):
         row = _resolve(table, *cell)
@@ -783,11 +930,16 @@ def render_headroom(
     for cell, worst in sorted(measured.items()):
         row = _resolve(table, *cell)
         if row is None:
+            # On the registry's default tolerance: no row records a figure for it.
+            uncovered += 1
             continue
         if not _gates(row, cell[1]):
             was = recorded_max(row)
             if was is None:
                 unjudged += 1
+            elif cell in empty:
+                regressed.append(_headroom_line(cell, 0, was, "no lane measurable"))
+                listed.add(_same_cell(cell))
             elif worst > was:
                 regressed.append(_headroom_line(cell, worst, was, "regressed"))
                 listed.add(_same_cell(cell))
@@ -820,12 +972,13 @@ def render_headroom(
         ]
         return "\n".join(out), 1
     out += [f"{len(measured)} cell(s) measured.", ""]
-    if unjudged:
+    if unjudged or uncovered:
         # Not a failure, but not a pass either: without a recorded figure there is
         # nothing to hold the cell to, and a clean summary must not read as covering it.
         out += [
-            f"{unjudged} tolerance cell(s) measured but not judged: their row records no "
-            "`max N ULP` to hold them to, or does not pin both `in` and `out`.",
+            f"{unjudged + uncovered} tolerance cell(s) measured but not judged: "
+            f"{unjudged} on a row that records no `max N ULP` or does not pin both "
+            f"`in` and `out`, {uncovered} covered by no row at all.",
             "",
         ]
     sections = (
@@ -906,7 +1059,15 @@ def _headroom(args) -> Tuple[str, int]:
     # A sweep that died before its first cell writes no file; the report then says it
     # measured nothing, and the JUnit failures say why.
     text = args.measured.read_text(encoding="utf-8") if args.measured.exists() else ""
-    rows = [json.loads(line) for line in text.splitlines() if line.strip()]
+    rows = []
+    for number, line in enumerate(text.splitlines(), 1):
+        if line.strip():
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as bad:
+                raise Unreadable(
+                    f"{args.measured}:{number} is not JSON ({bad})"
+                ) from None
     failures, completed = [], []
     if args.junit is not None:
         # Named but absent is a sweep that never finished writing it: without it there
@@ -920,8 +1081,9 @@ def _headroom(args) -> Tuple[str, int]:
             )
         junit = args.junit.read_text(encoding="utf-8")
         failures, completed = junit_failures(junit), junit_completed(junit)
+    worst, nonfinite, empty = _readings(rows)
     report, regressions = render_headroom(
-        table, _measured_cells(rows), _nonfinite_cells(rows), failures, completed
+        table, worst, nonfinite, failures, completed, empty
     )
     return report, 1 if regressions else 0
 
@@ -957,7 +1119,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
     try:
         report, status = (_diff if args.mode == "diff" else _headroom)(args)
-    except ValueError as refused:
+    except Unreadable as bad:
+        report, status = f"### SFPU ULP budgets\n\nCannot read the input: {bad}\n", 2
+    except (ValueError, yaml.YAMLError) as refused:
         # A table the registry would refuse to load. No verdict on it means anything,
         # and --allow-raises cannot admit one: the fix is the table.
         report, status = (
