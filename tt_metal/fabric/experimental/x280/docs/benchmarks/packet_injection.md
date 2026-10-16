@@ -1,21 +1,15 @@
 # Packet Injection Characterization
 
-The 40-configuration rerun includes both throughput families and all four latency/backpressure variants.
-Its worker records retain native CPU measurements where the interval is local.
-Current schema-2 records retain raw wall ticks and per-run AICLK evidence for
-offline conversion. Historical captures below retain their original schemas
-and conversion assumptions.
-
 **Status:** Implementation and silicon execution are available. The
 implementation uses core-sync for its phase boundary; measurement schema 2 owns
 the clock-evidence contract.
 
-**Scope:** feasibility benchmarks ID 10 and ID 11: characterization of
+**Scope:** characterization of
 dedicated single-producer single-consumer (SPSC) packet injection between
 Tensix workers (BRISC on NoC 0 and NCRISC on NoC 1) and an active X280 consumer
 over Blackhole NoC and LIM. Covers three compile-time measurement modes across
 five distinct image and test variants. The same producer, consumer, ABI and host
-stages also implement ID 14, `packet_injection/erisc_to_x280_header`, with idle
+stages also implement `packet_injection/erisc_to_x280_header`, with idle
 ERISC producers; see [ERISC Header-Ingress Member](#erisc-header-ingress-member).
 
 ## Architectural Overview
@@ -772,7 +766,7 @@ workers that a round takes longer than `S` requests.
 
 ## ERISC Header-Ingress Member
 
-`packet_injection/erisc_to_x280_header` (ID 14) measures a receiving ERISC publishing
+`packet_injection/erisc_to_x280_header` measures a receiving ERISC publishing
 ready 96-byte packet headers into the X280 forwarder, scaled across concurrent
 writers. One to all available inactive `IDLE_ETH` cores, one per Ethernet tile,
 each run the shared `Producer` against their own SPSC ring into the one shared
@@ -1030,7 +1024,7 @@ write, a write barrier, then the ring-tail produced counter, which X280 polls
 with a fence before the counter load and another before the slot loads (see
 [Architectural Overview](#architectural-overview)).
 Comparing that encoding with a per-slot or in-header valid flag, such as the
-prototype's, is Fabric 2.0 ID 15.
+prototype's, is a separate measurement this member does not make.
 
 ### Credit-protocol cost
 
@@ -1051,7 +1045,7 @@ Tensix BRISC/NCRISC producers into an X280 consumer, and
 open the 14-way `LimLayout::PacketInjection` profile. The ERISC member links
 `x280_slow_dispatch` ([harness.md](../harness.md#running-benchmarks)). The header-ingress member, which
 runs on the packet-injection throughput image, is in
-[§ ERISC Header-Ingress Member](#erisc-header-ingress-member), with the ID 14
+[§ ERISC Header-Ingress Member](#erisc-header-ingress-member), with its
 contract under [§ Measured operation](#measured-operation).
 Records name no source revision. What produced a run is established by the
 campaign runner's attempt record (`attempt.json`: the executable's and each

@@ -5,7 +5,7 @@
 /*
  * kernels/p2p_latency/backends/x280_x280_same_tile.hpp -- x280_same_tile X280 backend.
  *
- * ID 2 is X280 hart <-> X280 hart on the same L2CPU tile. Both participants
+ * x280_same_tile is X280 hart <-> X280 hart on the same L2CPU tile. Both participants
  * share one LIM, so a transmit is a plain LIM store from the initiator's
  * hart into the responder's inbound mailbox and a poll is a plain load from
  * this hart's own inbound. No NOC window is consumed, no address translation
@@ -19,7 +19,7 @@
  * "Native CPU cycles never become nanoseconds").
  *
  * See docs/benchmarks/design.md §Roles and mailbox model,
- * §Timing and clock domains, and §Participant rows for ID 2's semantic
+ * §Timing and clock domains, and §Participant rows for x280_same_tile's semantic
  * contract.
  */
 #ifndef X280_P2P_LATENCY_BACKEND_X280_X280_SAME_TILE_HPP
@@ -62,7 +62,7 @@ struct state_t {
     uint64_t hartid;
     uint64_t run_value;
 
-    /* Set by initialize(). Not used inside the timed loop for ID 2, but the
+    /* Set by initialize(). Not used inside the timed loop for x280_same_tile, but the
      * frontend calls bind_direction() every phase and future members may want a
      * per-direction rebinding. Kept for parity. */
     uint32_t direction;
@@ -95,7 +95,7 @@ inline bool initialize(
     }
 
     if (common.payload_size != 4u) {
-        /* ID 2 implements only the token-only specialisation. Larger
+        /* x280_same_tile implements only the token-only specialisation. Larger
          * payloads are a separate template instantiation of the frontend
          * and its backend transmit; they can be added alongside the
          * payload sweep without touching this member. */
@@ -121,7 +121,7 @@ inline bool initialize(
     return true;
 }
 
-/* Phase entry hook. ID 2's addresses are direction-agnostic (both harts read
+/* Phase entry hook. x280_same_tile's addresses are direction-agnostic (both harts read
  * their own inbound and write to the peer's inbound regardless of who is
  * initiator this phase), so this only records the current direction. */
 inline void bind_direction(state_t& state, p2p_latency_direction_t direction) {
@@ -158,7 +158,7 @@ inline bool delta(const state_t&, timestamp_t t0, timestamp_t t1, counter_delta_
  */
 template <p2p_latency_transfer_shape_t Shape, p2p_latency_transmit_mode_t TransmitMode>
 inline void transmit(state_t& state, uint32_t token) {
-    static_assert(Shape == P2P_LATENCY_TRANSFER_TOKEN_ONLY, "ID 2 supports only the token-only specialisation");
+    static_assert(Shape == P2P_LATENCY_TRANSFER_TOKEN_ONLY, "x280_same_tile supports only the token-only specialisation");
     static_assert(
         TransmitMode != P2P_LATENCY_TRANSMIT_WAIT_FOR_DEPARTURE,
         "X280 has no established departure-only primitive; the design rejects this mode");

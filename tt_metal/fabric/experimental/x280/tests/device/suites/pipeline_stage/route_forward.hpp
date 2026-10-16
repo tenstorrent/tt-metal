@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// suites/pipeline_stage/route_forward.hpp -- ID 7, the router-side forward.
+// suites/pipeline_stage/route_forward.hpp -- the router-side forward.
 //
-// ID 7 measures DECIDE: the hop decode and routing_fields update of the
+// route_forward measures DECIDE: the hop decode and routing_fields update of the
 // pinned first header, with no packet issued.
 
 #ifndef X280_SUITES_PIPELINE_STAGE_ROUTE_FORWARD_HPP

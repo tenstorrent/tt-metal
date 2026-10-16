@@ -1222,7 +1222,7 @@ an inherited filter, `tt-smi -r <N>` for a device outside it prints
   prepares a selected set of tiles, establishes the safe clock, and releases
   all of them in one write to `L2CPU_RESET`, inside the all-in-reset window the
   per-tile gate proves. Several L2CPUs leaving reset in one write is confirmed
-  on silicon: the `x280_peer_tile` placement sweep measured ID 3 across three
+  on silicon: the `x280_peer_tile` placement sweep ran across three
   complexes cold-booted as one batch. It is also the sanctioned bringup flow
   rather than a tolerated one. `tt-bh-linux`, `boot.py:76-85` implements the same algorithm — PLL to 200,
   read `L2CPU_RESET`, `|= 1 << (index + 4)` for every requested index, one

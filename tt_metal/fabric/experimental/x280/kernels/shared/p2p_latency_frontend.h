@@ -58,7 +58,7 @@ static inline uint32_t p2p_latency_cookie_for(ubench_section_t s) {
 /* --------------------------------------------------------------------------
  * Participant identity
  * --------------------------------------------------------------------------
- * A p2p_latency invocation has exactly two participants. ID 2 pairs two
+ * A p2p_latency invocation has exactly two participants. x280_same_tile pairs two
  * X280 harts on one tile; cross-class members pair an X280 image with a
  * Tensix, idle-ERISC or DRISC kernel.
  * "self" is who this device thinks it is, not who initiates first -- direction
@@ -81,7 +81,7 @@ typedef enum { P2P_LATENCY_POLL_TIGHT = 0u, P2P_LATENCY_POLL_BACKOFF = 1u } p2p_
 
 /* Backend-specific: X280 has no established departure-only primitive and
  * rejects WAIT_FOR_DEPARTURE. Tensix maps all three to its NOC issue, flush,
- * and barrier operations. ID 2 self-view maps FIRE_AND_FORGET and
+ * and barrier operations. x280_same_tile self-view maps FIRE_AND_FORGET and
  * WAIT_FOR_COMPLETION to a local store with and without a visibility fence;
  * WAIT_FOR_DEPARTURE has no meaning locally. */
 typedef enum {

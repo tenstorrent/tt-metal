@@ -149,8 +149,6 @@ results are described in [docs/results.md](docs/results.md).
   3.89 cycles per `sw`. Tensix -> X280 is Tensix-issue-bound at 17.8 ns per write through 256 B
   (14.4 GB/s), then the X280 sink holds about 17.5 GB/s from 384 B to 16 KiB at 1750 MHz; below
   about 1.44 GHz the sink binds at 256 B too.
-- **pipeline_stage.** A routing-table lookup costs about 74 X280 cycles per item and a forward
-  decision 42; recorded on the 4,160-byte prepared region, before it grew to 4,288 bytes.
 - **core_sync.** An X280 director's multicast release spreads 16 Tensix workers' exits over
   about 122 debug-timer ticks, against about 11,600 for unicast.
 - **packet_injection.** One Tensix producer sustains about 1.38 M headers/s at one credit per

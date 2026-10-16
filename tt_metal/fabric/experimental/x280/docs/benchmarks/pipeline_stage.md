@@ -16,8 +16,8 @@ window cleanup are owned by
 [`docs/harness.md`](../harness.md). Exact operator
 commands are owned by [`README.md`](../../README.md). This document owns the pipeline
 subjects, fixed layouts, configuration matrix, validation, and result identity.
-How benchmarks are named — `ID <n>` from the feasibility table, and why that number
-stays out of paths and result records — is owned by
+How benchmarks are named — by suite and member, with no other numbering in
+paths and result records — is owned by
 [`docs/benchmarks/design.md`](design.md)
 § Benchmark naming.
 
@@ -48,7 +48,7 @@ Forwarding's source is the first 96-byte header in the prepared Zero Device imag
 at `0x0A000AC0`. DECIDE stops after
 the load, decode, cursor update, and witness update without issuing the packet.
 
-## ID 6: destination-to-next-hop lookup
+## route_compute: destination-to-next-hop lookup
 
 One timed item reads `dst_start_chip_id` and `dst_start_mesh_id` from one of
 sixteen resident packet headers and returns one decoded direction:
@@ -73,7 +73,7 @@ and the input bytes are checked again after the timed loop.
 
 ### Excluded work
 
-ID 6 does not:
+`route_compute` does not:
 
 - construct or encode a route buffer;
 - load or expand a compressed full route;
@@ -346,11 +346,11 @@ There are no live `tier`, lookup `copy`/style, lookup placement, destination
 window, declared-geometry, or effective-working-set fields. Historical output
 containing those fields remains interpretable only as the retired profile.
 
-## ID 7: fixed-source forwarding contract
+## route_forward: fixed-source forwarding contract
 
 ### X280 placement
 
-ID 7 reads one hop command from the first header in the prepared image, decodes
+`route_forward` reads one hop command from the first header in the prepared image, decodes
 it, advances the cursor, and adds the decoded direction to the witness. This
 arm, DECIDE, issues no packet and opens no NoC window.
 

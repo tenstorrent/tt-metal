@@ -1,12 +1,12 @@
-# Cross-Cluster Signalling Characterization
+# p2p_latency: one live exchange between two cores
 
 **Status:** Measured on silicon. Results are in [`docs/results.md`](../results.md); running it is
 below.
 
-**Scope:** feasibility benchmark ID 3 (priority P2): hart-to-hart
+**Scope:** hart-to-hart
 signal latency where the two harts sit on different X280 complexes. This is
 the [`ubench design`](design.md)'s `p2p_latency`
-ID 3 — X280 tile to X280 tile, one chip — and is implemented as that row
+`x280_peer_tile` — X280 tile to X280 tile, one chip — and is implemented as that member
 rather than as a new suite.
 
 ## Document boundaries
@@ -16,7 +16,7 @@ the common result envelope are owned by
 [`docs/harness.md`](../harness.md). Protocol loop,
 roles, measurement boundaries, axes, and the frontend/backend contract are
 owned by [`docs/benchmarks/design.md`](design.md)
-§ Peer-to-peer latency. This document adds only what ID 3 needs beyond
+§ Peer-to-peer latency. This document adds only what `x280_peer_tile` needs beyond
 those two.
 
 Citations of the form `NoC/RoutingPaths.md` and `L2CPUTile/Caches.md` are
@@ -52,7 +52,7 @@ unicast requests and all types of response and acknowledgement packet take
 that NOC's one direction (`NoC/RoutingPaths.md:17`, `:41`). A non-posted
 write's ack returns the long way round rather than retracing the request, so a
 single non-posted store crosses exactly one lap — 12 hops — on whichever pair
-it runs. ID 3's exchange is two such stores, which puts 24 hops of routing in
+it runs. `x280_peer_tile`'s exchange is two such stores, which puts 24 hops of routing in
 every RTT independent of placement.
 
 The count is over every physical node on the ring. Whether a harvested tile
@@ -63,10 +63,10 @@ assumption first in line.
 
 ## Why the backend is NOC-shaped
 
-LIM is private to its complex. ID 2 signals with plain loads and stores
+LIM is private to its complex. `x280_same_tile` signals with plain loads and stores
 because both of its harts address one LIM; a hart on another complex has no
 load/store path to that memory. Cross-complex signalling therefore traverses
-the NOC, and the ID 3 backend is shaped like the X280-Tensix channel's — program a
+the NOC, and the `x280_peer_tile` backend is shaped like the X280-Tensix channel's — program a
 paired-range TLB window onto the peer's inbound mailbox, store the token
 through the window, poll own LIM with `fence ir, ir` — with the peer's LIM
 in place of Tensix L1 as the destination.
@@ -101,7 +101,7 @@ Three consequences follow from the destination being LIM rather than L1:
 
 ## Running it
 
-ID 3 needs two complexes in live resident idle, and reset release is one-way
+`x280_peer_tile` needs two complexes in live resident idle, and reset release is one-way
 ([harness.md](../harness.md#design-rules)), so every tile it uses must leave reset inside one chip-reset
 lifetime. The harness's session fixture boots every enabled L2CPU of a chip
 whose L2CPUs are all held in reset in one batch ([harness.md](../harness.md#running-benchmarks)),

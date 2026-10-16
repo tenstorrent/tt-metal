@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// pipeline_stage ID 7: router-side forwarding.
+// pipeline_stage route_forward: router-side forwarding.
 
 #include "harness/artifacts/artifacts.hpp"
 #include "harness/gtest_dispatch.hpp"

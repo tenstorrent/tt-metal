@@ -293,7 +293,7 @@ Metal `Program`.
 
 `bind_peer_view` selects the suite access form. Cross-tile X280 rows pass the
 directional access plan into explicit binding and retain all leased descriptors
-for the invocation. ID 2 selects a coherent or LIM self-view without binding a
+for the invocation. `x280_same_tile` selects a coherent or LIM self-view without binding a
 NOC window.
 
 ### Host shape for transport bandwidth
@@ -381,19 +381,9 @@ defines the meaning of derived values.
 
 ## Benchmark naming
 
-A benchmark is named by its feasibility ID, written `ID <n>`, matching the table
-in § Benchmark IDs verbatim. That table is the source of truth, so a
-document that invents its own handle for a benchmark forces every reader to
-translate. A document scoped to one benchmark says so in its opening
-`**Scope:**` line; prose and headings lead with the ID and use it alone
-thereafter.
-
-IDs stay out of code. APIs, paths, selectors and result records keep the
-behavior-named suite and member vocabulary, which is the rule § Behavior-named
-suites already states. The reason it states without giving: an editorial number
-is not a property of the thing it numbers, so a benchmark renumbered upstream
-would otherwise rename files. A reader who needs to run a benchmark reads the member name; a reader
-who needs to find it in the plan reads the ID.
+A benchmark is named by its suite and member, in prose and in code alike. APIs,
+paths, selectors, targets, environment variables and result records carry no
+other numbering, which is the rule § Behavior-named suites already states.
 
 **A member is named `<peer kind>_<locality>`.** The peer kind is what sits at
 the far end, `x280` or `tensix`. The locality is the L2CPU tile boundary,
@@ -404,42 +394,7 @@ different things. The x280 side goes unnamed because every member of
 `p2p_latency` has one. Where a member has a backend on each side, that backend
 is `BACKEND_ID_<own side>_<member>`.
 
-Prose names a member `ID <n>`, code by its member token; no identifier, path,
-target, environment variable or record key carries any other numbering.
-
-A member answering no numbered row says so, and names the unnumbered bullet it
-answers if there is one. Silence there reads as an oversight rather than a
-fact.
-
-The ID earns its place where the benchmark is the subject of a claim, and most
-of all where bare IDs appear in the same sentence — "ID 3 is the only one of
-the five" against "IDs 6, 7, 10 and 11" reads clearly where two numbering
-schemes would not. Mechanism prose is different: a passage describing how a
-backend is shaped, which fences it issues or which ordering mode it selects is
-about the implementation, and there the member name is the accurate one.
-
-Where a numbered benchmark is compared against an unnumbered sibling, use the
-feasibility ID for the numbered benchmark and the member name for the sibling.
-Cross-cluster signalling therefore compares ID 3 with `tensix_peer_tile`;
-neither side needs an editorial family number.
-
-## Benchmark IDs
-
-The suites answer the Fabric 2.0 feasibility benchmarks, which number 19
-microbenchmarks and list seven unnumbered X280 microbenchmarks beside them. The
-IDs below are cross-references to that numbering and nothing more: no API, path, selector, or result record carries one.
-
-| Feasibility ID | Microbenchmark | Member |
-|---|---|---|
-| 2 | X280 pipeline signal latency/cycle count (same cluster) | `p2p_latency` `x280_same_tile`, landed and measured |
-| 3 | X280 pipeline signal latency/cycle count (different cluster) | `p2p_latency` `x280_peer_tile`, landed and measured |
-| — | X280 ↔ Tensix, one channel both ways | `p2p_latency` `tensix_peer_tile` for latency and both `transport_bandwidth` members for bandwidth, landed and measured |
-| — | X280 ↔ inactive idle ERISC, same-chip NOC | `p2p_latency` `erisc_peer_tile`, landed as a mechanical smoke path; raw ERISC ticks only |
-| — | X280 ↔ free non-endpoint DRISC, same-chip NOC0 | `p2p_latency` `drisc_peer_tile`, landed as a mechanical smoke path; raw DRISC ticks only |
-| 6 | X280 Routing module | `pipeline_stage` `route_compute`, landed and measured, specified in `docs/benchmarks/pipeline_stage.md` |
-| 7 | X280 Forwarding module | `pipeline_stage` `route_forward`, landed and measured, specified in `docs/benchmarks/pipeline_stage.md` |
-| 10 | X280 packet injection handler module (single connection) | client handling, implemented in `docs/benchmarks/packet_injection.md` |
-| 11 | X280 packet injection handler (all workers) | client handling, implemented in `docs/benchmarks/packet_injection.md` |
+## Member sources
 
 The three Metal-peer members share one X280 firmware source,
 `src/p2p_latency_metal_peer_tile.cpp`, and one Metal entry,
@@ -464,14 +419,7 @@ Metal policy forwarding header. No member reduces
 its samples: every member records its raw populations, and the tabulator's one
 floor-index rule computes their percentiles (`docs/measurement.md`).
 
-The unnumbered row is grouped that way because IDs 2 and 3 describe the whole
-communication path of one two-core channel rather than a single quantity, and
-X280 ↔ Tensix is such a channel: `p2p_latency` `tensix_peer_tile` times it and
-`transport_bandwidth` measures its rate in each direction. That channel has no
-numbered counterpart, and its bandwidth half answers the unnumbered
-"Tensix -> x280 NOC BW" bullet.
-
-ID 14, X280 packet header ingress BW, is implemented by
+X280 packet-header ingress is implemented by
 `packet_injection/erisc_to_x280_header`, specified in
 [`docs/benchmarks/packet_injection.md`](packet_injection.md#erisc-header-ingress-member):
 one to all available idle ERISCs, one per Ethernet tile, publish ready 96 B
@@ -483,12 +431,6 @@ packet copy to DRISC, and the wait for that copy are preconditions outside the
 measured bracket. The cost of its credit protocol, against a single-writer
 prototype that never waited for its consumer, is in
 [packet_injection.md](packet_injection.md#credit-protocol-cost).
-
-`p2p_latency` participant entries 3–6 have no numbered counterpart. The IDs
-touching entries 4–6 — 4, 5, and 17–19 — are credit-flow and link-bandwidth
-benchmarks rather than signal-latency members. IDs 1 and 13 are DRISC subjects, 8 and 9 are
-the X280 credit modules, and 12, 15, and 16 are P2 scaling variants of numbers
-above; none has a member here.
 
 ## Functional preconditions
 
@@ -575,10 +517,10 @@ X280 maps the idle ERISC mailbox through its checked paired-range TLB, while
 ERISC returns the token through Metal NOC operations. The member requires an
 inactive Ethernet core and publishes ERISC wall-clock deltas as raw ticks with
 the same per-run AICLK evidence. Entry 6 remains unspecified.
-Entries 1 and 2 answer feasibility IDs 2 and 3; entries 3–6
-answer no numbered ID, and § Benchmark IDs carries the whole mapping.
+Entries 1–3 are the `x280_same_tile`, `x280_peer_tile` and `tensix_peer_tile`
+members.
 
-ID 2 is the only member with a medium choice: coherent cached memory or
+`x280_same_tile` is the only member with a medium choice: coherent cached memory or
 uncached LIM. It consumes no X280 NOC window. Entry 6 is the only cross-chip
 member.
 
@@ -676,7 +618,7 @@ per-run AICLK conversion rate.
 | first direction | A initiates first or B initiates first | runtime |
 | placement | one exact ordered participant pair | host |
 | directional access plans | one plan for A→B and one for B→A | host, programmed before launch |
-| ID 2 medium | coherent or uncached LIM | runtime |
+| `x280_same_tile` medium | coherent or uncached LIM | runtime |
 | sample and warm-up counts | `N > 0`, `W ≥ 1` | runtime |
 | payload size | at least 4 bytes, 4-byte aligned | exact invocation |
 | transmit mode | fire-and-forget, wait-for-departure, wait-for-completion | compile-time behavior |
@@ -707,7 +649,7 @@ Transmit-mode validity is backend-specific:
 - X280 completion wait uses a non-posted view or a posted view followed by a
   proven completion-forcing read-back.
 - X280 has no established departure-only primitive; that mode is rejected.
-- ID 2 maps fire-and-forget and completion wait to a local store without or
+- `x280_same_tile` maps fire-and-forget and completion wait to a local store without or
   with the required visibility fence. Departure wait is not applicable.
 
 Receiver-visible payload-before-token ordering is distinct from when
@@ -782,7 +724,7 @@ not be reported as the measurement error.
 
 The suite does not infer one-way latency by halving a round trip. Even when
 directional NOC selections produce equal hop counts, local issue and observation
-costs remain in the interval. ID 3 records directional NOC selection and
+costs remain in the interval. `x280_peer_tile` records directional NOC selection and
 derived hop counts, and uses same-NOC versus opposite-NOC configurations as
 topology controls without presenting a one-way result.
 
@@ -1038,7 +980,7 @@ selected placement.
 X280 device-window allocation, programming, verification, capacity, and
 aperture-offset handling follow the harness
 [`Memory regions and address views`](../harness.md#memory-regions-and-address-views).
-For this suite, ID 2 uses a self-view and no device window. Other X280 outbound
+For this suite, `x280_same_tile` uses a self-view and no device window. Other X280 outbound
 legs program and verify one paired-range window in `INIT` from the coordinate,
 address, slot, and ordering their directional access plans select on the host.
 Those mappings remain fixed through both direction phases; firmware does not
@@ -1105,7 +1047,7 @@ a model until a composed measurement validates it.
   DRISC and active/raw-link ERISC members?
 - What idle condition defines a reproducible cold-latency invocation?
 
-These questions do not block the local ID 2 baseline or the strict-order X280
+These questions do not block the local `x280_same_tile` baseline or the strict-order X280
 outbound leg used by `x280_peer_tile`, `tensix_peer_tile`, `erisc_peer_tile`,
 and `drisc_peer_tile`.
 
@@ -1119,7 +1061,7 @@ and contents may remain unchanged. It does not inspect payloads, exchange
 application credits, or require an echo in the timed path.
 
 The common loop and measurement boundaries are specified. Receiving-ERISC
-packet-header ingress (ID 14) is not a member of this suite: it returns ring
+packet-header ingress is not a member of this suite: it returns ring
 credit in its measured path, and is `packet_injection/erisc_to_x280_header`.
 
 A raw-Ethernet member uses the raw link primitive; production link and

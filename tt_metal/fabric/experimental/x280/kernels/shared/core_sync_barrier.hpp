@@ -63,11 +63,10 @@ struct DisabledSyncConfig {
 template <typename Config, typename Transport = X280Transport<>>
 class core_sync_barrier {
 public:
-    /* TODO(core-sync): Support multiple sync calls in one kernel launch. Word
-     * arrivals are nonce-qualified; counter arrivals need an explicit
-     * cumulative target or generation. Resetting the active counter between
-     * calls can erase a fast worker's next arrival. Cover counter-only,
-     * word-only, mixed, and counter-overflow behavior on host and silicon. */
+    /* Call once per kernel launch. A counter arrival is satisfied once the
+     * director's counter reaches the roster's arrival count; the counter starts
+     * each launch at zero and nothing resets it between calls, so a second call
+     * in the same launch would not wait for counter workers. */
     static inline Outcome sync(uint64_t hartid, uint64_t run_value, uint32_t run_nonce) {
         /* The else is what keeps a disabled config from naming a transport
          * operation at all: the branch is discarded before instantiation, so a

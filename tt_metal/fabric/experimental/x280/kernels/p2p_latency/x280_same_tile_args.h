@@ -5,13 +5,13 @@
 /*
  * kernels/p2p_latency/x280_same_tile_args.h -- x280_same_tile backend argument layout.
  *
- * ID 2 is X280 hart <-> X280 hart, same tile. Both participants live in the
+ * x280_same_tile is X280 hart <-> X280 hart, same tile. Both participants live in the
  * same L2CPU's shared LIM, so their inbound mailboxes, staging regions, and
  * result regions are all LIM addresses in the same address space. No NOC
  * window is consumed; no address translation is required. The medium selector
  * says whether transmit goes through the coherent cache or an uncached alias.
  *
- * The runtime tells every hart the same args_addr. ID 2 packs TWO
+ * The runtime tells every hart the same args_addr. x280_same_tile packs TWO
  * participant sections back to back so hart 0 (participant A) and hart 1
  * (participant B) each read their own section by fixed hartid-scaled offset.
  * See docs/benchmarks/design.md, §Roles and mailbox model.
@@ -34,7 +34,7 @@
 /* --------------------------------------------------------------------------
  * Medium selector
  * --------------------------------------------------------------------------
- * ID 2 is the only member with a medium choice (see design §Participant rows).
+ * x280_same_tile is the only member with a medium choice (see design §Participant rows).
  * Coherent cached LIM is the initial target; uncached LIM is admitted once
  * its visibility operation is separately established.
  */
@@ -44,7 +44,7 @@ typedef enum {
 } p2p_latency_x280_same_tile_medium_t;
 
 /* --------------------------------------------------------------------------
- * ID 2 backend argument section
+ * x280_same_tile backend argument section
  * --------------------------------------------------------------------------
  * All four *_addr fields are LIM absolute addresses (i.e. what
  * X280Tile::available_lim() yielded plus an offset). The image reads from
@@ -98,7 +98,7 @@ typedef struct {
  * -------------------------------------------------------------------------- */
 
 UBENCH_LAYOUT_ASSERT(
-    sizeof(p2p_latency_x280_same_tile_backend_args_t) == 40u, "ID 2 backend args are 40 bytes: 4 x u64 + 2 x u32");
+    sizeof(p2p_latency_x280_same_tile_backend_args_t) == 40u, "x280_same_tile backend args are 40 bytes: 4 x u64 + 2 x u32");
 UBENCH_LAYOUT_ASSERT(
     offsetof(p2p_latency_x280_same_tile_backend_args_t, own_inbound_addr) == 0u,
     "own_inbound_addr is the first backend field");
@@ -106,7 +106,7 @@ UBENCH_LAYOUT_ASSERT(
     offsetof(p2p_latency_x280_same_tile_backend_args_t, medium) == 32u, "medium follows the four addresses");
 UBENCH_LAYOUT_ASSERT(
     sizeof(p2p_latency_x280_same_tile_section_t) == 88u,
-    "ID 2 section = 4 cookie + 4 pad + 32 common + 4 cookie + 4 pad + 40 backend");
+    "x280_same_tile section = 4 cookie + 4 pad + 32 common + 4 cookie + 4 pad + 40 backend");
 UBENCH_LAYOUT_ASSERT(
     offsetof(p2p_latency_x280_same_tile_section_t, common) == 8u,
     "common args begin on their natural 8-byte alignment");

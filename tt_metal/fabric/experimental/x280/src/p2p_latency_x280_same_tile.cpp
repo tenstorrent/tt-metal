@@ -5,7 +5,7 @@
 /*
  * p2p_latency_x280_same_tile.cpp -- X280 image for x280_same_tile member of the p2p_latency suite.
  *
- * ID 2: X280 hart <-> X280 hart, same tile, no NOC. Two harts of one L2CPU
+ * x280_same_tile: X280 hart <-> X280 hart, same tile, no NOC. Two harts of one L2CPU
  * participate. Hart 0 is participant A, hart 1 is participant B. Harts 2 and
  * 3 return 0 immediately -- their presence is participation under the
  * lifecycle harness (docs/device_images.md, "The active-image contract", obligation 2) but they exchange
@@ -30,7 +30,7 @@
  * The post-section-copy ceremony (validate, backend init, run_participant,
  * shutdown, release fence) lives in the shared entry-point template under
  * kernels/shared/p2p_latency_entry_cxx.hpp; this file supplies the section
- * copy and the ID 2 descriptor.
+ * copy and the x280_same_tile descriptor.
  */
 
 extern "C" {
@@ -48,7 +48,7 @@ extern "C" {
 
 namespace {
 
-/* ID 2 uses harts 0 and 1. Kept as constexpr so a change here is checked
+/* x280_same_tile uses harts 0 and 1. Kept as constexpr so a change here is checked
  * against the assertion beside it rather than propagated as a magic number. */
 constexpr uint64_t kParticipantAHart = 0u;
 constexpr uint64_t kParticipantBHart = 1u;
@@ -96,7 +96,7 @@ struct X280SameTile {
         return ::p2p_latency::backend_x280_x280_same_tile::initialize(state, s.common, s.backend, hartid, run_value, r);
     }
 
-    /* ID 2 has no TLB or transport to release; the backend owns no
+    /* x280_same_tile has no TLB or transport to release; the backend owns no
      * resources beyond the state struct itself. */
     static void backend_shutdown(Backend::state_t&) {}
 };

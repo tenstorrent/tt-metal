@@ -225,7 +225,7 @@ The pipeline_stage suite calls `prepare_pinned_input` before every device case,
 so its executables run in any order and any number of times within one reset
 ([pipeline_stage.md](benchmarks/pipeline_stage.md#suite-prepared-input-x280-only)).
 
-ID 7 uses the first 96-byte header in this region at `0x0A000AC0`. Its
+`route_forward` uses the first 96-byte header in this region at `0x0A000AC0`. Its
 `decide_plain` configuration reseeds that complete header before warmup; it
 does not allocate a source region or change the prepared policy.
 
