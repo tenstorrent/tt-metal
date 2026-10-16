@@ -131,6 +131,38 @@ class MiMoGalaxyGenerator:
                     out[user] = rows[slot]
         return out
 
+    def decode_steps(self, tokens, positions, steps, replicas=None):
+        """Greedy decode ``steps`` tokens per user with the loop resident on device: each step's argmax feeds
+        the next step's input and positions advance on device, so the host only enqueues trace replays (and
+        the step's cos/sin) and reads the tokens every DECODE_HISTORY steps.
+
+        tokens, positions: dict user -> int (the last token and its position). Returns dict user -> list of
+        ``steps`` generated tokens."""
+        replicas = range(self.dp) if replicas is None else replicas
+        hist = self.models[0].DECODE_HISTORY
+        host = {}
+        for r in replicas:
+            tok = torch.zeros(self.max_batch, dtype=torch.int32)
+            pos = torch.full((self.max_batch,), -1, dtype=torch.int32)
+            for slot in range(self.users_per_replica):
+                user = r * self.users_per_replica + slot
+                if user in tokens:
+                    tok[slot], pos[slot] = tokens[user], positions[user]
+            host[r] = self.models[r].decode_steps_host_inputs(tok, pos, steps)
+        out = {u: [] for u in tokens}
+        for first in range(0, steps, hist):
+            count = min(hist, steps - first)
+            for s in range(first, first + count):
+                for r in replicas:  # all rows have a step in flight
+                    self.models[r].decode_steps_enqueue(host[r], s)
+            for r in replicas:
+                got = self.models[r].decode_steps_read(first, count)
+                for slot in range(self.users_per_replica):
+                    user = r * self.users_per_replica + slot
+                    if user in tokens:
+                        out[user].extend(got[:, slot].tolist())
+        return out
+
     @staticmethod
     def greedy_token(candidate):
         """Argmax token from a ``mode="topk"`` entry."""
