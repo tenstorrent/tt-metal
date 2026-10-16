@@ -21,7 +21,7 @@ import torch
 import ttnn
 
 from .common import TILE, DramShardedMatmul, as_weight, cache_exists, cache_name, compute_config, mcast_1d_config
-from .moe_stream import DownStream, GateUpStream, is_dram_interleaved, zero_output
+from .moe_stream import DownStream, GateUpStream, ReduceExpand, is_dram_interleaved
 
 
 class TtMiMoMoE:
@@ -213,11 +213,15 @@ class TtMiMoMoE:
             )
             self.ids_buf = ttnn.typecast(ids32, ttnn.uint16)
             ids32.deallocate(True)
-            # Down + sum over pairs, bank-local from the interleaved w_down, into rows 0-3 of a persistent zeroed
-            # output (the padding rows stay zero).
+            # Down + sum over pairs, bank-local from the interleaved w_down, into a persistent compact
+            # [1, 1, 32, hidden / 8] output holding only the user rows; one row all-gather of it, then ReduceExpand
+            # sums the chips' copies and restores [1, 1, 32, hidden] with zero padding rows.
             self.down_stream = DownStream(self.plan, self.hidden, self.inter_local, pairs)
             self.act_buf = self.down_stream.activation_buffer(self.plan)
-            self.out_buf = zero_output(self.plan, self.hidden)
+            self.out_buf = self.down_stream.compact_output(self.plan)
+            self.reduce_expand = ReduceExpand(
+                self.plan, self.hidden, self.plan.tp, self.down_stream.compute_config, DownStream.TINY_ROWS
+            )
 
     def _forward_decode_stream(self, x, token_mask):
         """BFP4 decode: fp32 router logits, sigmoid and +bias, then one streaming program that selects every user's
@@ -242,18 +246,23 @@ class TtMiMoMoE:
         scores.deallocate(True)
         biased.deallocate(True)
 
-        out = self.down_stream(act, self.ids_buf, self.w_down, self.out_buf)  # [1, 1, 32, H], persistent
+        out = self.down_stream(act, self.ids_buf, self.w_down, self.out_buf)  # compact [1, 1, 32, H / 8], persistent
         plan = self.plan
-        if plan.tp == 1:
-            return ttnn.clone(out)
-        # The persistent output is rewritten every call, so it is not deallocated like plan.all_reduce does.
-        return ttnn.all_reduce(
-            out,
-            cluster_axis=plan.tp_axis,
-            num_links=plan.num_links,
-            topology=plan.topology,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # The row all-reduce as one fabric phase: gather every chip's compact output (chip order along the row, the
+        # same on every chip), then ReduceExpand sums the copies in that order. The persistent compact output is
+        # rewritten every call, so it is not deallocated.
+        gathered = plan.all_gather(out, dim=3)  # [1, 1, 32, tp * H / 8]
+        full = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, TILE, self.hidden]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            plan.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
         )
+        self.reduce_expand(gathered, full)
+        if gathered is not self.out_buf:
+            gathered.deallocate(True)
+        return full
 
     def forward_decode(self, x, token_mask):
         """Decode: x [1, 1, 32, hidden], users in rows [0, decode_users). Computes only the selected experts.

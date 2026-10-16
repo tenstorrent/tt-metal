@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // BRISC (NOC 1): every pair's h tiny tiles from the row-major activation (page p = pair p's kt [4, 32] tiles), then
-// rows 0-3 of this core's output columns (tile column j * banks + bank) into the zeroed [1, 1, 32, hidden] output.
+// rows 0-3 of this core's output columns (tile column t = j * banks + bank) into the compact [1, 1, 32, hidden / 8]
+// output: rows 4c..4c+3 of compact tile t % compact_tiles, c = t / compact_tiles (the row all-reduce then moves only
+// the user rows; moe_expand_rows.cpp puts them back into rows 0-3 of the [32, hidden] result).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "moe_stream_common.hpp"
@@ -17,7 +19,9 @@ void kernel_main() {
     constexpr uint32_t ct = get_compile_time_arg_val(6);
     constexpr uint32_t banks = get_compile_time_arg_val(7);
     constexpr uint32_t tiny_bytes = get_compile_time_arg_val(8);
+    constexpr uint32_t compact_tiles = get_compile_time_arg_val(9);
     constexpr uint32_t tiny_face_bytes = tiny_bytes / 2;  // rows 0-3 of one face
+    constexpr uint32_t blocks_per_face = mimo_moe::kBf16FaceBytes / tiny_face_bytes;
     constexpr uint32_t bf16_tile_bytes = 2048;
 
     const uint32_t act_addr = get_arg_val<uint32_t>(0);
@@ -39,11 +43,15 @@ void kernel_main() {
         const uint32_t base = get_read_ptr(cb_out);
         for (uint32_t c = 0; c < ct; c++) {
             const uint32_t j = g * ct + c;
-            const uint32_t page = j * banks + bank;
+            const uint32_t t = j * banks + bank;
+            const uint32_t blk = t / compact_tiles;
+            const uint32_t page = t - blk * compact_tiles;
+            const uint32_t off =
+                (blk / blocks_per_face) * 2 * mimo_moe::kBf16FaceBytes + (blk % blocks_per_face) * tiny_face_bytes;
             const uint32_t src = base + j * tiny_bytes;
-            noc_async_write(src, out_gen.get_noc_addr(page, 0), tiny_face_bytes);
+            noc_async_write(src, out_gen.get_noc_addr(page, off), tiny_face_bytes);
             noc_async_write(
-                src + tiny_face_bytes, out_gen.get_noc_addr(page, mimo_moe::kBf16FaceBytes), tiny_face_bytes);
+                src + tiny_face_bytes, out_gen.get_noc_addr(page, off + mimo_moe::kBf16FaceBytes), tiny_face_bytes);
         }
     }
     noc_async_write_barrier();

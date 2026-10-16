@@ -46,14 +46,17 @@ void kernel_main() {
         noc_async_read(x_gen.get_noc_addr(t, 0), dst, tiny_face_bytes);
         noc_async_read(x_gen.get_noc_addr(t, mimo_moe::kBf16FaceBytes), dst + tiny_face_bytes, tiny_face_bytes);
     }
+    noc_async_read_barrier();
+    cb_push_back(cb_x, kt);
+
+    // The reader needs these selections only when its stream reaches the first of these users' pairs.
     uint32_t stage = 0;
     if constexpr (sel_users > 0) {
         cb_reserve_back(cb_stage, stage_pages);
         stage = get_write_ptr(cb_stage);
         mimo_moe::stage_route_rows<expert_tiles, has_mask>(biased_addr, scores_addr, mask_addr, stage);
+        noc_async_read_barrier();
     }
-    noc_async_read_barrier();
-    cb_push_back(cb_x, kt);
 
     // [ids of the sel_users * topk pairs | their weight bits]
     cb_reserve_back(cb_sel, 1);

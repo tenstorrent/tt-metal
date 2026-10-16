@@ -29,6 +29,7 @@ void kernel_main() {
     constexpr uint32_t num_pairs = get_compile_time_arg_val(4);
     constexpr uint32_t blocks_per_pair = get_compile_time_arg_val(5);
     constexpr uint32_t block_k = get_compile_time_arg_val(6);
+    constexpr uint32_t local_pairs = get_compile_time_arg_val(7);  // pairs whose weights are on route page 0
     constexpr uint32_t ct = 2;  // gate, up
     constexpr uint32_t block_tiles = block_k * ct;
     constexpr uint32_t kt = block_k * blocks_per_pair;
@@ -38,7 +39,11 @@ void kernel_main() {
     cb_wait_front(cb_route, 1);
 
     for (uint32_t p = 0; p < num_pairs; p++) {
-        const uint32_t w_bits = read_tile_value(cb_route, 0, p);
+        if (p == local_pairs) {
+            cb_wait_front(cb_route, 2);  // the writer's pairs: published before their first block is streamed
+        }
+        const uint32_t w_bits =
+            p < local_pairs ? read_tile_value(cb_route, 0, p) : read_tile_value(cb_route, 1, p - local_pairs);
         tile_regs_acquire();
         for (uint32_t b = 0; b < blocks_per_pair - 1; b++) {
             cb_wait_front(cb_w, block_tiles);
@@ -69,6 +74,9 @@ void kernel_main() {
         custom_mm_block_init_short<false, true, false>(cb_x, cb_w, cb_h, ct);
     }
 
-    cb_pop_front(cb_route, 1);
+    if constexpr (local_pairs >= num_pairs) {
+        cb_wait_front(cb_route, 2);
+    }
+    cb_pop_front(cb_route, 2);
     cb_pop_front(cb_x, kt);
 }

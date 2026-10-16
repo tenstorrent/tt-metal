@@ -47,9 +47,15 @@ void kernel_main() {
     mimo_moe::stage_route_rows<expert_tiles, has_mask>(biased_addr, scores_addr, mask_addr, stage);
     noc_async_read_barrier();
 
-    // Route page: [0, 4 * num_pairs) fp32 bits of the pair weights for compute.
-    cb_reserve_back(cb_route, 1);
-    volatile tt_l1_ptr uint32_t* w_out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_route));
+    // Route pages (fp32 weight bits for compute): page 0 holds the local pairs [0, local_pairs), page 1 the writer's
+    // pairs. Page 0 is published before streaming; page 1 when the stream reaches the first remote pair.
+    constexpr uint32_t local_pairs = local_users * topk;
+    constexpr uint32_t remote_pairs = num_pairs - local_pairs;
+    cb_reserve_back(cb_route, 2);
+    const uint32_t route_l1 = get_write_ptr(cb_route);
+    volatile tt_l1_ptr uint32_t* w_out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(route_l1);
+    volatile tt_l1_ptr uint32_t* w_remote =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(route_l1 + mimo_moe::kFp32TileBytes);
     volatile tt_l1_ptr uint16_t* stick = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stage + Stage::stick);
     uint32_t offsets[num_pairs];
     for (uint32_t u = 0; u < local_users; u++) {
@@ -63,19 +69,22 @@ void kernel_main() {
             stick[p] = static_cast<uint16_t>(ids[i]);
         }
     }
-    // The writer's users: [remote ids | remote weight bits].
-    constexpr uint32_t remote_pairs = num_pairs - local_users * topk;
-    cb_wait_front(cb_sel, 1);
-    volatile tt_l1_ptr uint32_t* sel = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_sel));
-    for (uint32_t j = 0; j < remote_pairs; j++) {
-        const uint32_t p = local_users * topk + j;
-        const uint32_t expert = sel[j];
-        offsets[p] = expert * expert_bytes;
-        w_out[p] = sel[remote_pairs + j];
-        stick[p] = static_cast<uint16_t>(expert);
-    }
-    cb_pop_front(cb_sel, 1);
     cb_push_back(cb_route, 1);
+
+    // The writer's users: [remote ids | remote weight bits]; taken just before the first remote block is issued.
+    auto take_remote = [&]() {
+        cb_wait_front(cb_sel, 1);
+        volatile tt_l1_ptr uint32_t* sel = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_sel));
+        for (uint32_t j = 0; j < remote_pairs; j++) {
+            const uint32_t p = local_pairs + j;
+            const uint32_t expert = sel[j];
+            offsets[p] = expert * expert_bytes;
+            w_remote[j] = sel[remote_pairs + j];
+            stick[p] = static_cast<uint16_t>(expert);
+        }
+        cb_pop_front(cb_sel, 1);
+        cb_push_back(cb_route, 1);
+    };
 
     // Stream: block i goes to CB slot i % num_buffers with trid (i % num_buffers) + 1; at most in_flight blocks
     // are issued but not pushed, and each reserve covers them plus the new block.
@@ -85,9 +94,13 @@ void kernel_main() {
     const uint32_t cb_base = get_write_ptr(cb_w);
 
     constexpr uint32_t total_blocks = num_pairs * blocks_per_pair;
+    constexpr uint32_t local_blocks = local_pairs * blocks_per_pair;
     uint32_t issued = 0;
     uint32_t oldest = 0;
     for (uint32_t i = 0; i < total_blocks; i++) {
+        if (i == local_blocks) {
+            take_remote();
+        }
         if (issued == in_flight) {
             noc_async_read_barrier_with_trid((oldest % num_buffers) + 1);
             cb_push_back(cb_w, block_tiles);
@@ -111,6 +124,9 @@ void kernel_main() {
         cb_push_back(cb_w, block_tiles);
         oldest++;
         issued--;
+    }
+    if constexpr (local_blocks >= total_blocks) {
+        take_remote();  // no remote pairs: still consume cb_sel and publish page 1
     }
 
     // Expert ids for the down sparse_matmul: row-major uint16 [1, 1, 1, pairs], one page in bank 0.
