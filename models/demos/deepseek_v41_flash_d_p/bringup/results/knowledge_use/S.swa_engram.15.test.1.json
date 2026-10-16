@@ -1,0 +1,66 @@
+{
+ "used": [
+  {
+   "id": "DS41-32",
+   "how": "carried test 14's split-by-routing router checks into test 15 (the only reference failure)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-30",
+   "how": "router vs golden at the noise floor: kept the 0.97 PCC bound and split checks instead of 0.99",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-39",
+   "how": "experts vs golden split by the rows whose top-6 set matches the golden's, as for the router",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-22",
+   "how": "added the experts component test's row-slope check (>= 0.35) vs the CPU step; it alone catches noise1e-2",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-1",
+   "how": "explained why bf16 inputs move the experts' fp8 steps, so the fixed row/ratio swap limits fail the bf16 control",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the rendered swap test after a reviewed one does not inherit the earlier review's check changes (test 14's router checks were missing from test 15)",
+  "the framework's fixed swap_step_row / swap_step_ratio fail the bf16 control for a step whose output follows fp8 q-dq of its inputs (experts)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "known_issues.md DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x (swap_step_calib) the step's own component error, no cap'; touched known_issues.md only to add DS41-33"
+  }
+ ],
+ "cited_only": [
+  "DS41-20",
+  "DS41-33"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "S.swa_engram.15",
+  "role": "test",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T05:06:27",
+  "head": "b496f67f0d0",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.swa_engram.15.test.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_15_experts.py"
+  ]
+ }
+}
