@@ -592,6 +592,9 @@ int main() {
 
             } while (reload_next_stage(launch_msg_address, reload_stage, reload_round));
 
+            // Look the go message up again: a preloaded launch can leave the wait loop holding the row from before a
+            // sub-device reconfigure, and its go then arrives on the new row.
+            go_message = current_go_message(mailboxes);
             go_message->signal = RUN_MSG_DONE;
             DEVICE_PRINT_KERNEL_FINISHED();
 
