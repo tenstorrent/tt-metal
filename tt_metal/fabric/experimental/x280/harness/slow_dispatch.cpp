@@ -4,8 +4,8 @@
 //
 // harness/slow_dispatch.cpp -- the x280_slow_dispatch object library.
 //
-// Sets TT_METAL_SLOW_DISPATCH_MODE=1 during static initialisation. The
-// pinned tt-metal launches kernels on core-local RISCs (idle and active
+// Sets TT_METAL_SLOW_DISPATCH_MODE=1 during static initialisation.
+// tt-metal launches kernels on core-local RISCs (idle and active
 // ERISC, DRISC) only under slow dispatch, and reads the variable once, when a
 // device open first builds its runtime options, so the value must be in place
 // before any Metal object exists. An executable opts in by linking this

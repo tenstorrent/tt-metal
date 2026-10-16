@@ -72,7 +72,7 @@ struct X280Roster {
      * validates these structural constraints but neither allocates nor canonicalizes
      * the topology; the caller proves that its bounded coordinates answer and that
      * its release targets cover every participant.
-     * Last, so the positional forms that predate it still name the same fields. */
+     * Last, so positional initializers of the earlier fields stay valid. */
     const X280Group* groups = nullptr;
     uint32_t group_count = 0;
 };
@@ -111,7 +111,7 @@ struct X280Transport {
     using ArrivalTarget = X280ArrivalTarget;
 
     /* An X280 cannot issue a NoC atomic: System Port is uncached with no atomics
-     * per PMA (x280/include/noc.h:25). It announces arrival by writing a word. */
+     * per PMA (include/noc.h, System Port). It announces arrival by writing a word. */
     static constexpr ArrivalKind kArrivalKind = ArrivalKind::Word;
 
     /* An X280 cannot receive one either, so it cannot hold an arrival counter.
@@ -120,15 +120,9 @@ struct X280Transport {
      * tiles (atomic operations cannot be performed against MMIO addresses, nor
      * DRAM addresses, nor can they be translated to or from PCIe
      * transactions)." MemoryMap.md, NOC_CTRL: "NOC_CMD_AT requires that the
-     * request be destined for the L1 of a Tensix tile or Ethernet tile". Black
-     * Hole NOC Specification 5.2 "NOC operations", p. 8: "NOC assumes that the
-     * atomic operations are implemented in the L1 memory block. There is no
-     * atomic logic in NOC itself. Atomics are not supported for AXI endpoints."
-     * The L2CPU inbound path terminates at an AXI endpoint -- NOC Specification
-     * 5.4.2, p. 10: "The NIU is similar, except it translates NOC packets into
-     * AXI transactions rather than L1 memory and register accesses"; L2CPU Spec
-     * 3.4, p. 16: "The entire front port address space of the L2CPU is visible
-     * to the inbound noc address." The behaviour of such a packet is
+     * request be destined for the L1 of a Tensix tile or Ethernet tile". The
+     * L2CPU inbound path ends at an AXI endpoint, which has no atomic support.
+     * The behaviour of such a packet is
      * unspecified; it is not documented to fail cleanly. */
     static constexpr bool kMayHostCounter = false;
 
@@ -232,9 +226,8 @@ struct X280Transport {
      * notify_arrival. A same-tile peer takes a direct LIM store; any other takes
      * a posted write through kTlbSlot, whose window is cleared before return, so
      * the slot is free for the next call. The write may still be in flight
-     * then. That it keeps its old target rests on Noc2AxiDesignSpec, which
-     * captures the window's sideband bits on the AXI request at acceptance; no
-     * L2CPU document states it.
+     * then. It keeps its old target because the window's sideband bits are
+     * captured on the AXI request at acceptance; no public document states it.
      *
      * Returns false when the window was refused -- an out-of-range coordinate or
      * slot. A peer that has simply not arrived is not a failure and is not
@@ -384,8 +377,8 @@ private:
      * the posted ordering mode a read may overtake the write before it
      * (WormholeB0/PCIExpressTile/TLBs.md, write then read: "Reordering
      * possible"; TLBWindows.md calls the L2CPU bits functionally identical), so
-     * it proves nothing about delivery. It is kept so the unicast release keeps
-     * the timing its recorded characterization measured. Never call it on a
+     * it proves nothing about delivery. It stays because the unicast release's
+     * published timing includes it. Never call it on a
      * broadcast window: a read there is out of contract
      * (BlackholeA0/NoC/MemoryMap.md, NOC_CMD_BRCST_PACKET). */
     static inline __attribute__((always_inline)) void unordered_read_back(volatile void* window) {

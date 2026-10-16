@@ -781,7 +781,7 @@ class AttemptLogging(unittest.TestCase):
         self.assertEqual(record["status"], "passed")
         self.assertNotIn("raw_sha256", record)
         self.assertEqual(set(record["artifacts_sha256"]), {"run.log", "gtest.xml", "raw/records.jsonl"})
-        # Historical prose is not an executable report input.
+        # provenance.json is not a report input.
         (self.root / "provenance.json").write_text("not JSON")
         self.assertTrue(campaign_report(self.root, self.root / "report"))
         summary = json.loads((self.root / "report" / "campaign.json").read_text())

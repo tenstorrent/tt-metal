@@ -515,11 +515,8 @@ static inline uint32_t ec_barrier_index_fwd(uint32_t p) { return 2u + p; }
  * aligned base, followed by E0's tx_fifo slots and E1's rx slots.
  *
  * The control area's unit order and its alignment are intentional, for
- * banking. Blackhole Ethernet L1 is 32 banks x 1024 x 128-bit
- * (EthernetSsDesignSpec, SharePoint Blackhole Documents/Ethernet). The
- * interleave bank = (addr >> 4) & 31 is inferred from the Wormhole Tensix L1
- * MAS ("addr[3:0] as a bank select" on the 16-byte word address) and the Neo L1
- * spec's default low-order interleave; it is not documented for Blackhole
+ * banking. Blackhole Ethernet L1 is 32 banks x 1024 x 128-bit. The
+ * interleave bank = (addr >> 4) & 31 is inferred, not documented for Blackhole
  * Ethernet. Under it, hot unit i of a 512-aligned area lands in bank i. Units
  * are grouped by the core that polls them, E0's then E1's, hot units first, so
  * the 6P hot units have distinct banks for every P <= EC_MAX_P.

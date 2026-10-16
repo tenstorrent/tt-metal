@@ -1,16 +1,12 @@
 # Fabric 2 Characterization Harness
 
-**Status:** Accepted v0 design; the lean X280 runtime is implemented. Metal
-watcher support for ARC/L2CPU host access remains an upstream integration gate.
-
 **Scope:** A host-side harness for correctness and performance characterization
 across Blackhole programmable core classes. It is not a production Fabric 2
 runtime.
 
-## Document contract
+## Document boundaries
 
-This is a concise, team-facing description of the current accepted design.
-It is canonical for host lifecycle and ownership, claims where the hardware
+This document is canonical for host lifecycle and ownership, claims where the hardware
 has a reversible reservation, regions and views, execution, deadlines, safety,
 runtime gates and API blockers, clock mechanisms,
 and the common result envelope. Performance-suite membership, participant
@@ -20,28 +16,6 @@ contracts, suite payloads, validation, and interpretation are owned by
 Raw X280 NOC encodings and helpers are defined in
 [`include/noc.h`](../include/noc.h); the non-obvious hardware invariants the
 harness relies on are summarized here.
-The following rules are part of the document:
-
-- Keep only current design. Replace superseded text instead of appending a
-  correction or preserving a chronological discussion; Git keeps the history.
-- Include only accepted design, necessary rationale, safety invariants, current
-  open questions, and stable implementation references.
-- Do not use this document as a project tracker, implementation diary, benchmark
-  catalogue, or archive of rejected alternatives.
-- Keep schedules, owners, checklists, and completion status in GitHub issues.
-- Do not reference issue numbers or other tracker identifiers. Describe the work
-  that resolves a question instead. Issues link into this document; this document
-  does not link back.
-- Reference implementation entry points only when they clarify a contract or a
-  hardware constraint. Do not maintain exhaustive file inventories here.
-- Document an API after it exists or when it is part of the immediately approved
-  milestone. Do not invent speculative interfaces for future component types.
-- An open question must identify the decision still needed and what it blocks.
-  Remove the question when it is resolved.
-- A change that alters a documented boundary or invariant must update this
-  document in the same pull request.
-- If a section grows enough to obscure the overall design, move the detail to a
-  focused document and leave the contract and a link here.
 
 ## Purpose
 
@@ -93,8 +67,6 @@ partition; the harness must not assume that partition in advance.
 - Public X280 writable outbound-NOC or per-hart APIs.
 - Progress monitoring, golden-file regression, multi-host execution, randomized
   traffic generation, or automatic sweep expansion.
-- A full performance result schema before the first real measurement requires
-  one.
 
 ## Architecture and dependency direction
 
@@ -157,8 +129,8 @@ The harness owns:
 
 ### Centralized host structure
 
-The logical module structure is fixed even if physical directory and target
-names follow the implementation that lands:
+The logical module structure is fixed; physical directory and target names may
+differ:
 
 ```text
 runner/                 gtest wrapper and exact-case dispatch
@@ -201,10 +173,9 @@ is not added merely to make one target resemble another.
 Target objects are host-side orchestration objects. Kernels do not see or
 mirror these classes.
 
-### Landed X280 programming-component contract
+### X280 programming-component contract
 
-The landed X280 C++ programming component provides the current base
-mechanisms:
+The X280 C++ programming component provides these base mechanisms:
 
 - bind the runner's caller-owned Metal `MeshDevice` without opening a second
   device owner;
@@ -220,8 +191,8 @@ mechanisms:
 - submit active images on the runtime and observe their acknowledged return
   through a runtime-owned session.
 
-Per-hart launch selection and writable outbound-NOC windows are later
-milestones. The private implementation contains parts of those mechanisms, but
+The component has no per-hart launch selection and no writable outbound-NOC
+window. The private implementation contains parts of those mechanisms, but
 the harness does not treat a private method as a usable contract.
 
 The harness does not duplicate these mechanisms. It selects participants,
@@ -263,8 +234,7 @@ and RISC, and a Tensix coordinate and RISC. A `CoreRangeSet` selection
 may contain many Tensix identities; resolving a per-core view still requires a
 core selector.
 
-This vocabulary is shared by region ownership and, once performance
-measurements begin, result records. It is not required to mirror an existing
+This vocabulary is shared by region ownership and result records. It is not required to mirror an existing
 runtime's naming.
 
 Inventory exposes harvesting-aware valid placements. For an on-chip NOC leg,
@@ -357,21 +327,16 @@ X280 hart becomes one or more complete window descriptors and aperture
 offsets. A same-tile coherent/LIM self-view is a local CPU address and consumes
 no NOC window.
 
-At the later writable-window milestone, binding validates the complete
-invocation plan, leases entries from the session-owned tile, programs and
-verifies them through the host programming component, and completes before
-argument packing or launch. The landed public component can encode and read
-descriptors but cannot yet perform that mutation. Firmware receives or derives
+The public component can encode and read descriptors but does not program
+them; there is no public binding contract. Firmware receives or derives
 aperture locations and local offsets; it installs a descriptor during `INIT`
 only for a window it exclusively owns, and never reprograms a window in a
-timed loop. Once the public binding
-contract exists, exhaustion or readback mismatch is reported before any
-participant starts.
+timed loop.
 
 Each X280 initiating tile has 224 2 MiB entries. The current shared slot
 convention reserves only indices 192–223 for host programming. That 32-entry
-split is a software convention, not a hardware limit, and is insufficient for
-the accepted characterization direction. A full physical Blackhole grid has
+split is a software convention, not a hardware limit, and is too small to map
+every target memory at once. A full physical Blackhole grid has
 140 Tensix L1s and 14 Ethernet L1s: `140 + 14 = 154` target memories, each
 fitting in one 2 MiB mapping under the current Metal programming map. Entries
 0–8 remain excluded because ARC can overwrite them, so a fully repartitioned
@@ -548,13 +513,12 @@ alongside a measurement.
 ## X280 programming component
 
 X280 is the first reusable programming component. Its base runtime and active
-submission are landed and independently usable with no harness dependency; the
-remaining gaps are the harness target integration and the later public per-hart
-and writable-window contracts.
+submission are usable with no harness dependency. It has no public per-hart or
+writable-window contract.
 
 `X280Runtime::open(mesh, config)` is Metal's stateful X280 initialization entry
 point. `RuntimeOpenConfig` contains the LIM ECC priming policy and target
-`LimShape`. The defaults preserve current behavior: `AutoPrime`, fifteen
+`LimShape`. The defaults are `AutoPrime`, fifteen
 128 KiB LIM ways, `WayEnable=0`, and 1.875 MiB backed. `RequirePrepared` runs
 the same readiness path without committing `WayEnable` on unprimed hardware.
 One call:
@@ -564,7 +528,7 @@ One call:
 3. creates one stable runtime-owned object for every selected tile under a weak
    binding to that live `MeshDevice`;
 4. applies a safe probe clock when reset-held hardware is otherwise unreadable;
-5. runs the temporary host PLL/LIM-ECC bootstrap when hardware state requires
+5. runs the host PLL/LIM-ECC bootstrap when hardware state requires
    it and the selected policy is `AutoPrime`;
 6. preflights every selected chip, then applies the configured WayEnable only
    while all affected L2CPUs remain held in reset; and
@@ -597,8 +561,8 @@ it stopped. No predicate reads the stage.
 
 Terminal success and the run-value echo are separate claims.
 `hart_result_ready` means the hart committed success and is still parked in
-`RUNNING_ACTIVE_FW`; it does not inspect the payload, because seven of the
-eight active images publish what their work produced.
+`RUNNING_ACTIVE_FW`; it does not inspect the payload, because an active image
+may publish what its work produced.
 `active_result_matches` is the echo check.
 Successful automatic ECC priming is progress, not readiness. It commits
 `WayEnable`, returns `ResetRequired` without a runtime, and requires the caller
@@ -702,11 +666,9 @@ Private implementation follows the same boundary:
 - `x280_state` owns pure classification and validation over values already read.
 
 The private `open_impl()` path coordinates per-chip preflight, safe-clock
-recovery, automatic ECC priming, and shape application. When system firmware
-or Metal assumes PLL/ECC bootstrap, remove those temporary branches without
-changing tile lookup or boot semantics.
+recovery, automatic ECC priming, and shape application.
 
-Writable outbound-NOC programming remains later-milestone scope. Active images
+The runtime has no writable outbound-NOC programming. Active images
 are submitted only through the runtime, which owns their sessions and their
 restoration.
 
@@ -971,9 +933,8 @@ clock confirmation, but does not inherently require an ASIC reset.
 
 ## Measurement discipline
 
-Correctness is required alongside every future performance number.
-
-When performance reporting is introduced:
+Correctness is required alongside every performance number. Performance
+reporting must:
 
 - record the clock domain and measured/configured clock state with each result;
 - never subtract timestamps sampled on different component classes;
@@ -1404,14 +1365,14 @@ has none and an unbounded kernel wait hangs the host with no way back.
 ## Implementation references
 
 - `include/x280/device/x280_runtime.hpp` and
-  `include/x280/device/x280_tile.hpp` — landed public runtime ownership,
+  `include/x280/device/x280_tile.hpp` — public runtime ownership,
   inventory, PLL, resident-idle, and LIM surface.
 - `include/x280/device/x280_state.hpp` and
   `include/x280/device/x280_noc_window.hpp` — pure state classification,
   LIM validation, and host-side NOC-window encoding.
 - `src/device/x280_runtime.cpp`, `src/device/x280_tile.cpp`, and
   `src/device/x280_metal_transport.cpp` — current initialization, boot,
-  private later-milestone window mechanisms, and Metal access adapter.
+  private window mechanisms, and Metal access adapter.
 - `src/device/x280_active.cpp` — runtime submission, active observation,
   acknowledged return, and unhealthy restoration handling.
 - `CMakeLists.txt` — the component build.
@@ -1436,7 +1397,7 @@ has none and an unbounded kernel wait hangs the host with no way back.
 - `tt_metal/llrt/tlb_config.cpp` — Blackhole L2CPU static TLB
   configuration over the LIM window.
 - `tt_metal/llrt/tt_cluster.hpp` and UMD `device/cluster.hpp` —
-  Metal wrapper read/write/topology surface plus the temporary raw ARC
+  Metal wrapper read/write/topology surface plus the raw ARC
   telemetry capability.
 - `tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_memory_map.hpp`
   — precedent for a bounded named test-memory map.

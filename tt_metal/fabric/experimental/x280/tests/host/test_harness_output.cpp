@@ -201,7 +201,7 @@ TEST(HarnessRecord, SchemaFollowsTheClock) {
         std::invalid_argument);
 }
 
-// Spec (RecordSpec, V-TM6): AICLK evidence converts the counter it sampled,
+// Spec (RecordSpec): AICLK evidence converts the counter it sampled,
 // or, for a DRISC's wall counter, the Tensix live timer that stands in for it.
 TEST(HarnessRecord, AiclkEvidenceMustHaveSampledTheWallCounter) {
     using x280::harness::measurement::Counter;
@@ -219,7 +219,7 @@ TEST(HarnessRecord, AiclkEvidenceMustHaveSampledTheWallCounter) {
     EXPECT_THROW(record(Counter::RiscDebugWallClock, Counter::EriscWallClock), std::invalid_argument);
 }
 
-// Spec (RecordSpec; V-TM7): a record with a clock states
+// Spec (RecordSpec): a record with a clock states
 // how its warm-up was chosen -- explicit, calibrated or none -- and a refused
 // calibration is no warm-up selection.
 TEST(HarnessRecord, AClockRequiresAWarmupSelection) {

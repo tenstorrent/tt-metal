@@ -337,9 +337,7 @@ its run by `run_value`, then carries `start_event` (`release_issued`),
 50 MHz `x280_mtime` domain rather than the run's AICLK evidence. The interval and the P*N
 headers and bytes it covers are derived offline from those. On a failed run or an invalid
 interval `aggregate_error` is `run_failed` or `invalid_interval`, and the raw endpoints are
-kept. Run records at PI schema 5 or earlier predate the
-aggregate record; the frozen tabulator (`docs/measurement.md` "Collection and reproduction")
-reads them, and the live campaign validator requires the aggregate record.
+kept. The campaign validator requires the aggregate record.
 
 Records include configuration, ordered tiles and selected prefix length, per-worker
 placement, memory budgets and cleanup status. Both run records carry `released_group_dests` and

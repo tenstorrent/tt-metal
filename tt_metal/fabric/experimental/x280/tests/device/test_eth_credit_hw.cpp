@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // eth_credit across the direct Ethernet link between chips 0 and 1, in the
-// plan's bring-up order: barrier and handshake with no traffic, the NoC hop
+// bring-up order: barrier and handshake with no traffic, the NoC hop
 // alone, the Ethernet hop alone, the admission test, the full path, P
 // forwarders, and both directions. Each step carries a run that must fail.
 //
@@ -182,7 +182,7 @@ TEST_P(EthCreditHw, BarrierAndHandshakeAtAFreshlyCompiledShape) {
 // rejects a misaligned peer_rx_base and records BAD_ARGS in its own result
 // block. No kernel reads another's status, so its neighbours leave on their own
 // stall budgets (or host STOP), and the host names E0 as the only origin
-// (SPEC §Failure and termination).
+// (docs/benchmarks/eth_credit.md § Failure and termination).
 TEST_P(EthCreditHw, RefusedE0ArgumentIsAttributedToE0) {
     suite::Case c{
         .name = "refused_e0_argument",
@@ -229,7 +229,7 @@ suite::Case withheld_peer_case(const char* name, bool expect_x280_ready) {
     return c;
 }
 
-/* Step 8's first case, the smallest clean run: one forwarder and one slot. */
+/* The full path's smallest clean run: one forwarder and one slot. */
 suite::Case small_clean_case(const char* name) {
     return suite::Case{
         .name = name, .shape = {1u, 1u, 1u, Slot(64u), 1u}, .direction = ec::Direction::AToB, .packets = each(1u, 1u)};
@@ -239,12 +239,12 @@ bool contains(const std::string& s, const char* needle) { return s.find(needle) 
 
 }  // namespace
 
-// Negative control for steps 3 and 4: chip B's E0 is withheld, so chip A's
+// Negative control for the barrier and handshake: chip B's E0 is withheld, so chip A's
 // E0 must time out in the handshake, and the host attribute the run to that
-// stall rather than to an origin. Undrained spec: that planned negative
+// stall rather than to an origin. That planned negative
 // control (expect_x280_ready false, every kernel ending with a result) is
 // Undrained::None, records nothing, and leaves the next run free to launch,
-// here step 8's full path with one forwarder and one slot.
+// here the full path with one forwarder and one slot.
 TEST_P(EthCreditHw, WithheldPeerE0TimesOutTheHandshakeAndLeavesTheProcessClean) {
     ASSERT_EQ(suite::g_undrained, suite::Undrained::None)
         << "an earlier run (" << suite::g_undrained_case << ") already ended undrained ("
@@ -256,7 +256,7 @@ TEST_P(EthCreditHw, WithheldPeerE0TimesOutTheHandshakeAndLeavesTheProcessClean) 
     EXPECT_EQ(e0.status.code, static_cast<uint32_t>(EC_ERROR_STALL_TIMEOUT));
     EXPECT_EQ(e0.status.detail, static_cast<uint32_t>(EC_SITE_HANDSHAKE));
 
-    // SPEC §Failure and termination: a STALL_TIMEOUT is never an origin; the
+    // eth_credit.md § Failure and termination: a STALL_TIMEOUT is never an origin; the
     // timed-out kernel is listed as stalled with its site as the detail.
     const suite::Attribution& a = neg.attribution;
     EXPECT_TRUE(a.origins.empty()) << a.describe();
@@ -305,7 +305,7 @@ TEST_P(EthCreditHw, ReadbackMismatchOnEitherChipStopsBeforeEnqueue) {
     }
 }
 
-// Undrained spec: a run whose X280 wait expires where the case expected
+// A run whose X280 wait expires where the case expected
 // ResultReady is UnplannedDeadline, reports "ended undrained", and is
 // recorded process-wide; every later run_case then reports "refusing to
 // launch" and returns before anything is enqueued. forget_undrained_run
@@ -372,7 +372,7 @@ TEST_P(EthCreditHw, UndrainedRunRefusesTheNextLaunch) {
         << "a refused run changed the record to " << suite::undrained_name(recorded_after_refusal);
 }
 
-// Step 5: the NoC hop alone. Forwarder -> E0 with W1, W2, and R3 credits, E0
+// The NoC hop alone. Forwarder -> E0 with W1, W2, and R3 credits, E0
 // checking each header's sequence number so a W2 ahead of its W1 fails.
 TEST_P(EthCreditHw, NocHopAlone) {
     suite::Case c{
@@ -389,7 +389,7 @@ TEST_P(EthCreditHw, NocHopAlone) {
     EXPECT_EQ(r.chips[0].e0.block.packets_out[0], 5000u);
 }
 
-// Step 6: the Ethernet hop alone. E0 fills tx_fifo itself; E1 checks each
+// The Ethernet hop alone. E0 fills tx_fifo itself; E1 checks each
 // header and returns R2 without delivering.
 TEST_P(EthCreditHw, EthernetHopAlone) {
     suite::Case c{
@@ -406,7 +406,7 @@ TEST_P(EthCreditHw, EthernetHopAlone) {
     EXPECT_EQ(r.chips[1].e1.block.packets_in[0], 20000u);
 }
 
-// Step 6: single-slot ping-pong. With one link slot, E0 cannot send packet
+// Single-slot ping-pong. With one link slot, E0 cannot send packet
 // k + 1 until R2 has returned slot k, so E0's own window over n packets is n
 // round trips on its clock.
 TEST_P(EthCreditHw, SingleSlotPingPong) {
@@ -427,7 +427,7 @@ TEST_P(EthCreditHw, SingleSlotPingPong) {
         static_cast<unsigned long long>(e0.last_ts - e0.first_ts));
 }
 
-// Step 7: the Ethernet admission test. E1 checks each slot's tail marker the
+// The Ethernet admission test. E1 checks each slot's tail marker the
 // moment pkts[p] shows the packet, at payloads up to the ABI maximum. A slot
 // larger than ETH_TXQ_MAX_PKT_SIZE leaves as several TT-link packets, the
 // case where the tail can lag the counter, so at least one payload must be.
@@ -454,7 +454,7 @@ TEST_P(EthCreditHw, AdmissionTailMarkerHoldsWhenCounterFollowsData) {
     EXPECT_GE(split_payloads, 1u) << "no payload's W3 left as more than one TT-link packet";
 }
 
-// Step 7 positive control: W4 is sent before its W3, so the counter is
+// Admission positive control: W4 is sent before its W3, so the counter is
 // premature by construction, and E1 must see a stale tail.
 TEST_P(EthCreditHw, AdmissionPositiveControlCatchesPrematureCounter) {
     suite::Case c{
@@ -476,7 +476,7 @@ TEST_P(EthCreditHw, AdmissionPositiveControlCatchesPrematureCounter) {
         << "E1 must see the stale marker of a packet whose counter arrived first";
 }
 
-// Step 8: many slots, with the packet count forcing both N_LINK and N_DELIVER
+// The full path over many slots, with the packet count forcing both N_LINK and N_DELIVER
 // round their 2N pointer range many times.
 TEST_P(EthCreditHw, FullPathForcedWrap) {
     const suite::Case c{
@@ -491,7 +491,7 @@ TEST_P(EthCreditHw, FullPathForcedWrap) {
     suite::record_throughput(spec(), fixture(), c, r, 0u);
 }
 
-// Step 9: P forwarders, one per hart.
+// P forwarders, one per hart.
 TEST_P(EthCreditHw, FourForwarders) {
     const suite::Case c{
         .name = "four_forwarders",
@@ -505,7 +505,7 @@ TEST_P(EthCreditHw, FourForwarders) {
     suite::record_throughput(spec(), fixture(), c, r, 0u);
 }
 
-// Step 10: both directions on the edge, validated by per-hop conservation
+// Both directions on the edge, validated by per-hop conservation
 // and the forwarders' per-p sequence checks.
 TEST_P(EthCreditHw, BothDirections) {
     const suite::Case c{

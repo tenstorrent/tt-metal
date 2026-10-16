@@ -494,9 +494,9 @@ inline void run_abandonment(x280::harness::session::Fixture& f, const x280::harn
  *
  * A Tensix worker announces arrival with noc_semaphore_inc onto the director's
  * counter; the X280 cannot issue a NoC atomic -- System Port is uncached with
- * no atomics per PMA (x280/include/noc.h:25) -- so it writes a private ready
+ * no atomics per PMA (include/noc.h, System Port) -- so it writes a private ready
  * word instead. wait_for_arrivals waits on the counter and then walks the
- * words, and neither tier has met the other on silicon before.
+ * words.
  *
  * Release is tiered the same way: the Tensix grid takes one broadcast, and the
  * X280, which no broadcast reaches, takes a notify_write into LIM.

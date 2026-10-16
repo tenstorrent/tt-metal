@@ -24,8 +24,8 @@
  *   - PollMode:     TIGHT
  *   - TransmitMode: WAIT_FOR_COMPLETION
  *
- * Other combinations are separate template instantiations added by later
- * phases; they do not change any code in this file.
+ * Other combinations are separate template instantiations; they do not
+ * change any code in this file.
  *
  * The post-section-copy ceremony (validate, backend init, run_participant,
  * shutdown, release fence) lives in the shared entry-point template under

@@ -71,8 +71,8 @@ namespace hout = x280::harness::output;
 namespace hreg = x280::harness::regions;
 namespace ec = x280::harness::regions::eth_credit;
 
-/* Physical chips of the pair: direct Ethernet neighbours on this host
- * (Cluster::get_ethernet_connections, chip 0 channel 8 <-> chip 1 channel 5). */
+/* Physical chips of the pair: they must be direct Ethernet neighbours
+ * (Cluster::get_ethernet_connections); find_link picks the channel. */
 inline const std::vector<int> kChipPair = {0, 1};
 
 // The NoCs E0 and E1 issue on; the X280 forwarders use output::kX280Noc.
@@ -286,7 +286,7 @@ inline const char* metal_failure_name(MetalFailure m) {
 }
 
 /**
- * The host's attribution of a run (SPEC §Failure and termination). No kernel
+ * The host's attribution of a run (docs/benchmarks/eth_credit.md § Failure and termination). No kernel
  * tells its neighbours it failed, so they exit on their own stall budgets: the
  * origin is every kernel whose error is not STALL_TIMEOUT, and without one
  * the host reports the timed-out kernels' stall sites. A launched kernel that

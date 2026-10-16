@@ -33,7 +33,7 @@
  *   independent clocks. `rdcycle` does not advance while the hart stalls
  *   on memory or a BRESP (docs/measurement.md
  *   "Unconfirmed hardware assumptions", item 5); the two counters have
- *   counted in lockstep on every run so far.
+ *   counted in lockstep.
  *   See rt/x280_measurement.h for the fenced helpers and the design's
  *   Measurement discipline for the rule the choice satisfies.
  *

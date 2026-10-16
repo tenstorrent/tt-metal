@@ -343,8 +343,7 @@ close failures as `std::runtime_error` naming the path, with checked close; no
 fsync or durability guarantees beyond checked close are claimed.
 
 There are no live `tier`, lookup `copy`/style, lookup placement, destination
-window, declared-geometry, or effective-working-set fields. Historical output
-containing those fields remains interpretable only as the retired profile.
+window, declared-geometry, or effective-working-set fields.
 
 ## route_forward: fixed-source forwarding contract
 
@@ -387,9 +386,7 @@ and `waymask_bits=1`, `boundary="decision"` and
 `subject="router forward decision"`.
 The tabulator rejects a fixed-source forwarding row unless its source, packet,
 capacity, hop count, boundary, subject, and instrumentation match this
-identity. Current rows carry no `args_schema`;
-rows with a schema, and historical variable-source forwarding rows, are read by
-the frozen tabulator.
+identity. Rows carry no `args_schema`.
 
 ## Validity
 

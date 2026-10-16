@@ -2,11 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// harness/session/session.hpp -- the Metal + X280Runtime + PLL fixture the
-// host cases that open an X280 runtime reproduce.
+// harness/session/session.hpp -- the Metal + X280Runtime + PLL fixture for
+// host cases that open an X280 runtime.
 //
-// A characterization case's SetUp is nearly identical across those
-// cases:
+// A characterization case's SetUp:
 //   1) if the Metal watcher is enabled, skip;
 //   2) create the case's MeshDevice: a unit mesh on chip 0 unless it names
 //      its chips;
@@ -194,7 +193,7 @@ inline x280::RuntimeOpenConfig runtime_open_config(const OpenConfig& cfg) {
 }
 
 // The whole SetUp pattern in one call. Emits GTEST_SKIP() / ASSERT_* into
-// the calling test case exactly the way the pre-harness code did. Returns
+// the calling test case. Returns
 // void because GTEST_SKIP() expands to `return void_expr;` and cannot sit
 // in a bool-returning helper. Callers inspect ::testing::Test::IsSkipped()
 // / HasFatalFailure() if they need to short-circuit follow-up work; the

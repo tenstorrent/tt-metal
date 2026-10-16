@@ -52,7 +52,7 @@ using GridTransport = core_sync::MetalTransport<ProgrammableCoreType::TENSIX>;
 
 // Arrival by private word rather than by counter. It is the tier every worker
 // of an X280 director takes, because a NoC atomic cannot reach an L2CPU's
-// inbound AXI endpoint (plan 4.1b).
+// inbound AXI endpoint (core_sync_transport_x280.hpp, kMayHostCounter).
 template <ProgrammableCoreType CoreType>
 using WordTransport = core_sync::MetalTransport<CoreType, core_sync::ArrivalKind::Word>;
 

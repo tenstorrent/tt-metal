@@ -3,10 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // harness/targets/x280_tile.hpp -- thin wrapper around a resident-idle X280
-// tile used by the characterization suite. Owns nothing new: rebinds the
-// existing X280Tile* + TileId + X280Runtime* triple as one value so the
-// runner does not need three parallel members and per-test callers stop
-// naming all three every time.
+// tile used by the characterization suite. Owns nothing: binds the
+// X280Tile* + TileId + X280Runtime* triple as one value so the runner and
+// per-test callers hold one member instead of three.
 
 #ifndef X280_HARNESS_TARGETS_X280_TILE_HPP
 #define X280_HARNESS_TARGETS_X280_TILE_HPP

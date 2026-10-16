@@ -5,7 +5,7 @@
 // tests/host/test_eth_credit.cpp -- pure host tests for the eth_credit ABI,
 // header use, 2N-wrap pointers, layout, admission and argument packing.
 //
-// Expected values come from the eth_credit design ("the plan"), cited by section in
+// Expected values come from docs/benchmarks/eth_credit.md, cited by section in
 // each test.
 
 #include <gtest/gtest.h>
@@ -39,11 +39,11 @@ namespace {
 
 constexpr uint32_t kKiB = 1024u;
 
-// Plan §ABI and layout / Memory map: "the 359 KiB window".
+// eth_credit.md § Memory map: "the 359 KiB window".
 constexpr uint64_t kEthWindowBytes = 359u * kKiB;
 constexpr uint64_t kEthWindowBase = 0x1A000u;
 
-// Plan §Header: a slot is the 96-byte header followed by the payload.
+// eth_credit.md § Header: a slot is the 96-byte header followed by the payload.
 constexpr uint32_t Slot(uint32_t payload) { return 96u + payload; }
 
 Capacity RealisticCapacity() {
@@ -88,7 +88,7 @@ std::vector<uint32_t> hot_unit_addresses(const ChipLayout& l) {
 }
 
 // The 6P hot unit addresses of one tile, from the named layout fields, in
-// layout order. Plan §Memory map: E0 {wr_sh[p], crd[p], rd_src[p]}, E1
+// layout order. eth_credit.md § Memory map: E0 {wr_sh[p], crd[p], rd_src[p]}, E1
 // {out_rd_sh[p], crd_src[p], out_wr_src[p]}.
 std::vector<uint32_t> NamedHotUnits(const ChipLayout& l) {
     const ec_eth_layout_t& e = l.eth;
@@ -101,14 +101,14 @@ std::vector<uint32_t> NamedHotUnits(const ChipLayout& l) {
     return out;
 }
 
-// Plan §Memory map: the inferred interleave, restated here rather than taken
+// eth_credit.md § Memory map: the inferred interleave, restated here rather than taken
 // from ec_eth_bank() so the test does not grade the mapping by itself.
 uint32_t InferredBank(uint32_t addr) { return (addr >> 4) & 31u; }
 
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// Header (plan §ABI and layout / Header; production PacketHeaderBase in
+// Header (eth_credit.md § Header; production PacketHeaderBase in
 // tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp: NocCommandFields is 40 bytes,
 // then payload_size_bytes (uint16), noc_send_type (uint8), src_ch_id (uint8)).
 // ---------------------------------------------------------------------------
@@ -143,7 +143,7 @@ TEST(EthCreditHeader, EachAccessorTouchesOnlyItsOwnBytes) {
     EXPECT_EQ(fs_src_ch_id(&h), 0x5Au);
 }
 
-// Plan §Header: fs_seed_unicast_header rewrites all 96 bytes, so src_ch_id and
+// eth_credit.md § Header: fs_seed_unicast_header rewrites all 96 bytes, so src_ch_id and
 // seq are written after it; everything else stays as the unicast seed made it.
 TEST(EthCreditHeader, SeedIsTheUnicastSeedPlusSeqSrcAndPayload) {
     alignas(16) fs_hybrid_mesh_packet_header_t plain;
@@ -169,10 +169,10 @@ TEST(EthCreditHeader, SeedIsTheUnicastSeedPlusSeqSrcAndPayload) {
 }
 
 // ---------------------------------------------------------------------------
-// Status word, result block, kernel ids (plan §Status word, §Result block).
+// Status word, result block, kernel ids (eth_credit.md § Terminal status, § Result block).
 // ---------------------------------------------------------------------------
 
-TEST(EthCreditAbi, StatusWordIsOneUnitWithThePlannedFields) {
+TEST(EthCreditAbi, StatusWordIsOneUnitWithTheDocumentedFields) {
     EXPECT_EQ(sizeof(ec_status_t), 16u);
     EXPECT_EQ(offsetof(ec_status_t, state), 0u);
     EXPECT_EQ(offsetof(ec_status_t, origin), 4u);
@@ -218,7 +218,7 @@ TEST(EthCreditAbi, OnlyDoneIsAMeasurementAndEveryFailureIsTerminal) {
 }
 
 // docs/benchmarks/eth_credit.md § Result block: no schema field; every record begins
-// {magic, kernel_id}; the result block keeps its other offsets and 256 bytes.
+// {magic, kernel_id}; the result block is 256 bytes at fixed offsets.
 TEST(EthCreditAbi, ResultBlockHasFixedSizeAndHeaderFirst) {
     EXPECT_EQ(sizeof(ec_result_t), EC_RESULT_BYTES);
     EXPECT_EQ(EC_RESULT_BYTES, 256u);
@@ -261,7 +261,7 @@ TEST(EthCreditAbi, StallTotalsAddCheckedIntervalsAndKeepARefusal) {
     }
 }
 
-// Spec §1, the ec_x280_fwd_args_t offset table.
+// The ec_x280_fwd_args_t offsets (eth_credit.md § Arguments, one struct per role).
 TEST(EthCreditAbi, ForwarderRecordOffsetsMatchTheTable) {
     EXPECT_EQ(sizeof(ec_x280_fwd_args_t), 128u);
     EXPECT_EQ(EC_X280_FWD_ARGS_BYTES, 128u);
@@ -292,7 +292,7 @@ TEST(EthCreditAbi, ForwarderRecordOffsetsMatchTheTable) {
     EXPECT_EQ(sizeof(ec_x280_fwd_args_t::reserved), 6u * 4u);
 }
 
-// Plan §Status word: ids X280_FWD_p, E0, E1 plus a chip bit, so a
+// eth_credit.md § Terminal status: ids X280_FWD_p, E0, E1 plus a chip bit, so a
 // failure's origin names which chip's core failed.
 TEST(EthCreditAbi, KernelIdsRoundTripAndAreDistinctAcrossBothChips) {
     std::set<uint32_t> ids;
@@ -361,7 +361,7 @@ TEST(EthCreditSites, CostSitesAreExactlyTheFourPostIssueWaits) {
 }
 
 // ---------------------------------------------------------------------------
-// 2N-wrap pointers (plan §Protocol / Pointers: slot = x & (N-1),
+// 2N-wrap pointers (eth_credit.md § Pointers: slot = x & (N-1),
 // used = (wr - rd) mod 2N, empty = rd == wr, full = used == N, and every reader
 // checks (wr - rd) mod 2N <= depth).
 // ---------------------------------------------------------------------------
@@ -418,7 +418,7 @@ TEST(EthCreditPointers, AgreeWithAnUnboundedModelAcrossManyWraps) {
     }
 }
 
-// Plan §Pointers: a violation of (wr - rd) mod 2N <= depth is COUNTER_DISTANCE.
+// eth_credit.md § Pointers: a violation of (wr - rd) mod 2N <= depth is COUNTER_DISTANCE.
 TEST(EthCreditPointers, DistanceRejectsOverrunAndOutOfRangePointers) {
     for (uint32_t n : {1u, 2u, 8u, 1024u}) {
         for (uint32_t rd = 0; rd < 2u * n; ++rd) {
@@ -434,14 +434,14 @@ TEST(EthCreditPointers, DistanceRejectsOverrunAndOutOfRangePointers) {
 }
 
 // ---------------------------------------------------------------------------
-// E0 idle site (audit C5, ec_e0_idle_site contract): a pass that sends nothing
+// E0 idle site (ec_e0_idle_site contract): a pass that sends nothing
 // is charged to EC_SITE_E0_LINK_CREDITS when its link credit is zero, and to
 // EC_SITE_E0_INPUTS_EMPTY otherwise. Credit is tested first because the
 // forwarder refills tx_fifo only as credit returns, so zero credit implies
 // zero input; an input-first test never reaches LINK_CREDITS.
 // ---------------------------------------------------------------------------
 
-// C5 ordering rationale: in every consistent state (crd <= sent <= wr in
+// Ordering rationale: in every consistent state (crd <= sent <= wr in
 // unbounded order, used(wr, crd) <= N because the forwarder fills only slots
 // credit has freed), credit == 0 implies avail == 0, and an idle pass is
 // charged to LINK_CREDITS exactly when credit is 0. Enumerates every crd
@@ -479,7 +479,7 @@ TEST(EthCreditE0IdleSite, ZeroCreditImpliesEmptyInputAndIdleSiteFollowsCredit) {
 }
 
 // ---------------------------------------------------------------------------
-// Shape (plan §Arguments: 1 <= BATCH <= min(N_LINK, N_DELIVER); §Pointers:
+// Shape (eth_credit.md § Arguments: 1 <= BATCH <= min(N_LINK, N_DELIVER); §Pointers:
 // power-of-two depths; §Header: SLOT_SIZE = 96 + 16k; §Forwarders: P <= 4).
 // ---------------------------------------------------------------------------
 
@@ -578,7 +578,7 @@ TEST(EthCreditShape, RejectedShapeLeavesLayoutOutputUntouched) {
 }
 
 // ---------------------------------------------------------------------------
-// Layout (plan §ABI and layout / Memory map, §Protocol / Layout).
+// Layout (eth_credit.md § Memory map, § Layout rules).
 // ---------------------------------------------------------------------------
 
 TEST(EthCreditLayout, ControlAreaHasHotUnitsFirstAndSixPOfThem) {
@@ -672,7 +672,7 @@ TEST(EthCreditLayout, ControlBaseIs512AlignedAndSlotsAreSizedToNeed) {
     EXPECT_FALSE(outbound(Direction::BToA, 0u));
 }
 
-// Plan §Memory map: each forwarder has its own LIM area; X280 FIFOs live in LIM;
+// eth_credit.md § Memory map: each forwarder has its own LIM area; X280 FIFOs live in LIM;
 // in[p] is N_DELIVER x 96 B.
 TEST(EthCreditLayout, ForwarderLimAreasAreDisjointAndInsideTheWindow) {
     const Capacity cap = RealisticCapacity();
@@ -695,10 +695,10 @@ TEST(EthCreditLayout, ForwarderLimAreasAreDisjointAndInsideTheWindow) {
     }
 }
 
-// Plan §Memory map: a forwarder area holds, in order, rd_sh, wr_src, wr_sh,
+// eth_credit.md § Memory map: a forwarder area holds, in order, rd_sh, wr_src, wr_sh,
 // rd_src, seq_expected, release, result, staging, in_slots; there are no
 // status units from E0 or E1.
-TEST(EthCreditLayout, ForwarderAreaUnitsAreInPlannedOrder) {
+TEST(EthCreditLayout, ForwarderAreaUnitsAreInDocumentedOrder) {
     for (uint32_t P = 1; P <= EC_MAX_P; ++P) {
         const Admission adm = admit(MakeConfig(P, 8u, 16u, 256u, 1u, Direction::Both), RealisticCapacity());
         ASSERT_TRUE(adm.ok()) << adm.describe();
@@ -718,8 +718,8 @@ TEST(EthCreditLayout, ForwarderAreaUnitsAreInPlannedOrder) {
 
 // ---------------------------------------------------------------------------
 // Bank placement. Tied to the INFERRED interleave bank = (addr >> 4) & 31
-// (plan §Memory map: inferred from the Wormhole Tensix L1 MAS and the Neo L1
-// spec's low-order interleave, not documented for Blackhole Ethernet). If the
+// (eth_credit.md § Memory map: the interleave is inferred, not documented for
+// Blackhole Ethernet). If the
 // real Blackhole Ethernet mapping differs, this test says nothing about it.
 // ---------------------------------------------------------------------------
 
@@ -753,12 +753,12 @@ TEST(EthCreditBanks, EveryHotUnitHasItsOwnBankUpToPFour) {
 }
 
 // ---------------------------------------------------------------------------
-// Fit (plan §Memory map: tile slots take 2 * P * N_LINK * SLOT_SIZE; at P = 4,
+// Fit (eth_credit.md § Memory map: tile slots take 2 * P * N_LINK * SLOT_SIZE; at P = 4,
 // N_LINK = 8 that is 64 slots, ~262 KiB at 4 KiB and ~134 KiB at 2 KiB, both
 // within 359 KiB; N_LINK = 16 at 4 KiB needs ~524 KiB and does not fit).
 // ---------------------------------------------------------------------------
 
-TEST(EthCreditFit, PlanExampleNLinkSixteenAtFourKiBIsRefusedWithBytesOver) {
+TEST(EthCreditFit, NLinkSixteenAtFourKiBIsRefusedWithBytesOver) {
     const Config cfg = MakeConfig(4u, 16u, 8u, 4096u, 1u, Direction::Both);
     const Admission adm = admit(cfg, RealisticCapacity());
     ASSERT_FALSE(adm.ok());
@@ -920,7 +920,7 @@ TEST(EthCreditPlacement, OnlyAPlacementEndingAtOrBelowFourGiBIsAccepted) {
 }
 
 // ---------------------------------------------------------------------------
-// Mod-16 congruence (plan §Protocol / Layout: Blackhole requires a NoC write's
+// Mod-16 congruence (eth_credit.md § Layout rules: Blackhole requires a NoC write's
 // source and destination to be congruent mod 16; the host checks that every
 // base and stride is a multiple of 16).
 // ---------------------------------------------------------------------------
@@ -1037,7 +1037,7 @@ TEST(EthCreditCongruence, TheFirstFaultInChipThenFieldOrderIsReported) {
 }
 
 // ---------------------------------------------------------------------------
-// Per-role peer NoC coordinates (plan §Ethernet cores and queues: ERISC0 on
+// Per-role peer NoC coordinates (eth_credit.md § Ethernet cores and queues: ERISC0 on
 // NoC 0, ERISC1 on NoC 1; the host derives each role's X280 coordinates for
 // that role's NoC).
 // ---------------------------------------------------------------------------
@@ -1082,7 +1082,7 @@ TEST(EthCreditAdmission, PlacementMissingACoordinateIsRefused) {
 }
 
 // ---------------------------------------------------------------------------
-// Admission (plan §Stream-ID budget: IDs 1-31, P per tile; §Files).
+// Admission (eth_credit.md § Stream-ID budget: IDs 1-31, P per tile; § Files).
 // ---------------------------------------------------------------------------
 
 TEST(EthCreditAdmission, StreamIdsAreOneThroughThirtyOneAndDistinctPerTile) {
@@ -1132,8 +1132,8 @@ TEST(EthCreditAdmission, StallBudgetConvertsOnEachRolesClock) {
 
 namespace {
 
-// Word indices of ec_erisc_args_t, restated from the declaration order the
-// spec lists (§2) rather than taken from offsetof, so a reordered struct fails.
+// Word indices of ec_erisc_args_t, restated from the declaration order
+// (eth_credit.md § Arguments) rather than taken from offsetof, so a reordered struct fails.
 constexpr uint32_t kWMagic = 0, kWKernelId = 1, kWFlags = 2, kWShape = 3;  // shape: P, n_link, n_deliver, slot, batch
 constexpr uint32_t kWRunNonce = 8, kWPollCadence = 9, kWBudgetLo = 10, kWBudgetHi = 11;
 constexpr uint32_t kWCtrlBase = 12, kWFwdX = 13, kWFwdY = 14, kWReadyBase = 15;
@@ -1175,7 +1175,7 @@ void FillPrefix(ec_erisc_args_t& e) {
 
 }  // namespace
 
-// Spec §2, serialization: word i is the record's i-th uint32 in declaration
+// eth_credit.md § Arguments, serialization: word i is the record's i-th uint32 in declaration
 // order, 38 words for E0 and 34 for E1. Every field carries a distinct value,
 // so a swapped, shifted or dropped field lands on a word the expected vector
 // does not hold.
@@ -1202,7 +1202,7 @@ TEST(EthCreditArgs, EachRecordPacksInDeclarationOrder) {
     expect_words("E1", pack_runtime_args(e1), 34u);
 }
 
-// Spec §3: each ERISC kernel's barrier slot is its role's fixed index: E0 0,
+// eth_credit.md § Arguments: each ERISC kernel's barrier slot is its role's fixed index: E0 0,
 // E1 1, forwarder p 2 + p, all inside the ready table.
 TEST(EthCreditArgs, BarrierWorkerIndexFollowsTheRole) {
     EXPECT_EQ(ec_barrier_index_e0(), 0u);
@@ -1233,7 +1233,7 @@ TEST(EthCreditArgs, DerivedArgumentsAgreeWithTheLayoutTheyCameFrom) {
         const ChipLayout& peer = adm.layout.chips[o];
         const ChipArguments& a = args.chips[c];
 
-        // E0. The shape is read from the packed words 3..7 (spec §2), so the
+        // E0. The shape is read from the packed words 3..7 (eth_credit.md § Arguments), so the
         // serialized record, not just the struct, carries it.
         const std::vector<uint32_t> e0w = pack_runtime_args(a.e0);
         ASSERT_EQ(e0w.size(), static_cast<size_t>(EC_E0_ARG_WORDS));
@@ -1283,7 +1283,7 @@ TEST(EthCreditArgs, DerivedArgumentsAgreeWithTheLayoutTheyCameFrom) {
         EXPECT_EQ(ec_u64(e1w[30], e1w[31]), l.lim_end);
 
         for (uint32_t p = 0; p < P; ++p) {
-            // W4 (plan §The nine writes): E0 on this chip increments pkts[p]
+            // W4 (eth_credit.md § The nine writes): E0 on this chip increments pkts[p]
             // on the peer tile, and E1 reads this tile's own.
             EXPECT_EQ(a.e0.erisc.stream_id[p], cfg.chips[o].stream_ids[p]) << "chip " << c << " p " << p;
             // E0 resets its own tile's counters before the handshake.
@@ -1329,7 +1329,7 @@ TEST(EthCreditArgs, OneWayRunIdlesTheSendersInboundSideAndTheReceiversOutbound) 
 
     const ChipArguments& a = args.chips[0];
     const ChipArguments& b = args.chips[1];
-    // Plan §Pre-run ordering: E0 runs on both tiles in every run.
+    // eth_credit.md § Pre-run ordering: E0 runs on both tiles in every run.
     EXPECT_EQ(a.e0.erisc.magic, EC_ABI_MAGIC);
     EXPECT_EQ(b.e0.erisc.magic, EC_ABI_MAGIC);
     EXPECT_NE(a.e0.erisc.flags & EC_E0_FLAG_OUTBOUND_ACTIVE, 0u);
@@ -2201,7 +2201,7 @@ TEST(EthCreditArgChecksE1, BadRxRegionOrPeerControlBaseIsRefused) {
 }
 
 // ---------------------------------------------------------------------------
-// Host X280 wait (eth-credit host-wait spec: the floor is
+// Host X280 wait (measurement::host_wait_floor_ms, eth_credit.md § Failure and termination: the floor is
 // kHostWaitPhases x stall_budget_ms + kHostWaitSlackMs, false on overflow;
 // Config::host_wait_ms 0 takes the floor, >= floor is kept, 0 < w < floor is
 // refused as EC_CHECK_BAD_PARAM / EC_CONSTRAINT_HOST_WAIT {w, floor}).
@@ -2212,7 +2212,7 @@ namespace {
 constexpr uint64_t kU64Max = ~0ull;
 constexpr uint64_t kUntouched = 0xDEADBEEFCAFEF00Dull;
 
-// The floor, restated from the spec rather than taken from host_wait_floor_ms().
+// The floor, restated from eth_credit.md rather than taken from host_wait_floor_ms().
 constexpr uint64_t SpecFloor(uint64_t stall_budget_ms) { return 4u * stall_budget_ms + 5000u; }
 
 }  // namespace

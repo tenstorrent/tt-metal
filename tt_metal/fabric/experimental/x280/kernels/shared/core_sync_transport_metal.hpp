@@ -112,8 +112,8 @@ struct MetalRoster {
     uint32_t word_arrival_count = 0;
 
     /* The Tensix rectangle one broadcast releases. A grid with num_dests zero
-     * leaves the corners unread and no broadcast is issued. Last, so the
-     * positional forms that predate it still name the same fields. */
+     * leaves the corners unread and no broadcast is issued. Last, so
+     * positional initializers of the earlier fields stay valid. */
     MetalGroup grid{};
 };
 

@@ -115,8 +115,7 @@ inline std::optional<std::pair<TileId, TileId>> selected_tile_pair(
 }
 
 // Default Tensix worker for the paired X280<->Tensix members. Worker (0, 0)
-// in LOGICAL is what every member picks; centralised here so a future
-// multi-worker case has one place to change.
+// in LOGICAL is what every member picks.
 struct TensixWorker {
     uint32_t x = 0;
     uint32_t y = 0;

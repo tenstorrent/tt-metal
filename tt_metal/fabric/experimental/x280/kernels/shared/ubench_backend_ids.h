@@ -12,8 +12,8 @@
 
 /* Bits 31..28 name the core family the backend runs on, bits 27..20 the suite,
  * and the low bits the member within the suite. The values are recorded and
- * tools/tabulate_suites.py selects tables by them, so a change here changes
- * that file in the same commit. */
+ * tools/tabulate_suites.py selects tables by them, so a change here must be
+ * mirrored there. */
 #define UBENCH_BACKEND_ID(core_class, suite, member) (((core_class) << 28) | ((suite) << 20) | (member))
 #define UBENCH_BACKEND_ID_CLASS(id) ((id) >> 28)
 

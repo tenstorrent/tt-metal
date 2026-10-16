@@ -1,11 +1,10 @@
 # Characterization measurements
 
 The maintained P2P, transport-bandwidth, pipeline-stage, packet-injection,
-core-sync and eth_credit suites retain native measurements. Legacy experiments are excluded.
-`characterization_manifest.json` selects 246 configurations: 28 of the 40 of an
-earlier campaign (39 evidenced prior configurations and the explicitly
-authorized first fixed-4×4 core-sync run, less its ten DRISC and idle-ERISC
-`pipeline_stage` configurations and its two X280 `route_forward` COPY ones), the nine
+core-sync and eth_credit suites retain native measurements.
+`characterization_manifest.json` selects 246 configurations: 28 base points (ten
+p2p_latency, eight transport_bandwidth, three pipeline_stage, six packet_injection and
+the fixed-4×4 core-sync run), the nine
 `packet_injection/erisc_to_x280_header` points at C=1, K=1 (writers 1, 2, 4, 8
 and all at B=1; B=4 and B=8 at writers 1 and 4), twelve points of its
 consumer-settings sweep (writers 1 and all at B=1 for six further (C, K)
@@ -23,7 +22,7 @@ change only C and K from `T4.s64` (C in {1, 2, 4, 8, 16} at K=16 and K in
 and all at B=1 and writers 1 at B=4 for (C, K) = (8, 16), (8, 32), (16, 32) and
 (32, 32)), the four `packet.throughput.brisc.T4{,.c8k16}.inflight{2,4}` points, which
 repeat `T4` and `T4.c8k16` with the consumer visiting 2 or 4 workers per pass
-and which no campaign has yet measured, `eth_credit.ethernet_hop`, the Ethernet hop alone
+`eth_credit.ethernet_hop`, the Ethernet hop alone
 over slot size and batch, `eth_credit.noc_hop` and `eth_credit.receive_side`, the NoC hop and
 the receive side alone on the leg grid (slots 160 to 4192 B at P = 1, 2 and 4, and 16480 B at
 P = 1), `eth_credit.w1_alone`, `eth_credit.w2_alone` and `eth_credit.r1_alone`, the forwarder's
@@ -34,8 +33,7 @@ sourcing, and
 sweep across the Ethernet link of cards 0 and 1 (`TT_VISIBLE_DEVICES` unset, so every card is
 visible), and
 the 18 `bw.tensix_to_x280` points that extend its transfer-size axis to 128, 320,
-384, 512, 1024, 2048, 4096, 8192 and 16384 B under both boundaries, which no
-campaign has yet measured, and the 20 `bw.x280_to_tensix` points that add 4096
+384, 512, 1024, 2048, 4096, 8192 and 16384 B under both boundaries, and the 20 `bw.x280_to_tensix` points that add 4096
 and 65536 B transfers and the `sd` (8 B) and `vse32.v` (64 B) store widths
 under both boundaries, the 24
 `bw.x280_to_tensix.h{2,4}` points that run each store width at 64 and 65536 B on 2 and 4
@@ -48,10 +46,7 @@ ERISC point the device cannot host -- more writers than inactive Ethernet cores,
 none at all, or `IDLE_ETH` not enabled -- is an availability skip, and like every
 skip it fails coverage.
 Warmup/sample counts come from those configurations, except that one omitting
-an AICLK-gated suite's warm-up leaves it to calibration (below). The earlier 40-configuration campaign
-collected one run each, with separately retained diagnostic attempts; the
-ERISC header-ingress campaigns collected three runs of each ERISC
-point and one of each Tensix cross-check.
+an AICLK-gated suite's warm-up leaves it to calibration (below).
 
 | Interval | Wall measurement | Native CPU measurement |
 |---|---|---|
@@ -75,8 +70,8 @@ Paired reads are ordered, not simultaneous. Every paired bracket reads wall then
 CPU, except the packet X280 aggregate, which nests them: mtime then rdcycle at
 the start and rdcycle then mtime at the end, so its CPU interval lies inside its
 wall interval. Reader cost is included;
-the records are instrumented intervals, without overhead subtraction. An
-independent per-target perturbation/overhead characterization is not yet present.
+the records are instrumented intervals, without overhead subtraction. No
+independent per-target perturbation/overhead characterization exists.
 Counter instances belong to their recorded participant/placement and run; no
 cross-instance CPU subtraction or cross-reset continuity is assumed.
 
@@ -230,7 +225,7 @@ the other counter in `secondary_deltas`. The records name both counters.
 
 ## Clock evidence and limits
 
-In the Metal these suites were written against, `syncDeviceHost` owns profiler state and a BRISC
+In tt-metal, `syncDeviceHost` owns profiler state and a BRISC
 sync kernel with 249 exchanges; realtime `run_sync` owns a reserved Tensix core,
 returns a processed mapping and has AICLK fallback paths. Neither exposes a
 bounded raw sampler for each actual DRISC/ERISC counter under these launch modes.
@@ -365,8 +360,7 @@ the others are open.
   at its old target when the window is cleared (core_sync release).
   No L2CPU document states it. Evidence:
   `WormholeB0/PCIExpressTile/TLBs.md` states it for Wormhole PCIe TLBs, and every
-  core_sync multicast release passes on silicon with no lost write, as did every
-  pipeline_stage four-window clear recorded before the move into tt-metal.
+  core_sync multicast release passes on silicon with no lost write.
 - Item 9, assumed: an 8-byte LIM slot is one ECC granule with no
   read-modify-write into its neighbours (core_sync slots). Manual §14.2.6 gives
   L3 ECC as SECDED with no width; `L2CPUTile/Caches.md` gives none. Evidence:
@@ -474,9 +468,8 @@ all its configurations under slow dispatch, so comparing one of these 132 of the
 `core_sync.release_skew.fixed4x4`.
 
 Record expectations come from the suite validator and the selected sample/worker
-counts; the manifest does not repeat them. Build recipes, preparation requirements
-and historical eligibility evidence remain in documentation and the retained
-original inventory. The runner uses prebuilt images; it does not build firmware
+counts; the manifest does not repeat them. Build recipes and preparation
+requirements are in the suite documentation. The runner uses prebuilt images; it does not build firmware
 or establish exclusive ownership. C++ fixtures own device admission.
 
 `--dry-run` shows the resolved command and selected environment. Each attempt has
@@ -529,12 +522,9 @@ same way, so such a record fails its attempt; a passed attempt the report cannot
 read counts as failed in its coverage, with the reason.
 `campaign.json` contains only derived coverage/conversion counts, the evidence
 directory and the frozen manifest hash. It does not consume `provenance.json`;
-hardware context, build instructions and clock-evidence limits belong in the
-verification note. The live tabulator reads only the current record format: it
-reads no console capture. Earlier campaigns (including two-file attempt logs and run records at PI
-schema 5 or earlier), records and console captures need the tabulator of the tree that
-wrote them. Historical captures retain their original schemas and clock metadata; they are not
-new campaign evidence.
+hardware context, build instructions and clock-evidence limits are in this
+document and the suite documents. The tabulator reads only the current record format: it
+reads no console capture.
 
 ### Tabulation
 

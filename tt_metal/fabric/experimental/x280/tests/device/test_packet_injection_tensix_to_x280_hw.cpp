@@ -64,7 +64,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::ValuesIn(kSweepPoints),
     [](const ::testing::TestParamInfo<suite::SweepPoint>& info) { return std::string(info.param.label); });
 
-// BU-1: JIT-compiles the producer for both data-movement RISCs across every
+// JIT-compiles the producer for both data-movement RISCs across every
 // mode/creation-flag variant, without enqueue, dispatch, X280 runtime or
 // prepared LIM state. Compiling a program needs only an initialised device.
 TEST(PacketInjectionCompile, BothRiscsCompileForEveryVariant) {

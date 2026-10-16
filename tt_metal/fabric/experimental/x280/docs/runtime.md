@@ -200,7 +200,7 @@ reset value). An empty record shows that no preparation has run since the
 reset; it does not show that nothing else cached those addresses, which
 exclusive ownership covers.
 
-Prime, open and boot as in "Using the X280 runtime", opening with
+Prime, open and boot as in [Production use](#production-use), opening with
 `LimEccPrimingPolicy::RequirePrepared` and `LimShape{14}` so shape provisioning
 cannot silently run the ECC primer. The runtime applies an increase-only shape
 only while every L2CPU remains in reset; it refuses a request that would expand

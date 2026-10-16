@@ -16,8 +16,7 @@
 // enqueues non-blocking and drains via Finish() on the mesh command queue.
 //
 // This header names both flows so the tests share one implementation.
-// Failures fall through as gtest ADD_FAILURE / EXPECT_* to keep the
-// existing skip/fail semantics.
+// Failures fall through as gtest ADD_FAILURE / EXPECT_*.
 
 #ifndef X280_HARNESS_EXECUTION_HPP
 #define X280_HARNESS_EXECUTION_HPP

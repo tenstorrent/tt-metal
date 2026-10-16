@@ -322,8 +322,8 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
     }
 
     // Verify worker coordinates against mesh
-    // MeshDevice, not Device: Device::worker_cores is an unconditional TT_FATAL
-    // at this tt-metal revision, so the per-device spelling aborts every run.
+    // MeshDevice, not Device: Device::worker_cores is an unconditional TT_FATAL,
+    // so the per-device spelling aborts every run.
     const auto worker_cores = f.mesh->worker_cores(ttm::HalProgrammableCoreType::TENSIX, ttm::SubDeviceId{0});
     for (uint32_t t = 0; t < T; ++t) {
         ttm::CoreCoord c{cfg.ordered_tiles[t].x, cfg.ordered_tiles[t].y};

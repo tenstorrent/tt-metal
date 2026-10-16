@@ -6,8 +6,8 @@
 //
 // One-place resolution for:
 //   - X280 firmware image path (env-var override, else the build's image).
-//   - Tensix kernel source directory (tests/device/kernels), the same
-//     path the host cases already compute from __FILE__.
+//   - Tensix kernel source directory (tests/device/kernels), computed from
+//     __FILE__.
 //   - env_u32/env_str helpers and the strict decimal parser behind them.
 
 #ifndef X280_HARNESS_ARTIFACTS_HPP

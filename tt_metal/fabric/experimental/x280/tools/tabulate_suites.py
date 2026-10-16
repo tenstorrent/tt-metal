@@ -5,9 +5,7 @@
 
 """Tabulate current x280 records without recomputing measurements.
 
-Reads current-format JSONL records; records and console captures from before
-the record builder are read by the frozen tabulator (docs/measurement.md
-"Collection and reproduction"). Malformed records are errors.
+Reads current-format JSONL records; malformed records are errors.
 """
 
 import argparse
@@ -285,14 +283,14 @@ TB_TABLES = (Table("", {}, tuple(TB_IDENTITY + TB_VALUES)),)
 
 
 def tb_x280_harts(row):
-    """The run's hart count. Records written before the hart axis carry none: one hart ran."""
+    """The run's hart count. A record without `harts` ran one hart."""
     return row.record.get("harts", 1)
 
 
 def tb_x280_span(row):
     """mtime ticks from the first hart's t0 to the last hart's t1 (all harts read one mtime).
 
-    A record from before the hart axis carries no brackets: its batch is the span."""
+    A record without hart_brackets carries no brackets: its batch is the span."""
     if "hart_brackets" not in row.record:
         return counter_value(row.record, ("raw_wall_ticks",))
     starts = each("hart_brackets", "wall_start")(row)
@@ -341,7 +339,7 @@ TB_ERISC_TABLES = (
         ),
     ),
 )
-# Records written before the store-width axis carry no store_width; they stored with sw.
+# A record without store_width stored with sw.
 # With harts > 1 the batch columns are hart 0's; span and run GB/s cover every hart.
 TB_X280_TABLES = (
     Table(
@@ -442,7 +440,7 @@ PI_COUNTER_WRITE_BYTES = 4
 
 def pi_inflight(record):
     """Workers one consumer pass visits together. A record without the field
-    predates the setting, when every pass visited one worker."""
+    visited one worker per pass."""
     return record.get("inflight", 1)
 
 
@@ -672,7 +670,7 @@ class DerivedRow(NamedTuple):
 
 
 def tx_mode(record):
-    """A p2p record's transmit mode; records written before the setting waited for completion."""
+    """A p2p record's transmit mode; a record without tx_mode waited for completion."""
     return record.get("tx_mode", "wait_for_completion")
 
 
@@ -1019,8 +1017,8 @@ def ec_ceilings(rows):
     A stretch's rate is its Mpkt/s at the path's shape; a pointer store's is BATCH times its
     million stores per second at the path's P, as the forwarder stores once per batch. Each is the
     mean over every row of that leg and key (every p and run), at the row's own clock; a row left
-    raw is no measurement. Ethernet hop records written before records named their legs are
-    recognised by their member. The slowest leg and the bound are named only where the NoC hop and the receive
+    raw is no measurement. An Ethernet hop record that names no leg is recognised by its
+    member. The slowest leg and the bound are named only where the NoC hop and the receive
     side were measured at the path's shape; the Ethernet hop is measured at P = 1 only.
     """
     names = {legs: name for name, legs in EC_CEILING_STRETCHES + EC_CEILING_STORES}

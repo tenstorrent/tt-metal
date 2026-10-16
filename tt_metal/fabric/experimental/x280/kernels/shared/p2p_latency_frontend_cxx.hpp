@@ -119,7 +119,7 @@ inline constexpr uint32_t token_for(
 /* --------------------------------------------------------------------------
  * Role derivation from (self, direction).
  *
- * x280_same_tile and every future row: A initiates A_TO_B; B initiates B_TO_A. So the
+ * Every member: A initiates A_TO_B; B initiates B_TO_A. So the
  * role is a pure function of self and direction, not a runtime choice.
  * -------------------------------------------------------------------------- */
 inline constexpr p2p_latency_role_t role_for(p2p_latency_participant_t self, p2p_latency_direction_t direction) {

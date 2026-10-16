@@ -25,7 +25,7 @@
  * same bracket as a cross-check between two independent clocks. rdcycle
  * does not advance while the hart stalls on memory or a BRESP
  * (docs/measurement.md "Unconfirmed hardware assumptions", item 5); the two
- * counters have counted in lockstep on every run so far.
+ * counters have counted in lockstep.
  *
  * The host retains secondary_batch_delta as raw CPU cycles. Only mtime
  * supplies elapsed time.
@@ -240,7 +240,7 @@ inline bool initialize(
      * short, and only an ASIC reset clears it. In hardware, the
      * outstanding-request limiter and the post-strict ordering logic operate
      * independently, so the master takes an early AXI BRESP. Staying under the
-     * tracked 256-outstanding-write workaround does not help; the failure is
+     * 256-outstanding-write limit does not help; the failure is
      * observed from four stores.
      *
      * An unverified window is kept in state.window so shutdown() clears it and

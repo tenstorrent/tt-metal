@@ -250,7 +250,7 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                   &tensix_clock,
                   "drisc",
                   std::array<uint32_t, 2>{0, 0}}}) {
-            // D1's card 0 placement: the X280 at NoC0 (8, 3), each peer at `noc0`, every leg on NoC 0.
+            // Card 0 placement: the X280 at NoC0 (8, 3), each peer at `noc0`, every leg on NoC 0.
             std::vector<hout::Field> placement{
                 {"chip_id", 0},
                 {"x280_hw_index", 0},

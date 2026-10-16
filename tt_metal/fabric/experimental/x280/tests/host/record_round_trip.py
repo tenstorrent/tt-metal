@@ -361,7 +361,7 @@ def metal_placement(to_peer, to_x280):
 
 
 EXPECTED = {
-    # D1's card 0 placement (placement-inspection REPORT.md): every Metal loop is 29 hops.
+    # Card 0 placement: every Metal loop is 29 hops.
     ("p2p_latency tensix_peer_tile placement", 0): dict(
         metal_placement(21, 8), **{"x280_noc": "(8, 3)", "tensix_noc0": "(1, 2)", "records": "4"}
     ),

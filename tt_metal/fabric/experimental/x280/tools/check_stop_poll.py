@@ -13,8 +13,7 @@ departs first the hart is stranded until `tt-smi -r`.
 
 The scan is deliberately narrow. It looks only for the LIM-poll idiom this tree
 actually uses -- a non-counting loop whose own body issues `fence ir, ir` --
-and asks whether that body can reach a STOP poll. A lint that cries wolf gets
-disabled, so recall is traded for precision on purpose.
+and asks whether that body can reach a STOP poll. It trades recall for precision.
 
 `fence ir, ir` is the anchor because it is not optional. A LIM poll can wedge
 on a stale word through a `volatile` (BlackholeA0/L2CPUTile/Caches.md), so every wait on a word another agent

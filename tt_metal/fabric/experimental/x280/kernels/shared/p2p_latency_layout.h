@@ -56,9 +56,8 @@
  * x280_peer_tile, tensix_peer_tile, erisc_peer_tile and drisc_peer_tile X280 backends store the token directly
  * for both roles without staging.
  *
- * Chosen at 256 bytes: enough for the design's first four anchor sizes
- * (4, 64, "current production", "configured maximum") without wasting LIM.
- * A future case that needs more raises this ceiling in one place.
+ * Chosen at 256 bytes: enough for the design's anchor sizes (4, 64,
+ * "current production", "configured maximum") without wasting LIM.
  */
 #define P2P_LATENCY_PAYLOAD_MAX 256u
 

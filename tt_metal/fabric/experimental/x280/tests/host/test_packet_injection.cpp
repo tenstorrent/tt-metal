@@ -448,8 +448,6 @@ TEST(PacketInjectionLayout, EveryCounterDestinationIsNocWriteCongruent) {
     // (tt_metal/hw/inc/internal/tt-1xx/blackhole/noc/noc_parameters.h:375-376,
     // and LOG_BASE_2_OF_L1_ALIGNMENT 4 in that architecture's core_config.h).
     // Producer sources are congruent to 0, so every destination must be too.
-    // kernels/transport_bandwidth/backends/tensix_to_x280.hpp:123-124 refuses a
-    // run on the same rule.
     //
     // pi_compute_layout() also refuses a base that breaks this, so loosening
     // the alignment shows up below as a rejected layout rather than as a
@@ -477,10 +475,10 @@ TEST(PacketInjectionLayout, EveryCounterDestinationIsNocWriteCongruent) {
         }
     }
 
-    // Negative control: an 8-byte slot stride is what reached silicon, and the
-    // P=1 offsets it produced explain the hang exactly. Worker 0's ready write
-    // was congruent and landed, so the X280 passed WAIT_WARMUP, while worker
-    // 0's produced write was not, so the consumer read zero and timed out.
+    // Negative control: an 8-byte slot stride breaks the rule. At P=1 worker
+    // 0's ready write is congruent and lands, so the X280 passes WAIT_WARMUP,
+    // while worker 0's produced write is not, so the consumer reads zero and
+    // times out.
     constexpr uint64_t kOldProducedOffset = 280u;
     constexpr uint64_t kOldReadyOffset = 288u;
     constexpr uint64_t kOldStride = 8u;
@@ -1605,7 +1603,7 @@ TEST(PacketInjectionAdmission, ARejectedAdmissionCarriesTheLayoutItDerived) {
     EXPECT_EQ(refused.layout.check.bound, (uint64_t)PI_CACHE_LIMIT_BYTES);
     EXPECT_EQ(refused.check, AdmissionCheck::Layout) << refused.describe();
 
-    // And the case the hoist cannot fix: a rejection BEFORE the layout is
+    // A rejection BEFORE the layout is
     // computed leaves the member default, which is indistinguishable from a
     // successful layout because PI_LAYOUT_OK is zero. So layout.ok() answers
     // "was the layout refused", never "is this Admission good" -- adm.ok() is

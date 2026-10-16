@@ -80,7 +80,7 @@ FakeState run(
 
 }  // namespace
 
-// Spec (transport_bandwidth_frontend_cxx.hpp, V-TM4): each exit runs the
+// Spec (transport_bandwidth_frontend_cxx.hpp): each exit runs the
 // footer once while the state is still non-terminal, then publishes one
 // terminal state behind one barrier -- WINDOW_CLEANUP_FAILED when the footer
 // failed, which the outcome map reads as a trap.
