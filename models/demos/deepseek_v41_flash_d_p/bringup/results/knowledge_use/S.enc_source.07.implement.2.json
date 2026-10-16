@@ -1,0 +1,37 @@
+{
+ "used": [
+  {
+   "id": "DS41-50",
+   "how": "made no device change; re-ran the gate to confirm the int top-k tail falls back to the fixed 0.01 (0.0230 vs nudged-CPU floor 0.026); fixed its detail heading",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-49",
+   "how": "kept the indexer module (ratio 2, natural query blocks) unchanged",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the knowledge checker needs the known_issues_detail.md section heading to equal the bullet title exactly (attempt 1 failed on a heading prefixed with the id)"
+ ],
+ "overseer": [],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "S.enc_source.07",
+  "role": "implement",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T20:11:30",
+  "head": "9eb223ec8c7",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.enc_source.07.implement.2.json"
+  ]
+ }
+}
