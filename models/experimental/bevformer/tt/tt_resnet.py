@@ -44,7 +44,7 @@ class TTModulatedDeformConv2dPack:
         )
 
         # conv_offset emits DCNv2's offsets, in pixels and (y, x) order, then the mask logits, the
-        # order the im2col takes, and in ROW_MAJOR, the layout it reads. Its output is bfloat16
+        # order the DCN op takes, and in ROW_MAJOR, the layout it reads. Its output is bfloat16
         # whatever the input dtype, since the offsets set the sampling positions. Trained offsets
         # reach tens of pixels, and accumulating in a bfloat16 destination register errs by up to
         # a few of them, so the register is fp32. The partial sums conv2d writes back between
@@ -69,7 +69,7 @@ class TTModulatedDeformConv2dPack:
         # between flat and NHWC, which in TILE copies whenever the width is not a tile multiple.
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         offset_mask, out_h, out_w = self.conv_offset(x)
-        # The im2col reads one interleaved stick per row; L1 serves those small reads faster.
+        # The DCN op reads one interleaved stick per row; L1 serves those small reads faster.
         offset_mask = ttnn.sharded_to_interleaved(offset_mask, ttnn.L1_MEMORY_CONFIG)
         offset_mask = ttnn.reshape(offset_mask, (self.batch_size, out_h, out_w, offset_mask.shape[-1]))
 

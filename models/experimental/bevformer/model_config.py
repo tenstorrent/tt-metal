@@ -232,9 +232,14 @@ _TTNN_DTYPES["BOX_DTYPE"] = _TTNN_DTYPES["GRID_DTYPE"]
 # suffice, the rest is margin.
 CODER_BISECTION_STEPS = 22
 
-# in0_block_w of the DCN matmul's 1D program config, by the DCN's input channels: the width
-# measured fastest on Blackhole for layer3 (C=256) and layer4 (C=512). The matmul streams its
-# K*K*C_in-wide columns from DRAM and multicasts the weight.
+# DCN input channels that run as one fused op, ttnn.experimental.modulated_deform_conv2d, whose
+# columns never leave L1. It holds every block's fp32 output on its core, which fits Blackhole's
+# grid at layer3 (C=256); layer4's (C=512) weight slices and accumulators do not fit, so it runs
+# ttnn.experimental.modulated_deform_im2col and a matmul.
+DCN_FUSED_CHANNELS = (256,)
+# in0_block_w of the unfused DCN's matmul 1D program config, by the DCN's input channels: the
+# width measured fastest on Blackhole. The matmul streams its K*K*C_in-wide columns from DRAM and
+# multicasts the weight.
 DCN_MATMUL_IN0_BLOCK_W = {256: 2, 512: 12}
 
 

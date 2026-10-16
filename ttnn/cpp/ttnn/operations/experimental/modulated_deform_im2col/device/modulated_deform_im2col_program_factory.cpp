@@ -23,21 +23,14 @@ namespace ttnn::operations::experimental::modulated_deform_im2col {
 
 using namespace tt::tt_metal;
 
-namespace {
-
-constexpr std::string_view kKernelDir = "ttnn/cpp/ttnn/operations/experimental/modulated_deform_im2col/device/kernels/";
-// The widest margin a core's input band takes beyond the kernel's span, and the L1 the band leaves
-// free for what the op's program does not account for.
-constexpr uint32_t kMaxBandMargin = 4;
-constexpr uint32_t kBandL1Reserve = 32 * 1024;
-
-}  // namespace
-
 // Work unit: a block of 32 consecutive output rows (pixels), all K*K kernel
 // positions of it on one core, so its offsets and mask logits are staged once. Blocks
 // are independent, so there is no cross-core traffic.
 ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args, Tensor& output) {
+    if (tensor_args.weight.has_value()) {
+        return create_conv_descriptor(attrs, tensor_args, output);
+    }
     ProgramDescriptor descriptor{};
     const auto s = derive_shapes(attrs, tensor_args);
 

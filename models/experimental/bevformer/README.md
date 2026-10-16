@@ -53,10 +53,10 @@ pytest --disable-warnings models/experimental/bevformer/tests/pcc/
 - `test_nms_free_coder.py`: the box coder's exact top-k, decoding and filters.
 - `test_bevformer.py`: the detector end to end over two frames.
 
-- **ResNet101-DCN** (`tt/tt_resnet.py`): caffe-style ResNet101 with DCNv2 (modulated deformable convolution, `tt/tt_modulated_deform_conv.py`: the `ttnn.experimental.modulated_deform_im2col` op and one matmul) in layer3 and layer4. It emits C3, C4 and C5 at strides 8, 16 and 32.
+- **ResNet101-DCN** (`tt/tt_resnet.py`): caffe-style ResNet101 with DCNv2 (modulated deformable convolution, `tt/tt_modulated_deform_conv.py`) in layer3 and layer4. Layer3's DCNs run as one fused op, `ttnn.experimental.modulated_deform_conv2d`; layer4's, whose weights and accumulators do not fit in L1 that way, run the `ttnn.experimental.modulated_deform_im2col` op and one matmul. It emits C3, C4 and C5 at strides 8, 16 and 32.
 - **FPN** (`tt/tt_fpn.py`): maps C3-C5 to four 256-channel levels, the fourth from an extra stride-2 conv on the last output.
 
-It runs 6 cameras at 1600x900, padded to 1600x928. `tt/model_preprocessing.py` prepares the weights: every BatchNorm folded into its conv, the stride-1 1x1 convs whose activations are in DRAM as Linear weights, and each DCN's matmul weight, laid out for its im2col's columns. conv2d lays out its own weights on its first call, in the constructors, so the forward runs on device only.
+It runs 6 cameras at 1600x900, padded to 1600x928. `tt/model_preprocessing.py` prepares the weights: every BatchNorm folded into its conv, the stride-1 1x1 convs whose activations are in DRAM as Linear weights, and each DCN's weight, laid out for the (kernel position, channel) order of its sampled columns. conv2d lays out its own weights on its first call, in the constructors, so the forward runs on device only.
 
 ### Encoder
 

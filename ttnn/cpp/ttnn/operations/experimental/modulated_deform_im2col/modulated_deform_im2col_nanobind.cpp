@@ -59,6 +59,48 @@ void bind_modulated_deform_im2col(nb::module_& mod) {
         nb::arg("padding") = std::array<uint32_t, 2>{0, 0},
         nb::arg("dilation") = std::array<uint32_t, 2>{1, 1},
         nb::arg("memory_config") = nb::none());
+
+    const auto* conv_doc =
+        R"doc(
+        A whole modulated deformable convolution (DCNv2): the columns of
+        :func:`ttnn.experimental.modulated_deform_im2col` multiplied by the weight in
+        the same op, so they never reach DRAM, plus the bias and an optional ReLU. The columns
+        are bfloat16, the K*K*C reduction accumulates in fp32, and the output is rounded to
+        bfloat16 after the bias and the ReLU.
+
+        Each core keeps the fp32 outputs of all its 32-row blocks and two (C, C_out) weight
+        slices in L1, so the op fits only while rows per core, C and C_out stay small; it fails
+        with the L1 it needs otherwise.
+
+        Args:
+            * :attr:`input`, :attr:`offset_mask`: as for modulated_deform_im2col
+            * :attr:`weight`: (K_h*K_w*C, C_out) TILE bfloat16 INTERLEAVED, rows ordered
+              (kk, c), C_out a multiple of 32
+            * :attr:`bias`: (1, C_out) TILE bfloat16 INTERLEAVED, or None
+            * :attr:`kernel_size`: (K_h, K_w)
+            * :attr:`stride`, :attr:`padding`, :attr:`dilation`: (h, w) pairs
+            * :attr:`relu`: apply ReLU to the output
+            * :attr:`memory_config`: output memory config, interleaved
+
+        Returns:
+            (1, 1, B*H_out*W_out, C_out) TILE bfloat16.
+        )doc";
+
+    ttnn::bind_function<"modulated_deform_conv2d", "ttnn.experimental.">(
+        mod,
+        conv_doc,
+        &ttnn::experimental::modulated_deform_conv2d,
+        nb::arg("input"),
+        nb::arg("offset_mask"),
+        nb::arg("weight"),
+        nb::arg("bias") = nb::none(),
+        nb::kw_only(),
+        nb::arg("kernel_size"),
+        nb::arg("stride") = std::array<uint32_t, 2>{1, 1},
+        nb::arg("padding") = std::array<uint32_t, 2>{0, 0},
+        nb::arg("dilation") = std::array<uint32_t, 2>{1, 1},
+        nb::arg("relu") = false,
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::modulated_deform_im2col::detail
