@@ -118,6 +118,8 @@ void elementwise_binary(DFB0& a, DFB1& b, DFB2& o, uint32_t n) {
 }
 
 // Multiply one selected source-tile pair and publish the result.
+// Mask products pass the exact mask first: a multiply's first operand lands in SrcA (8 explicit mantissa bits),
+// its second in SrcB (10 bits at HiFi3/4), so the FP32 data keeps the wider multiplier input.
 template <typename DFB0, typename DFB1, typename DFB2>
 void multiply_selected_tile(DFB0& a, uint32_t a_tile, DFB1& b, uint32_t b_tile, DFB2& o) {
     const uint32_t a_id = a.get_id();
@@ -383,7 +385,7 @@ void invert_block_nested(
     DFB4& matrix,
     DFB5& total,
     DFB6& product) {
-    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 0, matrix);  // N1
+    multiply_selected_tile(block_masks, 0, negative_strict_lower_akk, 0, matrix);  // N1
     matrix.wait_front(1);
     elementwise_binary<ElementwiseBinaryOp::Add>(identity, matrix, total, 1);
     total.wait_front(1);
@@ -399,7 +401,7 @@ void invert_block_nested(
     }
     matrix.pop_front(1);  // total holds A
 
-    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 1, matrix);  // L2
+    multiply_selected_tile(block_masks, 1, negative_strict_lower_akk, 0, matrix);  // L2
     matrix.wait_front(1);
     matmul_blocks<1, 1, 1, false>(total, matrix, product);  // M2 = A L2
     product.wait_front(1);
@@ -412,7 +414,7 @@ void invert_block_nested(
     total.pop_front(1);
     matrix.pop_front(1);
 
-    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 2, product);  // L3
+    multiply_selected_tile(block_masks, 2, negative_strict_lower_akk, 0, product);  // L3
     product.wait_front(1);
     // -strict_lower(Akk) is dead after extracting L3. Reuse its one-tile DFB
     // below for I+M3; all transactions remain one tile wide.
@@ -711,7 +713,7 @@ void prepare_pairwise_matrices(
         matmul_blocks<Ct, Kt, Ct, true>(q_pairwise, k_pairwise, aqk);
         aqk.wait_front(chunk_matrix_tiles);  // raw q_i*k_j*exp(G_i-G_j)
         q_pairwise.pop_front(chunk_key_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(aqk, causal_mask, intra, chunk_matrix_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply>(causal_mask, aqk, intra, chunk_matrix_tiles);
         aqk.pop_front(chunk_matrix_tiles);
     }
 }
@@ -744,10 +746,10 @@ void prepare_t_inv(
         auto& diagonal_akk = scratch_1;
 
         // T_inv = (I + strictly_lower(Akk))^-1.
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(akk, causal_mask, lower_akk, chunk_matrix_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply>(causal_mask, akk, lower_akk, chunk_matrix_tiles);
         lower_akk.wait_front(chunk_matrix_tiles);  // lower(A), including diagonal
         akk.pop_front(chunk_matrix_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(lower_akk, identity, diagonal_akk, chunk_matrix_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply>(identity, lower_akk, diagonal_akk, chunk_matrix_tiles);
         diagonal_akk.wait_front(chunk_matrix_tiles);  // diag(A)
         elementwise_binary<ElementwiseBinaryOp::Subtract>(diagonal_akk, lower_akk, akk, chunk_matrix_tiles);
         akk.wait_front(chunk_matrix_tiles);  // -strictly_lower(A)
