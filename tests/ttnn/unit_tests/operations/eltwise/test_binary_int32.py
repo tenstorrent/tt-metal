@@ -924,7 +924,8 @@ def test_div_edge_cases(rounding_mode, device):
         (1073741824, -2147483647),
         (-2147483648, 2),  # INT32_MIN numerator
         (5, -2147483648),  # INT32_MIN denominator
-        (-2147483648, -2147483648),  # INT32_MIN / INT32_MIN
+        (-2147483648, -2147483648),  # INT32_MIN / INT32_MIN (equal operands short-circuit to 1.0)
+        (-2147483647, -2147483648),  # INT32_MIN divisor through the conversion path; both round to -2^31 in fp32
     ]
 
     numerators, denominators = zip(*pairs)
