@@ -486,8 +486,7 @@ private:
         bool enable_dram_backed_cq,
         bool is_simulator,
         bool enable_blackhole_dram_programmable_cores,
-        bool enable_aerisc_ptp_trace,
-        bool enable_blackhole_dram_programmable_cores);
+        bool enable_aerisc_ptp_trace);
     void initialize_qa(
         uint32_t profiler_dram_bank_size_per_risc_bytes,
         bool enable_dram_backed_cq,

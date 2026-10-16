@@ -4,6 +4,8 @@ The `export CHIPPY_DIR` and `export GRENDELEMU_DIR` lines below only apply to th
 
 ## Setup 'chippy'
 
+Modify the below for your preferred workspace. Note that chippy is used to setup the emulator FW, so needs to be on a system that has access to SoC commands (e.g. can be done on `soc-l-#` machines) and `tt-metal` also needs to link to it (typically from `ird`) so it is strongly recommended to setup your chippy directory in a shared area such as `/proj_sw/user_dev`. Beyond the initial compilation of chippy, which only happens once, I did not notice any impact on development speed.
+
 ```
 cd /proj_sw/user_dev/$USER
 git clone git@yyz-gitlab.local.tenstorrent.com:syseng-platform/chippy.git
@@ -34,6 +36,15 @@ cmake --build $CHIPPY_DIR/../chippy-build --target grendel
 
 ## Build tt-metal
 
+Use branches:
+- `kstevens/enable_mimir` for tt-metal
+- `kstevens/grendel-emu-additions` for tt-umd (`tt_metal/third_party/umd`)
+
+UMD must be on the `kstevens/grendel-emu-additions` branch. The submodule commit recorded in tt-metal is older, so `git submodule update` will move UMD off this branch; re-run the checkout below if that happens.
+
+```
+cd tt_metal/third_party/umd
+git fetch origin
 git checkout kstevens/grendel-emu-additions
 cd -
 ```
@@ -49,6 +60,7 @@ sudo apt install -y g++-13
 Need to add additional defines to build. After building the first time, can just run usual `./build_metal.sh` commands unless the CMAKE files are removed (e.g. with a `--clean` or `git clean`).
 
 ```
+./build_metal.sh --build-tests --build-umd-tests --configure-only
 
 cmake -DTT_UMD_BUILD_GRENDEL_JTAG=ON \
   -DCHIPPY_SOURCE_DIR=$CHIPPY_DIR \
@@ -59,7 +71,7 @@ cmake --build build --target install
 ```
 
 **_NOTE:_** Probably don't need this, but keeping it here in case I'm wrong.
-`  -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/12 \`
+`  -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/12 \ `
 
 
 ## Launch Emulation Server

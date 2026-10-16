@@ -1169,6 +1169,7 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizePartialRecord) {
             EXPECT_NE(exception.find("partially written record noc0"), std::string::npos);
         },
         this->devices_[0]);
+}
 
 void RunCceSanitizeL1Overflow(
     MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {

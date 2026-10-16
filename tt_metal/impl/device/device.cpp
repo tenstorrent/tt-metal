@@ -868,8 +868,13 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
 const std::unique_ptr<AllocatorImpl>& Device::allocator_impl() const { return default_allocator_; }
 
 const std::unique_ptr<Allocator>& Device::allocator() const {
-    const auto& allocator{this->allocator_impl()};
-    return allocator->view();
+    // CreateDeviceMinimal on a package with no Tensix cores never builds an allocator. Callers
+    // such as WriteToDeviceDRAMChannel test this pointer before using it.
+    if (!default_allocator_) {
+        static const std::unique_ptr<Allocator> empty;
+        return empty;
+    }
+    return default_allocator_->view();
 }
 
 const std::unique_ptr<AllocatorImpl>& Device::allocator_impl(SubDeviceId /*sub_device_id*/) const {
@@ -877,8 +882,10 @@ const std::unique_ptr<AllocatorImpl>& Device::allocator_impl(SubDeviceId /*sub_d
 }
 
 const std::unique_ptr<Allocator>& Device::allocator(SubDeviceId sub_device_id) const {
-    const auto& allocator{this->allocator_impl(sub_device_id)};
-    return allocator->view();
+    if (!default_allocator_) {
+        return this->allocator();
+    }
+    return this->allocator_impl(sub_device_id)->view();
 }
 
 uint32_t Device::num_sub_devices() const { return 1U; }

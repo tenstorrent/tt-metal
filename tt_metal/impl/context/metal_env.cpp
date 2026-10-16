@@ -199,7 +199,7 @@ void MetalEnvImpl::initialize_base_objects() {
         this->rtoptions_->get_dram_backed_cq(),
         this->rtoptions_->get_simulator_enabled(),
         should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_),
-        this->rtoptions_->get_eth_ptp_trace());
+        this->rtoptions_->get_eth_ptp_trace(),
         should_enable_cce_programmable_cores(*this->cluster_));
 
     this->rtoptions_->ParseAllFeatureEnv(*hal_);

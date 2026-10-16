@@ -207,7 +207,7 @@ void SubDeviceManager::validate_sub_devices() const {
         DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     // Validate sub device cores fit inside the device grid
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
-    CoreRange device_worker_cores = grid_to_corerangeset(compute_grid_size);
+    CoreRangeSet device_worker_cores = grid_to_corerangeset(compute_grid_size);
     const Hal& hal = MetalContext::instance(context_id_).hal();
 
     for (uint8_t sub_device_id = 0; sub_device_id < this->num_sub_devices(); ++sub_device_id) {
