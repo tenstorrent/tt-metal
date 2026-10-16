@@ -520,16 +520,22 @@ def test_remainder_inf_divisor(testing_dtype, device):
     torch_dtype = getattr(torch, testing_dtype)
     ttnn_dtype = getattr(ttnn, testing_dtype)
 
-    torch_input_a = torch.tensor([5.0, -5.0, 5.0, -5.0, 0.0, 0.0, 2.5, -2.5, 0.0, 0.0], dtype=torch_dtype)
-    torch_input_b = torch.tensor([_INF, _INF, -_INF, -_INF, _INF, -_INF, _INF, -_INF, _INF, -_INF], dtype=torch_dtype)
+    torch_input_a = torch.tensor(
+        [5.0, -5.0, 5.0, -5.0, 0.0, 0.0, 2.5, -2.5, _INF, -_INF, _INF, -_INF, 0.0, 0.0], dtype=torch_dtype
+    )
+    torch_input_b = torch.tensor(
+        [_INF, _INF, -_INF, -_INF, _INF, -_INF, _INF, -_INF, _INF, _INF, -_INF, -_INF, _INF, -_INF],
+        dtype=torch_dtype,
+    )
     # A NaN dividend with the sign bit set (0xFFC00000): SFPABS keeps that sign, so a magnitude
     # test built on it would classify the lane as finite and negative, and return the divisor.
-    torch_input_a[8:] = _negative_nan(torch_dtype)
+    torch_input_a[12:] = _negative_nan(torch_dtype)
 
     golden_function = ttnn.get_golden_function(ttnn.remainder)
     golden = golden_function(torch_input_a, torch_input_b, device=device)
+    # An infinite or NaN dividend stays NaN whatever the divisor's sign.
     nan_lanes = torch.isnan(golden)
-    assert torch.equal(nan_lanes, torch.isnan(torch_input_a))
+    assert torch.equal(nan_lanes, ~torch.isfinite(torch_input_a))
 
     tt_in_a = ttnn.from_torch(torch_input_a, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
     tt_in_b = ttnn.from_torch(torch_input_b, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
