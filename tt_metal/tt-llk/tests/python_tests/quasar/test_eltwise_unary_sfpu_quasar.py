@@ -1579,7 +1579,6 @@ def _dropout_config(variant, src_A, src_B, tile_cnt, dropout_params):
             "templates": [
                 MATH_OP(mathop=MathOperation.Dropout),
                 APPROX_MODE(ApproximationMode.No),
-                IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
                 DATA_COPY_TYPE(DataCopyType.A2D),
                 UNPACKER_ENGINE_SEL(
                     UnpackerEngine.UnpDest
