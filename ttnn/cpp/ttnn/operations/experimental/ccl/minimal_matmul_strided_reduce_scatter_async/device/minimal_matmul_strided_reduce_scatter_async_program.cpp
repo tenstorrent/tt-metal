@@ -9,6 +9,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
 #include <cstring>
+#include <vector>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -17,6 +18,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 #include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
@@ -40,7 +42,7 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
     std::vector<Tensor>& output_tensor,
     const std::optional<ttnn::MeshCoordinate>&) {
     // Also rewrites tensor addresses: aliased addcmul inputs empty resolve_bindings, and this workload does not
-    // rebuild.
+    // rebuild. Caller-owned progress and credit counters are refreshed here too; workload-owned counters stay.
     constexpr uint32_t kReaderInputArg = 0;
     constexpr uint32_t kReaderIntermediateArg = 1;
     constexpr uint32_t kReaderSemaphoreArg = 2;
@@ -60,6 +62,9 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
     constexpr uint32_t kIn1WeightArg = 0;
     constexpr uint32_t kIn1BiasArg = 1;
     constexpr uint32_t kIn1OutputArg = 13;
+    constexpr uint32_t kReaderArgPrefix = 6;
+    constexpr uint32_t kWindowedProgressFromEnd = 4;
+    constexpr uint32_t kWindowedCreditFromEnd = 2;
 
     TT_FATAL(output_tensor.size() == 3, "minimal_matmul_strided_reduce_scatter returns 3 tensors");
     TT_FATAL(output_tensor[0].buffer() != nullptr, "matmul output must have a buffer");
@@ -92,6 +97,26 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
         addcmul_a_addr = static_cast<uint32_t>(tensor_args.addcmul_input_tensor1->buffer()->address());
         addcmul_b_addr = static_cast<uint32_t>(tensor_args.addcmul_input_tensor2->buffer()->address());
     }
+    const bool windowed = operation_attributes.mm_window_blocks.has_value();
+    const bool caller_progress = tensor_args.mm_progress_counters.has_value();
+    const bool caller_credit = windowed && tensor_args.mm_credit_counters.has_value();
+    uint32_t progress_addr = 0;
+    if (caller_progress) {
+        TT_FATAL(tensor_args.mm_progress_counters->buffer() != nullptr, "mm_progress_counters must have a buffer");
+        progress_addr = static_cast<uint32_t>(tensor_args.mm_progress_counters->buffer()->address());
+    }
+    uint32_t credit_addr = 0;
+    if (caller_credit) {
+        TT_FATAL(tensor_args.mm_credit_counters->buffer() != nullptr, "mm_credit_counters must have a buffer");
+        credit_addr = static_cast<uint32_t>(tensor_args.mm_credit_counters->buffer()->address());
+    }
+    uint32_t reader_progress_arg = kReaderArgPrefix;
+    if ((caller_progress || caller_credit) && output_tensor[1].is_sharded()) {
+        std::vector<uint32_t> shard_args;
+        shard_builder::extend_sharding_run_time_args(output_tensor[1], shard_args);
+        reader_progress_arg += static_cast<uint32_t>(shard_args.size());
+    }
+    const uint32_t reader_credit_arg = reader_progress_arg + 1;
 
     TT_FATAL(
         operation_attributes.semaphore.size() > kNumDirections,
@@ -114,6 +139,14 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
             if (fuse_addcmul) {
                 args[args.size() - 2] = addcmul_a_addr;
                 args[args.size() - 1] = addcmul_b_addr;
+            }
+            if (caller_progress) {
+                TT_FATAL(args.size() > reader_progress_arg, "reduce-scatter reader is missing the progress counter");
+                args[reader_progress_arg] = progress_addr;
+            }
+            if (caller_credit) {
+                TT_FATAL(args.size() > reader_credit_arg, "reduce-scatter reader is missing the credit counter");
+                args[reader_credit_arg] = credit_addr;
             }
         }
     }
@@ -143,6 +176,20 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
     auto& in0_receiver_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kMatmulIn0ReceiverKernelIdx);
     auto& in1_sender_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kMatmulIn1SenderKernelIdx);
     auto& in1_receiver_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kMatmulIn1ReceiverKernelIdx);
+    const auto refresh_matmul_counters = [&](auto& args) {
+        if (caller_progress) {
+            TT_FATAL(
+                !windowed || args.size() >= kWindowedProgressFromEnd,
+                "matmul runtime args are missing the progress counter");
+            const uint32_t progress_arg = windowed ? static_cast<uint32_t>(args.size() - kWindowedProgressFromEnd)
+                                                   : static_cast<uint32_t>(args.size() - 1);
+            args[progress_arg] = progress_addr;
+        }
+        if (caller_credit) {
+            TT_FATAL(args.size() >= kWindowedCreditFromEnd, "matmul runtime args are missing the credit counter");
+            args[args.size() - kWindowedCreditFromEnd] = credit_addr;
+        }
+    };
     for (uint32_t x = 0; x < grid.x; ++x) {
         for (uint32_t y = 0; y < grid.y; ++y) {
             auto& in0_grid = x == 0 ? in0_sender_runtime_args : in0_receiver_runtime_args;
@@ -152,6 +199,7 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
                 in0_args[kIn0BiasArg] = bias_addr;
                 in0_args[kIn0OptionalInputArg] = optional_input_addr;
                 in0_args[kIn0OutputArg] = mm_output_addr;
+                refresh_matmul_counters(in0_args);
             }
             auto& in1_grid = y == 0 ? in1_sender_runtime_args : in1_receiver_runtime_args;
             if (x < in1_grid.size() && y < in1_grid[x].size() && in1_grid[x][y].size() > kIn1OutputArg) {
@@ -159,6 +207,7 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
                 in1_args[kIn1WeightArg] = weight_addr;
                 in1_args[kIn1BiasArg] = bias_addr;
                 in1_args[kIn1OutputArg] = mm_output_addr;
+                refresh_matmul_counters(in1_args);
             }
         }
     }
