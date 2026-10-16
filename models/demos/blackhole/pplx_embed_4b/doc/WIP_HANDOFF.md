@@ -140,7 +140,7 @@ its analytic formulation slightly overstates, structure -0.17 ms at bs32); bs32 
 
 ### Next, in the order I would take them
 
-1. **bs32 host / dispatch: 12.6 ms** between cold and device replay (bs16: 1.2). Unexplained and the largest single bs32
+1. ~~**bs32 host / dispatch: 12.6 ms**~~ **Resolved 2026-10-16 (§76): it is AICLK falling during the replay** (cold replay at ~1.29 GHz effective; host share < 0.4 ms), i.e. the power manager, not dispatch. Was: between cold and device replay (bs16: 1.2). Unexplained and the largest single bs32
    item: look at the device timeline's gaps between ops (tracy report) and at what bs32 does differently (4 QKV / heads
    chunks per layer, 503 ops per replay against 293).
 2. **Inits / handshakes / blocking in the custom ops** (heads, add+RMSNorm): fusing their phases into the neighbouring

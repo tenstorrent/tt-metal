@@ -1987,3 +1987,25 @@ L1, which is what the freed 446 KB per core (bs16) allows. E2e, 2 alternating ro
 in L1 + one rsqrt) 75.3 / 98.0, 75.4 / 98.5 -> 75.0 / 98.4, 75.1 / 99.1. STS-B embeddings bit-identical (bs16, 128
 pairs). **Landed** at bs8 / 16 (`apply_workload_env`). bs32 (Q 594 KB per core cannot be in L1): open; there the
 chunked path could write Q head-major into a small L1 chunk tensor and the heads op copy it to Q in DRAM.
+
+## 76. The bs32 "host / dispatch gap" is the clock, not the host (diagnostic) (2026-10-16)
+
+The gap ladder put 12.6 ms of bs32's cold-vs-roofline gap under "host, dispatch, gaps between ops (cold − device)"
+(bs16: 1.2), the largest single bs32 item. `perf_tools/replay_clock.py`: one bs32 run (3 iterations, chip 0) under the
+device profiler with `QWEN_ITER_TIMING=1`; each replay's cycle span (first kernel start to last kernel end, all 503
+ops and the device-side gaps between them) against the host's time for that iteration:
+
+| replay | span (cycles) | at 1.35 GHz | host iteration | effective clock |
+|---|---|---|---|---|
+| 0 (cold best) | 372.7 M | 276.1 ms | 288.2 ms | 1293 MHz |
+| 1 | 371.6 M | 275.3 ms | 306.6 ms | 1212 MHz |
+| 2 | 370.8 M | 274.7 ms | 321.8 ms | 1152 MHz |
+
+The host's own share is < 0.4 ms per iteration (h2d 0.07, trace issue 0.02, readback enqueue 0.03, to_torch 0.26 ms).
+The work is constant in cycles; the wall time grows because AICLK falls, and it already averages ~1.29 GHz during the
+first, "cold" replay: 276.1 × 1.35 / 1.293 = 288.2 ms. bs16's iterations are half as long and finish before the drop
+(iterations 141.8 / 142.3 / 144.8 ms), hence its 1.2 ms. So the category is power management, not dispatch: nothing
+on the host side to fix; less energy per iteration (fewer DRAM bytes, fewer passes) is the lever. bs32's gap to the
+roofline in device cycles is 276 − 222 ≈ 54 ms, ~33 ms of it the matmuls (QKV / WO / FF13 / FF2 at 81-91% of the
+590.6 TFLOP/s roofline rate). Sustained runs at every batch size sit at ~200-230 A while power varies (~90-150 W),
+which suggests a current (TDC) limit rather than a power limit (not verified).
