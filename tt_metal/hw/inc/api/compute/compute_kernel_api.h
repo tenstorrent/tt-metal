@@ -753,7 +753,8 @@ template <
     PoolType pool_type,
     DataFormat format,
     ReduceDim reduce_dim = ReduceDim::REDUCE_COL,
-    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool start_after_copy = false>
 ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
     static_assert(
         reduce_dim == ReduceDim::REDUCE_COL ||
@@ -783,6 +784,15 @@ ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
         ct_dim,
         rt_dim));
 #else
+#ifdef ARCH_BLACKHOLE
+    if constexpr (start_after_copy) {
+        MATH(
+            (::ckernel::_sfpu_check_<DST_SYNC_MODE>(idst, VectorMode::RC_custom),
+             ckernel::sfpu::sfpu_reduce_after_copy<pool_type, reduce_dim, format, is_fp32_dest_acc_en>(
+                 idst, ct_dim, rt_dim)));
+        return;
+    }
+#endif
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
