@@ -142,8 +142,9 @@ __attribute__((noinline, optimize("no-jump-tables"))) constexpr bool is_quasar_u
             return dst == DataFormat::UInt8;
 
         // -------------------------------------------------------------------------
-        // INT8 — INT8 / INT8_2x (2x-packed Src Reg storage; 4-row variant only, not Dest/SrcS)
+        // INT8 / INT4 — INT8 / INT8_2x (2x-packed Src Reg storage; 4-row variant only, not Dest/SrcS)
         case DataFormat::Int8:
+        case DataFormat::Int4:
             switch (dst)
             {
                 case DataFormat::Int8:
@@ -158,19 +159,6 @@ __attribute__((noinline, optimize("no-jump-tables"))) constexpr bool is_quasar_u
         // INT16 — INT16
         case DataFormat::Int16:
             return dst == DataFormat::Int16;
-
-        // -------------------------------------------------------------------------
-        // INT4 — INT8 / INT8_2x (2x-packed Src Reg storage; 4-row variant only, not Dest/SrcS)
-        case DataFormat::Int4:
-            switch (dst)
-            {
-                case DataFormat::Int8:
-                    return true;
-                case DataFormat::Int8_2x:
-                    return HAS_INT8_2X_SRC_FORMAT && !unpack_to_dest;
-                default:
-                    return false;
-            }
 
         // -------------------------------------------------------------------------
         // UINT4 — INT8, UINT8
