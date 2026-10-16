@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Host-only tests of the mesh_partition label rules, which live in the CCL topology helper (ccl_topology_utils.hpp:
-// mesh_partition_output_topology, the reduce_scatter rule where nothing is summed) since the inline rule table #58915
-// landed with moved there. The cases keep that table's numbering (rules 0-5). No device: the rules are a pure
+// mesh_partition_output_topology, the reduce_scatter rule where nothing is summed). No device: the rules are a pure
 // function of the input label, the device mesh shape, dim, cluster_axis and the tensor rank. Every test runs
 // warn-only, so a refusal is a nullopt here (a TT_FATAL under ttnn.CONFIG.strict_ccl_topology); the op leaves the
 // input's label on the output then.
@@ -81,9 +80,9 @@ std::optional<TensorTopology> partition(
 
 }  // namespace
 
-// Rule 1: Shard{dim} on the partitioned axis, the input's placement elsewhere -- unless the partitioned axis itself
-// held a Shard of another dim: each device would then keep its chunk of that dim next to its new piece of dim, two
-// dims on one axis, which no label states, so that case is refused (the inline table overwrote the Shard{2}).
+// An N-D label takes Shard{dim} on the partitioned axis and keeps the input's placement elsewhere -- unless the
+// partitioned axis itself held a Shard of another dim: each device would then keep its chunk of that dim next to its
+// new piece of dim, two dims on one axis, which no label states, so that case is refused.
 TEST(MeshPartitionTopologyRules, NdLabelTakesShardDimOnThePartitionedAxisUnlessItHeldAnotherShard) {
     const WarnOnlyScope warn_only;
     const MeshShape mesh(2, 4);
@@ -96,7 +95,7 @@ TEST(MeshPartitionTopologyRules, NdLabelTakesShardDimOnThePartitionedAxisUnlessI
     EXPECT_FALSE(partition(input, mesh, 0).has_value());  // axis 0 holds Shard{2}
 }
 
-// Rule 1(i): one chunk along a size-1 axis is the whole extent.
+// One chunk along a size-1 axis is the whole extent.
 TEST(MeshPartitionTopologyRules, SameDimOnASizeOneAxisBecomesReplicate) {
     const WarnOnlyScope warn_only;
     const MeshShape mesh(1, 8);
@@ -105,9 +104,10 @@ TEST(MeshPartitionTopologyRules, SameDimOnASizeOneAxisBecomesReplicate) {
     expect_placements(*result, {Replicate{}, Shard{kDim}});
 }
 
-// Rule 1(ii): an OUTER axis already holding Shard{dim} composes with the partitioned axis into row-major
-// hierarchical sharding, which the collapsed label states exactly when the partitioned axis held Replicate; when it
-// already held Shard{dim} (a label the mappers refuse to build) the collapsed label is rule 2's output-bytes stance.
+// An OUTER axis already holding Shard{dim} composes with the partitioned axis into row-major hierarchical sharding,
+// which the collapsed label states exactly when the partitioned axis held Replicate; when it already held Shard{dim}
+// (a label the mappers refuse to build) the collapsed label describes the output bytes, as for a whole-mesh partition
+// of a sharded input.
 TEST(MeshPartitionTopologyRules, SameDimOnAnOuterAxisCollapsesRowMajor) {
     const WarnOnlyScope warn_only;
     const MeshShape mesh(2, 4);
@@ -129,7 +129,7 @@ TEST(MeshPartitionTopologyRules, SameDimOnAnOuterAxisCollapsesRowMajor) {
     expect_placements(*stale, {Shard{7}, Shard{kDim}});
 }
 
-// Rule 1(iii): everything else that would shard dim on two axes has no label.
+// Everything else that would shard dim on two axes has no label.
 TEST(MeshPartitionTopologyRules, SameDimOnAnInnerAxisOrAnotherShardOnThePartitionedAxisFallsBack) {
     const WarnOnlyScope warn_only;
     const MeshShape mesh(2, 4);
@@ -142,7 +142,7 @@ TEST(MeshPartitionTopologyRules, SameDimOnAnInnerAxisOrAnotherShardOnThePartitio
     EXPECT_FALSE(partition(nd_label(mesh3, {Shard{kDim}, Replicate{}, Replicate{}}), mesh3, 1).has_value());
 }
 
-// Rule 2: a whole-mesh partition of a replicated input is {N},[Shard{dim}] in row-major device order, whether the
+// A whole-mesh partition of a replicated input is {N},[Shard{dim}] in row-major device order, whether the
 // input label is N-D or collapsed.
 TEST(MeshPartitionTopologyRules, WholeMeshCollapsesAReplicatedInput) {
     const WarnOnlyScope warn_only;
@@ -158,10 +158,10 @@ TEST(MeshPartitionTopologyRules, WholeMeshCollapsesAReplicatedInput) {
     }
 }
 
-// Rule 2 on an input already sharded: Shard{dim} on a non-trivial axis is overwritten (the label then describes the
-// output bytes: device k holds chunk k of ITS OWN input shard, not a re-slicing of the input's global view); a Shard
-// of another dim on a non-trivial axis has no label, N-D or collapsed; a Shard on a size-1 axis is the whole extent
-// and does not block.
+// A whole-mesh partition of an input already sharded: Shard{dim} on a non-trivial axis is overwritten (the label then
+// describes the output bytes: device k holds chunk k of ITS OWN input shard, not a re-slicing of the input's global
+// view); a Shard of another dim on a non-trivial axis has no label, N-D or collapsed; a Shard on a size-1 axis is the
+// whole extent and does not block.
 TEST(MeshPartitionTopologyRules, WholeMeshOverwritesShardDimButNotAnotherDim) {
     const WarnOnlyScope warn_only;
     const MeshShape mesh(2, 4);
@@ -179,7 +179,7 @@ TEST(MeshPartitionTopologyRules, WholeMeshOverwritesShardDimButNotAnotherDim) {
     expect_placements(*trivial, {Shard{kDim}});
 }
 
-// Rule 3: on a line the collapsed label's only axis IS the partitioned axis; whatever it held is overwritten.
+// On a line the collapsed label's only axis IS the partitioned axis; whatever it held is overwritten.
 TEST(MeshPartitionTopologyRules, CollapsedLabelOnALineTakesShardDimWhateverItHeld) {
     const WarnOnlyScope warn_only;
     const MeshShape mesh(1, 8);
@@ -193,7 +193,7 @@ TEST(MeshPartitionTopologyRules, CollapsedLabelOnALineTakesShardDimWhateverItHel
     }
 }
 
-// Rule 4: a collapsed Replicate over a multi-axis mesh is spelled out per axis so that one axis can be Shard{dim}.
+// A collapsed Replicate over a multi-axis mesh is spelled out per axis so that one axis can be Shard{dim}.
 TEST(MeshPartitionTopologyRules, CollapsedReplicateOnAMultiAxisMeshUncollapses) {
     const WarnOnlyScope warn_only;
     const MeshShape mesh(2, 4);
@@ -210,11 +210,10 @@ TEST(MeshPartitionTopologyRules, CollapsedReplicateOnAMultiAxisMeshUncollapses) 
     }
 }
 
-// Rule 5, read per axis: a collapsed Shard over a multi-axis mesh is row-major hierarchical sharding of its dim. A
+// A collapsed Shard over a multi-axis mesh is read per axis as row-major hierarchical sharding of its dim. A
 // Shard of another dim is refused along either axis (the partitioned axis holds a piece of two dims). A Shard of dim
 // itself collapses again along the inner axis (each device keeps a sub-piece of its piece: N distinct, ordered
-// slices, the same spelling as the input) and is refused along the outer axis (column-major). The inline table fell
-// back for all of these.
+// slices, the same spelling as the input) and is refused along the outer axis (column-major).
 TEST(MeshPartitionTopologyRules, CollapsedShardOnAMultiAxisMeshIsReadPerAxis) {
     const WarnOnlyScope warn_only;
     const MeshShape mesh(2, 4);
@@ -225,9 +224,9 @@ TEST(MeshPartitionTopologyRules, CollapsedShardOnAMultiAxisMeshIsReadPerAxis) {
     EXPECT_FALSE(partition(collapsed_label(mesh, Shard{kDim}), mesh, 0).has_value());
 }
 
-// Rule 0, collapsed labels: no axes, so a label over fewer devices than the mesh says nothing about where its devices
-// sit. The fewer-shards label whose N equals the column count is the rule-3 look-alike; the whole-mesh case is the
-// regression Copilot flagged on the first version.
+// A collapsed label has no axes, so one over fewer devices than the mesh says nothing about where its devices sit.
+// The fewer-shards label whose N equals the column count looks like a line's label; the whole-mesh case is the
+// regression Copilot flagged on the first version of the op's hook.
 TEST(MeshPartitionTopologyRules, CollapsedLabelOverFewerDevicesThanTheMeshFallsBackForEveryClusterAxis) {
     const WarnOnlyScope warn_only;
     const MeshShape mesh(2, 4);
@@ -240,8 +239,8 @@ TEST(MeshPartitionTopologyRules, CollapsedLabelOverFewerDevicesThanTheMeshFallsB
     }
 }
 
-// Rule 0, N-D sub-mesh labels (mesh_shape_override that fits per axis; coordinates are the block's own): the label is
-// kept, and rule 1 applied within the block, only when the cluster axis spans the mesh along that axis, so that every
+// N-D sub-mesh labels (mesh_shape_override that fits per axis; coordinates are the block's own): the label is kept,
+// and the partition labelled within the block, only when the cluster axis spans the mesh along that axis, so that every
 // partition group lies inside the block. Otherwise a group reaches a device the label does not describe.
 TEST(MeshPartitionTopologyRules, SubMeshLabelIsPartitionedWithinItsBlockOnlyAlongAFullAxis) {
     const WarnOnlyScope warn_only;
@@ -270,7 +269,7 @@ TEST(MeshPartitionTopologyRules, SubMeshLabelIsPartitionedWithinItsBlockOnlyAlon
     EXPECT_FALSE(partition(square, mesh, 1).has_value());
 }
 
-// Rule 0, row-major reshapes of the whole mesh ({1,8} or {4,2} over 2x4; mesh_shape_override that does not fit per
+// Row-major reshapes of the whole mesh ({1,8} or {4,2} over 2x4; mesh_shape_override that does not fit per
 // axis): the coordinates enumerate the mesh row-major, so a whole-mesh partition has its exact collapsed label, but
 // the label's axes are not the mesh axes the op partitions along.
 TEST(MeshPartitionTopologyRules, RowMajorReshapeOfTheMeshPartitionsAsAWholeOnly) {
@@ -292,14 +291,14 @@ TEST(MeshPartitionTopologyRules, RowMajorReshapeOfTheMeshPartitionsAsAWholeOnly)
 // The coordinates must agree with the partition, which the factory computes from the device's own coordinate, not
 // from the label. The mappers always write agreeing coordinates (SUBMESH: an axis-aligned block; ROW_MAJOR: the
 // mesh's row-major enumeration); a label put together by hand with update_tensor_topology need not. Addressing an
-// axis requires the whole label to be a row-major block of the mesh (the inline table checked only the axis
-// addressed); a whole-mesh partition takes the label's coordinates as its order -- the Tensor overload respells
+// axis requires the whole label to be a row-major block of the mesh; a whole-mesh partition takes the label's
+// coordinates as its order -- the Tensor overload respells
 // that label over the storage's row-major coordinates, the order the factory partitions in.
 TEST(MeshPartitionTopologyRules, LabelWhoseCoordinatesDisagreeWithThePartitionFallsBack) {
     const WarnOnlyScope warn_only;
     const MeshShape mesh(2, 4);
-    // A block SHAPE over a ROW of devices: every device has global row 0 and takes chunk 0; rule 1 would have
-    // labelled tensor row 1 as holding chunk 1.
+    // A block SHAPE over a ROW of devices: every device has global row 0 and takes chunk 0; a per-axis label would
+    // have said tensor row 1 holds chunk 1.
     const std::vector<MeshCoordinate> row{
         MeshCoordinate(0, 0), MeshCoordinate(0, 1), MeshCoordinate(0, 2), MeshCoordinate(0, 3)};
     EXPECT_FALSE(partition(TensorTopology(MeshShape(2, 2), {Replicate{}, Replicate{}}, row), mesh, 0).has_value());

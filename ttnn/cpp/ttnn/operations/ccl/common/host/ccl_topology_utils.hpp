@@ -33,7 +33,7 @@
 // along that axis and a whole-mesh op every device, so a label that covers fewer devices along the axis addressed (a
 // (1, 4) row block on a 2x4 along axis 0, or over the whole mesh) is refused: the devices the label does not describe
 // take part and no label over the block can say what they hold. A block is gathered or scattered within itself only
-// along an axis it spans fully (the row along axis 1). This is mesh_partition's rule 0 (#58915) for the whole family.
+// along an axis it spans fully (the row along axis 1).
 //
 // Failure handling: a label the helper cannot honour (a collapsed label that does not cover the mesh in row-major
 // order, an N-D label whose axes do not align with the mesh axes, a gather that would interleave shards, a result no
@@ -194,9 +194,8 @@ std::optional<tt::tt_metal::TensorTopology> over_storage_ring_order(
 // non-trivial axis, and a scatter along an axis that itself holds a Shard of another dim (each device would hold a
 // piece of two dims on one axis), are refusals (reduce_scatter consumes both). A stale Shard dim left by a
 // rank-changing op (#52331) matches nothing, which the gather and reduce rules treat as harmless, but counts as a
-// Shard of another dim here, so a partition refuses it. mesh_partition's hook calls mesh_partition_output_topology:
-// the inline rule table #58915 landed with (rules 0-5) lives here now, with the per-axis coverage rule above as its
-// rule 0. all_to_all_output_topology is what the stacked experimental-CCL change calls for all_to_all_async and its
+// Shard of another dim here, so a partition refuses it. mesh_partition's hook calls mesh_partition_output_topology;
+// all_to_all_output_topology is what the stacked experimental-CCL change calls for all_to_all_async and its
 // fused variants, which is why both live here. The mesh_partition Tensor overload spells a whole-mesh label over the
 // storage's coordinates like reduce_scatter's (the program factory numbers devices row-major over the mesh, the
 // storage order of a tensor stored on every device); the all_to_all one returns the pure result, since those ops'
