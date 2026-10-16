@@ -19,6 +19,7 @@ class Hal;
 namespace tt::tt_fabric {
 
 class ControlPlane;
+struct PacketHeaderConfig;
 
 // Fills in what only ControlPlane, the cluster, and the chip's other routers know.
 manifest::Chip join_chip(

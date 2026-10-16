@@ -34,6 +34,13 @@ namespace tt::tt_fabric {
 class ControlPlane;
 class FabricBuilderContext;
 
+// A packet header FabricContext can choose.
+struct PacketHeaderConfig {
+    bool is_2d = false;
+    bool udm = false;
+    uint32_t extension_words = 0;    // 1D only
+    uint32_t route_buffer_size = 0;  // 2D only
+};
 
 /**
  * FabricContext
@@ -110,6 +117,8 @@ public:
     bool is_tensix_enabled() const { return fabric_tensix_config_ != tt::tt_fabric::FabricTensixConfig::DISABLED; }
 
     // ============ Packet Specs ============
+    // The run's packet header, which visit_packet_header_type maps to its type.
+    const PacketHeaderConfig& get_packet_header_config() const { return packet_header_config_; }
     size_t get_fabric_packet_header_size_bytes() const { return packet_header_size_bytes_; }
     size_t get_fabric_max_payload_size_bytes() const { return max_payload_size_bytes_; }
     size_t get_fabric_channel_buffer_size_bytes() const { return channel_buffer_size_bytes_; }
@@ -194,7 +203,7 @@ public:
 private:
     // ============ Private Implementation ============
     std::unordered_map<MeshId, bool> check_for_wrap_around_mesh(const ControlPlane& control_plane) const;
-    size_t compute_packet_header_size_bytes(const ControlPlane& control_plane) const;
+    PacketHeaderConfig compute_packet_header_config(const ControlPlane& control_plane) const;
     size_t compute_max_payload_size_bytes(const tt_metal::Hal& hal, tt::ARCH arch) const;
     size_t validate_and_apply_packet_size(const tt_metal::Hal& hal, tt::ARCH arch, size_t requested_size) const;
 
@@ -222,6 +231,7 @@ private:
 
     std::unordered_map<MeshId, bool> wrap_around_mesh_;
 
+    PacketHeaderConfig packet_header_config_;
     size_t packet_header_size_bytes_ = 0;
     size_t max_payload_size_bytes_ = 0;
     size_t channel_buffer_size_bytes_ = 0;
@@ -235,14 +245,6 @@ private:
 
     // Builder context (lazy init on first access)
     mutable std::unique_ptr<FabricBuilderContext> builder_context_;
-};
-
-// A packet header FabricContext can choose. Only the size field for the mode is read.
-struct PacketHeaderConfig {
-    bool is_2d = false;
-    bool udm = false;
-    uint32_t extension_words = 0;    // 1D only
-    uint32_t route_buffer_size = 0;  // 2D only
 };
 
 namespace packet_header_detail {

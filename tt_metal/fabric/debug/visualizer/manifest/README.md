@@ -35,7 +35,8 @@ The router builders are destroyed once the fabric program is compiled, so the ma
    other routers know: router keys, peers, cores, cross-host and wrap links, and sibling producers.
 3. **Write** (`fabric_manifest.cpp`). The writer is the one place that decides the JSON's key names and shape.
 
-The types at L1 addresses come from the struct layouts in `fabric_struct_layouts.hpp` and from the HAL.
+The types at L1 addresses come from the struct layouts in `fabric_struct_layouts.hpp` and from the HAL. The run's
+packet header layout comes from `fabric_packet_header_layouts.cpp`.
 
 ## Shape
 
@@ -43,12 +44,12 @@ The types at L1 addresses come from the struct layouts in `fabric_struct_layouts
 | --- | --- |
 | `manifest_version`, `kind` | `1` and `"fabric_manifest"` |
 | `run` | Architecture, fabric, reliability, tensix and UDM configs, host rank, MPI rank and world size, `written_at`, and the commit the build came from (`git_sha`, `git_dirty`) |
-| `fabric_context` | Topology, packet header, payload and channel buffer sizes, the route buffer size, `multi_txq` |
+| `fabric_context` | Topology, the packet header type (`packet_header`, as `{size, schema}`), payload and channel buffer sizes, the route buffer size, `multi_txq` |
 | `vocabulary` | Every field `category` and `kind`, and every chip `z_port_role` |
 | `archs.<arch>.areas` | L1 areas the architecture fixes: heartbeat, telemetry, routing table, go and launch messages, Ethernet firmware mailbox, base firmware link status |
 | `archs.<arch>.stream_registers` | Where the stream registers are and how wide their values are: `base`, `stride`, `count`, and each register's `offset` and `bits`, from the HAL |
 | `archs.<arch>.core_registers` | The soft reset and wall clock registers, in the order they are read, with each physical ERISC's reset bit |
-| `archs.<arch>.types` | Every struct a schema names, with its size and members in order |
+| `archs.<arch>.types` | Every struct a schema names, including the run's packet header, with its size and members in order |
 | `enums` | Every enum a schema names, with its values |
 | `meshes` | Each mesh, its chips, and each local chip's routers |
 
@@ -88,7 +89,8 @@ path:
   `buf_space_available`'s count can hold other state.
 - A **schema** is an integer (`u8` to `u32`, `i8` to `i32`), `struct:<Name>` (in `archs.<arch>.types`),
   `enum:<Name>` (in `enums`), `packed:<name>`, `bytes` or `pad`. Every `struct:` and `enum:` schema resolves: the
-  writer throws otherwise.
+  writer throws otherwise. A class template's name includes its arguments, with no space after a comma, for example
+  `struct:HybridMeshPacketHeaderT<36>`.
 
 ### Fields
 
@@ -193,6 +195,8 @@ names what to update. By kind of change:
 | Removed argument | The collector: "missing fabric router named compile-time argument ..." | Delete its table entry. An unrecorded entry for it is not detected; delete it by hand |
 | Collector code reads a new argument | `get_named_arg`: "the collector reads ..., which no field table reads" | Add it to `k_collector_args` |
 | New struct in L1 | The build, when a field's content names a struct with no `StructLayout`; the writer, when its schema does not resolve | A `StructLayout<T>` and an entry in `DescribedStructs` (`fabric_struct_layouts.hpp`) |
+| New packet header size | Nothing: every header `PACKET_HEADER_CONFIGS` lists has its layout checked at compile time | Nothing |
+| New packet header type, or a member added to one | The build, for a type with no `StructLayout` or a layout that misses bytes | Its `StructLayout` in `fabric_packet_header_layouts.cpp`, and a `PacketHeaderStructs` entry if it holds a struct `DescribedStructs` leaves out |
 | New enum | The writer, when a schema names it | An entry in `DescribedEnums` (`fabric_struct_layouts.hpp`) |
 | New enum value | Nothing for enums enchantum reads; the build for `EDMStatus` | `FABRIC_MANIFEST_EDM_STATUSES` for `EDMStatus` |
 | New or renamed field category, field kind or Z port role | The schema check, on the name in `vocabulary` | Its list in `fabric_manifest_schema.json` (`category`, `kind` or `z_port_role`) |
