@@ -295,6 +295,15 @@ inline void calculate_sfpu_binary_div(
             v_endif;
         }
 
+        if constexpr (BINOP == BinaryOp::DIV_NO_NAN) {
+            // div_no_nan is defined by this arm: a zero divisor of either sign yields zero, for a
+            // zero or NaN dividend too. Everything above it is the ordinary quotient, which is why
+            // the two share one kernel. The magnitude is tested because the SFPU compare does not
+            // read -0.0 as equal to 0.0.
+            v_if(sfpi::setsgn(in1, 0) == 0.0f) { result = 0.0f; }
+            v_endif;
+        }
+
         if constexpr (!is_fp32_dest_acc_en) {
             // software RNE approach:
             result = float32_to_bf16_rne(result);
@@ -307,8 +316,8 @@ inline void calculate_sfpu_binary_div(
 
 template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
 inline void sfpu_binary_init() {
-    if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::POW) {
-        // Initialisation for use of sfpu_reciprocal_iter<2> in DIV or POW.
+    if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::DIV_NO_NAN || BINOP == BinaryOp::POW) {
+        // Initialisation for use of sfpu_reciprocal_iter<2> in DIV, DIV_NO_NAN or POW.
         sfpu_reciprocal_init<false>();
     } else if constexpr (BINOP == BinaryOp::XLOGY) {
         _init_log_<APPROXIMATION_MODE>();

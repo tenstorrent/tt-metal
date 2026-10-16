@@ -82,6 +82,7 @@ struct OpConfig {
         XLOGY,
         ATAN2,
         NEXTAFTER,
+        DIV_NO_NAN,
         LT,
         GT,
         GE,
