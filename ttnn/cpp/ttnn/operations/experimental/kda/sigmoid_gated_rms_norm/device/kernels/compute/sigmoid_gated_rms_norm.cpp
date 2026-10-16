@@ -3,42 +3,57 @@
 
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/bcast.h"
+#include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
-template <typename DFB>
-void square(uint32_t n, DFB& tmp) {
-    tmp.reserve_back(n);
+// Precision contract: every multiply whose operands are not both BF16 runs on the SFPU in FP32 DST, with FP32
+// operands unpacked to DST losslessly. The FPU truncates a source-register operand to the multiplier's width
+// (SrcA keeps 8 explicit mantissa bits, SrcB 10), which biases the product's magnitude low. The only remaining
+// FPU product is the row sum of squares: x^2 (exact in FP32 for BF16 x) enters the matmul as in0, i.e. SrcB
+// (TF32, 10 bits), against an exact all-ones tile in SrcA, accumulating in FP32 DST.
+
+// tmp[i] = x[i]^2 in FP32 (exact for BF16 x).
+template <uint32_t Vt, typename DFB>
+FORCE_INLINE void square(DFB& tmp) {
+    tmp.reserve_back(Vt);
     pack_reconfig_data_format(dfb::tmp);
-    reconfig_data_format(dfb::x, dfb::x);
-    mul_init(dfb::x, dfb::x, false);
-    for (uint32_t i = 0; i < n; i++) {
+    reconfig_data_format_srca(dfb::x);
+    copy_init(dfb::x);
+    square_tile_init();
+    for (uint32_t i = 0; i < Vt; i++) {
         tile_regs_acquire();
-        mul_tiles(dfb::x, dfb::x, i, i, 0);
+        copy_tile(dfb::x, i, 0);
+        square_tile(0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, dfb::tmp, i);
         tile_regs_release();
     }
-    tmp.push_back(n);
+    tmp.push_back(Vt);
 }
 
-template <typename DFB>
-void inverse_rms(DFB& inv) {
+// inv = rsqrt(sum_j x_j^2 * inverse_width + epsilon), the row value replicated across every column.
+template <uint32_t Vt, uint32_t inverse_width_bits, uint32_t epsilon_bits, typename DFB>
+FORCE_INLINE void inverse_rms(DFB& inv) {
     inv.reserve_back(1);
     pack_reconfig_data_format(dfb::inv);
-    reconfig_data_format(dfb::stats, dfb::epsilon);
-    add_init(dfb::stats, dfb::epsilon);
+    reconfig_data_format(dfb::ones, dfb::tmp);
+    matmul_init(dfb::tmp, dfb::ones);
     tile_regs_acquire();
-    add_tiles(dfb::stats, dfb::epsilon, 0, 0, 0);
+    for (uint32_t i = 0; i < Vt; i++) {
+        matmul_tiles(dfb::tmp, dfb::ones, i, 0, 0);
+    }
+    binop_with_scalar_tile_init();
+    mul_unary_tile(0, inverse_width_bits);
+    add_unary_tile(0, epsilon_bits);
     rsqrt_tile_init();
     rsqrt_tile(0);
     tile_regs_commit();
@@ -48,68 +63,33 @@ void inverse_rms(DFB& inv) {
     inv.push_back(1);
 }
 
-template <typename DFB>
-void scale_by_inverse_rms(uint32_t Vt, DFB& norm) {
-    norm.reserve_back(Vt);
-    pack_reconfig_data_format(dfb::norm);
-    reconfig_data_format(dfb::x, dfb::inv);
-    mul_bcast_cols_init(dfb::x, dfb::inv);
-    for (uint32_t i = 0; i < Vt; i++) {
-        tile_regs_acquire();
-        mul_tiles_bcast_cols(dfb::x, dfb::inv, i, 0, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, dfb::norm, i);
-        tile_regs_release();
-    }
-    norm.push_back(Vt);
-}
-
-template <typename DFB>
-void apply_weight(uint32_t Vt, DFB& tmp) {
-    tmp.reserve_back(Vt);
-    pack_reconfig_data_format(dfb::tmp);
-    reconfig_data_format(dfb::norm, dfb::weight);
-    mul_bcast_rows_init(dfb::norm, dfb::weight);
-    for (uint32_t i = 0; i < Vt; i++) {
-        tile_regs_acquire();
-        mul_tiles_bcast_rows(dfb::norm, dfb::weight, i, i, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, dfb::tmp, i);
-        tile_regs_release();
-    }
-    tmp.push_back(Vt);
-}
-
-template <typename DFB>
-void activate_gate(uint32_t Vt, DFB& norm) {
-    norm.reserve_back(Vt);
-    pack_reconfig_data_format(dfb::norm);
-    reconfig_data_format_srca(dfb::gate);
-    copy_init(dfb::gate);
-    sigmoid_tile_init();
-    for (uint32_t i = 0; i < Vt; i++) {
-        tile_regs_acquire();
-        copy_tile(dfb::gate, i, 0);
-        sigmoid_tile(0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, dfb::norm, i);
-        tile_regs_release();
-    }
-    norm.push_back(Vt);
-}
-
-template <typename DFB>
-void multiply_output(uint32_t Vt, DFB& out) {
+// out[i] = x[i] * inv * weight[i] * sigmoid(gate[i]), all products in FP32 DST on the SFPU.
+template <uint32_t Vt, typename DFB>
+FORCE_INLINE void normalize_and_gate(DFB& out) {
     out.reserve_back(Vt);
     pack_reconfig_data_format(dfb::out);
-    reconfig_data_format(dfb::tmp, dfb::norm);
-    mul_init(dfb::tmp, dfb::norm);
     for (uint32_t i = 0; i < Vt; i++) {
         tile_regs_acquire();
-        mul_tiles(dfb::tmp, dfb::norm, i, i, 0);
+        reconfig_data_format_srca(dfb::x);
+        copy_init(dfb::x);
+        copy_tile(dfb::x, i, 0);
+        reconfig_data_format_srca(dfb::inv);
+        unary_bcast_init<BroadcastType::COL>(dfb::inv);
+        unary_bcast<BroadcastType::COL>(dfb::inv, 0, 1);
+        mul_binary_tile_init();
+        mul_binary_tile(0, 1, 0);
+        reconfig_data_format_srcb(dfb::weight);
+        unary_bcast_init<BroadcastType::ROW>(dfb::weight);
+        unary_bcast<BroadcastType::ROW>(dfb::weight, i, 1);
+        mul_binary_tile_init();
+        mul_binary_tile(0, 1, 0);
+        reconfig_data_format_srca(dfb::gate);
+        copy_init(dfb::gate);
+        copy_tile(dfb::gate, i, 1);
+        sigmoid_tile_init();
+        sigmoid_tile(1);
+        mul_binary_tile_init();
+        mul_binary_tile(0, 1, 0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, dfb::out, i);
@@ -118,45 +98,29 @@ void multiply_output(uint32_t Vt, DFB& out) {
     out.push_back(Vt);
 }
 
-template <uint32_t Vt>
+template <uint32_t Vt, uint32_t inverse_width_bits, uint32_t epsilon_bits>
 TT_KERNEL void compute(uint32_t wi_count) {
-    compute_kernel_hw_startup(dfb::x, dfb::scaler, dfb::out);
+    compute_kernel_hw_startup(dfb::ones, dfb::tmp, dfb::out);
     DataflowBuffer x(dfb::x);
     DataflowBuffer gate(dfb::gate);
     DataflowBuffer weight(dfb::weight);
     DataflowBuffer tmp(dfb::tmp);
-    DataflowBuffer stats(dfb::stats);
     DataflowBuffer inv(dfb::inv);
-    DataflowBuffer norm(dfb::norm);
     DataflowBuffer out(dfb::out);
-    DataflowBuffer scaler(dfb::scaler);
-    DataflowBuffer epsilon(dfb::epsilon);
+    DataflowBuffer ones(dfb::ones);
     weight.wait_front(Vt);
-    scaler.wait_front(1);
-    epsilon.wait_front(1);
+    ones.wait_front(1);
     for (uint32_t i = 0; i < wi_count; i++) {
         x.wait_front(Vt);
         gate.wait_front(Vt);
-        square(Vt, tmp);
-        compute_kernel_lib::
-            reduce<ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW, dfb::tmp, dfb::scaler, dfb::stats>(
-                compute_kernel_lib::ReduceInputBlockShape::of(1, Vt));
-        stats.wait_front(1);
-        inverse_rms(inv);
-        inv.wait_front(1);
-        scale_by_inverse_rms(Vt, norm);
-        norm.wait_front(Vt);
-        x.pop_front(Vt);
-        inv.pop_front(1);
-        stats.pop_front(1);
-        apply_weight(Vt, tmp);
+        square<Vt>(tmp);
         tmp.wait_front(Vt);
-        norm.pop_front(Vt);
-        activate_gate(Vt, norm);
-        norm.wait_front(Vt);
-        gate.pop_front(Vt);
-        multiply_output(Vt, out);
+        inverse_rms<Vt, inverse_width_bits, epsilon_bits>(inv);
         tmp.pop_front(Vt);
-        norm.pop_front(Vt);
+        inv.wait_front(1);
+        normalize_and_gate<Vt>(out);
+        inv.pop_front(1);
+        x.pop_front(Vt);
+        gate.pop_front(Vt);
     }
 }

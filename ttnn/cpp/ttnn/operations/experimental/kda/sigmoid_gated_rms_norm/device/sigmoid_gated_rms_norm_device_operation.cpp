@@ -11,6 +11,7 @@
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
 using namespace tt::tt_metal;
@@ -60,6 +61,12 @@ void SigmoidGatedRmsNormOperation::validate_on_program_cache_miss(
         !attrs.compute_kernel_config.packer_l1_acc,
         "sigmoid_gated_rms_norm: packer_l1_acc=true is unsupported because the compute kernel does not accumulate "
         "through L1");
+    const bool fp32_dest_acc_en =
+        std::get<2>(get_compute_kernel_config_args(in.input.device()->arch(), attrs.compute_kernel_config));
+    TT_FATAL(
+        fp32_dest_acc_en,
+        "sigmoid_gated_rms_norm: fp32_dest_acc_en=false is unsupported because the normalization products are formed "
+        "in FP32 DST");
 
     const auto& input_shape = in.input.logical_shape();
     const auto& gate_shape = in.gate.logical_shape();
