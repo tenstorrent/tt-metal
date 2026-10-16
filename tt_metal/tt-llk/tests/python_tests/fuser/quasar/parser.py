@@ -464,6 +464,10 @@ UNARY_SFPU_OPS = {
     MathOperation.UnaryLe,
     MathOperation.UnaryEq,
     MathOperation.UnaryNe,
+    MathOperation.UnaryMax,
+    MathOperation.UnaryMin,
+    MathOperation.UnaryMaxInt32,
+    MathOperation.UnaryMinInt32,
     MathOperation.BitwiseNot,
     MathOperation.LeftShift,
     MathOperation.RightShift,
@@ -528,6 +532,8 @@ BINARY_SFPU_OPS = {
     MathOperation.SfpuSituGlu,
     MathOperation.SfpuLogaddexp,
     MathOperation.SfpuLogaddexp2,
+    MathOperation.SfpuGcd,
+    MathOperation.SfpuLcm,
     MathOperation.SfpuElwRightShift,
     MathOperation.SfpuElwLeftShift,
     MathOperation.SfpuElwLogicalRightShift,
@@ -553,6 +559,16 @@ class QuasarUnarySfpuMathSchema(UnarySfpuMathSchema):
 class QuasarBinarySfpuMathSchema(BinarySfpuMathSchema):
     _sfpu_cls: ClassVar = BinarySfpu
     _sfpu_ops: ClassVar = BINARY_SFPU_OPS
+    _sign_magnitude_ops: ClassVar = {
+        "SfpuElwadd",
+        "SfpuElwmul",
+        "SfpuElwGt",
+        "SfpuElwLt",
+        "SfpuElwLe",
+        "SfpuElwGe",
+        "SfpuGcd",
+        "SfpuLcm",
+    }
 
 
 class QuasarTernarySfpuMathSchema(TernarySfpuMathSchema):

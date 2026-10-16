@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt_stl/span.hpp>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -135,6 +136,14 @@ private:
     // on the device may not be thread safe.
     std::mutex api_mutex_;
     bool command_list_builder_active_ = false;
+    // Traces and command lists may both be used on a MeshDevice, but never at the same time.
+    // Traces are the legacy pre-recorded dispatch path (supported today, slated for deprecation);
+    // command lists are the Metal 2.0 replacement. This counter, and the trace checks that use it
+    // and command_list_builder_active_, can be removed once traces are retired.
+    // Atomic rather than guarded by api_mutex_ so CommandList teardown never takes the API lock. Lists are
+    // only registered while a builder is active, so begin_mesh_trace, which checks both under api_mutex_,
+    // cannot miss a newly built list.
+    std::atomic<uint32_t> num_command_lists_ = 0;
     bool is_internal_state_initialized = false;
     // Which MetalContext instance this MeshDevice uses
     // To be removed in favor of directly passing around the MetalContext reference.
@@ -300,6 +309,10 @@ public:
     // SubDeviceManagerId is captured separately by the builder for validation.
     SubDeviceManagerId acquire_command_list_builder();
     void release_command_list_builder();
+
+    // Tracks live CommandLists so trace capture can be rejected while any exist; see num_command_lists_.
+    void register_command_list();
+    void unregister_command_list() noexcept;
 
     // IDevice interface implementation
     tt::ARCH arch() const override;
