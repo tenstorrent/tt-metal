@@ -140,9 +140,11 @@ and, per decoder layer, the classification branch.
 layer by score, their box predictions decoded to `(cx, cy, cz, w, l, h, yaw, vx, vy)`, and the
 range and score filters.
 
-- The top-k and the decoding run on device. A float32 top-k over all 9000 scores is slow, so the
-  logits are ranked in bfloat16 against a pivot, the bfloat16 k-th logit, and the 512
-  candidates (`CODER_NUM_CANDIDATES`) are re-ranked exactly in float32.
+- The top-k and the decoding run on device, and the top-k is exact. A float32 top-k over all
+  9000 scores is slow, so the exact k-th logit is found first: a bfloat16 top-k gives it rounded,
+  and a bisection on counts (`CODER_BISECTION_STEPS`) narrows that to the float32 value. A
+  bfloat16 top-k of the logits minus it then selects exactly the top 300, and a float32 top-k
+  sorts them.
 - The range test and the optional score threshold run on device too, as a validity mask on the
   300 boxes; only dropping the invalid ones runs on host (`compact`), as the count left depends on
   the data and device tensors have fixed shapes. Upstream's fallback when no score passes the
