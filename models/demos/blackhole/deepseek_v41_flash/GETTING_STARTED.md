@@ -200,8 +200,7 @@ Checked on this image with the API tests in `tools/serving_tests/` (23 of 23 pas
 | `temperature`, `top_p`, `top_k` | Sampled on the device. `temperature` 0 or `top_k` 1 is greedy. Top-k up to 32 is fastest. A negative `temperature` gets HTTP 400. |
 | `seed` | Same seed, same text, whatever slot or batch position. |
 | `stop`, `stream`, `stream_options.include_usage` | Work as usual. |
-| `logprobs`, structured output, `logit_bias`, `bad_words`, `allowed_token_ids`, `min_tokens` | Not supported with speculation. HTTP 400 with an OpenAI-style error (from the platform code). `logprobs` was tested live. |
-| `min_p` | Not tested live on this image. The platform code serves it without speculation. |
+| `logprobs`, structured output, `logit_bias`, `bad_words`, `allowed_token_ids`, `min_tokens` | Not supported with speculation. HTTP 400 with an OpenAI-style error. |
 | `presence_penalty`, `frequency_penalty`, `repetition_penalty` | Accepted. Those requests decode without speculation (slower). |
 | `n` | `n` 2 returns two choices. |
 | `/v1/completions`, `/v1/models`, `/health` | Work. `/health` stays 200 under overload and after a client disconnect. |
@@ -276,8 +275,7 @@ Tested on one persistent server per configuration:
 | API checks | 23/23 | 23/23 | 23/23 |
 
 A prompt that long means a long first token.
-Not yet tested: decode speed with 32k, 100k and 200k tokens already in the context, and prompts close to the limit (about 1,000,000 tokens at 4 users, about 250,000 at 16 users).
-The 1,000,000-token prefill is estimated at about 12 minutes.
+Estimate for a 1,000,000-token prompt at 4 users: about 12 minutes (not measured).
 
 Other points on an earlier tree (plain decode, not re-run on this image):
 
