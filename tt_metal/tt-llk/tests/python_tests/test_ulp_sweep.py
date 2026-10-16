@@ -549,7 +549,7 @@ def test_the_claim_limit_follows_what_the_stimuli_format_can_reach(op):
     """`sin(2.6e28)` is a bfloat16 value. float16 ends at 65504, inside the range the
     kernel reduces -- Sin and Cos read 1-4 steps over the whole fp16 format -- so an
     fp16 input carries no limit, and a non-finite answer at its very top is a failure.
-    Keyed on the op alone, the pi claim covered the fp16 cells too. The format that
+    The bf16/fp32 limit is 65504, where the reduction really breaks. The format that
     counts is the one the kernel is handed: a Float32 input into a Float16 output at
     ``dest_acc=No`` unpacks into a Float16 Dest, so it carries no limit either."""
     fmt = DataFormat.Float16
@@ -560,7 +560,8 @@ def test_the_claim_limit_follows_what_the_stimuli_format_can_reach(op):
         True,
         True,
     ]
-    # The same two magnitudes from a bfloat16 input: 4.0 is past pi and excused.
+    # From a bfloat16 input: 65504 rounds to 65536, past the limit and excused; 4.0 is
+    # claimed, so an inf there is a failure.
     assert nonfinite_failures(
         op,
         top.to(torch.bfloat16),
@@ -568,12 +569,12 @@ def test_the_claim_limit_follows_what_the_stimuli_format_can_reach(op):
         result.to(torch.bfloat16),
         DataFormat.Float16_b,
         DataFormat.Float16_b,
-    ).tolist() == [False, False]
-    # Float32 into a Float16 output: 4.0 is past pi, excused at a 32-bit Dest, where
-    # the kernel is handed fp32, and a failure at a 16-bit one, where it is handed fp16.
+    ).tolist() == [False, True]
+    # Float32 into a Float16 output: 4.0 is claimed whichever format the kernel is
+    # handed, so an inf there fails at either Dest width.
     wide = top.to(torch.float32)
-    for dest, past_pi_excused in (
-        (DestAccumulation.Yes, True),
+    for dest, excused in (
+        (DestAccumulation.Yes, False),
         (DestAccumulation.No, False),
     ):
         assert (
@@ -586,7 +587,7 @@ def test_the_claim_limit_follows_what_the_stimuli_format_can_reach(op):
                 DataFormat.Float16,
                 dest_acc=dest,
             ).tolist()[1]
-            is not past_pi_excused
+            is not excused
         ), dest
 
 
@@ -1425,7 +1426,10 @@ def test_the_near_zero_floor_is_derived_from_the_band_and_capped():
     past_cap = golden.clone()
     past_cap[30] = 0.01  # 0.01 absolute, past EMIT_MAX_NEAR_ZERO_ATOL
     assert 0.01 > EMIT_MAX_NEAR_ZERO_ATOL
-    assert floor(past_cap) is None
+    # The capped floor is still returned, with the lanes it leaves past the ceiling, so
+    # the demotion note can name the floor that was tried.
+    residual, atol = floor(past_cap)
+    assert atol == EMIT_MAX_NEAR_ZERO_ATOL and residual > 6
 
     outside_band = golden.clone()
     outside_band[31] = 0.0  # |golden| = 0.5 is not under 1% of 1.5
@@ -1457,6 +1461,72 @@ def test_a_floored_cell_is_written_with_its_floor_and_read_back(table):
         c for k, c in contracts.items() if k.input_format is DataFormat.Float16
     ]
     assert (contract.max_ulp, contract.near_zero_atol) == (3, 2.4e-7)
+
+
+def test_a_32bit_or_bf16_dest_holds_every_answer_the_output_can():
+    """Only an fp16 Dest at dest_acc=No narrows. At dest_acc=Yes the Dest is 32-bit,
+    and a bf16 Dest has fp32's exponent range although bfloat16.max < float32.max: an
+    infinite golden there is the kernel's answer to judge, not the Dest's overflow."""
+    from helpers.ulp_sweep import dest_holds
+
+    golden = torch.tensor([70000.0, math.inf, 3.4e38, 1e-5], dtype=torch.float32)
+    for in_fmt, dest in (
+        (DataFormat.Float16, DestAccumulation.Yes),
+        (DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float32, DestAccumulation.No),
+    ):
+        assert dest_holds(golden, in_fmt, DataFormat.Float32, dest).all(), (
+            in_fmt,
+            dest,
+        )
+
+
+def test_a_floor_short_of_the_ceiling_is_returned_for_the_demotion_note():
+    """near_zero_floor hands back the floor it tried even when the lanes outside it stay
+    past the ceiling, so _decide can demote the cell and say what it would have needed.
+    """
+    from helpers.ulp_sweep import near_zero_floor
+
+    golden = torch.tensor([1.0, 1e-6, 2.0], dtype=torch.float32)
+    result = torch.tensor([1.0, 0.0, 2.5], dtype=torch.float32)
+    distance = torch.tensor([0, 14000, 9000])
+    mask = torch.ones(3, dtype=torch.bool)
+    residual, atol = near_zero_floor(
+        golden, result, distance, mask, DataFormat.Float16_b
+    )
+    assert residual == 9000 and atol > 0
+
+
+def test_a_tied_reading_resolves_the_same_whichever_arrives_first():
+    """A floor rescues lanes, so on an equal worst lane the reading without one wins."""
+    from helpers.ulp_sweep import MEASURED, Floored, record
+
+    key = ("Float16_b", "Float16_b", "No", "No")
+    outcomes = []
+    for order in ((None, (2, 2.4e-7)), ((2, 2.4e-7), None)):
+        MEASURED.clear()
+        for floor in order:
+            record("Abs", key, 14337, floor)
+        outcomes.append(MEASURED["Abs"][key])
+    MEASURED.clear()
+    assert outcomes == [14337, 14337] and not isinstance(outcomes[0], Floored)
+
+
+def test_the_trig_claim_reaches_65504_on_a_wide_input():
+    """Sin/Cos/Tan are accurate out to 65504, so the ranking mask keeps those lanes;
+    past it the range reduction breaks and the lanes leave the claim."""
+    from helpers.ulp_sweep import claimed_lanes
+
+    src = torch.tensor([3.0, 4.0, 60000.0, 70000.0], dtype=torch.bfloat16)
+    claimed = claimed_lanes(
+        MathOperation.Sin,
+        src,
+        DataFormat.Float16_b,
+        DataFormat.Float16_b,
+        DestAccumulation.No,
+    )
+    assert claimed.tolist() == [True, True, True, False]
 
 
 def test_a_floor_that_still_leaves_the_cell_over_the_ceiling_demotes_and_says_so(table):

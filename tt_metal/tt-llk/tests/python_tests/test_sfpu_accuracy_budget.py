@@ -2091,7 +2091,7 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
         ApproximationMode.Yes,
         None,
     ): 2,
-    (MathOperation.Digamma, None, None, None, None): 20,
+    (MathOperation.Digamma, None, None, None, None): 8,
     (
         MathOperation.ExpWithBase,
         DataFormat.Float16,
@@ -2109,8 +2109,8 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
     (MathOperation.Expm1Cw, None, None, None, None): 25,
     (MathOperation.I0, None, None, None, None): 18,
     (MathOperation.I1, None, None, None, None): 18,
-    (MathOperation.Lgamma, None, None, None, None): 19,
-    (MathOperation.Polygamma, None, None, None, None): 50,
+    (MathOperation.Lgamma, None, None, None, None): 5,
+    (MathOperation.Polygamma, None, None, None, None): 19,
     (MathOperation.Rpow, None, None, None, None): 20,
 }
 

@@ -273,28 +273,17 @@ def _dest_dtype(input_format: DataFormat, output_format=None, dest_acc=None):
 def dest_holds(
     golden: torch.Tensor, input_format: DataFormat, output_format=None, dest_acc=None
 ) -> torch.Tensor:
-    """Lanes whose answer the Dest can hold at all.
-
-    A ``Float16`` input runs on an fp16 Dest, which tops out at 65504 and flushes below
-    6.1e-5, whatever the output format. Packed to Float16_b or Float32 the hardware
-    hands back 65536 or 66048 where the answer was 70000, and 0 where it was 3e-5 --
-    the Dest's doing, not the op's -- while the golden holds the answer in the wider
-    output and, for an overflow, substitutes a finite 130560/131008 that reads as 8
-    million fp32 steps and is not even a non-finite disagreement. Every ``Float16 ->
-    Float32`` cell of Exp, Cosh, Square, Selu, I0, ... was on tolerance for that one
-    lane class. Such a lane is a question the variant cannot be asked: neither ranked
-    nor a failure.
-
-    Only where the Dest is narrower than the output. An fp16 Dest under an fp16 output
-    overflows and flushes exactly as the output does, so a disagreement there is the
-    output's edge, which :func:`nonfinite_failures` judges; a bf16 Dest has fp32's
-    range. Without *output_format* and *dest_acc* nothing is excluded.
-    """
+    """Lanes an fp16 Dest (``dest_acc=No``) can hold under a wider output: past 65504
+    or below 6.1e-5 what comes back is the Dest's edge, not the op's answer."""
     from helpers.llk_params import format_dict
 
     holds = torch.ones(golden.shape, dtype=torch.bool, device=golden.device)
+    # A 32-bit Dest at dest_acc=Yes, and a bf16 one (fp32's exponent range), hold
+    # every answer the output can.
+    if getattr(dest_acc, "name", dest_acc) != "No":
+        return holds
     dtype = _dest_dtype(input_format, output_format, dest_acc)
-    if dtype is None:
+    if dtype is not torch.float16:
         return holds
     dest = torch.finfo(dtype)
     out = torch.finfo(format_dict[stimuli_format_for(output_format)])
@@ -430,20 +419,14 @@ def measurable_mask(
 #: The magnitude past which an op's argument reduction stops claiming a finite answer,
 #: per op and per *stimuli* format: ``{op: {stimuli_format: limit}}``. Only ops whose
 #: kernel reduces its argument belong here; anywhere else a non-finite answer against a
-#: finite golden is a failure over the whole format. Sin, Cos and Tan give up far
-#: outside [-pi, pi] -- `sin(2.6e28)` returns inf against a golden of -1, `tan(-3e38)`
-#: NaN against -2.4 -- and pi is the widest bound measured so far, so it is the claim
-#: until one is wider.
+#: finite golden is a failure over the whole format. Sin, Cos and Tan stay within 2
+#: steps out to 65504 and give up past it -- `sin(2.6e28)` returns inf against a golden
+#: of -1, `tan(-3e38)` NaN against -2.4. The limit also bounds the ranking mask, so it
+#: is where accuracy stops, not merely where a non-finite answer starts.
 #:
-#: Keyed on the format the kernel is handed (:func:`_unpack_format`), because the claim
-#: is about what that format can reach. 2.6e28 is a bfloat16 value (and a Float32 one);
-#: float16 ends at 65504, and Sin and Cos measure 1-4 steps over the whole float16
-#: format, so an fp16 input carries no limit and a non-finite answer anywhere in it is
-#: a failure. Keyed on the op alone, the pi claim silently covered the fp16 cells too,
-#: and a range-reduction regression on the ~46% of fp16 lanes past pi would have passed
-#: the gate and been emitted as a clean budget. Keyed on the input alone, it covered a
-#: Float32 input into a Float16 output at ``dest_acc=No`` too, which unpacks into a
-#: Float16 Dest and so reaches the kernel as fp16 values only.
+#: Keyed on the format the kernel is handed (:func:`_unpack_format`): float16 ends at
+#: 65504, so an fp16 input -- or a Float32 one unpacked into a Float16 Dest -- carries
+#: no limit, and a non-finite answer anywhere in it is a failure.
 _CLAIM_LIMIT: Dict = {}
 
 
@@ -451,7 +434,8 @@ def _claim_limits() -> Dict:
     from helpers.llk_params import MathOperation
 
     if not _CLAIM_LIMIT:
-        wide_formats = {DataFormat.Float16_b: math.pi, DataFormat.Float32: math.pi}
+        # Accurate (0-2 steps) out to 65504; the range reduction breaks past it.
+        wide_formats = {DataFormat.Float16_b: 65504.0, DataFormat.Float32: 65504.0}
         _CLAIM_LIMIT.update(
             {
                 MathOperation.Sin: wide_formats,
@@ -836,9 +820,8 @@ def nonfinite_failures(
     * **an input the op makes no claim on** (:func:`_claimed`): the op's own limit
       rather than the sweep's -- the undefined side of a registered singularity, or
       past an argument-reduction limit on a format that reaches it. ``Sin`` and ``Cos``
-      disagree on ~21,000 bf16 lanes far outside ``[-pi, pi]``. The budget is still
-      measured over the whole format; it is only the *non-finite* answer that needs the
-      op to have been claiming something.
+      disagree on bf16 lanes far past 65504. The sweep ranks the claimed lanes only,
+      so the budget and this check agree on what the op answers for.
     * **a lane a tracked issue names** (:data:`_KNOWN_NONFINITE_LANES`): a defect
       already on the books, excused on its own cell and inputs so the rest of the cell
       keeps its step gate. The gate fails once the lanes stop disagreeing
@@ -991,30 +974,13 @@ def near_zero_floor(
     mask: torch.Tensor,
     out_fmt: DataFormat,
 ) -> Optional[Tuple[int, float]]:
-    """The ``(residual, atol)`` a demoted cell would be enrolled with, or ``None``.
-
-    The step count is a difference of bit-pattern ranks, so a lane where the hardware
-    answers 0 for a 2e-9 the golden still holds, or where two values of 1e-24 differ in
-    sign, reads as the whole exponent range -- 14,337 bf16 steps, 2**29 fp32 steps --
-    and demotes the cell, although the error is nothing a consumer could measure.
-    815 of the 943 non-block cells on tolerance at P9 were demoted by such a lane. The
-    table already answers that with ``near_zero_atol``, the floor under which a lane is
-    judged on absolute error (:func:`ulp.ulp_elementwise_valid`); this derives it from
-    the measurement so the emitter can write it.
-
-    The band is the floor rule's own: lanes under ``NEAR_ZERO_FRACTION`` of the cell's
-    largest finite golden, capped at ``atol / NEAR_ZERO_FRACTION``. The floor is the
-    smallest that does the job: the largest absolute error among the band lanes that
-    are *past the ceiling* -- a band lane within budget needs no rescue, and taking the
-    band's largest error instead widened Gelu's 7.6e-5 floor to 1e-3 for lanes its
-    step budget already covered -- with ``EMIT_HEADROOM``, rounded up to two figures.
-    It is granted only up to ``EMIT_MAX_NEAR_ZERO_ATOL``, and only when the lanes it
-    does not rescue then fit the output's usable ceiling. A cell that fits without it
-    gets none.
-    """
+    """The near-zero floor (``atol``) a demoted cell needs, and the worst lane outside it
+    (``residual``); ``None`` when the cell fits without one (see SFPU_ULP.md)."""
     from helpers.sfpu_accuracy_budget import usable_budget_ceiling
-    from helpers.ulp import NEAR_ZERO_FRACTION
+    from helpers.ulp import _ULP_PROXY_DTYPES, NEAR_ZERO_FRACTION
 
+    if out_fmt in _ULP_PROXY_DTYPES:
+        return None  # a block-float output is judged as a block; no floor applies
     ceiling = usable_budget_ceiling(out_fmt)
     flat = distance.reshape(-1).to(torch.int64)
     selected = mask.reshape(-1) & (flat >= 0)
@@ -1041,8 +1007,7 @@ def near_zero_floor(
     rescued = band & (magnitude <= atol / NEAR_ZERO_FRACTION) & (absolute_error <= atol)
     kept = selected & ~rescued
     residual = int(flat[kept].max()) if kept.any() else 0
-    if residual > ceiling:
-        return None
+    # Past the ceiling even so, the cell demotes; _decide records the floor it tried.
     return residual, atol
 
 
@@ -1071,7 +1036,13 @@ def record(
     if isinstance(current, str):
         return  # already unmeasurable; a reading elsewhere does not rescue it
     new = Floored(max_ulp, *floor) if floor else max_ulp
-    if current is None or _max_of(new) > _max_of(current):
+    if (
+        current is None
+        or _max_of(new) > _max_of(current)
+        # A tie keeps the reading with no floor, whichever arrives first: a floor
+        # rescues lanes, so it is the polarity that can hide error.
+        or (_max_of(new) == _max_of(current) and not isinstance(new, Floored))
+    ):
         cells[key] = new
 
 
@@ -1141,8 +1112,8 @@ def finish_emit(arch, testsfailed: int, path=None, exitstatus=0) -> str:
       write into. Every *other* op's block has already been rewritten, so a red emit is
       not an untouched table.
     * **written**, returning the summary line. An op kept verbatim -- a row the run
-      covers carries a field ``_render`` cannot put back, the ``near_zero_atol`` floors
-      and ``atol``/``rtol`` anchors -- is named in it: such a block is maintained by
+      covers carries a field ``_render`` cannot put back, such as an ``atol``/``rtol``
+      pair -- is named in it: such a block is maintained by
       hand by design, and failing on it would turn every whole-table emit red.
 
     *exitstatus* is pytest's ``session.exitstatus``, an ``ExitCode`` or a plain int.
@@ -1474,9 +1445,9 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
 #: A ``name: value`` pair inside an inline row, with the value unquoted.
 _ROW_FIELD = re.compile(r'([A-Za-z_]\w*)\s*:\s*"?([^,}"]*)"?')
 
-#: What `_render` can put back. A row carrying anything else -- a `near_zero_atol`
-#: floor, an `atol`/`rtol` pair -- cannot be regenerated from a measurement, so it is
-#: preserved rather than replaced even when this sweep covers its cell.
+#: What `_render` can put back, a derived `near_zero_atol` floor included. A row
+#: carrying anything else -- an `atol`/`rtol` pair -- cannot be regenerated from a
+#: measurement, so it is preserved rather than replaced even when this sweep covers it.
 _RENDERABLE_FIELDS = frozenset(
     {"in", "out", "approx", "dest", "max_ulp", "metric", "near_zero_atol"}
 )
@@ -1553,8 +1524,8 @@ def _replaceable(line: str, emitted_cells: Set[Tuple[str, str]]) -> bool:
     and the table's own header says to re-measure on Blackhole; specificity lets the two
     rows coexist, so regenerating one arch must not erase the other's contract.
 
-    Nor is a row carrying a field ``_render`` cannot put back -- a ``near_zero_atol``
-    floor, an ``atol``/``rtol`` pair. :func:`write_table` keeps such an op's block
+    Nor is a row carrying a field ``_render`` cannot put back, such as an
+    ``atol``/``rtol`` pair. :func:`write_table` keeps such an op's block
     verbatim and names it in its return, rather than quietly replacing or quietly
     duplicating the row.
     """
@@ -1616,7 +1587,7 @@ def write_table(path, suffix: str) -> Tuple[int, List[str]]:
     """Replace every swept op's block in the YAML with what the sweep measured.
 
     Returns how many blocks were rewritten, and the ops kept verbatim because a row the
-    sweep covers carries a field it cannot regenerate (a ``near_zero_atol`` floor).
+    sweep covers carries a field it cannot regenerate (an ``atol``/``rtol`` pair).
 
     Line-oriented on purpose. The table's comments *are* its provenance, and a load and
     re-dump through PyYAML would drop every one of them, including for the ops this
@@ -1662,7 +1633,7 @@ def write_table(path, suffix: str) -> Tuple[int, List[str]]:
                 if _unrenderable(l) and _pins_a_measured_cell(l, set(MEASURED[name]))
             ]
             if unrenderable:
-                # Emitting over it would drop the floor; keeping it as well would give
+                # Emitting over it would drop the field; keeping it as well would give
                 # the cell two equally specific keys, which `_load_table` refuses. So
                 # the op's block stays as it is, and the caller is told: the row is a
                 # judgement a measurement cannot re-derive. Every other op is written.
@@ -1676,7 +1647,7 @@ def write_table(path, suffix: str) -> Tuple[int, List[str]]:
             )
             out.extend(_render(line, _collapse(_decide(MEASURED[name], name)), suffix))
             # Rows this run did not supersede -- a format it does not reach, an
-            # arch-keyed entry, a floor `_render` cannot re-derive -- are the
+            # arch-keyed entry, a field `_render` cannot re-derive -- are the
             # measurement of a different run and stay as they are. Replacing a whole op
             # block deleted them.
             out.extend(kept)

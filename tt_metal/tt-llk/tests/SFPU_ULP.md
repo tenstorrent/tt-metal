@@ -122,8 +122,9 @@ singularity `sfpu_domains._OP_SINGULARITIES` registers (`Log` below zero, `Recip
 at zero), every non-positive integer for `Digamma`, `Lgamma` and `Polygamma`
 (`_NONPOSITIVE_INTEGER_POLES`: the poles are a lattice, and every fp32 value of
 magnitude 2^23 or more is an integer) and a per-op argument-reduction limit (`Sin` and
-`Cos` past pi, on the formats that reach `sin(2.6e28)`: bfloat16 and Float32, not float16,
-which ends at 65504 and is reduced correctly throughout). Not the functional driver's
+`Cos` and `Tan` past 65504, where the reduction breaks, on the formats that reach it:
+bfloat16 and Float32, not float16, which ends there). The same limit bounds the lanes the
+sweep ranks, so a range-reduction regression below it fails the gate. Not the functional driver's
 sampling window, which is where points are drawn rather than where an op stops being
 defined, and not `_SFPU_UNDEFINED_RANGES`, whose holes are guard bands around those
 points rather than the points themselves. A golden past the output format's range is
