@@ -247,7 +247,8 @@ class TTNNConv1d:
         y = ttnn.linear(
             x_cat, self._tap_w, bias=self._bias_dev, memory_config=mc, compute_kernel_config=self.matmul_compute_config
         )
-        ttnn.deallocate(x_cat)
+        if k > 1:  # for k == 1 x_cat is a view of the caller's x
+            ttnn.deallocate(x_cat)
         return y, l_out
 
     def _conv1d_call(self, x: ttnn.Tensor, input_length: int) -> Tuple[ttnn.Tensor, int]:

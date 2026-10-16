@@ -138,6 +138,21 @@ def _cached_tt(cache: Optional[dict], key: Optional[str], build):
     return t
 
 
+# Zero blocks for causal padding, made once per shape. ttnn.zeros writes from the host,
+# which a trace capture forbids, so every shape is first made during warm-up (before any
+# trace exists) and the traced forward only reads it.
+_ZEROS = {}
+
+
+def _zeros_nlc(b: int, n: int, c: int, dtype, layout, device) -> ttnn.Tensor:
+    key = (id(device), b, n, c, dtype, layout)
+    z = _ZEROS.get(key)
+    if z is None:
+        z = ttnn.zeros([b, n, c], dtype=dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        _ZEROS[key] = z
+    return z
+
+
 def _causal_left_pad_nlc(x_nlc: ttnn.Tensor, pad: int, device) -> ttnn.Tensor:
     """Left-pad an NLC tensor [batch, length, channels] with ``pad`` zero frames.
 
@@ -147,13 +162,7 @@ def _causal_left_pad_nlc(x_nlc: ttnn.Tensor, pad: int, device) -> ttnn.Tensor:
     if pad <= 0:
         return x_nlc
     b, l, c = int(x_nlc.shape[0]), int(x_nlc.shape[1]), int(x_nlc.shape[2])
-    zeros = ttnn.zeros(
-        [b, pad, c],
-        dtype=x_nlc.dtype,
-        layout=x_nlc.layout,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    zeros = _zeros_nlc(b, pad, c, x_nlc.dtype, x_nlc.layout, device)
     return ttnn.concat([zeros, x_nlc], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
@@ -1781,9 +1790,20 @@ class TtSpeechTokenizerDecoder(LightweightModule):
                     device=self.device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
+                # One eager pass under the memory state the trace will see: the talker's
+                # resident buffers can change auto-picked op configs (and so program hashes)
+                # from what warm-up compiled, and capture cannot compile.
+                ttnn.deallocate(self._conv_decoder_forward(x_in))
                 ttnn.synchronize_device(self.device)
                 tid = ttnn.begin_trace_capture(self.device, cq_id=0)
-                out = self._conv_decoder_forward(x_in)
+                try:
+                    out = self._conv_decoder_forward(x_in)
+                except Exception:
+                    # Close and drop the capture: an open one makes every later write and
+                    # close_device fail.
+                    ttnn.end_trace_capture(self.device, tid, cq_id=0)
+                    ttnn.release_trace(self.device, tid)
+                    raise
                 ttnn.end_trace_capture(self.device, tid, cq_id=0)
                 ttnn.synchronize_device(self.device)
                 self._backend_traces[bucket] = (tid, x_in, out)

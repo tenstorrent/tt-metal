@@ -161,6 +161,9 @@ def main():
         config.greedy = False
         config.repetition_penalty = 1.15
         config.hidden_size = talker_config.hidden_size
+        # Before capture, as tt-media-server does (server 3092d10f): on an 8x8 grid the
+        # speaker encoder's static CBs clash with the server context's L1 buffers.
+        speaker_embedding = model.extract_speaker_embedding(audio_data)
         log("init_server_context (captures traces)")
         ctx = api.init_server_context(device, model, config, main_weights)
 
@@ -170,7 +173,9 @@ def main():
                 decoders[name].capture_backend_traces(report["variants"][name]["buckets"])
                 log(f"  traced {name}: {time.perf_counter() - t0:.1f}s")
             except Exception as e:  # noqa: BLE001
-                log(f"  TRACE FAILED {name}: {type(e).__name__}: {e}")
+                import traceback
+
+                log(f"  TRACE FAILED {name}: {type(e).__name__}: {e}\n{traceback.format_exc()}")
                 report["variants"][name]["trace_error"] = f"{type(e).__name__}: {e}"
                 del decoders[name]
 
@@ -183,7 +188,6 @@ def main():
                 decoders[name] = dec
 
         tokenizer = AutoTokenizer.from_pretrained(HF_ID, trust_remote_code=True)
-        speaker_embedding = model.extract_speaker_embedding(audio_data)
 
         # ---- 3. real requests; every variant decodes the same codes ----
         for i, (language, text) in enumerate(PROMPTS):
