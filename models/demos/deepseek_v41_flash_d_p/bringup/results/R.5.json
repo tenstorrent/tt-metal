@@ -1,0 +1,17 @@
+{
+ "metrics": {
+  "official_taps_errors": {
+   "t": "2026-10-16T13:01:45",
+   "value": 0
+  },
+  "official_taps_steps": {
+   "t": "2026-10-16T13:01:45",
+   "value": 129
+  },
+  "official_taps_unmapped": {
+   "t": "2026-10-16T13:01:45",
+   "value": 0
+  }
+ },
+ "task": "R.5"
+}

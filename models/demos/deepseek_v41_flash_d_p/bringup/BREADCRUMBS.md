@@ -893,3 +893,56 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   (and the other gate files; contract with `BRINGUP_TASK=C.swa.attention`); timing:
   `scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tt/perf_attention.py`; fork:
   `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_high_precision.py -k bf16_probs`
+
+## R.5 reference, attempt 2: official taps (F80)
+- Wrote (OV-7: no change to the reference) `reference/official_taps.py:capture`, the hook `hooks.py:official_taps`
+  and `bringup/official_taps.yaml`. Official side = `hf_oracle.build_oracle(dtype=bf16)` (DS41-1's tiling), first
+  max(layers) + 1 = 25 blocks, ONE prefill from position 0 over (chunk + 1) x chunk_size tokens (model.py has no chunked
+  prefill: start_pos > 0 is a one-token decode), rows of chunk c sliced. Every step of every layer is mapped (module
+  docstring has the map): block boundaries packed streams + pending pre (DS41-3); experts = MoE's fp32 `y` rebuilt
+  from the expert outputs with the same `y[idx] += out` order (bit-equal); compressor = the rows written to
+  compress_kv_cache + indexer.k_cache; indexer = output minus `offset`, padded with -1; kv = kv_norm's output object
+  read after the in-place RoPE + fp8.
+- Dtypes: packed boundaries marked bf16 (bf16 streams, fp32 pre in one tensor); mixes / router / experts fp32;
+  kv / compressed `fixed` as attention / indexer inputs.
+- Gate (run with `--spec $BRINGUP_SPEC`; the brief's command without it stops in Spec.load(None)): 129 steps,
+  0 unmapped, 7 errors. 122 steps pass; every bf16-out step sits at 0.50 x its limit (one bf16 rounding).
+  Failures and their cause (reference/official_taps_check.py):
+  - compressor L2 / L14 / L20 rel 0.0373 / 0.0366 / 0.0371 > 0.0304 / 0.0351 / 0.0361: model.py's own bf16 points
+    ahead of fp4; the fp32 step with them emulated equals the official output bit for bit (DS41-38).
+  - attention L3 / L20 / L21 / L24 rel 0.057 / 0.115 / 0.152 / 0.173 > 0.055 / 0.070 / 0.068 / 0.074: the ctx is the
+    golden's prefix state; with the official state 0.032 / 0.034 / 0.035 / 0.036 (all pass) (DS41-39).
+  Both need a framework change (testing/official_floor.py); not fixable in this step's paths without misstating dtypes.
+- official vs golden drift (bf16 chain vs fp32 chain), e.g. attn_norm rel 0.034 (L1), 0.090 (L3), 0.63 (L14), 0.29 (L24).
+- Times (CPU): capture ~6 min, gate ~25 min.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.testing.official_floor --spec $BRINGUP_SPEC`;
+  diagnosis: `PYTHONPATH=$PWD python -m models.demos.deepseek_v41_flash_d_p.reference.official_taps_check`.
+
+## R.5 reference, attempt 3 (run1 brief R.5.reference.1): official state in the taps (OV-8)
+- Map and official_taps.yaml unchanged. `hooks.py:official_taps` now calls `capture(..., states=True)` and puts per
+  layer `_state = {"start", "end"}` (DS41Reference.state_tensors format): window_kv from the official fp8 kv object,
+  compress_kv / index_k from model.py's caches, compress_partial zeros (chunk ends are multiples of every ratio),
+  topk_idx minus the indexer offset, candidates from shared_attn's mask; engram_tail from the token ids (EngramHasher,
+  model.py keeps none).
+- Gate (`python -m models.demos.common.bringup.testing.official_floor`, ~25 min CPU): 129 steps, 0 unmapped, 3 errors.
+  Every attention now passes on the official state (DS41-39): L0-L24 rel 0.026-0.044 vs limits 0.037-0.075.
+- Still failing, NOT state (same rel to 4 digits as with the golden's state; the compressor's output for a chunk reads
+  only that chunk's x): compressor L2 / L14 / L20 rel 0.0373 / 0.0366 / 0.0371 > 0.0304 / 0.0351 / 0.0361. Re-verified
+  DS41-38 with the hook's own taps: the fp32 step with model.py's bf16 points emulated equals the official output bit
+  for bit (equal 1.000000) at all three. The map is right; the check's limit (2 x input nudge) does not hold the
+  official code's internal bf16 roundings ahead of fp4. Needs a framework decision; dtypes left as they are (OV-8).
+
+## R.5 reference, attempt 4 (run1 brief R.5.reference.1, OV-9): compressor `explained`
+- The framework (F80, 014011cffcb) passes a step over its nudge limit when official_taps.yaml says why (`explained`).
+- New `reference/official_checks.py` (the durable form of /tmp/r5chk/chk.py): runs the hook official_taps on the
+  component golden's chunk (chunk 1, every golden layer) and recomputes each compressor with model.py's internal bf16
+  points emulated (`compressor_bf16`). Result: official == emulated bit for bit (equal 1.000000) at L2 (ratio 2),
+  L14 (ratio 2), L20 (ratio 1); official vs the plain fp32 step rel 0.0373 / 0.0366 / 0.0371. ~5 min CPU; exits 1 if
+  any layer is not bit-equal.
+- official_taps.yaml: `compressor` gets `explained` (why + that evidence); no dtype changed, nothing else explained.
+  The bare step name covers every block type with a compressor (enc_source, enc_source_engram, dec_candidate).
+- official_taps_check.py now imports compressor_bf16 from official_checks.py (one copy of the emulation).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.testing.official_floor` (~25 min CPU);
+  evidence: `PYTHONPATH=$PWD python -m models.demos.deepseek_v41_flash_d_p.reference.official_checks`.
+- Gate: `ok   official taps: 129 steps, chunk 1` (0 errors, 0 unmapped); L2 / L14 / L20 compressor pass as explained
+  (rel 0.0373 / 0.0366 / 0.0371 > 0.0304 / 0.0351 / 0.0361).

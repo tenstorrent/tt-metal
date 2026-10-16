@@ -42,6 +42,40 @@ def hf_model(spec, num_layers):
     return build_oracle(hf_path(spec), num_layers, dtype, max_seq_len=ORACLE_MAX_SEQ)
 
 
+def official_taps(spec, layers, tokens, chunk, chunk_size):
+    """F80: DeepSeek's inference/model.py at its shipped dtypes (bf16, the GPU configuration) over the first chunk + 1
+    chunks, every block step of every layer tapped for chunk ``chunk`` (reference/official_taps.py has the map;
+    official_taps.yaml the dtypes model.py holds each step's inputs and output in). Per layer also ``_state``: the
+    official run's own state at the chunk's start and end in DS41Reference.state_tensors' format (the KV window,
+    compressed caches, top-k and candidates from model.py's buffers; the engram tail from the token ids)."""
+    from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.deepseek_v41_flash_d_p.reference.official_taps import capture
+
+    path = hf_path(spec)
+    taps, states = capture(path, layers, tokens, chunk, chunk_size, states=True)
+    cfg = _config(spec)
+    tail = {}
+    if any(cfg.is_engram(L) for L in taps):  # the engram tail depends only on the token ids (model.py: none kept)
+        from transformers import AutoTokenizer
+
+        from models.demos.deepseek_v41_flash_d_p.reference.ngram import EngramHasher
+
+        hasher = EngramHasher.build(cfg.raw, AutoTokenizer.from_pretrained(path))
+        toks = torch.as_tensor(tokens).long().reshape(-1)
+        for tag, length in (("start", chunk * chunk_size), ("end", (chunk + 1) * chunk_size)):
+            t = hasher.new_tail()
+            if length:
+                L0 = next(L for L in taps if cfg.is_engram(L))
+                t = hasher.hashes(toks[:length], L0, t)[1]
+            tail[tag] = t
+    for L, st in states.items():
+        for tag, d in st.items():
+            if "engram_tail" in d:
+                d["engram_tail"] = tail[tag].clone()
+        taps[L]["_state"] = st
+    return taps
+
+
 def hf_layers(model):
     """Per-block taps: the block output packed like the reference's boundary, [S, 4 * H + 4] (streams, pending pre)."""
     return model.taps
