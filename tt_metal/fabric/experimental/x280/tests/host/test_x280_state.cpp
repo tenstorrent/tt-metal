@@ -142,29 +142,7 @@ TEST(LimShape, IncreaseAppliesOnlyWhileEveryTileIsResetHeld) {
 TEST(LimShape, ExpandingLimRequiresReset) {
     EXPECT_EQ(classify_lim_shape_transition(5, 0, true), LimShapeTransition::ResetRequired);
     EXPECT_EQ(classify_lim_shape_transition(5, 5, false), LimShapeTransition::AlreadyConfigured);
-}
-
-TEST(LimShape, RequireExactClassifiesEveryTransition) {
-    EXPECT_EQ(RuntimeOpenConfig{}.priming_policy, LimEccPrimingPolicy::AutoPrime);
-    EXPECT_EQ(RuntimeOpenConfig{}.shape_change_policy, LimShapeChangePolicy::ApplyWhileReset);
-    struct Case {
-        uint32_t current;
-        uint32_t target;
-        bool held_in_reset;
-        LimShapeChangePolicy policy;
-        LimShapeTransition expected;
-    };
-    constexpr Case cases[] = {
-        {0xFFFFFFF5u, 5u, false, LimShapeChangePolicy::RequireExact, LimShapeTransition::AlreadyConfigured},
-        {0u, 5u, true, LimShapeChangePolicy::RequireExact, LimShapeTransition::PreparedShapeRequired},
-        {0u, 5u, false, LimShapeChangePolicy::RequireExact, LimShapeTransition::ResetRequired},
-        {15u, 5u, true, LimShapeChangePolicy::RequireExact, LimShapeTransition::ResetRequired},
-        {5u, 5u, true, static_cast<LimShapeChangePolicy>(-1), LimShapeTransition::InvalidPolicy},
-    };
-    for (const auto& test : cases) {
-        EXPECT_EQ(
-            classify_lim_shape_transition(test.current, test.target, test.held_in_reset, test.policy), test.expected);
-    }
+    EXPECT_EQ(classify_lim_shape_transition(0xFFFFFFF5u, 5, false), LimShapeTransition::AlreadyConfigured);
 }
 
 TEST(LimBlock, ReadRequiresFourByteAlignmentAndAvailableRange) {

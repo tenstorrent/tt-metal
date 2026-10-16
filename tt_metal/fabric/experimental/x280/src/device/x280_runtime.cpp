@@ -115,13 +115,6 @@ ChipPlan preflight_chip(
 
     auto states = inspect_tiles(runtime, chip);
     if (const auto invalid = invalid_observation(states); invalid.has_value()) {
-        if (config.shape_change_policy == LimShapeChangePolicy::RequireExact) {
-            plan.result.outcome = RuntimeOpenOutcome::Failed;
-            plan.result.diagnostic =
-                *invalid +
-                "; exact-shape policy requires a readable initial shape and will not move PLL4 to recover it";
-            return plan;
-        }
         if (!chip->all_tiles_held_in_reset()) {
             plan.result.outcome = RuntimeOpenOutcome::Failed;
             plan.result.diagnostic =
@@ -156,48 +149,18 @@ ChipPlan preflight_chip(
     }
 
     bool needs_shape = false;
-    const TileState* prepared_shape_state = nullptr;
     const TileState* reset_shape_state = nullptr;
     for (const auto& state : states) {
-        const auto transition = classify_lim_shape_transition(
-            state.raw_wayenable, target_wayenable, chip->all_tiles_held_in_reset(), config.shape_change_policy);
+        const auto transition =
+            classify_lim_shape_transition(state.raw_wayenable, target_wayenable, chip->all_tiles_held_in_reset());
         switch (transition) {
             case LimShapeTransition::AlreadyConfigured: break;
             case LimShapeTransition::ApplyWhileReset: needs_shape = true; break;
-            case LimShapeTransition::PreparedShapeRequired:
-                if (prepared_shape_state == nullptr) {
-                    prepared_shape_state = &state;
-                }
-                break;
             case LimShapeTransition::ResetRequired:
                 if (reset_shape_state == nullptr) {
                     reset_shape_state = &state;
                 }
                 break;
-            case LimShapeTransition::InvalidPolicy:
-                plan.result.outcome = RuntimeOpenOutcome::Failed;
-                plan.result.diagnostic = "runtime open has an invalid LIM shape change policy";
-                return plan;
-        }
-    }
-
-    if (config.shape_change_policy == LimShapeChangePolicy::RequireExact) {
-        if (reset_shape_state != nullptr) {
-            plan.result.outcome = RuntimeOpenOutcome::ResetRequired;
-            plan.result.diagnostic = label_chip_l2cpu(reset_shape_state->id.chip_id, reset_shape_state->id.hw_index) +
-                                     " has WayEnable " + std::to_string(reset_shape_state->raw_wayenable & 0xFu) +
-                                     ", which cannot be admitted at configured target " +
-                                     std::to_string(target_wayenable) + " without an ASIC reset";
-            return plan;
-        }
-        if (prepared_shape_state != nullptr) {
-            plan.result.outcome = RuntimeOpenOutcome::PreparationRequired;
-            plan.result.diagnostic =
-                label_chip_l2cpu(prepared_shape_state->id.chip_id, prepared_shape_state->id.hw_index) +
-                " has WayEnable " + std::to_string(prepared_shape_state->raw_wayenable & 0xFu) +
-                "; exact-shape policy requires configured target " + std::to_string(target_wayenable) +
-                " to be prepared before open";
-            return plan;
         }
     }
 
@@ -441,18 +404,11 @@ RuntimeOpenResult X280Runtime::open_impl(
         result.diagnostic = "x280: invalid runtime LIM shape: " + shape.reason;
         return result;
     }
-    if (config.shape_change_policy != LimShapeChangePolicy::ApplyWhileReset &&
-        config.shape_change_policy != LimShapeChangePolicy::RequireExact) {
-        result.diagnostic =
-            "x280: invalid LIM shape change policy " + std::to_string(static_cast<int>(config.shape_change_policy));
-        return result;
-    }
     if (config.lim_layout == LimLayout::PacketInjection) {
         if (config.lim_shape.lim_ways != kPreparedLimWays ||
-            config.shape_change_policy != LimShapeChangePolicy::RequireExact ||
             config.priming_policy != LimEccPrimingPolicy::RequirePrepared) {
             result.diagnostic = "x280: PacketInjection layout requires lim_ways=" + std::to_string(kPreparedLimWays) +
-                                ", RequireExact shape change policy, and RequirePrepared priming policy";
+                                " and RequirePrepared priming policy";
             return result;
         }
     }

@@ -99,28 +99,16 @@ struct LimShapeCheck {
 // capacity. The target WayEnable is 15 - lim_ways.
 LimShapeCheck validate_lim_shape(LimShape shape, uint64_t required_backed_bytes);
 
-enum class LimShapeChangePolicy {
-    ApplyWhileReset,
-    RequireExact,
-};
-
 enum class LimShapeTransition {
     AlreadyConfigured,
     ApplyWhileReset,
     ResetRequired,
-    PreparedShapeRequired,
-    InvalidPolicy,
 };
 
 // WayEnable is increase-only. A larger value may be applied only while every
 // L2CPU on the chip is held in reset; a smaller value requires an ASIC reset.
-// RequireExact admits only an equal value, reporting a reset-held increase as
-// PreparedShapeRequired instead of applying it. Unknown policies are rejected.
 LimShapeTransition classify_lim_shape_transition(
-    uint32_t current_wayenable,
-    uint32_t target_wayenable,
-    bool all_tiles_held_in_reset,
-    LimShapeChangePolicy policy = LimShapeChangePolicy::ApplyWhileReset);
+    uint32_t current_wayenable, uint32_t target_wayenable, bool all_tiles_held_in_reset);
 
 // An unclocked or unreachable L2CPU answers reads with all ones. Both widths
 // occur: 32-bit for CSRs, 64-bit for the LIM mailboxes assembled from a block

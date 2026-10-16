@@ -116,11 +116,7 @@ LimShapeCheck validate_lim_shape(LimShape shape, uint64_t required_backed_bytes)
 }
 
 LimShapeTransition classify_lim_shape_transition(
-    uint32_t current_wayenable, uint32_t target_wayenable, bool all_tiles_held_in_reset, LimShapeChangePolicy policy) {
-    if (policy != LimShapeChangePolicy::ApplyWhileReset && policy != LimShapeChangePolicy::RequireExact) {
-        return LimShapeTransition::InvalidPolicy;
-    }
-
+    uint32_t current_wayenable, uint32_t target_wayenable, bool all_tiles_held_in_reset) {
     const uint32_t current = current_wayenable & 0xFu;
     if (current == target_wayenable) {
         return LimShapeTransition::AlreadyConfigured;
@@ -128,8 +124,7 @@ LimShapeTransition classify_lim_shape_transition(
     if (current > target_wayenable || !all_tiles_held_in_reset) {
         return LimShapeTransition::ResetRequired;
     }
-    return policy == LimShapeChangePolicy::RequireExact ? LimShapeTransition::PreparedShapeRequired
-                                                        : LimShapeTransition::ApplyWhileReset;
+    return LimShapeTransition::ApplyWhileReset;
 }
 
 const char* to_string(LimEccState state) { return enum_name(state, kLimEccStateNames); }

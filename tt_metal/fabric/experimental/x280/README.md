@@ -249,15 +249,6 @@ WayEnable is increase-only: a request that would expand LIM returns
 unsupported because the runtime does not own caller LIM allocations and
 resident idle has no protocol to quiesce every hart and cache master.
 
-`RuntimeOpenConfig::shape_change_policy` defaults to
-`LimShapeChangePolicy::ApplyWhileReset`, preserving this behavior.
-`RequireExact` instead requires the observed shape to match `lim_shape` on every
-selected chip before ECC priming or shape application. Pair it with
-`RequirePrepared` when opening hardware that must already have the requested
-partition; a mismatch is refused rather than provisioned by the benchmark.
-Unreadable shape observations are refused without attempting PLL recovery.
-This admission policy does not itself allocate or pin cached Zero Device storage.
-
 ### Prepared pipeline inputs (X280 only)
 
 The X280 pipeline benchmarks share a fixed 4288-byte cached Zero Device region at

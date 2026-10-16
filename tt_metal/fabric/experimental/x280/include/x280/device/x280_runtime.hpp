@@ -84,10 +84,6 @@ struct RuntimeOpenConfig {
     // Applied only after all selected chips preflight successfully and only
     // while every affected L2CPU remains held in reset.
     LimShape lim_shape{};
-    // RequireExact returns before clock recovery, ECC priming, or shape
-    // application when the observed shape is unreadable or differs from
-    // lim_shape.
-    LimShapeChangePolicy shape_change_policy = LimShapeChangePolicy::ApplyWhileReset;
     // Selected component memory layout profile. Default is Legacy.
     LimLayout lim_layout = LimLayout::Legacy;
 };
