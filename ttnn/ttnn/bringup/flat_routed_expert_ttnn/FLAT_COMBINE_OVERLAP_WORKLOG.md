@@ -710,3 +710,14 @@ Queued back to back, slowest chip, median, all exact (1.74-1.75e-3):
 | Zipf spread 1.2 | 2731 | 2588 | 1029 | 3056 | 2667 | 1.031 |
 | Zipf packed 1.2 | 5873 | 5747 | 2336 | 6004 | 5888 | 1.024 |
 Open: the remaining 3-5% (uniform ~110 us) with no combine DRAM traffic left.
+
+### Gate weights (2026-10-16)
+Each row's gate weight (bf16) rides in the hand-off table (destination word, upper half) -> the column-0 writer puts it
+in the row's trailer (word 1) -> through the fabric with the row -> the accumulator reader puts it into a weight CB
+(element 0) -> the compute multiplies (mul_tiles_bcast_scalar, HiFi4, fp32 DEST) before the packer L1 accumulation.
+Test: softmax gates over each token's 16 experts, bf16; reference = sum of bf16(w) * y in fp32. Queued, slowest chip:
+| routing | fused unweighted | fused weighted | worst token |
+| uniform | 2432 | 2427 | 1.73e-3 |
+| Zipf spread 1.2 | 2667 | 2671 | 1.75e-3 |
+| Zipf packed 1.2 | 5888 | 5896 | 1.75e-3 |
+No measurable cost (the accumulators had headroom).

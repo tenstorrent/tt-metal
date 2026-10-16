@@ -44,7 +44,8 @@ struct SeYRmWriter {
     // destination numbers its rows in the order the writers produce them (all writers walk the same schedule, so they
     // agree), grants slots (cumulative grant[d] in this core's words, +gbase[d] at this call's start), and takes a
     // row once every writer's landed counter there covers it (+1 per row, sent when a row tile's writes are acked).
-    // The column-0 writer also writes each row's 32-byte trailer (header word, arrival flags). Args at SE_Y_L1:
+    // The column-0 writer also writes each row's 32-byte trailer (header word, gate weight, arrival flags); a table
+    // row is (destination | gate weight bf16 << 16, header word). Args at SE_Y_L1:
     // nd, slot stride, table address, words address (grant[32], gbase[32], table page, trailer stages), writer index,
     // 3 spare, then per destination: noc x, noc y, slot base, slots, landed counter array address.
     static constexpr uint32_t L1_MAXD = 32;
@@ -136,7 +137,7 @@ struct SeYRmWriter {
             }
             const uint32_t stage = words + 512 + (issued % rows) * 32 * 32;  // trailers in flight (column-0 writer)
             for (uint32_t i = 0; i < n; ++i) {
-                const uint32_t d = ent[2 * i] & 0xFF, hdr = ent[2 * i + 1];
+                const uint32_t d = ent[2 * i] & 0xFF, hdr = ent[2 * i + 1], wbits = ent[2 * i] >> 16;
                 const uint32_t slot = dbase[d] + (cnt[d] % dq[d]) * islot;
                 ++cnt[d];
                 noc_async_write_one_packet_with_trid(
@@ -150,7 +151,8 @@ struct SeYRmWriter {
                 if (col_off == 0) {
                     volatile tt_l1_ptr uint32_t* tr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + i * 32);
                     tr[0] = hdr;
-                    tr[1] = tr[2] = tr[4] = tr[5] = tr[6] = 0;
+                    tr[1] = wbits;  // the row's gate weight (bf16 bits)
+                    tr[2] = tr[4] = tr[5] = tr[6] = 0;
                     tr[3] = 1;
                     tr[7] = 1;
                     noc_async_write_one_packet_with_trid(

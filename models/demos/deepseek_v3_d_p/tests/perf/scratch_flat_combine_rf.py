@@ -91,6 +91,11 @@ def _routing(name, seed=0):
     experts, rows per chip (padded), the busiest link's rows."""
     g = torch.Generator().manual_seed(seed)
     ids = _ids(name, g)
+    # gate weights per (home, token, k): softmax over the token's experts, bf16 (FC_GATES=0: all 1)
+    gates = torch.softmax(torch.randn(N, S, K, generator=g), -1).to(torch.bfloat16)
+    if os.environ.get("FC_GATES", "1") == "0":
+        gates = torch.ones(N, S, K, dtype=torch.bfloat16)
+    gbits = gates.view(torch.int16).to(torch.int64) & 0xFFFF
     chips = [(r, c) for r in range(R) for c in range(C)]
     pend = {ch: [] for ch in chips}
     load = {}
@@ -100,7 +105,7 @@ def _routing(name, seed=0):
                 e = int(ids[o, t, k])
                 src = chips[e // EPC]
                 link = (t + k) % L
-                pend[src].append((e % EPC, o, t, link))
+                pend[src].append((e % EPC, o, t, link, int(gbits[o, t, k])))
                 for hc, d in route(src, chips[o], R, C, False, False, link):
                     load[(hc, d, link)] = load.get((hc, d, link), 0) + 1
     rows, counts, regions, n_rows = (
@@ -124,8 +129,8 @@ def _routing(name, seed=0):
         n_rows = max(n_rows, acc)
         seen = [0] * EPC
         rows[ch] = []
-        for e, o, t, link in lst:
-            rows[ch].append((reg[e] + seen[e], chips[o], t, link, e))
+        for e, o, t, link, wb in lst:
+            rows[ch].append((reg[e] + seen[e], chips[o], t, link, e, wb))
             seen[e] += 1
         counts[ci, 0, ci * EPC : (ci + 1) * EPC] = torch.tensor(cnt, dtype=torch.int32)
         regions[ci, 0, ci * EPC : (ci + 1) * EPC] = torch.tensor(reg, dtype=torch.int32)
@@ -278,8 +283,9 @@ def test_flat_combine_rf(mesh_device, device_params, routing):
     chips = [(r_, c_) for r_ in range(R) for c_ in range(C)]
     ref = torch.zeros(N, S, H)
     for ci, ch in enumerate(chips):
-        for yrow, home, t, _, _ in rows[ch]:
-            ref[chips.index(home), t] += ys[ci][yrow]
+        for yrow, home, t, _, _, wb in rows[ch]:
+            w = torch.tensor([wb], dtype=torch.int32).to(torch.int16).view(torch.bfloat16).float()[0] if L1 else 1.0
+            ref[chips.index(home), t] += w * ys[ci][yrow]
     fin = torch.isfinite(ref).all(2)
     worst = 0.0
     for o in range(N):

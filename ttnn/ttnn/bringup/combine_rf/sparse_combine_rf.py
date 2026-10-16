@@ -29,7 +29,7 @@ from .fabric_all_gather_py import NOC0, NOC1, _SEM_CACHE
 from .sparse_all_gather_2d import DIRS, OPP, mesh_plan, place_ports
 from .sparse_combine_l1 import _ACC_COMPUTE, _ACC_WRITER, _PORT_READER, TILE, route
 
-CB_INJ, CB_ROW, CB_META, CB_TAB, CB_ACC, CB_OUT = 0, 1, 2, 3, 4, 5
+CB_INJ, CB_ROW, CB_META, CB_TAB, CB_ACC, CB_OUT, CB_W = 0, 1, 2, 3, 4, 5, 6
 PIECE_MAX = int(
     os.environ.get("SPC_PIECE", "7168")
 )  # row bytes per fabric packet at most: wider rows go as P equal pieces (64-byte multiples), each
@@ -204,6 +204,36 @@ void kernel_main() {
     }
 }
 """
+
+# the weighted accumulate: each row times its gate weight (HiFi4, scalar broadcast from the weight CB's element 0) into
+# DEST (fp32), packed onto the token's fp32 sum with packer L1 accumulation (scratch_l1acc_precision.py: exact)
+_ACC_COMPUTE_W = (
+    _ACC_COMPUTE.replace(
+        '#include "api/compute/reconfig_data_format.h"',
+        '#include "api/compute/reconfig_data_format.h"\n#include "api/compute/bcast.h"',
+    )
+    .replace(
+        "    constexpr uint32_t MAXT = get_compile_time_arg_val(5);",
+        "    constexpr uint32_t MAXT = get_compile_time_arg_val(5);\n    constexpr uint32_t cb_w = get_compile_time_arg_val(6);",
+    )
+    .replace(
+        "    compute_kernel_hw_startup(cb_row, cb_row, cb_acc);\n    copy_init(cb_row);",
+        "    compute_kernel_hw_startup(cb_row, cb_w, cb_acc);\n    mul_bcast_scalar_init(cb_row, cb_w);",
+    )
+    .replace(
+        "        cb_wait_front(cb_row, NT);\n        if constexpr (ABL & 1) {  // ablation: no accumulation\n            cb_pop_front(cb_row, NT);",
+        "        cb_wait_front(cb_row, NT);\n        cb_wait_front(cb_w, 1);\n        if constexpr (ABL & 1) {  // ablation: no accumulation\n            cb_pop_front(cb_row, NT);\n            cb_pop_front(cb_w, 1);",
+    )
+    .replace(
+        "            for (uint32_t j = 0; j < nj; ++j) copy_tile(cb_row, j0 + j, j);",
+        "            for (uint32_t j = 0; j < nj; ++j) mul_tiles_bcast_scalar(cb_row, cb_w, j0 + j, 0, j);",
+    )
+    .replace(
+        "        seen[t] = 1;\n        cb_pop_front(cb_row, NT);",
+        "        seen[t] = 1;\n        cb_pop_front(cb_row, NT);\n        cb_pop_front(cb_w, 1);",
+    )
+)
+assert _ACC_COMPUTE_W.count("cb_pop_front(cb_w, 1)") == 2 and "mul_tiles_bcast_scalar" in _ACC_COMPUTE_W
 
 # per-core L1 area: counters (cumulative), headers, then the accumulators' rings
 CRED, USED, RET, MISC, HDRS, RINGS = 0, 1024, 2048, 4096, 5120, 22528
@@ -451,7 +481,16 @@ void kernel_main() {
     constexpr uint32_t TCH = 256;
     volatile tt_l1_ptr uint32_t* misc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + MISC);
     volatile tt_l1_ptr uint32_t* taken = misc + 64;  // per ring, cumulative
+    constexpr uint32_t WGT = __L1__;  // (gate weights: with the L1 hand-off, from each row's trailer)
+    auto push_w = [&](uint32_t wb) {
+        if constexpr (WGT) {
+            cb_reserve_back(__CBW__, 1);
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(__CBW__))[0] = wb & 0xFFFF;  // element 0
+            cb_push_back(__CBW__, 1);
+        }
+    };
     auto push = [&](uint64_t src, uint32_t t) {
+        push_w(0x3F80);  // (1.0)
         cb_reserve_back(cb_row, NT);
         cb_reserve_back(cb_meta, 1);
         if constexpr ((ABL & 2) == 0) noc_async_read(src, get_write_ptr(cb_row), row_bytes);
@@ -461,6 +500,7 @@ void kernel_main() {
         cb_push_back(cb_meta, 1);
     };
     auto push_pieces = [&](uint32_t slot, uint32_t t) {  // a ring row: its pieces back to back into the CB
+        push_w(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot + LASTPB)[1]);
         cb_reserve_back(cb_row, NT);
         cb_reserve_back(cb_meta, 1);
         if constexpr ((ABL & 2) == 0) {
@@ -734,7 +774,8 @@ def sparse_combine_rf_prepare(
                 yrow, home, t, l = row[:4]
                 hdr = idx(home) | (t << 8) | ((row[4] if len(row) > 4 else 0) << 24)
                 dd = len(port_ids[ch]) + t % A if home == ch else port_ids[ch][(ch, fh(ch, home), l)]
-                lt[ch[0], ch[1], yrow // 32, 2 * (yrow % 32)] = dd
+                wb = row[5] if len(row) > 5 else 0x3F80  # (gate weight, bf16 bits; 1.0 without)
+                lt[ch[0], ch[1], yrow // 32, 2 * (yrow % 32)] = dd | (wb << 16)
                 lt[ch[0], ch[1], yrow // 32, 2 * (yrow % 32) + 1] = hdr
         l1_tab = ttnn.from_torch(
             lt.to(torch.int32).reshape(R, C, n_tiles, 64),
@@ -768,6 +809,7 @@ def sparse_combine_rf_prepare(
         "__TPROF__": os.environ.get("SPC_TPROF", "0"),
         "__L1__": str(int(l1 is not None)),
         "__CBTAB__": str(CB_TAB),
+        "__CBW__": str(CB_W),
         "__NOYREAD__": os.environ.get("SPC_NOYREAD", "0"),  # (probe: rows not read from y: garbage)
         "__PD__": str(PD),
         "__PS__": str(PS),
@@ -794,7 +836,7 @@ def sparse_combine_rf_prepare(
         ("pr1", _RF_READER_L1),
         ("ps", _RF_SENDER),
         ("ar", _RF_ACC_READER),
-        ("ac", _ACC_COMPUTE),
+        ("ac", _ACC_COMPUTE_W if l1 is not None else _ACC_COMPUTE),
         ("aw", _ACC_WRITER),
     ):
         for k, v in subs.items():
@@ -830,7 +872,7 @@ def sparse_combine_rf_prepare(
                 (CB_META, aset, 2 * 32, ttnn.uint32, 32),
                 (CB_ACC, aset, MAXT * NT * 4096, ttnn.float32, 4096),
                 (CB_OUT, aset, 2 * NT * TILE, ttnn.bfloat16, TILE),
-            ]
+            ] + ([(CB_W, aset, 2 * TILE, ttnn.bfloat16, TILE)] if l1 is not None else [])
             cbs = []  # (assigned at the end: program.cbs is a copy through the binding, appends to it are lost)
             if arena is None:
                 for cb, crs, total, fmt, page in specs:
@@ -985,9 +1027,9 @@ def sparse_combine_rf_prepare(
                     kernel_source=srcs["ac"],
                     source_type=st,
                     core_ranges=aset,
-                    compile_time_args=[CB_ROW, CB_META, CB_ACC, CB_OUT, NT, MAXT],
+                    compile_time_args=[CB_ROW, CB_META, CB_ACC, CB_OUT, NT, MAXT] + ([CB_W] if l1 is not None else []),
                     runtime_args=ac_rt,
-                    config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=True),
+                    config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
                 ),
                 ttnn.KernelDescriptor(
                     kernel_source=srcs["aw"],
