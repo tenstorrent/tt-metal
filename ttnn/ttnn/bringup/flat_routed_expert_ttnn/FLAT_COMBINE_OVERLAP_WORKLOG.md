@@ -736,3 +736,26 @@ marker). Overlap test FC_DEVPLAN=1 (with FC_L1): every per-call table from the d
 | Zipf packed 1.2 | 5896 | 5889 | 2.18e-3 |
 (Rows within an expert are now in (home, token) order; spread +35 us.) Planner: 1.45-1.66 ms on one core (~24 cycles per
 routing entry, two passes over 40960) -- must be split over cores; it can overlap the shared expert.
+
+### Planner: parallel + optimized (2026-10-16) — combine_plan.py `_PLANNER_MC2` (cores=..., default 32 in the tests)
+Per chip, M cores: (1) core p counting-sorts routing chunk p's local-expert entries by expert (count pass over id pairs,
+four loads in flight, plus a compact list of the local entries; then place from the list), each entry already its
+final table words; sends counts + bucket prefix to every core. (2) the owner of expert e (core e % M) totals it and
+each chunk's first row and sends that to every core (second round); core p takes 1/M of the row tiles and pulls the
+matching entry slices from each chunk's bucket (every read issued, one barrier, then copied): a hot expert is split
+over all cores. (3) rows to DRAM; then this chip's home-token counts (core q owns accumulators q, q + M, ...: n_local /
+want written whole to core 0's plan; n_inj / n_ret as atomics); core 0 writes counts / regions / plan.
+Bit-exact vs the host model on all 8 chips, 3 routings, after every step. Slowest chip, us:
+| version | uniform | Zipf spread 1.2 | Zipf packed 1.2 |
+| one core | 1451 | 1466 | 1655 |
+| 8 cores, expert-group placement | 215 | 452 | 982 |
+| v2 row-range placement, 16 cores | 155 | 189 | 298 |
+| + compact local list, owner-computed home counts | 112 | 154 | 290 |
+| + all slice reads before one barrier | 94 | 121 | 258 |
+| + bucket prefix sent with the counts | 75 | 81 | 183 |
+| + per-expert owner totals (2nd round), home counts in registers | 69 | 80 | 183 |
+| 32 cores | 52 | 59 | 117 |
+| + home counts after placement, id pairs | 51 | 52 | 113 |
+Probe that did not help: multicast all-to-all exchanges (every core multicasting into one rectangle at once): 187 us.
+Phases now (32 cores, uniform): read 5, sort 14, counts exchange 2, totals + placement 14-19, rows + home 6, core 0
+final 4. With the planner on 32 cores, fused (device tables): uniform 2425, spread 2714, packed 5896 us, exact.

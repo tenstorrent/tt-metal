@@ -17,6 +17,8 @@ chip's first-hop port toward home (Y first, then X; port_lut[direction * 2 + lin
 this chip) goes to accumulator t % A (destination id P + t % A). The same rules as sparse_combine_rf_prepare's host
 tables (plan_reference below is the host model)."""
 
+import os
+
 import torch
 
 import ttnn
@@ -139,6 +141,607 @@ void kernel_main() {
 """
 
 
+# Multi-core planner: M cores (core p): phase 1 each scans routing chunk p (CH entries) and buckets its local-expert
+# entries by expert group (GS experts per group, group q placed by core q) into compact lists (4 bytes: chunk index |
+# expert in group << 13 | gate weight bf16 << 16), counts per expert, and a 1/M slice of this chip's home tokens' rows
+# (n_local / want / n_ret partials); lists + counts go to each group's core, partials to core 0. Phase 2 (once every
+# chunk's list landed) core q totals the counts (regions), places its group's rows in scan order (chunk by chunk) and
+# writes its row range (32-row aligned) of the token index and the table straight to DRAM; core 0 sums the partials and
+# the n_inj counts and writes counts / regions / plan.
+_PLANNER_MC = r"""
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+constexpr uint32_t ME = get_compile_time_arg_val(0), R = get_compile_time_arg_val(1), C = get_compile_time_arg_val(2);
+constexpr uint32_t S = get_compile_time_arg_val(3), K = get_compile_time_arg_val(4), EPC = get_compile_time_arg_val(5);
+constexpr uint32_t NG = get_compile_time_arg_val(6), A = get_compile_time_arg_val(7), L = get_compile_time_arg_val(8);
+constexpr uint32_t P = get_compile_time_arg_val(9), ROWS_CAP = get_compile_time_arg_val(10);
+constexpr uint32_t M = get_compile_time_arg_val(11), CH = get_compile_time_arg_val(12), GS = get_compile_time_arg_val(13);
+constexpr uint32_t HS = get_compile_time_arg_val(14);
+constexpr uint32_t N = R * C, T = N * S * K, SK = S * K;
+constexpr uint32_t al64(uint32_t v) { return (v + 63) / 64 * 64; }
+// L1 layout (the same on every core)
+constexpr uint32_t O_IDS = 0, O_WTS = O_IDS + al64(CH * 2), O_HOME = O_WTS + al64(CH * 2);
+constexpr uint32_t O_OUT = O_HOME + al64(HS * 2);                 // M lists x CH entries
+constexpr uint32_t HDR = al64((1 + EPC) * 4);                     // a list header: length, counts[EPC]
+constexpr uint32_t O_HDR = O_OUT + M * CH * 4;                    // M outgoing headers
+constexpr uint32_t PART = al64(544 * 4);                          // a home partial (plan words 0..544)
+constexpr uint32_t O_PART = O_HDR + M * HDR;
+constexpr uint32_t O_IN = O_PART + PART;                          // M incoming lists
+constexpr uint32_t O_HIN = O_IN + M * CH * 4;                     // M incoming headers
+constexpr uint32_t O_PIN = O_HIN + M * HDR;                       // core 0: M partials
+constexpr uint32_t O_NIN = O_PIN + M * PART;                      // core 0: M n_inj (64 B each)
+constexpr uint32_t O_NINJ = O_NIN + M * 64;                       // this core's n_inj
+constexpr uint32_t O_TIDX = O_NINJ + 64, O_TAB = O_TIDX + al64(ROWS_CAP * 4);
+constexpr uint32_t O_PLAN = O_TAB + al64(ROWS_CAP * 8), O_CNT = O_PLAN + 4096, O_REG = O_CNT + al64(NG * 4);
+constexpr uint32_t O_END = O_REG + al64(NG * 4);
+FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {
+    const uint32_t sr = src / C, sc = src % C, dr = dst / C, dc = dst % C;
+    if (sr != dr) return dr > sr ? 2 : 3;
+    return dc > sc ? 0 : 1;
+}
+void kernel_main() {
+    size_t a = 0;
+    const uint32_t ids_addr = get_arg_val<uint32_t>(a++), w_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t cnt_addr = get_arg_val<uint32_t>(a++), reg_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t tidx_addr = get_arg_val<uint32_t>(a++), tab_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t plan_addr = get_arg_val<uint32_t>(a++);
+    uint32_t lut[8];
+    for (uint32_t i = 0; i < 8; ++i) lut[i] = get_arg_val<uint32_t>(a++);
+    const uint32_t p = get_arg_val<uint32_t>(a++);
+    uint32_t px[M], py[M];
+    for (uint32_t i = 0; i < M; ++i) {
+        px[i] = get_arg_val<uint32_t>(a++);
+        py[i] = get_arg_val<uint32_t>(a++);
+    }
+    const uint32_t tdbg = get_arg_val<uint32_t>(a++);
+    uint32_t ts[16];
+    ts[0] = get_timestamp_32b();
+    cb_reserve_back(0, 1);
+    const uint32_t B = (get_write_ptr(0) + 63) & ~63u;
+    const uint32_t sem_l = get_semaphore(0), sem_c = get_semaphore(1);
+    // in: my routing chunk and my slice of my home tokens' rows
+    const uint32_t c0 = p * CH, chl = c0 >= T ? 0 : (T - c0 < CH ? T - c0 : CH);
+    const InterleavedAddrGen<true> ids_g = {.bank_base_address = ids_addr, .page_size = T * 2};
+    const InterleavedAddrGen<true> w_g = {.bank_base_address = w_addr, .page_size = T * 2};
+    if (chl) {
+        noc_async_read(get_noc_addr(0, ids_g) + c0 * 2, B + O_IDS, al64(chl * 2));
+        noc_async_read(get_noc_addr(0, w_g) + c0 * 2, B + O_WTS, al64(chl * 2));
+    }
+    const uint32_t h0 = ME * SK + p * HS;
+    noc_async_read(get_noc_addr(0, ids_g) + h0 * 2, B + O_HOME, al64(HS * 2));
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    ts[1] = get_timestamp_32b();
+    const uint16_t* ids = reinterpret_cast<const uint16_t*>(B + O_IDS);
+    const uint16_t* wts = reinterpret_cast<const uint16_t*>(B + O_WTS);
+    const uint16_t* hid = reinterpret_cast<const uint16_t*>(B + O_HOME);
+    uint32_t* out = reinterpret_cast<uint32_t*>(B + O_OUT);
+    constexpr uint32_t E0 = ME * EPC;
+    // phase 1: bucket my chunk's local-expert entries by group
+    uint32_t len[M], cnt[EPC];
+    for (uint32_t q = 0; q < M; ++q) len[q] = 0;
+    for (uint32_t e = 0; e < EPC; ++e) cnt[e] = 0;
+    for (uint32_t ci = 0; ci < chl; ++ci) {
+        const uint32_t e = static_cast<uint32_t>(ids[ci]) - E0;
+        if (e < EPC) {
+            const uint32_t q = e / GS;
+            out[q * CH + len[q]++] = ci | ((e - q * GS) << 13) | (static_cast<uint32_t>(wts[ci]) << 16);
+            ++cnt[e];
+        }
+    }
+    ts[2] = get_timestamp_32b();
+    // my slice of my home tokens' rows: n_local / want / n_ret partials (plan words)
+    uint32_t* part = reinterpret_cast<uint32_t*>(B + O_PART);
+    for (uint32_t i = 0; i < 544; ++i) part[i] = 0;
+    for (uint32_t hi = 0; hi < HS; ++hi) {
+        const uint32_t idx = p * HS + hi, t = idx / K, k = idx % K, src = hid[hi] / EPC, l = (t + k) % L;
+        if (src == ME) {
+            ++part[16 + t % A];
+        } else {
+            ++part[32 + (t % A) * 32 + src * L + l];
+            ++part[8 + lut[first_hop(ME, src) * 2 + l]];
+        }
+    }
+    ts[3] = get_timestamp_32b();
+    // send: each group's list + header to its core, the partial to core 0
+    for (uint32_t q = 0; q < M; ++q) {
+        uint32_t* h = reinterpret_cast<uint32_t*>(B + O_HDR + q * HDR);
+        h[0] = len[q];
+        for (uint32_t e = 0; e < EPC; ++e) h[1 + e] = cnt[e];
+        if (len[q]) {
+            noc_async_write(B + O_OUT + q * CH * 4, get_noc_addr(px[q], py[q], B + O_IN + p * CH * 4), (len[q] * 4 + 15) & ~15u);
+        }
+        noc_async_write(B + O_HDR + q * HDR, get_noc_addr(px[q], py[q], B + O_HIN + p * HDR), HDR);
+    }
+    noc_async_write(B + O_PART, get_noc_addr(px[0], py[0], B + O_PIN + p * PART), PART);
+    noc_async_write_barrier();
+    for (uint32_t q = 0; q < M; ++q) noc_semaphore_inc(get_noc_addr(px[q], py[q], sem_l), 1);
+    noc_semaphore_inc(get_noc_addr(px[0], py[0], sem_c), 1);
+    // phase 2: totals, regions; place my group's rows in scan order
+    ts[4] = get_timestamp_32b();
+    noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_l), M);
+    invalidate_l1_cache();
+    ts[5] = get_timestamp_32b();
+    uint32_t reg[EPC], tot[EPC], off = 0;
+    for (uint32_t e = 0; e < EPC; ++e) {
+        uint32_t s_ = 0;
+        for (uint32_t j = 0; j < M; ++j) s_ += reinterpret_cast<const uint32_t*>(B + O_HIN + j * HDR)[1 + e];
+        tot[e] = s_;
+        reg[e] = off;
+        off += (s_ + 31) / 32 * 32;
+    }
+    const uint32_t g0 = p * GS, g1 = (p + 1) * GS < EPC ? (p + 1) * GS : EPC;
+    uint32_t* ninj = reinterpret_cast<uint32_t*>(B + O_NINJ);
+    for (uint32_t i = 0; i < 16; ++i) ninj[i] = 0;
+    if (g0 < g1) {
+        const uint32_t r0 = reg[g0], r1 = reg[g1 - 1] + (tot[g1 - 1] + 31) / 32 * 32;
+        uint32_t* tidx = reinterpret_cast<uint32_t*>(B + O_TIDX);
+        uint32_t* tab = reinterpret_cast<uint32_t*>(B + O_TAB);
+        for (uint32_t r = 0; r < r1 - r0; ++r) tidx[r] = 0;
+        uint32_t fill[GS];
+        for (uint32_t e = g0; e < g1; ++e) {
+            fill[e - g0] = reg[e] - r0;
+            for (uint32_t r = reg[e] + tot[e]; r < reg[e] + (tot[e] + 31) / 32 * 32; ++r) {  // (padding rows: zero)
+                tab[2 * (r - r0)] = tab[2 * (r - r0) + 1] = 0;
+            }
+        }
+        for (uint32_t j = 0; j < M; ++j) {
+            const uint32_t n = reinterpret_cast<const uint32_t*>(B + O_HIN + j * HDR)[0];
+            const uint32_t* lst = reinterpret_cast<const uint32_t*>(B + O_IN + j * CH * 4);
+            for (uint32_t x = 0; x < n; ++x) {
+                const uint32_t v = lst[x], i = j * CH + (v & 0x1FFF), eg = (v >> 13) & 7, w = v >> 16;
+                const uint32_t o = i / SK, rem = i - o * SK, t = rem / K, k = rem - t * K;
+                const uint32_t r = fill[eg]++;
+                if (r0 + r >= ROWS_CAP) continue;
+                tidx[r] = o * S + t;
+                uint32_t dest;
+                if (o == ME) {
+                    dest = P + t % A;
+                } else {
+                    dest = lut[first_hop(ME, o) * 2 + (t + k) % L];
+                    ++ninj[dest];
+                }
+                tab[2 * r] = dest | (w << 16);
+                tab[2 * r + 1] = o | (t << 8) | ((g0 + eg) << 24);
+            }
+        }
+        ts[6] = get_timestamp_32b();
+        const uint32_t w1 = r1 < ROWS_CAP ? r1 : ROWS_CAP;
+        if (w1 > r0) {
+            const InterleavedAddrGen<true> ig = {.bank_base_address = tidx_addr, .page_size = ROWS_CAP * 4};
+            const InterleavedAddrGen<true> tg = {.bank_base_address = tab_addr, .page_size = 256};
+            noc_async_write(B + O_TIDX, get_noc_addr(0, ig) + r0 * 4, (w1 - r0) * 4);
+            for (uint32_t pg = r0 / 32; pg < w1 / 32; ++pg) {
+                noc_async_write(B + O_TAB + (pg - r0 / 32) * 256, get_noc_addr(pg, tg), 256);
+            }
+        }
+    }
+    noc_async_write(B + O_NINJ, get_noc_addr(px[0], py[0], B + O_NIN + p * 64), 64);
+    noc_async_write_barrier();
+    ts[7] = get_timestamp_32b();
+    noc_semaphore_inc(get_noc_addr(px[0], py[0], sem_c), 1);
+    // phase 3 (core 0): counts, regions, plan
+    if (p == 0) {
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_c), 2 * M);
+        invalidate_l1_cache();
+        uint32_t* plan = reinterpret_cast<uint32_t*>(B + O_PLAN);
+        uint32_t* cg_ = reinterpret_cast<uint32_t*>(B + O_CNT);
+        uint32_t* rg_ = reinterpret_cast<uint32_t*>(B + O_REG);
+        for (uint32_t i = 0; i < 1024; ++i) plan[i] = 0;
+        for (uint32_t j = 0; j < M; ++j) {
+            const uint32_t* pa = reinterpret_cast<const uint32_t*>(B + O_PIN + j * PART);
+            for (uint32_t i = 8; i < 544; ++i) plan[i] += pa[i];
+            const uint32_t* ni = reinterpret_cast<const uint32_t*>(B + O_NIN + j * 64);
+            for (uint32_t i = 0; i < 8; ++i) plan[i] += ni[i];
+        }
+        plan[600] = off;
+        plan[601] = off > ROWS_CAP ? 1 : 0;
+        for (uint32_t i = 0; i < NG; ++i) cg_[i] = rg_[i] = 0;
+        for (uint32_t e = 0; e < EPC; ++e) {
+            cg_[E0 + e] = tot[e];
+            rg_[E0 + e] = reg[e];
+        }
+        const InterleavedAddrGen<true> cg = {.bank_base_address = cnt_addr, .page_size = NG * 4};
+        const InterleavedAddrGen<true> rg = {.bank_base_address = reg_addr, .page_size = NG * 4};
+        const InterleavedAddrGen<true> pg = {.bank_base_address = plan_addr, .page_size = 4096};
+        noc_async_write(B + O_CNT, get_noc_addr(0, cg), NG * 4);
+        noc_async_write(B + O_REG, get_noc_addr(0, rg), NG * 4);
+        noc_async_write(B + O_PLAN, get_noc_addr(0, pg), 4096);
+        noc_async_write_barrier();
+    }
+    ts[8] = get_timestamp_32b();
+    if (tdbg) {  // (phase timestamps: start, read, scan, home, sent, lists in, placed, rows out, end)
+        uint32_t* d = reinterpret_cast<uint32_t*>(B + O_NINJ);
+        for (uint32_t i = 0; i < 9; ++i) d[i] = ts[i];
+        const InterleavedAddrGen<true> dg = {.bank_base_address = tdbg, .page_size = 64};
+        noc_async_write(B + O_NINJ, get_noc_addr(p, dg), 64);
+        noc_async_write_barrier();
+    }
+}
+"""
+
+
+def _mc_l1_bytes(M, CH, HS, EPC, NG, rows_cap):
+    al = lambda v: (v + 63) // 64 * 64  # noqa: E731
+    HDR, PART = al((1 + EPC) * 4), al(544 * 4)
+    return (
+        2 * al(CH * 2)
+        + al(HS * 2)
+        + M * CH * 4
+        + M * HDR
+        + PART
+        + M * CH * 4
+        + M * HDR
+        + M * PART
+        + M * 64
+        + 64
+        + al(rows_cap * 4)
+        + al(rows_cap * 8)
+        + 4096
+        + 2 * al(NG * 4)
+        + 64
+    )
+
+
+# Multi-core planner v2 (M cores, core p): (1) counting-sort my routing chunk's local-expert entries by expert into a
+# bucket, each entry already its final table words (destination | gate weight << 16, header), plus n_inj partials;
+# send my per-expert counts to every core. (2) every core totals the counts (regions) and knows every chunk's base row per
+# expert; core p takes 1/M of the row tiles and pulls exactly the matching entry slices from each chunk's bucket (NoC
+# reads from that core's L1: a hot expert is split over all cores), writes its rows of the token index / table to DRAM.
+# (3) n_inj and this chip's home-token counts (n_local / want / n_ret, a 1/M slice per core) go to core 0's plan as
+# atomic increments; core 0 writes counts / regions / plan.
+_PLANNER_MC2 = r"""
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+constexpr uint32_t ME = get_compile_time_arg_val(0), R = get_compile_time_arg_val(1), C = get_compile_time_arg_val(2);
+constexpr uint32_t S = get_compile_time_arg_val(3), K = get_compile_time_arg_val(4), EPC = get_compile_time_arg_val(5);
+constexpr uint32_t NG = get_compile_time_arg_val(6), A = get_compile_time_arg_val(7), L = get_compile_time_arg_val(8);
+constexpr uint32_t P = get_compile_time_arg_val(9), ROWS_CAP = get_compile_time_arg_val(10);
+constexpr uint32_t M = get_compile_time_arg_val(11), CH = get_compile_time_arg_val(12), HS = get_compile_time_arg_val(13);
+constexpr uint32_t N = R * C, T = N * S * K, SK = S * K;
+constexpr uint32_t al64(uint32_t v) { return (v + 63) / 64 * 64; }
+constexpr uint32_t CNT = al64(2 * EPC * 4);  // a chunk's counts per expert, then its bucket prefix per expert
+constexpr uint32_t O_IDS = 0, O_WTS = O_IDS + al64(CH * 2), O_HOME = O_WTS + al64(CH * 2);
+constexpr uint32_t O_LST = O_HOME + al64(SK * 2);           // my local entries: chunk index << 8 | expert
+constexpr uint32_t O_BUCK = O_LST + al64(CH * 4);           // CH entries x 8 bytes, sorted by expert
+constexpr uint32_t O_MYC = O_BUCK + al64(CH * 8);           // my counts (sent to everyone)
+constexpr uint32_t O_CIN = O_MYC + CNT;                     // M x counts
+constexpr uint32_t STG = get_compile_time_arg_val(14);      // slice staging bytes (all of a core's slices at once)
+constexpr uint32_t XP = al64((M + 2) * 4);                  // per expert: total, region, then each chunk's first row
+constexpr uint32_t O_XP = O_CIN + M * CNT;                  // EPC x XP: filled by the experts' owner cores
+constexpr uint32_t O_STG = O_XP + EPC * XP;
+constexpr uint32_t O_PART = O_STG + al64(STG);              // home partial (plan words 0..544)
+constexpr uint32_t O_TIDX = O_PART + al64(544 * 4), O_TAB = O_TIDX + al64(ROWS_CAP * 4);
+constexpr uint32_t O_PLAN = O_TAB + al64(ROWS_CAP * 8), O_CNT = O_PLAN + 4096, O_REG = O_CNT + al64(NG * 4);
+constexpr uint32_t O_DBG = O_REG + al64(NG * 4);  // 64 bytes of timestamps, then 512 slice records
+FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {
+    const uint32_t sr = src / C, sc = src % C, dr = dst / C, dc = dst % C;
+    if (sr != dr) return dr > sr ? 2 : 3;
+    return dc > sc ? 0 : 1;
+}
+void kernel_main() {
+    size_t a = 0;
+    const uint32_t ids_addr = get_arg_val<uint32_t>(a++), w_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t cnt_addr = get_arg_val<uint32_t>(a++), reg_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t tidx_addr = get_arg_val<uint32_t>(a++), tab_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t plan_addr = get_arg_val<uint32_t>(a++);
+    uint32_t lut[8];
+    for (uint32_t i = 0; i < 8; ++i) lut[i] = get_arg_val<uint32_t>(a++);
+    const uint32_t p = get_arg_val<uint32_t>(a++);
+    uint32_t px[M], py[M];
+    for (uint32_t i = 0; i < M; ++i) {
+        px[i] = get_arg_val<uint32_t>(a++);
+        py[i] = get_arg_val<uint32_t>(a++);
+    }
+    const uint32_t tdbg = get_arg_val<uint32_t>(a++);
+    // (the planner cores' rectangle, NoC 0: unused - multicast exchanges from every core at once serialize, 3.6x slower)
+    const uint32_t mx0 = get_arg_val<uint32_t>(a++), my0 = get_arg_val<uint32_t>(a++);
+    const uint32_t mx1 = get_arg_val<uint32_t>(a++), my1 = get_arg_val<uint32_t>(a++);
+    (void)mx0, (void)my0, (void)mx1, (void)my1;
+    uint32_t ts[16];
+    ts[0] = get_timestamp_32b();
+    cb_reserve_back(0, 1);
+    const uint32_t B = (get_write_ptr(0) + 63) & ~63u;
+    const uint32_t sem_l = get_semaphore(0), sem_c = get_semaphore(1);
+    uint32_t* plan = reinterpret_cast<uint32_t*>(B + O_PLAN);
+    if (p == 0) {
+        for (uint32_t i = 0; i < 1024; ++i) plan[i] = 0;  // (before my counts go out: the others' atomics follow them)
+    }
+    const uint32_t c0 = p * CH, chl = c0 >= T ? 0 : (T - c0 < CH ? T - c0 : CH);
+    const InterleavedAddrGen<true> ids_g = {.bank_base_address = ids_addr, .page_size = T * 2};
+    const InterleavedAddrGen<true> w_g = {.bank_base_address = w_addr, .page_size = T * 2};
+    if (chl) {
+        noc_async_read(get_noc_addr(0, ids_g) + c0 * 2, B + O_IDS, al64(chl * 2));
+        noc_async_read(get_noc_addr(0, w_g) + c0 * 2, B + O_WTS, al64(chl * 2));
+    }
+    if (p < A) noc_async_read(get_noc_addr(0, ids_g) + ME * SK * 2, B + O_HOME, al64(SK * 2));  // (owners only)
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    ts[1] = get_timestamp_32b();
+    constexpr uint32_t E0 = ME * EPC;
+    const uint32_t* ids2 = reinterpret_cast<const uint32_t*>(B + O_IDS);  // two ids per word
+    const uint16_t* wts = reinterpret_cast<const uint16_t*>(B + O_WTS);
+    // the first-hop port toward each chip, per link
+    uint8_t hop[N * L];
+    for (uint32_t o = 0; o < N; ++o) {
+        for (uint32_t l = 0; l < L; ++l) hop[o * L + l] = o == ME ? 0xFF : lut[first_hop(ME, o) * 2 + l];
+    }
+    // (1) count my chunk's local entries (two ids per word) and list them; then place them (counting sort by expert),
+    // each entry already the final table words
+    uint32_t cnt[EPC], bo[EPC];
+    for (uint32_t e = 0; e < EPC; ++e) cnt[e] = 0;
+    uint32_t* lst = reinterpret_cast<uint32_t*>(B + O_LST);
+    uint32_t nl = 0;
+    auto take = [&](uint32_t v, uint32_t i) __attribute__((always_inline)) {
+        const uint32_t e0 = (v & 0xFFFF) - E0, e1 = (v >> 16) - E0;
+        if (e0 < EPC) {
+            ++cnt[e0];
+            lst[nl++] = (2 * i) << 8 | e0;
+        }
+        if (e1 < EPC) {
+            ++cnt[e1];
+            lst[nl++] = (2 * i + 1) << 8 | e1;
+        }
+    };
+    uint32_t i4 = 0;
+    for (; i4 + 4 <= chl / 2; i4 += 4) {  // (four loads in flight)
+        const uint32_t v0 = ids2[i4], v1 = ids2[i4 + 1], v2 = ids2[i4 + 2], v3 = ids2[i4 + 3];
+        take(v0, i4);
+        take(v1, i4 + 1);
+        take(v2, i4 + 2);
+        take(v3, i4 + 3);
+    }
+    for (; i4 < chl / 2; ++i4) take(ids2[i4], i4);
+    if (chl & 1) {
+        const uint32_t e0 = (ids2[chl / 2] & 0xFFFF) - E0;
+        if (e0 < EPC) {
+            ++cnt[e0];
+            lst[nl++] = (chl - 1) << 8 | e0;
+        }
+    }
+    uint32_t* myc = reinterpret_cast<uint32_t*>(B + O_MYC);
+    for (uint32_t e = 0, o_ = 0; e < EPC; ++e) {
+        bo[e] = o_;
+        myc[EPC + e] = o_;
+        o_ += cnt[e];
+        myc[e] = cnt[e];
+    }
+    uint32_t* buck = reinterpret_cast<uint32_t*>(B + O_BUCK);
+    uint32_t ninj[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    for (uint32_t x = 0; x < nl; ++x) {
+        const uint32_t v = lst[x], ci = v >> 8, e = v & 0xFF, gi = c0 + ci;
+        const uint32_t o = gi / SK, rem = gi - o * SK, t = rem / K, kk = rem - t * K;
+        const uint32_t pos = bo[e]++;
+        uint32_t dest;
+        if (o == ME) {
+            dest = P + t % A;
+        } else {
+            const uint32_t l = L == 2 ? ((t + kk) & 1) : (t + kk) % L;
+            dest = hop[o * L + l];
+            ++ninj[dest];
+        }
+        buck[2 * pos] = dest | (static_cast<uint32_t>(wts[ci]) << 16);
+        buck[2 * pos + 1] = o | (t << 8) | (e << 24);
+    }
+    ts[2] = get_timestamp_32b();
+    for (uint32_t q = 0; q < M; ++q) {  // (unicast: 32 cores multicasting into one rectangle at once serialize)
+        noc_async_write(B + O_MYC, get_noc_addr(px[q], py[q], B + O_CIN + p * CNT), CNT);
+    }
+    noc_async_write_barrier();
+    for (uint32_t q = 0; q < M; ++q) noc_semaphore_inc(get_noc_addr(px[q], py[q], sem_l), 1);
+    ts[3] = get_timestamp_32b();
+    uint32_t* cg_ = reinterpret_cast<uint32_t*>(B + O_CNT);
+    uint32_t* rg_ = reinterpret_cast<uint32_t*>(B + O_REG);
+    if (p == 0) {  // (off the critical path: the others are still sorting)
+        for (uint32_t i = 0; i < NG; ++i) cg_[i] = rg_[i] = 0;
+    }
+    // (2) all counts in; the owner of expert e (core e % M) totals it and its chunks' first rows, sends that to all
+    noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_l), M);
+    invalidate_l1_cache();
+    ts[4] = get_timestamp_32b();
+    const uint32_t* cin = reinterpret_cast<const uint32_t*>(B + O_CIN);
+    for (uint32_t e = p; e < EPC; e += M) {
+        uint32_t* xp = reinterpret_cast<uint32_t*>(B + O_XP + e * XP);
+        uint32_t s_ = 0;
+        for (uint32_t j = 0; j < M; ++j) {
+            xp[2 + j] = s_;  // (relative to the region start)
+            s_ += cin[j * (CNT / 4) + e];
+        }
+        xp[0] = s_;
+        for (uint32_t q = 0; q < M; ++q) {
+            if (q != p) noc_async_write(B + O_XP + e * XP, get_noc_addr(px[q], py[q], B + O_XP + e * XP), XP);
+        }
+    }
+    noc_async_write_barrier();
+    for (uint32_t q = 0; q < M; ++q) noc_semaphore_inc(get_noc_addr(px[q], py[q], get_semaphore(2)), 1);
+    noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(2)), M);
+    invalidate_l1_cache();
+    uint32_t tot[EPC], reg[EPC], off = 0;
+    for (uint32_t e = 0; e < EPC; ++e) {
+        const uint32_t s_ = reinterpret_cast<const uint32_t*>(B + O_XP + e * XP)[0];
+        tot[e] = s_;
+        reg[e] = off;
+        off += (s_ + 31) / 32 * 32;
+    }
+    const uint32_t NT = off / 32, R0 = (p * NT / M) * 32, R1 = ((p + 1) * NT / M) * 32;
+    uint32_t* tidx = reinterpret_cast<uint32_t*>(B + O_TIDX);
+    uint32_t* tab = reinterpret_cast<uint32_t*>(B + O_TAB);
+    // (slices: issue every read, one barrier, then copy)
+    struct Sl {
+        uint32_t lo, n, stg;
+    };
+    constexpr uint32_t MAXSL = 512;
+    Sl* sl = reinterpret_cast<Sl*>(B + O_DBG + 64);
+    uint32_t nsl = 0, sp = 0;
+    for (uint32_t e = 0; e < EPC && R1 > R0; ++e) {
+        const uint32_t e_lo = reg[e], e_end = reg[e] + tot[e], e_pad = reg[e] + (tot[e] + 31) / 32 * 32;
+        if (e_pad <= R0 || e_lo >= R1) continue;
+        for (uint32_t r = (e_end > R0 ? e_end : R0); r < (e_pad < R1 ? e_pad : R1); ++r) {  // padding rows
+            tidx[r - R0] = 0;
+            tab[2 * (r - R0)] = tab[2 * (r - R0) + 1] = 0;
+        }
+        const uint32_t* xp = reinterpret_cast<const uint32_t*>(B + O_XP + e * XP);
+        for (uint32_t j = 0; j < M; ++j) {
+            const uint32_t* cj = cin + j * (CNT / 4);
+            const uint32_t base = e_lo + xp[2 + j], n = (j + 1 < M ? xp[3 + j] : tot[e]) - xp[2 + j];
+            const uint32_t lo = base > R0 ? base : R0, hi = base + n < R1 ? base + n : R1;
+            if (lo < hi) {
+                const uint32_t bj = cj[EPC + e];  // e's first entry in chunk j's bucket
+                const uint32_t src = B + O_BUCK + (bj + (lo - base)) * 8, cnt_ = hi - lo;
+                const uint32_t bytes = ((src & 15) + cnt_ * 8 + 15) & ~15u;
+                if (nsl == MAXSL || sp + bytes > STG) {  // (staging full: drain)
+                    noc_async_read_barrier();
+                    invalidate_l1_cache();
+                    for (uint32_t q = 0; q < nsl; ++q) {
+                        const uint32_t* st = reinterpret_cast<const uint32_t*>(sl[q].stg);
+                        for (uint32_t x = 0; x < sl[q].n; ++x) {
+                            const uint32_t r = sl[q].lo + x - R0, w0 = st[2 * x], w1 = st[2 * x + 1];
+                            tab[2 * r] = w0;
+                            tab[2 * r + 1] = w1;
+                            tidx[r] = (w1 & 0xFF) * S + ((w1 >> 8) & 0xFFFF);
+                        }
+                    }
+                    nsl = sp = 0;
+                }
+                noc_async_read(get_noc_addr(px[j], py[j], src & ~15u), B + O_STG + sp, bytes);
+                sl[nsl++] = Sl{lo, cnt_, B + O_STG + sp + (src & 15)};
+                sp += bytes;
+            }
+        }
+    }
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    for (uint32_t q = 0; q < nsl; ++q) {
+        const uint32_t* st = reinterpret_cast<const uint32_t*>(sl[q].stg);
+        for (uint32_t x = 0; x < sl[q].n; ++x) {
+            const uint32_t r = sl[q].lo + x - R0, w0 = st[2 * x], w1 = st[2 * x + 1];
+            tab[2 * r] = w0;
+            tab[2 * r + 1] = w1;
+            tidx[r] = (w1 & 0xFF) * S + ((w1 >> 8) & 0xFFFF);
+        }
+    }
+    ts[5] = get_timestamp_32b();
+    const uint32_t W1 = R1 < ROWS_CAP ? R1 : ROWS_CAP;
+    if (W1 > R0) {
+        const InterleavedAddrGen<true> ig = {.bank_base_address = tidx_addr, .page_size = ROWS_CAP * 4};
+        const InterleavedAddrGen<true> tg = {.bank_base_address = tab_addr, .page_size = 256};
+        noc_async_write(B + O_TIDX, get_noc_addr(0, ig) + R0 * 4, (W1 - R0) * 4);
+        for (uint32_t pg = R0 / 32; pg < W1 / 32; ++pg) {
+            noc_async_write(B + O_TAB + (pg - R0 / 32) * 256, get_noc_addr(pg, tg), 256);
+        }
+    }
+    // my home tokens' rows: core q owns accumulators a = q, q + M, ... (their n_local / want in full); n_ret partial
+    uint32_t nret[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    uint32_t* part = reinterpret_cast<uint32_t*>(B + O_PART);  // per owned accumulator: [n_local, pad x 15, want x 32]
+    uint32_t n_own = 0;
+    {
+        const uint16_t* hid = reinterpret_cast<const uint16_t*>(B + O_HOME);
+        for (uint32_t aa = p; aa < A; aa += M, ++n_own) {
+            uint32_t* pw = part + n_own * 48;
+            uint32_t wl[32], nlo = 0;
+            for (uint32_t i = 0; i < 32; ++i) wl[i] = 0;
+            const uint32_t* hw = reinterpret_cast<const uint32_t*>(hid);
+            auto one = [&](uint32_t g, uint32_t l) __attribute__((always_inline)) {
+                const uint32_t src = g / EPC;
+                if (src == ME) {
+                    ++nlo;
+                } else {
+                    ++wl[src * L + l];
+                    ++nret[hop[src * L + l]];
+                }
+            };
+            for (uint32_t t = aa; t < S; t += A) {
+                static_assert(K % 4 == 0 && L == 2, "pairs of ids per word, two links");
+                for (uint32_t kk = 0; kk < K; kk += 4) {  // (two words, four ids, in flight)
+                    const uint32_t w0 = hw[(t * K + kk) / 2], w1 = hw[(t * K + kk) / 2 + 1];
+                    const uint32_t l0 = (t + kk) & 1;
+                    one(w0 & 0xFFFF, l0);
+                    one(w0 >> 16, l0 ^ 1);
+                    one(w1 & 0xFFFF, l0);
+                    one(w1 >> 16, l0 ^ 1);
+                }
+            }
+            pw[0] = nlo;
+            for (uint32_t i = 0; i < 32; ++i) pw[16 + i] = wl[i];
+        }
+    }
+    ts[6] = get_timestamp_32b();
+    // (3) my accumulators' want blocks and n_local onto core 0's plan; n_inj / n_ret as atomic increments (core 0
+    // zeroed its plan before its counts went out)
+    const uint32_t pl0 = B + O_PLAN;
+    {
+        uint32_t own = 0;
+        for (uint32_t aa = p; aa < A; aa += M, ++own) {
+            const uint32_t pw = B + O_PART + own * 48 * 4;
+            noc_async_write(pw + 64, get_noc_addr(px[0], py[0], pl0 + (32 + aa * 32) * 4), 128);
+            noc_inline_dw_write(get_noc_addr(px[0], py[0], pl0 + (16 + aa) * 4), reinterpret_cast<uint32_t*>(pw)[0]);
+        }
+    }
+    for (uint32_t d = 0; d < 8; ++d) {
+        if (ninj[d]) noc_semaphore_inc(get_noc_addr(px[0], py[0], pl0 + 4 * d), ninj[d]);
+        if (nret[d]) noc_semaphore_inc(get_noc_addr(px[0], py[0], pl0 + 4 * (8 + d)), nret[d]);
+    }
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
+    noc_semaphore_inc(get_noc_addr(px[0], py[0], sem_c), 1);
+    if (p == 0) {
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_c), M);
+        invalidate_l1_cache();
+        plan[600] = off;
+        plan[601] = off > ROWS_CAP ? 1 : 0;
+        for (uint32_t e = 0; e < EPC; ++e) {
+            cg_[E0 + e] = tot[e];
+            rg_[E0 + e] = reg[e];
+        }
+        const InterleavedAddrGen<true> cg = {.bank_base_address = cnt_addr, .page_size = NG * 4};
+        const InterleavedAddrGen<true> rg = {.bank_base_address = reg_addr, .page_size = NG * 4};
+        const InterleavedAddrGen<true> pg = {.bank_base_address = plan_addr, .page_size = 4096};
+        noc_async_write(B + O_CNT, get_noc_addr(0, cg), NG * 4);
+        noc_async_write(B + O_REG, get_noc_addr(0, rg), NG * 4);
+        noc_async_write(B + O_PLAN, get_noc_addr(0, pg), 4096);
+        noc_async_write_barrier();
+    }
+    ts[7] = get_timestamp_32b();
+    ts[8] = ts[7];
+    if (tdbg) {  // (phase timestamps: start, read, sort, home, counts in, placed, out + atomics, end)
+        uint32_t* d = reinterpret_cast<uint32_t*>(B + O_DBG);
+        for (uint32_t i = 0; i < 9; ++i) d[i] = ts[i];
+        const InterleavedAddrGen<true> dg = {.bank_base_address = tdbg, .page_size = 64};
+        noc_async_write(B + O_DBG, get_noc_addr(p, dg), 64);
+        noc_async_write_barrier();
+    }
+}
+"""
+
+
+def _mc2_stg(M, EPC, rows_cap):
+    return ((rows_cap // M + 64) * 8 + 16 * min(EPC * M, 512) + 63) // 64 * 64
+
+
+def _mc2_l1_bytes(M, CH, HS, EPC, NG, rows_cap):
+    al = lambda v: (v + 63) // 64 * 64  # noqa: E731
+    CNT = al(2 * EPC * 4)
+    XP = al((M + 2) * 4)
+    return (
+        2 * al(CH * 2)
+        + al(HS * M * 2)
+        + al(CH * 4)
+        + al(CH * 8)
+        + CNT
+        + M * CNT
+        + EPC * XP
+        + _mc2_stg(M, EPC, rows_cap)
+        + al(544 * 4)
+        + al(rows_cap * 4)
+        + al(rows_cap * 8)
+        + 4096
+        + 2 * al(NG * 4)
+        + 64
+        + 12 * 512
+        + 64
+    )
+
+
 def first_hop_idx(src, dst, C):
     sr, sc, dr, dc = src // C, src % C, dst // C, dst % C
     if sr != dr:
@@ -211,7 +814,7 @@ def port_luts(mesh_device, num_links):
     return luts, n
 
 
-def combine_planner_prepare(mesh_device, *, S, K, EPC, A, L, port_luts, n_ports, rows_cap, core=(0, 0)):
+def combine_planner_prepare(mesh_device, *, S, K, EPC, A, L, port_luts, n_ports, rows_cap, core=(0, 0), cores=None):
     """port_luts[coord] = 8 port ids (direction * 2 + link; 0xFF none), n_ports[coord] = P. Returns run(ids, wts) ->
     dict of the per-chip output tensors (counts, regions, token_index, table, plan), allocated once."""
     R, C = tuple(mesh_device.shape)
@@ -246,8 +849,74 @@ def combine_planner_prepare(mesh_device, *, S, K, EPC, A, L, port_luts, n_ports,
     out_bytes = 2 * ((NG * 4 + 63) // 64) * 64 + rows_cap * 12 + 4096 + 64
     c = ttnn.CoreCoord(*core)
     cs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c)])
+    if cores is not None:  # the multi-core planner
+        M = len(cores)
+        CH = (T + M - 1) // M
+        GS = (EPC + M - 1) // M
+        assert (S * K) % M == 0
+        HS = S * K // M
+
+        V2 = os.environ.get("FC_PLAN_V", "2") == "2"
+        assert V2 or (CH < (1 << 13) and GS <= 8), (CH, GS)
+        mcs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*x), ttnn.CoreCoord(*x)) for x in cores])
+        vv = [mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(*x)) for x in cores]
+        pxy = [w for v in vv for w in (v.x, v.y)]
+        mc_bytes = (_mc2_l1_bytes if V2 else _mc_l1_bytes)(M, CH, HS, EPC, NG, rows_cap)
+        tdbg_t = ttnn.from_torch(
+            torch.zeros(R, C, M, 16, dtype=torch.int32),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard,
+        )
+
+    def build_mc(ids, wts):
+        mesh_desc = ttnn.MeshProgramDescriptor()
+        for r in range(R):
+            for cc in range(C):
+                me = r * C + cc
+                pd = ttnn.ProgramDescriptor()
+                pd.cbs = [
+                    ttnn.CBDescriptor(
+                        total_size=mc_bytes,
+                        core_ranges=mcs,
+                        format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint32, mc_bytes)],
+                    )
+                ]
+                pd.semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=mcs, initial_value=0) for i in (0, 1, 2)]
+                rt = ttnn.RuntimeArgs()
+                head = [
+                    int(ids.buffer_address()),
+                    int(wts.buffer_address()),
+                    int(outs["counts"].buffer_address()),
+                    int(outs["regions"].buffer_address()),
+                    int(outs["token_index"].buffer_address()),
+                    int(outs["table"].buffer_address()),
+                    int(outs["plan"].buffer_address()),
+                ] + list(port_luts[(r, cc)])
+                rect = [min(v.x for v in vv), min(v.y for v in vv), max(v.x for v in vv), max(v.y for v in vv)]
+                for pi, x in enumerate(cores):
+                    rt[x[0]][x[1]] = head + [pi] + pxy + [int(tdbg_t.buffer_address())] + rect
+                pd.kernels = [
+                    ttnn.KernelDescriptor(
+                        kernel_source=_PLANNER_MC2 if V2 else _PLANNER_MC,
+                        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                        core_ranges=mcs,
+                        compile_time_args=[me, R, C, S, K, EPC, NG, A, L, n_ports[(r, cc)], rows_cap, M, CH]
+                        + ([HS, _mc2_stg(M, EPC, rows_cap)] if V2 else [GS, HS]),
+                        runtime_args=rt,
+                        config=ttnn.DataMovementConfigDescriptor(
+                            processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+                        ),
+                    )
+                ]
+                mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, cc), ttnn.MeshCoordinate(r, cc))] = pd
+        return mesh_desc
 
     def build(ids, wts):
+        if cores is not None:
+            return build_mc(ids, wts)
         mesh_desc = ttnn.MeshProgramDescriptor()
         for r in range(R):
             for cc in range(C):
@@ -302,4 +971,5 @@ def combine_planner_prepare(mesh_device, *, S, K, EPC, A, L, port_luts, n_ports,
         return outs
 
     run.outs = outs
+    run.tdbg = tdbg_t if cores is not None else None
     return run

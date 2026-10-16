@@ -208,6 +208,7 @@ def test_flat_combine_rf(mesh_device, device_params, routing):
             port_luts=luts,
             n_ports=nps,
             rows_cap=rows_cap,
+            cores=[(i % 8, i // 8) for i in range(int(os.environ.get("FC_PLAN_CORES", "32")))],
         )
         pl = planner(ids_t, w_t)
         ttnn.synchronize_device(mesh_device)

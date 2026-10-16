@@ -67,8 +67,10 @@ def test_combine_plan(mesh_device, device_params, routing):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=rep,
     )
+    m = int(os.environ.get("FC_PLAN_CORES", "8"))  # (0: the one-core planner)
+    cores = [(i % 8, i // 8) for i in range(m)] if m else None
     run = combine_planner_prepare(
-        mesh_device, S=S, K=K, EPC=EPC, A=A, L=L, port_luts=luts, n_ports=nps, rows_cap=ROWS_CAP
+        mesh_device, S=S, K=K, EPC=EPC, A=A, L=L, port_luts=luts, n_ports=nps, rows_cap=ROWS_CAP, cores=cores
     )
     outs = run(ids_t, w_t)
     ttnn.synchronize_device(mesh_device)
@@ -90,6 +92,22 @@ def test_combine_plan(mesh_device, device_params, routing):
         run(ids_t, w_t)
         ttnn.synchronize_device(mesh_device)
         per.append(max(_chip_ns(mesh_device)) / 1e3)
+    if run.tdbg is not None:  # (phases of the last call, on the chip whose planner ended last)
+        names = "read sort send wait xp+place rows+home final end".split()
+        worst = None
+        for ci, t in enumerate(ttnn.get_device_tensors(run.tdbg)):
+            d = (ttnn.to_torch(t).to(torch.int64).reshape(m, 16) & 0xFFFFFFFF).tolist()
+            t0 = min(r[0] for r in d)
+            span = max(r[8] for r in d) - t0
+            if worst is None or span > worst[0]:
+                worst = (span, ci, d, t0)
+        span, ci, d, t0 = worst
+        for pi, r in enumerate(d):
+            logger.info(
+                f"PLAN {routing} chip {ci} core {pi}: "
+                + " ".join(f"{n} {(r[i + 1] - r[i]) / 1350:.1f}" for i, n in enumerate(names))
+                + f" | start +{(r[0] - t0) / 1350:.1f} end {(r[8] - t0) / 1350:.1f} us"
+            )
     logger.info(
-        f"PLAN {routing}: planner {statistics.median(per):.0f} us (one core per chip, {N * S * K} routing entries)"
+        f"PLAN {routing}: planner {statistics.median(per):.1f} us ({m or 1} cores per chip, {N * S * K} routing entries)"
     )
