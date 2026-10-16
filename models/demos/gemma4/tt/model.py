@@ -440,7 +440,7 @@ class Gemma4Model:
         # ``Gemma4Generator._prefill_single_user_with_embeds``.
         self._g4_mm_prefill_embeds = None
         # Host block ids ([prompt_len], -1 = text) of the prompt behind the embeds override; turns into
-        # the per-layer-type image-span attention masks for a single-chunk prefill (GEMMA4_MM_BIDIR_MASK=1).
+        # the per-layer-type image-span attention masks for a single-chunk prefill (GEMMA4_MM_BIDIR_MASK, on).
         self._g4_mm_prefill_blocks = None
 
         # Stash for the per-layer-input (PLI) device tensor produced in
@@ -2196,7 +2196,9 @@ class Gemma4Model:
             return None
         from models.demos.gemma4.tt.common import gemma4_env_flag
 
-        if not gemma4_env_flag("GEMMA4_MM_BIDIR_MASK"):
+        # Default on: without it the 12B describes a different image (A/B on a (1,8) column: a
+        # hallucinated "person's face" vs the real subject); GEMMA4_MM_BIDIR_MASK=0 restores causal.
+        if not gemma4_env_flag("GEMMA4_MM_BIDIR_MASK", default="1"):
             return None
         start = 0 if chunk_start_idx is None or isinstance(chunk_start_idx, ttnn.Tensor) else int(chunk_start_idx)
         if chunk_page_table is not None or start > 0:
