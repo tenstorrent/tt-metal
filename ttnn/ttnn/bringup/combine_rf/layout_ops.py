@@ -158,11 +158,14 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_co
             ttnn.CBDescriptor(total_size=2 * cw * 2048, core_ranges=crs,
                               format_descriptors=[ttnn.CBFormatDescriptor(16, ttnn.bfloat16, 2048)]),
         ]
+        import os
+
+        swap = os.environ.get("LAYOUT_NOC", "swap") == "swap"  # (reads on NOC0, writes on NOC1)
         program.kernels = [
             ttnn.KernelDescriptor(kernel_source=rd_src, source_type=st, core_ranges=crs, compile_time_args=rd_ct,
-                                  runtime_args=rd_rt, config=dm("RISCV_1", ttnn.NOC.RISCV_1_default)),
+                                  runtime_args=rd_rt, config=dm("RISCV_1", ttnn.NOC.NOC_0 if swap else ttnn.NOC.RISCV_1_default)),
             ttnn.KernelDescriptor(kernel_source=wr_src, source_type=st, core_ranges=crs, compile_time_args=wr_ct,
-                                  runtime_args=wr_rt, config=dm("RISCV_0", ttnn.NOC.RISCV_0_default)),
+                                  runtime_args=wr_rt, config=dm("RISCV_0", ttnn.NOC.NOC_1 if swap else ttnn.NOC.RISCV_0_default)),
             ttnn.KernelDescriptor(kernel_source=comp, source_type=st, core_ranges=crs, compile_time_args=[cw],
                                   runtime_args=cp_rt, config=ttnn.ComputeConfigDescriptor()),
         ]

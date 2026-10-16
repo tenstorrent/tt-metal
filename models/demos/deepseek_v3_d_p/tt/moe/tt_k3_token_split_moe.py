@@ -34,6 +34,7 @@ from ttnn.bringup.combine_rf.l1_zero import l1_zero_program
 from ttnn.bringup.combine_rf.layout_ops import layout_op_prepare
 from ttnn.bringup.combine_rf.router_topk import router_topk_prepare
 from ttnn.bringup.combine_rf.sparse_combine_rf import sparse_combine_rf_prepare
+from ttnn.bringup.combine_rf.sum_ops import sum_parts_prepare
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import W_DTYPES, FlatRoutedExpert, _bank_sharded, flat_weight_regions
 
 import models.demos.glm53_flash_d_p.tt.mm_configs as mm_configs
@@ -448,6 +449,8 @@ class TtK3TokenSplitMoE:
         self.se_xbf16 = os.environ.get("K3_SE_XBF16", "1") == "1"
         self.se_yrm = os.environ.get("K3_SE_YRM") == "1"
         self.se_ybf16 = os.environ.get("K3_SE_YBF16", "1") == "1" and not self.se_yrm
+        self.fuse_sum = self.se_mode == "flat" and self.se_ybf16 and os.environ.get("K3_FUSE_SUM", "1") == "1"
+        self.sum_parts = sum_parts_prepare(self.mesh, P=self.se_parts)
         self.se_srnd = os.environ.get("K3_SE_SRND") == "1"
 
     def _build_shared_tp(self, mesh_device, w, d, S):
@@ -521,7 +524,9 @@ class TtK3TokenSplitMoE:
         self.se_counts, self.se_regions = row([S] * P), row([i * S for i in range(P)])
         self.se_tidx = row(list(range(S)) * P)
 
-    def shared(self, x):
+    def shared(self, x, yr=None):
+        """The shared expert's y [S, H]; with yr (local flat SE, bf16 tile parts) the block's y = yr + the parts' sum
+        in one pass (sum_ops) instead of ttnn.sum + ttnn.add."""
         if self.se_mode == "tp":  # (row all-gather, one flat expert on the row's tokens, reduce-scatter)
             x_rm = self.untilize7(x)  # (a row as 7 pages of 2 KB: the fabric all-gather sends whole pages, the flat reads 2 KB segments)
             xg = fabric_all_gather(x_rm, cluster_axis=1, topology=ttnn.Topology.Linear, num_links=2, dim=0)
@@ -543,6 +548,10 @@ class TtK3TokenSplitMoE:
                 yt = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
                 ttnn.deallocate(y)
                 y = yt
+            if yr is not None and self.fuse_sum:
+                out = self.sum_parts(yr, y)
+                ttnn.deallocate(y)
+                return out
             ys = ttnn.sum(ttnn.reshape(y, [self.se_parts, self.S, self.d.H]), dim=0)
             ttnn.deallocate(y)
             return ys
@@ -579,9 +588,13 @@ class TtK3TokenSplitMoE:
         mark("experts_combine")
         yr = self.latent_up()
         mark("lat_up")
-        ys = self.shared(x)
-        mark("shared")
-        y = ttnn.add(yr, ys, dtype=ttnn.bfloat16)
+        if self.fuse_sum and not keep:  # (the shared expert and the final sum; keep: ys separately, for the checks)
+            y, ys = self.shared(x, yr=yr), None
+            mark("shared")
+        else:
+            ys = self.shared(x)
+            mark("shared")
+            y = ttnn.add(yr, ys, dtype=ttnn.bfloat16)
         mark("sum")
         inter = dict(ids=ids, wts=wts, gi=gi, gw=gw, lat=lat, xg=xg, yr=yr, ys=ys, logits=logits[0], routed=self.out, pl=pl) if keep else None
         if not keep:
