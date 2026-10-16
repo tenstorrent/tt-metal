@@ -160,6 +160,64 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
             2 * tt::constants::TILE_WIDTH);
     }
 
+    const auto& outs = tensor_args.optional_output_tensors;
+    TT_FATAL(
+        outs.empty() || outs.size() == static_cast<size_t>(chunks),
+        "minimal_matmul optional_output_tensors must hold one tensor per chunk ({}), got {}",
+        chunks,
+        outs.size());
+    const auto& hm = operation_attributes.head_major;
+    if (!hm.empty()) {
+        TT_FATAL(
+            !operation_attributes.fuse_swiglu && !operation_attributes.fused_ternary_scalar.has_value(),
+            "minimal_matmul head_major does not combine with fuse_swiglu / fused ternary");
+        TT_FATAL(chunks >= 1 && chunks <= 8, "minimal_matmul head_major supports 1..8 chunks, got {}", chunks);
+        TT_FATAL(
+            hm.size() == 2 + 2 * static_cast<size_t>(chunks),
+            "minimal_matmul head_major must be [S, Wt, off_0, tot_0, ...] for {} chunks, got {} values",
+            chunks,
+            hm.size());
+        TT_FATAL(outs.size() == static_cast<size_t>(chunks), "minimal_matmul head_major needs optional_output_tensors");
+        const uint32_t S = hm[0], Wt = hm[1];
+        // upper activation dims fold into M (as in the program factory)
+        const uint32_t M_tiles = static_cast<uint32_t>(a_logical.volume() / K) / tt::constants::TILE_HEIGHT;
+        const uint32_t chunk_tiles = N / chunks / tt::constants::TILE_WIDTH;
+        TT_FATAL(
+            S > 0 && Wt > 0 && M_tiles % S == 0,
+            "minimal_matmul head_major: M={} tiles not a multiple of S={}",
+            M_tiles,
+            S);
+        TT_FATAL(
+            chunk_tiles % Wt == 0,
+            "minimal_matmul head_major: chunk width {} tiles not whole heads of {}",
+            chunk_tiles,
+            Wt);
+        for (int32_t c = 0; c < chunks; ++c) {
+            const uint32_t off = hm[2 + 2 * c], tot = hm[3 + 2 * c];
+            const auto& sh = outs[c].padded_shape();
+            TT_FATAL(
+                off + chunk_tiles / Wt <= tot && off < 0x10000 && tot < 0x10000,
+                "minimal_matmul head_major: chunk {} heads [{}, {}) exceed {}",
+                c,
+                off,
+                off + chunk_tiles / Wt,
+                tot);
+            TT_FATAL(
+                sh.rank() == 4 && sh[0] * S == M_tiles && sh[1] == tot && sh[2] == S * tt::constants::TILE_HEIGHT &&
+                    sh[3] == Wt * tt::constants::TILE_WIDTH,
+                "minimal_matmul head_major: output {} shape {} is not [{}, {}, {}, {}]",
+                c,
+                sh,
+                M_tiles / S,
+                tot,
+                S * tt::constants::TILE_HEIGHT,
+                Wt * tt::constants::TILE_WIDTH);
+            TT_FATAL(
+                outs[c].layout() == Layout::TILE && outs[c].dtype() == outs[0].dtype(),
+                "minimal_matmul head_major outputs must be TILE, one dtype");
+        }
+    }
+
     if (chunks > 1) {
         // Validate N is divisible by chunks
         TT_FATAL(N % chunks == 0, "Output width N={} must be divisible by chunks={}", N, chunks);
@@ -291,6 +349,13 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
 
 MinimalMatmulDeviceOperation::spec_return_value_t MinimalMatmulDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (!tensor_args.optional_output_tensors.empty()) {
+        std::vector<tt::tt_metal::TensorSpec> specs;
+        for (const auto& t : tensor_args.optional_output_tensors) {
+            specs.push_back(t.tensor_spec());
+        }
+        return specs;
+    }
     const auto& in0_input_tensor = tensor_args.input_tensor;
     const auto& in1_input_tensor = tensor_args.weight_tensor;
     const auto& in0_input_tensor_shape = in0_input_tensor.logical_shape();
@@ -320,6 +385,9 @@ MinimalMatmulDeviceOperation::spec_return_value_t MinimalMatmulDeviceOperation::
 
 MinimalMatmulDeviceOperation::tensor_return_value_t MinimalMatmulDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (!tensor_args.optional_output_tensors.empty()) {
+        return tensor_args.optional_output_tensors;
+    }
     const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
     auto* device = tensor_args.input_tensor.device();
 
@@ -352,7 +420,9 @@ std::vector<Tensor> minimal_matmul(
     const std::optional<Tensor>& fused_ternary_input_a,
     const std::optional<Tensor>& fused_ternary_input_b,
     bool fuse_swiglu,
-    const std::optional<Tensor>& optional_input_tensor) {
+    const std::optional<Tensor>& optional_input_tensor,
+    const std::vector<Tensor>& optional_output_tensors,
+    const std::vector<uint32_t>& head_major) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
     const auto arch = input_tensor.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -374,14 +444,16 @@ std::vector<Tensor> minimal_matmul(
             .compute_kernel_config = kernel_config_val,
             .chunks = chunks,
             .dim = dim,
-            .fuse_swiglu = fuse_swiglu},
+            .fuse_swiglu = fuse_swiglu,
+            .head_major = head_major},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,
             .bias_tensor = bias_tensor,
             .optional_input_tensor = optional_input_tensor,
             .fused_ternary_input_a = fused_ternary_input_a,
-            .fused_ternary_input_b = fused_ternary_input_b});
+            .fused_ternary_input_b = fused_ternary_input_b,
+            .optional_output_tensors = optional_output_tensors});
 }
 
 }  // namespace ttnn::prim

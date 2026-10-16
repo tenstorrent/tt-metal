@@ -81,6 +81,9 @@ std::vector<Tensor> minimal_matmul(
     bool fuse_swiglu = false,
     // Fused concat (concat-free): when set, in0's K is input_tensor (prefix) then optional_input_tensor
     // (suffix); the split point is input_tensor's K width and the weight is stacked [W_prefix; W_suffix].
-    const std::optional<Tensor>& optional_input_tensor = std::nullopt);
+    const std::optional<Tensor>& optional_input_tensor = std::nullopt,
+    // Preallocated outputs (one per chunk) and the head-major layout (MinimalMatmulParams::head_major).
+    const std::vector<Tensor>& optional_output_tensors = {},
+    const std::vector<uint32_t>& head_major = {});
 
 }  // namespace ttnn::prim

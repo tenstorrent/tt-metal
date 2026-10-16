@@ -111,6 +111,13 @@ void bind_minimal_matmul_split(nb::module_& mod) {
         - All tensors must be on the same device and allocated in device buffers
         - All tensors must be in TILE layout
         - Weight and bias must have 1 in all leading dimensions (dims < -2)
+
+        Head-major outputs
+        ------------------
+        ``output_tensors`` (one per chunk, may repeat a tensor) with ``head_major = [S, Wt, off_0, tot_0, off_1, tot_1,
+        ...]`` writes chunk c (``(N/chunks)/(32*Wt)`` heads of ``Wt`` tiles) into a ``[B, tot_c, S*32, Wt*32]`` tensor at
+        heads ``[off_c, ...)``, with M = B*S*32 rows: e.g. a fused QKV projection writing SDPA's Q / K / V directly,
+        chunks of 8 heads bound to (Q, Q, Q, Q, K, V) with offsets (0, 8, 16, 24, 0, 0). Returns ``output_tensors``.
         )doc",
         &ttnn::experimental::minimal_matmul_split,
         nb::arg("input_tensor"),
@@ -124,7 +131,9 @@ void bind_minimal_matmul_split(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("dtype") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("fuse_swiglu") = false);
+        nb::arg("fuse_swiglu") = false,
+        nb::arg("output_tensors") = std::vector<ttnn::Tensor>{},
+        nb::arg("head_major") = std::vector<uint32_t>{});
 }
 
 }  // namespace ttnn::operations::experimental::minimal_matmul::detail

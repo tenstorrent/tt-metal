@@ -38,6 +38,12 @@ struct MinimalMatmulParams {
     // Fused SwiGLU: the weight is a tile-pair-interleaved [gate|up] matrix of width 2N.
     // The op emits silu(gate) * up of width N (half the weight width) in a single matmul.
     bool fuse_swiglu = false;
+
+    // Head-major split output: empty = row-major chunks. Otherwise [S, Wt, off_0, tot_0, off_1, tot_1, ...]: chunk c
+    // (N/chunks tiles = (N/chunks)/Wt heads of Wt tiles) is written into a [B, tot_c, S*32, Wt*32] tensor at heads
+    // [off_c, off_c + (N/chunks)/Wt), with M = B * S tiles. Requires optional_output_tensors (one per chunk; several
+    // chunks may share a tensor, e.g. a fused QKV projection writing Q, Q, ..., K, V).
+    std::vector<uint32_t> head_major;
 };
 
 struct MinimalMatmulInputs {
@@ -51,6 +57,9 @@ struct MinimalMatmulInputs {
     // Fused addcmul: ternary_a + scalar * matmul_output * ternary_b
     std::optional<Tensor> fused_ternary_input_a;  // residual/base (broadcast like bias)
     std::optional<Tensor> fused_ternary_input_b;  // gate/multiplier (full MxN shape)
+
+    // Preallocated outputs, one per chunk (required with head_major); empty: the op allocates them.
+    std::vector<Tensor> optional_output_tensors;
 };
 
 }  // namespace ttnn::experimental::prim

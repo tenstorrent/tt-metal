@@ -51,6 +51,31 @@ void kernel_main() {
     constexpr auto is_injector_core = get_arg(args::is_injector_core);
     constexpr auto N_chunks = get_arg(args::N_chunks);
     constexpr auto N_tiles_per_chunk = get_arg(args::N_tiles_per_chunk);
+    // Head-major split output (head_major = 1): chunk c writes [B, tot_c, S, d] tiles at heads [off_c, off_c +
+    // N_tiles_per_chunk / Wt), packed as hm_c<c> = tot << 16 | off; S = hm_seq_tiles tiles per batch, d = Wt tiles.
+    // Output tile row m is (b, s) = (m / S, m % S) and column n of a chunk is (head, j) = (n / Wt, n % Wt). Lets e.g. a
+    // fused QKV projection write SDPA's Q / K / V directly (chunks bound to Q, Q, ..., K, V).
+    constexpr uint32_t head_major = get_arg(args::head_major);
+    constexpr uint32_t hm_St = get_arg(args::hm_seq_tiles);
+    constexpr uint32_t hm_Wt = get_arg(args::hm_head_dim_tiles);
+    constexpr uint32_t hm_c[8] = {
+        get_arg(args::hm_c0),
+        get_arg(args::hm_c1),
+        get_arg(args::hm_c2),
+        get_arg(args::hm_c3),
+        get_arg(args::hm_c4),
+        get_arg(args::hm_c5),
+        get_arg(args::hm_c6),
+        get_arg(args::hm_c7)};
+    auto out_page = [&](uint32_t chunk_idx, uint32_t m_tile, uint32_t n_in_chunk, uint32_t chunk_d1) -> uint32_t {
+        if constexpr (head_major) {
+            const uint32_t b = m_tile / hm_St, s_tile = m_tile % hm_St;
+            const uint32_t h = (hm_c[chunk_idx] & 0xFFFF) + n_in_chunk / hm_Wt;
+            return ((b * (hm_c[chunk_idx] >> 16) + h) * hm_St + s_tile) * hm_Wt + n_in_chunk % hm_Wt;
+        } else {
+            return m_tile * chunk_d1 + n_in_chunk;
+        }
+    };
 
     // Range parameters. The buffer addresses that used to lead this list are TensorBindings now.
     const auto is_sink_core = get_arg(args::is_sink_core);
@@ -276,7 +301,8 @@ void kernel_main() {
                             defer_write_m_tile,
                             defer_write_m_tile_end,
                             defer_write_n_tile / 2,
-                            defer_write_n_tile_end / 2);
+                            defer_write_n_tile_end / 2,
+                            out_page);
                     }
                     dfb_out.pop_front(out_block_num_tiles_swiglu);
 #else
@@ -304,7 +330,8 @@ void kernel_main() {
                             defer_write_m_tile,
                             defer_write_m_tile_end,
                             defer_write_n_tile,
-                            defer_write_n_tile_end);
+                            defer_write_n_tile_end,
+                            out_page);
                     }
                     dfb_out.pop_front(out_block_num_tiles);
 #endif  // FUSE_SWIGLU
@@ -473,7 +500,8 @@ void kernel_main() {
                         out_m_tile,
                         out_m_tile_end,
                         n_tile / 2,
-                        n_tile_end / 2);
+                        n_tile_end / 2,
+                        out_page);
                 }
 #else
                 // write_block_sync_granular_split is more generic (support multiple output tensors)
@@ -497,7 +525,8 @@ void kernel_main() {
                         out_m_tile,
                         out_m_tile_end,
                         n_tile,
-                        n_tile_end);
+                        n_tile_end,
+                        out_page);
                 }
 #endif  // FUSE_SWIGLU
 #ifdef SRS_FUSE_OP_SIGNALER

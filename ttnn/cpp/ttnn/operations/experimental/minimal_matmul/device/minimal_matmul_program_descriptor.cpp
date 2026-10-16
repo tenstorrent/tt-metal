@@ -14,6 +14,7 @@
 // refreshes every tensor binding on a program-cache hit.
 //
 
+#include <array>
 #include "minimal_matmul_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -189,6 +190,15 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     const bool fuse_swiglu = operation_attributes.fuse_swiglu;
     const uint32_t N_chunks = static_cast<uint32_t>(operation_attributes.chunks);
+    // Head-major split outputs (MinimalMatmulParams::head_major): per-chunk tot << 16 | off for the writer's page
+    // remap.
+    const auto& head_major = operation_attributes.head_major;
+    std::array<uint32_t, 8> hm_chunk{};
+    if (!head_major.empty()) {
+        for (uint32_t c = 0; c < N_chunks; ++c) {
+            hm_chunk[c] = (head_major[3 + 2 * c] << 16) | head_major[2 + 2 * c];
+        }
+    }
 
     auto* device = input_tensor.device();
     // Quasar (Gen2) uplift: every Gen2-specific choice below is keyed on this one flag so WH/BH keep
@@ -573,6 +583,17 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
                 {"is_injector_core", static_cast<uint32_t>(is_injector_core)},
                 {"N_chunks", N_chunks},
                 {"N_tiles_per_chunk", N_tiles_per_chunk},
+                {"head_major", static_cast<uint32_t>(!head_major.empty())},
+                {"hm_seq_tiles", head_major.empty() ? 1u : head_major[0]},
+                {"hm_head_dim_tiles", head_major.empty() ? 1u : head_major[1]},
+                {"hm_c0", hm_chunk[0]},
+                {"hm_c1", hm_chunk[1]},
+                {"hm_c2", hm_chunk[2]},
+                {"hm_c3", hm_chunk[3]},
+                {"hm_c4", hm_chunk[4]},
+                {"hm_c5", hm_chunk[5]},
+                {"hm_c6", hm_chunk[6]},
+                {"hm_c7", hm_chunk[7]},
                 {input_tile_size_name, input_tile_size},
             };
         };

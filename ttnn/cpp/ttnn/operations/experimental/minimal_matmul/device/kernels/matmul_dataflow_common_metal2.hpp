@@ -354,6 +354,17 @@ void write_block_sync_granular(
 }
 
 /**
+ * Page of output tile (m_tile, n_in_chunk) in chunk `chunk_idx` of a split output: row-major by default. A kernel can
+ * pass its own functor (e.g. a head-major [B, H, S, d] remap) to the split writers below.
+ */
+struct RowMajorPage {
+    FORCE_INLINE uint32_t
+    operator()(uint32_t /*chunk_idx*/, uint32_t m_tile, uint32_t n_in_chunk, uint32_t chunk_d1) const {
+        return m_tile * chunk_d1 + n_in_chunk;
+    }
+};
+
+/**
  * Helper: dispatch to correct tuple element using fold expression.
  * Each branch calls noc.async_write with the concrete TensorAccessor type.
  */
@@ -387,6 +398,7 @@ template <
     uint32_t N_block_tiles,
     uint32_t N_chunks,
     uint32_t N_tiles_per_chunk,
+    typename PageFn = RowMajorPage,
     typename... Accessors>
 void write_block_sync_split(
     const std::tuple<Accessors...>& accessors,
@@ -396,7 +408,8 @@ void write_block_sync_split(
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
-    uint32_t d1_end) {
+    uint32_t d1_end,
+    const PageFn& page_fn = PageFn{}) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
@@ -426,7 +439,7 @@ void write_block_sync_split(
                 continue;
             }
 
-            uint32_t tile_id_in_chunk = i * chunk_shape.logical_d1 + tile_idx_in_chunk;
+            uint32_t tile_id_in_chunk = page_fn(chunk_idx, i, tile_idx_in_chunk, chunk_shape.logical_d1);
 
             // Compile-time dispatch preserving concrete types
             write_tile_to_chunk(
@@ -454,6 +467,7 @@ template <
     uint32_t N_block_tiles,
     uint32_t N_chunks,
     uint32_t N_tiles_per_chunk,
+    typename PageFn = RowMajorPage,
     typename... Accessors>
 void write_block_sync_granular_split(
     const std::tuple<Accessors...>& accessors,
@@ -463,7 +477,8 @@ void write_block_sync_granular_split(
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
-    uint32_t d1_end) {
+    uint32_t d1_end,
+    const PageFn& page_fn = PageFn{}) {
     Noc noc;
     const uint32_t chunk_idx_start = d1_start / N_tiles_per_chunk;
     const uint32_t tile_idx_in_chunk_start = d1_start % N_tiles_per_chunk;
@@ -488,7 +503,7 @@ void write_block_sync_granular_split(
                     break;
                 }
 
-                uint32_t tile_id = m_tile * chunk_shape.logical_d1 + tile_idx_in_chunk;
+                uint32_t tile_id = page_fn(chunk_idx, m_tile, tile_idx_in_chunk, chunk_shape.logical_d1);
                 // Compile-time dispatch preserving concrete types
                 write_tile_to_chunk(
                     noc,
