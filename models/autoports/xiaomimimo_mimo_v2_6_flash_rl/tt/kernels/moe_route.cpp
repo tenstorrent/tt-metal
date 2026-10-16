@@ -6,7 +6,8 @@
 //
 // Inputs (DRAM interleaved, TILE): scores and biased [1, 1, 32, E] fp32, token mask [1, 1, 32, 1] bf16.
 // Outputs (L1 interleaved, one row-major page each): expert ids uint16 [users * k] and weights fp32
-// [users * k]; this core writes entries [user * k, user * k + k).
+// [users * k]; this core writes entries [user * k, user * k + k). Optionally also the per-pair row weights
+// [1, users * k, 32, 1] bf16 TILE (zero-initialised, persistent): pair p's tile gets its weight at (user, 0).
 //
 // The biased scores are positive (sigmoid in (0, 1) plus a small correction), so their fp32 bit patterns
 // order like the values: selection is integer compares on the exact fp32 inputs, ties keep the lower expert
@@ -42,16 +43,19 @@ void kernel_main() {
     const uint32_t ids_addr = get_arg_val<uint32_t>(3);
     const uint32_t weights_addr = get_arg_val<uint32_t>(4);
     const uint32_t user = get_arg_val<uint32_t>(5);
+    const uint32_t row_weight_addr = get_arg_val<uint32_t>(6);  // 0: not requested
 
     constexpr uint32_t num_experts = get_compile_time_arg_val(0);
     constexpr uint32_t k = get_compile_time_arg_val(1);
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(2);
     constexpr uint32_t ids_page_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t weights_page_bytes = get_compile_time_arg_val(4);
+    constexpr uint32_t row_weight_page_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t num_tiles = num_experts / 32;
     static_assert(num_experts % 32 == 0 && k <= 16, "E a multiple of 32, k <= 16");
 
     // Scratch: scores [E] fp32 | biased [E] fp32 | mask face 0 (512 B) | ids out (32 B) | weights out (64 B)
+    //          | row-weight rows (k x 16 B)
     cb_reserve_back(cb_scratch, 1);
     const uint32_t scratch = get_write_ptr(cb_scratch);
     const uint32_t scores_l1 = scratch;
@@ -59,6 +63,7 @@ void kernel_main() {
     const uint32_t mask_l1 = biased_l1 + num_experts * 4;
     const uint32_t ids_l1 = mask_l1 + 512;
     const uint32_t weights_l1 = ids_l1 + 32;
+    const uint32_t rows_l1 = weights_l1 + 64;
 
     read_row(scores_addr, num_tiles, user, scores_l1);
     read_row(biased_addr, num_tiles, user, biased_l1);
@@ -114,5 +119,25 @@ void kernel_main() {
     const InterleavedAddrGen<false> weights_gen = {.bank_base_address = weights_addr, .page_size = weights_page_bytes};
     noc_async_write(ids_l1, get_noc_addr(0, ids_gen, user * k * 2), k * 2);
     noc_async_write(weights_l1, get_noc_addr(0, weights_gen, user * k * 4), k * 4);
+    if (row_weight_addr != 0) {
+        // Row `user` of pair p's bf16 32x32 tile starts at user * 32 B in face 0 (user < 16); its first 16 B hold
+        // columns 0-7: the weight (round to nearest even, as typecast) and seven zeros.
+        const InterleavedAddrGen<false> rw_gen = {
+            .bank_base_address = row_weight_addr, .page_size = row_weight_page_bytes};
+        volatile tt_l1_ptr uint32_t* rows = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows_l1);
+        for (uint32_t i = 0; i < k; ++i) {
+            union {
+                float f;
+                uint32_t u;
+            } bits;
+            bits.f = weights_out[i];
+            const uint32_t bf16 = (bits.u + 0x7FFFu + ((bits.u >> 16) & 1u)) >> 16;
+            rows[i * 4 + 0] = bf16;  // little endian: column 0 is the low half
+            rows[i * 4 + 1] = 0;
+            rows[i * 4 + 2] = 0;
+            rows[i * 4 + 3] = 0;
+            noc_async_write(rows_l1 + i * 16, get_noc_addr(user * k + i, rw_gen, user * 32), 16);
+        }
+    }
     noc_async_write_barrier();
 }

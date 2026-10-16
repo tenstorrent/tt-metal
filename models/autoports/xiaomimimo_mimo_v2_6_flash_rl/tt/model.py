@@ -57,7 +57,7 @@ class TtMiMoModel:
         expert_dtype=ttnn.bfloat4_b,
         lm_head_dtype=ttnn.bfloat8_b,
         kv_dtype=ttnn.bfloat8_b,
-        num_links=1,
+        num_links=2,
     ):
         """``ckpt`` may be None when ``cache_dir`` already holds every tensor (a later DP replica)."""
         self.mesh_device = mesh_device

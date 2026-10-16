@@ -29,7 +29,7 @@ TILE = ttnn.TILE_SIZE
 class MeshPlan:
     """TP on ``tp_axis`` of a (sub)mesh. For a 1x8 replica ``dp == 1``; a 4x8 parent has ``dp == 4``."""
 
-    def __init__(self, mesh_device, tp_axis=1, num_links=1, topology=ttnn.Topology.Ring):
+    def __init__(self, mesh_device, tp_axis=1, num_links=2, topology=ttnn.Topology.Ring):
         self.mesh_device = mesh_device
         self.mesh_shape = tuple(mesh_device.shape)
         self.tp_axis = tp_axis
