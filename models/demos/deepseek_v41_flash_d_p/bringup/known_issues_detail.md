@@ -11,7 +11,9 @@ count `scaled.ladder` as well as the real ladder rungs.
 
 (Moved here from the bullet in C.swa.kv test attempt 2: the RESOLVED note pushed the bullet past 600 characters.)
 
-## Scaled router vs golden (PCC 0.99) sits at the device noise floor
+## Scaled router vs golden sits at the device noise floor; judge it by the noise-floor limit
+FIX.2 (2026-10-16): the fixed PCC 0.99 is gone (F76, every limit 2 x the noise floor of the reference's dtypes). At the reference kernel's attention dtypes (bf16 q / P / output, fp32 scores / max / sum) S.swa.11 records router vs golden 0.9862 (limit 0.254), router vs CPU 0.99987, pcc_swap_out 0.99982 (limit 0.9923). The history below is kept for the numbers.
+
 Gate S.swa.11 (scaled 2x2 checkpoint, 96 experts, top 6) fails only `swap_router_vs_golden` (the router component
 test's default PCC 0.99 against the golden dense routing weights). Every other check passes, pcc_swap_out 0.999848.
 
@@ -91,3 +93,20 @@ thread's rounding corrupted every multi-group case (rel 2-400). All of the optio
 Layer 1 (swa_engram, S.swa_engram.14 on the scaled model, a later task): router vs golden 0.9847 with all of this
 (0.9839 without), so the fixed 0.99 vs-golden PCC still fails there; the levers left are the owner's (ATTN_IN_MM /
 WINDOW_SDPA exact) or a routing-aware vs-golden check (K-39).
+
+### FIX.2: back to the reference kernel's precision
+The overseer's FIX.2: the attention matches inference/kernel.py sparse_attn stage by stage (bf16 q / kv; fp32 scores,
+running max and sum; P cast to bf16 before P.V; fp32 accumulation; bf16 output; fp32 sink), the default and the
+max-precision value. The fork option `bf16_probs` (with fp32_scores) does it: Float32 max, row-sum from the TF32
+probabilities, then P rounded to bf16 in DEST; bf16 output.
+
+| attention (layer 0, scaled 2x2, chunk 2048) | vs CPU rel / bias | router vs golden | ms per layer |
+|---|---|---|---|
+| DS41-31 (TF32 q / P, fp32 out), before FIX.2 | 0.0143 / -3.0e-4 | 0.9918 | 28.76 |
+| FIX.2 default (reference dtypes) | 0.0221 / -5.0e-4 (limit 0.0526) | 0.9862 (limit 0.254) | 26.13 |
+| bf16 scores, bf16 out (perf pick) | - | - | 26.17 |
+
+Op limits left: the score - max subtraction on the FPU is TF32-precise (probe: with bf16 scores and a max off 0 the
+probabilities' error grows with |s - m|, mean -2.6e-4, max 3.3e-3 at |s - m| ~ 5; exact when the max is 0); the flash
+correction stays bf16 (more than one k_chunk only; the window is one). Found: the fp32_scores TF32 P reaches P@V with
+~9 bits (one-hot keys: 0.495 of P equal rne_tf32(exp), the rest truncated).

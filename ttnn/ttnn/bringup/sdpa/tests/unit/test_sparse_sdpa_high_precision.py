@@ -27,6 +27,12 @@ keeps 1/sum in Float32 and takes the exact exp. Covered here:
   0.0009-0.0022), one chunk with a sink, 4 chunks (eltwise max, SALAD), 6 query tile-rows in 2 DST groups; its own
   program; refused without high_precision + fp32_output, and a float32 q without it. (A math-thread SFPU add in the
   row-sum, racing the pack thread's SFPU rounding, failed the 2-group cases with rel 2-400 during development.)
+- bf16_probs=True (with fp32_scores and a bf16 q; deepseek_v41_flash_d_p FIX.2): DeepSeek's sparse_attn kernel
+  stage by stage (Float32 scores and running max, the row-sum from the TF32 probabilities, then bf16 probabilities
+  before P@V, a bf16 output allowed): the probabilities read back exactly through one-hot keys equal
+  rne_bf16(rne_tf32(exp(score))) everywhere (with the rounding disabled: 0.26); closer to the kernel than the bf16
+  scores, no bias against the TF32 probabilities; the bf16 output is the fp32 one rounded to nearest; its own program;
+  refused without fp32_scores or with a float32 q.
 """
 
 import pytest
@@ -405,4 +411,171 @@ def test_fp32_scores_program_and_refusal(device, expect_error):
             compute_kernel_config=_ckc(),
             high_precision=True,
             fp32_output=True,
+        )
+
+
+# ---------------------------------------------------------------- bf16_probs (deepseek_v41_flash_d_p FIX.2)
+# bf16_probs=True (with fp32_scores and a bf16 q): DeepSeek's sparse_attn kernel (inference/kernel.py) stage by stage:
+# bf16 q / kv, Float32 scores, running max and row-sum, the probabilities rounded to bf16 before P@V, fp32
+# accumulation, a bf16 output (fp32_output may be off). Golden: that kernel in float32 torch on the same bf16 inputs
+# (P rounded to bf16 after the row-sum, the output rounded to bf16 last). Cases: the fp32_scores ones (one chunk with a
+# sink, 4 chunks, 2 DST groups).
+def _kernel_golden(q, kv, idx, scale, v_dim, sink, bf16_p=True):
+    """DeepSeek's sparse_attn on bf16 q / kv in float32: s = (q . k) scale, m = max, p = exp(s - m), den = sum p +
+    exp(sink scale - m), out = (bf16(p) @ v) / den (fp32 p with bf16_p False)."""
+    qf, kvf = q.float()[0], kv.float()[0, 0]
+    i = idx[0, 0]
+    sel = kvf[i.clamp(min=0)]
+    sc = torch.einsum("hsk,swk->hsw", qf, sel) * scale
+    sc = sc.masked_fill(~(i >= 0)[None], float("-inf"))
+    m = sc.amax(-1, keepdim=True)
+    p = torch.exp(sc - m)
+    den = p.sum(-1, keepdim=True) + torch.exp(sink.float().view(-1, 1, 1) * scale - m)
+    if bf16_p:
+        p = p.to(torch.bfloat16).float()
+    return (torch.einsum("hsw,swv->hsv", p, sel[..., :v_dim]) / den)[None]
+
+
+@pytest.mark.parametrize("case", list(FP32_SCORES_CASES))
+def test_bf16_probs(device, case):
+    q, kv, idx, v_dim, scale, kc, sink = _fp32_scores_inputs(case)
+    q = q.to(torch.bfloat16)
+    want = _kernel_golden(q, kv, idx, scale, v_dim, sink)
+    want_fp32p = _kernel_golden(q, kv, idx, scale, v_dim, sink, bf16_p=False)
+    tq, tkv = _dev(q, device, ttnn.bfloat16), _dev(kv, device, ttnn.bfloat16)
+    ti = _dev(idx.to(torch.int32), device, ttnn.uint32)
+    call = dict(
+        kv_format=ttnn.bringup.SparseKVFormat.BF16,
+        scale=scale,
+        k_chunk_size=kc,
+        compute_kernel_config=_ckc(),
+        attention_sink=_sink(device, sink),
+        high_precision=True,
+    )
+    o16 = ttnn.bringup.sparse_sdpa(tq, tkv, ti, v_dim, fp32_scores=True, bf16_probs=True, **call)
+    assert o16.dtype == ttnn.bfloat16 and o16.layout == ttnn.ROW_MAJOR_LAYOUT
+    b16 = ttnn.to_torch(o16).float()
+    b32 = ttnn.to_torch(
+        ttnn.bringup.sparse_sdpa(tq, tkv, ti, v_dim, fp32_scores=True, bf16_probs=True, fp32_output=True, **call)
+    ).float()
+    t32 = ttnn.to_torch(
+        ttnn.bringup.sparse_sdpa(tq, tkv, ti, v_dim, fp32_scores=True, fp32_output=True, **call)
+    ).float()
+    base = ttnn.to_torch(ttnn.bringup.sparse_sdpa(tq, tkv, ti, v_dim, **call)).float()  # bf16 scores, bf16 out
+    r16, r32, rt, rb = (_stats(x, want) for x in (b16, b32, t32, base))
+    # the bf16 rounding of P is there: the option moves the output from the TF32 probabilities' by as much as the
+    # kernel's bf16 P moves it from fp32 P (an option that did nothing would move it by 0)
+    d_dev = ((b32 - t32).norm() / t32.norm()).item()
+    d_ker = ((want - want_fp32p).norm() / want_fp32p.norm()).item()
+    # the bf16 output is the bf16_probs fp32 output rounded to nearest by the packer (<= half a bf16 step)
+    ulp = torch.where(b16 == 0, torch.full_like(b16, 2.0**-133), b16.abs() * 2.0**-7)
+    worst = ((b32 - b16).abs() / ulp).max().item()
+    bits = b32.view(torch.int32)
+    off_bf16 = ((bits & 0xFFFF) != 0).float().mean().item()
+    fmt = "rel {:.5f} ratio [{:.4f}, {:.4f}] coef {:.5f}"
+    print(
+        f"{case} vs the kernel: bf16_probs bf16 out "
+        + fmt.format(*r16)
+        + " | bf16_probs fp32 out "
+        + fmt.format(*r32)
+        + " | TF32 probs fp32 out "
+        + fmt.format(*rt)
+        + " | bf16 scores bf16 out "
+        + fmt.format(*rb)
+        + f" || P rounding: device {d_dev:.5f}, kernel {d_ker:.5f}; |fp32 - bf16 out| <= {worst:.3f} steps"
+    )
+    for r in (r16, r32):
+        assert torch.isfinite(torch.tensor(r)).all()
+        assert 0.98 <= r[1] and r[2] <= 1.02, f"per-row norm ratio [{r[1]:.4f}, {r[2]:.4f}]"
+        assert abs(r[3] - 1) <= 0.003, f"coefficient {r[3]:.5f}"
+    assert worst <= 0.5001, f"the bf16 output is {worst:.3f} bf16 steps from the fp32 one (its rounding: <= 0.5)"
+    assert off_bf16 > 0.9, "the fp32 output of bf16_probs was rounded"
+    # (d_dev is printed only: the two programs' own in-tile rounding noise (DS41-16) differs by ~6e-4 even without the
+    # rounding of P, measured; test_bf16_probs_values reads the probabilities back exactly)
+    # rounded to nearest: no bias (truncating P would shrink the output by ~1e-3 relative)
+    assert abs(r32[3] - rt[3]) <= 5e-4, f"bf16_probs coefficient {r32[3]:.5f} vs TF32 probs' {rt[3]:.5f}"
+    # the Float32 scores: closer to the kernel than the bf16 scores, both with a bf16 output
+    assert r16[0] < rb[0], f"bf16_probs rel {r16[0]:.5f} not below the bf16 scores' {rb[0]:.5f}"
+
+
+def _rne_bits(x: torch.Tensor, drop: int) -> torch.Tensor:
+    """float32 x rounded to nearest-even with the low `drop` mantissa bits cleared (13: TF32, 16: bf16)."""
+    i = x.float().contiguous().view(torch.int32)
+    i = (i + ((1 << (drop - 1)) - 1) + ((i >> drop) & 1)) & ~((1 << drop) - 1)
+    return i.view(torch.float32)
+
+
+@pytest.mark.parametrize("bf16_probs", [True, False], ids=["bf16_probs", "tf32_probs"])
+def test_bf16_probs_values(device, bf16_probs):
+    """The probabilities themselves, read back exactly: keys = values = one-hot rows e_j (j < 128), so every score is
+    q[j] (one product, exact) and every P@V output column one product p_j x (1/sum) (bf16 x TF32: exact in fp32);
+    the fp32 output then gives p_j = out[j] / out[argmax] exactly. Key 0's score is 0, the row max, so the FPU's
+    score - max (TF32-precise: it truncates a difference wider than 11 bits) is exact and p = exp(score), the
+    accurate fp32 exp, rounded to TF32 (nearest) in DEST. bf16_probs: then to bf16 (nearest): every p_j on the bf16
+    grid and equal to rne_bf16(rne_tf32(exp(q_j))) (truncation would match about half); without it the TF32 value."""
+    H, S, W, k_dim = 32, 32, 128, 512
+    g = torch.Generator().manual_seed(21)
+    kv = torch.zeros(1, 1, W, k_dim)
+    kv[0, 0, torch.arange(W), torch.arange(W)] = 1.0
+    q = torch.zeros(1, H, S, k_dim)
+    q[..., 1:W] = -6.0 * torch.rand(1, H, S, W - 1, generator=g) - 2.0**-7  # < 0: key 0 (score 0) is the max
+    q = q.to(torch.bfloat16)
+    idx = torch.stack([torch.randperm(W, generator=g) for _ in range(S)]).view(1, 1, S, W)
+    out = ttnn.to_torch(
+        ttnn.bringup.sparse_sdpa(
+            _dev(q, device, ttnn.bfloat16),
+            _dev(kv.to(torch.bfloat16), device, ttnn.bfloat16),
+            _dev(idx.to(torch.int32), device, ttnn.uint32),
+            k_dim,
+            kv_format=ttnn.bringup.SparseKVFormat.BF16,
+            scale=1.0,
+            k_chunk_size=128,
+            compute_kernel_config=_ckc(),
+            high_precision=True,
+            fp32_output=True,
+            fp32_scores=True,
+            bf16_probs=bf16_probs,
+        )
+    ).float()[..., :W]
+    p = (out.double() / out[..., :1].double()).float()  # exact: out[j] = p_j x r with one r per row, p_0 = 1
+    tf32 = _rne_bits(torch.exp(q[..., :W].double()).float(), 13)
+    want = _rne_bits(tf32, 16) if bf16_probs else tf32
+    bits = p.view(torch.int32)
+    on_grid = ((bits & 0xFFFF) == 0).float().mean().item()
+    match = (p == want).float().mean().item()
+    trunc = (p == (tf32.view(torch.int32) & ~0xFFFF).view(torch.float32)).float().mean().item()
+    print(
+        f"bf16_probs={bf16_probs}: on the bf16 grid {on_grid:.4f}, == the golden {match:.5f}, == truncated {trunc:.4f}"
+    )
+    if bf16_probs:
+        assert match >= 0.999, f"only {match:.5f} of the probabilities equal the golden"
+        assert on_grid == 1.0, f"{1 - on_grid:.4f} of the probabilities are off the bf16 grid"
+    else:
+        # control: the TF32 probabilities are not rounded to bf16. (They reach P@V with ~9 bits, not 11: 0.495 equal
+        # rne_tf32(exp), the values on the bf16 grid are the truncated ones; measured, deepseek_v41_flash_d_p FIX.2.)
+        assert on_grid < 0.5, f"{on_grid:.4f} of the TF32 probabilities are on the bf16 grid"
+
+
+def test_bf16_probs_program_and_refusal(device, expect_error):
+    q, kv, idx, v_dim, scale, kc, _ = _case_inputs("ds_h32_k576")
+    device.clear_program_cache()
+    _fork(device, q, kv, idx, v_dim, scale, kc, _ckc(), high_precision=True, fp32_output=True, fp32_scores=True)
+    n1 = device.num_program_cache_entries()
+    kw = dict(high_precision=True, fp32_output=True, fp32_scores=True, bf16_probs=True)
+    _fork(device, q, kv, idx, v_dim, scale, kc, _ckc(), **kw)
+    n2 = device.num_program_cache_entries()
+    assert n2 > n1, "bf16_probs must be a separate program"
+    with expect_error(RuntimeError, "bf16_probs requires fp32_scores"):
+        _fork(device, q, kv, idx, v_dim, scale, kc, _ckc(), high_precision=True, fp32_output=True, bf16_probs=True)
+    with expect_error(RuntimeError, "bf16_probs requires fp32_scores=true and a bf16 q"):
+        ttnn.bringup.sparse_sdpa(
+            _dev(q.float(), device, ttnn.float32),
+            _dev(kv, device, ttnn.bfloat16),
+            _dev(idx.to(torch.int32), device, ttnn.uint32),
+            v_dim,
+            kv_format=ttnn.bringup.SparseKVFormat.BF16,
+            scale=scale,
+            k_chunk_size=kc,
+            compute_kernel_config=_ckc(),
+            **kw,
         )

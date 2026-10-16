@@ -37,6 +37,23 @@ inline void calculate_round_tf32_rne() {
         sfpi::dst_reg++;
     }
 }
+#ifdef SPARSE_SDPA_BF16_PROBS
+// bf16_probs: the probabilities rounded to bf16 to nearest-even (DeepSeek's sparse_attn casts P to bf16 before P@V);
+// the Float32 CB then holds bf16 values, which the FPU reads exactly. Inputs are exp() values in [0, 1].
+template <int ITERATIONS = 8>
+inline void calculate_round_bf16_rne() {
+    for (int d = 0; d < ITERATIONS; ++d) {
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::vUInt u = sfpi::as<sfpi::vUInt>(v);
+        sfpi::vUInt lsb = (u >> 16) & 1;
+        u = u + lsb;
+        u = u + sfpi::vUInt(0x7FFF);  // sign-magnitude: the add rounds the magnitude of either sign
+        u = u & sfpi::vUInt(0xFFFF0000u);
+        sfpi::dst_reg[0] = sfpi::as<sfpi::vFloat>(u);
+        sfpi::dst_reg++;
+    }
+}
+#endif
 // DEST tile 0 = round_tf32(tile 0 + tile 1 + ... + tile N-1), fp32 SFPU adds in that order.
 template <int ITERATIONS, uint32_t N>
 inline void calculate_sum_round_tf32_rne() {
@@ -62,6 +79,11 @@ inline void calculate_sum_round_tf32_rne() {
 ALWI void round_tf32_packthread_tile(uint32_t idst) {
     PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_round_tf32_rne, (8), idst, VectorMode::RC)));
 }
+#ifdef SPARSE_SDPA_BF16_PROBS
+ALWI void round_bf16_packthread_tile(uint32_t idst) {
+    PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_round_bf16_rne, (8), idst, VectorMode::RC)));
+}
+#endif
 template <uint32_t N>
 ALWI void sum_round_tf32_packthread_tile0() {
     PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sum_round_tf32_rne, (8, N), 0, VectorMode::RC)));
@@ -479,7 +501,8 @@ void kernel_main() {
                     // running row-max (MAX-only; eltwise-max against prev on chunk>0)
                     max_cur.reserve_back(qsb);
 #ifdef SPARSE_SDPA_FP32_SCORES
-                    pack_reconfig_data_format(max_cur.get_cb_id());  // bf16 max from the Float32 scores
+                    // the max from the Float32 scores: bf16 (fp32_scores), Float32 with bf16_probs (TF32-exact)
+                    pack_reconfig_data_format(max_cur.get_cb_id());
 #endif
                     configure_single_tile_pack(max_cur.get_cb_id());
                     reduce_c_row_group<cb_qk_im, cb_scale, KT_stride>(
@@ -497,6 +520,9 @@ void kernel_main() {
                     // sub_exp in place: cb_qk_im = exp((cb_qk_im - max)*scale); partial row-sum -> sum_cur (L1-acc).
                     // Walk key-tile columns in exp_sbw steps (one step when the group fits DST); global_col_base
                     // drives the L1-accumulate across steps.
+#ifdef SPARSE_SDPA_BF16_PROBS
+                    reconfig_data_format_srcb(max_cur.get_cb_id());  // the Float32 max (srcB of the subtraction)
+#endif
                     for (uint32_t kc = 0; kc < Skt; kc += exp_sbw) {
                         sub_exp_block_bcast_cols<false, scale_fp32>(
                             cb_qk_im,
@@ -509,6 +535,9 @@ void kernel_main() {
                             /*sbw=*/exp_sbw);
                     }
                     pack_to_unpack_sync();  // sub_exp PACK writes must be visible to the V-matmul UNPACK
+#ifdef SPARSE_SDPA_BF16_PROBS
+                    reconfig_data_format_srcb(cb_scale);  // back to the bf16 srcB state
+#endif
 #ifdef SPARSE_SDPA_HIGH_PRECISION
                     // Row-sum partial from the packed bf16 probs (the ones PV multiplies), exact in the Float32
                     // DEST and L1-accumulated into the Float32 sum_cur: sum_cur[r] = sum_kt probs[r, kt].
@@ -553,6 +582,32 @@ void kernel_main() {
                         }
                     PACK((llk_pack_reconfig_l1_acc(0)));
                     pack_reconfig_data_format(cb_qk_im);
+#ifdef SPARSE_SDPA_BF16_PROBS
+                    // bf16_probs: the row-sum above came from the TF32 probabilities (DeepSeek's kernel sums the fp32
+                    // ones); now round them to bf16 (nearest) in place, the operand of probs@V (the kernel's bf16 P)
+                    configure_single_tile_pack(cb_qk_im);
+                    for (uint32_t r = 0; r < qsb; ++r) {
+                        for (uint32_t kt0 = 0; kt0 < Skt; kt0 += dst_size) {
+                            const uint32_t n = (Skt - kt0 < dst_size) ? (Skt - kt0) : dst_size;
+                            const uint32_t t0 = (row_base + r) * KT_stride + kt0;
+                            tile_regs_acquire();
+                            for (uint32_t j = 0; j < n; ++j) {
+                                copy_tile(cb_qk_im, t0 + j, j);
+                            }
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            for (uint32_t j = 0; j < n; ++j) {
+                                round_bf16_packthread_tile(j);
+                            }
+                            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                            for (uint32_t j = 0; j < n; ++j) {
+                                pack_tile<true>(j, cb_qk_im, t0 + j);
+                            }
+                            tile_regs_release();
+                        }
+                    }
+                    pack_to_unpack_sync();  // the in-place bf16 probabilities must be visible to the PV UNPACK
+#endif
 #endif
                 }
 
@@ -632,8 +687,14 @@ void kernel_main() {
                     // (sub_exp_first_col_blocks applies scale itself; the group's init baked scale_fp32).
                     exp_packthread_tile_init<EXP_APPROX_MODE>();
                     corr_cb.reserve_back(qsb);
+#ifdef SPARSE_SDPA_BF16_PROBS
+                    reconfig_data_format(max_prev.get_cb_id(), max_cur.get_cb_id());  // the Float32 maxima
+#endif
                     sub_exp_first_col_blocks<false, scale_fp32>(
                         max_prev.get_cb_id(), max_cur.get_cb_id(), cb_corr, /*q_subblock=*/qg, qsb);
+#ifdef SPARSE_SDPA_BF16_PROBS
+                    reconfig_data_format(cb_scale, cb_scale);
+#endif
                     corr_cb.push_back(qsb);
                     // cur.out += prev.out*corr ; cur.sum += prev.sum*corr (L1-acc). salad packs width=dst_size,
                     // so restore Default packer geometry first (the per-chunk tilize left it in Tilize layout).
