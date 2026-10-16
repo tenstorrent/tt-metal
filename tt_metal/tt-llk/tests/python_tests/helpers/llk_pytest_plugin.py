@@ -564,9 +564,7 @@ def pytest_configure(config):
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
-    # LLK_HARDWARE_FREE is set by tests/run_hardware_free.sh. setup_build above
-    # has already filled CHIP_ARCH and the path attributes; opening ttexalens
-    # here would require a card these tests never use.
+    # LLK_HARDWARE_FREE skips ttexalens after setup_build fills the paths.
     if (
         os.environ.get("LLK_HARDWARE_FREE") != "1"
         and TestConfig.BUILD_MODE != BuildMode.PRODUCE
