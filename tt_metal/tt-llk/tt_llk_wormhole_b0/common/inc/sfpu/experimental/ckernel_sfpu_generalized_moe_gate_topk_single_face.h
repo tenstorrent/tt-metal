@@ -721,9 +721,14 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
         // addr 8 and left scores+4 untouched -> full top-8). Reset Dst RWC first so the dst_reg base
         // lines up with the TTI ADDR_MOD_3 base. Zero the dropped slots' idx too (matches the topk<=4
         // path), same read-modify-write the scores use: load the row, zero the dropped lanes in-register,
-        // store all lanes back (kept lanes round-trip exactly). NOTE: the idx row must be read/written as
-        // vFloat (the default mod-0 SrcB raw-bit passthrough), NOT vUInt -- a vUInt dst_reg store here
-        // simply did not land. The mod-0 passthrough preserves the kept ids (e.g. 337/75) bit-for-bit.
+        // store all lanes back. The idx row holds RAW uint16 ids and must move through a 16-bit integer
+        // layout (DataLayout::U16 = SFPLOAD/SFPSTORE UINT16: the Dst16b word zero-extended on load, its low
+        // 16 bits on store), the same raw transfer the LO16_ONLY stores above use. The mod-0 float path is
+        // NOT a passthrough: the load reads the word's low byte as a bf16 exponent and the store flushes an
+        // exponent of zero to zero, so an id whose low byte is 0 -- 256, 512, ... (the >256-expert path
+        // carries global ids b*256+i) -- comes back as 0 and the token is routed to expert 0. A Default-
+        // layout vUInt store (INT32, Dst32b-addressed) does not land in this row, which is why the integer
+        // path has to name its 16-bit layout explicitly.
         constexpr int drop_thr = 16 * (static_cast<int>(topk) - 4); // tileid >= drop_thr -> rank >= topk
         constexpr int sc4_dreg = (scores_offset + 4) / 2;           // scores+4 (TTI addr 4)  -> dst_reg 2
         constexpr int ix4_dreg = (indices_offset + 4) / 2;          // indices+4 (TTI addr 68) -> dst_reg 34
@@ -735,13 +740,13 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
         }
         v_endif;
         sfpi::dst_reg[sc4_dreg] = sc;
-        sfpi::vFloat ix         = sfpi::dst_reg[ix4_dreg];
+        sfpi::vUInt ix          = sfpi::dst_reg[ix4_dreg].mode<sfpi::DataLayout::U16>();
         v_if (sfpi::vConstTileId >= drop_thr)
         {
-            ix = 0.0f;
+            ix = 0;
         }
         v_endif;
-        sfpi::dst_reg[ix4_dreg] = ix;
+        sfpi::dst_reg[ix4_dreg].mode<sfpi::DataLayout::U16>() = ix;
     }
 
     // ---- normalization tail (same as _generalized_moe_gate_top8) ----
