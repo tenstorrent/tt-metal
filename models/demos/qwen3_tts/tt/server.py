@@ -48,6 +48,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
+from models.demos.qwen3_tts.tt import fast_sampler
 from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
 from models.demos.qwen3_tts.tt.mesh_utils import to_torch_chip0 as _mesh_to_torch_chip0
 
@@ -572,6 +573,10 @@ def create_icl_embedding_ttnn(
     return inputs_embeds_tt, trailing_text_hidden, tts_pad_embed, code_pred_embeds
 
 
+# Exact numba top-k sampler (tt/fast_sampler.py, Blaze L5); 0 = the torch path below.
+FAST_SAMPLER = os.environ.get("TT_QWEN3_FAST_SAMPLER", "1") == "1"
+
+
 def sample_token(
     logits: torch.Tensor,
     temperature: float = 0.9,
@@ -610,6 +615,12 @@ def sample_token(
         if idx.numel() > 0:
             vals = logits[idx]
             logits[idx] = torch.where(vals > 0, vals / repetition_penalty, vals * repetition_penalty)
+
+    if top_k > 0 and FAST_SAMPLER and fast_sampler.available():
+        # Same kept set and probabilities as below in ~5 us; the uniform comes from torch's
+        # generator so per-request seeding still reproduces the output.
+        u = float(torch.rand(()).item())
+        return fast_sampler.draw(logits.contiguous().numpy(), temperature, top_k, u)
 
     logits = logits / temperature
     if top_k > 0:
