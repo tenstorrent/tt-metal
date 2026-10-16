@@ -214,7 +214,8 @@ def _log(name, out, st):
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_spec_vllm_class_runner(mesh_device, monkeypatch):
+@pytest.mark.parametrize("warmup", ["plugin", "lazy"])
+def test_spec_vllm_class_runner(mesh_device, monkeypatch, warmup):
     """Plugin call pattern on Qwen36MTPContractForCausalLM: lossless, one capture, no late compiles."""
     if not _MULTI:
         pytest.skip("spec decode is the TP path; run with MESH_DEVICE=P150x4")
@@ -255,12 +256,19 @@ def test_spec_vllm_class_runner(mesh_device, monkeypatch):
         for i, (name, prompt, max_new) in enumerate(reqs)
     }
 
-    # --- allocate the KV cache the plugin way, then the 4 warmup calls in plugin order -------------- #
+    # --- allocate the KV cache the plugin way, then the 4 warmup calls in plugin order (or the lazy path) -- #
     kv = cls.allocate_kv_cache(kv_shape, ttnn.bfloat16, len(model._attention_layer_indices))
-    cls.warmup_model_prefill(enable_trace=False, kv_cache=kv, can_sample_on_device=False)
-    cls.warmup_model_decode(enable_trace=False, kv_cache=kv, max_batch_size=1, num_blocks=W, can_sample_on_device=False)
-    cls.warmup_model_prefill(enable_trace=True, kv_cache=kv, can_sample_on_device=False)
-    cls.warmup_model_decode(enable_trace=True, kv_cache=kv, max_batch_size=1, num_blocks=W, can_sample_on_device=False)
+    if warmup == "lazy":  # enable_model_warmup=False: what the first prefill_forward runs
+        cls._ensure_ready(kv)
+    else:
+        cls.warmup_model_prefill(enable_trace=False, kv_cache=kv, can_sample_on_device=False)
+        cls.warmup_model_decode(
+            enable_trace=False, kv_cache=kv, max_batch_size=1, num_blocks=W, can_sample_on_device=False
+        )
+        cls.warmup_model_prefill(enable_trace=True, kv_cache=kv, can_sample_on_device=False)
+        cls.warmup_model_decode(
+            enable_trace=True, kv_cache=kv, max_batch_size=1, num_blocks=W, can_sample_on_device=False
+        )
 
     n_prog = mesh_device.num_program_cache_entries()
     assert model._vfy_capture_count == 1
@@ -644,6 +652,29 @@ def test_warmup_model_decode_enable_trace_routing(monkeypatch):
     gen.warmup_model_decode(kv_cache=None, enable_trace=True)
     gen.warmup_model_decode(None, True, can_sample_on_device=False)
     assert eng.log == ["prepare", "capture", "capture"]
+
+
+def test_ensure_ready_prepares_before_recording(monkeypatch):
+    """Lazy warmup follows the plugin order: prefill and decode prepared before any trace is recorded."""
+    gen = object.__new__(CLS)
+    eng = SimpleNamespace(prefill_prepared=False, prepared=False, prefill_recorded=False, captured=False, log=[])
+
+    def step(flag, name):
+        def run(*a, **k):
+            eng.log.append(name)
+            setattr(eng, flag, True)
+
+        return run
+
+    eng.prepare_decode = step("prepared", "prepare_decode")
+    eng.record_prefill = step("prefill_recorded", "record_prefill")
+    eng.capture_decode = step("captured", "capture_decode")
+    monkeypatch.setattr(gen, "_engine", lambda: eng, raising=False)
+    monkeypatch.setattr(gen, "warmup_model_prefill", step("prefill_prepared", "prepare_prefill"), raising=False)
+    assert gen._ensure_ready("kv") is eng
+    assert eng.log == ["prepare_prefill", "prepare_decode", "record_prefill", "capture_decode"]
+    gen._ensure_ready("kv")
+    assert len(eng.log) == 4
 
 
 def test_propose_draft_tokens(gen_eng):

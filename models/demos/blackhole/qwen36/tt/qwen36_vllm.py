@@ -579,12 +579,13 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         if eng.prefill_recorded and eng.captured:
             return eng
         logger.warning("Qwen36 MTP engine not warmed up (enable_model_warmup=False?); warming lazily")
+        # plugin warmup order: allocate and compile everything before any trace is recorded
         if not eng.prefill_prepared:
             self.warmup_model_prefill(kv_cache, False)
-        if not eng.prefill_recorded:
-            eng.record_prefill()
         if not eng.prepared:
             eng.prepare_decode()
+        if not eng.prefill_recorded:
+            eng.record_prefill()
         if not eng.captured:
             eng.capture_decode()
         return eng

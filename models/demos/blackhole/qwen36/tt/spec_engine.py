@@ -621,6 +621,8 @@ class MTPSpecEngine:
             return
         model, B, T = self.model, self.B, self.T
         assert not self.captured and getattr(model, "_vfy_trace_id", None) is None, "prepare_decode after capture"
+        # a B == 1 prefill trace replay may overwrite buffers allocated after it was recorded
+        assert not (B == 1 and self.prefill_recorded), "prepare_decode after record_prefill"
         t0 = time.perf_counter()
         # Compile the seed's programs (T = 1 forward, feed-row scatter and copy) before any capture.
         _, f = model.seed_spec_step([0] * B, [0] * B, self._prep_pt)

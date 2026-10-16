@@ -741,3 +741,11 @@ def test_decode_forward_padded_columns_stay_in_reservation(pos, nb, stale):
     )
     assert not bool((seen["pt"] == 99).any()), "verify got a block past the reservation"
     assert torch.equal(e._last_pt, pt), "the drafter must keep the full table"
+
+
+def test_prepare_decode_after_record_prefill_refused(expect_error):
+    e = _bare_engine(
+        1, prefill_prepared=True, prepared=False, prefill_recorded=True, captured=False, model=types.SimpleNamespace()
+    )
+    with expect_error(AssertionError, "prepare_decode after record_prefill"):
+        MTPSpecEngine.prepare_decode(e)
