@@ -1,0 +1,62 @@
+{
+ "used": [
+  {
+   "id": "DS41-14",
+   "how": "ported test_c_swa_kv.py's fp8 grid / mismatch checks; the off-grid check catches the slipped scale and noise mutations",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-36",
+   "how": "1 % noise slips the calibrated rel limits: added structural fp8 checks instead of tightening rel limits",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-1",
+   "how": "explained the nudge's 26-31 % fp8 flips and set the mismatch limit to 2 x that floor",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-45",
+   "how": "copied the q_a test's current sweep form (evaluate + error_gate, nudge and bf16 output controls)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-46",
+   "how": "new entry written by this step: the layer-2 nudge mismatch and the 0.63 limit",
+   "traced": null,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-14",
+   "evidence": "its fixed 0.15 mismatch limit (from the bf16 precision model) fails the F80 input-nudge control at layer 2: nudge mismatch 0.260-0.315 (BRINGUP_IMPL=mutations, test_c_enc_source_kv.py); the limit is layer-dependent, see DS41-46",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "the fp8 mismatch floor is set by the input nudge per layer (layer 2: 0.26-0.31), not by the bf16 precision model: now DS41-46"
+ ],
+ "overseer": [],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.enc_source.kv",
+  "role": "test",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T18:55:15",
+  "head": "6d22e9e4aaa",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.enc_source.kv.test.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_kv.py"
+  ]
+ }
+}
