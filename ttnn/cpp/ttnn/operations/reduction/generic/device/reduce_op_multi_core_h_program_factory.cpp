@@ -68,7 +68,7 @@ uint32_t reduce_h_num_cols(
 auto reduce_h_split_work(const ReduceParams& attrs, const tt::tt_metal::MeshTensor& a, uint32_t num_cols) {
     return attrs.sub_core_grids.has_value()
                ? tt::tt_metal::split_work_to_cores(*attrs.sub_core_grids, num_cols)
-               : tt::tt_metal::split_work_to_cores(a.mutable_device().compute_with_storage_grid_size(), num_cols);
+               : tt::tt_metal::split_work_to_cores(a.device().compute_with_storage_grid_size(), num_cols);
 }
 
 // Whether the compute_g2 kernel exists. override_runtime_arguments cannot see the built Program,
@@ -121,7 +121,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    tt_metal::distributed::MeshDevice& device = a.mutable_device();
+    const tt_metal::distributed::MeshDevice& device = a.device();
 
     // Fast path aliases I/O CBs onto the tensors; CBs are L1-only.
     const bool use_width_sharding = reduce_h_use_width_sharding(a, output);

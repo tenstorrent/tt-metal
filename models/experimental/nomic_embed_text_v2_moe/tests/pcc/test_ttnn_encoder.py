@@ -132,7 +132,7 @@ def test_encoder(device, config, reference_model, reference, tt_encoder, batch, 
 
 
 @pytest.mark.parametrize("batch, seqlen", STACK_SHAPES)
-def test_encoder_with_ragged_padding(device, config, reference_model, reference, tt_encoder, batch, seqlen):
+def test_encoder_with_ragged_padding(device, config, tt_config, reference_model, reference, tt_encoder, batch, seqlen):
     """The whole stack with 25% of each row padded, compared on the kept positions.
 
     The pooled embedding is taken with the same mask, so padded positions are excluded from it
@@ -145,7 +145,7 @@ def test_encoder_with_ragged_padding(device, config, reference_model, reference,
     out = tt_encoder(
         to_device(to_block_layout(x), device),
         rotary_tables(device, config, seqlen),
-        additive_attention_mask(mask, device),
+        additive_attention_mask(mask, device, mask_dtype=tt_config.attention_mask_dtype),
     )
 
     with torch.no_grad():
@@ -228,7 +228,7 @@ def test_routing_agreement_holds_at_depth(device, config, reference_model, refer
             # block input: the block input is one sub-block short of where routing happens, so
             # measuring there would report decisions the model never makes.
             tt_attn = layer.attn(tensor, rot_mats)
-            tt_hidden = layer._norm(tt_attn, tensor, layer.norm1_weight, layer.norm1_bias)
+            tt_hidden = layer._norm(tt_attn, tensor, layer.norm1)
             _, _, indices = layer.mlp.router.select(flatten_tokens(tt_hidden))
             selected = ttnn.to_torch(indices).long().reshape(tokens, config.moe_top_k)
             with torch.no_grad():

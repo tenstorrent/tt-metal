@@ -997,7 +997,8 @@ TEST(MultiHost, TestSubtorus4x4PipelineMgdPinningsExact) {
 
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        fabric_router_tests::fabric_config_for_active_mgd(),
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -1468,9 +1469,9 @@ TEST(MultiHost, BHDualGalaxyFabricConfigMismatchAcrossRanksFatal) {
 }
 // Negative test: mesh 2 is a single (1x1) exit chip cabled to BOTH mesh 0 and mesh 1, and both boundaries are
 // marked assign_z_direction. They both try to claim mesh 2's one Z lane; the losing boundary is Z-only (never
-// falls back to NESW), so it resolves zero routers -> control-plane initialization must fail. This exercises
-// the assign_z conflict path. See t3k_assign_z_conflict_mesh_graph_descriptor.textproto.
-TEST(MultiHost, T3KAssignZConflictFatal) {
+// falls back to NESW), so it resolves zero routers -> control-plane initialization must fail under STRICT.
+// This exercises the assign_z conflict path. See t3k_assign_z_conflict_mesh_graph_descriptor.textproto.
+TEST(MultiHost, T3KAssignZConflictStrictFatal) {
     const std::filesystem::path conflict_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_assign_z_conflict_mesh_graph_descriptor.textproto";
@@ -1481,6 +1482,34 @@ TEST(MultiHost, T3KAssignZConflictFatal) {
             tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
         control_plane->configure_routing_tables_for_fabric_ethernet_channels();
     });
+}
+
+// Same conflict under a RELAXED policy (#56762): init succeeds and both boundaries resolve zero (logical-only).
+TEST(MultiHost, T3KAssignZConflictLosingBoundaryResolvesZero) {
+    const std::filesystem::path conflict_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/"
+        "t3k_assign_z_conflict_relaxed_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane(
+        conflict_mesh_graph_desc_path.string(),
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    // Init succeeded and every declared mesh came up.
+    EXPECT_EQ(control_plane->get_mesh_graph().get_mesh_ids().size(), 4u)
+        << "assign_z conflict must no longer fatal control-plane init; all four meshes should initialize";
+
+    const auto pairs_0_to_2 =
+        control_plane->get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(MeshId{0}, MeshId{2});
+    const auto pairs_1_to_2 =
+        control_plane->get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(MeshId{1}, MeshId{2});
+
+    // Mesh 2's single Z lane cannot serve both boundaries; on this mock neither claims it.
+    EXPECT_TRUE(pairs_0_to_2.empty() && pairs_1_to_2.empty())
+        << "Under mutual assign_z contention for a single Z lane both connections are expected to "
+           "resolve zero (logical-only). Resolved 0->2: "
+        << pairs_0_to_2.size() << ", 1->2: " << pairs_1_to_2.size();
 }
 
 TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
@@ -1725,8 +1754,11 @@ TEST(MultiHost, TestLlama8b1x2PodControlPlaneInit) {
         GTEST_SKIP() << "Requires Blackhole Galaxy mock (single-pod llama 8b decode pod MGDs)";
     }
 
+    // Use the config the pod MGD declares (RING dim -> FABRIC_2D_TORUS_Y) so it matches the
+    // ControlPlaneFixture layout/corner checks sharing this tt-run process (no set-once fabric-config clash).
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+        fabric_router_tests::fabric_config_for_active_mgd(),
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -1817,8 +1849,11 @@ TEST(MultiHost, TestLlama8b2x1PodControlPlaneInit) {
         GTEST_SKIP() << "Requires Blackhole Galaxy mock (single-pod llama 8b decode pod MGDs)";
     }
 
+    // Use the config the pod MGD declares (RING dim -> FABRIC_2D_TORUS_Y) so it matches the
+    // ControlPlaneFixture layout/corner checks sharing this tt-run process (no set-once fabric-config clash).
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+        fabric_router_tests::fabric_config_for_active_mgd(),
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();

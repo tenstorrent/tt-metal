@@ -33,16 +33,36 @@ TT_KERNEL void derive() {
         noc.async_read_barrier();
         topology = derive_interval(start, words[0], sp_rank, sp_size, local_rows);
     }
-    for (uint32_t row = 0; row < selection::record_count(sp_size); ++row) {
+    for (uint32_t row = 0; row < selection::record_count; ++row) {
         for (uint32_t i = 0; i < selection::record_width; ++i) {
             words[i] = 0;
         }
-        if (row == selection::local_final_history(sp_size)) {
-            const uint32_t history_end = topology.valid_rows == 0 ? selection::history_rows : topology.valid_rows;
+        if (row == selection::local_final_history) {
+            // The end segment is the separated tail when it holds valid rows, else the
+            // rank's prefix. With fewer than three valid rows, the history reaches into
+            // the tokens preceding that segment: the layer carry before the logical
+            // start, or the exchanged predecessor history otherwise.
+            const bool tail = topology.has_valid_tail();
+            const uint32_t segment_begin = tail ? topology.head_rows : 0;
+            const uint32_t segment_rows = topology.valid_rows - segment_begin;
+            const uint32_t carried = segment_rows < selection::history_rows ? segment_rows : selection::history_rows;
+            // Words [0, history_rows): local rows starting at the earliest valid row kept.
+            // With fewer than three valid rows, rows past the end are never chosen below.
+            const uint32_t local_begin = topology.valid_rows - carried;
             for (uint32_t i = 0; i < selection::history_rows; ++i) {
-                words[i] = history_end - selection::history_rows + i;
+                words[i] = local_begin + i;
             }
-        } else if (row < selection::local_entry_state) {
+            // Words [history_rows, 2 * history_rows): rows of the candidate table
+            // [layer history; predecessor history; local rows].
+            const uint32_t preceding = topology.rank == topology.first_rank && !tail ? 0 : selection::history_rows;
+            for (uint32_t i = 0; i < selection::history_rows; ++i) {
+                const uint32_t position = carried + i;
+                words[selection::history_rows + i] =
+                    position < selection::history_rows
+                        ? preceding + position
+                        : 2 * selection::history_rows + position - selection::history_rows;
+            }
+        } else if (row < selection::final_state) {
             uint32_t base;
             if (row == selection::outgoing_history) {
                 base = (topology.local_split ? topology.head_rows : local_rows) - selection::history_rows;
@@ -55,22 +75,15 @@ TT_KERNEL void derive() {
                 words[i] = base + i;
             }
         } else {
-            uint32_t selected;
-            if (row < selection::final_state) {
-                selected = (topology.rank + sp_size - topology.first_rank) % sp_size;
-            } else if (row < selection::affine_transforms) {
-                // Candidates contain one final state per rank, followed by the
-                // completed distributed prefix at index sp_size for unsplit execution.
-                selected = topology.split ? topology.final_owner : sp_size;
-            } else {
-                selected = (topology.first_rank + (row - selection::affine_transforms) / 2) % sp_size;
-            }
-            const bool is_end_record = (row - selection::local_entry_state) % 2 != 0;
+            // Candidates contain one final state per rank, followed by the
+            // completed distributed prefix at index sp_size for unsplit execution.
+            const uint32_t selected = topology.split ? topology.final_owner : sp_size;
+            const bool is_end_record = row != selection::final_state;
             words[0] = selected + uint32_t(is_end_record);
             if (is_end_record) {
                 words[1] = BH;
                 words[2] = K;
-                words[3] = row >= selection::affine_transforms ? K + V : V;
+                words[3] = V;
             }
         }
         noc.async_write(

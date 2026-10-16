@@ -27,7 +27,10 @@ void kernel_main() {
 
     DataflowBuffer dfb_in(dfb::in);
 
-    const uint32_t tile_bytes = dfb_in.get_tile_size();
+    // get_entry_size() reads THIS DFB's live per-program entry size; get_tile_size() reads a global
+    // descriptor array that intervening ops clobber on Quasar DM kernels (stale -> wrong tile_bytes on a
+    // later invocation). Byte-identical to get_tile_size() on WH/BH. See writer_fill_cache_interleaved.cpp.
+    const uint32_t tile_bytes = dfb_in.get_entry_size();
 
     // read a ublock of tiles from src to the buffer, and then push the ublock to unpacker
     uint32_t tile_id = start_tile_id;

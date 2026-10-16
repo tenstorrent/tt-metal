@@ -138,9 +138,12 @@ def verdict(
     report_written,
     comparison_finished=True,
     measure_failed=False,
+    measure_reason="",
 ):
     """``(status, reason)`` — ``regressed`` | ``skipped`` | ``clean``."""
     if measure_failed:
+        if measure_reason:
+            return "skipped", f"{measure_reason.strip()} The gate compared nothing."
         return "skipped", (
             "Part of the measurement did not complete (failed or cancelled), "
             "so the gate compared nothing."
@@ -178,7 +181,7 @@ def _subject(ctx):
         if b
     ]
     return (
-        "(nightly)",
+        f"({_escape(ctx.get('trigger') or 'nightly')})",
         " · ".join(bits) or "scheduled run",
         ctx.get("run_types") or "?",
     )
@@ -187,15 +190,18 @@ def _subject(ctx):
 def build_text(status, rows, ctx):
     """The Slack message for one verdict. Plain text; Slack renders the links."""
     subject, byline, where = _subject(ctx)
+    gate = _escape(ctx.get("gate_name") or "LLK perf gate")
+    note = [f":hourglass: {_escape(ctx['note'])}"] if ctx.get("note") else []
     run_link = f"<{ctx['run_url']}|gate run>" if ctx.get("run_url") else "gate run"
 
     if status == "skipped":
         return "\n".join(
             [
-                f":warning: *LLK perf gate SKIPPED* {subject}",
-                byline,
+                f":warning: *{gate} SKIPPED* {subject}",
+                f"{byline}  ·  {where}",
+                *note,
                 "",
-                ctx.get("reason") or "The gate compared nothing.",
+                _escape(ctx.get("reason") or "The gate compared nothing."),
                 "*A green check here does not mean anything was checked.*",
                 "",
                 f"{run_link}",
@@ -205,8 +211,9 @@ def build_text(status, rows, ctx):
     if status == "clean":
         return "\n".join(
             [
-                f":white_check_mark: *LLK perf gate passed* {subject}",
+                f":white_check_mark: *{gate} passed* {subject}",
                 f"{byline}  ·  {where}",
+                *note,
                 "",
                 f"No point regressed. {run_link}",
             ]
@@ -215,8 +222,9 @@ def build_text(status, rows, ctx):
     findings = _findings(rows)
     worst = findings[:_TOP_N]
     lines = [
-        f":rotating_light: *LLK perf gate: regression* {subject}",
+        f":rotating_light: *{gate}: regression* {subject}",
         f"{byline}  ·  {where}",
+        *note,
         "",
         f"*{len(rows)} point(s) regressed, in {len(findings)} finding(s).*",
     ]
@@ -255,6 +263,9 @@ def main(argv=None):
     ap.add_argument("--exit-code", type=int, default=0)
     ap.add_argument("--comparison-finished", default="true")
     ap.add_argument("--measure-result", default="")
+    ap.add_argument(
+        "--measure-reason", default="", help="which leg did not complete, and why"
+    )
     ap.add_argument("--channel", required=True, help="Slack channel id")
     ap.add_argument("--pr-number", default="?")
     ap.add_argument("--pr-url", default="")
@@ -266,6 +277,16 @@ def main(argv=None):
     ap.add_argument("--baseline-sha", default="")
     ap.add_argument("--commit", default="")
     ap.add_argument("--mode", default="")
+    ap.add_argument("--gate-name", default="LLK perf gate")
+    ap.add_argument(
+        "--trigger", default="nightly", help="what started a run with no PR"
+    )
+    ap.add_argument("--note", default="", help="one extra line, e.g. a stale baseline")
+    ap.add_argument(
+        "--post-pass",
+        default="true",
+        help="false: post nothing when the gate passes; regressions and skips still post",
+    )
     ap.add_argument("--out", default="slack_payload.json")
     a = ap.parse_args(argv)
 
@@ -281,10 +302,11 @@ def main(argv=None):
         report_written=report_written,
         comparison_finished=a.comparison_finished.strip().lower() != "false",
         measure_failed=not _measure_complete(a.measure_result),
+        measure_reason=a.measure_reason,
     )
     rows = read_regressions(a.regressions) if status == "regressed" else []
 
-    should_post = True
+    should_post = status != "clean" or a.post_pass.strip().lower() != "false"
 
     ctx = {
         "pr_number": a.pr_number,
@@ -298,6 +320,9 @@ def main(argv=None):
         "run_url": a.run_url,
         "baseline_sha": a.baseline_sha,
         "reason": reason,
+        "gate_name": a.gate_name,
+        "trigger": a.trigger,
+        "note": a.note,
     }
     text = build_text(status, rows, ctx)
 

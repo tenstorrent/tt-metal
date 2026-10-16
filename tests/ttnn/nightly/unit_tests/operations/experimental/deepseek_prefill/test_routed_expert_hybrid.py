@@ -301,9 +301,7 @@ def test_tt_routed_expert_hybrid_isl_sweep(
     x_row_major: bool,
     weights_dram_sharded: bool,
 ):
-    """The aligned sweep, which straddles each model's threshold in both directions: kimi_k26's
-    sentinel keeps every count fused, glm_51's 1792 puts 1024 and below in the fused band and 2048
-    and above in the composite's."""
+    """The aligned sweep, which straddles each model's threshold in both directions."""
     run_routed_expert_hybrid(
         mesh_device,
         allocated_tokens,

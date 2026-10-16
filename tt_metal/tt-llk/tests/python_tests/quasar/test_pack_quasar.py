@@ -17,7 +17,6 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     PackerReluType,
     PerfRunType,
     format_dict,
@@ -39,7 +38,6 @@ from helpers.stimuli_generator import (  # generate_stimuli_w_tile_dimensions
 from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
@@ -132,12 +130,14 @@ def generate_qsr_pack_combinations(
             continue
 
         # Threshold ReLU modes are not supported for integer pack_src formats
-        # (mirroring the pytest.skip guard in the test body).
-        relu_types = (
-            [PackerReluType.NoRelu, PackerReluType.ZeroRelu]
-            if in_fmt.is_integer()
-            else all_relu_types
-        )
+        # (mirroring the pytest.skip guard in the test body), and the packer
+        # passes Int16 through with no ReLU of any kind applied.
+        if in_fmt == DataFormat.Int16:
+            relu_types = [PackerReluType.NoRelu]
+        elif in_fmt.is_integer():
+            relu_types = [PackerReluType.NoRelu, PackerReluType.ZeroRelu]
+        else:
+            relu_types = all_relu_types
         for dest_acc in get_dest_acc_modes(in_fmt):
             if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
                 tile_sizes = (
@@ -173,7 +173,7 @@ def generate_qsr_pack_combinations(
                                         fmt,
                                         dest_acc,
                                         dest_sync,
-                                        runtime(dimensions) if is_perf else dimensions,
+                                        runtime(dimensions),
                                         runtime(relu_type),
                                         runtime(tile_dims),
                                     )
@@ -318,7 +318,6 @@ def test_pack_quasar(
         "test_name": "sources/quasar/pack_quasar_test.cpp",
         "formats": formats,
         "templates": [
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
@@ -351,7 +350,6 @@ def test_pack_quasar(
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
-        "disable_format_inference": (formats.input_format.is_mx_format()),
     }
 
     # Single output MX quantization, after relu — matches HW's pack-time

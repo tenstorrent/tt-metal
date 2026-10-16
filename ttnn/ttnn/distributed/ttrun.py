@@ -802,6 +802,37 @@ def ensure_oversubscribe_for_multi_proc_per_host(
     return ["--oversubscribe"] + mpi_args
 
 
+def mpi_args_set_yield_when_idle(mpi_args: Optional[List[str]]) -> bool:
+    """True if ``mpi_args`` already sets the ``mpi_yield_when_idle`` MCA param (any value).
+
+    Used so tt-run's oversubscription default does not override an explicit user choice.
+    """
+    if not mpi_args:
+        return False
+    args = list(mpi_args)
+    for i, arg in enumerate(args):
+        if arg in ("--mca", "-mca") and i + 1 < len(args) and args[i + 1] == "mpi_yield_when_idle":
+            return True
+        if arg.startswith(("--mca=", "-mca=")) and "mpi_yield_when_idle" in arg:
+            return True
+    return False
+
+
+def yield_when_idle_mca_args(mpi_args: Optional[List[str]]) -> List[str]:
+    """MCA args to make idle MPI ranks yield the CPU (``sched_yield``) instead of busy-polling.
+
+    Returned (``["--mca", "mpi_yield_when_idle", "1"]``) only when placement is oversubscribed
+    (more ranks than cores) and the user has not already set the param. This is exactly the case
+    where aggressive busy-poll starves co-located ranks and livelocks the control-plane handshake
+    on mock / CPU-only multi-host runs. Normally-subscribed runs (one rank per core) get ``[]`` and
+    keep the low-latency busy-poll default. Injected *before* the user's ``--mpi-args`` so an
+    explicit ``--mca mpi_yield_when_idle 0`` still wins (Open MPI: last value on the line prevails).
+    """
+    if mpi_args_set_yield_when_idle(mpi_args):
+        return []
+    return ["--mca", "mpi_yield_when_idle", "1"]
+
+
 def build_host_slots_from_rankfile(rankfile_path: Path) -> tuple[str, int]:
     """Build --host host1:N,host2:N string and total rank count from rankfile.
 
@@ -959,6 +990,17 @@ def build_generate_rank_bindings_mpi_cmd(
     if mpi_args:
         cmd.extend(mpi_args)
 
+    # Mirror tt-run's default binding policy (see the ``--bind-to none`` block in the main launch path).
+    # Without an explicit binding directive, OpenMPI binds each rank to a single core. Phase 1 is
+    # compute-heavy: the placement solve runs on one rank while the other ranks busy-spin in MPI waiting
+    # for it. With per-core binding those spinning ranks get pinned onto the same cores as the solver rank
+    # on core-limited runners (e.g. CI's cpu_medium), serializing them and slowing the solve ~5-6x. This
+    # is why the SC36 sweep's Phase-1 producer took ~17 min on CI but tt-run (which already adds
+    # --bind-to none) did not. Let the OS load-balance ranks across all cores instead. Skip only when the
+    # caller already chose a binding policy.
+    if not mpi_args_specify_bind_to(mpi_args):
+        cmd.extend(["--bind-to", "none"])
+
     use_mapping = mesh_graph_path_is_mgd_mapping_yaml(mgd_path) if mgd_is_mapping_yaml is None else mgd_is_mapping_yaml
     mgd_arg = (
         ["--mesh-graph-descriptor-mapping", str(mgd_path.resolve())]
@@ -971,6 +1013,8 @@ def build_generate_rank_bindings_mpi_cmd(
         # Use per-rank -np 1 segments to set per-rank env vars (similar to legacy_flow)
         # Use --oversubscribe to allow more processes than available slots (needed for mock clusters)
         cmd.extend(["--oversubscribe"])
+        # Oversubscribed: yield the CPU on idle MPI spins (see yield_when_idle_mca_args).
+        cmd.extend(yield_when_idle_mca_args(mpi_args))
         # Don't specify --host for mock clusters - MPI will default to localhost
         # This avoids "All nodes which are allocated for this job are already filled" errors
 
@@ -1585,6 +1629,7 @@ ENV_PASSTHROUGH_PREFIXES = (
     "ARCH_",  # Architecture variables (e.g., ARCH_NAME)
     "WH_",  # Wormhole-specific variables (e.g., WH_ARCH_YAML)
     "TTNN_",  # TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
+    "RELIABILITY_MODE",  # Fabric reliability mode: the one rtoptions env var without a TT_ prefix
     "DEEPSEEK_",  # DeepSeek model vars (e.g., DEEPSEEK_V3_HF_MODEL, DEEPSEEK_V3_CACHE)
     "MESH_",  # Mesh config (e.g., MESH_DEVICE)
 )
@@ -1616,6 +1661,8 @@ ENV_BLOCKLIST = frozenset(
         "TT_RUN_SUBCONTEXT_SIZES",
         "TT_METAL_MOCK_CLUSTER_DESC_PATH",  # Mock cluster path for testing
         "TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH",  # FSD path - set from --factory-system-descriptor, not parent env
+        # Cluster id is the phase-1 PSD hostname, written into rank-binding env_overrides.
+        "TT_METAL_CLUSTER_ID",
         # Should only come from rank binding env_overrides
         "TT_VISIBLE_DEVICES",  # Per-rank device visibility - must be set via rank bindings
     }
@@ -1736,7 +1783,8 @@ def get_rank_environment(
     # Apply environment variables with expansion and proper precedence
     # Global environment variables first
     env.update({k: os.path.expandvars(v) for k, v in config.global_env.items()})
-    # Rank-specific overrides last (higher precedence)
+    # Rank-specific overrides last (higher precedence). TT_METAL_CLUSTER_ID arrives here from the
+    # phase-1 rank binding; a value exported in the parent environment is on ENV_BLOCKLIST.
     env.update({k: os.path.expandvars(v) for k, v in binding.env_overrides.items()})
 
     if extra_env:
@@ -2028,6 +2076,13 @@ def build_mpi_command(
 
     # Always enable tagged output for easier debugging (prefixes output with rank info)
     cmd.extend(["--tag-output"])
+
+    # When oversubscribed (mock / CPU-only multi-host: more ranks than cores), make idle ranks
+    # yield the CPU instead of busy-polling MPI progress, or co-located idle workers starve the
+    # rank doing the control-plane solve and the handshake livelocks. Prepended before user args
+    # so an explicit --mca mpi_yield_when_idle 0 still overrides.
+    if "--oversubscribe" in (effective_mpi_args or []):
+        cmd.extend(yield_when_idle_mca_args(effective_mpi_args))
 
     if effective_mpi_args:
         cmd.extend(effective_mpi_args)
