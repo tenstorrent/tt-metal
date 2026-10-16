@@ -17,6 +17,56 @@
 #include "api/compute/bcast.h"  // add_tiles_bcast_rows (mask add)
 #include "../sparse_sdpa_common.hpp"
 constexpr bool EXP_APPROX_MODE = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::MATH_APPROX_MODE) != 0;
+
+#ifdef SPARSE_SDPA_FP32_SCORES
+// fp32_scores: the FPU reads the Float32 scores / probabilities at TF32 (10 mantissa bits) by truncation, a coherent
+// bias toward zero (scores: a flatter softmax). Each DEST tile is rounded to TF32 to nearest-even on the pack thread
+// before it is packed (as the softmax exp runs there), so every later FPU read is exact and the rounding unbiased.
+#if defined(TRISC_PACK)
+namespace ckernel::sfpu {
+template <int ITERATIONS = 8>
+inline void calculate_round_tf32_rne() {
+    for (int d = 0; d < ITERATIONS; ++d) {
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::vUInt u = sfpi::as<sfpi::vUInt>(v);
+        sfpi::vUInt lsb = (u >> 13) & 1;
+        u = u + lsb;
+        u = u + sfpi::vUInt(0xFFF);  // sign-magnitude: the add rounds the magnitude of either sign
+        u = u & sfpi::vUInt(0xFFFFE000u);
+        sfpi::dst_reg[0] = sfpi::as<sfpi::vFloat>(u);
+        sfpi::dst_reg++;
+    }
+}
+// DEST tile 0 = round_tf32(tile 0 + tile 1 + ... + tile N-1), fp32 SFPU adds in that order.
+template <int ITERATIONS, uint32_t N>
+inline void calculate_sum_round_tf32_rne() {
+    constexpr uint32_t dst_tile_size_sfpi = 32;  // one DEST tile in sfpi rows
+    for (int d = 0; d < ITERATIONS; ++d) {
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        for (uint32_t j = 1; j < N; ++j) {
+            v = v + sfpi::dst_reg[j * dst_tile_size_sfpi];
+        }
+        sfpi::vUInt u = sfpi::as<sfpi::vUInt>(v);
+        sfpi::vUInt lsb = (u >> 13) & 1;
+        u = u + lsb;
+        u = u + sfpi::vUInt(0xFFF);
+        u = u & sfpi::vUInt(0xFFFFE000u);
+        sfpi::dst_reg[0] = sfpi::as<sfpi::vFloat>(u);
+        sfpi::dst_reg++;
+    }
+}
+}  // namespace ckernel::sfpu
+#endif
+// Pack thread only (the softmax exp runs there too): the SFPU is one unit, and the math thread's next tiles overlap
+// this thread's SFPU work on the other DEST half, so the math thread must not issue SFPU work meanwhile.
+ALWI void round_tf32_packthread_tile(uint32_t idst) {
+    PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_round_tf32_rne, (8), idst, VectorMode::RC)));
+}
+template <uint32_t N>
+ALWI void sum_round_tf32_packthread_tile0() {
+    PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sum_round_tf32_rne, (8, N), 0, VectorMode::RC)));
+}
+#endif
 // compute_streaming.hpp needs declarations from compute_common.hpp (LightweightMaskContext, reduce helpers,
 // DEST_AUTO_LIMIT); include it first. Only compute_streaming primitives are used.
 #include "compute_common.hpp"
@@ -296,6 +346,12 @@ void kernel_main() {
 
                 // ===== Phase 1: Q@Kᵀ -> cb_qk_im band, mask, running row-max =====
                 {
+#ifdef SPARSE_SDPA_FP32_SCORES
+                    // Float32 scores: the previous group left the bf16 state (srcA / srcB / packer); QK reads
+                    // srcA=cb_k_in, srcB=cb_q_in and packs the Float32 cb_qk_im.
+                    reconfig_data_format(cb_k_in, cb_q_in);
+                    pack_reconfig_data_format(cb_qk_im);
+#endif
                     if constexpr (scaled_kv) {
                         constexpr uint32_t rope_DHt = DHt - vDHt;
                         // Both partial products read fields from the full-width Q matrix. The matmul stride must
@@ -345,6 +401,32 @@ void kernel_main() {
                         // scores[q,sk]=ΣQ·K. in1=K, transpose=true (within-tile transpose => Kᵀ).
                         mm_no_mop_init_short(cb_q_in, cb_k_in, /*transpose=*/true, 1, qsb, DHt);
                         configure_row_pack_width(cb_qk_im, 1);
+#ifdef SPARSE_SDPA_FP32_SCORES
+                        // blocked_matmul_and_pack with the scores rounded to TF32 (nearest) in DEST before the pack
+                        for (uint32_t kt = 0; kt < Skt; ++kt) {
+                            tile_regs_acquire();
+                            for (uint32_t inner = 0; inner < DHt; ++inner) {
+                                sdpa_matmul_block_no_mop(
+                                    cb_q_in,
+                                    cb_k_in,
+                                    row_base * DHt + inner,
+                                    kt * DHt + inner,
+                                    /*dst_index=*/0,
+                                    /*transpose=*/true,
+                                    /*subblock_w=*/1,
+                                    /*subblock_h=*/qsb,
+                                    /*matmul_stride=*/DHt);
+                            }
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            for (uint32_t t = 0; t < qsb; ++t) {
+                                round_tf32_packthread_tile(t);
+                            }
+                            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                            pack_contiguous_rows_nocfg(cb_qk_im, qg * qsb, qsb, KT_stride, kt, 1);
+                            tile_regs_release();
+                        }
+#else
                         for (uint32_t kt = 0; kt < Skt; ++kt) {
                             blocked_matmul_and_pack<true, /*in1_stride=*/1, /*out_num_cols=*/KT_stride>(
                                 cb_q_in,
@@ -360,6 +442,7 @@ void kernel_main() {
                                 /*matmul_stride=*/DHt,
                                 /*skip_pack_configure=*/true);
                         }
+#endif
                     }
                     // Publish the band to UNPACK while holding wr_ptr (for the in-place mask/sub_exp).
                     cb_push_back_hold_wr_ptr(cb_qk_im, qsb * KT_stride);
@@ -395,6 +478,9 @@ void kernel_main() {
                     }
                     // running row-max (MAX-only; eltwise-max against prev on chunk>0)
                     max_cur.reserve_back(qsb);
+#ifdef SPARSE_SDPA_FP32_SCORES
+                    pack_reconfig_data_format(max_cur.get_cb_id());  // bf16 max from the Float32 scores
+#endif
                     configure_single_tile_pack(max_cur.get_cb_id());
                     reduce_c_row_group<cb_qk_im, cb_scale, KT_stride>(
                         max_cur.get_cb_id(),
@@ -404,6 +490,9 @@ void kernel_main() {
                         qsb,
                         Skt);
                     max_cur.push_back(qsb);
+#ifdef SPARSE_SDPA_FP32_SCORES
+                    pack_reconfig_data_format(cb_qk_im);  // sub_exp packs the Float32 probabilities in place
+#endif
 
                     // sub_exp in place: cb_qk_im = exp((cb_qk_im - max)*scale); partial row-sum -> sum_cur (L1-acc).
                     // Walk key-tile columns in exp_sbw steps (one step when the group fits DST); global_col_base
@@ -427,22 +516,41 @@ void kernel_main() {
                     copy_tile_to_dst_init_short(cb_qk_im);
                     pack_reconfig_data_format(sum_cur.get_cb_id());
                     configure_single_tile_pack(sum_cur.get_cb_id());
-                    for (uint32_t r = 0; r < qsb; ++r) {
-                        for (uint32_t kt0 = 0; kt0 < Skt; kt0 += dst_size) {
-                            const uint32_t n = (Skt - kt0 < dst_size) ? (Skt - kt0) : dst_size;
+#ifdef SPARSE_SDPA_FP32_SCORES
+                    if constexpr (Skt <= dst_size) {
+                        // fp32_scores: the row's Skt prob tiles (TF32-exact) summed in DEST by SFPU fp32 adds and
+                        // rounded to TF32 (nearest) on the pack thread, packed once: the normalize's identity matmul
+                        // then reads the row-sum exactly
+                        for (uint32_t r = 0; r < qsb; ++r) {
                             tile_regs_acquire();
-                            for (uint32_t j = 0; j < n; ++j) {
-                                copy_tile(cb_qk_im, (row_base + r) * KT_stride + kt0 + j, j);
+                            for (uint32_t j = 0; j < Skt; ++j) {
+                                copy_tile(cb_qk_im, (row_base + r) * KT_stride + j, j);
                             }
                             tile_regs_commit();
                             tile_regs_wait();
-                            for (uint32_t j = 0; j < n; ++j) {
-                                PACK((llk_pack_reconfig_l1_acc(kt0 + j > 0 ? 1 : 0)));
-                                pack_tile<true>(j, sum_cur.get_cb_id(), row_base + r);
-                            }
+                            sum_round_tf32_packthread_tile0<Skt>();
+                            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                            pack_tile<true>(0, sum_cur.get_cb_id(), row_base + r);
                             tile_regs_release();
                         }
-                    }
+                    } else
+#endif
+                        for (uint32_t r = 0; r < qsb; ++r) {
+                            for (uint32_t kt0 = 0; kt0 < Skt; kt0 += dst_size) {
+                                const uint32_t n = (Skt - kt0 < dst_size) ? (Skt - kt0) : dst_size;
+                                tile_regs_acquire();
+                                for (uint32_t j = 0; j < n; ++j) {
+                                    copy_tile(cb_qk_im, (row_base + r) * KT_stride + kt0 + j, j);
+                                }
+                                tile_regs_commit();
+                                tile_regs_wait();
+                                for (uint32_t j = 0; j < n; ++j) {
+                                    PACK((llk_pack_reconfig_l1_acc(kt0 + j > 0 ? 1 : 0)));
+                                    pack_tile<true>(j, sum_cur.get_cb_id(), row_base + r);
+                                }
+                                tile_regs_release();
+                            }
+                        }
                     PACK((llk_pack_reconfig_l1_acc(0)));
                     pack_reconfig_data_format(cb_qk_im);
 #endif
@@ -459,6 +567,33 @@ void kernel_main() {
                     pack_reconfig_data_format(out_cur.get_cb_id());  // Float32 running out
 #endif
                     configure_row_pack_width(out_cur.get_cb_id(), 1);
+#ifdef SPARSE_SDPA_FP32_SCORES
+                    // blocked_matmul_and_pack with the running output rounded to TF32 (nearest) in DEST before the
+                    // pack: the SALAD correction and the normalize read it through the FPU (TF32, truncating)
+                    for (uint32_t vd = 0; vd < vDHt; ++vd) {
+                        tile_regs_acquire();
+                        for (uint32_t inner = 0; inner < Skt; ++inner) {
+                            sdpa_matmul_block_no_mop(
+                                cb_qk_im,
+                                cb_k_in,
+                                row_base * Skt + inner,
+                                vd + inner * DHt,
+                                /*dst_index=*/0,
+                                /*transpose=*/false,
+                                /*subblock_w=*/1,
+                                /*subblock_h=*/qsb,
+                                /*matmul_stride=*/KT_stride);
+                        }
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        for (uint32_t t = 0; t < qsb; ++t) {
+                            round_tf32_packthread_tile(t);
+                        }
+                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                        pack_contiguous_rows_nocfg(out_cur.get_cb_id(), qg * qsb, qsb, vDHt, vd, 1);
+                        tile_regs_release();
+                    }
+#else
                     for (uint32_t vd = 0; vd < vDHt; ++vd) {
                         blocked_matmul_and_pack<false, /*in1_stride=*/scaled_kv ? vDHt : DHt, /*out_num_cols=*/vDHt>(
                             cb_qk_im,
@@ -474,12 +609,20 @@ void kernel_main() {
                             /*matmul_stride=*/KT_stride,
                             /*skip_pack_configure=*/true);
                     }
+#endif
                     pack_to_unpack_sync();                // flush PV's HELD out_cur packs (push_back deferred to
                                                           // after the group loop) so SALAD's L1-accumulate (!is_first)
                                                           // reads them; normalize reads post-push_back, so covered
+#ifdef SPARSE_SDPA_FP32_SCORES
+                    // cb_qk_im is Float32: restore the bf16 unpack (srcA and srcB; PV read the probs into srcB) and
+                    // pack state from bf16 CBs (the SALAD correction and the normalize expect it)
+                    reconfig_data_format(cb_scale, cb_scale);
+                    pack_reconfig_data_format(cb_corr);
+#else
                     reconfig_data_format_srca(cb_qk_im);  // PV left srcA in cb_k_in's format; restore bf16
 #ifdef SPARSE_SDPA_HIGH_PRECISION
                     pack_reconfig_data_format(cb_qk_im);  // back to the bf16 pack state
+#endif
 #endif
                 }
 
@@ -513,8 +656,13 @@ void kernel_main() {
                         /*write_q_subblock=*/qg);
                     pack_reconfig_l1_acc(0);
 #ifdef SPARSE_SDPA_HIGH_PRECISION
+#ifdef SPARSE_SDPA_FP32_SCORES
+                    reconfig_data_format(cb_scale, cb_scale);  // back to the bf16 unpack / pack state
+                    pack_reconfig_data_format(cb_corr);
+#else
                     reconfig_data_format(cb_qk_im, cb_qk_im);  // back to the bf16 unpack / pack state
                     pack_reconfig_data_format(cb_qk_im);
+#endif
 #endif
                     corr_cb.pop_front(qsb);
                     out_prev.pop_front(qsb * vDHt);  // this band's prev.out consumed into cur

@@ -26,6 +26,14 @@ TABLE = {
         "(spec rule 'Accuracy is judged against the noise floor', OV-3): fpu is the default and the max-precision "
         "value; exact stays selectable for comparison only",
     ),
+    "FP32_WEIGHT_ROUND": Setting(
+        "rne",
+        ("rne", "truncate"),
+        "fp32 matmul weights the FPU reads (mHC hc_fn, tt/common.fpu_weight): rne = rounded to TF32 to nearest-even at "
+        "load, so the FPU's TF32 read is exact and unbiased (host: the weight's share of the mixes error 3.5e-4, all "
+        "bias -> 1.5e-5; device attn_hc vs CPU 6.5e-4 -> 6.1e-4, the rest is the in-tile rounding, DS41-16); "
+        "truncate = uploaded as fp32 and truncated by the FPU (K-30, DS41-31). Load time only, no per-chunk cost",
+    ),
     "ENGRAM_KV_QDQ": Setting(
         "qdq",
         ("qdq", "skip"),
@@ -51,6 +59,16 @@ TABLE = {
         "the output of the high_precision sparse_sdpa: fp32 = ttnn.bringup.sparse_sdpa(fp32_output=True), the "
         "normalized fp32 DEST value, untilized exactly (DS41-29); bf16 = rounded to bf16 in the op (the fork's previous "
         "output; DS41-18: S.swa.06 attention vs the CPU step worst row 0.052 > 0.05)",
+    ),
+    "WINDOW_SDPA_SCORES": Setting(
+        "fp32",
+        ("fp32", "bf16"),
+        "the scores, softmax probabilities and q of the high_precision sparse_sdpa: fp32 = "
+        "ttnn.bringup.sparse_sdpa(fp32_scores=True) with q rounded to TF32 (nearest, tt/quant.round_tf32) and kept "
+        "fp32 through the head -> seq reshard; the op keeps scores / probabilities in Float32 and rounds every value "
+        "its FPU reads to TF32 to nearest (the FPU truncates); attention vs the CPU step rel 0.0143, +2.1 ms per layer "
+        "(28.6 vs 26.5 ms, 2x2, chunk 2048); bf16 = q and the scores / probabilities in bf16 (the fork's previous "
+        "program, rel 0.0189), a perf pick. DS41-31: S.swa.11 router vs golden 0.9917 (bf16: 0.9887 < 0.99)",
     ),
     "WINDOW_PIECES": Setting(
         3,
@@ -108,9 +126,11 @@ MAX_PRECISION = {
     "FP32_DEST_ACC": True,
     "HC_TP_SUM": "gather_add",
     "ENGRAM_KV_QDQ": "qdq",
+    "FP32_WEIGHT_ROUND": "rne",
     "ATTN_IN_MM": "fpu",  # owner 2026-10-15 (OV-3): accuracy against the noise floor, not exactness
     "WINDOW_SDPA": "high_precision",  # owner 2026-10-15 (OV-3); "exact" only for comparison
     "WINDOW_SDPA_OUT": "fp32",
+    "WINDOW_SDPA_SCORES": "fp32",
     "WINDOW_PIECES": 3,
     "ATTN_O_SUM": "gather_add",
     "EXPERTS_SUM": "gather_add",

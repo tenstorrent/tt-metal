@@ -96,6 +96,25 @@ def round_e4m3(y: ttnn.Tensor) -> ttnn.Tensor:
     return out
 
 
+TF32_DROP = 13  # fp32 mantissa 23 bits, TF32 keeps 10
+TF32_MASK = -(1 << TF32_DROP)
+
+
+def round_tf32(x: ttnn.Tensor) -> ttnn.Tensor:
+    """fp32 x -> x rounded to TF32 (10 mantissa bits), to nearest even, fp32; on the integer bits (sign-magnitude:
+    the same add rounds the magnitude of either sign). The FPU reads fp32 operands at TF32 by truncation (K-30); a
+    pre-rounded operand makes that read exact and the rounding unbiased (DS41-31). Does not consume x."""
+    i = _to_int(x)
+    lsb = ttnn.bitwise_and(ttnn.bitwise_right_shift(i, TF32_DROP, memory_config=DRAM), 1, memory_config=DRAM)
+    r = ttnn.add(i, lsb, memory_config=DRAM)
+    _free(lsb)
+    r2 = ttnn.add(r, (1 << (TF32_DROP - 1)) - 1, memory_config=DRAM)
+    _free(r)
+    nb = ttnn.bitwise_and(r2, TF32_MASK, memory_config=DRAM)
+    _free(r2)
+    return _to_float(nb)
+
+
 def fp8_qdq(x: ttnn.Tensor, dtype=ttnn.bfloat16) -> ttnn.Tensor:
     """act_quant_dequant(x, 32) of an fp32 TILE tensor [..., R, W] (W % 32 == 0), groups of 32 along the last dim.
     Returns the same shape in ``dtype`` (bf16 holds every value exactly). Does not consume ``x``."""

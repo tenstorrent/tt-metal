@@ -424,6 +424,11 @@ void bind_sdpa(nb::module_& mod) {
                 attention_sink (its exp uses the same rounded-to-nearest bf16 scale).
             fp32_output (bool): bring-up fork option, default False (output in q's dtype). True (needs
                 high_precision) returns the normalized output in Float32 instead of rounding it to bf16.
+            fp32_scores (bool): bring-up fork option, default False (bf16 scores and probabilities). True (needs
+                high_precision and fp32_output) keeps the scores and the softmax probabilities (the probs@V operand)
+                in Float32 instead of rounding them to bf16, and accepts a float32 q. The FPU reads Float32 operands
+                at TF32 by truncation, so the scores, probabilities, running output, row-sum and 1/sum are rounded
+                to TF32 to nearest-even in DEST before they are packed (pre-round a float32 q the same way).
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8), or
             Float32 with fp32_output.
@@ -444,7 +449,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("block_cyclic_cache_tp_sharded") = false,
         nb::arg("attention_sink") = nb::none(),
         nb::arg("high_precision") = false,
-        nb::arg("fp32_output") = false);
+        nb::arg("fp32_output") = false,
+        nb::arg("fp32_scores") = false);
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.bringup.">(
         mod,

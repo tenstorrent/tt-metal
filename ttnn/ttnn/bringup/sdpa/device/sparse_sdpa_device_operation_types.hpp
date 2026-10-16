@@ -33,6 +33,10 @@ struct SparseSDPAParams {
     // Fork option (needs high_precision): the output in Float32 (default: q's dtype). The normalized output CB is
     // Float32 and unpacks straight to the fp32 DEST for the untilize (exact). Compile-time; hashed.
     bool fp32_output = false;
+    // Fork option (needs high_precision and fp32_output): scores / probabilities in a Float32 CB (default bf16), every
+    // Float32 value the FPU reads later rounded to TF32 (nearest) in DEST before its pack, and a FLOAT32 q accepted
+    // (Float32 Q CBs). Compile-time (define SPARSE_SDPA_FP32_SCORES); hashed.
+    bool fp32_scores = false;
     bool has_scaled_kv() const { return kv_format == transformer::bringup::SparseKVFormat::SCALED_FP8; }
 };
 
