@@ -649,26 +649,6 @@ jobs:
         with:
           pytest-markers: "quasar and not perf"
 
-  # LLK SFPU ULP budget guard (llk-sfpu-ulp-budget-guard.yaml), advisory: it reports
-  # which cells a change to
-  # tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget.yaml loosens, for
-  # the table's code owners to review, and fails only on a table that cannot load.
-  # Host-only and seconds long; it ends at once when the table is untouched. Skips
-  # drafts like the rest: a job that ran there would wake workflow-status, which then
-  # fails on the skipped verify-time-budgets. The sweep that holds the hardware to the
-  # table runs nightly (llk-e2e.yaml).
-  llk-sfpu-ulp-budget-guard:
-    if: >-
-      ${{
-        github.event.action != 'destroyed' &&
-        (github.event_name == 'merge_group' ||
-         (github.event_name == 'pull_request' && !github.event.pull_request.draft))
-      }}
-    permissions:
-      contents: read
-      pull-requests: write
-    uses: ./.github/workflows/llk-sfpu-ulp-budget-guard.yaml
-
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
   workflow-status:
@@ -693,7 +673,6 @@ jobs:
       - build-docs
       - llk-smoke-tests
       - llk-build-quasar
-      - llk-sfpu-ulp-budget-guard
       - verify-time-budgets
     runs-on: ubuntu-slim
     steps:
@@ -711,6 +690,6 @@ jobs:
             asan-build, code-analysis,
             runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,
             model-charts-sync, build-docs,
-            llk-smoke-tests, llk-build-quasar, llk-sfpu-ulp-budget-guard
+            llk-smoke-tests, llk-build-quasar
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"

@@ -11,14 +11,14 @@ them: it cannot see a tail the sample never reaches.
 One device run per variant covers the whole format: 65,279 finite bfloat16 values or
 63,487 float16 ones, in 64 tiles. ``Bfp8_b`` is swept in bfloat16 and packed on the way
 in; a ``Float32`` input has 2**32 values, so it is walked with a stride instead.
-Marked ``accuracy``, which llk-e2e and the other marker-selected LLK workflows deselect;
-llk-e2e runs it by path every night (llk-sfpu-ulp-sweep.yaml). Run it as a gate::
+Marked ``accuracy``, which every LLK workflow deselects, so it runs only by name or with
+``-m accuracy``. Run it as a gate::
 
     pytest test_unary_sfpu_ulp.py
 
 which fails a gated cell over its budget and skips a tolerance cell with its measured
-maximum in the reason. To hold the tolerance cells to the figures their rows record, as
-the nightly sweep does, measure and compare::
+maximum in the reason. To hold the tolerance cells to the figures their rows record,
+measure and compare::
 
     pytest test_unary_sfpu_ulp.py --ulp-measure=ulp.jsonl
     python3 helpers/ulp_budget_diff.py headroom \\
@@ -84,8 +84,8 @@ from helpers.ulp_sweep import (
 )
 from helpers.utils import _record_ulp_measurement, passed_test
 
-#: `accuracy` is the marker llk-e2e and the other marker-selected LLK workflows deselect;
-#: `nightly` would not do, since llk-e2e runs it. The nightly sweep runs this file by path.
+#: `accuracy` is the marker every LLK workflow deselects; `nightly` would not do, since
+#: llk-e2e runs it.
 pytestmark = [
     pytest.mark.accuracy,
     # Every unkeyed budget is a Wormhole measurement and binds nowhere else

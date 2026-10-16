@@ -12,8 +12,8 @@ hardware still fits the gates it declares.
   the budgets. The sweep already fails a cell it cannot meet; this says which budgets
   are about to become regressions, and judges the tolerance cells the sweep cannot.
 
-Standalone on purpose -- ``yaml`` and the standard library, so the PR check runs on a
-slim runner and can parse a *base* revision of the table. ``test_ulp_budget_diff.py``
+Standalone on purpose -- ``yaml`` and the standard library, so it runs without the LLK
+environment and can parse a *base* revision of the table. ``test_ulp_budget_diff.py``
 ties this parse back to the real loader so the two cannot drift.
 """
 
@@ -430,7 +430,7 @@ def _classify(was: _Held, now: _Held) -> Optional[str]:
             return "tightened"
         return None
     # Neither side gates, but the cell is still held to something: the eltwise drivers
-    # compare it with the declared atol/rtol, and the nightly headroom report with the
+    # compare it with the declared atol/rtol, and the headroom report with the
     # measurement and the non-finite count its row records. Loosening either needs the
     # same re-measurement a raised budget does.
     if _widened(was.declared, now.declared):
@@ -555,7 +555,7 @@ def _change_row(c: Change, *, with_provenance: bool) -> str:
 
 
 def render_budget_diff(changes: List[Change]) -> str:
-    """The PR comment. Regressions first, and what to do about them."""
+    """The diff report. Regressions first, and what to do about them."""
     if not changes:
         return "### SFPU ULP budgets\n\nNo budget changed.\n"
     regressions = [c for c in changes if c.is_regression]
@@ -595,7 +595,7 @@ def render_budget_diff(changes: List[Change]) -> str:
 
 
 def _allowed_note(regressions: List[Change]) -> str:
-    """Appended under --allow-raises, as PR Gate runs it: the loosened gates are
+    """Appended under --allow-raises: the loosened gates are
     reported, not blocked, and the ones without a fresh measurement are named."""
     note = (
         f"\n_Advisory: {len(regressions)} loosened gate(s) reported, not blocked; "
@@ -747,7 +747,7 @@ def render_headroom(
     failures: Iterable[Failure] = (),
     completed: Iterable[Tuple[str, str, str, str, str]] = (),
 ) -> Tuple[str, int]:
-    """The report, and the regression count the workflow fails on.
+    """The report, and the regression count the command fails on.
 
     A gated cell is judged against its budget; the sweep already fails one it cannot
     meet, so the value here is which cells have no headroom left or carry slack. A
@@ -938,7 +938,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     d.add_argument(
         "--allow-raises",
         action="store_true",
-        help="report loosened gates but exit 0 (advisory, as PR Gate runs it)",
+        help="report loosened gates but exit 0 (advisory)",
     )
     d.add_argument("--out", type=Path, help="write the report here as well as stdout")
 

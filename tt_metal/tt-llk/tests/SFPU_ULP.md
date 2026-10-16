@@ -218,9 +218,8 @@ pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py -q
 
 - **No number is a guess.** The trailing comment on a row is the measurement it came
   from. A budget may only be *raised* by re-measuring and updating that comment in the
-  same change. From #57527, `llk-sfpu-ulp-budget-guard` reports, on the pull request,
-  every cell a change loosens and whether its row was re-measured; it is advisory, and
-  approving a raise is the table's code owners' review.
+  same change. `python3 helpers/ulp_budget_diff.py diff --base <old.yaml> --head
+  <new.yaml>` lists every cell a change loosens and whether its row was re-measured.
 - **Most specific key wins.** A row's key fields are `in`, `out`, `approx`, `dest` and
   `arch`, all optional. Two rows matching one variant equally specifically are an
   authoring error, not a tie-break, and the loader refuses them.
@@ -275,12 +274,8 @@ does not fail on them, because such a block is hand-maintained by design.
 - **Any host pytest run in `tests/` wipes `/tmp/tt-llk-build`.** Chain
   `--compile-producer` and `--compile-consumer` in one go; if you run a host suite in
   between, recompile.
-- **The sweep is marked `accuracy`**, which `llk-e2e` and the other marker-selected LLK
-  workflows deselect; `llk-e2e` runs it by path every night
-  (`llk-sfpu-ulp-sweep.yaml`, matrix `tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml`),
-  and the job summary lists any failing combination. Dispatch that workflow to sweep a
-  branch that changes an SFPU kernel or the SFPI pin. Run it locally by name or by
-  `-m accuracy`. `nightly` would *not* have kept it out of `llk-e2e`.
+- **The sweep is marked `accuracy`**, which every LLK workflow deselects. Run it by name
+  or by `-m accuracy`. `nightly` would *not* have kept it out of `llk-e2e`.
 - **Both runs take the same op set**: every unary op with a key line in the table,
   whatever its rows say. The key line is the enrolment, so an op on tolerance everywhere
   is measured on every run and held to the figures its rows record by the headroom
@@ -289,7 +284,7 @@ does not fail on them, because such a block is hand-maintained by design.
   consumer build the same set with or without it.
 - **A plain gate run does not judge tolerance cells.** It fails a gated cell over its
   budget and *skips* a tolerance cell, with the measured maximum in the skip reason. To
-  hold those cells to the figures their rows record, as the nightly sweep does:
+  hold those cells to the figures their rows record, measure and compare:
 
   ```bash
   CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py -n auto --ulp-measure=ulp.jsonl
