@@ -442,7 +442,7 @@ void kernel_main() {
     misc[1] = returned;
     // drain: every row this port injected is consumed (its credit snapshot landed), so nothing of this call reaches
     // this core after the program ends (the arena may be per call: its L1 is another op's after this)
-    for (bool open_ = true; open_;) {
+    for (bool open_ = __DRAIN__; open_;) {
         invalidate_l1_cache();
         open_ = false;
         for (uint32_t ci = 0; ci < N * AP; ++ci) open_ |= cred[ci] != used[ci];
@@ -867,6 +867,7 @@ def sparse_combine_rf_prepare(
         "__NOYREAD__": os.environ.get("SPC_NOYREAD", "0"),  # (probe: rows not read from y: garbage)
         "__PD__": str(PD),
         "__PS__": str(PS),
+        "__DRAIN__": "false" if os.environ.get("SPC_NODRAIN") == "1" else "true",  # (probe: no end-of-call credit drain)
     }
     dbg_t = ttnn.from_torch(
         torch.zeros(R, C, 128, 16, dtype=torch.int32),

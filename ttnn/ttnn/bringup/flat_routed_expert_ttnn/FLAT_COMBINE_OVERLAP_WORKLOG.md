@@ -792,3 +792,6 @@ The fused op is where expected (2425-2530 uniform). Every dense op is far from i
 of bf16 weights at 896 experts; latent down 27 MB bf8 ~53 us; shared 3 x 47 MB ~274 us): default configs, row-major
 round trips, tiny all-gathers at ~60 us each. Next: dense op configs, the routing gather in one op, the sparse 2D
 dispatch, the shared expert in its own lane (parallel with the experts).
+Port credit drain cost (standalone fused test, uniform): 2533 us with it vs 2520 without (SPC_NODRAIN=1), noise;
+pipelined (FC_PIPE=1) fused 2438 us, as before the change (2425). The layer's 2516 is the unpipelined number (a sync
+before each stage leaves ~80-100 us of launch skew).
