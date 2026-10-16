@@ -15,8 +15,9 @@
 
 // Fill one tile of `ones` with `value_bits` and one tile of `tril` with it on and below the diagonal (an inclusive
 // lower-triangular matrix): seed one face row, then replicate it with local NoC reads.
-template <uint32_t value_bits>
-inline void fill_ones_and_tril(DataflowBuffer& ones, DataflowBuffer& tril) {
+// One out-of-line copy serves both fills; it runs once per program, and a copy per value overflows the kernel config
+// buffer.
+__attribute__((noinline)) void fill_ones_and_tril(DataflowBuffer& ones, DataflowBuffer& tril, uint32_t value_bits) {
     constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
     constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
     constexpr uint32_t faces_per_tile = tt::constants::TILE_HW / tt::constants::FACE_HW;
@@ -76,7 +77,7 @@ inline void fill_constant_tiles(
     constexpr uint32_t mask_tile_count = 3;
     constexpr uint32_t face_bytes = face_elements * sizeof(uint32_t);
 
-    fill_ones_and_tril<fp32_one_bits>(ones, tril);
+    fill_ones_and_tril(ones, tril, fp32_one_bits);
 
     eye.reserve_back(1);
     block_masks.reserve_back(mask_tile_count);
@@ -127,7 +128,8 @@ inline void fill_constant_tiles(
 // (f1 or f3) to the end of the tile; below a padded top face row, f2 and f3 are all
 // padding. Inputs are BF16 or FP32, so face rows are 32 or 64 bytes and both ranges
 // start at the 16-byte alignment of the zero writes.
-inline void zero_rows_from(const Noc& noc, DataflowBuffer& buffer, uint32_t tiles, uint32_t first_row) {
+__attribute__((noinline)) void zero_rows_from(
+    const Noc& noc, DataflowBuffer& buffer, uint32_t tiles, uint32_t first_row) {
     constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
     constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
     constexpr uint32_t faces_per_tile_row = tt::constants::TILE_WIDTH / face_width;
@@ -232,7 +234,7 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         // the cumulative sum applies it without a separate pass over the gate (exactly for any BF16-representable
         // scale, since the HiFi4 product of BF16 g and the scale is exact in FP32).
         static_assert(Ct == 1, "fill_ones_and_tril fills one tile per chunk matrix");
-        fill_ones_and_tril<GATE_SCALE_BITS>(gate_ones, gate_tril);
+        fill_ones_and_tril(gate_ones, gate_tril, GATE_SCALE_BITS);
         constants_pending = false;
     };
 
