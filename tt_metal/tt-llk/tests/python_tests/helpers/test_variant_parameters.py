@@ -826,6 +826,29 @@ class OVERLAP_FIRST_HALF(TemplateParameter):
 
 
 @dataclass
+class REDUCE_OPERAND_SHAPE(TemplateParameter):
+    """Operand tile geometry handed to the reduce_block_max_row unpack/math inits
+    (``ckernel::TensorShape`` fields). The default is the full 32x32 tile; the
+    shape-guard test passes face grids the op does not implement to check that
+    its LLK_ASSERT rejects them."""
+
+    face_r_dim: int = 16
+    face_c_dim: int = 16
+    num_faces_r_dim: int = 2
+    num_faces_c_dim: int = 2
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint8_t REDUCE_OPERAND_FACE_R_DIM = {self.face_r_dim};",
+                f"constexpr std::uint8_t REDUCE_OPERAND_FACE_C_DIM = {self.face_c_dim};",
+                f"constexpr std::uint8_t REDUCE_OPERAND_NUM_FACES_R_DIM = {self.num_faces_r_dim};",
+                f"constexpr std::uint8_t REDUCE_OPERAND_NUM_FACES_C_DIM = {self.num_faces_c_dim};",
+            ]
+        )
+
+
+@dataclass
 class ITERATIONS(TemplateParameter):
     iterations: int = 8
 

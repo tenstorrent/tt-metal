@@ -66,9 +66,13 @@ ALWI void reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape, st
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
-// num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
+// num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4). The LLK only
+// implements two full 16-row column faces per face-row, so any other count is rejected at compile time.
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4>
 ALWI void reduce_block_max_row_init(std::uint32_t ocb) {
+    static_assert(
+        num_faces == 2 || num_faces == 4,
+        "reduce_block_max_row supports 32x32 (num_faces=4) and 16x32 (num_faces=2) tiles only");
     reduce_block_max_row_init<block_ct_dim, respect_trigger>(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb);
 }
@@ -134,6 +138,9 @@ ALWI void reduce_block_max_row(
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4>
 ALWI void reduce_block_max_row(
     std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t row_start_index, std::uint32_t idst) {
+    static_assert(
+        num_faces == 2 || num_faces == 4,
+        "reduce_block_max_row supports 32x32 (num_faces=4) and 16x32 (num_faces=2) tiles only");
     reduce_block_max_row<block_ct_dim, respect_trigger>(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces),
         icb,
@@ -176,6 +183,9 @@ ALWI void reduce_block_max_row_reinit_short(const ckernel::TensorShape& tensor_s
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4>
 ALWI void reduce_block_max_row_reinit_short(std::uint32_t ocb) {
+    static_assert(
+        num_faces == 2 || num_faces == 4,
+        "reduce_block_max_row supports 32x32 (num_faces=4) and 16x32 (num_faces=2) tiles only");
     reduce_block_max_row_reinit_short<block_ct_dim, respect_trigger>(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb);
 }
@@ -196,6 +206,9 @@ ALWI void reduce_block_max_row_reinit_minimal(const ckernel::TensorShape& tensor
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4>
 ALWI void reduce_block_max_row_reinit_minimal(std::uint32_t ocb) {
+    static_assert(
+        num_faces == 2 || num_faces == 4,
+        "reduce_block_max_row supports 32x32 (num_faces=4) and 16x32 (num_faces=2) tiles only");
     reduce_block_max_row_reinit_minimal<block_ct_dim, respect_trigger>(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb);
 }
@@ -220,6 +233,9 @@ ALWI void reduce_block_max_row_reinit_minimal_runtime(
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
 ALWI void reduce_block_max_row_reinit_minimal_runtime(
     std::uint32_t ocb, std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4) {
+    LLK_ASSERT(
+        num_faces == 2 || num_faces == 4,
+        "reduce_block_max_row supports 32x32 (num_faces=4) and 16x32 (num_faces=2) tiles only");
     reduce_block_max_row_reinit_minimal_runtime(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb, block_ct_dim, respect_trigger);
 }
@@ -243,6 +259,9 @@ ALWI void reduce_block_max_row_reinit_short_runtime(
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
 ALWI void reduce_block_max_row_reinit_short_runtime(
     std::uint32_t ocb, std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4) {
+    LLK_ASSERT(
+        num_faces == 2 || num_faces == 4,
+        "reduce_block_max_row supports 32x32 (num_faces=4) and 16x32 (num_faces=2) tiles only");
     reduce_block_max_row_reinit_short_runtime(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb, block_ct_dim, respect_trigger);
 }
@@ -331,6 +350,9 @@ ALWI void reduce_block_max_row_init_runtime(
     std::uint32_t icb_scaler,
     bool respect_trigger = false,
     std::uint32_t num_faces = 4) {
+    LLK_ASSERT(
+        num_faces == 2 || num_faces == 4,
+        "reduce_block_max_row supports 32x32 (num_faces=4) and 16x32 (num_faces=2) tiles only");
     reduce_block_max_row_init_runtime(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces),
         ocb,
@@ -369,6 +391,9 @@ ALWI void reduce_block_max_row_runtime(
     bool respect_trigger = false,
     bool overlap_first_half = false,
     std::uint32_t num_faces = 4) {
+    LLK_ASSERT(
+        num_faces == 2 || num_faces == 4,
+        "reduce_block_max_row supports 32x32 (num_faces=4) and 16x32 (num_faces=2) tiles only");
     reduce_block_max_row_runtime(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces),
         icb,

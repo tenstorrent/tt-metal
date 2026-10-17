@@ -47,6 +47,7 @@ from helpers.test_variant_parameters import (
     CLOBBER_OP,
     OVERLAP_FIRST_HALF,
     REDUCE_BLOCK_CT_DIM,
+    REDUCE_OPERAND_SHAPE,
     REINIT_MODE,
     RESPECT_TRIGGER,
     USE_RUNTIME,
@@ -57,6 +58,9 @@ from helpers.utils import tolerances
 # 32x32 bf16 tile.
 TILE_DIM = 32
 ELEMENTS_PER_TILE = TILE_DIM * TILE_DIM
+
+# Operand tile geometry as (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
+FULL_TILE_SHAPE = (16, 16, 2, 2)
 
 # Mirror of ckernel_template::MAX_LOOP_LEN (tt_llk_<arch>/common/inc/ckernel_template.h): the
 # template-1 MOP loop-count fields keep 7 bits on Wormhole and 10 on Blackhole, so the runtime
@@ -110,10 +114,15 @@ def _make_reduce_block_max_config(
     respect_trigger=False,
     overlap_first_half=False,
     expected_nondeterministic=False,
+    operand_shape=FULL_TILE_SHAPE,
     staged_ct_dim=None,
 ):
     """Build one reduce_block_max_row variant plus its golden (row-major, per-row max in
     column [0]).
+
+    ``operand_shape`` is the tile geometry the unpack/math inits are told about; the
+    staged operand is always 32x32 tiles, so a shape the op does not implement reaches
+    the inits with the same L1 image the full-tile case uses.
 
     ``staged_ct_dim`` is how many tiles are staged (and the golden's width) when it
     differs from the ``block_ct_dim`` the kernel is built with. Only the guard tests use
@@ -165,6 +174,7 @@ def _make_reduce_block_max_config(
             CLOBBER_OP(_CLOBBER_DEFINE[clobber]),
             RESPECT_TRIGGER(respect_trigger),
             OVERLAP_FIRST_HALF(overlap_first_half),
+            REDUCE_OPERAND_SHAPE(*operand_shape),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -451,4 +461,30 @@ def test_reduce_block_max_runtime_mop_loop_limit(block_ct_dim):
         configuration,
         golden_rowmajor,
         f"block_ct_dim={block_ct_dim} above the {_MOP_MAX_LOOP_LEN[arch]} MOP loop-count limit",
+    )
+
+
+# Operand geometries the op does not implement: it pools two full 16-row column faces per
+# face-row (two GMPOOLs with a 16-row SrcA step) and strides whole 32x32 / 16x32 tiles, so one
+# face column (16x16, 32x16) or a short face (8x32) pools SrcA rows the unpacker never wrote.
+_UNSUPPORTED_OPERAND_SHAPES = [
+    (16, 16, 1, 1),  # 16x16
+    (16, 16, 2, 1),  # 32x16
+    (8, 16, 1, 2),  # 8x32
+]
+
+
+@parametrize(use_runtime=[False, True], operand_shape=_UNSUPPORTED_OPERAND_SHAPES)
+def test_reduce_block_max_shape_guard(use_runtime, operand_shape):
+    """The unpack and math inits must LLK_ASSERT on a tile geometry the op does not
+    implement (validate_tensor_shape_reduce_block_max_row_), on the compile-time and the
+    runtime family alike. A guard that admits the shape lets the op pool SrcA rows the
+    unpacker never delivered and pack a wrong row max with no diagnostic."""
+    configuration, golden_rowmajor = _make_reduce_block_max_config(
+        FORMATS[0], 1, use_runtime=use_runtime, operand_shape=operand_shape
+    )
+    _expect_init_rejects(
+        configuration,
+        golden_rowmajor,
+        f"operand shape {operand_shape} (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)",
     )

@@ -210,4 +210,24 @@ constexpr bool validate_tensor_shape_sub_bcast_col_custom_(const TensorShape& te
            (tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM || tensor_shape.num_faces_r_dim == 1);
 }
 
+/**
+ * @brief Whether a tile shape is supported by the Wormhole/Blackhole block reduce_max_row LLKs.
+ *
+ * Stricter than @ref validate_tensor_shape_tile_dependent_ops_ on purpose: the unpack strides between block
+ * tiles by whole 32x32 / 16x32 tiles and the math always pools two full 16-row column faces per face-row
+ * (two GMPOOLs with a 16-row SrcA step) before transposing, so only a 2-face-column grid of full faces works -
+ * 32x32 (2x2 faces) or 16x32 (1x2 faces). One face column (16x16, 32x16) or short faces (face_r_dim < 16)
+ * would pool SrcA rows the unpacker never wrote and read the wrong block tiles.
+ *
+ * One predicate for every entry of the op (unpack init, math MOP config, math execute, and the runtime
+ * twins) on both arches, instead of hand-synced copies. Kept separate from
+ * @ref validate_tensor_shape_sub_bcast_col_custom_: the two ops accept the same shapes today, but their
+ * limits come from different code and may diverge.
+ **/
+constexpr bool validate_tensor_shape_reduce_block_max_row_(const TensorShape& tensor_shape)
+{
+    return tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.face_c_dim == MAX_FACE_C_DIM && tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM &&
+           (tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM || tensor_shape.num_faces_r_dim == 1);
+}
+
 } // namespace ckernel

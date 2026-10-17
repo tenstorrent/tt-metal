@@ -69,6 +69,12 @@ static constexpr DstSync DST_SYNC = DstSync::SyncHalf;
 static constexpr std::uint32_t NUM_FACES = 4;
 
 // RESPECT_TRIGGER / OVERLAP_FIRST_HALF are supplied by the Python driver (params.h).
+//
+// REDUCE_OPERAND_* (params.h) is the operand tile geometry handed to the unpack and
+// math inits. The driver's default is the full 32x32 tile; the shape-guard test passes
+// face grids the op does not implement (one face column, short faces) to check that
+// the inits reject them. The PACK thread always packs the 32x32 DEST slot the op
+// writes the row max into.
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -82,7 +88,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
+    const ckernel::TensorShape tensor_shape = {
+        REDUCE_OPERAND_FACE_R_DIM, REDUCE_OPERAND_FACE_C_DIM, REDUCE_OPERAND_NUM_FACES_R_DIM, REDUCE_OPERAND_NUM_FACES_C_DIM};
 
     // compute_kernel_hw_startup
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -169,7 +176,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
+    const ckernel::TensorShape tensor_shape = {
+        REDUCE_OPERAND_FACE_R_DIM, REDUCE_OPERAND_FACE_C_DIM, REDUCE_OPERAND_NUM_FACES_R_DIM, REDUCE_OPERAND_NUM_FACES_C_DIM};
 
     // compute_kernel_hw_startup
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
@@ -250,6 +258,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    // The op writes the row max into column [0] of a 32x32 DEST slot whatever the operand geometry.
     const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
 
     const std::uint32_t tile_size = tensor_shape.total_tensor_size();

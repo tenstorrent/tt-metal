@@ -160,7 +160,7 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t blo
     // block_ct_dim goes straight into the MOP outer-loop count, which keeps only its low bits: a wider block
     // silently reduces (block_ct_dim & MAX_LOOP_LEN) tiles. The compile-time sibling static_asserts the same bound.
     LLK_ASSERT(block_ct_dim <= ckernel_template::MAX_LOOP_LEN, "block_ct_dim exceeds the MOP loop-count field");
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_ASSERT(validate_tensor_shape_reduce_block_max_row_(tensor_shape), "block reduce_max_row supports 32x32 and 16x32 tiles only");
     LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 1 && is_fp32_dest_acc_en), "16x32 reduce_block_max_row not supported in FP32 dest mode yet");
 
     if (tensor_shape.num_faces_r_dim == 1)

@@ -1080,4 +1080,30 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixReduceBlockIdFreeGolden) {
         result, data, ::unit_tests::compute::gold_reduce_hw, /*red_type=*/0, /*shape=*/{1, num_tiles, 32, 32});
 }
 
+TEST_F(LLKMeshDeviceSingleCardFixture, TensixReduceBlockMaxRowNumFacesCompileLimits) {
+    // Compile-time contract test; these programs are never launched. The num_faces convenience
+    // overloads of reduce_block_max_row only describe geometries the LLK implements, 4 faces
+    // (32x32) and 2 faces (16x32): a single 16x16 face has to be rejected at compile time instead
+    // of pooling SrcA rows the unpacker never wrote.
+    for (const std::uint32_t num_faces : {4u, 2u, 1u}) {
+        SCOPED_TRACE(::testing::Message() << "num_faces=" << num_faces);
+        Program program = CreateProgram();
+        const CoreCoord core{0, 0};
+        for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16}) {
+            CreateCircularBuffer(
+                program, core, CircularBufferConfig(2048, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, 2048));
+        }
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/compute/reduce_block_max_row_compile_limits.cpp",
+            core,
+            ComputeConfig{.compile_args = {num_faces}});
+        if (num_faces == 1) {
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+        } else {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+        }
+    }
+}
+
 }  // namespace tt::tt_metal

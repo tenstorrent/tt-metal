@@ -136,7 +136,7 @@ inline void _llk_math_reduce_block_max_row_mop_config_(const ckernel::TensorShap
 {
     // Constraint on the outerloop and innerloop dim
     static_assert(block_ct_dim < 128, "block_ct_dim must be less than 128");
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_ASSERT(validate_tensor_shape_reduce_block_max_row_(tensor_shape), "block reduce_max_row supports 32x32 and 16x32 tiles only");
     LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 1 && is_fp32_dest_acc_en), "16x32 reduce_block_max_row not supported in FP32 dest mode yet");
 
     if (tensor_shape.num_faces_r_dim == 1)
@@ -273,7 +273,7 @@ template <std::uint32_t block_ct_dim>
 inline void _llk_math_reduce_block_max_row_mop_reprogram_only_(const ckernel::TensorShape tensor_shape)
 {
     static_assert(block_ct_dim < 128, "block_ct_dim must be less than 128");
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_ASSERT(validate_tensor_shape_reduce_block_max_row_(tensor_shape), "block reduce_max_row supports 32x32 and 16x32 tiles only");
 
     if (tensor_shape.num_faces_r_dim == 1)
     {
@@ -361,7 +361,7 @@ inline void _llk_math_reduce_block_max_row_uninit_()
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
 {
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_ASSERT(validate_tensor_shape_reduce_block_max_row_(tensor_shape), "block reduce_max_row supports 32x32 and 16x32 tiles only");
     LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 1 && is_fp32_dest_acc_en), "16x32 reduce_block_max_row not supported in FP32 dest mode yet");
 
     // Packer indexes at the 32x32 slot stride regardless of the operand's face count.
