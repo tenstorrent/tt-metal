@@ -43,7 +43,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const Operand& buffer_A = params.buffer_A;
+#endif
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
@@ -81,12 +83,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t DST_INDEX = params.DST_INDEX;
+#ifndef SPEED_OF_LIGHT
+    const int DST_INDEX = params.DST_INDEX;
+#endif
+    const std::uint32_t probe_tile = static_cast<std::uint32_t>(DST_INDEX);
 
     constexpr std::uint32_t MAX_TILES = get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
     static_assert(STALE_TILE < MAX_TILES, "STALE_TILE exceeds max dest tiles");
-    LLK_ASSERT(DST_INDEX < MAX_TILES, "DST_INDEX exceeds max dest tiles");
-    LLK_ASSERT(DST_INDEX != STALE_TILE, "the probe tile must differ from the stale tile");
+    LLK_ASSERT(probe_tile < MAX_TILES, "DST_INDEX exceeds max dest tiles");
+    LLK_ASSERT(probe_tile != STALE_TILE, "the probe tile must differ from the stale tile");
 
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
@@ -104,7 +109,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (PROBE_COPY)
     {
         _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            DST_INDEX, formats.math, formats.math, TILE_NUM_FACES);
+            probe_tile, formats.math, formats.math, TILE_NUM_FACES);
     }
     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
@@ -122,8 +127,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t DST_INDEX = params.DST_INDEX;
-    const Operand& buffer_Res     = params.buffer_Res;
+#ifndef SPEED_OF_LIGHT
+    const int DST_INDEX       = params.DST_INDEX;
+    const Operand& buffer_Res = params.buffer_Res;
+#endif
+    const std::uint32_t probe_tile = static_cast<std::uint32_t>(DST_INDEX);
 
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
@@ -138,7 +146,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Section 2: the probe tile, then the stale tile again (expected to pack as zeros).
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX, L1_ADDRESS(buffer_Res[1]));
+    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(probe_tile, L1_ADDRESS(buffer_Res[1]));
     _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(STALE_TILE, L1_ADDRESS(buffer_Res[2]));
     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
