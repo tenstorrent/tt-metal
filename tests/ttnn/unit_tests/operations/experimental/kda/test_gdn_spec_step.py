@@ -12,7 +12,8 @@ Every test also runs in the op's three arithmetic modes: ``plain`` (the original
 state), ``fast`` (fast_mode=True: gdn_decode_step's reader-side fp32 gates and dual-packed state add) and
 ``fast_fp32`` (fast_mode=True, fp32_state=True: plus the exact-fp32 SFPU state decay / add). The Tier-1 tests compare
 each mode against gdn_decode_step in the SAME mode (torch.equal); ``fast_fp32`` is what the qwen36 plain decode and
-QWEN36_VERIFY_SPEC_STEP=1 verify run.
+QWEN36_VERIFY_SPEC_STEP=1 verify run. They skip at (24, 8): this tree's gdn_decode_step reads a|b from one tile
+(2*Nv <= 32), so the two-tile geometry has no Tier-1 reference.
   GDN_GOLDEN_DIR=/path GDN_GOLDEN_MODE=dump   pytest ... -k nv12    # save the device results of the (12, 4) cases
   GDN_GOLDEN_DIR=/path GDN_GOLDEN_MODE=check  pytest ... -k nv12    # assert torch.equal against the saved ones
 (the dump/check pair proves a kernel change keeps the one-tile geometry bit-identical).
@@ -101,6 +102,14 @@ def skip_if_over_grid(device, g, B):
     n = num_cores(device)
     if B * g.Nv > n:
         pytest.skip(f"B*Nv = {B}*{g.Nv} = {B * g.Nv} (user, head) items exceed the {n}-core grid")
+
+
+def skip_if_no_decode_step(g):
+    """This tree's gdn_decode_step (the Tier-1 reference) reads the a|b gate pair from ONE tile: its validate rejects
+    2*Nv > TILE_WIDTH (gdn_decode_step_device_operation.cpp, "2*Nv <= 32 (a|b in one tile)"). gdn_spec_step itself
+    runs the two-tile (24, 8) geometry; only the identity against the decode op has no reference there."""
+    if 2 * g.Nv > 32:
+        pytest.skip(f"gdn_decode_step needs 2*Nv <= 32 (a|b in one tile); 2*{g.Nv} = {2 * g.Nv} -> no Tier-1 reference")
 
 
 def _golden(request, **tensors):
@@ -655,6 +664,7 @@ def test_tier1_vs_gdn_decode_step_conv(device, geo, mode, request, seed):
     """Plain-family identity (ungrouped path): gdn_spec_step(T=1, B=1) vs ttnn.experimental.kda.gdn_decode_step(conv_hist,
     conv_taps) at B=1 on identical inputs (history = E_prev rows 1..3, i.e. mi = 0), both in the same arithmetic mode:
     out and state must be bit-identical (torch.equal). ``fast_fp32`` is the qwen36 plain decode's mode."""
+    skip_if_no_decode_step(geo)
     B, T = 1, 1
     Nv = geo.Nv
     c = Case(device, geo, B, T, seed=seed, mi=[0], par=0, mode=mode)
@@ -686,6 +696,7 @@ def test_tier1_b2_vs_grouped_gdn_decode_step(device, geo, mode, request, seed):
     against itself (B=2 grouped vs B=1). The B=1 form is the reference family (Tier-1 identity); this test REPORTS the
     grouped-path result and asserts only the identity with the ungrouped per-user runs plus closeness (PCC > 0.9999)
     for the grouped path."""
+    skip_if_no_decode_step(geo)
     B, T = 2, 1
     Nv, VD = geo.Nv, geo.VD
     c = Case(device, geo, B, T, seed=seed, mi=[0, 0], par=0, mode=mode)
