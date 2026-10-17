@@ -37,12 +37,16 @@ ALWI void sfpu_sum_int_row(uint32_t idst) {
  * | Argument   | Description                                                        | Type     | Valid Range                                                                | Required |
  * |------------|--------------------------------------------------------------------|----------|----------------------------------------------------------------------------|----------|
  * | idst       | The index of the tile in DST register buffer that receives the sum | uint32_t | Must be less than the size of the DST register buffer                      | True     |
- * | dst_offset | Distance in tiles from idst to the operand tile (default 2)        | uint32_t | idst + dst_offset must be less than the size of the DST register buffer; 1 on Quasar | False    |
+ * | dst_offset | Distance in tiles from idst to the operand tile                    | uint32_t | idst + dst_offset must be less than the size of the DST register buffer; 1 on Quasar | True     |
  */
 // clang-format on
-ALWI void sfpu_add_int(uint32_t idst, uint32_t dst_offset = 2) {
+ALWI void sfpu_add_int(uint32_t idst, uint32_t dst_offset) {
 #ifdef ARCH_QUASAR
     LLK_ASSERT(dst_offset == 1, "sfpu_add_int on Quasar always adds tile idst + 1; dst_offset must be 1");
+    MATH(LLK_ASSERT(
+        (static_cast<std::uint64_t>(idst) + 1 <
+         trisc::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, trisc::DstTileShape::Tile32x32>()),
+        "sfpu_add_int operand tile idst + 1 exceeds max dest tiles"));
 #else
     MATH(LLK_ASSERT(
         (static_cast<std::uint64_t>(idst) + dst_offset <
