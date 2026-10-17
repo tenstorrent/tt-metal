@@ -23,6 +23,17 @@ TABLE = {
     # full layers: SDPA attends the chunk's own K / V in bf16 (a per-call bf16 copy of the slot's cache); the served
     # cache stays bfp8. False: SDPA reads the bfp8 cache (rel 0.067 vs 0.043 limit on L1: bfp8 on the chunk's own keys)
     "ATTN_CHUNK_KV_BF16": Setting(True, (True, False), "full-layer SDPA sees the chunk's own K / V in bf16"),
+    # sliding layers (ring SDPA takes only bfp8 K / V there): SDPA reads a per-call 128-wide slot copy, head dim
+    # [hi | lo] with hi = bfp8(x), lo = bfp8(x - hi), and q duplicated, so q.k and P.v see x to ~2^-14. bfp8 on the
+    # chunk's own K was rel 0.0246 vs the CPU step in S.sliding_moe.02 (limit 0.02); the split simulates at 0.003
+    "ATTN_SLIDING_KV_SPLIT": Setting(True, (True, False), "sliding-layer SDPA sees the chunk's K / V as bfp8 hi + lo"),
+    # bfp8 QKV weights are rel 0.012 of the sliding attention output against the CPU step (S.sliding_moe.02 device
+    # probe: the worst row ratio 1.027 > 1.02, block out rel 0.0101 > 0.01); bf16 costs 3.5 MB more per chip per layer
+    "ATTN_QKV_WEIGHT_DTYPE": Setting("bfloat16", ("bfloat16", "bfloat8_b"), "fused QKV weight dtype"),
+    # rotary_embedding_indexed runs with a 16-bit dest (fp32_dest_acc_en TT_FATALs in program setup) and truncates:
+    # q / k rel 0.0044, norms -0.2 % (S.sliding_moe.02 device probe). True: the op only fetches this chunk's cos / sin
+    # rows (hi / lo bf16 tables, exact), the rotation is matmuls on bf16 hi / lo halves, the products fp32 eltwise
+    "ROPE_FP32": Setting(True, (True, False), "q / k RoPE composed in fp32 instead of rotary_embedding_indexed"),
     "SDPA_FIDELITY": Setting("HiFi4", FIDELITIES, "rule 7 default: ring SDPA at HiFi4"),
     # ring_joint SDPA with attention_sink TT_FATALs with fp32 dest ("requires streaming compute; set
     # fp32_dest_acc_en=false", ring_joint_sdpa_device_operation.cpp): False is the most precise value the op allows.
@@ -53,6 +64,9 @@ MAX_PRECISION = {
     "ATTN_MM_FP32_ACC": True,
     "QKV_FP32": True,
     "ATTN_CHUNK_KV_BF16": True,
+    "ATTN_SLIDING_KV_SPLIT": True,
+    "ATTN_QKV_WEIGHT_DTYPE": "bfloat16",
+    "ROPE_FP32": True,
     "SDPA_FIDELITY": "HiFi4",
     "SDPA_FP32_ACC": False,
     "O_PROJ_REDUCE_FP32": True,

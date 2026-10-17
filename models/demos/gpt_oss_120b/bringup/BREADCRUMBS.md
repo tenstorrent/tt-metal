@@ -95,3 +95,35 @@
 - Gate: PASS. pcc 0.99957, auto_margin_min 1.03 (bias on golden is the closest check), 22 device ops, host FLOPs 0,
   deterministic. All 8 earlier C regressions PASS (sliding attention too).
 - Re-run: `bfw job check --task C.attn_moe.attention`.
+
+## S.sliding_moe.02 (layer 0: attn_norm + attention on device)
+
+- First run failed the swap step checks: swap_attention vs the CPU step on the same inputs had rel 0.0246 (limit
+  0.02 = min(0.02, 2 x component error)), worst row 0.075 (0.05) and ratio [0.965, 1.038] (1 +- 0.02). The block out
+  vs CPU attention had rel 0.0154 (0.01), and the margin was 0.53. The component gate passed because its limits are
+  set against the golden.
+- **Error sources, from a CPU simulation and an on-device stage probe** (rel of the attention output):
+  - bfp8 on the chunk's own K: 0.020. The prefix K / V in bfp8 contribute only 0.003; the test's CPU step sees the
+    chunk's K / V in fp32.
+  - `rotary_embedding_indexed`: 0.0044 on q / k, with norms 0.2 % low. It runs with a 16-bit dest, and
+    fp32_dest_acc_en TT_FATALs in program setup (`dfbs_with_entry.contains`). fp32 cos / sin tables changed nothing.
+  - bfp8 QKV weights: V rel 0.005, q / k 0.0004 more.
+  - The ring SDPA itself (bf16 intermediates, no fp32 dest with sinks): 0.007 against an fp32 SDPA on the same
+    inputs. This one is left as is.
+- **Fixes** (all Settings, in MAX_PRECISION):
+  - `ATTN_SLIDING_KV_SPLIT`. Ring SDPA's sliding path accepts only bfp8 K / V (TT_FATAL "Chunked sliding attention
+    requires BF16 Q and BFP8_B K/V"), so the bf16 slot copy of the full layers is not possible here. Instead SDPA
+    reads a per-call copy of the slot that is 128 wide:
+    - every row is [cache | 0];
+    - the chunk's rows are [hi | lo], with hi = bfp8(x) and lo = bfp8(x - hi);
+    - Q is [q | q].
+
+    With that, q.k and P.v see hi + lo, which is within 1e-4 of fp32. The output halves are sliced and added. The
+    served cache still gets plain bfp8 hi, written after the copy is built. The gather buffers are 128 wide.
+  - `ROPE_FP32`. `rotary_embedding_indexed` only fetches this chunk's table rows: it is called with input ones, a
+    zero rotation matrix and hi / lo bf16 tables, which is exact. The rotation itself is composed: matmuls of x's bf16
+    hi / lo halves with the 64x64 meta rotation (fp32 dest), then x * cos + rot * sin in fp32. q / k rel drops from
+    0.0044 to 0.0004.
+  - `ATTN_QKV_WEIGHT_DTYPE` bfloat16. This costs 3.5 MB more per chip per layer.
+- Probe after the fixes: module vs the CPU step rel 0.0088, row 0.029, ratio [0.989, 1.017], bias +0.0029.
+- Re-run: `bfw job check --task S.sliding_moe.02`.
