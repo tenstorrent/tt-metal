@@ -574,7 +574,7 @@ void ControlPlane::init_control_plane(
 
     // Mesh and rank identity are known at this point; enforce one consistent FabricConfig before
     // inter-mesh setup, routing table configuration, FabricContext, or router launch.
-    this->validate_fabric_config_across_ranks();
+    this->validate_fabric_config_compatibility();
 
     // Initialize routing table generator after validation to ensure no rank computes routing tables
     // with a FabricConfig that differs from peers.
@@ -703,7 +703,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     // Mesh and rank identity are known at this point; enforce one consistent FabricConfig before
     // inter-mesh setup, routing table configuration, FabricContext, or router launch.
-    this->validate_fabric_config_across_ranks();
+    this->validate_fabric_config_compatibility();
 
     // Initialize routing table generator after validation to ensure no rank computes routing tables
     // with a FabricConfig that differs from peers.
@@ -929,7 +929,44 @@ void ControlPlane::adopt_local_mesh_fabric_config() {
     this->fabric_config_ = resolved;
 }
 
-void ControlPlane::validate_fabric_config_across_ranks() {
+void ControlPlane::validate_fabric_config_compatibility() {
+    // Inter-mesh dimensionality compatibility (moved out of MeshGraph): two meshes joined by an inter-mesh
+    // link must share routing dimensionality -- all 2D configs (FABRIC_2D, FABRIC_2D_TORUS_X/Y/XY) interoperate,
+    // a 1D config cannot be inter-mesh-linked to a 2D one. Uses each mesh's resolved per-mesh config.
+    {
+        auto is_2d = [](FabricConfig cfg) {
+            return cfg == FabricConfig::FABRIC_2D || cfg == FabricConfig::FABRIC_2D_TORUS_X ||
+                   cfg == FabricConfig::FABRIC_2D_TORUS_Y || cfg == FabricConfig::FABRIC_2D_TORUS_XY;
+        };
+        auto check_pair = [&](uint32_t src, uint32_t dst) {
+            if (this->mesh_graph_->is_switch_mesh(MeshId{src}) || this->mesh_graph_->is_switch_mesh(MeshId{dst})) {
+                return;  // switch instances carry no fabric config
+            }
+            const auto src_cfg = this->mesh_graph_->get_fabric_config(MeshId{src});
+            const auto dst_cfg = this->mesh_graph_->get_fabric_config(MeshId{dst});
+            TT_FATAL(
+                is_2d(src_cfg) == is_2d(dst_cfg),
+                "Inter-mesh link between mesh M{} (FabricConfig {}) and mesh M{} (FabricConfig {}) joins meshes of "
+                "different routing dimensionality (1D vs 2D). The two ends of an inter-mesh channel must share the "
+                "same packet geometry (payload/header size), so a 1D mesh cannot be inter-mesh-linked to a 2D mesh. "
+                "All 2D configs (FABRIC_2D, FABRIC_2D_TORUS_X/Y/XY) are mutually compatible.",
+                src,
+                enchantum::to_string(src_cfg),
+                dst,
+                enchantum::to_string(dst_cfg));
+        };
+        for (const auto& [src, dst_map] : this->mesh_graph_->get_requested_intermesh_connections()) {
+            for (const auto& [dst, count] : dst_map) {
+                check_pair(src, dst);
+            }
+        }
+        for (const auto& [src, dst_map] : this->mesh_graph_->get_requested_intermesh_ports()) {
+            for (const auto& [dst, ports] : dst_map) {
+                check_pair(src, dst);
+            }
+        }
+    }
+
     using tt::tt_metal::distributed::multihost::ReduceOp;
     const auto& distributed_context = this->distributed_context_.get();
     const auto world_size = static_cast<uint32_t>(*distributed_context.size());
@@ -1016,8 +1053,8 @@ void ControlPlane::validate_fabric_config_across_ranks() {
     }
 
     const auto& mesh_graph_desc_path = this->mesh_graph_->get_mesh_graph_descriptor_path();
-    const std::string mesh_graph_path = mesh_graph_desc_path.has_value() ? mesh_graph_desc_path->string()
-                                                                          : std::string("<auto-discovered>");
+    const std::string mesh_graph_path =
+        mesh_graph_desc_path.has_value() ? mesh_graph_desc_path->string() : std::string("<auto-discovered>");
 
     validate_fabric_configs(observations, mesh_graph_path);
 
@@ -1104,7 +1141,8 @@ void ControlPlane::construct_link_health_after_intermesh() {
     if (this->fsd_physical_system_descriptor_ == nullptr) {
         return;
     }
-    this->link_health_ = std::make_unique<experimental::LinkHealth>(*this->topology_mapper_, *this->physical_system_descriptor_);
+    this->link_health_ =
+        std::make_unique<experimental::LinkHealth>(*this->topology_mapper_, *this->physical_system_descriptor_);
     this->check_fsd_compatibility_and_downed_fraction();
     this->confirm_local_downed_links();
 }
@@ -1244,7 +1282,9 @@ const std::vector<experimental::LinkInfo>& ControlPlane::get_unused_downed_links
     return this->link_health_ == nullptr ? kNone : this->link_health_->get_unused_downed_links();
 }
 
-const std::vector<experimental::LinkInfo>& ControlPlane::get_locally_unhealthy_links() const { return this->locally_unhealthy_; }
+const std::vector<experimental::LinkInfo>& ControlPlane::get_locally_unhealthy_links() const {
+    return this->locally_unhealthy_;
+}
 
 void ControlPlane::refresh_connectivity_diff() {
     if (this->link_health_ == nullptr) {
@@ -1257,9 +1297,7 @@ void ControlPlane::refresh_connectivity_diff() {
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     this->refreshed_live_descriptor_ =
         std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(tt::tt_metal::run_physical_system_discovery(
-            *this->cluster_.get().get_cluster_desc(),
-            distributed_context,
-            this->rtoptions_.get().get_target_device()));
+            *this->cluster_.get().get_cluster_desc(), distributed_context, this->rtoptions_.get().get_target_device()));
     this->link_health_->refresh(nullptr, this->refreshed_live_descriptor_.get());
     // refresh() clears the unused-plane classification; reapply the routing-plane snapshot so holes
     // already classified as unused do not silently reactivate.
@@ -1791,7 +1829,8 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                             log_warning(
                                 tt::LogFabric,
                                 "STRICT + FSD: skipping fatal on short connection, {} of {} eth link(s) from "
-                                "physical chip {} to physical chip {}. FSD in use -- recording in experimental::LinkHealth, "
+                                "physical chip {} to physical chip {}. FSD in use -- recording in "
+                                "experimental::LinkHealth, "
                                 "not fatal.",
                                 connected_eth_cores.size(),
                                 edge.connected_chip_ids.size(),
@@ -1838,8 +1877,8 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                             // machine all use that name.
                             auto neighbor_host_rank =
                                 physical_system_descriptor_->get_mpi_rank_for_asic(exit_node.dst_exit_node);
-                            const auto neighbor_rank = tt::tt_metal::distributed::multihost::Rank{
-                                static_cast<int>(neighbor_host_rank)};
+                            const auto neighbor_rank =
+                                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)};
                             if (!this->global_logical_bindings_.contains(neighbor_rank)) {
                                 continue;
                             }
@@ -3859,8 +3898,7 @@ PortDescriptorTable ControlPlane::generate_port_descriptor_table() {
         if (!this->global_logical_bindings_.contains(neighbor_rank)) {
             continue;
         }
-        sorted_neighbors.emplace_back(
-            this->global_logical_bindings_.at(neighbor_rank).first, neighbor_host, dst_rank);
+        sorted_neighbors.emplace_back(this->global_logical_bindings_.at(neighbor_rank).first, neighbor_host, dst_rank);
     }
     std::sort(sorted_neighbors.begin(), sorted_neighbors.end(), [](const auto& a, const auto& b) {
         if (*std::get<0>(a) != *std::get<0>(b)) {
