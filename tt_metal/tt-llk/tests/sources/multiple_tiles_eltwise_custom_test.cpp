@@ -60,6 +60,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+    if constexpr (PRESERVE_SRC_ZERO_FLAG)
+    {
+        // Leave the Src zero flag at keep, as a preceding copy_tile_init does. The init must restore the
+        // operand-driven value, or the FPU keeps the denormal SrcB operands it should flush.
+        math::_configure_preserve_zero_flag_state_();
+    }
     // Call the custom LLK once per destination section. The templated MUL/SUB scaffold is
     // Blackhole-only; Wormhole has only the SUB-named wrapper.
     for (int block = 0; block < params.NUM_BLOCKS; ++block)

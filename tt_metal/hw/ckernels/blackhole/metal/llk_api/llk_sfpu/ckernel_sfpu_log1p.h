@@ -150,7 +150,7 @@ inline void log1p_bf16_tile_init() {
 
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_log1p() {
-    if constexpr (!is_fp32_dest_acc_en && !FAST_APPROX && ITERATIONS == 32) {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
         if (bf16_dest_log1p()) {
             calculate_log1p_bf16<ITERATIONS>();
             return;

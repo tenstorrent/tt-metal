@@ -38,7 +38,7 @@ ALWI void log1p_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void log1p_tile(uint32_t idst) {
-    MATH(if constexpr (ckernel::sfpu::log1p_bf16_whole_tile && !is_fp32_dest_acc_en && !fast_and_approx) {
+    MATH(if constexpr (ckernel::sfpu::log1p_bf16_whole_tile && !is_fp32_dest_acc_en) {
         SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
