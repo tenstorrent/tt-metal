@@ -63,7 +63,7 @@ class _MoEPerfCase:
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    expected_ns=None,
+    expected_ns=3_751_000,
     margin=0.03,
     shape_note="384 experts / top-8, 7168 emb",
 )
@@ -71,7 +71,7 @@ _K2_7 = _MoEPerfCase(
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
-    expected_ns=None,
+    expected_ns=6_310_000,
     margin=0.03,
     shape_note="896 experts / top-16, 3584 latent",
     extra=dict(
