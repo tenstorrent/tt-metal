@@ -25,9 +25,9 @@ namespace ckernel {
  * restore those programmable constants before another SFPU operation relies on them.
  * This operation overwrites ADDR_MOD_6 (dest incr 2) on every call, so it may follow
  * another SFPU op's init without a rand_tile_init in the same kernel (the PRNG stream
- * seeded by an earlier rand_tile_init or ttnn.manual_seed continues); ops relying on
- * ADDR_MOD_6 from their own init (topk_tile_init, square, sfpu reduce) must re-run
- * that init after rand_tile.
+ * seeded by an earlier rand_tile_init or a host-set seed continues); ops relying on
+ * ADDR_MOD_6 from their own init (e.g. topk_tile_init, square, sfpu reduce, matmul with
+ * THROTTLE_LEVEL) must re-run that init after rand_tile.
  *
  * Return value: None
  *
