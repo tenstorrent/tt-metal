@@ -5294,6 +5294,27 @@
   "started": "2026-10-17T06:31:53",
   "status": "PASS"
  },
+ "S.enc_reuse.10": {
+  "attempts": 0,
+  "duration_s": 152.3,
+  "history": [
+   {
+    "s": 152.3,
+    "status": "PASS",
+    "t": "2026-10-17T06:43:23"
+   }
+  ],
+  "last_run": "2026-10-17T06:43:23",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/S.enc_reuse.10.log",
+  "metrics": {
+   "err_swap_out": 0.03551988676190376,
+   "err_swap_out_limit": 0.07334399968385696
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T06:40:51",
+  "status": "PASS"
+ },
  "S.enc_source.01": {
   "attempts": 0,
   "duration_s": 55.1,
