@@ -4,6 +4,8 @@
 
 #include "ring_fusion.hpp"
 
+#include <tt-metalium/mesh_device.hpp>
+
 using namespace tt::tt_metal;
 namespace ttnn::prim {
 
