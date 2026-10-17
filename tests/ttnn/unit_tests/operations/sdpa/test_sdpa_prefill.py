@@ -618,6 +618,8 @@ def test_sdpa_k_chunk_size_above_block_reduce_limit(
     the chunk and has no such limit, so the same chunk must be accepted and computed there. The
     experimental Quasar SDPA fork selects the same two kernels on Wormhole and Blackhole, so it must
     behave the same way."""
+    if ttnn.get_arch_name() == "quasar":
+        pytest.skip("Covers the Wormhole/Blackhole block-reduce limit; Quasar runs the standard kernel")
     if use_high_precision_compute:
         run_test_sdpa_tt(
             device,
