@@ -138,7 +138,10 @@ def _matrix_spec(formats: InputOutputFormat) -> StimuliSpec:
 
 
 def _uint16_full_range_spec() -> StimuliSpec:
-    """Random draws over the whole UInt16 range, with six values pinned per tile.
+    """Random draws over the whole UInt16 range, with six values pinned per face.
+
+    The stimuli generator calls the distribution once per 256-element face, so the
+    pins open every face (24 per 32x32 tile).
 
     The matrix caps integer inputs at 255 for the sake of its integer outputs, so
     nothing there needs the int -> bf16 rounding; here about 1k draws from
