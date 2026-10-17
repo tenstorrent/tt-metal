@@ -46,7 +46,7 @@ inline void _llk_unpack_reduce_mop_config_(const std::uint32_t num_faces)
 /**
  * @brief Initialize the unpacker for a reduce-with-scaler operation.
  *
- * Configures the SrcB format registers and scaler L1 base address, sets haloize (transpose) mode
+ * Configures the SrcB format registers, sets haloize (transpose) mode
  * according to the reduce dimension and the within-face transpose flag, programs the datum count,
  * and programs the reduce MOP.
  *
@@ -78,11 +78,6 @@ inline void _llk_unpack_reduce_init_(
     cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0xf>(unpB_src_format);
     cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_RMW>(unpB_dst_format);
 
-    TTI_WRCFG(p_gpr_unpack::L1_BUFFER_ADDR, p_cfg::WRCFG_32b, THCON_SEC1_REG3_Base_address_ADDR32);
-    TTI_WRCFG(p_gpr_unpack::L1_BUFFER_ADDR, p_cfg::WRCFG_32b, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
-    TTI_NOP;
-    TTI_NOP;
-
     // REDUCE_ROW requires transpose itself; additionally, within_face_16x16_transpose flag could require transpose;
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(ReduceDim::REDUCE_ROW == dim ? !within_face_16x16_transpose : within_face_16x16_transpose);
@@ -96,16 +91,18 @@ inline void _llk_unpack_reduce_init_(
 /**
  * @brief Unpack a tile for a reduce-with-scaler operation.
  *
- * Programs the operand base address, temporarily narrows SrcB to a single 16-datum row for the
- * scaler, runs the reduce MOP, restores the SrcB datum count, and switches config context.
+ * Programs the operand (SrcA) and scaler (SrcB) base addresses, narrows SrcB to a single 16-datum
+ * row for the scaler, runs the reduce MOP, restores the SrcB datum count, and switches config context.
  *
  * @tparam type: Reduction pooling op, values = <SUM/AVG/MAX>
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param address: L1 address of the source tile.
+ * @param scaler_address: L1 address of the scaler tile; its first row is unpacked into SrcB.
  * @note Call @ref _llk_unpack_reduce_init_ with matching template args before this function.
+ * @note The scaler is an ordinary L1 tile (e.g. a circular-buffer tile) owned by the caller.
  */
 template <PoolType type, ReduceDim dim>
-inline void _llk_unpack_reduce_(const std::uint32_t address)
+inline void _llk_unpack_reduce_(const std::uint32_t address, const std::uint32_t scaler_address)
 {
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
@@ -116,8 +113,8 @@ inline void _llk_unpack_reduce_(const std::uint32_t address)
     // Wait for free context
     wait_for_next_context(2);
 
-    // Validate and configure address
-    _llk_unpack_configure_single_address_(address, cfg);
+    // Validate and configure the operand (SrcA) and scaler (SrcB) addresses
+    _llk_unpack_configure_addresses_(address, scaler_address, cfg);
 
     // Trisc::SEMPOST for context acquire
     semaphore_post(semaphore::UNPACK_SYNC);
