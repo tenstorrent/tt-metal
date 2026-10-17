@@ -9,5 +9,3 @@
 >
 > Changelogs can be found attached to releases.  Additional documentation is in
 > `/source` directory, under the speicfic release versions.
-
-

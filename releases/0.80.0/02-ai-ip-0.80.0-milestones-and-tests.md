@@ -110,9 +110,9 @@ Quasar, Horizon and Trinity emulators.
 
 ### Test irregularities
 
-One entry is marked as "out-of-bounds" on the release build. 
+One entry is marked as "out-of-bounds" on the release build.
 
-#### Details 
+#### Details
 The test passed for functionality, but it's return timing was marked out-of-bounds by the test platform.  This test has been investigated, and development has marked this as a safe value for this release.  The boundary conditions will be examined for our next release, to determine if the code or the test needs to be adjusted.
 
 That test is:
