@@ -7,9 +7,10 @@
 ``llk_api/experimental/llk_sfpu/llk_math_sinkhorn.h`` into every TRISC_MATH kernel that
 includes it. ``_llk_math_sinkhorn_4x4_init_`` there is a non-template inline function,
 so its body is checked at header inclusion whether or not ``sinkhorn_4x4_init()`` is
-ever called. No in-tree kernel includes the header, so a build break in it is invisible
-to every functional test; this test builds a driver that includes it and asserts the
-math ELF was produced. It never runs the kernel.
+ever called, and the ``_llk_math_sinkhorn_4x4_`` forwarder is a template no in-tree kernel
+instantiates. This test builds a driver that includes the header, calls the init and
+instantiates the forwarder with the compute API's defaults, and asserts the math ELF was
+produced. It never runs the kernel.
 """
 
 from conftest import blackhole_only

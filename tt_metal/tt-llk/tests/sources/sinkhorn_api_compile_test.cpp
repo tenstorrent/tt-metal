@@ -11,8 +11,9 @@
 // nothing else ever compiles it: this driver does, and test_sinkhorn_api_compile.py only builds
 // it (never runs it).
 //
-// The math thread calls the init the way sinkhorn_4x4_init() dispatches it; the other two
-// threads are empty.
+// The math thread calls the init the way sinkhorn_4x4_init() dispatches it and instantiates
+// the sinkhorn_4x4 forwarder, which no in-tree kernel does either; the other two threads are
+// empty.
 
 #include <cstdint>
 
@@ -46,6 +47,17 @@ using namespace ckernel;
 void run_kernel([[maybe_unused]] RUNTIME_PARAMETERS params)
 {
     _llk_math_sinkhorn_4x4_init_();
+
+    // The forwarder with the defaults of sinkhorn_4x4() in api/compute/experimental/sinkhorn.h:
+    // four faces, both sub-matrices, full 32x32 rectangle. Instantiates every face arm of
+    // _sinkhorn_4x4_.
+    _llk_math_sinkhorn_4x4_<4 /* NUM_FACES_USED */, 20 /* ITERS */, 0x35890000 /* EPS_BITS */, false /* SINGLE_SUBMAT */, 32 /* VALID_H */, 32 /* VALID_W */>(
+        0 /* input_index */);
+
+    // The arms the defaults leave out: a single sub-matrix and a rectangle smaller than the
+    // face set, which selects the padding-zeroing path.
+    _llk_math_sinkhorn_4x4_<1 /* NUM_FACES_USED */, 1 /* ITERS */, 0x35890000 /* EPS_BITS */, true /* SINGLE_SUBMAT */, 16 /* VALID_H */, 16 /* VALID_W */>(
+        0 /* input_index */);
 }
 
 #endif
