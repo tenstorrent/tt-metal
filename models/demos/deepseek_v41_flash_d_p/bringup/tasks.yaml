@@ -5914,6 +5914,13 @@ tasks:
     - attn_hc
     - attn_collapse
     layer: 20
+  frozen:
+    at: '2026-10-17T08:06:15'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_02_attn_collapse.py: 206d6e9829b6e4e7b495ab515dc0570a59d0571d788f48cf6725317bf81ebd3d
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_candidate.attn_norm
   title: dec_candidate attn_norm (norm) on device, layer 20
   step: implement
