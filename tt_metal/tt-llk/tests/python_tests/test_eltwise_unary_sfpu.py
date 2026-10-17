@@ -503,6 +503,18 @@ def test_eltwise_unary_sfpu_edges(
     )
 
 
+def _assert_specials_reach_the_kernel(formats, dest_acc):
+    """The regression tests below feed non-finite probes through a format combination
+    specials_safe() says carries them. If that ever goes False the pipeline stopped
+    delivering the probe and the test's assertions would pass or fail for the wrong
+    reason -- fail loudly here instead."""
+    assert specials_safe(formats.input_format, formats.output_format, dest_acc), (
+        f"{formats.input_format.name} -> {formats.output_format.name} at "
+        f"dest_acc={dest_acc.name} no longer carries specials; re-derive the combination "
+        "this regression test runs on before editing it."
+    )
+
+
 # sqrt_custom(+/-inf): strict assertions on two named values, outside the edge sweep because
 # the sweep cannot distinguish the two NaNs it would have to. Float32 -> Float32 at dest_acc=Yes,
 # because a 16-bit output narrows NaN to inf and could not show a regression.
@@ -521,12 +533,7 @@ def test_sqrt_custom_infinity_regression(request):
     dest_acc = DestAccumulation.Yes
     input_dimensions = [32, 32]
 
-    # If this ever goes False the pipeline stopped delivering +inf and the assertion below
-    # would pass vacuously -- fail loudly instead of quietly testing nothing.
-    assert specials_safe(formats.input_format, formats.output_format, dest_acc), (
-        "Float32 -> Float32 at dest_acc=Yes no longer carries specials; re-derive the "
-        "combination this regression test runs on before editing it."
-    )
+    _assert_specials_reach_the_kernel(formats, dest_acc)
 
     num_elements = input_dimensions[0] * input_dimensions[1]
     # A finite control alongside the probe: if the guard is ever widened to pass everything
@@ -657,12 +664,7 @@ def test_expm1_cw_negative_nan_regression(mathop):
     dest_acc = DestAccumulation.Yes
     input_dimensions = [32, 32]
 
-    # If this ever goes False the pipeline stopped delivering the NaN and the assertions
-    # below would fail for the wrong reason -- fail loudly instead.
-    assert specials_safe(formats.input_format, formats.output_format, dest_acc), (
-        "Float32 -> Float32 at dest_acc=Yes no longer carries specials; re-derive the "
-        "combination this regression test runs on before editing it."
-    )
+    _assert_specials_reach_the_kernel(formats, dest_acc)
 
     # StimuliSpec.custom writes the same values at the head of every face, so one face's
     # worth of the repeating probe list covers the tile; the period has to stay odd for
