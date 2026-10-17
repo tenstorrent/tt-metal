@@ -164,7 +164,7 @@ void add_fabric_bound_cb(
 }
 
 template <typename F>
-void for_each_core_runtime_args(tt::tt_metal::Program& program, tt::tt_metal::KernelHandle kernel_index, F&& patch) {
+void for_each_core_runtime_args(tt::tt_metal::Program& program, tt::tt_metal::KernelHandle kernel_index, F patch) {
     auto& runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kernel_index);
     for (auto& runtime_args_column : runtime_args_by_core) {
         for (auto& runtime_args : runtime_args_column) {
