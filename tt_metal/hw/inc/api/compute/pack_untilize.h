@@ -113,7 +113,7 @@ ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
  * | Template   | block_ct_dim    | Width of a single block in tiles                    | uint32_t  | 1 to max (see note)       | False (default = 8)   |
  * | Template   | full_ct_dim     | Width of a full input in tiles                      | uint32_t  | Divisible by block_ct_dim | False                 |
  * | Template   | narrow_row      | Whether the provided input is narrow                | bool      | true/false                | False                 |
- * | Template   | row_num_datums  | Datums each tile contributes to an output row       | uint32_t  | >= 1                      | False                 |
+ * | Template   | row_num_datums  | Datums each tile contributes to an output row       | uint32_t  | >= 1; narrow_row: 16 B alignment, see NOTE | False                 |
  * | Template   | dense           | Packs two 2 face tiles in a single 4 face region    | bool      | true/false                | False (default false) |
  * | Template   | configure_remap      | Whether to (re)configure BH DEST remap (BH only)    | bool      | true/false                | False (default true)  |
  * | Template   | is_fp32_dest_acc_en  | DEST accumulation mode                              | bool      | true/false                | False                 |
@@ -122,6 +122,15 @@ ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
  * NOTE: When a row is processed in multiple blocks, every block must use the same block_ct_dim;
  * full_ct_dim must be divisible by block_ct_dim. Remainder blocks are unsupported because the L1 column offset
  * is computed as block_c_index * block_ct_dim.
+ *
+ * NOTE: Packer L1 addresses are kept in 16 B units and the LLKs assert the narrow-row layouts that cannot be
+ * expressed in them. With datum_bytes the size of one output datum, row_num_datums must satisfy:
+ * - Blackhole, narrow_row: block_ct_dim * row_num_datums * datum_bytes is a multiple of 16 (every block).
+ * - Wormhole, full_ct_dim > block_ct_dim: block_ct_dim * row_num_datums * datum_bytes is a multiple of 16.
+ * - Wormhole, more than one packer enabled (face_r_dim 16 and num_faces > 1, non-diagonal):
+ *   8 * full_ct_dim * row_num_datums * datum_bytes is a multiple of 16.
+ * For example Float16_b with block_ct_dim = 1 needs row_num_datums to be a multiple of 8 on Blackhole;
+ * TILE_C_DIM (full rows) always satisfies all three.
  */
 // clang-format on
 template <
@@ -298,7 +307,7 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
  * | Template   | full_ct_dim        | Width of a full input in tiles                                               | uint32_t  | Divisible by block_ct_dim               | False                 |
  * | Template   | diagonal           | Whether to use diagonal packing                                              | bool      | true/false                              | False                 |
  * | Template   | narrow_row         | Whether the provided input is narrow                                         | bool      | true/false                              | False                 |
- * | Template   | row_num_datums     | Datums each tile contributes to an output row (TILE_C_DIM unless narrow_row) | uint32_t  | >= 1                                    | False                 |
+ * | Template   | row_num_datums     | Datums each tile contributes to an output row (TILE_C_DIM unless narrow_row) | uint32_t  | >= 1; narrow_row: 16 B alignment, see the pack_untilize_dest_init NOTE | False                 |
  * | Template   | tile_dst_ct_offset | Compile time offset for the index of the tile in the dest from which to pack | uint32_t  | 0 to 7 (0 to 3 if fp32 dest is enabled) | False (default=0)     |
  * | Template   | dense              | Packs two 2 face tiles in a single 4 face region                             | bool      | true/false                              | False (default false) |
  * | Function   | ocb                | Output circular buffer identifier                                            | uint32_t  | 0 to 31                                 | True                  |
