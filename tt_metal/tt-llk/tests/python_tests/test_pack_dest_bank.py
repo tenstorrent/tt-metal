@@ -111,7 +111,7 @@ def test_pack_dest_bank_sync_full(formats, dest_acc):
         4,  # num_faces
         Tilize.No,
         0,  # dest_index
-        [512, 32],
+        [512, 32],  # input_dimensions
         dest_sync=DestSync.Full,
         pack_src=DataFormat.Float16_b,
     )
@@ -119,7 +119,7 @@ def test_pack_dest_bank_sync_full(formats, dest_acc):
 
 @parametrize(
     formats=input_output_formats([DataFormat.Float32, DataFormat.Int32], same=True),
-    dest_acc=[DestAccumulation.Yes],
+    dest_acc=DestAccumulation.Yes,
 )
 def test_pack_dest_bank_sync_full_32bit_source(formats, dest_acc):
     """One SyncFull block of 8 tiles, the whole 32-bit DEST, with a 32-bit pack source.
@@ -136,7 +136,7 @@ def test_pack_dest_bank_sync_full_32bit_source(formats, dest_acc):
         4,  # num_faces
         Tilize.No,
         0,  # dest_index
-        [256, 32],
+        [256, 32],  # input_dimensions
         dest_sync=DestSync.Full,
         pack_src=formats.output_format,
     )
