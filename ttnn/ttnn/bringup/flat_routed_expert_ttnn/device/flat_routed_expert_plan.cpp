@@ -541,7 +541,12 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     // 101.6 / 373.1 -> 44.2 / 91.4 / 366.5 us per expert); with 64-row sub-blocks there is one row pass anyway
     p.gu_full_sync = (cfg.x_bf16 || p.gwt > 4) && p.gu_fp32 && p.gu_rp && p.mt / p.g * p.gwt > 4;
     TT_FATAL(p.mt % p.g == 0 && (p.mt / p.g) * p.gwt <= p.dst_tiles, "flat_routed_expert: sub-block split");
-    p.drisc = p.drisc && !p.nu;  // (16-column units: Tensix readers, for now)
+    // 16-column units: DRISC as the other plans without reader down columns (pure slots, Tensix readers above 96 tokens
+    // / expert; MIMO_FL_HG_DRISC=0: Tensix readers only). V4.1 E 24 us / expert M 32 / 80 / 256 / 1024: 44.2 / 48.0 /
+    // 62.9 / 211.6 -> 43.2 / 48.3 / 62.9 / 211.7; without the Tensix readers (MIMO_FL_DRISC_DUAL=0, 16 cells freed)
+    // 58.9 / 61.3 / 70.6 / 215.0
+    const char* hgd = std::getenv("MIMO_FL_HG_DRISC");
+    p.drisc = p.drisc && (!p.nu || !hgd || std::atoi(hgd) != 0);
     p.mtg = p.mt / p.g;
     const uint32_t m_pad = (p.m + p.mt * 32 - 1) / (p.mt * 32) * p.mt * 32;
     p.nh = p.g > 1 ? 2 : 1;

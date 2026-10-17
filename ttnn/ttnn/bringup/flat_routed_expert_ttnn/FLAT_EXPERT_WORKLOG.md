@@ -936,3 +936,11 @@ bf16 h + 4 chains + the 2-expert pinned ring (DRING 2): 48.8 / 63.6 / 209.1 at M
 plans now: 4 chains, the 2-expert ring with bf16 h too. V4.1 E 24 us / expert at M 32 / 80 / 128 / 256 / 1024:
 bfp8 h 44.2 / 48.0 / 51.9 / 62.9 / 211.6 (was 226.6 at M 1024); bf16 h 44.6 / 48.8 / 52.5 / 63.6 / 208.8 (was 289.7).
 M 1024 is now at the h-off floor; what is left is the gate/up FPU (NU 2 + DRISC readers, ~131 us projected).
+DRISC with units (NU 3): the job descriptor is per slot (rg, R, region, receivers), nothing unit-specific; it just
+runs (PCC as Tensix readers). Default now as the other plans without reader down columns: pure slots, Tensix readers
+above 96 tokens / expert (MIMO_FL_HG_DRISC=0: off). E 24 us / expert M 32 / 80 / 256 / 1024: 44.2 / 48.0 / 62.9 /
+211.6 -> 43.2 / 48.2 / 62.9 / 211.7 (bf16 h 43.4 / 48.2 / 63.6 / 208.8). Without the Tensix readers (MIMO_FL_DRISC_DUAL=0:
+16 cells freed) 58.9 / 61.3 / 70.6 / 215.0, the same with the freed cells idle (RD_DOWN=0) or reader-distance assignment
+(DRISC_ASSIGN=0): the DRISC-only weight path itself is slower here, cause not found. NU 2 (72 gate/up cores) needs the
+freed cells (TT_FATAL: down arena does not fit with Tensix readers) and an uneven DRISC split (4 / 5 cores a slot);
+projected M 1024 ~150 us (gate/up 131, down 32 cores x 4.6 cols) but it would pay the DRISC-only cost at small M.
