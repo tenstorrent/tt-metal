@@ -6,13 +6,15 @@ been carried out, so the destination can be read straight away.
 
 Each iteration PACK writes a fresh pattern to the source buffer, issues an L1-to-L1 move through
 ``xmov_l1_to_l1_non_compact``, calls ``xmov_wait_till_idle`` and reads the destination back. An
-iteration in which any destination word still holds the previous pattern is a stale read.
+iteration in which any destination word does not yet hold the pattern of this iteration is a
+stale read.
 
 ``xfer_16b`` is the move size in 16-byte units; ``gap`` is the number of ``nop``s between the wait
 returning and the first destination read.
 """
 
 import pytest
+from conftest import skip_for_quasar
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.param_config import input_output_formats
@@ -25,11 +27,7 @@ from helpers.test_variant_parameters import ITERATIONS, XMOV_READ_GAP, XMOV_XFER
 NUM_ITERATIONS = 8192
 
 
-@pytest.mark.skipif(
-    get_chip_architecture()
-    not in (ChipArchitecture.BLACKHOLE, ChipArchitecture.WORMHOLE),
-    reason="The TDMA-RISC mover interface exists on Blackhole and Wormhole only.",
-)
+@skip_for_quasar
 @pytest.mark.parametrize("gap", [0, 64])
 @pytest.mark.parametrize("xfer_16b", [1, 16, 256])
 def test_xmov_wait_till_idle(xfer_16b, gap):
@@ -76,8 +74,13 @@ def test_xmov_wait_till_idle(xfer_16b, gap):
     ) = vals[:9]
 
     print(
-        f"\nxmov_wait_till_idle, {xfer_16b} x 16 B per move, {gap} nops before the read, "
-        f"cfg0 {cfg0:#x} (L0 data cache {'disabled' if cfg0 & (1 << 3) else 'enabled'}):"
+        f"\nxmov_wait_till_idle, {xfer_16b} x 16 B per move, {gap} nops before the read"
+        + (
+            f", cfg0 {cfg0:#x} (L0 data cache {'disabled' if cfg0 & (1 << 3) else 'enabled'})"
+            if get_chip_architecture() == ChipArchitecture.BLACKHOLE
+            else ""
+        )
+        + ":"
         f"\n  stale destination reads: {stale_iterations}/{iterations} iterations"
         + (
             f" (first at iteration {first_stale_iter}, word {first_stale_word}, "
@@ -100,5 +103,5 @@ def test_xmov_wait_till_idle(xfer_16b, gap):
     assert stale_iterations == 0, (
         f"xmov_wait_till_idle returned before the move was done in {stale_iterations}/{iterations} "
         f"iterations (first at iteration {first_stale_iter}: word {first_stale_word} and "
-        f"{first_stale_words - 1} more still held the previous pattern)"
+        f"{first_stale_words - 1} more did not yet hold the pattern of that iteration)"
     )
