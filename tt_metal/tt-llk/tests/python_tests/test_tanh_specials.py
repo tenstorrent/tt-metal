@@ -276,12 +276,13 @@ def test_tanh_polynomial_specials():
     activation standing in for a NaN an upstream op produced. tanh(+-inf) = +-1 must
     survive the guard.
 
-    A NaN written to a 16-bit Dest reaches L1 as an infinity of the same sign, whatever
-    the output format (test_tanh_specials records the same on the LUT kernel, and a
-    Float32 pack of this kernel's Dest returns the same infinities), so the NaN lanes
-    are asserted as the sign-carrying non-finite result, which the laundered +-1.0 is
-    not. The kernel itself returns a NaN: the same kernel forced onto a 32-bit Dest
-    stores NaN for NaN and +-1 for +-inf.
+    The guard's NaN does not reach L1 as a NaN: the kernel's rounding to bfloat16 and
+    the 16-bit Dest store each turn a NaN into an infinity of the same sign, whatever
+    the output format (test_tanh_specials records the same on the LUT kernel, a Float32
+    pack of this kernel's Dest returns the same infinities, and the same kernel with its
+    rounding step removed on a 32-bit Dest stores NaN for NaN and +-1 for +-inf). So the
+    NaN lanes are asserted as the sign-carrying non-finite result, which the laundered
+    +-1.0 is not.
 
     -0.0 -> +0.0 is the unpack path, not this kernel (see test_tanh_specials).
     """
