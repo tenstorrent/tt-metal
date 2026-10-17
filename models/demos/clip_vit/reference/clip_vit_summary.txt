@@ -1,0 +1,111 @@
+CLIP ViT-B/32 MODEL ARCHITECTURE
+================================================================================
+
+CLIPModel(
+  (text_model): CLIPTextTransformer(
+    (embeddings): CLIPTextEmbeddings(
+      (token_embedding): Embedding(49408, 512)
+      (position_embedding): Embedding(77, 512)
+    )
+    (encoder): CLIPEncoder(
+      (layers): ModuleList(
+        (0-11): 12 x CLIPEncoderLayer(
+          (self_attn): CLIPAttention(
+            (k_proj): Linear(in_features=512, out_features=512, bias=True)
+            (v_proj): Linear(in_features=512, out_features=512, bias=True)
+            (q_proj): Linear(in_features=512, out_features=512, bias=True)
+            (out_proj): Linear(in_features=512, out_features=512, bias=True)
+          )
+          (layer_norm1): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+          (mlp): CLIPMLP(
+            (activation_fn): QuickGELUActivation()
+            (fc1): Linear(in_features=512, out_features=2048, bias=True)
+            (fc2): Linear(in_features=2048, out_features=512, bias=True)
+          )
+          (layer_norm2): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+        )
+      )
+    )
+    (final_layer_norm): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+  )
+  (vision_model): CLIPVisionTransformer(
+    (embeddings): CLIPVisionEmbeddings(
+      (patch_embedding): Conv2d(3, 768, kernel_size=(32, 32), stride=(32, 32), bias=False)
+      (position_embedding): Embedding(50, 768)
+    )
+    (pre_layrnorm): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+    (encoder): CLIPEncoder(
+      (layers): ModuleList(
+        (0-11): 12 x CLIPEncoderLayer(
+          (self_attn): CLIPAttention(
+            (k_proj): Linear(in_features=768, out_features=768, bias=True)
+            (v_proj): Linear(in_features=768, out_features=768, bias=True)
+            (q_proj): Linear(in_features=768, out_features=768, bias=True)
+            (out_proj): Linear(in_features=768, out_features=768, bias=True)
+          )
+          (layer_norm1): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+          (mlp): CLIPMLP(
+            (activation_fn): QuickGELUActivation()
+            (fc1): Linear(in_features=768, out_features=3072, bias=True)
+            (fc2): Linear(in_features=3072, out_features=768, bias=True)
+          )
+          (layer_norm2): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+        )
+      )
+    )
+    (post_layernorm): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+  )
+  (visual_projection): Linear(in_features=768, out_features=512, bias=False)
+  (text_projection): Linear(in_features=512, out_features=512, bias=False)
+)
+
+================================================================================
+
+CLIPConfig {
+  "architectures": [
+    "CLIPModel"
+  ],
+  "initializer_factor": 1.0,
+  "logit_scale_init_value": 2.6592,
+  "model_type": "clip",
+  "projection_dim": 512,
+  "text_config": {
+    "attention_dropout": 0.0,
+    "bos_token_id": 0,
+    "dropout": 0.0,
+    "eos_token_id": 2,
+    "hidden_act": "quick_gelu",
+    "hidden_size": 512,
+    "initializer_factor": 1.0,
+    "initializer_range": 0.02,
+    "intermediate_size": 2048,
+    "layer_norm_eps": 1e-05,
+    "max_position_embeddings": 77,
+    "model_type": "clip_text_model",
+    "num_attention_heads": 8,
+    "num_hidden_layers": 12,
+    "projection_dim": 512,
+    "torch_dtype": "float32",
+    "vocab_size": 49408
+  },
+  "torch_dtype": "float32",
+  "transformers_version": "4.53.0",
+  "vision_config": {
+    "attention_dropout": 0.0,
+    "dropout": 0.0,
+    "hidden_act": "quick_gelu",
+    "hidden_size": 768,
+    "image_size": 224,
+    "initializer_factor": 1.0,
+    "initializer_range": 0.02,
+    "intermediate_size": 3072,
+    "layer_norm_eps": 1e-05,
+    "model_type": "clip_vision_model",
+    "num_attention_heads": 12,
+    "num_channels": 3,
+    "num_hidden_layers": 12,
+    "patch_size": 32,
+    "projection_dim": 512,
+    "torch_dtype": "float32"
+  }
+}
