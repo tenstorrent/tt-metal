@@ -930,7 +930,15 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::hardmish)
     {
-        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, hardmish, (APPROX, ITERATIONS), dst_index, VectorMode::RC);
+        if (sfpu_format == DataFormat::Float16)
+        {
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, hardmish, (APPROX, is_fp32_dest_acc_en, DataFormat::Float16, ITERATIONS), dst_index, VectorMode::RC);
+        }
+        else
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC, is_fp32_dest_acc_en, hardmish, (APPROX, is_fp32_dest_acc_en, DataFormat::Float16_b, ITERATIONS), dst_index, VectorMode::RC);
+        }
     }
     else if constexpr (OPERATION == SfpuType::mish)
     {
