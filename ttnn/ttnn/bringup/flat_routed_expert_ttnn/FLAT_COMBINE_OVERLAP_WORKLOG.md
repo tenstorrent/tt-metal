@@ -996,3 +996,12 @@ rectangle 0's relays multicast to both) 2372 / 3819; X2 2659 / 4188; XFWD 2859 /
 Now set for the routed experts' program only (K3_EXP_X1, default 1; read when the program is built): traced 3643 / 3640
 (was 3700), PCC 0.99619 unchanged, shared expert 529 us. (Earlier x-read isolation and probe history: the pr58093
 worktree's worklog 8e-8g - x read twice at ~22 GB/s per relay, 1 KB requests.)
+
+### K3 experts: the weight source does not matter (2026-10-17, with X1; experts / traced us)
+base 2380 / 3648; DRISC_PURE=0 (dual) 2362 / 3649; DRISC_TILES=2 2370 / 3648; TILES=1 2379 / 3650; dual + TILES=2
+2372 / 3650; DRISC forced (MAXCNT=1024) 2375 / 3643 - all within noise. Correction to the section above: at K3's ~91
+tokens / expert the busiest expert exceeds the pure mode's 96-token switch, so the block's calls normally take the
+Tensix-reader gate/up path (the "push" there is the readers' forwarding, not the DRISCs'); forcing the DRISCs changes
+nothing. Moving the down weights onto the DRISCs is out regardless: the gate/up forwarding alone (no DRAM reads)
+already needs ~1990 us for 694 MB (~350 GB/s), the down weights' 347 MB more would make it ~2980. What is left is the
+DRAM efficiency of the full read mix: 1059 MB at ~446 GB/s (87%) vs the gate/up reads alone at 93%.
