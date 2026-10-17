@@ -40,8 +40,9 @@ inline void clamped_affine_pairs()
     TTI_SFPNOP;
     TTI_SFPSWAP(0, p_sfpu::LCONST_1, p_sfpu::LREG3, 1);
     TTI_SFPNOP;
-    TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-    TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG3, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    // FP32 -> BF16 reads no VB; ttsim rejects a nonzero one, so VB is L0.
+    TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
     // ADDR_MOD_6 keeps stock's dest += 2, which other unary SFPU ops read, so each store advances.
     TTI_SFPSTORE(p_sfpu::LREG2, 0, kClampAdvance, 0);
     TTI_SFPSTORE(p_sfpu::LREG3, 0, kClampAdvance, 0);
