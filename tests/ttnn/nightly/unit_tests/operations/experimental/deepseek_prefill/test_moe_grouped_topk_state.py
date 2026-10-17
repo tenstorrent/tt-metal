@@ -38,11 +38,9 @@ INPUT_DTYPE = ttnn.bfloat16
 # mantissa bits (the FPU keeps that many when it moves fp32 tiles), so keys closer than about 1e-3
 # can be exact ties on device even when torch separates them.
 SORT_RESOLUTION = 2e-3
-# The device's activations against torch: allowed relative error, and the logit range checked. The
-# device's sqrt-softplus returns 0 for logits below about -5 (torch gives up to 0.08 there), so its
-# range starts at -5.
-ACTIVATION_RTOL = {"sigmoid": 2e-3, "sqrtsoftplus": 3e-3}
-ACTIVATION_RANGE = {"sigmoid": (-8.0, 16.0), "sqrtsoftplus": (-5.0, 16.0)}
+# The device's activations against torch: allowed relative error, and the logit range checked.
+ACTIVATION_RTOL = {"sigmoid": 2e-3, "sqrtsoftplus": 2e-3}
+ACTIVATION_RANGE = {"sigmoid": (-8.0, 16.0), "sqrtsoftplus": (-8.0, 16.0)}
 MIN_STRICT_FRACTION = 0.5
 
 ENGINES = pytest.mark.parametrize("stable_sort", [True, False], ids=["stable", "unstable"])
@@ -311,4 +309,55 @@ def test_activation_matches_torch(device, score_func):
     assert rel_err.max() <= ACTIVATION_RTOL[score_func], (
         f"[{score_func}] device {got[worst]:.7f} vs torch {want[worst]:.7f} at logit {grid[worst]:.4f}, "
         f"relative error {rel_err.max():.2e}"
+    )
+
+
+# Two experts around the softplus residual's polynomial boundary at |logit| = 5, as (logits, biases,
+# expert torch ranks first). The residual ln(1 + exp(-|t|)) is 0.0067 at 5 and is the whole softplus
+# value for a negative logit (the score is its square root), so an activation that drops it past the
+# boundary scores every logit below -5 as 0 and the gate can no longer order those experts. Both gaps
+# are far above SORT_RESOLUTION.
+POLY_BOUNDARY_CASES = {
+    # Equal bias: sqrt(softplus(-5.5)) = 0.0638 < sqrt(softplus(-5.25)) = 0.0723, a 12% gap.
+    "below_boundary": ((-5.5, -5.25), (0.0, 0.0), 1),
+    # A bias lifts the expert below the boundary over one above it: 0.0497 + 0.08 > 0.1051.
+    "biased_over_boundary": ((-6.0, -4.5), (0.08, 0.0), 0),
+}
+
+
+@pytest.mark.parametrize("case", list(POLY_BOUNDARY_CASES), ids=list(POLY_BOUNDARY_CASES))
+def test_sqrtsoftplus_ranks_experts_across_poly_boundary(device, case):
+    """Experts 0 and 1 carry the case's logits and biases (fp32, so the device sees them exactly), every
+    other expert sits at -20. The device must rank the pair as torch does and score it to the
+    activation tolerance."""
+    (logit_a, logit_b), (bias_a, bias_b), expect_first = POLY_BOUNDARY_CASES[case]
+    n_groups, total_experts, summed, topk_groups, k, route_scale = KIMI
+    tokens = 32
+    logits = torch.full((1, 1, tokens, total_experts), -20.0)
+    bias = torch.zeros_like(logits)
+    logits[..., 0], logits[..., 1] = logit_a, logit_b
+    bias[..., 0], bias[..., 1] = bias_a, bias_b
+
+    ref, _ = grouped_gate_golden_act(
+        logits, bias, route_scale, EPSILON, n_groups, summed, topk_groups, k, "sqrtsoftplus", stable=True
+    )
+    assert (ref[..., 0] == expect_first).all(), "golden disagrees with the case's expected winner"
+
+    indices, biased = run_gate(
+        device,
+        to_device(logits, ttnn.float32, device),
+        to_device(bias, ttnn.float32, device),
+        True,
+        score_func="sqrtsoftplus",
+    )
+    want = score_activation(logits[..., :2], "sqrtsoftplus") + bias[..., :2]
+    got = biased[..., :2]
+    assert torch.equal(indices[..., :2].long(), ref[..., :2].long()), (
+        f"[{case}] device ranks experts {indices[0, 0, 0, :2].tolist()}, torch {ref[0, 0, 0, :2].tolist()}; "
+        f"device biased scores {got[0, 0, 0].tolist()} vs torch {want[0, 0, 0].tolist()}"
+    )
+    rel_err = ((got - want).abs() / want.abs()).max()
+    assert rel_err <= ACTIVATION_RTOL["sqrtsoftplus"], (
+        f"[{case}] device biased scores {got[0, 0, 0].tolist()} vs torch {want[0, 0, 0].tolist()}, "
+        f"relative error {rel_err:.2e}"
     )

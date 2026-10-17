@@ -146,6 +146,13 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
         copy_init(cb_in_scores_id);
         copy_tile(cb_in_scores_id, 0, 0);
         if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
+#ifndef INP_FLOAT32
+            // The SFPU softplus picks its polynomial on this define, not on fp32_dest_acc_en. Its bf16 fit
+            // clamps the residual ln(1 + exp(-|t|)) to 0 past |t| = 5; for a negative logit that residual
+            // is the whole softplus value, so the gate would score every logit below -5 as 0.
+            static_assert(
+                score_func != SCORE_FUNC_SQRTSOFTPLUS, "sqrt-softplus needs -DINP_FLOAT32 from the program factory");
+#endif
             // sqrt(softplus(x)) with beta=1, threshold=20 (matches torch.nn.functional.softplus defaults).
             constexpr uint32_t const_1_fp32 = 0x3F800000;   // 1.0f -> beta and beta_reciprocal
             constexpr uint32_t const_20_fp32 = 0x41A00000;  // 20.0f -> threshold
