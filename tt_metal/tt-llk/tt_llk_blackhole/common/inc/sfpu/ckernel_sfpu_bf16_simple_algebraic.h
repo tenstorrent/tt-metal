@@ -9,8 +9,8 @@
 template <std::uint32_t A, std::uint32_t B, std::uint32_t Hold, std::uint32_t Advance, bool StepEach = false>
 inline void simple_finish_pair()
 {
-    TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, A, A, A, SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-    TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, B, B, B, SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, A, A, SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, B, B, SFPSTOCHRND_MOD1_FP32_TO_FP16B);
     if constexpr (StepEach)
     {
         TTI_SFPSTORE(A, 0, Advance, 0);
