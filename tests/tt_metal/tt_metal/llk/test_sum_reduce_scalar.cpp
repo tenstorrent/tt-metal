@@ -54,6 +54,9 @@ struct SumReduceScalarConfig {
     bool use_constant_input = false;
     uint16_t constant_input_bits = 0;
     bool expect_exact_zero = false;
+    // Zero every tile except this one, so the result is that tile's sum alone and a reduce that fails to
+    // move exactly this tile into SrcA returns 0 instead. -1 disables.
+    int32_t one_hot_tile = -1;
 };
 
 bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumReduceScalarConfig& config) {
@@ -144,6 +147,14 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
     } else {
         packed_input = test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
             0, 1.0f, byte_size / sizeof(bfloat16), config.seed);
+    }
+    if (config.one_hot_tile >= 0) {
+        const uint32_t words_per_tile = tile_byte_size / sizeof(uint32_t);
+        for (uint32_t tile = 0; tile < config.num_tiles; ++tile) {
+            if (static_cast<int32_t>(tile) != config.one_hot_tile) {
+                std::fill_n(packed_input.begin() + tile * words_per_tile, words_per_tile, 0u);
+            }
+        }
     }
 
     auto& cq = mesh_device.mesh_command_queue();
@@ -273,6 +284,50 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(1, 8),
     [](const testing::TestParamInfo<int>& info) {
         return "SumReduceScalar_fp32dest_" + std::to_string(info.param) + "_Tiles";
+    });
+
+// Full-sync bf16 DEST holds 16 tiles, the other diagonal from the fp32 suite above. Every tile 8..15 has to
+// be moved into SrcA by the shared reduce tail; one-hot input isolates each move, since the result is that
+// tile's sum alone (about 512) and a tail that does not move exactly tile k returns 0.
+struct SumReduceScalarFullSyncOneHotParam {
+    int num_tiles;
+    int hot_tile;
+};
+
+class SumReduceScalarFullSyncBf16Test : public LLKMeshDeviceSingleCardFixture,
+                                        public testing::WithParamInterface<SumReduceScalarFullSyncOneHotParam> {};
+
+TEST_P(SumReduceScalarFullSyncBf16Test, SumReduceScalarFullSyncBf16) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP()
+            << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+    }
+    const SumReduceScalarFullSyncOneHotParam p = GetParam();
+    ASSERT_TRUE(run_sum_reduce_scalar_test(
+        this->device(),
+        {.num_tiles = static_cast<uint32_t>(p.num_tiles),
+         .tile_height = 32,
+         .dst_full_sync = true,
+         .one_hot_tile = p.hot_tile}));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SumReduceScalarFullSyncBf16Tests,
+    SumReduceScalarFullSyncBf16Test,
+    testing::Values(
+        SumReduceScalarFullSyncOneHotParam{12, 8},
+        SumReduceScalarFullSyncOneHotParam{12, 11},
+        SumReduceScalarFullSyncOneHotParam{16, 8},
+        SumReduceScalarFullSyncOneHotParam{16, 9},
+        SumReduceScalarFullSyncOneHotParam{16, 10},
+        SumReduceScalarFullSyncOneHotParam{16, 11},
+        SumReduceScalarFullSyncOneHotParam{16, 12},
+        SumReduceScalarFullSyncOneHotParam{16, 13},
+        SumReduceScalarFullSyncOneHotParam{16, 14},
+        SumReduceScalarFullSyncOneHotParam{16, 15}),
+    [](const testing::TestParamInfo<SumReduceScalarFullSyncOneHotParam>& info) {
+        return "SumReduceScalar_fullsync_bf16_OneHot_" + std::to_string(info.param.num_tiles) + "_Tiles_hot_" +
+               std::to_string(info.param.hot_tile);
     });
 
 // LoFi is what blaze runs this op at (LayerNorm.math_fidelity = "LoFi"), and
