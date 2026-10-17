@@ -225,9 +225,10 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
  * @tparam diagonal: True to configure for diagonal (per-packer split) untilize packing.
  * @tparam narrow_row: True when packing fewer than TILE_C_DIM datums per row.
  * @tparam row_num_datums: Datums each tile contributes to an output row (TILE_C_DIM unless narrow_row); an
- *         output row of a block holds block_ct_dim * row_num_datums datums. With block_ct_dim != full_ct_dim
- *         the per-row L1 stride and the block start are kept in 16 B units, so block_ct_dim * row_num_datums
- *         datums must be a multiple of 16 bytes (asserted).
+ *         output row of a block holds block_ct_dim * row_num_datums datums. Packer L1 addresses are kept in
+ *         16 B units, so with more than one packer enabled a packer slab of TILE_R_DIM / 4 rows of full_ct_dim *
+ *         row_num_datums datums, and with block_ct_dim != full_ct_dim also block_ct_dim * row_num_datums datums
+ *         (the per-row stride and the block start), must be a multiple of 16 bytes (asserted).
  * @param pack_dst_format: Destination (L1) data format.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
@@ -251,12 +252,24 @@ inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const 
 
     _llk_pack_untilize_mop_config_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(face_r_dim, num_faces);
 
+    // Match BH: 2 face-cols per tile-row for num_faces>=2; old WH `num_faces/2` gave 1 only at num_faces==2 (#52175).
+    // A narrow row holds row_num_datums datums per tile.
+    const std::uint32_t row_datums_per_tile = narrow_row ? row_num_datums : ((num_faces == 1) ? 1 : 2) * FACE_C_DIM;
+
+    // program_packer_untilized_destination places packer p at p * (TILE_R_DIM / 4) rows of full_ct_dim *
+    // row_datums_per_tile datums, kept in L1 address units: with more than one packer enabled that slab has to be a
+    // multiple of the unit, or packers 1..3 start early and overwrite the previous slab (a 1-byte format with an odd
+    // full_ct_dim * row_num_datums). Full rows are always aligned; narrow rows are checked here. The diagonal layout
+    // places its packers differently and is not covered.
+    const std::uint32_t packers = (face_r_dim < FACE_R_DIM) ? 1 : num_faces;
+    LLK_ASSERT(
+        diagonal || packers == 1 ||
+            SCALE_DATUM_SIZE(pack_dst_format, (TILE_R_DIM / 4) * full_ct_dim * row_datums_per_tile) % PACK_UNTILIZE_L1_ADDRESS_UNIT_BYTES == 0,
+        "a packer slab of (TILE_R_DIM / 4) rows of full_ct_dim * row_num_datums datums must be a multiple of 16 bytes");
+
     if (block_ct_dim != full_ct_dim)
     {
-        // Match BH: 2 face-cols per tile-row for num_faces>=2; old WH `num_faces/2` gave 1 only at num_faces==2 (#52175).
-        // A narrow row holds row_num_datums datums per tile.
-        const std::uint32_t row_datums_per_tile = narrow_row ? row_num_datums : ((num_faces == 1) ? 1 : 2) * FACE_C_DIM;
-        const std::uint32_t output_addr_offset  = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * row_datums_per_tile);
+        const std::uint32_t output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * row_datums_per_tile);
         // The per-row stride below and the caller's block start are kept in L1 address units: a narrow row of one
         // block that is not a multiple of the unit would be truncated and the rows would overlap. full_ct_dim is a
         // multiple of block_ct_dim, so this also covers the row stride.
