@@ -345,16 +345,14 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     v_endif;
 
     // Quotients of 2^24 and above: floor_div + 1 ties or vanishes in float, so diff above is just
-    // the raw result and a floor one below the true quotient still leaves |result| >= |b|. Step
-    // by b in the direction of b's sign there. The step is gated on the quotient because at small
-    // quotients the recompute above is exact and a correctly rounded remainder can legitimately
-    // equal b (a = -1, b = 2^26), which must be kept.
+    // the raw result and a floor one below the true quotient still leaves |result| >= |b|.
+    // Subtract b if result has the sign of b, otherwise add b, so |result| shrinks; copysgn makes
+    // that one subtraction. The step is gated on the quotient because at small quotients the
+    // recompute above is exact and a correctly rounded remainder can legitimately equal b
+    // (a = -1, b = 2^26), which must be kept.
     constexpr float kQuotientStepLimit = 16777216.0f;  // 2^24
     v_if(sfpi::abs(floor_div) >= sfpi::vFloat(kQuotientStepLimit) && sfpi::abs(result) >= sfpi::abs(b)) {
-        sfpi::vInt signs = sfpi::as<sfpi::vInt>(result) ^ sfpi::as<sfpi::vInt>(b);
-        v_if(signs < 0) { result += b; }
-        v_else { result -= b; }
-        v_endif;
+        result -= sfpi::copysgn(b, result);
     }
     v_endif;
 
