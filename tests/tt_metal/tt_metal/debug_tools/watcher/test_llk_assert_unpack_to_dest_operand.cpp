@@ -125,8 +125,10 @@ void RunAddTilesWithUnpackToDestOperand(
         }
         return words;
     };
-    distributed::WriteShard(cq, src0, as_words(a), zero_coord);
-    distributed::WriteShard(cq, src1, as_words(b), zero_coord);
+    std::vector<uint32_t> a_words = as_words(a);
+    std::vector<uint32_t> b_words = as_words(b);
+    distributed::WriteShard(cq, src0, a_words, zero_coord);
+    distributed::WriteShard(cq, src1, b_words, zero_coord);
 
     SetRuntimeArgs(program, reader, core, {src0->address(), 0u, src1->address(), 0u, kNumTiles});
     SetRuntimeArgs(program, writer, core, {dst->address(), 0u, kNumTiles});
