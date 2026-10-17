@@ -181,7 +181,19 @@ inline void calculate_expm1() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat y = _sfpu_expm1_<is_fp32_dest_acc_en>(x);
-        if constexpr (!is_fp32_dest_acc_en) {
+        if constexpr (is_fp32_dest_acc_en) {
+            // expm1(±0) = ±0. The reduction keeps -0.0 in its linear term (f = j * Prgm1 + a
+            // with a = -0.0), but the final accumulate (r * s + u) rounds it to +0.0. Restore
+            // the input verbatim on the zero lanes only, so ±inf and every nonzero result stay
+            // bit-identical (sign(expm1(x)) == sign(x) for all x). is_zero is an integer compare,
+            // (as<vUInt>(x) << 1) == 0, exact for ±0 and deterministic-false for
+            // NaN/±inf/subnormals, so the restore does not lean on the float compare's NaN
+            // semantics, which SFPSETCC leaves unspecified for a NaN comparand
+            // (tests/ttnn/unit_tests/operations/eltwise/test_nextafter.py). fp32-only: a 16-bit
+            // destination canonicalises -0.0 to +0.0, so there is no sign to preserve.
+            v_if(sfpi::is_zero(x)) { y = x; }
+            v_endif;
+        } else {
             y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = y;
