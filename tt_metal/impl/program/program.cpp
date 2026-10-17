@@ -99,6 +99,7 @@
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <fmt/ranges.h>
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt {
 enum CBIndex : std::uint8_t;
@@ -2319,7 +2320,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device);
     if (mesh_device != nullptr) {
         // Mesh device: track all sub-devices
-        const auto sub_devices = mesh_device->get_devices();
+        const auto sub_devices = mesh_device->impl().get_devices();
         devices_to_track.reserve(sub_devices.size());
         for (IDevice* sub_device : sub_devices) {
             devices_to_track.push_back(sub_device);
@@ -2527,7 +2528,7 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     std::vector<AllocatorImpl*> physical_allocators;
     if (hybrid_mode) {
         if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
-            const auto mesh_devices = mesh->get_devices();
+            const auto mesh_devices = mesh->impl().get_devices();
             physical_allocators.reserve(mesh_devices.size());
             for (IDevice* dev : mesh_devices) {
                 physical_allocators.push_back(dev->allocator_impl().get());
@@ -2543,7 +2544,7 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     std::vector<const IDevice*> devices_for_svc_check;
     if (svc.has_any_claims()) {
         if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
-            const auto mesh_devices = mesh->get_devices();
+            const auto mesh_devices = mesh->impl().get_devices();
             devices_for_svc_check.reserve(mesh_devices.size());
             for (IDevice* dev : mesh_devices) {
                 devices_for_svc_check.push_back(dev);
