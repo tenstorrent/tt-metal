@@ -29,9 +29,10 @@ using namespace ckernel::math;
  *       set (written here); otherwise the exponent family (BF16 vs FP16) resolves from the reset value of REG1_SrcB,
  *       because this function clears the SrcB_val/SrcB_override bits below and SFPU_DEST_FMT_Enable is never set.
  *       SFPU kernels that need a different DEST exponent family should use an explicit SFPLOAD/SFPSTORE mode,
- *       which leaves no config behind: GetSfpLoadStoreInstrMod<format, is_fp32_dest_acc_en>() in llk_defs.h picks
- *       FP16A / FP16B, or FP32 under fp32 dest accumulation (ckernel_sfpu_reduce_custom.h uses FP16B directly for
- *       its 16-bit-only path). A kernel that instead programs REG1_SrcB, SrcB_override/SrcB_val or SFPU_DEST_FMT
+ *       which leaves no config behind: for Float16 / Float16_b, GetSfpLoadStoreInstrMod<format, is_fp32_dest_acc_en>()
+ *       in llk_defs.h picks FP16A / FP16B, or FP32 under fp32 dest accumulation (block-float and Lf8 formats return
+ *       DEFAULT from it, i.e. the config-dependent access; ckernel_sfpu_reduce_custom.h uses FP16B directly for its
+ *       16-bit-only path). A kernel that instead programs REG1_SrcB, SrcB_override/SrcB_val or SFPU_DEST_FMT
  *       owns that state and must restore it: nothing in the LLK rewrites REG1_SrcB or clears SFPU_DEST_FMT_Enable,
  *       and the override bits are cleared again only by this function, not by the per-operand reconfig paths below.
  */
@@ -178,8 +179,9 @@ inline void _llk_math_pack_sync_init_()
 }
 
 // Following functions do not need to program ALU_FORMAT_SPEC_REG0_SrcA/ALU_FORMAT_SPEC_REG1_SrcB
-// for blackhole: the FPU takes the per-bank implied source format (see DISABLE_IMPLIED_SRCA_FMT and
-// DISABLE_IMPLIED_SRCB_FMT, neither of which the LLK sets), and the
+// for blackhole: the FPU takes the per-bank implied source format while DISABLE_IMPLIED_SRCA_FMT and
+// DISABLE_IMPLIED_SRCB_FMT are clear (the transpose-dest, datacopy and custom reduce paths set the SrcA one
+// around their own format programming and clear it again), and the
 // SFPU's default-mode DEST read is FP32 when SFPU_Fp32_enabled is set, otherwise follows REG1_SrcB at its
 // reset value (overrides cleared, SFPU_DEST_FMT_Enable never set; see the _llk_math_hw_configure_ note above);
 // none of these comes from srca/srcb_data_format here.
