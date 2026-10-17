@@ -1061,11 +1061,25 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                DataMovementProcessor::RISCV_1,
                dn_noc0 ? NOC::NOC_1 : NOC::NOC_0,
                // (MIMO_FL_DW_BATCH: down blocks per read barrier, default DW_BATCH; read at program build)
-               {1, slot, w_tile, E * nblk,
-                std::getenv("MIMO_FL_DW_BATCH") ? static_cast<uint32_t>(std::atoi(std::getenv("MIMO_FL_DW_BATCH"))) : DW_BATCH,
-                cfg.weights_bf8 ? 1u : 0u, E, 0, 0, 0, MTD, pw, Ht},
-               plus(y_nc ? plus(plus(yrm_def(dyn_def, pw), ync), cmb_def) : dyn_def,
-                    p.dw_rot ? Defines{{"SE_DW_ROT", std::to_string(banks)}} : Defines{}));
+               {1,
+                slot,
+                w_tile,
+                E * nblk,
+                std::getenv("MIMO_FL_DW_BATCH") ? static_cast<uint32_t>(std::atoi(std::getenv("MIMO_FL_DW_BATCH")))
+                                                : DW_BATCH,
+                cfg.weights_bf8 ? 1u : 0u,
+                E,
+                0,
+                0,
+                0,
+                MTD,
+                pw,
+                Ht},
+               plus(
+                   plus(
+                       y_nc ? plus(plus(yrm_def(dyn_def, pw), ync), cmb_def) : dyn_def,
+                       p.dw_rot ? Defines{{"SE_DW_ROT", std::to_string(banks)}} : Defines{}),
+                   Defines{{"SE_DW_RING", std::to_string(ring)}}));
         const auto kc =
             cp("se6_dcompute.cpp",
                cores,

@@ -919,3 +919,20 @@ emulator only). Mock cluster (12 x 10) diff of every kernel's args (MIMO_FL_DUMP
 NoC targets, arena fits (564 x 2 KB from 415744); differences: h tile 2048, x slots 32 (24), y rows 2 (4) and NO
 SE_DN_REG (bf16 h: dring 1.5, the unpinned down schedule, never run with the unit layout / 40 down cores). Suspects, in
 order: the unpinned down schedule with units, x slots 32, the 512 B bf16 half-tile h writes.
+Found (same day, one-variable A/B, probing off): bfp8 h with MIMO_FL_DRING=1.5 (the unpinned down schedule) hangs as
+well, bf16 h with DRING=2 (pinned) runs, the uneven pair split (15 down, reader tails) runs unpinned, and
+MIMO_FL_DW_BATCH=1 runs. Cause: se6_dw writes a batch linearly from the CB write pointer while the compute reads block b
+at ring slot b % ring; a 1.5-expert ring of 27 blocks with batch 2 put every other lap's second block past the ring end
+(onto the h buffers). Fix: an unpinned batch stops at the ring end (SE_DW_RING), as a pinned one stops at a load
+boundary. The planner guard is gone; test_flat_uneven_split.py gained v41_e24_hbf16 and v41_e24_pin0 (min PCC 0.998).
+
+bf16 h cost at large M (E 24 M 256 / 1024: 62.8 / 226.6 bfp8 -> 83.7 / 289.7 bf16) is all h delivery: MIMO_FL_H_NODATA
+207.8; x slots 24 283.0, X_RESIDENT 278.9, LINK_DEPTH 6 297.2, HPIECES 16 298.8 (not round-trip bound). It is the
+down chain layout: each gate/up core writes its slice to every chain head (7 heads), the chains forward it.
+| chains (MIMO_FL_DCH) | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 12 | 14 |
+| bfp8 h M 1024 | 211.7 | 211.6 | 213.4 | 232.1 | 226.6 | 230.6 | - | 236.1 | - | - |
+| bf16 h M 1024 (1.5 ring) | 217.3 | 221.1 | 246.2 | 243.8 | 289.7 | 298.0 | 257.9 | 264.6 | 338.4 | 348.9 |
+bf16 h + 4 chains + the 2-expert pinned ring (DRING 2): 48.8 / 63.6 / 209.1 at M 80 / 256 / 1024. Defaults for unit
+plans now: 4 chains, the 2-expert ring with bf16 h too. V4.1 E 24 us / expert at M 32 / 80 / 128 / 256 / 1024:
+bfp8 h 44.2 / 48.0 / 51.9 / 62.9 / 211.6 (was 226.6 at M 1024); bf16 h 44.6 / 48.8 / 52.5 / 63.6 / 208.8 (was 289.7).
+M 1024 is now at the h-off floor; what is left is the gate/up FPU (NU 2 + DRISC readers, ~131 us projected).

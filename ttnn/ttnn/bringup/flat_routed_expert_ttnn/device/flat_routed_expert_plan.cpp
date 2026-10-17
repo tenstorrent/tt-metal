@@ -357,12 +357,11 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             }
         }
     }
-    // (bf16 h with 16-column units reset the whole host on bh-lb-09 2026-10-17: never auto-selected, refused below)
     // no even split: 16-column units (half-width gate / up tiles, MIMO_FL_HG_AUTO=0: off) with NU units a core, the
     // most gate/up cores that are a multiple of the 16 readers and fit (V4.1-Flash I 2304: 144 units -> 48 cores x 3;
     // us / expert at E 24 vs the uneven pair split (72 cores): M 80 48.2 vs 51.0, M 1024 226.5 vs 245.4)
     const char* hga = std::getenv("MIMO_FL_HG_AUTO");
-    if (!found && p.nsg == 1 && !(hga && std::atoi(hga) == 0) && !std::getenv("MIMO_FL_HG_NU") && !cfg.h_bf16) {
+    if (!found && p.nsg == 1 && !(hga && std::atoi(hga) == 0) && !std::getenv("MIMO_FL_HG_NU")) {
         const uint32_t units = 2 * p.It;
         const uint32_t cap_full = (east0 - a_x0) * nrows + std::min<uint32_t>(4u, uint32_t(grid.x) - b_x0) * hb_max;
         const uint32_t cells = rows_cap ? aw_max * nrows + bw_cap * hb_max : cap_full;
@@ -432,9 +431,6 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         p.uneven = (units / nu) % 16 != 0;
     }
     TT_FATAL(found, "flat_routed_expert: no gate/up split for {} tile columns", p.It);
-    TT_FATAL(  // (MIMO_FL_HG_BF16_UNSAFE=1: plan it anyway, for the mock cluster / emulator only, never a device)
-        !(p.nu && cfg.h_bf16) || std::getenv("MIMO_FL_HG_BF16_UNSAFE"),
-        "flat_routed_expert: 16-column units with bf16 h are disabled (the test reset the host; under investigation)");
     p.gwt = p.nu ? p.nu : 2 * p.np;
     p.hpc = p.nu ? (p.nu + 1) / 2 : p.np;
     p.ngrp = p.nu ? 2 * p.It / p.nu : p.It / p.np;
@@ -558,7 +554,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     // the down weight ring: two whole experts with pinning (the pinned schedule's regions); bf16 h: 1.5 experts, the
     // unpinned down schedule, so two 512 KB h buffers leave the row-major y out CB its room (else ~1 row tile: the
     // down packer stalls on the y writes)
-    p.dring = cfg.pin && !cfg.h_bf16 ? 2.0f : 1.5f;
+    // (16-column units: 64-row h buffers of 295 KB at V4.1-Flash, the 2-expert ring and the pinned schedule fit with
+    // bf16 h too: E 24 M 256 / 1024 with 4 chains 80.4 / 221.1 -> 63.6 / 209.1 us per expert, bfp8 h 62.8 / 211.6)
+    p.dring = cfg.pin && (!cfg.h_bf16 || p.nu) ? 2.0f : 1.5f;
     if (const char* dr = std::getenv("MIMO_FL_DRING")) {  // (perf probe: the down weight ring in experts)
         p.dring = static_cast<float>(std::atof(dr));
     }
@@ -893,6 +891,12 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         "flat_routed_expert: gate/up pair-sets per reader");
     p.ring_g = 2 * p.nk_gu;
     p.d_ch = p.rdown ? std::min(D_CHAINS, p.n_rd_sg) : D_CHAINS;
+    // 16-column units (40 down cores on V4.1-Flash): 4 chains. Each gate/up core writes its h slice to every chain
+    // head, the chains forward it; at E 24 M 1024 bfp8 h 3 / 4 / 5 / 7 / 10 chains: 211.7 / 211.6 / 213.4 / 226.6 /
+    // 236.1 us per expert (h writes off: 210.3), M 80 / 256 flat
+    if (p.nu) {
+        p.d_ch = 4;
+    }
     if (const char* dch = std::getenv("MIMO_FL_DCH"); dch && !p.rdown) {  // (perf probe: down chains)
         p.d_ch = static_cast<uint32_t>(std::atoi(dch));
     }

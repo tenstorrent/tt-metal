@@ -13,10 +13,13 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
 
-# (tag, H, I, local experts, capacity m, global experts, activation)
+# (tag, H, I, local experts, capacity m, global experts, activation[, FlatRoutedExpert kwargs])
 CASES = [
     ("v41_e12", 5120, 2304, 12, 2048, 384, "clamped_silu"),
     ("v41_e24", 5120, 2304, 24, 2048, 384, "clamped_silu"),
+    # bf16 h (1.5-expert down ring, unpinned down schedule) and pin 0 (unpinned): a down batch once ran off the ring
+    ("v41_e24_hbf16", 5120, 2304, 24, 2048, 384, "clamped_silu", {"h_bf16": True}),
+    ("v41_e24_pin0", 5120, 2304, 24, 2048, 384, "clamped_silu", {"pin": 0}),
     # even splits (the half-width gate / up tiles under MIMO_FL_HG=1): GLM shape SiLU, K3 shape SiTU
     ("glm_e12", 4096, 2048, 12, 2048, 256, "silu"),
     ("k3_e12", 3584, 3072, 12, 2048, 896, "situ"),
@@ -44,11 +47,12 @@ def _act(g, u, act):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("case", CASES, ids=[c[0] for c in CASES])
 def test_flat_uneven_split(device, case):
-    tag, H, I, E, m, NG, act = case
+    tag, H, I, E, m, NG, act = case[:7]
+    kw = {"pin": 1, **(case[7] if len(case) > 7 else {})}
     torch.manual_seed(0)
     weights = [[(torch.randn(H, I) * 0.02, torch.randn(H, I) * 0.02, torch.randn(I, H) * 0.02) for _ in range(E)]]
     gids = [[(NG // E) * e + 1 for e in range(E)]]
-    op = FlatRoutedExpert(device, weights, m=m, H=H, I=I, gids=gids, n_global=NG, act=act, pin=1)
+    op = FlatRoutedExpert(device, weights, m=m, H=H, I=I, gids=gids, n_global=NG, act=act, **kw)
     plan = op.plan
     logger.info(
         f"{tag}: np {plan['np']} g {plan['g']} mt {plan['mt']} uneven {plan['uneven']} rgs {plan['rgs']} "
