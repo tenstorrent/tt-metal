@@ -52,9 +52,12 @@ struct MulReduceScalarConfig {
     // Full-sync DEST (bf16): 16 tile slots instead of the half-sync 8.
     bool dst_full_sync = false;
     // Weight tensor B per tile, B[i] = (i + 1) / 16, instead of all ones. With all ones every tile sums to
-    // about the same value, so a tile reduced twice in place of a dropped one barely moves the total; distinct
-    // per-tile weights make such a substitution visible.
+    // about the same value, so a reduce that keeps re-reducing one tile in place of all the others still
+    // lands near the right total; the weights make that collapse a 26% error at 16 tiles.
     bool per_tile_weights = false;
+    // B = 1 on this tile and 0 on every other, so the result is the sum of that one product tile and any
+    // reduce that fails to move exactly this tile into SrcA returns 0 instead. -1 disables.
+    int32_t one_hot_tile = -1;
     float rel_tol = 0.01f;
 };
 
@@ -151,7 +154,10 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
     const uint32_t words_per_tile = tile_byte_size / sizeof(uint32_t);
     for (uint32_t tile = 0; tile < config.num_tiles; ++tile) {
         // (tile + 1) / 16 is exact in bf16 for tile < 16.
-        const float weight = config.per_tile_weights ? static_cast<float>(tile + 1) / 16.0f : 1.0f;
+        float weight = config.per_tile_weights ? static_cast<float>(tile + 1) / 16.0f : 1.0f;
+        if (config.one_hot_tile >= 0) {
+            weight = (static_cast<int32_t>(tile) == config.one_hot_tile) ? 1.0f : 0.0f;
+        }
         const uint16_t w_u16 = std::bit_cast<uint16_t>(bfloat16(weight));
         const uint32_t packed = (static_cast<uint32_t>(w_u16) << 16) | w_u16;
         std::fill_n(packed_input1.begin() + tile * words_per_tile, words_per_tile, packed);
@@ -241,12 +247,60 @@ INSTANTIATE_TEST_SUITE_P(
         return "MulReduceScalar_16x32_" + std::to_string(info.param) + "_Tiles";
     });
 
-// Full-sync bf16 DEST holds 16 tiles, so num_tiles may legally exceed the half-sync 8. The reduce must move
-// every product tile 8..15 into SrcA; a move that stops at tile 7 reduces tile 7 again in their place.
-// Per-tile weights make that substitution visible (see per_tile_weights); 8 is the control case.
-class MulReduceScalarFullSyncTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {};
+// Full-sync bf16 DEST holds 16 tiles, so num_tiles may legally exceed the half-sync 8, and the reduce must
+// move every product tile 8..15 into SrcA.
+//
+// One-hot B isolates each of those moves: the result is the one product tile's sum (about 512), and a reduce
+// that does not move exactly tile k returns 0. Covers every k in 8..15 at 16 tiles, and two at 12.
+struct MulReduceScalarFullSyncOneHotParam {
+    int num_tiles;
+    int hot_tile;
+};
 
-TEST_P(MulReduceScalarFullSyncTest, MulReduceScalarFullSync) {
+class MulReduceScalarFullSyncOneHotTest : public LLKMeshDeviceSingleCardFixture,
+                                          public testing::WithParamInterface<MulReduceScalarFullSyncOneHotParam> {};
+
+TEST_P(MulReduceScalarFullSyncOneHotTest, MulReduceScalarFullSyncOneHot) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP()
+            << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+    }
+    const MulReduceScalarFullSyncOneHotParam p = GetParam();
+    ASSERT_TRUE(run_mul_reduce_scalar_test(
+        this->device(),
+        {.num_tiles = static_cast<uint32_t>(p.num_tiles),
+         .tile_height = 32,
+         .dst_full_sync = true,
+         .one_hot_tile = p.hot_tile}));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MulReduceScalarFullSyncOneHotTests,
+    MulReduceScalarFullSyncOneHotTest,
+    testing::Values(
+        MulReduceScalarFullSyncOneHotParam{12, 8},
+        MulReduceScalarFullSyncOneHotParam{12, 11},
+        MulReduceScalarFullSyncOneHotParam{16, 8},
+        MulReduceScalarFullSyncOneHotParam{16, 9},
+        MulReduceScalarFullSyncOneHotParam{16, 10},
+        MulReduceScalarFullSyncOneHotParam{16, 11},
+        MulReduceScalarFullSyncOneHotParam{16, 12},
+        MulReduceScalarFullSyncOneHotParam{16, 13},
+        MulReduceScalarFullSyncOneHotParam{16, 14},
+        MulReduceScalarFullSyncOneHotParam{16, 15}),
+    [](const testing::TestParamInfo<MulReduceScalarFullSyncOneHotParam>& info) {
+        return "OneHot_" + std::to_string(info.param.num_tiles) + "_Tiles_hot_" + std::to_string(info.param.hot_tile);
+    });
+
+// All 16 tiles weighted and reduced together: the whole-row case the one-hot sweep does not run. A bf16 DEST
+// rounds each column's running sum (about 136, ulp 1) at every one of the 32 accumulates; observed error is
+// under 1%, and the collapse the weights are there to expose is a 26% error.
+constexpr float full_sync_weighted_rel_tol = 0.03f;
+
+class MulReduceScalarFullSyncWeightedTest : public LLKMeshDeviceSingleCardFixture,
+                                            public testing::WithParamInterface<int> {};
+
+TEST_P(MulReduceScalarFullSyncWeightedTest, MulReduceScalarFullSyncWeighted) {
     if (this->arch_ == tt::ARCH::QUASAR) {
         GTEST_SKIP()
             << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
@@ -258,15 +312,15 @@ TEST_P(MulReduceScalarFullSyncTest, MulReduceScalarFullSync) {
          .tile_height = 32,
          .dst_full_sync = true,
          .per_tile_weights = true,
-         .rel_tol = one_tile_rel_tol(num_tiles)}));
+         .rel_tol = full_sync_weighted_rel_tol}));
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    MulReduceScalarFullSyncTests,
-    MulReduceScalarFullSyncTest,
-    testing::Values(8, 12, 16),
+    MulReduceScalarFullSyncWeightedTests,
+    MulReduceScalarFullSyncWeightedTest,
+    testing::Values(16),
     [](const testing::TestParamInfo<int>& info) {
-        return "MulReduceScalarFullSync_" + std::to_string(info.param) + "_Tiles";
+        return "MulReduceScalarFullSyncWeighted_" + std::to_string(info.param) + "_Tiles";
     });
 
 // One-tile accumulation, parametrized past the 8-tile DEST capacity.
