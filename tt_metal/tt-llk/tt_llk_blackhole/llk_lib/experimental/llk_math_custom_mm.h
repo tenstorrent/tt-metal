@@ -215,7 +215,7 @@ inline void _llk_math_custom_mm_(
     // The height is checked in the init only. Here it selects the replay length, so it must still match the
     // height the init recorded: 0 (a caller that read the height on the unpack thread only) is safe for a
     // 1/2/4-row in0 or with finalize=false, but with finalize and an 8-row in0 it would run the 11-entry
-    // recording as 9 entries and skip the SrcB clear and the first finalize add.
+    // recording as 9 entries on the last column tile and skip the SrcA clear and the first finalize add.
     const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 

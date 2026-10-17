@@ -150,22 +150,26 @@ std::string wait_for_watcher_exception() {
 
 // A [16, 32] activation tile is a legal CB tile but outside the custom_mm family's
 // [1|2|4|8, 32] in0 contract. The typed LLKOperand overloads reject it at compile
-// time; the CB-id overloads read face_r_dim at run time, so their only guard is the
-// LLK assert this exercises. Without it the init completes with no diagnostic and
-// the 1..4-row program runs on a 16-row operand, dropping rows 8..15 of each face
-// from the product (not run here: a product kernel whose init asserts leaves the
-// pack thread in a tile-register wait, which blocks the core's re-initialization).
+// time; the CB-id overloads read the face height and face grid at run time, so their
+// only guard is the LLK asserts this exercises. Without them the init completes with no
+// diagnostic and the product is silently wrong: 16x16 faces run the 1..4-row program on
+// a 16-row operand and drop rows 8..15 of each face; 8x16 faces in a 2x2 grid run the
+// 8-row program and read faces 2/3 as the next K tile. (The product is not run here:
+// a product kernel whose init asserts leaves the pack thread in a tile-register wait,
+// which blocks the core's re-initialization.)
 constexpr std::uint32_t kGuardRows = 16;
 
 // mode: 0 custom_mm, 1 compressed_custom_mm. thread: 0 unpack init (TRISC0), 1 math init (TRISC1).
-void run_custom_mm_rows_guard(distributed::MeshDevice& mesh, std::uint32_t mode, std::uint32_t thread) {
+// in0_tile: the [kGuardRows, 32] in0 CB tile, 16x16 faces or an 8x16 face grid.
+void run_custom_mm_rows_guard(
+    distributed::MeshDevice& mesh, std::uint32_t mode, std::uint32_t thread, const Tile& in0_tile) {
     // A legal CB-id height must not trip the guard.
     run_custom_mm_operands(mesh, 8 /*rows*/, true /*mixed*/, mode, false /*full_sync*/);
     EXPECT_TRUE(MetalContext::instance().watcher_server()->exception_message().empty())
         << "rows=8 tripped the watcher: " << MetalContext::instance().watcher_server()->exception_message();
 
-    // Init-only kernel, one thread, on a [kGuardRows, 32] in0 CB: that init must assert.
-    const Tile tiny({kGuardRows, 32});
+    // Init-only kernel, one thread, on the [kGuardRows, 32] in0 CB: that init must assert.
+    const Tile& tiny = in0_tile;
     const Tile full;
     const auto weight_format = mode == 1 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
     const CoreCoord core{0, 0};
@@ -289,19 +293,28 @@ TEST_F(LLKBlackholeSingleCardFixture, CustomMatmulOperandOverloads) {
 }
 
 TEST_F(LLKBlackholeAssertFixture, CustomMatmulUnpackInitRejectsSixteenRowActivation) {
-    run_custom_mm_rows_guard(*devices_.at(0), 0 /*mode*/, 0 /*thread*/);
+    run_custom_mm_rows_guard(*devices_.at(0), 0 /*mode*/, 0 /*thread*/, Tile({kGuardRows, 32}));
 }
 
 TEST_F(LLKBlackholeAssertFixture, CustomMatmulMathInitRejectsSixteenRowActivation) {
-    run_custom_mm_rows_guard(*devices_.at(0), 0 /*mode*/, 1 /*thread*/);
+    run_custom_mm_rows_guard(*devices_.at(0), 0 /*mode*/, 1 /*thread*/, Tile({kGuardRows, 32}));
 }
 
 TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulUnpackInitRejectsSixteenRowActivation) {
-    run_custom_mm_rows_guard(*devices_.at(0), 1 /*mode*/, 0 /*thread*/);
+    run_custom_mm_rows_guard(*devices_.at(0), 1 /*mode*/, 0 /*thread*/, Tile({kGuardRows, 32}));
 }
 
 TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulMathInitRejectsSixteenRowActivation) {
-    run_custom_mm_rows_guard(*devices_.at(0), 1 /*mode*/, 1 /*thread*/);
+    run_custom_mm_rows_guard(*devices_.at(0), 1 /*mode*/, 1 /*thread*/, Tile({kGuardRows, 32}));
+}
+
+// Same height from 8x16 faces in a 2x2 grid: the face height passes, the face grid must not.
+TEST_F(LLKBlackholeAssertFixture, CustomMatmulUnpackInitRejectsFourFaceActivation) {
+    run_custom_mm_rows_guard(*devices_.at(0), 0 /*mode*/, 0 /*thread*/, Tile::from_face_grid(2, 2, {8, 16}));
+}
+
+TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulUnpackInitRejectsFourFaceActivation) {
+    run_custom_mm_rows_guard(*devices_.at(0), 1 /*mode*/, 0 /*thread*/, Tile::from_face_grid(2, 2, {8, 16}));
 }
 
 }  // namespace tt::tt_metal

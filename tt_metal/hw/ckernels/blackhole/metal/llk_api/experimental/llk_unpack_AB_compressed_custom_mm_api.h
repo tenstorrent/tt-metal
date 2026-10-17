@@ -40,6 +40,12 @@ inline void llk_unpack_AB_compressed_custom_mm_init(const std::uint32_t operand0
     const std::uint32_t operandA_id = get_operand_id(operand1);
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
+    const ckernel::TensorShape operandB_shape = get_operand_tensor_shape(operandB_id);
+    LLK_ASSERT(
+        (operandB_shape.face_r_dim == 1 || operandB_shape.face_r_dim == 2 || operandB_shape.face_r_dim == 4 ||
+         operandB_shape.face_r_dim == 8) &&
+            operandB_shape.num_faces_r_dim == 1 && operandB_shape.num_faces_c_dim == 2,
+        "compressed_custom_mm: in0 tile must be [1|2|4|8, 32]: face row count 1/2/4/8 and a 1x2 face grid");
 
     _llk_unpack_AB_compressed_custom_mm_init_<transpose, clear_src>(operandB_face_r_dim);
 }
