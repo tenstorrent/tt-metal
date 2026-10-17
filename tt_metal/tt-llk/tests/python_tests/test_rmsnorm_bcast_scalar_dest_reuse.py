@@ -158,7 +158,7 @@ def _run(
     clear_dest=False,
     unpack_full_transpose=False,
     clobber_unpa_x_end=False,
-    preserve_zero_flag=False,
+    preserve_src_zero_flag=False,
     operands=None,
 ):
     """Compile+run one variant.
@@ -199,7 +199,7 @@ def _run(
                 clear_dest=clear_dest,
                 unpack_full_transpose=unpack_full_transpose,
                 rmsnorm_clobber_unpa_x_end=clobber_unpa_x_end,
-                rmsnorm_preserve_zero_flag=preserve_zero_flag,
+                rmsnorm_preserve_src_zero_flag=preserve_src_zero_flag,
             ),
         ],
         runtimes=[],
@@ -555,8 +555,12 @@ def test_rmsnorm_bcast_scalar_dest_reuse_reprograms_srca_x_span(
 # Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
 BF16_DENORMAL_MIN = 2.0**-133
 BF16_DENORMAL_MANTISSAS = 1 << 7
-# SrcA is scaled up so a kept denormal scalar gives a visibly nonzero product.
+# SrcA is scaled up so a kept denormal scalar gives a visibly nonzero product; its mantissas are drawn
+# from [DENORMAL_SRCA_LOW, DENORMAL_SRCA_HIGH) so no operand is itself zero or denormal.
 DENORMAL_SRCA_SCALE = 2.0**100
+DENORMAL_SRCA_LOW, DENORMAL_SRCA_HIGH = 1.0, 4.0
+# The seed tile around the scalar follows the main sweep's operand range.
+SEED_LOW, SEED_HIGH = -4.0, 4.0
 
 
 @pytest.mark.parametrize("math_fidelity", _fidelities(MathOperation.Elwmul))
@@ -578,8 +582,11 @@ def test_rmsnorm_bcast_scalar_dest_reuse_flushes_denormal_scalar_after_keep_flag
     num_tiles = 1
 
     torch.manual_seed(0)
-    src_A = (torch.rand(num_tiles * 32, 32) * 3.0 + 1.0) * DENORMAL_SRCA_SCALE
-    src_B = torch.rand(32, 32) * 8.0 - 4.0
+    src_A = (
+        torch.rand(num_tiles * 32, 32) * (DENORMAL_SRCA_HIGH - DENORMAL_SRCA_LOW)
+        + DENORMAL_SRCA_LOW
+    ) * DENORMAL_SRCA_SCALE
+    src_B = torch.rand(32, 32) * (SEED_HIGH - SEED_LOW) + SEED_LOW
     src_B[0, 0] = (
         BF16_DENORMAL_MIN * torch.randint(1, BF16_DENORMAL_MANTISSAS, (1,)).item()
     )
@@ -594,7 +601,7 @@ def test_rmsnorm_bcast_scalar_dest_reuse_flushes_denormal_scalar_after_keep_flag
         math_fidelity,
         num_tiles,
         clear_dest=True,
-        preserve_zero_flag=True,
+        preserve_src_zero_flag=True,
         operands=(src_A, src_B),
     )
     assert scalar != 0.0

@@ -82,7 +82,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Leave unpacker A's X span at one row, as _llk_unpack_A_top32_rm_init_ does (its post-phase restore
         // resets the XY counters, not x_end). The rmsnorm init must re-program it: its MOP issues every real
         // UNPACR on SrcA, so an inherited span unpacks 16 datums per face instead of 256.
-        TTI_SETADCXX(p_setadc::UNP_A, 16 - 1, 0x0);
+        config_unpacker_x_end<p_setadc::UNP_A>(1 /* face_r_dim */);
     }
 
     // ---- the op under test ----

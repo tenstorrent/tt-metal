@@ -695,8 +695,9 @@ class PACK_NUM_TILES(TemplateParameter):
 class RMSNORM_DEST_REUSE(TemplateParameter):
     """Compile-time knobs for ``rmsnorm_bcast_scalar_dest_reuse_test.cpp``.
 
-    All four are template arguments (or a template-fixed runtime argument) on the LLK
-    pair, so none of them can be a runtime parameter:
+    The first four are template arguments (or a template-fixed runtime argument) on the
+    LLK pair, so none of them can be a runtime parameter; the last two are driver hooks
+    that perturb the state the inits must re-establish:
 
     ``rmsnorm_num_tiles``
         Outer-loop count of the math MOP *and* the unpack MOP -- one
@@ -716,7 +717,7 @@ class RMSNORM_DEST_REUSE(TemplateParameter):
         Before the rmsnorm unpack init, the unpack thread leaves unpacker A's X span at one
         row (as ``_llk_unpack_A_top32_rm_init_`` does). The init must re-program it: its
         MOP issues every real UNPACR on SrcA.
-    ``rmsnorm_preserve_zero_flag``
+    ``rmsnorm_preserve_src_zero_flag``
         Math sets the Src zero flag to keep before the seed datacopy, as ``copy_init``
         does. The rmsnorm math init must restore the operand-driven value.
 
@@ -732,7 +733,7 @@ class RMSNORM_DEST_REUSE(TemplateParameter):
     clear_dest: bool = False
     unpack_full_transpose: bool = False
     rmsnorm_clobber_unpa_x_end: bool = False
-    rmsnorm_preserve_zero_flag: bool = False
+    rmsnorm_preserve_src_zero_flag: bool = False
 
     def convert_to_cpp(self) -> str:
         return "\n".join(
@@ -745,7 +746,7 @@ class RMSNORM_DEST_REUSE(TemplateParameter):
                 "constexpr bool RMSNORM_CLOBBER_UNPA_X_END = "
                 f"{str(self.rmsnorm_clobber_unpa_x_end).lower()};",
                 "constexpr bool RMSNORM_PRESERVE_SRC_ZERO_FLAG = "
-                f"{str(self.rmsnorm_preserve_zero_flag).lower()};",
+                f"{str(self.rmsnorm_preserve_src_zero_flag).lower()};",
             ]
         )
 

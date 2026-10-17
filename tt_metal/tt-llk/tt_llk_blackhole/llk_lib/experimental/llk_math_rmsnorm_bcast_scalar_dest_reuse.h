@@ -114,6 +114,13 @@ inline void _llk_math_rmsnorm_bcast_scalar_dest_reuse_(std::uint32_t src_index, 
     constexpr bool high_fidelity          = is_high_fidelity(math_fidelity);
     constexpr std::uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
 
+    // The init re-established the operand-driven flag; an op issued between it and this call must not have
+    // left keep behind, or the MOP keeps the denormal Src operands it should flush (fires only under LLK asserts).
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "rmsnorm_bcast_scalar_dest_reuse: Src zero-substitution flag does not hold the operand-driven value; an op between the init "
+        "and this call left it at keep");
+
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(src_index);
     rmsnorm_bcast_scalar_reuse_dest_as_src();
     if constexpr (clear_dest)
