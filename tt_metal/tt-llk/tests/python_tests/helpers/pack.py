@@ -97,6 +97,33 @@ def pack_uint8(torch_tensor):
     return torch_tensor.cpu().numpy().astype(np.uint8).tobytes()
 
 
+def _pack_int4_nibbles(nibbles):
+    """Pack already-encoded 4-bit codes (0..15), two per byte, for Int4/UInt4 L1 tiles.
+
+    Low nibble = element at even index, high nibble = element at odd index.
+    Callers do the format encoding: pack_int4 (sign-magnitude) and pack_uint4.
+    """
+    assert len(nibbles) % 2 == 0, "4-bit packing needs an even element count"
+    nibbles = nibbles & 0x0F
+    return ((nibbles[1::2] << 4) | nibbles[0::2]).astype(np.uint8).tobytes()
+
+
+def pack_int4(torch_tensor):
+    # INT4 uses sign-magnitude format in hardware (S1.3): bit 3 = sign, bits 2:0 =
+    # magnitude. The unpacker widens it to sign-magnitude INT8 as {sign, 0000, mag}.
+    # -8 is not representable, so clip to [-7, 7].
+    array = np.clip(torch_tensor.cpu().numpy().astype(np.int16), -7, 7)
+    sign = (array < 0).astype(np.uint8) << 3
+    magnitude = np.abs(array).astype(np.uint8)
+    return _pack_int4_nibbles(sign | magnitude)
+
+
+def pack_uint4(torch_tensor):
+    # UINT4 is zero-extended to UINT8 by the unpacker.
+    array = np.clip(torch_tensor.cpu().numpy().astype(np.int16), 0, 15)
+    return _pack_int4_nibbles(array.astype(np.uint8))
+
+
 # ============================================================================
 # BFP (Block Floating-Point) Format Helpers
 # ============================================================================
