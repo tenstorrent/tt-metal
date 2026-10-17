@@ -1,0 +1,906 @@
+{
+  "scope": "Historical component readings, not current-main qualification. DiT/VAE use injected CUDA component inputs; encoder starts from native token IDs.",
+  "native_runtime": "0.1.dev1+ggec74d3b",
+  "sources": {
+    "tt-encoder-reports/encoder-fp32norm-full.json": {
+      "sha256": "5304bf0b7b32950338101578bee3da08134f424f3c67e2b7d1a8f687887d1ecc",
+      "report": {
+        "status": "passed",
+        "activation_injection": false,
+        "integrated_test": false,
+        "scope": "TT text encoder from native token IDs; CUDA tensors are comparisons only",
+        "checkpoint": "checkpoints/Base",
+        "capture": "captures/cuda-smoke-Base-256-r2",
+        "cuda_manifest_sha256": "de232aec8b69724ffa8a4d4f1884fea4c8bb2455f4a10c3f39e7bb2822c09daf",
+        "environment": {
+          "torch": "2.11.0+cpu",
+          "ttnn": "0.1.dev1+ggec74d3b",
+          "ttnn_module": "/home/user/Projects/voxcpm2-review-20261016/tt-metal/ttnn/ttnn/__init__.py",
+          "device_id": 0,
+          "visible_pci_device": "0000:21:00.0",
+          "weights": "BF16",
+          "fidelity": "HiFi4",
+          "fp32_dest_acc": true
+        },
+        "results": {
+          "positive/layer_000.output": {
+            "pcc": 0.999997812620079,
+            "relative_rms": 0.002098503477077055,
+            "max_abs": 0.03125,
+            "passed": true
+          },
+          "positive/layer_001.output": {
+            "pcc": 0.9999906607954302,
+            "relative_rms": 0.004321491053951095,
+            "max_abs": 0.0625,
+            "passed": true
+          },
+          "positive/layer_002.output": {
+            "pcc": 0.999982511354253,
+            "relative_rms": 0.005915009797037854,
+            "max_abs": 0.125,
+            "passed": true
+          },
+          "positive/layer_003.output": {
+            "pcc": 0.999981860241416,
+            "relative_rms": 0.006091446946635303,
+            "max_abs": 0.125,
+            "passed": true
+          },
+          "positive/layer_004.output": {
+            "pcc": 0.9999734629144446,
+            "relative_rms": 0.007423038097426062,
+            "max_abs": 0.125,
+            "passed": true
+          },
+          "positive/layer_005.output": {
+            "pcc": 0.9999666624860218,
+            "relative_rms": 0.008480176240582527,
+            "max_abs": 0.125,
+            "passed": true
+          },
+          "positive/layer_006.output": {
+            "pcc": 0.9999773431357031,
+            "relative_rms": 0.007124709822008724,
+            "max_abs": 0.25,
+            "passed": true
+          },
+          "positive/layer_007.output": {
+            "pcc": 0.9999598217223975,
+            "relative_rms": 0.00957671968772855,
+            "max_abs": 0.5,
+            "passed": true
+          },
+          "positive/layer_008.output": {
+            "pcc": 0.9999533107074305,
+            "relative_rms": 0.010939060757105037,
+            "max_abs": 0.5,
+            "passed": true
+          },
+          "positive/layer_009.output": {
+            "pcc": 0.9999398005871288,
+            "relative_rms": 0.012516507815053056,
+            "max_abs": 0.75,
+            "passed": true
+          },
+          "positive/layer_010.output": {
+            "pcc": 0.9999545660019533,
+            "relative_rms": 0.011147898573856212,
+            "max_abs": 0.75,
+            "passed": true
+          },
+          "positive/layer_011.output": {
+            "pcc": 0.9999371878463705,
+            "relative_rms": 0.012683246565157022,
+            "max_abs": 0.75,
+            "passed": true
+          },
+          "positive/layer_012.output": {
+            "pcc": 0.9999334601612972,
+            "relative_rms": 0.013156910756711099,
+            "max_abs": 0.625,
+            "passed": true
+          },
+          "positive/layer_013.output": {
+            "pcc": 0.9999333104460698,
+            "relative_rms": 0.013278078065127768,
+            "max_abs": 0.5,
+            "passed": true
+          },
+          "positive/layer_014.output": {
+            "pcc": 0.9999384130242189,
+            "relative_rms": 0.012514310315731565,
+            "max_abs": 0.5,
+            "passed": true
+          },
+          "positive/layer_015.output": {
+            "pcc": 0.9999157102452065,
+            "relative_rms": 0.015868880905498917,
+            "max_abs": 1.5,
+            "passed": true
+          },
+          "positive/layer_016.output": {
+            "pcc": 0.9999058421852008,
+            "relative_rms": 0.016503417344924387,
+            "max_abs": 1.5,
+            "passed": true
+          },
+          "positive/layer_017.output": {
+            "pcc": 0.9999000564498155,
+            "relative_rms": 0.016958332264190825,
+            "max_abs": 1.5,
+            "passed": true
+          },
+          "positive/layer_018.output": {
+            "pcc": 0.9999136354835817,
+            "relative_rms": 0.015259055461563533,
+            "max_abs": 1.5,
+            "passed": true
+          },
+          "positive/layer_019.output": {
+            "pcc": 0.9998577871066229,
+            "relative_rms": 0.018741848352416247,
+            "max_abs": 1.75,
+            "passed": true
+          },
+          "positive/layer_020.output": {
+            "pcc": 0.9998449609608323,
+            "relative_rms": 0.019136331906829323,
+            "max_abs": 1.875,
+            "passed": true
+          },
+          "positive/layer_021.output": {
+            "pcc": 0.9998195417841218,
+            "relative_rms": 0.020437929365788948,
+            "max_abs": 2.125,
+            "passed": true
+          },
+          "positive/layer_022.output": {
+            "pcc": 0.9998373692377004,
+            "relative_rms": 0.018829152508217328,
+            "max_abs": 2.5,
+            "passed": true
+          },
+          "positive/layer_023.output": {
+            "pcc": 0.9998214939077982,
+            "relative_rms": 0.019665272828674574,
+            "max_abs": 2.25,
+            "passed": true
+          },
+          "positive/layer_024.output": {
+            "pcc": 0.9998059621272933,
+            "relative_rms": 0.02050702560799015,
+            "max_abs": 2.5,
+            "passed": true
+          },
+          "positive/layer_025.output": {
+            "pcc": 0.9998036397701149,
+            "relative_rms": 0.02079022035691927,
+            "max_abs": 2.5,
+            "passed": true
+          },
+          "positive/layer_026.output": {
+            "pcc": 0.9998504426561639,
+            "relative_rms": 0.01941590399527195,
+            "max_abs": 6.0,
+            "passed": true
+          },
+          "positive/layer_027.output": {
+            "pcc": 0.9997158152787454,
+            "relative_rms": 0.025253170512527606,
+            "max_abs": 6.0,
+            "passed": true
+          },
+          "positive/layer_028.output": {
+            "pcc": 0.9996949999732263,
+            "relative_rms": 0.02591394671858127,
+            "max_abs": 6.0,
+            "passed": true
+          },
+          "positive/layer_029.output": {
+            "pcc": 0.9996705274701002,
+            "relative_rms": 0.02651422333543652,
+            "max_abs": 5.5,
+            "passed": true
+          },
+          "positive/layer_030.output": {
+            "pcc": 0.999670355667026,
+            "relative_rms": 0.026395509655046567,
+            "max_abs": 5.0,
+            "passed": true
+          },
+          "positive/layer_031.output": {
+            "pcc": 0.9997385330741071,
+            "relative_rms": 0.02322104859830378,
+            "max_abs": 5.5,
+            "passed": true
+          },
+          "positive/last_hidden_state": {
+            "pcc": 0.9996451138892044,
+            "relative_rms": 0.026646554390566873,
+            "max_abs": 1.6875,
+            "passed": true
+          },
+          "negative/layer_000.output": {
+            "pcc": 0.9999979558887498,
+            "relative_rms": 0.002046004714422185,
+            "max_abs": 0.03125,
+            "passed": true
+          },
+          "negative/layer_001.output": {
+            "pcc": 0.9999964028165629,
+            "relative_rms": 0.002722619903101615,
+            "max_abs": 0.03125,
+            "passed": true
+          },
+          "negative/layer_002.output": {
+            "pcc": 0.9999854234452918,
+            "relative_rms": 0.005534184841846749,
+            "max_abs": 0.125,
+            "passed": true
+          },
+          "negative/layer_003.output": {
+            "pcc": 0.9999815755160499,
+            "relative_rms": 0.006098602849955383,
+            "max_abs": 0.125,
+            "passed": true
+          },
+          "negative/layer_004.output": {
+            "pcc": 0.9999746020411396,
+            "relative_rms": 0.007130145941255795,
+            "max_abs": 0.125,
+            "passed": true
+          },
+          "negative/layer_005.output": {
+            "pcc": 0.9999721388830721,
+            "relative_rms": 0.007473296725040466,
+            "max_abs": 0.0625,
+            "passed": true
+          },
+          "negative/layer_006.output": {
+            "pcc": 0.999981941665551,
+            "relative_rms": 0.006278030657390829,
+            "max_abs": 0.25,
+            "passed": true
+          },
+          "negative/layer_007.output": {
+            "pcc": 0.9999675893257909,
+            "relative_rms": 0.008065593709374123,
+            "max_abs": 0.25,
+            "passed": true
+          },
+          "negative/layer_008.output": {
+            "pcc": 0.9999645643091486,
+            "relative_rms": 0.00847616982318209,
+            "max_abs": 0.25,
+            "passed": true
+          },
+          "negative/layer_009.output": {
+            "pcc": 0.9999571019001497,
+            "relative_rms": 0.00970636890042168,
+            "max_abs": 0.25,
+            "passed": true
+          },
+          "negative/layer_010.output": {
+            "pcc": 0.9999682750708494,
+            "relative_rms": 0.00888307118947122,
+            "max_abs": 0.5,
+            "passed": true
+          },
+          "negative/layer_011.output": {
+            "pcc": 0.9999607114940525,
+            "relative_rms": 0.009871144207579717,
+            "max_abs": 0.5,
+            "passed": true
+          },
+          "negative/layer_012.output": {
+            "pcc": 0.999959103918155,
+            "relative_rms": 0.01020272542734428,
+            "max_abs": 0.5,
+            "passed": true
+          },
+          "negative/layer_013.output": {
+            "pcc": 0.999952812845508,
+            "relative_rms": 0.010916785560256338,
+            "max_abs": 0.5,
+            "passed": true
+          },
+          "negative/layer_014.output": {
+            "pcc": 0.9999506500228571,
+            "relative_rms": 0.010919104330061952,
+            "max_abs": 0.5,
+            "passed": true
+          },
+          "negative/layer_015.output": {
+            "pcc": 0.9999140889505166,
+            "relative_rms": 0.016014342426266613,
+            "max_abs": 1.5,
+            "passed": true
+          },
+          "negative/layer_016.output": {
+            "pcc": 0.9999010720258522,
+            "relative_rms": 0.01706371267883892,
+            "max_abs": 1.5,
+            "passed": true
+          },
+          "negative/layer_017.output": {
+            "pcc": 0.9998913168386595,
+            "relative_rms": 0.017932371920964814,
+            "max_abs": 1.5,
+            "passed": true
+          },
+          "negative/layer_018.output": {
+            "pcc": 0.999909829866028,
+            "relative_rms": 0.015629315931892186,
+            "max_abs": 1.5,
+            "passed": true
+          },
+          "negative/layer_019.output": {
+            "pcc": 0.9998133591519379,
+            "relative_rms": 0.021774964783907256,
+            "max_abs": 1.75,
+            "passed": true
+          },
+          "negative/layer_020.output": {
+            "pcc": 0.9997767536969334,
+            "relative_rms": 0.023036145856908392,
+            "max_abs": 1.875,
+            "passed": true
+          },
+          "negative/layer_021.output": {
+            "pcc": 0.9997396327027499,
+            "relative_rms": 0.024507734141406907,
+            "max_abs": 2.125,
+            "passed": true
+          },
+          "negative/layer_022.output": {
+            "pcc": 0.9998152020814508,
+            "relative_rms": 0.0195394582449029,
+            "max_abs": 2.25,
+            "passed": true
+          },
+          "negative/layer_023.output": {
+            "pcc": 0.999748858231804,
+            "relative_rms": 0.023024431052104527,
+            "max_abs": 2.25,
+            "passed": true
+          },
+          "negative/layer_024.output": {
+            "pcc": 0.9997399971136209,
+            "relative_rms": 0.02364313625818723,
+            "max_abs": 2.5,
+            "passed": true
+          },
+          "negative/layer_025.output": {
+            "pcc": 0.9997363638157721,
+            "relative_rms": 0.02386084922897684,
+            "max_abs": 2.5,
+            "passed": true
+          },
+          "negative/layer_026.output": {
+            "pcc": 0.9998231428863231,
+            "relative_rms": 0.02023670556972991,
+            "max_abs": 6.0,
+            "passed": true
+          },
+          "negative/layer_027.output": {
+            "pcc": 0.9996690029825431,
+            "relative_rms": 0.0272157990639217,
+            "max_abs": 3.0,
+            "passed": true
+          },
+          "negative/layer_028.output": {
+            "pcc": 0.999595006493921,
+            "relative_rms": 0.02962882140789,
+            "max_abs": 3.5,
+            "passed": true
+          },
+          "negative/layer_029.output": {
+            "pcc": 0.9995761784513458,
+            "relative_rms": 0.02993132469049611,
+            "max_abs": 3.0,
+            "passed": true
+          },
+          "negative/layer_030.output": {
+            "pcc": 0.9995918374378054,
+            "relative_rms": 0.029460832427152535,
+            "max_abs": 4.5,
+            "passed": true
+          },
+          "negative/layer_031.output": {
+            "pcc": 0.9997348996022138,
+            "relative_rms": 0.023159810307639014,
+            "max_abs": 2.5,
+            "passed": true
+          },
+          "negative/last_hidden_state": {
+            "pcc": 0.9995550017764879,
+            "relative_rms": 0.029836708827524233,
+            "max_abs": 1.625,
+            "passed": true
+          }
+        },
+        "positive_seconds_including_upload_and_comparison": 30.32105632312596,
+        "negative_seconds_including_upload_and_comparison": 25.6277646869421
+      }
+    },
+    "tt-results/device-runs/dit1024-Base-step-1card-r2/report.json": {
+      "sha256": "50a1ede551f67d6b11e1367ee36897d9c35e0b72160497c1aff840c754e194e1",
+      "report": {
+        "activation_injection": true,
+        "integrated_test": false,
+        "cards": 1,
+        "checkpoint": "checkpoints/Base",
+        "capture": "captures/cuda-Base-1024-50",
+        "results": {
+          "positive/block_00": {
+            "pcc": 0.999974961935168,
+            "relative_rms": 0.013051616159075182,
+            "max_absolute_error": 128.0
+          },
+          "positive/block_21": {
+            "pcc": 0.9999528728055235,
+            "relative_rms": 0.01825404000796929,
+            "max_absolute_error": 896.0
+          },
+          "positive/block_41": {
+            "pcc": 0.9991954460893353,
+            "relative_rms": 0.04194327396955071,
+            "max_absolute_error": 1240.0
+          },
+          "positive/velocity": {
+            "pcc": 0.9999495665169426,
+            "relative_rms": 0.010361900293128744,
+            "max_absolute_error": 0.0625,
+            "seconds_including_weight_upload": 29.69927585311234,
+            "passed": true
+          },
+          "negative/block_00": {
+            "pcc": 0.999961382962795,
+            "relative_rms": 0.014072232420900306,
+            "max_absolute_error": 256.0
+          },
+          "negative/block_21": {
+            "pcc": 0.9999541586426302,
+            "relative_rms": 0.021150164602965597,
+            "max_absolute_error": 1024.0
+          },
+          "negative/block_41": {
+            "pcc": 0.999715866311789,
+            "relative_rms": 0.0266282358213902,
+            "max_absolute_error": 576.0
+          },
+          "negative/velocity": {
+            "pcc": 0.9999520628343551,
+            "relative_rms": 0.010152427529690273,
+            "max_absolute_error": 0.0625,
+            "seconds_including_weight_upload": 4.925185112282634,
+            "passed": true
+          }
+        },
+        "status": "passed",
+        "verified_checkpoint_files": {
+          "transformer/config.json": "3291c3a1c7adc22b8182a0de25ca8ec97474d72715ce84adbab09cc0be24f666",
+          "transformer/diffusion_pytorch_model-00001-of-00003.safetensors": "ae085fba123b6df67daf90aa9698fadee60c73e45bcaf3f3043d15f34e7a1804",
+          "transformer/diffusion_pytorch_model-00002-of-00003.safetensors": "806e876d80c7fba560663a3a95580e6c7033da3f9ea3c52765245ef0e1818f75",
+          "transformer/diffusion_pytorch_model-00003-of-00003.safetensors": "5f319b72c40324294007c270d78112425627b537fcd8769b3c00f9f070e506a9",
+          "transformer/diffusion_pytorch_model.safetensors.index.json": "b609327fc75dbe5080e7e095d8b727d74d728b4f98e8b047133b0082cfa2fb03"
+        },
+        "oracle_variant": "Base"
+      }
+    },
+    "tt-results/device-runs/dit1024-Base-step-2card-connected/report.json": {
+      "sha256": "0822074236a426c47ac335fec584eddcbeb89fbacba17b02f61925ef951eaf58",
+      "report": {
+        "activation_injection": true,
+        "integrated_test": false,
+        "cards": 2,
+        "checkpoint": "checkpoints/Base",
+        "capture": "captures/cuda-Base-1024-50",
+        "results": {
+          "positive/block_00": {
+            "pcc": 0.9999635232211758,
+            "relative_rms": 0.014388972635363298,
+            "max_absolute_error": 192.0
+          },
+          "positive/block_21": {
+            "pcc": 0.999941016345203,
+            "relative_rms": 0.01952134710852857,
+            "max_absolute_error": 1024.0
+          },
+          "positive/block_41": {
+            "pcc": 0.9992200126172357,
+            "relative_rms": 0.041675323548990596,
+            "max_absolute_error": 1184.0
+          },
+          "positive/velocity": {
+            "pcc": 0.9999502885102278,
+            "relative_rms": 0.010518107451080515,
+            "max_absolute_error": 0.0625,
+            "seconds_including_weight_upload": 42.083245454356074,
+            "passed": true
+          },
+          "negative/block_00": {
+            "pcc": 0.9999706413714576,
+            "relative_rms": 0.014323970871497204,
+            "max_absolute_error": 192.0
+          },
+          "negative/block_21": {
+            "pcc": 0.9999671235698352,
+            "relative_rms": 0.020541338537890964,
+            "max_absolute_error": 896.0
+          },
+          "negative/block_41": {
+            "pcc": 0.9996996388795523,
+            "relative_rms": 0.027693341780435674,
+            "max_absolute_error": 448.0
+          },
+          "negative/velocity": {
+            "pcc": 0.9999519376121602,
+            "relative_rms": 0.010504680650809487,
+            "max_absolute_error": 0.0625,
+            "seconds_including_weight_upload": 3.622815765440464,
+            "passed": true
+          }
+        },
+        "status": "passed",
+        "environment": {
+          "python": "3.10.20",
+          "tt_visible_devices": "0000:01:00.0,0000:41:00.0",
+          "torch": "2.11.0+cpu",
+          "ttnn": "0.1.dev1+ggec74d3b",
+          "weights": "BF16",
+          "math_fidelity": "HiFi4",
+          "fp32_destination_accumulation": true
+        },
+        "source_files": {
+          "model/dit.py": "cf008f1da2d1c88c9a6a54f15c2ea666a68e5ad4eb820ad535a52f3570879dfa",
+          "benchmarks/dit_validate.py": "e4d01c56069ee4d63431b3646a2f49c1f1fc118105cc53726c2001cad873def3"
+        },
+        "verified_checkpoint_files": {
+          "transformer/config.json": "3291c3a1c7adc22b8182a0de25ca8ec97474d72715ce84adbab09cc0be24f666",
+          "transformer/diffusion_pytorch_model-00001-of-00003.safetensors": "ae085fba123b6df67daf90aa9698fadee60c73e45bcaf3f3043d15f34e7a1804",
+          "transformer/diffusion_pytorch_model-00002-of-00003.safetensors": "806e876d80c7fba560663a3a95580e6c7033da3f9ea3c52765245ef0e1818f75",
+          "transformer/diffusion_pytorch_model-00003-of-00003.safetensors": "5f319b72c40324294007c270d78112425627b537fcd8769b3c00f9f070e506a9",
+          "transformer/diffusion_pytorch_model.safetensors.index.json": "b609327fc75dbe5080e7e095d8b727d74d728b4f98e8b047133b0082cfa2fb03"
+        },
+        "oracle_variant": "Base"
+      }
+    },
+    "tt-results/device-runs/dit1024-SFT-step-1card/report.json": {
+      "sha256": "4d4e643b7226d5063a85bee243dd088eff6725f606720ba1c9ec27fa51946383",
+      "report": {
+        "activation_injection": true,
+        "integrated_test": false,
+        "cards": 1,
+        "checkpoint": "checkpoints/SFT",
+        "capture": "captures/cuda-SFT-1024-50",
+        "results": {
+          "positive/block_00": {
+            "pcc": 0.9999374318171552,
+            "relative_rms": 0.013029993117182675,
+            "max_absolute_error": 192.0
+          },
+          "positive/block_21": {
+            "pcc": 0.9999071939378094,
+            "relative_rms": 0.014599399180001811,
+            "max_absolute_error": 512.0
+          },
+          "positive/block_41": {
+            "pcc": 0.999462263804917,
+            "relative_rms": 0.03484363569728593,
+            "max_absolute_error": 448.0
+          },
+          "positive/velocity": {
+            "pcc": 0.9999382253510946,
+            "relative_rms": 0.011343849866282145,
+            "max_absolute_error": 0.0625,
+            "seconds_including_weight_upload": 17.427515285089612,
+            "passed": true
+          },
+          "negative/block_00": {
+            "pcc": 0.9999389835451239,
+            "relative_rms": 0.013427150015822467,
+            "max_absolute_error": 256.0
+          },
+          "negative/block_21": {
+            "pcc": 0.9999652937482735,
+            "relative_rms": 0.011482864131563523,
+            "max_absolute_error": 256.0
+          },
+          "negative/block_41": {
+            "pcc": 0.9995905203296017,
+            "relative_rms": 0.03115619293213041,
+            "max_absolute_error": 576.0
+          },
+          "negative/velocity": {
+            "pcc": 0.9999494935754588,
+            "relative_rms": 0.010574667753922311,
+            "max_absolute_error": 0.0625,
+            "seconds_including_weight_upload": 3.3538359478116035,
+            "passed": true
+          }
+        },
+        "status": "passed",
+        "verified_checkpoint_files": {
+          "transformer/config.json": "3291c3a1c7adc22b8182a0de25ca8ec97474d72715ce84adbab09cc0be24f666",
+          "transformer/diffusion_pytorch_model-00001-of-00003.safetensors": "e40d3444940a0b0fd7cd45ba7959a5bd3d5efd7ddf87aae5ce4d87ce8aa03d01",
+          "transformer/diffusion_pytorch_model-00002-of-00003.safetensors": "d106da790ec2924ffd8af04b4ffa8f8de281a974b58e55649c3ec596dc8ef033",
+          "transformer/diffusion_pytorch_model-00003-of-00003.safetensors": "11f637ab17c7093344a6110a1e87ffda8e56558dc55183d8e790222cfcdcf52d",
+          "transformer/diffusion_pytorch_model.safetensors.index.json": "b609327fc75dbe5080e7e095d8b727d74d728b4f98e8b047133b0082cfa2fb03"
+        },
+        "oracle_variant": "SFT"
+      }
+    },
+    "tt-results/device-runs/dit1024-SFT-step-2card/report.json": {
+      "sha256": "2927fab73e7c9d6d2ae9c897118949e902f952770da5496a277902393f21d459",
+      "report": {
+        "activation_injection": true,
+        "integrated_test": false,
+        "cards": 2,
+        "checkpoint": "checkpoints/SFT",
+        "capture": "captures/cuda-SFT-1024-50",
+        "results": {
+          "positive/block_00": {
+            "pcc": 0.9999403349457389,
+            "relative_rms": 0.013449452512784428,
+            "max_absolute_error": 192.0
+          },
+          "positive/block_21": {
+            "pcc": 0.9999520673265936,
+            "relative_rms": 0.013460051126527988,
+            "max_absolute_error": 448.0
+          },
+          "positive/block_41": {
+            "pcc": 0.9994623027973499,
+            "relative_rms": 0.0349590888481491,
+            "max_absolute_error": 576.0
+          },
+          "positive/velocity": {
+            "pcc": 0.9999385942854961,
+            "relative_rms": 0.011368790321795885,
+            "max_absolute_error": 0.0625,
+            "seconds_including_weight_upload": 21.001354224979877,
+            "passed": true
+          },
+          "negative/block_00": {
+            "pcc": 0.9999441858601978,
+            "relative_rms": 0.013195546934480969,
+            "max_absolute_error": 192.0
+          },
+          "negative/block_21": {
+            "pcc": 0.9999610999703854,
+            "relative_rms": 0.011710318610277387,
+            "max_absolute_error": 256.0
+          },
+          "negative/block_41": {
+            "pcc": 0.9995883080896678,
+            "relative_rms": 0.03171760714913746,
+            "max_absolute_error": 512.0
+          },
+          "negative/velocity": {
+            "pcc": 0.9999485610570633,
+            "relative_rms": 0.011085156337183624,
+            "max_absolute_error": 0.078125,
+            "seconds_including_weight_upload": 2.4010752737522125,
+            "passed": true
+          }
+        },
+        "status": "passed",
+        "environment": {
+          "python": "3.10.20",
+          "tt_visible_devices": "0000:01:00.0,0000:41:00.0",
+          "torch": "2.11.0+cpu",
+          "ttnn": "0.1.dev1+ggec74d3b",
+          "weights": "BF16",
+          "math_fidelity": "HiFi4",
+          "fp32_destination_accumulation": true
+        },
+        "source_files": {
+          "model/dit.py": "cf008f1da2d1c88c9a6a54f15c2ea666a68e5ad4eb820ad535a52f3570879dfa",
+          "benchmarks/dit_validate.py": "e4d01c56069ee4d63431b3646a2f49c1f1fc118105cc53726c2001cad873def3"
+        },
+        "verified_checkpoint_files": {
+          "transformer/config.json": "3291c3a1c7adc22b8182a0de25ca8ec97474d72715ce84adbab09cc0be24f666",
+          "transformer/diffusion_pytorch_model-00001-of-00003.safetensors": "e40d3444940a0b0fd7cd45ba7959a5bd3d5efd7ddf87aae5ce4d87ce8aa03d01",
+          "transformer/diffusion_pytorch_model-00002-of-00003.safetensors": "d106da790ec2924ffd8af04b4ffa8f8de281a974b58e55649c3ec596dc8ef033",
+          "transformer/diffusion_pytorch_model-00003-of-00003.safetensors": "11f637ab17c7093344a6110a1e87ffda8e56558dc55183d8e790222cfcdcf52d",
+          "transformer/diffusion_pytorch_model.safetensors.index.json": "b609327fc75dbe5080e7e095d8b727d74d728b4f98e8b047133b0082cfa2fb03"
+        },
+        "oracle_variant": "SFT"
+      }
+    },
+    "tt-results/device-runs/vae1024-Base/report.json": {
+      "sha256": "b955eddbe1e1181ac3be952c3dae792ce3e934898900823b7d3cf6e2015f50e1",
+      "report": {
+        "capture": "/home/user/Projects/moss-image/captures/cuda-Base-1024-50",
+        "cards": 1,
+        "activation_injection": true,
+        "scope": "CUDA component replay and TT full VAE decode",
+        "thresholds": {
+          "min_pcc": 0.99,
+          "max_relative_rms": 0.03
+        },
+        "cases": [
+          {
+            "name": "decoder",
+            "shape": [
+              1,
+              3,
+              1024,
+              1024
+            ],
+            "pcc": 0.9999900946972586,
+            "relative_rms": 0.005440419184923439,
+            "max_abs": 0.02994251251220703,
+            "reference_rms": 0.8439965886328139,
+            "passed": true,
+            "seconds_including_compile_and_transfer": 4.692573040723801
+          }
+        ],
+        "passed": true
+      }
+    },
+    "tt-results/device-runs/vae1024-SFT/report.json": {
+      "sha256": "f8ae59f1d0dda17a56508087444f9f5743d25ccd51350aaed7b3f7d4c126e9b6",
+      "report": {
+        "capture": "/home/user/Projects/moss-image/captures/cuda-SFT-1024-50",
+        "cards": 1,
+        "activation_injection": true,
+        "scope": "CUDA component replay and TT full VAE decode",
+        "thresholds": {
+          "min_pcc": 0.99,
+          "max_relative_rms": 0.03
+        },
+        "cases": [
+          {
+            "name": "decoder",
+            "shape": [
+              1,
+              3,
+              1024,
+              1024
+            ],
+            "pcc": 0.9999899171541528,
+            "relative_rms": 0.011167123680724284,
+            "max_abs": 0.025542624294757843,
+            "reference_rms": 0.5643995927708388,
+            "passed": true,
+            "seconds_including_compile_and_transfer": 1.9582917522639036
+          }
+        ],
+        "passed": true
+      }
+    },
+    "tt-results/device-runs/vae1024-Base-2card/report.json": {
+      "sha256": "e2229c8a4163c58990f02df04e53c5a4bbb23063242afca1ca63cd3f17e5e01b",
+      "report": {
+        "capture": "/home/user/Projects/moss-image/captures/cuda-Base-1024-50",
+        "cards": 2,
+        "activation_injection": true,
+        "scope": "CUDA component replay and TT full VAE decode",
+        "thresholds": {
+          "min_pcc": 0.99,
+          "max_relative_rms": 0.03
+        },
+        "cases": [
+          {
+            "name": "decoder",
+            "shape": [
+              1,
+              3,
+              1024,
+              1024
+            ],
+            "pcc": 0.9999900946972586,
+            "relative_rms": 0.005440419184923439,
+            "max_abs": 0.02994251251220703,
+            "reference_rms": 0.8439965886328139,
+            "passed": true,
+            "per_card": [
+              {
+                "pcc": 0.9999900946972586,
+                "relative_rms": 0.005440419184923439,
+                "max_abs": 0.02994251251220703,
+                "reference_rms": 0.8439965886328139
+              },
+              {
+                "pcc": 0.9999900946972586,
+                "relative_rms": 0.005440419184923439,
+                "max_abs": 0.02994251251220703,
+                "reference_rms": 0.8439965886328139
+              }
+            ],
+            "seconds_including_compile_and_transfer": 57.320089280605316
+          }
+        ],
+        "environment": {
+          "torch": "2.11.0+cpu",
+          "ttnn": "0.1.dev1+ggec74d3b",
+          "tt_metal_home": "/home/user/Projects/voxcpm2-review-20261016/tt-metal",
+          "tt_visible_devices": "0000:01:00.0,0000:41:00.0",
+          "l1_small_size": 131072,
+          "sources_sha256": {
+            "benchmarks/vae_validate.py": "0df5d00279751f0f35458bd3a9f23b768f79a1eade6a585f850687fa209b2c5f",
+            "model/vae.py": "d385abef04934b1fb9f1d0b9297f07158e355efea9e8dc906c1684d3afc56d3f"
+          }
+        },
+        "passed": true
+      }
+    },
+    "tt-results/device-runs/vae1024-SFT-2card/report.json": {
+      "sha256": "eb5d8b529e40a3ac3e8a7f8c9a41b6b474265bb4fd2d436707c6ee62661f3e3a",
+      "report": {
+        "capture": "/home/user/Projects/moss-image/captures/cuda-SFT-1024-50",
+        "cards": 2,
+        "activation_injection": true,
+        "scope": "CUDA component replay and TT full VAE decode",
+        "thresholds": {
+          "min_pcc": 0.99,
+          "max_relative_rms": 0.03
+        },
+        "cases": [
+          {
+            "name": "decoder",
+            "shape": [
+              1,
+              3,
+              1024,
+              1024
+            ],
+            "pcc": 0.9999899171541528,
+            "relative_rms": 0.011167123680724284,
+            "max_abs": 0.025542624294757843,
+            "reference_rms": 0.5643995927708388,
+            "passed": true,
+            "per_card": [
+              {
+                "pcc": 0.9999899171541528,
+                "relative_rms": 0.011167123680724284,
+                "max_abs": 0.025542624294757843,
+                "reference_rms": 0.5643995927708388
+              },
+              {
+                "pcc": 0.9999899171541528,
+                "relative_rms": 0.011167123680724284,
+                "max_abs": 0.025542624294757843,
+                "reference_rms": 0.5643995927708388
+              }
+            ],
+            "seconds_including_compile_and_transfer": 2.664409641176462
+          }
+        ],
+        "environment": {
+          "torch": "2.11.0+cpu",
+          "ttnn": "0.1.dev1+ggec74d3b",
+          "tt_metal_home": "/home/user/Projects/voxcpm2-review-20261016/tt-metal",
+          "tt_visible_devices": "0000:01:00.0,0000:41:00.0",
+          "l1_small_size": 131072,
+          "sources_sha256": {
+            "benchmarks/vae_validate.py": "0df5d00279751f0f35458bd3a9f23b768f79a1eade6a585f850687fa209b2c5f",
+            "model/vae.py": "d385abef04934b1fb9f1d0b9297f07158e355efea9e8dc906c1684d3afc56d3f"
+          }
+        },
+        "passed": true
+      }
+    },
+    "tt-results/device-runs/scheduler256/report.json": {
+      "sha256": "c97045cd9c791146bc423609c24ed14fe5d55360bce62dc14d536a198256b4c1",
+      "report": {
+        "activation_injection": true,
+        "results": {
+          "guided_velocity": {
+            "pcc": 1.000000238418579,
+            "relative_rms": 0.0,
+            "max_absolute_error": 0.0
+          },
+          "updated_latents": {
+            "pcc": 1.0,
+            "relative_rms": 0.0,
+            "max_absolute_error": 0.0
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,174 @@
+{
+  "scope": "Controlled CUDA BF16-reduction-policy comparison; original references retained. TT outputs are historical native-runtime runs, no new TT generation.",
+  "changed_setting": "torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction=False",
+  "runs": {
+    "Base": {
+      "native_fullacc_manifest_sha256": "1ee2c1780e5afdd69ab739b6de1b536a5d75a4e80e6ac19e278797f9582cc154",
+      "environment": {
+        "cuda_visible_devices": "2",
+        "torch": "2.11.0+cu130",
+        "torch_cuda": "13.0",
+        "gpu": "NVIDIA RTX A6000",
+        "allow_bf16_reduced_precision_reduction": false,
+        "allow_tf32": false,
+        "cudnn_allow_tf32": true,
+        "transformers": "5.17.0",
+        "diffusers": "0.40.0"
+      },
+      "cuda_fullacc_vs_historical": {
+        "conditioning_positive": {
+          "pcc": 0.9998459594845458,
+          "relative_rms": 0.01755508522809603,
+          "max_absolute_error": 0.34375
+        },
+        "conditioning_negative": {
+          "pcc": 0.9997634713704667,
+          "relative_rms": 0.02178455361810714,
+          "max_absolute_error": 0.5
+        },
+        "final_latent": {
+          "pcc": 0.9200795010146627,
+          "relative_rms": 0.3990011650180975,
+          "max_absolute_error": 5.725322484970093
+        },
+        "decoded_pixels": {
+          "pcc": 0.9263432149061767,
+          "relative_rms": 0.320823783885823,
+          "max_absolute_error": 2.0
+        }
+      },
+      "historical_tt_vs_cuda_fullacc": {
+        "1": {
+          "decoded_pixels": {
+            "pcc": 0.9131875403070865,
+            "relative_rms": 0.3461332449530507,
+            "max_absolute_error": 2.0
+          },
+          "final_latent": {
+            "pcc": 0.9022808914344883,
+            "relative_rms": 0.43906667365859525,
+            "max_absolute_error": 5.548691034317017
+          },
+          "first_positive_prediction": {
+            "pcc": 0.9999477431749453,
+            "relative_rms": 0.01057543316575379,
+            "max_absolute_error": 0.0625
+          },
+          "first_negative_prediction": {
+            "pcc": 0.9999520672446199,
+            "relative_rms": 0.010250969879696351,
+            "max_absolute_error": 0.0625
+          }
+        },
+        "2": {
+          "decoded_pixels": {
+            "pcc": 0.9193271463340462,
+            "relative_rms": 0.3338034186843198,
+            "max_absolute_error": 2.0
+          },
+          "final_latent": {
+            "pcc": 0.9070598451793546,
+            "relative_rms": 0.4282276508155382,
+            "max_absolute_error": 5.7234046459198
+          },
+          "first_positive_prediction": {
+            "pcc": 0.9999481092951145,
+            "relative_rms": 0.0109436812392535,
+            "max_absolute_error": 0.078125
+          },
+          "first_negative_prediction": {
+            "pcc": 0.9999523733614714,
+            "relative_rms": 0.010553385806268769,
+            "max_absolute_error": 0.0625
+          }
+        }
+      },
+      "initial_noise_bitwise_equal": true,
+      "schedule_bitwise_equal": true
+    },
+    "SFT": {
+      "native_fullacc_manifest_sha256": "1ff2bbafb1e9685bbfdca4d30352bfd772c30b94d64a3c012572d0e82ac01866",
+      "environment": {
+        "cuda_visible_devices": "2",
+        "torch": "2.11.0+cu130",
+        "torch_cuda": "13.0",
+        "gpu": "NVIDIA RTX A6000",
+        "allow_bf16_reduced_precision_reduction": false,
+        "allow_tf32": false,
+        "cudnn_allow_tf32": true,
+        "transformers": "5.17.0",
+        "diffusers": "0.40.0"
+      },
+      "cuda_fullacc_vs_historical": {
+        "conditioning_positive": {
+          "pcc": 0.9998459594845458,
+          "relative_rms": 0.01755508522809603,
+          "max_absolute_error": 0.34375
+        },
+        "conditioning_negative": {
+          "pcc": 0.9997634713704667,
+          "relative_rms": 0.02178455361810714,
+          "max_absolute_error": 0.5
+        },
+        "final_latent": {
+          "pcc": 0.9645999044686225,
+          "relative_rms": 0.2657326811963425,
+          "max_absolute_error": 6.607791900634766
+        },
+        "decoded_pixels": {
+          "pcc": 0.9715297285348694,
+          "relative_rms": 0.24147901294319135,
+          "max_absolute_error": 1.9058616757392883
+        }
+      },
+      "historical_tt_vs_cuda_fullacc": {
+        "1": {
+          "decoded_pixels": {
+            "pcc": 0.8538230789522502,
+            "relative_rms": 0.5531625277399581,
+            "max_absolute_error": 1.9859825372695923
+          },
+          "final_latent": {
+            "pcc": 0.8640522131017445,
+            "relative_rms": 0.5205559377341846,
+            "max_absolute_error": 6.166337013244629
+          },
+          "first_positive_prediction": {
+            "pcc": 0.999932246806343,
+            "relative_rms": 0.011875634416373501,
+            "max_absolute_error": 0.0625
+          },
+          "first_negative_prediction": {
+            "pcc": 0.9999488860528333,
+            "relative_rms": 0.010288625341279584,
+            "max_absolute_error": 0.0625
+          }
+        },
+        "2": {
+          "decoded_pixels": {
+            "pcc": 0.8597129131428506,
+            "relative_rms": 0.5402071281412089,
+            "max_absolute_error": 2.0
+          },
+          "final_latent": {
+            "pcc": 0.8618479169286383,
+            "relative_rms": 0.5242261046502306,
+            "max_absolute_error": 5.414525270462036
+          },
+          "first_positive_prediction": {
+            "pcc": 0.9999359277370043,
+            "relative_rms": 0.011595305259181751,
+            "max_absolute_error": 0.0625
+          },
+          "first_negative_prediction": {
+            "pcc": 0.9999484999433169,
+            "relative_rms": 0.010672205969047829,
+            "max_absolute_error": 0.0625
+          }
+        }
+      },
+      "initial_noise_bitwise_equal": true,
+      "schedule_bitwise_equal": true
+    }
+  }
+}
