@@ -1,0 +1,245 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+#include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/tilize.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+
+// Every stage below (conv, silu_backward, accumulate_grad_tap, grad_input_tile) is marked [[gnu::noinline]].
+// Each stage starts with LLK *_init calls that program the math hardware through inline assembly, and some of
+// those instructions take their operand as an immediate: a number baked into the instruction bits, which GCC
+// must know at compile time. If GCC inlines all stages into one function it sees several similar init
+// sequences, merges them into one copy and passes the differing value through a register. That is fine for
+// normal code but not for an immediate, and the build fails with "impossible constraint in 'asm'". Keeping each
+// stage a separate function keeps every init's operand a constant.
+constexpr uint32_t tap_count = 4;
+constexpr uint32_t dst_tiles = 4;
+constexpr auto DEST_TO_SRCB = EltwiseBinaryReuseDestType::DEST_TO_SRCB;
+static_assert(DST_ACCUM_MODE, "the conv accumulates its 4 taps in fp32 DST");
+
+template <uint32_t limit>
+constexpr uint32_t batch_size(uint32_t base) {
+    return limit - base < dst_tiles ? limit - base : dst_tiles;
+}
+
+// mul_tiles_bcast_rows without the DST clear: in fp32 DST mode ELWMUL adds its product onto the DST tile, and the LLK
+// ignores clear_fp32_dst_acc when no dest-reuse is involved (it is passed as false only because the Blackhole overload
+// has no default). The conv relies on DST tiles being zero when acquired (the packer zeroes every tile it packs), so
+// the first tap writes and the remaining taps accumulate.
+FORCE_INLINE void mul_bcast_rows_accumulate(
+    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWMUL,
+          BroadcastType::ROW,
+          DST_ACCUM_MODE,
+          MATH_FIDELITY,
+          EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, /*clear_fp32_dst_acc=*/false)));
+    UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1, 0)));
+}
+
+// out = sum_tap weights[w] * view_tap, w = tap (preact) or 3 - tap (grad_input), summed in DST.
+template <uint32_t channel_tiles_per_block>
+[[gnu::noinline]] void conv(uint32_t views_cb, bool reversed, DataflowBuffer& out, uint32_t out_cb) {
+    out.reserve_back(channel_tiles_per_block);
+    reconfig_data_format(views_cb, dfb::weights);
+    mul_bcast_rows_init(views_cb, dfb::weights);
+    pack_reconfig_data_format(out_cb);
+    for (uint32_t base = 0; base < channel_tiles_per_block; base += dst_tiles) {
+        const uint32_t n = batch_size<channel_tiles_per_block>(base);
+        tile_regs_acquire();
+        for (uint32_t tap = 0; tap < tap_count; ++tap) {
+            const uint32_t w = reversed ? tap_count - 1 - tap : tap;
+            for (uint32_t i = 0; i < n; ++i) {
+                mul_bcast_rows_accumulate(
+                    views_cb,
+                    dfb::weights,
+                    tap * channel_tiles_per_block + base + i,
+                    w * channel_tiles_per_block + base + i,
+                    i);
+            }
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile(i, out_cb);
+        }
+        tile_regs_release();
+    }
+    out.push_back(channel_tiles_per_block);
+}
+
+// dc = grad_out * s * (1 + (preact - preact * s)), s = sigmoid(preact). FPU only after the sigmoid.
+template <uint32_t channel_tiles_per_block>
+[[gnu::noinline]] void silu_backward(DataflowBuffer& sigmoid, DataflowBuffer& dc_tile) {
+    dc_tile.reserve_back(channel_tiles_per_block);
+    for (uint32_t base = 0; base < channel_tiles_per_block; base += dst_tiles) {
+        const uint32_t n = batch_size<channel_tiles_per_block>(base);
+        sigmoid.reserve_back(n);
+        tile_regs_acquire();
+        reconfig_data_format_srca(dfb::preact);
+        copy_init(dfb::preact);
+        for (uint32_t i = 0; i < n; ++i) {
+            copy_tile(dfb::preact, base + i, i);
+        }
+        sigmoid_tile_init();
+        for (uint32_t i = 0; i < n; ++i) {
+            sigmoid_tile(i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(dfb::sigmoid);
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile(i, dfb::sigmoid);
+        }
+        tile_regs_release();
+        sigmoid.push_back(n);
+        sigmoid.wait_front(n);
+
+        tile_regs_acquire();
+        reconfig_data_format(dfb::preact, dfb::sigmoid);
+        mul_init(dfb::preact, dfb::sigmoid);
+        for (uint32_t i = 0; i < n; ++i) {
+            mul_tiles(dfb::preact, dfb::sigmoid, base + i, i, i);
+        }
+        sub_reuse_dest_init<DEST_TO_SRCB>(dfb::preact);
+        for (uint32_t i = 0; i < n; ++i) {
+            sub_reuse_dest_tiles<DEST_TO_SRCB>(dfb::preact, base + i, i);
+        }
+        reconfig_data_format_srca(dfb::ones);
+        add_reuse_dest_init<DEST_TO_SRCB>(dfb::ones);
+        for (uint32_t i = 0; i < n; ++i) {
+            add_reuse_dest_tiles<DEST_TO_SRCB>(dfb::ones, 0, i);
+        }
+        reconfig_data_format_srca(dfb::sigmoid);
+        mul_reuse_dest_init<DEST_TO_SRCB>(dfb::sigmoid);
+        for (uint32_t i = 0; i < n; ++i) {
+            mul_reuse_dest_tiles<DEST_TO_SRCB>(dfb::sigmoid, i, i);
+        }
+        mul_reuse_dest_init<DEST_TO_SRCB>(dfb::grad_out);
+        for (uint32_t i = 0; i < n; ++i) {
+            mul_reuse_dest_tiles<DEST_TO_SRCB>(dfb::grad_out, base + i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(dfb::dc_tile);
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile(i, dfb::dc_tile);
+        }
+        tile_regs_release();
+        sigmoid.pop_front(n);
+    }
+    dc_tile.push_back(channel_tiles_per_block);
+}
+
+// acc[tap][tile_column] += dc * view_tap. The partial lives in the acc pages in L1 and the packer adds each step's
+// products onto them in place (pack_reconfig_l1_acc), in fp32: nothing is unpacked back into the engine, so no
+// tf32 rounding. The pages are reserved once per item, written out of order by tile index, and pushed to the
+// writer on the last own step.
+template <uint32_t channel_tiles_per_block, bool first, bool last>
+[[gnu::noinline]] void accumulate_grad_tap(DataflowBuffer& acc) {
+    constexpr uint32_t total = tap_count * channel_tiles_per_block;
+    if constexpr (first) {
+        acc.reserve_back(total);
+    }
+    for (uint32_t base = 0; base < total; base += dst_tiles) {
+        const uint32_t n = batch_size<total>(base);
+        tile_regs_acquire();
+        reconfig_data_format(dfb::dc_tile, dfb::act_tile);
+        mul_init(dfb::dc_tile, dfb::act_tile);
+        for (uint32_t i = 0; i < n; ++i) {
+            mul_tiles(dfb::dc_tile, dfb::act_tile, (base + i) % channel_tiles_per_block, base + i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(dfb::acc);
+        pack_reconfig_l1_acc(first ? 0 : 1);
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile<true>(i, dfb::acc, base + i);
+        }
+        pack_reconfig_l1_acc(0);
+        tile_regs_release();
+    }
+    if constexpr (last) {
+        acc.push_back(total);
+    }
+}
+
+template <uint32_t channel_tiles_per_block>
+[[gnu::noinline]] void grad_input_tile(DataflowBuffer& dc_views, DataflowBuffer& output) {
+    compute_kernel_lib::tilize<channel_tiles_per_block, dfb::dcv_rm, dfb::dcv_tile>(tap_count);
+    dc_views.wait_front(tap_count * channel_tiles_per_block);
+    conv<channel_tiles_per_block>(dfb::dcv_tile, true, output, dfb::output);
+    dc_views.pop_front(tap_count * channel_tiles_per_block);
+}
+
+template <uint32_t channel_tiles_per_block, uint32_t tile_rows, uint32_t row_splits>
+TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
+    compute_kernel_hw_startup(dfb::act_rm, dfb::act_tile, dfb::dc_rm);
+    DataflowBuffer activation(dfb::act_tile);
+    DataflowBuffer weights(dfb::weights);
+    DataflowBuffer grad_out(dfb::grad_out);
+    DataflowBuffer preact(dfb::preact);
+    DataflowBuffer sigmoid(dfb::sigmoid);
+    DataflowBuffer dc_tile(dfb::dc_tile);
+    DataflowBuffer acc(dfb::acc);
+    DataflowBuffer dc_views(dfb::dcv_tile);
+    DataflowBuffer output(dfb::output);
+    DataflowBuffer ones(dfb::ones);
+
+    for (uint32_t item = 0; item < wi_count; ++item) {
+        const uint32_t work = wi_start + item;
+        const uint32_t split = work % row_splits;
+        const uint32_t first_tile_row = split * tile_rows / row_splits;
+        const uint32_t end_tile_row = (split + 1) * tile_rows / row_splits;
+        const uint32_t own_steps = end_tile_row - first_tile_row;
+        const bool has_halo = end_tile_row < tile_rows;
+        const uint32_t step_count = own_steps + (has_halo ? 1 : 0);
+
+        weights.wait_front(tap_count * channel_tiles_per_block);
+        if (item == 0) {
+            ones.wait_front(1);
+        }
+        for (uint32_t step = 0; step < step_count; ++step) {
+            compute_kernel_lib::tilize<channel_tiles_per_block, dfb::act_rm, dfb::act_tile>(tap_count);
+            activation.wait_front(tap_count * channel_tiles_per_block);
+            grad_out.wait_front(channel_tiles_per_block);
+
+            conv<channel_tiles_per_block>(dfb::act_tile, false, preact, dfb::preact);
+            preact.wait_front(channel_tiles_per_block);
+            silu_backward<channel_tiles_per_block>(sigmoid, dc_tile);
+            dc_tile.wait_front(channel_tiles_per_block);
+            preact.pop_front(channel_tiles_per_block);
+            if (step < own_steps) {
+                const bool first = step == 0;
+                const bool last = step + 1 == own_steps;
+                if (first && last) {
+                    accumulate_grad_tap<channel_tiles_per_block, true, true>(acc);
+                } else if (first) {
+                    accumulate_grad_tap<channel_tiles_per_block, true, false>(acc);
+                } else if (last) {
+                    accumulate_grad_tap<channel_tiles_per_block, false, true>(acc);
+                } else {
+                    accumulate_grad_tap<channel_tiles_per_block, false, false>(acc);
+                }
+            }
+            compute_kernel_lib::untilize<channel_tiles_per_block, dfb::dc_tile, dfb::dc_rm>(1);
+            activation.pop_front(tap_count * channel_tiles_per_block);
+            grad_out.pop_front(channel_tiles_per_block);
+
+            if (step > 0) {
+                grad_input_tile<channel_tiles_per_block>(dc_views, output);
+            }
+        }
+        if (!has_halo) {
+            grad_input_tile<channel_tiles_per_block>(dc_views, output);
+        }
+        weights.pop_front(tap_count * channel_tiles_per_block);
+    }
+}
