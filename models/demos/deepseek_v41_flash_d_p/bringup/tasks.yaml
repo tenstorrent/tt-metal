@@ -6349,6 +6349,13 @@ tasks:
     - attention
     - attn_residual
     layer: 20
+  frozen:
+    at: '2026-10-17T09:37:39'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_09_attn_residual.py: ab661ea743c641b90882bf20aeb536a551a5851eeccecd8045d8cb11f00efa61
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_candidate.ffn_hc
   title: dec_candidate ffn_hc (op) on device, layer 20
   step: implement
