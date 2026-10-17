@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <chrono>
 #include <exception>
+#include <numeric>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -25,6 +26,7 @@
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
+#include "tt_metal/distributed/hd_socket_descriptor.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include "tt_metal/impl/buffers/d2h_socket_internal.hpp"
 #include "tt_metal/impl/buffers/h2d_socket_internal.hpp"
@@ -259,6 +261,90 @@ void test_hd_socket_loopback(
     EXPECT_EQ(src_vec, dst_vec);
 }
 
+void test_hd_socket_owner_connector_handoff(
+    const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& socket_core) {
+    constexpr uint32_t fifo_size = 4096;
+    constexpr uint32_t page_size = 1088;
+    constexpr uint32_t warmup_pages = fifo_size / page_size;
+    constexpr uint32_t total_pages = warmup_pages + 2;
+    constexpr uint32_t barrier_timeout_ms = 5000;
+
+    H2DSocket owner_h2d(mesh_device, socket_core, BufferType::L1, fifo_size, H2DMode::HOST_PUSH);
+    D2HSocket owner_d2h(mesh_device, socket_core, fifo_size);
+    owner_h2d.set_page_size(page_size);
+    owner_d2h.set_page_size(page_size);
+    const auto h2d_descriptor = owner_h2d.populate_descriptor();
+    const auto d2h_descriptor = owner_d2h.populate_descriptor();
+
+    auto program = CreateProgram();
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_loopback.cpp",
+        socket_core.core_coord,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {
+                owner_h2d.get_config_buffer_address(),
+                owner_d2h.get_config_buffer_address(),
+                page_size,
+                total_pages * page_size,
+                1,  // One finite iteration containing all five pages.
+                0,  // HOST_PUSH.
+                0,  // DEVICE_PULL scratch address is unused.
+            }});
+    auto workload = MeshWorkload();
+    workload.add_program(MeshCoordinateRange(socket_core.device_coord), std::move(program));
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    auto retry_until_deadline = [deadline](auto&& operation, const char* direction, uint32_t page_index) {
+        while (!operation()) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                throw std::runtime_error(
+                    std::string("Timed out during owner/connector handoff ") + direction + " on page " +
+                    std::to_string(page_index + 1));
+            }
+            std::this_thread::yield();
+        }
+    };
+    auto round_trip = [&](H2DSocket& input, D2HSocket& output, uint32_t page_index) {
+        std::vector<uint32_t> expected(page_size / sizeof(uint32_t));
+        std::vector<uint32_t> actual(expected.size());
+        std::iota(expected.begin(), expected.end(), (page_index + 1) * 0x10000u);
+        retry_until_deadline(
+            [&]() { return experimental::detail::try_write(input, expected.data(), 1); }, "write", page_index);
+        retry_until_deadline(
+            [&]() { return experimental::detail::try_read(output, actual.data(), 1); }, "read", page_index);
+        // Keep draining the finite program after a mismatch so its final D2H barrier can finish.
+        EXPECT_EQ(expected, actual) << "page " << page_index + 1;
+    };
+
+    // Fill each slot with known data and cross the ring's 832-byte padding gap.
+    for (uint32_t page = 0; page < warmup_pages; ++page) {
+        round_trip(owner_h2d, owner_d2h, page);
+    }
+    EXPECT_EQ(owner_h2d.get_bytes_sent(), fifo_size);
+
+    {
+        // Independent connector handles reproduce the separate local cursors without a subprocess.
+        auto connector_h2d = H2DSocket::connect_from_descriptor(h2d_descriptor);
+        auto connector_d2h = D2HSocket::connect_from_descriptor(d2h_descriptor);
+        round_trip(*connector_h2d, *connector_d2h, warmup_pages);
+        connector_h2d->barrier(barrier_timeout_ms);
+        connector_d2h->barrier(barrier_timeout_ms);
+    }
+
+    // The connector is quiescent; the original handles must resume from its shared state.
+    owner_h2d.barrier(barrier_timeout_ms);
+    owner_d2h.barrier(barrier_timeout_ms);
+    EXPECT_EQ(owner_h2d.get_bytes_sent(), fifo_size + page_size);
+    round_trip(owner_h2d, owner_d2h, warmup_pages + 1);
+    owner_h2d.barrier(barrier_timeout_ms);
+    owner_d2h.barrier(barrier_timeout_ms);
+    EXPECT_EQ(owner_h2d.get_bytes_sent(), fifo_size + 2 * page_size);
+}
+
 void test_hd_socket_multithreaded_loopback(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     std::size_t socket_fifo_size,
@@ -485,6 +571,20 @@ TEST_F(HDSocketFixture, H2DSocketLoopback) {
                 mesh_device_, 16512, 1088, 156672, h2d_mode, 50, MeshCoreCoord(socket_coord, CoreCoord(0, 1)));
         }
     }
+}
+
+TEST_F(HDSocketFixture, H2DSocketOwnerConnectorHandoff) {
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+
+    for (const auto& socket_coord : MeshCoordinateRange(mesh_device_->shape())) {
+        if (is_device_coord_mmio_mapped(mesh_device_, socket_coord)) {
+            test_hd_socket_owner_connector_handoff(mesh_device_, MeshCoreCoord(socket_coord, CoreCoord(0, 0)));
+            return;
+        }
+    }
+    GTEST_SKIP() << "No MMIO-mapped device in the fixture mesh";
 }
 
 TEST_F(HDSocketFixture, H2DSocketLoopbackMultiThreadedStress) {
