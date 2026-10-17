@@ -21,8 +21,10 @@ void kernel_main() {
     constexpr std::uint32_t out_faces_r = get_compile_time_arg_val(5);
     constexpr std::uint32_t out_faces_c = get_compile_time_arg_val(6);
 
-    using InOp = experimental::LLKOperand<in_format, TensorShape{face_r_dim, 16, faces_r, faces_c}>;
-    using OutOp = experimental::LLKOperand<in_format, TensorShape{face_r_dim, 16, out_faces_r, out_faces_c}>;
+    using InOp =
+        experimental::LLKOperand<in_format, TensorShape{face_r_dim, ckernel::MAX_FACE_C_DIM, faces_r, faces_c}>;
+    using OutOp =
+        experimental::LLKOperand<in_format, TensorShape{face_r_dim, ckernel::MAX_FACE_C_DIM, out_faces_r, out_faces_c}>;
 
     // Never dereferenced: the program is only compiled.
     constexpr std::uint32_t l1_address = 0;

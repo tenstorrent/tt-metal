@@ -213,22 +213,19 @@ constexpr bool is_supported_tilize_operands(DataFormat in_format, TensorShape in
  *     would have half its faces unread);
  *   - in1 must be 32x32, 32x16 or 16x32 with full-height (16-row) faces: a 16x32 in1 is likewise unpacked as two
  *     faces, which the math program takes as two 16-row faces.
- * Matches the support matrix the LLK's own test validator enforces (tt-llk tests/python_tests/fuser/validator.py,
- * MATMUL_INNER_TILE_DIMS + SUPPORTED_TILE_SIZES, which only lists 16-row-face in1 tiles). The LLK's own guards are
- * runtime LLK_ASSERTs that production builds compile out: the 16x16-by-16x16 pair, transpose with a 32x16 in1 (its
- * address pattern has no transpose form; `transpose` is a runtime argument, so that one stays a runtime check), and
- * the throttled program's 32x32-by-32x32-only rule (compile-time in llk_math_matmul_init, where the throttle level
- * and fidelity are template arguments).
+ * This is the LLK's own matmul TensorShape validator, ckernel::validate_matmul_tensor_shapes_ (tt-llk
+ * common/tensor_shape.h; SrcB = in0 is its first argument, SrcA = in1 its second), minus the one pair it lists
+ * that Blackhole has no program for: 16x16 by 16x16, which the Blackhole LLK rejects only with a runtime
+ * LLK_ASSERT. Over every legal tile shape pair that is the only pair on which the two differ (the id-free matmul
+ * compile-limits test kernel enumerates them). The LLK's own guards are runtime LLK_ASSERTs that production
+ * builds compile out:
+ * that pair, transpose with a 32x16 in1 (its address pattern has no transpose form; `transpose` is a runtime
+ * argument, so that one stays a runtime check), and the throttled program's 32x32-by-32x32-only rule
+ * (compile-time in llk_math_matmul_init, where the throttle level and fidelity are template arguments).
  */
 constexpr bool is_supported_matmul_operand_pair(TensorShape in0, TensorShape in1) {
-    const bool inner_dim_match = in0.total_col_dim() == in1.total_row_dim();
-    const bool in0_ok = (in0.total_col_dim() == TILE_C_DIM) || (in0.total_row_dim() == TILE_R_DIM);
-    const bool in0_face_grid_ok = in0.face_r_dim == FACE_R_DIM || in0.num_faces_r_dim == ONE_FACE_ROW;
-    const bool in1_face_grid_ok = in1.face_r_dim == FACE_R_DIM;
-    const bool in1_full_height =
-        in1.total_row_dim() == TILE_R_DIM && (in1.total_col_dim() == TILE_C_DIM || in1.total_col_dim() == FACE_C_DIM);
-    const bool in1_half_height = in1.total_row_dim() == FACE_R_DIM && in1.total_col_dim() == TILE_C_DIM;
-    return inner_dim_match && in0_ok && in0_face_grid_ok && in1_face_grid_ok && (in1_full_height || in1_half_height);
+    const bool both_single_face = in0.total_num_faces() == ONE_FACE && in1.total_num_faces() == ONE_FACE;
+    return validate_matmul_tensor_shapes_(in0, in1) && !both_single_face;
 }
 
 }  // namespace experimental

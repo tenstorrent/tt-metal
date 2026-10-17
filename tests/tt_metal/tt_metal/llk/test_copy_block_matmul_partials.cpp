@@ -576,9 +576,9 @@ void run_pack_block_dest_overrun(distributed::MeshDevice& mesh, bool id_free) {
     const std::string path = id_free ? "experimental::pack_block" : "pack_tile";
     auto src = create_random_vector_of_bfloat16(
         tt::tile_size(tt::DataFormat::Float16_b) * kFp32HalfSyncDestTiles,
-        /*rand_max_float=*/20,
-        /*seed=*/42,
-        /*offset=*/-10.0f);
+        20 /*rand_max_float*/,
+        42 /*seed*/,
+        -10.0f /*offset*/);
     std::vector<std::uint32_t> golden;
     for (const auto& value : unpack_uint32_vec_into_bfloat16_vec(src)) {
         golden.push_back(std::bit_cast<std::uint32_t>(static_cast<float>(value)));

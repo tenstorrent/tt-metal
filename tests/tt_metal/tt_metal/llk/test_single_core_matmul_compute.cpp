@@ -1447,12 +1447,15 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulBlockIdFreeGolden) {
 // in0 not 16x16 (any 1..32-row height with 32 columns, or 32x16), in1 one of 32x32 / 32x16 / 16x32. The
 // programs are selected from the operands' total dimensions and assume the face grid behind them: an operand
 // shorter than 32 rows is unpacked two faces per tile and the math takes a 16-row operand as two 16-row faces, so
-// an in0 with short faces must be a single face row and in1 faces must be 16 rows high. The LLK's only guard is a
-// runtime LLK_ASSERT on the 16x16-by-16x16 pair that production builds compile out; every other unsupported pair
-// (a single-face operand next to a multi-face one, a mismatched inner dimension, four short faces whose total
-// matches a two-face tile) silently runs a program over faces the operand does not have, or leaves faces unread.
-// The API must reject all of them at compile time, in both the single-tile and the block init, and keep
-// accepting every supported pair.
+// an in0 with short faces must be a single face row and in1 faces must be 16 rows high. On the unthrottled pairs
+// the LLK's only guard is a runtime LLK_ASSERT on the 16x16-by-16x16 pair that production builds compile out
+// (its other two runtime asserts are transpose with a 32x16 in1, a runtime argument, and the throttled program's
+// 32x32-only rule, which the throttle rows below exercise); every other unsupported pair (a single-face operand
+// next to a multi-face one, a mismatched inner dimension, four short faces whose total matches a two-face tile)
+// silently runs a program over faces the operand does not have, or leaves faces unread. The API must reject all
+// of them at compile time, in both the single-tile and the block init and again in the execute (matmul_tiles /
+// matmul_block deduce their own operands and configure the unpacker from them, so an execute with a pair the
+// init was not given must not compile either), and keep accepting every supported pair.
 TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulIdFreeCompileLimits) {
     struct Case {
         std::uint32_t in0_faces_r, in0_faces_c, in1_faces_r, in1_faces_c;
@@ -1499,48 +1502,59 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulIdFreeCompileLimits) {
     const CoreCoord core{0, 0};
     for (const auto& test : cases) {
         for (const bool block : {false, true}) {
-            SCOPED_TRACE(
-                ::testing::Message() << "in0_faces=" << test.in0_faces_r << "x" << test.in0_faces_c
-                                     << ", in0_face_r_dim=" << test.in0_face_r_dim << ", in1_faces=" << test.in1_faces_r
-                                     << "x" << test.in1_faces_c << ", in1_face_r_dim=" << test.in1_face_r_dim
-                                     << ", mm_throttle=" << test.mm_throttle
-                                     << ", fidelity=" << static_cast<int>(test.fidelity) << ", block=" << block);
-            std::map<std::string, std::string> defines;
-            if (test.mm_throttle != 0) {
-                defines.emplace("MM_THROTTLE", std::to_string(test.mm_throttle));
-            }
-            Program program = CreateProgram();
-            CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/compute/matmul_idfree_compile_limits.cpp",
-                core,
-                ComputeConfig{
-                    .math_fidelity = test.fidelity,
-                    .fp32_dest_acc_en = false,
-                    .compile_args =
-                        {test.in0_faces_r,
-                         test.in0_faces_c,
-                         test.in1_faces_r,
-                         test.in1_faces_c,
-                         static_cast<std::uint32_t>(block),
-                         test.in0_face_r_dim,
-                         test.in1_face_r_dim},
-                    .defines = defines});
-            if (test.accepted) {
-                EXPECT_NO_THROW(program.impl().compile(&this->device()));
-                continue;
-            }
-            // The build failure carries the compiler log; the rejection must come from the API's static_assert,
-            // not from some unrelated build error. The throttled rows use supported pairs, so their rejection is
-            // the math init's throttle assert.
-            const std::string expected_assert = test.mm_throttle != 0 ? "llk_math_matmul_init: MM_THROTTLE"
-                                                : block               ? "matmul_block_init: unsupported operand pair"
-                                                                      : "matmul_init: unsupported operand pair";
-            try {
-                program.impl().compile(&this->device());
-                ADD_FAILURE() << "unsupported operand pair compiled";
-            } catch (const std::runtime_error& e) {
-                EXPECT_NE(std::string(e.what()).find(expected_assert), std::string::npos) << e.what();
+            // execute_only: the kernel inits with the 32x32 by 32x32 pair and hands the pair under test to the
+            // execute alone, so the execute's own assert is what rejects it. The throttle rule lives in the math
+            // init, and the 32x32 pair satisfies it at every level, so the throttled rows probe the init only.
+            for (const bool execute_only : {false, true}) {
+                if (execute_only && test.mm_throttle != 0) {
+                    continue;
+                }
+                SCOPED_TRACE(
+                    ::testing::Message() << "in0_faces=" << test.in0_faces_r << "x" << test.in0_faces_c
+                                         << ", in0_face_r_dim=" << test.in0_face_r_dim
+                                         << ", in1_faces=" << test.in1_faces_r << "x" << test.in1_faces_c
+                                         << ", in1_face_r_dim=" << test.in1_face_r_dim << ", mm_throttle="
+                                         << test.mm_throttle << ", fidelity=" << static_cast<int>(test.fidelity)
+                                         << ", block=" << block << ", execute_only=" << execute_only);
+                std::map<std::string, std::string> defines;
+                if (test.mm_throttle != 0) {
+                    defines.emplace("MM_THROTTLE", std::to_string(test.mm_throttle));
+                }
+                Program program = CreateProgram();
+                CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/compute/matmul_idfree_compile_limits.cpp",
+                    core,
+                    ComputeConfig{
+                        .math_fidelity = test.fidelity,
+                        .fp32_dest_acc_en = false,
+                        .compile_args =
+                            {test.in0_faces_r,
+                             test.in0_faces_c,
+                             test.in1_faces_r,
+                             test.in1_faces_c,
+                             static_cast<std::uint32_t>(block),
+                             test.in0_face_r_dim,
+                             test.in1_face_r_dim,
+                             static_cast<std::uint32_t>(execute_only)},
+                        .defines = defines});
+                if (test.accepted) {
+                    EXPECT_NO_THROW(program.impl().compile(&this->device()));
+                    continue;
+                }
+                // The build failure carries the compiler log; the rejection must come from the API's static_assert,
+                // not from some unrelated build error. The throttled rows use supported pairs, so their rejection is
+                // the math init's throttle assert; the execute-only rows must be rejected by the execute itself.
+                const std::string entry_point = block ? (execute_only ? "matmul_block" : "matmul_block_init")
+                                                      : (execute_only ? "matmul_tiles" : "matmul_init");
+                const std::string expected_assert = test.mm_throttle != 0 ? "llk_math_matmul_init: MM_THROTTLE"
+                                                                          : entry_point + ": unsupported operand pair";
+                try {
+                    program.impl().compile(&this->device());
+                    ADD_FAILURE() << "unsupported operand pair compiled";
+                } catch (const std::runtime_error& e) {
+                    EXPECT_NE(std::string(e.what()).find(expected_assert), std::string::npos) << e.what();
+                }
             }
         }
     }
