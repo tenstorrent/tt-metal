@@ -42,13 +42,28 @@ def contract_rung(s) -> str:
     return s.get("contract.rung") or s.data["ladder"][0]["name"]
 
 
+LAYER_IDS_ENV = "PREFILL_LAYER_IDS"
+
+
 def served_layers(s) -> tuple[int, int]:
-    """(first layer, layer count) the engine serves: the spec's layer subset, which must be one contiguous run (F41).
-    The runtime acks, and the producer reads back, only the layers the device model runs."""
+    """(first layer, layer count) the engine serves. A contiguous subset is served as itself (F41). A non-contiguous one
+    (a partial run's representative layers) is served as ``count`` engine layers 0..count-1, the model layer of each
+    listed in PREFILL_LAYER_IDS (F100): acks, the KV table and the producer's read-back use the engine index; the
+    runtime maps it with ``layer_ids_from_env`` and exposes the list as ``layer_ids``."""
     sel = s.layers()
-    if sel != list(range(sel[0], sel[0] + len(sel))):
-        raise ValueError(f"the serving contract needs a contiguous layer subset, got {sel}")
-    return sel[0], len(sel)
+    if sel == list(range(sel[0], sel[0] + len(sel))):
+        return sel[0], len(sel)
+    return 0, len(sel)
+
+
+def layer_ids_from_env(first_layer_idx: int, num_layers: int) -> list[int]:
+    """The model layers an adapter serves: PREFILL_LAYER_IDS when the engine env sets it (F100), else the range."""
+    ids = os.environ.get(LAYER_IDS_ENV)
+    if ids:
+        out = [int(x) for x in ids.split(",")]
+        assert len(out) == num_layers, f"{LAYER_IDS_ENV}={ids} lists {len(out)} layers, the engine serves {num_layers}"
+        return out
+    return list(range(first_layer_idx, first_layer_idx + num_layers))
 
 
 def engine_env(s) -> dict:
@@ -60,6 +75,7 @@ def engine_env(s) -> dict:
         "PREFILL_CHUNK_SIZE": str(rung["chunk"]),
         "PREFILL_MAX_SEQ_LEN": str(rung["seq"]),
         "PREFILL_NUM_LAYERS": str(served_layers(s)[1]),
+        LAYER_IDS_ENV: ",".join(str(i) for i in s.layers()),
         "PREFILL_NUM_USERS": str(s.get("contract.num_users")),
     }
     os.environ.update(env)
@@ -133,6 +149,15 @@ def run_contract_test(s, mesh) -> list[str]:
     )
     kv = adapter.allocate_kv_cache(mesh_device=mesh, hf_config=hf, params=params)
     rt = adapter.build_runtime(mesh_device=mesh, hf_config=hf, params=params)
+    sel = s.layers()
+    if first == 0 and sel != list(range(len(sel))):  # F100: a non-contiguous subset served by engine index
+        served = getattr(rt, "layer_ids", None)
+        if served is None or list(served) != sel:
+            failed.append(
+                f"non-contiguous layer subset {sel}: the runtime must serve the model layers {LAYER_IDS_ENV} lists and "
+                f"expose them as rt.layer_ids (got {served}; models/demos/common/bringup/testing/contract.py:"
+                "layer_ids_from_env)"
+            )
 
     with tempfile.TemporaryDirectory() as td:
         table_path = rt.build_kv_chunk_table(kv, os.path.join(td, "kv_table.pb"))

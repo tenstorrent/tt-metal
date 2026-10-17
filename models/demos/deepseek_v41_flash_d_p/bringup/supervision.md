@@ -224,3 +224,7 @@ Every intervention by the supervising session: time, task, trigger, classificati
 ## 2026-10-17 19:05 L.s55296 FAIL: index-state overlap 0.897 < 0.9 (my F99 default)
 - Layers 0.9966, float states 0.9958, host transfers 0. Class: framework (a threshold I set without data). Set to 0.75
   (structural); fix agent attempt 1 stopped; resumed.
+
+## 2026-10-17 19:25 K.1: "the serving contract needs a contiguous layer subset"
+- Class: framework (F100). Contract agent attempt 1 stopped (it cannot change the framework). Fixed; resumed with an
+  overseer note on PREFILL_LAYER_IDS.
