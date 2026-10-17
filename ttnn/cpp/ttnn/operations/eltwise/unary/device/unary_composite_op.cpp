@@ -37,10 +37,26 @@ Tensor _variance_impl(
     const std::optional<MemoryConfig>& output_mem_config) {
     ttsl::SmallVector<int> dims = {2, 3};
     constexpr float correction = 0.0f;
-    auto shape_wh = y.padded_shape();
-    float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
+    const auto& logical_shape = y.logical_shape();
+    const auto rank = logical_shape.rank();
+    TT_FATAL(rank >= 2, "var_hw requires tensor with rank >= 2, got rank {}", rank);
+    const uint32_t h = logical_shape[rank - 2];
+    const uint32_t w = logical_shape[rank - 1];
+    const uint64_t logical_elements = static_cast<uint64_t>(h) * w;
+    const float divisor = static_cast<float>(logical_elements) - correction;
+    const float scale = (divisor > 0.0f) ? (1.0f / divisor) : 0.0f;
+
     Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_mem_config);
-    return ttnn::sum(sqr_y_minus_mean_y, dims, true, std::nullopt, std::nullopt, scale);
+
+    // If tensor has implicit tile padding, zero out the padded region so that (-mu)^2
+    // padding elements do not leak into the reduction sum.
+    if (sqr_y_minus_mean_y.layout() == Layout::TILE) {
+        const auto& padded_shape = sqr_y_minus_mean_y.padded_shape();
+        if (h != padded_shape[rank - 2] || w != padded_shape[rank - 1]) {
+            sqr_y_minus_mean_y = ttnn::fill_implicit_tile_padding(sqr_y_minus_mean_y, 0.0f);
+        }
+    }
+    return ttnn::sum(sqr_y_minus_mean_y, dims, true, output_mem_config, std::nullopt, scale);
 }
 Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
