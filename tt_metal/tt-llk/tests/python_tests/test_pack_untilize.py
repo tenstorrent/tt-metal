@@ -315,3 +315,27 @@ def test_pack_untilize_single_face_tile(
         input_dimensions,
         tile_dimensions=[16, 16],
     )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    # [16, 16] is the one-tile path; [16, 128] with a 32-bit Dest splits the tile-row into two blocks.
+    input_dimensions=[[16, 16], [16, 128]],
+    row_num_datums=[4, 8],
+)
+def test_pack_untilize_narrow_row_single_face_tile(
+    formats,
+    dest_acc,
+    input_dimensions,
+    row_num_datums,
+):
+    """Narrow rows of single-face 16x16 tiles: one packer walks all 16 rows of each tile."""
+    _run_pack_untilize(
+        formats,
+        dest_acc,
+        input_dimensions,
+        tile_dimensions=[16, 16],
+        narrow_row=True,
+        row_num_datums=row_num_datums,
+    )
