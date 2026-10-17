@@ -9,8 +9,8 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/circular_buffer.h"
 
-// Tilize with a packer data-format reconfig between tilize_init and tilize_block, the order the
-// pack_reconfig_data_format documentation recommends ("right after other op-specific initialization").
+// Tilize with a packer data-format reconfig between tilize_init and tilize_block, an order the
+// pack_reconfig_data_format contract supports (the reconfig keeps the two-face Z layout tilize_init armed).
 // The packer is first set up for a scratch output CB of a different format (c_17, never written), then
 // reconfigured for the real output (c_16) and the block is tilized into c_16. The tilize pack MOP armed by
 // tilize_init needs the two-face Z stride; a reconfig that resets the strides to Default mode leaves the

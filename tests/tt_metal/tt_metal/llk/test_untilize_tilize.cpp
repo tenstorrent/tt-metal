@@ -1028,8 +1028,8 @@ std::vector<std::uint32_t> gold_narrow_row_untilize_face0(
 
 }  // namespace
 
-// Blackhole: tilize with pack_reconfig_data_format between tilize_init and tilize_block, the order the reconfig
-// API documents ("right after other op-specific initialization"). tilize_init arms the packer for a scratch
+// Blackhole: tilize with pack_reconfig_data_format between tilize_init and tilize_block, which the reconfig API
+// supports (the reconfig keeps the two-face Z layout tilize_init armed). tilize_init arms the packer for a scratch
 // output CB of a different format (c_17, never written), the reconfig switches it to the real bf16 output, and the
 // block is tilized into it. The Blackhole tilize pack MOP steps the dest Z counter by two faces per increment, so
 // a reconfig that reprograms the strides in Default mode (one face) makes the second half of every output tile
