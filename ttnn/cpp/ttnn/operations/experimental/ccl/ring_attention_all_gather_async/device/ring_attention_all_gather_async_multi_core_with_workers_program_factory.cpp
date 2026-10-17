@@ -147,7 +147,14 @@ constexpr uint32_t kWidthDimension = 3;
 
 // Independent performance tunables. Keep these named rather than deriving one from another: the reader prefetch
 // window and writer header pool protect different pipelines.
-constexpr uint32_t kPrefetchPackets = 4;
+constexpr uint32_t kPrefetchPackets = 4;  // neighbor halo exchange
+// The all-gather reader is DRAM-latency bound: it needs ~128 KiB of reads in flight per worker to keep a link busy
+// (4 packets of the stock 4352 B payload left the fused ring SDPA gather 0.3 ms short). Sized in bytes so a larger
+// fabric payload does not grow the CB past the 4-packet floor, and bounded so a tiny payload still batches enough
+// reads. At the stock payload the reader CB is ~2 x 128 KiB per worker core.
+constexpr uint32_t kGatherPrefetchBytesInFlight = 128 * 1024;
+constexpr uint32_t kMinGatherPrefetchPackets = 4;
+constexpr uint32_t kMaxGatherPrefetchPackets = 32;
 // The halo writer scatters up to the fabric's scatter-write chunk limit (NOC_SCATTER_WRITE_MAX_CHUNKS).
 constexpr uint32_t kMaxHaloPagesPerPacket = 4;
 constexpr uint32_t kPacketHeaderSlots = 8;
@@ -831,7 +838,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         output_bank_owned_schedule ? max_pages_per_packet : std::min(max_pages_per_packet, kMaxScatterPagesPerPacket);
     // Must be >= kDoubleBufferingFactor * prefetch_packets * num_pages_per_packet for deadlock-free buffering
     // (see PREFETCH_PACKETS in ring_attention_all_gather_reader.cpp).
-    const uint32_t cb_num_pages = kDoubleBufferingFactor * kPrefetchPackets * num_pages_per_packet;
+    const uint32_t gather_prefetch_packets = std::clamp(
+        kGatherPrefetchBytesInFlight / (num_pages_per_packet * l1_scratch_cb_page_size_bytes),
+        kMinGatherPrefetchPackets,
+        kMaxGatherPrefetchPackets);
+    const uint32_t cb_num_pages = kDoubleBufferingFactor * gather_prefetch_packets * num_pages_per_packet;
     const tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor[0].dtype());
 
     // CBs for transferring data between sender_reader and sender_writer
@@ -948,7 +959,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(partial_readiness_enabled),   // kPartialReadinessEnabled
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
-            kPrefetchPackets,                                   // kPrefetchPackets
+            gather_prefetch_packets,                            // kPrefetchPackets
             // Appended last so main's arg order is untouched; the reader reads it as kHasSlotMetadata
             // and kReaderFixedCompileTimeArgCount (asserted just below) counts it.
             static_cast<uint32_t>(has_slot_metadata),  // kHasSlotMetadata
