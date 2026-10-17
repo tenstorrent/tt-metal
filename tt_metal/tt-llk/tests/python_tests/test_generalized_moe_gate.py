@@ -410,6 +410,49 @@ def test_generalized_moe_gate(topk, softmax, approx):
     _assert_gate_output(faces, golden, topk, **_weight_tolerance(approx))
 
 
+# The >256-expert path uploads GLOBAL ids (block b carries b*256 + i), and finalize_ungrouped's topk-6
+# rank mask rewrites the rank 4-7 id row in place to zero ranks 6 and 7. Every id in the 0..255 face
+# except 0 has a nonzero low byte, so that mask never meets the id it has to carry through raw: one
+# whose low byte is zero -- 256, 512, ... A float round trip reads a DEST word's low byte as a bf16
+# exponent and stores an exponent of zero as zero, which routes the token to expert 0 with expert
+# 256's weight. topk=8 has no mask and topk=4 drops the whole half, so only topk=6 reaches it;
+# expert 256 is placed at each of the two kept ranks the mask rewrites.
+@parametrize(rank=[4, 5])
+def test_generalized_moe_gate_topk_mask_keeps_block_ids(rank):
+    rank = _one(rank)
+    topk = 6  # the only topk whose rank mask rewrites the kept ranks 4 and 5
+    block_id_base = 256  # block 1's expert-id base: the >256 path uploads b*256 + i
+    payload, _, keys = _gate_stimuli(seed=41)
+    # Block 1's ids: flat position i is expert block_id_base + i, so position 0 is expert 256.
+    ids = _ids_face() + block_id_base
+
+    # Put expert 256's key at `rank` by swapping it with the key that sits there, and rebuild the
+    # bias so the FPU's payload+bias still lands exactly on the intended key (see _gate_stimuli).
+    flat = keys.reshape(-1).to(torch.float32)
+    holder = int(flat.argsort(descending=True)[rank])
+    flat[[0, holder]] = flat[[holder, 0]]
+    keys = flat.reshape(16, 16).to(torch.bfloat16)
+    bias = (keys.to(torch.float32) - payload.to(torch.float32)).to(torch.bfloat16)
+
+    faces = _run(
+        _config(
+            GENERALIZED_MOE_GATE(
+                mode=MODE_GATE, topk=topk, eps=_bits(EPS), scale=_bits(SCALE)
+            ),
+            _gate_tiles(payload, ids),
+            src_b=bias,
+        )
+    )
+
+    golden = get_golden_generator(GeneralizedMoeGateGolden)(
+        keys, payload, ids, topk=topk, eps=EPS, scale=SCALE
+    )
+    assert (
+        int(golden[1][rank]) == block_id_base
+    ), "stimulus does not place expert 256 at the rank under test"
+    _assert_gate_output(faces, golden, topk, **_weight_tolerance(ApproximationMode.No))
+
+
 def _sigmoid_stimuli(seed, grouped):
     """A payload/bias pair for the sigmoid front-end, with eight winners the bias alone decides.
 
@@ -1284,38 +1327,51 @@ def _stored_run(faces, store_lo, store_hi):
 def test_generalized_moe_gate_merge4_top8():
     keys, ids, scores = _merge4_stimuli(seed=57)
     shifted = [torch.roll(t, shifts=8, dims=0) for t in (keys, ids, scores)]
+    store_lo, store_hi = 8, 10  # the run's home for the checks below
+    other_lo, other_hi = 12, 14  # a second store pair, to show the pair is honest
 
     at_zero, at_eight, stored_elsewhere = _run(
-        _merge4_config(0, (8, 10), keys, ids, scores),
-        _merge4_config(8, (8, 10), *shifted),
-        _merge4_config(0, (12, 14), keys, ids, scores),
+        _merge4_config(0, (store_lo, store_hi), keys, ids, scores),
+        _merge4_config(8, (store_lo, store_hi), *shifted),
+        _merge4_config(0, (other_lo, other_hi), keys, ids, scores),
     )
 
-    run = _stored_run(at_zero, 8, 10)
+    run = _stored_run(at_zero, store_lo, store_hi)
     # read_base names the first of the four offsets it reads, so base 8 reads {8,10,12,14}: rows
     # 8-15 rather than rows 0-7, which is the eight-row roll the shifted stimulus applies.
     assert run == _stored_run(
-        at_eight, 8, 10
+        at_eight, store_lo, store_hi
     ), "read_base did not move the read window by the eight rows it names"
     assert run == _stored_run(
-        stored_elsewhere, 12, 14
+        stored_elsewhere, other_lo, other_hi
     ), "the store pair did not move the run"
 
-    # A merge may drop a candidate but never invent one, and a score has to come back still
-    # attached to the id it arrived with. The concat is where that can break: erratum TEN-2932
-    # corrupts SFPU results written to LREG4-7 while index tracking is enabled, and the concat
-    # lives there.
+    # A merge may drop a candidate but never invent one, and every key it keeps has to come back
+    # with the id and score that arrived with it. The idx|score concat rides in LREG4-7 and follows
+    # the key swaps only while SFPU index tracking is on; a merge that never turned it on (the
+    # harness's topk_init clears it) stores its keys merged over a concat still in load order, so
+    # every stored pair is from the window and on the wrong key. Keys are distinct, so each stored
+    # key names exactly one companion pair.
     #
     # Only rows 0-7 are in read_base 0's window, so restricting the source to those makes this a
     # claim about the window too: a candidate from outside it is as invented as one from nowhere.
-    source = {int(ids[r, c]): float(scores[r, c]) for r in range(8) for c in range(16)}
-    for stored_id, stored_score in run:
-        assert (
-            stored_id in source
-        ), f"the run holds id {stored_id}, which was not in the read window"
-        assert (
-            stored_score == source[stored_id]
-        ), f"id {stored_id} came back carrying {stored_score}, not {source[stored_id]}"
+    companion = {
+        float(keys[r, c]): (int(ids[r, c]), float(scores[r, c]))
+        for r in range(8)
+        for c in range(16)
+    }
+    got_keys = _from_dst(at_zero[KEYS])
+    got_scores = _from_dst(at_zero[SCORES])
+    for instance in range(8):
+        for r, c in _run_slots(store_lo, store_hi, instance):
+            stored_key = float(got_keys[r, c])
+            assert (
+                stored_key in companion
+            ), f"instance {instance} stored key {stored_key}, which was not in the read window"
+            stored = (int(at_zero[IDS][r, c]), float(got_scores[r, c]))
+            assert (
+                stored == companion[stored_key]
+            ), f"instance {instance} key {stored_key} came back with {stored}, not {companion[stored_key]}"
 
 
 @parametrize(
