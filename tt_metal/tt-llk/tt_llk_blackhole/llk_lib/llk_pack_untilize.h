@@ -213,8 +213,9 @@ inline void _llk_pack_untilize_init_(
     {
         // A narrow row is at most one face wide: the per-row PACR reads row_num_datums consecutive datums of one
         // face, so a wider row reads past the face and is packed wrong (measured: 24 and 28 bf16 datums). The
-        // 16-byte row-width check below is necessary but not sufficient on its own.
-        static_assert(row_num_datums <= FACE_C_DIM, "row_num_datums must be at most FACE_C_DIM for narrow_row packing");
+        // 16-byte row-width check below is necessary but not sufficient on its own. Zero datums would wrap the
+        // SETADCXX X-end (row_num_datums - 1) below and pass that check (0 bytes), so the lower bound is explicit.
+        static_assert(row_num_datums >= 1 && row_num_datums <= FACE_C_DIM, "row_num_datums must be between 1 and FACE_C_DIM for narrow_row packing");
         // The wrapper's block column offset (llk_pack_untilize_impl) is
         // block_ct_dim * (num_faces > 2 ? num_faces / 2 : num_faces) * FACE_C_DIM datums, which equals the narrow
         // block width block_ct_dim * row_num_datums only for a one-face tile packed at a full face width (num_faces

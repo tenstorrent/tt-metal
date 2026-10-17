@@ -41,6 +41,6 @@ tt::tt_metal::ShardSpec generate_transpose_shard_spec(
 // the same path): H above one tile, an output row wider than one face or not a multiple of the L1 alignment in
 // bytes, and W % TILE_WIDTH != 0 (the last tile column's surplus rows are written past the output buffer). Call
 // once that factory is selected and H % TILE_HEIGHT != 0; throws (TT_FATAL) with the shape and the remedy.
-void validate_sharded_rm_transpose_narrow_row_height(const Tensor& input_tensor);
+void validate_sharded_rm_transpose_narrow_row(const Tensor& input_tensor);
 
 }  // namespace ttnn::operations::data_movement::transpose

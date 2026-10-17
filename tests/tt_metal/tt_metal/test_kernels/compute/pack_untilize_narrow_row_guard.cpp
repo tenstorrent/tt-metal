@@ -7,9 +7,10 @@
 #include "api/compute/pack_untilize.h"
 
 // Runs only the narrow-row pack_untilize init for row_num_datums datums per output row across full_ct_dim
-// tile columns in blocks of block_ct_dim tiles, and exits: the row-byte-width assert in that init is what the
-// guard test observes through the watcher, and the compile-contract test compiles it for the widths and block
-// splits the init's static_asserts must accept or reject. Nothing here waits on another thread, so a tripped assert
+// tile columns in blocks of block_ct_dim tiles, and exits: the narrow-row init's LLK_ASSERTs (row byte width and
+// block geometry on Blackhole, face geometry on Wormhole) are what the assert-fixture tests observe through the
+// watcher, and the compile-contract test compiles it for the widths and block splits the init's static_asserts
+// must accept or reject. Nothing here waits on another thread, so a tripped assert
 // parks only the pack thread and the core can be re-initialized afterwards; a product kernel whose pack init asserts
 // leaves the unpack and math threads in a tile-register wait, which blocks the core's re-initialization.
 void kernel_main() {

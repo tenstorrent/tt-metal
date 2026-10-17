@@ -168,8 +168,8 @@ ALWI void pack_untilize_block(
  * | Template   | is_fp32_dest_acc_en | Whether DEST is in fp32 accumulation mode   | bool       |                           | False                 |
  * | Function   | out           | Output operand (row-major destination; format+geometry) | LLKOperand |                     | True                  |
  *
- * NOTE: narrow_row limits. Checked at compile time (static_assert in the LLK init): row_num_datums is at most
- * FACE_C_DIM, and several blocks (block_ct_dim < full_ct_dim) require row_num_datums == FACE_C_DIM. Checked only
+ * NOTE: narrow_row limits. Checked at compile time (static_assert in the LLK init): row_num_datums is between 1
+ * and FACE_C_DIM, and several blocks (block_ct_dim < full_ct_dim) require row_num_datums == FACE_C_DIM. Checked only
  * with LLK asserts enabled (LLK_ASSERT, compiled out otherwise): full_ct_dim * row_num_datums must span a multiple
  * of 16 bytes in the output format (Blackhole advances the L1 row address in 16-byte units), and several blocks
  * also require num_faces == 1.

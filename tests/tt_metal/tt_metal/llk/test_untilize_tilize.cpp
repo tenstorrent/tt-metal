@@ -1993,7 +1993,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeNarrowRowWidths) {
 // Compile-time contract on Wormhole and Blackhole. Width: a narrow row wider than one face does not compile, one
 // face does; 20 bf16 datums (40 bytes) would also fail Blackhole's 16-byte row-width check, 24 datums (48 bytes)
 // would pass it and is still packed wrong on both architectures because the per-row PACR reads row_num_datums
-// consecutive datums of one face. Blocks: Blackhole packs a row split over several blocks only at a full face
+// consecutive datums of one face; 0 datums would wrap the packer X-end (row_num_datums - 1) and pass the 16-byte
+// check, so it does not compile either. Blocks: Blackhole packs a row split over several blocks only at a full face
 // width (the wrapper's block column offset is in face-column widths), Wormhole packs exactly one tile per call.
 // Each rejected case is pinned to its guard: the JIT build failure carries the compiler log, so the static_assert
 // message of the width or the block limit must be in the exception text. Quasar's compute API rejects narrow_row
@@ -2008,17 +2009,17 @@ TEST_F(LLKMeshDeviceSingleCardFixture, PackUntilizeNarrowRowRejectsRowsWiderThan
         std::uint32_t block_ct_dim;
         std::uint32_t full_ct_dim;
     };
-    for (const auto [row_num_datums, block_ct_dim, full_ct_dim] :
-         std::initializer_list<Case>{{16, 1, 1}, {20, 1, 1}, {24, 1, 1}, {8, 1, 2}, {12, 1, 2}, {16, 1, 2}}) {
+    for (const auto [row_num_datums, block_ct_dim, full_ct_dim] : std::initializer_list<Case>{
+             {0, 1, 1}, {16, 1, 1}, {20, 1, 1}, {24, 1, 1}, {8, 1, 2}, {12, 1, 2}, {16, 1, 2}}) {
         SCOPED_TRACE(fmt::format(
             "row_num_datums={}, block_ct_dim={}, full_ct_dim={}", row_num_datums, block_ct_dim, full_ct_dim));
-        const bool one_face_wide = row_num_datums <= constants::FACE_WIDTH;
+        const bool one_face_wide = row_num_datums >= 1 && row_num_datums <= constants::FACE_WIDTH;
         const bool blocks_accepted = arch == tt::ARCH::BLACKHOLE
                                          ? (block_ct_dim == full_ct_dim || row_num_datums == constants::FACE_WIDTH)
                                          : (block_ct_dim == 1 && full_ct_dim == 1);
         // The width limit is checked first in both inits, so a wide row names it even when the blocks are wrong too.
         const std::string expected_guard =
-            !one_face_wide ? "row_num_datums must be at most FACE_C_DIM for narrow_row packing"
+            !one_face_wide ? "row_num_datums must be between 1 and FACE_C_DIM for narrow_row packing"
             : arch == tt::ARCH::BLACKHOLE
                 ? "narrow_row packing with several blocks requires row_num_datums == FACE_C_DIM"
                 : "narrow_row packing requires block_ct_dim == full_ct_dim == 1";
@@ -2128,6 +2129,8 @@ const std::string kSixteenByteRowConsequence =
 const Tile kOneFaceTile = Tile::from_face_grid(1, 1, {constants::FACE_HEIGHT, constants::FACE_WIDTH});
 const Tile kShortOneFaceTile = Tile::from_face_grid(1, 1, {constants::FACE_HEIGHT / 2, constants::FACE_WIDTH});
 const Tile kTwoFaceTile = Tile::from_face_grid(1, 2, {constants::FACE_HEIGHT, constants::FACE_WIDTH});
+// Two faces stacked: a 32x16 narrow tile, whose packer dest offsets differ from the 16x32 two-face tile's.
+const Tile kTallTwoFaceTile = Tile::from_face_grid(2, 1, {constants::FACE_HEIGHT, constants::FACE_WIDTH});
 const Tile kShortFourFaceTile = Tile::from_face_grid(2, 2, {constants::FACE_HEIGHT / 2, constants::FACE_WIDTH});
 
 }  // namespace
@@ -2179,8 +2182,9 @@ TEST_F(LLKBlackholePackUntilizeAssertFixture, PackUntilizeNarrowRowRejectsTwoFac
 }
 
 // Wormhole packs a narrow row only for one full-height four-face tile per call (see the Wormhole init's @note):
-// the default 32x32 output tile passes with a clean watcher, a two-face tile or a short four-face tile trips the
-// init's face assert.
+// the default 32x32 output tile passes with a clean watcher; a two-face tile or a short four-face tile trips the
+// init's face assert. The rejected two-face tile is the 32x16 one, which really loses rows (packer 1 starts at
+// face 1); the init rejects the 16x32 one as well because num_faces alone cannot tell them apart.
 TEST_F(LLKWormholePackUntilizeAssertFixture, PackUntilizeNarrowRowAcceptsOneFourFaceTile) {
     run_pack_untilize_narrow_row_accepts(*devices_.at(0), {.row_num_datums = 16});
 }
@@ -2188,9 +2192,9 @@ TEST_F(LLKWormholePackUntilizeAssertFixture, PackUntilizeNarrowRowAcceptsOneFour
 TEST_F(LLKWormholePackUntilizeAssertFixture, PackUntilizeNarrowRowRejectsTwoFaceTiles) {
     run_pack_untilize_narrow_row_rejects(
         *devices_.at(0),
-        {.row_num_datums = 16, .output_tile = kTwoFaceTile},
-        "each PACR of the narrow MOP packs one row per selected packer with the four packers eight rows apart, so "
-        "two faces leave half the rows unpacked");
+        {.row_num_datums = 16, .output_tile = kTallTwoFaceTile},
+        "a 32x16 two-face tile is a narrow tile whose second packer starts at face 1, so rows 8-15 of each face are "
+        "never packed");
 }
 
 TEST_F(LLKWormholePackUntilizeAssertFixture, PackUntilizeNarrowRowRejectsShortFaces) {

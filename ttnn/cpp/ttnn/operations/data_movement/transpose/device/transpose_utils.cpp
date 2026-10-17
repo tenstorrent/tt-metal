@@ -207,7 +207,7 @@ ShardSpec generate_transpose_shard_spec(
 //   well (bf16 16x40: 4851 of 5120 datums wrong; 8x48 overfills the output CB and hangs), and when the tile
 //   does not hold a whole number of H % TILE_HEIGHT-row pages the full columns advance short too (fp32 H 12,
 //   W 44: 2 pages of 576 bytes advanced per 1536 bytes packed).
-void validate_sharded_rm_transpose_narrow_row_height(const Tensor& input_tensor) {
+void validate_sharded_rm_transpose_narrow_row(const Tensor& input_tensor) {
     const uint32_t logical_h = input_tensor.logical_shape()[-2];
     const uint32_t logical_w = input_tensor.logical_shape()[-1];
     const uint32_t row_num_datums = logical_h % tt::constants::TILE_HEIGHT;
