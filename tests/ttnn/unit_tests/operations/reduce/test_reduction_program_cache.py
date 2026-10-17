@@ -26,7 +26,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, merge_gate_subset
 
 
 @pytest.fixture
@@ -304,7 +304,15 @@ def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
 # =============================================================================
 
 
-@pytest.mark.parametrize("op", [ttnn.sum, ttnn.max, ttnn.min, ttnn.mean])
+@pytest.mark.parametrize(
+    "op",
+    [
+        pytest.param(ttnn.sum, marks=pytest.mark.merge_gate),
+        ttnn.max,
+        ttnn.min,
+        pytest.param(ttnn.mean, marks=pytest.mark.merge_gate),
+    ],
+)
 @pytest.mark.parametrize("dim", [-1, -2])
 def test_reduce_cache_reuse_across_scalars(device, isolate_program_cache, op, dim):
     """Different scalar values -> 1 cache entry, and each result is correct."""
@@ -326,6 +334,7 @@ def test_reduce_cache_reuse_across_scalars(device, isolate_program_cache, op, di
     assert device.cache_entries_counter.total == 1
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("dim", [-2, -1], ids=["H", "W"])
 def test_reduce_cache_reuse_across_scalars_two_core_groups(device, isolate_program_cache, dim):
     """Uneven core split -> compute_g2 exists, and its scalar must be re-stamped on a cache hit.
@@ -355,6 +364,7 @@ def test_reduce_cache_reuse_across_scalars_two_core_groups(device, isolate_progr
     assert device.cache_entries_counter.total == 1
 
 
+@pytest.mark.merge_gate
 def test_reduce_cache_reuse_across_scalars_h_axis_split(device, isolate_program_cache):
     """H-axis split (num_h_slices > 1): both stages must survive a scalar change on a cache hit.
 
@@ -406,10 +416,19 @@ def test_reduce_cache_reuse_across_scalar_signs_hw(device, isolate_program_cache
     assert device.cache_entries_counter.total == 1
 
 
-@pytest.mark.parametrize("op", [ttnn.std, ttnn.var])
-@pytest.mark.parametrize("dim", [-1, -2, [-2, -1]], ids=["W", "H", "HW"])
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-@pytest.mark.parametrize("two_core_groups", [False, True])
+@pytest.mark.parametrize(
+    *merge_gate_subset(
+        {
+            "two_core_groups": [False, True],
+            "dtype": [torch.bfloat16, torch.float32],
+            "dim": {"W": -1, "H": -2, "HW": [-2, -1]},
+            "op": {"op=ttnn.std": ttnn.std, "op=ttnn.var": ttnn.var},
+        },
+        keep=lambda two_core_groups, dtype, dim, op: two_core_groups
+        and dtype == torch.float32
+        and ((dim == -1 and op == ttnn.var) or (dim == [-2, -1] and op == ttnn.std)),
+    )
+)
 def test_welford_cache_reuse_across_scalars(device, isolate_program_cache, op, dim, dtype, two_core_groups):
     """Welford std/var: distinct scalars share one program, per correction setting.
 

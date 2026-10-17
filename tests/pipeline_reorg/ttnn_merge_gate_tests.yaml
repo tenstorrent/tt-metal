@@ -156,15 +156,15 @@
 # not as a list of node IDs here.
 - name: "ttnn matmul fused reduction ops"
   cmd: >-
-    pytest --timeout 60 -xv -m merge_gate
+    TT_METAL_LLK_ASSERTS=1 pytest --timeout 60 -xv -m merge_gate
     tests/ttnn/unit_tests/operations/matmul
     tests/ttnn/unit_tests/operations/fused
     tests/ttnn/unit_tests/operations/reduce
   skus:
     wh_n150_civ2:
-      timeout: 10
+      timeout: 15
     bh_p150b_civ2_viommu:
-      timeout: 10
+      timeout: 15
   team: ttnn
   budget_type: merge_gate
   owner_id: U084B1CES7M # Borys Bradel
