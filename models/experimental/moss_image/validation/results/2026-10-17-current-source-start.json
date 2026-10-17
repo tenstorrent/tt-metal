@@ -1,0 +1,83 @@
+{
+  "date": "2026-10-17",
+  "upstream_native_source": "229f9d53365f7c13a33b750ef07a4ca95b8b9907",
+  "model_commit": "790e7f30",
+  "native_build": "PASS: release source build using Clang20 and Python3.10.12; own editable install",
+  "host_tests": {
+    "passed": 22,
+    "scope": "test_host.py; excludes device fixture tests"
+  },
+  "rounding_probe": {
+    "input_a": [
+      1.0,
+      1.0078125,
+      1.015625,
+      1.0234375,
+      -1.0,
+      -1.0078125,
+      -1.015625,
+      -1.0234375
+    ],
+    "input_b": [
+      0.00390625,
+      0.00390625,
+      0.00390625,
+      0.00390625,
+      -0.00390625,
+      -0.00390625,
+      -0.00390625,
+      -0.00390625
+    ],
+    "exact_sum": [
+      1.00390625,
+      1.01171875,
+      1.01953125,
+      1.02734375,
+      -1.00390625,
+      -1.01171875,
+      -1.01953125,
+      -1.02734375
+    ],
+    "torch_bf16": [
+      1.0,
+      1.015625,
+      1.015625,
+      1.03125,
+      -1.0,
+      -1.015625,
+      -1.015625,
+      -1.03125
+    ],
+    "tt_direct": [
+      1.0078125,
+      1.015625,
+      1.0234375,
+      1.03125,
+      -1.0078125,
+      -1.015625,
+      -1.0234375,
+      -1.03125
+    ],
+    "tt_fp32_then_bf16": [
+      1.0,
+      1.015625,
+      1.015625,
+      1.03125,
+      -1.0,
+      -1.015625,
+      -1.015625,
+      -1.03125
+    ]
+  },
+  "integrated_run": {
+    "status_at_recording": "encoding_prompt",
+    "variant": "SFT",
+    "height": 1024,
+    "width": 1024,
+    "steps": 50,
+    "seed": 42,
+    "cards": 1,
+    "activation_injection": false,
+    "qualification": "pending; not an accuracy pass"
+  }
+}
