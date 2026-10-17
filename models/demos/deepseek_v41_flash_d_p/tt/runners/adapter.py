@@ -12,9 +12,9 @@ ROW_MAJOR, what the ladder runs on).
 Served layers: engine layer k = model layer ``layer_ids[k]``, from testing/contract.layer_ids_from_env
 (PREFILL_LAYER_IDS when the bring-up contract serves a non-contiguous subset, F100; else
 [first_layer_idx, first_layer_idx + num_layers)). Acks, the table and the read-back use the engine index. A subset
-with gaps (a partial bring-up's representative layers) starts every contiguous run after a gap from the golden block
-input of its first layer, as the ladder does (testing/ladder.py: "the gaps never run on the device"): a bring-up test
-feed, never active for a contiguous range (the served model).
+with gaps (a partial bring-up's representative layers) starts every run after a gap from the framework's feed
+(testing/contract.gap_feed, F102: the golden block input of the run's first layer, as the ladder does); None for a
+contiguous range (the served model).
 
 Per chunk (prefill_chunk):
   1. the engine input (uint32 ROW_MAJOR [sp, 1, chunk / sp], sharded over axis 0, replicated over axis 1, the server's
@@ -92,44 +92,6 @@ def served_layer_ids(first_layer_idx: int, num_layers: int) -> list[int]:
     return ids
 
 
-def run_starts(layer_ids: list[int]) -> list[int]:
-    """Engine indices that start a contiguous run of model layers (0, and every index after a gap)."""
-    return [k for k, i in enumerate(layer_ids) if k == 0 or i != layer_ids[k - 1] + 1]
-
-
-class GoldenGapFeed:
-    """Bring-up test feed for a non-contiguous layer subset: the golden block input [chunk, 4H + 4] of a run's first
-    layer at [start, start + chunk) (the golden is chunk-invariant: every position's row is the same under any chunk
-    plan). Read from the spec's golden rung that covers max_seq with every chunk dumped."""
-
-    def __init__(self, max_seq: int, chunk: int):
-        from models.demos.common.bringup.reference.golden import Golden
-
-        s = bringup_spec()
-        self.g = None
-        for rung in s.data.get("ladder", []):
-            try:
-                g = Golden.for_rung(s, rung["name"])
-            except FileNotFoundError:
-                continue
-            if g.seq >= max_seq and sorted(g.dumped_chunks) == list(range(g.n_chunks)):
-                self.g = g
-                break
-        assert self.g is not None, f"a gapped layer subset needs a golden with every chunk dumped up to {max_seq}"
-        self.chunk = chunk
-        self._rows = {}
-
-    def rows(self, layer: int, start: int):
-        import torch
-
-        if layer not in self._rows:
-            self._rows[layer] = torch.cat([self.g.layer(c, layer)["in"] for c in range(self.g.n_chunks)]).float()
-        x = self._rows[layer][start : start + self.chunk]
-        if x.shape[0] < self.chunk:
-            x = torch.cat([x, torch.zeros(self.chunk - x.shape[0], x.shape[1])])
-        return x
-
-
 @dataclass
 class DS41KvCaches(KvCaches):
     contract: object  # kv_contract.DS41ContractKV
@@ -154,9 +116,9 @@ class DS41PrefillRuntime:
         self.layer_ids = served_layer_ids(params.first_layer_idx, params.num_layers)
         self.model = TtDS41Model(mesh_device, model_path(), self.layer_ids, max_seq=m, chunk=c, lm_head=False)
         self.geo = WindowGeometry(mesh_device, c)
-        self.runs = set(run_starts(self.layer_ids))
-        gapped = any(self.layer_ids[k] != 0 for k in self.runs)
-        self.gap_feed = GoldenGapFeed(m, c) if gapped else None
+        from models.demos.common.bringup.testing.contract import gap_feed
+
+        self.gap_feed = gap_feed(self.layer_ids, m, c)  # the bring-up's gapped subset only (F102); None when served
         self._ttnn = ttnn
         self._sink = None
         self._d2h = None
@@ -228,7 +190,7 @@ class DS41PrefillRuntime:
         model.begin_chunk(ids, start)
         h = None
         for k, i in enumerate(self.layer_ids):
-            if k in self.runs:
+            if k == 0 or (self.gap_feed is not None and i in self.gap_feed.starts):
                 if h is not None:
                     model.free(h)
                 h = model.embed(ids, start) if i == 0 else model.from_host(self.gap_feed.rows(i, start), start)

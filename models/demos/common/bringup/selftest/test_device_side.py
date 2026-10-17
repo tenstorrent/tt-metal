@@ -216,6 +216,32 @@ def test_contract_serves_the_layer_subset(fx, monkeypatch):
     assert contract.layer_ids_from_env(3, 2) == [3, 4]
 
 
+def test_a_gapped_subset_takes_each_run_input_from_the_framework(fx, monkeypatch):
+    """F102: a run of served layers after a gap starts from the golden block input of its first layer, fed by the
+    framework (DeepSeek-V4.1 K.1 put a golden reader in the model's adapter); never for a contiguous range or a served
+    model (no PREFILL_LAYER_IDS)."""
+    import torch
+
+    from models.demos.common.bringup.testing import contract
+
+    class FakeGolden:
+        seq, n_chunks, dumped_chunks = 8, 2, [0, 1]
+
+        def layer(self, c, i):
+            return {"in": torch.full((4, 3), 10.0 * i + c)}
+
+    monkeypatch.setattr(contract.Golden, "for_rung", classmethod(lambda cls, s, name: FakeGolden()))
+    s = Spec.load(fx(layers=[0, 2]))
+    monkeypatch.setattr(contract.os, "environ", {})
+    assert contract.gap_feed([0, 2], 8, 4) is None  # a served model: no bring-up env
+    contract.os.environ[contract.LAYER_IDS_ENV] = "0,1"
+    assert contract.gap_feed([0, 1], 8, 4) is None  # contiguous
+    feed = contract.GapFeed(s, [0, 2, 3, 5], 8, 4)
+    assert feed.starts == {0, 2, 5}
+    assert feed.rows(2, 4)[0, 0] == 21.0 and feed.rows(5, 0)[0, 0] == 50.0  # chunk 1 of layer 2, chunk 0 of layer 5
+    assert feed.rows(2, 6).shape == (4, 3) and feed.rows(2, 6)[2:].abs().sum() == 0  # zero rows past the golden
+
+
 def test_full_prefill_times_a_prefix_subset(fx, monkeypatch):
     """F42: MiMo layers 0-5 of 48 recorded no prefill_ms_full; a prefix subset is timed (no final norm), a gapped one
     is not, the full stack still ends with the final norm."""
