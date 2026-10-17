@@ -6689,6 +6689,13 @@ tasks:
     - router
     - experts
     layer: 20
+  frozen:
+    at: '2026-10-17T10:40:58'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_14_experts.py: 22f1ba6f7be383b2ddbbaee3f509463d2eb150856d239250c6dc943a9c170bac
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_candidate.shared_expert
   title: dec_candidate shared_expert (mlp) on device, layer 20
   step: implement
