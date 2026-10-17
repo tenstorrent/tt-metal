@@ -42,7 +42,7 @@ def random_torch_tensor(dtype, shape):
     ],
 )
 @pytest.mark.parametrize("value", [0, 1])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.float32])
 def test_pad_rm(device, n, c, h, w, padding, torch_padding, value, dtype):
     torch.manual_seed(0)
 
@@ -55,6 +55,73 @@ def test_pad_rm(device, n, c, h, w, padding, torch_padding, value, dtype):
 
     assert output_tensor.shape == torch_output_tensor.shape
     assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "padding,torch_padding",
+    [
+        (((0, 0), (0, 0), (0, 16)), (0, 16, 0, 0, 0, 0)),
+    ],
+)
+@pytest.mark.parametrize("value", [float("-inf"), float("inf")])
+def test_pad_rm_non_finite_value_float32(device, padding, torch_padding, value):
+    """A float32 pad value must reach the padding as its own 32-bit pattern.
+
+    -inf is the ordinary way to build an attention mask, and it is the case where a
+    16-bit packing is not merely imprecise: two bfloat16 halves of -inf form
+    0xFF80FF80, which is a NaN, and a NaN in a mask poisons the whole row after
+    softmax. A PCC comparison cannot see this, so this test compares exactly.
+    """
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((1, 4, 16), dtype=torch.float32)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32)
+    output_tensor = ttnn.to_torch(ttnn.pad(input_tensor, padding=padding, value=value))
+
+    assert not torch.isnan(output_tensor).any(), (
+        f"pad(value={value}) produced NaN in the padding: "
+        f"{int(torch.isnan(output_tensor).sum())} of {output_tensor.numel()} elements"
+    )
+    assert torch.equal(torch_output_tensor, output_tensor)
+
+
+# use_multicore=False on an interleaved row-major input selects PadRmReaderWriterProgramFactory. Its reader fills
+# the padding both from the packed pad word and from a const buffer built on the host, so a float32 value must
+# reach both as its own 32-bit pattern. The second shape also ends each data row off a 32-byte boundary and pads
+# whole rows, channels and batches. 1/3 has a non-zero low half, so it tells the raw pattern from a bfloat16 one.
+@pytest.mark.parametrize(
+    "shape,padding,torch_padding",
+    [
+        ((1, 1, 4, 16), ((0, 0), (0, 0), (0, 0), (0, 16)), (0, 16, 0, 0, 0, 0, 0, 0)),
+        ((1, 1, 3, 13), ((0, 1), (0, 1), (0, 2), (0, 35)), (0, 35, 0, 2, 0, 1, 0, 1)),
+    ],
+)
+@pytest.mark.parametrize("value", [1.0, float("-inf"), 1 / 3])
+def test_pad_rm_float32_single_core(device, shape, padding, torch_padding, value):
+    torch.manual_seed(0)
+    torch_input = torch.rand(shape, dtype=torch.float32)
+    expected = torch.nn.functional.pad(torch_input, torch_padding, mode="constant", value=value)
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32)
+    output = ttnn.to_torch(ttnn.pad(input_tensor, padding=padding, value=value, use_multicore=False))
+    assert torch.equal(expected, output)
+
+
+# Same factory, non-zero pad value, the other row-major dtypes. The const buffer used to hold bfloat16(value)
+# whatever the dtype, and the reader wrote only the top half of the packed word (0 for int32/uint32), so only
+# bfloat16 came out right; bfloat16 is kept here to show it is unchanged.
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint16, ttnn.int32, ttnn.uint32])
+def test_pad_rm_single_core_nonzero_value(device, dtype):
+    torch.manual_seed(0)
+    torch_input = random_torch_tensor(dtype, (1, 1, 3, 13))
+    padding = ((0, 1), (0, 1), (0, 2), (0, 35))
+    torch_padding = (0, 35, 0, 2, 0, 1, 0, 1)
+    expected = torch.nn.functional.pad(torch_input, torch_padding, mode="constant", value=7)
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=dtype)
+    output = ttnn.to_torch(ttnn.pad(input_tensor, padding=padding, value=7, use_multicore=False))
+    # Compare in the output's dtype, as test_pad_tile_single_core does: torch.equal refuses mixed uint/int dtypes.
+    assert torch.equal(expected.to(output.dtype), output)
 
 
 @pytest.mark.parametrize(
@@ -377,7 +444,7 @@ def test_pad_rm_sharded_stickwise(
 @pytest.mark.parametrize("padding,torch_padding", [(((1, 1), (2, 32), (0, 0)), (0, 0, 2, 32, 1, 1))])
 @pytest.mark.parametrize("value", [8])
 @pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR])
-@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.bfloat16, ttnn.uint16])
+@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.bfloat16, ttnn.uint16, ttnn.float32])
 @pytest.mark.parametrize("buffer_type", [ttnn.types.BufferType.L1, ttnn.types.BufferType.DRAM])
 def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype, buffer_type):
     for _ in range(2):
@@ -775,8 +842,6 @@ def test_pad_op(device, in_dtype, shape, padshape, use_multicore, layout, mem_co
 def test_pad_tile_single_core(device, in_dtype, shape, padshape, pad_value, mem_config):
     if in_dtype == ttnn.bfloat8_b and pad_value != 0.0:
         pytest.skip("bfloat8_b compares approximately; the exact-fill check below does not apply")
-    if in_dtype == ttnn.float32 and pad_value != 0.0:
-        pytest.xfail("#54223: FLOAT32 pad value is packed as two bfloat16s in the single-core TILE factory")
 
     torch_input = random_torch_tensor(in_dtype, shape)
     ttnn_input = ttnn.from_torch(
