@@ -15,7 +15,15 @@
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::uint32_t operandB) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
+
+    LLK_ASSERT(
+        operand_unpacks_to_src(operandA_id),
+        "operand A has a Dest-only unpack destination format; FPU reduce operands must unpack to SrcA/SrcB");
+    LLK_ASSERT(
+        operand_unpacks_to_src(operandB_id),
+        "operand B has a Dest-only unpack destination format; FPU reduce operands must unpack to SrcA/SrcB");
 
     SAN_HOOK(init<OperationUnpackReduce>(
         StateVal<OperationUnpackReduce::PoolType>(to_underlying(pool_type)),
@@ -43,6 +51,13 @@ inline void llk_unpack_AB_reduce(
 
     LLK_ASSERT(cb_access_within_bounds(operandA_id, tile_index_a, 1), "Indexed tile read exceeds CB boundary");
     LLK_ASSERT(cb_access_within_bounds(operandB_id, tile_index_b, 1), "Indexed tile read exceeds CB boundary");
+
+    LLK_ASSERT(
+        operand_unpacks_to_src(operandA_id),
+        "operand A has a Dest-only unpack destination format; FPU reduce operands must unpack to SrcA/SrcB");
+    LLK_ASSERT(
+        operand_unpacks_to_src(operandB_id),
+        "operand B has a Dest-only unpack destination format; FPU reduce operands must unpack to SrcA/SrcB");
 
     // SUM/AVG REDUCE_ROW swaps the operands (scaler -> SrcA, data -> SrcB), see _llk_unpack_AB_reduce_.
     [[maybe_unused]] constexpr bool swap_operands =

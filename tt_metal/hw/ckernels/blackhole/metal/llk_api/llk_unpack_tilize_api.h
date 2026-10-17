@@ -187,6 +187,13 @@ inline void llk_unpack_tilizeA_B_init(
     const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
     const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
+    LLK_ASSERT(
+        operand_unpacks_to_src(operandA_id),
+        "operand A (SrcA) has a Dest-only unpack destination format; FPU operands must unpack to SrcA/SrcB");
+    LLK_ASSERT(
+        operand_unpacks_to_src(operandB_id),
+        "operand B (SrcB) has a Dest-only unpack destination format; FPU operands must unpack to SrcA/SrcB");
+
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
         unpack_src_format[operandA_id],
         unpack_dst_format[operandA_id],
@@ -243,6 +250,13 @@ inline void llk_unpack_tilizeA_B(
         get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
     const std::uint32_t offset_address_b = tile_index_b * get_local_cb_interface(operandB_id).fifo_page_size;
     const std::uint32_t address_b = base_address_b + offset_address_b;
+
+    LLK_ASSERT(
+        operand_unpacks_to_src(operandA_id),
+        "operand A (SrcA) has a Dest-only unpack destination format; FPU operands must unpack to SrcA/SrcB");
+    LLK_ASSERT(
+        operand_unpacks_to_src(operandB_id),
+        "operand B (SrcB) has a Dest-only unpack destination format; FPU operands must unpack to SrcA/SrcB");
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
         unpack_src_format[operandA_id],
