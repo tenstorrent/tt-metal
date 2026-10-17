@@ -18,7 +18,11 @@
  * @tparam type: Reduction pooling op, values = <SUM/AVG/MAX>
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>; REDUCE_ROW is MAX only
  *         (SUM/AVG must use llk_unpack_AB_reduce_init / llk_unpack_AB_reduce).
- * @param scaler_operand: Circular buffer holding the scaler tile; its formats configure SrcB.
+ * @param scaler_operand: Circular buffer holding the scaler tile; its formats configure the SrcB unpacker.
+ * @note scaler_operand should also be the SrcB operand passed to hw_startup / reconfig_data_format_srcb (as reduce_init
+ *       does via state_configure(icb, icb_scaler, ocb)), and llk_unpack_reduce must use a scaler CB with the same
+ *       formats; on Blackhole the FPU takes the SrcB format from the unpacker output format this init programs, so
+ *       a mismatch is not silently miscomputed here as it is on Wormhole.
  * @note Only the first FACE_C_DIM datums of face 0 of the scaler tile are used, for every face of the data tile;
  *       per-face or partial scaler tiles need llk_unpack_AB_reduce_init / llk_unpack_AB_reduce.
  * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose.
@@ -38,7 +42,8 @@ inline void llk_unpack_reduce_init(
  * @brief Unpack one data tile into SrcA and the scaler tile into SrcB for a single-operand reduce.
  *
  * @tparam type: Reduction pooling op, values = <SUM/AVG/MAX>
- * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>; REDUCE_ROW is MAX only (see
+ *         llk_unpack_reduce_init).
  * @param operand: Circular buffer holding the data tile.
  * @param scaler_operand: Circular buffer holding the scaler tile (only face 0, row 0 of it is used, for every
  *        face of the data tile).

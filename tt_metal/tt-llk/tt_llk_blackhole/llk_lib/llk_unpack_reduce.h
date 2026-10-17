@@ -104,7 +104,8 @@ inline void _llk_unpack_reduce_init_(
  * row for the scaler, runs the reduce MOP, restores the SrcB datum count, and switches config context.
  *
  * @tparam type: Reduction pooling op, values = <SUM/AVG/MAX>
- * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>; REDUCE_ROW is MAX only
+ *         (see _llk_unpack_reduce_init_).
  * @param address: L1 address of the source tile.
  * @param scaler_address: L1 address of the scaler tile. Only its first FACE_C_DIM datums (face 0, row 0) are
  *        unpacked into SrcB, and that one row is reused for every face of the data tile.

@@ -18,7 +18,12 @@
  * @tparam type: Reduction pooling op, values = <SUM/AVG/MAX>
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>; REDUCE_ROW is MAX only
  *         (SUM/AVG must use llk_unpack_AB_reduce_init / llk_unpack_AB_reduce).
- * @param scaler_operand: Circular buffer holding the scaler tile; its formats configure SrcB.
+ * @param scaler_operand: Circular buffer holding the scaler tile; its formats configure the SrcB unpacker.
+ * @note scaler_operand must also be the SrcB operand passed to hw_startup / reconfig_data_format_srcb (as reduce_init
+ *       does via state_configure(icb, icb_scaler, ocb)): this init programs only the SrcB unpacker formats, while the
+ *       FPU reads SrcB through the ALU SrcB format that only the math thread's hw_configure / reconfig_data_format_srcb
+ *       write, so a scaler CB whose formats differ from that operand is unpacked as one format and consumed as
+ *       another. llk_unpack_reduce must then use a scaler CB with the same formats.
  * @note Only the first FACE_C_DIM datums of face 0 of the scaler tile are used, for every face of the data tile;
  *       per-face or partial scaler tiles need llk_unpack_AB_reduce_init / llk_unpack_AB_reduce.
  * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose.
@@ -38,7 +43,8 @@ inline void llk_unpack_reduce_init(
  * @brief Unpack one data tile into SrcA and the scaler tile into SrcB for a single-operand reduce.
  *
  * @tparam type: Reduction pooling op, values = <SUM/AVG/MAX>
- * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>; REDUCE_ROW is MAX only (see
+ *         llk_unpack_reduce_init).
  * @param operand: Circular buffer holding the data tile.
  * @param scaler_operand: Circular buffer holding the scaler tile (only face 0, row 0 of it is used, for every
  *        face of the data tile).

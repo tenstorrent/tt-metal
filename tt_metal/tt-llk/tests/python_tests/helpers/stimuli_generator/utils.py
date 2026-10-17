@@ -852,7 +852,7 @@ def reduce_scaler_value(
     pool_type: ReducePool, reduce_dim: ReduceDimension, tile_dimensions: List[int]
 ) -> float:
     """
-    Value of the constant scaler tile a reduce test feeds to SrcB.
+    Value of the constant scaler tile (operand B) a reduce test feeds to the device.
 
     MAX and SUM leave the pooled value as is (scaler 1). AVG divides by the number of
     elements reduced: the tile width for a row reduce, the tile height for a column
