@@ -43,3 +43,16 @@
 - `hooks._HostBoundary` now takes any number of [S, H] inputs (`*xs`), each sent with `rows_to_device`.
 - Gate: pcc 0.9999985, auto_margin_min 1.97, device_ops 1, host FLOPs 0; attn_norm and attention regressions PASS.
 - Re-run: `bfw job check --task C.sliding_moe.attn_residual`.
+
+## C.sliding_moe.router (layer 0)
+
+- `tt/router.py:TtRouter` (plan.md step 5): `ttnn.linear` (weight [2880, 128] + bias, bf16, replicated; fp32 out,
+  HiFi4 fp32 dest) -> `ttnn.topk` k 4 sorted -> `ttnn.softmax` over the 4 chosen logits (fp32) -> `ttnn.scatter`
+  (fp32 ROW_MAJOR: scatter has no fp32 TILE path) onto a zeros table built at load (`prepare(rows)`, rows = chunk /
+  8). Local per chip, no collective. `route(x)` returns the sparse pair (indices uint16 ROW_MAJOR [.., S/8, 4],
+  weights fp32 TILE [.., S/8, 4]) for the experts step; `__call__` returns the dense [1, 1, S/8, 128] fp32 graph
+  output.
+- Settings ROUTER_FIDELITY (HiFi4), ROUTER_FP32_ACC (True), ROUTER_WEIGHT_DTYPE (bfloat16), all in MAX_PRECISION.
+- Gate: pcc 0.999866; selection overlap vs golden 0.99917 (matched rows 0.99668, rel 0.0019, rowsum 0.0038),
+  auto_margin_min 2.60, deterministic. Worked first time.
+- Re-run: `bfw job check --task C.sliding_moe.router`.

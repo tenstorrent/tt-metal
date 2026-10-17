@@ -27,6 +27,10 @@ TABLE = {
     "SDPA_Q_CHUNK": Setting(128, (64, 128), "ring SDPA sliding supports Q blocks 64 / 128"),
     "SDPA_K_CHUNK": Setting(128, (128,), "ring SDPA sliding supports K blocks 128"),
     "O_PROJ_REDUCE_FP32": Setting(True, (True, False), "o_proj partials summed over TP in fp32, then bf16"),
+    "ROUTER_FIDELITY": Setting("HiFi4", FIDELITIES, "rule 7 default: router linear and softmax at HiFi4"),
+    "ROUTER_FP32_ACC": Setting(True, (True, False), "router logits in fp32 dest: top-4 ties are precision-bound"),
+    # plan.md step 5: the router weight is bf16 (0.74 MB per chip), a small price for exact top-4 selection
+    "ROUTER_WEIGHT_DTYPE": Setting("bfloat16", ("bfloat16", "bfloat8_b"), "router weight and bias dtype"),
     "CCL_NUM_LINKS": Setting(2, (1, 2), "fabric links per CCL on Blackhole (gpt_oss_d_p get_default_num_links)"),
 }
 
@@ -39,6 +43,9 @@ MAX_PRECISION = {
     "SDPA_FIDELITY": "HiFi4",
     "SDPA_FP32_ACC": False,
     "O_PROJ_REDUCE_FP32": True,
+    "ROUTER_FIDELITY": "HiFi4",
+    "ROUTER_FP32_ACC": True,
+    "ROUTER_WEIGHT_DTYPE": "bfloat16",
 }
 
 settings = Settings("GPT_OSS_120B_", TABLE, max_precision=MAX_PRECISION)

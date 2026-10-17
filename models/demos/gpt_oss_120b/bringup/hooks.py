@@ -132,6 +132,15 @@ def device_component(mesh, spec, layer, step):
         from models.demos.gpt_oss_120b.tt.residual import TtResidualAdd
 
         return _HostBoundary(mesh, TtResidualAdd())
+    if step == "router":
+        from models.demos.gpt_oss_120b.tt.router import TtRouter
+
+        ck = _checkpoint(spec)
+        w, b = (ck.get(f"model.layers.{layer}.mlp.router.{n}") for n in ("weight", "bias"))
+        ck.close()
+        router = TtRouter(mesh, w, b, _config(spec)["num_experts_per_tok"])
+        router.prepare(int(spec.get("target.chunk")) // tuple(mesh.shape)[0])
+        return _HostBoundary(mesh, router)
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 
