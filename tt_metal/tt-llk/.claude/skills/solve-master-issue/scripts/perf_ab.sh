@@ -47,9 +47,9 @@ run_one() {  # run_one <tree> <label>  -> prints the post.csv path
         cd "$llk/tests" || exit 3
         export CHIP_ARCH=$arch PERF_RUN_TAG=$tag
         echo "== $label: $tree @ $(git -C "$tree" rev-parse --short=11 HEAD) tag=$tag" >> "$log"
-        exec 9>"/tmp/tt-device-$(hostname).lock"; flock 9 || exit 3
+        exec 9>"${TT_DEVICE_LOCK:-/tmp/tt-device-$(hostname).lock}"; flock 9 || exit 3
         # A hung test from an earlier session leaves the card wedged (xdist workers die at startup): reset first.
-        tt-smi -r 0 > /dev/null 2>&1 || true
+        [ -n "${TT_DEVICE_LOCK:-}" ] || tt-smi -r 0 > /dev/null 2>&1 || true   # no reset under a test-harness lock
         .venv/bin/python -m pytest -q --override-ini=log_cli=false "${sol[@]}" --compile-producer -n 10 \
             -m "perf and not accuracy" --timeout=120 "${k[@]}" "./python_tests/$mod.py" >> "$log" 2>&1 || exit 3
         .venv/bin/python -m pytest -q --override-ini=log_cli=false "${sol[@]}" --compile-consumer --dist loadgroup -n 15 \

@@ -402,6 +402,24 @@ def cmd_mark(a):
         if v
     }
     fields["host"] = os.uname().nodename
+    for attempt in range(3):  # a shared-filesystem hiccup must not lose a state change
+        try:
+            hit = mark_once(a, keys, fields)
+            break
+        except OSError as e:
+            if attempt == 2:
+                sys.exit(f"mark failed 3 times: {e}")
+            time.sleep(2 + 3 * attempt)
+    missing = len(keys) - min(hit, len(keys))
+    print(
+        f"marked {hit} record(s) {a.state}"
+        + (f"; {missing} key(s) not found" if hit < len(keys) else "")
+    )
+    if hit == 0:
+        sys.exit(1)
+
+
+def mark_once(a, keys, fields):
     with lock(a.file):
         if a.file.endswith(".json"):
             data, recs = load_json(a.file)
@@ -418,13 +436,7 @@ def cmd_mark(a):
                     lines[i] = "| " + " | ".join(cells) + " |"
                     hit += 1
             save_atomic(a.file, "\n".join(lines) + "\n")
-    missing = len(keys) - min(hit, len(keys))
-    print(
-        f"marked {hit} record(s) {a.state}"
-        + (f"; {missing} key(s) not found" if hit < len(keys) else "")
-    )
-    if hit == 0:
-        sys.exit(1)
+    return hit
 
 
 # ------------------------------------------------------------ groups/claims
@@ -457,21 +469,49 @@ def group_table(recs):
     return g
 
 
+CLAIM_STALE_S = int(os.environ.get("FINDINGS_CLAIM_STALE_S", "600"))
+
+
 def claim_owner(claims, group):
     if not claims or not os.path.isdir(os.path.join(claims, group)):
         return None
     try:
         with open(os.path.join(claims, group, "owner.json")) as fh:
-            return json.load(fh)
+            o = json.load(fh)
     except (OSError, ValueError):
-        return {"owner": "?"}
+        o = {"owner": "?"}
+    try:
+        o["age_s"] = int(time.time() - os.stat(os.path.join(claims, group)).st_mtime)
+    except OSError:
+        o["age_s"] = 0
+    return o
+
+
+def claim_is_stale(entry, owner):
+    """A claim whose items never left `planned` after CLAIM_STALE_S: the claimer died between the
+    mkdir and the marks (claim is not crash-safe by design — the mkdir must come first).
+    """
+    return (
+        owner is not None
+        and owner.get("age_s", 0) > CLAIM_STALE_S
+        and all(s == "planned" for s in entry["states"].values())
+    )
+
+
+def need_json(a):
+    if not a.file.endswith(".json"):
+        sys.exit(
+            "groups/next/claim/release need the JSON findings file; the .md table has no group/owner columns"
+        )
 
 
 def cmd_groups(a):
+    need_json(a)
     _, recs = load_json(a.file)
     for e in group_table(recs).values():
         c = claim_owner(a.claims, e["group"])
         e["claimed_by"] = (c or {}).get("owner")
+        e["stale_claim"] = claim_is_stale(e, c)
         print(json.dumps(e))
 
 
@@ -497,6 +537,7 @@ def spread_key(owner, group):
 
 
 def cmd_next(a):
+    need_json(a)
     mine = arch_set(a.arch)
     if not mine:
         sys.exit("--arch must name at least one architecture this box can run")
@@ -505,8 +546,26 @@ def cmd_next(a):
     for e in group_table(recs).values():
         if any(s != "planned" for s in e["states"].values()):
             continue  # already started by someone (or finished)
-        if claim_owner(a.claims, e["group"]):
-            continue
+        c = claim_owner(a.claims, e["group"])
+        if c:
+            if claim_is_stale(e, c):
+                print(
+                    f"stale claim: {e['group']} by {c.get('owner')} ({c.get('age_s')}s, items still planned)"
+                    + (
+                        " — reclaiming"
+                        if a.reclaim_stale
+                        else " — `release` it to reoffer"
+                    ),
+                    file=sys.stderr,
+                )
+                if a.reclaim_stale:
+                    shutil.rmtree(
+                        os.path.join(a.claims, e["group"]), ignore_errors=True
+                    )
+                else:
+                    continue
+            else:
+                continue
         r = rank_for(e["arch"], mine)
         if r == 3 and not a.take_other:
             continue
@@ -518,6 +577,7 @@ def cmd_next(a):
 
 
 def cmd_claim(a):
+    need_json(a)
     os.makedirs(a.claims, exist_ok=True)
     cdir = os.path.join(a.claims, a.group)
     try:
@@ -561,6 +621,7 @@ def cmd_claim(a):
 
 
 def cmd_release(a):
+    need_json(a)
     cdir = os.path.join(a.claims, a.group)
     with lock(a.file):
         data, recs = load_json(a.file)
@@ -713,6 +774,19 @@ def cmd_sync(a):
             capture_output=True,
             text=True,
         )
+        if a.sync_cmd:
+            # explicit wins: a findings file that merely sits inside some checkout must not be
+            # committed to that checkout's branch
+            r = subprocess.run(
+                a.sync_cmd + " " + json.dumps(msg),
+                shell=True,
+                capture_output=True,
+                text=True,
+            )
+            print((r.stdout.strip() or r.stderr.strip())[-400:])
+            if r.returncode:
+                sys.exit(1)
+            return
         if top.returncode == 0:
             subprocess.run(["git", "-C", d, "add", "--", path], check=True)
             if (
@@ -767,16 +841,6 @@ def cmd_sync(a):
                     return
             print(f"push failed: {r.stderr.strip()[:300]}")
             sys.exit(1)
-        elif a.sync_cmd:
-            r = subprocess.run(
-                a.sync_cmd + " " + json.dumps(msg),
-                shell=True,
-                capture_output=True,
-                text=True,
-            )
-            print((r.stdout.strip() or r.stderr.strip())[-400:])
-            if r.returncode:
-                sys.exit(1)
         else:
             print(f"{path} is not in a git repo and no --sync-cmd given: local only")
 
@@ -819,6 +883,7 @@ def main():
     s.add_argument("--claims", required=True)
     s.add_argument("-n", type=int, default=5)
     s.add_argument("--take-other", action="store_true")
+    s.add_argument("--reclaim-stale", action="store_true")
     s.set_defaults(f=cmd_next)
     s = sp.add_parser("claim")
     s.add_argument("file")

@@ -18,7 +18,7 @@ while :; do case "${1:-}" in
     *) break;;
 esac; done
 cap_s=${CI_BUDGET_SANITY:-5}; cap_n=${CI_BUDGET_NIGHTLY:-5}
-for kv in "$@"; do case $kv in sanity=*) cap_s=${kv#*=};; nightly=*) cap_n=${kv#*=};; esac; done
+for kv in "$@"; do for part in ${kv//,/ }; do case $part in sanity=*) cap_s=${part#*=};; nightly=*) cap_n=${part#*=};; esac; done; done   # "sanity=5 nightly=5" or "sanity=5,nightly=5"
 repo=${GH_REPO:-tenstorrent/tt-metal}
 me=$(gh api user -q .login) || exit 2
 count() {  # count <workflow name>...: non-completed workflow_dispatch runs of mine across those workflows

@@ -53,6 +53,7 @@ out=$("$legs" status --run-dir "$D")
 head -1 <<< "$out" | grep -qE "^serve wormhole: $(hostname) pid=[0-9]+ last seen [0-9]+s ago \(busy=-\)$"; check $? "status shows the wormhole server" "$(head -1 <<< "$out")"
 [ "$(grep -c ' done exit=' <<< "$out")" = 3 ] && [ "$(grep -vc '^serve ' <<< "$out")" = 3 ]; check $? "status lists 3 done requests" "$out"
 echo "blackhole otherbox pid=1 $(date -u -d '-10 minutes' +%FT%TZ) busy=-" > "$D/legs/serve-blackhole@otherbox.alive"
+touch -d "-10 minutes" "$D/legs/serve-blackhole@otherbox.alive"
 "$legs" status --run-dir "$D" | grep -qE '^serve blackhole: otherbox pid=1 last seen [0-9]+s ago STALE \(busy=-\)$'; check $? "status marks a 10-minute-old heartbeat STALE"
 rm -f "$D/legs/serve-blackhole@otherbox.alive"
 

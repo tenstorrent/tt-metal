@@ -37,8 +37,10 @@ issues go to **tt-metal** (never tt-llk), and the file itself is the shared reco
 done (§0b) — it is marked after every state change and pushed, so a re-run, a crash, or another box
 never repeats work. Options (anywhere in the arguments): `--sync-cmd '<cmd>'` (how to publish the file
 when it is not in a git repo — e.g. a mirror's pack-and-push script), `--ci-budget sanity=N,nightly=M`
-(default 5,5), `--group-max N` (default 8 items per PR), `--only-open` (work only items with no state
-at all or `planned` by this skill — skip ones already filed upstream), `--unattended --run-name <name>` (set by
+(default 5,5; pass the same words to `ci_budget.sh`, which takes `sanity=N,nightly=M` or `sanity=N nightly=M`),
+`--group-max N` (default 8 items per PR), `--only-open` (work only what `findings.py list` prints by default:
+items with no state or `planned`; without it, also work `already_filed` items — list them with `--all` and
+filter on that state), `--unattended --run-name <name>` (set by
 `run_unattended.sh`: end the turn instead of sleeping when everything waits; write `DONE` at the end),
 `--plan-only` (triage + group every workable item, write the plan into the file, sync, stop — no fixes),
 `--worker <name> --arch <arch>[,<arch>]` (this session is one of several workers sharing the file, each
@@ -50,24 +52,27 @@ Conventions used below: `<me>` = `gh api user -q .login`; `$SKILL` =
 does not exist in the checkout you are in (the skill's branch is not merged there), `$SKILL` is
 `$(readlink -f ~/.claude/skills/solve-master-issue)`; `$MASTER_ISSUE_DIR` = where ledgers live,
 default `~/.claude/master-issues` — point it at shared storage if you have some, so a run can be
-resumed from another machine. Scripts avoid `gh run list --branch` and `gh run rerun --failed`, which
+resumed from another machine; `$LEDGER_DIR` = this run's state dir: `$MASTER_ISSUE_DIR/<run-name>`
+(`--run-name`, or `<repo>-<N>` for a master issue run without one), and for a worker (§0c)
+`$MASTER_ISSUE_DIR/<run-name>/workers/<name>` — the ledger, evidence, perf and acked files live there. Scripts avoid `gh run list --branch` and `gh run rerun --failed`, which
 older `gh` (2.4) lacks.
 
 | script | use |
 |---|---|
 | `mkwt.sh <name> <branch>` | worktree off origin/main (or the existing branch on resume) |
 | `dispatch.sh [--match <regex>] "<workflow>" <ref> [-f k=v]` | dispatch a workflow **and get its run id** (gh prints none); `--match` pins the run's identity when the workflow+ref is shared |
-| `ci_budget.sh [--need-nightly N] [--verify] [sanity=5] [nightly=5]` | room for one more PR's CI? counts **my** in-flight Sanity / Nightly(+e2e) dispatches on GitHub (so the cap is global across boxes); exit 0 = dispatch, 1 = queue it; `--verify` right after a dispatch: exit 1 = over the cap, cancel what you just dispatched (§6) |
+| `ci_budget.sh [--need-nightly N] [--verify] [sanity=5] [nightly=5]` | room for one more PR's CI? counts **my** in-flight Sanity / Nightly(+e2e) dispatches on GitHub (so the cap is global across boxes); exit 0 = dispatch, 1 = queue it, 2 = GitHub unreadable (treat as "not now", retry next loop); `--verify` right after a dispatch: exit 1 = over the cap, cancel what you just dispatched (§6) |
+| `device_queue.sh` | how many processes hold or wait on this box's device lock, whatever form took it — the §2 queue cap uses it |
 | `ci_triage.sh <run_id>` | every non-green job of a run with its failing tests |
 | `main_job_status.sh "<workflow>" "<job>"` | is the same job failing on main — on the same tests? |
 | `bot_threads.sh <pr>` | bot feedback still unanswered; ack handled summaries by URL |
 | `bots_pending.sh <pr>` | what must still finish before the head SHA is "bots quiet"; exit 0 + empty = quiet |
 | `perf_ab.sh <fix-wt> <base-sha> <arch> <perf-module> <out-dir> [-k …] [--op …] [--goal …]` | same-board perf A/B of one tt-llk perf module, fix vs base, judged by `perf_eval.py` (§3b); exit 0 pass · 1 regression · 2 not comparable · 3 run failed |
-| `perf_eval.py --current <csv> --baseline <csv> …` | the judge: variant-matched cycle deltas, ±0.5 % noise band, intent-aware verdict; vendored from the LLK issue solver, `test_perf_eval.py` guards it (run with `pytest -c /dev/null --noconftest`) |
+| `perf_eval.py --current <csv> --baseline <csv> …` | the judge: variant-matched cycle deltas, ±0.5 % noise band, intent-aware verdict; vendored from the LLK issue solver, `test_perf_eval.py` guards it (run with `pytest -c /dev/null --noconftest`); its `--goal measure` / `--results-out` paths need a module not vendored here — use only `no_regress` / `improve` |
 | `findings.py list\|mark\|groups\|next\|claim\|release\|reconcile\|sync <file> …` | the findings file as source: workable items as JSON; write state + links per item (dups follow); the plan's groups; the next groups for a worker and the atomic claim (§0c); GitHub-vs-file drift on resume; commit+push (pull --rebase first) or `--sync-cmd` |
 | `legs.sh request\|wait\|serve\|status --run-dir <dir> …` | a test leg on the *other* worker's board: the requester files a request in the shared run dir, that box's serve loop runs it under its device lock and writes the result back (§0c, §3) |
 | `ledger_log.sh <ledger.md> <text…>` | append a Log line stamped with the clock's UTC time — the only way to write one (estimated times are forbidden) |
-| `run_unattended.sh <run-name> [--worker <w>] <args…>` | detached headless driver: `claude -p` turns, resumed every 15 min until `DONE` (§2); one per box with `--worker`, state under `workers/<w>/` |
+| `run_unattended.sh <run-name> [--worker <w>] <args…>` | detached headless driver: `claude -p` turns, resumed every 15 min (or at `NEXT_WAKE`, §2) until `DONE`; one per box with `--worker` (anywhere in the args), state under `workers/<w>/`; one driver per state dir; stops with a `STOPPED-failed` / `STOPPED-cap` file (no report) after 3 failed turns or the 7-day cap — read the last `attempt-NN.err` and restart |
 
 The two gate scripts print nothing when there is nothing left — and also when GitHub could not be
 read, so their **exit status is part of the gate**: a non-zero exit is "not quiet / not answered",
@@ -102,7 +107,8 @@ retry after the poll interval. Never treat an empty failed read as done.
    the Copilot coding agent while you are on it. That pipeline is for items Copilot can fix from a
    runner without hardware; this skill exists for the ones that need a card, a local build and a
    fail-without/pass-with proof.
-6. **Create the ledger** at `$MASTER_ISSUE_DIR/<repo>-<N>/ledger.md` from `$SKILL/ledger-template.md`.
+6. **Create the ledger** at `$LEDGER_DIR/ledger.md` from `$SKILL/ledger-template.md` (`$LEDGER_DIR` as defined
+   above: the run-name dir, or the worker's dir under it).
    Every Log line goes through `$SKILL/scripts/ledger_log.sh <ledger> <text>` so its time is the clock's.
    It must let a *fresh* session continue with no conversation history: worktrees, branches, head SHAs,
    dispatched run ids, what each wait is for, retry counters. **After any context compaction, re-read
@@ -113,7 +119,9 @@ retry after the poll interval. Never treat an empty failed read as done.
 ## 0b. A findings file as the source
 
 The file is the record shared with the user and with any later run, so it is kept truthful at every
-step; the ledger holds the operational detail (run ids, counters) that the file does not.
+step; the ledger holds the operational detail (run ids, counters) that the file does not. An `.md`
+table source supports `list`/`mark`/`sync` only (its Status cell holds state + links); grouping, claims
+and workers (§0c) need the JSON form — convert first, or run single-worker.
 
 1. **Read it with the script, not by eye:** `findings.py list <file>` prints one JSON line per open
    canonical item — key (`path:line`, `#n` when two findings share a line), severity, class, summary,
@@ -201,7 +209,16 @@ moves on. Groups needing none of this box's architectures are left to a box that
 `in-progress` with `--owner`; a claim you cannot start after all is `release`d. On resume, `reconcile`
 lists `in-progress` items with their owner: **a worker resumes only its own; the rest belong to the other
 box even if that box is silent** (it will resume them; if it is gone for good, the user reassigns by
-`release`).
+`release`). A **stale claim** — a claim dir whose items are still `planned` after 10 min (the claimer died
+between the `mkdir` and the marks) — is shown by `groups` (`stale_claim: true`) and skipped by `next`;
+`release` it, or pass `--reclaim-stale` to `next` to take it. **When `next` prints nothing:** take
+`--take-other` groups only if every other worker's serve-loop heartbeat is STALE or absent in
+`legs.sh status` (nobody else will do them); otherwise your part of the plan is finished — go to §8 and
+write your `DONE` once your own PRs are done. **Ledger status ↔ file state:** `triage`/`repro`/`fix`/
+`verify` ↔ `in-progress`; `pr`/`bot-review`/`ci-queue`/`ci` ↔ `pr` (issue filed earlier ↔ `issue`);
+`done` ↔ `done`; `parked(<reason>)` ↔ `needs-user` (a decision) or `skipped` (not a bug / fixed on main,
+with the note); `frozen` ↔ `pr` plus a note. When the ledger and the file disagree on resume, the file
+wins for state and the ledger for operational detail — fix the ledger row, never the mark.
 
 **Remote legs — another worker's box as the missing board.** When a group needs a fail-without /
 pass-with / perf leg on an arch this box lacks, do not go to CI silicon first:
@@ -212,7 +229,10 @@ id=$($SKILL/scripts/legs.sh request --run-dir $MASTER_ISSUE_DIR/<run> --arch bla
 $SKILL/scripts/legs.sh wait --run-dir $MASTER_ISSUE_DIR/<run> $id        # exit = the leg's exit; prints the log path
 ```
 Any box whose serve loop runs for that arch may take the request (several boxes per arch share one
-queue). Branch mode runs in a detached worktree on the serving box (tt-llk pytest, gtest already built there);
+queue). Branch mode runs in a detached worktree on the serving box (tt-llk pytest; gtest only if that box built
+the target); a **perf leg** is branch mode too: `--cmd '$SKILL/scripts/perf_ab.sh . <base-sha> <arch> <module> <out-dir> …' --cwd .`
+on a box whose harness is set up (the serve worktree becomes the fix tree; §3b's "board in this box" then
+means the serving box);
 `--patch <diff>` mode applies a patch to that box's **built** checkout under its device lock and reverts it
 after — for ttnn tests that need a build. **ttnn legs are patch mode, full stop:** a branch-mode run with
 `TT_METAL_HOME` pointed at an unbuilt worktree is not probative (the JIT root and the loaded library disagree;
@@ -221,8 +241,14 @@ on disk, so a skill fix needs no restart on the other box. Probe arm = the same 
 branch, exactly as in §3. A leg is a wait like any other: file it, record the id in the pending table, arm
 nothing that must outlive the turn, and move on; `legs.sh status` shows the queue. The PR body names the
 serving host and board and links the log in the run dir. **CI silicon (§3) remains the fallback** when no
-worker serves that arch (`legs.sh status` shows the serve loop's last heartbeat) or the leg needs a SKU
-neither box has.
+worker serves that arch (`legs.sh status` shows each serve loop's last heartbeat, aged by the shared
+filesystem's clock so box clocks need not agree) or the leg needs a SKU neither box has. **Leg exits that
+are not a verdict:** `96` the serving box's built tree has modified tracked files (its owner must clean it;
+re-file later or fall back to CI silicon), `97` the tree could not be prepared (unpushed sha, patch does not
+apply to that box's base — re-push or re-diff against its HEAD), `125` no server took it within the wait
+(the serve loop is down — check the heartbeat; a request already filed cannot be withdrawn, so a late
+server will still run it: file a fresh one only after the old one is answered or `rm -r` its request dir).
+A server that died mid-leg leaves `claimed.d` with no result: `rm -r <req>/claimed.d <req>/claimed` reopens it.
 
 **CI budget across boxes.** `ci_budget.sh` counts runs on GitHub per login, so every worker shares one
 5 + 5 pool with no coordination, however many boxes there are. The gate is check-then-dispatch, so right
@@ -230,9 +256,12 @@ after every dispatch run `ci_budget.sh --verify`: exit 1 means another box dispa
 its cap — cancel the run(s) you just dispatched (`gh run cancel <id>`) and put the PR back at the head of
 your ci-queue. The cap holds exactly; a few seconds of overshoot is the worst case.
 
-**Stopping.** `touch $MASTER_ISSUE_DIR/<run>/STOP` stops every worker after its current turn;
-`workers/<name>/STOP` stops one. Each worker writes its own `workers/<name>/DONE` with its report (§8);
-the run is done when every worker's is.
+**Stopping.** `touch $MASTER_ISSUE_DIR/<run>/STOP` stops every worker after its current turn **and every
+serve loop at its next scan**; `workers/<name>/STOP` stops one worker, `legs/STOP-<arch>` one serve loop.
+To restart after a stop: remove the STOP file(s), move `session.id` aside if the skill text changed,
+start the serve loop(s) again, then the driver(s). Each worker writes its own `workers/<name>/DONE` with
+its report (§8); the run is done when every worker's is. A `STOPPED-failed` / `STOPPED-cap` file in a
+worker dir means its driver gave up without a report.
 
 ## 1. Split into items and triage
 
@@ -243,7 +272,7 @@ file(s), claimed defect, arch(es), what hardware a test needs, and an initial cl
 | class | meaning |
 |---|---|
 | `local` | testable on this box |
-| `arch-other` | needs an arch/board not here — compile-only here + probe/fix A/B on the CI lane that has the board (§3) |
+| `arch-other` | needs an arch/board not here — compile-only here + probe/fix A/B on another worker's box (`legs.sh`, §0c) or, failing that, on the CI lane that has the board (§3) |
 | `test-only` | the issue asks for coverage, not a code fix — deliverable is the test; evidence = it detects an injected regression |
 | `assert-only` / `api-hardening` | no runtime behavior change; look for a test that *can* observe it before parking |
 | `race/timing` | needs a forced repro (`perturb` skill, NOP injection) — but see the repro gate |
@@ -288,7 +317,8 @@ Each item moves through: `triage → repro → fix → verify → PR → bot-rev
 **Resources:**
 - **Device** — serial, shared with other sessions. Every device run goes through
   `flock /tmp/tt-device-$(hostname).lock <cmd>`. Never hold it while reading code or building. **Cap the
-  queue:** at most 4 device legs waiting on the lock at once (`pgrep -fc "tt-device-$(hostname)"`); beyond
+  queue:** at most 4 device legs waiting on the lock at once (`$SKILL/scripts/device_queue.sh`, which counts
+  every holder and waiter whatever form took the lock); beyond
   that, batch an item's legs into one run and hold the rest — tonight 18–20 queued legs meant a 30-min wait
   per leg and a box at load 200, which is slower than running them in turn.
 - **Builds** — a Release build of tt-metal is ~3 GB and 30–60 min (a built worktree ~8 GB in all; the tt-llk harness, sfpi + .venv, another ~2 GB; tt-llk pytest needs no build); do **not** build per worktree. Keep one
@@ -374,8 +404,9 @@ Synthetic mechanism-only kernels and injection-only failures are evidence, not a
 
 **Before parking an item as "can't repro", try every feasible path:**
 - an existing full build on the box (a gtest target may already exist in another worktree);
-- the other arch's code path compiles here — compile-only test here, then **CI silicon as the
-  missing board** (below); a board you don't have is a slower gate, not a reason to park;
+- the other arch's code path compiles here — compile-only test here, then a remote leg on a worker's
+  box (§0c) or **CI silicon as the missing board** (below); a board you don't have is a slower gate, not
+  a reason to park;
 - data that actually hits the edge (denormals, bounds around 2^31, odd tile dims, max/min pads);
 - a seed sweep / repeated runs for nondeterministic bugs; the `perturb` skill for timing;
 - a test that observes the assert-only/API-only change at compile time (static_assert, a
@@ -404,8 +435,8 @@ CI runner and the gate still holds — both arms, not just pass-with:
    suite stays green.
 5. **Evidence and cleanup.** The PR body names the SKUs, links both runs, and says no local board
    existed. Delete the probe branch once the fix run is recorded (`git push origin --delete`).
-Another box with the board, if one is reachable, is the same thing with the device lock (§0) on that
-host — but CI is the default because it leaves a link anyone can check.
+The order of preference is the ladder below: a worker's box first (minutes, no budget), CI silicon when
+no worker serves that arch; either way the PR body carries the evidence (log path or run link).
 
 **Where a board comes from, in order:** (1) this box (`tt-smi -s`); (2) **another worker of this run**
 that has the board — `legs.sh request` / `wait` (§0c), minutes per leg and no CI budget; (3) another box
@@ -440,7 +471,7 @@ breakage). Then the perf A/B below, when the change is on a measured path.
 modules are named for their op). Assert-only, host-side, test-only and doc changes need none; say so in
 the ledger. A perf-motivated item uses `--goal improve`; everything else `--goal no_regress`.
 
-**How** (the board must be in this box; `perf_ab.sh` creates and reuses a detached baseline worktree
+**How** (the board must be in this box or in a worker's box reached by a perf leg, §0c; `perf_ab.sh` creates and reuses a detached baseline worktree
 at the PR's merge-base, runs current then baseline back to back under the device lock, and judges):
 ```bash
 base=$(git -C <fix-wt> merge-base HEAD origin/main)
@@ -450,8 +481,8 @@ $SKILL/scripts/perf_ab.sh <fix-wt> $base <arch> <perf-module> $LEDGER_DIR/perf/<
 `-k` narrows what runs (a full module is 10–40 min); `--op` narrows what is compared. Modules that
 declare only `MATH_ISOLATE` (`perf_sfpu_binop_scalar`, `perf_sfpu_reduce`, `perf_sfpu_ternary`) need
 `--primary-metric 'mean(MATH_ISOLATE)'`; the evaluator never picks a kinder metric by itself. Run it once
-per architecture you have; an architecture you lack is **"perf not measured on <arch>"** in the PR body,
-never a blocker (CI silicon runs no perf).
+per architecture you have or can reach through a worker's box; an architecture nobody has is **"perf not
+measured on <arch>"** in the PR body, never a blocker (CI silicon runs no perf).
 
 **Verdict → action:** exit 0 (neutral or improved) → quote the summary line in the PR body and link
 the two CSVs in the ledger dir. Exit 1 (regression past the noise band, median variant by default) →
@@ -631,7 +662,10 @@ lanes of a PR are dispatched together or not at all, so a PR never holds a Sanit
 for a Nightly one. The point is pacing, not throughput: other developers share these runners.
 
 Once bots are quiet on the current head SHA **and the budget has room**, dispatch on the branch and
-record run ids. A manual dispatch is **not** the nightly by default: every test family the cron schedule turns on is an
+record run ids. `dispatch.sh` exit 1 (dispatched but no run registered within 90 s) is **not** a reason to
+dispatch again: list that workflow's runs for the branch through the API over the next few minutes and
+adopt the run that appears; a second dispatch would double-spend the budget. Exit 3 (more than one new
+run) means something else dispatched too — adopt the one whose run name/branch is yours, record both. A manual dispatch is **not** the nightly by default: every test family the cron schedule turns on is an
 opt-in `workflow_dispatch` input that defaults to false, so a bare dispatch reports success with the
 test jobs skipped. "Full Nightly" for this skill is the set of scheduled suites that execute kernels:
 ```bash

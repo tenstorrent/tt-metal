@@ -206,13 +206,14 @@ cmd_serve() {
     # a kill mid-leg must not leave the patch in --repo
     trap 'rc=$?; [ -n "${applied:-}" ] && git -C "$repo" apply -R "$applied" 2>/dev/null; exit $rc' EXIT
     trap 'exit 143' INT TERM
-    log "serve start host=$(hostname) pid=$$ repo=$repo worktree-root=$wroot once=$once interval=$interval script=$(stat -c %Y "$0")"
-    self_mtime=$(stat -c %Y "$0")
+    self=$(readlink -f "$0")   # follow the skill symlink: the real file is what a skill update replaces
+    log "serve start host=$(hostname) pid=$$ repo=$repo worktree-root=$wroot once=$once interval=$interval script=$self@$(stat -c %Y "$self")"
+    self_mtime=$(stat -c %Y "$self")
     while :; do
         if [ -e "$D/STOP" ] || [ -e "$legs/STOP-$arch" ]; then log "STOP present, exiting"; exit 0; fi
         # a skill update (git checkout writes a new file) is picked up without anyone restarting the loop
-        if [ "$(stat -c %Y "$0" 2>/dev/null)" != "$self_mtime" ] && [ $once = 0 ]; then
-            log "legs.sh changed on disk, re-executing"; exec "$0" serve "${serve_args[@]}"
+        if [ "$(stat -c %Y "$self" 2>/dev/null)" != "$self_mtime" ] && [ $once = 0 ]; then
+            log "legs.sh changed on disk, re-executing"; exec "$self" serve "${serve_args[@]}"
         fi
         beat
         claim_next
@@ -262,8 +263,8 @@ def secs(iso):
 for f in sorted(glob.glob(os.path.join(sys.argv[1], 'serve-*.alive'))):
     m = re.match(r'(\S+) (\S+) pid=(\d+) (\S+) busy=(\S+)', open(f).read())
     if not m: print(f'serve ?: unreadable heartbeat {f}'); continue
-    try: ago = secs(m[4])
-    except Exception: print(f'serve {m[1]}: unreadable heartbeat {f}'); continue
+    # age by the file's mtime: the shared filesystem stamps it, so two boxes with skewed clocks agree
+    ago = int(time.time() - os.stat(f).st_mtime)
     stale = ' STALE' if ago > 3 * int(sys.argv[2]) else ''
     print(f'serve {m[1]}: {m[2]} pid={m[3]} last seen {ago}s ago{stale} (busy={m[5]})')
 def load(p):

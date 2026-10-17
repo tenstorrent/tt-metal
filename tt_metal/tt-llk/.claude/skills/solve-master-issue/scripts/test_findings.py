@@ -424,3 +424,72 @@ def test_stale_lock_break_has_one_winner(ffile):
     for k in keys:
         assert allv[k]["state"] == "skipped" and allv[k]["disposition"]["note"] == k
     assert not os.path.exists(lockd)
+
+
+def test_explicit_sync_cmd_wins_inside_a_git_checkout(tmp_path):
+    # a findings file that merely sits inside some checkout must not be committed to that checkout
+    repo = tmp_path / "somerepo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    git(str(repo), "config", "user.email", "t@t")
+    git(str(repo), "config", "user.name", "t")
+    f = repo / "sub" / "F.json"
+    f.parent.mkdir()
+    f.write_text(json.dumps([rec("tt_metal/x.h", 1)]))
+    marker = tmp_path / "synced.txt"
+    out = run(
+        "sync", str(f), "--sync-cmd", f"sh -c 'echo ran > {marker}; echo CUSTOM_OK'"
+    ).stdout
+    assert "CUSTOM_OK" in out and marker.exists()
+    assert (
+        git(str(repo), "status", "--porcelain").strip() != ""
+    )  # nothing was committed there
+    assert "no changes" not in out
+
+
+def test_stale_claim_is_reported_and_reclaimable(ffile, tmp_path):
+    plan(ffile)
+    claims = str(tmp_path / "claims")
+    # a claim dir with no marks behind it (claimer died after the mkdir), made old
+    os.makedirs(os.path.join(claims, "g-cd"))
+    json.dump(
+        {"owner": "ghost", "host": "x", "time": "t"},
+        open(os.path.join(claims, "g-cd", "owner.json"), "w"),
+    )
+    os.utime(os.path.join(claims, "g-cd"), (1, 1))
+    groups = {
+        json.loads(l)["group"]: json.loads(l)
+        for l in run("groups", ffile, "--claims", claims).stdout.splitlines()
+    }
+    assert (
+        groups["g-cd"]["claimed_by"] == "ghost"
+        and groups["g-cd"]["stale_claim"] is True
+    )
+    r = run("next", ffile, "--owner", "bh", "--arch", "blackhole", "--claims", claims)
+    assert (
+        "g-cd" not in [json.loads(l)["group"] for l in r.stdout.splitlines()]
+        and "stale claim" in r.stderr
+    )
+    r = run(
+        "next",
+        ffile,
+        "--owner",
+        "bh",
+        "--arch",
+        "blackhole",
+        "--claims",
+        claims,
+        "--reclaim-stale",
+    )
+    assert "g-cd" in [json.loads(l)["group"] for l in r.stdout.splitlines()]
+    assert run(
+        "claim", ffile, "g-cd", "--owner", "bh", "--claims", claims
+    ).stdout.startswith("CLAIMED")
+
+
+def test_workers_need_json(tmp_path):
+    md = tmp_path / "OPEN.md"
+    md.write_text(
+        "| Status | Location | Summary |\n|---|---|---|\n| open | `tt_metal/a.h:1` | x |\n"
+    )
+    r = run("groups", str(md), check=False)
+    assert r.returncode != 0 and "JSON" in (r.stderr + r.stdout)
