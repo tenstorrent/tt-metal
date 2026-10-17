@@ -35,10 +35,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
 
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+    _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+        0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
 
-    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+    _llk_unpack_A_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
 }
 
@@ -55,11 +55,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-constexpr bool APPROX = false;
-// Draws in [0, 1]; the sentinel the stimulus fills Dest with lies outside that range.
-constexpr std::uint32_t RAND_FROM  = 0x00000000U; // 0.0f
-constexpr std::uint32_t RAND_SCALE = 0x3F800000U; // 1.0f
-constexpr std::uint32_t PRNG_SEED  = 7919U;
+// APPROX_MODE, VECTOR_MODE, RAND_FROM_BITS / RAND_SCALE_BITS (the draw interval, which the stimulus
+// sentinel lies outside of) and RAND_SEED come from the test's template parameters.
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -69,23 +66,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /*is_int_fpu_en*/, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
 
-    // Seed once, as ttnn.manual_seed's kernel does; no rand init follows after this point.
+    // Seed once, as a host-set seed's kernel does; no rand init follows after this point.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-    ckernel::sfpu::rand_init<APPROX>(PRNG_SEED);
+    ckernel::sfpu::rand_init<APPROX_MODE>(RAND_SEED);
 
     // Sentinel tile into Dest.
     _llk_math_wait_for_dest_available_<DST_SYNC>();
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-        0 /* dst_index */, formats.math, formats.math);
+        0 /*dst_index*/, formats.math, formats.math);
 
     // Another op's init between the seed and the draw: programs slot 6 to dest incr 32.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::topk_local_sort>();
 
     // The draw. rand must overwrite the whole tile regardless of what slot 6 held.
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::rand<APPROX>, 0 /* dst_index */, VectorMode::RC, RAND_FROM, RAND_SCALE);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::rand<APPROX_MODE>, 0 /*dst_index*/, VECTOR_MODE, RAND_FROM_BITS, RAND_SCALE_BITS);
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }
 
@@ -102,11 +99,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+    _llk_pack_init_wrapper_<PackMode::Default, false /*zero_output*/>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[0]));
+    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /*tile_index*/, L1_ADDRESS(params.buffer_Res[0]));
     _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }
 
