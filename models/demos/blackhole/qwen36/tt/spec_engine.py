@@ -13,7 +13,16 @@ Rows are user-major, r = u*T + j with T = K+1, in one 32-row decode tile; row u 
 Verify row j of user u processes tokens[u, j] at start_pos[u] + j. After m accepted drafts,
 committed_tokens[u, :m+1] = accepted drafts + bonus token, at committed_positions[u, :m+1] =
 start_pos + 1 .. start_pos + m + 1. The bonus is the next ``pending``; the anchor hidden is verify row m.
-The drafter pairs (hidden at slot s, token at s+1) -> slot s."""
+The drafter pairs (hidden at slot s, token at s+1) -> slot s.
+
+Slot map (QWEN36_SPEC_SLOTMAP, default 1): the runner front-packs its rows and sends a ``slot_remap`` after every
+condense. The engine keeps every request in the engine row its prefill chose and only permutes the host map
+``_phys`` (runner slot -> engine row). The runner-facing calls ``decode_forward`` / ``propose_draft_tokens`` /
+``prefill`` / ``release`` take runner slots: per-row inputs are scattered to engine rows, outputs gathered back.
+``verify`` / ``propose`` (the demo API) and every ``_fresh`` / ``_active`` / ... set are in engine rows; the demo never
+remaps, so there the two numberings coincide. With the flag at 0 a remap permutes the GDN state on the device.
+Every per-row device input the verify stages (tokens, positions, mi_prev -> state_blk_idx / conv_sel, or under
+QWEN36_VERIFY_SPEC_STEP=1 the gdn_spec_step ctrl page {parity, mi, ring block}) is built from ENGINE rows."""
 
 import math
 import os
@@ -26,6 +35,7 @@ from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
+from models.demos.blackhole.qwen36.tt.tp_common import spec_hostfix_enabled
 
 # Prompt length above which the reseed goes back to the per-slot loop (B == 1 only).
 EAGER_RESEED_PROMPT_LEN = 131072
@@ -147,6 +157,41 @@ def _int_vec(x, B, name):
 def sanitize_verify_block(tokens, start_pos, num_valid_drafts, K):
     """Validate a runner verify block [B, 1+K] -> (clean_tokens [B,T] int64, start0 [B] int64, active [B] bool).
     Active row (start_pos[u,0] >= 0): columns 0..n are real (tokens >= 0, consecutive positions); the padding
+    tail gets tokens[u,0]. Inactive row: start_pos[u,0] < 0, n == 0.
+    QWEN36_SPEC_HOSTFIX (default 1): checks and padding on plain lists (no tensor op per row); a block with any error
+    is re-run through the per-row code so the raised error is the same."""
+    if not spec_hostfix_enabled():
+        return _sanitize_verify_block_old(tokens, start_pos, num_valid_drafts, K)
+    T = K + 1
+    tokens = torch.as_tensor(tokens)
+    if tokens.ndim != 2 or tokens.shape[1] != T:
+        raise ValueError(f"tokens must have shape [B, {T}], got {tuple(tokens.shape)}")
+    B = tokens.shape[0]
+    tokens = tokens.to(torch.int64)
+    pos = _int_block(start_pos, B, T, "start_pos")
+    nv = _int_vec(num_valid_drafts, B, "num_valid_drafts")
+    tl, pl, nl = tokens.tolist(), pos.tolist(), nv.tolist()
+    clean, start0, active = [], [], []
+    for u in range(B):
+        n, s0 = nl[u], pl[u][0]
+        if s0 < 0:
+            ok, row = n == 0, [0] * T
+        else:
+            ok = 0 <= n <= K and min(tl[u][: n + 1]) >= 0 and pl[u][: n + 1] == list(range(s0, s0 + n + 1))
+            row = tl[u][: n + 1] + [tl[u][0]] * (T - n - 1)
+        if not ok:
+            return _sanitize_verify_block_old(tokens, start_pos, num_valid_drafts, K)  # raises the row's error
+        clean.append(row)
+        start0.append(max(s0, 0))
+        active.append(s0 >= 0)
+    if B == 0:
+        return _sanitize_verify_block_old(tokens, start_pos, num_valid_drafts, K)
+    return torch.tensor(clean, dtype=torch.int64), torch.tensor(start0, dtype=torch.int64), torch.tensor(active)
+
+
+def _sanitize_verify_block_old(tokens, start_pos, num_valid_drafts, K):
+    """Validate a runner verify block [B, 1+K] -> (clean_tokens [B,T] int64, start0 [B] int64, active [B] bool).
+    Active row (start_pos[u,0] >= 0): columns 0..n are real (tokens >= 0, consecutive positions); the padding
     tail gets tokens[u,0]. Inactive row: start_pos[u,0] < 0, n == 0."""
     T = K + 1
     tokens = torch.as_tensor(tokens)
@@ -198,7 +243,9 @@ def note_withheld_drafts(offered, marked, speculated, streak, num_valid_drafts, 
     Mutates ``offered``/``speculated``/``streak`` (offered is consumed); returns the new ``marked`` set."""
     nv = torch.as_tensor(num_valid_drafts).reshape(-1)
     marked = set(marked)
-    for u in range(nv.numel()):
+    if spec_hostfix_enabled():  # QWEN36_SPEC_HOSTFIX: one tolist() instead of a tensor index per row
+        nv = nv.tolist()
+    for u in range(len(nv)):
         if int(nv[u]) > 0:
             speculated.add(u)
             streak[u] = 0
@@ -253,6 +300,30 @@ def verify_write_table(page_table, start_pos, num_valid_drafts, block_size):
     cols = torch.arange(pt.shape[1]).reshape(1, -1)
     pt[cols > (last // int(block_size)).reshape(-1, 1)] = 0
     return pt
+
+
+def slot_map_after_remap(phys, remap):
+    """Runner slot -> engine row after a runner slot_remap: runner row i now holds the request that sat at runner
+    row remap[i], and that request's state stays in engine row phys[remap[i]]."""
+    return [phys[int(j)] for j in remap]
+
+
+def slot_map_inverse(phys):
+    """Engine row -> runner slot (the inverse permutation of a slot map)."""
+    inv = [0] * len(phys)
+    for slot, row in enumerate(phys):
+        inv[int(row)] = slot
+    return inv
+
+
+def rows_to_engine(x, inv):
+    """Scatter a runner-ordered per-row tensor into engine row order: out[phys[s]] = x[s] (``inv`` = slot_map_inverse)."""
+    return torch.as_tensor(x)[torch.as_tensor(inv, dtype=torch.int64)]
+
+
+def rows_to_runner(x, phys):
+    """Gather an engine-ordered per-row tensor back into runner slot order: out[s] = x[phys[s]]."""
+    return torch.as_tensor(x)[torch.as_tensor(phys, dtype=torch.int64)]
 
 
 # --------------------------------------------------------------------------------------------- #
@@ -482,10 +553,46 @@ class MTPSpecEngine:
         self._withheld_streak = {}  # slot -> consecutive offers answered with n == 0
         self.no_draft_streak = NO_DRAFT_STREAK
         self.skipped_propose_calls = 0  # proposes skipped because every row was marked
+        # Host slot map (module docstring): 1 = a runner slot_remap permutes _phys only; 0 = the GDN state moves on
+        # the device (remap_spec_slots per layer) and the per-slot host state is renumbered, as before.
+        self.host_slotmap = os.environ.get("QWEN36_SPEC_SLOTMAP", "1") != "0"
+        self._phys = list(range(self.B))  # runner slot -> engine row
+        self._phys_perm = None  # (phys, inv) int64 index tensors while the map is not the identity
 
     # --------------------------------------------------------------------- #
     # Host helpers
     # --------------------------------------------------------------------- #
+    def _set_slot_map(self, phys):
+        self._phys = [int(r) for r in phys]
+        if self._phys == list(range(self.B)):
+            self._phys_perm = None
+        else:
+            inv = slot_map_inverse(self._phys)
+            self._phys_perm = (torch.tensor(self._phys, dtype=torch.int64), torch.tensor(inv, dtype=torch.int64))
+
+    def _to_rows(self, *xs):
+        """Runner-ordered per-row tensors -> engine row order (the identity map passes them through, no copy).
+        Scattered this way: tokens, start_pos, active, num_valid_drafts, accepted_counts (-> mi_prev, state_blk_idx,
+        conv_sel, or the gdn_spec_step ctrl page under QWEN36_VERIFY_SPEC_STEP=1) and the page-table rows (verify
+        write table, drafter / MTP tables, reseed rows). The GDN ring,
+        E_prev, rec_state, conv taps, _last_hidden, _vfeed, _mtp_pt_rows and every per-slot set stay in engine rows."""
+        if self._phys_perm is None:
+            return xs
+        inv = self._phys_perm[1]
+        return tuple(None if x is None else torch.as_tensor(x)[inv] for x in xs)
+
+    def _to_slots(self, *xs):
+        """Engine-ordered per-row outputs -> runner slot order (ids, logits, drafts, num_valid; no copy at the
+        identity). In logits mode this gathers [B, T, V] fp32: up to 32 MB at B=8, T=4, so only off the identity."""
+        if self._phys_perm is None:
+            return xs
+        phys = self._phys_perm[0]
+        return tuple(None if x is None else torch.as_tensor(x)[phys] for x in xs)
+
+    def _slot_of(self, row):
+        """Runner slot of an engine row (for messages)."""
+        return row if self._phys_perm is None else int(self._phys_perm[1][row])
+
     def _fit(self, pt):
         pt = self.model._fit_spec_page_table(pt, self.nb)
         assert pt.shape[0] == self.B, f"page_table has {pt.shape[0]} rows, engine has B={self.B}"
@@ -505,6 +612,19 @@ class MTPSpecEngine:
         )
         ttnn.copy_host_to_device_tensor(h, dev)
 
+    def _stage_table(self, host, dev, dtype, layout):
+        """_stage for a page table that mostly repeats from step to step. QWEN36_SPEC_HOSTFIX (default 1): skip the
+        copy when ``dev`` already holds this exact table. Every write to a buffer must go through here, since the
+        cache is the host copy of what that buffer holds (keyed by the buffer, dropped when it is freed)."""
+        if not spec_hostfix_enabled():
+            return self._stage(host, dev, dtype, layout)
+        cache = self.__dict__.setdefault("_stage_cache", {})
+        hit = cache.get(id(dev))
+        if hit is not None and hit[0] is dev and hit[1].shape == host.shape and torch.equal(hit[1], host):
+            return
+        self._stage(host, dev, dtype, layout)
+        cache[id(dev)] = (dev, host.clone())
+
     def _alloc_host_replicated(self, host, dtype, layout):
         return ttnn.from_torch(
             host,
@@ -517,9 +637,9 @@ class MTPSpecEngine:
 
     def _stage_mtp_tables(self, pt):
         """Re-stage the persistent MTP page tables from the fitted host table [B, nb]."""
-        self._stage(pt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        self._stage_table(pt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         for u in range(self.B):
-            self._stage(pt[u : u + 1].contiguous(), self._mtp_pt_rows[u], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            self._stage_table(pt[u : u + 1].contiguous(), self._mtp_pt_rows[u], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
 
     def _check_scratch(self, pt):
         assert int(pt.max()) < self._scratch_block, (
@@ -595,8 +715,8 @@ class MTPSpecEngine:
                 if prev is not None:
                     model._unbind_gdn_prefill_scratch(prev)
         warm_lens = [L for L in _WARM_PROMPT_LENS if L + T + 1 <= cap]
-        for L in warm_lens:  # dummy prompts through the real (eager) prefill path on slot 0
-            self.prefill(0, [1] * L, pt[0:1], _cap_blocks=width)
+        for L in warm_lens:  # dummy prompts through the real (eager) prefill path on engine row 0
+            self._prefill_row(0, [1] * L, pt[0:1], _cap_blocks=width)
             self._fresh.pop(0, None)
             self._active.discard(0)
 
@@ -646,6 +766,8 @@ class MTPSpecEngine:
             for dn in self._gdn:
                 dn.seed_spec_rows(range(0, B, 2))
                 dn.seed_spec_rows(range(1, B, 2))
+                # Also with the host slot map: the per-user ring / E_prev slices this compiles are the ones
+                # save_spec_user (parking) reuses after capture.
                 dn.remap_spec_slots(list(range(B))[::-1])  # a full reversal slices every row offset once
                 if B % 2 == 1:  # odd B: the reversal fixes the middle row; a cyclic shift moves every row
                     dn.remap_spec_slots([(i + 1) % B for i in range(B)])
@@ -698,7 +820,10 @@ class MTPSpecEngine:
 
         ttnn.synchronize_device(self.mesh)
         self.prepared = True
-        logger.info(f"[spec_engine] decode prepared in {time.perf_counter() - t0:.1f}s")
+        logger.info(
+            f"[spec_engine] decode prepared in {time.perf_counter() - t0:.1f}s "
+            f"(slot remaps: {'host slot map' if self.host_slotmap else 'device GDN remap, QWEN36_SPEC_SLOTMAP=0'})"
+        )
 
     def capture_decode(self):
         """Record the verify trace, then the drafter trace. Idempotent; requires prepare_decode."""
@@ -743,6 +868,7 @@ class MTPSpecEngine:
         self._dr_outs, self._dr_bufs = [], []
         self._dr_tok0 = self._dr_rs_tok = self._dr_rs_pos = self._dr_rs_pt = self._dr_rs_cos = self._dr_rs_sin = None
         self._dr_pos, self._dr_cos, self._dr_sin = [], [], []
+        self.__dict__.pop("_stage_cache", None)  # QWEN36_SPEC_HOSTFIX table cache: its buffers are freed here
         bufs = [
             *self._last_hidden,
             *self._last_sel.values(),
@@ -770,6 +896,7 @@ class MTPSpecEngine:
         self._prep_pt = None
         self._fresh.clear()
         self._active.clear()
+        self._set_slot_map(range(self.B))
         self.prefill_prepared = self.prefill_recorded = self.prepared = self.captured = False
         if getattr(model, "_spec_engine", None) is self:
             model._spec_engine = None
@@ -827,7 +954,8 @@ class MTPSpecEngine:
         return {"per_seq": per_seq, "fixed": fixed, "per_token": per_token}
 
     def release(self, slot):
-        """Mark a slot empty and re-offer drafts to every row (no device work)."""
+        """Mark runner slot ``slot`` (engine row _phys[slot]) empty and re-offer drafts to every row (no device work)."""
+        slot = self._phys[int(slot)]
         self._active.discard(slot)
         self._fresh.pop(slot, None)
         self._parked.pop(slot, None)
@@ -839,12 +967,17 @@ class MTPSpecEngine:
         self._withheld_streak.clear()
 
     def remap_slots(self, remap):
-        """Apply a runner slot_remap (row i takes slot remap[i]'s state) to every GDN layer and the per-slot host
-        state; paged KV follows the page tables. Identity is a no-op."""
+        """Apply a runner slot_remap (runner row i takes the request that sat at row remap[i]). Host slot map
+        (QWEN36_SPEC_SLOTMAP=1): only ``_phys`` changes, no device work, every engine row and per-row host set
+        keeps its state. Otherwise the GDN state of every layer and the per-slot host state are permuted on the
+        device; paged KV follows the page tables either way. Identity is a no-op."""
         idx = [int(x) for x in remap]
         if sorted(idx) != list(range(self.B)):
             raise ValueError(f"slot_remap {idx} is not a permutation of range({self.B})")
         if idx == list(range(self.B)):
+            return
+        if self.host_slotmap:
+            self._set_slot_map(slot_map_after_remap(self._phys, idx))
             return
         for dn in self._gdn:
             dn.remap_spec_slots(idx)
@@ -864,9 +997,14 @@ class MTPSpecEngine:
     # Prefill
     # --------------------------------------------------------------------- #
     def prefill(self, slot, prompt_ids, page_table_row, _cap_blocks=None):
-        """Eager prefill into state slot ``slot``, warming its MTP KV; returns host float logits [vocab].
-        Replays the recorded chunk trace when B == 1 and record_prefill ran, else the eager path.
+        """Eager prefill of runner slot ``slot`` (engine row _phys[slot]), warming its MTP KV; returns host float
+        logits [vocab]. Replays the recorded chunk trace when B == 1 and record_prefill ran, else the eager path.
         The GDN seed and the MTP KV of slot Tp-1 are written by the first ``verify``."""
+        assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
+        return self._prefill_row(self._phys[int(slot)], prompt_ids, page_table_row, _cap_blocks)
+
+    def _prefill_row(self, slot, prompt_ids, page_table_row, _cap_blocks=None):
+        """``prefill`` of engine row ``slot``."""
         reset_draft_skip(self, slot)
         self._parked.pop(slot, None)
         self._fresh_dirty.discard(slot)
@@ -914,8 +1052,8 @@ class MTPSpecEngine:
     def _reprefill(self, slot):
         """Re-run a fresh slot's prefill (a seed overwrote its prefill GDN state while it was left out)."""
         prompt, row = self._prompts[slot]
-        logger.info(f"[spec_engine] re-prefill slot {slot} ({len(prompt)} tokens)")
-        self.prefill(slot, prompt, row)
+        logger.info(f"[spec_engine] re-prefill engine row {slot} ({len(prompt)} tokens)")
+        self._prefill_row(slot, prompt, row)
 
     def _capture_last_row(self, feed, i, slot):
         """feed row i -> self._last_hidden[slot], fixed-shape programs only (a per-length slice would
@@ -1130,8 +1268,9 @@ class MTPSpecEngine:
         spec_mode="argmax_ids",
         slot_remap=None,
     ):
-        """Runner verify contract over a [B, 1+K] block (see sanitize_verify_block); slot_remap is applied after
-        validation. Returns VerifyResult."""
+        """Runner verify contract over a [B, 1+K] block (see sanitize_verify_block) in runner slots; slot_remap is
+        applied after validation, then every per-row input is scattered to engine rows (_to_rows) and the outputs
+        are gathered back (_to_slots). Returns VerifyResult."""
         if spec_mode not in SPEC_MODES:
             raise ValueError(f"spec_mode {spec_mode!r} not in {SPEC_MODES}")
         clean, start0, active = sanitize_verify_block(tokens, start_pos, num_valid_drafts, self.K)
@@ -1141,23 +1280,27 @@ class MTPSpecEngine:
             raise ValueError("no active row in the verify block")
         if slot_remap is not None:
             self.remap_slots(slot_remap)
+        clean, start0, active, nv_rows, acc_rows, pt_rows = self._to_rows(
+            clean, start0, active, num_valid_drafts, accepted_counts, page_table
+        )
         self._no_draft = note_withheld_drafts(
             self._offered,
             self._no_draft,
             self._speculated,
             self._withheld_streak,
-            num_valid_drafts,
+            nv_rows,
             self.no_draft_streak,
         )
         ids, logits = self.verify(
             clean,
             start0,
-            accepted_counts,
-            page_table,
+            acc_rows,
+            pt_rows,
             read_logits=spec_mode == "logits",
             active=active,
-            num_valid_drafts=num_valid_drafts,
+            num_valid_drafts=nv_rows,
         )
+        ids, logits = self._to_slots(ids, logits)
         return VerifyResult(spec_mode, mask_unused_columns(ids, num_valid_drafts), logits)
 
     def _verify_split(self, tokens, positions, mi_prev, **kw):
@@ -1229,7 +1372,7 @@ class MTPSpecEngine:
                 dpt[torch.tensor(decline)] = self._scratch_block
                 p = [0 if d else pu for d, pu in zip(decline, p)]
                 pending = [0 if d else t for d, t in zip(decline, pending)]
-            self._stage(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            self._stage_table(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             drafts = self._propose_recorded(ctok, cpos, m, pending, p, pt, m_kv)
             if any(decline):
                 drafts[torch.tensor(decline)] = 0
@@ -1246,7 +1389,7 @@ class MTPSpecEngine:
         if any(decline):  # declined rows draft at position 0 over an all-scratch table; their ids are discarded
             dpt = pt.clone()
             dpt[torch.tensor(decline)] = self._scratch_block
-            self._stage(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            self._stage_table(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             p = [0 if d else pu for d, pu in zip(decline, p)]
             pending = [0 if d else t for d, t in zip(decline, pending)]
         drafts = self._draft(pending, self._hp_buf, p)
@@ -1256,8 +1399,8 @@ class MTPSpecEngine:
     def propose_draft_tokens(
         self, num_drafts, committed_tokens, committed_positions, accepted_counts, page_table=None, hidden=None
     ):
-        """Runner propose contract: committed block [B, 1+K] padded with -1 past accepted_counts; page_table None =
-        the table of the last verify. Rows whose
+        """Runner propose contract in runner slots: committed block [B, 1+K] padded with -1 past accepted_counts;
+        page_table None = the table of the last verify (already in engine rows). Rows whose
         window would leave the paged KV decline (num_valid 0). Returns DraftResult."""
         B, T, K = self.B, self.T, self.K
         if int(num_drafts) != K:
@@ -1268,6 +1411,7 @@ class MTPSpecEngine:
             page_table, cap_blocks = self._last_pt, self._last_cap_blocks
         else:
             cap_blocks = int(torch.as_tensor(page_table).shape[-1])
+            (page_table,) = self._to_rows(page_table)
         if hidden is not None:
             raise ValueError("hidden must be None (the drafter's hidden handoff is on device)")
         ctok = _int_block(committed_tokens, B, T, "committed_tokens")
@@ -1275,17 +1419,33 @@ class MTPSpecEngine:
         acc = _int_vec(accepted_counts, B, "accepted_counts")
         if bool(((acc < 1) | (acc > T)).any()):
             raise ValueError(f"accepted_counts must be in [1, {T}], got {acc.tolist()}")
+        ctok, cpos, acc = self._to_rows(ctok, cpos, acc)
         pad = [False] * B if self._row_active is None else [not bool(a) for a in self._row_active]
         acc = acc.clone()
         acc[torch.tensor(pad)] = 1  # a padding row's count is 1
-        for u in range(B):
+        check_rows = range(B)
+        if spec_hostfix_enabled():  # QWEN36_SPEC_HOSTFIX: validate on plain lists; the per-row loop only names an error
+            ctl, cpl, al = ctok.tolist(), cpos.tolist(), acc.tolist()
+            ok = all(
+                pad[u]
+                or (
+                    min(ctl[u][: al[u]]) >= 0
+                    and cpl[u][0] >= 1
+                    and cpl[u][: al[u]] == list(range(cpl[u][0], cpl[u][0] + al[u]))
+                )
+                for u in range(B)
+            )
+            check_rows = () if ok else range(B)
+        for u in check_rows:
             if pad[u]:
                 continue
             c = int(acc[u])
             if bool((ctok[u, :c] < 0).any()):
-                raise ValueError(f"row {u}: negative committed token in columns 0..{c - 1}")
+                raise ValueError(f"row {self._slot_of(u)}: negative committed token in columns 0..{c - 1}")
             if not torch.equal(cpos[u, :c], cpos[u, 0] + torch.arange(c)) or int(cpos[u, 0]) < 1:
-                raise ValueError(f"row {u}: committed positions {cpos[u, :c].tolist()} are not consecutive from >= 1")
+                raise ValueError(
+                    f"row {self._slot_of(u)}: committed positions {cpos[u, :c].tolist()} are not consecutive from >= 1"
+                )
         _, _, _, p = accepted_plan(ctok, cpos, acc, B, T)
         fit = draft_rows_fit(p, K, table_capacity(cap_blocks, self.block_size))
         decline = [(not f) or pd for f, pd in zip(fit, pad)]
@@ -1300,6 +1460,7 @@ class MTPSpecEngine:
         drafts = self.propose(ctok, cpos, acc, page_table, decline=decline, cap_blocks=cap_blocks, keep_kv=keep)
         num_valid = torch.tensor([0 if d else K for d in decline], dtype=torch.int32)
         self._offered = {u for u in range(B) if decline[u] is False}
+        drafts, num_valid = self._to_slots(drafts, num_valid)
         return DraftResult(drafts, num_valid)
 
     # --------------------------------------------------------------------- #
@@ -1407,7 +1568,7 @@ class MTPSpecEngine:
         rcos, rsin = model._rope_tp_cos_sin_decode_torch(rpos)
         stage(rtok, self._dr_rs_tok, ttnn.uint32, rm)
         stage(rpos, self._dr_rs_pos, ttnn.int32, rm)
-        stage(rpt, self._dr_rs_pt, ttnn.int32, rm)
+        self._stage_table(rpt, self._dr_rs_pt, ttnn.int32, rm)
         stage(rcos, self._dr_rs_cos, bf, tile)
         stage(rsin, self._dr_rs_sin, bf, tile)
         tok0, poss = draft_step_plan(pending, p, K)
@@ -1420,7 +1581,7 @@ class MTPSpecEngine:
         ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
         if any(m):
             self.mtp_extra_steps += 1
-        steps = [self._id_to_host(t) for t in self._dr_outs]  # steps[k][u]
+        steps = self._ids_to_host(self._dr_outs)  # steps[k][u]
         return torch.tensor([[steps[k][u] for k in range(K)] for u in range(B)], dtype=torch.int32)
 
     def _draft_warmup(self, pending, Hp, p):
@@ -1435,6 +1596,15 @@ class MTPSpecEngine:
         """[*, B] uint32 device ids -> B ints, read from the device-0 replica."""
         t = ttnn.to_torch(ttnn.get_device_tensors(id_tt)[0])
         return [int(v) for v in t.reshape(-1)[: self.B]]
+
+    def _ids_to_host(self, id_tts):
+        """_id_to_host for several tensors. QWEN36_SPEC_HOSTFIX (default 1): all device-0 copies are enqueued
+        without blocking, then one synchronize, instead of one blocking read round trip per tensor."""
+        if not spec_hostfix_enabled():
+            return [self._id_to_host(t) for t in id_tts]
+        hosts = [ttnn.from_device(ttnn.get_device_tensors(t)[0], blocking=False) for t in id_tts]
+        ttnn.synchronize_device(self.mesh)
+        return [[int(v) for v in ttnn.to_torch(h).reshape(-1)[: self.B]] for h in hosts]
 
     # --------------------------------------------------------------------- #
     # MTP KV maintenance

@@ -7,6 +7,8 @@ or finishing: each request must equal its output in a full simultaneous batch.
 """
 
 import math
+import statistics
+import time
 
 import pytest
 import torch
@@ -68,6 +70,8 @@ class BatchDriver:
         self.steps = 0
         self.stats = []
         self.blocks_of = {}
+        self.remapped = False  # a remap since the last step
+        self.step_ms = []  # per step: (decode_forward ms, remap applied, fresh row seeded)
 
     def _blocks_for(self, req, last_pos):
         """[NB] int32 row covering positions up to last_pos + (1+K) + (K+1) lookahead (up to last_pos without
@@ -123,9 +127,13 @@ class BatchDriver:
             nvd[r] = n
             acc[r] = q["acc"]
             pt[r] = self._blocks_for(q, pos0[r])
+        fresh = bool(eng._fresh)
+        t0 = time.perf_counter()
         res = eng.decode_forward(
             tokens, start, num_valid_drafts=nvd, accepted_counts=acc, page_table=pt, spec_mode="argmax_ids"
         )
+        self.step_ms.append((1e3 * (time.perf_counter() - t0), self.remapped, fresh))
+        self.remapped = False
         ids_all = res.argmax_ids
         assert tuple(ids_all.shape) == (B, 1 + K)
         cross = [r for r in live if int(pt[r, (pos0[r] + K) // BLOCK_SIZE]) == 0]  # padded columns past the blocks
@@ -170,6 +178,20 @@ class BatchDriver:
     def remap(self, perm):
         self.eng.remap_slots(perm)
         self.reqs = [self.reqs[j] for j in perm]
+        self.remapped = True
+
+    def condense(self):
+        """The plugin's input_batch.condense: the last live row moves into the lowest hole, as one swap remap.
+        Returns the remap, or None when the live rows are already front-packed."""
+        live = self.live()
+        holes = [r for r in range(len(live)) if self.reqs[r] is None]
+        if not holes:
+            return None
+        perm = list(range(B))
+        for h, t in zip(holes, [r for r in reversed(live) if r >= len(live)]):
+            perm[h], perm[t] = t, h
+        self.remap(perm)
+        return perm
 
     def run(self, schedule, remaps=None, skips=None):
         """schedule: step index -> [(row, rid, prompt)] admissions, made at that step or the first later one
@@ -297,6 +319,57 @@ def test_row_moves_keep_state(mesh_device):
         for u in range(B):
             _assert_same(f"request {u} after row moves", moved[u], full[u])
         assert mesh_device.num_program_cache_entries() == n_prog, "a program compiled after capture"
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_churn_row_moves_match_full_batch(mesh_device):
+    """Production-shaped churn (note 23, D3): short outputs, a finish about every second step, each hole condensed
+    by the runner's swap remap and refilled by a new request. Every request's tokens equal its full-batch tokens,
+    no program compiles after capture, and a remap costs nothing on the device: a step with a remap and no fresh
+    row takes < 1.3x the median plain step (QWEN36_SPEC_SLOTMAP=1; the device remap of =0 adds ~200 ms)."""
+    model, eng, tokenizer, prompts = _setup(mesh_device)
+    n_prog = mesh_device.num_program_cache_entries()
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        full = BatchDriver(eng, seed=1).run({0: [(u, u, prompts[u]) for u in range(B)]})
+        drv = BatchDriver(eng, seed=11)
+        N_REQ = 24
+        lens = {rid: 5 + (rid * 7) % 12 for rid in range(N_REQ)}  # 5..16 tokens, staggered finishes
+        home = {}  # rid -> prompt index
+        for u in range(B):
+            drv.admit(u, u, prompts[u], max_new=lens[u])
+            home[u] = u
+        rid = B
+        while drv.live() or rid < N_REQ:
+            drv.condense()
+            # one admission into the lowest free row every other step (at once when the batch ran dry)
+            if rid < N_REQ and (drv.steps % 2 == 0 or not drv.live()):
+                free = [r for r in range(B) if drv.reqs[r] is None]
+                if free:
+                    home[rid] = rid % B
+                    drv.admit(free[0], rid, prompts[rid % B], max_new=lens[rid])
+                    rid += 1
+            if drv.live():
+                drv.step()
+        for r, p in home.items():
+            assert len(drv.outs[r]) == lens[r], f"request {r}: {len(drv.outs[r])} tokens, wanted {lens[r]}"
+            _assert_same(f"request {r} (prompt {p}) under churn", drv.outs[r], full[p][: lens[r]])
+        assert mesh_device.num_program_cache_entries() == n_prog, "a program compiled after capture"
+        plain = [ms for ms, rm, fr in drv.step_ms if not rm and not fr]
+        remap_only = [ms for ms, rm, fr in drv.step_ms if rm and not fr]
+        joins = [ms for ms, rm, fr in drv.step_ms if fr]
+        logger.info(
+            f"[churn] steps={drv.steps} plain={len(plain)} (median {statistics.median(plain):.1f} ms) "
+            f"remap-only={len(remap_only)} (median {statistics.median(remap_only) if remap_only else 0:.1f} ms) "
+            f"join={len(joins)} (median {statistics.median(joins) if joins else 0:.1f} ms)"
+        )
+        assert len(remap_only) >= 3, "the churn schedule produced no remap-only steps"
+        assert statistics.median(remap_only) < 1.3 * statistics.median(plain), "a remap step is not free"
     finally:
         mesh_device.set_program_cache_misses_allowed(True)
 
