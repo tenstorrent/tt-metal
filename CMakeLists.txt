@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24...4.2)
+cmake_minimum_required(VERSION 3.25...4.2)
 
 # Forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
@@ -162,14 +162,8 @@ endif()
 add_custom_target(all_generated_files)
 
 include(CPM)
-if(CMAKE_VERSION VERSION_LESS 3.25)
-    # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
-    add_subdirectory(third_party)
-    add_subdirectory(tt_metal/third_party)
-else()
-    add_subdirectory(third_party SYSTEM)
-    add_subdirectory(tt_metal/third_party SYSTEM)
-endif()
+add_subdirectory(third_party SYSTEM)
+add_subdirectory(tt_metal/third_party SYSTEM)
 
 option(TT_METAL_SKIP_LINKING "Replace the linker with a no-op touch for clang-tidy builds" OFF)
 if(TT_METAL_SKIP_LINKING)
