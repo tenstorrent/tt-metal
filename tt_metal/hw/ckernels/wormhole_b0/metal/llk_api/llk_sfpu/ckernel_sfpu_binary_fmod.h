@@ -103,6 +103,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     v_if(b == sfpi::vFloat(0.0f)) { result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN()); }
     v_endif;
 
+    apply_fmod_inf_divisor(result, a, b_abs);
+
     if constexpr (!is_fp32_dest_acc_en) {
         result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
     }
