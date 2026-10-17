@@ -6219,6 +6219,13 @@ tasks:
     - compressor
     - indexer
     layer: 20
+  frozen:
+    at: '2026-10-17T08:59:23'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_07_indexer.py: 2dfe72332ea15831ae4aa9500934c9e61e0ca778807bfd05ac43a50f7a593804
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_candidate.attention
   title: dec_candidate attention (attention) on device, layer 20
   step: implement
