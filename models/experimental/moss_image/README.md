@@ -121,7 +121,6 @@ python -m models.experimental.moss_image.validation.cuda_reference \
 The upstream reference is pinned to OpenMOSS commit
 `c1355e6b1986dfe8fba3c0455783a05899212342`. Its vendored file has formatting
 and SPDX attribution changes only; its AST matches the original source.
-[Provenance](tt/vendor/PROVENANCE.json) records both hashes. The vendored GDN
-helpers have numerical changes described in their separate
-[provenance record](tt/vendor/tt_qwen35/PROVENANCE.json). Apache-2.0 licenses and
-upstream attribution are retained.
+[Provenance](tt/vendor/PROVENANCE.json) records both hashes. The GDN prefill uses an explicit FP32 SFPU recurrence in
+[tt/gated_delta.py](tt/gated_delta.py), replacing the earlier chunked vendor
+helpers. Apache-2.0 licenses and upstream attribution are retained.

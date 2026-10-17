@@ -32,12 +32,26 @@ The attention sequence is image first followed by the actual text tokens; padded
 keys are masked and the split-half rotary layout matches the official model.
 Classifier-free guidance and Euler latent updates use FP32.
 
+BF16 pointwise arithmetic executes one operation in FP32 and explicitly casts
+back to BF16 at each PyTorch eager boundary. This preserves ties-to-even rounding:
+the qualified runtime's direct BF16 addition instead rounds halfway values away
+from zero. It also avoids prematurely quantizing constants such as 1/25. Split-half
+RoPE uses two separately rounded BF16 products followed by a separately rounded
+sum, rather than the native fused rotary operation. Biased linear projections
+retain FP32 matmul output through bias addition and round once afterwards.
+SDPA explicitly disables approximate exponentiation and uses 128-token query/key
+chunks. Matched late-step SFT tests selected that configuration over 32-, 256-
+and 512-key-token alternatives; this is a measured accuracy choice, not a claim
+that it is universally optimal. These are model-local
+helpers; no process-wide TTNN monkeypatch is installed. The precision corrections
+reduce measured step error but do not establish final independent image parity.
+
 The prompt encoder retains full normalized token output and the official thinking
-chat template. Its GDN path uses FP32 L2 normalization, decay, chunk scan and
+chat template. Its GDN path uses FP32 L2 normalization, decay, explicit SFPU recurrence and
 residual state arithmetic where required. Zero-centered RMS weights are offset
 in FP32. Causal convolution and the gated normalization preserve reference
 rounding order. These details were needed for all-token component accuracy and
-are explicitly recorded in the GDN vendor provenance.
+are implemented in the model-local GDN recurrence.
 
 The VAE reverses the packed latent batch normalization before unpacking 2×2
 patches. It uses the checkpoint's decoder widths [96, 192, 384, 384], not the

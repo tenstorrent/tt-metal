@@ -46,7 +46,9 @@ class TTMossDiT:
 
     def __init__(self, checkpoint, device):
         import ttnn
+        from models.experimental.moss_image.tt import precision
 
+        self.ops = precision
         self.t = ttnn
         self.device = device
         self.cards = device.get_num_devices()
@@ -66,6 +68,12 @@ class TTMossDiT:
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
+        )
+        self.sdpa_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
         )
         self.metadata_cache = {}
 
@@ -110,33 +118,36 @@ class TTMossDiT:
         # Matrix [in,out]: column sharding splits output, row sharding input.
         shard = 1 if mode == "column" else 0 if mode == "row" else None
         w = self.parameter(name + ".weight", transpose=True, shard=shard, part=part)
-        y = t.matmul(x, w, compute_kernel_config=self.compute, memory_config=t.DRAM_MEMORY_CONFIG)
+        if bias is None:
+            bias = name + ".bias" in self.weights.mapping
+        # Native F.linear rounds after the bias epilogue. A BF16 matmul followed
+        # by a separate BF16 add introduces an additional rounding boundary.
+        options = {"dtype": t.float32} if bias else {}
+        y = t.matmul(x, w, compute_kernel_config=self.compute, memory_config=t.DRAM_MEMORY_CONFIG, **options)
         if mode == "row" and self.cards == 2:
             y = t.all_reduce(
                 y, cluster_axis=1, num_links=1, topology=t.Topology.Linear, memory_config=t.DRAM_MEMORY_CONFIG
             )
-        if bias is None:
-            bias = name + ".bias" in self.weights.mapping
         if bias:
-            # Bias must be added once after summing row-sharded partial products.
+            # Apply a replicated row-parallel bias once, after the FP32 reduction.
             b = self.parameter(name + ".bias", shard=2 if mode == "column" else None, part=part)
-            y = t.add(y, b)
+            y = t.add(y, t.typecast(b, t.float32))
+            y = t.typecast(y, t.bfloat16)
         return y
 
     def norm(self, x, name):
         # Match official FP32 variance, BF16 normalized activation, BF16 scale.
         t = self.t
         xf = t.typecast(x, t.float32)
-        var = t.mean(t.multiply(xf, xf), dim=-1, keepdim=True)
-        y = t.multiply(xf, t.rsqrt(t.add(var, 1e-6)))
-        return t.multiply(t.typecast(y, t.bfloat16), self.parameter(name + ".weight"))
+        var = t.mean(self.ops.multiply(xf, xf), dim=-1, keepdim=True)
+        y = self.ops.multiply(xf, t.rsqrt(self.ops.add(var, 1e-6)))
+        return self.ops.multiply(t.typecast(y, t.bfloat16), self.parameter(name + ".weight"))
 
     def situ(self, hidden, gate):
-        t = self.t
         # This bounded activation is part of MOSS; it is not ordinary SwiGLU.
-        bounded_gate = t.multiply(t.tanh(t.multiply(gate, 0.25)), 4.0)
-        bounded_hidden = t.multiply(t.tanh(t.multiply(hidden, 0.04)), 25.0)
-        return t.multiply(t.multiply(bounded_gate, t.sigmoid(gate)), bounded_hidden)
+        bounded_gate = self.ops.multiply(self.ops.tanh(self.ops.multiply(gate, 0.25)), 4.0)
+        bounded_hidden = self.ops.multiply(self.ops.tanh(self.ops.multiply(hidden, 0.04)), 25.0)
+        return self.ops.multiply(self.ops.multiply(bounded_gate, self.ops.sigmoid(gate)), bounded_hidden)
 
     def rope_and_mask(self, rope, sequence):
         t = self.t
@@ -173,9 +184,7 @@ class TTMossDiT:
             if sequence != padded:
                 y = t.pad(y, ((0, 0), (0, 0), (0, padded - sequence), (0, 0)), 0.0)
             if kind in ("q", "k"):
-                y = t.experimental.rotary_embedding_hf(
-                    y, cos, sin, is_decode_mode=False, memory_config=t.DRAM_MEMORY_CONFIG
-                )
+                y = self.ops.rotary_split_half(y, cos, sin)
             return y
 
         q, k, v = project("q"), project("k"), project("v")
@@ -188,6 +197,7 @@ class TTMossDiT:
             scale=128**-0.5,
             compute_kernel_config=self.compute,
             memory_config=t.DRAM_MEMORY_CONFIG,
+            program_config=self.sdpa_config,
         )
         if observe:
             observe("attention", y)
@@ -197,14 +207,13 @@ class TTMossDiT:
 
     def text_block(self, x, index, rope, observe=None):
         p = f"text_embedder.blocks.{index}"
-        x = self.t.add(x, self.attention(self.norm(x, p + ".norm1"), p, rope, text=True, observe=observe))
+        x = self.ops.add(x, self.attention(self.norm(x, p + ".norm1"), p, rope, text=True, observe=observe))
         y = self.norm(x, p + ".norm2")
         hidden = self.linear(y, p + ".ffn_up", "column")
         gate = self.linear(y, p + ".ffn_gate", "column")
-        return self.t.add(x, self.linear(self.situ(hidden, gate), p + ".ffn_down", "row"))
+        return self.ops.add(x, self.linear(self.situ(hidden, gate), p + ".ffn_down", "row"))
 
     def block(self, x, index, rope, modulation, observe=None):
-        t = self.t
         p = f"layers.{index}"
         shift_a, scale_a, gate_a, shift_f, scale_f, gate_f = modulation
 
@@ -213,14 +222,20 @@ class TTMossDiT:
                 observe(name, value)
             return value
 
-        y = emit("attention_input", t.add(t.multiply(self.norm(x, p + ".norm1"), t.add(scale_a, 1.0)), shift_a))
+        y = emit(
+            "attention_input",
+            self.ops.add(self.ops.multiply(self.norm(x, p + ".norm1"), self.ops.add(scale_a, 1.0)), shift_a),
+        )
         branch = self.attention(y, p, rope, observe=observe)
-        x = emit("attention_residual", t.add(x, t.multiply(branch, gate_a)))
-        y = emit("ffn_input", t.add(t.multiply(self.norm(x, p + ".norm2"), t.add(scale_f, 1.0)), shift_f))
+        x = emit("attention_residual", self.ops.add(x, self.ops.multiply(branch, gate_a)))
+        y = emit(
+            "ffn_input",
+            self.ops.add(self.ops.multiply(self.norm(x, p + ".norm2"), self.ops.add(scale_f, 1.0)), shift_f),
+        )
         hidden = self.linear(y, p + ".proj.ffn_up_gate", "column", part=(0, 2), bias=False)
         gate = self.linear(y, p + ".proj.ffn_up_gate", "column", part=(1, 2), bias=False)
         y = self.linear(self.situ(hidden, gate), p + ".proj.ffn_down", "row")
-        return emit("output", t.add(x, t.multiply(y, gate_f)))
+        return emit("output", self.ops.add(x, self.ops.multiply(y, gate_f)))
 
     def __call__(self, latents, timestep, context, height, width, *, skip_layers=(), observe=None):
         """Packed latents [1,N,128], context [1,L,4096] -> velocity [1,N,128]."""
@@ -236,7 +251,7 @@ class TTMossDiT:
             return value
 
         time = self.linear(self.upload(time_metadata(timestep)), "time_embedding.0")
-        time = emit("time_embedding", self.linear(t.silu(time), "time_embedding.2"))
+        time = emit("time_embedding", self.linear(self.ops.silu(time), "time_embedding.2"))
         mod = self.linear(time, "shared_block_modulation")
         head = self.linear(time, "video_head_modulation")
 
@@ -258,5 +273,5 @@ class TTMossDiT:
                 x = emit(f"block_{index:02d}", self.block(x, index, rope, modulation))
         x = t.slice(x, (0, 0, 0), (1, height * width, 3072))
         x = self.norm(x, "final_norm_video")
-        x = emit("head_input", t.add(t.multiply(x, t.add(scale, 1.0)), shift))
+        x = emit("head_input", self.ops.add(self.ops.multiply(x, self.ops.add(scale, 1.0)), shift))
         return emit("velocity", self.linear(x, "final_linear_video"))
