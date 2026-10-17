@@ -1168,3 +1168,33 @@ def test_reduce_int32_identity_scalar_is_not_lossy(device):
     tt_out = ttnn.to_torch(ttnn.sum(tt_a, dim=-1, keepdim=True, scalar=1.0))
 
     assert torch.all(tt_out == 2**25 + 1)
+
+
+# A 32x32 TILE has four 16x16 faces. #49715's reduce_row SUM/AVG fast path unpacks all four in
+# one UNPACR; distinct face constants catch a mix that random tiles and loose PCC miss.
+_FACE = 16
+_TILE = 32
+
+
+def _tile_with_distinct_faces(dtype):
+    tile = torch.empty((_TILE, _TILE), dtype=dtype)
+    tile[:_FACE, :_FACE] = 1
+    tile[:_FACE, _FACE:] = 2
+    tile[_FACE:, :_FACE] = 3
+    tile[_FACE:, _FACE:] = 4
+    return tile
+
+
+@pytest.mark.parametrize("op", [ttnn.sum, ttnn.mean], ids=["sum", "mean"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+def test_reduce_row_distinct_tile_faces(device, op, dtype):
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch_input = _tile_with_distinct_faces(torch_dtype).unsqueeze(0)
+    torch_op = torch.sum if op == ttnn.sum else torch.mean
+    # These four constants and a 32-wide row are exact in bf16 and fp32, so a face mix cannot hide
+    # inside rounding. atol is 0.
+    expected = torch_op(torch_input, dim=-1, keepdim=True)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    got = ttnn.to_torch(op(tt_input, dim=-1, keepdim=True))
+    assert torch.equal(expected, got), f"{op.__name__} {dtype} row reduce mixed tile faces"
