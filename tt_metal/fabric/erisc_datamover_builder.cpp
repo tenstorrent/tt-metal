@@ -1739,10 +1739,12 @@ tt::tt_metal::KernelBuildOptLevel FabricEriscDatamoverBuilder::get_kernel_opt_le
     if (opt_level_override.has_value()) {
         return opt_level_override.value();
     }
-    // Use Os (optimize for size) when VC1 is active to fit in code space
+    // VC1 is active on every router of a multi-mesh fabric, so this level governs all intra-mesh traffic
+    // there. O3 does not fit the active-erisc kernel config window with VC1; Os does, but it is what made
+    // intra-mesh CCLs ~40% slower than on a single mesh. O2 fits and brings them back to within ~10%.
     // Use O3 (optimize for performance) otherwise
     bool vc1_active = this->config.num_used_receiver_channels_per_vc[1] > 0;
-    return vc1_active ? tt::tt_metal::KernelBuildOptLevel::Os : tt::tt_metal::KernelBuildOptLevel::O3;
+    return vc1_active ? tt::tt_metal::KernelBuildOptLevel::O2 : tt::tt_metal::KernelBuildOptLevel::O3;
 }
 
 void FabricEriscDatamoverBuilder::teardown_from_host(

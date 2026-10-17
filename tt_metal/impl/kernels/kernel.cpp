@@ -817,6 +817,10 @@ uint64_t Kernel::compute_hash() const {
         ++num_include_paths;
     });
     hasher.update(static_cast<uint64_t>(num_include_paths));
+    // The optimization level changes the binary, so it must be in the cache key; without it a kernel
+    // rebuilt at another level (e.g. TT_METAL_FABRIC_OPT_LEVEL) silently reuses the cached binary.
+    hasher.update(this->get_compiler_opt_level());
+    hasher.update(this->get_linker_opt_level());
     return hasher.digest();
 }
 
