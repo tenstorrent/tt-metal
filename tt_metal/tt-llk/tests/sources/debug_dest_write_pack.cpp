@@ -68,9 +68,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     constexpr std::uint32_t TILE_IDX = 0;
 
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<false /* untilize */, false /* tilize */>>(
-        formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES /* tile_size */, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
-    _llk_pack_init_wrapper_<llk_test_pack_mode_v<false /* untilize */, false /* tilize */>, false /* zero_output */>(
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<false /*untilize*/, false /*tilize*/>>(
+        formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES /*tile_size*/, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+    _llk_pack_init_wrapper_<llk_test_pack_mode_v<false /*untilize*/, false /*tilize*/>, false /*zero_output*/>(
         formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
