@@ -37,11 +37,14 @@ FORMATS = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
 TILE_CNT = 4
 DST_OFFSETS = [1, 2, 3]
 
+# Per-tile value base. Any stride >= ELEMENTS_PER_TILE keeps tile and lane decodable from a raw value.
+TILE_VALUE_STRIDE = 4 * ELEMENTS_PER_TILE
+
 
 def _build_input_tiles() -> torch.Tensor:
-    """TILE_CNT tilized Int32 tiles; tile k holds (k + 1) * 4096 + lane, so every tile differs in every lane."""
+    """TILE_CNT tilized Int32 tiles; tile k holds (k + 1) * TILE_VALUE_STRIDE + lane, so every tile differs in every lane."""
     lane = torch.arange(ELEMENTS_PER_TILE, dtype=torch.int32)
-    return torch.cat([(k + 1) * 4096 + lane for k in range(TILE_CNT)])
+    return torch.cat([(k + 1) * TILE_VALUE_STRIDE + lane for k in range(TILE_CNT)])
 
 
 def _tile(tensor: torch.Tensor, k: int) -> torch.Tensor:
