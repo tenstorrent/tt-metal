@@ -31,6 +31,32 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 
+// Gate-only fused sqrt(softplus(x)) + bias SFPU pass (fp32-accurate softplus, see the LLK header). Only
+// Blackhole ships it; elsewhere apply_score_func_add_bias keeps the stock softplus / sqrt / add sequence.
+#if __has_include("ckernel_sfpu_moe_gate_sqrt_softplus.h")
+#define MOE_GATE_FUSED_SQRT_SOFTPLUS 1
+#ifdef TRISC_MATH
+#include "ckernel_sfpu_moe_gate_sqrt_softplus.h"
+#endif
+namespace ckernel {
+// x in DEST tile idst_x, bias in idst_bias -> sqrt(softplus(x)) over idst_x, sqrt(softplus(x)) + bias over idst_bias.
+ALWI void moe_gate_sqrt_softplus_add_bias_tile_init() {
+    MATH((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::moe_gate_sqrt_softplus_init)));
+}
+ALWI void moe_gate_sqrt_softplus_add_bias_tile(uint32_t idst_x, uint32_t idst_bias) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_moe_gate_sqrt_softplus_add_bias,
+        (8 /* ITERATIONS */),
+        idst_x,
+        idst_bias,
+        idst_bias,
+        VectorMode::RC)));
+}
+}  // namespace ckernel
+#endif
+
 namespace blocks {
 // Router affinity activations applied to the raw gate logits.
 constexpr uint32_t SCORE_FUNC_SIGMOID = 0;       // DeepSeek-V3 / Kimi
@@ -45,15 +71,13 @@ constexpr ckernel::TopkTieOrder GATE_TOPK_TIE_ORDER =
 
 // Stable engines: the comparator (STABLE_SORT) works on any key. The rank-tag engine (RANK_STAMPED)
 // stamps a GATE_TAG_BITS-wide chain-position tag into the low mantissa bits of each fp32 key and lets
-// the plain network order ties. It is lossless only while those bits are zero, which holds for keys
-// unpacked through SrcA as TF32 (mantissa bits 12..0 zero) and is certified by the factory as
-// sort_keys_tf32. It sorts stable-by-index only where candidates arrive in index order: the
+// the plain network order ties. The keys are full fp32, so the stamp clears the tag field first and
+// they compare at 23 - GATE_TAG_BITS = 17 mantissa bits.
+// It sorts stable-by-index only where candidates arrive in index order: the
 // single-group expert top-k and the group-score sort (column == group id), not the grouped path's
 // final top-k, whose winning-group tiles arrive in group-sum order. Everything else keeps the comparator.
 constexpr uint32_t GATE_TAG_BITS = 6;
-constexpr uint32_t TF32_ZERO_LOW_MANTISSA_BITS = 13;  // fp32 mantissa (23) - TF32 mantissa (10)
 static_assert((1u << GATE_TAG_BITS) >= 64, "a two-tile chain (ranks 0..63) must fit the tag field");
-static_assert(GATE_TAG_BITS <= TF32_ZERO_LOW_MANTISSA_BITS, "the rank tag must sit inside the TF32 zero bits");
 
 // The gate's TopK primitives in one place: stable_sort selects stable mode, rank_tag its engine
 // (rank tags, else the comparator). Every call site below goes through these.
@@ -166,6 +190,84 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
         pack_tile(0, cb_activated_scores_id);
         tile_regs_release();
         cb_activated_scores.push_back(1);
+    }
+}
+
+// apply_score_func + add_bias in one pass, read straight from the raw (bf16 or fp32) input CBs: bf16 is
+// exact through SrcA and fp32 inputs are UnpackToDestFp32, so DEST holds the exact logits and bias, and
+// no fp32 upcast pass is needed. The bias add runs on the SFPU in full fp32 (the FPU add would read the
+// activation through SrcA as TF32 first). Packs the unbiased activated scores (gathered later for the
+// weights) and the biased sort keys.
+template <uint32_t score_func, bool dump_biased = false>
+void apply_score_func_add_bias(
+    uint32_t cb_in_scores_id,
+    uint32_t cb_in_bias_id,
+    uint32_t cb_activated_scores_id,
+    uint32_t cb_biased_scores_id,
+    uint32_t width_tiles,
+    uint32_t cb_biased_dump_id = 0) {
+    CircularBuffer cb_in_scores(cb_in_scores_id);
+    CircularBuffer cb_in_bias(cb_in_bias_id);
+    CircularBuffer cb_activated_scores(cb_activated_scores_id);
+    CircularBuffer cb_biased_scores(cb_biased_scores_id);
+    CircularBuffer cb_biased_dump(cb_biased_dump_id);
+    for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
+        cb_in_scores.wait_front(1);
+        cb_in_bias.wait_front(1);
+        tile_regs_acquire();
+        // Reconfigure the unpacker for the input (a prior top-k iteration may have left it on UInt16).
+        reconfig_data_format_srca(cb_in_scores_id);
+        copy_init(cb_in_scores_id);
+        copy_tile(cb_in_scores_id, 0, 0);
+        reconfig_data_format_srca(cb_in_scores_id, cb_in_bias_id);
+        copy_init(cb_in_bias_id);
+        copy_tile(cb_in_bias_id, 0, 1);
+#ifdef MOE_GATE_FUSED_SQRT_SOFTPLUS
+        if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
+            // sqrt(softplus(x)) (beta=1, threshold=20, as torch) with an fp32-accurate softplus, and the bias
+            // add, in one SFPU pass.
+            moe_gate_sqrt_softplus_add_bias_tile_init();
+            moe_gate_sqrt_softplus_add_bias_tile(0, 1);
+        } else
+#endif
+        {
+            if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
+                // sqrt(softplus(x)) with beta=1, threshold=20 (matches torch.nn.functional.softplus defaults).
+                constexpr uint32_t const_1_fp32 = 0x3F800000;   // 1.0f -> beta and beta_reciprocal
+                constexpr uint32_t const_20_fp32 = 0x41A00000;  // 20.0f -> threshold
+                softplus_tile_init();
+                softplus_tile(0, const_1_fp32, const_1_fp32, const_20_fp32);
+                sqrt_tile_init();
+                sqrt_tile(0);
+            } else {
+                sigmoid_tile_init();
+                sigmoid_tile(0);
+            }
+            add_binary_tile_init();
+            add_binary_tile(0, 1, 1);
+        }
+        tile_regs_commit();
+        cb_in_scores.pop_front(1);
+        cb_in_bias.pop_front(1);
+
+        cb_activated_scores.reserve_back(1);
+        cb_biased_scores.reserve_back(1);
+        if constexpr (dump_biased) {
+            cb_biased_dump.reserve_back(1);
+        }
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_activated_scores_id);
+        pack_tile(0, cb_activated_scores_id);
+        pack_tile(1, cb_biased_scores_id);
+        if constexpr (dump_biased) {
+            pack_tile(1, cb_biased_dump_id);
+        }
+        tile_regs_release();
+        cb_activated_scores.push_back(1);
+        cb_biased_scores.push_back(1);
+        if constexpr (dump_biased) {
+            cb_biased_dump.push_back(1);
+        }
     }
 }
 
@@ -291,6 +393,37 @@ void sum_top_experts_per_group(
     tile_regs_acquire();
     for (uint32_t i = 0; i < summed_experts_per_group; i += 2) {
         add_tiles(cb_top_experts_per_group_id, cb_top_experts_per_group_id, i, i + 1, 0);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_reconfig_data_format(cb_group_summed_scores_id);
+    pack_tile(0, cb_group_summed_scores_id);
+    tile_regs_release();
+
+    cb_group_summed_scores.push_back(1);
+    cb_top_experts_per_group.pop_front(summed_experts_per_group);
+}
+
+// sum_top_experts_per_group in full fp32: the top tiles are unpacked straight to DEST
+// (cb_top_experts_per_group is UnpackToDestFp32) and summed on the SFPU in index order, instead of an
+// FPU add whose SrcA/SrcB loads truncate each summand to TF32.
+void sum_top_experts_per_group_fp32(
+    const uint32_t cb_top_experts_per_group_id,
+    const uint32_t cb_group_summed_scores_id,
+    uint32_t summed_experts_per_group) {
+    CircularBuffer cb_top_experts_per_group(cb_top_experts_per_group_id);
+    CircularBuffer cb_group_summed_scores(cb_group_summed_scores_id);
+    cb_top_experts_per_group.wait_front(summed_experts_per_group);
+
+    cb_group_summed_scores.reserve_back(1);
+    tile_regs_acquire();
+    reconfig_data_format_srca(cb_top_experts_per_group_id);
+    copy_init(cb_top_experts_per_group_id);
+    copy_tile(cb_top_experts_per_group_id, 0, 0);
+    for (uint32_t i = 1; i < summed_experts_per_group; i++) {
+        copy_tile(cb_top_experts_per_group_id, i, 1);
+        add_binary_tile_init();
+        add_binary_tile(0, 1, 0);
     }
     tile_regs_commit();
     tile_regs_wait();
