@@ -9,18 +9,18 @@ What changed in this release is in `RELEASE_NOTES.md`.
 
 | | |
 |---|---|
-| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-799a223-ffd1a57` |
-| Size | 21.8 GB on disk (5.4 GB compressed), built 2026-10-16 |
-| tt-metal | `799a223987c18909ced4bab280e4bccf673a73b0` |
+| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-c9cfb00-ffd1a57` |
+| Size | 22.1 GB on disk (5.3 GB compressed), built 2026-10-17 |
+| tt-metal | `c9cfb008c651ea5b5a7978f0569cd4358196f8ce` |
 | tt-inference-server | `ffd1a57ceece25c02b668bbcc4682dba52dbd9da` |
-| vllm-tt-plugin | `8cb999ebf8579e0733e378d852bb2139f7cac064` |
+| vllm-tt-plugin | `ff71d290df8e95e5e956d49ba860478db2cb034c` |
 | vLLM | 0.31.0 (torch 2.11.0+cpu, transformers 5.12.1) |
 | Model | [`deepseek-ai/DeepSeek-V4.1-Flash`](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash) (476 GB, 48 shards) |
 | Hardware | 1x Blackhole Galaxy |
 
 All branches are `ssinghal/dsv4p1`.
 `BUILD_INFO` in the image records the three commits.
-The image is an overlay on the previous image (`0.24.0-3dce07e-233b250`).
+The image is an overlay on the previous image (`0.24.0-799a223-ffd1a57`).
 The compiled tt-metal and the Python environment are reused.
 `models/`, the tt-inference-server tree and the plugin package come from the commits above.
 The `assets/` folder inside the image is older than the one in the repo: take runtime specs from the repo.
@@ -40,12 +40,15 @@ Everything else in the launch stays the same.
 | Default with images | `runtime_spec_b16_k5_131072_vision.json` | 16 | 131,072 | yes |
 | Long context, 16 users | `runtime_spec_b16_k5_262144_vision.json` | 16 | 262,144 | yes |
 | Long context, 4 users | `runtime_spec_b4_k5_1048576.json` | 4 | 1,048,576 | no |
+| Long context with images, 4 users, 1M | `runtime_spec_b4_k5_1048576_vision.json` | 4 | 1,048,576 | yes |
 | Long context with images, 4 users | `runtime_spec_b4_k5_524288_vision.json` | 4 | 524,288 | yes |
+| Prefix caching + chunked prefill, 16 users | `runtime_spec_b16_k5_262144_vision_apc.json` | 16 | 262,144 | yes |
+| Prefix caching + chunked prefill, 4 users | `runtime_spec_b4_k5_1048576_vision_apc.json` | 4 | 1,048,576 | yes |
 
 Shared settings:
 - Speculative decoding: 5 draft tokens per round, lossless.
 - Sampling on the device: temperature, top-k, top-p, per-request seed.
-- KV cache: fp8 pool, no prefix caching.
+- KV cache: fp8 pool. Prefix caching is off, except in the two `_apc` specs.
 - Chat template: non-thinking.
 - More requests than users wait in the vLLM queue.
 
@@ -70,7 +73,7 @@ It is 131,584 by default and 262,144 in the 16-user long-context spec.
 `docker run` pulls it on first use.
 
 ```bash
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-799a223-ffd1a57
+export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-c9cfb00-ffd1a57
 docker pull $IMAGE
 ```
 
@@ -81,7 +84,7 @@ export CKPT=/path/to/deepseek-v41-flash        # the checkpoint (read-only for t
 export CACHE=/path/to/dsv41_cache              # weights/ and kernels/, reused across starts
 export STATE=/path/to/dsv41_state              # scratch dirs the server writes to
 export SPEC=$PWD/assets/runtime_spec_b16_k5_131072.json   # run from models/demos/blackhole/deepseek_v41_flash/ in tt-metal
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-799a223-ffd1a57
+export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-c9cfb00-ffd1a57
 
 mkdir -p $CKPT $CACHE/weights $CACHE/unified $CACHE/kernels $STATE/cache_root $STATE/logs $STATE/traces
 
@@ -191,7 +194,7 @@ Streaming (`"stream": true`) works the same way.
 
 ### Request fields
 
-Checked on this image with the API tests in `tools/serving_tests/` (23 of 23 pass on each configuration).
+Checked on the previous image (`0.24.0-799a223-ffd1a57`) with the API tests in `tools/serving_tests/` (23 of 23 pass on each configuration). Not re-run on this image.
 
 | Field | Behaviour |
 |---|---|
@@ -239,13 +242,10 @@ Verified configurations:
 - 16 users up to 262,144 tokens.
 - 4 users up to 524,288 tokens.
 
-**4 users with images at about 1M tokens does not fit.**
-The prefill warm-up needs one contiguous 21 MB block per bank for a 160 MiB buffer.
-With the vision tower loaded, the largest free block is 17-19 MB.
-Free DRAM is 79-108 MB per bank, but fragmented.
-It failed at 1,048,576 tokens (chunk 512 and 256) and at 1,000,448 tokens.
+- 4 users up to 1,048,576 tokens (`runtime_spec_b4_k5_1048576_vision.json`).
+  The Engram reduce-scatter of the prefill warm-up is split in 4 when vision is on, so the blocks it needs fit.
 
-Checks on this image (vision on, speculation on):
+Checks on the previous image (vision on, speculation on); this image passed the image, 16-image and 16-concurrent stress tests on the 16-user 262,144 and the 4-user 1,048,576 vision configurations:
 - Text, one image, two images, 4 image + 4 text at once, streaming.
 - 16 numbered images in one prompt: all 16 labels returned.
 - One 2400 x 1800 image: resized to 1,019 tokens, answered correctly.
@@ -284,7 +284,37 @@ Other points on an earlier tree (plain decode, not re-run on this image):
 | 8 | 524,288 | 22 min | 141 s | works |
 | 8 | 1,048,576 | - | - | out of DRAM at warm-up |
 
+## Prefix caching and chunked prefill (opt-in)
+
+Start with `runtime_spec_b16_k5_262144_vision_apc.json` or `runtime_spec_b4_k5_1048576_vision_apc.json` (see Configurations).
+They set `enable-prefix-caching`, `DSV41_APC=1` and a token budget of 4,096 per step.
+The default specs keep both off.
+
+What it does:
+- Requests that share a prefix (a system prompt, few-shot examples, a long document) skip the shared part.
+- The model keeps snapshots of the prefill state in host memory (6 GiB, a snapshot at each power of two of the prompt length).
+- A long prompt is split into 4,096-token steps, so decoding of the other users continues between steps.
+
+Measured with speculation on (one server per row):
+
+| Configuration | Burst TTFT p50 | Worst decode stall during a 32k prompt | GSM8K |
+|---|---|---|---|
+| 16 users, 262,144 tokens, default spec | 5.5 s | 32.7 s | 94.09 % (workflow) |
+| 16 users, 262,144 tokens, `_apc` spec, this image | 2.2 s | 9.2 s | 95.60 % (workflow) |
+| 4 users, 1,048,576 tokens, no APC, budget 4,096 | 15.5 s | 12.6 s | 96.5 / 97.7 % (own client, 256 questions) |
+| 4 users, 1,048,576 tokens, `_apc` spec | 12.3 s | 12.7 s | 97.7 / 96.9 % (own client, 256 questions) |
+
+The burst and stall numbers of the default spec and of the 4-user rows come from tests of the same code on a branch (images off); the 16-user `_apc` row and the GSM8K scores marked workflow are from this image.
+
+Long shared prefix (cold, then a hit): 100,000 tokens 107-124 s then 39-46 s; 300,000 tokens at 4 users 504 s then 69 s.
+Limits:
+- Prompts with images are not cached.
+- A long prompt takes 1-3 s longer to its first token with the small budget.
+- Setting `DSV41_PIDX_SHARD=0` at 262,144 tokens breaks cache hits (answers wrong from 16k); leave it unset.
+
 ## Performance
+
+The tables below were measured on the previous image (`0.24.0-799a223-ffd1a57`); the benchmark workflow was not re-run on this image. The prefix-caching and chunked-prefill numbers are in their own section.
 
 Method for all tables:
 - GSM8K 8-shot prompts, about 700 tokens, 256 output tokens.
@@ -378,6 +408,8 @@ All 1319 test questions, flexible-extract in percent, standard error about 0.6.
 | 4 users, 1,048,576 tokens | 4 | **94.92** | 65.1 |
 | 16 users, 262,144 tokens, images on | 16 | **93.56** and **93.48** (two runs) | 70.1 and 70.5 |
 | Previous image, 16 users, 131,072 tokens | 16 | 95.45 | |
+| **This image**, 16 users, 262,144 tokens, images on | 16 | **94.09** | 68.4 |
+| **This image**, same, `_apc` spec | 16 | **95.60** | 66.2 |
 
 All pass the workflow gate (within 5 % of the model card's 93.0).
 Sampling at temperature 1.0 moves a score by about half a percent between runs.

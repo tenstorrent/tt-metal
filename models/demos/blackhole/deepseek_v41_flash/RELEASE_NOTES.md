@@ -1,16 +1,22 @@
 # DeepSeek-V4.1-Flash on Blackhole Galaxy: release notes
 
-## This release: image `0.24.0-799a223-ffd1a57` (vLLM 0.31.0)
+## This release: image `0.24.0-c9cfb00-ffd1a57` (vLLM 0.31.0)
 
 | | |
 |---|---|
-| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-799a223-ffd1a57` |
-| tt-metal | `799a223987c18909ced4bab280e4bccf673a73b0` (branch `ssinghal/dsv4p1`) |
+| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-c9cfb00-ffd1a57` |
+| tt-metal | `c9cfb008c651ea5b5a7978f0569cd4358196f8ce` (branch `ssinghal/dsv4p1`; the image was built from this commit, later commits change documentation only) |
 | tt-inference-server | `ffd1a57ceece25c02b668bbcc4682dba52dbd9da` (branch `ssinghal/dsv4p1`) |
-| vllm-tt-plugin | `8cb999ebf8579e0733e378d852bb2139f7cac064` (branch `ssinghal/dsv4p1`) |
+| vllm-tt-plugin | `ff71d290df8e95e5e956d49ba860478db2cb034c` (branch `ssinghal/dsv4p1`) |
 | Stack | vLLM 0.31.0, torch 2.11.0+cpu, transformers 5.12.1 |
-| Previous image | `0.24.0-3dce07e-233b250` (vLLM 0.31.0, 16 users, 131,072 tokens, up to 4 images per prompt) |
-| Build | an overlay on the previous image's build: the compiled tt-metal (C++), the Python environment and the vLLM install are reused unchanged (no file outside `models/` differs in tt-metal between the two commits); `models/`, the tt-inference-server tree, the plugin package, `model_spec.json` and `BUILD_INFO` are replaced from the new commits. `BUILD_INFO` in the image records the three shas and the note. |
+| Previous image | `0.24.0-799a223-ffd1a57` (vLLM 0.31.0; before it `0.24.0-3dce07e-233b250`) |
+| Build | an overlay on the previous image (`0.24.0-799a223-ffd1a57`): the compiled tt-metal (C++), the Python environment and the vLLM install are reused unchanged (no file outside `models/` differs in tt-metal between `3dce07e3792` and this commit); `models/` and the plugin package are replaced from the commits above, the tt-inference-server tree is unchanged. |
+
+## What changed since `0.24.0-799a223-ffd1a57`
+
+- **Plain decode is fixed.** A server without speculative decoding used the fused decode-indexer backend and answered wrongly at 16 users (GSM8K 85.67 % at 131,072 tokens, 80.59 % at 262,144). Plain decode now uses the matmul backend up to 262,144 index entries, like the speculative servers (`DSV41_IDX_SWITCH` default 262144 for every launch). See "Known issues" for how this was verified.
+- **Prefix caching (APC) and chunked prefill, opt-in.** New runtime specs `runtime_spec_b16_k5_262144_vision_apc.json` and `runtime_spec_b4_k5_1048576_vision_apc.json` start the server with APC on and a token budget of 4,096 per step. Shared-prefix bursts get their first token about 3x sooner at 16 users / 262,144 tokens, and a 32k-token prompt no longer stops decoding for 33 s (9 s). The default specs are unchanged (APC off, budget 67,584).
+- **Image input at 4 users and 1,048,576 tokens** now works (`runtime_spec_b4_k5_1048576_vision.json`). The Engram reduce-scatter of the prefill trace capture is split into 4 pieces when vision is on (`DSV41_PFA_ENGRAM_RS_SPLIT`), which makes the contiguous blocks it needs 4 times smaller.
 
 ## What this release adds
 
@@ -22,8 +28,10 @@ The budget that fits one galaxy is about **1M tokens of context per mesh row** (
 |---|---|---|---|---|---|
 | Default (unchanged) | 16 | 131,072 | k = 5 | optional | `assets/runtime_spec_b16_k5_131072.json` / `_vision.json` |
 | **Long context, 16 users** | 16 | **262,144** | k = 5 | yes | `assets/runtime_spec_b16_k5_262144_vision.json` |
-| **Long context, 4 users** | 4 | **1,048,576** | k = 5 | **no** (does not fit) | `assets/runtime_spec_b4_k5_1048576.json` |
+| **Long context, 4 users** | 4 | **1,048,576** | k = 5 | optional | `assets/runtime_spec_b4_k5_1048576.json` / `_vision.json` |
 | **Long context with images, 4 users** | 4 | **524,288** | k = 5 | yes | `assets/runtime_spec_b4_k5_524288_vision.json` |
+| **APC + chunked prefill, 16 users** (opt-in) | 16 | 262,144 | k = 5 | yes | `assets/runtime_spec_b16_k5_262144_vision_apc.json` |
+| **APC + chunked prefill, 4 users** (opt-in) | 4 | 1,048,576 | k = 5 | yes | `assets/runtime_spec_b4_k5_1048576_vision_apc.json` |
 
 Also measured on the same code (plain decode, not shipped as specs): 8 users at 524,288 tokens, and 8 users at 1,048,576 tokens does **not** fit (out of DRAM at warm-up).
 
@@ -45,7 +53,7 @@ Spec decode (k = 5, lossless) now runs at 262,144 tokens (16 users) and 1,048,57
   `{"error": {"message": "At most 16 image(s) may be provided in one prompt. (parameter=image)", "type": "BadRequestError", "param": "image", "code": 400}}` and the server keeps serving.
 - An image is at most `max_image_tokens` = 1,024 tokens (31 x 31 token grid, about 1302 x 1302 pixels, 8,649 ViT patches); larger images are resized, keeping the aspect ratio.
 - Works together with speculative decoding and with the long-context configurations above that list image input: verified at 16 users / 262,144 tokens and 4 users / 524,288 tokens.
-- **Does not fit at 4 users and about 1M tokens**: with the vision tower loaded (about 22 MB per DRAM bank) the prefill trace warm-up needs one contiguous 21 MB block per bank for a 160 MiB buffer and the largest block left is 17-19 MB (79-108 MB per bank free in total). Tried: 1,048,576 tokens at chunk 512 and 256, and 1,000,448 tokens. Use the 4-user text spec at 1M tokens or the 524,288-token vision spec.
+- At 4 users and 1,048,576 tokens image input needed a fix of the prefill trace capture (the vision tower, about 22 MB per DRAM bank, left no contiguous 21 MB block for the 160 MiB reduce-scatter buffer). The Engram reduce-scatter is now split into 4 pieces along the hidden dimension when `DSV41_VISION=1`; the result is the same up to bf16 summation order (test `tests/test_engram_rs_split.py`, PCC at least 0.99995). Verified in this image at 4 users / 1,048,576 tokens: image checks, 100,020-token needle, GSM8K, and with APC on.
 
 ### 4. Fixes
 
@@ -71,6 +79,23 @@ Method: GSM8K 8-shot prompts (about 700 tokens), 256 output tokens, `vllm bench 
 Against what the previous image `0.24.0-3dce07e-233b250` shipped (16 users, 131,072 tokens: greedy TPOT 27.7 / 33.7 / 43.7 / 52.5 / 80.1 ms, TTFT 1.24 / 1.51 / 1.54 / 1.96 / 2.75 s, 168.3 tok/s at 16 requests): the default configuration of this release is the same or faster at every concurrency (TPOT 0.8 ms higher at one request, 9.7 ms lower at 16; TTFT lower throughout; throughput up to 17 % higher at 16 requests), and the 262,144-token server has the same speed within the run-to-run noise (3-4 ms). The previous image's numbers were measured on other hosts, so part of the difference can be the hosts; an A/B run of the old image on the same host was not done. The two fixes of this release do not change speculative decoding speed (the 262,144-token server measured 29.95 / 33.0 / 41.4 / 49.8 / 73.9 ms greedy on the same configuration before them).
 The 1M-token and 524,288-token servers are slower than the 16-user ones at the same concurrency (every decode step and every prefill chunk scores the index entries of the whole context; TTFT +0.3-0.4 s). A 100,020-token prompt prefills in 115-117 s at 16 users / 262,144 tokens, 132-134 s at 4 users / 524,288, and 158-159 s at 4 users / 1,048,576 tokens.
 
+### Prefix caching and chunked prefill (opt-in specs), measured with `tools/` clients on the rebased branch
+
+Method: 16 prompts of about 727 tokens with a shared 8-shot header; a 32k-token prompt arriving 4 s after 8 short chats. Speculative decoding k = 5.
+
+| Configuration | APC | Token budget | Burst TTFT p50 | Worst decode stall during the 32k prompt |
+|---|---|---|---|---|
+| 16 users, 262,144 tokens | off | 67,584 | 5.5 s | 32.7 s |
+| 16 users, 262,144 tokens | off | 4,096 | 6.2 s | 9.1 s |
+| 16 users, 262,144 tokens | on | 4,096 | 2.1 s | 9.1 s |
+| 16 users, 262,144 tokens, images on, in this image | on | 4,096 | 2.2 s | 9.2 s |
+| 4 users, 1,048,576 tokens | on | 67,584 | 11.9 s | 47.9 s |
+| 4 users, 1,048,576 tokens | off | 4,096 | 15.5 s | 12.6 s |
+| 4 users, 1,048,576 tokens | on | 4,096 | 12.3 s | 12.7 s |
+
+Long shared prefix (needle prompt, cold then cache hits, 4 users and 16 users): a 100,000-token prefix answers in 39-46 s on a hit against 107-124 s cold at 16 users, and in 59 s against 166 s at 4 users / 1,048,576 tokens; a 300,000-token prefix 69 s against 504 s at 4 users / 1,048,576 tokens. The long prompt itself takes 1-3 s longer to its first token with a small budget (34.5 s -> 35.8 s at 16 users).
+The burst numbers at 4 users queue 16 requests on 4 slots.
+
 ## Accuracy
 
 GSM8K 8-shot (`dsv41_gsm8k_cot`, all 1319 questions, tt-inference-server `evals` workflow from the image, temperature 1.0, flexible-extract, standard error about 0.6):
@@ -82,6 +107,10 @@ GSM8K 8-shot (`dsv41_gsm8k_cot`, all 1319 questions, tt-inference-server `evals`
 | 4 users, 1,048,576 tokens | 94.92 % |
 | 16 users, 262,144 tokens, image input on | **93.56 % and 93.48 %** (two runs on the same server) |
 | Previous image, 16 users, 131,072 tokens | 95.45 % |
+| **This image**, 16 users, 262,144 tokens, image input on (default spec) | **94.09 %** |
+| **This image**, 16 users, 262,144 tokens, image input on, APC on, budget 4,096 | **95.60 %** |
+| Plain decode, 16 users, 131,072 tokens, matmul indexer (previous image, `DSV41_IDX_BACKEND=matmul`) | 95.22 % (85.67 % with the fused indexer) |
+| Plain decode, 16 users, 262,144 tokens, matmul indexer (previous image, `DSV41_IDX_BACKEND=matmul`) | 94.47 % (80.59 % with the fused indexer) |
 
 The 16-user 262,144-token server scores about 2 points lower than the other configurations (about 3 standard errors, reproduced on a second run). It passes the workflow's gate (within 5 % of the model card's 93.0). Checks made to find the cause: vision on or off makes no difference (131,072 tokens: 95.38 % with, 95.22 % without; 262,144 tokens: 93.5 % with, 93.18 % without and with the column-sharded RoPE tables switched off), the new code is not the cause at the default context (95.22 % at 131,072 tokens on this image), and 163,840 tokens scored 94.54 %. **The cause of this 2-point gap is not identified** (the speculative servers already run the matmul decode indexer; a plain-decode server on the fused indexer scored lower, see "Known issues"). The 262,144-token server passes every functional test and has the speed of the default configuration.
 
@@ -105,13 +134,30 @@ Each configuration was served once and every test ran against that one server (n
 The default 131,072-token configuration (16 users, no images) was re-measured too: sanity pass, the 20,020-token prompt (4817), the 100,020-token needle at the end and at the start (4817 / 4817, prefill 97.3 / 99.5 s), benchmarks, and GSM8K (95.22 %; 95.38 % with image input on).
 Model-level device test of the RoPE fix (`tests/test_decode_batch_sensitivity.py`, 4 layers): the logits of a user are bit-identical (24 of 24 steps) whatever the other users of its mesh row do; the 40-layer variant shows run-to-run noise in the serving environment of the test wrapper (MoE fp32 accumulation / bfp8 flags) and was not conclusive there.
 
+## Testing done on `0.24.0-c9cfb00-ffd1a57`
+
+Each configuration was served once and tested against that server (tools in `tools/serving_tests/`).
+
+| Test | 16 users / 262,144, images (default spec) | 16 users / 262,144, images, APC + budget 4,096 | 4 users / 1,048,576, images, APC + budget 4,096 |
+|---|---|---|---|
+| Sanity, 20,020-token prompt, 100,020-token needle | pass | not run | pass |
+| Image checks, 16 images in one prompt, 17 images -> HTTP 400, 16-concurrent image stress | pass | pass (vision suite) | pass |
+| Prefix sweep (needle prefix, cold then hits): 8k / 32k / 100k tokens | not applicable | correct at 32k and 100k; 8k other-suffix hit wrong (cold and same-prompt hit right) | correct at 16k and 100k |
+| GSM8K 8-shot, workflow (flexible-extract) | 94.09 % | 95.60 % | not run |
+| GSM8K 8-shot, sampled, 256 questions, own client | not run | 98.4 % and 97.7 % | on the branch (prior to the image): 96.9 % |
+
+Not run on this image: the benchmark workflow, the serving-API suite, the overload test, and a plain-decode (no speculative config) server; the plain-decode fix was verified on the previous image through `DSV41_IDX_BACKEND=matmul` (same selection the new default makes), not on this image.
+
 ## Known issues
 
-- **Plain decode (no speculation) on the image `0.24.0-799a223-ffd1a57` answers wrongly at 16 users: GSM8K 85.67 % at 131,072 tokens and 80.59 % at 262,144 tokens** (speculation: 95.2 % and 93.5 %). Cause: servers without a speculative config used the fused decode-indexer backend (default switch 65,536 entries); speculative servers set `DSV41_IDX_SWITCH=262144` and run the matmul backend. With `DSV41_IDX_BACKEND=matmul` on the same image and protocol plain decode scores **95.22 % at 131,072 tokens and 94.47 % at 262,144 tokens**. The fix (source commit `6c50266b817`: the 262,144 switch default for plain decode too) is not in this image; until the image is rebuilt, start plain-decode servers with `DSV41_IDX_BACKEND=matmul`. Requests that decode without speculation inside a speculative server (penalties, prompts above `DSV41_VLLM_SPEC_ISL_MAX`) run on the speculative server's matmul backend. Ruled out: the plain-decode RoPE change (the old fused kernel scores 74.68 % at 262,144 tokens), the sampler (0.02-0.04 % mismatch against a CPU reference at the same random numbers), request admission pattern, vision. Why the fused backend answers wrongly at 4 users per mesh row is not understood; no shipped configuration uses it.
+- **Plain decode on the previous image `0.24.0-799a223-ffd1a57` answered wrongly at 16 users (GSM8K 85.67 % at 131,072 tokens, 80.59 % at 262,144 tokens; speculation 95.2 % and 93.5 %).** Cause: servers without a speculative config used the fused decode-indexer backend (default switch 65,536 entries); speculative servers ran matmul. With the matmul backend plain decode scored 95.22 % and 94.47 %. This image makes matmul the default up to 262,144 index entries for plain decode too; it was verified through the environment variable on the previous image, not on a plain-decode server of this image. The fused backend is still in the code (it is selected above 262,144 entries and by `DSV41_IDX_BACKEND=fused`) and still answers wrongly at 4 users per mesh row; why is not understood. Ruled out: the plain-decode RoPE change (the old fused RoPE kernel scores 74.68 %), the sampler (0.02-0.04 % mismatch against a CPU reference at the same random numbers), request admission, vision.
 - **16 users at 262,144 tokens score about 2 points lower on GSM8K** (93.5 % against 95.2-95.4 % at 131,072 tokens), cause not identified (see "Accuracy"). Use the default 131,072-token configuration where that accuracy matters.
-- **Image input does not fit at 4 users and about 1M tokens** (see "Image input"); it works up to 524,288 tokens at 4 users and 262,144 tokens at 16 users.
+- **APC restore is wrong when the prefill indexer is forced to the unsharded layout at 262,144 tokens** (`DSV41_PIDX_SHARD=0`): cache hits answer wrongly from a 16,384-token snapshot upward (cold requests are right; `DSV41_ROPE_SHARD=0` alone is fine). The default configurations shard the indexer from 131,072 index entries and are not affected; cause not found.
+- **APC is switched off for prompts that contain images** (the vision guard); text prompts of a vision server are cached.
+- **Needle retrieval at about 8,000 tokens fails now and then even without a cache**, and single-digit errors at 64k appear cold as well (1 of 6 cold requests, 0 of 6 hits); this is retrieval noise of the model on filler text, not an APC defect.
+- APC and chunked prefill are opt-in: the snapshots live in host memory (budget 6 GiB, snapshot grid at powers of two of the prompt length), and a small token budget raises the first-token time of a long prompt by 1-3 s.
 - **The plain-decode RoPE fix is verified bit-exact on a 4-layer model** (24 of 24 steps on 7 batch compositions, `tests/test_decode_batch_sensitivity.py`); the same test on the full 40-layer model in this tree still shows differences between runs of the identical batch composition (max logit difference 2.4-3.3, deterministic), so independence from the other users of a mesh row is not shown at 40 layers on this tree. Speculative decoding (all shipped configurations) does not use the plain-decode path.
-- Full GSM8K was not run on the 4-user 524,288-token configuration.
+- Full GSM8K was not run on the 4-user 524,288-token configuration, nor on the 4-user 1,048,576-token configuration with images or APC (a 256-question sample scored 96.9 % with images and 97.7 % / 96.9 % with APC on).
 
 ## Tests still to run
 
@@ -121,13 +167,13 @@ Model-level device test of the RoPE fix (`tests/test_decode_batch_sensitivity.py
 
 ## Not in this release
 
-- Prefix caching (APC) and chunked-prefill alignment: implemented on branch `ssinghal/dsv4p1-apc` (TTFT 5.2 -> 2.1 s on a shared-prefix burst), not merged.
+- Prefix caching and chunked prefill as the default: they are opt-in specs; the default specs keep APC off and the 67,584-token budget.
 - fp8 prefill kv table, sharding the prefill kv table over the mesh columns.
 - 8 users at 1,048,576 tokens (does not fit).
 - `logprobs`, structured output, `logit_bias`, `bad_words`, `allowed_token_ids` and `min_tokens` with speculative decoding (refused with HTTP 400, because the model-owned device sampler of the speculative round does not apply them; answering without them would silently change the request).
 
 ## Upgrade notes
 
-- New runtime specs for the two long-context configurations (above); the default 131,072-token specs are unchanged. Use `SPEC=...` in step 3 of `GETTING_STARTED.md`.
+- New runtime specs (above): 4 users / 1,048,576 tokens with images, and the two APC + chunked-prefill specs; the default 131,072-token specs and the earlier long-context specs are unchanged. Use `SPEC=...` in step 3 of `GETTING_STARTED.md`.
 - Startup of the long-context servers takes about 25-40 minutes (weight cache and kernel cache populated).
-- Environment variables added or changed: `DSV41_SPEC_MAX_CTX` (final word on the spec context cap), `DSV41_VLLM_SPEC_GUARD` (0 disables the vLLM-side guard), `DSV41_ROPE_ROWS_FUSED`, `DSV41_KEY_EXPORT_PIECE`, `DSV41_SPEC_SCORE_PIECE`, `DSV41_DEC_PRECAPTURE_WARM`, `DSV41_SPEC_PRECAPTURE_WARM`, `DSV41_PIDX_SHARD`, `DSV41_PF_FIFO_CHUNK`, `DSV41_PF_PRECAPTURE_WARM`.
+- Environment variables added or changed: `DSV41_SPEC_MAX_CTX` (final word on the spec context cap), `DSV41_VLLM_SPEC_GUARD` (0 disables the vLLM-side guard), `DSV41_ROPE_ROWS_FUSED`, `DSV41_KEY_EXPORT_PIECE`, `DSV41_SPEC_SCORE_PIECE`, `DSV41_DEC_PRECAPTURE_WARM`, `DSV41_SPEC_PRECAPTURE_WARM`, `DSV41_PIDX_SHARD`, `DSV41_PF_FIFO_CHUNK`, `DSV41_PF_PRECAPTURE_WARM`; new in this image: `DSV41_APC` (1 = prefix caching, with `--enable-prefix-caching`), `DSV41_PFA_ENGRAM_RS_SPLIT` (default 4 with `DSV41_VISION=1`, else 1), and `DSV41_IDX_SWITCH` now defaults to 262144 for plain decode as well.
