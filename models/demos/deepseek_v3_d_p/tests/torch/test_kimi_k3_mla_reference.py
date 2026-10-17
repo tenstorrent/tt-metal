@@ -319,7 +319,6 @@ def test_k3_accuracy_pinned_blocking():
     mla.num_heads = KimiK3Config.NUM_ATTENTION_HEADS
     mla.q_lora_rank = KimiK3Config.Q_LORA_RANK
     mla.is_chunked = True
-    mla._is_dsa_family = False
 
     for name, expected_ibw in pinned.items():
         cfg = mla._select_cfg(MLA_MATMUL_CONFIG[name][640])

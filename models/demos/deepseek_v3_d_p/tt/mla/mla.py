@@ -484,27 +484,28 @@ class ttMLA:
         # attention blocks and compressors share with this.
         self.sp_ccl_topology, self.tp_ccl_topology = resolve_per_axis_topology(topology, self.sp_axis, self.tp_axis)
 
-        # Ring-attention persistent buffers. Chunked prefill (ring_mla) and the standard ring
-        # joint SDPA use disjoint buffer sets, so allocate only the one the configured mode needs --
+        # Ring-attention persistent buffers. Chunked prefill and the single-shot ring joint SDPA use
+        # disjoint buffer sets, so allocate only the one the configured mode needs --
         # holding both would waste DRAM. Both sets are owned once per model by TT_CCL and shared by
         # every layer's MLA (uniform across layers, scratch / no per-layer state) instead of
         # re-allocated per layer.
         #
         # kv_only (last layer) never reaches SDPA, so it needs no ring/gather buffers. Sparse (DSA) uses
-        # sparse_sdpa + the transient _gather_kvpe_prefix gather — neither the ring_mla chunked scratch nor
+        # sparse_sdpa + the transient _gather_kvpe_prefix gather — neither the dense chunked scratch nor
         # the ring-joint-SDPA buffers — so it allocates none of these regardless of is_chunked.
         if kv_only or self._has_indexer:
             pass
         elif self.is_chunked:
-            # Single combined gathered-KV scratch buffer for ring_mla: K and V both come from the
-            # latent kvpe cache, so one (1, 1, seq_len, kvpe_dim) buffer replaces the separate
-            # per-K/per-V ring-SDPA buffers (and the dummy joint tensors) used in the other mode.
-            # ring_mla's single-slot gather (kv_cache_batch_idx) writes only the active cache slot
-            # into gathered slot 0, so the scratch is batch-1 regardless of slot_num * layer_num.
+            # Chunked prefill gathers K (the latent kvpe cache) and the per-head V that _expand_v unrolls from it.
+            # The single-slot gather (kv_cache_batch_idx) writes only the active cache slot into gathered slot 0, so
+            # the K scratch is batch-1 regardless of slot_num * layer_num.
             self._chunked_kv_buf = self.tt_ccl.get_mla_chunked_kv_buffer(
                 cache_batch=1,
                 seq_len=seq_len,
                 kvpe_dim=self.kv_lora_rank + self.qk_rope_head_dim,
+            )
+            self._chunked_v_buf = self.tt_ccl.get_mla_chunked_v_buffer(
+                seq_len=seq_len, num_heads=self.num_heads, v_head_dim=self.v_head_dim, tp_axis=self.tp_axis
             )
         else:
             # All-gather K/V outputs + dummy joint_q/kv/v placeholders are uniform across layers
@@ -548,6 +549,8 @@ class ttMLA:
             self.q_b_proj_weight = weights["q_b_proj"]
             self.wkv_b1_weight = weights["wkv_b1"]
             self.wkv_b2_weight = weights["wkv_b2"]
+            if self.is_chunked and not self._has_indexer:
+                self._init_unrolled_v()
             self.o_proj_weight = weights["o_proj"]
             if self._use_gate:
                 self.g_proj_weight = weights["g_proj"]
@@ -556,11 +559,6 @@ class ttMLA:
         # DSA indexer (v3.2 / GLM): self._has_indexer was resolved above (before the buffer alloc). The
         # TtIndexer owns the indexer stems / RoPE tables / device key-cache and reuses this MLA's q_a stem
         # + collectives. Inert for dense v3.1.
-        # DSA *family* (config carries the indexer fields), independent of whether the indexer is active
-        # this layer. V3.1's dense config lacks them; V3.2's config has them even when a benchmark forces
-        # the attention dense (has_indexer=False). Dense-path tuning gates that must tell V3.1 from a
-        # dense-run V3.2 key on this, not _has_indexer (see _get_sdpa_program_config).
-        self._is_dsa_family = TtIndexer.matches_config(config)
         self._sparse_kv_gather_buffer = None
 
         self.tp_shard_kv = self._has_indexer and self.tp_factor > 1
@@ -783,11 +781,6 @@ class ttMLA:
         # them to a batch=1 latent). Fall back to defaults when this ttMLA was not built for chunked.
         if cfg.get("chunked_only") and not self.is_chunked:
             return False
-        # Dense-path head ceiling: above dense_head_cap_non_dsa, non-DSA models fall back rather than
-        # use this tiling. Empirically derived (V3.1 at 128 heads); DSA-family models are exempt.
-        cap = cfg.get("dense_head_cap_non_dsa")
-        if cap is not None and self.num_heads > cap and not self._is_dsa_family:
-            return False
         # K. The table is keyed on (weight_name, seq_len_local), so one slot is shared by variants
         # with different K. A tiling whose in0_block_w does not divide this model's per-device Kt
         # cannot run here at all -- the matmul dies with "Kt (32) must be divisible by in0_block_w
@@ -894,12 +887,7 @@ class ttMLA:
 
     def _get_sdpa_program_config(self, seq_len_local: int) -> ttnn.SDPAProgramConfig:
         """Get SDPA program config, falling back to default chunk sizes."""
-        # Same gating tags as the matmul configs, via the shared _cfg_matches. dense_head_cap_non_dsa
-        # is consumed only here (sparse V3.2/GLM go through sparse_sdpa), and keys on the DSA family
-        # because V3.1 and V3.2 are dimensionally identical. It is an EMPIRICAL guard -- V3.1 OOMs L1 at
-        # k=640 above it -- NOT "L1 scales with head count": the program factory sizes every CB from
-        # Sq_chunk_t / Sk_chunk_t / DHt with no num_heads term. Do not extend it to a new model on that
-        # reasoning; measure it (test_ring_joint_sdpa.py's k_chunk_sizes sweeps).
+        # Same gating tags as the matmul configs, via the shared _cfg_matches.
         cfg = self._select_cfg(self.sdpa_configs.get(seq_len_local))
         q_chunk_size = cfg["q_chunk_size"] if cfg else 32
         k_chunk_size = cfg["k_chunk_size"] if cfg else 32
@@ -981,14 +969,14 @@ class ttMLA:
         actual_end: Optional[int] = None,
         metadata: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
-        """Chunked-prefill attention via update_padded_kv_cache + ring_mla.
+        """Chunked-prefill attention via update_padded_kv_cache + V unrolled ahead of ring_joint SDPA.
 
         Unified path for both rotated (kv_actual_isl mid-slab) and chunk-aligned prefill: the
         chunk-aligned case is the degenerate kv_actual_isl = n * chunk_size_global, where
         update_padded_kv_cache reduces to a uniform per-chip write and the indexed rope/SDPA reduce
-        to natural order. K and V both come from the single latent kvpe cache -- ring_mla reads V as
-        the first kv_lora_rank columns of KV and materializes it in-op, so wkv_b2 is applied to the
-        compact (kv_lora_rank-wide) attention output afterwards. Returns attn_out in v_head_dim space.
+        to natural order. K is the latent kvpe cache; V = latent @ W_UV is expanded per head over the filled
+        cache rows first (_expand_v), so the attention's PV runs at v_head_dim instead of kv_lora_rank and
+        no wkv_b2 follows. Returns attn_out in v_head_dim space.
         """
         assert not self.is_balanced, "chunked prefill currently requires is_balanced=False"
 
@@ -1005,8 +993,8 @@ class ttMLA:
 
         # Write this chunk into the cache. update_padded_kv_cache derives each chip's local write
         # offset on-device from kv_actual_global (chunk-aligned kv_actual -> uniform per-chip write).
-        # The dense ring_mla cache is still TP-replicated; only _sparse_chunked_attn is TP-dedup wired.
-        assert not self.tp_shard_kv, "tp_shard_kv is only supported on the sparse (DSA) path, not dense ring_mla"
+        # The dense chunked cache is still TP-replicated; only _sparse_chunked_attn is TP-dedup wired.
+        assert not self.tp_shard_kv, "tp_shard_kv is only supported on the sparse (DSA) path, not dense chunked"
         # Metadata (trace-safe) path reads slot_idx/kv_actual_global on-device from the metadata tensor.
         self._update_kv_cache(
             kvpe_cache,
@@ -1018,11 +1006,11 @@ class ttMLA:
             metadata=metadata,
         )
 
-        # K and V are the single latent kvpe cache (V = first kv_lora_rank columns, materialized
-        # in-op). logical_n = prior valid length + this chunk; cache_batch_idx selects this
-        # user/layer's slot; kv_actual_isl drives the on-device rotation/causality offset.
+        # K is the latent kvpe cache; V is unrolled from it per head (_expand_v). logical_n = prior valid
+        # length + this chunk; cache_batch_idx selects this user/layer's slot; kv_actual_isl drives the
+        # on-device rotation/causality offset.
         #
-        # Trace-safe metadata path: ring_mla reads its per-chunk scalars on-device -- the all-gather +
+        # Trace-safe metadata path: the SDPA reads its per-chunk scalars on-device -- the all-gather +
         # SDPA readers take the cache slot from metadata[0] and derive logical_nt / masks from
         # kv_actual_isl = metadata[1]. Every kernel derives logical_n on-device on this path, so the host
         # logical_n is a placeholder = global cache capacity. metadata[0] holds only the user slot, so pass
@@ -1038,17 +1026,217 @@ class ttMLA:
             ring_logical_n = kvpe_cache.storage.shape[2] * self.sp_factor  # global cache capacity
         else:
             meta_slot_kwargs = {"kv_cache_batch_idx": cache_batch_idx, "kv_actual_isl": kv_actual_isl}
-            # Capped at the capacity ring_mla accepts: the last chunk's pad rows can sit past the cache
+            # Capped at the capacity the SDPA accepts: the last chunk's pad rows can sit past the cache
             # end, and only pad rows read them.
             ring_logical_n = min(kv_actual_isl + chunk_size_global, kvpe_cache.storage.shape[2] * self.sp_factor)
-        attn_out, _ = ttnn.transformer.ring_mla(
+        return self._unrolled_v_attn(
+            tt_q=tt_q,
+            kvpe_cache=kvpe_cache,
+            ring_logical_n=ring_logical_n,
+            seq_len_local=seq_len_local,
+            cache_batch_idx=cache_batch_idx,
+            cache_layer_idx=cache_layer_idx,
+            metadata=metadata,
+            meta_slot_kwargs=meta_slot_kwargs,
+        )
+
+    # V expansion (minimal_matmul), swept on Blackhole (HiFi2, 2k-262k local rows, i.e. short to 512k KV): the whole
+    # latent K in one block (packed straight to the output), hardware multicast of the input blocks and M along the
+    # grid's y axis. M is split over the cores at runtime, so one config serves every KV length. At this many local
+    # heads or more M8/N1 8x1 (Kimi-K3, 24; within 1.2% of the per-length best), below it M4/N2 4x2 (Kimi-K2.7, 16;
+    # within 5.2%). K3 at the Galaxy shape: 97 us, 71% FPU util.
+    _UNROLLED_V_WIDE_LOCAL_HEADS = 24
+
+    def _init_unrolled_v(self):
+        """W_UV as one [kv_lora_rank, H_local * v_head_dim] head-major weight, and the V expansion's static configs."""
+        w_bf16 = ttnn.typecast(self.wkv_b2_weight, ttnn.bfloat16)  # [1, H_local, kv_lora_rank, v_head_dim]
+        w_rm = ttnn.to_layout(w_bf16, ttnn.ROW_MAJOR_LAYOUT)
+        w_perm = ttnn.permute(w_rm, (0, 2, 1, 3))
+        heads_local = self.wkv_b2_weight.shape[1]
+        w_flat = ttnn.reshape(w_perm, (1, 1, self.kv_lora_rank, heads_local * self.v_head_dim))
+        w_tile = ttnn.to_layout(w_flat, ttnn.TILE_LAYOUT)
+        self.wv_unrolled_weight = ttnn.typecast(w_tile, ttnn.bfloat8_b)
+        for t in (w_bf16, w_rm, w_perm, w_tile):
+            ttnn.deallocate(t)
+
+        wide = heads_local >= self._UNROLLED_V_WIDE_LOCAL_HEADS
+        self._expand_v_config = ttnn.MinimalMatmulConfig(
+            M_block_size=8 if wide else 4,
+            K_block_size=self.kv_lora_rank // ttnn.TILE_SIZE,
+            N_block_size=1 if wide else 2,
+            subblock_h=8 if wide else 4,
+            subblock_w=1 if wide else 2,
+            compute_with_storage_grid_size=ttnn.CoreCoord(*self.ring_sdpa_compute_grid),
+            hw_mcast=True,
+            transpose_core_grid=False,
+        )
+        self._expand_v_compute_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        # Host-path (no metadata) row count, rewritten in place every chunk.
+        self._expand_v_rows = ttnn.from_torch(
+            torch.zeros(1, 1, 1, 1, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+    # Measured (Q chunk, K chunk, K splits) at the production shapes, keyed (kvpe width, local heads, local rows), all
+    # at 640 rows per chip (the 5k chunk on 8 SP devices):
+    #   Kimi-K3 (576, 24): q160 = 96 units on 96 cores;
+    #   Kimi-K2.7 (576, 16): q320 k256 split three ways = 96 cores, 10% faster SDPA than q128 (80 cores);
+    #   Mistral-Small-4 (320, 32): two waves of q128 beside a k640 chunk, 26% faster than three of q64 (the narrower K
+    #     leaves room for the larger chunks), forward 7.83 -> 6.14 ms vs ring_mla on the 8x1 LoudBox.
+    # Shapes not listed fall back to the model below, which is calibrated on the 576-wide K.
+    _UNROLLED_V_SDPA_CHUNKS = {
+        (576, 24, 640): (160, 512, 1),
+        (576, 16, 640): (320, 256, 3),
+        (320, 32, 640): (128, 640, 1),
+    }
+
+    # Per-core efficiency (math util / work-split ceiling) of the unrolled-V ring_joint SDPA by (Q chunk, K chunk),
+    # measured on the Blackhole LoudBox (test_ring_joint_attention_chunked_unrolled_v_perf_check, test_mla.py's
+    # test_mla_chunked_perf_loudbox). Small Q chunks re-stream the whole K/V prefix per chunk. q320 fits L1 only beside
+    # a k256 K chunk, which alone costs ~6% (at q128); it is measured, and used, only K-split (see below).
+    _UNROLLED_V_CHUNK_EFFICIENCY = {
+        (320, 256): 0.70,
+        (160, 512): 0.75,
+        (128, 512): 0.75,
+        (96, 512): 0.70,
+        (64, 512): 0.63,
+        (32, 512): 0.35,
+    }
+    # Beside the 576-wide K chunk, Q chunks above this fit L1 only single-buffered, i.e. one Q chunk per core.
+    _UNROLLED_V_MAX_DOUBLE_BUFFERED_Q_CHUNK = 128
+    # ring_joint's K split: at most this many bands (kKSplitMaxCount), each of whole grid rows.
+    _UNROLLED_V_MAX_K_SPLITS = 4
+    _UNROLLED_V_K_SPLIT_CHUNKS = {(320, 256)}
+
+    def _unrolled_v_sdpa_chunks(self, seq_len_local: int, num_local_heads: int) -> tuple[int, int, int]:
+        """(Q chunk, K chunk, K splits): the measured entry for this shape, else the one minimizing modeled time, i.e.
+        critical-path rows per core (waves x q_chunk / splits) over the chunk's efficiency. A (head, Q chunk) unit takes
+        one core; when the units leave whole grid rows idle, ring_joint's K split gives every band of rows a slice of
+        the K/V sequence."""
+        measured = self._UNROLLED_V_SDPA_CHUNKS.get(
+            (self.kv_lora_rank + self.qk_rope_head_dim, num_local_heads, seq_len_local)
+        )
+        if measured is not None:
+            return measured
+        grid_x, grid_y = self.ring_sdpa_compute_grid
+        num_cores = grid_x * grid_y
+
+        def plan(q, k):
+            units = num_local_heads * (seq_len_local // q)
+            splits = 1
+            if (q, k) in self._UNROLLED_V_K_SPLIT_CHUNKS and units <= num_cores:
+                splits = max(1, min(self._UNROLLED_V_MAX_K_SPLITS, grid_y // -(-units // grid_x)))
+            return units, splits
+
+        def modeled_time(q, k):
+            units, splits = plan(q, k)
+            return -(-units // num_cores) * q / splits / self._UNROLLED_V_CHUNK_EFFICIENCY[(q, k)]
+
+        def eligible(q, k):
+            if seq_len_local % q != 0:
+                return False
+            units, splits = plan(q, k)
+            fits_l1 = q <= self._UNROLLED_V_MAX_DOUBLE_BUFFERED_Q_CHUNK or units <= num_cores
+            return fits_l1 and (splits > 1 or (q, k) not in self._UNROLLED_V_K_SPLIT_CHUNKS)
+
+        candidates = [qk for qk in self._UNROLLED_V_CHUNK_EFFICIENCY if eligible(*qk)]
+        q, k = min(candidates, key=lambda qk: (modeled_time(*qk), -qk[0]))
+        return q, k, plan(q, k)[1]
+
+    def _unrolled_v_sdpa_program_config(self, q_chunk_size, k_chunk_size, k_splits) -> ttnn.SDPAProgramConfig:
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
+            max_k_splits=k_splits,
+            matmul_math_fidelity=self.sdpa_matmul_fidelity,
+        )
+
+    def _expand_v(
+        self, kvpe_cache, ring_logical_n, seq_len_local, cache_batch_idx, cache_layer_idx, metadata, row_align
+    ):
+        """V = latent @ W_UV over the filled local cache rows, written head-major [1, H_local, cap_local, v_head_dim].
+        Rows are rounded up to row_align, the SDPA's K chunk: the SDPA reads whole K/V chunks and masks the tail, so
+        every row it reads must hold finite data (0 * NaN from an unwritten row would poison the output)."""
+        cap_local = kvpe_cache.storage.shape[2]
+        chunk_size_global = seq_len_local * self.sp_factor
+        if metadata is not None:
+            # metadata[1] is the global prefix length; each chunk (even a partial one) adds seq_len_local rows to
+            # every device's cache, so local rows = ceil(prefix / chunk_global) * seq_len_local + seq_len_local.
+            rows = ttnn.MinimalMatmulDynamicRows(
+                metadata[1],
+                slot_tensor=metadata[0],
+                divisor=chunk_size_global,
+                multiplier=seq_len_local,
+                addend=seq_len_local,
+                align=row_align,
+                num_layers=self.layer_num,
+                layer_idx=cache_layer_idx,
+            )
+        else:
+            local_rows = -(-ring_logical_n // chunk_size_global) * seq_len_local
+            local_rows = min(-(-local_rows // row_align) * row_align, cap_local)
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    torch.tensor([[[[local_rows]]]], dtype=torch.int32),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                ),
+                self._expand_v_rows,
+            )
+            # No slot tensor: cache_batch_idx already folds (user, layer), so it is the layer index of a cache whose
+            # every batch is a layer.
+            rows = ttnn.MinimalMatmulDynamicRows(
+                self._expand_v_rows, num_layers=kvpe_cache.storage.shape[0], layer_idx=cache_batch_idx
+            )
+        return ttnn.experimental.minimal_matmul(
+            kvpe_cache.storage,
+            self.wv_unrolled_weight,
+            config=self._expand_v_config,
+            compute_kernel_config=self._expand_v_compute_config,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dynamic_rows=rows,
+            out_head_dim=self.v_head_dim,
+            in0_k_prefix=True,
+        )
+
+    def _unrolled_v_attn(
+        self,
+        *,
+        tt_q,
+        kvpe_cache,
+        ring_logical_n,
+        seq_len_local,
+        cache_batch_idx,
+        cache_layer_idx,
+        metadata,
+        meta_slot_kwargs,
+    ):
+        q_chunk, k_chunk, k_splits = self._unrolled_v_sdpa_chunks(seq_len_local, tt_q.shape[1])
+        tt_v = self._expand_v(
+            kvpe_cache, ring_logical_n, seq_len_local, cache_batch_idx, cache_layer_idx, metadata, row_align=k_chunk
+        )
+        attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_q,
             kvpe_cache.storage,
-            persistent_output_buffer_kv=self._chunked_kv_buf,
-            head_dim_v=self.kv_lora_rank,
+            tt_v,
+            persistent_output_buffer_k=self._chunked_kv_buf,
+            persistent_output_buffer_v=self._chunked_v_buf,
             logical_n=ring_logical_n,
-            program_config=self._get_sdpa_program_config(seq_len_local),
-            scale=self.scale,
+            program_config=self._unrolled_v_sdpa_program_config(q_chunk, k_chunk, k_splits),
             compute_kernel_config=self.default_compute_kernel_config,
             dim=2,
             multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
@@ -1058,21 +1246,12 @@ class ttMLA:
             topology=self.sp_ccl_topology,
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
             use_column_major_ccl=True,
+            is_causal=True,
+            scale=self.scale,
             is_balanced=self.is_balanced,
             **meta_slot_kwargs,
         )
-
-        # ring_mla output is in kv_lora_rank (latent V) space; expand to v_head_dim per head. Unlike the
-        # single-shot path this in0 is the per-head SDPA output (batch=local_heads), so the tuned 640
-        # config is a true batched MatmulMultiCoreReuse. When no tuned config matches (non-Kimi variant
-        # or non-blackhole) _get_mm_kwargs falls back to the 1D batched default.
-        # NOTE: Input is ideally L1 but DRAM comes from SDPA
-        attn_out = ttnn.linear(
-            attn_out,
-            self.wkv_b2_weight,
-            compute_kernel_config=self.default_compute_kernel_config,
-            **self._get_mm_kwargs("wkv_b2", seq_len_local),
-        )
+        ttnn.deallocate(tt_v)
         return attn_out
 
     def _q_a_latent(
@@ -1545,8 +1724,8 @@ class ttMLA:
     ) -> "ttnn.Tensor | tuple[ttnn.Tensor, Optional[dict]]":
         # Trace-safe metadata path: a 3-tuple of 1-element uint32 DRAM tensors (slot_id, actual_start,
         # actual_end) passed in from outside. When provided, the chunked-prefill ops (update_padded_kv_cache,
-        # rotary_embedding_indexed, ring_mla) read their per-chunk scalars on-device from it instead of from
-        # host actual_start/cache_user_id. Threaded through verbatim -- ttMLA never reads/reconstructs it.
+        # rotary_embedding_indexed, V expansion, ring joint SDPA) read their per-chunk scalars on-device from it
+        # instead of from host actual_start/cache_user_id. Threaded through verbatim -- ttMLA never reads/reconstructs it.
         #
         # Chunked-prefill mode is fixed at construction: self.is_chunked drives buffer allocation in
         # __init__ and the rope variant, and forward honors that flag -- it does not infer the mode from
@@ -1719,7 +1898,7 @@ class ttMLA:
     def _cache_batch_idx(self, cache_user_id: int, cache_layer_idx: int) -> int:
         """Flat KVPE-cache slot for (user, layer). The cache batch dim is user-major: each user reserves
         self.layer_num contiguous slots, so the flat slot is cache_user_id * layer_num + cache_layer_idx.
-        Shared by the dense (ring_mla) and sparse (sparse_sdpa) chunked paths."""
+        Shared by the dense (ring joint SDPA) and sparse (sparse_sdpa) chunked paths."""
         assert cache_user_id < self.slot_num, f"cache_user_id {cache_user_id} >= slot_num {self.slot_num}"
         return cache_user_id * self.layer_num + cache_layer_idx
 

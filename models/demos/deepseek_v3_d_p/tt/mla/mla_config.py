@@ -411,39 +411,6 @@ MLA_MATMUL_CONFIG = {
     "wkv_b2": {
         640: [
             {
-                "num_heads": 64,
-                "q_lora_rank": 1536,
-                "chunked_only": True,
-                "program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
-                    compute_with_storage_grid_size=COMPUTE_GRID,
-                    in0_block_w=2,
-                    out_subblock_h=4,
-                    out_subblock_w=1,
-                    per_core_M=4,
-                    per_core_N=4,
-                ),
-                "act_mem_config": ttnn.L1_MEMORY_CONFIG,
-                "out_mem_config": ttnn.L1_MEMORY_CONFIG,
-                "out_dtype": ttnn.bfloat8_b,
-            },
-            # Kimi-K3 (96 heads): same batch increase as wkv_b1.
-            {
-                "num_heads": 96,
-                "q_lora_rank": 1536,
-                "chunked_only": True,
-                "program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
-                    compute_with_storage_grid_size=COMPUTE_GRID,
-                    in0_block_w=2,
-                    out_subblock_h=1,
-                    out_subblock_w=4,
-                    per_core_M=5,
-                    per_core_N=4,
-                ),
-                "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
-                "out_mem_config": ttnn.L1_MEMORY_CONFIG,
-                "out_dtype": ttnn.bfloat8_b,
-            },
-            {
                 **_GLM_TAGS,
                 "program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
                     compute_with_storage_grid_size=COMPUTE_GRID,
@@ -761,38 +728,6 @@ MLA_SDPA_CONFIG = {
         "q_chunk_size": 160,
         "k_chunk_size": 320,
     },
-    # 5k total seq_len → 640 per device on 8x4.
-    # Two candidates (first tag match wins, see ttMLA._select_cfg):
-    #   1. the original catch-all, kept exactly as-is, with its empirical non-DSA head cap;
-    #   2. Kimi-K3 at 96 heads, which the cap would otherwise send to the k=32 default.
-    # K3 carries NO cap because it was measured, not assumed: test_ring_mla_chunked_accuracy
-    # [kimi_k3-q32-k{32,128,256,512,640}] all pass at 24 heads/device with zero L1 OOM, and the
-    # final-chunk PCC goes 0.99590 (k=32) → 0.99919 (128) → 0.99936 (256) → 0.99937 (512) →
-    # 0.99938 (640). So the fallback to k=32 was costing ~0.0035 PCC and protecting nothing here.
-    # (The cap's stated "L1 scales with head count" rationale does not hold — see
-    # ttMLA._get_sdpa_program_config.) Accuracy saturates by k=256; 640 matches K2.6's validated
-    # tiling.
-    #
-    # Also confirmed through the model path at 8 SP, which is the stronger check: the chunked-prefill
-    # test resolves this K3 candidate (the catch-all is rejected by its cap at 96 heads) and runs
-    # k_chunk=640 at 24 heads/device over 56320 tokens with no L1 OOM. Note the sweep test itself
-    # cannot corroborate that on a wider mesh -- it forces FABRIC_1D_RING, which does not map beyond
-    # 2 SP for any variant (K2.6's case fails identically), so the sweep is small-mesh-only.
-    640: [
-        {
-            "q_chunk_size": 32,
-            "k_chunk_size": 640,
-            "num_heads": None,
-            "dense_head_cap_non_dsa": 64,
-            "chunked_only": True,
-        },
-        {
-            "q_chunk_size": 32,
-            "k_chunk_size": 640,
-            "num_heads": 96,
-            "chunked_only": True,
-        },
-    ],
 }
 
 

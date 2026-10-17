@@ -37,6 +37,7 @@ from ttnn.operations.transformer_golden import torch_sdpa_reference
 
 import ttnn
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
+from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import GLOBAL_PACKED_DIM
 from models.demos.gpt_oss_d_p.tt.attention.kv_cache import bounded_blockcyclic_positions, sliding_capacity_tokens
@@ -3776,6 +3777,26 @@ def test_ring_joint_attention_chunked_unrolled_v_accuracy(q_chunk_size):
 
 
 @pytest.mark.timeout(1800)
+@pytest.mark.parametrize("model_name", ["kimi_k3_unrolled_v", "kimi_k2_7_unrolled_v", "mistral4_unrolled_v"])
+def test_ring_joint_attention_chunked_unrolled_v_production_accuracy(model_name):
+    """Each model's production unrolled-V attention (chunks and K split from ttMLA), every chunk checked against the
+    full-sequence reference. A K split also asserts it changed the output, i.e. it was not silently disabled."""
+    q_chunk, k_chunk, k_splits = unrolled_v_production_chunks(model_name)
+    model = UNROLLED_V_CHUNKED_MODEL_CONFIGS[model_name]
+    run_ring_joint_sdpa_chunked(
+        MESH_CONFIG,
+        model,
+        chunk_size=CHUNKED_PREFILL_CHUNK_SIZE,
+        q_chunk_size=q_chunk,
+        k_chunk_size=k_chunk,
+        indexed_nd_sharded_kv_cache=True,
+        v_single_slot=True,
+        max_k_splits=k_splits,
+        matmul_math_fidelity=model.matmul_math_fidelity,
+    )
+
+
+@pytest.mark.timeout(1800)
 def test_ring_joint_attention_chunked_unrolled_v_ksplit2_accuracy():
     """K split in two bands (24 heads in q320: 48 units on 5 of 10 rows), beside the production three-band split."""
     run_ring_joint_sdpa_chunked(
@@ -6096,6 +6117,12 @@ UNROLLED_V_CHUNKED_MODEL_CONFIGS = {
 CHUNKED_PERF_MODEL_CONFIGS.update(UNROLLED_V_CHUNKED_MODEL_CONFIGS)
 
 
+def unrolled_v_production_chunks(model_name):
+    """(q_chunk, k_chunk, k_splits) the model runs at this per-chip shape, read from ttMLA so the two cannot drift."""
+    model = UNROLLED_V_CHUNKED_MODEL_CONFIGS[model_name]
+    return ttMLA._UNROLLED_V_SDPA_CHUNKS[(model.d_k, model.nhq, CHUNKED_PREFILL_PER_DEVICE_CHUNK)]
+
+
 # Minimax3 production chunked-prefill GQA shape. The full model is 64 Q heads and 4 K/V
 # heads. With TP=4, each chip sees one KV head; keep the config per-ring so the generic
 # TP scaling produces 64Q/4KV globally on Galaxy and still exercises one-KV-head GQA locally.
@@ -7578,7 +7605,7 @@ def test_ring_joint_attention_minimax3_gqa_create_chunked_perf_table(
 
 
 def compute_chunked_prefill_perf_check_utilization(
-    mesh_config, model, chunk_size, perf_chunk, duration_ns, measured_core_count
+    mesh_config, model, chunk_size, perf_chunk, duration_ns, measured_core_count, round_to_grid_rows=True
 ):
     # Chunk geometry: q_per_dev Q rows attend to the full prefix (non-causal rectangle) plus
     # the current chunk's causal triangle. Folding the triangle into an effective K/V length
@@ -7588,7 +7615,9 @@ def compute_chunked_prefill_perf_check_utilization(
     effective_kv = prefix_k + chunk_size // 2
 
     # Match perf-table effective_cores rounding (ignore non-multiple-of-grid-row CCL strays).
-    effective_cores = measured_core_count - measured_core_count % mesh_config.grid_rows
+    effective_cores = (
+        measured_core_count - measured_core_count % mesh_config.grid_rows if round_to_grid_rows else measured_core_count
+    )
     assert (
         effective_cores > 0
     ), f"effective_cores=0 (measured_core_count={measured_core_count}) - profiler output incomplete"
@@ -7736,6 +7765,79 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
     assert lower <= utilization <= upper, (
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
         f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
+    )
+
+
+# Unrolled-V final 50k+5k chunk at each model's production chunks (ttMLA). Util counts d_v=128 FLOPs, so it is not
+# comparable to the ring_mla (d_v=512) numbers above; compare chunk latency end to end instead. Calibrated on the
+# 8-device Blackhole LoudBox ring (non-Galaxy, sp=8 tp=1, 110 SDPA cores), stock fabric packets.
+UNROLLED_V_CHUNKED_PERF_CHECK_CONFIGS = [
+    # (model_name, ring_size, expected_util)
+    ("kimi_k3_unrolled_v", 8, 65.20),  # q160 k512, 96 units in one wave: 5.863 ms
+    ("kimi_k2_7_unrolled_v", 8, 58.78),  # q320 k256 split three ways, 96 cores: 4.336 ms
+    ("mistral4_unrolled_v", 8, 34.39),  # q128 k640, two waves, LoFi (util against the LoFi peak): 4.716 ms
+]
+
+
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize(
+    "model_name, ring_size_expected, expected_util",
+    UNROLLED_V_CHUNKED_PERF_CHECK_CONFIGS,
+    ids=[f"{cfg[0]}-ring{cfg[1]}" for cfg in UNROLLED_V_CHUNKED_PERF_CHECK_CONFIGS],
+)
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_ring_joint_attention_chunked_unrolled_v_perf_check(model_name, ring_size_expected, expected_util):
+    """Math util of the final chunk of each model's production unrolled-V MLA chunked prefill (indexed latent K
+    cache, batch-1 per-head bfp8 V)."""
+    if MESH_CONFIG.is_galaxy or MESH_CONFIG.sp_size != ring_size_expected:
+        pytest.skip(f"Calibrated for a non-Galaxy ring of {ring_size_expected}, got sp={MESH_CONFIG.sp_size}")
+
+    q_chunk_size, k_chunk_size, k_splits = unrolled_v_production_chunks(model_name)
+    model = CHUNKED_PERF_MODEL_CONFIGS[model_name]
+    chunk_size = CHUNKED_PREFILL_CHUNK_SIZE
+    n_chunks = CHUNKED_PREFILL_TOTAL_SEQ // chunk_size
+    perf_chunk = n_chunks - 1
+
+    config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}-indexed"
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    sdpa_cores = runtime.sdpa_compute_grid[0] * runtime.sdpa_compute_grid[1]
+    try:
+        with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
+            duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
+                runtime.mesh_device,
+                lambda: run_ring_joint_sdpa_chunked(
+                    MESH_CONFIG,
+                    model,
+                    chunk_size=chunk_size,
+                    qk_configs=[(q_chunk_size, k_chunk_size)],
+                    persistent_buffer_mode="exact_per_chunk",
+                    do_check=False,
+                    indexed_nd_sharded_kv_cache=True,
+                    v_single_slot=True,
+                    max_k_splits=k_splits,
+                    matmul_math_fidelity=model.matmul_math_fidelity,
+                    runtime=runtime,
+                ),
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+    utilization, _ = compute_chunked_prefill_perf_check_utilization(
+        MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, sdpa_cores, round_to_grid_rows=False
+    )
+    utilization /= get_matmul_peak_multiplier(model)
+
+    logger.info(
+        f"Unrolled-V chunked final-chunk perf check {config_id}: "
+        f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% sdpa_cores={sdpa_cores} "
+        f"(expected {expected_util}), profiler_records={len(perf_records)}"
+    )
+    lower = expected_util * (1 - DEFAULT_PERF_MARGIN)
+    upper = expected_util * (1 + DEFAULT_PERF_MARGIN)
+    assert lower <= utilization <= upper, (
+        f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+        f"(expected {expected_util:.2f}%, margin +/- {DEFAULT_PERF_MARGIN*100:.1f}%)"
     )
 
 
