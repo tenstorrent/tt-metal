@@ -1010,3 +1010,29 @@ DRAM efficiency of the full read mix: 1059 MB at ~446 GB/s (87%) vs the gate/up 
 Inside the block trace the fused program's flat cores end at ~2305-2340 us and the program at ~2440 (profiled): the
 combine runs ~110-120 us alone after the experts every call. tt-npe on a K3-like trace: no NoC congestion (impact 0%,
 links avg 8%), DRAM ~87% in steady state.
+
+### K3 block: the latent linears as a custom 2D matmul, combine_rf/lin2d.py (2026-10-17) -> 3613 us traced
+Why: ttnn mm2d at 320 rows sits at 117-123 us whatever the config (its in0/in1 distribution pipeline, ~8 us a block;
+compute-skip and in1-read-skip probes change nothing). The earlier custom stream_linear v4 (rotating column owners)
+lost ~90 us to colliding multicasts. Measurements that shaped lin2d (bh-lb-09, 12 x 10):
+- multicast concurrency (zz_scratch_mcast_bw.py::test_mcast_concurrent, per column): one sender 52 GB/s; two senders on
+  NOC0 (top + middle) 28.9; top on NOC0 + bottom on NOC1 99.7.
+- DRAM reads from the edge rows (zz_scratch_dram_mix.py::test_edge_readers, 44-52 KB pages): one row on NOC0 384 GB/s,
+  on NOC1 ~100; rows 0 + 9 both NOC0 369, split NOC0 / NOC1 185 (the NOC1 row drags); whole grid NOC0 390, NOC1 236.
+  2 KB pages need depth 6 for ~30 GB/s a core. Pinning each reader to one bank: no gain (~390 GB/s ceiling for cores
+  away from the DRAM; the flat op's bank-adjacent readers reach ~510).
+- crossing multicasts: a row multicast (x) and column multicasts (W) on the same NoC stall each other - the per-core
+  event trace (L2D_PROBE=512) showed core (0, 0)'s x block 2 leaving at 57.7 us (block 0 at 0.4), row 0's last x push
+  at 58 us. W-only multicasts 72 us, x-only 51, both 107.
+Design (see the module docstring): x resident in L1 and multicast first by the row's two ends (NOC0 / NOC1), then W
+down each column by its two ends (NOC0 / NOC1), every DRAM read on the BRISC (NOC1 senders fed through L1 semaphores),
+W pieces one contiguous region each (bank-sharded per group of equal-width columns, no padding), per-slot credits (a
+shared credit counter let a fast core's credits stand in for a slow one's: hang).
+Steps (lat_down / lat_up standalone, us; mm2d 117 / 122): first version (all reads per tile, NOC1 reads) 181 / 174;
+bank-contiguous pieces 186 (reads were not the per-tile cost: NOC1 reads were); NOC0 reads + resident x 141 / 121;
+x on NOC1 only (one sender) 107 / 100; x first (barrier) with both ends 105 / 97; exact pieces 103 / 95. Probes at the
+end (lat_down): skeleton 23, compute only 67, multicasts only 47, DRAM reads only 95 -> DRAM bound (x then W at ~340
+GB/s). LoFi 101 / 93 (no gain). Deeper W prefetch (8, 12 pieces) or x staging (6) or no W prefetch during x: no gain.
+In the block (K3_LIN2D=1, default; K3_LIN2D=0 = ttnn mm2d): latent down 115.4 -> 103.2, latent up 113.6 -> 94.6, traced
+3649 -> 3613 us; PCC 0.99619 both (latent down stage 0.99987 vs 0.99988).
+Next (if worth it): feed W through bank-adjacent readers (~510 GB/s) instead of the edge rows (~390): ~70-75 us floor.

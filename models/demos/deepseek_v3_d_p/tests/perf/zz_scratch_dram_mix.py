@@ -42,8 +42,12 @@ void kernel_main() {
 
 def _dur(mesh_device):
     ttnn.ReadDeviceProfiler(mesh_device)
-    us = [float(p.program_analyses_results[_KEY].duration) / 1e3 for progs in (ttnn.get_latest_programs_perf_data() or {}).values()
-          for p in progs if _KEY in (p.program_analyses_results or {})]
+    us = [
+        float(p.program_analyses_results[_KEY].duration) / 1e3
+        for progs in (ttnn.get_latest_programs_perf_data() or {}).values()
+        for p in progs
+        if _KEY in (p.program_analyses_results or {})
+    ]
     return us[-1] if us else float("nan")
 
 
@@ -54,20 +58,28 @@ def test_dram_mix(mesh_device):
     gu_mb, dn_mb = float(os.environ.get("DM_GU_MB", "694")), float(os.environ.get("DM_DN_MB", "347"))
     GU_PAGE, BANKS = 55296, 8
     # the K3 routed plan's own cores (readers next to the DRAM columns, 28 down cores of 4 output tile columns)
-    plan = dict(ttnn._ttnn.operations.bringup.flat_routed_expert_plan(
-        mesh_device, 3584, 3072, 56, 448, 8192, weights_bf8=False, pin=1, x_bf16=False, h_bf16=False))
+    plan = dict(
+        ttnn._ttnn.operations.bringup.flat_routed_expert_plan(
+            mesh_device, 3584, 3072, 56, 448, 8192, weights_bf8=False, pin=1, x_bf16=False, h_bf16=False
+        )
+    )
     plan_rd = [ttnn.CoreCoord(x, y) for x, y in plan["readers"]]
     plan_dn = [ttnn.CoreCoord(x, y) for x, y in plan["down"]]
     use_plan = os.environ.get("DM_PLAN_CORES", "1") == "1"
     n_gu_rd, n_dn = 16, (len(plan_dn) if use_plan else 38)
     gu_pages = int(gu_mb * 1e6 / GU_PAGE) // n_gu_rd * n_gu_rd
-    t_gu = ttnn.allocate_tensor_on_device(ttnn.Shape([gu_pages, GU_PAGE // 4]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device,
-                                          ttnn.DRAM_MEMORY_CONFIG)
+    t_gu = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([gu_pages, GU_PAGE // 4]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+    )
     dn = {}
     for page in (9216, 36864):
         pages = int(dn_mb * 1e6 / page) // n_dn * n_dn
-        dn[page] = (pages, ttnn.allocate_tensor_on_device(ttnn.Shape([pages, page // 4]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT,
-                                                         mesh_device, ttnn.DRAM_MEMORY_CONFIG))
+        dn[page] = (
+            pages,
+            ttnn.allocate_tensor_on_device(
+                ttnn.Shape([pages, page // 4]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+            ),
+        )
     gu_cores, dn_cores = (plan_rd, plan_dn) if use_plan else (cores[:n_gu_rd], cores[n_gu_rd : n_gu_rd + n_dn])
 
     def group(t, page, depth, core_list, plan):
@@ -75,11 +87,19 @@ def test_dram_mix(mesh_device):
         for i, c in enumerate(core_list):
             rt[c.x][c.y] = [int(t.buffer_address())] + plan(i)
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in core_list])
-        cb = ttnn.CBDescriptor(total_size=depth * page, core_ranges=crs, format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint32, depth * page)])
-        k = ttnn.KernelDescriptor(kernel_source=_K, source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE, core_ranges=crs,
-                                  compile_time_args=[page, depth] + list(ttnn.TensorAccessorArgs(t).get_compile_time_args()),
-                                  runtime_args=rt, config=ttnn.DataMovementConfigDescriptor(
-                                      processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0))
+        cb = ttnn.CBDescriptor(
+            total_size=depth * page,
+            core_ranges=crs,
+            format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint32, depth * page)],
+        )
+        k = ttnn.KernelDescriptor(
+            kernel_source=_K,
+            source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+            core_ranges=crs,
+            compile_time_args=[page, depth] + list(ttnn.TensorAccessorArgs(t).get_compile_time_args()),
+            runtime_args=rt,
+            config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
+        )
         return cb, k, page * sum(plan(i)[1] for i in range(len(core_list)))
 
     per_rd = gu_pages // n_gu_rd
@@ -101,7 +121,9 @@ def test_dram_mix(mesh_device):
         return lambda i: [(i % BANKS) + BANKS * (i // BANKS) * k_per, k_per, BANKS]
 
     # cores next to the DRAM columns that the readers leave (logical columns 0, 1, 7, 8)
-    near = [ttnn.CoreCoord(x, y) for x in (0, 1, 7, 8) for y in range(grid.y) if (x, y) not in {(c.x, c.y) for c in plan_rd}]
+    near = [
+        ttnn.CoreCoord(x, y) for x in (0, 1, 7, 8) for y in range(grid.y) if (x, y) not in {(c.x, c.y) for c in plan_rd}
+    ]
     only = os.environ.get("DM_ONLY")
     variants = {
         "gate/up alone (16 x 54 KB, own bank)": [("gu",)],
@@ -144,4 +166,92 @@ def test_dram_mix(mesh_device):
             ttnn.synchronize_device(mesh_device)
             t = _dur(mesh_device)
             best = t if best is None or t < best else best
-        logger.info(f"DMIX {name:48s} {total / 1e6:7.1f} MB in {best:8.1f} us = {total / best / 1e3:6.1f} GB/s ({total / best / 1e3 / 512 * 100:4.1f}%)")
+        logger.info(
+            f"DMIX {name:48s} {total / 1e6:7.1f} MB in {best:8.1f} us = {total / best / 1e3:6.1f} GB/s ({total / best / 1e3 / 512 * 100:4.1f}%)"
+        )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_edge_readers(mesh_device):
+    """lin2d's weight senders: one core per column in grid rows DE_ROWS (default top + bottom), each reading its
+    share of DE_MB as DE_PAGE pages (page i in bank i % 8) DE_DEPTH deep, on NOC0 / NOC1 / per row (DE_NOC: 0, 1,
+    or 'split' = top NOC0 + bottom NOC1)."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    total_mb = float(os.environ.get("DE_MB", "27.3"))
+    for page in [int(v) for v in os.environ.get("DE_PAGE", "52224,2048").split(",")]:
+        for rows_s in os.environ.get("DE_ROWS", "0;9;0,9;0,1,2,3,4,5,6,7,8,9").split(";"):
+            rows = [int(r) for r in rows_s.split(",")]
+            cores = [ttnn.CoreCoord(x, y) for y in rows for x in range(grid.x)]
+            pages = int(total_mb * 1e6 / page) // len(cores) * len(cores)
+            per = pages // len(cores)
+            t = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([pages, page // 4]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+            )
+            for noc_mode, pin in [
+                (m, int(p_))
+                for m in os.environ.get("DE_NOC", "0,1,split").split(",")
+                for p_ in os.environ.get("DE_PIN", "0").split(",")
+            ]:
+                for depth in [int(v) for v in os.environ.get("DE_DEPTH", "3,6").split(",")]:
+                    if depth * page > 1_000_000:
+                        continue
+                    pd = ttnn.ProgramDescriptor()
+                    cbs, ks = [], []
+                    for y in rows:
+                        noc = (0 if y == rows[0] else 1) if noc_mode == "split" else int(noc_mode)
+                        cl = [c for c in cores if c.y == y]
+                        rt = ttnn.RuntimeArgs()
+                        for c in cl:
+                            i = cores.index(c)
+                            if (
+                                pin
+                            ):  # (core i: bank i % 8 only, its slot among that bank's cores: sequential in the bank)
+                                nper = -(-len(cores) // 8)
+                                rt[c.x][c.y] = [int(t.buffer_address()), (i % 8) + 8 * (i // 8) * per, per, 8]
+                            else:
+                                rt[c.x][c.y] = [
+                                    int(t.buffer_address()),
+                                    i,
+                                    per,
+                                    len(cores),
+                                ]  # (page i + n cores k: rotates banks)
+                        crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cl])
+                        cbs.append(
+                            ttnn.CBDescriptor(
+                                total_size=depth * page,
+                                core_ranges=crs,
+                                format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint32, depth * page)],
+                            )
+                        )
+                        ks.append(
+                            ttnn.KernelDescriptor(
+                                kernel_source=_K,
+                                source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                                core_ranges=crs,
+                                compile_time_args=[page, depth]
+                                + list(ttnn.TensorAccessorArgs(t).get_compile_time_args()),
+                                runtime_args=rt,
+                                config=ttnn.DataMovementConfigDescriptor(
+                                    processor=ttnn.DataMovementProcessor.RISCV_0
+                                    if noc == 0
+                                    else ttnn.DataMovementProcessor.RISCV_1,
+                                    noc=ttnn.NOC.NOC_0 if noc == 0 else ttnn.NOC.NOC_1,
+                                ),
+                            )
+                        )
+                    pd.cbs, pd.kernels = cbs, ks
+                    md = ttnn.MeshProgramDescriptor()
+                    md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 0))] = pd
+                    best = None
+                    for _ in range(3):
+                        _dur(mesh_device)
+                        ttnn.generic_op([t], md)
+                        ttnn.synchronize_device(mesh_device)
+                        d = _dur(mesh_device)
+                        best = d if best is None or d < best else best
+                    b = pages * page
+                    logger.info(
+                        f"DEDGE page {page:6d} rows {rows_s:20s} noc {noc_mode:5s} pin {pin} depth {depth}  {b / 1e6:6.1f} MB in {best:7.1f} us"
+                        f" = {b / best / 1e3:6.1f} GB/s total, {b / best / 1e3 / len(cores):5.1f} per core"
+                    )
+            ttnn.deallocate(t)

@@ -28,15 +28,28 @@ from dataclasses import dataclass, field
 import torch
 from ttnn.bringup.combine_rf.combine_plan import combine_planner_prepare, port_luts
 from ttnn.bringup.combine_rf.dispatch_prep import all_chips_route_words, dispatch_prep_prepare, own_rows_copy_prepare
-from ttnn.bringup.combine_rf.sparse_all_gather_2d import ensure_semaphores, manifest_spec, port_cores_all, sparse_all_gather_2d
-from ttnn.bringup.combine_rf.fabric_all_gather_py import fabric_all_gather, worker_cores
+from ttnn.bringup.combine_rf.fabric_all_gather_py import fabric_all_gather
 from ttnn.bringup.combine_rf.fabric_all_gather_py import plan as fag_plan
+from ttnn.bringup.combine_rf.fabric_all_gather_py import worker_cores
 from ttnn.bringup.combine_rf.l1_zero import l1_zero_program
 from ttnn.bringup.combine_rf.layout_ops import layout_op_prepare
+from ttnn.bringup.combine_rf.lin2d import lin2d_prepare
+from ttnn.bringup.combine_rf.lin2d import upload_stacked as lin2d_upload
 from ttnn.bringup.combine_rf.router_topk import router_topk_prepare
+from ttnn.bringup.combine_rf.sparse_all_gather_2d import (
+    ensure_semaphores,
+    manifest_spec,
+    port_cores_all,
+    sparse_all_gather_2d,
+)
 from ttnn.bringup.combine_rf.sparse_combine_rf import sparse_combine_rf_prepare
 from ttnn.bringup.combine_rf.sum_ops import sum_parts_prepare
-from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import W_DTYPES, FlatRoutedExpert, _bank_sharded, flat_weight_regions
+from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import (
+    W_DTYPES,
+    FlatRoutedExpert,
+    _bank_sharded,
+    flat_weight_regions,
+)
 
 import models.demos.glm53_flash_d_p.tt.mm_configs as mm_configs
 import ttnn
@@ -135,41 +148,79 @@ class TtK3TokenSplitMoE:
         # router (bf16), latent (bf8), shared (bf8)
         self.w_gate = tw(w.gate.T, ttnn.bfloat16)
         self.bias = ttnn.from_torch(
-            w.bias.view(1, -1).expand(S, -1).contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-            device=mesh_device, memory_config=dram, mesh_mapper=rep,
+            w.bias.view(1, -1).expand(S, -1).contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=dram,
+            mesh_mapper=rep,
         )
         # router selection: K3_TOPK=custom (default: sigmoid + bias add in fp32, router_topk writes the joint routing
         # rows) or ttnn (moe_grouped_topk + layout / concat ops)
         self.topk_custom = os.environ.get("K3_TOPK", "custom") == "custom"
         self.bias32 = ttnn.from_torch(
-            w.bias.view(1, -1).float().contiguous(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh_device,
-            memory_config=dram, mesh_mapper=rep,
+            w.bias.view(1, -1).float().contiguous(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=dram,
+            mesh_mapper=rep,
         )
         # (one ttnn.add with a sigmoid on its input gives the biased scores; the top-k reads only those and the bias row,
         # each pick's score = biased - bias: one program and half the top-k's reads fewer)
         self.topk_bias = os.environ.get("K3_TOPK_BIAS", "1") == "1"
         self.bias_row = ttnn.from_torch(
-            w.bias.view(1, -1).float().contiguous(), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device,
-            memory_config=dram, mesh_mapper=rep,
+            w.bias.view(1, -1).float().contiguous(),
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=dram,
+            mesh_mapper=rep,
         )
-        self.rtopk = router_topk_prepare(mesh_device, S=S, E=d.E, K=d.K, route_scale=d.route_scale, bias_mode=self.topk_bias)
+        self.rtopk = router_topk_prepare(
+            mesh_device, S=S, E=d.E, K=d.K, route_scale=d.route_scale, bias_mode=self.topk_bias
+        )
         self.w_ld = tw(w.lat_down.T, ttnn.bfloat8_b)
         self.w_lu = tw(w.lat_up.T, ttnn.bfloat8_b)
+        # latent down / up as combine_rf/lin2d (K3_LIN2D=1, default): x resident in L1, the weights streamed down each
+        # column by fixed senders (top NOC0 / bottom NOC1, after x is in), each weight piece one DRAM read; 103 / 95 us
+        # standalone vs ttnn mm2d's 117 / 122 (zz_scratch_k3_dense_mm.py::test_lin2d)
+        self.lin2d = os.environ.get("K3_LIN2D", "1") == "1"
+        if self.lin2d:
+            fid = getattr(ttnn.MathFidelity, os.environ.get("K3_LAT_FID", "HiFi2"))
+            self.ld_run, lay = lin2d_prepare(mesh_device, M=S, K=d.H, N=d.latent, fidelity=fid)
+            self.w_ld2 = lin2d_upload(mesh_device, w.lat_down.T.contiguous(), lay)
+            self.lu_run, lay = lin2d_prepare(mesh_device, M=S, K=d.latent, N=d.H, fidelity=fid)
+            self.w_lu2 = lin2d_upload(mesh_device, w.lat_up.T.contiguous(), lay)
         self.g_ln = ttnn.from_torch(
-            w.lat_norm.view(1, 1, -1, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device,
-            memory_config=dram, mesh_mapper=rep,
+            w.lat_norm.view(1, 1, -1, 32),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=dram,
+            mesh_mapper=rep,
         )
         # shared expert: K3_SE=flat (default) runs it as the flat routed expert with one expert every own token goes
         # to (bf8 weights in its bank layout, fused gate/up + SiTU + down); dense: three ttnn.linear + situ_glu
         # latent norm: the combine's rows tilized straight into an 8 x 10 block-sharded L1 tensor (1 row tile x 14 tiles a
         # core), the sharded rms_norm (7 us vs 58 interleaved), back to DRAM interleaved for the latent up
         gx_ln = 8
-        self.ln_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(
-            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx_ln - 1, S // 32 - 1))]),
-            [32, d.latent // gx_ln], ttnn.ShardOrientation.ROW_MAJOR))
+        self.ln_mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx_ln - 1, S // 32 - 1))]),
+                [32, d.latent // gx_ln],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
         self.ln_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(gx_ln, S // 32), subblock_w=2, block_h=1,
-            block_w=d.latent // gx_ln // 32, inplace=False)
+            compute_with_storage_grid_size=ttnn.CoreCoord(gx_ln, S // 32),
+            subblock_w=2,
+            block_h=1,
+            block_w=d.latent // gx_ln // 32,
+            inplace=False,
+        )
         self.tilize_ln = layout_op_prepare(mesh_device, "tilize", out_memory_config=self.ln_mc)
         self.tilize = layout_op_prepare(mesh_device, "tilize")
         self.untilize = layout_op_prepare(mesh_device, "untilize")
@@ -192,8 +243,10 @@ class TtK3TokenSplitMoE:
         )
         # the latent down / up linears (bf8 weights): K3_LAT_FID (HiFi2 default; LoFi as TtMoe's default config)
         self.cfg_lat = ttnn.types.BlackholeComputeKernelConfig(
-            math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("K3_LAT_FID", "HiFi2")), math_approx_mode=False,
-            fp32_dest_acc_en=True, packer_l1_acc=True,
+            math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("K3_LAT_FID", "HiFi2")),
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
         )
         # routed experts: the flat expert (fake-initialized, then the pool packed once and replicated). Its tokens and
         # its gate/up -> down intermediate in bfp8 (K3_X_BF16 / K3_H_BF16 = 1: bf16, accuracy probes)
@@ -203,13 +256,26 @@ class TtK3TokenSplitMoE:
         self.act = os.environ.get("K3_ROUTED_ACT", "situ")  # (silu: an accuracy probe of the device SiTU)
         E, EPC = d.E, self.EPC
         self.op = FlatRoutedExpert(
-            mesh_device, "fake", m=cap, H=d.latent, I=d.I, gids=[list(range(c * EPC, (c + 1) * EPC)) for c in range(self.N)],
-            n_global=E, wdtype=self.wdtype, act=self.act, pin=1, x_bf16=self.x_bf16, h_bf16=self.h_bf16,
+            mesh_device,
+            "fake",
+            m=cap,
+            H=d.latent,
+            I=d.I,
+            gids=[list(range(c * EPC, (c + 1) * EPC)) for c in range(self.N)],
+            n_global=E,
+            wdtype=self.wdtype,
+            act=self.act,
+            pin=1,
+            x_bf16=self.x_bf16,
+            h_bf16=self.h_bf16,
         )
         P = len(w.pool)
         assert EPC % P == 0, "every chip's local expert e uses pool[e % P]: EPC must be a multiple of the pool"
         lay = dict(self.op.plan)
-        W_l = [tuple(t.T.contiguous() for t in (w.pool[e % P][0], w.pool[e % P][1])) + (w.pool[e % P][2].T.contiguous(),) for e in range(EPC)]
+        W_l = [
+            tuple(t.T.contiguous() for t in (w.pool[e % P][0], w.pool[e % P][1])) + (w.pool[e % P][2].T.contiguous(),)
+            for e in range(EPC)
+        ]
         regions, dregs, rregs = flat_weight_regions(W_l, lay)
         wdt = W_DTYPES[self.wdtype][0]
         for t in (self.op.w_gu, self.op.w_d, self.op.w_rd):  # (the fake tensors)
@@ -230,11 +296,16 @@ class TtK3TokenSplitMoE:
         wcrs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in wcores])
         # (the writers' words first: persistent L1 above the arena, not stranded in the middle when it is freed)
         self.words = ttnn.from_torch(
-            torch.zeros(len(wcores) * 192, 16, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device, memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
+            torch.zeros(len(wcores) * 192, 16, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
                 ttnn.ShardSpec(wcrs, [192, 16], ttnn.ShardOrientation.ROW_MAJOR),
-            ), mesh_mapper=rep,
+            ),
+            mesh_mapper=rep,
         )
         # the arena: the flat expert's buffers, the combine's state / rings / CBs (~all of L1 on every core). Per call:
         # allocated after the dense ops before the experts, its combine state zeroed on the device, freed after (a
@@ -248,14 +319,17 @@ class TtK3TokenSplitMoE:
         # offset), dispatch_prep then only writes the route words: -18 us of own-row copy for +2.5 us of untilize
         self.lat_direct = self.sparse_dispatch and os.environ.get("K3_LAT_DIRECT", "1") == "1"
         self.dprep = (
-            dispatch_prep_prepare(mesh_device, S=S, K=d.K, EPC=self.EPC, tokens_per_page=self.rows_pt, copy=not self.lat_direct)
+            dispatch_prep_prepare(
+                mesh_device, S=S, K=d.K, EPC=self.EPC, tokens_per_page=self.rows_pt, copy=not self.lat_direct
+            )
             if self.sparse_dispatch
             else None
         )
         if self.lat_direct:  # (and both in one generic_op, the untilize on the cores the route words leave)
             C_ = tuple(mesh_device.shape)[1]
-            self.untilize_x = layout_op_prepare(mesh_device, "untilize", row0_of=lambda r, c: (r * C_ + c) * S,
-                                                exclude=self.dprep.cores)
+            self.untilize_x = layout_op_prepare(
+                mesh_device, "untilize", row0_of=lambda r, c: (r * C_ + c) * S, exclude=self.dprep.cores
+            )
             self._prep_merged = {}
         # the routing rows' all-gather: one sparse_all_gather_2d to every chip (default) or two ttnn.all_gather
         # (sparse: sparse_all_gather_2d to every chip, 157 us vs 140 for the two ttnn.all_gather at 64-B rows; fag: the
@@ -271,9 +345,13 @@ class TtK3TokenSplitMoE:
         a_rows = int(plan["arena_tiles"]) * 32
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         self._arena_spec = (
-            ttnn.Shape([grid.x * grid.y * a_rows, 16]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device,
+            ttnn.Shape([grid.x * grid.y * a_rows, 16]),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_device,
             ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
                 ttnn.ShardSpec(all_cores, [a_rows, 16], ttnn.ShardOrientation.ROW_MAJOR),
             ),
         )
@@ -283,13 +361,31 @@ class TtK3TokenSplitMoE:
         luts, nps = port_luts(mesh_device, 2)
         self.rows_cap = rows_cap
         chips = [(r, c) for r in range(R) for c in range(C)]
-        self._planner_args = dict(S=S, K=d.K, EPC=EPC, L=2, port_luts=luts, n_ports=nps, rows_cap=rows_cap,
-                                  cores=sorted(pcores, key=lambda c: (c[1], c[0])), row_pages=True, joint=True,
-                                  tokens_per_page=32 if os.environ.get("K3_TOPK", "custom") == "custom" else 1)
+        self._planner_args = dict(
+            S=S,
+            K=d.K,
+            EPC=EPC,
+            L=2,
+            port_luts=luts,
+            n_ports=nps,
+            rows_cap=rows_cap,
+            cores=sorted(pcores, key=lambda c: (c[1], c[0])),
+            row_pages=True,
+            joint=True,
+            tokens_per_page=32 if os.environ.get("K3_TOPK", "custom") == "custom" else 1,
+        )
         probe = combine_planner_prepare(mesh_device, A=15, **self._planner_args)  # (outputs only: their addresses)
         self.combine = sparse_combine_rf_prepare(
-            mesh_device, S, d.latent, {ch: [] for ch in chips}, num_links=2, n_acc=16, depth=int(os.environ.get("K3_D", "4")),
-            cells=self.cells, arena=self.arena, writers=self.writers,
+            mesh_device,
+            S,
+            d.latent,
+            {ch: [] for ch in chips},
+            num_links=2,
+            n_acc=16,
+            depth=int(os.environ.get("K3_D", "4")),
+            cells=self.cells,
+            arena=self.arena,
+            writers=self.writers,
             l1=dict(writers=wcores, words=int(self.words.buffer_address())),
             devplan=dict(plan=probe.outs["plan"], table=probe.outs["table"]),
         )
@@ -313,13 +409,27 @@ class TtK3TokenSplitMoE:
             self.untilize_disp = layout_op_prepare(mesh_device, "untilize", exclude=ex)
         # per-call buffers (allocated once)
         sh = ttnn.ShardTensorToMesh(mesh_device, dim=0)
-        self.y = ttnn.from_torch(torch.zeros(self.N, rows_cap, d.latent, dtype=torch.bfloat16), dtype=ttnn.bfloat16,
-                                 layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=dram, mesh_mapper=sh)
-        self.out = ttnn.from_torch(torch.zeros(self.N, 1, S, d.latent, dtype=torch.bfloat16), dtype=ttnn.bfloat16,
-                                   layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=dram, mesh_mapper=sh)
+        self.y = ttnn.from_torch(
+            torch.zeros(self.N, rows_cap, d.latent, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=dram,
+            mesh_mapper=sh,
+        )
+        self.out = ttnn.from_torch(
+            torch.zeros(self.N, 1, S, d.latent, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=dram,
+            mesh_mapper=sh,
+        )
         self.desc = self.l1_args = None  # (built on the first call: its CBs bind that call's arena)
         self.coll = self.combine.collector
-        zr = {c: [(self.arena_addr + o, b, st, n) for o, b, st, n in runs] for c, runs in self.combine.zero_runs.items()}
+        zr = {
+            c: [(self.arena_addr + o, b, st, n) for o, b, st, n in runs] for c, runs in self.combine.zero_runs.items()
+        }
         for c in wcores:
             zr.setdefault(c, []).append((int(self.words.buffer_address()), 192 * 16 * 4, 0, 1))
         self.zero_desc = l1_zero_program(mesh_device, zr)
@@ -337,8 +447,12 @@ class TtK3TokenSplitMoE:
     def _warm_up(self):
         """Every dense op once on zero tokens (e.g. CCL semaphores are allocated on first use and kept)."""
         x = ttnn.from_torch(
-            torch.zeros(self.N * self.S, self.d.H, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-            device=self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+            torch.zeros(self.N * self.S, self.d.H, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
         )
         ids, wts = self.router(x)
         gi, gw = self.gather_routing(ids, wts)
@@ -363,7 +477,9 @@ class TtK3TokenSplitMoE:
             mc = ttnn.L1_MEMORY_CONFIG if "router" in self.l1_set else None  # (the top-k's 64 B reads: L1 latency)
             logits = self._linear(x, self.w_gate, self.cfg_hi, ttnn.float32, memory_config=mc)
             if self.topk_bias:
-                bs = ttnn.add(logits, self.bias32, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID], memory_config=mc)
+                bs = ttnn.add(
+                    logits, self.bias32, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID], memory_config=mc
+                )
                 rows = self.rtopk(self.bias_row, bs)
             else:
                 sc = ttnn.sigmoid(logits, memory_config=mc)
@@ -381,9 +497,18 @@ class TtK3TokenSplitMoE:
             return rows, None
         logits = self._linear(x, self.w_gate, self.cfg_hi)
         wts, ids = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
-            logits, self.bias, n_groups=1, summed_experts_per_group=1, topk_groups=1, n_activated_experts=self.d.K,
-            route_scale=self.d.route_scale, stable_sort=True, epsilon=1e-20, score_func="sigmoid",
-            padding_config=None, weights_layout=ttnn.ROW_MAJOR_LAYOUT,
+            logits,
+            self.bias,
+            n_groups=1,
+            summed_experts_per_group=1,
+            topk_groups=1,
+            n_activated_experts=self.d.K,
+            route_scale=self.d.route_scale,
+            stable_sort=True,
+            epsilon=1e-20,
+            score_func="sigmoid",
+            padding_config=None,
+            weights_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         if keep_logits:
             return ids, wts, logits
@@ -420,7 +545,9 @@ class TtK3TokenSplitMoE:
             if x_se is not None:  # (and the shared expert's row-major x, untilized under it)
                 ua = self.untilize_gather.programs(x_se, x_rm)
                 extra = ([x_se, x_rm], lambda coord: (list(ua[coord].cbs), list(ua[coord].kernels)))
-            g = fabric_all_gather(both, cluster_axis=None, topology=ttnn.Topology.Linear, num_links=1, dim=0, extra=extra)
+            g = fabric_all_gather(
+                both, cluster_axis=None, topology=ttnn.Topology.Linear, num_links=1, dim=0, extra=extra
+            )
             ttnn.deallocate(both)
             return g, g
         a = ttnn.all_gather(both, dim=0, cluster_axis=1)
@@ -433,8 +560,9 @@ class TtK3TokenSplitMoE:
         """The combine plan; with se_x_in_plan also the shared expert's row-major x ([S, H], DRAM), in one program."""
         if not (self.se_x_in_plan and self.se_mode == "flat"):
             return self.planner(gi, gw), None
-        x_rm = ttnn.allocate_tensor_on_device(ttnn.Shape([self.S, self.d.H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh,
-                                              ttnn.DRAM_MEMORY_CONFIG)
+        x_rm = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([self.S, self.d.H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, ttnn.DRAM_MEMORY_CONFIG
+        )
         k = tuple(int(t.buffer_address()) for t in (gi, gw, x, x_rm))
         if self._plan_merged.get("key") != k:
             pa, ua = self.planner.programs(gi, gw), self.untilize_plan.programs(x, x_rm)
@@ -452,7 +580,10 @@ class TtK3TokenSplitMoE:
     def latent_down(self, x):
         """[S, latent]: tiled (lat_direct: dispatch_prep untilizes it into the dispatch buffer), else row-major."""
         l1 = "latdown" in self.l1_set  # (the tiled result is transient: L1; the row-major one feeds the dispatch: DRAM)
-        lat = self._linear(x, self.w_ld, self.cfg_lat, memory_config=ttnn.L1_MEMORY_CONFIG if l1 else None)
+        mc = ttnn.L1_MEMORY_CONFIG if l1 else None
+        lat = (
+            self.ld_run(x, self.w_ld2, mc) if self.lin2d else self._linear(x, self.w_ld, self.cfg_lat, memory_config=mc)
+        )
         if self.lat_direct:
             return lat
         rm = ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -466,8 +597,12 @@ class TtK3TokenSplitMoE:
             return None
         N, S, W = self.N, self.S, self.d.latent
         dram = ttnn.DRAM_MEMORY_CONFIG
-        xbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, N * S, W]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, dram)
-        route = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, 1, S]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh, dram)
+        xbuf = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, N * S, W]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, dram
+        )
+        route = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, 1, S]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh, dram
+        )
         if self.lat_direct:  # (lat_rm is the tiled latent: own rows straight into the buffer; one program, both ops)
             k = tuple(int(t.buffer_address()) for t in (lat_rm, gi, xbuf, route))
             if self._prep_merged.get("key") != k:
@@ -498,8 +633,9 @@ class TtK3TokenSplitMoE:
         man = ttnn.allocate_tensor_on_device(*manifest_spec(self.mesh, self.S, num_links=2))
         extra, x_rm = None, None
         if x_se is not None:  # (the shared expert's row-major x, untilized under the dispatch)
-            x_rm = ttnn.allocate_tensor_on_device(ttnn.Shape([self.S, self.d.H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT,
-                                                  self.mesh, ttnn.DRAM_MEMORY_CONFIG)
+            x_rm = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([self.S, self.d.H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, ttnn.DRAM_MEMORY_CONFIG
+            )
             ua = self.untilize_disp.programs(x_se, x_rm)
             extra = ([x_se, x_rm], lambda coord: (list(ua[coord].cbs), list(ua[coord].kernels)))
         sparse_all_gather_2d(xbuf, route, num_links=2, manifest=man, extra=extra)
@@ -511,9 +647,9 @@ class TtK3TokenSplitMoE:
     def alloc_arena(self):
         """The call's arena (uninitialized) with the combine's state zeroed."""
         arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
-        assert int(arena.buffer_address()) == self.arena_addr, (
-            f"the arena landed at {int(arena.buffer_address())}, not {self.arena_addr}: an L1 tensor outlives its op"
-        )
+        assert (
+            int(arena.buffer_address()) == self.arena_addr
+        ), f"the arena landed at {int(arena.buffer_address())}, not {self.arena_addr}: an L1 tensor outlives its op"
         if self.desc is None:
             self.desc, self.l1_args = self.combine.build_l1(self.y, self.out, arena)
         else:  # (the CBs bind the arena's buffer: a program-cache miss rebuilds them from this one)
@@ -525,7 +661,10 @@ class TtK3TokenSplitMoE:
         # x read from DRAM once (MIMO_FL_X1, read when the program is built): routed experts 2433 -> 2372 us traced;
         # the shared expert's flat op keeps reading it twice (X1 there: 523 -> 702 us). K3_EXP_X1=0: off
         # K3_EXP_DW_BATCH=n: down-weight blocks per read barrier (MIMO_FL_DW_BATCH, 2 by default; 4: block-level noise)
-        scoped = {"MIMO_FL_X1": os.environ.get("K3_EXP_X1", "1") == "1", "MIMO_FL_DW_BATCH": os.environ.get("K3_EXP_DW_BATCH", "")}
+        scoped = {
+            "MIMO_FL_X1": os.environ.get("K3_EXP_X1", "1") == "1",
+            "MIMO_FL_DW_BATCH": os.environ.get("K3_EXP_DW_BATCH", ""),
+        }
         scoped = {k: ("1" if v is True else v) for k, v in scoped.items() if v and v != "0" and k not in os.environ}
         for kv in filter(None, os.environ.get("K3_EXP_ENV", "").split(",")):  # (more flat knobs, this program only)
             k, v = kv.split("=", 1)
@@ -539,22 +678,49 @@ class TtK3TokenSplitMoE:
 
     def _experts_combine(self, xg, pl, arena):
         return ttnn.bringup.flat_routed_expert_with_program(
-            xg, pl["counts"], pl["regions"], self.op.gidx, self.op.w_gu, self.op.w_d, reader_down_weights=self.op.w_rd,
-            done_words=self.op.done, intermediate=self.d.I, max_tokens_per_expert=self.op.m, arena=arena, y=self.y,
-            extra=self.desc, extra_key=self.key, collector=self.coll["core"], counts_addr=self.coll["counts_addr"],
-            writers=self.writers, activation=self.op.act, pin=1, token_index=pl["token_index"], down_fp32=True,
-            x_bf16=self.x_bf16, h_bf16=self.h_bf16,
+            xg,
+            pl["counts"],
+            pl["regions"],
+            self.op.gidx,
+            self.op.w_gu,
+            self.op.w_d,
+            reader_down_weights=self.op.w_rd,
+            done_words=self.op.done,
+            intermediate=self.d.I,
+            max_tokens_per_expert=self.op.m,
+            arena=arena,
+            y=self.y,
+            extra=self.desc,
+            extra_key=self.key,
+            collector=self.coll["core"],
+            counts_addr=self.coll["counts_addr"],
+            writers=self.writers,
+            activation=self.op.act,
+            pin=1,
+            token_index=pl["token_index"],
+            down_fp32=True,
+            x_bf16=self.x_bf16,
+            h_bf16=self.h_bf16,
             l1_args=self.l1_args,
         )
 
     def latent_up(self, yr_l1=False):
         o = self.tilize_ln(ttnn.reshape(self.out, [self.S, self.d.latent]))  # (layout_ops: 19 us vs ttnn's 53)
-        ns = ttnn.rms_norm(o, epsilon=self.d.eps, weight=self.g_ln, program_config=self.ln_pc, memory_config=self.ln_mc,
-                           compute_kernel_config=self.cfg_hi)
+        ns = ttnn.rms_norm(
+            o,
+            epsilon=self.d.eps,
+            weight=self.g_ln,
+            program_config=self.ln_pc,
+            memory_config=self.ln_mc,
+            compute_kernel_config=self.cfg_hi,
+        )
         ttnn.deallocate(o)
-        n = ttnn.sharded_to_interleaved(ns, ttnn.L1_MEMORY_CONFIG if "latup" in self.l1_set else ttnn.DRAM_MEMORY_CONFIG)
+        n = ttnn.sharded_to_interleaved(
+            ns, ttnn.L1_MEMORY_CONFIG if "latup" in self.l1_set else ttnn.DRAM_MEMORY_CONFIG
+        )
         ttnn.deallocate(ns)
-        y = self._linear(n, self.w_lu, self.cfg_lat, memory_config=ttnn.L1_MEMORY_CONFIG if yr_l1 else None)
+        mc = ttnn.L1_MEMORY_CONFIG if yr_l1 else None
+        y = self.lu_run(n, self.w_lu2, mc) if self.lin2d else self._linear(n, self.w_lu, self.cfg_lat, memory_config=mc)
         ttnn.deallocate(n)
         return y
 
@@ -578,16 +744,27 @@ class TtK3TokenSplitMoE:
         It = d.I_shared // C
         self._se_knobs()
         self.se = FlatRoutedExpert(
-            mesh_device, "fake", m=C * S, H=d.H, I=It, gids=[[0] for _ in range(N)], n_global=1, wdtype="bf8",
-            act="situ", pin=1, x_bf16=self.se_xbf16,
+            mesh_device,
+            "fake",
+            m=C * S,
+            H=d.H,
+            I=It,
+            gids=[[0] for _ in range(N)],
+            n_global=1,
+            wdtype="bf8",
+            act="situ",
+            pin=1,
+            x_bf16=self.se_xbf16,
         )
         lay = dict(self.se.plan)
         per_col = []
         for c in range(C):
             sl = slice(c * It, (c + 1) * It)
-            per_col.append(flat_weight_regions(
-                [(w.sh_gate[sl].T.contiguous(), w.sh_up[sl].T.contiguous(), w.sh_down[:, sl].T.contiguous())], lay
-            ))
+            per_col.append(
+                flat_weight_regions(
+                    [(w.sh_gate[sl].T.contiguous(), w.sh_up[sl].T.contiguous(), w.sh_down[:, sl].T.contiguous())], lay
+                )
+            )
         wdt = W_DTYPES["bf8"][0]
         for t in (self.se.w_gu, self.se.w_d, self.se.w_rd):
             if t is not None:
@@ -599,8 +776,12 @@ class TtK3TokenSplitMoE:
             self.se.w_rd = _bank_sharded([rr for _, _, rr in dev_order], lay["banks"], wdt, mesh_device)
         rep = ttnn.ReplicateTensorToMesh(mesh_device)
         row = lambda v: ttnn.from_torch(  # noqa: E731
-            torch.tensor([v], dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=rep,
+            torch.tensor([v], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=rep,
         )
         self.se_counts, self.se_regions, self.se_tidx = row([C * S]), row([0]), None
 
@@ -616,13 +797,25 @@ class TtK3TokenSplitMoE:
         # K3_SE_YRM bf16 row-major y, K3_SE_SRND stochastic packer rounding
         self._se_knobs()
         self.se = FlatRoutedExpert(
-            mesh_device, "fake", m=S, H=d.H, I=Ip, gids=[list(range(P)) for _ in range(N)], n_global=P, wdtype="bf8",
-            act="situ", pin=1, x_bf16=self.se_xbf16,
+            mesh_device,
+            "fake",
+            m=S,
+            H=d.H,
+            I=Ip,
+            gids=[list(range(P)) for _ in range(N)],
+            n_global=P,
+            wdtype="bf8",
+            act="situ",
+            pin=1,
+            x_bf16=self.se_xbf16,
         )
         lay = dict(self.se.plan)
         sl = lambda i: slice(i * Ip, (i + 1) * Ip)  # noqa: E731
         regions, dregs, rregs = flat_weight_regions(
-            [(w.sh_gate[sl(i)].T.contiguous(), w.sh_up[sl(i)].T.contiguous(), w.sh_down[:, sl(i)].T.contiguous()) for i in range(P)],
+            [
+                (w.sh_gate[sl(i)].T.contiguous(), w.sh_up[sl(i)].T.contiguous(), w.sh_down[:, sl(i)].T.contiguous())
+                for i in range(P)
+            ],
             lay,
         )
         wdt = W_DTYPES["bf8"][0]
@@ -635,8 +828,12 @@ class TtK3TokenSplitMoE:
             self.se.w_rd = _bank_sharded([rregs], lay["banks"], wdt, mesh_device)
         rep = ttnn.ReplicateTensorToMesh(mesh_device)
         row = lambda v: ttnn.from_torch(  # noqa: E731
-            torch.tensor([v], dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=rep,
+            torch.tensor([v], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=rep,
         )
         self.se_counts, self.se_regions = row([S] * P), row([i * S for i in range(P)])
         self.se_tidx = row(list(range(S)) * P)
@@ -645,11 +842,21 @@ class TtK3TokenSplitMoE:
         """The shared expert's y [S, H]; with yr (local flat SE, bf16 tile parts) the block's y = yr + the parts' sum
         in one pass (sum_ops) instead of ttnn.sum + ttnn.add."""
         if self.se_mode == "tp":  # (row all-gather, one flat expert on the row's tokens, reduce-scatter)
-            x_rm = self.untilize7(x)  # (a row as 7 pages of 2 KB: the fabric all-gather sends whole pages, the flat reads 2 KB segments)
+            x_rm = self.untilize7(
+                x
+            )  # (a row as 7 pages of 2 KB: the fabric all-gather sends whole pages, the flat reads 2 KB segments)
             xg = fabric_all_gather(x_rm, cluster_axis=1, topology=ttnn.Topology.Linear, num_links=2, dim=0)
             ttnn.deallocate(x_rm)
-            y = self.se(xg, self.se_counts, self.se_regions, x_pages_per_row=7, down_fp32=True,
-                        pack_stochastic_rounding=self.se_srnd, y_bf16=self.se_ybf16, math_fidelity=self.se_fid)
+            y = self.se(
+                xg,
+                self.se_counts,
+                self.se_regions,
+                x_pages_per_row=7,
+                down_fp32=True,
+                pack_stochastic_rounding=self.se_srnd,
+                y_bf16=self.se_ybf16,
+                math_fidelity=self.se_fid,
+            )
             ttnn.deallocate(xg)
             ys = ttnn.reduce_scatter(y, 0, cluster_axis=1, num_links=2, topology=ttnn.Topology.Linear)
             ttnn.deallocate(y)
@@ -657,8 +864,15 @@ class TtK3TokenSplitMoE:
         if self.se_flat:  # (x row major; y bfp8 tiles [P S, H]: the parts' outputs, summed)
             x_rm = self.untilize(x) if x_rm is None else x_rm  # (layout_ops: 32 us vs ttnn's 49; or the planner's)
             y = self.se(
-                x_rm, self.se_counts, self.se_regions, token_index=self.se_tidx, down_fp32=True, y_row_major=self.se_yrm,
-                pack_stochastic_rounding=self.se_srnd, y_bf16=self.se_ybf16, math_fidelity=self.se_fid,
+                x_rm,
+                self.se_counts,
+                self.se_regions,
+                token_index=self.se_tidx,
+                down_fp32=True,
+                y_row_major=self.se_yrm,
+                pack_stochastic_rounding=self.se_srnd,
+                y_bf16=self.se_ybf16,
+                math_fidelity=self.se_fid,
             )
             ttnn.deallocate(x_rm)
             if self.se_yrm:
@@ -692,8 +906,9 @@ class TtK3TokenSplitMoE:
         mark("router")
         x_rm = None
         if self.se_x_where == "gather" and self.rgather == "fag" and self.se_mode == "flat":
-            x_rm = ttnn.allocate_tensor_on_device(ttnn.Shape([self.S, self.d.H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT,
-                                                  self.mesh, ttnn.DRAM_MEMORY_CONFIG)
+            x_rm = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([self.S, self.d.H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, ttnn.DRAM_MEMORY_CONFIG
+            )
             gi, gw = self.gather_routing(ids, wts, x_se=x, x_rm=x_rm)
         else:
             gi, gw = self.gather_routing(ids, wts)
@@ -714,12 +929,16 @@ class TtK3TokenSplitMoE:
         if x_rm is None and self.se_x_where == "dispatch" and self.sparse_dispatch and self.se_mode == "flat":
             xg, x_rm = self.dispatch(lat, prep, x_se=x)  # (also the barrier: every chip zeroed its arena first)
         else:
-            xg = self.dispatch(lat, prep)  # (also the barrier: every chip zeroed its arena before any chip's experts start)
+            xg = self.dispatch(
+                lat, prep
+            )  # (also the barrier: every chip zeroed its arena before any chip's experts start)
         mark("dispatch")
         self.experts_combine(xg, pl, arena)
         ttnn.deallocate(arena)
         mark("experts_combine")
-        if self.fuse_sum and not keep:  # (shared expert parts, latent up, then one sum; keep: ys separately, for checks)
+        if (
+            self.fuse_sum and not keep
+        ):  # (shared expert parts, latent up, then one sum; keep: ys separately, for checks)
             parts = self.shared(x, parts_only=True, x_rm=x_rm)  # (first: its arena takes all L1, so yr may live in L1)
             mark("shared")
             yr = self.latent_up(yr_l1="yr" in self.l1_set)
@@ -733,7 +952,11 @@ class TtK3TokenSplitMoE:
             mark("shared")
             y = ttnn.add(yr, ys, dtype=ttnn.bfloat16)
         mark("sum")
-        inter = dict(ids=ids, wts=wts, gi=gi, gw=gw, lat=lat, xg=xg, yr=yr, ys=ys, logits=logits[0], routed=self.out, pl=pl) if keep else None
+        inter = (
+            dict(ids=ids, wts=wts, gi=gi, gw=gw, lat=lat, xg=xg, yr=yr, ys=ys, logits=logits[0], routed=self.out, pl=pl)
+            if keep
+            else None
+        )
         if not keep:
             for t in (ids, wts, gi, lat, xg, yr, ys):  # (gw is gi)
                 if t is not None and t.is_allocated():
