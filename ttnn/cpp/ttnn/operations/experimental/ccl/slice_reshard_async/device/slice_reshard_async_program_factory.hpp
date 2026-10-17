@@ -32,12 +32,8 @@ inline constexpr uint32_t kWriterOutputAddrArg = 1;
 inline constexpr uint32_t kWriterOutReadySemArg = 14;
 inline constexpr uint32_t kWriterBarrierSemArg = 18;
 
-inline constexpr uint32_t reader_kernel_idx(uint32_t core_idx) {
-    return (core_idx * kKernelsPerCore) + kReaderKernelOffset;
-}
-inline constexpr uint32_t writer_kernel_idx(uint32_t core_idx) {
-    return (core_idx * kKernelsPerCore) + kWriterKernelOffset;
-}
+constexpr uint32_t reader_kernel_idx(uint32_t core_idx) { return (core_idx * kKernelsPerCore) + kReaderKernelOffset; }
+constexpr uint32_t writer_kernel_idx(uint32_t core_idx) { return (core_idx * kKernelsPerCore) + kWriterKernelOffset; }
 }  // namespace slice_reshard_async_dynamic
 
 struct SliceReshardAsyncProgramFactory {
