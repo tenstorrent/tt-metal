@@ -20,12 +20,15 @@ import os
 
 from helpers.logger import logger
 
-_MODE_TO_FUNC = {
-    "accuracy": "test_sfpu_accuracy_sweep",
-    "perf": "test_sfpu_perf_sweep",
-    "both": "test_sfpu_accuracy_and_perf_sweep",
+# Sweep functions per --mode. The Quasar sibling is accuracy-only (run_case
+# rejects PERF/BOTH on Quasar), so it is selected by "accuracy" and deselected
+# by the other modes.
+_MODE_TO_FUNCS = {
+    "accuracy": {"test_sfpu_accuracy_sweep", "test_sfpu_accuracy_sweep_quasar"},
+    "perf": {"test_sfpu_perf_sweep"},
+    "both": {"test_sfpu_accuracy_and_perf_sweep"},
 }
-_SWEEP_FUNCS = set(_MODE_TO_FUNC.values())
+_SWEEP_FUNCS = set().union(*_MODE_TO_FUNCS.values())
 
 
 def pytest_collection_modifyitems(config, items):
@@ -33,13 +36,13 @@ def pytest_collection_modifyitems(config, items):
     mode = config.getoption("--mode", default=None)
     if not mode:
         return
-    target = _MODE_TO_FUNC[mode]
+    targets = _MODE_TO_FUNCS[mode]
     deselected = [
         it
         for it in items
         if getattr(it, "function", None) is not None
         and it.function.__name__ in _SWEEP_FUNCS
-        and it.function.__name__ != target
+        and it.function.__name__ not in targets
     ]
     if deselected:
         drop = {id(it) for it in deselected}
