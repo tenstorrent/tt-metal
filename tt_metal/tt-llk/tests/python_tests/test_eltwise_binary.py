@@ -259,12 +259,15 @@ def get_dest_reuse_dest_acc(formats, math_op):
     rows carry the ELWMUL accumulation across folds and the face clear must
     follow the Dest geometry on its own. Float16_b operands reach the LoFi and
     HiFi2 ELWMUL paths, Float32 the HiFi3 and HiFi4 ones; ELWADD/ELWSUB never
-    clear. Blackhole still keys that clear on clear_fp32_dst_acc, so the 32-bit
-    cases stay Wormhole-only until it does.
+    clear. Blackhole keys the same clear on clear_fp32_dst_acc and is not yet
+    changed; its clear geometry is tracked in the issue this change closes.
+    Drop the Wormhole gate below once the Blackhole clear follows the Dest
+    geometry too.
     """
     if (
         math_op == MathOperation.Elwmul
         and formats.input_format in (DataFormat.Float16_b, DataFormat.Float32)
+        # Blackhole: same predicate, not yet changed; drop this gate when it is.
         and get_chip_architecture() == ChipArchitecture.WORMHOLE
     ):
         return [DestAccumulation.No, DestAccumulation.Yes]
