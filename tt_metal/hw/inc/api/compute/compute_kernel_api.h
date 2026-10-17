@@ -458,13 +458,22 @@ ALWI void signbit_tile_int32(uint32_t idst) {
  */
 // clang-format on
 ALWI void abs_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX), idst, VectorMode::RC));
+    MATH(if constexpr (ckernel::sfpu::abs_bf16_whole_tile && !DST_ACCUM_MODE) {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX, 32, DST_ACCUM_MODE), idst, VectorMode::None);
+        return;
+    });
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX, 8, DST_ACCUM_MODE), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void abs_tile_init() { MATH(SFPU_UNARY_INIT(abs)); }
+ALWI void abs_tile_init() {
+    MATH(SFPU_UNARY_INIT(abs));
+    MATH(ckernel::sfpu::abs_bf16_tile_init<!DST_ACCUM_MODE>());
+}
 
 // clang-format off
 /**
