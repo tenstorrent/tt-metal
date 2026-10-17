@@ -236,6 +236,7 @@ class TTSpatialCrossAttention:
             num_levels=deformable_attention.get("num_levels", 4),
             num_points=deformable_attention.get("num_points", 4),
             batch_first=batch_first,
+            value_memory=deformable_attention.get("value_memory", "auto"),
         )
 
         # ``params.deformable_attention``, not ``params``: MSDA applies its own

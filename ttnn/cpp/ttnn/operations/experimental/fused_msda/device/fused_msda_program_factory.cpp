@@ -112,7 +112,10 @@ AxisConstants axis_constants(uint32_t extent, bool align_corners, bool grid_spac
             bias = -0.5f;
         }
     }
-    return {std::bit_cast<uint32_t>(primary_scale), std::bit_cast<uint32_t>(secondary_scale), std::bit_cast<uint32_t>(bias)};
+    return {
+        std::bit_cast<uint32_t>(primary_scale),
+        std::bit_cast<uint32_t>(secondary_scale),
+        std::bit_cast<uint32_t>(bias)};
 }
 
 // CB depths for the geometry pipeline. Both the reader and the compute kernel
@@ -133,7 +136,156 @@ constexpr uint32_t kFracCbPages = 2;    // compute -> compute, one point at a ti
 constexpr uint32_t kScalarCbPages = 8;  // two points of four corners each
 constexpr uint32_t kInputCbGroups = 8;  // ditto, in corner groups of n_d_tiles
 
+constexpr uint32_t kTileMaxRows = 32;
+constexpr uint32_t kTileWidth = 32;
+
+constexpr uint8_t value_scratch_cb = tt::CBIndex::c_0;
+constexpr uint8_t attn_scratch_cb = tt::CBIndex::c_1;
+constexpr uint8_t loc_scratch_cb = tt::CBIndex::c_2;
+constexpr uint8_t input_tile_cb = tt::CBIndex::c_3;
+constexpr uint8_t scalar_tile_cb = tt::CBIndex::c_4;
+constexpr uint8_t output_scratch_cb = tt::CBIndex::c_5;
+constexpr uint8_t ref_scratch_cb = tt::CBIndex::c_6;
+// The geometry pipeline (README.md §6). geom/offset/attn go reader ->
+// compute, x0/y0 come back compute -> reader, frac never leaves compute.
+constexpr uint8_t geom_x_cb = tt::CBIndex::c_7;
+constexpr uint8_t geom_y_cb = tt::CBIndex::c_8;
+constexpr uint8_t offset_x_cb = tt::CBIndex::c_9;
+constexpr uint8_t offset_y_cb = tt::CBIndex::c_10;
+constexpr uint8_t attn_tile_cb = tt::CBIndex::c_11;
+constexpr uint8_t x0_cb = tt::CBIndex::c_12;
+constexpr uint8_t y0_cb = tt::CBIndex::c_13;
+constexpr uint8_t frac_x_cb = tt::CBIndex::c_14;
+constexpr uint8_t frac_y_cb = tt::CBIndex::c_15;
+constexpr uint8_t output_tile_cb = tt::CBIndex::c_16;
+constexpr uint8_t tiled_input_cb = tt::CBIndex::c_17;
+
+uint32_t page_size_for_cb(const MSDACircularBufferPlan& plan, uint8_t index) {
+    const auto it = std::find_if(plan.begin(), plan.end(), [index](const auto& spec) { return spec.index == index; });
+    TT_FATAL(it != plan.end(), "fused_msda: internal error, missing circular buffer {}", index);
+    return it->page_size;
+}
+
 }  // namespace
+
+MSDACircularBufferPlan derive_circular_buffer_plan(
+    const FusedMSDAOperation::operation_attributes_t& attrs,
+    const FusedMSDAOperation::tensor_args_t& args,
+    const MSDAShapes& s,
+    BufferType value_buffer_type,
+    BufferType output_buffer_type,
+    DataType output_dtype) {
+    const auto& value = args.value;
+    const auto& attn = args.attention_weights;
+    const Tensor& loc = attrs.from_offsets ? *args.sampling_offsets : *args.sampling_locations;
+
+    const uint32_t n_d_tiles = (s.head_dim + kTileWidth - 1) / kTileWidth;
+    const uint32_t attn_sticks_per_row = s.weights_packed ? 1u : s.num_levels;
+    const uint32_t loc_sticks_per_row = s.locations_packed ? 1u : (s.num_levels * s.num_points);
+
+    const uint32_t value_stick_raw = s.head_dim * value.element_size();
+    const uint32_t attn_stick_raw =
+        (s.weights_packed ? s.num_levels * s.num_points : s.num_points) * attn.element_size();
+    const uint32_t loc_stick_raw = (s.locations_packed ? s.num_levels * s.num_points * 2u : 2u) * loc.element_size();
+
+    const uint32_t value_stick_aligned = aligned_page_size(value_stick_raw, value_buffer_type);
+    const uint32_t attn_stick_aligned = aligned_page_size(attn_stick_raw, attn.buffer()->buffer_type());
+    const uint32_t loc_stick_aligned = aligned_page_size(loc_stick_raw, loc.buffer()->buffer_type());
+    // Writer scratch holds one head's D-wide stick, not the whole output page.
+    const uint32_t head_stick_aligned = aligned_page_size(value_stick_raw, output_buffer_type);
+
+    uint32_t ref_stick_aligned = 0;
+    if (attrs.from_offsets) {
+        const auto& ref = *args.reference_points;
+        ref_stick_aligned = aligned_page_size(2u * ref.element_size(), ref.buffer()->buffer_type());
+    }
+
+    const auto data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
+    const auto output_format = datatype_to_dataformat_converter(output_dtype);
+    const uint32_t tile_nbytes = tt::tile_size(data_format);
+
+    // Row-major staging: when D is a whole number of tile widths, the reader
+    // lands the four corners of a point side by side as a row-major block and
+    // compute tilizes it on the unpacker, so the reader copies nothing. Other
+    // D fall back to the reader scattering sticks into tile faces.
+    const bool rm_staging = s.head_dim % kTileWidth == 0;
+    // Row-major staging packs the four corner slots of a row back to back, so a
+    // slot must be exactly D*2 bytes; alignment padding would shift the tile
+    // columns compute tilizes.
+    TT_FATAL(
+        !rm_staging || value_stick_aligned == value_stick_raw,
+        "fused_msda: row-major staging needs an unpadded value stick ({} B aligned vs {} B raw)",
+        value_stick_aligned,
+        value_stick_raw);
+
+    MSDACircularBufferPlan plan;
+    auto push = [&](uint8_t index, uint32_t pages, uint32_t page_size, tt::DataFormat data_format) {
+        plan.push_back(MSDACircularBufferSpec{
+            .index = index,
+            .total_size = pages * page_size,
+            .page_size = page_size,
+            .data_format = data_format,
+        });
+    };
+
+    // Reader-only staging arenas: reserved once and treated as flat L1 space.
+    push(value_scratch_cb, kTileMaxRows, value_stick_aligned, datatype_to_dataformat_converter(value.dtype()));
+    push(
+        attn_scratch_cb,
+        kTileMaxRows * attn_sticks_per_row,
+        attn_stick_aligned,
+        datatype_to_dataformat_converter(attn.dtype()));
+    push(
+        loc_scratch_cb,
+        kTileMaxRows * loc_sticks_per_row,
+        loc_stick_aligned,
+        datatype_to_dataformat_converter(loc.dtype()));
+    if (attrs.from_offsets) {
+        push(
+            ref_scratch_cb,
+            kTileMaxRows * s.num_refs,
+            ref_stick_aligned,
+            datatype_to_dataformat_converter(args.reference_points->dtype()));
+    }
+    // The sample stream, sized so that reader and compute can each run one
+    // sampling point ahead of the other (see kGeomCbPages and friends).
+    push(input_tile_cb, kInputCbGroups * n_d_tiles, tile_nbytes, data_format);
+    if (rm_staging) {
+        push(tiled_input_cb, kInputCbGroups * n_d_tiles, tile_nbytes, data_format);
+    }
+    push(scalar_tile_cb, kScalarCbPages, tile_nbytes, data_format);
+    // The geometry pipeline. Always allocated, including the offset pipes on
+    // V1 where the compute kernel names but never reads them: 8 KB of L1
+    // against a conditional CB index the kernel would have to guard.
+    //
+    // float32 reference points use float32 geom_x/geom_y tiles. Packing them
+    // to bf16 first would round the point before the SFPU multiply.
+    const bool ref_fp32 = attrs.from_offsets && args.reference_points->dtype() == DataType::FLOAT32;
+    const auto primary_format = ref_fp32 ? datatype_to_dataformat_converter(DataType::FLOAT32) : data_format;
+    const uint32_t primary_tile_nbytes = tt::tile_size(primary_format);
+    push(geom_x_cb, kGeomCbPages, primary_tile_nbytes, primary_format);
+    push(geom_y_cb, kGeomCbPages, primary_tile_nbytes, primary_format);
+    push(offset_x_cb, kGeomCbPages, tile_nbytes, data_format);
+    push(offset_y_cb, kGeomCbPages, tile_nbytes, data_format);
+    push(attn_tile_cb, kGeomCbPages, tile_nbytes, data_format);
+    push(x0_cb, kCornerCbPages, tile_nbytes, data_format);
+    push(y0_cb, kCornerCbPages, tile_nbytes, data_format);
+    push(frac_x_cb, kFracCbPages, tile_nbytes, data_format);
+    push(frac_y_cb, kFracCbPages, tile_nbytes, data_format);
+    // Compute -> writer, double-buffered.
+    push(output_tile_cb, 2 * n_d_tiles, tile_nbytes, output_format);
+    // Writer-only scratch.
+    push(output_scratch_cb, 1, head_stick_aligned, output_format);
+    return plan;
+}
+
+uint64_t circular_buffer_bytes_per_core(const MSDACircularBufferPlan& plan) {
+    uint64_t total = 0;
+    for (const auto& spec : plan) {
+        total += spec.total_size;
+    }
+    return total;
+}
 
 ProgramDescriptor FusedMSDAOperation::create_descriptor(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args, Tensor& output) {
@@ -148,18 +300,16 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     auto* device = value.device();
     const auto compute_grid = device->compute_with_storage_grid_size();
 
-    constexpr uint32_t TILE_MAX_ROWS = 32;
-    constexpr uint32_t TILE_WIDTH = 32;
-    const uint32_t n_d_tiles = (s.head_dim + TILE_WIDTH - 1) / TILE_WIDTH;
+    const uint32_t n_d_tiles = (s.head_dim + kTileWidth - 1) / kTileWidth;
 
     // ---- work units ----
-    const uint32_t q_blocks = (s.num_queries + TILE_MAX_ROWS - 1) / TILE_MAX_ROWS;
+    const uint32_t q_blocks = (s.num_queries + kTileMaxRows - 1) / kTileMaxRows;
     std::vector<TileAssignment> tiles;
     tiles.reserve(static_cast<size_t>(s.batch) * s.num_heads * q_blocks);
     for (uint32_t b = 0; b < s.batch; ++b) {
         for (uint32_t h = 0; h < s.num_heads; ++h) {
-            for (uint32_t q_start = 0; q_start < s.num_queries; q_start += TILE_MAX_ROWS) {
-                tiles.push_back({b, h, q_start, std::min(TILE_MAX_ROWS, s.num_queries - q_start)});
+            for (uint32_t q_start = 0; q_start < s.num_queries; q_start += kTileMaxRows) {
+                tiles.push_back({b, h, q_start, std::min(kTileMaxRows, s.num_queries - q_start)});
             }
         }
     }
@@ -186,21 +336,15 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     }
 
     // ---- page / stick sizes ----
-    const uint32_t attn_sticks_per_row = s.weights_packed ? 1u : s.num_levels;
-    const uint32_t loc_sticks_per_row = s.locations_packed ? 1u : (s.num_levels * s.num_points);
-
+    const auto cb_plan = derive_circular_buffer_plan(
+        attrs, tensor_args, s, value.buffer()->buffer_type(), output.buffer()->buffer_type(), output.dtype());
     const uint32_t value_stick_raw = s.head_dim * value.element_size();
-    const uint32_t attn_stick_raw =
-        (s.weights_packed ? s.num_levels * s.num_points : s.num_points) * attn.element_size();
-    const uint32_t loc_stick_raw = (s.locations_packed ? s.num_levels * s.num_points * 2u : 2u) * loc.element_size();
     const uint32_t output_page_raw = s.num_heads * s.head_dim * output.element_size();
-
-    const uint32_t value_stick_aligned = aligned_page_size(value_stick_raw, value.buffer()->buffer_type());
-    const uint32_t attn_stick_aligned = aligned_page_size(attn_stick_raw, attn.buffer()->buffer_type());
-    const uint32_t loc_stick_aligned = aligned_page_size(loc_stick_raw, loc.buffer()->buffer_type());
+    const uint32_t value_stick_aligned = page_size_for_cb(cb_plan, value_scratch_cb);
+    const uint32_t attn_stick_aligned = page_size_for_cb(cb_plan, attn_scratch_cb);
+    const uint32_t loc_stick_aligned = page_size_for_cb(cb_plan, loc_scratch_cb);
+    const uint32_t ref_stick_aligned = attrs.from_offsets ? page_size_for_cb(cb_plan, ref_scratch_cb) : 0;
     const uint32_t output_page_aligned = aligned_page_size(output_page_raw, output.buffer()->buffer_type());
-    // Writer scratch holds one head's D-wide stick, not the whole output page.
-    const uint32_t head_stick_aligned = aligned_page_size(value_stick_raw, output.buffer()->buffer_type());
 
     // The writer places head h at byte offset h * D * elem_size inside the
     // output page, so that offset has to be a legal NoC destination address.
@@ -231,112 +375,23 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
         }
     }
 
-    uint32_t ref_stick_aligned = 0;
-    if (attrs.from_offsets) {
-        const auto& ref = *tensor_args.reference_points;
-        ref_stick_aligned = aligned_page_size(2u * ref.element_size(), ref.buffer()->buffer_type());
-    }
-
-    const auto data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
-    const uint32_t tile_nbytes = tt::tile_size(data_format);
-
     auto [num_cores, all_cores, core_group_1, core_group_2, tiles_per_core_group_1, tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_grid, total_output_tiles);
 
     // ---- circular buffers (see README.md §6) ----
-    constexpr uint8_t value_scratch_cb = tt::CBIndex::c_0;
-    constexpr uint8_t attn_scratch_cb = tt::CBIndex::c_1;
-    constexpr uint8_t loc_scratch_cb = tt::CBIndex::c_2;
-    constexpr uint8_t input_tile_cb = tt::CBIndex::c_3;
-    constexpr uint8_t scalar_tile_cb = tt::CBIndex::c_4;
-    constexpr uint8_t output_scratch_cb = tt::CBIndex::c_5;
-    constexpr uint8_t ref_scratch_cb = tt::CBIndex::c_6;
-    // The geometry pipeline (README.md §6). geom/offset/attn go reader ->
-    // compute, x0/y0 come back compute -> reader, frac never leaves compute.
-    constexpr uint8_t geom_x_cb = tt::CBIndex::c_7;
-    constexpr uint8_t geom_y_cb = tt::CBIndex::c_8;
-    constexpr uint8_t offset_x_cb = tt::CBIndex::c_9;
-    constexpr uint8_t offset_y_cb = tt::CBIndex::c_10;
-    constexpr uint8_t attn_tile_cb = tt::CBIndex::c_11;
-    constexpr uint8_t x0_cb = tt::CBIndex::c_12;
-    constexpr uint8_t y0_cb = tt::CBIndex::c_13;
-    constexpr uint8_t frac_x_cb = tt::CBIndex::c_14;
-    constexpr uint8_t frac_y_cb = tt::CBIndex::c_15;
-    constexpr uint8_t output_tile_cb = tt::CBIndex::c_16;
-    constexpr uint8_t tiled_input_cb = tt::CBIndex::c_17;
-
-    // Row-major staging: when D is a whole number of tile widths, the reader
-    // lands the four corners of a point side by side as a row-major block and
-    // compute tilizes it on the unpacker, so the reader copies nothing. Other
-    // D fall back to the reader scattering sticks into tile faces.
-    const bool rm_staging = s.head_dim % TILE_WIDTH == 0;
-
-    auto push_cb = [&](uint8_t idx, uint32_t pages, uint32_t page_size, tt::DataFormat fmt) {
+    for (const auto& spec : cb_plan) {
         descriptor.cbs.push_back(CBDescriptor{
-            .total_size = pages * page_size,
+            .total_size = spec.total_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = idx,
-                .data_format = fmt,
-                .page_size = page_size,
+                .buffer_index = spec.index,
+                .data_format = spec.data_format,
+                .page_size = spec.page_size,
             }}},
         });
-    };
-
-    const auto value_fmt = datatype_to_dataformat_converter(value.dtype());
-    const auto attn_fmt = datatype_to_dataformat_converter(attn.dtype());
-    const auto loc_fmt = datatype_to_dataformat_converter(loc.dtype());
-    const auto output_fmt = datatype_to_dataformat_converter(output.dtype());
-
-    // Reader-only staging arenas: reserved once and treated as flat L1 space.
-    push_cb(value_scratch_cb, TILE_MAX_ROWS, value_stick_aligned, value_fmt);
-    push_cb(attn_scratch_cb, TILE_MAX_ROWS * attn_sticks_per_row, attn_stick_aligned, attn_fmt);
-    push_cb(loc_scratch_cb, TILE_MAX_ROWS * loc_sticks_per_row, loc_stick_aligned, loc_fmt);
-    if (attrs.from_offsets) {
-        push_cb(
-            ref_scratch_cb,
-            TILE_MAX_ROWS * s.num_refs,
-            ref_stick_aligned,
-            datatype_to_dataformat_converter(tensor_args.reference_points->dtype()));
     }
-    // The sample stream, sized so that reader and compute can each run one
-    // sampling point ahead of the other (see kGeomCbPages and friends).
-    push_cb(input_tile_cb, kInputCbGroups * n_d_tiles, tile_nbytes, data_format);
-    // Row-major staging packs the four corner slots of a row back to back, so a
-    // slot must be exactly D*2 bytes; alignment padding would shift the tile
-    // columns compute tilizes.
-    TT_FATAL(
-        !rm_staging || value_stick_aligned == value_stick_raw,
-        "fused_msda: row-major staging needs an unpadded value stick ({} B aligned vs {} B raw)",
-        value_stick_aligned,
-        value_stick_raw);
-    if (rm_staging) {
-        push_cb(tiled_input_cb, kInputCbGroups * n_d_tiles, tile_nbytes, data_format);
-    }
-    push_cb(scalar_tile_cb, kScalarCbPages, tile_nbytes, data_format);
-    // The geometry pipeline. Always allocated, including the offset pipes on
-    // V1 where the compute kernel names but never reads them: 8 KB of L1
-    // against a conditional CB index the kernel would have to guard.
-    //
-    // float32 reference points use float32 geom_x/geom_y tiles. Packing them
-    // to bf16 first would round the point before the SFPU multiply.
-    const bool ref_fp32 =
-        attrs.from_offsets && tensor_args.reference_points->dtype() == DataType::FLOAT32;
-    const auto primary_fmt = ref_fp32 ? datatype_to_dataformat_converter(DataType::FLOAT32) : data_format;
-    const uint32_t primary_tile_nbytes = tt::tile_size(primary_fmt);
-    push_cb(geom_x_cb, kGeomCbPages, primary_tile_nbytes, primary_fmt);
-    push_cb(geom_y_cb, kGeomCbPages, primary_tile_nbytes, primary_fmt);
-    push_cb(offset_x_cb, kGeomCbPages, tile_nbytes, data_format);
-    push_cb(offset_y_cb, kGeomCbPages, tile_nbytes, data_format);
-    push_cb(attn_tile_cb, kGeomCbPages, tile_nbytes, data_format);
-    push_cb(x0_cb, kCornerCbPages, tile_nbytes, data_format);
-    push_cb(y0_cb, kCornerCbPages, tile_nbytes, data_format);
-    push_cb(frac_x_cb, kFracCbPages, tile_nbytes, data_format);
-    push_cb(frac_y_cb, kFracCbPages, tile_nbytes, data_format);
-    // Compute -> writer, double-buffered.
-    push_cb(output_tile_cb, 2 * n_d_tiles, tile_nbytes, output_fmt);
-    // Writer-only scratch.
-    push_cb(output_scratch_cb, 1, head_stick_aligned, output_fmt);
+    const bool rm_staging = s.head_dim % kTileWidth == 0;
+    const bool ref_fp32 = attrs.from_offsets && tensor_args.reference_points->dtype() == DataType::FLOAT32;
 
     // ---- reader ----
     // Compile-time arg order is fixed by fused_msda_reader_common.hpp; both

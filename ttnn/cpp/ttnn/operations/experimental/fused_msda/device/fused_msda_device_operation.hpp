@@ -37,6 +37,15 @@ struct MSDAShapes {
     bool value_packed = false;      // value given as (B, S, H*D); heads recovered from attention_weights
 };
 
+struct MSDACircularBufferSpec {
+    uint8_t index = 0;
+    uint32_t total_size = 0;
+    uint32_t page_size = 0;
+    tt::DataFormat data_format = tt::DataFormat::Invalid;
+};
+
+using MSDACircularBufferPlan = ttsl::SmallVector<MSDACircularBufferSpec>;
+
 struct FusedMSDAOperation {
     struct operation_attributes_t {
         MemoryConfig output_memory_config;
@@ -75,7 +84,19 @@ struct FusedMSDAOperation {
 // Derives (and fully validates) the problem geometry. Throws with a descriptive
 // TT_FATAL on any inconsistency.
 MSDAShapes derive_shapes(
-    const FusedMSDAOperation::operation_attributes_t& attrs, const FusedMSDAOperation::tensor_args_t& args);
+    const FusedMSDAOperation::operation_attributes_t& attrs,
+    const FusedMSDAOperation::tensor_args_t& args,
+    bool require_value_row_major = true);
+
+MSDACircularBufferPlan derive_circular_buffer_plan(
+    const FusedMSDAOperation::operation_attributes_t& attrs,
+    const FusedMSDAOperation::tensor_args_t& args,
+    const MSDAShapes& shapes,
+    tt::tt_metal::BufferType value_buffer_type,
+    tt::tt_metal::BufferType output_buffer_type,
+    DataType output_dtype);
+
+uint64_t circular_buffer_bytes_per_core(const MSDACircularBufferPlan& plan);
 
 }  // namespace ttnn::operations::experimental::fused_msda
 
@@ -99,5 +120,14 @@ ttnn::Tensor fused_msda_from_offsets(
     ttnn::experimental::MSDAReferenceMode reference_mode,
     bool align_corners,
     const std::optional<MemoryConfig>& memory_config);
+
+bool can_use_fused_msda_from_offsets_l1_value(
+    const Tensor& value,
+    const Tensor& reference_points,
+    const Tensor& sampling_offsets,
+    const Tensor& attention_weights,
+    const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
+    ttnn::experimental::MSDAReferenceMode reference_mode,
+    bool align_corners);
 
 }  // namespace ttnn::prim

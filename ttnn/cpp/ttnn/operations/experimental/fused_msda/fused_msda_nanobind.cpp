@@ -58,6 +58,24 @@ ttnn::Tensor fused_msda_from_offsets_py(
         memory_config);
 }
 
+bool can_use_fused_msda_from_offsets_l1_value_py(
+    const ttnn::Tensor& value,
+    const ttnn::Tensor& reference_points,
+    const ttnn::Tensor& sampling_offsets,
+    const ttnn::Tensor& attention_weights,
+    const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
+    const std::string& reference_mode,
+    bool align_corners) {
+    return ttnn::experimental::can_use_fused_msda_from_offsets_l1_value(
+        value,
+        reference_points,
+        sampling_offsets,
+        attention_weights,
+        spatial_shapes,
+        parse_reference_mode(reference_mode),
+        align_corners);
+}
+
 }  // namespace
 
 void bind_fused_msda(nb::module_& mod) {
@@ -161,6 +179,29 @@ void bind_fused_msda(nb::module_& mod) {
         nb::arg("reference_mode") = "level",
         nb::arg("align_corners") = false,
         nb::arg("memory_config") = nb::none());
+
+    const auto* l1_value_fit_doc =
+        R"doc(
+        Return whether fused_msda_from_offsets can safely stage value and output
+        in interleaved L1 under the device's current allocator state.
+
+        The check includes exact per-bank tensor allocations, the operation's
+        circular buffers, and a conservative program-L1 margin. The decision is
+        live allocator state and must not be cached.
+        )doc";
+
+    ttnn::bind_function<"can_use_fused_msda_from_offsets_l1_value", "ttnn.experimental.">(
+        mod,
+        l1_value_fit_doc,
+        &can_use_fused_msda_from_offsets_l1_value_py,
+        nb::arg("value"),
+        nb::arg("reference_points"),
+        nb::arg("sampling_offsets"),
+        nb::arg("attention_weights"),
+        nb::arg("spatial_shapes"),
+        nb::kw_only(),
+        nb::arg("reference_mode") = "level",
+        nb::arg("align_corners") = false);
 }
 
 }  // namespace ttnn::operations::experimental::fused_msda::detail

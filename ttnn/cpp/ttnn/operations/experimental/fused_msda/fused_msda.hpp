@@ -93,4 +93,13 @@ ttnn::Tensor fused_msda_from_offsets(
     bool align_corners = false,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
+bool can_use_fused_msda_from_offsets_l1_value(
+    const ttnn::Tensor& value,
+    const ttnn::Tensor& reference_points,
+    const ttnn::Tensor& sampling_offsets,
+    const ttnn::Tensor& attention_weights,
+    const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
+    MSDAReferenceMode reference_mode = MSDAReferenceMode::Level,
+    bool align_corners = false);
+
 }  // namespace ttnn::experimental

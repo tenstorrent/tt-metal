@@ -31,6 +31,7 @@ from loguru import logger
 
 # Enable/disable logging output
 ENABLE_LOGGING = False
+_warned_dram_fallbacks = set()
 
 
 def _spatial_shapes_list(spatial_shapes):
@@ -43,7 +44,15 @@ def _spatial_shapes_list(spatial_shapes):
     return [(int(h), int(w)) for h, w in spatial_shapes.tolist()]
 
 
-def multi_scale_deformable_attn_fused(value, reference_points, sampling_offsets, attention_weights, spatial_shapes):
+def multi_scale_deformable_attn_fused(
+    value,
+    reference_points,
+    sampling_offsets,
+    attention_weights,
+    spatial_shapes,
+    *,
+    value_memory="auto",
+):
     """Core multi-scale deformable attention, as one device op.
 
     Computes, for each (b, q, h), with ``r(l, p) = p % R`` (BEVFormer's z-anchor
@@ -54,13 +63,16 @@ def multi_scale_deformable_attn_fused(value, reference_points, sampling_offsets,
                        reference_points[b, q, r(l, p)] + sampling_offsets[b, q, h, l, p] / [W_l, H_l])
 
     Args:
-        value: (bs, num_keys, num_heads, head_dim) or packed (bs, num_keys, num_heads*head_dim) ROW_MAJOR
+        value: (bs, num_keys, num_heads, head_dim) or packed (bs, num_keys, num_heads*head_dim)
         reference_points: (bs, num_queries, num_points_in_pillar, 2), normalized [0, 1]
         sampling_offsets: (bs, num_queries, num_heads, num_levels*num_points*2) ROW_MAJOR,
             raw, in feature-map pixel units -- the reader applies the per-level
             ``/ [W_l, H_l]`` normalization itself.
         attention_weights: (bs, num_queries, num_heads, num_levels*num_points) ROW_MAJOR
         spatial_shapes: torch (num_levels, 2) of (H, W)
+        value_memory: ``"auto"`` selects L1 only when value, output, and fused-op
+            circular buffers fit safely; ``"dram"`` forces DRAM; ``"l1"`` requires L1
+            and raises ``RuntimeError`` when it does not fit.
 
     Returns:
         (bs, num_queries, num_heads*head_dim) ROW_MAJOR -- the heads are already
@@ -69,23 +81,58 @@ def multi_scale_deformable_attn_fused(value, reference_points, sampling_offsets,
     if use_signpost:
         signpost(header="fused_msda Start")
 
-    # The op's gather is limited by the DRAM endpoints' request rate, so value is
-    # untilized straight into L1 interleaved: 3.3x faster than from DRAM on
-    # Blackhole at nuscenes base.
-    value_l1 = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    if value_memory not in {"auto", "l1", "dram"}:
+        raise ValueError(f'value_memory must be "auto", "l1", or "dram", got {value_memory!r}')
+
     attention_weights = ttnn.to_layout(attention_weights, ttnn.ROW_MAJOR_LAYOUT)
     reference_points = ttnn.to_layout(reference_points, ttnn.ROW_MAJOR_LAYOUT)
 
-    output = ttnn.experimental.fused_msda_from_offsets(
-        value_l1,
-        reference_points,
-        sampling_offsets,
-        attention_weights,
-        _spatial_shapes_list(spatial_shapes),
-        reference_mode="pillar",
-    )
-    # Free the L1 copy now; it is the largest L1 tensor of the layer.
-    ttnn.deallocate(value_l1)
+    if value_memory == "dram":
+        target_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    else:
+        l1_is_safe = ttnn.experimental.can_use_fused_msda_from_offsets_l1_value(
+            value,
+            reference_points,
+            sampling_offsets,
+            attention_weights,
+            _spatial_shapes_list(spatial_shapes),
+            reference_mode="pillar",
+        )
+        if value_memory == "l1" and not l1_is_safe:
+            raise RuntimeError("fused_msda value_memory='l1' is unsafe under the current L1 allocation")
+        target_memory_config = ttnn.L1_MEMORY_CONFIG if l1_is_safe else ttnn.DRAM_MEMORY_CONFIG
+        if value_memory == "auto" and not l1_is_safe:
+            warning_key = (tuple(value.shape), tuple(attention_weights.shape), tuple(spatial_shapes.flatten().tolist()))
+            if warning_key not in _warned_dram_fallbacks:
+                _warned_dram_fallbacks.add(warning_key)
+                logger.warning(
+                    "fused_msda: value and output do not safely fit L1; using interleaved DRAM "
+                    f"for value shape {list(value.shape)}"
+                )
+
+    owns_staged_value = False
+    if value.layout != ttnn.ROW_MAJOR_LAYOUT:
+        staged_value = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT, memory_config=target_memory_config)
+        owns_staged_value = True
+    elif value.memory_config() != target_memory_config:
+        staged_value = ttnn.to_memory_config(value, target_memory_config)
+        owns_staged_value = True
+    else:
+        staged_value = value
+
+    try:
+        output = ttnn.experimental.fused_msda_from_offsets(
+            staged_value,
+            reference_points,
+            sampling_offsets,
+            attention_weights,
+            _spatial_shapes_list(spatial_shapes),
+            reference_mode="pillar",
+            memory_config=target_memory_config,
+        )
+    finally:
+        if owns_staged_value:
+            ttnn.deallocate(staged_value)
 
     if use_signpost:
         signpost(header="fused_msda End")
@@ -149,6 +196,7 @@ class TTMSDeformableAttention:
         self.params = params
         self.spatial_shapes = spatial_shapes.to(dtype=torch.long).clone()
         self.total_keys = int(self.spatial_shapes.prod(dim=1).sum().item())
+        self.value_memory = config.value_memory
 
         self.head_dim = self.embed_dims // self.num_heads
 
@@ -261,6 +309,7 @@ class TTMSDeformableAttention:
             sampling_offsets=sampling_offsets,
             attention_weights=attention_weights,
             spatial_shapes=self.spatial_shapes,
+            value_memory=self.value_memory,
         )
 
         if ENABLE_LOGGING:
