@@ -584,6 +584,19 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSemaphoreCompileLimits) {
             EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
         }
     }
+    // The output posts share the semaphore with the chunk's still-outstanding bcast-mul/dummy
+    // post, so (num_tiles_v / output_granularity) + 1 must fit as well: with unit grouping
+    // 14 output tiles fit and 15 must be rejected.
+    for (const auto num_tiles_v : {14u, 15u}) {
+        SCOPED_TRACE(::testing::Message() << "num_tiles_v=" << num_tiles_v << ", output_granularity=1");
+        const bool fits = num_tiles_v / 1 + 1 <= 15;
+        auto program = make_sdpa_chunk_compile_program({2, 1, 1, num_tiles_v, num_tiles_v, 0, 2, 0});
+        if (fits) {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+        } else {
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+        }
+    }
 }
 
 TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkMergedKvCompileLimits) {
