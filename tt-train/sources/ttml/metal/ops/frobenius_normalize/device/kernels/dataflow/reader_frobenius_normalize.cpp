@@ -9,8 +9,9 @@
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 constexpr uint32_t cb_input = tt::CBIndex::c_0;
+constexpr uint32_t cb_norm_computed = tt::CBIndex::c_2;
 constexpr uint32_t cb_recv = tt::CBIndex::c_3;
-constexpr uint32_t cb_norm = tt::CBIndex::c_4;
+constexpr uint32_t cb_norm_broadcast = tt::CBIndex::c_4;
 constexpr uint32_t cb_sq_partial = tt::CBIndex::c_7;
 
 constexpr uint32_t origin_phys_x = get_compile_time_arg_val(0);
@@ -41,10 +42,9 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduction_sem_addr);
 
     const uint32_t bcast_sem_addr = get_semaphore(bcast_sem_id);
-    volatile tt_l1_ptr uint32_t* const bcast_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bcast_sem_addr);
+    volatile tt_l1_ptr uint32_t* const bcast_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bcast_sem_addr);
 
-    const uint32_t norm_scalar_addr = get_write_ptr(cb_norm);
+    const uint32_t norm_scalar_addr = get_write_ptr(cb_norm_broadcast);
     volatile tt_l1_ptr uint32_t* const norm_scalar_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(norm_scalar_addr);
 
@@ -116,11 +116,11 @@ void kernel_main() {
         // Norm broadcast: origin extracts scalar, multicasts to all cores
         // =====================================================================
 #ifdef IS_ORIGIN
-        cb_wait_front(cb_norm, 1);
-        const uint32_t norm_tile_l1 = get_read_ptr(cb_norm);
+        cb_wait_front(cb_norm_computed, 1);
+        const uint32_t norm_tile_l1 = get_read_ptr(cb_norm_computed);
         const uint32_t bcast_val = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(norm_tile_l1);
         *norm_scalar_ptr = bcast_val;
-        cb_pop_front(cb_norm, 1);
+        cb_pop_front(cb_norm_computed, 1);
 
         if constexpr (num_active_cores > 1) {
             const uint64_t mcast_dst_addr =
@@ -141,7 +141,7 @@ void kernel_main() {
         noc_semaphore_set(bcast_sem_ptr, 0);
 
         const uint32_t norm_val = *norm_scalar_ptr;
-        generate_tile_with_uint32_value(cb_norm, norm_val);
+        generate_tile_with_uint32_value(cb_norm_broadcast, norm_val);
     }
 
     // =========================================================================
