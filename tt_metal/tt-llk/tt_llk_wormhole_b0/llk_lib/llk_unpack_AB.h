@@ -215,7 +215,7 @@ inline void _llk_unpack_AB_uninit_()
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param address_a: L1 memory address of source A tile
  * @param address_b: L1 memory address of source B tile
- * @param bcast_row_idx: Row index within source B tile for ROW broadcast (0..31)
+ * @param bcast_row_idx: Row index within source B tile for ROW broadcast (0..31; must be 0 for a BFP operand B)
  * @param srcb_format: Source B data format used to calculate ROW broadcast address offset
  * @note Call @ref _llk_unpack_AB_init_ with matching template args before this function, and
  *       @ref _llk_unpack_AB_uninit_ after it to restore modified state.
@@ -233,6 +233,11 @@ inline void _llk_unpack_AB_(
     if constexpr (BType == BroadcastType::ROW)
     {
         LLK_ASSERT(bcast_row_idx < TILE_R_DIM, "bcast_row_idx must be < 32 (row within the B tile)");
+        // The row select below shifts the base address by whole rows of mantissas. A BFP tile keeps one
+        // shared exponent per row in a 64 B header at the base, so no base shift selects a BFP row.
+        LLK_ASSERT(
+            bcast_row_idx == 0 || !IS_BFP_FORMAT(srcb_format),
+            "ROW broadcast row select requires a non-BFP operand B (shared-exponent tiles cannot be row-addressed)");
         if (bcast_row_idx > 0)
         {
             // Row broadcast reads a full 32-element row, which spans two faces:

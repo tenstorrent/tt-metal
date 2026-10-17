@@ -177,7 +177,7 @@ ALWI void bcast_init(LLKOperand<AFormat, AShape> /*a*/) {
  * | Function   | a / b           | Input operands (A -> SrcA, broadcast B -> SrcB)        | LLKOperand        | N/A         | True     |
  * | Function   | itile0 / itile1 | Tile indices within A / B                              | uint32_t          | N/A         | True     |
  * | Function   | idst            | DST register index for the result                     | uint32_t          | Must be less than the acquired size of DST REG | True     |
- * | Function   | bcast_row_idx   | ROW broadcast: which row of B's tile to broadcast     | uint32_t          | 0 to 31     | False    |
+ * | Function   | bcast_row_idx   | ROW broadcast: which row of B's tile to broadcast     | uint32_t          | 0 to 31; non-zero needs a non-BFP B | False    |
  */
 // clang-format on
 template <

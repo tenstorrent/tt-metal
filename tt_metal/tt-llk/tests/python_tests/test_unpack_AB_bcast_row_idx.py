@@ -9,9 +9,11 @@ faces (cols 0-15 in face 0/2, cols 16-31 in face 1/3), so row ``idx`` of the til
 ``idx % 16`` of faces ``(0, 1)`` for ``idx < 16`` and of faces ``(2, 3)`` otherwise; every output
 face repeats its column half of that row.
 
-The guard case pins the bound in the ROW branch of ``_llk_unpack_AB_``: an index past the tile
-otherwise silently reads a row of whatever follows the tile in L1. It relies on ``LLK_ASSERT``
-being compiled in, which the harness does unless ``TT_LLK_DISABLE_ASSERTS`` is set.
+The guard cases pin the two checks in the ROW branch of ``_llk_unpack_AB_``: an index past the
+tile (which otherwise silently reads a row of whatever follows the tile in L1) and a BFP operand B
+with a non-zero index (the base-address shift cannot select a row of a shared-exponent tile). Both
+rely on ``LLK_ASSERT`` being compiled in, which the harness does unless ``TT_LLK_DISABLE_ASSERTS``
+is set.
 """
 
 import os
@@ -101,9 +103,15 @@ def valid_row_indices(formats):
     return [0, 1, 15, 16, 31]
 
 
+def rejected_row_indices(formats):
+    if formats.input_format == DataFormat.Bfp8_b:
+        return [5, 40]
+    return [40]
+
+
 @parametrize(
     formats=ROW_BCAST_FORMATS,
-    bcast_row_idx=[40],
+    bcast_row_idx=rejected_row_indices,
 )
 def test_unpack_AB_bcast_row_idx_rejected(formats, bcast_row_idx):
     """The unpacker must refuse an index it cannot address rather than read a wrong row."""
