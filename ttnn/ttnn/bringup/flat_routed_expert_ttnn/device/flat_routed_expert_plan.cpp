@@ -357,11 +357,12 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             }
         }
     }
+    // (bf16 h with 16-column units reset the whole host on bh-lb-09 2026-10-17: never auto-selected, refused below)
     // no even split: 16-column units (half-width gate / up tiles, MIMO_FL_HG_AUTO=0: off) with NU units a core, the
     // most gate/up cores that are a multiple of the 16 readers and fit (V4.1-Flash I 2304: 144 units -> 48 cores x 3;
     // us / expert at E 24 vs the uneven pair split (72 cores): M 80 48.2 vs 51.0, M 1024 226.5 vs 245.4)
     const char* hga = std::getenv("MIMO_FL_HG_AUTO");
-    if (!found && p.nsg == 1 && !(hga && std::atoi(hga) == 0) && !std::getenv("MIMO_FL_HG_NU")) {
+    if (!found && p.nsg == 1 && !(hga && std::atoi(hga) == 0) && !std::getenv("MIMO_FL_HG_NU") && !cfg.h_bf16) {
         const uint32_t units = 2 * p.It;
         const uint32_t cap_full = (east0 - a_x0) * nrows + std::min<uint32_t>(4u, uint32_t(grid.x) - b_x0) * hb_max;
         const uint32_t cells = rows_cap ? aw_max * nrows + bw_cap * hb_max : cap_full;
@@ -431,6 +432,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         p.uneven = (units / nu) % 16 != 0;
     }
     TT_FATAL(found, "flat_routed_expert: no gate/up split for {} tile columns", p.It);
+    TT_FATAL(  // (MIMO_FL_HG_BF16_UNSAFE=1: plan it anyway, for the mock cluster / emulator only, never a device)
+        !(p.nu && cfg.h_bf16) || std::getenv("MIMO_FL_HG_BF16_UNSAFE"),
+        "flat_routed_expert: 16-column units with bf16 h are disabled (the test reset the host; under investigation)");
     p.gwt = p.nu ? p.nu : 2 * p.np;
     p.hpc = p.nu ? (p.nu + 1) / 2 : p.np;
     p.ngrp = p.nu ? 2 * p.It / p.nu : p.It / p.np;

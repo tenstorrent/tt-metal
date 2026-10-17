@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <set>
+#include <cstdio>
 #include <cstdlib>
 #include <map>
 #include <sstream>
@@ -321,17 +322,29 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             sv.patches.push_back({k, c, i, s, off});
         }
     };
+    // (MIMO_FL_DUMP_RT=path: every kernel's cores, compile args, defines and runtime args, for host-side checks)
+    struct KRec {
+        KernelHandle k;
+        std::string name;
+        std::vector<CoreCoord> cores;
+        std::vector<uint32_t> ct;
+        Defines defs;
+        int proc;
+    };
+    std::vector<KRec> krec;
     auto dm = [&](const std::string& name,
                   const std::vector<CoreCoord>& cores,
                   DataMovementProcessor proc,
                   NOC noc,
                   const std::vector<uint32_t>& ct,
                   const Defines& defs) {
-        return CreateKernel(
+        const KernelHandle k = CreateKernel(
             program,
             std::string(KDIR) + name,
             rect_ranges(cores),
             DataMovementConfig{.processor = proc, .noc = noc, .compile_args = ct, .defines = defs});
+        krec.push_back({k, name, cores, ct, defs, proc == DataMovementProcessor::RISCV_0 ? 0 : 1});
+        return k;
     };
     auto cp = [&](const std::string& name,
                   const std::vector<CoreCoord>& cores,
@@ -343,7 +356,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         if (cfg.pack_stochastic_rounding) {
             d["SE_PACK_SRND"] = "1";
         }
-        return CreateKernel(
+        const KernelHandle k = CreateKernel(
             program,
             std::string(KDIR) + name,
             rect_ranges(cores),
@@ -353,6 +366,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 .dst_full_sync_en = full_sync,
                 .compile_args = ct,
                 .defines = d});
+        krec.push_back({k, name, cores, ct, d, 2});
+        return k;
     };
     // the down computes' accumulation (cfg.down_fp32): fp32 DEST in a full-sync DST
     const auto dn_def = [&](Defines d) {
@@ -1193,6 +1208,44 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
 
     cached_program_t cached{std::move(program), std::move(sv)};
     override_runtime_arguments(cached, cfg, t, output);
+    if (const char* dump = std::getenv("MIMO_FL_DUMP_RT")) {
+        std::ostringstream o;
+        const auto vec = [&](const std::vector<uint32_t>& v) {
+            o << "[";
+            for (size_t i = 0; i < v.size(); ++i) {
+                o << (i ? "," : "") << v[i];
+            }
+            o << "]";
+        };
+        o << "{\"arena\":" << t.arena.buffer()->address() << ",\"kernels\":[";
+        for (size_t i = 0; i < krec.size(); ++i) {
+            const auto& r = krec[i];
+            o << (i ? "," : "") << "{\"name\":\"" << r.name << "\",\"proc\":" << r.proc << ",\"ct\":";
+            vec(r.ct);
+            o << ",\"defs\":{";
+            bool first = true;
+            for (const auto& [dk, dv] : r.defs) {
+                o << (first ? "" : ",") << "\"" << dk << "\":\"" << dv << "\"";
+                first = false;
+            }
+            o << "},\"cores\":[";
+            for (size_t c = 0; c < r.cores.size(); ++c) {
+                const auto q = phys(r.cores[c]);
+                o << (c ? "," : "") << "{\"l\":[" << r.cores[c].x << "," << r.cores[c].y << "],\"v\":[" << q.x << ","
+                  << q.y << "],\"rt\":";
+                const auto& ra = GetRuntimeArgs(cached.program, r.k, r.cores[c]);
+                vec(std::vector<uint32_t>(ra.data(), ra.data() + ra.size()));
+                o << "}";
+            }
+            o << "]}";
+        }
+        o << "]}";
+        FILE* f = std::fopen(dump, "w");
+        if (f) {
+            std::fputs(o.str().c_str(), f);
+            std::fclose(f);
+        }
+    }
     return cached;
 }
 

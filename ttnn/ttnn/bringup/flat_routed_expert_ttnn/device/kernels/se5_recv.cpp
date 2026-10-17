@@ -463,6 +463,7 @@ void kernel_main() {
                 // odd (lead), the last one's left half only when (cg + 1) NU is odd (tail); the full ones are one run,
                 // the halves go face by face (bf16: faces 512 B; bfp8: 16 B exponents of each face, then 256 B data)
                 {
+                    static_assert(h_tile_bytes == 2048 || h_tile_bytes == 1088, "SE_HG_NU: bf16 or bfp8 h tiles");
                     const uint32_t u0 = cg * hg_nu, k0 = u0 / 2, lead = u0 & 1, tail = (u0 + hg_nu) & 1;
                     const uint32_t j0 = lead, j1 = hpc - tail;
                     const uint64_t base = bc_h + dst + k0 * mt * h_tile_bytes;
@@ -482,7 +483,6 @@ void kernel_main() {
                                 if constexpr (h_tile_bytes == 2048) {
                                     SE_H_WRITE(s + f * 512, d + f * 512, 512, noc_index, h_vc);
                                 } else {
-                                    static_assert(h_tile_bytes == 1088, "SE_HG_NU: bf16 or bfp8 h tiles");
                                     SE_H_WRITE(s + f * 16, d + f * 16, 16, noc_index, h_vc);
                                     SE_H_WRITE(s + 64 + f * 256, d + 64 + f * 256, 256, noc_index, h_vc);
                                 }

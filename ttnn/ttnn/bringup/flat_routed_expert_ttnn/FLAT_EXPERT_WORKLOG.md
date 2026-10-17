@@ -902,3 +902,20 @@ V4.1 us / expert (DRAM %), E 24:
 | units NU 3, 48 gate/up, no reader tails (default) | 44.3 (91%) | 48.2 (87%) | 51.9 (85%) | 62.8 (78%) | 226.5 |
 E 48 / E 12 at M 80: 47.5 (89%) / 49.8 (85%); M 1024: 225.8 / 229.7. Probes (NU 3): full-sync DST 284 (worse),
 MIMO_FL_ND=64 (untrimmed down) no gain, PCD_R 3 / 4 with tails 233 / 245.
+
+### V4.1 large M: what bounds it; bf16 h + units hangs the chip (2026-10-17)
+M 1024 E 24 (units NU 3, 226.6 us / expert): probes NO_ACT 219.9, H_NODATA 210.3, X_RESIDENT 210.2, W_NOREAD +
+W_NOFWD 221.8, all of them 207.5 (matmul only). The gate/up FPU is the bound: 32 x 160 x 3 tile products (matmul_block,
+ct = 3, rt 1 a row pass) at ~18 cycles = ~205 us. Not SFPU overlap (-3%) nor h delivery (-7%). It is the gate/up vs down
+core balance: gate/up = units x 65.6 us, down = columns x 29.5 us -> NU 3: 197 / 118; NU 2: 131 / ~177 (28 down);
+NU 2 + DRISC readers (16 cells back): 131 / ~118 (~44 down). Ideal on 100 cores 142, on 116 122.
+
+bf16 h with units (GLM_SWEEP_HBF16=1, NU 3) HANGS the chip on the first launch (bfp8 h with the same plan is fine). Twice
+the whole host then rebooted: the dispatch timeout ran tt-triage (host MMIO reads into the wedged chip; plus the NOC0
+retry that was in scripts/lib/tt_safe_run.sh, now removed). With no probing (no triage, no watcher, os._exit on the
+timeout, no reset: scratch noprobe_run.sh) the same hang left the host up; the KMD then logged "Timeout waiting for ARC
+response" on close: the hang takes ARC with it. The planner refuses NU + bf16 h (MIMO_FL_HG_BF16_UNSAFE=1: mock /
+emulator only). Mock cluster (12 x 10) diff of every kernel's args (MIMO_FL_DUMP_RT=path) bf16 vs bfp8 h: same cores and
+NoC targets, arena fits (564 x 2 KB from 415744); differences: h tile 2048, x slots 32 (24), y rows 2 (4) and NO
+SE_DN_REG (bf16 h: dring 1.5, the unpinned down schedule, never run with the unit layout / 40 down cores). Suspects, in
+order: the unpinned down schedule with units, x slots 32, the 512 B bf16 half-tile h writes.
