@@ -666,7 +666,9 @@ def test_pipeline_defaults_to_nightly_without_an_explicit_value(monkeypatch):
 
 
 @pytest.mark.parametrize("event", ["push", "schedule", "pull_request"])
-@pytest.mark.parametrize("pipeline", ["pr", "nightly", "baseline", "merge_baseline"])
+@pytest.mark.parametrize(
+    "pipeline", ["pr", "nightly", "baseline", "merge_baseline", "manual"]
+)
 def test_explicit_pipeline_wins_over_the_event_guess(monkeypatch, event, pipeline):
     monkeypatch.setenv("GITHUB_EVENT_NAME", event)
     monkeypatch.setenv("PIPELINE", pipeline)
