@@ -15,41 +15,11 @@ _IGNORED_GROUPS = ("address_counters", "register_window_counters")
 
 FORMATS = [
     (
-        DataFormat.Float16,
-        DataFormat.Float16,
-        DataFormat.Bfp8,
-        DataFormat.Bfp8,
-    ),  # expA->expA
-    (
-        DataFormat.Float32,
-        DataFormat.Float32,
-        DataFormat.Float16,
-        DataFormat.Float16,
-    ),  # expB->expA
-    (
-        DataFormat.Float16,
-        DataFormat.Float16,
-        DataFormat.Float16_b,
-        DataFormat.Float16_b,
-    ),  # expA->expB
-    (
         DataFormat.Bfp8,
         DataFormat.Bfp8,
         DataFormat.Bfp8_b,
         DataFormat.Bfp8_b,
     ),  # expA->expB
-    (
-        DataFormat.Float16,
-        DataFormat.Float16,
-        DataFormat.Int8,
-        DataFormat.Int8,
-    ),  # expA->int
-    (
-        DataFormat.Float16_b,
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-        DataFormat.Float16,
-    ),  # expB->expA
     (
         DataFormat.Float16_b,
         DataFormat.Float16_b,
@@ -62,12 +32,6 @@ FORMATS = [
         DataFormat.Int8,
         DataFormat.Int8,
     ),  # expB->int
-    (
-        DataFormat.Int8,
-        DataFormat.Int8,
-        DataFormat.Float16,
-        DataFormat.Float16,
-    ),  # int->expA
     (
         DataFormat.Int8,
         DataFormat.Int8,

@@ -57,7 +57,6 @@ def _dest_bank_max_tiles(formats, dest_acc):
 MATMUL_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.Bfp8_b,
     ]

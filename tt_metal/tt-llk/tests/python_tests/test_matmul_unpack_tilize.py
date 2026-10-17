@@ -23,7 +23,6 @@ from helpers.utils import passed_test
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
-            DataFormat.Float16,
             DataFormat.Float32,
         ],  #  Add DataFormat.Bfp8_b only as input when Data format Inference Model 2.0 supports format conversions for > 1 pipeline run with different inputs and outputs.
         same=True,

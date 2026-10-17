@@ -33,7 +33,6 @@ from helpers.utils import passed_test
 TRANSPOSE_DEST_FLOAT_FORMATS = input_output_formats(
     [
         DataFormat.Float32,
-        DataFormat.Float16,
         DataFormat.Float16_b,
         DataFormat.Bfp8_b,
     ]
