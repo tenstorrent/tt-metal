@@ -3222,11 +3222,10 @@ class UnarySFPUGolden:
         return cast_to_dest_dtype(out, tile.dtype)
 
     def _tiled_prod(self, tile):
-        # calculate_tiled_prod under VectorMode RC: every SFPU lane (row r of each 4-row group,
-        # column 2c + parity) keeps a running fp32 product over its 8 values per face, storing
-        # each partial product. A face's ninth step multiplies into the next face's first row,
-        # so the next face starts from that stored product and the chain runs through faces
-        # 0-3. (The last face's ninth step lands in the next Dest tile, which is not modelled.)
+        # calculate_tiled_prod under VectorMode RC_custom: one call per tile. Every SFPU lane
+        # (row r of each 4-row group, column 2c + parity) keeps one running fp32 product over
+        # its 8 values per face through faces 0-3, storing each partial product; the product is
+        # carried in a register across faces, so nothing is stored outside the tile.
         # The SFPU flushes denormals, and a NaN product carries no sign (the canonical NaN, see
         # BinarySFPUGolden._canonicalise_emitted_nan); stores round to the Dest format.
         dest_dtype = format_dict[self.dst_format]
@@ -3253,15 +3252,10 @@ class UnarySFPUGolden:
 
         for lane_row in range(4):
             for lane_col in range(8):
+                product = 1.0
                 for face in range(4):
-                    # A face call starts from what Dest holds: its first value may already be the
-                    # product the previous face's ninth step stored there.
-                    product = 1.0
-                    for step in range(9):
-                        target_face = face + 1 if step == 8 else face
-                        if target_face == 4:
-                            break
-                        row, col = position(target_face, step % 8, lane_row, lane_col)
+                    for step in range(8):
+                        row, col = position(face, step, lane_row, lane_col)
                         product = fp32(product * ftz(float(out[row, col])))
                         out[row, col] = store(product)
         return cast_to_dest_dtype(out, tile.dtype)
