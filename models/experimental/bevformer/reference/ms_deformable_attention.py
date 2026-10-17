@@ -76,7 +76,7 @@ def multi_scale_deformable_attn(
 class MSDeformableAttention(nn.Module):
     """mmcv's MultiScaleDeformableAttention, inference only."""
 
-    def __init__(self, config: DeformableAttentionConfig, device=None):
+    def __init__(self, config: DeformableAttentionConfig):
         """
         Args:
             config (DeformableAttentionConfig): Configuration object containing:
@@ -85,7 +85,6 @@ class MSDeformableAttention(nn.Module):
                 - num_levels (int): Number of feature pyramid levels
                 - num_points (int): Sampling points per head and level
                 - batch_first (bool): Whether batch dimension comes first
-            device: Unused; accepted for call-site compatibility.
 
         Raises:
             ValueError: If embed_dims is not divisible by num_heads
@@ -103,7 +102,6 @@ class MSDeformableAttention(nn.Module):
 
         self.head_dim = self.embed_dims // self.num_heads
         self.config = config
-        self.device = device
 
         self._setup_layers()
 

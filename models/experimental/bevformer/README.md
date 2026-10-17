@@ -20,7 +20,7 @@ The multi-camera features the encoder reads come from BEVFormer-base's image bac
 - **ResNet101-DCN** (`tt/tt_resnet.py`): caffe-style ResNet101 with DCNv2 (modulated deformable convolution, `tt/tt_modulated_deform_conv.py`) in layer3 and layer4. It emits C3, C4 and C5 at strides 8, 16 and 32.
 - **FPN** (`tt/tt_fpn.py`): maps C3-C5 to four 256-channel levels, the fourth from an extra stride-2 conv on the last output.
 
-It runs 6 cameras at 1600x900, padded to 1600x928. `tt/model_preprocessing.py` prepares the weights: every BatchNorm folded into its conv, the 1x1 convs whose activations are in DRAM as Linear weights, and each DCN's matmul weight chunks and an offset conv that emits the offsets in the device DCN's (x, y) order and grid units. conv2d lays out its own weights on its first call, in the constructors, so the forward runs on device only.
+It runs 6 cameras at 1600x900, padded to 1600x928. `tt/model_preprocessing.py` prepares the weights: every BatchNorm folded into its conv, the stride-1 1x1 convs whose activations are in DRAM as Linear weights, and each DCN's matmul weight chunks and an offset conv that emits the offsets in the device DCN's (x, y) order and grid units. conv2d lays out its own weights on its first call, in the constructors, so the forward runs on device only.
 
 ### Encoder
 
@@ -53,11 +53,10 @@ so the checkpoint's `pts_bbox_head.transformer.encoder` loads into it unchanged.
   see, and the temporal self-attention reads `value[:bs]`; both are exact at batch size 1, which
   BEVFormer runs.
 - The temporal self-attention, the spatial cross-attention and the decoder's cross-attention all
-  run on the fused MSDA op
-  (`ttnn.experimental.fused_msda_from_offsets`), through `TTMSDeformableAttention`
-  (`tt/tt_ms_deformable_attention.py`), with float32 reference points: in bfloat16 a point moves
-  in steps of up to 0.8 px on the 200x200 grid. The self-attention calls the op directly, as its
-  Linears read both stacked maps.
+  run on the fused MSDA op (`ttnn.experimental.fused_msda_from_offsets`) with float32 reference
+  points: in bfloat16 a point moves in steps of up to 0.8 px on the 200x200 grid. The
+  cross-attentions go through `TTMSDeformableAttention` (`tt/tt_ms_deformable_attention.py`); the
+  self-attention calls the op directly, as its Linears read both stacked maps.
 - The camera features are `(bs * num_cams, num_keys, 256)`: each sample's cameras in turn, the
   FPN's order, with the levels concatenated, as the perception transformer builds them.
 - Parameters come from `tt/model_preprocessing.py` (`create_bevformer_encoder_parameters`).
@@ -71,8 +70,8 @@ so the checkpoint's `pts_bbox_head.transformer.encoder` loads into it unchanged.
   camera and level embeddings, and the levels are concatenated into the encoder's camera features.
 - The previous frame's BEV is rotated by the heading change about cell (100, 100), upstream's
   default for every grid size, as torchvision's nearest-neighbour `rotate` does, and the encoder
-  shifts its reference points by the ego translation in cells of the point-cloud range over the
-  grid, as upstream's head passes it.
+  shifts its reference points by the ego translation in BEV-grid fractions: metres over the cell
+  size (the point-cloud range over the grid, as upstream's head passes it), over the grid size.
 - `prepare_frame(img_metas)` turns the frame's CAN bus, ego shift, rotation and cameras into device
   buffers, refilled in place for later frames, so the forward runs on device only and can be
   traced. The rotation moves whole cells: the host rotates an image of cell indices with the
@@ -93,7 +92,6 @@ output ends, as upstream's `simple_test` does, in 3D boxes from the last decoder
   `get_bboxes(scores, labels, boxes, valid)` only drops the invalid boxes on the host: the count
   that remains depends on the data, which no fixed-shape device tensor can hold. For BEVFormer-base
   it drops none, as the head scales the box centers into `pc_range`, inside the post-center range.
-
 - `prepare_frame(img_metas, frame)` prepares or refills the frame's buffers; the caller carries the
   previous BEV between frames, as upstream does.
 - The BEV queries and their learned positional encoding depend on the weights only and are
@@ -332,11 +330,15 @@ models/experimental/bevformer/
 
 ## Test Files
 
-The test suite validates the image backbone, the FPN, the individual components of the BEVFormer encoder, the detection decoder, and the detection head and box coder, each TTNN part against its PyTorch reference.
+The test suite checks the image backbone, the FPN, the BEVFormer encoder and its components (point
+sampling, the two attentions), the perception transformer, the detection decoder, the detection
+head and box coder, and the detector end to end, each TTNN part against its PyTorch reference.
 
 ### PCC (Pearson Correlation Coefficient) Tests
 
-Located in `models/experimental/bevformer/tests/pcc/`, these tests validate the accuracy of TTNN implementations against PyTorch reference models using PCC metrics.
+Located in `models/experimental/bevformer/tests/pcc/`, these tests validate the accuracy of TTNN
+implementations against PyTorch reference models using PCC metrics and, where PCC is too weak, exact
+or tolerance checks.
 
 #### test_resnet.py
 Tests the ResNet101-DCN backbone block by block.
@@ -504,12 +506,12 @@ pytest models/experimental/bevformer/tests/pcc/test_temporal_self_attention.py
 ```
 
 #### test_spatial_cross_attention.py
-Tests the spatial cross-attention alone, with a rebatch plan from `build_rebatch_plan`, on the
-tiny, base and non-square grids, the CARLA preset (a synthetic ring at CARLA's image size and range), batch size 2 with the second sample's rig turned, a
-frame no camera sees (an empty plan) and a frame that fills the plan exactly. PCC 0.999 on the
-output and on the attended part alone, except for the empty plan, whose attended part is the output
-projection's bias alone. `test_rebatch_plan_update` refills a plan in place for
-another rig.
+Tests the spatial cross-attention alone, with a rebatch plan from `build_rebatch_plan`, on the tiny,
+base and non-square grids, the CARLA preset (a synthetic ring at CARLA's image size and range),
+batch size 2 with the second sample's rig turned, a frame no camera sees (an empty plan) and a frame
+that fills the plan exactly. PCC 0.999 on the output and on the attended part alone, except for the
+empty plan, whose attended part is the output projection's bias alone. `test_rebatch_plan_update`
+refills a plan in place for another rig.
 
 **Usage:**
 ```bash
@@ -541,8 +543,8 @@ pytest models/experimental/bevformer/tests/pcc/test_point_sampling_3d_2d.py
 ### Perf harnesses
 
 Located in `models/experimental/bevformer/tests/perf/`. Each runs a stage, on the base 200x200 grid
-unless noted, behind a PCC gate that doubles as the warmup, captures its forward as a trace, which fails on any
-host read or write, and replays it once between Tracy's `start` and `stop` signposts.
+unless noted, behind a PCC gate that doubles as the warmup, captures its forward as a trace, which
+fails on any host read or write, and replays it once between Tracy's `start` and `stop` signposts.
 `test_fused_msda_perf.py` instead runs its forward eagerly between the signposts, without a trace,
 and its report takes no `--tracing-mode`:
 
@@ -550,8 +552,8 @@ and its report takes no `--tracing-mode`:
 - `test_fused_msda_perf.py`: the fused MSDA module and the fused op alone, on the nuScenes tiny
   and base attention shapes.
 - `test_encoder_layer_perf.py`: one encoder layer on a 100x100 grid, without the per-frame setup.
-- `test_encoder_perf.py`: the six-layer encoder, and one layer alone, on a second frame; it then replays the trace on the
-  next frame, with the plan refilled in place.
+- `test_encoder_perf.py`: the six-layer encoder, and one layer alone, on a second frame; it then
+  replays the trace on the next frame, with the plan refilled in place.
 - `test_decoder_perf.py`: the six-layer decoder.
 - `test_head_perf.py`: the head and the coder's top-k.
 - `test_bevformer_perf.py`: the detector end to end, images to the 3D detections, then a replay on
@@ -587,11 +589,11 @@ the port:
   pillars and the head's boxes share.
 - The box code and the coder's box layout, ranges and top-k size.
 - The image size, its padding and normalization.
-- The port's precision and memory choices: the weight dtypes, the float32 reference points and
-  class logits, the coder's bisection steps (`CODER_BISECTION_STEPS`), and the backbone and FPN's per-layer DRAM, sharding,
-  act_block_h and fp32-accumulation settings. `tt_resnet_kwargs()` and `tt_fpn_kwargs()` collect
-  them; `create_resnet_parameters` and `create_fpn_parameters` prepare the weights for them and
-  record them in the parameters, which `TTResNet` and `TTFPN` read them from.
+- The port's precision and memory choices: the weight dtypes, the float32 reference points and class
+  logits, the coder's bisection steps (`CODER_BISECTION_STEPS`), and the backbone and FPN's
+  per-layer DRAM, sharding, act_block_h and fp32-accumulation settings. `tt_resnet_kwargs()` and
+  `tt_fpn_kwargs()` collect them; `create_resnet_parameters` and `create_fpn_parameters` prepare the
+  weights for them and record them in the parameters, which `TTResNet` and `TTFPN` read them from.
 
 The dataset presets (camera rigs, image sizes, point-cloud ranges) that the deformable-attention,
 point-sampling and encoder tests use are test fixtures, in `tests/common.py`.
