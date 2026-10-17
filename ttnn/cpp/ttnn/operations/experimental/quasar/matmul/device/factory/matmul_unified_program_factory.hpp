@@ -24,7 +24,8 @@ struct UnifiedMatmulPlan {
     uint32_t M_tiles = 0;
     uint32_t K_tiles = 0;
     uint32_t N_tiles = 0;
-    uint32_t batch_size = 0;  // batches of A (and of C)
+    // Batches of A (and of C), each with its own B; batches that share one B are folded into M_tiles.
+    uint32_t batch_size = 0;
     // Tiles from one batch of B to the next: K_tiles * N_tiles when B has a [K x N] per batch, 0 when B is a
     // single [K x N] (or [1 x K x N]) that every batch of A multiplies. A's stride is always M_tiles * K_tiles.
     uint32_t B_batch_stride_tiles = 0;
@@ -71,9 +72,13 @@ struct UnifiedMatmulPlan {
     uint32_t C_buffer_depth = 0;
     // Multicast, when each core produces one C slice per batch on a rectangle laid out as the C slices tile C: the
     // first core of each row reads the row's A slices and multicasts them along the row, and the first core of each
-    // column does the same with B down the column. Cores each sender multicasts to; 0 = that operand is not.
+    // column does the same with B down the column. When C is one row of C slices (one column) every core of the
+    // rectangle needs the same A (B), which its first core multicasts to all of them. Cores each sender multicasts
+    // to; 0 = that operand is not.
     uint32_t A_mcast_num_dests = 0;
     uint32_t B_mcast_num_dests = 0;
+    bool A_mcast_to_all_cores = false;
+    bool B_mcast_to_all_cores = false;
 
     // C slice assignment: one batch's C slices, walked across N then down M, split into contiguous
     // runs per active core (the factory derives the per-core RTAs).
@@ -106,6 +111,12 @@ struct UnifiedMatmulPlan {
     uint32_t C_partials_entries = 0;
     // C_partials shares C_slice's L1; only safe when partials are never live while C_slice holds unread data.
     bool alias_C_partials_onto_C_slice = false;
+    // Fused bias: one tile row of the C slice's columns per C slice, loaded into DST before K chunk 0 so the
+    // sum carries it once. Reader thread t pushes the bias of every num_reader_threads-th C slice into its own
+    // part of the DFB, one set of C_slice_N_padded_tiles entries each.
+    bool has_bias = false;
+    uint32_t bias_entry_bytes = 0;
+    uint32_t bias_entries = 0;
     uint64_t l1_bytes = 0;  // total DFB footprint per core
 
     // Only meaningful for a sharded output: the layout implied by how the C slices tile C.
@@ -163,9 +174,20 @@ UnifiedMatmulPlan plan_unified_matmul(
     const tt::tt_metal::IDevice& device,
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
+    uint32_t bias_tile_bytes,  // 0 without a bias
     const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config,
     const MatmulParams& attributes,
     const std::optional<ttnn::Tensor>& output);
+
+// The same plan, or nullopt where plan_unified_matmul would FATAL because nothing fits L1 or a sharded output's
+// constraints fail (other config errors still FATAL); for the auto-config's candidate search.
+std::optional<UnifiedMatmulPlan> try_plan_unified_matmul(
+    const tt::tt_metal::IDevice& device,
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b,
+    uint32_t bias_tile_bytes,
+    const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config,
+    const MatmulParams& attributes);
 
 struct MatmulUnifiedProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(

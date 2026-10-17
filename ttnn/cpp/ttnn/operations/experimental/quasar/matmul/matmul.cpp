@@ -105,10 +105,20 @@ static bool get_post_process_bias(
     const MemoryConfig& output_mem_config,
     const ttnn::Tensor& input_tensor_a_adjusted,
     const ttnn::Tensor& input_tensor_b_adjusted,
-    const bool transpose_a) {
+    const bool transpose_a,
+    const bool fp32_dest_acc_en) {
     // Determine if we should post-process bias based on the program config
     // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
     bool post_process_bias = false;
+    if (bias.has_value() && program_config.has_value() &&
+        std::holds_alternative<MatmulUnifiedProgramConfig>(program_config.value())) {
+        // The unified kernels add a single tile row of bias (broadcast down M) to every batch, through a row
+        // broadcast into a 16-bit DST (the Wormhole LLK misplaces its rows in a 32-bit one).
+        const auto& tile_shape = input_tensor_a_adjusted.tensor_spec().tile().get_tile_shape();
+        const uint32_t tile_height = transpose_a ? tile_shape[1] : tile_shape[0];
+        return bias.value().padded_shape()[-2] != tile_height ||
+               detail::is_input_batched(bias.value().logical_shape()) || fp32_dest_acc_en;
+    }
     if (bias.has_value()) {
         // Quasar: the fused matmul+bias path was historically avoided (bmm_large..._fused_bias TILE_COUNTERS
         // fault). But (a) the post-process add is a BROADCAST ([M,N]+[1,N]) and Quasar has NO broadcast/repeat
@@ -146,9 +156,8 @@ static bool get_post_process_bias(
         if (bias_padded_shape[-2] != tile_height) {
             post_process_bias = true;
         } else if (program_config.has_value()) {
-            // MatmulMultiCoreProgramConfig and MatmulUnifiedProgramConfig do not fuse bias
-            post_process_bias = std::holds_alternative<MatmulMultiCoreProgramConfig>(program_config.value()) ||
-                                std::holds_alternative<MatmulUnifiedProgramConfig>(program_config.value());
+            // MatmulMultiCoreProgramConfig does not fuse bias
+            post_process_bias = std::holds_alternative<MatmulMultiCoreProgramConfig>(program_config.value());
         } else if (!user_core_coord.has_value()) {
             // When program_config and user_core_coord are not provided, config is auto-generated
 
@@ -234,6 +243,13 @@ static ttnn::Tensor bound_matmul(
           std::holds_alternative<MatmulMultiCoreReuseProgramConfig>(chosen_program_config));
     bool needs_manual_transpose_a = parameters.transpose_a && needs_manual_transpose;
     bool needs_manual_transpose_b = parameters.transpose_b && needs_manual_transpose;
+    if (!parameters.program_config.has_value() &&
+        std::holds_alternative<MatmulUnifiedProgramConfig>(chosen_program_config)) {
+        // The auto-config chose the unified matmul, which fuses the activation; keep the choice so the op does not
+        // choose again.
+        parameters.program_config = chosen_program_config;
+        parameters.user_fused_activation = std::nullopt;
+    }
 
     const auto& input_tensor_a_adjusted = needs_manual_transpose_a
                                               ? ttnn::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config())
@@ -263,7 +279,8 @@ static ttnn::Tensor bound_matmul(
         parameters.output_mem_config,
         input_tensor_a_adjusted,
         input_tensor_b_adjusted,
-        parameters.transpose_a);
+        parameters.transpose_a,
+        get_fp32_dest_acc_en(matmul_struct.compute_kernel_config));
 
     auto attributes = ttnn::prim::qsr::create_matmul_attributes(
         input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});

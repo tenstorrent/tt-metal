@@ -90,9 +90,13 @@ struct MatmulMultiCoreProgramConfig {
 // Placement-first config for the Quasar-native matmul (GH#41910): the caller names the clusters and
 // the C slice (in 32x32 tiles) each produces in one go; the factory assigns one batch's C slices to
 // `cores` as contiguous runs. Edge C slices are clipped on read/write, so any M / N works. Within a
-// cluster the C slice's subblocks are assigned round-robin to the compute threads (NEOs).
-// Limits: no bias/activation/untilize, 32x32 tiles only; sharded output needs batch 1 and one C slice per core.
+// cluster the C slice's subblocks are assigned round-robin to the compute threads (NEOs). A bias row and the
+// activation are applied in DST before the final pack.
+// Batches of A that share one B are stacked into one [batch * M x N] GEMM.
+// Limits: no untilize, 32x32 tiles only; sharded output needs one C slice per core (and batch 1 with a batched B).
 struct MatmulUnifiedProgramConfig {
+    // Empty = auto placement: the cores, C slice and orientation are chosen by a cost estimate over the natural
+    // placements (the other fields are kept).
     tt::tt_metal::CoreRangeSet cores;
     // C slice (in tiles) each core produces in one go. 0 = auto: the output shard when C is sharded, else the
     // largest divisor piece of the core's share of C (M / N split over the bounding box of `cores`) that fits
@@ -101,7 +105,8 @@ struct MatmulUnifiedProgramConfig {
     std::size_t C_slice_N_tiles = 0;
     // K tiles multiplied per accumulation step: one A slice and one B slice are resident in L1 at a time and
     // the partial sums round-trip L1 between steps. Must divide K_tiles. 0 = auto: the largest divisor of
-    // K_tiles whose buffers fit L1, capped at 8 unless the C slice is 4 tiles or fewer (#57884).
+    // K_tiles whose buffers fit L1, capped at 8 unless the C slice is 4 tiles or fewer, which still leaves a K
+    // chunk per reader thread (#57884).
     std::size_t K_chunk_tiles = 0;
     // Subblock: the C slice's tiles accumulated in DST at once; holds <= 8 tiles (4 with fp32
     // accumulation). Need not divide the C slice: it is padded up to subblock multiples and the
@@ -115,6 +120,8 @@ struct MatmulUnifiedProgramConfig {
     // Compute threads per core (Quasar NEOs running the compute kernel); 1, 2 or 4. 0 = auto: 4 on Quasar,
     // 1 elsewhere (Wormhole / Blackhole have one compute engine per core).
     std::size_t num_compute_threads = 0;
+    // Applied to the finished sum in DST, after the bias, before the final pack.
+    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation = std::nullopt;
 };
 
 using MatmulProgramConfig = std::variant<
