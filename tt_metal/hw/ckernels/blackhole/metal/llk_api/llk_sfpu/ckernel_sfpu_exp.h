@@ -485,7 +485,7 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
     static_assert(
         !(APPROXIMATION_MODE && SCALE_EN),
         "approximate exp scales by exp_init's template scale and never reads the runtime scale: pass the scale to "
-        "exp_init and SCALE_EN=false");
+        "exp_init as FP32 bits (the bf16 scale << 16, positive with CLAMP_NEGATIVE) and SCALE_EN=false");
     if constexpr (!APPROXIMATION_MODE) {
         if constexpr (!is_fp32_dest_acc_en) {
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
@@ -755,6 +755,12 @@ void exp_init() {
         constexpr float THRESHOLD = -88.5f;
 
         constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
+        // THRESHOLD is divided by the scale below: a negative scale would turn the -88.5 input
+        // floor into a ceiling, and a denormal (a bf16 scale pasted in unshifted) into a huge one.
+        static_assert(
+            scale_fp32 >= std::numeric_limits<float>::min(),
+            "exp_init: scale is FP32 bits (the bf16 scale << 16) and must be a positive normal number with "
+            "CLAMP_NEGATIVE");
 
         constexpr float A_scaled = A * scale_fp32;
         constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;

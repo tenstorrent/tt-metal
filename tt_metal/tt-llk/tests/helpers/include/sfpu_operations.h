@@ -140,7 +140,8 @@ constexpr std::uint32_t EXP_WITH_BASE_SCALE_FP32 = EXP_WITH_BASE_SCALE_BF16 << 1
 constexpr int EXP_APPROX_CLAMP_ITERATIONS = 8;
 
 // SCALE_EN only on the accurate paths: the approximate kernel scales by exp_init's template
-// scale (programmed by the exp_with_base init above) and rejects SCALE_EN at compile time.
+// scale (the exp_with_base branch of call_unary_sfpu_operation_init below programs it) and
+// rejects SCALE_EN at compile time.
 template <bool APPROXIMATION_MODE, bool IS_FP32_DEST_ACC_EN, int ITERATIONS, bool CLAMP_NEGATIVE, std::uint32_t EXP_BASE_SCALE_FACTOR>
 inline __attribute__((always_inline)) void calculate_exponential_const_scale()
 {
@@ -478,12 +479,12 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     }
     else if constexpr (OPERATION == SfpuType::exp_with_base)
     {
-        // "exp with base b" = b^x = exp(x * ln b); implemented as the SCALE_EN path
-        // of calculate_exponential (multiplies the input by a bf16 scale before exp).
-        // The accurate paths apply the scale in the calculate call. The approximate
-        // clamp path does not read it there: it bakes the scale into the constants this
-        // init programs, so the init carries the same 0.5 -- with 1.0 here it computed
-        // exp(x) against an exp(0.5 * x) golden.
+        // "exp with base b" = b^x = exp(x * ln b). In accurate mode it is the SCALE_EN path
+        // of calculate_exponential (multiplies the input by a bf16 scale before exp), which
+        // applies the scale in the calculate call. The approximate paths do not read it
+        // there: they bake the scale into the constants this init programs, so the init
+        // carries the same 0.5 -- with 1.0 here it computed exp(x) against an exp(0.5 * x)
+        // golden.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(exp_init<APPROX_MODE, EXP_WITH_BASE_SCALE_FP32, CLAMP_NEGATIVE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::erfinv)
@@ -944,8 +945,9 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             dst_index,
             VectorMode::RC);
     }
-    // exp_with_base = b^x = exp(x * ln b): the only op that drives calculate_exponential
-    // with SCALE_EN=true. The bf16 scale EXP_WITH_BASE_SCALE_BF16 == 0.5 selects base
+    // exp_with_base = b^x = exp(x * ln b): in accurate mode the only op that drives
+    // calculate_exponential with SCALE_EN=true (approximate mode passes false and relies on
+    // exp_init's scale). The bf16 scale EXP_WITH_BASE_SCALE_BF16 == 0.5 selects base
     // b = e^0.5, so the golden is exp(0.5*x); 0.5 is exact in bf16 so no scale-rounding
     // error is added.
     //

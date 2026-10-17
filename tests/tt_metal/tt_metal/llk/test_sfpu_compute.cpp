@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <random>
 #include <stdexcept>
 #include <tt-metalium/host_api.hpp>
@@ -20,6 +21,7 @@
 #include <optional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <variant>
 #include <vector>
@@ -2677,57 +2679,80 @@ TEST_F(LLKBlackholeSingleCardFixture, SfpuExp21fRetainedCoefficients) {
 
 namespace {
 
-// Single-core program whose compute kernel runs `chain` on one tile. Compile-contract
-// probes only: the program is compiled, never launched.
-Program make_sfpu_chain_compile_program(const std::string& chain) {
+constexpr std::string_view kApproxScaleGuard = "never reads the runtime scale";
+constexpr std::string_view kInitScaleSignGuard = "must be a positive normal number";
+// bf16 -1.0 as exp_tile's runtime scale, and the same value as exp_tile_init's FP32-bit scale.
+const std::string kBf16MinusOne = "0xBF80";
+const std::string kFp32MinusOne = "0xBF800000";
+
+// Builds a single-core program whose compute kernel runs `chain` on one tile and compiles it
+// (never launches it). Returns the build failure's message, which carries the compiler log, or
+// an empty string when the kernel compiled.
+std::string compile_sfpu_chain(distributed::MeshDevice& device, const std::string& chain) {
     Program program = CreateProgram();
     const CoreCoord core{0, 0};
+    const auto tile_bytes = static_cast<uint32_t>(tt::tile_size(tt::DataFormat::Float16_b));
     for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_16}) {
         CreateCircularBuffer(
-            program, core, CircularBufferConfig(2048, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, 2048));
+            program,
+            core,
+            CircularBufferConfig(tile_bytes, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, tile_bytes));
     }
-    // 32-bit Dest so the non-approximate control runs the sfpi exp, which takes the runtime
-    // scale as a value; the bf16 TTI exp lowers it to an SFPMULI immediate, which the Wormhole
-    // build does not constant-fold through exp_tile's argument.
+    // 32-bit Dest: on Wormhole the bf16 accurate exp lowers exp_tile's runtime scale to an SFPMULI
+    // immediate and fails to build when that argument is not constant-folded, so the non-approximate
+    // control below takes the sfpi path instead.
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp",
         core,
         ComputeConfig{
             .fp32_dest_acc_en = true,
-            .compile_args = {1u, 1u},
+            .compile_args = {1u /*per_core_block_cnt*/, 1u /*per_core_block_dim*/},
             .defines = {{"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", chain}}});
-    return program;
+    try {
+        program.impl().compile(&device);
+    } catch (const std::exception& e) {
+        return e.what();
+    }
+    return {};
 }
 
 }  // namespace
 
 TEST_F(LLKMeshDeviceSingleCardFixture, SfpuExpApproxRejectsRuntimeScale) {
-    // Compile-time contract test; these programs are never launched. The approximate exp
-    // kernel scales by exp_tile_init's template scale and never reads exp_tile's runtime
-    // scale, so exp_tile<approx = true, scale_en = true> must fail to compile rather than
-    // silently compute exp(x) for a caller that asked for exp(scale * x).
+    // Compile-time contract test; nothing runs on the device. The approximate exp kernel scales
+    // by exp_tile_init's template scale and never reads exp_tile's runtime scale, so
+    // exp_tile<approx = true, scale_en = true> must fail to compile with the kernel's guard rather
+    // than silently compute exp(x) for a caller that asked for exp(scale * x); and the template
+    // scale, which the ClampToNegative init divides the input clamp by, must be positive.
     if (this->device().arch() == tt::ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar exp rejects scale_en in every mode; this test pins the Wormhole/Blackhole contract";
     }
-    struct Case {
-        const char* chain;
-        bool compiles;
-    };
-    const Case cases[] = {
-        {"exp_tile_init<true>(); exp_tile<true, true>(0, VectorMode::RC, 0xBF80);", false},
-        {"exp_tile_init<true>(); exp_tile<true, false>(0);", true},
-        {"exp_tile_init<false>(); exp_tile<false, true>(0, VectorMode::RC, 0xBF80);", true},
-    };
-    for (const auto& c : cases) {
-        SCOPED_TRACE(::testing::Message() << c.chain);
-        auto program = make_sfpu_chain_compile_program(c.chain);
-        if (c.compiles) {
-            EXPECT_NO_THROW(program.impl().compile(&this->device()));
-        } else {
-            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
-        }
-    }
+    auto& device = this->device();
+
+    // Controls: the supported combinations build, so a rejection below is the guard's doing.
+    EXPECT_EQ(compile_sfpu_chain(device, "exp_tile_init<true>(); exp_tile<true, false>(0);"), "");
+    EXPECT_EQ(
+        compile_sfpu_chain(
+            device, "exp_tile_init<false>(); exp_tile<false, true>(0, VectorMode::RC, " + kBf16MinusOne + ");"),
+        "");
+
+    const std::string runtime_scale = compile_sfpu_chain(
+        device, "exp_tile_init<true>(); exp_tile<true, true>(0, VectorMode::RC, " + kBf16MinusOne + ");");
+    EXPECT_FALSE(runtime_scale.empty()) << "exp_tile<true, true> compiled; the approximate kernel ignores the runtime "
+                                           "scale, so this must be a compile error";
+    EXPECT_NE(runtime_scale.find(kApproxScaleGuard), std::string::npos)
+        << "the build failed for a reason other than the approximate-scale guard:\n"
+        << runtime_scale;
+
+    const std::string negative_init_scale =
+        compile_sfpu_chain(device, "exp_tile_init<true, " + kFp32MinusOne + ">(); exp_tile<true, false>(0);");
+    EXPECT_FALSE(negative_init_scale.empty())
+        << "exp_tile_init<true, bf16(-1.0) << 16> compiled; the clamp init divides -88.5 by the scale, so a "
+           "negative scale must be a compile error";
+    EXPECT_NE(negative_init_scale.find(kInitScaleSignGuard), std::string::npos)
+        << "the build failed for a reason other than the init scale sign guard:\n"
+        << negative_init_scale;
 }
 
 void run_quasar_sfpu_unpack_to_dest_fp32(

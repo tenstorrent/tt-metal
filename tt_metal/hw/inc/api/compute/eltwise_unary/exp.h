@@ -26,9 +26,12 @@ enum class InputClamping : uint8_t {
 /**
  * Please refer to documentation for any_init.
  *
- * Template scale parameter is applied in approximate mode (always, regardless of exp_tile's
- * scale_en, which approximate mode rejects at compile time); in non-approximate mode it is
- * ignored and exp_tile's runtime scale is used instead.
+ * Template scale parameter is the FP32 bit pattern of the scale (0x3F800000 = 1.0; exp_tile's
+ * bf16 runtime scale shifted left by 16, so 0xBF80 must become 0xBF800000, not 0xBF80). In
+ * approximate mode it is always applied, by both the ClampToNegative and the None variants
+ * (exp_tile's scale_en is rejected at compile time there); with ClampToNegative it must be
+ * a positive normal number, because the -88.5 input clamp is divided by it. In non-approximate
+ * mode it is ignored; the exp_tile runtime scale applies when scale_en is true.
  *
  */
 template <

@@ -229,8 +229,14 @@ inline void init_fast_approx_exp_constants() {
 inline void fast_approx_exp(std::uint32_t dst_index) {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    // Scaling comes from init_fast_approx_exp_constants' template scale; the approximate kernel rejects SCALE_EN.
-    ckernel::sfpu::calculate_exponential<true, DST_ACCUM_MODE, false, 8, true>();
+    // The scale comes from the exp_init template scale the caller programmed (exp_packthread_tile_init<true,
+    // scale> / exp_tile_init<true, scale>); the approximate kernel rejects SCALE_EN.
+    ckernel::sfpu::calculate_exponential<
+        true /*APPROXIMATION_MODE*/,
+        DST_ACCUM_MODE,
+        false /*SCALE_EN*/,
+        8 /*ITERATIONS*/,
+        true /*CLAMP_NEGATIVE*/>();
 }
 
 // TODO: Currently hardcodes the lregs used by red max
