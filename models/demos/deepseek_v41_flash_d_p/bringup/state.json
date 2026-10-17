@@ -1027,6 +1027,27 @@
   "started": "2026-10-17T00:03:21",
   "status": "PASS"
  },
+ "C.enc_source_engram.kv": {
+  "attempts": 0,
+  "duration_s": 33.3,
+  "history": [
+   {
+    "s": 33.3,
+    "status": "PASS",
+    "t": "2026-10-17T01:37:43"
+   }
+  ],
+  "last_run": "2026-10-17T01:37:43",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.enc_source_engram.kv.log",
+  "metrics": {
+   "err_kv_L14": 0.024708399549126625,
+   "err_kv_L14_limit": 0.549126923084259
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T01:37:10",
+  "status": "PASS"
+ },
  "C.enc_source_engram.q_a": {
   "attempts": 0,
   "duration_s": 36.5,
