@@ -478,7 +478,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 return {
                     "unary_ne_tile_init();",
-                    fmt::format("unary_ne_tile_int32({}, {}u);", idst, std::bit_cast<uint32_t>(param0_raw))};
+                    fmt::format(
+                        "unary_ne_tile_int32({}, {}u);",
+                        idst,
+                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
             }
             return {
                 "unary_ne_tile_init();",
@@ -490,7 +493,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 return {
                     "unary_eq_tile_init();",
-                    fmt::format("unary_eq_tile_int32({}, {}u);", idst, std::bit_cast<uint32_t>(param0_raw))};
+                    fmt::format(
+                        "unary_eq_tile_int32({}, {}u);",
+                        idst,
+                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
             }
             return {
                 "unary_eq_tile_init();",
@@ -502,7 +508,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 return {
                     "unary_gt_tile_init();",
-                    fmt::format("unary_gt_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
+                    fmt::format(
+                        "unary_gt_tile_int32({}, {});",
+                        idst,
+                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
             }
             return {
                 "unary_gt_tile_init();",
@@ -514,7 +523,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 return {
                     "unary_lt_tile_init();",
-                    fmt::format("unary_lt_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
+                    fmt::format(
+                        "unary_lt_tile_int32({}, {});",
+                        idst,
+                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
             }
             return {
                 "unary_lt_tile_init();",
@@ -526,7 +538,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 return {
                     "unary_ge_tile_init();",
-                    fmt::format("unary_ge_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
+                    fmt::format(
+                        "unary_ge_tile_int32({}, {});",
+                        idst,
+                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
             }
             return {
                 "unary_ge_tile_init();",
@@ -538,7 +553,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 return {
                     "unary_le_tile_init();",
-                    fmt::format("unary_le_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
+                    fmt::format(
+                        "unary_le_tile_int32({}, {});",
+                        idst,
+                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
             }
             return {
                 "unary_le_tile_init();",
