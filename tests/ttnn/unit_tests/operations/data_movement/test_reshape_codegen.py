@@ -79,6 +79,11 @@ _PATHS = [
     ("tile_rows_int32", [1, 64, 1024], [1, 64, 8, 128], ttnn.int32, ttnn.TILE_LAYOUT),
     ("tile_rows_uint32", [1, 64, 1024], [1, 64, 8, 128], ttnn.uint32, ttnn.TILE_LAYOUT),
     ("tile_rows_uint16", [1, 64, 1024], [1, 64, 8, 128], ttnn.uint16, ttnn.TILE_LAYOUT),
+    # Row-major stick program: dividing widths.
+    ("rm_split", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    # Row-major slab program: widths that do not divide, and dividing widths whose stick program does not fit L1.
+    ("rm_arbitrary_bf16", [64, 97], [97, 64], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ("rm_slab_dividing", [2, 409600], [4, 204800], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
 ]
 
 
@@ -94,8 +99,8 @@ def test_reshape_codegen_bit_exact(device, path, in_shape, out_shape, dtype, lay
 
 @pytest.mark.parametrize(
     "path,in_shape,out_shape,dtype,layout",
-    [p for p in _PATHS if p[0] == "tile_rows"],
-    ids=["tile_rows"],
+    [p for p in _PATHS if p[0] in ("tile_rows", "rm_split")],
+    ids=["tile_rows", "rm_split"],
 )
 def test_reshape_codegen_sub_core_grids(device, path, in_shape, out_shape, dtype, layout):
     source = _make(in_shape, dtype)
@@ -141,9 +146,22 @@ def test_reshape_codegen_edge_shapes(device, case, in_shape, out_shape, dtype):
     _assert_bits(padded, codegen.cpu().to_torch_with_padded_shape(), dtype)
 
 
-# (id, in shape, out shape, dtype, layout, expected route). Shapes outside the tile-rows scope, and shapes
-# is_demoted sends back, run native.
+def _rm_aligned_pair(piece_bytes, merge, sticks=512):
+    # bf16 sticks of `piece_bytes` and twice that, both alignment multiples: a merge goes short to long, a split back.
+    short, long = [sticks, piece_bytes // 2], [sticks // 2, piece_bytes]
+    return (short, long) if merge else (long, short)
+
+
+# (id, in shape, out shape, dtype, layout, expected route). Row-major demotion is decided by stick sizes
+# (rm_native_faster) and taken only where native runs and the stick program fits (demotion_applies); the row-major
+# cases sit on either side of its aligned-DRAM rule, which demotes merges from a 256 B piece on Blackhole and a 2 KB
+# piece on Wormhole and never splits; "native_bh" is native on Blackhole only. TILE demotion is decided by the tile
+# plan (is_demoted); shapes the tile-rows program does not take run native.
 _ROUTES = [
+    ("rm_split_piece_256", *_rm_aligned_pair(256, merge=False), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
+    ("rm_merge_piece_128", *_rm_aligned_pair(128, merge=True), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
+    ("rm_merge_piece_256", *_rm_aligned_pair(256, merge=True), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "native_bh"),
+    ("rm_merge_piece_2048", *_rm_aligned_pair(2048, merge=True), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "native"),
     # Head split: batching cuts source reads 32x.
     ("tile_rows", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
     # 4-head merge: the cut is only 4x, but each output tile reads 24 fewer padded source tiles.
@@ -153,12 +171,13 @@ _ROUTES = [
     ("tile_width_uint16", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.uint16, ttnn.TILE_LAYOUT, "codegen"),
     # A width that is not a multiple of 32 is not a tile-row permutation.
     ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "native"),
-    ("row_major", [512, 256], [1024, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "native"),
 ]
 
 
 @pytest.mark.parametrize("case,in_shape,out_shape,dtype,layout,route", _ROUTES, ids=[r[0] for r in _ROUTES])
 def test_reshape_codegen_routing(device, case, in_shape, out_shape, dtype, layout, route):
+    if route == "native_bh":
+        route = "codegen" if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else "native"
     source = _make(in_shape, dtype)
     x = _to_device(device, source, dtype, layout, _DRAM)
     expected_leg = _force_codegen if route == "codegen" else _force_native
@@ -172,8 +191,8 @@ def test_reshape_codegen_routing(device, case, in_shape, out_shape, dtype, layou
 
 @pytest.mark.parametrize(
     "path,in_shape,out_shape,dtype,layout",
-    [p for p in _PATHS if p[0] == "tile_rows"],
-    ids=["tile_rows"],
+    [p for p in _PATHS if p[0] in ("tile_rows", "rm_split")],
+    ids=["tile_rows", "rm_split"],
 )
 def test_reshape_codegen_cache_hit_new_addresses(device, path, in_shape, out_shape, dtype, layout):
     source = _make(in_shape, dtype)
@@ -298,10 +317,35 @@ def test_reshape_codegen_routes_native_when_no_plan_fits_l1(device, expect_error
     ttnn.deallocate(hog)
 
 
+def test_reshape_codegen_rm_routes_native_when_no_program_fits_l1(device, expect_error):
+    # Merging 4 B sticks into 30004 B ones takes two 30 KB CB pages in the stick program and a window region of over
+    # 64 KiB in the slab program, while native's single kernel needs about 30 KB. With 48 KiB free auto must run
+    # native, while the forced entry still refuses.
+    in_shape, out_shape, dtype = [60008, 1], [8, 7501], ttnn.float32
+    source = _make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, ttnn.ROW_MAJOR_LAYOUT, _DRAM)
+    hog = _l1_hog_leaving(device, 48 * 1024)
+    _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+    with expect_error(RuntimeError, "no row-major program fits"):
+        _force_codegen(x, out_shape, memory_config=_DRAM)
+    ttnn.deallocate(hog)
+
+
+def test_reshape_codegen_rm_ring_within_cb_page_limit(device):
+    # Splitting 4096 16 B sticks into 2 B ones on one core wants a 65,536-page ring of 16 B pages, one more than the
+    # 16-bit CB page counters hold, though 1 MiB fits L1; the plan must shrink the ring instead.
+    in_shape, out_shape, dtype = [4096, 8], [4096, 8, 1], ttnn.bfloat16
+    source = _make(in_shape, dtype)
+    x = _to_device(device, source, dtype, ttnn.ROW_MAJOR_LAYOUT, _DRAM)
+    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
+
+
 _OUT_OF_SCOPE = [
     ("bfloat8_b", [1, 1, 64, 128], [1, 1, 128, 64], ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
     ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    ("row_major", [512, 256], [1024, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
 ]
 
 

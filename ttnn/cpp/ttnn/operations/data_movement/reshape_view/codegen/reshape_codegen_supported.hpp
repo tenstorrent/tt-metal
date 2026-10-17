@@ -24,7 +24,7 @@ const char* call_contract_violation(
 
 // Why the codegen program cannot run this call, or nullptr. Budgets the smallest plan against static_l1_budget only,
 // never live free L1: the op allocates its output between routing and validation, so a live read could disagree with
-// itself. Live L1 picks the plan at program creation (live_tile_rows_choice).
+// itself. Live L1 picks the plan at program creation (live_tile_rows_choice, live_rm_choice).
 const char* unsupported_reason(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
@@ -39,10 +39,11 @@ bool supported_by_codegen(
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
 bool supported_by_codegen(const Tensor& input, const ttnn::Shape& logical_output_shape);
 
-// Perf routing only, for a call supported_by_codegen: native's tiled reshape measures faster than the tile-rows
-// program. True unless the full plan cuts reads 8x, saves 16+ reads per output tile, or copies whole face halves over
-// more than one native round; thresholds fitted on Blackhole. Never true for uint16: native rejects it, so demoting
-// would fail the call. Depends on shapes and static device geometry only, never on live L1.
+// Perf routing only, for a call supported_by_codegen: native measures faster than the program the gate admits.
+// TILE: native's tiled reshape beats tile rows unless the full plan cuts reads 8x, saves 16+ reads per output tile,
+// or copies whole face halves over more than one native round. ROW_MAJOR: rm_native_faster's stick-size rule, taken
+// only while native's scratch and the stick program fit the static L1 window. Never true for uint16: native rejects
+// it, so demoting would fail the call. Depends on shapes and static device geometry only, never on live L1.
 bool is_demoted(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
@@ -50,7 +51,7 @@ bool is_demoted(
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
 
 // Live-L1 routing gate, for a call supported_by_codegen: whether the smallest plan fits the L1 free once the output
-// is allocated. Native needs only a few CB pages, so routing sends a false call there instead of to the program
+// is allocated. Native sizes its scratch to live L1, so routing sends a false call there instead of to the program
 // factory's no-plan error. Never consulted by validate or the forced entry.
 bool codegen_plan_fits_live_l1(
     const Tensor& input,

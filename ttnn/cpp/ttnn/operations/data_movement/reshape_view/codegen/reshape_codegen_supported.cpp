@@ -4,6 +4,8 @@
 
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_supported.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -53,7 +55,7 @@ const char* scope_violation(
     if (input.device()->is_remote_only()) {
         return "the mesh has no local devices";
     }
-    // The program moves bytes, so any 2 or 4 B type the kernels copy in halfwords or words works alike.
+    // Every program moves bytes, so any 2 or 4 B type the kernels copy in halfwords or words works alike.
     switch (input.dtype()) {
         case DataType::BFLOAT16:
         case DataType::FLOAT32:
@@ -72,11 +74,16 @@ const char* scope_violation(
     if (in_shape.volume() == 0 || in_shape.volume() != logical_output_shape.volume()) {
         return "input is empty or the volume changes";
     }
-    if (input.layout() != Layout::TILE || !standard_tile_with_tight_padding(input)) {
-        return "input is not TILE with 32x32 tiles padded only in the last two dims";
-    }
-    if (!is_tile_row_permutation(in_shape, logical_output_shape)) {
-        return "input or output last dim is not a multiple of 32";
+    if (input.layout() == Layout::TILE) {
+        if (!standard_tile_with_tight_padding(input)) {
+            return "input is not TILE with 32x32 tiles padded only in the last two dims";
+        }
+        if (!is_tile_row_permutation(in_shape, logical_output_shape)) {
+            return "input or output last dim is not a multiple of 32";
+        }
+    } else if (input.layout() != Layout::ROW_MAJOR || input.padded_shape() != in_shape) {
+        // Row-major programs address input sticks by the logical shape.
+        return "input is neither TILE nor unpadded ROW_MAJOR";
     }
     if (!supported_execution_controls(input, sub_core_grids)) {
         return "sub_core_grids is not a non-empty subset of the compute grid";
@@ -129,6 +136,215 @@ bool native_faster(const Tensor& input, const TileRowsChoice& choice, uint32_t n
     return !read_cut && !reads_saved && !whole_halves;
 }
 
+// Native's row-major factory treats a stick as NOC-aligned at this multiple.
+constexpr uint32_t kNativeNocAlignment = 16;
+
+// Native's row-major kernel runs as two instances per core, each on its own RISC and NOC, unless its output is DRAM
+// with sticks that are not a 16 B multiple; then a single instance moves everything.
+bool native_runs_two_kernels(uint32_t new_stick, const tt::tt_metal::MemoryConfig& output_mem_config) {
+    return output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 || new_stick % kNativeNocAlignment == 0;
+}
+
+// Merges issue every read from one RISC on one NOC while native spreads them over two. From L1 a read of
+// kMaxReadSize is alone between barriers, and a 32 KB new stick is one push the writer waits on in full.
+constexpr uint32_t kSinglePushNewStick = 16 * kMaxReadSize;
+
+bool coalesced_l1_merge_native_faster(uint32_t piece, uint32_t new_stick) {
+    return piece >= kMaxReadSize || (2 * piece >= kMaxReadSize && new_stick >= kSinglePushNewStick);
+}
+
+// Unaligned sticks are repacked by a RISC at a cost per byte; native pays a round trip per piece, so it wins from a
+// piece size set by that round trip and its kernel count. Merges pay a read round trip per piece, splits only a
+// staged write. Fitted on Blackhole.
+constexpr uint32_t kMinNativeMergePieceTwoKernels = 40;
+constexpr uint32_t kMinNativeSplitPieceTwoKernels = 20;
+constexpr uint32_t kMinNativeMergePieceOneKernel = 128;
+constexpr uint32_t kMinNativeSplitPieceOneKernel = 40;
+
+uint32_t min_native_piece(bool two_kernels, bool merge) {
+    if (two_kernels) {
+        return merge ? kMinNativeMergePieceTwoKernels : kMinNativeSplitPieceTwoKernels;
+    }
+    return merge ? kMinNativeMergePieceOneKernel : kMinNativeSplitPieceOneKernel;
+}
+
+// Native hands each of its two kernels half of a core's source sticks; at two sticks per core each kernel moves one,
+// while the port's reader and writer pass both through one pipeline. Up to this many pieces per stick, the second
+// stick costs the port more than its repack saves.
+constexpr uint32_t kMaxPairedSplitPieces = 24;
+
+// Whether an L1 split puts exactly two source sticks on the port's busiest core. In DRAM the port still wins there.
+bool paired_l1_split_native_faster(
+    uint32_t ratio, uint64_t num_old_sticks, uint32_t num_cores, const tt::tt_metal::MemoryConfig& output_mem_config) {
+    return output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 && ratio <= kMaxPairedSplitPieces &&
+           num_old_sticks > num_cores && num_old_sticks <= 2 * static_cast<uint64_t>(num_cores);
+}
+
+bool staged_native_faster(
+    uint32_t piece,
+    uint32_t new_stick,
+    uint32_t ratio,
+    uint64_t num_old_sticks,
+    uint32_t num_cores,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    bool merge) {
+    const bool two_kernels = native_runs_two_kernels(new_stick, output_mem_config);
+    // Pieces that are not a multiple of 4 B make native copy byte by byte; one kernel doing that never catches up.
+    if (!two_kernels && piece % 4 != 0) {
+        return false;
+    }
+    return piece >= min_native_piece(two_kernels, merge) ||
+           (!merge && paired_l1_split_native_faster(ratio, num_old_sticks, num_cores, output_mem_config));
+}
+
+// Slack native's row-major factory adds to each source read and destination slot.
+constexpr uint64_t kNativeSourceReadSlack = 128;
+constexpr uint64_t kNativeDestSlotSlack = 80;
+
+// Native's row-major kernel fits its minimum scratch in the static L1 window. Native sizes that scratch from live L1
+// and fails when it does not fit.
+bool native_rm_fits_l1(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    uint64_t static_budget) {
+    const uint32_t elem = input.element_size();
+    const uint64_t old_stick = static_cast<uint64_t>(input.logical_shape()[-1]) * elem;
+    const uint64_t new_stick = static_cast<uint64_t>(logical_output_shape[-1]) * elem;
+    // Per instance: two source pages padded to 64 B plus 128 B, one destination slot padded to 64 B plus 80 B.
+    const uint64_t per_kernel = (2 * (((old_stick - 1) & ~uint64_t{63}) + kNativeSourceReadSlack)) +
+                                ((new_stick - 1) & ~uint64_t{63}) + kNativeDestSlotSlack;
+    const bool divisible = old_stick % new_stick == 0 || new_stick % old_stick == 0;
+    const uint64_t kernels =
+        divisible && native_runs_two_kernels(static_cast<uint32_t>(new_stick), output_mem_config) ? 2 : 1;
+    return kernels * per_kernel <= static_budget;
+}
+
+// Wormhole thresholds, fitted from the same forced sweeps run on Wormhole. Its DRAM reads stay transaction-bound up to
+// 2 KB pieces, its L1 merges lose to native from 1 KB, and a single-kernel split with at most one source stick per
+// core leaves the port's pipeline unfilled, so native wins from 20 B.
+constexpr uint32_t kWhMinDramMergePiece = 2048;
+constexpr uint32_t kWhMinL1MergePiece = 1024;
+constexpr uint32_t kWhMinUnderfilledSplitPiece = 20;
+// Blackhole's counterpart of kWhMinDramMergePiece; the reason is at its use in rm_native_faster.
+constexpr uint32_t kBhMinDramMergePiece = 256;
+
+// Whether an rm_native_faster verdict may be taken once the static fit is known. Native's scratch must fit, and the
+// stick program rm_native_faster was measured against must fit the static L1 window. When only the slab program
+// fits, it reads a batch of windows behind one barrier, as for widths that do not divide.
+bool demotion_applies(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    uint64_t static_budget,
+    bool stick_program_fits) {
+    return stick_program_fits && native_rm_fits_l1(input, logical_output_shape, output_mem_config, static_budget);
+}
+
+// Whether native's kernel measures faster than the ROW_MAJOR program the gate admits. Thresholds fitted on Blackhole
+// from forced port-vs-native sweeps of same-placement copies, with the Wormhole thresholds above. Widths that do not
+// divide are never demoted: native waits on a read barrier per input page, the slab program reads every window of a
+// batch of slabs behind one barrier. Mixed DRAM/L1 placement is not demoted either: the output's alignment is not an
+// attribute of the input, and the rule was fitted on same-placement copies only.
+bool rm_native_faster(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    uint32_t num_cores) {
+    if (input.layout() != Layout::ROW_MAJOR || output_mem_config.buffer_type() != input.memory_config().buffer_type()) {
+        return false;
+    }
+    const uint32_t elem = input.element_size();
+    const uint32_t old_stick = input.logical_shape()[-1] * elem;
+    const uint32_t new_stick = logical_output_shape[-1] * elem;
+    // The shorter stick is the piece both programs move one at a time.
+    const uint32_t piece = std::min(old_stick, new_stick);
+    if (old_stick == new_stick || std::max(old_stick, new_stick) % piece != 0) {
+        return false;
+    }
+    const uint32_t alignment = input.buffer()->alignment();
+    const bool merge = new_stick > old_stick;
+    const bool wormhole = input.device()->arch() == tt::ARCH::WORMHOLE_B0;
+    if (old_stick % alignment == 0 && new_stick % alignment == 0) {
+        // Splits keep every short write in flight; native waits on each one. From 256 B a DRAM read is no longer
+        // transaction-bound and the port's single read NOC caps it.
+        if (input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM) {
+            return merge && piece >= (wormhole ? kWhMinDramMergePiece : kBhMinDramMergePiece);
+        }
+        if (wormhole) {
+            return merge && piece >= kWhMinL1MergePiece;
+        }
+        return merge && coalesced_l1_merge_native_faster(piece, new_stick);
+    }
+    const uint64_t num_old_sticks = input.logical_shape().volume() / input.logical_shape()[-1];
+    if (wormhole && !merge && !native_runs_two_kernels(new_stick, output_mem_config) && piece % 4 == 0 &&
+        piece >= kWhMinUnderfilledSplitPiece && num_old_sticks <= num_cores) {
+        return true;
+    }
+    return staged_native_faster(
+        piece, new_stick, std::max(old_stick, new_stick) / piece, num_old_sticks, num_cores, output_mem_config, merge);
+}
+
+// The budget-independent half of the row-major programs, fitted to the static budget for the gate. The launch
+// carries it unfitted for live_rm_choice. The slab geometry is only built when the stick program does not fit.
+class RmGeometry {
+public:
+    RmGeometry(
+        const Tensor& input,
+        const ttnn::Shape& logical_output_shape,
+        const tt::tt_metal::MemoryConfig& output_mem_config,
+        uint32_t num_cores) :
+        input_(input),
+        logical_output_shape_(logical_output_shape),
+        output_mem_config_(output_mem_config),
+        num_cores_(num_cores),
+        output_spec_(reshape_codegen::output_spec(input, logical_output_shape, output_mem_config)),
+        out_aligned_page_(output_aligned_page(input, output_spec_)),
+        stick_(rm_geometry(input, logical_output_shape, out_aligned_page_, num_cores_)),
+        static_budget_(static_l1_budget(input, output_spec_)) {}
+
+    uint64_t static_budget() const { return static_budget_; }
+    const tt::tt_metal::TensorSpec& output_spec() const { return output_spec_; }
+
+    std::optional<RmPlan> fit_stick(uint64_t l1_budget) const {
+        return stick_.has_value() ? fit_rm(*stick_, l1_budget) : std::nullopt;
+    }
+
+    std::optional<RmArbitraryPlan> fit_slab(uint64_t l1_budget) {
+        if (!slab_built_) {
+            slab_ = rm_arbitrary_geometry(
+                input_, logical_output_shape_, out_aligned_page_, output_mem_config_.buffer_type(), num_cores_);
+            slab_built_ = true;
+        }
+        return slab_.has_value() ? fit_rm_arbitrary(*slab_, l1_budget) : std::nullopt;
+    }
+
+    // Whether the smallest stick or slab plan fits the static window.
+    bool fits_static() { return fit_stick(static_budget_).has_value() || fit_slab(static_budget_).has_value(); }
+
+    LaunchPlan launch_plan() const {
+        return LaunchPlan{.out_aligned_page = out_aligned_page_, .rm = stick_, .rm_arbitrary = slab_};
+    }
+
+private:
+    const Tensor& input_;
+    const ttnn::Shape& logical_output_shape_;
+    const tt::tt_metal::MemoryConfig& output_mem_config_;
+    uint32_t num_cores_;
+    tt::tt_metal::TensorSpec output_spec_;
+    uint32_t out_aligned_page_;
+    std::optional<RmPlan> stick_;
+    uint64_t static_budget_;
+    bool slab_built_ = false;
+    std::optional<RmArbitraryPlan> slab_;
+};
+
+uint32_t rm_grid_cores(const Tensor& input, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    return static_cast<uint32_t>(reshape_core_grid(input, sub_core_grids).num_cores());
+}
+
+constexpr const char* kRmStaticFitViolation = "no row-major program fits the static L1 budget";
+
 }  // namespace
 
 const char* call_contract_violation(
@@ -162,6 +378,10 @@ const char* unsupported_reason(
     if (const char* violation = scope_violation(input, logical_output_shape, output_mem_config, sub_core_grids)) {
         return violation;
     }
+    if (input.layout() == Layout::ROW_MAJOR) {
+        RmGeometry geometry(input, logical_output_shape, output_mem_config, rm_grid_cores(input, sub_core_grids));
+        return geometry.fits_static() ? nullptr : kRmStaticFitViolation;
+    }
     const auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
     if (!choice) {
         return kPlanCapsViolation;
@@ -184,8 +404,24 @@ bool supported_by_codegen(const Tensor& input, const ttnn::Shape& logical_output
 bool is_demoted(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
-    const tt::tt_metal::MemoryConfig& /*output_mem_config*/,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    if (input.layout() == Layout::ROW_MAJOR) {
+        const uint32_t num_cores = rm_grid_cores(input, sub_core_grids);
+        // The stick-size rule runs before any output spec is built; native's device operation rejects uint16.
+        if (input.dtype() == DataType::UINT16 ||
+            !rm_native_faster(input, logical_output_shape, output_mem_config, num_cores)) {
+            return false;
+        }
+        RmGeometry geometry(input, logical_output_shape, output_mem_config, num_cores);
+        const uint64_t static_budget = geometry.static_budget();
+        return demotion_applies(
+            input,
+            logical_output_shape,
+            output_mem_config,
+            static_budget,
+            geometry.fit_stick(static_budget).has_value());
+    }
     const auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
     return choice.has_value() && native_faster(input, *choice, reshape_core_grid(input, sub_core_grids).num_cores());
 }
@@ -194,7 +430,23 @@ bool codegen_plan_fits_live_l1(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& /*sub_core_grids*/) {
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    if (input.layout() == Layout::ROW_MAJOR) {
+        const uint32_t num_cores = rm_grid_cores(input, sub_core_grids);
+        RmGeometry geometry(input, logical_output_shape, output_mem_config, num_cores);
+        if (!geometry.fits_static()) {
+            return false;
+        }
+        const auto reserved = pending_output_l1_bytes(input, geometry.output_spec());
+        return live_rm_choice(
+                   input,
+                   logical_output_shape,
+                   output_mem_config.buffer_type(),
+                   num_cores,
+                   geometry.launch_plan(),
+                   reserved)
+            .has_value();
+    }
     const auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
     if (!choice) {
         return false;
@@ -210,6 +462,11 @@ LaunchPlan launch_plan(
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     const char* violation = scope_violation(input, logical_output_shape, output_mem_config, sub_core_grids);
     TT_FATAL(violation == nullptr, "reshape_force_codegen: outside the codegen scope: {}", violation);
+    if (input.layout() == Layout::ROW_MAJOR) {
+        RmGeometry geometry(input, logical_output_shape, output_mem_config, rm_grid_cores(input, sub_core_grids));
+        TT_FATAL(geometry.fits_static(), "reshape_force_codegen: outside the codegen scope: {}", kRmStaticFitViolation);
+        return geometry.launch_plan();
+    }
     auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
     TT_FATAL(choice.has_value(), "reshape_force_codegen: outside the codegen scope: {}", kPlanCapsViolation);
     violation = static_fit_violation(input, logical_output_shape, output_mem_config, *choice);
