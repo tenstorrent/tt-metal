@@ -469,7 +469,9 @@ def test_transpose_hw_rm_with_program_cache(device, n, c, h, w):
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [224])
 @pytest.mark.parametrize("h", [16])
-@pytest.mark.parametrize("w", [112])
+# H below one tile takes the narrow-row untilize, which needs W to be a tile multiple (the sharded output pages
+# hold only W % 32 rows for the last tile column while 32 are packed); see transpose_utils.cpp.
+@pytest.mark.parametrize("w", [128])
 def test_transpose_hw_sharded_rm(device, n, c, h, w):
     torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
