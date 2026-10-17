@@ -54,10 +54,11 @@ def test_transpose_hw_sharded_rm_narrow_row_aligned(device, h, w):
 @pytest.mark.parametrize(
     "h, message",
     [
-        # 8- and 40-byte rows cannot be packed at the 16-byte page pitch of the sharded output.
+        # 8- and 24-byte rows cannot be packed at the 16-byte page pitch of the sharded output.
         (4, "must be a multiple of the 16-byte buffer alignment"),
-        (20, "must be a multiple of the 16-byte buffer alignment"),
-        # 48-byte rows are aligned but wider than one face.
+        (12, "must be a multiple of the 16-byte buffer alignment"),
+        # 40- and 48-byte rows are wider than one face (checked before the alignment).
+        (20, "wider than one face"),
         (24, "wider than one face"),
         # Above one tile and not a multiple of it: every tile column is clipped to H % 32 datums.
         (36, "every tile column of the output row would be clipped to 4 datums"),

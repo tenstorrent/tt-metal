@@ -1853,12 +1853,9 @@ narrow_row_untilize_golden(std::uint32_t row_num_datums) {
 // its watcher state is read.
 constexpr int kNarrowRowWatcherIntervalMs = 250;
 
-// Runs pack_untilize_narrow_row_guard.cpp, the init-only kernel, for row_num_datums across full_ct_dim tile
-// columns on one core with a full-tile bf16 CB pair. Returns true when the program completed; false when the
-// wait aborted because the watcher reported an error (the only exception tolerated), leaving the watcher
-// state for the caller to read.
-bool run_pack_untilize_narrow_row_guard_kernel(
-    distributed::MeshDevice& mesh, std::uint32_t row_num_datums, std::uint32_t full_ct_dim = 1) {
+// Builds the program for pack_untilize_narrow_row_guard.cpp, the init-only kernel, for row_num_datums across
+// full_ct_dim tile columns on one core with a full-tile bf16 CB pair; the caller compiles or launches it.
+Program make_pack_untilize_narrow_row_guard_program(std::uint32_t row_num_datums, std::uint32_t full_ct_dim) {
     const CoreCoord core{0, 0};
     Program program = CreateProgram();
     const std::uint32_t tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
@@ -1873,6 +1870,15 @@ bool run_pack_untilize_narrow_row_guard_kernel(
         "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize_narrow_row_guard.cpp",
         core,
         ComputeConfig{.compile_args = {row_num_datums, full_ct_dim}});
+    return program;
+}
+
+// Runs the guard program for row_num_datums across full_ct_dim tile columns. Returns true when the program completed;
+// false when the wait aborted because the watcher reported an error (the only exception tolerated), leaving the watcher
+// state for the caller to read.
+bool run_pack_untilize_narrow_row_guard_kernel(
+    distributed::MeshDevice& mesh, std::uint32_t row_num_datums, std::uint32_t full_ct_dim = 1) {
+    Program program = make_pack_untilize_narrow_row_guard_program(row_num_datums, full_ct_dim);
     distributed::MeshWorkload workload;
     const distributed::MeshCoordinate zero(0, 0);
     workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
@@ -1904,7 +1910,7 @@ std::string wait_for_narrow_row_watcher_exception() {
 
 // A narrow row whose bf16 byte width is not a multiple of 16 must trip the pack untilize init's row-width
 // assert on TRISC2. Without it the init accepts the width and the rows are packed at a 16-byte-floored pitch:
-// 8-byte rows all land on the same 16 bytes, 40-byte rows overwrite the tail of the previous row.
+// 8-byte rows all land on the same 16 bytes, 24-byte rows overwrite the tail of the previous row.
 void run_pack_untilize_narrow_row_rejects(distributed::MeshDevice& mesh, std::uint32_t row_num_datums) {
     // The program may complete (no guard), so completion is not checked here; the watcher state is.
     run_pack_untilize_narrow_row_guard_kernel(mesh, row_num_datums);
@@ -1939,6 +1945,21 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeNarrowRowWidths) {
                 .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
                 .golden_function = narrow_row_untilize_golden(row_num_datums)};
             unit_tests::compute::tilize::run_single_core_tilize_program(*devices_.at(0), config);
+        }
+    }
+}
+
+// Compile-time contract: a narrow row wider than one face does not compile, one face does. 20 bf16 datums
+// (40 bytes) would also fail the 16-byte row-width check; 24 datums (48 bytes) would pass it, and is still
+// packed wrong because the per-row PACR reads row_num_datums consecutive datums of one face.
+TEST_F(LLKBlackholeSingleCardFixture, PackUntilizeNarrowRowRejectsRowsWiderThanAFaceAtCompileTime) {
+    for (const std::uint32_t row_num_datums : {16u, 20u, 24u}) {
+        SCOPED_TRACE(fmt::format("row_num_datums={}", row_num_datums));
+        Program program = make_pack_untilize_narrow_row_guard_program(row_num_datums, 1 /*full_ct_dim*/);
+        if (row_num_datums <= constants::FACE_WIDTH) {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+        } else {
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
         }
     }
 }
@@ -2036,9 +2057,9 @@ TEST_F(LLKBlackholePackUntilizeAssertFixture, PackUntilizeNarrowRowRejectsEightB
     run_pack_untilize_narrow_row_rejects(*devices_.at(0), 4 /*row_num_datums*/);
 }
 
-// 20 bf16 datums = 40 bytes: the per-row advance floors to 32 and each row overwrites the previous row's tail.
-TEST_F(LLKBlackholePackUntilizeAssertFixture, PackUntilizeNarrowRowRejectsFortyByteRows) {
-    run_pack_untilize_narrow_row_rejects(*devices_.at(0), 20 /*row_num_datums*/);
+// 12 bf16 datums = 24 bytes: the per-row advance floors to 16 and each row overwrites the previous row's tail.
+TEST_F(LLKBlackholePackUntilizeAssertFixture, PackUntilizeNarrowRowRejectsTwentyFourByteRows) {
+    run_pack_untilize_narrow_row_rejects(*devices_.at(0), 12 /*row_num_datums*/);
 }
 
 // ============================================================================
