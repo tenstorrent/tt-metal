@@ -69,7 +69,6 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")
 # conftest's module-scoped 1x2 fixtures restore it only at module teardown) describes a different mesh.
 _MGD_FOR_ARCH_AND_SHAPE = {
     ("blackhole", (1, 2)): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_1_2_line_line.textproto"),
-    ("wormhole_b0", (1, 2)): os.path.join(_REPO_ROOT, "configs", "mgd", "n300_1_2_line_line.textproto"),
     ("blackhole", (2, 2)): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_2_2_line_line.textproto"),
 }
 
@@ -81,8 +80,6 @@ def _detect_arch() -> Optional[str]:
         return None
     if "blackhole" in name:
         return "blackhole"
-    if "wormhole_b0" in name:
-        return "wormhole_b0"
     return None
 
 
