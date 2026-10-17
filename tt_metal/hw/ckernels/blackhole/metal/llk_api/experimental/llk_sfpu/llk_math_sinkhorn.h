@@ -14,7 +14,7 @@
 
 namespace ckernel {
 
-inline void _llk_math_sinkhorn_4x4_init_() { llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(); }
+inline void _llk_math_sinkhorn_4x4_init_() { llk_math_eltwise_unary_sfpu_init<SfpuType::unused, DST_ACCUM_MODE>(); }
 
 inline void _llk_math_sinkhorn_row_max_sub_(std::uint32_t input_index) {
     _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_sinkhorn_row_max_sub_4x4_, input_index, VectorMode::RC_custom);
@@ -28,6 +28,10 @@ template <
     std::uint32_t VALID_H,
     std::uint32_t VALID_W>
 inline void _llk_math_sinkhorn_4x4_(std::uint32_t input_index) {
+    static_assert(
+        DST_ACCUM_MODE == false,
+        "_llk_math_sinkhorn_4x4_: the strip-pair store rounds FP32_TO_FP16B into a 16-bit DEST; FP32 destination "
+        "accumulation mode is not supported");
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_sinkhorn_4x4_<NUM_FACES_USED, ITERS, EPS_BITS, SINGLE_SUBMAT, VALID_H, VALID_W>,
         input_index,
