@@ -29,7 +29,8 @@ Attention:
     global:                16 q heads x 512, 2 KV heads x 512, no v_proj: V = v_norm(k_proj(x)) (unscaled RMS),
                            K = rope(k_norm(k_proj(x))), proportional RoPE theta 1e6 on 25% (dims [0:64] + [256:320])
     attention scale 1.0 (q_norm/k_norm replace 1/sqrt(d)); softmax fp32.
-State: key / value per layer, [Hkv, max_seq, D], K post-norm post-RoPE, V post-v_norm.
+State: key / value per layer, held as [Hkv, max_seq, D] (K post-norm post-RoPE, V post-v_norm); state_tensors /
+load_state exchange them position-major as [length, Hkv * D].
 Embedding: embed[tokens] * sqrt(hidden). Logits: tied embedding, then 30 * tanh(logits / 30).
 """
 
@@ -373,11 +374,18 @@ class Gemma4Reference:
         return State(self.cfg, self.layer_ids, max_seq, self.dtype)
 
     def state_tensors(self, state: State, layer: int, length: int) -> dict:
-        return {"key": state.k[layer][:, :length].clone(), "value": state.v[layer][:, :length].clone()}
+        """Position-major {key, value} [length, Hkv * D] (row = token, heads concatenated): the layout the framework's
+        KV checks slice by row (chunk starts, per-chunk ladder, contract read-back)."""
+        return {
+            "key": state.k[layer][:, :length].transpose(0, 1).reshape(length, -1).clone(),
+            "value": state.v[layer][:, :length].transpose(0, 1).reshape(length, -1).clone(),
+        }
 
     def load_state(self, state: State, layer: int, tensors: dict, length: int) -> None:
-        state.k[layer][:, :length] = tensors["key"][:, :length].to(state.k[layer].dtype)
-        state.v[layer][:, :length] = tensors["value"][:, :length].to(state.v[layer].dtype)
+        """Inverse of state_tensors: rows [0, length) of [>= length, Hkv * D] into the head-major cache."""
+        for name, cache in (("key", state.k[layer]), ("value", state.v[layer])):
+            hkv, _, d = cache.shape
+            cache[:, :length] = tensors[name][:length].reshape(length, hkv, d).transpose(0, 1).to(cache.dtype)
 
     def block_graph(self, layer: int) -> list[Step]:
         return list(BLOCK_GRAPH)
