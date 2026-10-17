@@ -207,7 +207,7 @@ class DeformableAttentionConfig:
 # --- TTNN precision and memory ------------------------------------------------------------------
 
 # The ttnn dtypes, by name. The PyTorch reference imports this module and must not need ttnn, so
-# they are looked up in ttnn on first access, by the module ``__getattr__`` at the end of this file.
+# they are looked up in ttnn on access, by the module ``__getattr__`` at the end of this file.
 WEIGHT_DTYPE: "ttnn.DataType"
 CONV_WEIGHT_DTYPE: "ttnn.DataType"
 GRID_DTYPE: "ttnn.DataType"
@@ -304,16 +304,15 @@ def tt_fpn_kwargs():
 
 
 def _ttnn_dtype(name):
-    """``_TTNN_DTYPES[name]`` looked up in ttnn, cached as a module attribute. Without ttnn, the
-    ``ModuleNotFoundError`` reaches the caller as is, naming the missing module."""
+    """``_TTNN_DTYPES[name]`` as a ttnn dtype. Without ttnn, the ``ModuleNotFoundError`` reaches
+    the caller as is, naming the missing module."""
     import ttnn
 
-    value = globals()[name] = getattr(ttnn, _TTNN_DTYPES[name])
-    return value
+    return {"bfloat16": ttnn.bfloat16, "bfloat8_b": ttnn.bfloat8_b, "float32": ttnn.float32}[_TTNN_DTYPES[name]]
 
 
 def __getattr__(name):
-    """The module attribute hook of PEP 562: resolves ``_TTNN_DTYPES`` on first access, so ttnn is
+    """The module attribute hook of PEP 562: resolves ``_TTNN_DTYPES`` on access, so ttnn is
     imported only by the code that uses them."""
     if name not in _TTNN_DTYPES:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
