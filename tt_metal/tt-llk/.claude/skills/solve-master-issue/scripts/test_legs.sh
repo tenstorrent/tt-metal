@@ -64,6 +64,13 @@ echo dirty >> "$repo/README"
 id=$("$legs" request --run-dir "$D" --arch wormhole --label dirty --patch "$tmp/m2.diff" --cmd true --cwd .)
 "${serve[@]}" > /dev/null 2>&1; out=$("$legs" wait --run-dir "$D" "$id"); rc=$?
 git -C "$repo" checkout -q README
+# untracked files (sfpi/.venv left by the harness) must NOT block patch mode
+mkdir -p "$repo/tt_metal/tt-llk/tests/sfpi"; echo x > "$repo/tt_metal/tt-llk/tests/sfpi/untracked.txt"
+uid=$("$legs" request --run-dir "$D" --arch wormhole --label untracked --patch "$tmp/m2.diff" --cmd 'test -f marker2.txt' --cwd .)
+"${serve[@]}" > /dev/null 2>&1
+"$legs" wait --run-dir "$D" "$uid" --timeout 60 > /dev/null 2>&1; check $? "patch leg runs despite untracked files" "$(tail -3 "$D/legs/$uid/leg.log" 2>/dev/null)"
+grep -q '"revert_ok": true' "$D/legs/$uid/result.json"; check $? "revert_ok true with untracked files present"
+rm -rf "$repo/tt_metal/tt-llk/tests/sfpi"
 [ "$rc" = 96 ] && grep -q dirty "$D/legs/$id/leg.log"; check $? "dirty repo refuses a patch leg with 96" "wait=$rc $out"
 "$legs" request --run-dir "$D" --arch wormhole --label bad --cmd true > /dev/null 2>&1; [ $? = 2 ]; check $? "request without --branch/--sha or --patch exits 2"
 "$legs" request --run-dir "$D" --arch 'Not-An-Arch' --label bad --branch b --sha s --cmd true > /dev/null 2>&1; [ $? = 2 ]; check $? "request with a bad arch exits 2"

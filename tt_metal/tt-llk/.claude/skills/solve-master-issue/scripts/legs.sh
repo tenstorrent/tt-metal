@@ -25,8 +25,9 @@
 # checks out <sha> in a disposable worktree <worktree-root>/wt-legs-<arch>, created from origin/main on
 # first use, with tests/sfpi and tests/.venv symlinked from --repo), or produces `git diff > x.diff`
 # (patch mode, for ttnn tests that need a built tree: the server applies it to --repo itself, runs, and
-# reverts it, holding the device lock from before the apply to after the revert; refused when --repo is
-# dirty beforehand — it never cleans a tree). Then `legs.sh wait <id>`
+# reverts it, holding the device lock from before the apply to after the revert; refused when --repo has
+# modified TRACKED files beforehand — untracked files such as tests/sfpi, tests/.venv are fine; it never
+# cleans a tree). Then `legs.sh wait <id>`
 # blocks until result.json exists and exits with the leg's exit code. The server never pushes, never
 # touches GitHub, and never runs anything but the requested command. That command runs with cwd
 # <tree>/<cwd>, CHIP_ARCH=<arch> and the request's env, under the box's device lock
@@ -39,7 +40,7 @@
 #   nohup setsid $SKILL/scripts/legs.sh serve --run-dir <D> --arch blackhole --repo /localdev/<user>/tt-metal > /dev/null 2>&1 &
 # Exit codes: request 0 (prints the id) · 2 bad args.   serve --once 0 served one · 3 nothing open · 2 bad args.
 #   wait exits with the leg's code: 0 pass · N fail · 124 command timed out (137 if it ignored TERM) ·
-#   96 server refused: --repo dirty before applying the patch · 97 tree not prepared: sha not reachable,
+#   96 server refused: --repo has modified tracked files before the patch · 97 tree not prepared: sha not reachable,
 #   patch does not apply, cwd missing · 125 wait itself timed out with no result.   status 0.
 set -uo pipefail
 die() { echo "legs.sh: $*" >&2; exit 2; }
@@ -126,7 +127,7 @@ finish() {  # finish <exit> [message]: revert the patch if applied, write result
     [ -n "$msg" ] && { echo "legs.sh: $msg" >> "$d/leg.log"; extra+=(message="$msg"); }
     if [ "$r_mode" = patch ]; then
         [ -n "$applied" ] && { git -C "$repo" apply -R "$applied" 2>>"$slog"; applied=; }
-        if [ -z "$(git -C "$repo" status --porcelain)" ]; then extra+=('revert_ok:=true')
+        if [ -z "$(git -C "$repo" status --porcelain --untracked-files=no)" ]; then extra+=('revert_ok:=true')
         else extra+=('revert_ok:=false'); log "$r_id WARNING $repo is dirty after the leg — clean it by hand"; fi
     fi
     json_write "$d/result.json" id="$r_id" server="$(hostname)" arch="$arch" mode="$r_mode" tree="$tree" head="$head" \
@@ -158,7 +159,8 @@ serve_one() {  # serve_one <req dir>: prepare the tree, run the command under th
         # the built tree is shared with the local worker's own apply/revert legs: hold the device lock from
         # before the apply until after the revert, so no one sees (or clobbers) a half-patched tree
         exec 9>"$lock"; flock 9 || { finish 97 "cannot take the device lock $lock"; return; }; have_lock=1
-        [ -z "$(git -C "$repo" status --porcelain)" ] || { finish 96 "$repo is dirty, refusing to apply a patch"; return; }
+        # tracked modifications only: the harness leaves tests/sfpi and tests/.venv untracked in a served checkout
+        [ -z "$(git -C "$repo" status --porcelain --untracked-files=no)" ] || { finish 96 "$repo has modified tracked files, refusing to apply a patch"; return; }
         git -C "$repo" apply --check "$d/patch.diff" 2>>"$slog" || { finish 97 "patch does not apply to $repo @ $(git -C "$repo" rev-parse --short=11 HEAD)"; return; }
         git -C "$repo" apply "$d/patch.diff" 2>>"$slog" || { finish 97 "git apply failed in $repo"; return; }
         applied=$d/patch.diff
