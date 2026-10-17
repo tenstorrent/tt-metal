@@ -12,7 +12,7 @@
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
 
-void kernel_main() {
+__attribute__((flatten)) void kernel_main() {
     constexpr uint32_t Skt = get_compile_time_arg_val(0);
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
     constexpr uint32_t vDHt = get_compile_time_arg_val(2);
