@@ -156,8 +156,11 @@ PipelineParallelLlama::PipelineParallelLlama(
                 "WARNING: Building pipeline-parallel + tensor-parallel LM head with "
                 "gather_output=false. PP+TP end-to-end correctness has not been validated; "
                 "please sanity-check loss values before relying on this path.\n");
+            // Shard the vocab along the ParallelismContext's TP axis, as DistributedLlamaBlock does and as the
+            // re-initialiser above labels this weight; whole-mesh sharding would disagree with both on a DP x TP mesh.
+            const auto tp_axis = autograd::ctx().get_parallelism_context().get_tp_axis();
             fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
-                embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ false);
+                embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ false, tp_axis);
         } else {
             fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* bias */ false);
         }
