@@ -182,6 +182,12 @@ split even if the body fits. Items that match nothing go out alone, as today.
 worktree, one commit per item (test + fix), so a reviewer can drop one without unpicking the rest. The
 PR body lists items in a table; CI runs once for the whole group.
 
+**Never stack PRs.** Every PR branches from `origin/main` and targets `main`; no PR may contain, depend
+on, or wait for another open PR's commits. If a fix turns out to need code that is only in another open
+PR of yours, the two belong to one group: fold the item into that PR (re-check the body cap) rather than
+opening a second PR on top of it. Overlapping *files* between independent PRs are acceptable (the user
+handles merge conflicts; the rebase before final CI resolves them); a merge-order *dependency* is not.
+
 ## 2. The scheduler — how to never idle
 
 Each item moves through: `triage → repro → fix → verify → PR → bot-review → CI → done | parked`.
