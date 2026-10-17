@@ -114,10 +114,11 @@ void kernel_main() {
     // SFPU; exact in BF16). A draw of exactly 256 (the inclusive upper endpoint, probability ~0)
     // is clamped to 255 so both digits are 8-bit. The threshold is the lattice point
     // (hi * 256 + lo) / 65536 in [0, 1 - 2^-16], uniform over 65536 equiprobable values.
-    // Elements 0 and 1 are the first two draws of the tile's first row. Element 1 is written by
-    // the compute kernel's second SFPU store, so it is only a draw when rand_tile runs under its
-    // own address mode (generate_rand_tile); a dead low digit collapses the threshold to hi / 256
-    // and brings the 1/256 tail cutoff back (test_sampling_low_digit_reaches_the_tail).
+    // Elements 0 and 1 are the first two draws of the tile's first row: element 0 is lane 0 of
+    // rand_tile's first SFPU store, element 1 is lane 0 of its second store, which lands because
+    // rand() programs its dest address mode on every call. A dead low digit would collapse the
+    // threshold to hi / 256 and bring the 1/256 tail cutoff back
+    // (test_sampling_low_digit_reaches_the_tail).
     constexpr uint32_t RAND_HI_ELEMENT = 0;
     constexpr uint32_t RAND_LO_ELEMENT = 1;
     constexpr float RAND_DIGIT_MAX = 255.0f;
