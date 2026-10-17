@@ -418,3 +418,21 @@ def test_cumsum_bf16_accuracy(size, dim, sequence_type, reverse_order, device):
 
     assert output.dtype == torch.bfloat16
     assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=1)
+
+
+@pytest.mark.parametrize(
+    "src_dtype, target_dtype",
+    [
+        (ttnn.bfloat16, ttnn.float32),
+        (ttnn.float32, ttnn.bfloat16),
+        (ttnn.bfloat16, ttnn.int32),
+    ],
+)
+def test_cumsum_0d_dtype_conversion(device, src_dtype, target_dtype):
+    """Verify rank-0 scalar tensors properly cast to caller-specified target dtype during accumulation."""
+    torch_src = torch.tensor(3.0, dtype=torch.float32)
+    tt_src = ttnn.from_torch(torch_src, dtype=src_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out = ttnn.cumsum(tt_src, dim=0, dtype=target_dtype)
+    assert out.dtype == target_dtype, f"Expected output dtype {target_dtype}, got {out.dtype}"
+    assert out.shape == tt_src.shape
