@@ -8619,6 +8619,13 @@ tasks:
     - ffn_norm
     - router
     layer: 21
+  frozen:
+    at: '2026-10-17T16:37:55'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_11_router.py: e78e5c17ea58d3c57e9438bfc55cae2a0f9c137b6c2d084c86bd0b3e2f9e51c6
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_reuse.experts
   title: dec_reuse experts (moe) on device, layer 21
   step: implement
