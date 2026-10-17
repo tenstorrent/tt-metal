@@ -85,8 +85,15 @@ def _write_bits(src, bits_by_face):
         u16[base : base + len(bits)] = torch.tensor(bits, dtype=torch.uint16)
 
 
-def _run(values_by_face, out_fmt, dest_acc, in_fmt=DataFormat.Float16_b, floats=False):
-    """Run approximate tanh over `values_by_face`.
+def _run(
+    values_by_face,
+    out_fmt,
+    dest_acc,
+    in_fmt=DataFormat.Float16_b,
+    floats=False,
+    approx=ApproximationMode.Yes,
+):
+    """Run tanh over `values_by_face`; the LUT kernel unless `approx` says otherwise.
 
     `floats=True` takes ordinary float values per face instead of raw bit patterns;
     the bit-pattern path exists only for the NaN-sign hazard `_write_bits` documents,
@@ -121,7 +128,7 @@ def _run(values_by_face, out_fmt, dest_acc, in_fmt=DataFormat.Float16_b, floats=
         formats,
         templates=[
             generate_input_dim(dims, dims),
-            APPROX_MODE(ApproximationMode.Yes),
+            APPROX_MODE(approx),
             FAST_MODE(FastMode.No),
             CLAMP_NEGATIVE(False),
             MATH_OP(mathop=MathOperation.Tanh),
@@ -144,17 +151,8 @@ def _run(values_by_face, out_fmt, dest_acc, in_fmt=DataFormat.Float16_b, floats=
     return src_A.to(torch.float32).numpy(), hw.to(torch.float32).numpy()
 
 
-@pytest.mark.parametrize(
-    "out_fmt,dest_acc",
-    [
-        (DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float32, DestAccumulation.Yes),
-    ],
-    ids=["bf16-out", "fp32-out"],
-)
-def test_tanh_specials(out_fmt, dest_acc):
-    x, hw = _run({0: POS_SPECIALS, 1: NEG_SPECIALS, 2: ZEROS}, out_fmt, dest_acc)
-
+def _group_specials(x, hw):
+    """{input class: {result class: count}} over the non-finite and signed-zero lanes."""
     groups = {}
     for xv, hv in zip(x, hw):
         if np.isnan(xv):
@@ -167,6 +165,20 @@ def test_tanh_specials(out_fmt, dest_acc):
             continue
         groups.setdefault(key, {}).setdefault(classify_special(hv), 0)
         groups[key][classify_special(hv)] += 1
+    return groups
+
+
+@pytest.mark.parametrize(
+    "out_fmt,dest_acc",
+    [
+        (DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float32, DestAccumulation.Yes),
+    ],
+    ids=["bf16-out", "fp32-out"],
+)
+def test_tanh_specials(out_fmt, dest_acc):
+    x, hw = _run({0: POS_SPECIALS, 1: NEG_SPECIALS, 2: ZEROS}, out_fmt, dest_acc)
+    groups = _group_specials(x, hw)
 
     # What the hardware actually does today, measured on a Wormhole n150 and
     # byte-for-byte identical on main's 3-entry table, so none of it is a property of
@@ -250,6 +262,64 @@ def test_tanh_specials(out_fmt, dest_acc):
         "behaviour on the non-finite / signed-zero patterns changed:\n  "
         + "\n  ".join(failures)
         + "\nThese were identical on main. If the change is deliberate, update RECORDED."
+    )
+
+
+@pytest.mark.parametrize(
+    "out_fmt,dest_acc",
+    [
+        (DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float32, DestAccumulation.Yes),
+    ],
+    ids=["polynomial-bf16", "accurate-fp32"],
+)
+def test_tanh_nonapprox_specials(out_fmt, dest_acc):
+    """ApproximationMode.No follows the reference on the 257 patterns, on both Dest widths.
+
+    `calculate_tanh<false, ...>` is two kernels: the Sollya polynomial on a 16-bit Dest
+    (the default bfloat16 tanh, also under softcap and situ_glu) and the expm1-based
+    accurate kernel on a 32-bit Dest. Both must give tanh(+-inf) = +-1 and keep a NaN a
+    NaN. The polynomial saturates with min(result, 1.0f), and SFPSWAP's min ranks a
+    positive NaN above +inf (SFPSWAP.md), while SFPMAD only ever emits the positive
+    canonical NaN (SFPMAD.md): without a guard the Horner chain's NaN is clamped to 1.0
+    and copysign then returns +-1.0, a legal activation standing in for a NaN that an
+    upstream op produced. The accurate kernel already guards this; the polynomial must too.
+
+    -0.0 -> +0.0 is the unpack path, not either kernel (see test_tanh_specials).
+    """
+    x, hw = _run(
+        {0: POS_SPECIALS, 1: NEG_SPECIALS, 2: ZEROS},
+        out_fmt,
+        dest_acc,
+        approx=ApproximationMode.No,
+    )
+    groups = _group_specials(x, hw)
+
+    EXPECTED = {
+        "+inf": "1",
+        "-inf": "-1",
+        "NaN(+)": "NaN",
+        "NaN(-)": "NaN",
+        "+0.0": "+0.0",
+        "-0.0": "+0.0",
+    }
+    KEYS = tuple(EXPECTED)
+
+    def shown(key):
+        return ", ".join("%s x%d" % (k, v) for k, v in sorted(groups[key].items()))
+
+    missing = [k for k in KEYS if k not in groups]
+    assert not missing, "these input patterns never reached the kernel: " + ", ".join(
+        missing
+    )
+    failures = [
+        "%s: expected %s, got %s" % (k, EXPECTED[k], shown(k))
+        for k in KEYS
+        if list(groups[k]) != [EXPECTED[k]]
+    ]
+    assert not failures, (
+        "non-approximate tanh departs from the reference on the non-finite / signed-zero "
+        "patterns:\n  " + "\n  ".join(failures)
     )
 
 
