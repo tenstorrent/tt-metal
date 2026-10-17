@@ -32,9 +32,11 @@
 //    ^offset 0, entries grow forward                          ^layout slots grow backward
 //                                                               from kRequestPageBytes
 //
-// - Entries (one per prefetched tensor) carry the tensor's bank-local address plus the byte
-//   offset of its layout slot from the page start. Entry k lives at byte offset
-//   sizeof(TensorPrefetcherRequestHeader) + k * sizeof(TensorPrefetcherEntry).
+// - Entries (one per prefetched tensor) carry the tensor's bank-local address, the byte offset of
+//   its layout slot from the page start, and its group selector (how many groups the tensor stacks
+//   per receiver slab, and optionally the NoC location of a mask choosing which of them to
+//   stream). Entry k lives at byte offset sizeof(TensorPrefetcherRequestHeader) +
+//   k * sizeof(TensorPrefetcherEntry).
 // - The layout table deduplicates the address-independent geometry: tensors that share a
 //   shape/dtype/ring topology — and, for streaming, the same per-receiver rotation slice —
 //   share one layout slot. A layout slot is sizeof(TensorPrefetcherTensorLayout) bytes of
@@ -50,7 +52,11 @@
 //
 // The kernel walks header.prefetch.num_entries entries in order; for each it reads the
 // address from the entry and the geometry from the referenced layout, then runs the
-// per-tensor chunk loop.
+// per-tensor chunk loop once per streamed group (once for an ungrouped tensor).
+//
+// Budget: header (12) + one entry (20) + one layout (64) leaves 32 B of a 128 B page for the
+// streaming rotation table, so a streaming tensor fits for up to 8 receivers per sender.
+// serialize_request_pages rejects anything larger.
 //
 // When one Queue call has more tensors than fit in a single page, the host emits
 // multiple PREFETCH pages (each an independent request); the target's per-sender write cursor
@@ -69,9 +75,10 @@ namespace tt::tt_metal {
 // kSocketFifoPages × this.
 //
 // Sized for fine-grained queueing (one matmul per request → one entry per page): a single
-// tensor needs header + one layout + one entry = 72 B, so 128 B holds one comfortably with
-// room for a few entries that share a layout. The per-socket L1 FIFO is held constant by
-// scaling kSocketFifoPages inversely (see tensor_prefetcher_manager.hpp).
+// tensor needs header + one layout + one entry = 96 B, so 128 B holds one with room for one
+// more entry that shares its layout, or a rotation table for up to 8 receivers. The per-socket
+// L1 FIFO is held constant by scaling kSocketFifoPages inversely (see
+// tensor_prefetcher_manager.hpp).
 inline constexpr uint32_t kRequestPageBytes = 128;
 
 // Number of per-DRAM-core CQ signal slots (one uint32 counter per command queue).
@@ -123,6 +130,12 @@ struct TensorPrefetcherTensorLayout {
     // therefore excluded from layout dedup by construction — dedup compares the template geometry,
     // where this is always 0.
     uint32_t recv_index_base = 0;
+    // Grouped weight (receiver-contiguous only): each receiver's slab stacks the tensor's groups
+    // (experts) one after another, and this is the byte stride from one group's block to the next.
+    // Group g of local receiver r starts at
+    // bank_local_base + g * group_stride_bytes + (recv_index_base + r) * recv_stride_bytes.
+    // 0 for an ungrouped tensor. Geometry, so it takes part in layout dedup.
+    uint32_t group_stride_bytes = 0;
 } __attribute__((packed));
 
 // Delivery transport for a request, carried in the page header. Per-request rather than per-tensor
@@ -134,15 +147,43 @@ enum TensorPrefetcherTransport : uint8_t {
     TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE = 1,
 };
 
-// One prefetched tensor: its bank-local address plus the position of its layout slot. The kernel
-// resolves the layout as page start + layout_offset, so it needs to know nothing about how the
-// host packed the slots.
+// How an entry picks which of its groups to stream (TensorPrefetcherEntry::selector_mode).
+enum TensorPrefetcherSelectorMode : uint8_t {
+    // Stream every group, in ascending order.
+    TENSOR_PREFETCHER_SELECTOR_NONE = 0,
+    // Read num_groups 16-bit words from the selector page and stream, in ascending order, only the
+    // groups whose word is non-zero. The consumer scans the same mask in the same order.
+    TENSOR_PREFETCHER_SELECTOR_NONZERO_MASK = 1,
+};
+
+// Most groups one selector can name: the kernel reads the selector page (one 16-bit word per group)
+// into a scratch buffer of this many words.
+inline constexpr uint32_t kTensorPrefetcherSelectorMaxEntries = 256;
+inline constexpr uint32_t kTensorPrefetcherSelectorScratchBytes =
+    kTensorPrefetcherSelectorMaxEntries * sizeof(uint16_t);
+
+// One prefetched tensor: its bank-local address, the position of its layout slot, and which of its
+// groups to stream. The kernel resolves the layout as page start + layout_offset, so it needs to know
+// nothing about how the host packed the slots.
 struct TensorPrefetcherEntry {
     uint32_t bank_local_base = 0;  // GDDR offset where this tensor starts in the bank
     // Byte offset from the page start of this tensor's TensorPrefetcherTensorLayout; its
     // per-receiver rotation table follows the struct.
     uint32_t layout_offset = 0;
+    // Where the selector page lives when selector_mode is not NONE: a NoC endpoint as virtual
+    // coordinates, x in the low 16 bits and y in the high 16, which the kernel maps onto its own NoC
+    // the way it maps the receiver table; and the local address of the page at that endpoint.
+    uint32_t selector_noc_xy = 0;
+    uint32_t selector_addr = 0;
+    // Groups the tensor stacks per receiver slab: 1 for an ungrouped tensor. With a selector this is
+    // also how many selector words the kernel reads.
+    uint16_t num_groups = 1;
+    TensorPrefetcherSelectorMode selector_mode = TENSOR_PREFETCHER_SELECTOR_NONE;
+    uint8_t pad = 0;
 } __attribute__((packed));
+
+static_assert(
+    sizeof(TensorPrefetcherEntry) == 20, "TensorPrefetcherEntry must be 20 bytes (host↔kernel wire contract)");
 
 // One-byte command id at the front of every request page.
 enum TensorPrefetcherCmdId : uint8_t {
@@ -226,6 +267,7 @@ inline constexpr uint32_t kDrainTargetsPerPage =
 // This is a compile-time floor; a streaming tensor's layout slot additionally carries
 // num_receivers * sizeof(uint32_t) rotation bytes (runtime, bounded by recv_per_bank since a
 // page is per-sender), which serialize_request_pages validates against kRequestPageBytes.
+static_assert(sizeof(TensorPrefetcherTensorLayout) == 64, "TensorPrefetcherTensorLayout must be 64 bytes");
 static_assert(
     sizeof(TensorPrefetcherRequestHeader) + sizeof(TensorPrefetcherTensorLayout) + sizeof(TensorPrefetcherEntry) <=
         kRequestPageBytes,
