@@ -731,11 +731,6 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(param1))};
         }
-        case UnaryOpType::HARDMISH: {
-            return {
-                fmt::format("hardmish_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("hardmish_tile<{1}u>({0});", idst, (uint32_t)param0)};
-        }
         case UnaryOpType::MISH: {
             return {
                 fmt::format("mish_tile_init<{}u>();", (uint32_t)param0),
@@ -1091,7 +1086,9 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::ALT_COMPLEX_ROTATE90);
     }
     if (name == "hardmish") {
-        return UnaryWithParam(UnaryOpType::HARDMISH, static_cast<float>(true));
+        // hardmish_tile takes no parameter; a parameter would route it to the parameterized
+        // generator, which has no HARDMISH case and rejects it at the host.
+        return UnaryWithParam(UnaryOpType::HARDMISH);
     }
     if (name == "mish") {
         return UnaryWithParam(UnaryOpType::MISH, static_cast<float>(false));
