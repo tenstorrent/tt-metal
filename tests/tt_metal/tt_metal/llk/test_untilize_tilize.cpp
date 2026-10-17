@@ -928,6 +928,37 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilize) {
     }
 }
 
+// fast_tilize_* on a 16x32 tiny tile (1x2 faces of 16x16) through the compute API. Wormhole has a
+// two-face fast-tilize data path for even block widths; Blackhole's fast-tilize path is 32x32-only, so
+// its compute API must route tiny tiles to tilize_* instead of running the 32x32 unpack/pack sequence
+// over a 16-row tile (which reads 16 rows past the input and overruns the output CB by a half tile per
+// tile).
+TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeTinyTile16x32) {
+    constexpr std::uint32_t tile_shape_in_faces_r = 1;  // 16x32 = 1x2 faces of 16x16
+    constexpr std::uint32_t tile_shape_in_faces_c = 2;
+    constexpr std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT;
+    constexpr std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;
+    constexpr std::uint32_t tile_bytes =
+        tile_shape_in_faces_r * tile_shape_in_faces_c * face_r_dim * face_c_dim * sizeof(std::uint16_t);
+    // Even block widths: one unit (2), two units (4), one and three units across two tile-rows, and a
+    // full bf16 dest bank (8 tiles at unit_dim 2 on Wormhole).
+    vector<vector<std::uint32_t>> num_tiles = {{1, 2}, {1, 4}, {2, 2}, {2, 6}, {1, 8}};
+    for (auto num_tile : num_tiles) {
+        unit_tests::compute::tilize::TestConfig test_config = {
+            .fast_tilize = true,
+            .input_single_tile_size = tile_bytes,
+            .output_single_tile_size = tile_bytes,
+            .num_tiles_r = num_tile[0],
+            .num_tiles_c = num_tile[1],
+            .tile_shape_in_faces_r = tile_shape_in_faces_r,
+            .tile_shape_in_faces_c = tile_shape_in_faces_c,
+            .face_r_dim = face_r_dim,
+            .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+            .golden_function = ::unit_tests::compute::gold_standard_tilize};
+        unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
+    }
+}
+
 // tilizeA_B + eltwise add on narrow tiles: 32x16 (two vertically stacked 16x16 faces) and 16x16 (one face).
 // A is row-major, B is a constant, so every output datum is the tilized A datum plus that constant. Small
 // integer inputs keep the bf16 sum exact.

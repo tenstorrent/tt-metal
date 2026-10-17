@@ -118,13 +118,15 @@ inline void _llk_unpack_fast_tilize_reinit_xdim_(const std::uint32_t unit_dim)
 
 // One call = one row-chunk (one unit_dim, one MOP run).
 // Block height is always 1; multiple rows and chunks are loops in the caller.
+// 32x32 tiles only: the MOP below always reads 32 tensor rows (TT_MOP count) per chunk.
 inline void _llk_unpack_fast_tilize_block_(
     const std::uint32_t base_address,
     [[maybe_unused]] const std::uint32_t tile_index,
     [[maybe_unused]] const std::uint32_t unpack_src_format,
     [[maybe_unused]] const std::uint32_t unit_dim,
-    [[maybe_unused]] const std::uint32_t num_faces = 4)
+    const std::uint32_t num_faces = 4)
 {
+    LLK_ASSERT(num_faces == 4, "Blackhole fast tilize supports 32x32 tiles only");
     // Standard BH unpacker context dance (see _llk_unpack_untilize_pass_).
     // Programs REG3 Base_address for the current cfg context via cfg[] write,
     // then synchronises Trisc<->T6 so the MOP runs with that base in place.

@@ -239,10 +239,33 @@ ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
 #ifndef ARCH_QUASAR
 namespace fast_tilize_detail {
 
+#ifdef ARCH_BLACKHOLE
+// Blackhole fast-tilize is a 32x32-tile path on every thread: the unpack MOP reads 32 tensor rows per
+// chunk, math writes DEST at the 32x32 tile stride and pack replays 16 PACRs per tile with a full-tile
+// L1 advance. Tiny tiles (e.g. 16x32) take the tilize_* path instead. Each thread reads the tile shape
+// from the operand its LLK is driven by: unpack and math from the input, pack from the output.
+ALWI bool fast_tilize_uses_32x32_tiles([[maybe_unused]] uint32_t icb, [[maybe_unused]] uint32_t ocb) {
+    bool is_32x32 = true;
+    UNPACK({
+        const uint32_t operand_id = get_operand_id(icb);
+        is_32x32 = get_operand_tile_r_dim(operand_id) == TILE_R_DIM && get_operand_tile_c_dim(operand_id) == TILE_C_DIM;
+    });
+    MATH({
+        const uint32_t operand_id = get_operand_id(icb);
+        is_32x32 = get_operand_tile_r_dim(operand_id) == TILE_R_DIM && get_operand_tile_c_dim(operand_id) == TILE_C_DIM;
+    });
+    PACK({
+        const uint32_t output_id = get_output_id(ocb);
+        is_32x32 = get_output_tile_r_dim(output_id) == TILE_R_DIM && get_output_tile_c_dim(output_id) == TILE_C_DIM;
+    });
+    return is_32x32;
+}
+#endif
+
 template <bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifdef ARCH_BLACKHOLE
-    if (full_dim == 1) {
+    if (full_dim == 1 || !fast_tilize_uses_32x32_tiles(icb, ocb)) {
         tilize_init<is_fp32_dest_acc_en>(icb, full_dim, ocb, call_line);
         return;
     }
@@ -308,7 +331,7 @@ ALWI void fast_tilize_init_with_dt_skip_remap(uint32_t icb, uint32_t full_dim, u
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, uint32_t full_dim) {
 #ifdef ARCH_BLACKHOLE
-    if (full_dim == 1) {
+    if (full_dim == 1 || !fast_tilize_detail::fast_tilize_uses_32x32_tiles(icb, ocb)) {
         tilize_uninit(icb, ocb);
         return;
     }
@@ -323,7 +346,7 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
 #ifdef ARCH_BLACKHOLE
-    if (block == 1) {
+    if (block == 1 || !fast_tilize_detail::fast_tilize_uses_32x32_tiles(icb, ocb)) {
         tilize_block<is_fp32_dest_acc_en>(icb, block, ocb, input_tile_index, output_tile_index);
         return;
     }
