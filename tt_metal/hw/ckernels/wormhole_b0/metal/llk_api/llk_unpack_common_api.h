@@ -25,6 +25,18 @@
  *************************************************************************/
 
 /**
+ * Whether an operand unpacks into the SrcA/SrcB registers rather than straight into Dest.
+ *
+ * The host emits a Float32 unpack destination format only for a CB marked UnpackToDestMode::UnpackToDestFp32.
+ * Such a buffer is unpacked into Dest (copy_tile and the other unpack_A paths) and cannot be an FPU operand:
+ * the unpacker's SrcA/SrcB path has no FP32 output format. The SrcA/SrcB (AB, matmul) unpack entry points
+ * assert this for both operands.
+ */
+inline bool operand_unpacks_to_src(const std::uint32_t operand_id) {
+    return unpack_dst_format[operand_id] != (std::uint32_t)DataFormat::Float32;
+}
+
+/**
  * Configure the unpacker hardware for operands A and B.
  *
  * Face geometry (face_r_dim, num_faces) and tile size for both operands are
