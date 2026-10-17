@@ -8,6 +8,7 @@ Tests for ExpertKernel (unified SRAM, DRAM, and hybrid):
   DRAM (multi-device): each device gets its own N-slice of B in DRAM.
 """
 
+import numpy as np
 import pytest
 import torch
 from loguru import logger
@@ -17,6 +18,7 @@ from models.common.utility_functions import comp_pcc, skip_with_llk_assert
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
     ExpertKernel,
+    _assert_sram_weights_bfp4,
     _pad_to_face_r_dim,
     create_dram_expert_tensors_multi_device,
     encode_expert_indices,
@@ -1382,6 +1384,7 @@ def _run_accum(
     fmt_ratios=None,
     num_loop_iters=1,
     primary_at_last_offset=False,
+    sram_use_compression=True,
 ):
     """Accumulation path: WIDTH_SHARDED SRAM, expert outputs summed in-place.
 
@@ -1565,6 +1568,7 @@ def _run_accum(
         tp_expert=tp_expert,
         num_loop_iters=num_loop_iters,
         primary_at_last_offset=primary_at_last_offset,
+        sram_use_compression=sram_use_compression,
     )
     if active_sram:
         _validate_sram_output_accum(
@@ -1844,6 +1848,7 @@ def _run_hybrid_expert_multi_device(
     k_parallel_per_bank=1,
     num_loop_iters=1,
     primary_at_last_offset=False,
+    sram_use_compression=True,
 ):
     """Dispatcher: delegate to the appropriate variant.
 
@@ -1867,6 +1872,9 @@ def _run_hybrid_expert_multi_device(
         assert (
             not accum_experts
         ), "Expert parallel (tp_expert=False) processes 1 expert per device, accum not applicable"
+    assert sram_use_compression or (
+        accum_experts and sram_k_parallel == 1
+    ), "the plain SRAM path runs only in the accum path without a K split"
     slice_k = sram_k_parallel > 1
     if slice_k:
         _run_slice_k(
@@ -1917,6 +1925,7 @@ def _run_hybrid_expert_multi_device(
             fmt_ratios,
             num_loop_iters=num_loop_iters,
             primary_at_last_offset=primary_at_last_offset,
+            sram_use_compression=sram_use_compression,
         )
     else:
         _run_standard(
@@ -2117,6 +2126,65 @@ def test_hybrid_expert_single_device_sparse_accum_experts(device):
         num_subblocks_k=1,
         accum_experts=True,
     )
+
+
+@pytest.mark.parametrize("num_loop_iters", [1, 3], ids=["one_iter", "three_iters"])
+@pytest.mark.parametrize(
+    "K, N, sram_n_parallel",
+    [(256, 3584, 56), (896, 1792, 56)],
+    ids=["kt8_ct2", "kt28_ct1"],
+)
+def test_hybrid_expert_single_device_accum_experts_plain(device, K, N, sram_n_parallel, num_loop_iters):
+    """The plain custom_mm SRAM path with uniform bfp4 weights: 4 SRAM experts of 6, banked calls into one DEST."""
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=K,
+        N=N,
+        num_experts=8,
+        sram_expert_ids=[1, 3, 4, 6],
+        dram_expert_ids=[0, 2, 5, 7],
+        active_expert_ids=[0, 1, 3, 4, 6, 7],
+        formats_per_device=[["bfp4"]],
+        sram_n_parallel=sram_n_parallel,
+        num_subblocks_k=1,
+        accum_experts=True,
+        num_loop_iters=num_loop_iters,
+        sram_use_compression=False,
+    )
+
+
+class _UniformShardWeights:
+    """Host stand-in for a CompressedTensor whose every SRAM shard has the same format assignment."""
+
+    def __init__(self, assignment):
+        self.assignment = np.array(assignment, dtype=np.int8)
+
+    def get_assignment_per_shard(self, core_coord, device_coord=None):
+        return self.assignment
+
+
+@pytest.mark.parametrize(
+    "assignments, accepted",
+    [
+        ([[1, 1, 1, 1]], True),
+        ([[1, 1, 1, 1], [1, 1, 1, 1]], True),
+        ([[0, 0, 0, 0]], False),
+        ([[2, 2, 2, 2]], False),
+        ([[1, 1, 1, 1], [1, 1, 3, 1]], False),
+    ],
+    ids=["bfp4", "bfp4_two_experts", "bfp8", "bfp2", "bfp0_tile_in_second_expert"],
+)
+def test_plain_sram_path_rejects_non_bfp4_weights(assignments, accepted, expect_error):
+    """Host only: the plain SRAM path rejects SRAM weights that are not uniform bfp4_b."""
+    cts = [_UniformShardWeights(assignment) for assignment in assignments]
+    cores = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)]
+    coords = [ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1)]
+    if accepted:
+        _assert_sram_weights_bfp4(cts, cores, coords)
+    else:
+        with expect_error(AssertionError, "uniform bfp4_b"):
+            _assert_sram_weights_bfp4(cts, cores, coords)
 
 
 def test_hybrid_expert_multi_device_sparse_accum_experts(bh_2d_mesh_device):

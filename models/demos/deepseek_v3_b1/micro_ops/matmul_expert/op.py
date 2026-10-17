@@ -17,6 +17,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_b1.compressed_tensor import COMPRESSED_FORMATS
 from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import _TILE_SIZES
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import _CB_ADDR_SHIFT
@@ -42,6 +43,19 @@ def _assignment_to_llk_fmt(idx: int) -> int:
     """Map CompressedTensor assignment index to new LLK format code."""
     _ASSIGNMENT_TO_LLK_FMT = [3, 2, 1, 0]  # bfp8→3, bfp4→2, bfp2→1, bfp0→0
     return _ASSIGNMENT_TO_LLK_FMT[idx]
+
+
+def _assert_sram_weights_bfp4(sram_cts: list, sram_cores: list, device_coords: list) -> None:
+    """The plain SRAM path reads one bfp4_b page per tile."""
+    bfp4 = COMPRESSED_FORMATS.index("bfp4")
+    for coord in device_coords:
+        for core in sram_cores:
+            for expert, ct in enumerate(sram_cts):
+                assignment = ct.get_assignment_per_shard(core, device_coord=coord)
+                assert (assignment == bfp4).all(), (
+                    f"sram_use_compression=False needs uniform bfp4_b SRAM weights; expert {expert} on core "
+                    f"({core.x}, {core.y}) of device {coord} has formats {sorted(set(int(f) for f in assignment))}"
+                )
 
 
 def _meta_words_for_tiles(num_tiles: int) -> int:
@@ -381,6 +395,7 @@ def _build_program_for_device(
     num_loop_iters: int = 1,
     primary_at_last_offset: bool = False,
     gather_sync_sem_addr: int = 0,
+    sram_use_compression: bool = True,
 ) -> ttnn.ProgramDescriptor:
     """Build a ProgramDescriptor for one device — handles SRAM-only, DRAM-only, and hybrid.
 
@@ -421,6 +436,19 @@ def _build_program_for_device(
     # CB descriptors.
     cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in0, a_tensor)
     cb1_descs = sram_cts[0].cb_descriptor_from_compressed_tensor(cb_in1, device_coord=coord) if sram_cts else []
+    if not sram_use_compression:
+        # Plain custom_mm steps by the CB page, so declare one uniform bfp4_b tile
+        bfp4_tile_size = _TILE_SIZES[1]
+        for desc in cb1_descs:
+            desc.total_size = bfp4_tile_size
+            desc.format_descriptors = [
+                ttnn.CBFormatDescriptor(
+                    buffer_index=cb_in1,
+                    data_format=ttnn.bfloat4_b,
+                    page_size=bfp4_tile_size,
+                    tile=ttnn.TileDescriptor(ttnn.Tile([32, 32])),
+                )
+            ]
     cb2_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out, out_tensor)
     cb3_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_index, index_tensor)
     cb_internal_acc_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_internal_acc, out_tensor)
@@ -569,6 +597,8 @@ def _build_program_for_device(
         # cb_internal_acc: aliases cb_out's L1; per-expert push/pop bookkeeping
         # routes through it so cb_out's metadata only updates once at the end.
         ("cb_internal_acc", cb_internal_acc),
+        # 0 = the plain custom_mm path, for SRAM weights that are uniform bfp4_b.
+        ("sram_use_compression", 1 if sram_use_compression else 0),
     ]
 
     # Per-core descriptors.
@@ -1305,6 +1335,7 @@ class ExpertKernel:
         subblock_n: int = 1,
         num_loop_iters: int = 1,
         primary_at_last_offset: bool = False,
+        sram_use_compression: bool = True,
     ) -> ttnn.Tensor:
         """
         Args:
@@ -1324,6 +1355,7 @@ class ExpertKernel:
             n_parallel_per_bank: N-parallel cores per DRAM bank (total cores per bank =
                                  n_parallel_per_bank * k_parallel_per_bank).
             sram_output_tensor: Separate SRAM output tensor on sram_core_grid (required when has_sram).
+            sram_use_compression: False runs the plain custom_mm path, for SRAM weights that are uniform bfp4_b.
         """
         cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
         mesh_device = a_tensor.device()
@@ -1339,6 +1371,12 @@ class ExpertKernel:
             assert sram_fmt_l1_addrs is not None, "sram_fmt_l1_addrs must be set when has_sram=True"
             assert sram_base_addrs_l1_addrs is not None, "sram_base_addrs_l1_addrs must be set when has_sram=True"
             assert sram_output_tensor is not None, "sram_output_tensor must be set when has_sram=True"
+            if not sram_use_compression:
+                _assert_sram_weights_bfp4(
+                    sram_cts,
+                    ttnn.corerange_to_cores(sram_core_grid, row_wise=True),
+                    [ttnn.MeshCoordinate(row, col) for row in range(mesh_rows) for col in range(mesh_cols)],
+                )
 
         if not tp_expert:
             assert not has_sram, "Expert parallel (tp_expert=False) only supports DRAM matmul"
@@ -1445,6 +1483,7 @@ class ExpertKernel:
                     num_loop_iters=num_loop_iters,
                     primary_at_last_offset=primary_at_last_offset,
                     gather_sync_sem_addr=gather_sync_sem_addr,
+                    sram_use_compression=sram_use_compression,
                 )
                 mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
 

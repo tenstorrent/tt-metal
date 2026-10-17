@@ -23,6 +23,8 @@
 // Fully typed inputs reconcile source exponent widths using the existing
 // 2.0 format rules. Mixed CB/LLKOperand inputs retain the CB API's requirement
 // that both configured source-register formats use the same exponent width.
+// banked calls follow custom_mm.h; every call of a sequence takes a weight
+// operand of the LLKOperand type its bank init took.
 
 namespace ckernel {
 
@@ -65,7 +67,8 @@ ALWI void custom_mm_block_init(
     // Match the unpacker's physical ordering, including the source-format
     // caches maintained by current Metal: weights -> SrcA, activations -> SrcB.
     MATH((llk_math_hw_configure<fp32_dest_acc_en, in1_descriptor, in0_descriptor>()));
-    MATH((_llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(S0.face_r_dim, ct_dim)));
+    MATH((_llk_math_custom_mm_init_<transpose, split_acc, dense_packing, custom_mm_group_finalize_weights(F1)>(
+        S0.face_r_dim, ct_dim)));
 
     PACK((llk_pack_dest_init<fp32_dest_acc_en, ckernel::PackMode::Default>(out_cb_id)));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
@@ -114,7 +117,8 @@ ALWI void custom_mm_block_init(
         llk_math_pack_sync_init<fp32_dest_acc_en>();
         _llk_math_hw_configure_<fp32_dest_acc_en>(
             static_cast<std::uint32_t>(in1_register_format), unpack_dst_format[in0_id]);
-        _llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(get_operand_face_r_dim(in0_id), ct_dim);
+        _llk_math_custom_mm_init_<transpose, split_acc, dense_packing, custom_mm_group_finalize_weights(F1)>(
+            get_operand_face_r_dim(in0_id), ct_dim);
     }));
 
     PACK((llk_pack_dest_init<fp32_dest_acc_en, ckernel::PackMode::Default>(out_cb_id)));
@@ -150,7 +154,8 @@ ALWI void custom_mm_block_init_short(
     constexpr auto in1_register_format = infer_unpack_dst_format_2op<F1, F0>(DST_ACCUM_MODE);
     UNPACK((_llk_unpack_AB_custom_mm_init_<transpose, clear_src>(
         S0.face_r_dim, static_cast<std::uint32_t>(in1_register_format), ct_dim)));
-    MATH((_llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(S0.face_r_dim, ct_dim)));
+    MATH((_llk_math_custom_mm_init_<transpose, split_acc, dense_packing, custom_mm_group_finalize_weights(F1)>(
+        S0.face_r_dim, ct_dim)));
 
     PACK((_llk_pack_custom_mm_init_<dense_packing>()));
 }
@@ -176,7 +181,8 @@ ALWI void custom_mm_block_init_short(
     }));
     MATH(({
         const auto in0_id = get_operand_id(in0_cb_id);
-        _llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(get_operand_face_r_dim(in0_id), ct_dim);
+        _llk_math_custom_mm_init_<transpose, split_acc, dense_packing, custom_mm_group_finalize_weights(F1)>(
+            get_operand_face_r_dim(in0_id), ct_dim);
     }));
 
     PACK((_llk_pack_custom_mm_init_<dense_packing>()));
@@ -185,6 +191,7 @@ ALWI void custom_mm_block_init_short(
 template <
     bool finalize = true,
     bool read_transposed = false,
+    bool banked = false,
     DataFormat F0,
     TensorShape S0,
     DataFormat F1,
@@ -202,12 +209,13 @@ ALWI void custom_mm_block(
     static_assert(experimental::is_legal_tile_shape(S1), "Illegal weight tile shape");
     constexpr std::uint32_t in0_tile_size = experimental::tile_stride_words(F0, S0);
     constexpr std::uint32_t in1_tile_size = experimental::tile_stride_words(F1, S1);
-    UNPACK((_llk_unpack_AB_custom_mm_<read_transposed>(
+    UNPACK((_llk_unpack_AB_custom_mm_<read_transposed, banked>(
         in1.l1_address, in0.l1_address, in1_tile_index, in0_tile_index, in1_tile_size, in0_tile_size, kt_dim, ct_dim)));
-    MATH((_llk_math_custom_mm_<finalize>(S0.face_r_dim, dst_index, kt_dim, ct_dim)));
+    MATH((_llk_math_custom_mm_<finalize, custom_mm_group_finalize_weights(F1)>(
+        S0.face_r_dim, dst_index, kt_dim, ct_dim)));
 }
 
-template <bool finalize = true, bool read_transposed = false, DataFormat F1, TensorShape S1>
+template <bool finalize = true, bool read_transposed = false, bool banked = false, DataFormat F1, TensorShape S1>
 ALWI void custom_mm_block(
     const std::uint32_t in0_cb_id,
     experimental::LLKOperand<F1, S1> in1,
@@ -221,7 +229,7 @@ ALWI void custom_mm_block(
     UNPACK(({
         const auto in0_id = get_operand_id(in0_cb_id);
         const auto& in0 = get_local_cb_interface(in0_id);
-        _llk_unpack_AB_custom_mm_<read_transposed>(
+        _llk_unpack_AB_custom_mm_<read_transposed, banked>(
             in1.l1_address,
             in0.fifo_rd_ptr - 1,
             in1_tile_index,
@@ -233,7 +241,44 @@ ALWI void custom_mm_block(
     }));
     MATH(({
         const auto in0_id = get_operand_id(in0_cb_id);
-        _llk_math_custom_mm_<finalize>(get_operand_face_r_dim(in0_id), dst_index, kt_dim, ct_dim);
+        _llk_math_custom_mm_<finalize, custom_mm_group_finalize_weights(F1)>(
+            get_operand_face_r_dim(in0_id), dst_index, kt_dim, ct_dim);
+    }));
+}
+
+template <
+    bool transpose = false,
+    bool fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat F0,
+    TensorShape S0,
+    DataFormat F1,
+    TensorShape S1>
+ALWI void custom_mm_block_bank_init(
+    experimental::LLKOperand<F0, S0> /*in0*/, experimental::LLKOperand<F1, S1> /*in1*/) {
+    UNPACK((llk_unpack_AB_custom_mm_bank_init<transpose>(
+        static_cast<std::uint32_t>(F1),
+        static_cast<std::uint32_t>(infer_unpack_dst_format_2op<F1, F0>(fp32_dest_acc_en)),
+        S1.face_r_dim,
+        S1.total_num_faces(),
+        static_cast<std::uint32_t>(F0),
+        static_cast<std::uint32_t>(infer_unpack_dst_format_2op<F0, F1>(fp32_dest_acc_en)),
+        S0.face_r_dim,
+        S0.total_num_faces())));
+}
+
+template <bool transpose = false, bool fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat F1, TensorShape S1>
+ALWI void custom_mm_block_bank_init(const std::uint32_t in0_cb_id, experimental::LLKOperand<F1, S1> /*in1*/) {
+    UNPACK(({
+        const auto in0_id = get_operand_id(in0_cb_id);
+        llk_unpack_AB_custom_mm_bank_init<transpose>(
+            static_cast<std::uint32_t>(F1),
+            static_cast<std::uint32_t>(infer_unpack_dst_format(F1, fp32_dest_acc_en)),
+            S1.face_r_dim,
+            S1.total_num_faces(),
+            unpack_src_format[in0_id],
+            unpack_dst_format[in0_id],
+            get_operand_face_r_dim(in0_id),
+            get_operand_num_faces(in0_id));
     }));
 }
 
