@@ -8,8 +8,9 @@
 //
 // What the op does (tt-blaze#1971): eltwise ADD/SUB/MUL of a per-tile operand (SrcA) with a *column* broadcast
 // (SrcB) where the column source is DEST reused as a source register (DEST -> SrcB via MOVD2B), reused across every
-// SrcA row (the softmax scale / normalize step). This advance test exercises the MUL (softmax-scale) instantiation,
-// which has high-fidelity ELWMUL support; here we pin LoFi for the small bf16 grid.
+// SrcA row (the softmax scale / normalize step). This advance test exercises all three instantiations -- MUL (the
+// softmax-scale path, which also has high-fidelity ELWMUL support; LoFi is pinned here for the small bf16 grid), ADD
+// and SUB -- selected per variant through ELTWISE_BINARY_OP from the generated build header.
 //
 // SrcB-reuse + set_srcb_dummy_valid handshake modeled here (same shape as transpose_dest_test.cpp's dest-reuse
 // handshake; the external reference for the op itself is tt-blaze#1971, cited above):
@@ -25,6 +26,8 @@
 //   4. _llk_math_sdpa_bcast_col_srcb_reuse_preamble_ MOVD2Bs DEST rows -> SrcB (P1 and P2), then
 //      _llk_math_sdpa_bcast_col_srcb_reuse_ runs the SRCB_BCAST_COL eltwise MOP and the postamble clears SrcB:
 //      DEST[DST_INDEX] = A0 * broadcast_col(P1) + A1 * broadcast_col(P2)   (the ELWMULs accumulate).
+//      ADD/SUB walk the same two passes over the same dest rows, so they must accumulate too:
+//      DEST[DST_INDEX] = (A0 +/- broadcast_col(P1)) + (A1 +/- broadcast_col(P2)).
 //
 // This kernel covers unpack_A_sdpa as well, because exercising either primitive in isolation is impossible:
 // unpack_A_sdpa is init/mop-config plus the dummy-SrcB-valid helper and has no execute of its own, and the math op
@@ -69,15 +72,15 @@ static constexpr std::uint32_t DST_INDEX = 0;
 // constexpr the generated build header declares (helpers/sdpa_bcast_utils.py), so the value lives in python only and
 // the unpack/pack sides read the same constant the math mop does.
 
-// This advance test exercises the MUL (softmax-scale) instantiation, LoFi fidelity.
-static constexpr EltwiseBinaryType SDPA_OP  = EltwiseBinaryType::ELWMUL;
+// The op (ELWMUL / ELWADD / ELWSUB) is SDPA_OP, bound below from the build header's ELTWISE_BINARY_OP; LoFi fidelity.
 static constexpr MathFidelity SDPA_FIDELITY = MathFidelity::LoFi;
 
-// The MOP's ELWMULs ACCUMULATE into DEST (verified on p100a: with clear_dest == false the packed result is
-// seed + A0*bcast_col(P1) + A1*bcast_col(P2), i.e. the column-source seed still sitting in DEST[DST_INDEX]
+// The MOP's two passes ACCUMULATE into DEST (verified on p100a for MUL: with clear_dest == false the packed result
+// is seed + A0*bcast_col(P1) + A1*bcast_col(P2), i.e. the column-source seed still sitting in DEST[DST_INDEX]
 // is added in at column 0). clear_dest == true makes the preamble ZEROACC the dest half *after* its MOVD2Bs
-// have already latched P1/P2 into SrcB, so the op reduces to the clean two-term product. The demo takes the
-// same branch on its normalize path (sdpa.h: sdpa_bcast_col_reuse_preamble<normalize>()).
+// have already latched P1/P2 into SrcB, so the op reduces to the clean two-term sum. The demo takes the
+// same branch on its normalize path (sdpa.h: sdpa_bcast_col_reuse_preamble<normalize>()). ADD/SUB rely on the
+// same zero seed: their MOP sets the dest-accumulate bit so pass 2 adds onto pass 1 instead of replacing it.
 static constexpr bool CLEAR_DEST = true;
 
 #ifdef LLK_TRISC_UNPACK
@@ -167,6 +170,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "params.h"
 
+// ELTWISE_BINARY_OP is the per-variant op the python driver emits into the build header (MATH_OP template).
+static constexpr EltwiseBinaryType SDPA_OP = ELTWISE_BINARY_OP;
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -185,11 +191,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_INDEX + 1, formats.math, formats.math, num_faces);
 
     // Step 2: SDPA column-broadcast SrcB-reuse eltwise.
-    //   init      -> program addr_mods + the SRCB_BCAST_COL MUL MOP.
+    //   init      -> program addr_mods + the SRCB_BCAST_COL eltwise MOP for SDPA_OP.
     //   preamble  -> STALLWAIT(SRCB_VLD) on the unpacker's dummy SrcB valid, then MOVD2B DEST rows -> SrcB.
-    //   execute   -> DEST[DST_INDEX] = SrcA(operand) * broadcast_col(scale).
+    //   execute   -> DEST[DST_INDEX] = SrcA(operand) op broadcast_col(scale), accumulated over the two passes.
     //   postamble -> SETRWC CLR_B (release the reused SrcB).
-    _llk_math_sdpa_bcast_col_srcb_reuse_init_<SDPA_OP, NUM_TILES, SDPA_FIDELITY>(num_faces, 0 /* acc_to_dest */);
+    _llk_math_sdpa_bcast_col_srcb_reuse_init_<SDPA_OP, NUM_TILES, SDPA_FIDELITY>(num_faces);
     _llk_math_sdpa_bcast_col_srcb_reuse_preamble_<DST_SYNC, is_fp32_dest_acc_en, CLEAR_DEST>();
     _llk_math_sdpa_bcast_col_srcb_reuse_<SDPA_OP, NUM_TILES, DST_SYNC, is_fp32_dest_acc_en, SDPA_FIDELITY, CLEAR_DEST>(DST_INDEX);
     _llk_math_sdpa_bcast_col_srcb_reuse_postamble_();

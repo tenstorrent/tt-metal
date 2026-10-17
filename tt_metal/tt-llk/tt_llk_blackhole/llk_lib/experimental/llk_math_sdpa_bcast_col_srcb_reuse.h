@@ -16,7 +16,7 @@
 using namespace ckernel;
 
 template <EltwiseBinaryType eltwise_binary_type, std::uint32_t num_tiles, MathFidelity math_fidelity>
-inline void sdpa_bcast_col_srcb_reuse_configure_mop(const std::uint32_t num_faces = 4, const std::uint32_t acc_to_dest = 0)
+inline void sdpa_bcast_col_srcb_reuse_configure_mop(const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 2, "num_faces must be 1, 2, or 4");
     constexpr bool high_fidelity     = is_high_fidelity(math_fidelity);
@@ -26,18 +26,26 @@ inline void sdpa_bcast_col_srcb_reuse_configure_mop(const std::uint32_t num_face
     constexpr auto broadcast_type    = p_elwise::SRCB_BCAST_COL;
 
     // Scalar broadcast should not Clear B within a mop.  This is controlled outside of MOP.
+    //
+    // The execute runs this MOP twice over the SAME dest rows: pass 1 ends on ADDR_MOD_3 (dest cleared back to row 0,
+    // SrcB advanced to the second column source) and pass 2 restarts at row 0. ELWMUL always accumulates into dest,
+    // so pass 2 adds A1 * bcast(P2) onto pass 1. ELWADD/ELWSUB only accumulate when their dest-accumulate bit is set;
+    // without it pass 2 overwrites pass 1 and the result is A1 +/- bcast(P2) alone. The bit is therefore always set
+    // here so the ADD/SUB paths compute the same two-term sum as MUL; the preamble's clear_dest ZEROACC supplies the
+    // zero seed, exactly as the MUL path already relies on.
+    constexpr std::uint32_t dest_accum_en = 1;
     if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWADD)
     {
-        ckernel_template tmp(num_tiles, num_faces, TT_OP_ELWADD(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_0, 0));
-        tmp.set_last_inner_loop_instr(TT_OP_ELWADD(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_2, 0));
-        tmp.set_last_outer_loop_instr(TT_OP_ELWADD(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
+        ckernel_template tmp(num_tiles, num_faces, TT_OP_ELWADD(p_setrwc::CLR_A, dest_accum_en, broadcast_type, ADDR_MOD_0, 0));
+        tmp.set_last_inner_loop_instr(TT_OP_ELWADD(p_setrwc::CLR_A, dest_accum_en, broadcast_type, ADDR_MOD_2, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_ELWADD(p_setrwc::CLR_A, dest_accum_en, broadcast_type, ADDR_MOD_3, 0));
         tmp.program();
     }
     else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWSUB)
     {
-        ckernel_template tmp(num_tiles, num_faces, TT_OP_ELWSUB(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_0, 0));
-        tmp.set_last_inner_loop_instr(TT_OP_ELWSUB(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_2, 0));
-        tmp.set_last_outer_loop_instr(TT_OP_ELWSUB(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
+        ckernel_template tmp(num_tiles, num_faces, TT_OP_ELWSUB(p_setrwc::CLR_A, dest_accum_en, broadcast_type, ADDR_MOD_0, 0));
+        tmp.set_last_inner_loop_instr(TT_OP_ELWSUB(p_setrwc::CLR_A, dest_accum_en, broadcast_type, ADDR_MOD_2, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_ELWSUB(p_setrwc::CLR_A, dest_accum_en, broadcast_type, ADDR_MOD_3, 0));
         tmp.program();
     }
     else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL)
@@ -206,7 +214,7 @@ inline void sdpa_bcast_col_srcb_reuse_configure_addrmod(const std::uint32_t num_
 }
 
 template <EltwiseBinaryType eltwise_binary_type, std::uint32_t num_tiles, MathFidelity math_fidelity, bool dense = false>
-inline void _llk_math_sdpa_bcast_col_srcb_reuse_init_(const std::uint32_t num_faces, const std::uint32_t acc_to_dest)
+inline void _llk_math_sdpa_bcast_col_srcb_reuse_init_(const std::uint32_t num_faces)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
@@ -216,7 +224,7 @@ inline void _llk_math_sdpa_bcast_col_srcb_reuse_init_(const std::uint32_t num_fa
         (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
         (eltwise_binary_type == EltwiseBinaryType::ELWMUL))
     {
-        sdpa_bcast_col_srcb_reuse_configure_mop<eltwise_binary_type, num_tiles, math_fidelity>(num_faces, acc_to_dest);
+        sdpa_bcast_col_srcb_reuse_configure_mop<eltwise_binary_type, num_tiles, math_fidelity>(num_faces);
     }
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
