@@ -356,7 +356,9 @@ def test_matmul_custom_throttle(
 # path feeds this LLK through the operand tensor shape. The throttled replay sequences are
 # hand-written for a full 32x32 tile, so on this geometry the no-mop init must record the
 # unthrottled geometry-aware replay and the execute must replay it (the fallback the regular
-# _llk_math_matmul_init_ takes). Levels 4/5 are LoFi-only for the reason given above.
+# _llk_math_matmul_init_ takes). Because the execute makes the same decision, the fallback
+# holds at every level and fidelity, including HiFi at throttle levels 4/5 -- which the
+# full-tile test above has to skip because there the throttled sequence does run.
 TINY_IN0_THROTTLE_LEVELS = [level for level in THROTTLE_LEVELS if level > 0]
 
 
@@ -375,12 +377,6 @@ def test_matmul_custom_throttle_tiny_in0(
     dest_acc,
     boot_mode=BootMode.DEFAULT,
 ):
-    if throttle_level >= 4 and math_fidelity != MathFidelity.LoFi:
-        pytest.skip(
-            "throttle levels 4/5 do not increment the fidelity phase per LLK; "
-            "only correct for LoFi (single-phase)"
-        )
-
     input_A_dimensions, input_B_dimensions = THROTTLE_DIMS
     _run_matmul_custom(
         math_fidelity,
