@@ -116,5 +116,6 @@ inline void llk_pack_reconfig_data_format() {
         tile_size,
         DESC.shape.total_col_dim(),
         DESC.shape.total_num_faces(),
-        false /* partial_face */);
+        // partial_face by face height (is_face_partial). Folds at compile time; full-height faces give false.
+        is_face_partial(DESC.shape.face_r_dim));
 }
