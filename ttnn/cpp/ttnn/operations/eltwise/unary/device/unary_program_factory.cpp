@@ -491,16 +491,22 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
                     : std::nullopt;
 
     const auto& all_device_cores = operation_attributes.worker_grid;
-    const bool needs_tmp0 = needs_tmp0_dfb(ops_chain[0].type());
 
     const bool math_approx_mode = false;
-    std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
+    const auto bf16_kernel_defines = get_bf16_kernel_defines(
+        ops_chain, input.dtype(), output.dtype(), operation_attributes.fp32_dest_acc_en, input.device()->arch());
+    // A generated kernel computes the op in one SFPU pass of the plain SFPU program.
+    std::map<std::string, std::string> unary_defines =
+        bf16_kernel_defines ? *bf16_kernel_defines : get_block_defines(ops_chain, "0", "0", input.dtype());
+    // The generated kernel reads only the input; the op's own temporary buffer is not allocated.
+    const bool needs_tmp0 = !bf16_kernel_defines && needs_tmp0_dfb(ops_chain[0].type());
     add_input_dtype_defines(input.dtype(), unary_defines);
     const bool logit_clamp_enabled = pack_first_op_scalars(ops_chain[0], input.dtype(), packed_scalar1, packed_scalar2);
 
     const std::string compute_path = fmt::format(
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/{}",
-        get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
+        bf16_kernel_defines ? std::string_view{"eltwise_sfpu.cpp"}
+                            : get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
     DataFormat dfb_data_format_for_input =
         (ops_chain[0].type() == unary::UnaryOpType::BITCAST) ? dfb_data_format_output : dfb_data_format;
