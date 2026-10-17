@@ -66,6 +66,9 @@ class TTTextEncoder:
     def __init__(self, checkpoint: Path, device):
         import ttnn
 
+        from models.experimental.moss_image.tt import precision
+
+        self.precision = precision
         self.ttnn = ttnn
         self.device = device
         if device.get_num_devices() != 1:
@@ -125,15 +128,15 @@ class TTTextEncoder:
         t = self.ttnn
         # Qwen decoder/query/key norms store an offset; GDN output norm does not.
         xf = t.typecast(x, t.float32)
-        variance = t.mean(t.multiply(xf, xf), dim=-1, keepdim=True)
-        normalized = t.multiply(xf, t.rsqrt(t.add(variance, self.config["rms_norm_eps"])))
+        variance = t.mean(self.precision.multiply(xf, xf), dim=-1, keepdim=True)
+        normalized = self.precision.multiply(xf, t.rsqrt(self.precision.add(variance, self.config["rms_norm_eps"])))
         if zero_centered:
             # HF multiplies by (1 + weight.float()) before casting back. Folding
             # that offset into a BF16 weight would round it prematurely.
             scale = self.upload((weight.float() + 1).reshape(1, -1), dtype=t.float32)
-            return t.typecast(t.multiply(normalized, scale), x.dtype)
+            return t.typecast(self.precision.multiply(normalized, scale), x.dtype)
         normalized = t.typecast(normalized, x.dtype)
-        return t.multiply(normalized, self.upload(weight.reshape(1, -1)))
+        return self.precision.multiply(normalized, self.upload(weight.reshape(1, -1)))
 
     def _rope(self, x):
         t = self.ttnn
@@ -146,7 +149,7 @@ class TTTextEncoder:
         cosine = self.upload(phase.cos().reshape(1, 1, seq, rotary))
         sine = self.upload(phase.sin().reshape(1, 1, seq, rotary))
         rotating = x[..., :rotary]
-        rotated = t.experimental.rotary_embedding_hf(rotating, cosine, sine, is_decode_mode=False)
+        rotated = self.precision.rotary_split_half(rotating, cosine, sine)
         return t.concat([rotated, x[..., rotary:]], dim=-1)
 
     def full_attention(self, x, state, record):
@@ -170,15 +173,21 @@ class TTTextEncoder:
             scale=256**-0.5,
             compute_kernel_config=self.compute,
             memory_config=t.DRAM_MEMORY_CONFIG,
+            program_config=t.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
+                q_chunk_size=32,
+                k_chunk_size=32,
+                exp_approx_mode=False,
+            ),
         )
         y = t.permute(y, (0, 2, 1, 3))
-        y = t.multiply(y, t.sigmoid(gate))
+        y = self.precision.multiply(y, self.precision.sigmoid(gate))
         record("attention_gated", y)
         y = t.reshape(y, (1, seq, 4096))
         return self.linear(y, state, "self_attn.o_proj")
 
     def linear_attention(self, x, state, valid_length, record):
-        from .vendor.tt_qwen35.ttnn_delta_rule_seq import chunk_gated_delta_rule_seq_adapter
+        from .gated_delta import gated_delta_rule_recurrent
 
         t = self.ttnn
         seq = x.shape[1]
@@ -195,9 +204,9 @@ class TTTextEncoder:
         for index in range(4):
             window = t.to_layout(padded[:, index : index + seq, :], t.TILE_LAYOUT)
             tap = self.upload(conv[:, 0, index].float().reshape(1, 1, -1), dtype=t.float32)
-            term = t.multiply(t.typecast(window, t.float32), tap)
-            out = term if out is None else t.add(out, term)
-        qkv = t.silu(t.typecast(out, t.bfloat16))
+            term = self.precision.multiply(t.typecast(window, t.float32), tap)
+            out = term if out is None else self.precision.add(out, term)
+        qkv = self.precision.silu(t.typecast(out, t.bfloat16))
         record("gdn_convolution", qkv)
         q = t.reshape(qkv[..., :2048], (1, seq, 16, 128))
         k = t.reshape(qkv[..., 2048:4096], (1, seq, 16, 128))
@@ -206,23 +215,22 @@ class TTTextEncoder:
         record("linear_attn.in_proj_a", a)
         b = self.linear(x, state, p + "in_proj_b")
         record("linear_attn.in_proj_b", b)
-        beta = t.sigmoid(b)
+        beta = self.precision.sigmoid(b)
         # HF calculates decay parameters in FP32.
         a = t.typecast(a, t.float32)
         dt = self.upload(state[p + "dt_bias"].float().reshape(1, 1, -1), dtype=t.float32)
         decay = self.upload(-state[p + "A_log"].float().exp().reshape(1, 1, -1), dtype=t.float32)
-        g = t.multiply(decay, t.softplus(t.add(a, dt)))
+        g = self.precision.multiply(decay, t.softplus(self.precision.add(a, dt)))
         record("gdn_decay", g)
         record("gdn_beta", beta)
-        y, final_state = chunk_gated_delta_rule_seq_adapter(
+        y, final_state = gated_delta_rule_recurrent(
             t.typecast(q, t.float32),
             t.typecast(k, t.float32),
             v,
             beta,
             g,
             device=self.device,
-            chunk_size=128,
-            valid_len=valid_length,
+            valid_length=valid_length,
         )
         t.deallocate(final_state)
         y = t.typecast(y, t.bfloat16)
@@ -232,7 +240,10 @@ class TTTextEncoder:
         gate = t.reshape(gate, (1, seq, 32, 128))
         y = self.norm(y, state[p + "norm.weight"], zero_centered=False)
         record("gdn_norm_before_gate", y)
-        y = t.typecast(t.multiply(t.typecast(y, t.float32), t.silu(t.typecast(gate, t.float32))), t.bfloat16)
+        y = t.typecast(
+            self.precision.multiply(t.typecast(y, t.float32), self.precision.silu(t.typecast(gate, t.float32))),
+            t.bfloat16,
+        )
         record("gdn_norm_output", y)
         y = t.reshape(y, (1, seq, 4096))
         y = self.linear(y, state, p + "out_proj")
@@ -277,7 +288,7 @@ class TTTextEncoder:
                 y = self.full_attention(normed, state, record)
             else:
                 y = self.linear_attention(normed, state, valid, record)
-            x = t.add(x, y)
+            x = self.precision.add(x, y)
             record("attention_residual", x)
             normed = self.norm(x, state["post_attention_layernorm.weight"])
             record("post_attention_layernorm", normed)
@@ -285,9 +296,9 @@ class TTTextEncoder:
             record("mlp.gate_proj", gate)
             up = self.linear(normed, state, "mlp.up_proj")
             record("mlp.up_proj", up)
-            y = self.linear(t.multiply(t.silu(gate), up), state, "mlp.down_proj")
+            y = self.linear(self.precision.multiply(self.precision.silu(gate), up), state, "mlp.down_proj")
             record("mlp.down_proj", y)
-            x = t.add(x, y)
+            x = self.precision.add(x, y)
             record("output", x)
             del state
         if count == self.config["num_hidden_layers"]:
