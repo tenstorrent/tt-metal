@@ -6,7 +6,7 @@
 #   arch         wormhole | blackhole  (must be the board in this box)
 #   perf-module  tests/python_tests/<perf-module>.py, e.g. perf_eltwise_unary_sfpu
 #   out-dir      where the evidence lands: current.post.csv, baseline.post.csv, verdict.json, *.log
-# Each tree runs the CI two-phase flow (compile-producer, then compile-consumer under the device lock),
+# Each tree runs the CI two-phase flow (compile-producer then compile-consumer, both under one device-lock hold),
 # with PERF_RUN_TAG pinned so the combined CSV is at perf_data/runs/<tag>/<module>/<module>.post.csv.
 # Current runs first, then baseline, back to back on the same card, same toolchain, same selector.
 # Exit: 0 = pass (neutral/improved per goal) · 1 = regression · 2 = not comparable (no baseline rows,
@@ -41,14 +41,18 @@ run_one() {  # run_one <tree> <label>  -> prints the post.csv path
     log=$out/$label.log
     [ -f "$llk/tests/python_tests/$mod.py" ] || { echo "no $mod.py in $llk/tests/python_tests" >&2; return 3; }
     local k=(); [ -n "$kexpr" ] && k=(-k "$kexpr")
+    # Both phases under ONE device-lock hold: the producer compiles into the shared /tmp/tt-llk-build, which any
+    # other runner session wipes at its own compile start, so an unlocked producer races every other test run.
     (
         cd "$llk/tests" || exit 3
         export CHIP_ARCH=$arch PERF_RUN_TAG=$tag
         echo "== $label: $tree @ $(git -C "$tree" rev-parse --short=11 HEAD) tag=$tag" >> "$log"
+        exec 9>"/tmp/tt-device-$(hostname).lock"; flock 9 || exit 3
+        # A hung test from an earlier session leaves the card wedged (xdist workers die at startup): reset first.
+        tt-smi -r 0 > /dev/null 2>&1 || true
         .venv/bin/python -m pytest -q --override-ini=log_cli=false "${sol[@]}" --compile-producer -n 10 \
             -m "perf and not accuracy" --timeout=120 "${k[@]}" "./python_tests/$mod.py" >> "$log" 2>&1 || exit 3
-        flock "/tmp/tt-device-$(hostname).lock" \
-            .venv/bin/python -m pytest -q --override-ini=log_cli=false "${sol[@]}" --compile-consumer --dist loadgroup -n 15 \
+        .venv/bin/python -m pytest -q --override-ini=log_cli=false "${sol[@]}" --compile-consumer --dist loadgroup -n 15 \
             -m "perf and not accuracy" --timeout=120 "${k[@]}" "./python_tests/$mod.py" >> "$log" 2>&1 || exit 3
     ) || return 3
     csv="$llk/perf_data/runs/$tag/$mod/$mod.post.csv"
