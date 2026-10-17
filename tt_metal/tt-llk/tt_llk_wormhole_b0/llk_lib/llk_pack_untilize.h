@@ -237,7 +237,9 @@ inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const 
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    _llk_pack_untilize_configure_addrmod_<diagonal, _llk_pack_untilize_single_tile_v<block_ct_dim, full_ct_dim, narrow_row>>();
+    // The one-tile narrow MOP walks the rows itself, so ADDR_MOD_0 has to step Y after every PACR.
+    constexpr bool step_y_per_pacr = _llk_pack_untilize_single_tile_v<block_ct_dim, full_ct_dim, narrow_row>;
+    _llk_pack_untilize_configure_addrmod_<diagonal, step_y_per_pacr>();
 
     _llk_pack_untilize_mop_config_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(face_r_dim, num_faces);
 
