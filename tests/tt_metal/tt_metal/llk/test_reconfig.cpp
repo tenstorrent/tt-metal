@@ -1518,6 +1518,28 @@ TEST_F(LLKMeshDeviceFixture, TensixPackReconfigBfpFaceHeight) {
     }
 }
 
+// Conditional pack_reconfig_data_format<true>(c_2, c_16) from a Bfp8_b 16x32 CB to a Bfp8_b 32x16 CB: same
+// format, same face height (16) and face count (two); only the tile width / narrow-tile flag differs. The
+// startup sized the 16x32 output's exponent section from the CB partial-face flag (one chunk), so the switch
+// must reconfigure to the two chunks of a two-full-face tile, and the sanitizer's tile-shape state must
+// follow the new output before its pack init.
+TEST_F(LLKMeshDeviceFixture, TensixPackReconfigBfpNarrowTile) {
+    using unit_tests::compute::reconfig::PackReconfigMode;
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar programs the packer geometry from buffer descriptors at op init";
+    }
+    constexpr std::uint32_t num_tiles = 4;
+    const Tile startup_tile({16, 32});
+    const Tile out_tile({32, 16});
+    const auto payload = unit_tests::compute::reconfig::make_bfp8_exact_payload(
+        num_tiles * out_tile.get_tile_hw() /*num_datums*/, /*seed=*/46);
+    for (auto& device : this->devices_) {
+        const auto result = unit_tests::compute::reconfig::run_pack_reconfig_bfp_geometry(
+            *device, PackReconfigMode::TwoArg, out_tile, payload, num_tiles, &startup_tile);
+        EXPECT_EQ(payload, result);
+    }
+}
+
 // Control: the hw startup alone, no reconfig, onto the shapes it sizes correctly (8x32: one chunk; 32x16:
 // one chunk per full-height face). Pins the host decode and payload against the untouched configure path.
 TEST_F(LLKMeshDeviceFixture, TensixPackHwStartupBfpControl) {

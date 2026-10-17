@@ -160,9 +160,10 @@ inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output)
  * Face count, tile column dimension and tile size are derived from the new output's CB metadata.
  * The packer's partial-face flag follows the face height: faces shorter than FACE_R_DIM rows make a
  * block-float tile carry one exponent chunk in total, full-height faces one chunk per face. That
- * single chunk holds at most FACE_R_DIM exponent rows, so short faces are supported only while
- * face_r_dim * num_faces <= FACE_R_DIM (the host's default face shapes satisfy this; a 16x32 tile
- * of four 8-row faces would not). The CB's own partial_face flag (tile height below the full tile)
+ * single chunk holds at most FACE_R_DIM exponent rows, so a block-float output with short faces is
+ * supported only while face_r_dim * num_faces <= FACE_R_DIM (the host's default face shapes satisfy
+ * this; a block-float 16x32 tile of four 8-row faces would not; other formats have no exponent
+ * section and are unrestricted). The CB's own partial_face flag (tile height below the full tile)
  * is not used here, since it is also set for a 16x32 tile whose two full-height faces need a chunk
  * each.
  *
@@ -177,13 +178,14 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     const bool partial_face = face_r_dim < FACE_R_DIM;
     LLK_ASSERT(
-        face_r_dim == FACE_R_DIM || face_r_dim * num_faces <= FACE_R_DIM,
+        !IS_BFP_FORMAT(pack_dst_format[output_id]) || face_r_dim == FACE_R_DIM || face_r_dim * num_faces <= FACE_R_DIM,
         "short-face block-float tile needs more than one exponent chunk");
 
     SAN_HOOK(reconfigure(
         StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
         StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
         StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
         StateVal<Operand<Exu::Pack>::TileWidth>(tile_c_dim),
         StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
         // The sanitizer tracks the CB's partial_face flag, as the other pack hooks do; partial_face above is

@@ -181,9 +181,10 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output) {
  * Face geometry (face_r_dim, num_faces), narrow-tile flag and tile size are derived from the new
  * output's CB metadata. The packer's partial-face flag follows the face height: faces shorter than
  * FACE_R_DIM rows make a block-float tile carry one exponent chunk in total, full-height faces one
- * chunk per face. That single chunk holds at most FACE_R_DIM exponent rows, so short faces are
- * supported only while face_r_dim * num_faces <= FACE_R_DIM (the host's default face shapes satisfy
- * this; a 16x32 tile of four 8-row faces would not). The CB's own partial_face flag (tile height
+ * chunk per face. That single chunk holds at most FACE_R_DIM exponent rows, so a block-float output
+ * with short faces is supported only while face_r_dim * num_faces <= FACE_R_DIM (the host's default
+ * face shapes satisfy this; a block-float 16x32 tile of four 8-row faces would not; other formats
+ * have no exponent section and are unrestricted). The CB's own partial_face flag (tile height
  * below the full tile) is not used here, since it is also set for a 16x32 tile whose two full-height
  * faces need a chunk each.
  *
@@ -198,7 +199,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const bool partial_face = face_r_dim < FACE_R_DIM;
     const bool narrow_tile = get_output_narrow_tile(output_id);
     LLK_ASSERT(
-        face_r_dim == FACE_R_DIM || face_r_dim * num_faces <= FACE_R_DIM,
+        !IS_BFP_FORMAT(pack_dst_format[output_id]) || face_r_dim == FACE_R_DIM || face_r_dim * num_faces <= FACE_R_DIM,
         "short-face block-float tile needs more than one exponent chunk");
 
     SAN_HOOK(reconfigure(
@@ -224,10 +225,13 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
 
 /**
  * Conditionally reconfigure the packer when switching output operands: reprograms the packer when the
- * new output's data formats or tile geometry (face height, face count) differ from the old one's and
- * neither destination format is Invalid. The geometry is compared because the reconfig also programs
- * the block-float exponent section sizes from it; the narrow-tile flag is not compared since the
- * reconfig does not program from it.
+ * new output's data formats or tile geometry (face height, face count, narrow-tile flag) differ from
+ * the old one's and neither destination format is Invalid. Face height and face count are compared
+ * because the reconfig programs the block-float exponent section sizes from them. The narrow-tile
+ * flag is the only term that changes on a same-format 16x32 -> 32x16 switch (same face height and
+ * count): that switch must re-size the exponent section when the packer was configured for the
+ * 16x32 output by llk_pack_hw_configure (one chunk, from the CB partial-face flag) and it keeps the
+ * sanitizer's NarrowTile and PartialFace operand state current for the next pack init.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  old_output          Currently configured output operand index.
@@ -242,7 +246,8 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
     const bool format_changed = (pack_dst_format[old_output_id] != pack_dst_format[new_output_id]) ||
                                 (pack_src_format[old_output_id] != pack_src_format[new_output_id]);
     const bool geometry_changed = (get_output_face_r_dim(old_output_id) != get_output_face_r_dim(new_output_id)) ||
-                                  (get_output_num_faces(old_output_id) != get_output_num_faces(new_output_id));
+                                  (get_output_num_faces(old_output_id) != get_output_num_faces(new_output_id)) ||
+                                  (get_output_narrow_tile(old_output_id) != get_output_narrow_tile(new_output_id));
 
     if ((format_changed || geometry_changed) && (pack_dst_format[old_output_id] != (uint)DataFormat::Invalid) &&
         (pack_dst_format[new_output_id] != (uint)DataFormat::Invalid)) {
