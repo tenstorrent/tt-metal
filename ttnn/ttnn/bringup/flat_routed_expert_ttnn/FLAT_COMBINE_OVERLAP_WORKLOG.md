@@ -1036,3 +1036,14 @@ GB/s). LoFi 101 / 93 (no gain). Deeper W prefetch (8, 12 pieces) or x staging (6
 In the block (K3_LIN2D=1, default; K3_LIN2D=0 = ttnn mm2d): latent down 115.4 -> 103.2, latent up 113.6 -> 94.6, traced
 3649 -> 3613 us; PCC 0.99619 both (latent down stage 0.99987 vs 0.99988).
 Next (if worth it): feed W through bank-adjacent readers (~510 GB/s) instead of the edge rows (~390): ~70-75 us floor.
+
+### K3 block: the shared expert as lin2d (2026-10-17) -> 3483 us traced
+lin2d on the shared expert's shapes (standalone, us; mm2d in brackets): gate 158 (196), down 156 (195), gate + up as one
+N 12288 linear 286 (378). Two new lin2d modes: glu=True (weight tile columns are gate / up pairs; Kimi's SiTU-GLU
+applied on the PACK thread's SFPU over the pass's DST tiles, as se3_compute, and half the tiles packed: a [S, I]
+directly) and residual=True (the NCRISC reads the core's tiles of r into CB 5; compute starts DST from them, then the
+matmul accumulates: y = r + x @ W, one rounding). Standalone: gate / up + SiTU 299 us (a PCC 0.99994), down 156,
+down + residual 153 (0.99989), both 456 (0.99987) vs the flat SE's ~525 + the sum.
+In the block (K3_SE=lin2d, now default): latent up first (yr in L1), then gate / up + SiTU (a in L1), then down + yr
+-> the block's y; the SE untilize (24 us) and the sum (45 us) are gone. Trace: gate / up 309, down + residual 158;
+traced 3613 -> 3483 us. PCC 0.99622 (flat SE 0.99619), shared expert stage 0.99981 (0.99976).

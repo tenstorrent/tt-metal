@@ -18,6 +18,7 @@ SHAPES = {  # name: (K, N, weight dtype)
     "lat_down": (7168, 3584, ttnn.bfloat8_b),
     "lat_up": (3584, 7168, ttnn.bfloat8_b),
     "uni": (7168, 3072, ttnn.bfloat8_b),  # (lin2d debug: 8 tiles a column)
+    "se_gu2": (7168, 12288, ttnn.bfloat8_b),  # (shared gate + up as one linear)
     "se_gu": (7168, 6144, ttnn.bfloat8_b),
     "se_down": (6144, 7168, ttnn.bfloat8_b),
     "router": (7168, int(os.environ.get("MM_E", "448")), ttnn.bfloat16),
@@ -658,3 +659,47 @@ def _lin2d_trace(dbg, layout, nb, nblk, clk_ghz=1.35):
             + (f"  x push ..{us(int(xp.max())):7.2f}" if xp is not None else "")
             + (f"  credit(for this step) ..{us(int(cred.max())):7.2f}" if cred is not None else "")
         )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_lin2d_se(mesh_device):
+    """The K3 shared expert as two lin2d calls: gate / up with the SiTU-GLU fused (glu=True), then down; vs fp32."""
+    from ttnn.bringup.combine_rf.lin2d import glu_weight, lin2d_prepare, upload_stacked
+
+    H, I = 7168, 6144
+    g = torch.Generator().manual_seed(0)
+    x = torch.randn(M, H, generator=g).to(torch.bfloat16)
+    wg, wu, wd = (
+        torch.randn(H, I, generator=g) * 0.02,
+        torch.randn(H, I, generator=g) * 0.02,
+        torch.randn(I, H, generator=g) * 0.02,
+    )
+    gs, us_ = x.float() @ wg, x.float() @ wu
+    aref = 4 * torch.tanh(gs / 4) * torch.sigmoid(gs) * (25 * torch.tanh(us_ / 25))
+    yref = aref @ wd
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    fid = ttnn.MathFidelity[os.environ.get("MM_FID", "HiFi2")]
+    gu_run, lay_gu = lin2d_prepare(mesh_device, M=M, K=H, N=2 * I, fidelity=fid, glu=True)
+    w_gu = upload_stacked(mesh_device, glu_weight(wg, wu), lay_gu)
+    d_run, lay_d = lin2d_prepare(mesh_device, M=M, K=I, N=H, fidelity=fid)
+    w_d = upload_stacked(mesh_device, wd, lay_d)
+    floor_gu, floor_d = H * 2 * I * 1.0625 / 512e3, I * H * 1.0625 / 512e3
+    a_mc = ttnn.L1_MEMORY_CONFIG if os.environ.get("L2D_A_L1", "1") == "1" else None
+    _timed_pcc(mesh_device, f"L2DSE gate/up + SiTU (NP {lay_gu['NP']})", aref, floor_gu, lambda: gu_run(xt, w_gu, a_mc))
+    a = gu_run(xt, w_gu, a_mc)
+    _timed_pcc(mesh_device, f"L2DSE down (NP {lay_d['NP']})", yref, floor_d, lambda: d_run(a, w_d))
+
+    def both():
+        a_ = gu_run(xt, w_gu, a_mc)
+        y_ = d_run(a_, w_d)
+        ttnn.deallocate(a_)
+        return y_
+
+    _timed_pcc(mesh_device, "L2DSE shared expert (both)", yref, floor_gu + floor_d, both)
+    # down with the residual fused (the block's routed output yr): y = yr + a @ wd
+    r = torch.randn(M, H, generator=g).to(torch.bfloat16)
+    rt = ttnn.from_torch(
+        r, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    dr_run, _ = lin2d_prepare(mesh_device, M=M, K=I, N=H, fidelity=fid, residual=True)
+    _timed_pcc(mesh_device, "L2DSE down + residual", yref + r.float(), floor_d, lambda: dr_run(a, w_d, None, rt))

@@ -33,7 +33,7 @@ from ttnn.bringup.combine_rf.fabric_all_gather_py import plan as fag_plan
 from ttnn.bringup.combine_rf.fabric_all_gather_py import worker_cores
 from ttnn.bringup.combine_rf.l1_zero import l1_zero_program
 from ttnn.bringup.combine_rf.layout_ops import layout_op_prepare
-from ttnn.bringup.combine_rf.lin2d import lin2d_prepare
+from ttnn.bringup.combine_rf.lin2d import glu_weight, lin2d_prepare
 from ttnn.bringup.combine_rf.lin2d import upload_stacked as lin2d_upload
 from ttnn.bringup.combine_rf.router_topk import router_topk_prepare
 from ttnn.bringup.combine_rf.sparse_all_gather_2d import (
@@ -225,11 +225,15 @@ class TtK3TokenSplitMoE:
         self.tilize = layout_op_prepare(mesh_device, "tilize")
         self.untilize = layout_op_prepare(mesh_device, "untilize")
         self.untilize7 = layout_op_prepare(mesh_device, "untilize", pages_per_row=7)
-        self.se_mode = os.environ.get("K3_SE", "flat")  # flat (local) | tp (TP over each mesh row) | dense
+        # lin2d (default: local, two combine_rf/lin2d calls, the down adding the latent up's output) | flat (local, the
+        # flat expert) | tp (TP over each mesh row) | dense (ttnn.linear)
+        self.se_mode = os.environ.get("K3_SE", "lin2d")
         self.se_flat = self.se_mode in ("flat", "tp")
         self.se_parts = int(os.environ.get("K3_SE_PARTS", "3"))
         if self.se_mode == "tp":
             self._build_shared_tp(mesh_device, w, d, S)
+        elif self.se_mode == "lin2d":
+            self._build_shared_lin2d(mesh_device, w, d, S)
         elif self.se_flat:
             self._build_shared_flat(mesh_device, w, d, S)
         else:
@@ -785,6 +789,21 @@ class TtK3TokenSplitMoE:
         )
         self.se_counts, self.se_regions, self.se_tidx = row([C * S]), row([0]), None
 
+    def _build_shared_lin2d(self, mesh_device, w, d, S):
+        """The shared expert as two combine_rf/lin2d calls on the own S tokens: gate / up with the SiTU-GLU fused
+        (gate / up tile pairs, the activation a [S, I] packed), then down; in the block's forward the down also adds
+        the latent up's output (y = yr + a @ Wd: no separate sum). 458 us standalone vs the flat SE's ~525 + sum."""
+        self._se_knobs()
+        assert (d.beta, d.linear_beta) == (4.0, 25.0), "lin2d's SiTU is Kimi's (sfpu::SituGluConfigKimi)"
+        fid = [ttnn.MathFidelity.LoFi, None, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi3, ttnn.MathFidelity.HiFi4][
+            self.se_fid
+        ]
+        self.se_gu_run, lay = lin2d_prepare(mesh_device, M=S, K=d.H, N=2 * d.I_shared, fidelity=fid, glu=True)
+        self.se_w_gu = lin2d_upload(mesh_device, glu_weight(w.sh_gate.T.contiguous(), w.sh_up.T.contiguous()), lay)
+        self.se_d_run, lay = lin2d_prepare(mesh_device, M=S, K=d.I_shared, N=d.H, fidelity=fid)
+        self.se_dr_run, _ = lin2d_prepare(mesh_device, M=S, K=d.I_shared, N=d.H, fidelity=fid, residual=True)
+        self.se_w_d = lin2d_upload(mesh_device, w.sh_down.T.contiguous(), lay)
+
     def _build_shared_flat(self, mesh_device, w, d, S):
         """The shared expert as SE_P experts of I_shared / SE_P intermediate columns each (the flat expert's gate/up
         split takes <= 64 tile columns per expert at H 7168 bf8), every own token to all of them (indexed rows: token
@@ -861,6 +880,11 @@ class TtK3TokenSplitMoE:
             ys = ttnn.reduce_scatter(y, 0, cluster_axis=1, num_links=2, topology=ttnn.Topology.Linear)
             ttnn.deallocate(y)
             return ys
+        if self.se_mode == "lin2d":  # (a in L1; with yr: the block's y = yr + a @ Wd, in DRAM)
+            a = self.se_gu_run(x, self.se_w_gu, ttnn.L1_MEMORY_CONFIG)
+            y = self.se_d_run(a, self.se_w_d) if yr is None else self.se_dr_run(a, self.se_w_d, None, yr)
+            ttnn.deallocate(a)
+            return y
         if self.se_flat:  # (x row major; y bfp8 tiles [P S, H]: the parts' outputs, summed)
             x_rm = self.untilize(x) if x_rm is None else x_rm  # (layout_ops: 32 us vs ttnn's 49; or the planner's)
             y = self.se(
@@ -936,7 +960,12 @@ class TtK3TokenSplitMoE:
         self.experts_combine(xg, pl, arena)
         ttnn.deallocate(arena)
         mark("experts_combine")
-        if (
+        if self.se_mode == "lin2d" and not keep:  # (latent up, then the shared expert's down adds it: no sum op)
+            yr = self.latent_up(yr_l1="yr" in self.l1_set)
+            mark("lat_up")
+            y, ys = self.shared(x, yr=yr), None
+            mark("shared")
+        elif (
             self.fuse_sum and not keep
         ):  # (shared expert parts, latent up, then one sum; keep: ys separately, for checks)
             parts = self.shared(x, parts_only=True, x_rm=x_rm)  # (first: its arena takes all L1, so yr may live in L1)

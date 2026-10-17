@@ -52,9 +52,14 @@ constexpr uint32_t XS = get_compile_time_arg_val(14), WS = get_compile_time_arg_
 constexpr uint32_t XBAR = get_compile_time_arg_val(16), NSTW = get_compile_time_arg_val(17);  // (NST: x staging slots)
 // WPRE = 0: the W senders read nothing before every core of the column has x (the x reads get the DRAM to themselves)
 constexpr uint32_t WPRE = get_compile_time_arg_val(18);
-constexpr auto x_args = TensorAccessorArgs<19>();
+// GLU: the weight's tile columns are gate / up pairs; the output (NT tiles a row) is the activation, PNP / 2 a pass
+constexpr uint32_t GLU = get_compile_time_arg_val(19), PO = GLU ? PNP / 2 : PNP;
+// RES: y = r + x @ W (r [M, N] bf16 TILE: the NCRISC reads the core's tiles into CB 5, compute starts DST from them)
+constexpr uint32_t RES = get_compile_time_arg_val(20);
+constexpr auto x_args = TensorAccessorArgs<21>();
 constexpr auto y_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 constexpr auto d_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();  // (PROBE 512: event trace)
+constexpr auto r_args = TensorAccessorArgs<d_args.next_compile_time_args_offset()>();
 constexpr uint32_t XB = KB * 2048, WB = KB * PNPX * WTB, NS = NP * NBLK, WPT = KB * PNPX;
 constexpr uint32_t XV = 0, WV = 2, XD = 8, WC = 9;  // (WC: per W ring slot, NB of them)
 // multicast value words (16 B apart) in CB 10: [0, 128) the BRISC's, [128, 256) the NCRISC's; the feed handshake
@@ -226,6 +231,14 @@ void kernel_main() {
     const auto yg = TensorAccessor(y_args, y_addr, 2048);
     const uint32_t xres = get_write_ptr(0), wring = get_write_ptr(1), words = get_write_ptr(10);
     const uint32_t xst = get_write_ptr(8), wst = get_write_ptr(9);
+    if constexpr (RES) {  // (the residual's tiles of every pass, up front: the y tiles' positions)
+        const auto rg = TensorAccessor(r_args, get_arg_val<uint32_t>(11), 2048);
+        cb_reserve_back(5, NP * PNP);
+        const uint32_t l1 = get_write_ptr(5);
+        for (uint32_t t = 0; t < NP * PNP; ++t) noc_async_read(rg.get_noc_addr(cy * NT + n0 + t), l1 + t * 2048, 2048);
+        noc_async_read_barrier();
+        cb_push_back(5, NP * PNP);
+    }
     // the odd x blocks (right core) / odd W steps (bottom core): the BRISC reads them into the staging
     const bool xo = cx == GX - 1, wo = WS == 2 && cy == GY - 1;
     const uint32_t nx = xo ? n_own(XS, NBLK, 1) : 0, nw = wo ? n_own(WS, NS, 1) : 0;
@@ -254,11 +267,11 @@ void kernel_main() {
         }
     }
     for (uint32_t p = 0; p < NP; ++p) {  // (y: NP passes x PNP tiles)
-        cb_wait_front(4, PNP);
+        cb_wait_front(4, PO);
         const uint32_t l1 = get_read_ptr(4);
-        for (uint32_t t = 0; t < PNP; ++t) noc_async_write(l1 + t * 2048, yg.get_noc_addr(cy * NT + n0 + p * PNP + t), 2048);
+        for (uint32_t t = 0; t < PO; ++t) noc_async_write(l1 + t * 2048, yg.get_noc_addr(cy * NT + n0 / (GLU + 1) + p * PO + t), 2048);
         noc_async_write_barrier();
-        cb_pop_front(4, PNP);
+        cb_pop_front(4, PO);
     }
     noc_async_write_barrier();
     tr_dump(get_arg_val<uint32_t>(10), cy * GX + cx, 1);
@@ -272,13 +285,41 @@ _COMPUTE = r"""
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 #include "api/compute/cb_api.h"
+// L2D_GLU (defined for the gate / up linear): SiTU-GLU 4 tanh(g / 4) sigmoid(g) * 25 tanh(u / 25) over the pass's
+// DST tiles (gate t, up t + 1 -> t) on the PACK thread's SFPU, as the flat expert's se3_compute
+#ifdef L2D_RES
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
+#endif
+#if defined(L2D_GLU) && defined(TRISC_PACK)
+#include "ckernel_sfpu_binary.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
+#include "ckernel_sfpu_situ_glu.h"
+#endif
 constexpr uint32_t KB = get_compile_time_arg_val(0), PNP = get_compile_time_arg_val(1), PNPX = get_compile_time_arg_val(2);
 constexpr uint32_t NBLK = get_compile_time_arg_val(3), NP = get_compile_time_arg_val(4), PROBE = get_compile_time_arg_val(5);
 void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(0, 1, 4);  // (matmul: in1 -> SrcA, in0 -> SrcB)
     matmul_block_init(0, 1, 0, PNP, 1, KB);
+#ifdef L2D_GLU
+    PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init)));
+    constexpr uint32_t PO = PNP / 2;
+#else
+    constexpr uint32_t PO = PNP;
+#endif
     for (uint32_t p = 0; p < NP; ++p) {
+#ifdef L2D_RES
+        // DST starts from the residual's tiles (unpack srcA: W's format -> bf16, then the matmul state again)
+        reconfig_data_format_srca(1, 5);
+        copy_tile_to_dst_init_short(5);
         tile_regs_acquire();
+        cb_wait_front(5, (p + 1) * PNP);
+        for (uint32_t t = 0; t < PNP; ++t) copy_tile(5, p * PNP + t, t);
+        reconfig_data_format_srca(5, 1);
+        matmul_block_init(0, 1, 0, PNP, 1, KB);
+#else
+        tile_regs_acquire();
+#endif
         for (uint32_t j = 0; j < NBLK; ++j) {
             if (p == 0) cb_wait_front(0, (j + 1) * KB);  // (x: resident, block j arrives in pass 0)
             cb_wait_front(1, KB * PNPX);
@@ -286,13 +327,25 @@ void kernel_main() {
             cb_pop_front(1, KB * PNPX);
         }
         tile_regs_commit();
-        cb_reserve_back(4, PNP);
+        cb_reserve_back(4, PO);
         tile_regs_wait();
+#ifdef L2D_GLU
+        PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+        for (uint32_t t = 0; t < PNP; t += 2) {
+            PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_situ_glu,
+                                   (DST_ACCUM_MODE, 8, sfpu::SituGluConfigKimi), t, t + 1, t, VectorMode::RC)));
+        }
+        for (uint32_t t = 0; t < PNP; t += 2) pack_tile(t, 4);
+#else
         for (uint32_t t = 0; t < PNP; ++t) pack_tile(t, 4);
+#endif
         tile_regs_release();
-        cb_push_back(4, PNP);
+        cb_push_back(4, PO);
     }
     cb_pop_front(0, KB * NBLK);
+#ifdef L2D_RES
+    cb_pop_front(5, NP * PNP);
+#endif
 }
 """
 
@@ -319,6 +372,8 @@ def lin2d_prepare(
     fidelity=None,
     w_dtype=ttnn.bfloat8_b,
     out_dtype=ttnn.bfloat16,
+    glu=False,
+    residual=False,
 ):
     """Returns (run, layout): run(x [M, K] bf16 TILE, upload_stacked(mesh, W, layout)) -> y [M, N] TILE DRAM."""
     grid = mesh_device.compute_with_storage_grid_size()
@@ -326,9 +381,10 @@ def lin2d_prepare(
     GX, GY = grid.x, Mt
     assert M % 32 == 0 and 2 <= Mt <= grid.y and nb % 2 == 0 and nb <= 8
     NP = 1
-    while (Nt % NP) or max(column_split(Nt, GX, NP)) // NP > 8:  # (a pass's width: <= 8 fp32 DST tiles, full sync)
+    G = 2 if glu else 1  # (glu: N = 2 I weight columns as gate / up tile pairs, y [M, I] = the activation)
+    while (Nt % (NP * G)) or max(column_split(Nt, GX, NP * G)) // NP > 8:  # (a pass: <= 8 fp32 DST tiles, full sync)
         NP += 1
-    pns = column_split(Nt, GX, NP)
+    pns = column_split(Nt, GX, NP * G)
     assert Kt % kb == 0, (Kt, kb)
     nblk = Kt // kb
     wtb = {ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576, ttnn.bfloat16: 2048}[w_dtype]
@@ -358,7 +414,7 @@ def lin2d_prepare(
     nbank = mesh_device.dram_grid_size().x
     layout = dict(pns=pns, NP=NP, kb=kb, banks=nbank, xs=xs, ws=ws, groups=sorted(groups.items()))
 
-    def build(x, wl, y, dbg):
+    def build(x, wl, y, dbg, res):
         program = ttnn.ProgramDescriptor()
         fmt = lambda i, dt, page: [ttnn.CBFormatDescriptor(i, dt, page)]  # noqa: E731
         # the grid-wide CBs first (resident x: the same address across a row), then the W ring / output / W staging per
@@ -376,17 +432,33 @@ def lin2d_prepare(
         for pn, cols in sorted(groups.items()):
             crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx, 0), ttnn.CoreCoord(cx, GY - 1)) for cx in cols])
             wbg = kb * (pn // NP) * wtb
-            program.cbs += [
-                ttnn.CBDescriptor(total_size=nb * wbg, core_ranges=crs, format_descriptors=fmt(1, w_dtype, wtb)),
-                ttnn.CBDescriptor(
-                    total_size=NP * (pn // NP) * 2048, core_ranges=crs, format_descriptors=fmt(4, out_dtype, 2048)
-                ),
-                ttnn.CBDescriptor(total_size=nstw * wbg, core_ranges=crs, format_descriptors=fmt(9, w_dtype, wtb)),
-            ]
+            program.cbs += (
+                [
+                    ttnn.CBDescriptor(total_size=nb * wbg, core_ranges=crs, format_descriptors=fmt(1, w_dtype, wtb)),
+                    ttnn.CBDescriptor(
+                        total_size=NP * (pn // NP // G) * 2048,
+                        core_ranges=crs,
+                        format_descriptors=fmt(4, out_dtype, 2048),
+                    ),
+                ]
+                + (
+                    [
+                        ttnn.CBDescriptor(
+                            total_size=pn * 2048, core_ranges=crs, format_descriptors=fmt(5, ttnn.bfloat16, 2048)
+                        )
+                    ]
+                    if residual
+                    else []
+                )
+                + [
+                    ttnn.CBDescriptor(total_size=nstw * wbg, core_ranges=crs, format_descriptors=fmt(9, w_dtype, wtb)),
+                ]
+            )
         program.semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=allc, initial_value=0) for i in range(9 + nb)]
         x_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         y_ct = list(ttnn.TensorAccessorArgs(y).get_compile_time_args())
         d_ct = list(ttnn.TensorAccessorArgs(dbg).get_compile_time_args())
+        r_ct = list(ttnn.TensorAccessorArgs(res if res is not None else y).get_compile_time_args())
         dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
             processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
         )  # noqa: E731
@@ -396,11 +468,12 @@ def lin2d_prepare(
             crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx, 0), ttnn.CoreCoord(cx, GY - 1)) for cx in cols])
             pnp = pn // NP
             ct = (
-                [Kt, kb, pnp, nblk, NP, nb, GX, GY, wtb, pnp, Nt, probe, nbank, nst]
-                + [xs, ws, xbar, nstw, wpre]
+                [Kt, kb, pnp, nblk, NP, nb, GX, GY, wtb, pnp, Nt // G, probe, nbank, nst]
+                + [xs, ws, xbar, nstw, wpre, int(glu), int(residual)]
                 + x_ct
                 + y_ct
                 + d_ct
+                + r_ct
             )
             b_rt, n_rt, c_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for cx in cols:
@@ -433,6 +506,7 @@ def lin2d_prepare(
                         ty,
                         cxv,
                         int(dbg.buffer_address()),
+                        int(res.buffer_address()) if res is not None else 0,
                     ]
                     c_rt[cx][cy] = []
             comp = ttnn.ComputeConfigDescriptor()
@@ -458,7 +532,9 @@ def lin2d_prepare(
                     config=dm("RISCV_1", ttnn.NOC.NOC_1),
                 ),
                 ttnn.KernelDescriptor(
-                    kernel_source=_COMPUTE,
+                    kernel_source=("#define L2D_GLU 1\n" if glu else "")
+                    + ("#define L2D_RES 1\n" if residual else "")
+                    + _COMPUTE,
                     source_type=st,
                     core_ranges=crs,
                     compile_time_args=[kb, pnp, pnp, nblk, NP, probe],
@@ -472,9 +548,15 @@ def lin2d_prepare(
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(R - 1, C - 1))] = program
         return mesh_desc
 
-    def run(x, w, out_memory_config=None):
+    def run(x, w, out_memory_config=None, residual_tensor=None):
+        assert (residual_tensor is not None) == bool(residual)
+        res = residual_tensor
         y = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([M, N]), out_dtype, ttnn.TILE_LAYOUT, mesh_device, out_memory_config or ttnn.DRAM_MEMORY_CONFIG
+            ttnn.Shape([M, N // G]),
+            out_dtype,
+            ttnn.TILE_LAYOUT,
+            mesh_device,
+            out_memory_config or ttnn.DRAM_MEMORY_CONFIG,
         )
         if probe & 512 and "dbg" not in state:
             state["dbg"] = ttnn.allocate_tensor_on_device(
@@ -482,14 +564,21 @@ def lin2d_prepare(
             )
         dbg = state.get("dbg", y)
         wl = list(w) if isinstance(w, (list, tuple)) else [w]
-        k = tuple(int(t.buffer_address()) for t in [x, y, dbg] + wl)
+        k = tuple(int(t.buffer_address()) for t in [x, y, dbg] + wl + ([res] if res is not None else []))
         if state.get("key") != k:
-            state["key"], state["desc"] = k, build(x, wl, y, dbg)
-        ttnn.generic_op([x] + wl + ([dbg] if dbg is not y else []) + [y], state["desc"])  # (the output last)
+            state["key"], state["desc"] = k, build(x, wl, y, dbg, res)
+        extra = ([dbg] if dbg is not y else []) + ([res] if res is not None else [])
+        ttnn.generic_op([x] + wl + extra + [y], state["desc"])  # (the output last)
         run.dbg = state.get("dbg")
         return y
 
     return run, layout
+
+
+def glu_weight(wg, wu):
+    """Gate / up [K, I] each -> [K, 2 I] with tile columns gate 0, up 0, gate 1, up 1, .. (lin2d_prepare(glu=True))."""
+    K, I = wg.shape
+    return torch.stack([wg.reshape(K, I // 32, 32), wu.reshape(K, I // 32, 32)], dim=2).reshape(K, 2 * I)
 
 
 def upload_stacked(mesh_device, w, layout, dtype=ttnn.bfloat8_b):
