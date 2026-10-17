@@ -593,6 +593,106 @@ def test_sqrt_custom_infinity_regression(request):
     )
 
 
+# tanh_derivative_lut(+/-inf): exact 0 on a 16-bit cell. The edge sweep asserts the two
+# infinities only on Float32 -> Float32 at dest_acc=Yes. The op is in GENERATED_NAN_SIGN_OPS,
+# and on Wormhole specials_after_nan_sign_gate switches cat B off wholesale on the five cells
+# where the NaN narrows, which takes the +/-inf probes out with the NaN probe; with no cat-A or
+# cat-D edge of its own the op then skips those cells outright. The infinities do not depend on
+# the NaN sign, so this pins them on one of the cells the gate takes away: Float16_b -> Float16_b
+# at dest_acc=No, where the tt-llk kernel's +/-inf guard is what makes the result 0 rather than
+# the NaN of 0 * inf + 1, which this cell's pack would narrow to a signed infinity.
+#
+# Blackhole runs the gate-free edge sweep on Float32 -> Float32 only (_skip_bh_unless_fp32)
+# and takes the same skip here.
+@pytest.mark.nightly
+def test_tanh_derivative_lut_infinity_regression():
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    dest_acc = DestAccumulation.No
+    input_dimensions = [32, 32]
+
+    _skip_bh_unless_fp32(formats, dest_acc)
+
+    # If this ever goes False the pipeline stopped delivering +/-inf and the assertions below
+    # would pass vacuously -- fail loudly instead of quietly testing nothing.
+    assert specials_safe(formats.input_format, formats.output_format, dest_acc), (
+        "Float16_b -> Float16_b at dest_acc=No no longer carries specials; re-derive the "
+        "combination this regression test runs on before editing it."
+    )
+
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    # 0.0 on every lane around the probes: segment 0's intercept is 0, so the result there is
+    # exactly 1.0, and a guard widened to move every lane onto the tail returns 0 instead.
+    src_A = torch.zeros(num_elements, dtype=format_dict[formats.input_format])
+    src_A[0] = float("inf")
+    src_A[1] = float("-inf")
+    # A finite tail input, exactly 0 from the (0, 1.0) tail pair with no guard involved: a 0 on
+    # the probes is then the value the guard moves them onto, not a coincidence.
+    src_A[2] = 4.0
+    src_B = torch.zeros(num_elements, dtype=format_dict[formats.input_format])
+    tile_cnt = 1
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=MathOperation.TanhDerivativeLut),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        # A 16-bit input at dest_acc=No goes through the source registers, as in the sweep.
+        unpack_to_dest=False,
+    )
+
+    res = torch.tensor(
+        configuration.run().result, dtype=format_dict[formats.output_format]
+    ).float()
+
+    for lane, probe in ((0, "+inf"), (1, "-inf")):
+        assert res[lane] == 0.0, (
+            f"tanh_derivative_lut({probe}) returned {res[lane].item()!r}, expected 0.0. The "
+            "+/-inf guard in ckernel_sfpu_tanh_derivative.h is what moves the infinities onto "
+            "the lut's saturated tail; a signed infinity here is the NaN of 0 * inf + 1 "
+            "narrowed by the bfloat16 pack, i.e. the input reached the lut unguarded."
+        )
+    assert res[2] == 0.0, (
+        f"tanh_derivative_lut(4.0) returned {res[2].item()!r}, expected exactly 0.0 from the "
+        "table's (0, 1.0) tail pair; the pair the guard relies on has moved."
+    )
+    # Exactly 1.0, not a tolerance: segment 0 is 0.93701171875 * |x| + 0 and 1 - 0^2 is exact.
+    assert torch.equal(res[3:], torch.ones(num_elements - 3)), (
+        "tanh_derivative_lut(0.0) is no longer exactly 1.0 on the lanes around the probes "
+        f"(values seen: {sorted(set(res[3:].tolist()))}); the guard's predicate has been "
+        "widened to divert finite lanes."
+    )
+
+
 # sqrt(-0) and rsqrt(-0), read back as raw bit patterns. Outside the edge sweep because
 # passed_test() treats -0.0 and +0.0 as equal, so only an integer comparison can tell them
 # apart, and because the sweep runs ApproximationMode.No while _calculate_sqrt_body_ has a

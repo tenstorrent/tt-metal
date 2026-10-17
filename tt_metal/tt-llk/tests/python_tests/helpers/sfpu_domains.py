@@ -2163,7 +2163,9 @@ GENERATED_NAN_SIGN_OPS: FrozenSet[MathOperation] = frozenset(
         # A NaN input comes through the lut as a NaN, and the closing `val * (-val) + 1.0f`
         # SFPMAD then re-emits it as a NaN of its own, with the sign Wormhole leaves
         # unspecified: measured sign-set for a positive NaN input, which the bf16 narrowing
-        # lands on -inf against the golden's +inf.
+        # lands on -inf against the golden's +inf. Its +/-inf -> 0 result does not depend on
+        # the sign, and test_tanh_derivative_lut_infinity_regression pins it on one of the
+        # 16-bit cells this gate takes away.
         MathOperation.TanhDerivativeLut,
     }
 )
