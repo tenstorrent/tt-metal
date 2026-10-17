@@ -182,6 +182,8 @@ class TTMoEGate:
         self.k = select_experts_k
         self.hidden_size = hidden_size
         self.n_group = n_group
+        # The single block generalized gate on Blackhole reads token rows straight from the logits tiles, no repack.
+        self.direct_input = self.num_blocks == 1 and n_group != 8 and ttnn.device.is_blackhole(mesh_device)
         self.score_func = score_func
         self.scaling_factor = scaling_factor
         self.eps = eps
@@ -546,12 +548,10 @@ class TTMoEGate:
         out = ttnn.slice(self.tt_output, [0, 0, 0], [batch_per_iter, 32, 32], memory_config=mem_out)
         out_idx = ttnn.slice(self.tt_output_indices, [0, 0, 0], [batch_per_iter, 32, 32], memory_config=mem_out)
 
-        # The single block generalized gate on Blackhole reads token rows straight from the logits tiles, no repack.
-        direct_input = self.num_blocks == 1 and self.n_group != 8 and ttnn.device.is_blackhole(self.mesh_device)
         weights_chunks, indices_chunks = [], []
         for start in range(0, total_batch + padding, batch_per_iter):
             cur = logits[:, :, start : start + batch_per_iter, :]
-            if not direct_input:
+            if not self.direct_input:
                 cur = ttnn.reshape(cur, reshaped_shape)  # (bpi,16,16) or (bpi,num_blocks,16,16) for combine
                 cur = ttnn.to_memory_config(cur, memory_config=mem_in)  # height-shard: one token/core
 
@@ -583,7 +583,8 @@ class TTMoEGate:
                 )
             weights_chunks.append(ttnn.to_memory_config(w, memory_config=ttnn.L1_MEMORY_CONFIG))
             indices_chunks.append(ttnn.to_memory_config(idx, memory_config=ttnn.L1_MEMORY_CONFIG))
-            if not direct_input or cur is not logits:
+            # A single direct pass slices the whole of logits, which shares its buffer and is freed below.
+            if not (self.direct_input and num_iters == 1):
                 ttnn.deallocate(cur)
         ttnn.deallocate(logits)
 
