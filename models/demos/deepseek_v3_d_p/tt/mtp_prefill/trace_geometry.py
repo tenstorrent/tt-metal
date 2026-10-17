@@ -16,9 +16,13 @@ from __future__ import annotations
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.mla.utils import global_to_local_token_id, rotated_row_of_position
+from models.demos.deepseek_v3_d_p.tt.mla.utils import (
+    global_to_local_token_id,
+    mtp_lookahead_positions,
+    rotated_chip_positions,
+    rotated_row_of_position,
+)
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPSplitChipLookahead, MTPUnionEmbedding
-from models.demos.deepseek_v3_d_p.tt.runners.input_prep import mtp_generation_keep_rows, mtp_generation_select_rows
 
 # The one-hot matmuls stand in for slices, so they must copy rows bit-exactly: HiFi4 keeps every
 # mantissa bit of the copied operand and the fp32 dest holds it until the bf16 pack.
@@ -28,6 +32,10 @@ ONE_HOT_COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=True,
     packer_l1_acc=False,
 )
+
+
+def _generate_only(name: str) -> bool:
+    return name in ("keep", "rows", "col", "lm_rows")
 
 
 class MTPTraceGeometry:
@@ -69,15 +77,26 @@ class MTPTraceGeometry:
             f"{self.num_mtp_tokens} lookahead rows"
         )
         self._tensors: dict = {}
-        for name, host in self._host(0, self.chunk_size, self.num_levels).items():
-            self._tensors[name] = ttnn.from_torch(
-                host,
-                device=mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=self._mapper(),
-            )
+        # The plan key each device tensor was last written for, so write() skips an unchanged one.
+        self._keys: dict = {}
+        plan = self._plan(0, self.chunk_size, self.num_levels)
+        for name in self._names():
+            self._keys[name] = self._key(name, plan)
+            self._tensors[name] = self._device(self._build(name, plan, {}))
+        width = ttnn.TILE_SIZE * self.sp_factor
+        self._selects = [
+            self._device(torch.zeros(self.sp_factor, 1, self.union_len, width)) for _ in range(self.num_levels)
+        ]
+        # level_pick[k] keeps only row k of "col"; constant, so it is written once here.
+        tile = ttnn.TILE_SIZE
+        self._level_pick, self._level_cols = [], []
+        for k in range(self.num_levels):
+            pick = torch.zeros(self.sp_factor, 1, tile, tile)
+            pick[:, 0, k, k] = 1.0
+            self._level_pick.append(self._device(pick))
+            self._level_cols.append(self._device(torch.zeros(self.sp_factor, 1, tile, width)))
+        # Also compiles the select program before the capture, so write() never compiles between replays.
+        self._build_selects(range(self.num_levels))
 
     @property
     def has_split_chip(self) -> bool:
@@ -89,7 +108,7 @@ class MTPTraceGeometry:
 
     @property
     def selects(self) -> list:
-        return [self._tensors[f"select{k}"] for k in range(self.num_levels)]
+        return self._selects
 
     @property
     def lm_rows(self) -> ttnn.Tensor:
@@ -116,56 +135,164 @@ class MTPTraceGeometry:
         return self._tensors["take_next"]
 
     def write(self, actual_start: int, actual_end: int, provided_levels: int) -> None:
-        """Refresh every tensor in place for the chunk ``[actual_start, actual_end)``. Never inside a capture."""
-        for name, host in self._host(actual_start, actual_end, provided_levels).items():
-            src = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper())
-            ttnn.copy_host_to_device_tensor(src, self._tensors[name])
+        """Refresh the tensors whose plan key changed, for the chunk ``[actual_start, actual_end)``.
+
+        Never inside a capture. The selects are rebuilt on device from ``rows`` and ``col``, which are
+        ~1/15 of their size. A "provided" replay skips generation, so its write leaves the generate-only
+        tensors and the selects stale.
+        """
+        plan = self._plan(actual_start, actual_end, provided_levels)
+        generates = provided_levels < self.num_levels
+        built, written = {}, set()
+        for name in self._names():
+            if not generates and _generate_only(name):
+                continue
+            key = self._key(name, plan)
+            if key == self._keys[name]:
+                continue
+            ttnn.copy_host_to_device_tensor(self._host_tensor(self._build(name, plan, built)), self._tensors[name])
+            self._keys[name] = key
+            written.add(name)
+        self._build_selects(range(self.num_levels) if written & {"rows", "col"} else ())
 
     def deallocate(self) -> None:
-        for t in self._tensors.values():
+        for t in list(self._tensors.values()) + self._selects + self._level_pick + self._level_cols:
             ttnn.deallocate(t)
-        self._tensors = {}
+        self._tensors, self._selects, self._level_pick, self._level_cols = {}, [], [], []
 
     def _mapper(self):
         return ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=self.mesh_shape, dims=(self.sp_axis, None))
 
-    def _host(self, actual_start: int, actual_end: int, provided_levels: int) -> dict:
-        sp, k_levels, tile = self.sp_factor, self.num_levels, ttnn.TILE_SIZE
-        w, width = self.window_len, ttnn.TILE_SIZE * self.sp_factor
-        assert 0 <= provided_levels <= k_levels, f"provided_levels {provided_levels} outside [0, {k_levels}]"
-        geom = dict(
-            num_mtp_tokens=self.num_mtp_tokens,
-            num_levels=k_levels,
-            chunk_start=actual_start,
-            actual_end=actual_end,
-        )
-        generated = range(provided_levels, k_levels)
-        out = {"keep": mtp_generation_keep_rows(sp, self.chunk_size, **geom, levels=generated)}
+    def _host_tensor(self, host: torch.Tensor) -> ttnn.Tensor:
+        return ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper())
 
+    def _device(self, host: torch.Tensor) -> ttnn.Tensor:
+        return ttnn.from_torch(
+            host,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._mapper(),
+        )
+
+    def _build_selects(self, levels) -> None:
+        # rows[:, k] is level k's landing row and col row k is a 1 at source_row; picking that one row
+        # and multiplying gives the [U, 32*sp] one-hot selector. One-hot operands keep both exact.
+        for k in levels:
+            ttnn.matmul(
+                self._level_pick[k],
+                self._tensors["col"],
+                compute_kernel_config=ONE_HOT_COMPUTE_CONFIG,
+                optional_output_tensor=self._level_cols[k],
+            )
+            ttnn.matmul(
+                self._tensors["rows"],
+                self._level_cols[k],
+                compute_kernel_config=ONE_HOT_COMPUTE_CONFIG,
+                optional_output_tensor=self._selects[k],
+            )
+
+    def _names(self) -> list:
+        names = ["keep", "rows", "col", "lm_rows"]
+        if self.has_split_chip:
+            names += [f"win_keep{k}" for k in range(self.num_levels)]
+            names += [f"win_place{k}" for k in range(self.num_levels)]
+            names += ["next_select", "take_tail", "take_next"]
+        return names
+
+    def _key(self, name: str, plan: dict):
+        if name in ("keep", "rows"):
+            return plan["landing_key"]
+        if name == "col":
+            return (tuple(sorted(plan["landing"])), plan["source_row"])
+        if name == "lm_rows":
+            return plan["tile_start"]
+        return plan["split"]
+
+    def _generation_rows(self, actual_start: int, actual_end: int, levels) -> dict:
+        """Per level, the (chips, union rows) that position ``actual_end + level`` lands on.
+
+        Same answer as ``mtp_generation_union_rows``, with the chip positions built once per chunk
+        instead of twice per level: list ``index`` keeps its first-occurrence rule, trunk before slots.
+        """
+        w = self.window_len
+        trunks = rotated_chip_positions(actual_start, self.sp_factor, w)
+        slots = mtp_lookahead_positions(actual_start, self.sp_factor, w, actual_end, self.num_levels)
+        assert all(len(s) <= self.num_mtp_tokens for s in slots), f"lookahead slots do not fit in {self.num_mtp_tokens}"
+        out = {}
+        for level in levels:
+            pos, chips, rows = actual_end + level, [], []
+            for c, (trunk, chip_slots) in enumerate(zip(trunks, slots)):
+                if pos in trunk:
+                    chips.append(c), rows.append(trunk.index(pos))
+                elif pos in chip_slots:
+                    chips.append(c), rows.append(w + chip_slots.index(pos))
+            assert chips, f"no chip holds global position {pos}: chunk_start={actual_start} level={level}"
+            out[level] = (torch.tensor(chips), torch.tensor(rows))
+        return out
+
+    def _plan(self, actual_start: int, actual_end: int, provided_levels: int) -> dict:
+        """The chunk's decisions; every tensor is a function of one of them."""
+        k_levels, tile, w = self.num_levels, ttnn.TILE_SIZE, self.window_len
+        assert 0 <= provided_levels <= k_levels, f"provided_levels {provided_levels} outside [0, {k_levels}]"
+        assert k_levels <= tile, f"rows packs one level per column of a {tile}-wide tile; K={k_levels}"
+        generated = range(provided_levels, k_levels)
+        # A provided chunk reads only the split-chip windows, so it skips the per-chip position lists.
+        landing = self._generation_rows(actual_start, actual_end, generated) if generated else {}
         tile_start, source_row = 0, 0
         if generated:
-            last_row = rotated_row_of_position(actual_start, sp, w, actual_end - 1)
+            last_row = rotated_row_of_position(actual_start, self.sp_factor, w, actual_end - 1)
             assert (
                 last_row is not None
             ), f"the chunk at {actual_start} does not carry its own last real position {actual_end - 1}"
-            device_id, local = global_to_local_token_id(last_row, sp, self.chunk_size, is_balanced=False)
+            device_id, local = global_to_local_token_id(last_row, self.sp_factor, self.chunk_size, is_balanced=False)
             tile_start = (local // tile) * tile
             source_row = device_id * tile + local % tile
-        for k in range(k_levels):
-            out[f"select{k}"] = (
-                mtp_generation_select_rows(sp, self.chunk_size, **geom, level=k, source_row=source_row)
-                if k in generated
-                else torch.zeros(sp, 1, self.union_len, width)
-            )
-        lm_rows = torch.zeros(sp, 1, tile, w)
-        lm_rows[:, 0, torch.arange(tile), tile_start + torch.arange(tile)] = 1.0
-        out["lm_rows"] = lm_rows
+        split = MTPSplitChipLookahead.geometry(
+            actual_start, w, self.sp_factor, chunk_end=actual_end, num_levels=k_levels
+        )
+        return dict(
+            landing=landing,
+            landing_key=tuple((k, tuple(c.tolist()), tuple(r.tolist())) for k, (c, r) in sorted(landing.items())),
+            tile_start=tile_start,
+            source_row=source_row,
+            split=split,
+        )
 
+    def _build(self, name: str, plan: dict, built: dict) -> torch.Tensor:
+        """Host tensor ``name`` for ``plan``; ``built`` caches the window group, which shares one key."""
+        sp, k_levels, tile, w = self.sp_factor, self.num_levels, ttnn.TILE_SIZE, self.window_len
+        width = tile * sp
+        if name == "keep":
+            keep = torch.ones(sp, 1, self.union_len, 1)
+            for chips, rows in plan["landing"].values():
+                keep[chips, 0, rows, 0] = 0.0
+            return keep
+        if name == "rows":
+            rows_t = torch.zeros(sp, 1, self.union_len, tile)
+            for k, (chips, rows) in plan["landing"].items():
+                rows_t[chips, 0, rows, k] = 1.0
+            return rows_t
+        if name == "col":
+            col = torch.zeros(sp, 1, tile, width)
+            col[:, 0, list(plan["landing"]), plan["source_row"]] = 1.0
+            return col
+        if name == "lm_rows":
+            lm_rows = torch.zeros(sp, 1, tile, w)
+            lm_rows[:, 0, torch.arange(tile), plan["tile_start"] + torch.arange(tile)] = 1.0
+            return lm_rows
+        if not built:
+            built.update(self._build_window(plan["split"]))
+        return built[name]
+
+    def _build_window(self, split) -> dict:
+        sp, k_levels, tile, w = self.sp_factor, self.num_levels, ttnn.TILE_SIZE, self.window_len
+        width = tile * sp
         win_keep = [torch.ones(sp, 1, w, 1) for _ in range(k_levels)]
         win_place = [torch.zeros(sp, 1, w, tile) for _ in range(k_levels)]
         next_select = torch.zeros(sp, 1, tile, width)
         take_tail, take_next = torch.zeros(sp, 1, 1, 1), torch.zeros(sp, 1, 1, 1)
-        split = MTPSplitChipLookahead.geometry(actual_start, w, sp, chunk_end=actual_end, num_levels=k_levels)
         if split is not None:
             split_row, split_chip, next_chip = split
             assert k_levels < split_row < w and k_levels <= tile <= self.num_mtp_tokens, (
@@ -182,11 +309,20 @@ class MTPTraceGeometry:
             else:
                 take_next[:] = 1.0
                 next_select[:, 0, torch.arange(tile), next_chip * tile + torch.arange(tile)] = 1.0
-        if self.has_split_chip:
-            for k in range(k_levels):
-                out[f"win_keep{k}"] = win_keep[k]
-                out[f"win_place{k}"] = win_place[k]
-            out.update(next_select=next_select, take_tail=take_tail, take_next=take_next)
+        out = {f"win_keep{k}": win_keep[k] for k in range(k_levels)}
+        out.update({f"win_place{k}": win_place[k] for k in range(k_levels)})
+        out.update(next_select=next_select, take_tail=take_tail, take_next=take_next)
+        return out
+
+    def _host(self, actual_start: int, actual_end: int, provided_levels: int) -> dict:
+        """Every tensor the replay reads, on host, with the selects formed as the device forms them."""
+        plan = self._plan(actual_start, actual_end, provided_levels)
+        built: dict = {}
+        out = {name: self._build(name, plan, built) for name in self._names()}
+        for k in range(self.num_levels):
+            pick = torch.zeros(self.sp_factor, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE)
+            pick[:, 0, k, k] = 1.0
+            out[f"select{k}"] = out["rows"] @ (pick @ out["col"])
         return out
 
 
