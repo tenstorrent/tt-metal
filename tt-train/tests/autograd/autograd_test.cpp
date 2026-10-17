@@ -86,6 +86,28 @@ TEST_F(AutogradTest, TestMul) {
     EXPECT_EQ(t1_back, test_data2);
 }
 
+// Regression test for #57751: freezing a parameter must drop its previously accumulated
+// gradient. Otherwise add_grad() keeps skipping (it no-ops while !requires_grad) and the stale
+// gradient from before the freeze survives is_grad_initialized() checks in every optimizer's
+// zero_grad()/step(), so the parameter keeps getting updated after being frozen.
+TEST_F(AutogradTest, SetRequiresGradFalseClearsGrad) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    std::vector<float> test_data = {1.F, 2.F, 3.F, 4.F};
+    auto shape = ttnn::Shape({1, 1, 1, 4});
+    auto tensor = ttml::core::from_vector(test_data, shape, device);
+    auto t = ttml::autograd::create_tensor(tensor, /* requires_grad */ true);
+
+    t->set_grad(ttml::core::from_vector(test_data, shape, device));
+    EXPECT_TRUE(t->is_grad_initialized());
+
+    t->set_requires_grad(false);
+    EXPECT_FALSE(t->is_grad_initialized());
+
+    // Freezing does not create a gradient out of nothing.
+    t->set_requires_grad(true);
+    EXPECT_FALSE(t->is_grad_initialized());
+}
+
 TEST_F(AutogradTest, BroadCastBatchTest) {
     using namespace ttml::ops;
     auto* device = &ttml::autograd::ctx().get_device();
