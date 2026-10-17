@@ -115,6 +115,13 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     // Since tanh(x) is bounded by [-1, 1], we clamp output to 1.0.
     result = sfpi::min(result, 1.0f);
 
+    // The clamp alone launders a NaN: min is SFPSWAP, whose order ranks a positive NaN above
+    // +Inf, and SFPMAD emits a positive NaN, so min(NaN, 1.0) is 1.0. Same construction as the
+    // accurate kernel: val is +Inf or NaN here, so the decrement makes +Inf finite (-> 1.0) and
+    // leaves a NaN a NaN.
+    v_if(!sfpi::is_finite(val)) { result = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(val) - 1) * 0.0f + 1.0f; }
+    v_endif;
+
     result = sfpi::copysgn(result, x);  // restore sign (i.e. tanh(-x) = -tanh(x))
 
     return result;
@@ -146,8 +153,15 @@ sfpi_inline void _sfpu_tanh_polynomial_x2_(
     r0 = r0 * a0;
     r1 = r1 * a1;
 
-    y0 = sfpi::copysgn(sfpi::min(r0, 1.0f), x0);
-    y1 = sfpi::copysgn(sfpi::min(r1, 1.0f), x1);
+    r0 = sfpi::min(r0, 1.0f);
+    r1 = sfpi::min(r1, 1.0f);
+    // NaN guard, as in _sfpu_tanh_polynomial_.
+    v_if(!sfpi::is_finite(a0)) { r0 = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a0) - 1) * 0.0f + 1.0f; }
+    v_endif;
+    v_if(!sfpi::is_finite(a1)) { r1 = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a1) - 1) * 0.0f + 1.0f; }
+    v_endif;
+    y0 = sfpi::copysgn(r0, x0);
+    y1 = sfpi::copysgn(r1, x1);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
