@@ -10,7 +10,7 @@
 // the RHS PREPROCESS + wait_front(1) move OUT of process_sfpu_scalar_tiles (the scalar tile is produced
 // once, by the writer), the per-tile RHS copy_tile always reads tile index 0, and the RHS DFB is popped
 // once after all chunks. The LHS stream, the lhs/rhs/post activation machinery, and the ARCH_QUASAR
-// copy_tile_to_dst_init_short gasket are identical to the no-broadcast kernel.
+// copy_init gasket are identical to the no-broadcast kernel.
 //
 // DFB operand naming mirrors the CB CBIndex mapping:
 //   dfb::pre_lhs  (= CBIndex::c_0)   dfb::pre_rhs (= c_1)   dfb::out (= c_2)

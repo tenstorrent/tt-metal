@@ -184,7 +184,7 @@ ALWI void fold_dest(uint32_t num_contributors, uint32_t n) {
         // remainder pairs up exactly; both spellings OVERWRITE rather than accumulate.
         uint32_t c;
         if (num_contributors & 1u) {
-            copy_tile_to_dst_init_short(IN);
+            copy_init(IN);
             for (uint32_t i = 0; i < w; ++i) {
                 copy_tile(IN, t0 + i, i);
             }
@@ -289,7 +289,7 @@ ALWI void fold_binary_act_blocked(uint32_t num_contributors, uint32_t n) {
         reconfig_data_format(GATE, GATE);
         uint32_t c;
         if (num_contributors & 1u) {
-            copy_tile_to_dst_init_short(GATE);
+            copy_init(GATE);
             for (uint32_t i = 0; i < width; ++i) {
                 copy_tile(GATE, base + i, i);
             }
@@ -310,7 +310,7 @@ ALWI void fold_binary_act_blocked(uint32_t num_contributors, uint32_t n) {
 
         reconfig_data_format(UP, UP);
         if (num_contributors & 1u) {
-            copy_tile_to_dst_init_short(UP);
+            copy_init(UP);
             for (uint32_t i = 0; i < width; ++i) {
                 copy_tile(UP, base + i, width + i);
             }

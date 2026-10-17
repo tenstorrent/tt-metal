@@ -234,7 +234,8 @@ This is the heart of the example, demonstrating **SFPU operation chaining**:
 
 ```cpp
 // Initialize SFPU and acquire tile registers
-init_sfpu(src_cb_index, result_cb_index);
+compute_kernel_hw_startup(src_cb_index, result_cb_index);
+copy_init(src_cb_index);
 tile_regs_acquire();
 
 // Load data into registers
