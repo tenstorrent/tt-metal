@@ -348,7 +348,7 @@ void compute_sdpa_chunk(
         chunk_size % qk_signal_granularity == 0,
         "compute_sdpa_chunk: chunk_size must be divisible by qk_signal_granularity");
     // The custom-MM unpacks issue a single MOP of (kt_dim/2)-1 iterations and only support an even
-    // kt_dim >= 2 (an even number from 2 to 254; the shared SrcB face walk cannot address face 511). With
+    // kt_dim >= 2 (see the "kt_dim: even number from 2 to 256" note in the unpack LLK headers). With
     // kt_dim < 2 the count underflows to ~4 billion and the unpacker hangs silently. Fail at compile
     // time instead. OV matmul: kt_dim = chunk_size (Sk_chunk_t); QK matmul: kt_dim = qk_kt.
     static_assert(

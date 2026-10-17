@@ -30,7 +30,7 @@ namespace ckernel {
  * in1 tile shape: [32, 32]
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
- * kt_dim: any integer from 1 to 255 (inclusive)
+ * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -84,7 +84,7 @@ ALWI void custom_mm_block_init(
  * in1 tile shape: [32, 32]
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
- * kt_dim: any integer from 1 to 255 (inclusive)
+ * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -127,7 +127,7 @@ ALWI void custom_mm_block_init_short(
  * in1 tile shape: [32, 32]
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
- * kt_dim: any integer from 1 to 255 (inclusive)
+ * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -142,7 +142,7 @@ ALWI void custom_mm_block_init_short(
  * | in0_tile_index  | The index of the tile in block A from the first input CB                                                        | uint32_t | Must be less than the size of the CB             | True                  |
  * | in1_tile_index  | The index of the tile in block B from the second input CB                                                       | uint32_t | Must be less than the size of the CB             | True                  |
  * | dst_index       | The index of the tile in DST REG to which the result C will be written                                          | uint32_t | Must be less than the acquired size of DST REG   | True                  |
- * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t | Any integer from 1 to 255 (inclusive)            | True                  |
+ * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t | Any integer from 1 to 256 (inclusive)            | True                  |
  * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 16                                          | False (default 1)     |
  */
 // clang-format on
@@ -172,7 +172,7 @@ ALWI void custom_mm_block(
  * in1 tile shape: [32, 32]
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
- * kt_dim: any integer from 1 to 255 (inclusive)
+ * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -185,7 +185,7 @@ ALWI void custom_mm_block(
  * | in1_cb_id       | The identifier of the second input circular buffer (CB)                                                         | uint32_t | 0 to 31                                          | True                  |
  * | in0_tile_index  | The index of the tile in block A from the first input CB                                                        | uint32_t | Must be less than the size of the CB             | True                  |
  * | in1_tile_index  | The index of the tile in block B from the second input CB                                                       | uint32_t | Must be less than the size of the CB             | True                  |
- * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t | Any integer from 1 to 255 (inclusive)            | True                  |
+ * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t | Any integer from 1 to 256 (inclusive)            | True                  |
  * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 16                                          | False (default 1)     |
  */
 // clang-format on
@@ -213,7 +213,7 @@ ALWI void custom_mm_block_unpack(
  * in1 tile shape: [32, 32]
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
- * kt_dim: any integer from 1 to 255 (inclusive)
+ * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -225,7 +225,7 @@ ALWI void custom_mm_block_unpack(
  * | in0_cb_id       | The identifier of the first input circular buffer (CB)                                                         | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id       | The identifier of the second input circular buffer (CB)                                                        | uint32_t | 0 to 31                                          | True                  |
  * | dst_index       | The index of the tile in DST REG to which the result C will be written                                         | uint32_t | Must be less than the acquired size of DST REG   | True                  |
- * | kt_dim          | The inner dimension in tiles                                                                                   | uint32_t | Any integer from 1 to 255 (inclusive)            | True                  |
+ * | kt_dim          | The inner dimension in tiles                                                                                   | uint32_t | Any integer from 1 to 256 (inclusive)            | True                  |
  * | ct_dim          | The width of the output matrix in tiles                                                                        | uint32_t | 1 to 16                                          | False (default 1)     |
  */
 // clang-format on

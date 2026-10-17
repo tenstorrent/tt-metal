@@ -22,7 +22,7 @@ using namespace ckernel::unpacker;
 // in1 tile shape: [32, 32]
 // rt_dim: 1
 // ct_dim: any integer from 1 to 16
-// kt_dim: any integer from 1 to 255 (inclusive)
+// kt_dim: any integer from 1 to 256 (inclusive)
 // fidelity: LoFi only
 // throttle: not supported
 
@@ -44,9 +44,10 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
     // Each unpack instruction we move to next face in L1, but this is split among Y and Z counters
     // The L1 face index is the sum of the low 8 bits of each counter, (Y & 0xff) + (Z & 0xff)
     // (UNPACR_Regular.md), so a single counter would overflow after 256 faces. Per k-tile the first
-    // face is read at (Y=k, Z=k) and the second at (Y=k, Z=k+1): kt_dim = 255 reads faces 0..509 and
-    // the walk cannot address face 511, which caps kt_dim at 255. For k = 255 the second read would
-    // see Z = 256, whose low byte is 0, and fetch face 255 instead of face 511
+    // face is read at (Y=k, Z=k) and the second at (Y=k, Z=k+1), so one walk from a base reaches face
+    // 510 at most, i.e. 255 k-tiles: for k = 255 the second read would see Z = 256, whose low byte is
+    // 0, and fetch face 255 instead of face 511. kt_dim = 256 is therefore unpacked as 2 x 128 k-tiles,
+    // the second run restarting the counters at zero from a SrcB base advanced by 128 tiles (see _run_)
     // For SrcB first unpack has to land at index 0 and second one at index 16,
     // increment from first to second is straightforward, but moving back to 0 after second requires us to exploit
     // counter overflow as CH1 counters only use low 6 bits and wrap at the number of rows in a Src reg (64)
@@ -237,15 +238,16 @@ inline void _llk_unpack_AB_custom_mm_run_(
     volatile std::uint32_t* cfg,
     std::uint32_t address_a,
     const std::uint32_t address_b,
+    const std::uint32_t tile_size_b,
     const std::uint32_t block_increment,
     const std::uint32_t inner_increment,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim) {
-    LLK_ASSERT(kt_dim <= 255, "custom_mm: the SrcB face walk addresses at most 510 faces (kt_dim <= 255)");
+    const std::uint32_t ct_dim)
+{
+    // kt_dim = 0 would wrap the math thread's kt_dim - 1 loop; 256 is the most two runs of the face walk cover
+    LLK_ASSERT(kt_dim >= 1 && kt_dim <= 256, "custom_mm: kt_dim must be 1 to 256");
 
-    // Program SrcB address once, its updated using counters for up to 255 kt_dim
-    cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
-    // Program SrcA address once, its updated using CFGSHIFTMASK
+    // Program SrcA address once, its updated using CFGSHIFTMASK, which also carries it across the run split below
     cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
     // Setup CFGSHIFTMASK increments
     // block_increment moves to next tile in tile_row
@@ -253,43 +255,66 @@ inline void _llk_unpack_AB_custom_mm_run_(
     // inner_increment moves to next tile_row (next inner_dim)
     cfg[SCRATCH_SEC1_val_ADDR32] = inner_increment;
 
-    semaphore_post(semaphore::UNPACK_SYNC);
-
-    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
-
     constexpr std::uint32_t mop_template_0 = 0;
     constexpr std::uint32_t no_skip_zmask = 0;
     constexpr std::uint32_t replay_buffer_size = 32;
     constexpr std::uint32_t full_unpack_instruction_count = 5;
     constexpr std::uint32_t reuse_instruction_count = 3;
 
-    const std::uint32_t kt_pairs = kt_dim / 2;
-    if (kt_pairs > 0) {
-        TT_MOP(mop_template_0, kt_pairs - 1, no_skip_zmask);
-    }
-    if (kt_dim % 2 != 0) {
-        const std::uint32_t first_half_tiles = (ct_dim + 1) / 2;
-        const std::uint32_t second_half_tiles = ct_dim / 2;
-        // Both tunings occupy five instructions for the full unpack. Post1's first instruction is a padding NOP,
-        // while post0's last instruction is a hazard NOP.
-        const std::uint32_t first_half_instruction_count =
-            full_unpack_instruction_count + (first_half_tiles - 1) * reuse_instruction_count;
-        lltt::replay(0, first_half_instruction_count);
-        if (second_half_tiles > 0) {
-            const std::uint32_t second_half_instruction_count = second_half_tiles * reuse_instruction_count;
-            TT_REPLAY(replay_buffer_size - second_half_instruction_count, second_half_instruction_count, 0, 0);
+    // The SrcB face walk addresses at most 510 faces from one base (see _llk_unpack_AB_custom_mm_iter_insns), so a
+    // run covers at most 255 k-tiles and kt_dim = 256 is unpacked as two runs of 128. The second run restarts the
+    // Ch0 Y/Z counters at zero from a SrcB base advanced past the first run's tiles. SrcA needs nothing: the first
+    // run's CFGSHIFTMASKs have already moved its base to the next k-tile row. The math thread sees one uninterrupted
+    // sequence of SrcB data-valid flips, so it needs no per-run sync.
+    constexpr std::uint32_t max_kt_per_run = 255;
+    const std::uint32_t num_runs           = kt_dim > max_kt_per_run ? 2 : 1;
+    const std::uint32_t first_run_kt       = num_runs == 2 ? kt_dim / 2 : kt_dim;
+    std::uint32_t run_address_b            = address_b;
+    std::uint32_t run_kt                   = first_run_kt;
+    for (std::uint32_t run = 0; run < num_runs; run++)
+    {
+        // Program SrcB address, its updated using counters for up to 255 kt_dim
+        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = run_address_b;
+
+        semaphore_post(semaphore::UNPACK_SYNC);
+
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+        const std::uint32_t kt_pairs = run_kt / 2;
+        if (kt_pairs > 0)
+        {
+            TT_MOP(mop_template_0, kt_pairs - 1, no_skip_zmask);
         }
+        if (run_kt % 2 != 0)
+        {
+            const std::uint32_t first_half_tiles  = (ct_dim + 1) / 2;
+            const std::uint32_t second_half_tiles = ct_dim / 2;
+            // Both tunings occupy five instructions for the full unpack. Post1's first instruction is a padding NOP,
+            // while post0's last instruction is a hazard NOP.
+            const std::uint32_t first_half_instruction_count = full_unpack_instruction_count + (first_half_tiles - 1) * reuse_instruction_count;
+            lltt::replay(0, first_half_instruction_count);
+            if (second_half_tiles > 0)
+            {
+                const std::uint32_t second_half_instruction_count = second_half_tiles * reuse_instruction_count;
+                TT_REPLAY(replay_buffer_size - second_half_instruction_count, second_half_instruction_count, 0, 0);
+            }
+        }
+
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+        // Wait for all contexts to be free. The SEMGET above executes once every UNPACR of this run has issued and
+        // formed its L1 address, so the counters can be reset and, for a second run, the SrcB base rewritten -- the
+        // same ordering back-to-back calls of this function rely on.
+        wait_for_next_context(1);
+        reset_config_context();
+
+        // Reset counters at the end (of each run)
+        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+        TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
+
+        run_address_b += run_kt * tile_size_b;
+        run_kt = kt_dim - first_run_kt;
     }
-
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
-
-    // Wait for all contexts to be free
-    wait_for_next_context(1);
-    reset_config_context();
-
-    // Reset counters at the end
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
-    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
 /**
@@ -303,7 +328,7 @@ inline void _llk_unpack_AB_custom_mm_run_(
  * @param tile_index_b: First activation tile to read.
  * @param tile_size_a: Weight tile size, in 16-byte words.
  * @param tile_size_b: Activation tile size, in 16-byte words.
- * @param kt_dim: Inner dimension in tiles, 1 to 255.
+ * @param kt_dim: Inner dimension in tiles, 1 to 256.
  * @param ct_dim: Output width in tiles, 1 to 16.
  * @note Call @ref _llk_unpack_AB_custom_mm_init_ first.
  * @note On the math thread, pair with @ref _llk_math_custom_mm_.
@@ -331,5 +356,5 @@ inline void _llk_unpack_AB_custom_mm_(
     wait_for_next_context(1);
     reset_config_context();
 
-    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
+    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, tile_size_b, block_increment, inner_increment, kt_dim, ct_dim);
 }

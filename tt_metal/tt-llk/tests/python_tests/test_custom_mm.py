@@ -17,17 +17,19 @@ A standard tiled matmul ``C[M,N] = A[M,K] @ B[K,N]`` with the header's tile-shap
   in0 (A)  -> SrcB, tile shape ``[{1,2,4,8}, 32]``: only the top two faces, each
               ``face_r_dim = M`` rows tall. So M is restricted to {1,2,4,8}.
   in1 (B)  -> SrcA, full ``[32,32]`` tiles.
-  rt_dim = 1, ct_dim in [1,16], kt_dim in [1,255], LoFi only.
+  rt_dim = 1, ct_dim in [1,16], kt_dim in [1,256], LoFi only.
 
 The kt_dim ceiling
 ------------------
 The SrcB walk reads one face per UNPACR and forms the L1 face index from the low 8 bits
 of the Ch0 Y and Z counters, (Y & 0xff) + (Z & 0xff) (UNPACR_Regular.md, ADCs.md). Per
-k-tile it reads faces (Y=k, Z=k) and (Y=k, Z=k+1): kt_dim = 255 reads faces 0..509, and the
-walk cannot address face 511. kt_dim = 256 needs it: at k = 255 the Z counter has stepped to
-256, its low byte is 0, and the second UNPACR reads face 255 (k-tile 127's second face)
-instead. ``test_custom_mm_kt_past_max_asserts`` pins the LLK assert that rejects it, and
-``test_custom_mm_kt_max`` is the kt_dim = 255 positive control.
+k-tile it reads faces (Y=k, Z=k) and (Y=k, Z=k+1), so one walk from a base covers at most
+255 k-tiles (faces 0..509): at k = 255 the Z counter has stepped to 256, its low byte is 0,
+and the second UNPACR would read face 255 (k-tile 127's second face) instead of face 511.
+The LLK therefore unpacks kt_dim = 256 as two runs of 128, restarting the counters from a
+SrcB base advanced by 128 tiles. ``test_custom_mm_kt_max`` pins the two-run case with
+operands that make the aliased face decide the sign of the result, and
+``test_custom_mm_kt_single_run_max`` is the kt_dim = 255 single-run control.
 
 ``split_acc=false`` / ``finalize=false``, so there is no finalization merge and DEST
 holds the plain accumulated product (custom_mm.h: finalize must be false when split_acc
@@ -292,8 +294,8 @@ CUSTOM_MM_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Float32], same=True
 )
 
-# kt is in [1,255]; small even values cover the paired MOP path. The ceiling is covered by
-# test_custom_mm_kt_max / test_custom_mm_kt_past_max_asserts below.
+# kt is in [1,256]; small even values cover the paired MOP path. The ceiling is covered by
+# the test_custom_mm_kt_* tests below.
 KT_DIMS = [2, 4]
 
 # ct in [1,16]. Include 1, an even width, and the odd widths 7/9/11 that the header's
@@ -392,11 +394,14 @@ def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format):
     )
 
 
-# kt_dim = 255 reads SrcB faces 0..509 and the walk cannot address face 511 (see the module
-# docstring), so kt_dim tops out at 255. At the ceiling the operands are kt*2048 B each for ct=1
-# in Float16_b, which is the most the harness's L1 window holds (Float32 tiles or ct>1 would
-# not fit), so both tests use ct=1.
-KT_MAX = 255
+# One SrcB face walk covers 255 k-tiles (faces 0..509, see the module docstring); kt_dim = 256 is
+# unpacked as two runs of 128. At the ceiling the operands are kt*2048 B each for ct=1 in
+# Float16_b, which is the most the harness's L1 window holds (Float32 tiles or ct>1 would not
+# fit), so the ceiling tests share this one shape.
+KT_MAX = 256
+KT_SINGLE_RUN_MAX = 255
+KT_CEILING_M = 8
+KT_CEILING_CT = 1
 KT_CEILING_FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 # A face's value tells the two counter halves apart: an aliased read lands 256 faces below.
 A_FACE_VALUE_LOW, A_FACE_VALUE_HIGH = 1.0, 2.0
@@ -418,16 +423,53 @@ def _last_k_tile_b(K, N):
     return torch_b
 
 
+def _sign_deciding_operands(M, K, N):
+    """Operands where the last k-tile's second face decides the sign of the result.
+
+    A is 0 except the last face (= +1) and the face 256 below it (= -1); B is 0 except the rows
+    the last face pairs with, as small integers (1..8) exact in LoFi. The golden is +16 * B_row;
+    a walk that reads the face 256 below (the aliasing the two-run split avoids) gives -16 * B_row.
+    """
+    last_face = slice(K - FACE_C_DIM, K)
+    aliased_face = slice(K // 2 - FACE_C_DIM, K // 2)
+    torch_a = torch.zeros((M, K), dtype=torch.float32)
+    torch_a[:, last_face] = 1.0
+    torch_a[:, aliased_face] = -1.0
+    torch_b = torch.zeros((K, N), dtype=torch.float32)
+    torch_b[last_face, :] = 1.0 + (torch.arange(N, dtype=torch.float32) % 8)
+    return torch_a, torch_b
+
+
 @blackhole_only
 def test_custom_mm_kt_max():
-    """kt_dim = 255 reads faces 0..509; the last k-tile (faces 508 and 509) must come from where it lives.
+    """kt_dim = 256 needs SrcB face 511, which one face walk cannot address; the LLK runs the walk twice.
+
+    A single walk would multiply k-tile 255's second half of B with A's face 255 instead of face
+    511; the operands make that one swap decide the sign of the result.
+    """
+    M, kt, ct = KT_CEILING_M, KT_MAX, KT_CEILING_CT
+    K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        KT_CEILING_FORMATS,
+        DestAccumulation.No,
+        operands=_sign_deciding_operands(M, K, N),
+        exact_arithmetic=True,
+    )
+
+
+@blackhole_only
+def test_custom_mm_kt_single_run_max():
+    """kt_dim = 255 is the last single-run value; the last k-tile (faces 508 and 509) must come from where it lives.
 
     B is 0 except the rows of the last k-tile, so the golden is decided only by the two faces that
     end the walk, and A's upper-half faces carry 2 where the lower half carries 1, so a face read
-    256 below (the aliasing the ceiling guards against) halves the result instead of hiding in the
-    K-scaled tolerance a random operand set would need.
+    256 below halves the result instead of hiding in the K-scaled tolerance a random operand set
+    would need.
     """
-    M, kt, ct = 8, KT_MAX, 1
+    M, kt, ct = KT_CEILING_M, KT_SINGLE_RUN_MAX, KT_CEILING_CT
     K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
     _run_custom_mm(
         M,
@@ -443,31 +485,16 @@ def test_custom_mm_kt_max():
 @blackhole_only
 @pytest.mark.skipif(
     os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1",
-    reason="LLK_ASSERT is compiled out (TT_LLK_DISABLE_ASSERTS=1); kt_dim = 256 then runs to a golden mismatch",
+    reason="LLK_ASSERT is compiled out (TT_LLK_DISABLE_ASSERTS=1); past the ceiling the walk then runs unguarded",
 )
 def test_custom_mm_kt_past_max_asserts():
-    """kt_dim = 256 needs SrcB face 511, which the walk cannot address; the unpack LLK rejects it.
+    """kt_dim = 257 is past the contract; the unpack and math LLKs both reject it before issuing anything.
 
-    Without the assert the kernel runs to completion and multiplies k-tile 255's second half
-    of B with A's face 255 instead of face 511. The operands make that one swap decide the
-    result: A is 0 except face 511 (= +1) and face 255 (= -1), and B is 0 except the rows face
-    511 pairs with, so the golden is +16 * B_row and the misaddressed walk produces -16 * B_row.
-
-    The unpack and math LLKs both reject the block before issuing anything, and the test
-    kernel's pack thread gives up waiting for math (custom_mm_test.cpp), so the core is left
-    with no Tensix instruction pending and the next test runs clean after the RISC reset.
+    The test kernel's pack thread gives up waiting for math (custom_mm_test.cpp), so the core is
+    left with no Tensix instruction pending and the next test runs clean after the RISC reset.
     """
-    M, kt, ct = 8, KT_MAX + 1, 1
+    M, kt, ct = KT_CEILING_M, KT_MAX + 1, KT_CEILING_CT
     K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
-    last_face = slice(K - FACE_C_DIM, K)
-    aliased_face = slice(K // 2 - FACE_C_DIM, K // 2)
-
-    torch_a = torch.zeros((M, K), dtype=torch.float32)
-    torch_a[:, last_face] = 1.0
-    torch_a[:, aliased_face] = -1.0
-    torch_b = torch.zeros((K, N), dtype=torch.float32)
-    # Small integers so LoFi and the bf16 dest hold every product and sum exactly.
-    torch_b[last_face, :] = 1.0 + (torch.arange(N, dtype=torch.float32) % 8)
 
     with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
         LLKAssertException
@@ -478,7 +505,7 @@ def test_custom_mm_kt_past_max_asserts():
             ct,
             KT_CEILING_FORMATS,
             DestAccumulation.No,
-            operands=(torch_a, torch_b),
+            operands=(_face_tagged_a(M, K), _last_k_tile_b(K, N)),
             exact_arithmetic=True,
         )
     # The stack traces name the halted cores. Both threads must reject the block: the unpack thread

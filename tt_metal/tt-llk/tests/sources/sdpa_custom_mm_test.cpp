@@ -30,7 +30,7 @@
 // with the custom_mm layout limits (llk_unpack_AB_custom_mm.h):
 //     in0 (SrcB) tile shape [M, 32], M in {1,2,4,8}   -> operandB_face_r_dim
 //     in1 (SrcA) tile shape [32, 32]
-//     rt_dim = 1, ct_dim = N/32 in [1,16], kt_dim = K/32 even in [2,254]
+//     rt_dim = 1, ct_dim = N/32 in [1,16], kt_dim = K/32 even in [2,256]
 //
 // _llk_math_sdpa_custom_mm_ does exactly one accumulating MVMUL walk:
 //   - _llk_math_sdpa_custom_mm_mask_dest_ first ZEROes the ct_dim result tiles in DEST
@@ -93,10 +93,10 @@ constexpr std::uint32_t SDPA_INPUT_ROW_STRIDE = KT_DIM;
 #endif
 constexpr std::uint32_t SDPA_MASK_TILE_INDEX = SDPA_INPUT_TILE_OFFSET + SDPA_INPUT_ROW_STRIDE * CT_DIM;
 
-// The kt_dim ceiling of the shared unpack worker (llk_unpack_AB_custom_mm.h): kt_dim = 255 reads SrcB faces 0..509 and
-// the walk cannot address face 511. A call past it is rejected by the unpack and math LLK_ASSERTs before either issues
-// an instruction; test_sdpa_custom_mm_kt_past_max_asserts expects that.
-constexpr std::uint32_t custom_mm_kt_max = 255;
+// The kt_dim ceiling of the shared unpack worker (llk_unpack_AB_custom_mm.h): one SrcB face walk covers 255 k-tiles and
+// kt_dim = 256 is unpacked as two runs. A call past 256 is rejected by the unpack and math LLK_ASSERTs before either
+// issues an instruction; test_sdpa_custom_mm_kt_past_max_asserts expects that.
+constexpr std::uint32_t custom_mm_kt_max = 256;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -129,7 +129,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // heuristic (post1) in the MOP config.
     _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE, false /* clear_src */>(params.in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
 
-    // Run: base_address_a = in1 (SrcA), base_address_b = in0 (SrcB).
+    // Run: base_address_a = in1 (SrcA), base_address_b = in0 (SrcB). The in0 tile size is the two dense
+    // in0_face_r_dim x 16 faces the SrcB walk strides by (TILE_SIZE_UNPACK_B is the full 32x32 tile; Float16_b here,
+    // so it scales with the datum count); the LLK uses it for the SrcB base of the second run at kt_dim = 256.
+    const std::uint32_t in0_tile_size = params.TILE_SIZE_UNPACK_B * params.in0_face_r_dim / TILE_R_DIM;
     // The re-entry variant appends a mask to in1 and uses it only on the first pass.
     // The whole kt walk is issued by a single call (internal MOP covers kt_dim/2 iterations).
     for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
@@ -141,7 +144,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             SDPA_INPUT_TILE_OFFSET,                                                    // tile_index_a
             0,                                                                         // tile_index_b
             params.TILE_SIZE_UNPACK_A,                                                 // tile_size_a (in1 [32,32])
-            params.TILE_SIZE_UNPACK_B,                                                 // tile_size_b (in0 [M,32])
+            in0_tile_size,                                                             // tile_size_b (in0 [M,32], dense faces)
             KT_DIM,
             CT_DIM,
             SDPA_MASK_REENTRY && pass == 0, // mask_chunk: first pass only

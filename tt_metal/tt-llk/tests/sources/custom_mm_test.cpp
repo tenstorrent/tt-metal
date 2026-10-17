@@ -24,7 +24,7 @@
 //   in0 (A, the [M,K] operand)  -> SrcB, tile shape [{1,2,4,8}, 32]  (only the top two
 //                                  faces, each face_r_dim rows tall; face_r_dim = M)
 //   in1 (B, the [K,N] operand)  -> SrcA, full [32,32] tiles
-//   rt_dim = 1, ct_dim in [1,16], kt_dim in [1,255], LoFi only.
+//   rt_dim = 1, ct_dim in [1,16], kt_dim in [1,256], LoFi only.
 //
 // So the header restricts M to {1,2,4,8} rows: only those DEST rows are defined. The math
 // LLK (_llk_math_custom_mm_) runs one MVMUL walk per k-tile, accumulating A*B into DEST;
@@ -70,10 +70,10 @@ constexpr std::uint32_t num_calls   = CUSTOM_MM_NUM_CALLS;
 constexpr std::uint32_t kt_per_call = KT_DIM / num_calls;
 static_assert(kt_per_call * num_calls == KT_DIM, "K tiles must split evenly across the calls");
 
-// The LLKs' kt_dim ceiling (llk_unpack_AB_custom_mm.h): kt_dim = 255 reads SrcB faces 0..509 and the walk cannot address
-// face 511. A call past it is rejected by the unpack and math LLK_ASSERTs before either issues an instruction;
-// test_custom_mm_kt_past_max_asserts expects that.
-constexpr std::uint32_t custom_mm_kt_max = 255;
+// The LLKs' kt_dim ceiling (llk_unpack_AB_custom_mm.h): one SrcB face walk covers 255 k-tiles and kt_dim = 256 is
+// unpacked as two runs. A call past 256 is rejected by the unpack and math LLK_ASSERTs before either issues an
+// instruction; test_custom_mm_kt_past_max_asserts expects that.
+constexpr std::uint32_t custom_mm_kt_max = 256;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -115,18 +115,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_AB_custom_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM);
 
     // SrcA=buffer_B (B matrix, full tiles), SrcB=buffer_A (A matrix). Call c takes K tiles
-    // [c * kt_per_call, (c + 1) * kt_per_call): B is k-major, so its tiles start at c * kt_per_call * ct,
-    // and an in0 tile is 4 * in0_face_r_dim 16-byte words (TILE_SIZE_UNPACK_A is a full tile here).
+    // [c * kt_per_call, (c + 1) * kt_per_call): B is k-major, so its tiles start at c * kt_per_call * ct.
+    // An in0 tile is the two dense in0_face_r_dim x 16 faces the SrcB walk strides by, not the full 32x32 tile
+    // TILE_SIZE_UNPACK_A describes (the in0 formats here are not block-float, so it scales with the datum count);
+    // the LLK uses it for tile_index_b and for the SrcB base of the second run at kt_dim = 256.
     // Within a call the SrcA walk covers its kt*ct grid via CFGSHIFTMASK, the SrcB walk covers kt via counters.
+    const std::uint32_t in0_tile_size = params.TILE_SIZE_UNPACK_A * params.in0_face_r_dim / TILE_R_DIM;
     for (std::uint32_t call = 0; call < num_calls; call++)
     {
         _llk_unpack_AB_custom_mm_<false /* read_transposed */>(
             L1_ADDRESS(params.buffer_B[0]),
-            L1_ADDRESS(params.buffer_A[0]) + call * kt_per_call * 4 * params.in0_face_r_dim,
+            L1_ADDRESS(params.buffer_A[0]),
             call * kt_per_call * CT_DIM /* tile_index_a */,
-            0 /* tile_index_b */,
+            call * kt_per_call /* tile_index_b */,
             params.TILE_SIZE_UNPACK_B,
-            params.TILE_SIZE_UNPACK_A,
+            in0_tile_size,
             kt_per_call,
             CT_DIM);
     }
