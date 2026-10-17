@@ -8552,6 +8552,13 @@ tasks:
     - ffn_collapse
     - ffn_norm
     layer: 21
+  frozen:
+    at: '2026-10-17T16:29:36'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_10_ffn_norm.py: c3086fa8b9c62ea2a9ed69caf1f4406ae6b25e9eb562d552caf4f2f44b906c85
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_reuse.router
   title: dec_reuse router (router) on device, layer 21
   step: implement
