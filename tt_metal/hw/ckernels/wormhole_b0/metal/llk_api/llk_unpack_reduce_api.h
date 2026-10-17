@@ -36,6 +36,14 @@ inline void llk_unpack_reduce_init(
     SAN_HOOK(unsupported());
     const std::uint32_t scaler_operand_id = get_operand_id(scaler_operand);
 
+    // The SrcB unpacker must already be configured for the scaler CB (by hw_startup / reconfig_data_format_srcb);
+    // checked before the init below rewrites the SrcB formats, after which the check would pass trivially.
+    LLK_ASSERT_BLOCK((is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile, true /*check_unpacker_b*/>(
+        unpack_src_format[scaler_operand_id],
+        unpack_dst_format[scaler_operand_id],
+        get_operand_face_r_dim(scaler_operand_id),
+        get_operand_num_faces(scaler_operand_id))));
+
     _llk_unpack_reduce_init_<type, dim>(
         unpack_src_format[scaler_operand_id], unpack_dst_format[scaler_operand_id], within_face_16x16_transpose);
 }
@@ -74,8 +82,19 @@ inline void llk_unpack_reduce(
     LLK_ASSERT(
         cb_access_within_bounds(operand_id, tile_index, 1 /*num_tiles*/), "Indexed tile read exceeds CB boundary");
     LLK_ASSERT(
-        get_operand_num_faces(operand_id) == 4 && get_operand_face_r_dim(operand_id) == FACE_R_DIM,
+        get_operand_num_faces(operand_id) == TILE_NUM_FACES && get_operand_face_r_dim(operand_id) == FACE_R_DIM,
         "Single-operand reduce supports 32x32 tiles only");
+
+    // llk_unpack_reduce_init programs SrcB only; SrcA must hold the data CB's formats from hw_startup / reconfig.
+    LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
+        unpack_src_format[operand_id],
+        unpack_dst_format[operand_id],
+        unpack_src_format[scaler_operand_id],
+        unpack_dst_format[scaler_operand_id],
+        get_operand_face_r_dim(operand_id),
+        get_operand_face_r_dim(scaler_operand_id),
+        get_operand_num_faces(operand_id),
+        get_operand_num_faces(scaler_operand_id)));
     LLK_ASSERT(
         cb_access_within_bounds(scaler_operand_id, scaler_tile_index, 1 /*num_tiles*/),
         "Indexed tile read exceeds CB boundary");
