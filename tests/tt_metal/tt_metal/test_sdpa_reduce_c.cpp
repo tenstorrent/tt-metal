@@ -482,6 +482,25 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, NIGHTLY_SdpaReduceC) {
                 }
             }
         }
+
+        // Widest block the runtime reduce accepts everywhere: block_ct_dim is programmed straight into the
+        // MOP outer-loop count, a 7-bit field on Wormhole (10 bits on Blackhole), so 127 tiles is the
+        // documented maximum and the last width that must still reduce correctly on both arches.
+        for (uint32_t k_chunk_size : {127u}) {
+            bool this_passed = test_sdpa_reduce_c(
+                devices_[0],
+                /*q_chunk_size=*/1,
+                k_chunk_size,
+                /*fp32_dest_acc_en=*/false,
+                /*do_eltwise_max=*/false,
+                rt_kernel_path,
+                "reduce_block_max_row_runtime_32x32_max_block",
+                /*num_faces=*/4);
+            if (!this_passed) {
+                log_error(LogTest, "REPRO Failed: kernel reduce_block_max_row_runtime_32x32, q 1, k {}", k_chunk_size);
+            }
+            pass &= this_passed;
+        }
     }
 
     ASSERT_TRUE(pass);
