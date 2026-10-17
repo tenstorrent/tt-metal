@@ -331,6 +331,24 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                     v_shape[3]);
             }
         }
+        if (use_mla && tensors.v.has_value()) {
+            // A separate paged V cache, head_dim_v wide, addressed by K's page table.
+            const auto& v_cache = tensors.v.value();
+            const auto v_cache_shape = v_cache.logical_shape();
+            TT_FATAL(
+                v_cache.storage_type() == StorageType::DEVICE && v_cache.layout() == Layout::TILE &&
+                    !v_cache.is_sharded(),
+                "MLA V cache must be an interleaved tile tensor on device");
+            TT_FATAL(
+                v_cache_shape[0] == k_shape[0] && v_cache_shape[1] == nkv_cache &&
+                    v_cache_shape[2] == k_page_size_cache && v_cache_shape[3] == attrs.head_dim_v.value(),
+                "MLA V cache must be [{}, {}, {}, head_dim_v={}], got {}",
+                k_shape[0],
+                nkv_cache,
+                k_page_size_cache,
+                attrs.head_dim_v.value(),
+                v_cache_shape);
+        }
         TT_FATAL(
             nkv > 0 && nqh >= nkv && nqh % nkv == 0,
             "Q num_heads must be >= K num_heads and divisible by K num_heads, and K num_heads must be greater than 0. "
