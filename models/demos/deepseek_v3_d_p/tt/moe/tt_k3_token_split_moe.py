@@ -182,6 +182,11 @@ class TtK3TokenSplitMoE:
         self.cfg = ttnn.types.BlackholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
         )
+        # the latent down / up linears (bf8 weights): K3_LAT_FID (HiFi2 default; LoFi as TtMoe's default config)
+        self.cfg_lat = ttnn.types.BlackholeComputeKernelConfig(
+            math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("K3_LAT_FID", "HiFi2")), math_approx_mode=False,
+            fp32_dest_acc_en=True, packer_l1_acc=True,
+        )
         # routed experts: the flat expert (fake-initialized, then the pool packed once and replicated). Its tokens and
         # its gate/up -> down intermediate in bfp8 (K3_X_BF16 / K3_H_BF16 = 1: bf16, accuracy probes)
         self.x_bf16 = os.environ.get("K3_X_BF16") == "1"
@@ -293,11 +298,11 @@ class TtK3TokenSplitMoE:
         self.key = 7_000_000 + id(self) % 1_000_000
 
     @staticmethod
-    def _linear(x, w, cfg, dtype=ttnn.bfloat16):
+    def _linear(x, w, cfg, dtype=ttnn.bfloat16, memory_config=None):
         """ttnn.linear with the 2D-multicast config for the shape (models/demos/glm53_flash_d_p/tt/mm_configs.mm2d):
         2-4x the default at 320 rows (zz_scratch_k3_dense_mm.py)."""
         pc = mm_configs.linear_config(x, w, dtype)
-        return ttnn.linear(x, w, compute_kernel_config=cfg, dtype=dtype, program_config=pc)
+        return ttnn.linear(x, w, compute_kernel_config=cfg, dtype=dtype, program_config=pc, memory_config=memory_config)
 
     def _warm_up(self):
         """Every dense op once on zero tokens (e.g. CCL semaphores are allocated on first use and kept)."""
@@ -321,13 +326,18 @@ class TtK3TokenSplitMoE:
     # -- the ops (per chip; tensors on the mesh) --
     def router(self, x, keep_logits=False):
         if self.topk_custom:  # (fp32 logits / scores / biased scores, router_topk: the joint rows; ids = the rows)
-            logits = self._linear(x, self.w_gate, self.cfg_hi, ttnn.float32)
-            sc = ttnn.sigmoid(logits)
-            bs = ttnn.add(sc, self.bias32)
+            mc = ttnn.L1_MEMORY_CONFIG if "router" in self.l1_set else None  # (the top-k's 64 B reads: L1 latency)
+            logits = self._linear(x, self.w_gate, self.cfg_hi, ttnn.float32, memory_config=mc)
+            sc = ttnn.sigmoid(logits, memory_config=mc)
+            bs = ttnn.add(sc, self.bias32, memory_config=mc)
             rows = self.rtopk(sc, bs)
             ttnn.deallocate(sc)
             ttnn.deallocate(bs)
             if keep_logits:
+                if mc is not None:  # (no L1 tensor may outlive its op: the arena's address)
+                    kept = ttnn.to_memory_config(logits, ttnn.DRAM_MEMORY_CONFIG)
+                    ttnn.deallocate(logits)
+                    logits = kept
                 return rows, None, logits
             ttnn.deallocate(logits)
             return rows, None
@@ -378,8 +388,11 @@ class TtK3TokenSplitMoE:
         return g, g
 
     def latent_down(self, x):
-        lat = self._linear(x, self.w_ld, self.cfg)
-        return ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT)
+        l1 = "latdown" in self.l1_set  # (the tiled result is transient: L1; the row-major one feeds the dispatch: DRAM)
+        lat = self._linear(x, self.w_ld, self.cfg_lat, memory_config=ttnn.L1_MEMORY_CONFIG if l1 else None)
+        rm = ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(lat)
+        return rm
 
     def dispatch_prep(self, lat_rm, gi):
         """Sparse dispatch: the buffer [1, 1, N S, latent] with this chip's own rows in place and the route words of
@@ -433,14 +446,14 @@ class TtK3TokenSplitMoE:
             l1_args=self.l1_args,
         )
 
-    def latent_up(self):
+    def latent_up(self, yr_l1=False):
         o = self.tilize_ln(ttnn.reshape(self.out, [self.S, self.d.latent]))  # (layout_ops: 19 us vs ttnn's 53)
         ns = ttnn.rms_norm(o, epsilon=self.d.eps, weight=self.g_ln, program_config=self.ln_pc, memory_config=self.ln_mc,
                            compute_kernel_config=self.cfg_hi)
         ttnn.deallocate(o)
-        n = ttnn.sharded_to_interleaved(ns, ttnn.DRAM_MEMORY_CONFIG)
+        n = ttnn.sharded_to_interleaved(ns, ttnn.L1_MEMORY_CONFIG if "latup" in self.l1_set else ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(ns)
-        y = self._linear(n, self.w_lu, self.cfg)
+        y = self._linear(n, self.w_lu, self.cfg_lat, memory_config=ttnn.L1_MEMORY_CONFIG if yr_l1 else None)
         ttnn.deallocate(n)
         return y
 
@@ -450,6 +463,9 @@ class TtK3TokenSplitMoE:
         self.se_yrm = os.environ.get("K3_SE_YRM") == "1"
         self.se_ybf16 = os.environ.get("K3_SE_YBF16", "1") == "1" and not self.se_yrm
         self.fuse_sum = self.se_mode == "flat" and self.se_ybf16 and os.environ.get("K3_FUSE_SUM", "1") == "1"
+        # transient intermediates in L1 (router logits / scores: the top-k 49.6 -> 36 us; latent up input / output, latent
+        # down output: the linears write L1, -4..-8 us each); K3_L1= (empty) keeps them in DRAM
+        self.l1_set = set(os.environ.get("K3_L1", "router,latup,yr,latdown").split(","))
         self.sum_parts = sum_parts_prepare(self.mesh, P=self.se_parts)
         self.se_srnd = os.environ.get("K3_SE_SRND") == "1"
 
@@ -524,7 +540,7 @@ class TtK3TokenSplitMoE:
         self.se_counts, self.se_regions = row([S] * P), row([i * S for i in range(P)])
         self.se_tidx = row(list(range(S)) * P)
 
-    def shared(self, x, yr=None):
+    def shared(self, x, yr=None, parts_only=False):
         """The shared expert's y [S, H]; with yr (local flat SE, bf16 tile parts) the block's y = yr + the parts' sum
         in one pass (sum_ops) instead of ttnn.sum + ttnn.add."""
         if self.se_mode == "tp":  # (row all-gather, one flat expert on the row's tokens, reduce-scatter)
@@ -548,6 +564,8 @@ class TtK3TokenSplitMoE:
                 yt = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
                 ttnn.deallocate(y)
                 y = yt
+            if parts_only:
+                return y
             if yr is not None and self.fuse_sum:
                 out = self.sum_parts(yr, y)
                 ttnn.deallocate(y)
@@ -586,12 +604,16 @@ class TtK3TokenSplitMoE:
         self.experts_combine(xg, pl, arena)
         ttnn.deallocate(arena)
         mark("experts_combine")
-        yr = self.latent_up()
-        mark("lat_up")
-        if self.fuse_sum and not keep:  # (the shared expert and the final sum; keep: ys separately, for the checks)
-            y, ys = self.shared(x, yr=yr), None
+        if self.fuse_sum and not keep:  # (shared expert parts, latent up, then one sum; keep: ys separately, for checks)
+            parts = self.shared(x, parts_only=True)  # (first: its arena takes the whole L1, so yr may live in L1 after)
             mark("shared")
+            yr = self.latent_up(yr_l1="yr" in self.l1_set)
+            mark("lat_up")
+            y, ys = self.sum_parts(yr, parts), None
+            ttnn.deallocate(parts)
         else:
+            yr = self.latent_up()
+            mark("lat_up")
             ys = self.shared(x)
             mark("shared")
             y = ttnn.add(yr, ys, dtype=ttnn.bfloat16)
