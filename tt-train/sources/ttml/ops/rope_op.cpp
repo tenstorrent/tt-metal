@@ -119,6 +119,14 @@ autograd::TensorPtr rope(
     auto seq_len = input_logical_shape[2];
     auto head_dim = input_logical_shape[3];
 
+    if (token_position > params.sequence_length || seq_len > params.sequence_length - token_position) {
+        throw std::out_of_range(fmt::format(
+            "RoPE token range [{}, {}) exceeds the configured sequence length {}.",
+            token_position,
+            static_cast<uint64_t>(token_position) + seq_len,
+            params.sequence_length));
+    }
+
     auto squish_batch = [num_batch, num_heads](const ttnn::Tensor& input) {
         auto shape = input.logical_shape();
         auto seq_len = shape[2];
@@ -293,6 +301,7 @@ RotaryEmbeddingParams build_rope_params(
 
         .sequence_length = local_seq_len,
         .head_dim = head_dim,
+        .theta = theta,
 
         .rope_scaling_params = scaling_params,
     };
