@@ -5856,6 +5856,13 @@ tasks:
     swapped:
     - attn_hc
     layer: 20
+  frozen:
+    at: '2026-10-17T07:56:34'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_01_attn_hc.py: 40f85d6eeb18a335b98f6634ea6ee2218ca833474037524627d1909d6231d87a
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_candidate.attn_collapse
   title: dec_candidate attn_collapse (op) on device, layer 20
   step: implement
