@@ -1462,6 +1462,9 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"MAX_NUM_WORKER_SEMS", std::to_string(DispatchSettings::DISPATCH_MESSAGE_ENTRIES)},
         {"MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES", std::to_string(DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES)},
         {"MCAST_GO_SIGNAL_ADDR", "0"},
+        // Workers report done for a go to the dispatcher that sent it.
+        {"GO_DONE_NOC_X", std::to_string(my_virtual.x)},
+        {"GO_DONE_NOC_Y", std::to_string(my_virtual.y)},
         {"UNICAST_GO_SIGNAL_ADDR", "0"},
         {"DISTRIBUTED_DISPATCHER", "0"},
         {"HOST_COMPLETION_Q_WR_PTR",
