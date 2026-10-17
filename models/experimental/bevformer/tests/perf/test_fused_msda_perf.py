@@ -14,7 +14,8 @@ time is in:
 ``test_fused_msda_module_perf``
     The whole ``TTMSDeformableAttention`` forward: value/attn/offset Linears,
     softmax, the fused op, ``output_proj`` and the residual. This is what the
-    encoder actually pays.
+    encoder actually pays. Run once per ``value_memory``: ``auto`` is the
+    production path, ``dram`` the fallback it takes when L1 does not fit.
 
 ``test_fused_msda_kernel_perf``
     Only ``ttnn.experimental.fused_msda_from_offsets``. The projections and the
@@ -279,6 +280,7 @@ def _signposted(device, op_fn, iters=DEVICE_PERF_ITERS):
 @torch.no_grad()
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("config_name, batch_size, num_queries", WORKLOADS)
+@pytest.mark.parametrize("value_memory", ["auto", "dram"])
 @pytest.mark.parametrize("expected_pcc", [0.999])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
 def test_fused_msda_module_perf(
@@ -286,14 +288,18 @@ def test_fused_msda_module_perf(
     config_name,
     batch_size,
     num_queries,
+    value_memory,
     expected_pcc,
     reset_seeds,
     ensure_gc,
 ):
     """Whole-module device time: what the encoder pays per MSDA call."""
-    logger.info(f"device-perf run of commit {_head_sha()} -- module {config_name} q={num_queries}")
+    logger.info(
+        f"device-perf run of commit {_head_sha()} -- module {config_name} q={num_queries} value_memory={value_memory}"
+    )
 
     config, ref_model, tt_parameters, torch_inputs = _build(device, config_name, batch_size, num_queries)
+    config.value_memory = value_memory
     query, value, reference_points, spatial_shapes = torch_inputs
     tt_query, tt_value, tt_refs = _to_device(device, torch_inputs)
     model = _tt_model(device, config, tt_parameters, spatial_shapes)
