@@ -332,3 +332,22 @@ def test_bw_binary_div_inf_cases(input_shapes, rounding_mode, device):
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
+
+
+def test_bw_div_factor_pairing_and_zero_grad(device):
+    shape = torch.Size([1, 1, 32, 32])
+    torch.manual_seed(0)
+
+    # other < 2^-63, grad = 0 -> other_grad should be 0.0, not NaN
+    grad_data = torch.zeros(shape, dtype=torch.bfloat16)
+    in_data = torch.ones(shape, dtype=torch.bfloat16)
+    other_data = torch.full(shape, 1e-25, dtype=torch.bfloat16)
+
+    grad_t = ttnn.from_torch(grad_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    in_t = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    other_t = ttnn.from_torch(other_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out = ttnn.div_bw(grad_t, in_t, other_t)
+    out_b = ttnn.to_torch(out[1])
+    assert not torch.isnan(out_b).any(), "other_grad produced NaN for zero gradient on tiny divisor"
+    assert torch.equal(out_b, torch.zeros_like(out_b)), "other_grad must be 0.0 when grad is 0.0"
