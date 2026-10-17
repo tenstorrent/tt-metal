@@ -686,7 +686,7 @@ def test_rdiv_reciprocal_underflow_boundary(device, low, high, value):
     Wormhole rounds the bf16 reciprocal to bf16 before the power-of-two
     scaling, so x = +/-2^126 gives the normal +/-2^-126 (times value) instead
     of a just-below-1 intermediate that scaling flushes to zero; every larger
-    |x| has a subnormal reciprocal and is flushed to +0. Other architectures
+    |x| has a subnormal reciprocal and is flushed to zero. Other architectures
     retain their existing +0 result at the boundary. Every exact result in
     this range is nonzero and bf16-representable after rounding.
     """
