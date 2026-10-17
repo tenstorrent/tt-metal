@@ -1153,3 +1153,18 @@ weights + x rows x 7168 B x 2 rectangles + 2.3 MB combine output; y stays in L1;
 | uniform (5246 rows, max 123 / expert) | 1118 MB | 458 GB/s = 89.4% | 488 GB/s = 95.4% |
 | Zipf spread (6369 rows, one expert 2552) | 1134 MB | 81.2% | 85.5% |
 | Zipf packed (28854 rows) | 1456 MB | 48.0% | 49.9% (compute: 1906 GFLOP at 334 TFLOP/s) |
+
+### 64 gate/up + DRISC-only in the K3 block (2026-10-17, 2 x 4, K3_GU64=1)
+tt_k3_token_split_moe.py: K3_GU64=1 sets the layout's plan options (MIMO_FL_CMB_DRISC / DRISC_DUAL=0 / HG / HG_NU=3 /
+ND=28, env defaults); the block's combine cells now use the plan's tensix_readers (DRISC-freed reader cells go to the
+combine). Same PCC as the base (0.99622 vs host, device routing). Device-routing load per chip (K3_LOAD): mean ~91
+tokens / expert, max 141-193, ~40% of experts > 96, none > 224 (the harness's uniform: max 123).
+| config | experts_combine (per-op, median) | block sum | traced forward |
+| base (48 gate/up, Tensix readers) | 2446 us | 3504 | 3407 |
+| DRISC-only 48 gate/up | 2443 | 3516 | - |
+| 64 gate/up + DRISC-only | 2476 / 2496 | 3531 / 3568 | 3453 |
+| + tile 1 DMA depth 1 / burst 4 | 2548 / 2526 | | |
+In the trace, experts_combine 2370 (base) vs 2414 us (64 gate/up). Not what the harness shows (2442 / 2314 / 2289
+queued): not the accumulator count (harness with 16: 2311), not x's buffer (both DRAM interleaved row pages), and not
+tile 1's x-read conflict (throttling tile 1 makes it worse). Open: profile the block's call (DRISC section cycles,
+relay / gate/up wait zones) against the harness's.

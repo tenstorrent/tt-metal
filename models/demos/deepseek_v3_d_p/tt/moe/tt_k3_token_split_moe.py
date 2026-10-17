@@ -272,6 +272,19 @@ class TtK3TokenSplitMoE:
         self.wdtype = os.environ.get("K3_WDTYPE", "bf4")  # routed expert weights: bf4 (default) or bf8
         self.act = os.environ.get("K3_ROUTED_ACT", "situ")  # (silu: an accuracy probe of the device SiTU)
         E, EPC = d.E, self.EPC
+        # routed experts' layout: K3_GU64=1 - 64 gate/up cores (16-column units, 3 a core) with DRISC weight readers only
+        # (the 16 Tensix reader cells go to the combine) and 28 down cores (4 columns each); both DRISC tiles of a bank
+        # on every call. 2 x 4 overlap harness, fused us uniform / Zipf spread / packed: 2289 / 2590 / 5705 vs the
+        # 48 gate/up Tensix-reader layout's 2442 / 2727 / 5920. (Plan options are process-wide env; explicit ones win.)
+        if os.environ.get("K3_GU64") == "1":
+            for k, v in (
+                ("MIMO_FL_CMB_DRISC", "1"),
+                ("MIMO_FL_DRISC_DUAL", "0"),
+                ("MIMO_FL_HG", "1"),
+                ("MIMO_FL_HG_NU", "3"),
+                ("MIMO_FL_ND", "28"),
+            ):
+                os.environ.setdefault(k, v)
         self.op = FlatRoutedExpert(
             mesh_device,
             "fake",
@@ -306,7 +319,9 @@ class TtK3TokenSplitMoE:
         plan = self.op.plan
         self.writers = len(plan["down"]) + (len(plan["rdn"]) if plan["rdown"] else 0)
         grid = mesh_device.compute_with_storage_grid_size()
-        taken = {tuple(c) for k in ("arena_cores", "gu", "down", "readers", "relays", "coords") for c in plan[k]}
+        # (DRISC: only the reader cells still running Tensix readers / the launcher are taken; the rest go to combine)
+        rd_key = "tensix_readers" if "tensix_readers" in plan else "readers"
+        taken = {tuple(c) for k in ("arena_cores", "gu", "down", rd_key, "relays", "coords") for c in plan[k]}
         pcores = {(i % 8, i // 8) for i in range(planner_cores)}
         self.cells = [(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in taken]
         wcores = [tuple(c) for c in plan["down"]] + ([tuple(c) for c in plan["rdn"]] if plan["rdown"] else [])

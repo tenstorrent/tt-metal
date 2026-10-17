@@ -160,6 +160,15 @@ def test_k3_moe_layer(mesh_device, device_params):
     g = ttnn.to_torch(ttnn.get_device_tensors(inter["gi"])[0]).to(torch.int64).reshape(N * S, 2 * d.K) & 0xFFFF
     gi = g[:, : d.K]  # (the joint routing rows: ids, then the weights' bf16 bits)
     gw = g[:, d.K :].to(torch.int16).view(torch.bfloat16).float()
+    cnt = torch.bincount(gi.reshape(-1), minlength=d.E)  # (the device routing's tokens per expert)
+    epc = d.E // N
+    for ch in range(N):
+        cc = cnt[ch * epc : (ch + 1) * epc]
+        logger.info(
+            f"K3_LOAD chip {ch}: rows {int(cc.sum())}, mean {cc.float().mean():.0f}, max {int(cc.max())}, "
+            f"experts > 96 {int((cc > 96).sum())}, > 160 {int((cc > 160).sum())}, > 224 {int((cc > 224).sum())}, "
+            f"zero {int((cc == 0).sum())}"
+        )
     # the reference with the device's routing (the rest of the block), and with its own (routing agreement)
     yref_dev, _, _ = reference_k3_moe(x, w, d, ids=gi, wts=gw)
     yref, ids_ref, wts_ref = reference_k3_moe(x, w, d)
