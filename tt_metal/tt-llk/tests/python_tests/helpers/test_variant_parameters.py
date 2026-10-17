@@ -1652,7 +1652,8 @@ class L1_ACC(RuntimeParameter):
 class BCAST_ROW_IDX(RuntimeParameter):
     """Row of the SrcB tile that a ROW broadcast reads (``_llk_unpack_AB_<ROW>`` argument).
 
-    Valid values are 0..31 on a 32x32 non-BFP tile; the kernel asserts anything else.
+    Valid values are 0..31 of a 32x32 tile, and a non-zero index needs a non-BFP B: the kernel
+    asserts idx >= 32, or idx > 0 with a BFP B.
     """
 
     bcast_row_idx: int = 0
