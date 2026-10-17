@@ -51,6 +51,47 @@ def engram_own():
     return os.environ.get("DSV41_PF_ENGRAM_OWN", "0") == "1"
 
 
+def engram_reduce_scatter(cat8, cc, free_after=()):
+    """reduce_scatter over mesh axis 1 along dim 0 of the 8 stacked Engram outputs. DSV41_PFA_ENGRAM_RS_SPLIT=k (default 4 with DSV41_VISION=1, else 1 = one op) cuts the
+    hidden dim into k pieces and reduces them one after the other (elementwise sum, same maths), so that the op's DRAM buffers need k times
+    smaller contiguous blocks: inside the prefill trace capture of a fragmented 1M-context heap the single op's buffer does not fit.
+    """
+    k = int(os.environ.get("DSV41_PFA_ENGRAM_RS_SPLIT", "4" if os.environ.get("DSV41_VISION", "0") == "1" else "1"))
+
+    def rs(t):
+        return ttnn.experimental.reduce_scatter_minimal_async(
+            t,
+            dim=0,
+            multi_device_global_semaphore=cc.get_rs_ping_pong_semaphore(),
+            num_links=cc.num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=cc.topology,
+            cluster_axis=1,
+            barrier_semaphore=cc.get_barrier_semaphore(),
+        )
+
+    if os.environ.get("DSV41_PFA_ENGRAM_RS_LOG") == "1":
+        print(f"engram_reduce_scatter: cat8 {list(cat8.shape)} {cat8.dtype} {cat8.layout} split {k}", flush=True)
+    if k <= 1:
+        return rs(cat8)
+    sh = list(cat8.shape)
+    D = sh[3]
+    assert D % k == 0 and (D // k) % 32 == 0, (D, k)
+    w = D // k
+    pieces = [ttnn.slice(cat8, [0, 0, 0, i * w], [sh[0], sh[1], sh[2], (i + 1) * w]) for i in range(k)]
+    for t_ in (cat8, *free_after):
+        if t_.is_allocated():
+            ttnn.deallocate(t_)
+    outs = []
+    for p in pieces:
+        outs.append(rs(p))
+        ttnn.deallocate(p)
+    out = ttnn.concat(outs, dim=3)
+    for o in outs:
+        ttnn.deallocate(o)
+    return out
+
+
 class DSV41PrefillModel:
     def __init__(self, md, layers, embedding, head, engram=None, host_rows=None, users_per_row=4):
         """layers: list of (layer_id, DSV41PrefillLayer); engram: {layer_id: DSV41DeviceEngram}; host_rows: HostEngramRows."""
@@ -402,19 +443,13 @@ class DSV41PrefillModel:
                         ):  # op-table profiling: drain the device profiler per group
                             ttnn.synchronize_device(self.md)
                             ttnn.ReadDeviceProfiler(self.md)
-                        rs8 = ttnn.experimental.reduce_scatter_minimal_async(
-                            cat8,
-                            dim=0,
-                            multi_device_global_semaphore=cc.get_rs_ping_pong_semaphore(),
-                            num_links=cc.num_links,
-                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                            topology=cc.topology,
-                            cluster_axis=1,
-                            barrier_semaphore=cc.get_barrier_semaphore(),
-                        )
+                        rs8 = engram_reduce_scatter(cat8, cc, outs8)
                         new.append(ttnn.multiply(rs8, 1.0 / self.cols))
-                        for t_ in (xg, cat8, rs8, *outs8):
+                        for t_ in (xg, rs8):
                             ttnn.deallocate(t_)
+                        for t_ in (cat8, *outs8):
+                            if t_.is_allocated():
+                                ttnn.deallocate(t_)
                 else:
                     new = [
                         fe(x, sl(c) if fe.__name__ == "forward_v2" else ttnn.reshape(sl(c), [T, 1, 1, kin]))
