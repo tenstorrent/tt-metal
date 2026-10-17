@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "indexer_score_device_operation.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 
 #include <algorithm>
 #include <array>
@@ -903,7 +904,7 @@ ttnn::Tensor launch_indexer_score(
     uint32_t block_size,
     bool synthesize_gate,
     float gate_scale,
-    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
+    std::optional<ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig> program_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,
@@ -938,6 +939,23 @@ ttnn::Tensor launch_indexer_score(
         "indexer_score: key_compression_ratio must be 1 or 4 (got {})",
         key_compression_ratio);
     const bool full_mesh = fused_ring.has_value() && fused_ring->full_mesh;
+    const auto tile_bytes = [](const ttnn::Tensor& t) {
+        return t.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.dtype()));
+    };
+    // An L1 q also puts the output in L1, allocated after this choice, so it keeps the small default.
+    ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig resolved_program_config{};
+    if (program_config.has_value()) {
+        resolved_program_config = *program_config;
+    } else if (q.memory_config().buffer_type() != BufferType::L1) {
+        resolved_program_config = ttnn::operations::experimental::indexer_score::program::default_program_config(
+            /*Hi*/ q.logical_shape()[1],
+            /*Tt*/ k.logical_shape()[2] / tt::constants::TILE_WIDTH,
+            /*Dt*/ q.logical_shape()[3] / tt::constants::TILE_WIDTH,
+            tile_bytes(q),
+            tile_bytes(k),
+            ttnn::operations::core::available_program_l1_capacity(q.device()),
+            key_compression_ratio);
+    }
 
     // Block-cyclic (per-SP-shard) K layout -- interface matches ttnn.transformer.sparse_sdpa: the caller
     // names the MESH AXIS the cache was striped over (block_cyclic_sp_axis) and passes the per-shard chunk
@@ -1142,7 +1160,7 @@ ttnn::Tensor launch_indexer_score(
         block_size,
         synthesize_gate,
         gate_scale,
-        program_config,
+        resolved_program_config,
         resolved,
         cache_batch_idx,
         kv_len,
@@ -1168,7 +1186,7 @@ ttnn::Tensor indexer_score_dsa(
     const ttnn::Tensor& weights,
     std::optional<uint32_t> chunk_start_idx,
     uint32_t key_compression_ratio,
-    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
+    std::optional<ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig> program_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,
@@ -1206,7 +1224,7 @@ ttnn::Tensor indexer_score_msa(
     std::optional<uint32_t> chunk_start_idx,
     float scale,
     uint32_t block_size,
-    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
+    std::optional<ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig> program_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,
@@ -1255,7 +1273,7 @@ ttnn::Tensor ring_indexer_score_dsa(
     std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id,
     std::optional<uint32_t> chunk_start_idx,
     uint32_t key_compression_ratio,
-    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
+    std::optional<ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig> program_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,

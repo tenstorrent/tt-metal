@@ -243,7 +243,7 @@ The strategy consists of two phases:
 1. **Local Processing Phase**: Each core processes its width chunk using bitonic sort algorithms.
 2. **Global Aggregation Phase**: A final core performs bitonic merge on all local results to compute the global top K.
 
-#### Phase 1: Local Processing (Split Cores) - `topk_local.cpp`
+#### Phase 1: Local Processing (Split Cores) - `topk_local.cpp` (`topk_local_tree_merge.cpp` with the tree merge)
 
 1. **Width Splitting**:
    - The input width is divided among multiple cores.
@@ -254,8 +254,12 @@ The strategy consists of two phases:
      - Total cores used = `width / split_size`
      - Width must divide evenly by `split_size` (no remainder)
      - The core count fits the grid as a contiguous rectangle, and the per-core CB footprint fits L1
+     - With the tree merge (Blackhole), `split_size > k`, so each local TopK reduces its chunk
    - Among all valid power-of-two splits, the one with the lowest **modeled makespan** is selected:
      `T ≈ kLocalCostFactor × Wt_local + kFinalCostFactor × Wt_final`, where `Wt_final = num_cores × Kt`.
+     With the tree merge (Blackhole) the final core receives only `Kt` tiles and each merge round is priced:
+     `T ≈ kLocalCostFactor × Wt_local + kTreeRoundCostFactor × log2(num_cores) + kFinalCostFactor × Kt`
+     (7, 3 and 2), so more local cores pay off.
      The constants were fitted on Blackhole (p150a) silicon; a local tile costs ~3.5× a final tile because
      local cores run full 64-element sorts per tile while the final core runs merge/rebuild pair-ops.
      Note this is **not** the maximum-parallelism (most-cores / smallest-split) choice: adding cores grows
@@ -270,16 +274,22 @@ The strategy consists of two phases:
      - Iteration n: Compare with distance 2^n → groups of 64*(2^(n+1)) elements
    - **Result Extraction**: Extract top Kt tiles (ceil(K/32)) containing locally optimal TopK elements
 
-3. **Communication**:
-   - Each local core sends its Kt tiles of locally optimal results to the final core
-   - Uses semaphore-synchronized NoC transfers for efficient L1-to-L1 communication
-   - Writer kernel manages data transmission to prevent buffer overflow
+3. **Tree Merge and Communication** (Blackhole; other archs send every core's Kt tiles to the final core):
+   - `log2(num_local_cores)` rounds: in round r, core i with `i % 2^(r+1) == 0` receives the Kt tiles of
+     core `i + 2^r` into a landing slot next to its own Kt tiles and keeps the top Kt of the pair with one
+     bitonic merge step (`process_iteration` on a 2×Kt row); the kept sequence's sort direction alternates so
+     that the partners of the next round form a bitonic sequence
+   - Each round is flow controlled by two semaphores: the parent grants a credit once its landing slot is
+     free, the child signals data once its NoC write is drained
+   - The surviving core(s) send their Kt tiles to the final core with the semaphore-synchronized NoC
+     transfer; with the tree run to the root only core 0 sends and the final core is a pass through
 
 #### Phase 2: Global Aggregation (Final Core) - `topk_final.cpp`
 
 1. **Data Gathering**:
-   - Final core receives Kt tiles from each of the local cores
-   - Total aggregated data: `Wt_final = num_local_cores × Kt` tiles
+   - Final core receives Kt tiles from each tree survivor
+   - Total aggregated data: `Wt_final = (num_local_cores >> tree_rounds) × Kt` tiles (`Kt` when the tree runs
+     to the root)
    - Data represents candidate TopK elements from all width chunks
 
 2. **Global Bitonic Merge**:
@@ -297,13 +307,15 @@ The strategy consists of two phases:
 - **index_cb_index**: Input indices (double-buffered)
 - **input_transposed_cb_index**: Transposed values staging buffer (Wt_local tiles)
 - **index_transposed_cb_index**: Transposed indices staging buffer (Wt_local tiles)
-- **values_cb_index**: Local TopK values output (Kt tiles for transmission to final core)
-- **output_ind_cb_index**: Local TopK indices output (Kt tiles for transmission to final core)
+- **values_cb_index**: Local TopK values output (Kt tiles for transmission to the parent or final core)
+- **output_ind_cb_index**: Local TopK indices output (Kt tiles for transmission to the parent or final core)
+- **landing_values_cb_index / landing_indices_cb_index** (tree merge only): Tree-merge landing slot ([own Kt | partner Kt] tiles, filled by the writer and the partner core's NoC write)
+- **merge_values_cb_index / merge_indices_cb_index** (tree merge only): Tree-merge in-place workspace (2×Kt tiles)
 
 #### Circular Buffers (Final Core):
 
-- **input_cb_index**: Received values from all local cores (Wt_final = num_cores × Kt tiles)
-- **index_cb_index**: Received indices from all local cores (Wt_final = num_cores × Kt tiles)
+- **input_cb_index**: Received values from the local cores (Wt_final = num_cores × Kt tiles, Kt with the tree merge)
+- **index_cb_index**: Received indices from the local cores (Wt_final = num_cores × Kt tiles, Kt with the tree merge)
 - **input_transposed_cb_index**: Staging buffer for global bitonic merge operations (values)
 - **index_transposed_cb_index**: Staging buffer for global bitonic merge operations (indices)
 - **values_cb_index**: Final globally optimal TopK values output (Kt tiles)
@@ -332,8 +344,8 @@ This limits the maximum number of cores and the split size that can be used.
 
 #### Example:
 
-For a tensor of shape `[32, 16384]` (1 × 512 tiles), k=32, on a grid large enough for a
-32-core rectangle (e.g. Blackhole), the makespan model picks:
+For a tensor of shape `[32, 16384]` (1 × 512 tiles), k=32, with the serial final merge (other archs than
+Blackhole) on a grid large enough for a 32-core rectangle, the makespan model picks:
 
 **Configuration:**
 - `split_size = 512` (16 tiles per core): score `7×16 + 2×32 = 176`, beating
@@ -352,6 +364,10 @@ For a tensor of shape `[32, 16384]` (1 × 512 tiles), k=32, on a grid large enou
 2. Executes Bitonic Merge on 32 tiles
 3. Extracts global top 32 elements
 4. Writes 1 tile to DRAM
+
+With the tree merge on Blackhole the same call picks `split_size = 256`: 64 local cores of 8 tiles each,
+score `7×8 + 3×6 + 2×1 = 76` against `7×16 + 3×5 + 2×1 = 129` for 32 cores. Six merge rounds leave the
+top 32 on core 0, and the final core receives 1 tile.
 
 **Advantages:**
 - 32-way parallelism in phase 1, with the local/final split balanced by the fitted cost model

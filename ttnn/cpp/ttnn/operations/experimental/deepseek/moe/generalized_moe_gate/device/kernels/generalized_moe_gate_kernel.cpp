@@ -21,6 +21,58 @@
 #include "../unified_kernels/kernel_op_api.hpp"
 #include "../unified_kernels/kernel_utils.hpp"
 #include "../unified_kernels/generalized_moe_gate.hpp"
+#if defined(COMPILE_FOR_NCRISC)
+#include "api/dataflow/noc.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
+#include "tt-metalium/constants.hpp"
+
+// Gathers one token row of a [.., 256] tile tensor into face 0; one 64 B aligned 576 B read per tile spans both faces.
+template <typename Accessor>
+void gather_token_row(const Accessor& input, uint32_t input_cb, uint32_t token, uint32_t width_tiles) {
+    using namespace tt::constants;
+    constexpr uint32_t face_bytes = FACE_HW * sizeof(uint16_t);
+    constexpr uint32_t face_row_bytes = FACE_WIDTH * sizeof(uint16_t);
+    constexpr uint32_t noc_align = 64;
+    constexpr uint32_t span = face_bytes + noc_align;
+    CircularBuffer cb(input_cb);
+    cb.reserve_back(1);
+    const uint32_t page = cb.get_write_ptr();
+    const uint32_t slots_l1 = page + get_tile_size(input_cb);
+    const uint32_t r = token % TILE_HEIGHT;
+    const uint32_t face_row = (r / FACE_HEIGHT) * 2 * face_bytes + (r % FACE_HEIGHT) * face_row_bytes;
+    Noc noc;
+    for (uint32_t t = 0; t < width_tiles; ++t) {
+        noc.async_read(
+            input,
+            CoreLocalMem<uint32_t>(slots_l1 + t * span),
+            span,
+            {.page_id = (token / TILE_HEIGHT) * width_tiles + t, .offset_bytes = face_row & ~(noc_align - 1)},
+            {});
+    }
+    noc.async_write_zeros(cb, 3 * face_bytes, {.offset_bytes = face_bytes});
+    noc.async_read_barrier();
+    noc.write_zeros_l1_barrier();
+    // Eight loads ahead of eight stores, so the loads overlap.
+    volatile tt_l1_ptr uint32_t* src =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slots_l1 + (face_row & (noc_align - 1)));
+    volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page);
+    for (uint32_t s = 0; s < width_tiles * 2; ++s, dst += 8) {
+        volatile tt_l1_ptr uint32_t* row = src + (s / 2) * (span / 4) + (s % 2) * (face_bytes / 4);
+        const uint32_t w0 = row[0], w1 = row[1], w2 = row[2], w3 = row[3];
+        const uint32_t w4 = row[4], w5 = row[5], w6 = row[6], w7 = row[7];
+        dst[0] = w0;
+        dst[1] = w1;
+        dst[2] = w2;
+        dst[3] = w3;
+        dst[4] = w4;
+        dst[5] = w5;
+        dst[6] = w6;
+        dst[7] = w7;
+    }
+    cb.push_back(1);
+}
+#endif
 
 // Compile-time role flag for dead code elimination via if constexpr
 struct Core {
@@ -39,14 +91,23 @@ void kernel_main() {
     constexpr std::uint32_t bias_cb = get_named_compile_time_arg_val("moe_gate_bias_cb");
     constexpr std::uint32_t input_indices_cb = get_named_compile_time_arg_val("moe_gate_input_indices_cb");
     constexpr std::uint32_t num_blocks = get_named_compile_time_arg_val("moe_gate_num_blocks");
+    constexpr bool input_interleaved = get_named_compile_time_arg_val("moe_gate_input_interleaved") == 1;
+    constexpr std::uint32_t input_width_tiles = get_named_compile_time_arg_val("moe_gate_input_width_tiles");
 
-    // Setup sharded persistent buffers (all tensor-backed). input + bias each have num_blocks tiles/core
-    // (one 256-expert block per tile); input_indices likewise has num_blocks tiles/core — block b's tile
-    // holds that block's GLOBAL expert ids (arange + b*256), uploaded by the host.
+    // Sharded buffers hold num_blocks tiles/core; input_indices block b holds GLOBAL expert ids arange + b*256.
     if constexpr (Core::is_active_core) {
-        unified_kernels::setup_sharded_buffer(input_cb, num_blocks);
-        unified_kernels::setup_sharded_buffer(bias_cb, num_blocks);
-        unified_kernels::setup_sharded_buffer(input_indices_cb, num_blocks);
+        if constexpr (input_interleaved) {
+            // Bias and indices go first, so compute sets up while the token row is in flight.
+            unified_kernels::setup_sharded_buffer(bias_cb, num_blocks);
+            unified_kernels::setup_sharded_buffer(input_indices_cb, num_blocks);
+            constexpr auto input_args = TensorAccessorArgs<0>();
+            const auto input = TensorAccessor(input_args, get_arg_val<uint32_t>(0));
+            gather_token_row(input, input_cb, get_arg_val<uint32_t>(1), input_width_tiles);
+        } else {
+            unified_kernels::setup_sharded_buffer(input_cb, num_blocks);
+            unified_kernels::setup_sharded_buffer(bias_cb, num_blocks);
+            unified_kernels::setup_sharded_buffer(input_indices_cb, num_blocks);
+        }
     }
 
 #elif defined(COMPILE_FOR_BRISC)
