@@ -45,8 +45,13 @@ Tensor contract (SP = sequence-parallel factor on ``sp_axis``, TP = tensor-paral
   pairs axis-major, no channel permutation). The fused op rotates with ``get_rot_transformation_mat`` so that
   ``out[2i] = x[2i] cos - x[2i+1] sin`` and ``out[2i+1] = x[2i+1] cos + x[2i] sin``, which is ``dit.py:69-70``.
   Pad rows carry ``cos = 1, sin = 0``.
-* ``mod = (shift, scale_plus_one, gate)``, all rank 3 bf16, ``scale_plus_one = (1 + scale).to(bf16)`` folded on
-  host (tt_dit convention, bit-identical to the reference's bf16 ``1.0 + scale``):
+* ``mod = (shift, scale_plus_one, gate)``, all rank 3 bf16. ``scale_plus_one`` is ``1 + scale`` in bf16; who adds
+  the 1 is the caller's business. The block test folds ``(1 + scale).to(bf16)`` on host from the reference's bf16
+  ``scale`` (bit-identical to the reference's own bf16 ``1.0 + scale``). The DiT (``modulation_flux3_klein.py``)
+  gets it from the merged modulation matmul with the 1 as a fused bias, ONE rounding ``bf16(acc + 1)`` instead of
+  the reference's two ``bf16(bf16(acc) + 1)``: not bit-identical (about a fifth of N(0, 0.5) scales differ by one
+  bf16 ulp) but always the value closer to ``acc + 1`` (the Flux2 convention; decision 10's bf16-with-fp32-
+  accumulation operands, no precision loss).
   - broadcast (early stacks): each ``[1, 1, 3072]``, ``mesh_axes=[None, None, tp_axis]``;
   - per token (single stack): each ``[1, L_pad, 3072]``, ``mesh_axes=[None, sp_axis, tp_axis]`` (the activation's
     own distribution). Rows are the per-run expansion of the three ``(shift, scale, gate)`` rows in
