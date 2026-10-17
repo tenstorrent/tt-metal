@@ -1441,29 +1441,32 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulBlockIdFreeGolden) {
     EXPECT_TRUE(check_pcc(result_floats, golden, /*min_pcc=*/0.99));
 }
 
-// llk_matmul_pack with out_of_order_output=true must pack DST tile (start + i) to output page
+// llk_matmul_pack with out_of_order_output=true must pack DST tile (start_tile_index + i) to output page
 // (output_tile_index + i): the out-of-order address helper is stateless, so the loop has to offset the page
-// index per DST tile. The kernel copies two distinct tiles to DST[0] / DST[1] and packs both with one
-// llk_matmul_pack<..., true>(0, c_16, 2, 0); every output page must hold its own input tile. With a constant
-// page index both DST tiles land on page 0 (page 0 ends up holding tile 1) and page 1 is never written.
-// Wormhole and Blackhole share the defect; Quasar has no llk_matmul_pack.
+// index per DST tile. The kernel copies four distinct tiles to DST[0..3] and packs the two DST halves swapped,
+// one out-of-order llk_matmul_pack call each: (2, c_16, 2, 0) then (0, c_16, 2, 2), so pages 0..3 must hold DST
+// tiles 2, 3, 0, 1. Nonzero start_tile_index and output_tile_index in different calls make the three wrong
+// loops distinguishable: a constant page index gives pages {3, -, 1, -} (second tile of each half overwrites the
+// first, "-" never written); a page index of just tile_index gives {0, 1, 2, 3}; output_tile_index + tile_index
+// (no start rebase) gives {-, -, 0, 1}. Wormhole and Blackhole share the defect; Quasar has no llk_matmul_pack.
 TEST_F(LLKMeshDeviceFixture, TensixMatmulPackOutOfOrderPacksEachDestTileToItsOwnPage) {
     if (arch_ == tt::ARCH::QUASAR) {
         GTEST_SKIP() << "llk_matmul_pack is not implemented on Quasar";
     }
-    constexpr std::uint32_t ntiles = 2;
+    constexpr std::uint32_t ntiles = 4;
+    constexpr std::uint32_t half = ntiles / 2;
     constexpr std::uint32_t tile_elems = constants::TILE_HW;
-    // Integers of magnitude <= 251 are exact in Float16_b; tile 1 is the negation of tile 0 so the two
-    // tiles differ at every element.
+    // Tile t holds the integers 1 + 60 t .. 50 + 60 t (exact in Float16_b, <= 256), so no two tiles share a
+    // value and every tile differs from every other at every element.
     std::vector<bfloat16> src(ntiles * tile_elems);
     for (std::uint32_t t = 0; t < ntiles; ++t) {
         for (std::uint32_t i = 0; i < tile_elems; ++i) {
-            const float v = static_cast<float>(1 + (i % 251));
-            src[t * tile_elems + i] = bfloat16(t == 0 ? v : -v);
+            src[t * tile_elems + i] = bfloat16(static_cast<float>(1 + 60 * t + (i % 50)));
         }
     }
     const auto src_u32 = pack_bfloat16_vec_into_uint32_vec(src);
-    const std::uint32_t page_u32 = tile_elems / 2;
+    constexpr std::uint32_t bf16_per_u32 = sizeof(std::uint32_t) / sizeof(bfloat16);
+    const std::uint32_t page_u32 = tile_elems / bf16_per_u32;
 
     for (auto& device : this->devices_) {
         auto result = unit_tests::llk::single_core::run_unary(
@@ -1488,9 +1491,10 @@ TEST_F(LLKMeshDeviceFixture, TensixMatmulPackOutOfOrderPacksEachDestTileToItsOwn
             }
             return -1;
         };
-        for (std::uint32_t t = 0; t < ntiles; ++t) {
-            EXPECT_EQ(page_holds(t), static_cast<int>(t))
-                << "output page " << t << " must hold DST tile " << t << " (-1: no input tile)";
+        for (std::uint32_t page = 0; page < ntiles; ++page) {
+            const std::uint32_t expected_dst_tile = (page + half) % ntiles;
+            EXPECT_EQ(page_holds(page), static_cast<int>(expected_dst_tile))
+                << "output page " << page << " must hold DST tile " << expected_dst_tile << " (-1: no input tile)";
         }
     }
 }
