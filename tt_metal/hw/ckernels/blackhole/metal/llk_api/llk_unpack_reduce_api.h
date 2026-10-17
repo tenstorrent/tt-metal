@@ -12,8 +12,15 @@
  *************************************************************************/
 
 /**
- * Single-operand reduce: the data tile goes to SrcA, the scaler tile (an ordinary tile in a circular
- * buffer) to SrcB. Formats for SrcB come from the scaler operand's CB configuration.
+ * @brief Initialize the unpacker for a single-operand reduce: the data tile goes to SrcA, the scaler tile
+ *        (an ordinary circular-buffer tile) to SrcB.
+ *
+ * @tparam type: Reduction pooling op, values = <SUM/AVG/MAX>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>; REDUCE_ROW is MAX only
+ *         (SUM/AVG must use llk_unpack_AB_reduce_init / llk_unpack_AB_reduce).
+ * @param scaler_operand: Circular buffer holding the scaler tile; its formats configure SrcB.
+ * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose.
+ * @note Pair with @ref llk_unpack_reduce for the per-tile unpack.
  */
 template <PoolType type, ReduceDim dim>
 inline void llk_unpack_reduce_init(
@@ -25,6 +32,17 @@ inline void llk_unpack_reduce_init(
         unpack_src_format[scaler_operand_id], unpack_dst_format[scaler_operand_id], within_face_16x16_transpose);
 }
 
+/**
+ * @brief Unpack one data tile into SrcA and the scaler tile into SrcB for a single-operand reduce.
+ *
+ * @tparam type: Reduction pooling op, values = <SUM/AVG/MAX>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @param operand: Circular buffer holding the data tile.
+ * @param scaler_operand: Circular buffer holding the scaler tile.
+ * @param tile_index: Index of the data tile within its circular buffer.
+ * @param scaler_tile_index: Index of the scaler tile within its circular buffer.
+ * @note Call @ref llk_unpack_reduce_init with matching template args before this function.
+ */
 template <PoolType type, ReduceDim dim>
 inline void llk_unpack_reduce(
     const std::uint32_t operand,
@@ -41,9 +59,11 @@ inline void llk_unpack_reduce(
     std::uint32_t scaler_offset_address = get_local_cb_interface(scaler_operand_id).fifo_page_size * scaler_tile_index;
     std::uint32_t scaler_address = scaler_base_address + scaler_offset_address;
 
-    LLK_ASSERT(cb_access_within_bounds(operand_id, tile_index, 1), "Indexed tile read exceeds CB boundary");
     LLK_ASSERT(
-        cb_access_within_bounds(scaler_operand_id, scaler_tile_index, 1), "Indexed tile read exceeds CB boundary");
+        cb_access_within_bounds(operand_id, tile_index, 1 /*num_tiles*/), "Indexed tile read exceeds CB boundary");
+    LLK_ASSERT(
+        cb_access_within_bounds(scaler_operand_id, scaler_tile_index, 1 /*num_tiles*/),
+        "Indexed tile read exceeds CB boundary");
 
     WAYPOINT("UPRW");
     _llk_unpack_reduce_<type, dim>(address, scaler_address);

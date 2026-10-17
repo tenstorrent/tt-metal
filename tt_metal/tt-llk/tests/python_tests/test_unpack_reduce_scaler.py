@@ -7,11 +7,10 @@ tile goes to SrcA and the scaler tile, placed in its own L1 buffer, to SrcB. The
 pack threads are the ones test_reduce.py uses, so a mismatch against the golden means the
 scaler the unpacker delivered is not the one in the buffer.
 
-REDUCE_ROW SUM/AVG is left out: the math LLK runs that case with the operands swapped
-(data in SrcB), which this unpack path does not produce. REDUCE_ROW MAX pools SrcA only.
+REDUCE_ROW SUM/AVG is not a variant: _llk_unpack_reduce_init_ rejects it at compile time
+(the math LLK runs that case with the operands swapped, which this unpack path does not
+produce). REDUCE_ROW MAX pools SrcA only and is covered.
 """
-
-import math
 
 import torch
 from conftest import skip_for_quasar
@@ -33,7 +32,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import generate_stimuli, reduce_scaler_value
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     IN_FACE_DIMS,
@@ -44,7 +43,6 @@ from helpers.test_variant_parameters import (
     NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
     OUTPUT_TILE_CNT,
-    REDUCE_TO_ONE,
 )
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
@@ -68,9 +66,8 @@ def _pool_types_for_dim(reduce_dim):
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=_pool_types_for_dim,
-    math_fidelity=[MathFidelity.HiFi4],
 )
-def test_unpack_reduce_scaler(formats, reduce_dim, pool_type, math_fidelity):
+def test_unpack_reduce_scaler(formats, reduce_dim, pool_type):
     tile_dimensions = [32, 32]
     tile_shape = construct_tile_shape(tile_dimensions)
     input_dimensions = [64, 32]
@@ -83,16 +80,10 @@ def test_unpack_reduce_scaler(formats, reduce_dim, pool_type, math_fidelity):
         tile_dimensions=tile_dimensions,
     )
 
-    # The scaler tile: 1 for max/sum, 1/N for the average over the reduced extent.
-    if pool_type in [ReducePool.Max, ReducePool.Sum]:
-        scaler = 1.0
-    elif reduce_dim == ReduceDimension.Row:
-        scaler = 1 / tile_dimensions[1]
-    elif reduce_dim == ReduceDimension.Column:
-        scaler = 1 / tile_dimensions[0]
-    else:
-        scaler = 1 / math.sqrt(tile_dimensions[0] * tile_dimensions[1])
-    src_B = torch.full((tile_shape.total_tile_size(),), scaler)
+    src_B = torch.full(
+        (tile_shape.total_tile_size(),),
+        reduce_scaler_value(pool_type, reduce_dim, tile_dimensions),
+    )
 
     generate_golden = get_golden_generator(ReduceGolden)
     golden_tensor = generate_golden(
@@ -126,7 +117,7 @@ def test_unpack_reduce_scaler(formats, reduce_dim, pool_type, math_fidelity):
         formats,
         templates=[
             MATH_OP(mathop=mathop_mapping[reduce_dim], pool_type=pool_type),
-            MATH_FIDELITY(math_fidelity),
+            MATH_FIDELITY(MathFidelity.HiFi4),
         ],
         runtimes=[
             IN_FACE_DIMS(
@@ -138,7 +129,6 @@ def test_unpack_reduce_scaler(formats, reduce_dim, pool_type, math_fidelity):
             INPUT_TILE_CNT(tile_cnt_A),
             OUTPUT_TILE_CNT(tile_cnt_A),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            REDUCE_TO_ONE(False),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
         ],
@@ -166,11 +156,6 @@ def test_unpack_reduce_scaler(formats, reduce_dim, pool_type, math_fidelity):
     ), "Result tensor and golden tensor are not of the same length"
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
-
-    # Print the first reduced row so a scaler mismatch is visible in the log.
-    print(
-        f"device[:8]={res_tensor[:8].tolist()} golden[:8]={golden_tensor[:8].tolist()}"
-    )
 
     assert passed_test(
         golden_tensor,

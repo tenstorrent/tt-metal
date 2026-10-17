@@ -59,6 +59,7 @@ inline void _llk_unpack_reduce_mop_config_()
  * @param unpB_src_format: Source data format of the scaler operand (SrcB) in L1.
  * @param unpB_dst_format: Destination data format the scaler operand is converted to.
  * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose.
+ * @note REDUCE_ROW is supported for MAX only; REDUCE_ROW SUM/AVG must use the AB reduce path (static_assert).
  * @ref _llk_unpack_reduce_ is the matching execute call.
  * @ref _llk_math_reduce_init_ is the matching init on the math thread (single-operand unpack pairing).
  */
@@ -71,6 +72,12 @@ inline void _llk_unpack_reduce_init_(
         type != PoolType::MIN,
         "The FPU reduce has no MIN: the hardware provides GMPOOL (max) and GAPOOL (average) only. "
         "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
+
+    // This path always unpacks the data tile into SrcA and the scaler into SrcB; the REDUCE_ROW SUM/AVG math
+    // expects the reverse layout (data in SrcB, scaler column in SrcA), which only the AB reduce unpack provides.
+    static_assert(
+        !(dim == ReduceDim::REDUCE_ROW && type != PoolType::MAX),
+        "REDUCE_ROW SUM/AVG needs the data tile in SrcB; use _llk_unpack_AB_reduce_init_ / _llk_unpack_AB_reduce_.");
 
     // Configure SrcB format registers
     cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0xf>(unpB_src_format);

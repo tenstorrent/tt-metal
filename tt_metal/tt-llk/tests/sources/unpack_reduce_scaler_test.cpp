@@ -4,7 +4,8 @@
 
 // Single-operand reduce: the operand tile is unpacked into SrcA and a scaler tile from
 // its own L1 buffer into SrcB through _llk_unpack_reduce_init_ / _llk_unpack_reduce_
-// (the path behind llk_unpack_reduce_init / llk_unpack_reduce in compute_kernel_api.h).
+// (the path behind llk_unpack_reduce_init / llk_unpack_reduce in
+// hw/ckernels/{arch}/metal/llk_api/llk_unpack_reduce_api.h).
 // The math and pack threads are the ones the AB reduce test uses.
 
 #include <algorithm>
@@ -122,7 +123,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
 
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
+    _llk_pack_init_wrapper_<PackMode::Default, false /*zero_output*/>(
         formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
 
     _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape.face_r_dim);

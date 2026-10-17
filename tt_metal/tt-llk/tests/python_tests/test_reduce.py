@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-
 import torch
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import ReduceGolden, get_golden_generator
@@ -22,7 +20,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import generate_stimuli, reduce_scaler_value
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     IN_FACE_DIMS,
@@ -118,22 +116,10 @@ def test_reduce(
         tile_dimensions=tile_dimensions,
     )
 
-    if pool_type in [
-        ReducePool.Max,
-        ReducePool.Sum,
-    ]:  # result in srcA should be divided by 1
-        src_B = torch.full((tile_shape.total_tile_size(),), 1)
-    else:
-        # reduce average divides by length of elements in array we reduce
-        if reduce_dim == ReduceDimension.Row:
-            src_B = torch.full((tile_shape.total_tile_size(),), 1 / tile_dimensions[1])
-        elif reduce_dim == ReduceDimension.Column:
-            src_B = torch.full((tile_shape.total_tile_size(),), 1 / tile_dimensions[0])
-        else:  # Scalar
-            src_B = torch.full(
-                (tile_shape.total_tile_size(),),
-                1 / math.sqrt(tile_dimensions[0] * tile_dimensions[1]),
-            )
+    src_B = torch.full(
+        (tile_shape.total_tile_size(),),
+        reduce_scaler_value(pool_type, reduce_dim, tile_dimensions),
+    )
 
     generate_golden = get_golden_generator(ReduceGolden)
     golden_tensor = generate_golden(
@@ -298,22 +284,10 @@ def test_reduce_bfp4_b(
         tile_dimensions=tile_dimensions,
     )
 
-    if pool_type in [
-        ReducePool.Max,
-        ReducePool.Sum,
-    ]:  # result in srcA should be divided by 1
-        src_B = torch.full((tile_shape.total_tile_size(),), 1)
-    else:
-        # reduce average divides by length of elements in array we reduce
-        if reduce_dim == ReduceDimension.Row:
-            src_B = torch.full((tile_shape.total_tile_size(),), 1 / tile_dimensions[1])
-        elif reduce_dim == ReduceDimension.Column:
-            src_B = torch.full((tile_shape.total_tile_size(),), 1 / tile_dimensions[0])
-        else:  # Scalar
-            src_B = torch.full(
-                (tile_shape.total_tile_size(),),
-                1 / math.sqrt(tile_dimensions[0] * tile_dimensions[1]),
-            )
+    src_B = torch.full(
+        (tile_shape.total_tile_size(),),
+        reduce_scaler_value(pool_type, reduce_dim, tile_dimensions),
+    )
 
     generate_golden = get_golden_generator(ReduceGolden)
     golden_tensor = generate_golden(
