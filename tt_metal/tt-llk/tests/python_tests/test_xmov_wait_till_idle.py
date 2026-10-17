@@ -25,12 +25,19 @@ from helpers.test_variant_parameters import ITERATIONS, XMOV_READ_GAP, XMOV_XFER
 
 # Passed to the kernel as ITERATIONS; the kernel echoes it back as its first result word.
 NUM_ITERATIONS = 8192
+# cfg0 bit 3 (DisLowCash): set means the Blackhole L0 data cache is disabled.
+CFG0_L0_DCACHE_DISABLE = 1 << 3
 
 
 @skip_for_quasar
 @pytest.mark.parametrize("gap", [0, 64])
 @pytest.mark.parametrize("xfer_16b", [1, 16, 256])
 def test_xmov_wait_till_idle(xfer_16b, gap):
+    if TestConfig.TEST_TARGET.run_simulator:
+        pytest.skip(
+            "The TDMA-RISC mover and its status bits are unverified on the simulator; "
+            "the wait would spin to the timeout if they are not modelled."
+        )
     formats = input_output_formats([DataFormat.Int32])[0]
     input_dimensions = [32, 32]
 
@@ -76,7 +83,7 @@ def test_xmov_wait_till_idle(xfer_16b, gap):
     print(
         f"\nxmov_wait_till_idle, {xfer_16b} x 16 B per move, {gap} nops before the read"
         + (
-            f", cfg0 {cfg0:#x} (L0 data cache {'disabled' if cfg0 & (1 << 3) else 'enabled'})"
+            f", cfg0 {cfg0:#x} (L0 data cache {'disabled' if cfg0 & CFG0_L0_DCACHE_DISABLE else 'enabled'})"
             if get_chip_architecture() == ChipArchitecture.BLACKHOLE
             else ""
         )
