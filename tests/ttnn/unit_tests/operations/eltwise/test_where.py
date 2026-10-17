@@ -433,6 +433,44 @@ def test_where_scalar_bf16_inputs_fp32_output(device, scalar, scalar_is_true):
 
 @pytest.mark.parametrize(
     "c_shape",
+    [
+        (2, 64, 1),
+        (1, 1, 1),
+        pytest.param(
+            (1, 1, 128),
+            marks=pytest.mark.xfail(
+                reason="Wormhole row broadcast of a bf16 operand into a 32-bit Dest is wrong for every SFPU "
+                "binary op (add, div, pow, maximum as well), independently of the where variant"
+            ),
+        ),
+    ],
+    ids=["col_bcast", "scalar_bcast", "row_bcast"],
+)
+@pytest.mark.parametrize("scalar_is_true", [False, True], ids=["tts", "tst"])
+@pytest.mark.parametrize("scalar", [-1.0, 15.5])
+def test_where_scalar_bf16_inputs_fp32_output_bcast(device, c_shape, scalar, scalar_is_true):
+    # The broadcast kernels take their where_tile variant from the condition dtype; with a float32 output
+    # the Dest is 32-bit, so a bf16 condition must still select the Float32 variant (as no-bcast does).
+    torch.manual_seed(0)
+    shape = (2, 64, 128)
+    C = (torch.rand(c_shape) > 0.5).to(torch.bfloat16)
+    T = torch.rand(shape, dtype=torch.bfloat16).uniform_(-100, 100)
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(torch.zeros(shape), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    if scalar_is_true:
+        ttnn.where(ttnn_C, scalar, ttnn_T, output_tensor=out)
+        expected = torch.where(C.bool(), torch.tensor(scalar), T.float())
+    else:
+        ttnn.where(ttnn_C, ttnn_T, scalar, output_tensor=out)
+        expected = torch.where(C.bool(), T.float(), torch.tensor(scalar))
+
+    assert torch.equal(ttnn.to_torch(out), expected)
+
+
+@pytest.mark.parametrize(
+    "c_shape",
     [(2, 64, 128), (2, 64, 1), (1, 1, 1), (1, 1, 128)],
     ids=["no_bcast", "col_bcast", "scalar_bcast", "row_bcast"],
 )
