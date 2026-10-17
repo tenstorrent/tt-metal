@@ -267,14 +267,17 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
                 AddRuntimeArgsForNode(reader_ra.runtime_arg_values, core, {{"num_tiles", num_units_per_core}});
                 AddRuntimeArgsForNode(writer_ra.runtime_arg_values, core, {{"num_tiles", num_units_per_core}});
             } else {
+                // A sharded row-major buffer stores each row at its aligned page size.
                 AddRuntimeArgsForNode(
                     reader_ra.runtime_arg_values,
                     core,
-                    {{"stick_size", input_unit_size}, {"num_sticks", num_units_per_core}});
+                    {{"stick_size", tt::align(input_unit_size, input.buffer()->alignment())},
+                     {"num_sticks", num_units_per_core}});
                 AddRuntimeArgsForNode(
                     writer_ra.runtime_arg_values,
                     core,
-                    {{"stick_size", output_unit_size}, {"num_sticks", num_units_per_core}});
+                    {{"stick_size", tt::align(output_unit_size, output.buffer()->alignment())},
+                     {"num_sticks", num_units_per_core}});
             }
         } else {
             if (tilized) {
