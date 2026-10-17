@@ -6,17 +6,16 @@
 
 #include <optional>
 
-#include <tt-metalium/program_descriptors.hpp>
-
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 
-// CB depth shared by all three program-factory branches (TILE-interleaved, RM
-// last-dim, RM higher-dim). Also consulted by repeat_codegen_supported.cpp's
-// L1-capacity gate, so this is the single source of truth rather than a value
-// duplicated across files.
+// Staging-buffer depth (DFB entries) shared by all three program-factory branches
+// (TILE-interleaved, RM last-dim, RM higher-dim). Also consulted by
+// repeat_codegen_supported.cpp's L1-capacity gate, so this is the single source of
+// truth rather than a value duplicated across files.
 inline constexpr uint32_t kRepeatCbDepth = 8;
 
 struct RepeatCodegenParams {
@@ -36,7 +35,7 @@ struct RepeatCodegenInputs {
 };
 
 struct RepeatCodegenProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const RepeatCodegenParams& operation_attributes,
         const RepeatCodegenInputs& tensor_args,
         Tensor& tensor_return_value);
