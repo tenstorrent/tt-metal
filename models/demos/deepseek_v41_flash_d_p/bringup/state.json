@@ -164,6 +164,27 @@
   "started": "2026-10-17T05:14:04",
   "status": "PASS"
  },
+ "C.enc_reuse.attn_residual": {
+  "attempts": 0,
+  "duration_s": 95.1,
+  "history": [
+   {
+    "s": 95.1,
+    "status": "PASS",
+    "t": "2026-10-17T06:08:54"
+   }
+  ],
+  "last_run": "2026-10-17T06:08:54",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.enc_reuse.attn_residual.log",
+  "metrics": {
+   "err_attn_residual_L03": 0.002599612809717655,
+   "err_attn_residual_L03_limit": 0.11694247275590897
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T06:07:19",
+  "status": "PASS"
+ },
  "C.enc_reuse.kv": {
   "attempts": 0,
   "duration_s": 30.5,
