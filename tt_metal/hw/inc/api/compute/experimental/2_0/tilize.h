@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
+#include "experimental/2_0/llk_config.h"
 
 #ifdef TRISC_MATH
 #include "experimental/2_0/llk_math_unary_datacopy.h"
@@ -46,19 +47,22 @@ ALWI void tilize_init(
     LLKOperand<InFormat, InShape> /*in*/, std::uint32_t block, LLKOperand<OutFormat, OutShape> /*out*/) {
     static_assert(is_legal_tile_shape(InShape), "tilize_init: illegal input tile shape.");
     static_assert(is_legal_tile_shape(OutShape), "tilize_init: illegal output tile shape.");
-    UNPACK((llk_unpack_tilize_init<LLKOperand<InFormat, InShape>::descriptor, is_fp32_dest_acc_en>(block)));
+    constexpr auto in_desc = LLKOperand<InFormat, InShape>::descriptor;
+    constexpr auto out_desc = LLKOperand<OutFormat, OutShape>::descriptor;
+    // Helpers first (L1 format, zero flag, clear mask), then tilize mode / tilize pack.
+    UNPACK((llk_unpack_config<is_fp32_dest_acc_en, in_desc, in_desc>()));
+    UNPACK((llk_unpack_tilize_init<in_desc, is_fp32_dest_acc_en>(block)));
+    // Tilize mode depends on the run-time block, so it is not a tracked config.
+    UNPACK((detail::unpack_config_state = nullptr));
+    MATH((llk_math_config<is_fp32_dest_acc_en, in_desc, in_desc, true /*datacopy_zero_flag*/>()));
     MATH((llk_math_eltwise_unary_datacopy_init<
-          LLKOperand<InFormat, InShape>::descriptor,
+          in_desc,
           DataCopyType::A2D,
           is_fp32_dest_acc_en,
           BroadcastType::NONE,
           false /*is_int_en*/,
           PackMode::Tilize>()));
-    PACK((llk_pack_init<
-          LLKOperand<OutFormat, OutShape>::descriptor,
-          LLKOperand<InFormat, InShape>::descriptor,
-          is_fp32_dest_acc_en,
-          PackMode::Tilize>(1 /* num_tiles */)));
+    PACK((llk_pack_tilize_config<is_fp32_dest_acc_en, out_desc, in_desc>()));
 }
 
 // clang-format off
@@ -140,6 +144,8 @@ template <
 ALWI void tilize_uninit(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<OutFormat, OutShape> /*out*/) {
     UNPACK((llk_unpack_tilize_uninit<LLKOperand<InFormat, InShape>::descriptor, is_fp32_dest_acc_en>()));
     PACK((llk_pack_init<LLKOperand<OutFormat, OutShape>::descriptor, is_fp32_dest_acc_en, PackMode::Default>()));
+    UNPACK((detail::unpack_config_state = nullptr));
+    PACK((detail::pack_config_state = nullptr));
 }
 
 }  // namespace experimental

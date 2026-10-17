@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
+#include "experimental/2_0/llk_config.h"
 
 #ifdef TRISC_PACK
 #include "experimental/2_0/llk_pack_tile.h"
@@ -34,7 +35,7 @@ ALWI void pack_init(LLKOperand<Format, Shape> /*out*/) {
         !(is_block_float_format(Format) && is_partial_height(Shape)),
         "pack: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath; "
         "use a full 32-row tile.");
-    PACK((llk_pack_init<LLKOperand<Format, Shape>::descriptor, is_fp32_dest_acc_en>()));
+    PACK((llk_pack_config<is_fp32_dest_acc_en, LLKOperand<Format, Shape>::descriptor>()));
 }
 
 // clang-format off
