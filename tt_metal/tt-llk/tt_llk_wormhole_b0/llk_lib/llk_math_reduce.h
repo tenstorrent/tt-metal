@@ -26,6 +26,11 @@ using namespace ckernel;
 constexpr std::uint32_t REDUCE_SCALAR_SCRATCH_ROW = 4;
 // SFPLOAD/SFPSTORE address bit that selects the odd columns of a 4-row block.
 constexpr std::uint32_t SFPU_ODD_COLS = 2;
+// The fp32 SUM/AVG tail pools a second copy of its pieces into this 4-row block (cleared right before) so the
+// mid/lo sums never mix with whatever the result row already holds.
+constexpr std::uint32_t REDUCE_SCALAR_PIECE_SUM_ROW = 8;
+// SFPSHFT Mod1: the shift amount is the immediate (ISA SFPSHFT_MOD1_ARG_IMM).
+constexpr std::uint32_t SFPSHFT_MOD1_ARG_IMM = 1;
 
 // local function declarations
 template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
@@ -99,10 +104,13 @@ inline void reduce_row_perform_transpose()
  * is rewritten as row 0 = hi, row 1 = mid, row 2 = lo (row 3 unused), and the FPU tail moves those three rows
  * to SrcB rows 16, 30 and 31, so after the transpose the final GAPOOL weights every piece by its own column of
  * the scaler row, exactly as it weighted the whole partials before (a non-uniform scaler row keeps its meaning),
- * and lands the three sums in result columns 0 (on top of the running accumulation), 14 and 15;
- * @ref reduce_scalar_fp32_sum_pieces adds them in fp32 and writes the result.
+ * and lands the sums in columns 0 (hi, on top of the running accumulation of the result row), 14 (mid) and
+ * 15 (lo); a second copy of that pool into the piece-sum rows, cleared right before it, provides the mid and lo
+ * sums free of whatever the result row held, and @ref reduce_scalar_fp32_sum_pieces adds the three in fp32.
+ * A non-finite partial stays whole in hi with mid = lo = 0.
  *
- * Runs after the last face pool and before the MOVD2B of the scratch block. Overwrites SFPU LREG0-LREG7 (callers
+ * Runs after the last face pool and before the MOVD2B of the scratch block. Overwrites SFPU LREG0-LREG7 and leaves
+ * the lane flags enabled with all lanes on (callers
  * re-run any SFPU init that preloads an LREG). Kept out of line like _apply_src_zero_flag_: a kernel with several
  * REDUCE_SCALAR SUM sites would otherwise carry one copy of this sequence per site.
  */
@@ -111,6 +119,9 @@ inline __attribute__((noinline)) void reduce_scalar_fp32_split_partials()
     // SFPLOADI halves of the piece mask 0xFFFF0000: sign, exponent and the 7 mantissa bits a bf16 keeps.
     constexpr std::uint32_t PIECE_MASK_UPPER = 0xFFFF;
     constexpr std::uint32_t PIECE_MASK_LOWER = 0x0000;
+    // SFPLOADI halves of the exponent mask 0x7F800000.
+    constexpr std::uint32_t EXPONENT_MASK_UPPER = 0x7F80;
+    constexpr std::uint32_t EXPONENT_MASK_LOWER = 0x0000;
 
     // Let the FPU pooling writes (including the HiFi MOP) land in DEST before the SFPU reads them.
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
@@ -153,6 +164,29 @@ inline __attribute__((noinline)) void reduce_scalar_fp32_split_partials()
     TTI_SFPADD(p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG6, 0 /*instr_mod1*/);
     TTI_SFPNOP;
 
+    // Non-finite partials (an fp32 overflow during the face pooling leaves an exponent-255 pattern) must not go
+    // through the residual subtractions: inf - inf is NaN on the SFPU, and the FPU reads exponent-255 Src patterns
+    // numerically. Keep such a partial in hi (the mask preserves its exponent and sign) and zero its mid and lo.
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, EXPONENT_MASK_UPPER);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, EXPONENT_MASK_LOWER);
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0 /*lreg_c*/, 0 /*lreg_dest*/, sfpi::SFPENCC_MOD1_EI_RI);
+    // even columns: LREG7 = mask - (hi & mask), zero exactly when the exponent is all ones
+    TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG7, 0 /*instr_mod1*/);
+    TTI_SFPAND(0 /*imm12_math*/, p_sfpu::LREG3, p_sfpu::LREG7, 0 /*instr_mod1*/);
+    TTI_SFPIADD(0 /*imm12_math*/, p_sfpu::LREG3, p_sfpu::LREG7, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSETCC(0 /*imm12_math*/, p_sfpu::LREG7, 0 /*lreg_dest*/, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+    TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG1, 0 /*instr_mod1*/);
+    TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG2, 0 /*instr_mod1*/);
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0 /*lreg_c*/, 0 /*lreg_dest*/, sfpi::SFPENCC_MOD1_EI_RI);
+    // odd columns
+    TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LREG4, p_sfpu::LREG7, 0 /*instr_mod1*/);
+    TTI_SFPAND(0 /*imm12_math*/, p_sfpu::LREG3, p_sfpu::LREG7, 0 /*instr_mod1*/);
+    TTI_SFPIADD(0 /*imm12_math*/, p_sfpu::LREG3, p_sfpu::LREG7, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSETCC(0 /*imm12_math*/, p_sfpu::LREG7, 0 /*lreg_dest*/, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+    TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG5, 0 /*instr_mod1*/);
+    TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG6, 0 /*instr_mod1*/);
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0 /*lreg_c*/, 0 /*lreg_dest*/, sfpi::SFPENCC_MOD1_EI_RI);
+
     // Transpose again: LREG0 lane groups 0-2 = hi, mid, lo of the even columns (from LREG0-2), LREG4 the same
     // for the odd columns (from LREG4-6); lane group 3 (block row 3) carries LREG3 / LREG7 and is never moved.
     TTI_SFPTRANSP(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
@@ -166,45 +200,45 @@ inline __attribute__((noinline)) void reduce_scalar_fp32_split_partials()
 /**
  * @brief Second half of the fp32-DEST REDUCE_SCALAR SUM/AVG tail: add the three piece sums and write the result.
  *
- * Runs after the final GAPOOL, which left result column 0 as the accumulation so far plus the scaler-weighted
- * hi pieces, column 14 as the weighted mid pieces and column 15 as the weighted lo pieces (see
- * @ref reduce_scalar_fp32_split_partials). Adds the three in fp32 and writes [result, 0, ..., 0] over the result
- * rows 0-3 (the packer reads element [0]; the zeroed columns keep 14 and 15 clean for the next tile while
- * column 0 carries the accumulation). Overwrites SFPU LREG0-LREG3 and leaves the lane flags enabled with all
- * lanes on.
+ * Runs after the two final GAPOOLs (see @ref reduce_scalar_fp32_split_partials): the result rows hold the
+ * accumulation so far plus the scaler-weighted hi pieces in column 0 (the FPU reads an undefined result row as
+ * zero, so a fresh DEST section and a caller-preloaded accumulation both work as before), and the piece-sum rows,
+ * cleared right before that pool, hold the weighted mid pieces in column 14 and the weighted lo pieces in column
+ * 15. Adds the three in fp32 and writes column 0 of the result rows (the packer reads element [0]; the other
+ * columns of the result rows are left exactly as the FPU tail leaves them). Overwrites SFPU LREG0-LREG3 and
+ * leaves the lane flags enabled with all lanes on.
  */
 inline __attribute__((noinline)) void reduce_scalar_fp32_sum_pieces()
 {
-    constexpr std::uint32_t RESULT_ROW = 0;
+    constexpr std::uint32_t RESULT_ROW         = 0;
+    constexpr std::uint32_t LTILEID_COL0_SHIFT = 28; // LTILEID << 28 is zero only in lanes 0, 8, 16, 24 (column 0 of each row)
 
-    // Let the final GAPOOL land in DEST before the SFPU reads it.
+    // Let the final GAPOOLs land in DEST before the SFPU reads them.
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
 
-    // Lane 0 of the even columns is column 0, lane 7 is column 14; lane 7 of the odd columns is column 15.
-    // Rotating by one lane brings columns 14 and 15 to lane 0.
+    // Even columns of the result rows: lane 0 (and 8, 16, 24) = column 0. Piece-sum rows: lane 7 of the even
+    // columns = column 14, lane 7 of the odd columns = column 15; one rotation brings both to lane 0 (8, 16, 24).
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_0, RESULT_ROW);
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_0, RESULT_ROW + SFPU_ODD_COLS);
-    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_SCALAR_PIECE_SUM_ROW);
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_SCALAR_PIECE_SUM_ROW + SFPU_ODD_COLS);
+    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPNOP;
-    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG1, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPNOP;
-    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*instr_mod1*/);
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0 /*instr_mod1*/);
     TTI_SFPNOP;
-    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG0, 0 /*instr_mod1*/); // lane 0 = result
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*instr_mod1*/); // column 0 lanes = result
     TTI_SFPNOP;
 
-    // [result, 0, ..., 0] over rows 0-3: lane 0 of the even columns (LTILEID is 2 * lane, zero only there),
-    // zero elsewhere.
+    // Store column 0 of the result rows only.
     TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0 /*lreg_c*/, 0 /*lreg_dest*/, sfpi::SFPENCC_MOD1_EI_RI);
-    TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG2, 0 /*instr_mod1*/);
-    TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG1, 0 /*instr_mod1*/);
-    TTI_SFPSETCC(0 /*imm12_math*/, p_sfpu::LTILEID, 0 /*lreg_dest*/, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-    TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG2, 0 /*instr_mod1*/);
+    TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LTILEID, p_sfpu::LREG3, 0 /*instr_mod1*/);
+    TTI_SFPSHFT(LTILEID_COL0_SHIFT, 0 /*lreg_c*/, p_sfpu::LREG3, SFPSHFT_MOD1_ARG_IMM);
+    TTI_SFPSETCC(0 /*imm12_math*/, p_sfpu::LREG3, 0 /*lreg_dest*/, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_0, RESULT_ROW);
     TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0 /*lreg_c*/, 0 /*lreg_dest*/, sfpi::SFPENCC_MOD1_EI_RI);
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_0, RESULT_ROW);
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_0, RESULT_ROW + SFPU_ODD_COLS);
 
-    // Let the stores land before any later FPU write to this tile.
+    // Let the store land before any later FPU write to this tile.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
 }
 
@@ -476,6 +510,15 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         TTI_GATESRCRST(0b1, 0b1);
         // zero out scratch in dest
         TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, ADDR_MOD_0, REDUCE_SCALAR_SCRATCH_ROW);
+        if constexpr (fp32_sfpu_tail)
+        {
+            // Clear the piece-sum rows so the second pool below starts from zero whatever they (or a preloaded result
+            // row) hold.
+            TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, ADDR_MOD_0, REDUCE_SCALAR_PIECE_SUM_ROW + 0);
+            TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, ADDR_MOD_0, REDUCE_SCALAR_PIECE_SUM_ROW + 1);
+            TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, ADDR_MOD_0, REDUCE_SCALAR_PIECE_SUM_ROW + 2);
+            TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, ADDR_MOD_0, REDUCE_SCALAR_PIECE_SUM_ROW + 3);
+        }
 
         if constexpr (type == PoolType::MAX)
         {
@@ -483,6 +526,18 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         }
         else
         {
+            if constexpr (fp32_sfpu_tail)
+            {
+                // Same pool into the cleared piece-sum rows: their columns 14 and 15 are the mid and lo sums alone.
+                if constexpr (high_fidelity)
+                {
+                    for (std::uint32_t i = 0; i < to_underlying(math_fidelity) - 1; i++)
+                    {
+                        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, REDUCE_SCALAR_PIECE_SUM_ROW);
+                    }
+                }
+                TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, REDUCE_SCALAR_PIECE_SUM_ROW);
+            }
             if constexpr (high_fidelity)
             {
                 for (std::uint32_t i = 0; i < to_underlying(math_fidelity) - 1; i++)

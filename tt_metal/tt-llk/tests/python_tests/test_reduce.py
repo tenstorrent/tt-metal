@@ -445,7 +445,14 @@ def test_reduce_bfp4_b(
 # for SUM, a per-column weight pattern that is also exact; the final GAPOOL is
 # then exact too and the device total must equal the fp64 total bit for bit.
 # With four tiles reduced to one the sum is still exact in fp32, which checks
-# the accumulation carried across tiles at fp32 precision.
+# the accumulation carried across tiles at fp32 precision. Two more input
+# patterns (SUM, uniform scaler): "sparse" puts 1, 2^-8 and 2^-16 in the same
+# in-face column of three different faces (one value per face: a single 16-row
+# face pool cannot carry terms 16 binades apart, the fp32 DEST accumulation
+# across faces can), so that partial needs all three bf16-exact pieces and
+# losing the low one (2^-16) exceeds the gate; "overflow" puts two -2^127
+# values in one column so the face pooling overflows fp32 and the result must
+# be -inf, as before.
 # ---------------------------------------------------------------------------
 
 FP32_EXACT_TILES = [[32, 32], [16, 32], [16, 16]]
@@ -467,6 +474,21 @@ def _fp32_exact_scaler_rows_for_pool(pool_type):
     return ["uniform", "per_column"]
 
 
+def _fp32_exact_patterns(pool_type, scaler_row):
+    """The sparse and overflow patterns are SUM-only with a uniform scaler."""
+    if pool_type == ReducePool.Sum and scaler_row == "uniform":
+        return ["random", "sparse", "overflow"]
+    return ["random"]
+
+
+def _fp32_exact_tiles_for_pool_and_pattern(pool_type, pattern):
+    """AVG keeps the scaler an exact power of two; the sparse pattern needs three faces."""
+    tiles = _fp32_exact_tiles_for_pool(pool_type)
+    if pattern == "sparse":
+        return [t for t in tiles if construct_tile_shape(t).total_num_faces() >= 3]
+    return tiles
+
+
 def _truncate_significand(value: float, explicit_mantissa_bits: int) -> float:
     """Truncate a float toward zero to 1 + explicit_mantissa_bits significant bits."""
     if value == 0.0:
@@ -484,10 +506,11 @@ def _truncate_significand(value: float, explicit_mantissa_bits: int) -> float:
     math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
     num_tiles=[1, 4],
     scaler_row=_fp32_exact_scaler_rows_for_pool,
-    tile_dimensions=_fp32_exact_tiles_for_pool,
+    pattern=_fp32_exact_patterns,
+    tile_dimensions=_fp32_exact_tiles_for_pool_and_pattern,
 )
 def test_reduce_scalar_fp32_exact(
-    pool_type, math_fidelity, num_tiles, scaler_row, tile_dimensions
+    pool_type, math_fidelity, num_tiles, scaler_row, pattern, tile_dimensions
 ):
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     tile_shape = construct_tile_shape(tile_dimensions)
@@ -500,6 +523,23 @@ def test_reduce_scalar_fp32_exact(
     generator = torch.Generator().manual_seed(0x5EED)
     k = torch.randint(0, 2**INPUT_MANTISSA_BITS, (num_elements,), generator=generator)
     src_A = (1.0 + k.to(torch.float64) * 2.0**-INPUT_MANTISSA_BITS).to(torch.float32)
+    if pattern != "random":
+        # In-face column 3 carries the pattern, everything else is 0: "sparse" puts one value in row 0 of
+        # faces 0, 1 and 2 (they pool into the same partial), "overflow" two values in rows 0 and 1 of face 0.
+        src_A = torch.zeros(num_elements, dtype=torch.float32)
+        face_elements = tile_shape.face_r_dim * FACE_C_DIM
+        if pattern == "sparse":
+            placements = [(face, 0, 2.0 ** (-8 * face)) for face in range(3)]
+        else:
+            placements = [(0, 0, -(2.0**127)), (0, 1, -(2.0**127))]
+        for tile in range(num_tiles):
+            for face, row, value in placements:
+                src_A[
+                    tile * elements_per_tile
+                    + face * face_elements
+                    + row * FACE_C_DIM
+                    + 3
+                ] = value
 
     # Scaler row w[c] for the 16 columns of a face. The kernel applies it twice:
     # the face pooling weights face row r by w[r] and the final pool weights the
@@ -525,6 +565,10 @@ def test_reduce_scalar_fp32_exact(
     w = torch.tensor(weights, dtype=torch.float64)
     weighted = values * w[face_row] * w[face_col]
     golden = float(weighted.sum().item())
+    if pattern == "overflow":
+        golden = (
+            -math.inf
+        )  # the fp32 face pooling overflows; the pre-fix tail carried that through
 
     # What the Src round trip of the pre-fix tail does, for the assertion message
     # only: per tile, each in-face column is pooled into one fp32 partial, every
@@ -587,6 +631,12 @@ def test_reduce_scalar_fp32_exact(
     assert len(res_from_L1) == elements_per_tile, "Result tensor has the wrong length"
 
     device = float(res_from_L1[0])
+    if pattern == "overflow":
+        assert device == golden, (
+            f"REDUCE_SCALAR {pool_type.name} fp32 overflow result changed: device={device!r} "
+            f"expected {golden!r} (tile={tile_dimensions}, num_tiles={num_tiles}, fidelity={math_fidelity.name})"
+        )
+        return
     error = device - golden
     tolerance = 2 * abs(golden) * 2.0**-23  # two fp32 ulps
     assert abs(error) <= tolerance, (
@@ -594,6 +644,6 @@ def test_reduce_scalar_fp32_exact(
         f"golden={golden!r} error={error:+.6g} (allowed +-{tolerance:.3g}); "
         f"Src round-trip model of the pre-fix FPU-only tail (partials truncated to 9/10/7 "
         f"explicit mantissa bits): {modelled[9]!r} / {modelled[10]!r} / {modelled[7]!r} "
-        f"(tile={tile_dimensions}, num_tiles={num_tiles}, scaler_row={scaler_row}, "
+        f"(tile={tile_dimensions}, num_tiles={num_tiles}, scaler_row={scaler_row}, pattern={pattern}, "
         f"fidelity={math_fidelity.name})"
     )
