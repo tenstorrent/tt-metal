@@ -290,6 +290,26 @@ struct Transfer<SrcB, Dst>
     constexpr std::uint32_t get_operation() const;
 };
 
+/**
+ * @brief Describe a MOVD2A transfer.
+ *
+ * @note MOVD2A does not wait for SrcA bank ownership; stall on SrcAValid | MathIdle before issuing.
+ */
+template <>
+struct Transfer<Dst, SrcA>
+{
+    std::uint32_t source_row        = 0xffffffffu;
+    RowAddressing source_addressing = RowAddressing::Absolute;
+    std::uint32_t destination_row   = 0xffffffffu;
+    std::uint8_t address_mode       = 0xffu;
+    RowCount number_of_rows {0};
+    std::uint8_t final_address_mode = SameAddressMode;
+    bool source_32bit_low           = false;
+
+    /** @brief Encode the transfer when it consists of exactly one instruction. */
+    constexpr std::uint32_t get_operation() const;
+};
+
 /** @brief Describe a MOVD2B transfer. */
 template <>
 struct Transfer<Dst, SrcB>
@@ -402,6 +422,7 @@ inline constexpr std::uint32_t MmioLastEncodable     = 0xffbffffcu;
 inline constexpr std::uint32_t L1BlockCapacity       = MEM_L1_SIZE / 16u;
 
 inline constexpr std::uint32_t LoadIndOpcode    = 0x49u;
+inline constexpr std::uint32_t MoveD2AOpcode    = 0x08u;
 inline constexpr std::uint32_t MoveDbgA2DOpcode = 0x09u;
 inline constexpr std::uint32_t MoveD2BOpcode    = 0x0au;
 inline constexpr std::uint32_t MoveDbgB2DOpcode = 0x0cu;
@@ -520,6 +541,11 @@ constexpr std::uint16_t native_rows(const Transfer<SrcB, Dst> transfer)
     return 1u;
 }
 
+constexpr std::uint16_t native_rows(const Transfer<Dst, SrcA> transfer)
+{
+    return transfer.number_of_rows.value % 4u == 0u ? 4u : 1u;
+}
+
 constexpr std::uint16_t native_rows(const Transfer<Dst, SrcB> transfer)
 {
     return transfer.number_of_rows.value % 4u == 0u ? 4u : 1u;
@@ -531,6 +557,11 @@ constexpr std::size_t operation_count(const Transfer<SrcA, Dst> transfer)
 }
 
 constexpr std::size_t operation_count(const Transfer<SrcB, Dst> transfer)
+{
+    return transfer.number_of_rows.value / native_rows(transfer);
+}
+
+constexpr std::size_t operation_count(const Transfer<Dst, SrcA> transfer)
 {
     return transfer.number_of_rows.value / native_rows(transfer);
 }
@@ -592,6 +623,15 @@ constexpr bool is_valid(const Transfer<SrcB, Dst> transfer)
            is_canonical(transfer.number_of_rows) && transfer.source_row + source_span <= MatrixSourceRows && is_valid(transfer.broadcast) &&
            !(transfer.number_of_rows.value == 1u && transfer.broadcast == Broadcast::Row) && count <= MaxMatrixTransferInstructions &&
            has_valid_address_modes(transfer.address_mode, transfer.final_address_mode, count) && is_valid(transfer.source_validity);
+}
+
+constexpr bool is_valid(const Transfer<Dst, SrcA> transfer)
+{
+    const std::size_t count = operation_count(transfer);
+    return is_valid(transfer.source_addressing) && is_valid_dst_rows(transfer.source_row, transfer.number_of_rows.value, transfer.source_addressing) &&
+           transfer.destination_row < MatrixSourceRows && is_canonical(transfer.number_of_rows) &&
+           transfer.destination_row + transfer.number_of_rows.value <= MatrixSourceRows && count <= MaxMatrixTransferInstructions &&
+           has_valid_address_modes(transfer.address_mode, transfer.final_address_mode, count);
 }
 
 constexpr bool is_valid(const Transfer<Dst, SrcB> transfer)
@@ -687,6 +727,15 @@ constexpr std::uint32_t encode(const Transfer<SrcB, Dst> transfer, const std::si
     const std::uint32_t fields = (static_cast<std::uint32_t>(transfer.destination_32bit_low) << 23u) | (transfer.source_row << 17u) | (address_mode << 14u) |
                                  (modifier << 11u) | transfer.destination_row;
     return encode_instruction(opcode, fields);
+}
+
+constexpr std::uint32_t encode(const Transfer<Dst, SrcA> transfer, const std::size_t fragment)
+{
+    const std::uint32_t modifier     = native_rows(transfer) == 4u ? 2u : 0u;
+    const std::uint32_t address_mode = address_mode_for_fragment(transfer.address_mode, transfer.final_address_mode, fragment, operation_count(transfer));
+    const std::uint32_t fields = (static_cast<std::uint32_t>(transfer.source_32bit_low) << 23u) | (transfer.destination_row << 17u) | (address_mode << 14u) |
+                                 (modifier << 12u) | transfer.source_row;
+    return encode_instruction(MoveD2AOpcode, fields);
 }
 
 constexpr std::uint32_t encode(const Transfer<Dst, SrcB> transfer, const std::size_t fragment)
@@ -832,6 +881,23 @@ inline __attribute__((always_inline)) void assert_valid(const Transfer<SrcB, Dst
     LLK_ASSERT(is_valid(transfer.source_validity), "MOVB2D source validity must be Wait or Ignore");
 }
 
+inline __attribute__((always_inline)) void assert_valid(const Transfer<Dst, SrcA> transfer)
+{
+    LLK_ASSERT(is_valid(transfer.source_addressing), "MOVD2A source addressing must be Absolute or CounterRelative");
+    LLK_ASSERT(transfer.source_row < MatrixDestinationRows, "MOVD2A source row field must fit ten bits");
+    LLK_ASSERT(transfer.destination_row < MatrixSourceRows, "MOVD2A destination row must be in [0, 63]");
+    LLK_ASSERT(is_canonical(transfer.number_of_rows), "MOVD2A row count must be 1, 4, 8, or a positive whole number of faces");
+    LLK_ASSERT(
+        transfer.source_addressing == RowAddressing::CounterRelative || transfer.source_row + transfer.number_of_rows.value <= MatrixDestinationRows,
+        "MOVD2A absolute source span must fit Dst");
+    LLK_ASSERT(transfer.destination_row + transfer.number_of_rows.value <= MatrixSourceRows, "MOVD2A destination span must fit SrcA");
+    LLK_ASSERT(operation_count(transfer) <= MaxMatrixTransferInstructions, "MOVD2A transfers may expand to at most 8 native TT instructions");
+    LLK_ASSERT(transfer.address_mode < AddressModeCount, "Blackhole MOVD2A address mode must be in [0, 7]");
+    LLK_ASSERT(
+        transfer.final_address_mode == SameAddressMode || (transfer.final_address_mode < AddressModeCount && operation_count(transfer) > 1u),
+        "MOVD2A final address mode must be reused or select [0, 7] for a multi-instruction transfer");
+}
+
 inline __attribute__((always_inline)) void assert_valid(const Transfer<Dst, SrcB> transfer)
 {
     LLK_ASSERT(is_valid(transfer.source_addressing), "MOVD2B source addressing must be Absolute or CounterRelative");
@@ -969,6 +1035,12 @@ constexpr bool is_valid(const Transfer<SrcB, Dst> transfer)
     return detail::is_valid(transfer);
 }
 
+/** @brief Return whether a Dst-to-SrcA descriptor is semantically encodable. */
+constexpr bool is_valid(const Transfer<Dst, SrcA> transfer)
+{
+    return detail::is_valid(transfer);
+}
+
 /** @brief Return whether a Dst-to-SrcB descriptor is semantically encodable. */
 constexpr bool is_valid(const Transfer<Dst, SrcB> transfer)
 {
@@ -1069,6 +1141,19 @@ inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<SrcB, Dst
     {
         detail::assert_valid(*this);
         detail::assert_single_operation(*this, "multi-instruction MOVB2D descriptors must use run()");
+    }
+#endif
+    return detail::encode(*this, 0u);
+}
+
+inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<Dst, SrcA>::get_operation() const
+{
+    detail::reject_invalid_constant(detail::is_valid(*this) && detail::operation_count(*this) == 1u);
+#ifdef ENABLE_LLK_ASSERT
+    if (!__builtin_is_constant_evaluated())
+    {
+        detail::assert_valid(*this);
+        detail::assert_single_operation(*this, "multi-instruction MOVD2A descriptors must use run()");
     }
 #endif
     return detail::encode(*this, 0u);
@@ -1199,6 +1284,16 @@ inline __attribute__((always_inline)) void run_static(const Transfer<SrcB, Dst>)
 }
 
 template <auto Operation>
+inline __attribute__((always_inline)) void run_static(const Transfer<Dst, SrcA>)
+{
+    static_assert(detail::is_valid(Operation), "invalid Dst-to-SrcA transfer descriptor");
+    if constexpr (detail::is_valid(Operation))
+    {
+        emit_matrix_transfer<Operation>();
+    }
+}
+
+template <auto Operation>
 inline __attribute__((always_inline)) void run_static(const Transfer<Dst, SrcB>)
 {
     static_assert(detail::is_valid(Operation), "invalid Dst-to-SrcB transfer descriptor");
@@ -1317,6 +1412,14 @@ inline __attribute__((always_inline)) void run_runtime(const Transfer<SrcA, Dst>
 }
 
 inline __attribute__((always_inline)) void run_runtime(const Transfer<SrcB, Dst> transfer)
+{
+#ifdef ENABLE_LLK_ASSERT
+    assert_valid(transfer);
+#endif
+    run_runtime_matrix(transfer);
+}
+
+inline __attribute__((always_inline)) void run_runtime(const Transfer<Dst, SrcA> transfer)
 {
 #ifdef ENABLE_LLK_ASSERT
     assert_valid(transfer);
