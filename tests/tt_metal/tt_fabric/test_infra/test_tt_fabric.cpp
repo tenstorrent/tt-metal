@@ -273,10 +273,10 @@ int main(int argc, char** argv) {
                 test_context.set_performance_test_mode(built_test.performance_test_mode);
 
                 test_context.setup_devices();
-                log_info(tt::LogTest, "Device setup complete");
+                log_debug(tt::LogTest, "Device setup complete");
 
                 test_context.process_traffic_config(built_test);
-                log_info(tt::LogTest, "Traffic config processed");
+                log_debug(tt::LogTest, "Traffic config processed");
 
                 // Setup latency test mode AFTER process_traffic_config so that senders_/receivers_ maps are populated
                 if (built_test.performance_test_mode == PerformanceTestMode::LATENCY) {
@@ -292,16 +292,16 @@ int main(int argc, char** argv) {
                     YamlTestConfigSerializer::dump({built_test}, output_stream);
                 }
 
-                log_info(tt::LogTest, "Compiling programs");
+                log_debug(tt::LogTest, "Compiling programs");
                 test_context.compile_programs();
 
                 // multi-host barrier to synchronize before starting the test (as we could be clearing out addresses)
                 fixture->barrier();
 
-                log_info(tt::LogTest, "Launching programs");
+                log_debug(tt::LogTest, "Launching programs");
                 test_context.launch_programs();
 
-                log_info(tt::LogTest, "Waiting for programs");
+                log_debug(tt::LogTest, "Waiting for programs");
                 test_context.wait_for_programs_with_progress();
 
                 if (test_context.did_last_test_hang()) {
