@@ -431,7 +431,7 @@ private:
     // Gathers the FabricConfig of every rank and enforces one consistent FabricConfig per logical mesh
     // and across all meshes connected by the mesh graph descriptor. Must run after the local mesh
     // binding and distributed contexts are known, and before routing tables or FabricContext are built.
-    void validate_fabric_config_across_ranks();
+    void validate_fabric_config_compatibility();
 
     // Initialize fabric context if fabric is enabled
     void initialize_fabric_context();
@@ -445,7 +445,7 @@ private:
     // Fabric Settings
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
 
-    // FabricConfig that was agreed on by all ranks in validate_fabric_config_across_ranks(). Fabric
+    // FabricConfig that was agreed on by all ranks in validate_fabric_config_compatibility(). Fabric
     // initialization is only allowed to proceed with this value.
     std::optional<tt_fabric::FabricConfig> validated_fabric_config_;
 
@@ -640,6 +640,12 @@ private:
     // Initialize the local mesh binding from the environment variables
     // Returns std::nullopt if not in multi-host context
     LocalMeshBinding initialize_local_mesh_binding();
+
+    // In the per-rank process model each rank owns a single mesh, so this process should build fabric for
+    // that mesh's resolved config, not the raw process-wide override. Adopts it into fabric_config_ once
+    // the local mesh binding is known. No-op when the rank owns multiple meshes or the MGD declares no
+    // explicit per-mesh config (resolves back to the process-wide override).
+    void adopt_local_mesh_fabric_config();
 
     // Top level function responsible for generating intermesh connectivity
     // based on the MGD and Physical State of the system.

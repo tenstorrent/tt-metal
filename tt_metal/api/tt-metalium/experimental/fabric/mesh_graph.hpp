@@ -245,6 +245,8 @@ private:
     MeshGraph() = default;
 
     void validate_mesh_id(MeshId mesh_id) const;
+    // Reject inter-mesh links whose two ends resolve to FabricConfigs of different routing dimensionality
+    // (1D vs 2D) and thus incompatible channel geometry. See the .cpp for the rationale.
     std::unordered_map<ChipId, RouterEdge> get_valid_connections(
         const MeshCoordinate& src_mesh_coord,
         const MeshCoordinateRange& mesh_coord_range,
