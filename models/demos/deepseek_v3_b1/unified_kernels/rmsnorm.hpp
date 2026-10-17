@@ -129,13 +129,13 @@ struct RMSNorm {
             pack_block_contiguous_init(CTArgs::output_cb);
             {
                 // Square the input
-                mul_reduce_scalar_init(CTArgs::input_cb, CTArgs::input_cb);
+                mul_reduce_scalar_init<num_tiles>(CTArgs::input_cb, CTArgs::input_cb);
                 add_rsqrt_tile_init();
                 cb_wait_front(CTArgs::input_cb, num_tiles);
                 tile_regs_acquire();
-                mul_reduce_scalar_tile<PoolType::SUM>(
+                mul_reduce_scalar_tile<PoolType::SUM, DST_ACCUM_MODE, false, num_tiles>(
                     CTArgs::input_cb, CTArgs::input_cb, CTArgs::output_cb, num_tiles, args.scalar);
-                mul_reduce_scalar_uninit();
+                mul_reduce_scalar_uninit<num_tiles>();
             }
             {
                 add_rsqrt_tile<CTArgs::rsqrt_fast_approx, VectorMode::RC_custom, 1>(0, args.epsilon);

@@ -29,17 +29,31 @@ namespace ckernel {
  *
  * Must be called before mul_reduce_scalar_tile().
  *
- * | Argument       | Description                                                   | Type     | Valid Range | Required |
- * |----------------|---------------------------------------------------------------|----------|-------------|----------|
- * | icb0           | Input circular buffer 0 (tensor A)                            | uint32_t | 0 to 31     | True     |
- * | icb1           | Input circular buffer 1 (tensor B)                            | uint32_t | 0 to 31     | True     |
+ * | Param Type | Name      | Description                                                   | Type     | Valid Range | Required |
+ * |------------|-----------|---------------------------------------------------------------|----------|-------------|----------|
+ * | Template   | row_tiles | The row_tiles of the mul_reduce_scalar_tile calls it serves   | uint32_t | 0 or num_tiles | False |
+ * | Function   | icb0      | Input circular buffer 0 (tensor A)                            | uint32_t | 0 to 31     | True     |
+ * | Function   | icb1      | Input circular buffer 1 (tensor B)                            | uint32_t | 0 to 31     | True     |
  *
  * Return value: None
  */
 // clang-format on
+template <uint32_t row_tiles = 0>
 ALWI void mul_reduce_scalar_init(uint32_t icb0, uint32_t icb1) {
+#if defined(ARCH_BLACKHOLE)
+    UNPACK(
+        if (row_tiles >= 2 && llk_unpack_mul_reduce_scalar_two_face_banks(icb0)) {
+            llk_unpack_mul_reduce_scalar_two_face_banks_init();
+        } else { llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1); });
+    // The interleaved row runs no multiply MOP.
+    MATH(if (row_tiles >= 2 && MATH_FIDELITY == MathFidelity::LoFi &&
+             llk_math_mul_reduce_scalar_two_face_banks(icb0, row_tiles)) {
+        llk_math_mul_reduce_scalar_interleaved_init<DST_ACCUM_MODE>();
+    } else { llk_math_eltwise_mul_reduce_scalar_init<MATH_FIDELITY>(icb0, false /*acc_to_dest*/); });
+#else
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
     MATH((llk_math_eltwise_mul_reduce_scalar_init<MATH_FIDELITY>(icb0, false /*acc_to_dest*/)));
+#endif
 }
 
 namespace detail {
@@ -50,7 +64,8 @@ template <
     MathFidelity mul_fidelity,
     MathFidelity reduce_fidelity,
     bool accumulate_in_one_tile,
-    bool is_fp32_dest_acc_en>
+    bool is_fp32_dest_acc_en,
+    uint32_t row_tiles = 0>
 ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t num_tiles, float scaler) {
     MATH(constexpr MathFidelity mul_f = program_fidelity ? MATH_FIDELITY : mul_fidelity);
     MATH(constexpr MathFidelity reduce_f = program_fidelity ? MATH_FIDELITY : reduce_fidelity);
@@ -63,22 +78,54 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
     static_assert(!accumulate_in_one_tile, "accumulate_in_one_tile is Blackhole-only");
 #endif
 
+#if defined(ARCH_BLACKHOLE)
+    // A row of two or more 32x32 tiles, its length given at compile time, takes two faces per SrcA/SrcB bank; at LoFi
+    // it pools each product while the next tile is multiplied (same results).
+    LLK_ASSERT(row_tiles == 0 || num_tiles == row_tiles, "mul_reduce_scalar_tile: row_tiles must equal num_tiles");
+    static_assert(row_tiles == 0 || !accumulate_in_one_tile, "row_tiles is for one product per tile");
+    MATH(const bool two_face_banks = row_tiles >= 2 && llk_math_mul_reduce_scalar_two_face_banks(icb0, row_tiles));
+    MATH(const bool interleave = two_face_banks && mul_f == MathFidelity::LoFi && reduce_f == MathFidelity::LoFi);
+    MATH(if (interleave) {
+        llk_math_mul_reduce_scalar_interleaved_start();
+        llk_math_mul_reduce_scalar_interleaved_row<row_tiles>(scaler);
+    });
+#endif
+
     // Step 1: Unpack input tiles from both circular buffers and perform multiplication. ELWMUL accumulates
     // into DEST, so with accumulate_in_one_tile every product lands in dest[0].
     for (uint32_t i = 0; i < num_tiles; i++) {
         UNPACK((llk_unpack_AB(icb0, icb1, i, i)));
+#if defined(ARCH_BLACKHOLE)
+        MATH(if (!interleave) {
+            (two_face_banks ? llk_math_mul_reduce_scalar_mul_two_face_banks<mul_f>(i)
+                            : llk_math_eltwise_mul_reduce_scalar<is_fp32_dest_acc_en, mul_f, !accumulate_in_one_tile>(
+                                  accumulate_in_one_tile ? 0 : i, icb0));
+        });
+#else
         MATH((llk_math_eltwise_mul_reduce_scalar<is_fp32_dest_acc_en, mul_f>(accumulate_in_one_tile ? 0 : i, icb0)));
+#endif
     }
+    const uint32_t product_tiles = accumulate_in_one_tile ? 1 : num_tiles;
 
     // Step 2: Switch UNPACK state for reduce phase (reset counters, set DVALID)
     UNPACK((llk_unpack_mul_reduce_scalar_switch_to_reduce()));
+#if defined(ARCH_BLACKHOLE)
+    MATH(if (interleave) {
+        llk_math_mul_reduce_scalar_interleaved_tail(num_tiles);
+        return;
+    });
+#endif
 
     // Step 3: Initialize reduce operation
     MATH((llk_math_mul_reduce_scalar_reduce_init<is_fp32_dest_acc_en, reduce_f>()));
 
     // Step 4: Prepare data for first tile's scalar reduction
     // Move dest[0] (first multiply result) to srcA
+#if defined(ARCH_BLACKHOLE)
+    MATH((llk_math_mul_reduce_scalar_move_product<!accumulate_in_one_tile>(0 /*i*/, product_tiles, icb0)));
+#else
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0)));
+#endif
 
     // Populate srcB with the scaler value
     MATH(SFPU_UNARY_CALL(
@@ -92,6 +139,9 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
 
     // Clear dest[0] - this will accumulate scalar reduction results from all tiles
+#if defined(ARCH_BLACKHOLE)
+    MATH((llk_math_mul_reduce_scalar_clear_pool_face<is_fp32_dest_acc_en>(0 /*dst_index*/)));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -100,20 +150,33 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
         0 /*dst_index*/,
         VectorMode::RC_custom,
         0.0f));
+#endif
 
     // Step 5: Configure packer for scalar reduction
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_SCALAR, PackMode::Default>(ocb)));
 
     // Step 6: Perform column reduction for each product tile, accumulating into dest[0]
     // First iteration (i=0) - no move needed
+#if defined(ARCH_BLACKHOLE)
+    // The SFPU has drained and the DEST address is at tile 0, so no tile setup.
+    MATH((llk_math_mul_reduce_column<reduce_f, false /*tile_setup*/>(0 /*dst_index*/, icb0)));
+#else
     MATH((llk_math_mul_reduce_column<reduce_f>(0, icb0)));
+#endif
 
     // Remaining iterations - always move
-    const uint32_t product_tiles = accumulate_in_one_tile ? 1 : num_tiles;
+#if defined(ARCH_BLACKHOLE)
+#pragma GCC unroll 8
+    for (uint32_t i = 1; i < product_tiles; i++) {
+        MATH((llk_math_mul_reduce_scalar_move_product<!accumulate_in_one_tile>(i, product_tiles, icb0)));
+        MATH((llk_math_mul_reduce_column<reduce_f, false /*tile_setup*/>(0 /*dst_index*/, icb0)));
+    }
+#else
     for (uint32_t i = 1; i < product_tiles; i++) {
         MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i)));
         MATH((llk_math_mul_reduce_column<reduce_f>(0, icb0)));
     }
+#endif
 
     // Step 7: Perform final scalar reduction
     MATH((llk_math_mul_reduce_scalar<reduce_f>()));
@@ -134,14 +197,19 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
  * The final scalar result is stored in dest[0] at element position [0].
  *
  * The multiply accumulates into DEST, so the tiles it writes must be zero on entry; the packer clears each
- * DEST half it releases. By default product i goes to dest[i], which bounds num_tiles by the DEST capacity.
+ * DEST half it releases. By default product i goes to dest[i] (on Blackhole, two 16x32 products share a slot), which
+ * bounds num_tiles by the DEST capacity.
  * accumulate_in_one_tile sums every product in dest[0] instead: num_tiles is then unbounded, and one column
  * reduce serves the whole row. With a bf16 DEST each element's running sum is rounded to bf16 at every
  * accumulate, so its error grows with num_tiles.
+ * On Blackhole, row_tiles (the row length at compile time, also given to mul_reduce_scalar_init and
+ * mul_reduce_scalar_uninit) lets a row of two or more 32x32 tiles take two faces per SrcA/SrcB bank and, at LoFi,
+ * pool each product while the next tile is multiplied, with the same results.
  *
  * | Param Type | Name                   | Description                                                | Type     | Valid Range | Required |
  * |------------|------------------------|------------------------------------------------------------|----------|-------------|----------|
  * | Template   | accumulate_in_one_tile | Sum every product in dest[0] rather than one tile each (Blackhole only) | bool | true/false | False |
+ * | Template   | row_tiles              | num_tiles known at compile time, or 0                      | uint32_t | 0 or num_tiles | False  |
  * | Function   | icb0                   | Input circular buffer 0 (tensor A)                         | uint32_t | 0 to 31     | True     |
  * | Function   | icb1                   | Input circular buffer 1 (tensor B)                         | uint32_t | 0 to 31     | True     |
  * | Function   | ocb                    | Output circular buffer (used to program packer face_r_dim) | uint32_t | 0 to 31     | True     |
@@ -154,7 +222,8 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
 template <
     PoolType reduce_type = PoolType::SUM,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
-    bool accumulate_in_one_tile = false>
+    bool accumulate_in_one_tile = false,
+    uint32_t row_tiles = 0>
 ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t num_tiles, float scaler = 1.0f) {
     // The two fidelity arguments are placeholders: program_fidelity=true reads MATH_FIDELITY instead.
     detail::mul_reduce_scalar_tile_impl<
@@ -162,7 +231,8 @@ ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, uin
         MathFidelity::LoFi,
         MathFidelity::LoFi,
         accumulate_in_one_tile,
-        is_fp32_dest_acc_en>(icb0, icb1, ocb, num_tiles, scaler);
+        is_fp32_dest_acc_en,
+        row_tiles>(icb0, icb1, ocb, num_tiles, scaler);
 }
 
 #if defined(ARCH_BLACKHOLE)
@@ -227,6 +297,12 @@ ALWI void mul_reduce_scalar_tile_fidelity(
  * Return value: None
  */
 // clang-format on
-ALWI void mul_reduce_scalar_uninit() { PACK((llk_pack_reduce_mask_clear())); }
+template <uint32_t row_tiles = 0>
+ALWI void mul_reduce_scalar_uninit() {
+#if defined(ARCH_BLACKHOLE)
+    UNPACK(if constexpr (row_tiles >= 2) { llk_unpack_mul_reduce_scalar_two_face_banks_uninit(); });
+#endif
+    PACK((llk_pack_reduce_mask_clear()));
+}
 
 }  // namespace ckernel
