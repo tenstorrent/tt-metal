@@ -5088,6 +5088,7 @@ def test_matmul_1d_untilize_out_in1_tile_width(device, in1_tile_w):
 
     in1_tile_w=16 gives a 32x16 output tile whose two faces are stacked, so the untilize pack has to
     emit 16-datum rows with the second face below the first; in1_tile_w=32 is the 32x32 control.
+    The row-major output is written into an L1 shard, as the models that use untilize_out do.
     """
     torch.manual_seed(0)
     m, k, n = 32, 32, 64
@@ -5119,13 +5120,20 @@ def test_matmul_1d_untilize_out_in1_tile_width(device, in1_tile_w):
         mcast_in0=True,
         untilize_out=True,
     )
+    out_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    out_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(out_core, (m, n), ttnn.ShardOrientation.ROW_MAJOR),
+    )
     out = ttnn.matmul(
         a_t,
         b_t,
         program_config=program_config,
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=out_memory_config,
     )
+    assert out.layout == ttnn.ROW_MAJOR_LAYOUT
     out = ttnn.to_torch(out).float().reshape(m, n)
 
     assert_with_pcc(ref, out, 0.999)
