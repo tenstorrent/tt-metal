@@ -130,6 +130,11 @@ ttnn::Tensor slice(
         "Step {} must have the same size as start {} and end",
         step.size(),
         begins.size());
+    // The step is cast to uint32_t below: a negative step returned an empty tensor and a zero step divided by zero
+    // on the host (#57988). torch rejects both.
+    for (size_t i = 0; i < step.size(); ++i) {
+        TT_FATAL(step[i] > 0, "Slice step must be greater than zero, got {} for dim {}", step[i], i);
+    }
 
     bool no_step = std::ranges::all_of(step, [](uint32_t s) { return s == 1; });
     bool starts_zero = std::ranges::all_of(begins, [](uint32_t s) { return s == 0; });
