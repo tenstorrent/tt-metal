@@ -3683,6 +3683,13 @@ tasks:
     - engram_kv
     - engram_add
     layer: 14
+  frozen:
+    at: '2026-10-17T00:44:04'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_03_engram_add.py: a6097683f7821a1558e50382c18e6839ba64be217fc4b74f5513821218dcd749
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.enc_source_engram.attn_hc
   title: enc_source_engram attn_hc (op) on device, layer 14
   step: implement
