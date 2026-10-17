@@ -27,6 +27,8 @@ RESULT_MAGIC = 0x43464744
 PROBE_COUNT_WORD = 1
 PROBE_BASE = 8
 WORDS_PER_PROBE = 4
+PROBE_ID_BANK_SHIFT = 16
+EXPECTED_PROBES = 4  # two HW_CFG_1 words, the HW_CFG_0 control, the thread word
 
 BANK_NAMES = {
     0: "THREAD_0_CFG",
@@ -67,13 +69,16 @@ def test_dbg_read_cfgreg_reads_the_named_word():
     words = [int(w) & 0xFFFFFFFF for w in configuration.run().result]
     assert words[0] == RESULT_MAGIC, f"no result written (magic {words[0]:#x})"
     probe_count = words[PROBE_COUNT_WORD]
-    assert probe_count > 0, "the kernel recorded no probes"
+    assert (
+        probe_count == EXPECTED_PROBES
+    ), f"the kernel recorded {probe_count} probes, expected {EXPECTED_PROBES}"
 
     mismatches = []
     for probe in range(probe_count):
         base = PROBE_BASE + WORDS_PER_PROBE * probe
         ident, expected, got = words[base : base + 3]
-        bank, addr = ident >> 16, ident & 0xFFFF
+        bank = ident >> PROBE_ID_BANK_SHIFT
+        addr = ident & ((1 << PROBE_ID_BANK_SHIFT) - 1)
         label = f"dbg_read_cfgreg({BANK_NAMES.get(bank, bank)}, ADDR32 {addr})"
         logger.info(f"{label}: planted {expected:#010x}, read {got:#010x}")
         if got != expected:

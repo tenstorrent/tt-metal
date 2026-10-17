@@ -14,12 +14,13 @@
 //   - a second bank-1 word far from the first, so a wrong base cannot pass by coincidence
 //   - the same word in bank 0 as a control (base 0 on every layout)
 //   - its own thread-CFG word, set with SETC16 (thread 1 is the math TRISC)
-// Every word is restored afterwards. No LLK runs on any thread, so the words are free to use.
+// State words are restored afterwards; the thread word is reset to its boot value 0. No LLK runs on
+// any thread, so the words are free to use.
 //
 // Result words (math thread only):
 //   0          magic
 //   1          number of probes
-//   8 + 4p     probe p: identifier (bank << 16 | addr)
+//   8 + 4p     probe p: identifier (bank << PROBE_ID_BANK_SHIFT | addr)
 //   9 + 4p     probe p: expected value
 //   10 + 4p    probe p: value dbg_read_cfgreg returned
 
@@ -50,10 +51,12 @@ using namespace ckernel;
 namespace
 {
 
-constexpr std::uint32_t RESULT_MAGIC    = 0x43464744; // "CFGD"
-constexpr std::uint32_t RESULT_WORDS    = 64;
-constexpr std::uint32_t PROBE_BASE      = 8;
-constexpr std::uint32_t WORDS_PER_PROBE = 4;
+// Must match python_tests/test_dbg_read_cfgreg_layout.py
+constexpr std::uint32_t RESULT_MAGIC        = 0x43464744; // "CFGD"
+constexpr std::uint32_t RESULT_WORDS        = 64;
+constexpr std::uint32_t PROBE_BASE          = 8;
+constexpr std::uint32_t WORDS_PER_PROBE     = 4;
+constexpr std::uint32_t PROBE_ID_BANK_SHIFT = 16;
 
 // Word offset of state bank 1 in the RISC's view of the configuration space.
 constexpr std::uint32_t BANK1_OFFSET = CFG_STATE_SIZE * 4;
@@ -71,6 +74,11 @@ constexpr std::uint32_t BANK0_PATTERN  = 0x3C5AE196;
 // Within the 12-bit DEST_TARGET_REG_CFG_MATH_Offset field, the only field of that thread word.
 constexpr std::uint32_t THREAD_PATTERN = 0xABC;
 static_assert((THREAD_PATTERN & ~DEST_TARGET_REG_CFG_MATH_Offset_MASK) == 0, "thread pattern must fit its field");
+// What every LLK op re-establishes before it uses the dest offset.
+constexpr std::uint32_t THREAD_BOOT_VALUE = 0;
+// A thread-CFG word is a 16-bit value and 16 bits of padding; only the value half is compared, as
+// the HAL's thread-word read does.
+constexpr std::uint32_t THREAD_WORD_MASK = 0xffff;
 
 // This TRISC's thread-CFG bank, as dbg_read_cfgreg numbers them.
 constexpr std::uint32_t OWN_THREAD_CFG = dbg_cfgreg::THREAD_1_CFG;
@@ -80,9 +88,15 @@ inline volatile std::uint32_t tt_reg_ptr* cfg_mmio()
     return reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(TENSIX_CFG_BASE);
 }
 
-inline void record(volatile std::uint32_t* out, const std::uint32_t probe, const std::uint32_t id, const std::uint32_t expected, const std::uint32_t got)
+inline void record(
+    volatile std::uint32_t* out,
+    const std::uint32_t probe,
+    const std::uint32_t bank,
+    const std::uint32_t addr,
+    const std::uint32_t expected,
+    const std::uint32_t got)
 {
-    out[PROBE_BASE + WORDS_PER_PROBE * probe]     = id;
+    out[PROBE_BASE + WORDS_PER_PROBE * probe]     = (bank << PROBE_ID_BANK_SHIFT) | addr;
     out[PROBE_BASE + WORDS_PER_PROBE * probe + 1] = expected;
     out[PROBE_BASE + WORDS_PER_PROBE * probe + 2] = got;
 }
@@ -107,7 +121,7 @@ inline void probe_state_word(
     cfg_mmio()[mmio_index] = original;
     (void)load_blocking(&cfg_mmio()[mmio_index]);
 
-    record(out, probe, (bank << 16) | addr, expected, got);
+    record(out, probe, bank, addr, expected, got);
 }
 
 } // namespace
@@ -129,14 +143,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Control: bank 0 starts at index 0 on every layout, so this read agrees with MMIO regardless.
     probe_state_word(out, probe++, dbg_cfgreg::HW_CFG_0, STRIDE_WORD, STRIDE_WORD, BANK0_PATTERN);
 
-    // Own thread-CFG word: SETC16 is the only writer, and nothing else runs on this thread, so the
-    // boot value (0) is what every LLK op re-establishes before use.
+    // Own thread-CFG word: SETC16 is the only writer, and nothing else runs on this thread, so it is
+    // put back to its boot value rather than read first.
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, THREAD_PATTERN);
     tensix_sync();
-    const std::uint32_t thread_got = dbg_read_cfgreg(OWN_THREAD_CFG, DEST_TARGET_REG_CFG_MATH_Offset_ADDR32);
-    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, 0);
+    const std::uint32_t thread_got = dbg_read_cfgreg(OWN_THREAD_CFG, DEST_TARGET_REG_CFG_MATH_Offset_ADDR32) & THREAD_WORD_MASK;
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, THREAD_BOOT_VALUE);
     tensix_sync();
-    record(out, probe++, (OWN_THREAD_CFG << 16) | DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, THREAD_PATTERN, thread_got);
+    record(out, probe++, OWN_THREAD_CFG, DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, THREAD_PATTERN, thread_got);
 
     out[1] = probe;
 }
