@@ -54,7 +54,7 @@ inline void exp2_paired_reduce()
     TTI_SFP_STOCH_RND(
         sfpi::SFPSTOCHRND_RND_EVEN, 0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
     TTI_SFP_STOCH_RND(
-        sfpi::SFPSTOCHRND_RND_EVEN, 0, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG3, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        sfpi::SFPSTOCHRND_RND_EVEN, 0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG3, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
 }
 
 template <std::uint32_t Degree, bool Clamp, std::uint32_t Hold>
