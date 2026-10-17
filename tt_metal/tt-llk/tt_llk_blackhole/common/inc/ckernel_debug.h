@@ -264,8 +264,9 @@ struct dbg_cfg_layout
     constexpr static std::uint32_t THREAD_CFG_BASE        = (STATE_BANKS + DUAL_WRITE_BANKS) * CFG_STATE_SIZE * WORDS_PER_STATE_ENTRY;
 };
 
-// The TRISC this code executes on: the thread whose ThreadConfig bank the SETC16s below write, and so the only bank
-// whose dest offset the SrcA dump may save and restore. Every compute build defines it (0 unpack, 1 math, 2 pack).
+// The TRISC this code executes on. SFPLOAD, MOVDBGA2D and SFPSTORE add that thread's dest offset, which
+// dbg_read_dest_offset reads from the same thread's ThreadConfig bank. Every compute build defines it (0 unpack,
+// 1 math, 2 pack).
 #if defined(COMPILE_FOR_TRISC)
 constexpr std::uint32_t DBG_EXECUTING_TRISC = COMPILE_FOR_TRISC;
 static_assert(DBG_EXECUTING_TRISC <= 2, "COMPILE_FOR_TRISC must select TRISC0, TRISC1 or TRISC2");
@@ -310,9 +311,14 @@ inline std::uint32_t dbg_dest_physical_row(std::uint32_t row)
 
 // Dump one row of SrcA, SrcB or DEST over the debug bus into rd_data[8], from inside a dbg_thread_halt /
 // dbg_thread_unhalt bracket (the math thread for every in-tree caller). With a 32-bit DEST each word holds the high
-// 16 bits of two datums; the low halves live in the physical row 8 further on. The SrcA dump stages the row in dest
-// at the executing thread's dest offset -- the row the caller's last op wrote, so a defined one -- restores it
-// before returning, and leaves the thread's dest offset untouched.
+// 16 bits of two datums; the low halves live in the physical row 8 further on.
+//
+// The SrcA dump stages the row in dest at the executing thread's dest offset and restores what it overwrote
+// before returning; the thread's dest offset is left untouched. Call it only while that offset points at a tile
+// written in the current section -- after an op, before the section is handed to the packer -- because the save
+// and restore footprint is that tile's first rows (and, with a 32-bit DEST, the rows holding their low halves):
+// rows left undefined by a ZEROACC must not be borrowed, as an SFPLOAD of one is undefined behaviour and the
+// restore would define the row with whatever it returned.
 inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t row_addr, std::uint32_t *rd_data)
 {
     // Dest offset is added to row_addr to dump currently used half of the dest accumulator (SyncHalf dest mode)
@@ -325,9 +331,8 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
     // The same mode must save and restore the borrowed row; read it once, after queued config writes land.
     InstrModLoadStore save_mode = InstrModLoadStore::LO16;
     // Physical row the SrcA row is staged in: the row at the thread's dest offset, which SFPLOAD, MOVDBGA2D and
-    // SFPSTORE all address relative to (SFPLOAD.md, the MOVA2D model). It is left where the caller put it: the
-    // caller's last op wrote that row, so it is defined, whereas rows untouched since a ZEROACC are undefined and
-    // an SFPLOAD of one is undefined behaviour (ZEROACC.md) -- the restore would then define them with junk.
+    // SFPSTORE all address relative to (SFPLOAD.md, the MOVA2D model). The offset is left where the caller put it,
+    // so the footprint stays on the tile the caller is working on (see the contract above).
     std::uint32_t staged_row = 0;
     if (array_id == dbg_array_id::SRCA)
     {
@@ -363,7 +368,9 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
         // documented as unsupported on Blackhole.
         TTI_CLEARDVALID(0b01, 0);
 
-        // Copy single row from SrcA[row_addr] to the row at the dest offset
+        // Copy single row from SrcA[row_addr] to the row at the dest offset. With a 32-bit DEST the hardware treats
+        // the SrcA format as TF32 for this move whenever fp32 accumulation is enabled (MOVA2D model), so it writes
+        // 32-bit datums at the 32-bit addresses the save, restore and read-back use; no format override is needed.
         TT_MOVDBGA2D(0, row_addr, 0, p_mova2d::MOV_1_ROW, 0);
 
         // Wait for TT instructions to complete

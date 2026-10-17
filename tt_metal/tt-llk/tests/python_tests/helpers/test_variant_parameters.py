@@ -692,9 +692,10 @@ class DBG_SRCA_DUMP(TemplateParameter):
     constants: ``WORDS_PER_ROW`` debug-bus words of the SrcA dump at the start of result
     tile 0; the thread's dest offset before the dump, after it, and the value the datacopy
     set it to at ``DEST_OFFSET_BEFORE_WORD`` / ``DEST_OFFSET_AFTER_WORD`` /
-    ``DEST_OFFSET_SET_WORD``; the ``BORROWED_ROW_COUNT`` DEST rows the dump borrows (rows
-    0-3 and 8-11 of the current half) read before and after it at
-    ``BORROWED_ROWS_BEFORE_WORD`` / ``BORROWED_ROWS_AFTER_WORD``; and the DEST tile handed
+    ``DEST_OFFSET_SET_WORD``; the ``BORROWED_ROW_COUNT`` DEST rows the dump borrows (the
+    first four rows of tile ``DUMP_DST_INDEX`` in the current half plus the rows 8 further on)
+    read before and after it at ``BORROWED_ROWS_BEFORE_WORD`` / ``BORROWED_ROWS_AFTER_WORD``;
+    and the DEST tile handed
     back in result tile ``RESULT_TILE_DEST`` of the ``RESULT_TILE_COUNT`` result tiles: the
     planted tile read through the RISC-V window (restore check, Blackhole) or tile 0 of the
     lower dest half packed by the packer (SrcA check).
