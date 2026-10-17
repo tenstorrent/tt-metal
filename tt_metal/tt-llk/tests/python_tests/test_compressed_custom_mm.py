@@ -21,8 +21,8 @@
 # Difference vs custom_mm: BOTH primitives take an extra base_address_meta argument (a buffer of packed 3-bit per-tile
 # compression-format codes). We route it through the harness's optional third operand (buffer_C). The codes are CONTROL
 # FLOW, not just numerics: code 0 means "zero tile", for which the unpacker emits no UNPACR at all and math takes the
-# STALLWAIT(SRCB_VLD) branch, so an all-zero meta buffer hangs Math/Packer forever. Every tile here carries the one BFP
-# format under test.
+# STALLWAIT(SRCB_VLD) branch, so an all-zero meta buffer hangs Math/Packer forever. The grid tests give every tile the
+# one BFP format under test; test_compressed_custom_mm_zero_tile places single zero tiles in a full-width block.
 #
 # The golden folds in1's BFP quantization in rather than charging it against PCC: in1 is packed to the BFP format and
 # then unpacked back to bf16, and that dequantized tensor is what the golden multiplies. This is what
@@ -34,6 +34,7 @@ import pytest
 import torch
 from conftest import blackhole_only
 from helpers.compressed_utils import (
+    FMT_CODE,
     FMT_CODE_BY_DATAFORMAT,
     encode_tile_meta,
     pack_bfp_tile,
@@ -82,8 +83,12 @@ COMPRESSED_MM_FORMATS = generate_combination(
 )
 
 
-def _pack_in1_bfp(in1, kt_dim, ct_dim, code):
+def _pack_in1_bfp(in1, kt_dim, ct_dim, codes):
     """BFP-pack in1 tile by tile (row-major over the kt x ct grid) and return (bytes, dequantized).
+
+    codes is the per-tile format code, row-major over the same grid. A zero code (bfp0) packs to no
+    bytes and dequantizes to a zero tile, which is exactly what the kernel does with it: the tile is
+    absent from the stream and the math skips it.
 
     The dequantized copy is what the golden multiplies, so BFP rounding is folded into the golden
     rather than charged against PCC -- the same trick compressed_utils.run_compressed uses.
@@ -92,6 +97,7 @@ def _pack_in1_bfp(in1, kt_dim, ct_dim, code):
     dequant = torch.zeros_like(in1)
     for k in range(kt_dim):
         for c in range(ct_dim):
+            code = codes[k * ct_dim + c]
             blk = in1[
                 k * TILE_DIM : (k + 1) * TILE_DIM, c * TILE_DIM : (c + 1) * TILE_DIM
             ]
@@ -138,10 +144,42 @@ def test_compressed_custom_mm_full_grid(
     _run_compressed_custom_mm(formats, ct_kt_rows, boot_mode)
 
 
+# Zero-code (bfp0) weight tiles. The unpacker emits no UNPACR for them and the math thread takes its skip branch,
+# which only has to carry the DEST counter over the tile's slot without multiplying. The full-width case is the one
+# that tells: with dense_packing the 16 output tiles of ct_dim=16 fill the whole DEST half (16 x 32 rows), so a skip
+# that disturbs any face of the half lands on a live partial. Zero tiles sit in k-iterations >= 1 so the tiles already
+# hold partials from the earlier k, and span the inner columns (the last column takes a different branch, SETRWC):
+# the skip used to be a ZEROACC whose row select wraps onto the last face of the half, tile 15's second face, which
+# it marked zero for a zero tile at column 9 or later -- the k1-c9, k1-c14, k2-c9 and three-zero cases failed on
+# that face while the earlier columns passed. Every case must pass, and a wrong stride in the skip would shift every
+# later tile, so the passing columns guard the fix as well.
+ZERO_TILE_SHAPE = (16, 4, 8)  # (ct_dim, kt_dim, in0_rows)
+ZERO_TILE_CASES = [
+    pytest.param(((1, 0),), id="k1-c0"),
+    pytest.param(((1, 3),), id="k1-c3"),
+    pytest.param(((1, 8),), id="k1-c8"),
+    pytest.param(((1, 9),), id="k1-c9"),
+    pytest.param(((1, 14),), id="k1-c14"),
+    pytest.param(((2, 9),), id="k2-c9"),
+    pytest.param(((3, 0),), id="k3-c0"),
+    pytest.param(((1, 2), (2, 7), (3, 11)), id="k1-c2_k2-c7_k3-c11"),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize("zero_tiles", ZERO_TILE_CASES)
+def test_compressed_custom_mm_zero_tile(zero_tiles):
+    """Zero-code weight tiles at ct_dim=16 must leave every other tile's partial intact."""
+    _run_compressed_custom_mm(
+        COMPRESSED_MM_FORMATS[0], ZERO_TILE_SHAPE, zero_tiles=zero_tiles
+    )
+
+
 def _run_compressed_custom_mm(
     formats,
     ct_kt_rows,
     boot_mode=BootMode.DEFAULT,
+    zero_tiles=(),
 ):
     ct_dim, kt_dim, in0_rows = ct_kt_rows
     rt_dim = 1  # compressed_custom_mm contract: rt_dim is always 1
@@ -167,8 +205,12 @@ def _run_compressed_custom_mm(
     in0 = src_A.reshape(in0_dimensions).to(torch_format)
     in1 = src_B.reshape(in1_dimensions).to(torch_format)
 
-    code = FMT_CODE_BY_DATAFORMAT[in1_format]
-    packed_b, in1_dequant = _pack_in1_bfp(in1, kt_dim, ct_dim, code)
+    # Every tile carries the one BFP format under test, except the (k, c) tiles named in zero_tiles, which are
+    # zero-code (bfp0): absent from the stream, zero in the golden.
+    codes = [FMT_CODE_BY_DATAFORMAT[in1_format]] * (kt_dim * ct_dim)
+    for k, c in zero_tiles:
+        codes[k * ct_dim + c] = FMT_CODE["bfp0"]
+    packed_b, in1_dequant = _pack_in1_bfp(in1, kt_dim, ct_dim, codes)
 
     # Golden multiplies the DEQUANTIZED in1, so BFP rounding is folded in rather than charged against PCC.
     # LoFi, not a raw torch matmul: the FPU truncates the SrcA/SrcB mantissas before multiplying, which
@@ -187,8 +229,7 @@ def _run_compressed_custom_mm(
     ).reshape(in0_dimensions[0], in1_dimensions[1])
 
     in0_faces = pack_in0_faces(in0, kt_dim, in0_format)
-    # Every tile carries the one BFP format under test, so the assignment is uniform.
-    meta_bytes = encode_tile_meta([code] * (kt_dim * ct_dim), ct_dim)
+    meta_bytes = encode_tile_meta(codes, ct_dim)
 
     configuration = TestConfig(
         "sources/compressed_custom_mm_test.cpp",
@@ -232,9 +273,22 @@ def _run_compressed_custom_mm(
         res_tensor.numel() == golden_tensor.numel()
     ), "Result tensor and golden tensor are not of the same length"
 
+    # Name the output tiles that miss, so a failure says where in DEST it landed.
+    tile_err = (
+        (res_tensor.float() - golden_tensor.float())
+        .abs()
+        .reshape(in0_rows, ct_dim, TILE_DIM)
+    )
+    atol = matmul_acc_atol(golden_tensor, kt_dim)
+    bad_tiles = {
+        f"tile{c}.F{f}": round(tile_err[:, c, f * 16 : (f + 1) * 16].max().item(), 4)
+        for c in range(ct_dim)
+        for f in range(2)
+        if tile_err[:, c, f * 16 : (f + 1) * 16].max().item() > atol
+    }
     assert passed_test(
         golden_tensor.flatten(),
         res_tensor.flatten(),
         formats.output_format,
-        custom_atol=matmul_acc_atol(golden_tensor, kt_dim),
-    ), "Assert against golden failed"
+        custom_atol=atol,
+    ), f"Assert against golden failed; output tiles over atol={atol:.4g} (max abs err): {bad_tiles}"
