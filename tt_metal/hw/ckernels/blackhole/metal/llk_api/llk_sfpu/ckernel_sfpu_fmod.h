@@ -68,16 +68,7 @@ inline void calculate_fmod() {
 
         if constexpr (INFINITE_DIVISOR) {
             // The host reciprocal of +-inf is 0, so v - quotient * s above is 0 * inf = NaN.
-            // fmod(val, +-inf) is val for finite val and NaN for an infinite val. Same rule as the
-            // tensor-tensor kernel in ckernel_sfpu_binary_fmod.h.
-            v_if(sfpi::as<sfpi::vInt>(s) == kInfBits) {
-                v = val;
-                v_if(sfpi::as<sfpi::vInt>(sfpi::setsgn(val, 0)) >= kInfBits) {
-                    v = std::numeric_limits<float>::quiet_NaN();
-                }
-                v_endif;
-            }
-            v_endif;
+            apply_fmod_inf_divisor(v, val, s);
         }
         sfpi::dst_reg[0] = v;
         sfpi::dst_reg++;

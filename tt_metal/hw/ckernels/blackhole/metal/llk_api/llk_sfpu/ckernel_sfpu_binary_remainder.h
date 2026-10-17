@@ -222,6 +222,36 @@ sfpi_inline void correct_sign_to_divisor(sfpi::vFloat& result, const sfpi::vFloa
     v_endif;
 }
 
+// Infinite divisor: the reciprocal of +-inf is exactly 0, so the quotient * b term is 0 * inf =
+// NaN. For finite a, remainder(a, +-inf) is a when a is zero or has the sign of b, else b
+// (torch.remainder). Classify on the bit pattern, as ckernel_sfpu_isclose.h does, so a NaN divisor
+// is excluded. An infinite or NaN a keeps the NaN: clear the sign with setsgn rather than
+// sfpi::abs, because SFPABS leaves -NaN sign-set and it would read as a negative integer below
+// kInfBits. b_abs is |b|, passed in so a loop-invariant divisor magnitude stays hoisted.
+sfpi_inline void apply_remainder_inf_divisor(
+    sfpi::vFloat& result, const sfpi::vFloat& a, const sfpi::vFloat& b, const sfpi::vFloat& b_abs) {
+    sfpi::vInt a_magnitude_bits = sfpi::as<sfpi::vInt>(sfpi::setsgn(a, 0));
+    v_if(sfpi::as<sfpi::vInt>(b_abs) == kInfBits && a_magnitude_bits < kInfBits) {
+        result = a;
+        v_if(a_magnitude_bits != 0 && (sfpi::as<sfpi::vInt>(a) ^ sfpi::as<sfpi::vInt>(b)) < 0) { result = b; }
+        v_endif;
+    }
+    v_endif;
+}
+
+// fmod(a, +-inf) is a for finite a and NaN for an infinite a (which an a == b special case would
+// otherwise zero for inf/inf). Same classification as apply_remainder_inf_divisor.
+sfpi_inline void apply_fmod_inf_divisor(sfpi::vFloat& result, const sfpi::vFloat& a, const sfpi::vFloat& b_abs) {
+    v_if(sfpi::as<sfpi::vInt>(b_abs) == kInfBits) {
+        result = a;
+        v_if(sfpi::as<sfpi::vInt>(sfpi::setsgn(a, 0)) >= kInfBits) {
+            result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN());
+        }
+        v_endif;
+    }
+    v_endif;
+}
+
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat in1) {
     // remainder(a, b) = a - floor(a/b) * b
@@ -280,19 +310,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     v_if(b == sfpi::vFloat(0.0f)) { result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN()); }
     v_endif;
 
-    // Infinite divisor: the reciprocal of +-inf is exactly 0, so floor_div * b is 0 * inf = NaN
-    // above. For finite a, remainder(a, +-inf) is a when a is zero or has the sign of b, else b
-    // (torch.remainder). Classify on the bit pattern, as ckernel_sfpu_isclose.h does, so a NaN
-    // divisor is excluded. An infinite or NaN a keeps the NaN: clear the sign with setsgn rather
-    // than sfpi::abs, because SFPABS leaves -NaN sign-set and it would read as a negative integer
-    // below kInfBits.
-    sfpi::vInt a_magnitude_bits = sfpi::as<sfpi::vInt>(sfpi::setsgn(a, 0));
-    v_if(sfpi::as<sfpi::vInt>(sfpi::abs(b)) == kInfBits && a_magnitude_bits < kInfBits) {
-        result = a;
-        v_if(a_magnitude_bits != 0 && (sfpi::as<sfpi::vInt>(a) ^ sfpi::as<sfpi::vInt>(b)) < 0) { result = b; }
-        v_endif;
-    }
-    v_endif;
+    apply_remainder_inf_divisor(result, a, b, sfpi::abs(b));
 
     if constexpr (!is_fp32_dest_acc_en) {
         result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
