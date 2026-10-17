@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "status": "complete",
+  "steps": [],
+  "scope": "Teacher-forced selected-block CUDA oracle; original BF16 reduction policy",
+  "activation_injection": true,
+  "integrated_qualification": false,
+  "pipeline_sha256": "1dac1aca9feb1bfdfc727a401e4b67d61a505d3190706d1b7d2d784f88678b31",
+  "step_index": 49,
+  "allow_bf16_reduced_precision_reduction": true,
+  "capture_bytes": 5074357252,
+  "prediction_bitwise_equal_to_original_capture": {
+    "positive": true,
+    "negative": true
+  },
+  "source_script_sha256": "a9f58c304f8da45b500084a9ef732a27d91ff1144c17ec287d3e27ca90cf3670",
+  "checkpoint": {
+    "declared_variant": "SFT",
+    "expected_hub_repo": "OpenMOSS-Team/MOSS-Image-SFT",
+    "expected_hub_revision": "fc5de0d56fc910cbca6f6625a70f5f582b26deb1",
+    "actual_checkpoint_path": "/home/zcm/data/moss-image/checkpoints/SFT",
+    "files": {
+      "transformer/config.json": {
+        "sha256": "3291c3a1c7adc22b8182a0de25ca8ec97474d72715ce84adbab09cc0be24f666",
+        "bytes": 240
+      },
+      "transformer/diffusion_pytorch_model-00001-of-00003.safetensors": {
+        "sha256": "e40d3444940a0b0fd7cd45ba7959a5bd3d5efd7ddf87aae5ce4d87ce8aa03d01",
+        "bytes": 4991978016
+      },
+      "transformer/diffusion_pytorch_model-00002-of-00003.safetensors": {
+        "sha256": "d106da790ec2924ffd8af04b4ffa8f8de281a974b58e55649c3ec596dc8ef033",
+        "bytes": 4983137016
+      },
+      "transformer/diffusion_pytorch_model-00003-of-00003.safetensors": {
+        "sha256": "11f637ab17c7093344a6110a1e87ffda8e56558dc55183d8e790222cfcdcf52d",
+        "bytes": 189549184
+      },
+      "transformer/diffusion_pytorch_model.safetensors.index.json": {
+        "sha256": "b609327fc75dbe5080e7e095d8b727d74d728b4f98e8b047133b0082cfa2fb03",
+        "bytes": 40298
+      },
+      "text_encoder/config.json": {
+        "sha256": "b31ee18a242bcfcccbe740f825f6b1d3ae231b0655eeecb5de3e98d504b7d68c",
+        "bytes": 2813
+      },
+      "text_encoder/model-00001-of-00004.safetensors": {
+        "sha256": "abfaa3d3a8612508c85ee8f6da9c734b862f10298b903765c4ad384177c32b0b",
+        "bytes": 4973910744
+      },
+      "text_encoder/model-00002-of-00004.safetensors": {
+        "sha256": "9112637fa6bf4d07bafd6ae268852b18d3d0c1242f4ee901c5579006e5bd4894",
+        "bytes": 4988364288
+      },
+      "text_encoder/model-00003-of-00004.safetensors": {
+        "sha256": "956f1ef51d0cfe610b0d22987c0b7821c36e3ce228abceccef523518bcf079dc",
+        "bytes": 4954202112
+      },
+      "text_encoder/model-00004-of-00004.safetensors": {
+        "sha256": "9e21d20e8adde88c3e0b65d4a0d251f143d98ee9d52db36b4348361091e4e208",
+        "bytes": 1869001848
+      },
+      "text_encoder/model.safetensors.index.json": {
+        "sha256": "0af6fa3fa36ba8dcbb6b7ad0325a36c5b1b69862a9a1f1486b1b80385bd8f5ee",
+        "bytes": 64641
+      },
+      "tokenizer/chat_template.jinja": {
+        "sha256": "a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715",
+        "bytes": 7756
+      },
+      "tokenizer/tokenizer.json": {
+        "sha256": "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523",
+        "bytes": 19989325
+      },
+      "tokenizer/tokenizer_config.json": {
+        "sha256": "bee8eba30f0eb4af73c0fe2cd06d0f89b657d7819941c438157ec42f7c80ea87",
+        "bytes": 1123
+      },
+      "vae/config.json": {
+        "sha256": "cc77f3f0ce0357039c71018dc19edaa4fcceb0c2f7488fdc2b9c0580d6baafa1",
+        "bytes": 838
+      },
+      "vae/diffusion_pytorch_model.safetensors": {
+        "sha256": "c3bdf94dc67ec69b30ea9fe1fa8340085679cae64d019f7c7e4a9921f1a7f17a",
+        "bytes": 249521372
+      },
+      "scheduler/scheduler_config.json": {
+        "sha256": "707322832cc507dfb8c51c0e0cd04d44ee2d30a9b036b6f3c47d6c17aa71adf0",
+        "bytes": 494
+      }
+    }
+  },
+  "parent_manifest_sha256": "f18fa34c6f6d507c1ca9d21206c2286982598f201f8f622d77994c053103e5ff",
+  "verified_parent_capture_inputs": true,
+  "verified_transformer_checkpoint_files": true,
+  "full_artifact_manifest_sha256": "633f398e73b065ee16fa66f623525c837b522dc2d7e8a00a7f06ee5b8f1294de",
+  "artifact_count": 96
+}

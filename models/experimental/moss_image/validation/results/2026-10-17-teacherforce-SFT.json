@@ -1,0 +1,128 @@
+{
+  "activation_injection": true,
+  "integrated_test": false,
+  "scope": "Teacher-forced complete DiT forward at selected CUDA trajectory steps",
+  "checkpoint": "/home/user/Projects/moss-image/checkpoints/SFT",
+  "capture": "/home/user/Projects/moss-image/captures/cuda-SFT-1024-50",
+  "cards": 1,
+  "verified_checkpoint_files": {
+    "transformer/config.json": {
+      "sha256": "3291c3a1c7adc22b8182a0de25ca8ec97474d72715ce84adbab09cc0be24f666",
+      "bytes": 240
+    },
+    "transformer/diffusion_pytorch_model-00001-of-00003.safetensors": {
+      "sha256": "e40d3444940a0b0fd7cd45ba7959a5bd3d5efd7ddf87aae5ce4d87ce8aa03d01",
+      "bytes": 4991978016
+    },
+    "transformer/diffusion_pytorch_model-00002-of-00003.safetensors": {
+      "sha256": "d106da790ec2924ffd8af04b4ffa8f8de281a974b58e55649c3ec596dc8ef033",
+      "bytes": 4983137016
+    },
+    "transformer/diffusion_pytorch_model-00003-of-00003.safetensors": {
+      "sha256": "11f637ab17c7093344a6110a1e87ffda8e56558dc55183d8e790222cfcdcf52d",
+      "bytes": 189549184
+    },
+    "transformer/diffusion_pytorch_model.safetensors.index.json": {
+      "sha256": "b609327fc75dbe5080e7e095d8b727d74d728b4f98e8b047133b0082cfa2fb03",
+      "bytes": 40298
+    }
+  },
+  "results": {
+    "step_000/positive": {
+      "pcc": 0.9999382253510943,
+      "relative_rms": 0.011343849866282145,
+      "max_absolute_error": 0.0625,
+      "seconds_including_weight_upload_and_comparison": 16.136165618896484
+    },
+    "step_000/negative": {
+      "pcc": 0.9999494935754593,
+      "relative_rms": 0.010574667753922311,
+      "max_absolute_error": 0.0625,
+      "seconds_including_weight_upload_and_comparison": 2.920191589742899
+    },
+    "step_010/positive": {
+      "pcc": 0.9997393007930564,
+      "relative_rms": 0.022871566552881837,
+      "max_absolute_error": 0.2578125,
+      "seconds_including_weight_upload_and_comparison": 2.576550181955099
+    },
+    "step_010/negative": {
+      "pcc": 0.9998037525712097,
+      "relative_rms": 0.019899888488888098,
+      "max_absolute_error": 0.1953125,
+      "seconds_including_weight_upload_and_comparison": 2.50874082185328
+    },
+    "step_025/positive": {
+      "pcc": 0.9998032725357865,
+      "relative_rms": 0.02073237154602645,
+      "max_absolute_error": 0.28955078125,
+      "seconds_including_weight_upload_and_comparison": 2.5764066502451897
+    },
+    "step_025/negative": {
+      "pcc": 0.9997979650080753,
+      "relative_rms": 0.0211191880717757,
+      "max_absolute_error": 0.3125,
+      "seconds_including_weight_upload_and_comparison": 2.510236581787467
+    },
+    "step_040/positive": {
+      "pcc": 0.9997055397895203,
+      "relative_rms": 0.026877267196438268,
+      "max_absolute_error": 0.402587890625,
+      "seconds_including_weight_upload_and_comparison": 2.5753595512360334
+    },
+    "step_040/negative": {
+      "pcc": 0.9997127504491429,
+      "relative_rms": 0.026458934920225226,
+      "max_absolute_error": 0.25,
+      "seconds_including_weight_upload_and_comparison": 2.510414505377412
+    },
+    "step_049/positive": {
+      "pcc": 0.9995314050771611,
+      "relative_rms": 0.037014131715287224,
+      "max_absolute_error": 0.34375,
+      "seconds_including_weight_upload_and_comparison": 2.5759407617151737
+    },
+    "step_049/negative": {
+      "pcc": 0.9995510200886011,
+      "relative_rms": 0.03561995308979411,
+      "max_absolute_error": 0.375,
+      "seconds_including_weight_upload_and_comparison": 2.5104239471256733
+    },
+    "step_000/host_combined_guided_velocity": {
+      "pcc": 0.9994909337066639,
+      "relative_rms": 0.0318859708325688,
+      "max_absolute_error": 0.1875
+    },
+    "step_010/host_combined_guided_velocity": {
+      "pcc": 0.9979644571610189,
+      "relative_rms": 0.06376602134920721,
+      "max_absolute_error": 0.7578125
+    },
+    "step_025/host_combined_guided_velocity": {
+      "pcc": 0.9984584279470401,
+      "relative_rms": 0.055837906868968994,
+      "max_absolute_error": 0.88037109375
+    },
+    "step_040/host_combined_guided_velocity": {
+      "pcc": 0.9980029898040986,
+      "relative_rms": 0.0646008344578133,
+      "max_absolute_error": 0.96875
+    },
+    "step_049/host_combined_guided_velocity": {
+      "pcc": 0.9966704744602083,
+      "relative_rms": 0.08570294025075911,
+      "max_absolute_error": 0.91796875
+    }
+  },
+  "status": "complete",
+  "environment": {
+    "ttnn": "0.1.dev1+ggec74d3b",
+    "torch": "2.11.0+cpu",
+    "ttnn_module": "/home/user/Projects/voxcpm2-review-20261016/tt-metal/ttnn/ttnn/__init__.py"
+  },
+  "source_sha256": {
+    "tt/dit.py": "fb5d12cab62543b8de1a7e8d2c2f7aa58b3f37bca1172ffaa1df3931e990c7af",
+    "validation/dit_validate.py": "e62387da24ece1654560e89cfedee343f37a260873f7b70c9376d2e83f248337"
+  },
+  "guidance_metric_note": "Guided velocity is computed in FP32 on the host from TT positive/negative outputs for this diagnostic; the standalone TT CFG/Euler component already matched reference bitwise."
+}

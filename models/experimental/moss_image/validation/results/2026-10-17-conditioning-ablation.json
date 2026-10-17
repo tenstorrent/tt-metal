@@ -1,0 +1,79 @@
+{
+  "activation_injection": true,
+  "integrated_qualification": false,
+  "scope": "Native official CUDA pipeline, replacing only positive/negative conditioning with independently generated TT conditioning. Seed, weights, schedule, CFG and VAE unchanged.",
+  "runs": {
+    "Base": {
+      "seconds": 68.66877810098231,
+      "latent": {
+        "pcc": 0.9793502835872309,
+        "relative_rms": 0.20251733250793752,
+        "max_absolute_error": 4.645144462585449,
+        "fitted_gain": 0.9800109971657516,
+        "fitted_offset": -0.0022175059938703695,
+        "residual_relative_rms_after_fit": 0.20137620959649838
+      },
+      "decoded_pixels": {
+        "pcc": 0.9834910245513926,
+        "relative_rms": 0.1496120801216247,
+        "max_absolute_error": 2.0,
+        "fitted_gain": 0.9862051128640235,
+        "fitted_offset": -0.0033047352190929136,
+        "residual_relative_rms_after_fit": 0.1494413544533823
+      },
+      "conditioning_sha256": {
+        "positive": "10c82ef8fb743d03d1dd5f749d2f3a9cbdbd7236baa18ef79edc1858245019dd",
+        "negative": "9697a9266d7ae8d6365929d8251cf0d9e9d05e5daa7a708fc4960ca10bfa5551"
+      },
+      "tt_integrated_vs_cuda_with_identical_tt_conditioning": {
+        "pcc": 0.9865258296190549,
+        "relative_rms": 0.13608872097057279
+      }
+    },
+    "SFT": {
+      "seconds": 69.38027119264007,
+      "latent": {
+        "pcc": 0.873899874933349,
+        "relative_rms": 0.5004995782500063,
+        "max_absolute_error": 5.589211463928223,
+        "fitted_gain": 0.8695593114961844,
+        "fitted_offset": -0.0013124313979324329,
+        "residual_relative_rms_after_fit": 0.4857150123021339
+      },
+      "decoded_pixels": {
+        "pcc": 0.87272432131411,
+        "relative_rms": 0.5172339075213219,
+        "max_absolute_error": 1.9763532280921936,
+        "fitted_gain": 0.9096823972624098,
+        "fitted_offset": -0.021803829633221836,
+        "residual_relative_rms_after_fit": 0.4879553226239419
+      },
+      "conditioning_sha256": {
+        "positive": "10c82ef8fb743d03d1dd5f749d2f3a9cbdbd7236baa18ef79edc1858245019dd",
+        "negative": "9697a9266d7ae8d6365929d8251cf0d9e9d05e5daa7a708fc4960ca10bfa5551"
+      },
+      "tt_integrated_vs_cuda_with_identical_tt_conditioning": {
+        "pcc": 0.9429110974651123,
+        "relative_rms": 0.34153225518714947
+      }
+    }
+  },
+  "source_script_sha256": "258c8849c60faa2d725b35ec288bda5eb0a0669cae37c01eb91f0cc65ccc51b5",
+  "pipeline_sha256": "1dac1aca9feb1bfdfc727a401e4b67d61a505d3190706d1b7d2d784f88678b31",
+  "configuration": {
+    "height": 1024,
+    "width": 1024,
+    "steps": 50,
+    "seed": 42,
+    "guidance_scale": 3,
+    "negative_skip_layers": [
+      22
+    ]
+  },
+  "environment": {
+    "gpu": "NVIDIA RTX A6000",
+    "physical_gpu": 2,
+    "torch": "2.11.0+cu130",
+    "torch_cuda": "13.0"
+  }
+}
