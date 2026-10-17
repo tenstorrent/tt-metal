@@ -237,3 +237,15 @@ def test_silu_llm(
         shard_orientation,
         op,
     )
+
+
+@pytest.mark.parametrize("op", ["silu", "mish"])
+def test_silu_mish_float32_negative_tail_is_not_flushed(device, op):
+    # x * exp(x) stays a normal float down to about -103, but both ops returned exactly 0 below -87.34 (#55711).
+    x = torch.linspace(-100.0, -60.0, 1024, dtype=torch.float32).reshape(1, 1, 32, 32)
+    expected = getattr(torch.nn.functional, op)(x.double())
+    input_tensor = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.to_torch(getattr(ttnn, op)(input_tensor)).double()
+    normal = expected.abs() >= 2.0**-126
+    rel = ((output - expected).abs() / expected.abs())[normal]
+    assert rel.max().item() < 1e-5, rel.max().item()
