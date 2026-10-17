@@ -70,7 +70,7 @@ static constexpr std::uint32_t NUM_FACES = 4;
 
 // RESPECT_TRIGGER / OVERLAP_FIRST_HALF are supplied by the Python driver (params.h).
 //
-// REDUCE_OPERAND_* (params.h) is the operand tile geometry handed to the unpack and
+// REDUCE_OPERAND_SHAPE (params.h) is the operand tile geometry handed to the unpack and
 // math inits. The driver's default is the full 32x32 tile; the shape-guard test passes
 // face grids the op does not implement (one face column, short faces) to check that
 // the inits reject them. The PACK thread always packs the 32x32 DEST slot the op
@@ -88,8 +88,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const ckernel::TensorShape tensor_shape = {
-        REDUCE_OPERAND_FACE_R_DIM, REDUCE_OPERAND_FACE_C_DIM, REDUCE_OPERAND_NUM_FACES_R_DIM, REDUCE_OPERAND_NUM_FACES_C_DIM};
+    const ckernel::TensorShape tensor_shape = REDUCE_OPERAND_SHAPE;
 
     // compute_kernel_hw_startup
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -176,8 +175,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const ckernel::TensorShape tensor_shape = {
-        REDUCE_OPERAND_FACE_R_DIM, REDUCE_OPERAND_FACE_C_DIM, REDUCE_OPERAND_NUM_FACES_R_DIM, REDUCE_OPERAND_NUM_FACES_C_DIM};
+    const ckernel::TensorShape tensor_shape = REDUCE_OPERAND_SHAPE;
 
     // compute_kernel_hw_startup
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();

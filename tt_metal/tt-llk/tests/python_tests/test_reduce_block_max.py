@@ -52,6 +52,7 @@ from helpers.test_variant_parameters import (
     RESPECT_TRIGGER,
     USE_RUNTIME,
 )
+from helpers.tile_shape import TileShape, construct_tile_shape
 from helpers.tilize_untilize import tilize, untilize
 from helpers.utils import tolerances
 
@@ -59,13 +60,13 @@ from helpers.utils import tolerances
 TILE_DIM = 32
 ELEMENTS_PER_TILE = TILE_DIM * TILE_DIM
 
-# Operand tile geometry as (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
-FULL_TILE_SHAPE = (16, 16, 2, 2)
+FULL_TILE_SHAPE = construct_tile_shape((32, 32))
 
-# Mirror of ckernel_template::MAX_LOOP_LEN (tt_llk_<arch>/common/inc/ckernel_template.h): the
-# template-1 MOP loop-count fields keep 7 bits on Wormhole and 10 on Blackhole, so the runtime
-# reduce (which programs block_ct_dim straight into the outer count) must reject anything wider.
-_MOP_MAX_LOOP_LEN = {ChipArchitecture.WORMHOLE: 127, ChipArchitecture.BLACKHOLE: 1023}
+# Widest block the runtime reduce accepts on every arch (its compile-time sibling static_asserts
+# block_ct_dim < 128). block_ct_dim goes straight into the MOP outer-loop count, which keeps 7 bits
+# on Wormhole, and the block is walked by the unpacker's tile counter, whose input address keeps 8
+# bits on both arches: 128 silently reduces nothing on Wormhole, 257 aliases tile 0 on Blackhole.
+MAX_BLOCK_CT_DIM = 127
 
 # Inputs are always bf16 (the op's contract); only the DEST/output precision varies.
 FORMATS = [
@@ -120,7 +121,7 @@ def _make_reduce_block_max_config(
     """Build one reduce_block_max_row variant plus its golden (row-major, per-row max in
     column [0]).
 
-    ``operand_shape`` is the tile geometry the unpack/math inits are told about; the
+    ``operand_shape`` is the ``TileShape`` the unpack/math inits are told about; the
     staged operand is always 32x32 tiles, so a shape the op does not implement reaches
     the inits with the same L1 image the full-tile case uses.
 
@@ -174,7 +175,7 @@ def _make_reduce_block_max_config(
             CLOBBER_OP(_CLOBBER_DEFINE[clobber]),
             RESPECT_TRIGGER(respect_trigger),
             OVERLAP_FIRST_HALF(overlap_first_half),
-            REDUCE_OPERAND_SHAPE(*operand_shape),
+            REDUCE_OPERAND_SHAPE(operand_shape),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -438,20 +439,17 @@ def _expect_init_rejects(configuration, golden_rowmajor, what):
     )
 
 
-@parametrize(block_ct_dim=[127, 128, 1024])
-def test_reduce_block_max_runtime_mop_loop_limit(block_ct_dim):
-    """The runtime reduce programs block_ct_dim straight into the MOP outer-loop count,
-    whose field keeps 7 bits on Wormhole and 10 on Blackhole: a wider block silently
-    runs (block_ct_dim & mask) tiles, so 128 on Wormhole (or 1024 on Blackhole) unpacks
-    and pools nothing and the packed row max is stale DEST. Up to the arch's field width
-    the block must reduce correctly (128 on Blackhole shows its wider field is real);
-    above it the init must LLK_ASSERT instead of wrapping. The rejected block never reads
-    its operand, so a single tile is staged for it."""
+@parametrize(block_ct_dim=[MAX_BLOCK_CT_DIM, MAX_BLOCK_CT_DIM + 1])
+def test_reduce_block_max_runtime_block_ct_dim_limit(block_ct_dim):
+    """The runtime reduce programs block_ct_dim straight into the MOP outer-loop count
+    (7 bits on Wormhole, so 128 unpacks and pools nothing and the packed row max is stale
+    DEST) and walks the block with the unpacker's 8-bit tile counter (so 257 aliases
+    tile 0 on Blackhole); the runtime inits must hold the same block_ct_dim < 128
+    contract their compile-time siblings static_assert, on both arches. The widest legal
+    block must reduce correctly; one past it must LLK_ASSERT at init instead of
+    wrapping. The rejected block never reads its operand, so a single tile is staged."""
     (block_ct_dim,) = block_ct_dim
-    arch = get_chip_architecture()
-    if arch not in _MOP_MAX_LOOP_LEN:
-        pytest.skip("MOP loop-count width only recorded for Wormhole and Blackhole")
-    if block_ct_dim <= _MOP_MAX_LOOP_LEN[arch]:
+    if block_ct_dim <= MAX_BLOCK_CT_DIM:
         _run_reduce_block_max(FORMATS[0], block_ct_dim, use_runtime=True)
         return
     configuration, golden_rowmajor = _make_reduce_block_max_config(
@@ -460,7 +458,7 @@ def test_reduce_block_max_runtime_mop_loop_limit(block_ct_dim):
     _expect_init_rejects(
         configuration,
         golden_rowmajor,
-        f"block_ct_dim={block_ct_dim} above the {_MOP_MAX_LOOP_LEN[arch]} MOP loop-count limit",
+        f"block_ct_dim={block_ct_dim} above the {MAX_BLOCK_CT_DIM} limit",
     )
 
 
@@ -468,9 +466,9 @@ def test_reduce_block_max_runtime_mop_loop_limit(block_ct_dim):
 # face-row (two GMPOOLs with a 16-row SrcA step) and strides whole 32x32 / 16x32 tiles, so one
 # face column (16x16, 32x16) or a short face (8x32) pools SrcA rows the unpacker never wrote.
 _UNSUPPORTED_OPERAND_SHAPES = [
-    (16, 16, 1, 1),  # 16x16
-    (16, 16, 2, 1),  # 32x16
-    (8, 16, 1, 2),  # 8x32
+    TileShape(16, 16, 1, 1),  # 16x16
+    TileShape(16, 16, 2, 1),  # 32x16
+    TileShape(8, 16, 1, 2),  # 8x32
 ]
 
 
@@ -481,10 +479,8 @@ def test_reduce_block_max_shape_guard(use_runtime, operand_shape):
     runtime family alike. A guard that admits the shape lets the op pool SrcA rows the
     unpacker never delivered and pack a wrong row max with no diagnostic."""
     configuration, golden_rowmajor = _make_reduce_block_max_config(
-        FORMATS[0], 1, use_runtime=use_runtime, operand_shape=operand_shape
+        FORMATS[0], block_ct_dim=1, use_runtime=use_runtime, operand_shape=operand_shape
     )
     _expect_init_rejects(
-        configuration,
-        golden_rowmajor,
-        f"operand shape {operand_shape} (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)",
+        configuration, golden_rowmajor, f"operand shape {operand_shape}"
     )

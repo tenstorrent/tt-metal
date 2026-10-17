@@ -6,7 +6,9 @@ import math
 import struct
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from helpers.tile_shape import TileShape
 
 from .format_config import DataFormat
 from .golden_generators import TILE_DIMENSIONS
@@ -827,25 +829,15 @@ class OVERLAP_FIRST_HALF(TemplateParameter):
 
 @dataclass
 class REDUCE_OPERAND_SHAPE(TemplateParameter):
-    """Operand tile geometry handed to the reduce_block_max_row unpack/math inits
-    (``ckernel::TensorShape`` fields). The default is the full 32x32 tile; the
-    shape-guard test passes face grids the op does not implement to check that
-    its LLK_ASSERT rejects them."""
+    """Operand tile geometry handed to the reduce_block_max_row unpack/math inits, as a
+    ``TileShape`` (the Python mirror of ``ckernel::TensorShape``). The default is the full
+    32x32 tile; the shape-guard test passes face grids the op does not implement to check
+    that its LLK_ASSERT rejects them."""
 
-    face_r_dim: int = 16
-    face_c_dim: int = 16
-    num_faces_r_dim: int = 2
-    num_faces_c_dim: int = 2
+    tile_shape: TileShape = field(default_factory=lambda: TileShape(16, 16, 2, 2))
 
     def convert_to_cpp(self) -> str:
-        return "\n".join(
-            [
-                f"constexpr std::uint8_t REDUCE_OPERAND_FACE_R_DIM = {self.face_r_dim};",
-                f"constexpr std::uint8_t REDUCE_OPERAND_FACE_C_DIM = {self.face_c_dim};",
-                f"constexpr std::uint8_t REDUCE_OPERAND_NUM_FACES_R_DIM = {self.num_faces_r_dim};",
-                f"constexpr std::uint8_t REDUCE_OPERAND_NUM_FACES_C_DIM = {self.num_faces_c_dim};",
-            ]
-        )
+        return f"constexpr ckernel::TensorShape REDUCE_OPERAND_SHAPE = {self.tile_shape.cpp_value};"
 
 
 @dataclass

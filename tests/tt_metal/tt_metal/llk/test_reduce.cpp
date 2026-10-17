@@ -1084,24 +1084,40 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixReduceBlockMaxRowNumFacesCompileLim
     // Compile-time contract test; these programs are never launched. The num_faces convenience
     // overloads of reduce_block_max_row only describe geometries the LLK implements, 4 faces
     // (32x32) and 2 faces (16x32): a single 16x16 face has to be rejected at compile time instead
-    // of pooling SrcA rows the unpacker never wrote.
-    for (const std::uint32_t num_faces : {4u, 2u, 1u}) {
-        SCOPED_TRACE(::testing::Message() << "num_faces=" << num_faces);
-        Program program = CreateProgram();
-        const CoreCoord core{0, 0};
-        for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16}) {
-            CreateCircularBuffer(
-                program, core, CircularBufferConfig(2048, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, 2048));
-        }
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/reduce_block_max_row_compile_limits.cpp",
-            core,
-            ComputeConfig{.compile_args = {num_faces}});
-        if (num_faces == 1) {
-            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
-        } else {
-            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+    // of pooling SrcA rows the unpacker never wrote. One overload is compiled per build (compile
+    // arg 1) so every static_assert is checked on its own, and the JIT error must carry its message.
+    const std::uint32_t num_overloads =
+        detail::detect_arch() == tt::ARCH::BLACKHOLE ? 4 : 2;  // reinit_short / reinit_minimal are Blackhole-only
+    for (std::uint32_t overload = 0; overload < num_overloads; ++overload) {
+        for (const std::uint32_t num_faces : {4u, 2u, 1u}) {
+            SCOPED_TRACE(::testing::Message() << "overload=" << overload << ", num_faces=" << num_faces);
+            Program program = CreateProgram();
+            const CoreCoord core{0, 0};
+            for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16}) {
+                CreateCircularBuffer(
+                    program,
+                    core,
+                    CircularBufferConfig(2048, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, 2048));
+            }
+            CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/compute/reduce_block_max_row_compile_limits.cpp",
+                core,
+                ComputeConfig{.compile_args = {num_faces, overload}});
+            if (num_faces == 1) {
+                try {
+                    program.impl().compile(&this->device());
+                    FAIL() << "num_faces=1 compiled";
+                } catch (const std::runtime_error& e) {
+                    EXPECT_NE(
+                        std::string(e.what()).find(
+                            "reduce_block_max_row supports 32x32 (num_faces=4) and 16x32 (num_faces=2) tiles only"),
+                        std::string::npos)
+                        << e.what();
+                }
+            } else {
+                EXPECT_NO_THROW(program.impl().compile(&this->device()));
+            }
         }
     }
 }
