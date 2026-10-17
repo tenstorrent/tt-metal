@@ -22,13 +22,69 @@
 // 3. topk = 1 (the fused decode LM head, fused_decode/terminal.py): also keeps this core's top-32 output values (ties
 //    to the lower output index; index = 32 n + lane) and, after the last column, writes them as 32 UINT32 order keys +
 //    32 UINT32 indices into slot `list_idx` of the merge core's list buffer and increments its semaphore `merge_sem`.
+// 4. QKV_ROPE_KV (out_mode 3, one user; fused_decode/stream.py QKVRopeCache): before the activation arrives, loads the
+//    RoPE inputs of the compute kernel (kernels/stream_qkv_rope_compute.cpp: [I, T] and the position's cos / sin
+//    rows), reads the position and its paged-cache block (unpaged caches: block 0) and prefetches the cache tile of
+//    each of this core's K / V columns. Q columns (rotated by compute) go to the Q heads as above; a K (rotated) or V
+//    column is converted to BFP8 into row (position % block) of its cache tile, which is written back. The weight slots
+//    are in K / V-first order (qkv_column_order): slot c's output column is runtime arg 12 + c.
 //
-// runtime args: [x_addr, out_addr, col0, k_addr, v_addr, lists_addr, list_idx]
+// runtime args: [x_addr, out_addr, col0, k_addr, v_addr, lists_addr, list_idx]; QKV_ROPE_KV: [x_addr, out_addr, col0,
+//                k_addr, v_addr, rot, cos, sin, pos, page_table, k_cache, v_cache addresses, slot columns...]
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
 #include "router_topk.hpp"
+
+#ifdef QKV_ROPE_KV
+// One BF16 value (bits b) as a BFP8_b byte under shared exponent `shared`: sign | 7-bit magnitude = the 8-bit
+// significand (hidden bit included) shifted right by shared - exponent + 1, rounded to nearest even and saturated (the
+// rounding of tt_metal's host BFP8 packer); zero / denormal inputs and magnitudes that round to 0 give 0.
+inline uint32_t bfp8_byte(uint32_t b, uint32_t shared) {
+    const uint32_t e = (b >> 7) & 0xFF;
+    const uint32_t shift = shared - e + 1;
+    if (e == 0 || shift > 8) {
+        return 0;
+    }
+    const uint32_t sig = 0x80 | (b & 0x7F);
+    uint32_t q = sig >> shift;
+    const uint32_t rem = sig & ((1u << shift) - 1);
+    const uint32_t half = 1u << (shift - 1);
+    q += (rem > half || (rem == half && (q & 1))) ? 1 : 0;
+    q = q > 127 ? 127 : q;
+    return q == 0 ? 0 : ((b >> 15) << 7) | q;
+}
+
+// Writes 32 BF16 values (1x32 tile at src: values 0-15 then 16-31) into row rr of the BFP8_b 32x32 tile at tile
+// (L1): per 16-value face row the shared exponent is the largest exponent. Layout: 64 exponent bytes (face-major, then
+// row), then 4 x 256 mantissa bytes (face-major, row-major). Word loads / stores: this core is slow at byte accesses.
+inline void bfp8_write_row(uint32_t tile, uint32_t src, uint32_t rr) {
+    volatile tt_l1_ptr uint32_t* in = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src);
+    for (uint32_t hh = 0; hh < 2; ++hh) {
+        uint32_t v[16];
+        uint32_t shared = 0;
+        for (uint32_t i = 0; i < 8; ++i) {
+            const uint32_t w = in[hh * 8 + i];
+            v[2 * i] = w & 0xFFFF;
+            v[2 * i + 1] = w >> 16;
+            const uint32_t e0 = (w >> 7) & 0xFF;
+            const uint32_t e1 = (w >> 23) & 0xFF;
+            shared = e0 > shared ? e0 : shared;
+            shared = e1 > shared ? e1 : shared;
+        }
+        const uint32_t face = (rr >> 4) * 2 + hh;
+        const uint32_t frow = rr & 15;
+        reinterpret_cast<volatile tt_l1_ptr uint8_t*>(tile)[face * 16 + frow] = shared;
+        volatile tt_l1_ptr uint32_t* man =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile + 64 + face * 256 + frow * 16);
+        for (uint32_t q = 0; q < 4; ++q) {
+            man[q] = bfp8_byte(v[4 * q], shared) | (bfp8_byte(v[4 * q + 1], shared) << 8) |
+                     (bfp8_byte(v[4 * q + 2], shared) << 16) | (bfp8_byte(v[4 * q + 3], shared) << 24);
+        }
+    }
+}
+#endif
 
 void kernel_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
@@ -68,6 +124,33 @@ void kernel_main() {
     constexpr uint32_t merge_x = get_compile_time_arg_val(notify_ct + 6);
     constexpr uint32_t merge_y = get_compile_time_arg_val(notify_ct + 7);
     constexpr uint32_t merge_sem = get_compile_time_arg_val(notify_ct + 8);
+#ifdef QKV_ROPE_KV
+    // Fused RoPE + KV-cache write (one user): see fused_decode/stream.py QKVRopeCache.
+    constexpr uint32_t rk = notify_ct + 9;
+    constexpr uint32_t cb_rot = get_compile_time_arg_val(rk);
+    constexpr uint32_t cb_cs = get_compile_time_arg_val(rk + 1);
+    constexpr uint32_t cb_kv = get_compile_time_arg_val(rk + 2);
+    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(rk + 3);
+    constexpr uint32_t block_size = get_compile_time_arg_val(rk + 4);
+    constexpr uint32_t kv_tile_bytes = get_compile_time_arg_val(rk + 5);
+    constexpr uint32_t paged = get_compile_time_arg_val(rk + 6);  // 0: unpaged caches, the user's rows are block 0
+    constexpr auto rot_args = TensorAccessorArgs<rk + 7>();
+    constexpr auto cos_args = TensorAccessorArgs<rot_args.next_compile_time_args_offset()>();
+    constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
+    constexpr auto pos_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
+    constexpr auto pt_args = TensorAccessorArgs<pos_args.next_compile_time_args_offset()>();
+    constexpr auto kc_args = TensorAccessorArgs<pt_args.next_compile_time_args_offset()>();
+    constexpr auto vc_args = TensorAccessorArgs<kc_args.next_compile_time_args_offset()>();
+    const auto s_rot = TensorAccessor(rot_args, get_arg_val<uint32_t>(5), kv_tile_bytes);
+    const auto s_cos = TensorAccessor(cos_args, get_arg_val<uint32_t>(6), 2048);
+    const auto s_sin = TensorAccessor(sin_args, get_arg_val<uint32_t>(7), 2048);
+    const auto s_pos = TensorAccessor(pos_args, get_arg_val<uint32_t>(8), 64);
+    const auto s_pt = TensorAccessor(pt_args, get_arg_val<uint32_t>(9), 64);
+    const auto s_kc = TensorAccessor(kc_args, get_arg_val<uint32_t>(10), kv_tile_bytes);
+    const auto s_vc = TensorAccessor(vc_args, get_arg_val<uint32_t>(11), kv_tile_bytes);
+    // Output column of weight slot c (runtime args 12..: the slot order of fused_decode/stream.py qkv_column_order).
+    auto slot_column = [](uint32_t c) -> uint32_t { return get_arg_val<uint32_t>(12 + c); };
+#endif
     constexpr uint32_t K = 32;
     uint32_t top_key[K];
     uint32_t top_idx[K];
@@ -87,6 +170,60 @@ void kernel_main() {
     const auto s_out = TensorAccessor(out_args, out_addr, out_page_bytes);
     const auto s_k = TensorAccessor(k_args, k_addr, out_page_bytes);
     const auto s_v = TensorAccessor(v_args, v_addr, out_page_bytes);
+
+#ifdef QKV_ROPE_KV
+    // Before the activation (none of this depends on it, and a fused boundary is still running): RoPE inputs for
+    // compute: [I, T] and the position's cos / sin rows (row 0 of the first user's [32, head_dim] shard: 16 values in
+    // face 0, 16 in face 1 of each 32-wide tile).
+    cb_reserve_back(cb_rot, 2);
+    const uint32_t rot_l1 = get_write_ptr(cb_rot);
+    noc_async_read(s_rot.get_noc_addr(0), rot_l1, kv_tile_bytes);
+    noc_async_read(s_rot.get_noc_addr(1), rot_l1 + kv_tile_bytes, kv_tile_bytes);
+    cb_reserve_back(cb_cs, 2 * head_tiles);
+    const uint32_t cs_l1 = get_write_ptr(cb_cs);
+    for (uint32_t t = 0; t < head_tiles; ++t) {
+        noc_async_read(s_cos.get_noc_addr(t), cs_l1 + t * tiny_bytes, half_row);
+        noc_async_read(s_cos.get_noc_addr(t) + face_bytes, cs_l1 + t * tiny_bytes + half_row, half_row);
+        noc_async_read(s_sin.get_noc_addr(t), cs_l1 + (head_tiles + t) * tiny_bytes, half_row);
+        noc_async_read(s_sin.get_noc_addr(t) + face_bytes, cs_l1 + (head_tiles + t) * tiny_bytes + half_row, half_row);
+    }
+    // The position and its page (64-byte aligned reads, DRAM).
+    cb_reserve_back(cb_kv, 1 + cols);
+    const uint32_t kv_l1 = get_write_ptr(cb_kv);
+    noc_async_read(s_pos.get_noc_addr(0), kv_l1, 64);
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    const uint32_t pos = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kv_l1)[0];
+    const uint32_t blk_idx = pos / block_size;
+    uint32_t blk = 0;
+    if constexpr (paged) {
+        noc_async_read(s_pt.get_noc_addr(0) + ((blk_idx * 4) & ~63u), kv_l1, 64);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        blk = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kv_l1)[(blk_idx & 15)];
+    }
+    const uint32_t r = pos % block_size;
+    // Paged cache tile of K / V output column n: row r of block blk, kv head m / head_tiles, tile m % head_tiles.
+    auto kv_cache_addr = [&](uint32_t n) -> uint64_t {
+        const bool is_k = n < q_cols + k_cols;
+        const uint32_t m = is_k ? n - q_cols : n - q_cols - k_cols;
+        const uint32_t tile =
+            ((blk * num_kv_heads + m / head_tiles) * (block_size / 32) + r / 32) * head_tiles + m % head_tiles;
+        return is_k ? s_kc.get_noc_addr(tile) : s_vc.get_noc_addr(tile);
+    };
+    // Prefetch the cache tile of each of this core's K / V columns (page 1 + c of cb_kv): each output column then
+    // only patches its row and writes the tile back, with no DRAM round trip in the output loop.
+    for (uint32_t c = 0; c < cols; ++c) {
+        const uint32_t n = slot_column(c);
+        if (n >= q_cols && n < n_tiles) {
+            noc_async_read(kv_cache_addr(n), kv_l1 + (1 + c) * kv_tile_bytes, kv_tile_bytes);
+        }
+    }
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    cb_push_back(cb_rot, 2);
+    cb_push_back(cb_cs, 2 * head_tiles);
+#endif
 
     cb_reserve_back(cb_x, kx + 1);
     const uint32_t x_l1 = get_write_ptr(cb_x);
@@ -130,7 +267,11 @@ void kernel_main() {
     }
     for (uint32_t c = 0; c < cols; ++c) {
         cb_wait_front(cb_out, 1);
+#ifdef QKV_ROPE_KV
+        const uint32_t n = slot_column(c);
+#else
         const uint32_t n = col0 + c;
+#endif
         if (n < n_tiles) {
             const uint32_t src = get_read_ptr(cb_out);
             if constexpr (out_mode == 4) {
@@ -141,7 +282,17 @@ void kernel_main() {
                 noc_async_write(exp_chunks + chunk, s_k.get_noc_addr(0), chunk);
             } else if constexpr (out_mode == 5) {
                 noc_async_write(src, s_out.get_noc_addr(n / 32, (n % 32) * tiny_bytes), tiny_bytes);
-            } else {
+            }
+#ifdef QKV_ROPE_KV
+            else if (n >= q_cols) {
+                // K (rotated) / V row -> row r of its prefetched paged cache tile, written back.
+                const uint32_t tile_l1 = kv_l1 + (1 + c) * kv_tile_bytes;
+                invalidate_l1_cache();  // src was written by the packer
+                bfp8_write_row(tile_l1, src, r % 32);
+                noc_async_write(tile_l1, kv_cache_addr(n), kv_tile_bytes);
+            }
+#endif
+            else {
                 const uint32_t m = n < q_cols ? n : (n < q_cols + k_cols ? n - q_cols : n - q_cols - k_cols);
                 const uint32_t h = m / head_tiles;
                 const uint32_t off = h < 16 ? h * half_row : 2 * face_bytes + (h - 16) * half_row;

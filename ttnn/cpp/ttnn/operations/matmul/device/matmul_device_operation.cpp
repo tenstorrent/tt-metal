@@ -91,6 +91,34 @@ void validate_matmul_matrix_dimensions(
     TT_FATAL(Kt_a == Kt_b, "K dimension in tiles must match between input A ({}) and input B ({})", Kt_a, Kt_b);
 }
 
+// In0 Column Window: A is read from a tile-aligned column window [offset, offset + K) of a wider, interleaved A
+// whose width holds the window; only the 2D multicast program config supports it.
+void validate_matmul_in0_column_window(
+    const MatmulParams& attributes,
+    const Tensor& input_tensor_a,
+    const ttnn::Shape& a_shape,
+    const ttnn::Shape& b_shape,
+    const tt::tt_metal::Tile& in0_tile) {
+    const uint64_t offset = *attributes.in0_column_offset;
+    TT_FATAL(
+        attributes.program_config.has_value() &&
+            std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
+                *attributes.program_config),
+        "in0_column_offset requires a MatmulMultiCoreReuseMultiCastProgramConfig");
+    TT_FATAL(!attributes.transpose_a, "in0_column_offset does not support transpose_a");
+    TT_FATAL(
+        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "in0_column_offset requires an interleaved input A, got {}",
+        input_tensor_a.memory_config().memory_layout());
+    TT_FATAL(
+        b_shape.rank() >= 2 && offset % in0_tile.get_width() == 0 && b_shape[-2] % in0_tile.get_width() == 0 &&
+            offset + b_shape[-2] <= a_shape[-1],
+        "in0_column_offset: the tile-aligned window [{}, {}) must fit input A's {} columns",
+        offset,
+        offset + b_shape[-2],
+        a_shape[-1]);
+}
+
 // Bfloat4 Tile Size: checks that a bfloat4 input has each tile dim >= 4. Only A's height
 // and B's width are checked; the other two dims (A's width, B's height) are the K axis,
 // already forced to 32 by the Operand Basics check above, so they can't be < 4.
@@ -580,8 +608,21 @@ void validate_matmul_block_and_subblock_configuration(
                     attributes.output_tile.has_value(),
                     "{}: output_tile must be set for matmul subblock validation",
                     config_name);
-                const uint32_t available_reg_count = ttnn::get_dest_reg_count(
-                    attributes.compute_kernel_config.value(), attributes.output_tile.value().get_tile_shape());
+                // Only the 1D gather_in0 kernel computes subblocks in the full-sync dest register. The 2D, 1D and
+                // Reuse factories give wrong values (or hang) above the half-sync count even with dst_full_sync_en:
+                // the 1D factory always runs half-sync, and the others fail above it too (#59689).
+                auto dest_config = attributes.compute_kernel_config.value();
+                bool full_sync_dest_supported = false;
+                if constexpr (std::is_same_v<
+                                  ProgramConfigType,
+                                  operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                    full_sync_dest_supported = program_config.gather_in0;
+                }
+                if (!full_sync_dest_supported) {
+                    dest_config.dst_full_sync_en = false;
+                }
+                const uint32_t available_reg_count =
+                    ttnn::get_dest_reg_count(dest_config, attributes.output_tile.value().get_tile_shape());
                 TT_FATAL(
                     program_config.out_subblock_h * program_config.out_subblock_w <= available_reg_count,
                     "{}: out_subblock_w {} times out_subblock_h {} needs to be at most {} to fit in hardware",
@@ -1265,11 +1306,13 @@ void validate_prefetcher_pipes_mcast_in0_geometry(
         "mcast_in0");
 }
 
-// gather_in0 over PrefetcherPipes streams: each worker's in1 K-blocks arrive in ring order, its own
-// K-block first, and the reader publishes each to compute as it lands, keeping one block of lookahead
-// as mcast_in0 does. A pipe ring is never read as a resident layer the way a batched global_cb is.
-// Ring worker i is the core holding activation shard i; it computes output column block i, per_core_N
-// tiles wide, in place in its own shard of the output.
+// gather_in0 over PrefetcherPipes: each worker's in1 K-blocks arrive one per ring position, and compute
+// takes them in ring order, the worker's own first, as the in0 shards come round. With stream_in1 they
+// arrive in that order, and the reader publishes each as it lands, keeping one block of lookahead as
+// mcast_in0 does. Without it they arrive in K order, and the ring holds the whole layer until the worker
+// is done with it, as a batched global_cb does. Ring worker i is the core holding activation shard i; it
+// computes output column block i, per_core_N tiles wide, in place in its own shard of the output. Hop
+// cores only pass in0 on.
 void validate_prefetcher_pipes_gather_in0_geometry(
     const ttnn::PrefetcherPipeList& prefetcher_pipes,
     const Tensor& input_tensor_a,
@@ -1279,28 +1322,13 @@ void validate_prefetcher_pipes_gather_in0_geometry(
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
     const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config) {
-    TT_FATAL(
-        program_config.stream_in1,
-        "gather_in0 prefetcher_pipes requires stream_in1=true: the pipes deliver each worker its in1 K-blocks in "
-        "ring order and the matmul consumes them as they arrive");
-    TT_FATAL(
-        program_config.hop_cores.empty(),
-        "gather_in0 prefetcher_pipes does not support hop_cores ({}); every ring core must compute an output block",
-        program_config.hop_cores);
-
-    // One K-block per ring position, as wide as an in0 shard. Padded shards would make the K-blocks
-    // narrower than the shards, and the pipes' entries would no longer match what compute reads.
+    // One K-block per ring position, an in0 shard wide. The shards always reach K: a width-sharded
+    // TensorSpec holds no more shards than cores, and the activation's K matches the weight's. When K
+    // does not fill the ring the last shards are padded; compute reads only their unpadded K, but each
+    // pipe entry is still a whole shard wide.
     const auto& in0_shard_spec = input_tensor_a.shard_spec().value();
     const uint32_t ring_size = in0_shard_spec.grid.num_cores();
     const uint32_t in0_shard_width_tiles = in0_shard_spec.shape[1] / in0_tile.get_width();
-    const uint32_t weight_K_tiles = b_shape_padded[-2] / in1_tile.get_height();
-    TT_FATAL(
-        in0_shard_width_tiles * ring_size == weight_K_tiles,
-        "gather_in0 prefetcher_pipes needs the activation's {} shards of {} tiles to cover the weight's K of {} tiles "
-        "exactly, one K-block per ring position; pad K to a multiple of the ring size rather than padding the shards",
-        ring_size,
-        in0_shard_width_tiles,
-        weight_K_tiles);
 
     // A worker-sender pipe's producer is the caller's, so nothing on the in1 side ties per_core_N to the
     // weight's N; the ring's output column blocks have to reach the weight's last column.
@@ -1341,12 +1369,50 @@ void validate_prefetcher_pipes_gather_in0_geometry(
             i < out_shard_cores.size() ? out_shard_cores[i].str() : std::string("no core"));
     }
 
+    // The Tensor prefetcher cuts each receiver's slab of the weight into ring_size equal K-blocks, so the
+    // slab has to be ring_size shard widths deep, padded past the weight's K when the shards are. (A
+    // worker-sender pipe's producer is the caller's, and lays out its entries itself.) Checked ahead of
+    // the shared weight checks, whose K-blocking rule a padded ring with an unpadded slab would trip
+    // first; a weight that is not a 2D receiver-contiguous one is left to them.
+    const auto pipes = ttnn::prefetcher_pipe_refs(prefetcher_pipes);
+    const tt::tt_metal::experimental::PrefetcherPipe& first_pipe = pipes.front();
+    const auto& weight_nd_shard_spec = input_tensor_b.nd_shard_spec();
+    const bool tensor_prefetcher_2d_slab =
+        first_pipe.sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram &&
+        weight_nd_shard_spec.has_value() && weight_nd_shard_spec->shard_shape.rank() == 2;
+    if (tensor_prefetcher_2d_slab) {
+        const uint32_t slab_K_tiles = weight_nd_shard_spec->shard_shape[0] / in1_tile.get_height();
+        const uint32_t weight_K_tiles = b_shape_padded[-2] / in1_tile.get_height();
+        TT_FATAL(
+            slab_K_tiles == ring_size * in0_shard_width_tiles,
+            "gather_in0 prefetcher_pipes reads in1 K-blocks one in0 shard ({} tiles) deep, but the Tensor prefetcher "
+            "cuts each receiver's {}-tile slab of the weight into {} K-blocks of a different depth. Give the weight's "
+            "NdShardSpec a K of {} tiles (ring_size * shard width), padded past the weight's K of {} tiles if need be.",
+            in0_shard_width_tiles,
+            slab_K_tiles,
+            ring_size,
+            ring_size * in0_shard_width_tiles,
+            weight_K_tiles);
+    }
+
+    const uint32_t in1_block_size_bytes =
+        in1_k_block_size_bytes(input_tensor_b, in1_tile, in0_shard_width_tiles, program_config);
     validate_prefetcher_pipes_in1_delivery(
-        prefetcher_pipes,
-        input_tensor_b,
-        program_config,
-        in1_k_block_size_bytes(input_tensor_b, in1_tile, in0_shard_width_tiles, program_config),
-        "gather_in0");
+        prefetcher_pipes, input_tensor_b, program_config, in1_block_size_bytes, "gather_in0");
+
+    if (!program_config.stream_in1) {
+        const uint32_t pipe_ring_blocks = first_pipe.ring_size() / in1_block_size_bytes;
+        TT_FATAL(
+            pipe_ring_blocks >= ring_size,
+            "gather_in0 prefetcher_pipes with stream_in1=false delivers each worker its {} in1 K-blocks in K order "
+            "and reads them in ring order, its own first, so the pipe ring has to hold the whole layer: {} K-blocks "
+            "of {} B, but its {} B hold {}. Grow the ring, or set stream_in1=true and deliver them in ring order.",
+            ring_size,
+            ring_size,
+            in1_block_size_bytes,
+            first_pipe.ring_size(),
+            pipe_ring_blocks);
+    }
 }
 
 // Helper: warns if a caller of MatmulDeviceOperation's static API hasn't populated
@@ -2483,16 +2549,23 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_b = args.input_tensors.at(1);
     const auto& optional_input_tensors = args.optional_input_tensors;
 
-    const auto& a_shape =
+    auto a_shape =
         operations::matmul::utilities::get_matmul_tensor_logical_shape(input_tensor_a, attributes.transpose_a);
     const auto& b_shape =
         operations::matmul::utilities::get_matmul_tensor_logical_shape(input_tensor_b, attributes.transpose_b);
-    const auto& a_shape_padded =
+    auto a_shape_padded =
         operations::matmul::utilities::get_matmul_tensor_padded_shape(input_tensor_a, attributes.transpose_a);
     const auto& b_shape_padded =
         operations::matmul::utilities::get_matmul_tensor_padded_shape(input_tensor_b, attributes.transpose_b);
     auto in0_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_a, attributes.transpose_a);
     auto in1_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_b, attributes.transpose_b);
+
+    if (attributes.in0_column_offset.has_value()) {
+        // The rest of validation sees A as its column window: B's K columns starting at the offset.
+        validate_matmul_in0_column_window(attributes, input_tensor_a, a_shape, b_shape, in0_tile);
+        a_shape[-1] = b_shape[-2];
+        a_shape_padded[-1] = b_shape_padded[-2];
+    }
 
     // ---- universal checks, part 1: independent of the chosen program config ----
     validate_matmul_operand_basics(input_tensor_a, input_tensor_b, in0_tile, in1_tile);
@@ -3031,7 +3104,11 @@ MatmulDeviceOperation::create_op_performance_model(
 
     // Calculate number of mul/add operations
     // TODO: add bias modeling
-    int64_t num_mul_adds_per_elem = in_a_shape[-1] * 2;  // 1 multiply and 1 add per element
+    // A column window multiplies only B's K columns of A.
+    const int64_t K = operation_attributes.in0_column_offset.has_value()
+                          ? input_tensor_b.logical_shape()[operation_attributes.transpose_b ? -1 : -2]
+                          : in_a_shape[-1];
+    int64_t num_mul_adds_per_elem = K * 2;  // 1 multiply and 1 add per element
     uint32_t batch_size = get_batch_size(out_shape);
     int64_t num_mul_adds = num_mul_adds_per_elem * out_shape[-2] * out_shape[-1] * batch_size;
 
@@ -3138,7 +3215,8 @@ MatmulParams create_matmul_attributes(
         output_tile,
         parameters.global_cb,
         parameters.sub_device_id,
-        parameters.prefetcher_pipes};
+        parameters.prefetcher_pipes,
+        parameters.in0_column_offset};
 }
 
 MatmulDeviceOperation::tensor_return_value_t matmul(

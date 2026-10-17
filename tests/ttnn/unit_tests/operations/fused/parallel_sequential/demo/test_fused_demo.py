@@ -38,7 +38,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 import ttnn
-from models.common.utility_functions import is_watcher_enabled, skip_with_llk_assert
+from tt_py_test_utils_common.utility_functions import is_watcher_enabled, skip_with_llk_assert
 from models.experimental.ops.descriptors.fusion import clear_build_cache
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 
