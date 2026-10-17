@@ -1148,6 +1148,14 @@ class HybridDeviceModel:
         pass
 
 
+def contract_state_pcc(spec, runtime, kv, slot, length, golden):
+    """The slot's fixed-size state (window ring, compressor partial, engram tail) after a request of ``length``
+    tokens vs the golden snapshot (testing/contract.py; tt/runners/adapter.py:contract_state_pcc)."""
+    from models.demos.deepseek_v41_flash_d_p.tt.runners.adapter import contract_state_pcc as _impl
+
+    return _impl(spec, runtime, kv, slot, length, golden)
+
+
 def device_model(mesh, spec, layers, lm_head=True):
     """The all-device model (tt/model.py:TtDS41Model, M.1): hidden state on the device from the embedding to the final
     norm, every block through run_block with the validated modules. Setting DEVICE_MODEL=hybrid (DS41_DEVICE_MODEL)
