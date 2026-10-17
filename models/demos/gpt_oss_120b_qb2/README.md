@@ -4,24 +4,32 @@ This implementation shards GPT-OSS 120B across a 1×4 Blackhole mesh. It uses
 indexed sparse experts, chunked prefill, sliding-window KV rings and device
 sampling. Adam Housman developed the original implementation.
 
-**Draft integration:** the model source is imported from the measured
-`1800a9402b5e976a48bbf6b3dfa05a7cbc803953` integration. Native operation tests,
-host contracts and a complete 100-token single-prompt reference test passed at
-that earlier source boundary with the transfer setting below. Those results do
-not qualify this current-main tree. Serving measurements also used recorded
-fixed-width/sequential-prefill overlays; they do not establish the default
-variable-bucket path. Full quality, matched baseline/performance, weekly CI and
-two-cycle reopen qualification remain unfinished. The source package's accuracy
-and throughput numbers are not validation of this code.
+## Validated scope
 
-The model's decode wrapper and vLLM adapter use current main's explicit input,
-page-table and sampling-state commands. The original 87 model host tests and 47 compact-prefill host tests pass with
-actual compiled TTNN/model imports ([CPU validation](https://github.com/tenstorrent/tt-metal/actions/runs/38600987845)).
-This tree includes the exact tested compact-prefill padding and layout guards. They cover
-async token feedback, page-only refresh, teacher forcing, trace recapture and
-sampling-state reuse, using CPU tensors and mocked device operations. They do
-not qualify device execution. The compact-prefill prerequisite merged in #58504
-as `20b3ff3e`; its generator and regression-test sources match this tree exactly.
+The supported profile is one active sequence on four Blackhole chips, with all
+36 layers and capacity for a 131,072-token context. The original independent
+100-position reference test passes on model source `dbd36853` with native
+`0b315cc0`: prefill and all four traced teacher-forced repetitions each achieve
+95/100 top-1, 100/100 top-5 and 100/100 top-100 agreement. The unchanged criteria
+are at least 98/100 top-5 and 100/100 top-100. Each decode repetition also checks
+99 model and 99 sampling trace submissions with no full-logits readback. This
+is one prompt's token-agreement test; it is not a full AIME evaluation.
+
+Prefill uses the supported all-reduce operation on a 128-row tensor view before
+restoring the logical hidden width. This corrects a reproduced reduction error
+at this model's padded physical width without changing precision or weights.
+
+The preceding one-sequence support profile passed the unchanged 28-case plugin
+seeding/variety suite with 820 HTTP 200 responses and ordinary shutdown. That
+suite predates the collective fix and retains that scope. Its 99 maintained
+host tests passed with compiled TTNN/plugin imports in
+[38953425677](https://github.com/tenstorrent/tt-metal/actions/runs/38953425677);
+device operations in those host tests are mocked. The collective fix is covered
+by the full-model reference test above.
+
+The decode wrapper and vLLM adapter use the shared explicit input, page-table and
+sampling-state commands. Compact prefill #58504 merged as `20b3ff3e`; this model
+already includes its exact generator and regression-test sources.
 
 ## Configuration
 
@@ -60,8 +68,7 @@ The shared-generator changes are reviewed separately:
 All five prerequisites are merged on main. Compact prefill #58504 merged as
 `20b3ff3e` on 15 October 2026. The current model tree already includes its exact
 generator and regression-test source; no pending compact-prefill dependency
-remains. Validation after refreshing the model onto newer main remains separate
-from the measured current-source serving investigation.
+remains. The model needs no temporary prerequisite pin.
 
 Serving uses the current official [vLLM TT plugin installation procedure](https://github.com/tenstorrent/vllm-tt-plugin#installation)
 with merged [input/slot integration #152](https://github.com/tenstorrent/vllm-tt-plugin/pull/152)
@@ -138,9 +145,9 @@ python -m pytest --noconftest \
 ## Serve with the current plugin
 
 Run from the tt-metal checkout in the supported plugin environment. Use a cache
-owned by this server and an exclusive four-chip allocation. These commands are
-prepared for device validation. CLI parsing has been checked against vLLM 0.30.0 with plugin loading disabled;
-successful server startup alone is not serving qualification.
+owned by this server and an exclusive four-chip allocation. The one-sequence
+profile below was used for the 28-case serving suite. CLI parsing was checked against vLLM 0.30.0; successful startup alone does not prove
+task accuracy.
 
 ```bash
 export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
@@ -169,9 +176,8 @@ python -m vllm.entrypoints.openai.api_server \
 ```
 
 The tested serving configuration reserves 16,384 bytes of small L1. The default
-zero-reserve path has a retained failure and is not qualified. The command above
-still requires successful full-model serving and quality validation; merged
-prerequisites alone do not establish that qualification.
+zero-reserve path has a retained failure and is not qualified. The original
+reference test above validates the repaired full-model path. Broader serving quality remains separate from the earlier API suite.
 
 The model declares its ring fabric requirement before the plugin opens the mesh.
 For bulk throughput, set `GPT_OSS_120B_CHUNK_WARMUP=32768`, pass
@@ -186,16 +192,16 @@ part of this integration. A response that spends
 its entire output budget on reasoning can therefore have empty final content;
 evaluation must record that as a failure.
 
-## Qualification still required
+## Additional validation
 
-Exercise partial batches, reordered/recycled slots, mixed host/device sampling,
-long chunked prompts, prefix hits, ring wrap, cancellation and at least 128
-completed requests of continuous churn. The source package reported prompt echo
-and device-slot exhaustion under heavy long-context load; those reports remain
-acceptance risks until reproduced and resolved against the current plugin.
+Wider active batches are not supported by the selected profile. Further coverage
+should include mixed host/device sampling, long chunked prompts, prefix hits,
+ring wrap, cancellation and continuous churn. The source package reported prompt
+echo and device-slot exhaustion under heavy long-context load; the one-prompt
+reference result does not resolve those wider workload reports.
 
 Compare the maintained upstream GPT-OSS implementation using the same hardware,
 checkpoint, precision/accuracy, prompt/output lengths, concurrency and timing
-boundaries. Publish a measured benefit before treating this additional
-implementation as ready for maintenance. Weekly CI targets and budgets must come
-from the exact setup/test/serve/report/cleanup command measured on its target SKU.
+boundaries. No comparative speedup is claimed. Weekly CI targets and budgets
+must come from the exact setup/test/serve/report/cleanup command measured on its
+target SKU.
