@@ -1534,24 +1534,19 @@ def eltwise_unary_sfpu(
     return res_tensor, golden_tensor
 
 
-# Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false
-@pytest.mark.parametrize("clamp_negative", [True, False])
-def test_exponential_clamp_negative(clamp_negative: bool):
-    torch.manual_seed(0)
-    input_dimensions = [32, 32]
+# The two exp tests below share one 32x32 bf16 Dest run; each keeps only its stimuli and
+# its asserts. Returns (res_tensor, golden_tensor) for MathOperation.Exp on src_A.
+def _run_exp_on_bf16_tile(
+    src_A: torch.Tensor,
+    input_dimensions: list[int],
+    approx_mode: ApproximationMode,
+    fast_mode: FastMode,
+    clamp_negative: bool,
+):
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     dest_acc = DestAccumulation.No
 
-    # Generate custom stimuli with range [-5, 0.7]
     num_elements = input_dimensions[0] * input_dimensions[1]
-    src_A = torch.rand(num_elements, dtype=torch.bfloat16) * 5.7 - 5.0
-    # Set some values to be large and negative:
-    src_A[0] = -10000
-    src_A[1] = -1000
-    src_A[2] = -200
-    src_A[3] = -100
-    src_A[4] = -88.5
-
     src_B = torch.zeros(num_elements, dtype=torch.bfloat16)
     tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
     tile_cnt_B = tile_cnt_A
@@ -1580,8 +1575,8 @@ def test_exponential_clamp_negative(clamp_negative: bool):
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.Yes),
-            FAST_MODE(FastMode.Yes),
+            APPROX_MODE(approx_mode),
+            FAST_MODE(fast_mode),
             CLAMP_NEGATIVE(clamp_negative),
             MATH_OP(mathop=MathOperation.Exp),
         ],
@@ -1612,6 +1607,28 @@ def test_exponential_clamp_negative(clamp_negative: bool):
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    return res_tensor, golden_tensor
+
+
+# Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false
+@pytest.mark.parametrize("clamp_negative", [True, False])
+def test_exponential_clamp_negative(clamp_negative: bool):
+    torch.manual_seed(0)
+    input_dimensions = [32, 32]
+
+    # Generate custom stimuli with range [-5, 0.7]
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    src_A = torch.rand(num_elements, dtype=torch.bfloat16) * 5.7 - 5.0
+    # Set some values to be large and negative:
+    src_A[0] = -10000
+    src_A[1] = -1000
+    src_A[2] = -200
+    src_A[3] = -100
+    src_A[4] = -88.5
+
+    res_tensor, golden_tensor = _run_exp_on_bf16_tile(
+        src_A, input_dimensions, ApproximationMode.Yes, FastMode.Yes, clamp_negative
+    )
 
     # clamp_negative=False: require inputs < -88 to be negative (not necessarily
     # correct) and exclude them from the isclose check.
@@ -1630,3 +1647,56 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     assert torch.all(
         is_valid
     ), f"Test failed: {(~is_valid).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
+
+
+# Accurate (APPROX_MODE=false) exp on a bf16 Dest with CLAMP_NEGATIVE=false. The approximate
+# path's clamp is the one InputClamping::None switches off; the accurate bf16 kernel forms
+# 2^int(x/ln2) from the bit pattern of x/ln2 + 127, which is only meaningful for a
+# non-negative value, so it must keep its own lower clamp whatever the flag says. Without
+# it, inputs below ~-88 (where exp is 0 in bf16) come out as positive garbage, up to ~1e21.
+def test_exponential_accurate_unclamped_large_negative():
+    torch.manual_seed(0)
+    input_dimensions = [32, 32]
+
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    src_A = torch.rand(num_elements, dtype=torch.bfloat16) * 10.0 - 5.0
+    # exp(x) for every one of these is far below the smallest bf16 subnormal, so the
+    # only correct bf16 output is 0.0. The kernel records its body on the first 32-lane
+    # iteration and replays it for the other 31. src_A is written in face layout, so
+    # element i sits in Dest row i // 16, column i % 16, and one SFPLOAD reads four
+    # Dest rows (SFPLOAD_WINDOW = 64 consecutive elements) of a single column parity:
+    # even columns at an even Dest address, odd columns at +2. The kernel steps Dest by 2
+    # per iteration, so the iterations alternate parities. A sentinel pair (one even
+    # column, one odd) every SFPLOAD_WINDOW // len(large_negative) elements puts
+    # len(large_negative) even-column and as many odd-column sentinels in every window,
+    # so every iteration -- the recorded one and each replay, of either parity -- sees
+    # a negative xlog2, and both parities cycle through all the values.
+    large_negative = [-10000.0, -1000.0, -226.0, -200.0, -176.0, -150.0, -120.0, -100.0]
+    SFPLOAD_WINDOW = 64
+    sentinel_stride = SFPLOAD_WINDOW // len(large_negative)
+    assert (
+        SFPLOAD_WINDOW % len(large_negative) == 0 and sentinel_stride >= 2
+    ), "large_negative must divide the SFPLOAD window and leave room for a pair per stride"
+    sentinel_indices = []
+    for n, i in enumerate(range(0, num_elements, sentinel_stride)):
+        src_A[i] = large_negative[n % len(large_negative)]  # even column
+        src_A[i + 1] = large_negative[(n + 1) % len(large_negative)]  # odd column
+        sentinel_indices += [i, i + 1]
+
+    res_tensor, golden_tensor = _run_exp_on_bf16_tile(
+        src_A, input_dimensions, ApproximationMode.No, FastMode.No, clamp_negative=False
+    )
+
+    sentinel_results = res_tensor[sentinel_indices].float()
+    nonzero = (sentinel_results != 0.0).nonzero().flatten()
+    assert len(nonzero) == 0, (
+        "Accurate exp of inputs below -88 must be 0.0 on a bf16 Dest regardless of "
+        f"CLAMP_NEGATIVE; {len(nonzero)} of {len(sentinel_indices)} sentinels are not, e.g. "
+        f"{[(src_A[sentinel_indices[k]].item(), sentinel_results[k].item()) for k in nonzero[:MAX_REPORTED_MISMATCHES].tolist()]}"
+    )
+
+    atol, rtol = 0.02, 0.02
+    is_close = torch.isclose(golden_tensor, res_tensor, rtol=rtol, atol=atol)
+    assert torch.all(
+        is_close
+    ), f"Test failed: {(~is_close).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
