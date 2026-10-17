@@ -3201,14 +3201,16 @@ class TPGatedDeltaNet:
     # ---- QWEN36_VERIFY_SPEC_STEP=1 helpers (gdn_spec_step) ----
     @staticmethod
     def _spec_hnew_depth(B):
-        """States buffered between the op's compute and its ring writer: 4 at B >= 4 (the writer-bound shapes), else
-        2. QWEN36_SPEC_STEP_HNEW_DEPTH overrides (2 frees 128 KB of L1 per core if a shape does not fit)."""
+        """States buffered between the op's compute and its ring writer: 2 (QWEN36_SPEC_STEP_HNEW_DEPTH=4 opts into
+        the deeper buffering). Depth 4 costs 128 KB of L1 per core, and at B = 4 on the P150x8 column its static
+        dataflow buffers clash with the verify bucket's L1 buffers (TT_THROW at launch, T = 4 and T = 8), while at
+        B = 8 K = 3 it measured the same verify time as depth 2 (37.2 ms both)."""
         env = os.environ.get("QWEN36_SPEC_STEP_HNEW_DEPTH")
         if env is not None:
             d = int(env)
             assert d in (2, 4), f"QWEN36_SPEC_STEP_HNEW_DEPTH must be 2 or 4, got {env}"
             return d
-        return 4 if B >= 4 else 2
+        return 2
 
     def _ensure_spec_fused_seed(self):
         """Allocate (once per B) the fused seed's constants: the scratch half of its [B, K, C] window pair and its
