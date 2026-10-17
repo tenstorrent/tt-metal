@@ -272,25 +272,20 @@ def _fp32_to_uint8_wide_exponent_bits() -> list[int]:
     return patterns
 
 
-def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
-    # SFPSHFT uses (amount & 31); without a bound on the large side, exponents
-    # 55..62, 87..94 and 119..126 shift the mantissa back into the low byte.
-    # Every finite |x| >= 2^31 is a multiple of 256, so the wrapped result must be 0.
-    formats = InputOutputFormat(DataFormat.Float32, DataFormat.UInt8)
-    dest_acc = DestAccumulation.Yes
-    input_dimensions = [32, 64]
-    patterns = _fp32_to_uint8_wide_exponent_bits()
-
+def _run_typecast_on_bit_patterns(
+    formats, dest_acc, input_dimensions, bits, golden, result_mask
+):
+    """Run the typecast kernel on an operand whose elements are the fp32 bit patterns
+    `bits` (one per element, sign bit included) and return (src_bits, mismatches), with
+    mismatches = [(input bits, expected, got)]. `golden(src_A, src_bits)` returns the
+    expected integers; `result_mask` keeps the output width of the kernel result."""
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
     )
-    # The stimuli generator calls a custom distribution once per face, so place
-    # the bit patterns over the whole operand afterwards.
-    assert len(patterns) <= src_A.numel()
-    bits = patterns + [0] * (src_A.numel() - len(patterns))
+    assert len(bits) == src_A.numel()
     src_A = (
         torch.tensor(
             [b - _UINT32_WRAP if b & _FP32_SIGN_BIT else b for b in bits],
@@ -302,7 +297,7 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
     src_bits = [
         b & 0xFFFFFFFF for b in src_A.to(torch.float32).view(torch.int32).tolist()
     ]
-    golden = [_fp32_to_uint8_wrap(b) for b in src_bits]
+    expected = golden(src_A, src_bits)
 
     configuration = _build_typecast_config(
         formats,
@@ -314,12 +309,37 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
         src_B,
         tile_cnt_B,
     )
-    result = [int(v) & 0xFF for v in configuration.run().result]
+    result = [int(v) & result_mask for v in configuration.run().result]
     assert len(result) == len(
-        golden
-    ), f"expected {len(golden)} result elements, got {len(result)}"
+        expected
+    ), f"expected {len(expected)} result elements, got {len(result)}"
 
-    mismatches = [(b, g, r) for b, g, r in zip(src_bits, golden, result) if g != r]
+    mismatches = [(b, g, r) for b, g, r in zip(src_bits, expected, result) if g != r]
+    return src_bits, mismatches
+
+
+def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
+    # SFPSHFT uses (amount & 31); without a bound on the large side, exponents
+    # 55..62, 87..94 and 119..126 shift the mantissa back into the low byte.
+    # Every finite |x| >= 2^31 is a multiple of 256, so the wrapped result must be 0.
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.UInt8)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 64]
+    patterns = _fp32_to_uint8_wide_exponent_bits()
+
+    # The stimuli generator calls a custom distribution once per face, so place
+    # the bit patterns over the whole operand afterwards.
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    assert len(patterns) <= num_elements
+    bits = patterns + [0] * (num_elements - len(patterns))
+    _, mismatches = _run_typecast_on_bit_patterns(
+        formats,
+        dest_acc,
+        input_dimensions,
+        bits,
+        lambda src_A, src_bits: [_fp32_to_uint8_wrap(b) for b in src_bits],
+        0xFF,
+    )
     failing_exponents = sorted({_fp32_unbiased_exp(b) for b, _, _ in mismatches})
     assert not mismatches, (
         f"{len(mismatches)} fp32->uint8 mismatches at unbiased exponents "
@@ -368,59 +388,29 @@ def test_eltwise_unary_typecast_fractional_to_uint16(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    # Float -> uint16 truncates toward zero and saturates at 65535, like every other
-    # integer destination. Half-integers tell truncation from rounding; zeros, denormals
-    # and tiny values pin the clamp after the -0.5 bias. The Float16_b source runs the
-    # 16-bit Dest (SFPLOADMACRO) path of the kernel and the Float32 source the 32-bit one.
+    # Float16_b runs the 16-bit Dest (SFPLOADMACRO) kernel path, Float32 the 32-bit one.
     patterns = _fractional_to_uint16_bits(formats.input_format)
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-    )
-    assert len(patterns) <= src_A.numel()
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    assert len(patterns) <= num_elements
     # Fill the rest of the operand with quarter steps.
     bits = patterns + [
-        _fp32_bits_of((k % 256) / 4) for k in range(src_A.numel() - len(patterns))
+        _fp32_bits_of((k % 256) / 4) for k in range(num_elements - len(patterns))
     ]
-    src_A = (
-        torch.tensor(
-            [b - _UINT32_WRAP if b & _FP32_SIGN_BIT else b for b in bits],
-            dtype=torch.int32,
-        )
-        .view(torch.float32)
-        .to(src_A.dtype)
-    )
-    src_bits = [
-        b & 0xFFFFFFFF for b in src_A.to(torch.float32).view(torch.int32).tolist()
-    ]
-    assert src_bits == bits, "stimulus is not exact in the input format"
-
-    golden = [
-        int(v)
-        for v in get_golden_generator(TypecastGolden)(
-            src_A, formats.input_format, formats.output_format, input_dimensions
-        ).tolist()
-    ]
-
-    configuration = _build_typecast_config(
+    src_bits, mismatches = _run_typecast_on_bit_patterns(
         formats,
         dest_acc,
-        ApproximationMode.No,
         input_dimensions,
-        src_A,
-        tile_cnt_A,
-        src_B,
-        tile_cnt_B,
+        bits,
+        lambda src_A, src_bits: [
+            int(v)
+            for v in get_golden_generator(TypecastGolden)(
+                src_A, formats.input_format, formats.output_format, input_dimensions
+            ).tolist()
+        ],
+        0xFFFF,
     )
-    result = [int(v) & 0xFFFF for v in configuration.run().result]
-    assert len(result) == len(
-        golden
-    ), f"expected {len(golden)} result elements, got {len(result)}"
-
-    mismatches = [(b, g, r) for b, g, r in zip(src_bits, golden, result) if g != r]
+    assert src_bits == bits, "stimulus is not exact in the input format"
     assert not mismatches, (
         f"{len(mismatches)} float->uint16 mismatches; first (input bits, expected, got): "
         f"{[(hex(b), g, r) for b, g, r in mismatches[:16]]}"

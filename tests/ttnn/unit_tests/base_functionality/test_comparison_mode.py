@@ -513,19 +513,21 @@ def test_typecast_golden_prefers_explicit_bfloat16_metadata():
 
     input_tensor = torch.tensor([1.7], dtype=torch.bfloat16)
 
+    # On Wormhole and Blackhole both source dtypes now truncate (1.7 -> 1), so use Quasar,
+    # where bfloat16 rounds and bfloat8_b truncates: its golden still shows which input dtype was used.
     captured_dtype_result = _typecast_golden_function(
         input_tensor,
         output_dtype=ttnn.uint16,
         input_dtype=ttnn.bfloat8_b,
         _ttnn_input_dtype=ttnn.bfloat16,
-        _ttnn_arch_name="wormhole_b0",
+        _ttnn_arch_name="quasar",
     )
     explicit_dtype_result = _typecast_golden_function(
         input_tensor,
         ttnn.bfloat8_b,
         ttnn.uint16,
         input_dtype=ttnn.bfloat16,
-        _ttnn_arch_name="wormhole_b0",
+        _ttnn_arch_name="quasar",
     )
 
     assert captured_dtype_result.item() == 2
