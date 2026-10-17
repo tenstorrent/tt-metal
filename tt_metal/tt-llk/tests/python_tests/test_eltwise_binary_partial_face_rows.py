@@ -5,11 +5,11 @@
 
 The kernel unpacks and packs 16x32 tiles but runs the math with 8-row faces, so
 the packed rows 8..15 of each face expose whatever the MOP did past the tile's
-rows. Boot leaves DEST undefined and the packer reads undefined rows as zero,
-so those rows must come back as zero; the rows the tile does have must hold the
-op result. The dest-reuse variants seed DEST with the first tile and fold the
-remaining tiles through DEST_TO_SRCA / DEST_TO_SRCB, exercising the dest-reuse
-MOP the same way.
+rows. Boot ZEROACCs all of DEST and each pack ZEROACCs the packed half, so a
+row nothing wrote reads as zero: those rows must come back as zero, and the
+rows the tile does have must hold the op result. The dest-reuse variants seed
+DEST with the first tile and fold the remaining tiles through DEST_TO_SRCA /
+DEST_TO_SRCB, exercising the dest-reuse MOP the same way.
 
 The same partial-face MOP is built for every SrcB broadcast, so the standard
 and DEST_TO_SRCA variants also run with ROW / COL / SCALAR broadcast of the

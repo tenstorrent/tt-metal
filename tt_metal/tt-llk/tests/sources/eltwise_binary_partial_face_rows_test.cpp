@@ -10,9 +10,9 @@
 //   * math runs the op with an 8-row-face shape of the same two faces;
 //   * pack reads the slot back as a full 16x32 tile.
 //
-// Boot leaves every DEST row undefined (ZEROACC of all rows) and the packer reads an undefined
-// row as zero, so rows 8..15 of each packed face must be zero. If the MOP replaces the INCRWC
-// with a second FPU op, those rows carry SrcA[8..15] (+/-) SrcB[8..15] instead.
+// Boot ZEROACCs all of DEST and each pack ZEROACCs the packed half, so a row nothing wrote reads
+// as zero: rows 8..15 of each packed face must be zero. If the MOP replaces the INCRWC with a
+// second FPU op, those rows carry SrcA[8..15] (+/-) SrcB[8..15] instead.
 //
 // REUSE_DEST_TYPE selects the MOP under test: NONE runs the standard op once per tile (one
 // output tile per input tile); DEST_TO_SRCA / DEST_TO_SRCB seed DEST with tile 0 through the
