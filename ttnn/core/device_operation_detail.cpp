@@ -8,10 +8,16 @@
 
 #include <algorithm>
 #include <functional>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -67,7 +73,7 @@ compute_output_placements_and_shape(const std::vector<std::reference_wrapper<con
                 std::max(max_distribution_rank, tensor_ref.get().tensor_topology().distribution_shape().dims());
         }
     } else {
-        const auto &first_tensor = tensors.front().get();
+        const auto& first_tensor = tensors.front().get();
         max_distribution_rank = first_tensor.tensor_topology().distribution_shape().dims();
     }
 
@@ -216,6 +222,87 @@ std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
         }
     }
     return tensor_coordinates;
+}
+
+std::optional<ttsl::SmallVector<bool>> sharded_per_mesh_axis(
+    const tt::tt_metal::TensorTopology& topology, const tt::tt_metal::distributed::MeshShape& mesh_shape) {
+    const auto is_shard = [](const auto& placement) {
+        return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement);
+    };
+    const auto& placements = topology.placements();
+    const size_t dims = mesh_shape.dims();
+    ttsl::SmallVector<bool> sharded(dims, false);
+    if (placements.size() == dims) {
+        for (size_t axis = 0; axis < dims; ++axis) {
+            sharded[axis] = is_shard(placements[axis]);
+        }
+        return sharded;
+    }
+    if (placements.size() == 1) {
+        const bool shard = is_shard(placements[0]);
+        for (size_t axis = 0; axis < dims; ++axis) {
+            sharded[axis] = shard && mesh_shape[static_cast<int>(axis)] > 1;
+        }
+        return sharded;
+    }
+    return std::nullopt;
+}
+
+std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
+    const ttnn::Tensor& caller_tensor, std::initializer_list<const ttnn::Tensor*> operands, std::string_view op_name) {
+    const auto& caller_topology = caller_tensor.tensor_topology();
+    if (caller_tensor.device() == nullptr) {
+        return caller_topology;  // not a mesh tensor: nothing to compare against
+    }
+    const auto& mesh_shape = caller_tensor.device()->shape();
+    const auto caller_sharded = sharded_per_mesh_axis(caller_topology, mesh_shape);
+
+    std::string_view reason;
+    for (const ttnn::Tensor* operand : operands) {
+        if (operand == nullptr || operand == &caller_tensor) {
+            continue;
+        }
+        const auto& operand_topology = operand->tensor_topology();
+        if (operand_topology.mesh_coords() != caller_topology.mesh_coords()) {
+            reason = "an operand is distributed over a different set of mesh coordinates";
+            break;
+        }
+        const auto operand_sharded = sharded_per_mesh_axis(operand_topology, mesh_shape);
+        if (!caller_sharded.has_value() || !operand_sharded.has_value()) {
+            reason = "a label does not have one placement per mesh axis and is not a collapsed whole-mesh label";
+            break;
+        }
+        for (size_t axis = 0; axis < mesh_shape.dims(); ++axis) {
+            if ((*operand_sharded)[axis] && !(*caller_sharded)[axis]) {
+                reason = "an operand is sharded along a mesh axis on which the caller's tensor is replicated";
+                break;
+            }
+        }
+        if (!reason.empty()) {
+            break;
+        }
+    }
+    if (reason.empty()) {
+        return caller_topology;
+    }
+
+    static std::mutex warned_mutex;
+    static std::unordered_set<std::string> warned;
+    bool first_time = false;
+    {
+        std::lock_guard<std::mutex> guard(warned_mutex);
+        first_time = warned.insert(std::string(op_name)).second;
+    }
+    if (first_time) {
+        log_warning(
+            tt::LogOp,
+            "{}: the result takes the union of the operand topologies instead of the caller-owned tensor's own label: "
+            "{}. The per-device results differ, so the caller's handle now reads as sharded (logged once per process "
+            "for this op)",
+            op_name,
+            reason);
+    }
+    return std::nullopt;
 }
 
 void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_view operation_name, size_t input_index) {

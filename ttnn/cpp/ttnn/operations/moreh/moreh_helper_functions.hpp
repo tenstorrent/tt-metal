@@ -6,8 +6,12 @@
 
 #pragma once
 
+#include <functional>
+#include <initializer_list>
 #include <optional>
+#include <string_view>
 #include <variant>
+#include <vector>
 
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -163,6 +167,33 @@ void check_tensor(
     Layout layout = Layout::TILE,
     bool check_dtype = true,
     bool check_layout = true);
+
+// compute_output_topologies for a moreh op whose outputs are `std::optional<Tensor>` slots the caller may
+// preallocate (moreh_adamw, moreh_adam, moreh_sgd). `operands` is every tensor the op reads (nullptr for an absent
+// optional); `output_specs` is compute_output_specs' result and `preallocated_outputs` the caller-supplied slot for
+// each of its entries, in the same order; a nullopt spec is an absent output, which the framework does not visit,
+// so it gets no entry.
+//
+// A preallocated (caller-owned) output keeps the label it arrived with while that label still describes the data:
+// no operand may be sharded along a mesh axis on which the output is replicated, and every operand must span the
+// output's mesh coordinates (ttnn::device_operation::detail::caller_owned_output_topology, shared with the in-place
+// softmax / layer_norm and KV-cache hooks of PRs #59329-#59332). Otherwise -- a gradient sharded along an axis on which
+// the parameter is replicated leaves every device with a different parameter -- it takes the union of every tensor in
+// tensor_args, which is data-preserving, exactly like an output the op allocates itself. Returns {} when nothing is
+// preallocated: the framework then applies its union default itself.
+std::vector<tt::tt_metal::TensorTopology> preallocated_or_union_output_topologies(
+    std::initializer_list<const Tensor*> operands,
+    const Tensor& primary_input,
+    const std::vector<std::optional<tt::tt_metal::TensorSpec>>& output_specs,
+    const std::vector<std::reference_wrapper<const std::optional<Tensor>>>& preallocated_outputs,
+    std::string_view op_name);
+
+// The framework's union default over `tensors` (every tensor in tensor_args), placed on `primary_input`'s mesh
+// coordinates: the label of an output that is per-device distinct whenever any input is. Assumes uniform storage
+// (every tensor spans the whole mesh), as these ops' tensors do; the framework filters a non-uniform output to the
+// coordinate intersection, and no label computed here describes such an output exactly.
+tt::tt_metal::TensorTopology union_output_topology(
+    const std::vector<std::reference_wrapper<const Tensor>>& tensors, const Tensor& primary_input);
 
 struct CallbackArgMap {
     std::map<uint32_t, uint32_t> input;

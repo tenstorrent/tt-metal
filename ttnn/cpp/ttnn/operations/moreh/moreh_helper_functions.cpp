@@ -14,6 +14,7 @@
 #include <tt-metalium/math.hpp>
 
 #include "tt-metalium/hal.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 namespace ttnn::operations {
 
@@ -503,6 +504,64 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
     uint32_t reduce_tile_size = reduce_dim * inner_tile_size;
 
     return {Wt, Ht, inner_tile_size, reduce_tile_size};
+}
+
+tt::tt_metal::TensorTopology union_output_topology(
+    const std::vector<std::reference_wrapper<const Tensor>>& tensors, const Tensor& primary_input) {
+    auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(tensors);
+    return tt::tt_metal::TensorTopology(
+        std::move(shape), std::move(placements), primary_input.tensor_topology().mesh_coords());
+}
+
+std::vector<tt::tt_metal::TensorTopology> preallocated_or_union_output_topologies(
+    std::initializer_list<const Tensor*> operands,
+    const Tensor& primary_input,
+    const std::vector<std::optional<tt::tt_metal::TensorSpec>>& output_specs,
+    const std::vector<std::reference_wrapper<const std::optional<Tensor>>>& preallocated_outputs,
+    std::string_view op_name) {
+    TT_FATAL(
+        output_specs.size() == preallocated_outputs.size(),
+        "Expected one preallocated-output slot per output spec, got {} slots for {} specs",
+        preallocated_outputs.size(),
+        output_specs.size());
+
+    bool any_preallocated = false;
+    for (const auto& output : preallocated_outputs) {
+        any_preallocated |= output.get().has_value();
+    }
+    if (!any_preallocated) {
+        return {};
+    }
+
+    std::vector<std::reference_wrapper<const Tensor>> all_tensors;
+    for (const Tensor* operand : operands) {
+        if (operand != nullptr) {
+            all_tensors.emplace_back(*operand);
+        }
+    }
+    for (const auto& output : preallocated_outputs) {
+        if (output.get().has_value()) {
+            all_tensors.emplace_back(*output.get());
+        }
+    }
+    const auto union_topology = union_output_topology(all_tensors, primary_input);
+
+    std::vector<tt::tt_metal::TensorTopology> topologies;
+    topologies.reserve(output_specs.size());
+    for (size_t i = 0; i < output_specs.size(); ++i) {
+        if (!output_specs[i].has_value()) {
+            continue;
+        }
+        const auto& preallocated = preallocated_outputs[i].get();
+        if (!preallocated.has_value()) {
+            topologies.push_back(union_topology);
+            continue;
+        }
+        topologies.push_back(
+            ttnn::device_operation::detail::caller_owned_output_topology(*preallocated, operands, op_name)
+                .value_or(union_topology));
+    }
+    return topologies;
 }
 
 }  // namespace ttnn::operations
