@@ -15,6 +15,7 @@ namespace ttnn::operations::unary_backward {
 // The enum is the program-cache discriminator: it is part of operation_attributes_t, so two
 // op types can never share a cache entry even though they share this device operation.
 enum class UnaryBackwardOpType : uint8_t {
+    LOGITEPS_BW,
     SIGMOID_BW,
     TANH_BW,
     GELU_BW,
