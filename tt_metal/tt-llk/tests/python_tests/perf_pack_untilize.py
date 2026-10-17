@@ -128,19 +128,20 @@ def test_perf_pack_untilize(
     _run_perf_pack_untilize(perf_report, formats, full_rt_dim, full_ct_dim)
 
 
-# Narrow rows (each tile contributes row_num_datums datums per output row): one tile per block
+# Narrow rows (each tile contributes NARROW_ROW_NUM_DATUMS datums per output row): one tile per block
 # (the sharded-transpose shape) up to a full 8-tile block.
+NARROW_ROW_NUM_DATUMS = 8
+
+
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
     full_ct_dim=[1, 2, 4, 8],
-    row_num_datums=[8],
 )
 def test_perf_pack_untilize_narrow_row(
     perf_report,
     formats,
     full_ct_dim,
-    row_num_datums,
 ):
     _run_perf_pack_untilize(
         perf_report,
@@ -148,7 +149,7 @@ def test_perf_pack_untilize_narrow_row(
         1,
         full_ct_dim,
         narrow_row=True,
-        row_num_datums=row_num_datums,
+        row_num_datums=NARROW_ROW_NUM_DATUMS,
     )
 
 
