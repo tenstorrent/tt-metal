@@ -87,6 +87,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/construct_program.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/kernel_lowering.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/dfb.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/prefetcher_pipe.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/resource.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/scratchpad.cpp

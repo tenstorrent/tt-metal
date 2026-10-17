@@ -8,6 +8,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/global_semaphore_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
@@ -30,6 +31,7 @@ namespace tt::tt_metal::experimental {
 //      o scratchpads
 //  - user-managed resources (parameters)
 //      o tensor parameters
+//      o global semaphore parameters
 //      o prefetcher pipe parameters (advanced option)
 //
 // It also specifies the device nodes (physical location) where kernels will run,
@@ -88,6 +90,10 @@ struct ProgramSpec {
     // Provides ids and layout specs for tensors the Program's kernels will operate on
     // (The actual MeshTensors are supplied via ProgramRunArgs.)
     Group<TensorParameter> tensor_parameters;
+
+    // GlobalSemaphore parameter declarations (see global_semaphore_parameter.hpp)
+    // (The actual GlobalSemaphores are supplied via ProgramRunArgs.)
+    Group<GlobalSemaphoreParameter> global_semaphore_parameters;
 
     // WorkUnit specifications:
     // A valid ProgramSpec has at least one WorkUnitSpec.

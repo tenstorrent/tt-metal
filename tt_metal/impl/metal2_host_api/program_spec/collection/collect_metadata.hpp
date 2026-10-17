@@ -28,9 +28,19 @@ struct CollectedSpecData {
     std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*> scratchpad_by_name;
     std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
     std::unordered_map<PrefetcherPipeParamName, const PrefetcherPipeParameter*> prefetcher_pipe_by_name;
+    std::unordered_map<GlobalSemaphoreParamName, const GlobalSemaphoreParameter*> global_semaphore_by_name;
 
     // ------------------------------------------------------------------------
     // Resource -> Users lookups.
+
+    // GlobalSemaphore binders: kernels whose SemaphoreBinding names a GlobalSemaphoreParameter.
+    // These bindings are kept out of semaphore_binders (they have no SemaphoreSpec and no scope).
+    //
+    // Invariants:
+    // - Every key is a key in global_semaphore_by_name. A declared but unbound parameter has no entry.
+    // - Every vector is non-empty, and no kernel appears more than once in a vector.
+    // - Every pointer k is the registered kernel: kernel_by_name[k->unique_id] == k.
+    std::unordered_map<GlobalSemaphoreParamName, std::vector<const KernelSpec*>> global_semaphore_binders;
 
     // Relay DFBs per PrefetcherPipeParameter. A local DFB relays a pipe when it lists it in
     // DFBAdvancedOptions::prefetcher_pipe_relays (its ring aliases the pipe's ring).
@@ -106,8 +116,9 @@ struct CollectedSpecData {
     std::unordered_map<DFBSpecName, NodeRangeSet> dfb_node_set;
 
     // Semaphore binder census (derived from kernel semaphore bindings and kernel_node_set): which
-    // kernel instances bind each semaphore, and their placement. A kernel binds a given semaphore at
+    // kernel instances bind each program semaphore, and their placement. A kernel binds a given semaphore at
     // most once (enforced during collection). A declared but unbound semaphore has no entry.
+    // GlobalSemaphore bindings are not part of this census (see global_semaphore_binders).
     struct SemaphoreBinderInfo {
         struct BinderRecord {
             // Invariants:
@@ -120,7 +131,8 @@ struct CollectedSpecData {
         // Invariants:
         // - Non-empty.
         // - No kernel appears more than once.
-        // - Every binding->semaphore_spec_name equals the key of this entry in semaphore_binders.
+        // - Every binding->semaphore_spec_name holds the SemaphoreSpecName that keys this entry in
+        //   semaphore_binders.
         std::vector<BinderRecord> binders;
         // Invariant: union of kernel_node_set[rec.kernel->unique_id] over binders.
         // May contain no nodes if every binder kernel is placed on no nodes (binders itself is never empty).

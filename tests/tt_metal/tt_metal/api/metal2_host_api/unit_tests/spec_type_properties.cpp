@@ -380,7 +380,7 @@ TEST(AggregateSpecTypes, CPU_NestedStructsDesignatedInitializers) {
         .semaphore_spec_name = SemaphoreSpecName{"my_sem"},
         .accessor_name = "sem_accessor",
     };
-    EXPECT_EQ(sem_binding.semaphore_spec_name.get(), "my_sem");
+    EXPECT_EQ(std::get<SemaphoreSpecName>(sem_binding.semaphore_spec_name).get(), "my_sem");
 
     KernelSpec::CompilerOptions opts{
         .include_paths = {"/path/to/include"},

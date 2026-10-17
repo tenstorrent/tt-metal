@@ -373,6 +373,13 @@ void Kernel::process_prefetcher_pipe_binding_handles(
     }
 }
 
+void Kernel::process_global_semaphore_binding_handles(
+    std::function<void(const std::string& accessor_name, uint8_t slot)> callback) const {
+    for (const auto& handle : this->global_semaphore_binding_handles_) {
+        callback(handle.accessor_name, handle.slot);
+    }
+}
+
 void Kernel::process_tensor_binding_sequences(
     const std::function<void(const std::string& sequence_name, const std::vector<std::string>& members)> callback)
     const {
@@ -746,6 +753,12 @@ uint64_t Kernel::compute_hash() const {
     for (const auto& handle : this->prefetcher_pipe_binding_handles_) {
         hasher.update(handle.accessor_name);
         hasher.update(static_cast<uint64_t>(handle.prefetcher_pipe_id));
+    }
+    // GlobalSemaphore binding handles: the slot is baked into the generated `sem::` token.
+    hasher.update(static_cast<uint64_t>(this->global_semaphore_binding_handles_.size()));
+    for (const auto& handle : this->global_semaphore_binding_handles_) {
+        hasher.update(handle.accessor_name);
+        hasher.update(static_cast<uint64_t>(handle.slot));
     }
     // Tensor Binding Sequence: the ordering of the tensor binding matters here, 2 tensor bindings of
     // the same set of members but with different orderings are different tensor binding sequences.

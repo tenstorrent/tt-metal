@@ -154,22 +154,25 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
     tt::tt_metal::SemaphoreBindingHandleMap out;
     out.reserve(kernel_spec.semaphore_bindings.size());
     for (const auto& semaphore_binding : kernel_spec.semaphore_bindings) {
-        const uint32_t id = semaphore_name_to_id.at(semaphore_binding.semaphore_spec_name);
+        // GlobalSemaphore bindings get a slot token instead (see ReserveGlobalSemaphoreSlots).
+        const SemaphoreSpecName* sem_name = program_semaphore_name(semaphore_binding);
+        if (sem_name == nullptr) {
+            continue;
+        }
+        const uint32_t id = semaphore_name_to_id.at(*sem_name);
         TT_FATAL(
             id <= std::numeric_limits<uint16_t>::max(),
             "Kernel '{}' semaphore '{}' id {} does not fit uint16_t",
             kernel_spec.unique_id,
-            semaphore_binding.semaphore_spec_name,
+            *sem_name,
             id);
-        const SemScope scope = semaphore_name_to_scope.at(semaphore_binding.semaphore_spec_name);
+        const SemScope scope = semaphore_name_to_scope.at(*sem_name);
         const uint32_t total_binder_harts =
-            scope == SemScope::DM_LOCAL_CACHED
-                ? BinderHartCount(semaphore_binders, semaphore_binding.semaphore_spec_name)
-                : 0u;
+            scope == SemScope::DM_LOCAL_CACHED ? BinderHartCount(semaphore_binders, *sem_name) : 0u;
         TT_FATAL(
             total_binder_harts <= 0x7FFFu,
             "Semaphore '{}' has {} binder harts; the cached seed protocol supports at most 32767",
-            semaphore_binding.semaphore_spec_name,
+            *sem_name,
             total_binder_harts);
         out.emplace(
             semaphore_binding.accessor_name,

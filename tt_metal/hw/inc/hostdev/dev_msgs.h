@@ -196,7 +196,11 @@ struct kernel_config_msg_t {
     // REMOTE_DFB_OFFSET_NONE (0xFF) means no PrefetcherPipes on this launch.
     // Placed after the 2-byte origin pair so the field is uint16-aligned.
     volatile uint16_t prefetcher_pipe_offset;
-    volatile uint8_t pad3[9 - (MaxProcessorsPerCoreType % 2) * 2];  // CODEGEN:skip
+    // Byte offset of the GlobalSemaphore address table from kernel_config_base.
+    // REMOTE_DFB_OFFSET_NONE (0xFF) means no GlobalSemaphore bindings on this launch.
+    // Region layout: word[0] = num_slots; then one L1 address per slot.
+    volatile uint16_t global_sem_offset;
+    volatile uint8_t pad3[7 - (MaxProcessorsPerCoreType % 2) * 2];  // CODEGEN:skip
 
     // Per-processor kernel thread info (Quasar: num threads for kernel on this processor; thread_id in that kernel;
     // values fit in 8 bits) The array sizes are rounded up to a multiple of 8 bytes for alignment (i.e. a multiple of
@@ -214,6 +218,7 @@ static_assert(offsetof(kernel_config_msg_t, local_cb_offset) % sizeof(uint16_t) 
 static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, cross_node_dfb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, prefetcher_pipe_offset) % sizeof(uint16_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, global_sem_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_size) % sizeof(uint32_t) == 0);

@@ -63,6 +63,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/topology_solver.tpp
     api/tt-metalium/experimental/forge_backdoor/global_semaphore.hpp
     api/tt-metalium/experimental/global_circular_buffer.hpp
+    api/tt-metalium/experimental/global_semaphore.hpp
     api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/inspector_config.hpp
     api/tt-metalium/experimental/kernel_cache.hpp
@@ -77,6 +78,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp
     api/tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp
     api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp
+    api/tt-metalium/experimental/metal2_host_api/global_semaphore_parameter.hpp
     api/tt-metalium/experimental/metal2_host_api/kernel_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/node_coord.hpp
     api/tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp

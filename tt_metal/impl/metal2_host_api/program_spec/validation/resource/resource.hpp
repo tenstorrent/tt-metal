@@ -17,7 +17,7 @@ namespace tt::tt_metal::experimental {
 // ----------------------------------------------------------------------------
 // Resource validation: declarations, bindings, and cross-kernel usage of every
 // resource a ProgramSpec declares (DFBs, prefetcher pipes, scratchpads,
-// semaphores, tensor parameters).
+// semaphores, global semaphore parameters, tensor parameters).
 // ----------------------------------------------------------------------------
 //
 // Callers outside this folder use only the three phase drivers below
@@ -73,7 +73,8 @@ void ValidateScratchpadsUsed(const ValidationContext& ctx);
 void ValidateSemaphoreSpec(const SemaphoreSpec& sem, tt::ARCH arch);
 void ValidateSemaphoreBindings(const KernelSpec& kernel, tt::ARCH arch);
 void ValidateComputeSemaphores(const ValidationContext& ctx);
-// no all-used requirement for semaphore
+// no all-used requirement for program semaphores; every GlobalSemaphoreParameter must be bound
+void ValidateGlobalSemaphoresUsed(const ValidationContext& ctx);
 
 // tensor.cpp
 void ValidateTensorBindings(const KernelSpec& kernel);

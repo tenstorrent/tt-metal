@@ -64,6 +64,28 @@ inline void emit_semaphore_binding_tokens(std::ostream& os, const std::vector<Se
     os << "}  // namespace sem\n";
 }
 
+// One resolved GlobalSemaphore binding: the accessor and its program address-table slot.
+struct GlobalSemBindingEntry {
+    std::string name;
+    uint8_t slot = 0;
+};
+
+// The generated GlobalSemaphore section, in the same `namespace sem` as program semaphores
+// (accessor names are unique across both). Each accessor gets its own token type so that
+// passing it to Semaphore (or a program token to GlobalSemaphore) fails to compile.
+inline void emit_global_semaphore_binding_tokens(std::ostream& os, const std::vector<GlobalSemBindingEntry>& entries) {
+    if (entries.empty()) {
+        return;
+    }
+    os << "namespace sem {\n";
+    for (const auto& entry : entries) {
+        os << "using " << entry.name << "_t = ::GlobalSemaphoreBindingToken<" << static_cast<uint32_t>(entry.slot)
+           << "u>;\n";
+        os << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+    }
+    os << "}  // namespace sem\n";
+}
+
 // Metal 2.0: precomputed layout of a kernel's common runtime args (CRTA) buffer.
 //
 // The CRTA buffer is laid out as four back-to-back sections:
@@ -206,6 +228,13 @@ public:
     virtual void process_prefetcher_pipe_binding_handles(
         // NOLINTNEXTLINE(performance-unnecessary-value-param)
         std::function<void(const std::string& accessor_name, uint8_t prefetcher_pipe_id)>) const {}
+
+    // GlobalSemaphore binding callback (Metal 2.0):
+    //  - accessor_name: kernel-side identifier, used as the symbol name in the `sem::` namespace
+    //  - slot: the program GlobalSemaphore table slot the accessor reads its address from
+    virtual void process_global_semaphore_binding_handles(
+        // NOLINTNEXTLINE(performance-unnecessary-value-param)
+        std::function<void(const std::string& accessor_name, uint8_t slot)>) const {}
 
     // Tensor binding sequence callback: sequence_name + ordered member TensorBinding accessor names.
     // Emitted as constexpr std::tuple tokens in the `tensor::` namespace (user order; no sort).

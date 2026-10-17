@@ -270,11 +270,12 @@ void BakeComputeSemaphoreMax(
     const ProgramSpec& spec,
     const SemaphoreNameToScopeMap& scopes) {
     for (const auto& binding : kernel_spec.semaphore_bindings) {
-        if (scopes.at(binding.semaphore_spec_name) != SemScope::COMPUTE_ATOMIC) {
+        const SemaphoreSpecName* sem_name = program_semaphore_name(binding);
+        if (sem_name == nullptr || scopes.at(*sem_name) != SemScope::COMPUTE_ATOMIC) {
             continue;
         }
         const auto sem = std::find_if(spec.semaphores.begin(), spec.semaphores.end(), [&](const SemaphoreSpec& s) {
-            return s.unique_id == binding.semaphore_spec_name;
+            return s.unique_id == *sem_name;
         });
         const uint32_t capacity = (sem != spec.semaphores.end() && sem->advanced_options.max_value != 0)
                                       ? sem->advanced_options.max_value
@@ -423,6 +424,11 @@ LoweredKernel LowerKernel(
     // PrefetcherPipe accessors -> program slot ids (also part of the kernel cache key).
     if (!resource_bindings.prefetcher_pipes.empty()) {
         kernel->set_prefetcher_pipe_binding_handles(resource_bindings.prefetcher_pipes);
+    }
+
+    // GlobalSemaphore accessors -> program table slots (also part of the kernel cache key).
+    if (!resource_bindings.global_semaphores.empty()) {
+        kernel->set_global_semaphore_binding_handles(resource_bindings.global_semaphores);
     }
 
     std::vector<TensorBindingSequenceHandle> tensor_binding_sequences;

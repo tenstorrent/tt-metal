@@ -35,6 +35,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/dfb_endpoints.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/dfbs_per_node.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/gen1_dm_placement.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/global_semaphores.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/gen2_dm_core_assignment.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/prefetcher_pipe_lanes.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/prefetcher_pipe_relays.cpp
@@ -61,6 +62,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/semaphore_scope.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/borrowed_dfb_attach.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/dfb_run_overrides.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/global_semaphore_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/kernel_run_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/merge_program_run_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/named_runtime_args.cpp
@@ -73,6 +75,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/tensor_spec_relaxations/tensor_spec_relaxations.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/utility/table.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/get_token_if_present.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/global_semaphore_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/llk_operand.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/scratchpad_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/tensor_bindings.cpp
@@ -80,6 +83,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/kernel_args/tt_kernel_shim.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/binding_loopbacks.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/compute_semaphore.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/integration_tests/global_semaphore.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/kernel_args_loopbacks.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/llk_operand_mul.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/mesh_workload_factories.cpp

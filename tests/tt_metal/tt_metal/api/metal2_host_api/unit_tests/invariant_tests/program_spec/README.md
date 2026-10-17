@@ -37,7 +37,8 @@ struct ProgramSpec {
     //
     // Every name resolves:
     // - Each KernelSpec::DFBBinding::dfb_spec_name names a spec in dataflow_buffers.
-    // - Each KernelSpec::SemaphoreBinding::semaphore_spec_name names a spec in semaphores.
+    // - Each KernelSpec::SemaphoreBinding::semaphore_spec_name names a spec in semaphores (SemaphoreSpecName)
+    //   or a parameter in global_semaphore_parameters (GlobalSemaphoreParamName).
     // - Each KernelSpec::ScratchpadBinding::scratchpad_spec_name names a spec in scratchpads.
     // - Each KernelSpec::TensorBinding::tensor_parameter_name names a parameter in tensor_parameters.
     // - Each name in WorkUnitSpec::kernels names a spec in kernels.
@@ -48,6 +49,7 @@ struct ProgramSpec {
     // - Each dataflow buffer is bound by at least one kernel.
     // - Each scratchpad is bound by at least one kernel.
     // - Each tensor parameter is bound by a kernel, or by a dataflow buffer's borrowed_from.
+    // - Each global semaphore parameter is bound by at least one kernel.
     // - (Semaphores are exempt here)
     //
     // Data-movement core assignment:
@@ -97,6 +99,10 @@ struct ProgramSpec {
     // Invariant:
     // - Must not have repeated TensorParameter::unique_id.
     Group<TensorParameter> tensor_parameters;
+
+    // Invariant:
+    // - Must not have repeated GlobalSemaphoreParameter::unique_id.
+    Group<GlobalSemaphoreParameter> global_semaphore_parameters;
 
     // Invariant:
     // - Must have at least one WorkUnitSpec.

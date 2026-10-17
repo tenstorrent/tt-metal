@@ -4,6 +4,7 @@
 
 #include "impl/metal2_host_api/program_spec/collection/collect_metadata.hpp"
 
+#include <algorithm>
 #include <unordered_set>
 
 #include <tt_stl/assert.hpp>
@@ -48,6 +49,12 @@ void CollectNameLookups(const ProgramSpec& spec, CollectedSpecData& collected) {
     for (const auto& pipe_parameter : spec.advanced_options.prefetcher_pipe_parameters) {
         auto [it, inserted] = collected.prefetcher_pipe_by_name.try_emplace(pipe_parameter.unique_id, &pipe_parameter);
         TT_FATAL(inserted, "Duplicate PrefetcherPipeParameter name '{}'", pipe_parameter.unique_id);
+    }
+
+    for (const auto& global_semaphore : spec.global_semaphore_parameters) {
+        auto [it, inserted] =
+            collected.global_semaphore_by_name.try_emplace(global_semaphore.unique_id, &global_semaphore);
+        TT_FATAL(inserted, "Duplicate GlobalSemaphoreParameter name '{}'", global_semaphore.unique_id);
     }
 }
 
@@ -134,15 +141,44 @@ void CollectResourceUsers(const ProgramSpec& spec, CollectedSpecData& collected)
         }
     }
 
+    // global_semaphore_binders: a kernel binds a given GlobalSemaphoreParameter at most once (a second
+    // binding would only alias the same address under another name).
+    for (const auto& kernel : spec.kernels) {
+        for (const auto& binding : kernel.semaphore_bindings) {
+            const GlobalSemaphoreParamName* global_name = global_semaphore_name(binding);
+            if (global_name == nullptr) {
+                continue;
+            }
+            TT_FATAL(
+                collected.global_semaphore_by_name.contains(*global_name),
+                "Kernel '{}' references unknown GlobalSemaphoreParameter '{}'",
+                kernel.unique_id,
+                *global_name);
+            auto& binders = collected.global_semaphore_binders[*global_name];
+            TT_FATAL(
+                std::find(binders.begin(), binders.end(), &kernel) == binders.end(),
+                "Kernel '{}' binds GlobalSemaphoreParameter '{}' more than once (latest under accessor_name '{}'). "
+                "A kernel may bind a given GlobalSemaphore at most once.",
+                kernel.unique_id,
+                *global_name,
+                binding.accessor_name);
+            binders.push_back(&kernel);
+        }
+    }
+
     // Dangling-reference checks for bindings that are not indexed (nothing downstream reads a
     // reverse index for them).
     for (const auto& kernel : spec.kernels) {
         for (const auto& binding : kernel.semaphore_bindings) {
+            const SemaphoreSpecName* sem_name = program_semaphore_name(binding);
+            if (sem_name == nullptr) {
+                continue;
+            }
             TT_FATAL(
-                collected.semaphore_by_name.contains(binding.semaphore_spec_name),
+                collected.semaphore_by_name.contains(*sem_name),
                 "Kernel '{}' references unknown semaphore '{}'",
                 kernel.unique_id,
-                binding.semaphore_spec_name);
+                *sem_name);
         }
         for (const auto& binding : kernel.tensor_bindings) {
             TT_FATAL(
@@ -215,7 +251,11 @@ void CollectSemaphoreBinders(const ProgramSpec& spec, CollectedSpecData& collect
 
     for (const auto& kernel : spec.kernels) {
         for (const auto& binding : kernel.semaphore_bindings) {
-            CollectedSpecData::SemaphoreBinderInfo& sem_info = census[binding.semaphore_spec_name];
+            const SemaphoreSpecName* sem_name = program_semaphore_name(binding);
+            if (sem_name == nullptr) {
+                continue;
+            }
+            CollectedSpecData::SemaphoreBinderInfo& sem_info = census[*sem_name];
             // A kernel may bind a given semaphore only once. A second binding would be the same
             // harts reaching the same L1 word under a second name: the derivation below would
             // count those harts twice (over-sizing the cached pool's seed), and the generated
@@ -227,7 +267,7 @@ void CollectSemaphoreBinders(const ProgramSpec& spec, CollectedSpecData& collect
                     "kernel may bind a given semaphore at most once; to refer to it by another name in "
                     "kernel code, alias the handle (constexpr auto x = sem::y) instead.",
                     kernel.unique_id,
-                    binding.semaphore_spec_name,
+                    *sem_name,
                     rec.binding->accessor_name,
                     binding.accessor_name);
             }

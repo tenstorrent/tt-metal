@@ -16,6 +16,7 @@
 #include "tt-metalium/kernel_types.hpp"  // KernelHandle
 #include "tt-metalium/program.hpp"       // KernelGroup
 #include "tt-metalium/mesh_workload.hpp"
+#include "hostdev/global_semaphore_constants.h"
 #include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
 #include "program_device_map.hpp"          // ProgramTransferInfo
 #include "impl/buffers/semaphore.hpp"
@@ -127,6 +128,10 @@ struct ProgramConfig {
     // PrefetcherPipe dense index byte offset from kernel_config_base, or
     // REMOTE_DFB_OFFSET_NONE when no PrefetcherPipe attachments are present.
     uint32_t prefetcher_pipe_offset = REMOTE_DFB_OFFSET_NONE;
+    // GlobalSemaphore address table byte offset from kernel_config_base, or
+    // REMOTE_DFB_OFFSET_NONE when no GlobalSemaphore bindings are present.
+    // Table: word[0]=num_slots, then one L1 address per slot.
+    uint32_t global_sem_offset = REMOTE_DFB_OFFSET_NONE;
     uint32_t kernel_text_offset;  // offset of first kernel bin
     uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
 };
@@ -161,6 +166,8 @@ struct ProgramOffsetsState {
     uint32_t cross_node_dfb_offset = REMOTE_DFB_OFFSET_NONE;
     // PrefetcherPipe offset from config base, or REMOTE_DFB_OFFSET_NONE if none.
     uint32_t prefetcher_pipe_offset = REMOTE_DFB_OFFSET_NONE;
+    // GlobalSemaphore table offset from config base, or REMOTE_DFB_OFFSET_NONE if none.
+    uint32_t global_sem_offset = REMOTE_DFB_OFFSET_NONE;
     // Kernel binary offsets and sizes.
     uint32_t kernel_text_offset = 0;
     uint32_t kernel_text_size = 0;
@@ -526,6 +533,28 @@ public:
         const PrefetcherPipeParameterBinding::SlotCores& slot_cores,
         const experimental::PrefetcherPipeImpl& prefetcher_pipe);
 
+    // Metal 2.0: a GlobalSemaphoreParameter's placement in this program. Each parameter owns one
+    // slot of the per-launch GlobalSemaphore address table; every kernel that binds it reads that slot.
+    struct GlobalSemaphoreParameterBinding {
+        // Mesh the program was built for; a bound GlobalSemaphore must live on it.
+        distributed::MeshDevice* device = nullptr;
+        uint8_t slot = 0;
+        // Every node of every kernel that binds the parameter; a bound GlobalSemaphore must cover it.
+        CoreRangeSet cores;
+        bool bound = false;
+    };
+    // Registers `name` and assigns it the next slot (returned).
+    uint8_t register_global_semaphore_parameter(const std::string& name, GlobalSemaphoreParameterBinding&& binding);
+    const GlobalSemaphoreParameterBinding* get_global_semaphore_parameter(const std::string& name) const;
+    std::vector<std::string> get_registered_global_semaphore_parameter_names() const;
+    uint8_t num_global_semaphore_slots() const { return static_cast<uint8_t>(global_semaphore_parameters_.size()); }
+    // Writes `address` into the parameter's table slot. Rebinding only changes table data.
+    void bind_global_semaphore_parameter(const std::string& name, uint32_t address);
+    // The table image every launch writes: word[0] = num_slots, then one address per slot.
+    const std::vector<uint32_t>& global_semaphore_table() const { return global_semaphore_table_; }
+    // Union of the cores of every kernel with a GlobalSemaphore binding.
+    const CoreRangeSet& global_semaphore_cores() const { return global_semaphore_cores_; }
+
     // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
     // core require remapper being enabled
     void finalize_dataflow_buffer_configs();
@@ -740,6 +769,10 @@ private:
     std::vector<PrefetcherPipeSlot> prefetcher_pipe_slots_;
     // Metal 2.0: PrefetcherPipeParameter name -> placement + bound pipe.
     std::unordered_map<std::string, PrefetcherPipeParameterBinding> prefetcher_pipe_parameters_;
+    // Metal 2.0: GlobalSemaphoreParameter name -> slot + placement, and the table image.
+    std::unordered_map<std::string, GlobalSemaphoreParameterBinding> global_semaphore_parameters_;
+    std::vector<uint32_t> global_semaphore_table_;
+    CoreRangeSet global_semaphore_cores_;
     tt::tt_metal::experimental::dfb::detail::TileCounterAllocator tile_counter_allocator_;
     tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;
     tt::tt_metal::experimental::dfb::detail::TxnIdAllocator txn_id_allocator_;

@@ -1923,6 +1923,53 @@ std::vector<std::string> detail::ProgramImpl::get_registered_prefetcher_pipe_par
     return names;
 }
 
+uint8_t detail::ProgramImpl::register_global_semaphore_parameter(
+    const std::string& name, GlobalSemaphoreParameterBinding&& binding) {
+    TT_FATAL(this->compiled_.empty(), "Cannot add a GlobalSemaphore slot to an already compiled program {}", this->id);
+    TT_FATAL(
+        global_semaphore_parameters_.size() < std::numeric_limits<uint8_t>::max(),
+        "Program {} declares more than {} GlobalSemaphoreParameters",
+        this->id,
+        std::numeric_limits<uint8_t>::max() - 1);
+    const auto slot = static_cast<uint8_t>(global_semaphore_parameters_.size());
+    binding.slot = slot;
+    binding.bound = false;
+    global_semaphore_cores_ = global_semaphore_cores_.merge(binding.cores);
+    auto [it, inserted] = global_semaphore_parameters_.try_emplace(name, std::move(binding));
+    TT_FATAL(inserted, "GlobalSemaphoreParameter '{}' is already registered in program {}", name, this->id);
+
+    global_semaphore_table_.assign(global_sem_region_words(global_semaphore_parameters_.size()), 0u);
+    global_semaphore_table_[0] = static_cast<uint32_t>(global_semaphore_parameters_.size());
+    return slot;
+}
+
+const detail::ProgramImpl::GlobalSemaphoreParameterBinding* detail::ProgramImpl::get_global_semaphore_parameter(
+    const std::string& name) const {
+    auto it = global_semaphore_parameters_.find(name);
+    return it == global_semaphore_parameters_.end() ? nullptr : &it->second;
+}
+
+std::vector<std::string> detail::ProgramImpl::get_registered_global_semaphore_parameter_names() const {
+    std::vector<std::string> names;
+    names.reserve(global_semaphore_parameters_.size());
+    for (const auto& [name, binding] : global_semaphore_parameters_) {
+        names.push_back(name);
+    }
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
+void detail::ProgramImpl::bind_global_semaphore_parameter(const std::string& name, uint32_t address) {
+    auto it = global_semaphore_parameters_.find(name);
+    TT_FATAL(
+        it != global_semaphore_parameters_.end(),
+        "Program {} declares no GlobalSemaphoreParameter '{}'",
+        this->id,
+        name);
+    global_semaphore_table_[GLOBAL_SEM_REGION_HEADER_WORDS + it->second.slot] = address;
+    it->second.bound = true;
+}
+
 void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const PrefetcherPipeParameterBind> binds) {
     // Pass 1: validate everything. Nothing below this loop may throw on a well-formed batch.
     struct Checked {
@@ -3603,6 +3650,7 @@ void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const Pr
     program_config.dfb_size = state.dfb_size;
     program_config.cross_node_dfb_offset = state.cross_node_dfb_offset;
     program_config.prefetcher_pipe_offset = state.prefetcher_pipe_offset;
+    program_config.global_sem_offset = state.global_sem_offset;
     program_config.kernel_text_offset = state.kernel_text_offset;
     program_config.kernel_text_size = state.kernel_text_size;
     program_config_sizes_[index] = state.offset;
@@ -3730,6 +3778,14 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         state.prefetcher_pipe_offset = (state.offset > prev_offset_before_prefetcher_pipe)
                                            ? (prev_offset_before_prefetcher_pipe - state.config_base_offset)
                                            : REMOTE_DFB_OFFSET_NONE;
+
+        TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
+
+        uint32_t prev_offset_before_global_sem = state.offset;
+        state.offset = program_dispatch::finalize_global_semaphores(metal_ctx, index, programs, state.offset);
+        state.global_sem_offset = (state.offset > prev_offset_before_global_sem)
+                                      ? (prev_offset_before_global_sem - state.config_base_offset)
+                                      : REMOTE_DFB_OFFSET_NONE;
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
