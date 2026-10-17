@@ -34,8 +34,12 @@ constexpr std::int32_t TYPECAST_INT8_MINUS_128_IMM12 = -128 & 0xfff;
 // +infinity as an SFPLOADI FLOATB (upper 16 bits) immediate; any |x| above it is a NaN.
 constexpr std::uint32_t TYPECAST_FP32_INF_IMM16 = 0x7F80;
 
-// The fp32 quiet-NaN bit (bit 22) as an SFPLOADI FLOATB immediate.
-constexpr std::uint32_t TYPECAST_FP32_QUIET_NAN_IMM16 = 0x0040;
+// The fp32 quiet-NaN mantissa (bit 22 alone) as SFPSETMAN's 12-bit immediate, which the
+// instruction places at mantissa bits 22..11.
+constexpr std::uint32_t TYPECAST_FP32_QUIET_NAN_MAN_IMM12 = 0x800;
+
+// SFPSETMAN mod1 selector that takes the new mantissa from the immediate.
+constexpr std::uint32_t SFPSETMAN_MOD1_ARG_IMM = 1;
 
 // Disarms the SFPLOADMACRO "Misc" / Load-Macro-Control config that the typecast init functions program
 // unconditionally (the init dispatch passes only APPROX, so it cannot see is_fp32_dest_acc_en and always arms
@@ -312,13 +316,12 @@ inline void calculate_typecast_fp32_to_fp16b() {
     // 0x80000000, a signed zero) and the mask can clear every mantissa bit a low-payload NaN
     // had (0x7F800001 -> 0x7F800000, infinity). Infinity itself passes the rounding unchanged
     // (its lsb and low half are 0). So NaN lanes, found as |x| > +inf the way
-    // ckernel_sfpu_comp.h does, get the quiet bit set and skip the rounding; the mask then
-    // leaves a NaN with the input sign behind.
+    // ckernel_sfpu_comp.h does, are replaced by the canonical quiet NaN with the input sign
+    // (sign | 0x7FC00000) before the rounding: its low half is zero, so the add cannot carry
+    // out of it and the mask leaves it as it is. The payload is not kept.
     constexpr std::uint32_t ABS_V = p_sfpu::LREG2;
     constexpr std::uint32_t INF = p_sfpu::LREG3;
-    constexpr std::uint32_t QUIET_NAN_BIT = p_sfpu::LREG4;
     TTI_SFPLOADI(INF, sfpi::SFPLOADI_MOD0_FLOATB, TYPECAST_FP32_INF_IMM16);
-    TTI_SFPLOADI(QUIET_NAN_BIT, sfpi::SFPLOADI_MOD0_FLOATB, TYPECAST_FP32_QUIET_NAN_IMM16);
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
@@ -326,16 +329,15 @@ inline void calculate_typecast_fp32_to_fp16b() {
         TTI_SFPSETSGN(0, p_sfpu::LREG1, ABS_V, 1);  // lreg[2] = |x|
         // LaneEnabled = |x| > +inf (NaN)
         TTI_SFPIADD(0, INF, ABS_V, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
-        TTI_SFPOR(0, QUIET_NAN_BIT, p_sfpu::LREG1, 0);  // lreg[1] |= 0x00400000
-        // LaneEnabled = not NaN
-        TTI_SFPCOMPC(0, 0, 0, 0);
+        // lreg[1] = (lreg[1] & 0x80000000) | 0x7FC00000
+        TTI_SFPSETMAN(TYPECAST_FP32_QUIET_NAN_MAN_IMM12, p_sfpu::LREG1, p_sfpu::LREG1, SFPSETMAN_MOD1_ARG_IMM);
+        // LaneEnabled = true
+        TTI_SFPENCC(0, 0, 0, 0);
         TTI_SFPSHFT((-16) & 0xFFF, 0, p_sfpu::LREG0, 1);                            // lreg[0] >>= 16
         TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);                            // lreg[0] &= 1
         TTI_SFPIADD(0, p_sfpu::LREG13, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);  // lreg[1] += 0x7FFF
         TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);   // lreg[1] += lreg[0]
-        // LaneEnabled = true
-        TTI_SFPENCC(0, 0, 0, 0);
-        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG1, 0);  // lreg[1] &= 0xFFFF0000
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG1, 0);                            // lreg[1] &= 0xFFFF0000
         TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_2, 0);
     }
 }
