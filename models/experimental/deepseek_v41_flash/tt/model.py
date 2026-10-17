@@ -947,6 +947,23 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._session_pos[sid] = 0
         self._write_page_tables()
 
+    def truncate_session(self, sid: int, pos: int) -> None:
+        """Rewind session ``sid`` to position ``pos`` (at most its current one), keeping the compressed entries
+        of the positions before ``pos`` and returning the blocks past them to the pools.
+
+        The ring is left stale: it holds the window before the old position. Only a prefill that rebuilds the
+        window (:meth:`seed_prefill` with ``tails=False``, then :meth:`commit_prefill_state` from ``pos``) may
+        follow, not a decode step."""
+        paged = self._require_paged()
+        if sid not in self._slot_of:
+            raise KeyError(f"no such session {sid}")
+        if not 0 <= pos <= self._session_pos[sid]:
+            raise ValueError(f"cannot truncate session {sid} at {self._session_pos[sid]} to {pos}")
+        self._wait_replays_dispatched()
+        paged.truncate_session(sid, pos)
+        self._session_pos[sid] = pos
+        self._write_page_tables()
+
     # -- replay: every posted step is bound to the session resident when it was posted -- #
     def replay_traced(self, pos: int) -> None:
         """V4's :meth:`~DeepSeekV4Model.replay_traced` for the resident session, which the step keeps:
@@ -1293,10 +1310,16 @@ class DeepSeekV41Model(DeepSeekV4Model):
         session_id: int,
         progress: Optional[Callable[[str], None]] = None,
         bias_slots: Optional[dict] = None,
+        start: int = 0,
     ) -> int:
         """Write a prefill's per-layer ``states`` into the decode caches of ``session_id``; returns ``T``.
 
         ``bias_slots`` is accepted so V4's callers work and must be ``None``: V4.1 has no CSA position bias.
+
+        ``start > 0`` commits a prefill continued from the session's current position ``start`` (seeded by
+        :meth:`seed_prefill`): the rings are rewritten whole, the paged pools only from the block holding entry
+        ``start // rate`` on, and the session is not rewound. A bounded replay may end at ``start`` itself, and
+        then rewrites only the rings.
 
         For a prompt of ``T`` tokens (a multiple of ``sliding_window``, so ring slot ``j`` holds token
         ``T - W + j``, and of every compress ratio, so no compressor window is half full):
@@ -1328,6 +1351,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 f"prefilled length {total} must be a positive multiple of {ALIGNMENT} and of the "
                 f"{self.sliding_window}-token sliding window"
             )
+        if start and (start != self._session_pos[session_id] or start > total):
+            raise ValueError(
+                f"a prefill continued from {start} up to {total} does not continue session {session_id} "
+                f"at position {self._session_pos[session_id]}"
+            )
         self.ensure_session_capacity(total - 1, session_id)
         ring_row = self._slot_of[session_id] * self.sliding_window
         for sm in self.submeshes_io:
@@ -1352,7 +1380,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 entries = self._on_stage(source.compressed_kv, device)
                 keys = self._on_stage(source.idx_keys, device)
                 ratio = int(self.config.compress_ratios[src])
-                self._commit_paged_entries(scache, self._paged_ratios[ratio].layer_type, session_id, entries, keys)
+                self._commit_paged_entries(
+                    scache, self._paged_ratios[ratio].layer_type, session_id, entries, keys, start // ratio
+                )
                 for copy, original in ((entries, source.compressed_kv), (keys, source.idx_keys)):
                     if copy is not original:
                         ttnn.deallocate(copy)
@@ -1363,12 +1393,18 @@ class DeepSeekV41Model(DeepSeekV4Model):
         return total
 
     def _commit_paged_entries(
-        self, scache, group: str, session_id: int, entries: ttnn.Tensor, keys: ttnn.Tensor
+        self,
+        scache,
+        group: str,
+        session_id: int,
+        entries: ttnn.Tensor,
+        keys: ttnn.Tensor,
+        first_entry: int = 0,
     ) -> None:
         """Compressed entries (ROW_MAJOR ``[1, 1, n, Dh]``) into ``scache.comp_kv`` and their index keys
         (ROW_MAJOR ``[1, 1, n, index_head_dim]``) into ``scache.idx_key_cache``, entry ``w`` at row
         ``w % 64`` of the physical block session ``session_id``'s row of ``group`` maps logical block
-        ``w // 64`` to.
+        ``w // 64`` to. Blocks before the one holding ``first_entry`` are left as they are.
 
         ``comp_kv`` is ROW_MAJOR, which ``fill_cache`` does not take, so each run of consecutive physical
         blocks is one ``slice_write``; the tiled keys go one block per ``fill_cache``.
@@ -1378,36 +1414,155 @@ class DeepSeekV41Model(DeepSeekV4Model):
             raise ValueError(f"{n} index keys for {entries.shape[2]} compressed entries")
         block = CSA_INDEX_BLOCK_SIZE
         blocks = -(-n // block)
+        lo = first_entry // block
+        if lo >= blocks:
+            return
         page_row = self._require_paged().page_row(session_id, group)[0].tolist()
-        if ZERO_BLOCK in page_row[:blocks]:
+        if ZERO_BLOCK in page_row[lo:blocks]:
             raise RuntimeError(f"{group}: {n} entries reach an unmapped block; capacity was not ensured")
         device = scache.idx_key_cache.device()
         dh, key_dim = entries.shape[3], keys.shape[3]
+        if lo:
+            entries = ttnn.slice(entries, [0, 0, lo * block, 0], [1, 1, n, dh])
+            keys = ttnn.slice(keys, [0, 0, lo * block, 0], [1, 1, n, key_dim])
 
-        stacked = self._stack_rows([entries], blocks * block, dh, device)
-        kv_blocks = ttnn.reshape(stacked, [blocks, 1, block, dh])
-        start = 0
+        stacked = self._stack_rows([entries], (blocks - lo) * block, dh, device)
+        kv_blocks = ttnn.reshape(stacked, [blocks - lo, 1, block, dh])
+        start = lo
         while start < blocks:
             end = start + 1
             while end < blocks and page_row[end] == page_row[end - 1] + 1:
                 end += 1
             first = page_row[start]
-            run = ttnn.slice(kv_blocks, [start, 0, 0, 0], [end, 1, block, dh])
+            run = ttnn.slice(kv_blocks, [start - lo, 0, 0, 0], [end - lo, 1, block, dh])
             ttnn.experimental.slice_write(
                 run, scache.comp_kv, [first, 0, 0, 0], [first + end - start, 1, block, dh], [1, 1, 1, 1]
             )
-            ttnn.deallocate(run)
+            if run.buffer_address() != kv_blocks.buffer_address():  # a slice of every block is kv_blocks itself
+                ttnn.deallocate(run)
             start = end
         ttnn.deallocate(stacked)
 
-        keys_rm = self._stack_rows([keys], blocks * block, key_dim, device)
+        keys_rm = self._stack_rows([keys], (blocks - lo) * block, key_dim, device)
         keys_tiled = ttnn.to_layout(keys_rm, ttnn.TILE_LAYOUT)
         ttnn.deallocate(keys_rm)
-        for logical in range(blocks):
-            rows = ttnn.slice(keys_tiled, [0, 0, logical * block, 0], [1, 1, (logical + 1) * block, key_dim])
+        for logical in range(lo, blocks):
+            rows = ttnn.slice(
+                keys_tiled, [0, 0, (logical - lo) * block, 0], [1, 1, (logical - lo + 1) * block, key_dim]
+            )
             ttnn.fill_cache(scache.idx_key_cache, rows, page_row[logical])
-            ttnn.deallocate(rows)
+            if rows.buffer_address() != keys_tiled.buffer_address():  # a slice of the one block is keys_tiled
+                ttnn.deallocate(rows)
         ttnn.deallocate(keys_tiled)
+        if lo:
+            ttnn.deallocate(entries)
+            ttnn.deallocate(keys)
+
+    def _gather_paged_entries(self, scache, group: str, session_id: int, n: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """The inverse of :meth:`_commit_paged_entries`: session ``session_id``'s first ``n`` compressed entries
+        and index keys out of ``scache.comp_kv`` / ``scache.idx_key_cache``, as new bf16 ROW_MAJOR
+        ``[1, 1, n, Dh]`` / ``[1, 1, n, index_head_dim]`` tensors (one slice per run of consecutive blocks)."""
+        block = CSA_INDEX_BLOCK_SIZE
+        blocks = -(-n // block)
+        page_row = self._require_paged().page_row(session_id, group)[0].tolist()
+        if ZERO_BLOCK in page_row[:blocks]:
+            raise RuntimeError(f"{group}: session {session_id}'s first {n} entries reach an unmapped block")
+        dh, key_dim = scache.comp_kv.shape[3], scache.idx_key_cache.shape[3]
+        kv_runs, key_runs = [], []
+        start = 0
+        while start < blocks:
+            end = start + 1
+            while end < blocks and page_row[end] == page_row[end - 1] + 1:
+                end += 1
+            first, count = page_row[start], end - start
+            kv = ttnn.slice(scache.comp_kv, [first, 0, 0, 0], [first + count, 1, block, dh])
+            kv_runs.append(ttnn.reshape(kv, [1, 1, count * block, dh]))
+            keys = ttnn.slice(scache.idx_key_cache, [first, 0, 0, 0], [first + count, 1, block, key_dim])
+            keys_rm = ttnn.to_layout(keys, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(keys)
+            key_runs.append(ttnn.reshape(keys_rm, [1, 1, count * block, key_dim]))
+            start = end
+        out = []
+        for runs, width in ((kv_runs, dh), (key_runs, key_dim)):
+            whole = runs[0] if len(runs) == 1 else ttnn.concat(runs, dim=2)
+            out.append(ttnn.slice(whole, [0, 0, 0, 0], [1, 1, n, width]))
+            # A slice of all of ``whole`` (n a multiple of the block) is ``whole`` itself.
+            kept = out[-1].buffer_address()
+            for run in {r.buffer_address(): r for r in (*runs, whole)}.values():
+                if run.buffer_address() != kept:
+                    ttnn.deallocate(run)
+        return out[0], out[1]
+
+    def seed_prefill(self, traced, session_id: int, tails: bool = True) -> None:
+        """Load session ``session_id``'s decode state at its position ``P`` into the buffers of ``traced`` (a
+        :class:`~.prefill.model.DeepSeekV41TracedPrefill` built by :meth:`build_prefill`), so its ``run`` can
+        continue the session from ``P``: pass ``start=P, seed=lambda t: model.seed_prefill(t, sid)``.
+
+        ``P`` must be a positive multiple of ``sliding_window``: ring slot ``j`` then holds token ``P - W + j``,
+        which is the prefill ``tail`` as it stands after ``P`` tokens. A kv source's first ``P // rate``
+        entries and index keys are gathered out of the paged pools of its stage into its ``entries`` /
+        ``idx_keys``, and into each prefill stage's ``mirrors`` of them: from that stage's own pools when its
+        decode stage holds them, else copied over through the host. Reads only; the caches stay as they are.
+
+        ``tails=False`` skips the rings, for a bounded replay (``run(..., bounded_replay=True)`` from ``P - W``),
+        which rebuilds the window itself and so also follows a :meth:`truncate_session`.
+        """
+        if session_id not in self._slot_of:
+            raise KeyError(f"no such session {session_id}")
+        pos, w = self._session_pos[session_id], self.sliding_window
+        if pos <= 0 or pos % w:
+            raise ValueError(f"session {session_id} is at {pos}: a prefill continues from multiples of {w}")
+        self._wait_replays_dispatched()
+        ring_row = self._slot_of[session_id] * w
+
+        def write_rows(dst: ttnn.Tensor, rows: ttnn.Tensor) -> None:
+            end = [1, 1, rows.shape[2], dst.shape[3]]
+            ttnn.experimental.slice_write(rows, dst, [0, 0, 0, 0], end, [1, 1, 1, 1])
+            ttnn.deallocate(rows)
+
+        def pools_of(sm: dict, src: int):
+            return next(
+                (
+                    sm["scaches"][li]
+                    for li in sm["layers"]
+                    if self._kv_source_of.get(li) == src and sm["scaches"][li].comp_kv is not None
+                ),
+                None,
+            )
+
+        def entries_of(sm: dict, src: int):
+            ratio = int(self.config.compress_ratios[src])
+            group = self._paged_ratios[ratio].layer_type
+            return self._gather_paged_entries(pools_of(sm, src), group, session_id, pos // ratio)
+
+        sources = {}  # kv source -> its (entries, keys) on its own stage
+        for sm in self.submeshes_io:
+            for li in sm["layers"]:
+                if tails:
+                    kv = sm["scaches"][li].kv
+                    ring = ttnn.slice(kv, [0, 0, ring_row, 0], [1, 1, ring_row + w, kv.shape[3]])
+                    tail = ttnn.to_layout(ring, ttnn.ROW_MAJOR_LAYOUT)
+                    if ring.buffer_address() != kv.buffer_address():  # a slice of the whole ring is kv itself
+                        ttnn.deallocate(ring)
+                    write_rows(traced.buffers[li].tail, tail)
+                if li in self.config.kv_source_layer_ids:
+                    entries, keys = entries_of(sm, li)
+                    sources[li] = (entries, keys)
+                    bufs = traced.buffers[li]
+                    for dst, rows in ((bufs.entries, entries), (bufs.idx_keys, keys)):
+                        ttnn.experimental.slice_write(
+                            rows, dst, [0, 0, 0, 0], [1, 1, rows.shape[2], dst.shape[3]], [1, 1, 1, 1]
+                        )
+        for stage in traced.stages:
+            ids = list(stage.device.get_device_ids())
+            sm = next(sm for sm in self.submeshes_io if list(sm["device"].get_device_ids()) == ids)
+            for src, mirror in stage.io.mirrors.items():
+                local = entries_of(sm, src) if pools_of(sm, src) is not None else None
+                for dst, rows, remote in zip(mirror, local or (None, None), sources[src]):
+                    write_rows(dst, rows if rows is not None else self._on_stage(remote, stage.device))
+        for entries, keys in sources.values():
+            ttnn.deallocate(entries)
+            ttnn.deallocate(keys)
 
     @staticmethod
     def _on_stage(tensor: ttnn.Tensor, device: ttnn.MeshDevice) -> ttnn.Tensor:
