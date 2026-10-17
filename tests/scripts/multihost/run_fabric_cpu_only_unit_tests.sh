@@ -747,11 +747,13 @@ for mock in "${SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" "${SC20_REVAB_SU
   # 4x4 40-stage ring: 4x4-split layout + MGD pinning exact (revC/revAB) + pipeline builder.
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc20_4x4_pipeline_40stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_4X4_PIPELINE}"
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc20_8x4_pipeline_20stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_8X4_PIPELINE}"
-  # Full SC20 torus: five 32x4 groups wired as a ring (20 hosts).
-  # TODO(https://github.com/tenstorrent/tt-metal/issues/49275): TestPipelineBuilderCheck omitted: the 5-group 32x4 ring fails resolve_graph_layout
-  # ("no valid submesh assignment found") on the subtorus mocks — a distinct pipeline-builder bug worth
-  # investigating. Layout + corner-pin checks still run and pass.
-  run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc20_32x4_5group_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestGalaxyLayoutCheck:ControlPlaneFixture.TestGalaxyCornerPins
+  # Full SC20 torus: five 32x4 groups (20 hosts), inter-mesh seams wired ALL_TO_ALL.
+  # TestPipelineBuilderCheck re-enabled (#49275 fixed): the 5-group 32x4 ring previously failed
+  # resolve_graph_layout ("no valid submesh assignment found") because a ring-rotation placement could
+  # leave two of a mesh's four host-rank galaxies with no inter-mesh link (degree-2 twins -> no
+  # Hamiltonian cycle). All-to-all seams give every mesh links on all four galaxies, so the native-ring
+  # pipeline embeds regardless of solver/rotation. Verified passing on revC + revAB under kissat + cadical.
+  run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc20_32x4_5group_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestGalaxyLayoutCheck:ControlPlaneFixture.TestGalaxyCornerPins:${GTEST_PIPELINE_BUILDER_CHECK}"
 done
 
 # Inter-mesh channel-rule checks on the SC20 80-mesh ring (round-robin allocator). Relaxed: every requested
