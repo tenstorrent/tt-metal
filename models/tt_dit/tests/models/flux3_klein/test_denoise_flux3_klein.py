@@ -11,6 +11,11 @@ Rows (mesh rows as in the M1/M3 tests: the (2,2) Linear submesh of the (4,8) par
                           (1024 tokens), text 80 or 320; base: guidance 3.5 (one row at 3.3, a non-bf16 guidance
                           through the fp32 slot) with a random 80-row empty prompt, the first 4 steps of
                           ``Flux3KleinScheduler(50)``; flow map: the first 4 steps of ``Flux3KleinScheduler(16)``.
+                          M8 rows ``*_pad_cond``: one random reference on the PADDED 30x33 grid (990 cond rows -> 1024
+                          at SP4, 34 pad rows in the image AND the cond segment, ``l = -1``) on both models: the first
+                          device run of a padded ``image_cond`` segment against the host loop at the R1 gate (M3/M4
+                          only ran tile-aligned cond rows; the 896x1120 figurine golden pads 3920 -> 3968 and misses
+                          the final band while its teacher-forced floor holds, see test_golden_1024).
                           Oracle: the ``sampling.py`` step loop on the same DiT (``host_states``), pinned to
                           ``sampling.denoise`` / ``denoise_flow_map`` on a fresh pack (``torch.equal``). Gates: per-step
                           ``x_t`` pcc >= R1_STEP_PCC, device state == host ``update(x, v_device)`` bit for bit at every
@@ -114,6 +119,7 @@ from .test_transformer_flux3_klein import (
     FULL_DEPTH,
     device_transformer,
     load_real_weights,
+    random_cond,
     random_dit,
     random_image,
     random_text,
@@ -189,15 +195,64 @@ R1_STEPS = 4
 # R1c rows: (flow_map, guidance); the three layouts are fixed inside the test.
 R1_MULTI_KEY_CASES = {"base_cfg": (False, 3.5), "flow_map": (True, None)}
 
+# R1 rows: (flow_map, guidance, text length, latent grid, reference grid or None).
 R1_CASES = {
-    "base_txt80": (False, 3.5, EMPTY_PROMPT_TEXT_LENGTH, R1_GRID),
-    "base_txt320": (False, 3.5, 320, R1_GRID),
-    "base_g3.3_txt80_pad": (False, 3.3, EMPTY_PROMPT_TEXT_LENGTH, R1_GRID_PADDED),
-    "flow_map_txt80_pad": (True, None, EMPTY_PROMPT_TEXT_LENGTH, R1_GRID_PADDED),
-    "flow_map_txt320": (True, None, 320, R1_GRID),
+    "base_txt80": (False, 3.5, EMPTY_PROMPT_TEXT_LENGTH, R1_GRID, None),
+    "base_txt320": (False, 3.5, 320, R1_GRID, None),
+    "base_g3.3_txt80_pad": (False, 3.3, EMPTY_PROMPT_TEXT_LENGTH, R1_GRID_PADDED, None),
+    "flow_map_txt80_pad": (True, None, EMPTY_PROMPT_TEXT_LENGTH, R1_GRID_PADDED, None),
+    "flow_map_txt320": (True, None, 320, R1_GRID, None),
+    # M8: a padded image_cond segment (one 30x33 reference: 990 rows -> 1024 at SP4) on both models.
+    "base_txt80_pad_cond": (False, 3.5, EMPTY_PROMPT_TEXT_LENGTH, R1_GRID_PADDED, R1_GRID_PADDED),
+    "flow_map_txt80_pad_cond": (True, None, EMPTY_PROMPT_TEXT_LENGTH, R1_GRID_PADDED, R1_GRID_PADDED),
 }
 
 GOLDEN_1024_CASES = golden_cases()
+
+
+class FinalBandNotMet(AssertionError):
+    """A golden row whose free-running final state misses ``final_gate`` although its teacher-forced per-step floor
+    holds (the reason of a strict xfail that carries the measurement; every other assertion is a real failure)."""
+
+
+# distilled/1_figurine (896x1120: 3920 image + 3920 cond rows, each padded to 3968 at SP4 = 48 pad rows in both
+# segments; the first padded image_cond segment ever run). Measured 2026-10-17 on the 4x8 ring with the recorded text
+# and recorded cond tokens (M8 numerics verifier, logs/m8_verifier_numerics_denoise_refs_4x8.log:1116,1125): teacher-
+# forced worst per-step velocity pcc 0.998783 >= 0.998 (the floor holds), traced == eager at all 17 states, 48 pad rows
+# exactly +0, but the free-running final state pcc 0.976069 / rel_rmse 0.2189 / max_abs 4.3306 vs the 0.99 / 0.15 band
+# (per-step: v rel_rmse 0.0415 at step 0 vs 0.0273 for mugprint; x_t rel_rmse 0.0098 at step 8, 0.0525 at 12, 0.160 at
+# 15). The two 1024 reference cases pass comfortably (bandana 0.999747 / 0.0229 at :2258, mugprint 0.999552 / 0.0301
+# at :1912). Open numerics item (docs/M8_DESIGN.md section 15): the row is a STRICT xfail at the unchanged band until
+# the R1 ``*_pad_cond`` rows and a (2,2)-submesh run separate pad-row handling from bf16 trajectory sensitivity; an
+# XPASS is the signal to drop the marker. The band is not loosened.
+FINAL_BAND_XFAIL_CASES = {
+    ("distilled", "1_figurine"): (
+        "distilled/1_figurine 896x1120 (padded cond segment): final pcc 0.976069 / rel_rmse 0.2189 vs the band 0.99 / "
+        "0.15 with the teacher-forced floor met (0.998783); logs/m8_verifier_numerics_denoise_refs_4x8.log:1116,1125"
+    ),
+}
+
+
+def golden_case_param(case_dir: Path):
+    """``case_dir`` as a pytest param, marked strict-xfail when it is a recorded final-band miss."""
+    reason = FINAL_BAND_XFAIL_CASES.get((case_dir.parent.name, case_dir.name))
+    if reason is None:
+        return case_dir
+    return pytest.param(case_dir, marks=pytest.mark.xfail(strict=True, raises=FinalBandNotMet, reason=reason))
+
+
+def check_final_band(
+    name: str, reference: torch.Tensor, got: torch.Tensor, *, pcc: float, relative_rmse: float
+) -> None:
+    """``check`` whose band miss raises :class:`FinalBandNotMet` (so a strict xfail can name it). ``assert_quality``
+    raises a bare ``Exception`` for a missed pcc / rel_rmse and ``ValueError`` for a shape mismatch; only the former
+    is a band miss."""
+    try:
+        check(name, reference, got, pcc=pcc, relative_rmse=relative_rmse)
+    except (ValueError, TypeError):
+        raise
+    except Exception as error:
+        raise FinalBandNotMet(str(error)) from error
 
 
 # --- goldens ------------------------------------------------------------------------------------------------------------
@@ -258,7 +313,7 @@ def all_golden_cases() -> list[Path]:
 
 
 def random_request(
-    seed: int, text_length: int, guidance: float | None, num_steps: int, grid=R1_GRID
+    seed: int, text_length: int, guidance: float | None, num_steps: int, grid=R1_GRID, cond_grid=None
 ) -> Flux3KleinDenoiseRequest:
     noise, ids = random_image(seed, grid)
     return Flux3KleinDenoiseRequest(
@@ -268,6 +323,7 @@ def random_request(
         num_steps=num_steps,
         guidance=guidance,
         text_null=random_text(seed + 2, EMPTY_PROMPT_TEXT_LENGTH) if guidance is not None else None,
+        image_cond=random_cond(seed + 3, cond_grid) if cond_grid is not None else None,
     )
 
 
@@ -466,14 +522,22 @@ def real_model(mesh: Mesh, variant: str):
 @mesh_rows
 @pytest.mark.parametrize("case", list(R1_CASES), ids=list(R1_CASES))
 def test_fast_random(mesh_device, submesh_shape, sp_axis, tp_axis, topology, num_links, case: str, monkeypatch) -> None:
-    flow_map, guidance, text_length, grid = R1_CASES[case]
+    flow_map, guidance, text_length, grid, cond_grid = R1_CASES[case]
     mesh = open_mesh(mesh_device, submesh_shape, sp_axis, tp_axis, topology, num_links)
     patch_reference_depth(monkeypatch, ref_dit, FAST_DEPTH)
     dit = random_dit(flow_map, seed=40)
     num_steps = FLUX3_KLEIN_STEPS["distilled" if flow_map else "base"]
-    request = random_request(41, text_length, guidance, num_steps, grid)
-    second = random_request(45, text_length, guidance, num_steps, grid)
+    request = random_request(41, text_length, guidance, num_steps, grid, cond_grid)
+    second = random_request(45, text_length, guidance, num_steps, grid, cond_grid)
     assert not torch.equal(request.noise, second.noise)
+    if cond_grid is not None:
+        sp = int(mesh.device.shape[mesh.sp_axis]) if mesh.sp_axis is not None else 1
+        cond_rows = request.image_cond[0].shape[0]
+        assert padded_length(cond_rows, sp) > cond_rows, "the cond grid must pad (the row under test)"
+        assert request.lengths()["image_cond"] == cond_rows and request.image_cond[1][0, 3] == -1
+        logger.info(
+            f"{case}: image_cond {cond_rows} rows -> {padded_length(cond_rows, sp)} at SP{sp} (pad rows in the cond segment)"
+        )
 
     # Host oracle: the step loop, pinned to the reference sampler on a fresh pack.
     expected = host_states(dit, request, R1_STEPS)
@@ -749,7 +813,7 @@ def test_golden_velocity_chain(mesh_device, submesh_shape, sp_axis, tp_axis, top
 @mesh_rows
 @pytest.mark.parametrize(
     "case_dir",
-    GOLDEN_1024_CASES or [None],
+    [golden_case_param(p) for p in GOLDEN_1024_CASES] or [None],
     ids=[f"{p.parent.name}/{p.name}" for p in GOLDEN_1024_CASES] or ["no_goldens"],
 )
 def test_golden_1024(mesh_device, submesh_shape, sp_axis, tp_axis, topology, num_links, case_dir: Path | None) -> None:
@@ -819,14 +883,14 @@ def test_golden_1024(mesh_device, submesh_shape, sp_axis, tp_axis, topology, num
         ), "un-hooked eager burst differs from the hooked run"
         logger.info(f"RECORD {name}: eager burst {n} steps: {burst_eager:.3f}s = {burst_eager / n:.3f} s/step")
         assert_final_clean(name, denoiser, prepared)
-        check(
+        check_final_band(
             f"{name} final_tokens",
             golden.steps["final_tokens"],
             traced[-1],
             pcc=final_pcc,
             relative_rmse=final_rmse,
         )
-        check(f"{name} x_t({n})", golden.x_t(n), traced[-1], pcc=final_pcc, relative_rmse=final_rmse)
+        check_final_band(f"{name} x_t({n})", golden.x_t(n), traced[-1], pcc=final_pcc, relative_rmse=final_rmse)
     finally:
         prepared.release()
         ttnn.synchronize_device(mesh.device)

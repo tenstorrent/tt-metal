@@ -299,3 +299,138 @@ def pcc(reference: torch.Tensor, test: torch.Tensor) -> float:
 
 def sha256_of(tensor: torch.Tensor) -> str:
     return hashlib.sha256(tensor.detach().cpu().contiguous().view(torch.uint8).numpy().tobytes()).hexdigest()
+
+
+# --- references (M8) -------------------------------------------------------------------------------------------------------
+
+EXAMPLE_INPUTS_DIR = EXAMPLES_DIR / "inputs"
+"""The vendored ``examples/inputs/`` (the JSON box records; the PNGs 1.png 896x1120, 2.png / 3.png 1024x1024 are not
+vendored: they come from ``$FLUX3_KLEIN_REFERENCE/examples/inputs`` (the BFL clone) or a golden set's copies)."""
+REFERENCE_CLONE_ENV = "FLUX3_KLEIN_REFERENCE"
+
+
+def example_input_candidates(name: str) -> list[Path]:
+    """Where an upstream ``examples/inputs/<name>`` reference image may live, in order of preference."""
+    candidates = [EXAMPLE_INPUTS_DIR / name]
+    clone = os.environ.get(REFERENCE_CLONE_ENV)
+    if clone:
+        candidates.append(Path(clone) / "examples" / "inputs" / name)
+    root = goldens_root()
+    if root is not None:
+        candidates.append(root / "inputs" / name)
+        candidates += sorted(root.rglob(name))
+    return candidates
+
+
+def example_input_path(name: str) -> Path | None:
+    """The first existing candidate of :func:`example_input_candidates`, else ``None`` (callers skip)."""
+    return next((c for c in example_input_candidates(name) if c.is_file()), None)
+
+
+def require_example_input(name: str) -> Path:
+    found = example_input_path(name)
+    if found is None:
+        pytest.skip(f"reference image {name} not found ({REFERENCE_CLONE_ENV} unset and no golden copy)")
+    return found
+
+
+def golden_reference_images(case: GoldenCase) -> list:
+    """The golden's reference images as PIL images, opened from the golden case's own copies (the generator copies
+    every reference next to ``record.json`` under its basename), the golden root's ``inputs/``, the BFL clone
+    (``$FLUX3_KLEIN_REFERENCE``) or the vendored examples."""
+    from PIL import Image
+
+    out = []
+    for entry in case.replay.get("references") or []:
+        name = Path(entry).name
+        candidates = [case.path / name, case.path / "inputs" / name]
+        for parent in case.path.parents:
+            candidates.append(parent / "inputs" / name)
+        candidates += example_input_candidates(name)
+        found = next((c for c in candidates if c.is_file()), None)
+        if found is None:
+            raise FileNotFoundError(f"{case.name}: reference {entry} not found (tried {[str(c) for c in candidates]})")
+        out.append(Image.open(found))
+    return out
+
+
+def reference_golden_cases(root: Path | None = None) -> list[Path]:
+    """The complete golden cases WITH references (``replay.references`` non-empty), sorted."""
+    out = []
+    for case_dir in golden_cases(root):
+        record = case_dir / "record.json"
+        if not record.is_file():
+            continue
+        replay = json.loads(record.read_text()).get("replay", {})
+        if replay.get("references") and replay.get("model") in ("base", "distilled"):
+            out.append(case_dir)
+    return out
+
+
+_REFERENCE_AE: dict = {}
+
+
+def reference_autoencoder(snapshot: Path):
+    """The vendored ``AutoEncoder`` (fp32, ``ae.safetensors``) of ``snapshot``, loaded once per process."""
+    import time
+
+    from loguru import logger
+
+    from ....reference.flux3_klein import autoencoder as ref_ae
+    from ....reference.flux3_klein import checkpoint as ref_ckpt
+
+    if snapshot not in _REFERENCE_AE:
+        t0 = time.time()
+        _REFERENCE_AE[snapshot] = ref_ckpt.load_checkpoint(
+            ref_ae.AutoEncoder(), str(snapshot / "ae.safetensors"), "cpu", torch.float32
+        )
+        logger.info(f"reference AutoEncoder (fp32, ae.safetensors) loaded in {time.time() - t0:.1f}s")
+    return _REFERENCE_AE[snapshot]
+
+
+def cached_reference_encode(snapshot: Path, image, label: str, threads: int = 16) -> tuple[torch.Tensor, torch.Tensor]:
+    """``AutoEncoder.encode(to_tensor(image))`` (fp32, CPU): ``(tokens fp32 [h*w, 128], ids int64 [h*w, 4])`` through
+    ``$FLUX3_KLEIN_VAE_ORACLE_CACHE`` (key: ae blob, image bytes, size, torch version). ~60-90 s per 1 MP image on a
+    login box, ~8 s on a node CPU."""
+    import time
+
+    import numpy as np
+    from loguru import logger
+    from safetensors.torch import load_file, save_file
+
+    from ....pipelines.flux3_klein.references import to_tensor
+
+    blob = Path(os.path.realpath(snapshot / "ae.safetensors")).name[:16]
+    pixels = np.asarray(image.convert("RGB"))
+    fields = {
+        "op": "encode",
+        "ae_blob": blob,
+        "image_sha256": hashlib.sha256(pixels.tobytes()).hexdigest(),
+        "w": int(image.width),
+        "h": int(image.height),
+        "torch": torch.__version__,
+    }
+    digest = hashlib.sha256("|".join(f"{k}={fields[k]}" for k in fields).encode()).hexdigest()
+    root = vae_oracle_cache()
+    if root is not None and (root / f"{digest}.safetensors").is_file():
+        logger.info(f"ORACLE HIT {digest[:16]} ({label})")
+        data = load_file(str(root / f"{digest}.safetensors"))
+        return data["tokens"], data["ids"]
+    logger.info(f"ORACLE MISS {digest[:16]} ({label}): CPU reference encode of {image.width}x{image.height}")
+    torch.set_num_threads(threads)
+    t0 = time.time()
+    with torch.inference_mode():
+        tokens, ids = reference_autoencoder(snapshot).encode(to_tensor(image))
+    tokens, ids = tokens.float().contiguous(), ids.contiguous()
+    logger.info(f"ORACLE {label}: CPU reference encode {time.time() - t0:.1f} s -> {tuple(tokens.shape)}")
+    if root is not None:
+        root.mkdir(parents=True, exist_ok=True)
+        save_file({"tokens": tokens, "ids": ids}, str(root / f"{digest}.safetensors"))
+        (root / f"{digest}.json").write_text(json.dumps({**fields, "label": label}, indent=1))
+    return tokens, ids
+
+
+def rel_rmse_of(reference: torch.Tensor, got: torch.Tensor) -> float:
+    """``rmse(reference - got) / std(reference)`` in fp64 (the ``assert_quality`` definition)."""
+    a, b = reference.detach().double(), got.detach().double()
+    return float(((a - b) ** 2).mean().sqrt() / a.std())

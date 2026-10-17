@@ -48,6 +48,9 @@ from loguru import logger
 
 import ttnn
 
+from ...layers.conv2d import Conv2d
+from ...layers.normalization import plain_group_norm_grid
+from ...models.vae.vae import VaeAttention
 from ...models.vae.vae_flux2 import Flux2VaeDecoder
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
@@ -58,6 +61,109 @@ VAE_SUBFOLDER = "vae"
 VAE_WEIGHTS_FILE = "diffusion_pytorch_model.safetensors"
 # autoencoder.py: 8x spatial compression per side before the 2x2 patchify.
 FLUX3_KLEIN_VAE_SCALE = 8
+
+# DRAM slice counts of ``layers/conv2d.py::Conv2d`` for the Klein VAE's convolutions, per level of a full-resolution
+# ``H x W`` image: level 0 = the image resolution (128 channels), level 1 = /2 (256), level 2 = /4 (512), level 3 = /8
+# (512 and the 32 / 64 latent channels). Keyed ``(in_channels, out_channels) -> num_slices``; the counts are the
+# shipped ``Conv2d.slice_default`` entries of the 1024x1024 levels (``(1024, 1024, 128, 128): 16`` ...) carried to the
+# channel pairs the ENCODER adds (``3 -> 128``, ``128 -> 256``, ``256 -> 512``, ``512 -> 64``: 16 / 8 / 8 / 4 by the
+# same bytes-per-slice rule) and to the non-1024 sizes the pipeline decodes / encodes on the replicated TP4 configs,
+# whose ``(h, w)`` keys the shipped table does not list. ``register_klein_conv_slices`` installs them under the
+# process's mesh shape (a (4, 8) mesh has no table of its own and falls back to ``slice_default``, which keeps every
+# shipped entry: the registration is a superset, never a change, of the counts the 1024 decode already ran with).
+#
+# ttnn's limit (``op_slicing.cpp`` ``compute_max_num_slices`` + the TT_FATAL at the slice-config check): a DRAM
+# WIDTH-sliced conv with a TILE output takes at most ``ceil(output_width / 32)`` slices. ``klein_conv_slices`` caps every
+# level count at that bound for the level's OUTPUT width (= the input width for the stride-1 convs here); the stride-2
+# ``VaeDownsample2d`` halves the width and caps its own instance entry (``encoder_flux2.py``), because the ``Conv2d``
+# key ``(h, w, cin, cout)`` carries no stride and the shipped stride-1 count of the same key exceeds its bound
+# (found 2026-10-17 by the M8 verifiers: ``TT_FATAL ... Number of slices (8) exceeds the maximum allowed (4)`` at the
+# level-2 downsample of 1024x1024, logs/m8_verifier_numerics_device_encode_4x8.log:44, and 41 violations over the
+# admitted sizes, logs/m8_verifier_device_slice_table_host.log; the shipped 1024 decode entries all sit inside the
+# bound, so the cap changes no count the M6 decode ran with).
+KLEIN_CONV_SLICES_PER_LEVEL = (
+    {(3, 128): 16, (128, 128): 16, (128, 3): 8, (256, 128): 16},
+    {(128, 256): 8, (256, 256): 4, (512, 256): 16},
+    {(256, 512): 8, (512, 512): 8},
+    {(512, 512): 4, (512, 64): 4, (32, 512): 1},
+)
+_registered_conv_slices: set[tuple] = set()
+
+
+def conv_slice_cap(output_width: int) -> int:
+    """ttnn's maximum DRAM width-slice count for a conv whose TILE output is ``output_width`` wide: ``ceil(w / 32)``
+    (``op_slicing.cpp::compute_max_num_slices``, ``slice_rounding_value`` = TILE_HEIGHT for a TILE DRAM_WIDTH slice)."""
+    return max(1, -(-int(output_width) // 32))
+
+
+def downsample_extent(extent: int) -> int:
+    """The spatial extent after the reference ``Downsample`` (``autoencoder.py:34-40``: ``conv(F.pad(x, (0, 1, 0, 1)))``,
+    3x3 stride 2 pad 0): ``floor((H + 1 - 3) / 2) + 1 = floor(H / 2)`` (torch and the device agree: 35 -> 17, 17 -> 8;
+    the M8 verifier's V6[35x35] measurement). A 16-multiple side never produces an odd extent before a downsample."""
+    return (int(extent) + 1 - 3) // 2 + 1
+
+
+def klein_conv_slices(height: int, width: int) -> dict[tuple[int, int, int, int], int]:
+    """``(h, w, in_channels, out_channels) -> num_slices`` for the four VAE levels of a ``height x width`` image, every
+    stride-1 entry capped at ``conv_slice_cap(w_level)`` (the level's output width); the strided downsample's extents
+    are ``downsample_extent`` (floor)."""
+    out, h, w = {}, height, width
+    for level in KLEIN_CONV_SLICES_PER_LEVEL:
+        cap = conv_slice_cap(w)
+        for (cin, cout), slices in level.items():
+            out[(h, w, cin, cout)] = min(slices, cap)
+        h, w = downsample_extent(h), downsample_extent(w)
+    return out
+
+
+def klein_downsample_slices(height: int, width: int) -> dict[tuple[int, int, int, int], int]:
+    """The slice counts the encoder's three stride-2 downsamples (levels 0-2, ``channels -> channels``) take for a
+    ``height x width`` image: the level's stride-1 count for the same ``(h, w, c, c)`` key capped at
+    ``conv_slice_cap(downsample_extent(w))``, the downsample's OUTPUT width (the rule ``VaeDownsample2d`` applies per
+    instance; here for the host test row)."""
+    stride1 = klein_conv_slices(height, width)
+    out, h, w = {}, height, width
+    for channels in (128, 256, 512):
+        key = (h, w, channels, channels)
+        out[key] = min(stride1[key], conv_slice_cap(downsample_extent(w)))
+        h, w = downsample_extent(h), downsample_extent(w)
+    return out
+
+
+def register_klein_conv_slices(mesh_shape: tuple[int, int], height: int, width: int) -> None:
+    """Make ``Conv2d.slice_params[mesh_shape]`` know the Klein VAE shapes of a ``height x width`` image (idempotent;
+    existing entries are never overwritten, so the shipped counts win where both exist)."""
+    key = (tuple(mesh_shape), int(height), int(width))
+    if key in _registered_conv_slices:
+        return
+    table = Conv2d.slice_params.setdefault(tuple(mesh_shape), dict(Conv2d.slice_default))
+    for shape, slices in klein_conv_slices(height, width).items():
+        table.setdefault(shape, slices)
+    _registered_conv_slices.add(key)
+
+
+def _walk_modules(module):
+    yield module
+    for _, child in module.named_children():
+        yield from _walk_modules(child)
+
+
+def set_sdpa_chunk_size(module, q_chunk_size: int, k_chunk_size: int) -> int:
+    """Rebuild the SDPA program config of every ``VaeAttention`` under ``module`` with the given chunk sizes (the
+    class-level ``sdpa_chunk_size_map`` is NOT touched: this is per instance). Chunking changes the reduction
+    blocking only (fp32 accumulation, ``exp_approx_mode=False`` kept). Returns the number of attentions changed."""
+    changed = 0
+    for child in _walk_modules(module):
+        if isinstance(child, VaeAttention):
+            old = child._sdpa_program_config
+            child._sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=old.compute_with_storage_grid_size,
+                q_chunk_size=q_chunk_size,
+                k_chunk_size=k_chunk_size,
+                exp_approx_mode=old.exp_approx_mode,
+            )
+            changed += 1
+    return changed
 
 
 def vae_blob(snapshot: str | os.PathLike) -> str:
@@ -235,6 +341,7 @@ class Flux3KleinVaeDecode:
         h, w = latent_shape(height, width)
         if h * w != num_image_rows:
             raise ValueError(f"{height}x{width} has {h * w} latent rows, got num_image_rows {num_image_rows}")
+        register_klein_conv_slices(tuple(self._device.shape), height, width)
         partitioned = self.partitioned(height, width)
         decoder = self._decoder if partitioned else self._fallback_decoder()
         rows = self.gather_real_rows(state, num_image_rows=num_image_rows)
@@ -273,6 +380,15 @@ class Flux3KleinVaeDecode:
     def trace_captured(self) -> bool:
         return _trace_captured(self._decoder)
 
+    def trace_captured_for(self, height: int, width: int) -> bool:
+        """True when the decoder that serves ``height x width`` holds a trace captured AT that size (the next traced
+        decode of the size is a replay: nothing long-lived is allocated by it)."""
+        partitioned = self.partitioned(height, width)
+        decoder = self._decoder if partitioned else self._fallback
+        if decoder is None:
+            return False
+        return _trace_captured(decoder) and self._traced_size.get(id(decoder)) == (height, width)
+
 
 def _trace_captured(decoder: Flux2VaeDecoder) -> bool:
     """Whether ``decoder.forward`` holds a captured trace (the next ``traced=True`` call is a replay)."""
@@ -284,11 +400,19 @@ def _trace_captured(decoder: Flux2VaeDecoder) -> bool:
 __all__ = [
     "FLUX3_KLEIN_PATCH",
     "FLUX3_KLEIN_VAE_SCALE",
+    "KLEIN_CONV_SLICES_PER_LEVEL",
     "Flux3KleinVaeDecode",
     "build_flux3_klein_vae_decoder",
+    "conv_slice_cap",
+    "downsample_extent",
+    "klein_conv_slices",
+    "klein_downsample_slices",
     "load_flux3_klein_vae_weights",
     "load_vae_torch_state",
+    "plain_group_norm_grid",
+    "register_klein_conv_slices",
     "release_module_trace",
+    "set_sdpa_chunk_size",
     "vae_blob",
     "vae_model_name",
 ]
