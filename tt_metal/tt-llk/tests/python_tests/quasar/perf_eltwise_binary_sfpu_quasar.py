@@ -45,6 +45,7 @@ _FLOAT_PERF_SWEEP = {
 @pytest.mark.quasar
 @parametrize(
     **_func.INT_SWEEP,
+    sign_magnitude=[False, True],
     approx_mode=[ApproximationMode.No],
     **_PERF_AXES,
 )
@@ -53,6 +54,7 @@ def test_perf_eltwise_binary_sfpu_int_quasar(
     formats,
     dest_acc,
     mathop,
+    sign_magnitude,
     approx_mode,
     run_types,
     loop_factor,
@@ -63,6 +65,7 @@ def test_perf_eltwise_binary_sfpu_int_quasar(
         dest_acc,
         mathop,
         _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
+        sign_magnitude=sign_magnitude,
         approx_mode=approx_mode,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )
