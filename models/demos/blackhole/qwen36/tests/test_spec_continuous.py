@@ -7,6 +7,7 @@ or finishing: each request must equal its output in a full simultaneous batch.
 """
 
 import math
+import os
 import statistics
 import time
 
@@ -49,10 +50,36 @@ def _setup(mesh_device):
         [NUM_BLOCKS, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim], ttnn.bfloat16, batch_size=B
     )
     eng = get_spec_engine(model, B, K)
-    warm = torch.stack([torch.arange(1 + u * NB, 1 + (u + 1) * NB, dtype=torch.int32) for u in range(B)])
-    eng.prepare(warm)
+    eng.prepare(_warm_table())
     eng.capture()
     return model, eng, tokenizer, prompts
+
+
+def _warm_table():
+    return torch.stack([torch.arange(1 + u * NB, 1 + (u + 1) * NB, dtype=torch.int32) for u in range(B)])
+
+
+# The join schedule of test_join_running_batch: step -> [(row, request id, prompt index)]; requests join a running
+# batch, and request 100 reuses row 0 (with prompt 3) once request 0 has finished.
+_JOIN_SCHEDULE = {
+    0: [(0, 0, 0), (5, 5, 5)],
+    3: [(2, 2, 2)],
+    7: [(1, 1, 1), (7, 7, 7)],
+    12: [(3, 3, 3), (4, 4, 4), (6, 6, 6)],
+    14: [(0, 100, 3)],
+}
+
+
+def _join_schedule(prompts):
+    return {step: [(row, rid, prompts[p]) for row, rid, p in adms] for step, adms in _JOIN_SCHEDULE.items()}
+
+
+def _step_classes(drv):
+    """(plain, remap-only, join) step times in ms from a BatchDriver (join = a fresh row seeded in the step)."""
+    plain = [ms for ms, rm, fr in drv.step_ms if not rm and not fr]
+    remap_only = [ms for ms, rm, fr in drv.step_ms if rm and not fr]
+    joins = [ms for ms, rm, fr in drv.step_ms if fr]
+    return plain, remap_only, joins
 
 
 class BatchDriver:
@@ -269,28 +296,90 @@ def test_padding_rows_match_full_batch(mesh_device):
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_join_running_batch(mesh_device):
-    """Requests joining a running batch (including into a just-finished row) get exactly their full-batch tokens."""
+@pytest.mark.parametrize("fast_join", ["0", "1"])
+def test_join_running_batch(mesh_device, fast_join, monkeypatch):
+    """Requests joining a running batch (including into a just-finished row) get exactly their full-batch tokens.
+    QWEN36_SPEC_FAST_JOIN=1 (the fresh rows seeded in place and verified inside the running rows' replay) must also
+    make a join step cheap: median join step < 1.8x the median plain step (the eager seed's is ~5x)."""
+    monkeypatch.setenv("QWEN36_SPEC_FAST_JOIN", fast_join)
     model, eng, tokenizer, prompts = _setup(mesh_device)
+    assert eng.fast_join is (fast_join == "1")
     n_prog = mesh_device.num_program_cache_entries()
     mesh_device.set_program_cache_misses_allowed(False)
     try:
         full = BatchDriver(eng, seed=1).run({0: [(u, u, prompts[u]) for u in range(B)]})
-        stag = BatchDriver(eng, seed=4).run(
-            {
-                0: [(0, 0, prompts[0]), (5, 5, prompts[5])],
-                3: [(2, 2, prompts[2])],
-                7: [(1, 1, prompts[1]), (7, 7, prompts[7])],
-                12: [(3, 3, prompts[3]), (4, 4, prompts[4]), (6, 6, prompts[6])],
-                14: [(0, 100, prompts[3])],  # reuses row 0 once request 0 has finished
-            }
-        )
+        drv = BatchDriver(eng, seed=4)
+        stag = drv.run(_join_schedule(prompts))
         for u in range(B):
             _assert_same(f"request {u} joined late", stag[u], full[u])
         _assert_same("request 100 (prompt 3 in row 0)", stag[100], full[3])
         assert mesh_device.num_program_cache_entries() == n_prog, "a program compiled after capture"
     finally:
         mesh_device.set_program_cache_misses_allowed(True)
+    plain, _, joins = _step_classes(drv)
+    logger.info(
+        f"[join fast_join={fast_join}] plain={len(plain)} (median {statistics.median(plain):.1f} ms) "
+        f"join={len(joins)} (median {statistics.median(joins):.1f} ms, max {max(joins):.1f} ms)"
+    )
+    if fast_join == "1":
+        assert statistics.median(joins) < 1.8 * statistics.median(plain), "a fast-join step is not cheap"
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_fast_join_vs_eager_seed(mesh_device, monkeypatch):
+    """QWEN36_SPEC_FAST_JOIN 0 vs 1 on the SAME model and prompts (note 23, D2): the join schedule under both flags,
+    one engine after the other. Every request's tokens identical between the flags (the seeded first token comes
+    from the T-row verify kernels instead of the eager T = 1 forward: a bf16 near-tie flip would show here;
+    QWEN36_FAST_JOIN_STRICT_TOKENS=0 turns that into a log line), mean committed tokens per row-step within 0.1,
+    and the fast path's join / seed steps under half the eager seed's and under 1.8x a plain step."""
+    monkeypatch.setenv("QWEN36_SPEC_FAST_JOIN", "0")
+    model, eng, tokenizer, prompts = _setup(mesh_device)
+    runs = {}
+    for flag in ("0", "1"):
+        if flag == "1":
+            eng.shutdown()
+            monkeypatch.setenv("QWEN36_SPEC_FAST_JOIN", "1")
+            eng = get_spec_engine(model, B, K)
+            eng.prepare(_warm_table())
+            eng.capture()
+        assert eng.fast_join is (flag == "1")
+        n_prog = mesh_device.num_program_cache_entries()
+        mesh_device.set_program_cache_misses_allowed(False)
+        try:
+            full = BatchDriver(eng, seed=1).run({0: [(u, u, prompts[u]) for u in range(B)]})
+            drv = BatchDriver(eng, seed=4)
+            stag = drv.run(_join_schedule(prompts))
+            assert mesh_device.num_program_cache_entries() == n_prog, f"flag {flag}: a program compiled after capture"
+        finally:
+            mesh_device.set_program_cache_misses_allowed(True)
+        for u in range(B):
+            _assert_same(f"[fast_join={flag}] request {u} joined late", stag[u], full[u])
+        plain, _, joins = _step_classes(drv)
+        runs[flag] = dict(
+            full=full, stag=stag, rate=_accept_rate(drv), plain=statistics.median(plain), join=statistics.median(joins)
+        )
+        logger.info(
+            f"[fast_join={flag}] committed/row-step={runs[flag]['rate']:.3f} plain median {runs[flag]['plain']:.1f} ms "
+            f"join median {runs[flag]['join']:.1f} ms (n={len(joins)}, max {max(joins):.1f} ms)"
+        )
+    strict = os.environ.get("QWEN36_FAST_JOIN_STRICT_TOKENS", "1") == "1"
+    for rid, ref in runs["0"]["stag"].items():
+        got = runs["1"]["stag"][rid]
+        if got != ref:
+            i = next((j for j in range(min(len(got), len(ref))) if got[j] != ref[j]), min(len(got), len(ref)))
+            msg = (
+                f"request {rid}: fast join diverges from the eager seed at token {i}\n fast  {got}\n eager {ref}\n"
+                f" fast: {tokenizer.decode(got)!r}\n eager: {tokenizer.decode(ref)!r}"
+            )
+            if strict:
+                raise AssertionError(msg)
+            logger.warning(msg)
+    assert abs(runs["0"]["rate"] - runs["1"]["rate"]) < 0.1, "acceptance changed with the fast join"
+    assert runs["1"]["join"] < 0.5 * runs["0"]["join"], "the fast join is not faster than the eager seed"
+    assert runs["1"]["join"] < 1.8 * runs["1"]["plain"], "a fast-join step is not cheap"
 
 
 @run_for_blackhole()
@@ -327,12 +416,16 @@ def test_row_moves_keep_state(mesh_device):
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_churn_row_moves_match_full_batch(mesh_device):
+@pytest.mark.parametrize("fast_join", ["0", "1"])
+def test_churn_row_moves_match_full_batch(mesh_device, fast_join, monkeypatch):
     """Production-shaped churn (note 23, D3): short outputs, a finish about every second step, each hole condensed
     by the runner's swap remap and refilled by a new request. Every request's tokens equal its full-batch tokens,
     no program compiles after capture, and a remap costs nothing on the device: a step with a remap and no fresh
-    row takes < 1.3x the median plain step (QWEN36_SPEC_SLOTMAP=1; the device remap of =0 adds ~200 ms)."""
+    row takes < 1.3x the median plain step (QWEN36_SPEC_SLOTMAP=1; the device remap of =0 adds ~200 ms). With
+    QWEN36_SPEC_FAST_JOIN=1 a join step (a fresh row seeded) takes < 1.8x the median plain step as well."""
+    monkeypatch.setenv("QWEN36_SPEC_FAST_JOIN", fast_join)
     model, eng, tokenizer, prompts = _setup(mesh_device)
+    assert eng.fast_join is (fast_join == "1")
     n_prog = mesh_device.num_program_cache_entries()
     mesh_device.set_program_cache_misses_allowed(False)
     try:
@@ -360,16 +453,18 @@ def test_churn_row_moves_match_full_batch(mesh_device):
             assert len(drv.outs[r]) == lens[r], f"request {r}: {len(drv.outs[r])} tokens, wanted {lens[r]}"
             _assert_same(f"request {r} (prompt {p}) under churn", drv.outs[r], full[p][: lens[r]])
         assert mesh_device.num_program_cache_entries() == n_prog, "a program compiled after capture"
-        plain = [ms for ms, rm, fr in drv.step_ms if not rm and not fr]
-        remap_only = [ms for ms, rm, fr in drv.step_ms if rm and not fr]
-        joins = [ms for ms, rm, fr in drv.step_ms if fr]
+        plain, remap_only, joins = _step_classes(drv)
         logger.info(
-            f"[churn] steps={drv.steps} plain={len(plain)} (median {statistics.median(plain):.1f} ms) "
+            f"[churn fast_join={fast_join}] steps={drv.steps} plain={len(plain)} (median {statistics.median(plain):.1f} ms) "
             f"remap-only={len(remap_only)} (median {statistics.median(remap_only) if remap_only else 0:.1f} ms) "
-            f"join={len(joins)} (median {statistics.median(joins) if joins else 0:.1f} ms)"
+            f"join={len(joins)} (median {statistics.median(joins) if joins else 0:.1f} ms, "
+            f"max {max(joins) if joins else 0:.1f} ms)"
         )
         assert len(remap_only) >= 3, "the churn schedule produced no remap-only steps"
         assert statistics.median(remap_only) < 1.3 * statistics.median(plain), "a remap step is not free"
+        if fast_join == "1":
+            assert joins, "the churn schedule produced no join steps"
+            assert statistics.median(joins) < 1.8 * statistics.median(plain), "a fast-join step is not cheap"
     finally:
         mesh_device.set_program_cache_misses_allowed(True)
 

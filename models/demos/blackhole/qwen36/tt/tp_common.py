@@ -61,6 +61,14 @@ def spec_hostfix_enabled():
     return bool(int(os.environ.get("QWEN36_SPEC_HOSTFIX", "1")))
 
 
+def spec_fast_join_enabled():
+    """QWEN36_SPEC_FAST_JOIN (default "0"; "1" opts in): a fresh row's first verify (the seed, or a join into a running
+    batch) runs INSIDE the normal verify replay as an ordinary 0-draft row, after its ring slot 0 / conv window are
+    seeded from the prefill state with a few exact data-movement ops per GDN layer (TPGatedDeltaNet.seed_spec_rows_select).
+    "0" keeps the eager T = 1 seed forward (model.seed_spec_step) plus the per-row ring rebuild, byte for byte."""
+    return os.environ.get("QWEN36_SPEC_FAST_JOIN", "0") == "1"
+
+
 def kv_cache_bf8_enabled():
     """bf8 paged KV cache (the qwen38_27b_qb2 KV dtype): QWEN36_KV_BF8 (default 1; 0 = bf16 cache) keeps the
     prefill Q in bf16, QWEN_SDPA_BF8=1 additionally casts the prefill Q to bf8. Halves KV memory and the SDPA reads

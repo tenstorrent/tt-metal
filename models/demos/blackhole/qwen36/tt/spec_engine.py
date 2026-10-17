@@ -22,7 +22,15 @@ condense. The engine keeps every request in the engine row its prefill chose and
 ``verify`` / ``propose`` (the demo API) and every ``_fresh`` / ``_active`` / ... set are in engine rows; the demo never
 remaps, so there the two numberings coincide. With the flag at 0 (not the default) a remap permutes the GDN state on the device.
 Every per-row device input the verify stages (tokens, positions, mi_prev -> state_blk_idx / conv_sel, or under
-QWEN36_VERIFY_SPEC_STEP=1 the gdn_spec_step ctrl page {parity, mi, ring block}) is built from ENGINE rows."""
+QWEN36_VERIFY_SPEC_STEP=1 the gdn_spec_step ctrl page {parity, mi, ring block}) is built from ENGINE rows.
+
+Fast join (QWEN36_SPEC_FAST_JOIN, default 0): with the flag at 1 a fresh row's first verify is NOT a separate eager
+T = 1 forward (_seed / _join: model.seed_spec_step over all 64 layers, ~3000 dispatches, plus the ring rebuild) but the
+normal verify replay itself: the row's ring slot 0 / E_prev are first seeded from its prefill state
+(TPGatedDeltaNet.seed_spec_rows_select, ~6 exact data-movement ops per GDN layer), then it runs as an ordinary 0-draft
+row (tokens [t_Tp, pad..], mi_prev 0) next to the running rows, in ONE replay (_seed_fresh_rows). Token 0 of a T-row
+verify is one plain decode step of the same kernels, so the state and logits are those of the eager seed; rec_state is
+no longer advanced by a seed, so a fresh row left out of a step keeps its prefill state (no re-prefill)."""
 
 import math
 import os
@@ -35,7 +43,7 @@ from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
-from models.demos.blackhole.qwen36.tt.tp_common import spec_hostfix_enabled
+from models.demos.blackhole.qwen36.tt.tp_common import spec_fast_join_enabled, spec_hostfix_enabled
 
 # Prompt length above which the reseed goes back to the per-slot loop (B == 1 only).
 EAGER_RESEED_PROMPT_LEN = 131072
@@ -558,6 +566,11 @@ class MTPSpecEngine:
         self.host_slotmap = os.environ.get("QWEN36_SPEC_SLOTMAP", "1") != "0"
         self._phys = list(range(self.B))  # runner slot -> engine row
         self._phys_perm = None  # (phys, inv) int64 index tensors while the map is not the identity
+        # Fast join (module docstring): 1 = a fresh row is seeded in place and verified inside the normal replay;
+        # 0 = the eager T = 1 seed forward (_seed / _join), as before.
+        self.fast_join = spec_fast_join_enabled()
+        self._kc = self._gdn[0].K if self._gdn else 4  # GDN conv kernel size (E_prev carry rows 1 .. kc-1)
+        self._fj_sel = None  # persistent one-hot [B, kc-1+T, kc-1+T + kc-1]: fresh_row_select, shared by every layer
 
     # --------------------------------------------------------------------- #
     # Host helpers
@@ -760,6 +773,17 @@ class MTPSpecEngine:
             # The seed's sync_conv_win from the packed conv format (the gdn_decode_step op is the plain decode, e.g.
             # QWEN36_VERIFY_SPEC_STEP=1): compile its unpack / copies before capture_decode forbids cache misses.
             dn.warmup_packed_sync()
+        if self.fast_join:
+            # QWEN36_SPEC_FAST_JOIN=1: the per-row ring writes at every offset, the whole-slot write, the window select
+            # and both taps routes, compiled now (the ring and window pair exist since prepare_verify_trace).
+            from models.demos.blackhole.qwen36.tt.gdn.tp import fresh_row_select
+
+            self._fj_sel = self._alloc_host_replicated(
+                fresh_row_select(range(B), B, T, self._kc), ttnn.bfloat16, ttnn.TILE_LAYOUT
+            )
+            for dn in self._gdn:
+                dn.warmup_fast_seed(self._fj_sel)
+            ttnn.synchronize_device(self.mesh)
         if B > 1:  # compile the join programs (per-user seed, feed merge)
             self._join_take = self._alloc_host_replicated(
                 torch.zeros(1, 1, B * T, B, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
@@ -826,7 +850,8 @@ class MTPSpecEngine:
         self.prepared = True
         logger.info(
             f"[spec_engine] decode prepared in {time.perf_counter() - t0:.1f}s "
-            f"(slot remaps: {'host slot map' if self.host_slotmap else 'device GDN remap, QWEN36_SPEC_SLOTMAP=0'})"
+            f"(slot remaps: {'host slot map' if self.host_slotmap else 'device GDN remap, QWEN36_SPEC_SLOTMAP=0'}; "
+            f"fresh rows: {'seeded in the verify replay (QWEN36_SPEC_FAST_JOIN=1)' if self.fast_join else 'eager T=1 seed forward'})"
         )
 
     def capture_decode(self):
@@ -883,10 +908,12 @@ class MTPSpecEngine:
             self._eager_sel,
             self._join_take,
             self._join_keep,
+            self._fj_sel,
         ]
         for t in bufs:
             if t is not None:
                 ttnn.deallocate(t)
+        self._fj_sel = None
         self._last_hidden, self._last_sel = [], {}
         self._mtp_pt, self._mtp_pt_rows, self._hp_buf, self._anchor_sel, self._eager_sel, self._vfeed = (
             None,
@@ -949,6 +976,7 @@ class MTPSpecEngine:
                     self._eager_sel,
                     self._join_take,
                     self._join_keep,
+                    self._fj_sel,
                 )
             ),
         }
@@ -1129,7 +1157,13 @@ class MTPSpecEngine:
         ), "verify window past the paged KV capacity"
 
         fresh_now = {u: Tp for u, Tp in self._fresh.items() if active[u]}
-        if fresh_now:
+        if fresh_now and self.fast_join:
+            # QWEN36_SPEC_FAST_JOIN=1: seed the fresh rows' ring slot 0 / E_prev in place, then verify them in THIS
+            # replay as 0-draft rows at mi = 0 next to the running rows (one forward for the whole step).
+            fresh = self._seed_fresh_rows(tokens, start_pos, pt, fresh_now, rows)
+            mi_prev = mi_prev.clone()
+            mi_prev[fresh] = 0
+        elif fresh_now:
             # the seed rewrites every row's durable GDN state: fresh rows left out must re-prefill before their own seed
             self._fresh_dirty |= set(self._fresh) - set(fresh_now)
             for u in sorted(fresh_now):
@@ -1158,6 +1192,33 @@ class MTPSpecEngine:
         self._vfeed = vfeed
         ids = torch.tensor(ids, dtype=torch.int32).reshape(B, T)
         return ids, (None if lt is None else lt.reshape(B, T, -1))
+
+    def _seed_fresh_rows(self, tokens, start_pos, pt, fresh_now, rows):
+        """QWEN36_SPEC_FAST_JOIN=1: make the fresh rows in ``fresh_now`` (engine row -> prompt length) ordinary verify
+        rows. Writes each one's MTP KV of slot Tp-1 (_warm_mtp_last, as the eager seed did), then seeds its GDN ring
+        slot 0 / E_prev row from the prefill state (rec_state, conv taps) in every GDN layer through ONE shared
+        one-hot selector (fresh_row_select, staged once per call). The whole-slot ring write is used when every active
+        row (``rows``) is fresh. Nothing advances rec_state or the taps, so a fresh row left out of this step keeps
+        its prefill state and needs no re-prefill. Returns the sorted fresh engine rows; the caller runs them in the
+        normal verify replay with mi_prev = 0 (their tokens are [t_Tp, pad..] and the runner reads column 0)."""
+        from models.demos.blackhole.qwen36.tt.gdn.tp import fresh_row_select
+
+        B, T = self.B, self.T
+        self._stage_mtp_tables(pt)
+        for u, Tp in sorted(fresh_now.items()):
+            assert int(start_pos[u]) == Tp, f"slot {u}: start_pos {int(start_pos[u])} != prompt length {Tp}"
+            self._warm_mtp_last(self._last_hidden[u], int(tokens[u, 0]), Tp - 1, self._mtp_pt_rows[u])
+        fresh = sorted(fresh_now)
+        for u in fresh:
+            del self._fresh[u]
+            self._prompts.pop(u, None)
+            self._fresh_dirty.discard(u)
+        if self._gdn:
+            self._stage(fresh_row_select(fresh, B, T, self._kc), self._fj_sel, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+            seed_rows = range(B) if set(fresh) == set(rows) else fresh
+            for dn in self._gdn:
+                dn.seed_spec_rows_select(seed_rows, self._fj_sel)
+        return fresh
 
     def _seed_rows(self, feed):
         """[1,1,B,dim/tp] seed feed -> [1,1,B*T,dim/tp] with user u's row at u*T (exact one-hot matmul)."""
