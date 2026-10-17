@@ -1,0 +1,57 @@
+{
+ "used": [
+  {
+   "id": "DS41-28",
+   "how": "added DEVICE_STEPS['enc_reuse'] with every step that passed for the block type plus attention",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-36",
+   "how": "ran the contract test with BRINGUP_TASK=C.enc_reuse.attention so it runs layers [2, 3] only",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "K-1",
+   "how": "_topk_rows converts the top-k to TILE only if it is not TILE and frees only its own copy (device top-k kept for readers)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-31",
+   "how": "kept the reused module's ttnn.bringup.sparse_sdpa(high_precision=True) with the sink; no fork change",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-18",
+   "how": "kept the -1 sentinel through int32 -> bitcast uint32 in the reused top-k row mapping",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the contract test_cache_starts checks served caches only, not a reader layer's attention output: the source top-k hand-off needs its own check (probe ds41_reuse_attn/probe_001)"
+ ],
+ "overseer": [],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.enc_reuse.attention",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-17T05:52:24",
+  "head": "2af246b6f3d",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.enc_reuse.attention.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py"
+  ]
+ }
+}

@@ -1367,3 +1367,28 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - Gate: component PASS; test_cache_starts (BRINGUP_TASK=C.enc_source_engram.attention, layers [14]) 4 passed,
   0 failures each.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attention.py && BRINGUP_TASK=C.enc_source_engram.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`
+
+## C.enc_reuse.attention implement (attempt 1)
+- No new module: layer 3's attention is `tt/sparse_attention.py:TtSparseAttention` (C.enc_source.attention) run on its
+  sources' state (layer 2: `cfg.kv_source_of` / `index_source_of`). The module already takes the KV source's served
+  compressed cache and a top-k tensor; only the harness boundary and the hybrid wiring were new.
+- hooks `_sparse_attention_host_fn` generalized: inputs (qr, kv[, compressed][, topk]) per the block graph (compressed
+  only on its own KV source, topk only on its own index source). Component tests: a reader loads the compressed cache
+  from `source_state[kv source]["compress_kv"][: (start + S) / r]` and the top-k from `source_state[index
+  source]["topk_idx"][start, start + S)` (F65; no swap_context hook needed, K-43). Dispatch: every compressed layer
+  except the decoder ones (candidates) and dec_reindex (own top-k over another layer's KV) goes to it.
+- Hybrid model: `_indexer_host_fn` keeps its device top-k ([1, 1, S/SP, 512] uint32, TP-replicated) in
+  `_HybridState.topk[layer] = (start, tensor)` when `ctx.extra["topk_store"]` is set (freed on the next chunk / state
+  free); `HybridDeviceModel.layer` gives a reader `compress_cache` = its KV source's served caches and `topk_device` =
+  the index source's device top-k of the same chunk start (else the reference state's rows). Probe
+  (ds41_reuse_attn/probe_001): layer 3 output with the device top-k == the host top-k path, bit for bit, chunks 0
+  and 2048.
+- `_topk_rows` converts to TILE only when the top-k is not TILE already and frees only its own copy (K-1).
+- `DEVICE_STEPS["enc_reuse"]` = attn_hc, attn_collapse, attn_norm, q_a, kv, attention (DS41-28: the earlier
+  C.enc_reuse.* steps passed on the swa modules with no entry).
+- Gate: component PASS, err_attention_L03 0.0331 <= 0.1817; vs CPU 0.0301 <= 0.0634; chunk0 0.0298 <= 0.0550;
+  layer24 0.0380 <= 0.0670; mixed 0.0426 <= 0.0662; small 0.0385 <= 0.2; big 0.0235 <= 0.2; determinism
+  bit-identical. Contract test_cache_starts (BRINGUP_TASK=C.enc_reuse.attention, layers [2, 3]): 4 passed, 0
+  failures. It checks the served caches only, not layer 3's attention output (hence the probe).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attention.py && BRINGUP_TASK=C.enc_reuse.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`;
+  probe `PYTHONPATH=$PWD scripts/tt-probe.sh ds41_reuse_attn < tests/ttnn/unit_tests/operations/ds41_reuse_attn/probes/probe_001.py`.
