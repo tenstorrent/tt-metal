@@ -37,6 +37,9 @@
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
+#ifdef SE_HG  // (half-width gate / up tiles: the face-wise GLU, se_glu_faces.hpp)
+#include "se_glu_faces.hpp"
+#endif
 #if SE_ACT == 1
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
 #elif SE_ACT == 2
@@ -50,6 +53,11 @@
 #endif
 #if defined(SE_ZONES) || defined(SE_WAITZ)
 #include "tools/profiler/kernel_profiler.hpp"
+#endif
+
+// (perf probe SE_NO_MATH: no matmul - every CB handshake, unpack-side pops and pack stay; garbage outputs)
+#ifdef SE_NO_MATH
+#define matmul_block(...) ((void)0)
 #endif
 
 constexpr uint32_t x_cb = tt::CBIndex::c_0;
@@ -76,7 +84,15 @@ constexpr uint32_t slot = get_compile_time_arg_val(7);
 constexpr uint32_t pcd = get_compile_time_arg_val(8);
 constexpr uint32_t rt_d = get_compile_time_arg_val(9);
 constexpr uint32_t np = get_compile_time_arg_val(10);
+#ifdef SE_HG_NU  // 16-column units: NU weight tiles a row, HPC h tiles a row (hg_lead: this core's first unit is odd)
+constexpr uint32_t gw = SE_HG_NU, hpc = SE_HPC;
+#else
 constexpr uint32_t gw = 2 * np;  // gate/up block width
+constexpr uint32_t hpc = np;     // h tiles a row
+#endif
+uint32_t hg_lead = 0;
+// SE_HG: the DST tile (of a row's gw) that holds local h tile j: its first unit's (lead: unit 0 is a right half)
+FORCE_INLINE uint32_t h_slot(uint32_t j) { return j == 0 ? 0 : 2 * j - hg_lead; }
 constexpr bool gu_pipe = get_compile_time_arg_val(11) != 0;
 constexpr uint32_t ring_ct = get_compile_time_arg_val(12);
 constexpr uint32_t nk_dd = kt_d / kblk_d;
@@ -160,10 +176,27 @@ FORCE_INLINE void pop_used() {
 }
 
 // Gate/up activation on DST tiles [0, N) (gate t, up t + 1 -> t), on the PACK thread's SFPU (after tile_regs_wait).
+// SE_HG: tiles t, t + 1 hold [gate | up] of the h tile's left / right 16 columns: both activations land in tile t.
 FORCE_INLINE void act_dst(uint32_t n) {
 #ifndef SE_NO_ACT
     PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-#if SE_ACT == 1 || SE_ACT == 2 || SE_ACT == 3
+#ifdef SE_HG
+    // (one call site: two inlined copies of the SFPU body in this loop make the SFPI compiler's rvtt_synth_renumber
+    // pass ICE; unit u of a row goes to its h tile's slot, half (u + lead) & 1)
+    for (uint32_t t = 0; t < n; ++t) {
+        const uint32_t u = t % gw, out = t - u + h_slot((u + hg_lead) / 2);
+        PACK((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_glu_faces,
+            (DST_ACCUM_MODE, SE_ACT, 8),
+            t,
+            t,
+            out,
+            VectorMode::C,
+            (u + hg_lead) & 1u)));
+    }
+#elif SE_ACT == 1 || SE_ACT == 2 || SE_ACT == 3
     for (uint32_t t = 0; t < n; t += 2) {  // one binary op: gate t, up t + 1 -> t
 #if SE_ACT == 1
         PACK((ckernel::llk_math_eltwise_binary_sfpu_swiglu<DST_ACCUM_MODE>(t, t + 1, t)));
@@ -321,16 +354,16 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
 #ifdef SE_ZONES
         DeviceZoneScopedN("SE_GU_ACT_PACK");
 #endif
-        cb_reserve_back(h_local_cb, mt * np);
+        cb_reserve_back(h_local_cb, mt * hpc);
         tile_regs_wait();
 #ifndef SE_NO_ACT
         act_dst(rows * gw);
 #endif
         pack_reconfig_data_format(out_cb, h_local_cb);
 #ifdef SE_GU_ONLY
-        for (uint32_t p = 0; p < np; ++p) {      // [p][m]: K-tile-major, one contiguous run on the down cores
+        for (uint32_t p = 0; p < hpc; ++p) {     // [p][m]: K-tile-major, one contiguous run on the down cores
             for (uint32_t m = 0; m < mt; ++m) {  // (rows past ROWS: whatever DST holds, never used)
-                pack_tile(m < rows ? m * gw + 2 * p : 2 * p, h_local_cb);
+                pack_tile(m < rows ? m * gw + h_slot(p) : h_slot(p), h_local_cb);
             }
         }
 #else
@@ -340,7 +373,7 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
 #endif
         pack_reconfig_data_format(h_local_cb, out_cb);
         tile_regs_release();
-        cb_push_back(h_local_cb, mt * np);
+        cb_push_back(h_local_cb, mt * hpc);
     }
 }
 
@@ -360,10 +393,10 @@ FORCE_INLINE void gate_up_rp(uint32_t e, bool last, uint32_t ph0, uint32_t rows)
     const bool wz = calls++ % 16 == SE_WAITZ;
     if (wz) {
         DeviceZoneScopedN("W_H");
-        cb_reserve_back(h_local_cb, mt * np);
+        cb_reserve_back(h_local_cb, mt * hpc);
     }
 #endif
-    cb_reserve_back(h_local_cb, mt * np);
+    cb_reserve_back(h_local_cb, mt * hpc);
     for (uint32_t ps = 0; ps < npass; ++ps) {
         const uint32_t r0 = ps * rp, rr = rows - r0 < rp ? rows - r0 : rp;
         const bool fin = ps + 1 == npass;
@@ -423,15 +456,15 @@ FORCE_INLINE void gate_up_rp(uint32_t e, bool last, uint32_t ph0, uint32_t rows)
         tile_regs_wait();
         act_dst(rr * gw);
         pack_reconfig_data_format(out_cb, h_local_cb);
-        for (uint32_t p = 0; p < np; ++p) {  // [p][m] as gate_up: this pass's rows r0.. of each K tile
+        for (uint32_t p = 0; p < hpc; ++p) {  // [p][m] as gate_up: this pass's rows r0.. of each K tile
             for (uint32_t m = 0; m < rr; ++m) {
-                pack_tile<true>(m * gw + 2 * p, h_local_cb, p * mt + r0 + m);
+                pack_tile<true>(m * gw + h_slot(p), h_local_cb, p * mt + r0 + m);
             }
         }
         pack_reconfig_data_format(h_local_cb, out_cb);
         tile_regs_release();
     }
-    cb_push_back(h_local_cb, mt * np);  // (rows past ROWS: never written, never used)
+    cb_push_back(h_local_cb, mt * hpc);  // (rows past ROWS: never written, never used)
 }
 #endif
 
@@ -493,6 +526,9 @@ FORCE_INLINE void down(uint32_t v) {
 void kernel_main() {
     constexpr uint32_t num_v = num_experts * sub;
     const uint32_t grp = get_arg_val<uint32_t>(0);  // M-group (RT 0)
+#ifdef SE_HG_NU
+    hg_lead = get_arg_val<uint32_t>(1);  // (RT 1: this core's first unit is odd)
+#endif
     x_row0 = grp * mt * kblk;
     compute_kernel_hw_startup<SrcOrder::Reverse>(x_cb, in1_cb, out_cb);
 #ifdef SE_PACK_SRND  // stochastic rounding in the packer (the default rounds bf16 -> bfp8 ties away from zero)
@@ -500,7 +536,9 @@ void kernel_main() {
 #endif
     matmul_block_init(x_cb, in1_cb, false, gw, mt, kblk);
 #ifndef SE_NO_ACT
-#if SE_ACT == 1
+#if defined(SE_HG)  // (every face-wise GLU uses SiTU's sigmoid: tanh_init, no vConstFloatPrgm for the sigmoid)
+    PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init)));
+#elif SE_ACT == 1
     PACK((ckernel::llk_math_eltwise_binary_sfpu_swiglu_init()));
 #elif SE_ACT == 2
     PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init)));

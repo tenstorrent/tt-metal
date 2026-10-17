@@ -36,6 +36,9 @@ struct SeCmbDone {
     bool go_seen = false;
 
     void wait_go() {
+#ifdef SE_CMB_NO_GO  // (flat_with_program: cumulative counts, nothing to wait for)
+        go_seen = true;
+#endif
         if (go_seen) {
             return;
         }

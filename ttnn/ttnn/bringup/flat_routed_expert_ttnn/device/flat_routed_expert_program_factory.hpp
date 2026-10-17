@@ -40,6 +40,9 @@ struct AddrPatch {
     uint32_t offset;  // byte offset added to the buffer address
 };
 
+// flat_with_program's L1 hand-off (MIMO_FL_Y_L1): the y writers' extra args after the 4 report args (se_yrm.hpp)
+constexpr uint32_t FLAT_Y_L1_ARGS = 8 + 5 * 32;
+
 struct FlatRoutedExpertSharedVariables {
     std::vector<AddrPatch> patches;
     std::vector<std::pair<tt::tt_metal::CBHandle, uint32_t>> arena_cbs;  // (CB, arena byte offset)

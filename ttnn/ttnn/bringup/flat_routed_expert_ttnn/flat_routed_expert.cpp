@@ -12,6 +12,7 @@
 #include <set>
 
 #include "device/flat_combine_overlap_device_operation.hpp"
+#include "device/flat_with_program_device_operation.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_placement.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -93,8 +94,11 @@ ttnn::Tensor flat_routed_expert(
     bool down_fp32,
     bool pack_stochastic_rounding,
     bool x_bf16,
-    bool h_bf16) {
+    bool h_bf16,
+    bool y_bf16,
+    uint32_t math_fidelity) {
     using namespace tt::tt_metal;
+    TT_FATAL(!(y_bf16 && y_row_major), "flat_routed_expert: y_bf16 is for tiled y (row-major y is bf16 already)");
     FlatRoutedExpertConfig cfg{
         .hidden = x.logical_shape()[-1] * x_pages_per_row,
         .intermediate = intermediate,
@@ -108,7 +112,9 @@ ttnn::Tensor flat_routed_expert(
         .down_fp32 = down_fp32,
         .pack_stochastic_rounding = pack_stochastic_rounding,
         .x_bf16 = x_bf16,
-        .h_bf16 = h_bf16};
+        .h_bf16 = h_bf16,
+        .y_bf16 = y_bf16,
+        .math_fidelity = math_fidelity};
     auto* device = x.device();
     const auto plan = flat_routed_expert_plan(device, cfg);
     TT_FATAL(
@@ -117,7 +123,7 @@ ttnn::Tensor flat_routed_expert(
     const ttnn::Tensor output = ttnn::empty(
         ttnn::Shape(
             {token_index ? token_index->logical_shape()[-1] : x.logical_shape()[-2] / x_pages_per_row, cfg.hidden}),
-        y_row_major ? DataType::BFLOAT16 : DataType::BFLOAT8_B,
+        y_row_major || y_bf16 ? DataType::BFLOAT16 : DataType::BFLOAT8_B,
         y_row_major ? Layout::ROW_MAJOR : Layout::TILE,
         device,
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
@@ -337,6 +343,132 @@ ttnn::Tensor flat_combine_overlap(
             .global_expert_idx_table = replicated_global_expert_idx_table,
             .output = out});
     arena.deallocate(true);
+    words.deallocate(true);
+    return result;
+}
+
+ttnn::Tensor flat_routed_expert_with_program(
+    const ttnn::Tensor& x,
+    const ttnn::Tensor& counts,
+    const ttnn::Tensor& regions,
+    const ttnn::Tensor& global_expert_ids,
+    const ttnn::Tensor& gate_up_weights,
+    const ttnn::Tensor& down_weights,
+    const std::optional<ttnn::Tensor>& reader_down_weights,
+    const ttnn::Tensor& done_words,
+    uint32_t intermediate,
+    uint32_t max_tokens_per_expert,
+    const ttnn::Tensor& arena,
+    const ttnn::Tensor& y,
+    const tt::tt_metal::experimental::MeshProgramDescriptor& extra,
+    uint64_t extra_key,
+    const tt::tt_metal::CoreCoord& collector,
+    uint32_t counts_addr,
+    uint32_t writers,
+    uint32_t activation,
+    uint32_t pin,
+    const std::optional<ttnn::Tensor>& token_index,
+    bool down_fp32,
+    bool x_bf16,
+    bool h_bf16,
+    const std::vector<std::vector<uint32_t>>& l1_args) {
+    using namespace tt::tt_metal;
+    FlatRoutedExpertConfig cfg{
+        .hidden = x.logical_shape()[-1],
+        .intermediate = intermediate,
+        .experts_per_chip = static_cast<uint32_t>(global_expert_ids.logical_volume()),
+        .num_global_experts = counts.logical_shape()[-1],
+        .max_tokens = (max_tokens_per_expert + 31) / 32 * 32,
+        .weights_bf8 = gate_up_weights.dtype() == DataType::BFLOAT8_B,
+        .activation = activation,
+        .pin = pin,
+        .y_row_major = true,
+        .down_fp32 = down_fp32,
+        .pack_stochastic_rounding = false,
+        .x_bf16 = x_bf16,
+        .h_bf16 = h_bf16};
+    auto* device = x.device();
+    // (planned before cmb_rt is set: the plan cache ignores it, and the standalone plan keeps the DRISC senders)
+    const auto plan = flat_routed_expert_plan(device, cfg);
+    TT_FATAL(
+        plan->rdown == reader_down_weights.has_value(),
+        "flat_routed_expert_with_program: reader_down_weights iff the plan has reader tails");
+    TT_FATAL(
+        y.layout() == Layout::ROW_MAJOR && y.dtype() == DataType::BFLOAT16 &&
+            y.logical_shape()[-2] >= (token_index ? token_index->logical_shape()[-1] : x.logical_shape()[-2]),
+        "flat_routed_expert_with_program: y must be bf16 ROW_MAJOR with a row per dispatched row");
+    const auto shard = arena.memory_config().shard_spec();
+    TT_FATAL(
+        shard.has_value() && shard->shape[0] >= plan->arena_tiles * 32,
+        "flat_routed_expert_with_program: the arena needs >= {} rows per core",
+        plan->arena_tiles * 32);
+    for (const auto& c : plan->arena_cores()) {
+        TT_FATAL(shard->grid.contains(c), "flat_routed_expert_with_program: the arena misses core {}", c.str());
+    }
+    cfg.cmb_rt = 48 + static_cast<uint32_t>(plan->gu.size()) + 2 * cfg.experts_per_chip;
+    // the writers report local experts in slot order, with cumulative counts and no go handshake
+    setenv("MIMO_FL_CMB_SLOT_ORDER", "1", 0);
+    setenv("MIMO_FL_CMB_NO_GO", "1", 0);
+    ttnn::Tensor words = create_device_tensor(l1_sharded_spec(plan->relays, 32), device);
+    FlatWithProgramParams p{
+        .flat = cfg,
+        .extra = extra,
+        .collector = collector,
+        .counts_addr = counts_addr,
+        .writers = writers,
+        .extra_key = extra_key,
+        .l1_args = l1_args};
+    if (!l1_args.empty()) {
+        setenv("MIMO_FL_Y_L1", "1", 0);  // (the writers' args and SE_Y_L1)
+        for (const auto& v : l1_args) {
+            p.addrs.insert(p.addrs.end(), v.begin(), v.end());
+        }
+    }
+    for (const ttnn::Tensor* tt : std::initializer_list<const ttnn::Tensor*>{
+             &x,
+             &counts,
+             &regions,
+             &global_expert_ids,
+             &gate_up_weights,
+             &down_weights,
+             &done_words,
+             &arena,
+             &words,
+             &y}) {
+        p.addrs.push_back(static_cast<uint32_t>(tt->buffer()->address()));
+    }
+    for (const auto* o : {&reader_down_weights, &token_index}) {
+        p.addrs.push_back(o->has_value() ? static_cast<uint32_t>((*o)->buffer()->address()) : 0u);
+    }
+    p.flat_key = {
+        cfg.hidden,
+        cfg.intermediate,
+        cfg.experts_per_chip,
+        cfg.num_global_experts,
+        cfg.max_tokens,
+        cfg.weights_bf8,
+        cfg.activation,
+        cfg.pin,
+        cfg.down_fp32,
+        cfg.x_bf16,
+        cfg.h_bf16,
+        cfg.cmb_rt,
+        static_cast<uint32_t>(arena.memory_config().shard_spec()->shape[0])};
+    auto result = ttnn::prim::bringup::flat_with_program(
+        p,
+        FlatRoutedExpertInputs{
+            .x = x,
+            .counts = counts,
+            .regions = regions,
+            .global_expert_ids = global_expert_ids,
+            .gate_up_weights = gate_up_weights,
+            .down_weights = down_weights,
+            .reader_down_weights = reader_down_weights,
+            .done_words = done_words,
+            .arena = arena,
+            .words = words,
+            .output = y,
+            .token_index = token_index});
     words.deallocate(true);
     return result;
 }

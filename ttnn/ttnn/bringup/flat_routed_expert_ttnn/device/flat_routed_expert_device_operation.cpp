@@ -54,12 +54,13 @@ void FlatRoutedExpertDeviceOperation::validate_on_program_cache_miss(
         t.token_index ? t.token_index->logical_shape()[-1] : t.x.logical_shape()[-2] / (cfg.hidden / xw);
     const bool out_ok = cfg.y_row_major
                             ? t.output.layout() == Layout::ROW_MAJOR && t.output.dtype() == DataType::BFLOAT16
-                            : t.output.layout() == Layout::TILE && t.output.dtype() == DataType::BFLOAT8_B;
+                            : t.output.layout() == Layout::TILE &&
+                                  t.output.dtype() == (cfg.y_bf16 ? DataType::BFLOAT16 : DataType::BFLOAT8_B);
     TT_FATAL(
         out_ok && dram_interleaved(t.output) && t.output.logical_shape()[-2] == rows &&
             t.output.logical_shape()[-1] == cfg.hidden,
         "flat_routed_expert: output must be a {} DRAM tensor with the flat (dispatch buffer / token_index) rows",
-        cfg.y_row_major ? "row-major bf16" : "bfp8 TILE");
+        cfg.y_row_major ? "row-major bf16" : (cfg.y_bf16 ? "bf16 TILE" : "bfp8 TILE"));
 }
 
 void FlatRoutedExpertDeviceOperation::validate_on_program_cache_hit(

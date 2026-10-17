@@ -37,7 +37,13 @@ void kernel_main() {
     SeDyn dyn;
     // RT 3 / 4: the primary's round (1 + helpers) and this helper's place in it (its super-blocks b % round == place)
     se_dyn_load<get_compile_time_arg_val(6)>(dyn, 5, get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF, mt * 32);
+#ifdef SE_X2  // the primary's stream is every S-th super-block from K (RT after the dyn args: S, K)
+    const uint32_t tot_all = dyn.num_v * get_compile_time_arg_val(7), x2s = get_arg_val<uint32_t>(5 + SE_DYN_NARGS),
+                   x2k = get_arg_val<uint32_t>(6 + SE_DYN_NARGS);
+    const uint32_t tot_sb = tot_all > x2k ? (tot_all - x2k + x2s - 1) / x2s : 0;
+#else
     const uint32_t tot_sb = dyn.num_v * get_compile_time_arg_val(7);
+#endif
     const uint32_t round_ = get_arg_val<uint32_t>(3), place = get_arg_val<uint32_t>(4);
 #ifdef SE_SMALL_T
     const uint32_t num_sb = dyn.small || tot_sb <= place ? 0 : (tot_sb - place + round_ - 1) / round_;  // small: idle
