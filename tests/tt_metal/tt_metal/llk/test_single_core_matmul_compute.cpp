@@ -1444,11 +1444,13 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulBlockIdFreeGolden) {
 // llk_matmul_pack with out_of_order_output=true must pack DST tile (start_tile_index + i) to output page
 // (output_tile_index + i): the out-of-order address helper is stateless, so the loop has to offset the page
 // index per DST tile. The kernel copies four distinct tiles to DST[0..3] and packs the two DST halves swapped,
-// one out-of-order llk_matmul_pack call each: (2, c_16, 2, 0) then (0, c_16, 2, 2), so pages 0..3 must hold DST
+// one out-of-order llk_matmul_pack call each: (0, c_16, 2, 2) then (2, c_16, 2, 0), so pages 0..3 must hold DST
 // tiles 2, 3, 0, 1. Nonzero start_tile_index and output_tile_index in different calls make the three wrong
 // loops distinguishable: a constant page index gives pages {3, -, 1, -} (second tile of each half overwrites the
 // first, "-" never written); a page index of just tile_index gives {0, 1, 2, 3}; output_tile_index + tile_index
-// (no start rebase) gives {-, -, 0, 1}. Wormhole and Blackhole share the defect; Quasar has no llk_matmul_pack.
+// (no start rebase) gives {-, -, 2, 3}. Each wrong loop leaves a wrong tile on a page it writes, so a stale page
+// left in L1 by an earlier program cannot mask it (the call order is what makes the no-rebase loop overwrite
+// pages 2, 3 with the wrong half). Wormhole and Blackhole share the defect; Quasar has no llk_matmul_pack.
 TEST_F(LLKMeshDeviceFixture, TensixMatmulPackOutOfOrderPacksEachDestTileToItsOwnPage) {
     if (arch_ == tt::ARCH::QUASAR) {
         GTEST_SKIP() << "llk_matmul_pack is not implemented on Quasar";
