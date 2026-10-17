@@ -12,7 +12,21 @@
  * LLK ELTWISE BINARY
  *************************************************************************/
 
-// Version with operands
+/**
+ * @brief Configure the math thread for the SrcB-reuse column-broadcast op from the operand CBs.
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam num_tiles: Number of dest tiles processed per execute call.
+ * @tparam math_fidelity: Math fidelity of the ELWMUL path.
+ * @tparam dense: Place two-face tiles back to back in dest, values = <true/false>
+ * @param operand_A: CB whose face count configures the MOP; both operands must have the same number of faces.
+ * @param operand_B: CB of the second operand, unused on this thread.
+ * @note Call this before @ref llk_math_sdpa_bcast_col_srcb_reuse_preamble and @ref llk_math_sdpa_bcast_col_srcb_reuse,
+ *       and run @ref llk_math_sdpa_bcast_col_srcb_reuse_postamble after.
+ * @note The MOP always accumulates into DEST, for ADD/SUB as well as MUL. Zero the output tiles first: run
+ *       @ref llk_math_sdpa_bcast_col_srcb_reuse_preamble with clear_dest = true, or target a freshly released dest
+ *       section.
+ */
 template <
     EltwiseBinaryType eltwise_binary_type,
     std::uint32_t num_tiles,

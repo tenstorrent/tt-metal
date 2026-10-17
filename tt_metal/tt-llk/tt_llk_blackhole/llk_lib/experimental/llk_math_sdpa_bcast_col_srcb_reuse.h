@@ -31,8 +31,10 @@ inline void sdpa_bcast_col_srcb_reuse_configure_mop(const std::uint32_t num_face
     // SrcB advanced to the second column source) and pass 2 restarts at row 0. ELWMUL always accumulates into dest,
     // so pass 2 adds A1 * bcast(P2) onto pass 1. ELWADD/ELWSUB only accumulate when their dest-accumulate bit is set;
     // without it pass 2 overwrites pass 1 and the result is A1 +/- bcast(P2) alone. The bit is therefore always set
-    // here so the ADD/SUB paths compute the same two-term sum as MUL; the preamble's clear_dest ZEROACC supplies the
-    // zero seed, exactly as the MUL path already relies on.
+    // here so the ADD/SUB paths compute the same two-term sum as MUL. ADD/SUB now read dest exactly as MUL always
+    // did, so the output dest tiles must be zero on entry: run the preamble with clear_dest = true (it defaults to
+    // false), or target a freshly released dest section, which is what sdpa_tail_ms_reduce<normalize = false>
+    // relies on for the MUL path. An in-place call on a non-zero tile adds the old contents into the result.
     constexpr std::uint32_t dest_accum_en = 1;
     if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWADD)
     {
@@ -213,6 +215,23 @@ inline void sdpa_bcast_col_srcb_reuse_configure_addrmod(const std::uint32_t num_
     }
 }
 
+/**
+ * @brief Configure the math thread for the SrcB-reuse column-broadcast op: Dest = A0 op bcast_col(P1) + A1 op bcast_col(P2).
+ *
+ * Programs the address modifiers and the MOP that the execute runs twice over the same dest rows, once per column
+ * source held in SrcB.
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam num_tiles: Number of dest tiles processed per execute call.
+ * @tparam math_fidelity: Math fidelity of the ELWMUL path; a high fidelity selects the fidelity-phase MOP.
+ * @tparam dense: Place two-face tiles back to back in dest (requires num_faces == 2), values = <true/false>
+ * @param num_faces: Faces per operand tile; the MOP currently requires 2.
+ * @note Call this before @ref _llk_math_sdpa_bcast_col_srcb_reuse_preamble_ and
+ *       @ref _llk_math_sdpa_bcast_col_srcb_reuse_, and run @ref _llk_math_sdpa_bcast_col_srcb_reuse_postamble_ after.
+ * @note The MOP always accumulates into DEST, for ADD/SUB as well as MUL. Zero the output tiles first: run
+ *       @ref _llk_math_sdpa_bcast_col_srcb_reuse_preamble_ with clear_dest = true, or target a freshly released
+ *       dest section.
+ */
 template <EltwiseBinaryType eltwise_binary_type, std::uint32_t num_tiles, MathFidelity math_fidelity, bool dense = false>
 inline void _llk_math_sdpa_bcast_col_srcb_reuse_init_(const std::uint32_t num_faces)
 {
