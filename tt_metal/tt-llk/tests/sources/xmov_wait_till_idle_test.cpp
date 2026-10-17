@@ -34,6 +34,10 @@ constexpr std::uint32_t WORDS_PER_16B = 4;
 constexpr std::uint32_t WORDS         = XMOV_XFER_16B * WORDS_PER_16B;
 constexpr std::uint32_t NO_STALE      = 0xFFFFFFFFu;
 
+// buffer_A and buffer_B are one 32x32 Int32 tile each, laid out back to back with buffer_Res.
+constexpr std::uint32_t BUFFER_BYTES = 32 * 32 * sizeof(std::uint32_t);
+static_assert(XMOV_XFER_16B > 0 && XMOV_XFER_16B * 16 <= BUFFER_BYTES, "the move must stay inside one buffer and not be empty");
+
 // Pattern constants: odd multipliers, so consecutive iterations differ in every word.
 constexpr std::uint32_t ITERATION_STRIDE = 0x9E3779B1u;
 constexpr std::uint32_t WORD_STRIDE      = 0x01000193u;
@@ -48,9 +52,7 @@ constexpr std::uint32_t pattern(const std::uint32_t iteration, const std::uint32
 inline std::uint32_t read_cfg0()
 {
 #if defined(ARCH_BLACKHOLE)
-    std::uint32_t cfg0;
-    asm volatile("csrr %0, 0x7c0" : "=r"(cfg0));
-    return cfg0;
+    return csr_read<0x7c0 /*csr_num*/, false /*fence*/>();
 #else
     return 0;
 #endif
@@ -109,7 +111,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             src_mismatches += src[w] != pattern(i, w) ? 1 : 0;
         }
 
-        xmov_l1_to_l1_non_compact(src_addr >> 4 /* src_addr_16B */, dst_addr >> 4 /* dst_addr_16B */, XMOV_XFER_16B /* xfer_size_16B */);
+        xmov_l1_to_l1_non_compact(src_addr >> 4 /*src_addr_16B*/, dst_addr >> 4 /*dst_addr_16B*/, XMOV_XFER_16B /*xfer_size_16B*/);
         xmov_wait_till_idle();
 
         for (std::uint32_t g = 0; g < XMOV_READ_GAP; g++)

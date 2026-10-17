@@ -98,8 +98,8 @@ inline void xmov_wait_till_idle()
     // store, and the TDMA block processes the store, this load and the status loads below in that
     // order, so the first status read already sees the command queued.
     (void)XMOV_CMD[0];
-    // The mover is reported busy only once the command processor has dequeued the command, so the
-    // queue has to be empty as well as the mover idle before the move is known to be done.
+    // A queued command does not show as mover busy, and the command processor pops it only after
+    // starting the mover, so the move is done once the queue is empty and the mover idle.
     constexpr std::uint32_t mask = RISCV_TDMA_STATUS_FLAG_MOVER0_BUSY_MASK | RISCV_TDMA_STATUS_FLAG_FIFO_EMPTY_MASK;
     while ((XMOV_STATUS[0] & mask) != RISCV_TDMA_STATUS_FLAG_FIFO_EMPTY_MASK)
     {
