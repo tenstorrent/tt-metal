@@ -126,6 +126,7 @@ claim_next() {  # sets req= the oldest open request for this arch, claimed by us
 }
 finish() {  # finish <exit> [message]: revert the patch if applied, write result.json, log   (uses serve_one's locals)
     local rc=$1 msg=${2:-} extra=()
+    [ -n "${beater:-}" ] && { kill "$beater" 2>/dev/null; wait "$beater" 2>/dev/null; beater=; }
     [ -n "$msg" ] && { echo "legs.sh: $msg" >> "$d/leg.log"; extra+=(message="$msg"); }
     if [ "$r_mode" = patch ]; then
         [ -n "$applied" ] && { git -C "$repo" apply -R "$applied" 2>>"$slog"; applied=; }
@@ -139,10 +140,14 @@ finish() {  # finish <exit> [message]: revert the patch if applied, write result
     beat
 }
 serve_one() {  # serve_one <req dir>: prepare the tree, run the command under the device lock, write result.json
-    local d=$1 tree= head= started l rc beater have_lock=0
+    local d=$1 tree= head= started l rc have_lock=0
+    beater=
     lock=${TT_DEVICE_LOCK:-/tmp/tt-device-$(hostname).lock}
     started=$(now); beat "$r_id"
     log "$r_id claimed label=$r_label mode=$r_mode requester=$r_requester"
+    # keep the heartbeat fresh from the claim on: a leg can wait minutes to hours for the device lock before
+    # it runs, and `status` must show that as busy, not STALE (finish() stops the beater)
+    ( while :; do sleep "$interval"; beat "$r_id"; done ) & beater=$!
     if [ "$r_mode" = branch ]; then
         tree=$wroot/wt-legs-$arch
         if [ ! -d "$tree" ]; then
@@ -160,7 +165,9 @@ serve_one() {  # serve_one <req dir>: prepare the tree, run the command under th
         tree=$repo
         # the built tree is shared with the local worker's own apply/revert legs: hold the device lock from
         # before the apply until after the revert, so no one sees (or clobbers) a half-patched tree
-        exec 9>"$lock"; flock 9 || { finish 97 "cannot take the device lock $lock"; return; }; have_lock=1
+        exec 9>"$lock"
+        flock -n 9 || { log "$r_id waiting for device lock $lock"; flock 9 || { finish 97 "cannot take the device lock $lock"; return; }; log "$r_id device lock acquired"; }
+        have_lock=1
         # tracked modifications only: the harness leaves tests/sfpi and tests/.venv untracked in a served checkout
         [ -z "$(git -C "$repo" status --porcelain --untracked-files=no)" ] || { finish 96 "$repo has modified tracked files, refusing to apply a patch"; return; }
         git -C "$repo" apply --check "$d/patch.diff" 2>>"$slog" || { finish 97 "patch does not apply to $repo @ $(git -C "$repo" rev-parse --short=11 HEAD)"; return; }
@@ -170,7 +177,6 @@ serve_one() {  # serve_one <req dir>: prepare the tree, run the command under th
     fi
     [ -d "$tree/$r_cwd" ] || { finish 97 "cwd $r_cwd does not exist in $tree"; return; }
     log "$r_id running in $tree/$r_cwd @ $head timeout=${r_timeout}s"
-    ( while :; do sleep "$interval"; beat "$r_id"; done ) & beater=$!   # keep the heartbeat fresh during a long leg
     (
         cd "$tree/$r_cwd" || exit 97
         export CHIP_ARCH=$arch
@@ -188,7 +194,6 @@ serve_one() {  # serve_one <req dir>: prepare the tree, run the command under th
         timeout --kill-after=60 "$r_timeout" bash -c "$r_cmd"
     ) > "$d/leg.log" 2>&1
     rc=$?
-    kill "$beater" 2>/dev/null; wait "$beater" 2>/dev/null
     finish "$rc"
 }
 cmd_serve() {
