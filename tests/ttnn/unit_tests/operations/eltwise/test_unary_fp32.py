@@ -323,8 +323,9 @@ def _assert_signed_zero_golden_match(golden, result, ttnn_function, dtype):
     "ttnn_function, torch_function",
     [
         (ttnn.log1p, torch.log1p),
+        (ttnn.expm1, torch.expm1),
     ],
-    ids=["log1p"],
+    ids=["log1p", "expm1"],
 )
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_log1p_expm1_signed_zero(device, ttnn_function, torch_function, dtype):
@@ -382,3 +383,43 @@ def test_log1p_fp32_input_bfloat16_output_keeps_negative_lanes_positive(device):
     assert torch.isfinite(finite_lane) and torch.allclose(
         finite_lane.float(), expected_finite, rtol=2e-2, atol=1e-3
     ), f"log1p(1.0) fp32->bf16 returned {finite_lane.item()!r}, expected ~{expected_finite.item()!r} (finite, in-domain)."
+
+
+def test_expm1_fp32_input_bfloat16_output_keeps_domain_lanes_finite(device):
+    """The fp32 kernel arm runs for an fp32 input even when the preallocated output is bfloat16.
+
+    Same mixed-dtype path as the log1p twin above: ``unary.cpp`` derives ``preserve_fp32_precision``
+    from the *input* dtype, so ``ttnn.expm1(x_fp32, output_tensor=<bf16>)`` takes the fp32 arm and
+    only the pack narrows the result. expm1 has no NaN-from-domain lane (it is defined on all of R),
+    so the probe is ``[-0.0, -inf, 1.0]``: the zero-lane restore must leave ``-0.0`` a zero without
+    disturbing the other two lanes, and both non-zero lanes must stay finite with the right
+    sign/magnitude after the bfloat16 pack.
+    """
+    x_torch = torch.tensor([[-0.0, float("-inf"), 1.0]], dtype=torch.float32)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.from_torch(
+        torch.zeros(x_torch.shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    result = ttnn.to_torch(ttnn.expm1(x_tt, output_tensor=out_tt))
+
+    # -0.0 input: bfloat16 cannot carry the sign (a 16-bit Dest/pack canonicalises -0.0 to +0.0),
+    # so the lane is only required to be a zero.
+    assert result[0, 0].item() == 0.0, (
+        f"expm1(-0.0) fp32->bf16 returned {result[0, 0].item()!r}, expected a zero; a nonzero "
+        "result means the zero-lane restore touched a lane it must leave alone."
+    )
+    # expm1(-inf) = -1: finite and negative, not flattened into the zero lane nor sign-flipped.
+    minus_one_lane = result[0, 1]
+    expected_minus_one = torch.expm1(x_torch[0, 1]).to(torch.bfloat16).float()
+    assert (
+        torch.isfinite(minus_one_lane)
+        and minus_one_lane.item() < 0.0
+        and torch.allclose(minus_one_lane.float(), expected_minus_one, rtol=2e-2, atol=1e-2)
+    ), f"expm1(-inf) fp32->bf16 returned {minus_one_lane.item()!r}, expected ~-1.0 (finite, negative)."
+    # expm1(1.0) = e - 1: a finite in-domain lane must not be swallowed by the zero-lane predicate.
+    e_minus_one_lane = result[0, 2]
+    expected_finite = torch.expm1(x_torch[0, 2]).to(torch.bfloat16).float()
+    assert torch.isfinite(e_minus_one_lane) and torch.allclose(
+        e_minus_one_lane.float(), expected_finite, rtol=2e-2, atol=1e-3
+    ), f"expm1(1.0) fp32->bf16 returned {e_minus_one_lane.item()!r}, expected ~{expected_finite.item()!r} (finite, in-domain)."
