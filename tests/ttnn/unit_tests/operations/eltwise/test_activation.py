@@ -70,10 +70,10 @@ def run_softplus_boundary_test(device, beta, threshold, pcc=0.99):
 
 
 # `threshold` must stay at roughly 4 or below. The boundary residual is log1p(exp(-threshold))/beta,
-# which falls under half a bfloat16 output ULP by threshold=5, and past SOFTPLUS_POLY_BOUNDARY = 5.0f
-# the kernel drops the residual entirely. A correct softplus then returns the input bit for bit and
-# the strict-inequality assertion below would fail spuriously. Note test_softplus_op in
-# test_unary_category6_bfloat16.py uses thresholds up to 20; neither can be reused here.
+# which falls under half a bfloat16 output ULP by threshold=5, so from there a correct softplus
+# rounds to the input bit for bit and the strict-inequality assertion below would fail spuriously.
+# Note test_softplus_op in test_unary_category6_bfloat16.py uses thresholds up to 20; neither can
+# be reused here.
 @pytest.mark.parametrize("beta, threshold", [(2, 1), (1, 2), (0.5, 1), (4, 1), (1, 0.5)])
 def test_softplus_threshold_boundary(device, beta, threshold):
     run_softplus_boundary_test(device, beta, threshold)

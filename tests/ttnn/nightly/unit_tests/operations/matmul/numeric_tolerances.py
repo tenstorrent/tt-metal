@@ -494,12 +494,13 @@ _PIECEWISE_LINEAR_RMS_FRACTION = 0.5
 # An activation is allowed two units in the last place of the format it is
 # evaluated in, which is the accumulator's, so a 32 bit accumulator normally
 # makes that allowance negligible. Softplus is the exception. Its kernel picks
-# its polynomial on the INP_FLOAT32 macro, which only the eltwise unary program
-# factory defines, so a fused softplus always takes the degree-6 branch whatever
-# fp32_dest_acc_en says. That branch records itself as bf16-accurate at
-# "<0.28 ULP", the low end of the range quoted above, so its allowance is two
-# units of bfloat16. The flag still reaches the kernel, but there it decides only
-# whether the result is rounded to bfloat16 on the way out.
+# its evaluation on the INP_FLOAT32 macro, which only the eltwise unary program
+# factory defines, so a fused softplus always takes the bf16 path (the one
+# evaluated in u = exp(-|beta*x|)) whatever fp32_dest_acc_en says. That path
+# measures at about 0.5 bf16 ULP end to end over the bf16 grid, the low end of
+# the range quoted above, so its allowance is two units of bfloat16. The flag
+# still reaches the kernel, but there it decides only whether the result is
+# rounded to bfloat16 on the way out.
 #
 # Softplus is the only entry. Every other activation the matmul can fuse chooses
 # its polynomial from is_fp32_dest_acc_en, the same setting that decides the
