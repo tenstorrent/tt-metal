@@ -269,6 +269,23 @@ ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, u
 
 }  // namespace fast_tilize_detail
 
+// clang-format off
+/**
+ * Initializes the fast tilize operation. fast_tilize_init_skip_remap skips the DEST remap setup, and the
+ * _with_dt variants first reconfigure the unpacker and math data formats for icb. The same icb, ocb and
+ * full_dim must be passed to fast_tilize_block (as its block) and to fast_tilize_uninit: on each architecture
+ * they select whether the block takes the fast-tilize path or the plain tilize path, and init, block and
+ * uninit must take the same one.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name     | Description                              | Type     | Valid Range | Required |
+ * |----------- |----------|------------------------------------------|----------|-------------|----------|
+ * | Function   | icb      | Input circular buffer identifier         | uint32_t | 0 to 31     | True     |
+ * | Function   | full_dim | Block width in tiles                     | uint32_t | > 0         | True     |
+ * | Function   | ocb      | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     fast_tilize_detail::fast_tilize_init_impl<true, is_fp32_dest_acc_en>(icb, full_dim, ocb, call_line);
@@ -305,6 +322,20 @@ ALWI void fast_tilize_init_with_dt_skip_remap(uint32_t icb, uint32_t full_dim, u
     fast_tilize_detail::fast_tilize_init_with_dt_impl<false, is_fp32_dest_acc_en>(icb, full_dim, ocb);
 }
 
+// clang-format off
+/**
+ * Uninitializes the fast tilize operation. icb, ocb and full_dim must be the values fast_tilize_init
+ * received: they select the path to undo (fast tilize or plain tilize), which must be the one init set up.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name     | Description                              | Type     | Valid Range | Required |
+ * |----------- |----------|------------------------------------------|----------|-------------|----------|
+ * | Function   | icb      | Input circular buffer identifier         | uint32_t | 0 to 31     | True     |
+ * | Function   | ocb      | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
+ * | Function   | full_dim | Block width in tiles given to init       | uint32_t | > 0         | True     |
+ */
+// clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, uint32_t full_dim) {
     if (llk_fast_tilize_needs_fallback(icb, ocb, full_dim)) {
@@ -324,7 +355,8 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, uint32_t full_dim) {
  * tilize path, as decided by the architecture's llk_fast_tilize_needs_fallback: on Blackhole every
  * tile other than 32x32 with four 16x16 faces (and a width of 1), on Wormhole every tile other than
  * 32x32 with four 16x16 faces and 16x32 with two 16x16 faces, plus the latter at an odd block width
- * (the two-face data path exists only for pairs of tiles).
+ * (the two-face data path exists only for pairs of tiles) or in an L1 format other than Float16_b and
+ * Float32 (the pack sequence writes two tiny tiles as one 32x32 tile).
  *
  * Return value: None
  *

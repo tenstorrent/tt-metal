@@ -125,7 +125,7 @@ inline void _llk_pack_fast_tilize_init_(
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4");
     LLK_ASSERT(fast_tilize_unit_supports_faces(unit_dim, num_faces), FAST_TILIZE_TINY_TILE_UNIT_DIM_MSG);
     LLK_ASSERT(
-        pack_dst_format == to_underlying(DataFormat::Float16_b) || pack_dst_format == to_underlying(DataFormat::Float32) || num_faces == 4,
+        num_faces == TILE_NUM_FACES || fast_tilize_tiny_tile_format_supported(pack_dst_format),
         "16x32 tiny tiles are only supported with float16_b or float32 output formats");
     // instead of using the actual is_fp32_dest_acc_en flag dest 32 bit mode is enabled if unpack_dst_format is TF32
     // this is due to a hw quirk with MOVA2D and MOVB2D

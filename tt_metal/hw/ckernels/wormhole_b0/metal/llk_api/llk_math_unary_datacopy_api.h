@@ -99,9 +99,10 @@ inline void llk_math_eltwise_unary_datacopy_uninit() {
  * @brief Whether fast_tilize_init/block/uninit must take the plain tilize path for this block.
  *
  * Wormhole fast-tilize supports 32x32 tiles, and 16x32 tiny tiles only at an even width, both with 16-row faces
- * (see ckernel::fast_tilize_block_supported). Both the input and the output CB are checked, tile shape and face
- * geometry, through this thread's geometry arrays, which cover every CB index and are generated from the same
- * descriptor on every thread, so all three threads reach the same decision even when the two CBs differ.
+ * and in Float16_b or Float32 (see ckernel::fast_tilize_block_supported). Both the input and the output CB are
+ * checked, tile shape, face geometry and L1 format, through this thread's arrays, which cover every CB index and are
+ * generated from the same descriptor on every thread (the unpack-source and pack-destination L1 formats of a CB are
+ * equalized by the JIT), so all three threads reach the same decision even when the two CBs differ.
  *
  * @param icb: Input circular buffer identifier.
  * @param ocb: Output circular buffer identifier.
@@ -117,12 +118,14 @@ inline bool llk_fast_tilize_needs_fallback(
             get_operand_tile_c_dim(in_id),
             get_operand_face_r_dim(in_id),
             get_operand_num_faces(in_id),
+            get_operand_src_format(in_id),
             block) &&
         ckernel::fast_tilize_block_supported(
             get_operand_tile_r_dim(out_id),
             get_operand_tile_c_dim(out_id),
             get_operand_face_r_dim(out_id),
             get_operand_num_faces(out_id),
+            get_operand_src_format(out_id),
             block));
 }
 

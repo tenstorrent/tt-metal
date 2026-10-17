@@ -12,9 +12,10 @@
 // ============================================================================
 // BH Fast-Tilize Math
 //
-// Modified A2D datacopy for fast-tilize's SrcA layout (8 data rows + 8 gap rows).
-// MOVA2D MOV_8_ROWS with srca_incr=16, dest_incr=16 copies data rows while
-// preserving the gap layout. 8 MOVA2D per dvalid = 64 data rows (8 tensor rows of 4 tiles).
+// Modified A2D datacopy for fast-tilize: MOVA2D MOV_8_ROWS with srca_incr=8 reads
+// SrcA contiguously, and dest_incr=16 leaves 8 gap rows after every 8 data rows in
+// DEST (the stride the packer reads). 8 MOVA2D per dvalid = 64 SrcA rows (8 tensor
+// rows of 4 tiles).
 //
 // Accumulates 4 dvalids into one DEST half-bank (512 rows for bf16):
 //   dvalid k: DEST rows 128k + {0-7, 16-23, ..., 112-119} (8 data groups of 8 rows)
@@ -69,6 +70,7 @@ inline void _llk_math_fast_tilize_init_([[maybe_unused]] const std::uint32_t unp
  * Block height is always 1 and chunk iteration is in the caller. The MOP is hardwired to 4 dvalids (one
  * 4-tile unit) per run at the Tile32x32 DEST stride, so only 32x32 tiles are supported.
  *
+ * @tparam is_fp32_dest_acc_en: Unused.
  * @param dst_index: Tile index in DEST to write the unit to.
  * @param unpack_dst_format: Unused; the DEST view is fixed to 16 bit by @ref _llk_math_fast_tilize_init_.
  * @param unit_dim: Unused; every unit consumes 4 dvalids regardless of its tile count.
