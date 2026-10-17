@@ -24,6 +24,7 @@
 #include <cstdint>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/data_movement/common/datacopy_rounding.hpp"
 
 namespace ttnn::prim {
 
@@ -157,12 +158,22 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
     };
 
     // Compute kernel (only present when converting data format): consumes IN, produces OUT.
+    const bool round_to_bf16 = ttnn::operations::data_movement::datacopy_rounds_fp32_to_bf16(
+        input.device()->arch(), input_data_format, output_data_format);
+    m2::KernelSpec::CompilerOptions::Defines compute_defines;
+    m2::ComputeHardwareConfig compute_hw{};
+    if (round_to_bf16) {
+        compute_defines.emplace("ROUND_FP32_TO_BF16", "1");
+        compute_hw.enable_32_bit_dest = true;
+        compute_hw.unpack_modes =
+            m2::ComputeHardwareConfig::ComputeUnpackModes{{IN, tt::tt_metal::UnpackMode::UnpackToDest}};
+    }
     // ComputeHardwareConfig's defaults match the legacy ComputeConfigDescriptor{} defaults; opt_level is set
     // to O3 explicitly (legacy compute defaults to O3; Metal 2.0 CompilerOptions defaults to O2).
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
         .source = KERNEL_COMPUTE_ELTWISE_COPY,
-        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
                 m2::DFBBinding{
@@ -180,7 +191,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
             {
                 .runtime_arg_names = {"per_core_tile_cnt"},
             },
-        .hw_config = m2::ComputeHardwareConfig{},
+        .hw_config = compute_hw,
     };
 
     // Runtime args: each core owns a contiguous span of tiles.
