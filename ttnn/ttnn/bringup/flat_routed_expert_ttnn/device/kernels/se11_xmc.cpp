@@ -205,7 +205,12 @@ void kernel_main() {
                     continue;
 #endif
                     for (uint32_t m = m0; m < m1; ++m) {
+#ifdef XMC_UNLINKED  // (MIMO_FL_XMC_UNLINKED: no linked chains - an open chain holds the NoC path, so other traffic
+                     // from this core on the same NoC, e.g. x reads with MIMO_FL_XRD_NOC=0, could deadlock with it)
+                        const bool last = true;
+#else
                         const bool last = k + 1 == n && m + 1 == m1;  // the chain ends before the next rectangle's
+#endif
                         noc_async_write_multicast(
                             src + (m * SE_SBT + (i + k) * kblk) * tb,
                             rects[q] | (dst + m * piece),

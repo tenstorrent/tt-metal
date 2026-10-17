@@ -977,3 +977,31 @@ NoC traces + tt-npe. us / expert; Tensix readers (the default) M 32 / 80 / 256 /
 Where it stands: DRISC-only = Tensix at M <= ~224 (two tiles), +5..12% at M 256 (two tiles: x; one tile: rate),
 +1.6% at M 1024. Options: x off NOC1 (fix the same-NoC hang, or move the relays so a NOC1 multicast works), or keep a
 Tensix reader for each bank's second slot (the old hybrid: 8 cells free).
+
+### x off the DRISC tile's port: linked multicasts, helper reads on NOC0 (2026-10-17, V4.1 E 24, units)
+- **The x-reads-on-NOC0 hang is the linked multicast.** The primary relay sends x as linked multicast chains on NOC0;
+  with MIMO_FL_XRD_NOC=0 its BRISC issues DRAM reads from another command buffer on the same NoC while a chain is
+  open, which deadlocks (the documented linked-mcast hazard; dynamic-NoC mode, MIMO_FL_XRD_DYN, does not help). With
+  MIMO_FL_XMC_UNLINKED=1 (every piece unlinked) x reads on NOC0 run.
+- **Unlinked multicasts cost too much**, us / expert M 80 / 256 / 1024:
+  | config | M 80 | M 256 | M 1024 |
+  | Tensix readers (default, linked) | 48.0 | 62.9 | 211.6 |
+  | Tensix, unlinked | 48.3 | 71.2 | 258.5 |
+  | Tensix, unlinked + x reads NOC0 (dynamic NoC) | 52.6 | 90.0 | 264.8 |
+  | DRISC two tiles (DUAL=0, ALT_MAXCNT 4096), linked | 47.5 | 69.8 | 216.4 |
+  | DRISC, unlinked | 47.9 | 78.2 | 266.1 |
+  | DRISC, unlinked + x reads NOC0 | 50.4 | 80.6 | 271.8 |
+  | DRISC, unlinked + x reads NOC0 + down reads NOC1 (DN_NOC0) | hang (passed standalone at M 256) |
+- **Helpers read on NOC0, primaries keep NOC1 reads + linked NOC0 multicasts** (MIMO_FL_XHELP_NOC0=1: the helpers'
+  reader + sender in dynamic-NoC mode; MIMO_FL_NH helpers per rectangle take (NH) / (NH + 1) of x):
+  | config | M 80 | M 256 | M 1024 |
+  | DRISC, helpers NOC0, NH 1 | 49.0 | 72.3 | 216.1 |
+  | DRISC, helpers NOC0, NH 2 | 49.0 | 69.9 | 216.4 |
+  | DRISC, helpers NOC0, NH 3 | 49.5 | 69.4 | 215.5 |
+  | Tensix, helpers NOC0, NH 1 | 49.5 | 82.4 | 213.1 |
+  | Tensix, helpers NOC0, NH 2 | 51.0 | 80.8 | 212.2 |
+  x reads are slow on whichever bank tile also carries a bulk stream: tile 0 (the NOC0 endpoint) has the down weight
+  reads (and, with Tensix readers, the gate/up weights: M 256 62.9 -> 82.4), tile 1 the DRISC DMA. Only the Tensix
+  reader layout leaves x a tile to itself (tile 1, NOC1). Left: all x on NOC0 by helpers (the primaries reading
+  nothing: an se11_xmc change) with the down reads on NOC1 next to the DRISC DMA, or the hybrid (free-tile DRISC +
+  Tensix readers, 8 cells).

@@ -773,14 +773,27 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 xrel.push_back(p.relays[idx]);
             }
         }
-        const auto kxr =
-            dm("se11_xrd.cpp",
-               xrel,
-               DataMovementProcessor::RISCV_0,
-               xrd_noc,
-               {0, t.x.logical_shape()[-1] * 2, E, MT, p.nsb, S, xrd_batch, idx_arg, p.H / t.x.logical_shape()[-1]},
-               xrd_def,
-               x_mode);
+        // (probe MIMO_FL_XHELP_NOC0=1: the helper relays read x on NOC0 - through each bank's NOC0 endpoint, not the
+        // NOC1 endpoint a DRISC tile DMAs through - in dynamic-NoC mode with their NOC0 sends to the primary; the
+        // primaries keep NOC1 reads next to their linked NOC0 multicasts, which must not share a NoC with other
+        // traffic of the core)
+        const bool xhelp_noc0 = std::getenv("MIMO_FL_XHELP_NOC0") != nullptr && !x_once;
+        std::vector<CoreCoord> xrel_p, xrel_h;
+        for (const auto& c : xrel) {
+            const bool helper = std::find(p.relays.begin(), p.relays.begin() + NR, c) == p.relays.begin() + NR;
+            (xhelp_noc0 && helper ? xrel_h : xrel_p).push_back(c);
+        }
+        const std::vector<uint32_t> xrd_ct = {
+            0, t.x.logical_shape()[-1] * 2, E, MT, p.nsb, S, xrd_batch, idx_arg, p.H / t.x.logical_shape()[-1]};
+        const auto kxr = dm("se11_xrd.cpp", xrel_p, DataMovementProcessor::RISCV_0, xrd_noc, xrd_ct, xrd_def, x_mode);
+        const KernelHandle kxr_h = xrel_h.empty() ? kxr
+                                                  : dm("se11_xrd.cpp",
+                                                       xrel_h,
+                                                       DataMovementProcessor::RISCV_0,
+                                                       NOC::NOC_0,
+                                                       xrd_ct,
+                                                       xrd_def,
+                                                       NOC_MODE::DM_DYNAMIC_NOC);
         // MIMO_FL_TZ_SKIP: the relays' tilizers only do the CB handshakes; MIMO_FL_XMC_NODATA: the multicasters send
         // only the XARR counts (garbage x on the gate/up cores)
         Defines tz_def = with(dyn_def, {{"SE_SBT", sbt}});
@@ -802,6 +815,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         if (std::getenv("MIMO_FL_XMC_NODATA")) {
             xmc_def["XMC_NODATA"] = "1";
+        }
+        if (std::getenv("MIMO_FL_XMC_UNLINKED")) {  // (probe: the x multicasts without linked chains)
+            xmc_def["XMC_UNLINKED"] = "1";
         }
         // (x read once with forwarding: one kernel per primary, its half XMC_FWD_K)
         std::vector<KernelHandle> kxms;
@@ -827,7 +843,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 x_mc_noc,
                 {1, MT, p.x_tile, p.land_slots, data_sem, 5, E, p.nsb},
                 x_two || p.xfwd ? with(dyn_def, {{"SE_SBT", sbt}, {"SE_X2", "1"}}) : with(dyn_def, {{"SE_SBT", sbt}}),
-                x_mode));
+                xhelp_noc0 ? NOC_MODE::DM_DYNAMIC_NOC : x_mode));
         }
         const uint32_t sbb = MT * p.sbt * p.x_tile;
         for (uint32_t idx = 0; idx < p.relays.size(); ++idx) {
@@ -864,7 +880,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 xr.a(AddrSrc::TokenIndex);
                 xr.a(AddrSrc::Arena, p.ti_off);  // (XRD_IDX_ALL: the call's token index, read once)
             }
-            add_rt(kxr, rl, xr);
+            add_rt(xhelp_noc0 && idx >= NR ? kxr_h : kxr, rl, xr);
             SetRuntimeArgs(program, ktz, rl, std::vector<uint32_t>{rl_sb(idx)});
             if (idx < NR) {
                 Args xm;
