@@ -160,7 +160,7 @@ constexpr std::uint32_t SFPSHFT_MOD1_ARG_IMM          = 1;
 
 // Replay-buffer slots.
 constexpr std::uint32_t REPLAY_SLOT_BROADCAST = 0;  // col-0 -> all-cols broadcast
-constexpr std::uint32_t REPLAY_LEN_BROADCAST  = 14; // see _record_broadcast_replay_
+constexpr std::uint32_t REPLAY_LEN_BROADCAST  = 13; // see _record_broadcast_replay_
 
 // BCAST_ROW col-group offsets within a face pair (face N + face N+1), in
 // dest addr units. A "col group" is one 4-row x 8-col SFPLOAD/SFPSTORE slot.
@@ -208,21 +208,22 @@ inline void _zero_lanes_outside_col0_()
 // combined, and because stage 3 interleaves per-slot SFPLOADs into its
 // SFPSHFT2 latency slots (data addresses are per-call so can't be recorded).
 //
-// Sequence recorded (14 SFPU ops):
+// Sequence recorded (13 SFPU ops):
 //    1  SFPSETCC  LaneFlags = (LREG_MASK != 0)   (enable SFPU cols 1..7 only)
 //    2  SFPLOADI  LREG_BCAST = +0.0              (in the enabled lanes only)
 //    3  SFPENCC   re-enable all lanes
-//    4  SFPNOP
-//    5  SFPSHFT2  LREG_TMP = ROR1(LREG_BCAST)
-//    6  SFPNOP
-//    7  SFPADD    LREG_BCAST += LREG_TMP
-//    8  SFPNOP
-//    9  SFPSHFT2  LREG_TMP = ROR1(LREG_BCAST)
-//   10  SFPNOP
-//   11  SFPSHFT2  LREG_TMP = ROR1(LREG_TMP)
-//   12  SFPNOP
-//   13  SFPADD    LREG_BCAST += LREG_TMP
-//   14  SFPNOP
+//    4  SFPSHFT2  LREG_TMP = ROR1(LREG_BCAST)
+//    5  SFPNOP
+//    6  SFPADD    LREG_BCAST += LREG_TMP
+//    7  SFPNOP
+//    8  SFPSHFT2  LREG_TMP = ROR1(LREG_BCAST)
+//    9  SFPNOP
+//   10  SFPSHFT2  LREG_TMP = ROR1(LREG_TMP)
+//   11  SFPNOP
+//   12  SFPADD    LREG_BCAST += LREG_TMP
+//   13  SFPNOP
+// No SFPNOP between steps 3 and 4: SFPLOADI and SFPENCC are single-cycle, so
+// the SFPSHFT2 reads LREG_BCAST two slots after it was written.
 inline void _record_broadcast_replay_()
 {
     lltt::record(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
@@ -230,7 +231,6 @@ inline void _record_broadcast_replay_()
     // (1) Mask: zero out SFPU cols 1..7 by predicated assignment, so an Inf or
     //     NaN in a discarded column cannot reach col 0 (see the helper).
     _zero_lanes_outside_col0_<LREG_BCAST>();
-    TTI_SFPNOP; // conservative: keeps the SFPSHFT2 read of LREG_BCAST two cycles behind its write, as with the SFPMUL this replaces
 
     // Stage 1: ROR by 1, add.
     TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
