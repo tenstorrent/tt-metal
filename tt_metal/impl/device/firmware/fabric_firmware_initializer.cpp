@@ -463,7 +463,7 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
             configured_count++;
         }
     }
-    log_info(tt::LogMetal, "Fabric initialized on {} devices", configured_count);
+    log_debug(tt::LogMetal, "Fabric initialized on {} devices", configured_count);
 }
 
 void FabricFirmwareInitializer::compile_fabric_only() {
