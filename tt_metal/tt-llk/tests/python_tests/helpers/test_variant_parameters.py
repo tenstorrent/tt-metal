@@ -687,7 +687,17 @@ class DBG_SRCA_DUMP(TemplateParameter):
                          thread's dest offset is left when the dump runs.
     ``DUMP_UPPER_HALF``  run the datacopy in the upper dest half (``dest_section_flip``)
                          instead of the lower one.
+
+    The result layout the kernel writes is shared with the test through the class
+    constants: ``WORDS_PER_ROW`` debug-bus words of the SrcA dump at the start of result
+    tile 0, the thread's dest offset before the dump, after it, and the value the datacopy
+    set it to at ``DEST_OFFSET_WORD``, and the DEST tile read back in result tile
+    ``RESULT_TILE_DEST`` (Blackhole).
     """
+
+    WORDS_PER_ROW = 8
+    DEST_OFFSET_WORD = WORDS_PER_ROW
+    RESULT_TILE_DEST = 1
 
     srca_row_check: bool = False
     dump_dst_index: int = 0
@@ -699,6 +709,9 @@ class DBG_SRCA_DUMP(TemplateParameter):
                 f"constexpr bool SRCA_ROW_CHECK = {str(self.srca_row_check).lower()};",
                 f"constexpr std::uint32_t DUMP_DST_INDEX = {self.dump_dst_index}u;",
                 f"constexpr bool DUMP_UPPER_HALF = {str(self.dump_upper_half).lower()};",
+                f"constexpr std::uint32_t WORDS_PER_ROW = {self.WORDS_PER_ROW}u;",
+                f"constexpr std::uint32_t DEST_OFFSET_WORD = {self.DEST_OFFSET_WORD}u;",
+                f"constexpr std::uint32_t RESULT_TILE_DEST = {self.RESULT_TILE_DEST}u;",
             ]
         )
 

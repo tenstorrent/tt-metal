@@ -35,8 +35,9 @@
 // scheduled on it hangs in its boot-time ZEROACC -- a hang that lands on whatever test follows,
 // not on this one.
 //
-// Result layout: tile 0 of the result buffer carries the raw debug-bus words of the SrcA dump;
-// tile 1 is the DEST tile read back on Blackhole.
+// Result layout (constants shared with the host through DBG_SRCA_DUMP): tile 0 of the result buffer carries the
+// raw debug-bus words of the SrcA dump, then the thread's dest offset read before the dump, after it, and the
+// value the datacopy left it at; tile 1 is the DEST tile read back on Blackhole.
 
 #include <cstdint>
 
@@ -51,9 +52,6 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-constexpr std::uint32_t NUM_FACES          = 4;
-constexpr std::uint32_t WORDS_PER_ROW      = 8; // one debug-bus row read
-constexpr std::uint32_t RESULT_TILE_DEST   = 1;
 constexpr std::uint32_t DEST_ROWS_PER_TILE = (ckernel::TILE_HEIGHT * ckernel::TILE_WIDTH) / ckernel::FACE_WIDTH; // a dest row is one face wide
 
 #ifdef LLK_TRISC_UNPACK
@@ -72,14 +70,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (SRCA_ROW_CHECK)
     {
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, NUM_FACES, NUM_FACES);
-        _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
-            0 /* transpose_of_faces */,
-            0 /* within_face_16x16_transpose */,
-            make_tensor_shape_from_legacy(FACE_R_DIM, NUM_FACES),
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
+        _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, false /*unpack_to_dest*/>(
+            0 /*transpose_of_faces*/,
+            0 /*within_face_16x16_transpose*/,
+            make_tensor_shape_from_legacy(FACE_R_DIM, TILE_NUM_FACES),
             formats.unpack_A_src,
             formats.unpack_A_dst);
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+        _llk_unpack_A_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, false /*unpack_to_dest*/>(
             L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
     }
 
@@ -106,8 +104,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (SRCA_ROW_CHECK)
     {
-        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(
-            NUM_FACES, formats.math);
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /*is_int_fpu_en*/, PackMode::Default>(
+            TILE_NUM_FACES, formats.math);
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         if constexpr (DUMP_UPPER_HALF)
@@ -116,8 +114,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
         // Leaves the thread's dest offset at tile DUMP_DST_INDEX of the current half, as any op targeting it does.
-        _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
-            DUMP_DST_INDEX, formats.math, formats.math, NUM_FACES);
+        _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, false /*unpack_to_dest*/>(
+            DUMP_DST_INDEX, formats.math, formats.math, TILE_NUM_FACES);
     }
     else
     {
@@ -130,6 +128,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     volatile std::uint32_t* words = reinterpret_cast<volatile std::uint32_t*>(params.buffer_Res[0]);
 
     dbg_thread_halt<MathThreadId>();
+
+    if constexpr (SRCA_ROW_CHECK)
+    {
+        // The offset the datacopy left (the halt drained its SETC16), and where the datacopy should have left it.
+        words[DEST_OFFSET_WORD + 0] = dbg_read_dest_offset<MathThreadId>();
+        words[DEST_OFFSET_WORD + 2] = DUMP_DST_INDEX * DEST_ROWS_PER_TILE + (DUMP_UPPER_HALF ? DEST_REGISTER_HALF_SIZE : 0);
+    }
 
 #ifdef ARCH_BLACKHOLE
     // The tile the helper borrows from is the first tile of the current dest half. The debug window addresses
@@ -151,6 +156,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     dbg_thread_unhalt<MathThreadId>();
+
+    if constexpr (SRCA_ROW_CHECK)
+    {
+        // The offset the dump left behind (the unhalt drained its restore); it must be what the datacopy set.
+        words[DEST_OFFSET_WORD + 1] = dbg_read_dest_offset<MathThreadId>();
+    }
 }
 
 #endif

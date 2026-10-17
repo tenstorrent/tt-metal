@@ -20,7 +20,9 @@ cannot read directly, and must put that row back before returning. Two tests, on
   faces in order, so the bank the dump reads holds the last face: the words must be row 0 of
   face 3 in the dest BF16 bit layout (the host builds them from the tile it wrote). The helper
   stages and restores through the thread's offset but reads back a physical row, so without
-  pinning the offset first a nonzero offset returns a stale row.
+  pinning the offset first a nonzero offset returns a stale row. The same variants check that
+  the dump hands the offset back as it found it, since ops that run on the inherited offset
+  would otherwise be retargeted.
 
 Every in-tree caller passes ``dbg_array_id::DEST``, which never enters this path, so without
 these tests the SrcA path can regress undetected.
@@ -38,6 +40,12 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import DBG_SRCA_DUMP
+from helpers.tile_constants import (
+    FACE_C_DIM,
+    MAX_FACE_ELEMENTS,
+    MAX_NUM_FACES,
+    MAX_TILE_ELEMENTS,
+)
 
 # Int32 bit patterns a converting save would change: an FP32-mode save flushes the ones that read as
 # denormals (exponent 0) and a BF16-mode save drops their low half. Planted in dest row 0 so the
@@ -65,13 +73,18 @@ FP32_AT_RISK_BITS = [
 ]
 BF16_AT_RISK_BITS = [0x0001, 0x007F, 0x8001, 0x8000, 0x0080, 0x7F7F]
 
-TILE_ELEMENTS = 32 * 32
-FACE_ELEMENTS = 16 * 16
-ROW_ELEMENTS = 16
-# Result layout the kernel writes: tile 0 holds the raw debug-bus words, tile 1 the DEST tile read back.
-WORDS_PER_ROW = 8
-NUM_FACES = 4
-RESULT_TILE_DEST = 1
+INPUT_DIMENSIONS = [32, 32]
+# Result layout the kernel writes, shared through the template parameter.
+WORDS_PER_ROW = DBG_SRCA_DUMP.WORDS_PER_ROW
+DEST_OFFSET_WORD = DBG_SRCA_DUMP.DEST_OFFSET_WORD
+RESULT_TILE_DEST = DBG_SRCA_DUMP.RESULT_TILE_DEST
+
+# BF16 fields, as test_topk.py names them.
+_BF16_SIGN_MASK = 0x8000
+_BF16_EXP_MASK = 0x7F80
+_BF16_MANT_MASK = 0x007F
+_BF16_EXP_SHIFT = 7
+_BF16_MANT_BITS = 8
 
 # Where the datacopy leaves the math thread's dest offset before the dump: (dest tile, upper half).
 DEST_OFFSETS = {
@@ -102,7 +115,9 @@ def dest_bf16_bits(ieee_bits):
     same in both DEST widths.
     """
     return (
-        (ieee_bits & 0x8000) | ((ieee_bits & 0x7F80) >> 7) | ((ieee_bits & 0x007F) << 8)
+        (ieee_bits & _BF16_SIGN_MASK)
+        | ((ieee_bits & _BF16_EXP_MASK) >> _BF16_EXP_SHIFT)
+        | ((ieee_bits & _BF16_MANT_MASK) << _BF16_MANT_BITS)
     )
 
 
@@ -114,8 +129,19 @@ def dest_row_words(bf16_row):
 
 def face_row(tile, face, row):
     """Row ``row`` of face ``face`` of a 32x32 tile laid out face by face, as the kernel reads it."""
-    start = face * FACE_ELEMENTS + row * ROW_ELEMENTS
-    return tile[start : start + ROW_ELEMENTS]
+    start = face * MAX_FACE_ELEMENTS + row * FACE_C_DIM
+    return tile[start : start + FACE_C_DIM]
+
+
+def tile_pair(formats):
+    """One tile of random stimuli per operand: A is unpacked into SrcA, B is planted into DEST."""
+    src_A, tile_cnt, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=INPUT_DIMENSIONS,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=INPUT_DIMENSIONS,
+    )
+    return src_A, src_B, tile_cnt
 
 
 def make_config(formats, dest_acc, src_A, src_B, tile_cnt, dump):
@@ -140,10 +166,12 @@ def make_config(formats, dest_acc, src_A, src_B, tile_cnt, dump):
 def dest_tile_from(res_from_L1, output_format):
     """The DEST tile the kernel read back, as a tensor of the output format."""
     assert (
-        len(res_from_L1) == 2 * TILE_ELEMENTS
+        len(res_from_L1) == 2 * MAX_TILE_ELEMENTS
     ), f"Result length {len(res_from_L1)} does not match the two-tile layout the kernel writes"
     tile = res_from_L1[
-        RESULT_TILE_DEST * TILE_ELEMENTS : (RESULT_TILE_DEST + 1) * TILE_ELEMENTS
+        RESULT_TILE_DEST
+        * MAX_TILE_ELEMENTS : (RESULT_TILE_DEST + 1)
+        * MAX_TILE_ELEMENTS
     ]
     return torch.tensor(tile, dtype=format_dict[output_format])
 
@@ -174,14 +202,7 @@ def test_srca_row_dump_restores_dest_row_0(formats, dest_acc):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("The RISC-DEST debug window is only available on Blackhole.")
 
-    input_dimensions = [32, 32]
-
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-    )
+    src_A, src_B, tile_cnt = tile_pair(formats)
     # The kernel plants buffer_B into DEST; put the at-risk patterns there.
     if formats.input_format == DataFormat.Int32:
         src_B[: len(INT32_AT_RISK)] = torch.tensor(INT32_AT_RISK, dtype=src_B.dtype)
@@ -191,7 +212,7 @@ def test_srca_row_dump_restores_dest_row_0(formats, dest_acc):
         src_B[: len(BF16_AT_RISK_BITS)] = as_float_bits(BF16_AT_RISK_BITS, 16)
 
     configuration = make_config(
-        formats, dest_acc, src_A, src_B, tile_cnt_A, DBG_SRCA_DUMP(srca_row_check=False)
+        formats, dest_acc, src_A, src_B, tile_cnt, DBG_SRCA_DUMP(srca_row_check=False)
     )
 
     res_from_L1 = configuration.run().result
@@ -207,22 +228,18 @@ def test_srca_row_dump_restores_dest_row_0(formats, dest_acc):
 )
 def test_srca_row_dump_reads_srca_row(formats, dest_acc, dest_offset):
 
-    dst_index, upper_half = DEST_OFFSETS[dest_offset]
-    input_dimensions = [32, 32]
+    if get_chip_architecture() == ChipArchitecture.QUASAR:
+        pytest.skip("Quasar has no dbg_get_array_row.")
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-    )
+    dst_index, upper_half = DEST_OFFSETS[dest_offset]
+    src_A, src_B, tile_cnt = tile_pair(formats)
 
     configuration = make_config(
         formats,
         dest_acc,
         src_A,
         src_B,
-        tile_cnt_A,
+        tile_cnt,
         DBG_SRCA_DUMP(
             srca_row_check=True, dump_dst_index=dst_index, dump_upper_half=upper_half
         ),
@@ -234,14 +251,17 @@ def test_srca_row_dump_reads_srca_row(formats, dest_acc, dest_offset):
         TestConfig.TENSIX_LOCATION
     )
     srca_row = struct.unpack_from(f"<{WORDS_PER_ROW}I", raw, 0)
+    offset_before, offset_after, offset_set = struct.unpack_from(
+        "<3I", raw, 4 * DEST_OFFSET_WORD
+    )
 
     # The datacopy consumed the tile face by face, alternating SrcA banks, and the dump reads the
     # bank used last: the last face. The expectation comes from the host tile rather than from a
     # DEST read-back, so it does not depend on how DEST happens to be addressed on the card.
-    expected = dest_row_words(face_row(src_A, NUM_FACES - 1, 0))
+    expected = dest_row_words(face_row(src_A, MAX_NUM_FACES - 1, 0))
     face_hits = [
         face
-        for face in range(NUM_FACES)
+        for face in range(MAX_NUM_FACES)
         if dest_row_words(face_row(src_A, face, 0)) == srca_row
     ]
     if face_hits:
@@ -256,6 +276,17 @@ def test_srca_row_dump_reads_srca_row(formats, dest_acc, dest_offset):
         f"dbg_get_array_row(SRCA) with the math dest offset at {dest_offset} returned "
         f"{[hex(w) for w in srca_row]}, expected SrcA row 0 of the last face "
         f"{[hex(w) for w in expected]} ({got})"
+    )
+
+    # The offset the dump found is the one the datacopy set (this also checks the read-back the
+    # helper saves with), and the dump must hand it back unchanged.
+    assert offset_before == offset_set, (
+        f"the math thread's dest offset read before the dump is {offset_before}, "
+        f"but the datacopy set it to {offset_set}"
+    )
+    assert offset_after == offset_before, (
+        f"dbg_get_array_row(SRCA) left the math thread's dest offset at {offset_after}; "
+        f"it was {offset_before} before the dump and must be handed back unchanged"
     )
 
     if get_chip_architecture() == ChipArchitecture.BLACKHOLE:
