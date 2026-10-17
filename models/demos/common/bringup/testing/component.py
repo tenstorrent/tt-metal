@@ -576,7 +576,9 @@ def _check_tail(s, ref, layer: int, steps, last, seen: dict, cpu, snapshot: dict
     # the one calibration margin. swap_out_rel only when the model cannot run
     how = "fixed"
     model = snapshot.get("model")
-    model = [model] if isinstance(model, torch.Tensor) else model
+    model = [model] if isinstance(model, torch.Tensor) else list(model or [])
+    if model and cpu.is_floating_point():  # F98: a correct device step's output is at least rounded to bf16; the
+        model.append(cpu.to(torch.bfloat16).float())  # steps after it (a top-k) can flip near-ties on that alone
     # an int step output (a top-k) too: the nudged fp32 step's own selection flips are its floor (DS41-50)
     if model and all(isinstance(m, torch.Tensor) for m in model):
         try:
