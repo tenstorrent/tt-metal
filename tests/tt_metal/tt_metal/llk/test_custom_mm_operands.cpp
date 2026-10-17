@@ -148,9 +148,12 @@ std::string wait_for_watcher_exception() {
     return exception;
 }
 
-// Watcher poll period for the assert fixture below; a clean run is given one more poll before its
-// watcher state is read.
+// Watcher poll period for the assert fixture below.
 constexpr int kWatcherIntervalMs = 250;
+
+// Watcher periods a clean run waits after completion before its watcher state is read: two, so at least one
+// full poll starts and ends after the kernel finished.
+constexpr int kWatcherPeriodsAfterCompletion = 2;
 
 // A [16, 32] activation tile is a legal CB tile but outside the custom_mm family's
 // [1|2|4|8, 32] in0 contract. The typed LLKOperand overloads reject it at compile
@@ -163,12 +166,16 @@ constexpr int kWatcherIntervalMs = 250;
 // which blocks the core's re-initialization.)
 constexpr std::uint32_t kGuardRows = 16;
 
-// The tallest legal in0 tile: the positive control for the guards.
+// The tallest legal in0 tile: the product run under LLK asserts uses it.
 constexpr std::uint32_t kLegalRows = 8;
 
+// Every legal in0 height: the positive controls run each of them through the CB-id inits.
+constexpr std::uint32_t kLegalHeights[] = {1, 2, 4, 8};
+
 // mode: 0 custom_mm, 1 compressed_custom_mm.
-// thread: 0 unpack init (TRISC0), 1 math init (TRISC1), 2 the 2.0 mixed-overload init block (CB-id in0,
-// typed in1), whose unpack and math parts both run.
+// thread: 0 unpack init (TRISC0), 1 math init (TRISC1), 2 the 2.0 mixed-overload short init block (CB-id in0,
+// typed in1), 3 the 2.0 mixed-overload full init (custom_mm only; it also configures PACK on the out CB); the
+// unpack and math parts of 2 and 3 both run.
 // Runs custom_mm_operands_guard.cpp, the init-only kernel, on an in0 CB of in0_tile. Returns true when the
 // program completed; false when the wait aborted because the watcher reported an error (the only exception
 // tolerated), leaving the watcher state for the caller to read.
@@ -187,6 +194,8 @@ bool run_custom_mm_guard_kernel(
     };
     make_cb(tt::CBIndex::c_0, tt::DataFormat::Float16_b, in0_tile);
     make_cb(tt::CBIndex::c_1, weight_format, full);
+    // Output CB for the full mixed init (thread 3), which configures PACK from it; unused by the other inits.
+    make_cb(tt::CBIndex::c_16, tt::DataFormat::Float16_b, in0_tile);
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/custom_mm_operands_guard.cpp",
@@ -225,23 +234,27 @@ void run_custom_mm_rows_guard(
     EXPECT_NE(exception.find("tripped an assert"), std::string::npos) << exception;
     EXPECT_NE(exception.find("custom_mm_operands_guard"), std::string::npos) << exception;
     // The watcher records the first assert per core. With one init thread that names the RISC; the mixed
-    // init block asserts on both, so no RISC is attributed.
-    if (thread != 2) {
+    // init blocks assert on both, so no RISC is attributed.
+    if (thread == 0 || thread == 1) {
         EXPECT_NE(exception.find(thread == 0 ? "TRISC0" : "TRISC1"), std::string::npos) << exception;
     }
 }
 
-// The same init on a legal [kLegalRows, 32] in0 must complete with a clean watcher. The product test runs the
-// typed overloads and never reaches the CB-id wrappers, so this is the only place a wrapper assert that also
-// fired on a legal tile would show, before it tripped the callers that use the CB-id path under LLK asserts.
+// The same init on each legal [1|2|4|8, 32] in0 must complete with a clean watcher. The product test runs
+// without LLK asserts, so this is the only place a CB-id assert that also fired on a legal tile would show,
+// before it tripped the 1-row callers that use the CB-id path under LLK asserts. Init-only, so every height
+// is cheap.
 void run_custom_mm_legal_guard(distributed::MeshDevice& mesh, std::uint32_t mode, std::uint32_t thread) {
-    ASSERT_TRUE(run_custom_mm_guard_kernel(mesh, mode, thread, Tile({kLegalRows, 32})))
-        << "the init on a legal [8, 32] in0 did not complete: "
-        << MetalContext::instance().watcher_server()->exception_message();
-    // One more watcher poll after completion, so a late report is not missed.
-    std::this_thread::sleep_for(std::chrono::milliseconds(2 * kWatcherIntervalMs));
-    EXPECT_TRUE(MetalContext::instance().watcher_server()->exception_message().empty())
-        << MetalContext::instance().watcher_server()->exception_message();
+    for (const auto rows : kLegalHeights) {
+        SCOPED_TRACE(::testing::Message() << "rows=" << rows);
+        ASSERT_TRUE(run_custom_mm_guard_kernel(mesh, mode, thread, Tile({rows, 32})))
+            << "the init on a legal [" << rows
+            << ", 32] in0 did not complete: " << MetalContext::instance().watcher_server()->exception_message();
+        // Wait for a full watcher poll after completion, so a late report is not missed.
+        std::this_thread::sleep_for(std::chrono::milliseconds(kWatcherPeriodsAfterCompletion * kWatcherIntervalMs));
+        ASSERT_TRUE(MetalContext::instance().watcher_server()->exception_message().empty())
+            << MetalContext::instance().watcher_server()->exception_message();
+    }
 }
 
 }  // namespace
@@ -355,30 +368,52 @@ TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulMathInitRejectsFourFaceA
     run_custom_mm_rows_guard(*devices_.at(0), 1 /*mode*/, 1 /*thread*/, Tile::from_face_grid(2, 2, {8, 16}));
 }
 
-// The 2.0 mixed-overload init blocks (CB-id in0, typed in1) carry the same guard.
-TEST_F(LLKBlackholeAssertFixture, CustomMatmulMixedInitRejectsFourFaceActivation) {
+// The 2.0 mixed-overload short init blocks (CB-id in0, typed in1) carry the same guard.
+TEST_F(LLKBlackholeAssertFixture, CustomMatmulMixedShortInitRejectsFourFaceActivation) {
     run_custom_mm_rows_guard(*devices_.at(0), 0 /*mode*/, 2 /*thread*/, Tile::from_face_grid(2, 2, {8, 16}));
 }
 
-TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulMixedInitRejectsFourFaceActivation) {
+TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulMixedShortInitRejectsFourFaceActivation) {
     run_custom_mm_rows_guard(*devices_.at(0), 1 /*mode*/, 2 /*thread*/, Tile::from_face_grid(2, 2, {8, 16}));
 }
 
-// Positive controls: the same wrapper inits on a legal [8, 32] in0 complete with the watcher clean.
-TEST_F(LLKBlackholeAssertFixture, CustomMatmulUnpackInitAcceptsEightRowActivation) {
+// The 2.0 mixed-overload full init (custom_mm only) carries it too; the product test's mixed mode calls it, but
+// on legal tiles only.
+TEST_F(LLKBlackholeAssertFixture, CustomMatmulMixedInitRejectsSixteenRowActivation) {
+    run_custom_mm_rows_guard(*devices_.at(0), 0 /*mode*/, 3 /*thread*/, Tile({kGuardRows, 32}));
+}
+
+TEST_F(LLKBlackholeAssertFixture, CustomMatmulMixedInitRejectsFourFaceActivation) {
+    run_custom_mm_rows_guard(*devices_.at(0), 0 /*mode*/, 3 /*thread*/, Tile::from_face_grid(2, 2, {8, 16}));
+}
+
+// Positive controls: every CB-id init on each legal [1|2|4|8, 32] in0 completes with the watcher clean.
+TEST_F(LLKBlackholeAssertFixture, CustomMatmulUnpackInitAcceptsLegalActivations) {
     run_custom_mm_legal_guard(*devices_.at(0), 0 /*mode*/, 0 /*thread*/);
 }
 
-TEST_F(LLKBlackholeAssertFixture, CustomMatmulMathInitAcceptsEightRowActivation) {
+TEST_F(LLKBlackholeAssertFixture, CustomMatmulMathInitAcceptsLegalActivations) {
     run_custom_mm_legal_guard(*devices_.at(0), 0 /*mode*/, 1 /*thread*/);
 }
 
-TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulUnpackInitAcceptsEightRowActivation) {
+TEST_F(LLKBlackholeAssertFixture, CustomMatmulMixedShortInitAcceptsLegalActivations) {
+    run_custom_mm_legal_guard(*devices_.at(0), 0 /*mode*/, 2 /*thread*/);
+}
+
+TEST_F(LLKBlackholeAssertFixture, CustomMatmulMixedInitAcceptsLegalActivations) {
+    run_custom_mm_legal_guard(*devices_.at(0), 0 /*mode*/, 3 /*thread*/);
+}
+
+TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulUnpackInitAcceptsLegalActivations) {
     run_custom_mm_legal_guard(*devices_.at(0), 1 /*mode*/, 0 /*thread*/);
 }
 
-TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulMathInitAcceptsEightRowActivation) {
+TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulMathInitAcceptsLegalActivations) {
     run_custom_mm_legal_guard(*devices_.at(0), 1 /*mode*/, 1 /*thread*/);
+}
+
+TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulMixedShortInitAcceptsLegalActivations) {
+    run_custom_mm_legal_guard(*devices_.at(0), 1 /*mode*/, 2 /*thread*/);
 }
 
 }  // namespace tt::tt_metal

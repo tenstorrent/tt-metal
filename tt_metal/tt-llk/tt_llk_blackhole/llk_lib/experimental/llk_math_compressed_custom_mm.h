@@ -144,7 +144,9 @@ inline void _llk_math_compressed_custom_mm_mop_config_(const std::uint32_t opera
 }
 
 /**
- * @brief Configure the math thread for compressed_custom_mm: programs address mods and the MVMUL MOP.
+ * @brief Configure the math thread for compressed_custom_mm: programs address mods and records the
+ *        MVMUL/MOVD2B/finalize sequence into the replay buffer. No MOP is programmed; @ref
+ *        _llk_math_compressed_custom_mm_ replays the recorded sequence per k-tile.
  *
  * @tparam transpose: Transpose in1 faces during the multiply.
  * @tparam split_acc: Accumulate into split DEST halves that the finalize pass merges.
