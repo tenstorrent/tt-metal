@@ -283,6 +283,43 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { retur
  *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
  *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 4.791750e-15f
  */
+// The part of the _sfpu_exp_21f_bf16_tti_ loop body that is issued inline on every
+// iteration instead of being recorded in the replay buffer: SFPMAD poly2, SFPLOADI 255,
+// SFPSETEXP, SFP_STOCH_RND (bf16 Dest only), SFPSTORE, INCRWC. Its instruction count is
+// EXP_21F_BF16_TTI_TAIL_LEN below; update both together.
+template <bool is_fp32_dest_acc_en>
+sfpi_inline void _sfpu_exp_21f_bf16_tti_tail_() {
+    // frac = c0 + frac * (c1 + frac * c2), second step (LREG2 holds c1 + frac * c2).
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG1, 0);
+
+    // Refresh LREG2 = 255.0f for next iteration's upper-clamp. Hidden in
+    // the SFPMAD's 2-cycle latency window before LREG1 is consumed.
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
+
+    // y = setexp(frac, exponential_part) — recombine 2^x_i * 2^x_f.
+    constexpr unsigned SFPSETEXP_MOD1_ARG_EXPONENT = 2;
+    TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPSETEXP_MOD1_ARG_EXPONENT);
+
+    if constexpr (!is_fp32_dest_acc_en) {
+        // Round float32 -> bfloat16 using round-to-nearest before
+        // SFPSTORE truncates. Avoids ULP loss on values like 9*9 = 80.8.
+        TTI_SFP_STOCH_RND(
+            sfpi::SFPSTOCHRND_RND_EVEN,
+            0,
+            p_sfpu::LREG0,
+            p_sfpu::LREG0,
+            p_sfpu::LREG0,
+            sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    }
+
+    // sfpi::dst_reg[0] = y; sfpi::dst_reg++;
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+    TTI_INCRWC(0, 2, 0, 0);
+}
+
+template <bool is_fp32_dest_acc_en>
+constexpr unsigned EXP_21F_BF16_TTI_TAIL_LEN = 5 + (is_fp32_dest_acc_en ? 0 : 1);
+
 template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, int ITERATIONS>
 inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // Iteration-invariant constants:
@@ -301,36 +338,53 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
 
     TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
 
-    // Number of instructions in one iteration of the loop body. Used by
-    // TTI_REPLAY/record and TTI_REPLAY/replay below; MUST match exactly the count of
-    // TTI_ instructions emitted between the TTI_REPLAY/record call and the
-    // replay loop, or the replay buffer will misalign.
+    // Number of instructions in one iteration of the loop body: the recorded
+    // prefix (REC_LEN, emitted between the TTI_REPLAY/record call and the first
+    // tail call below) plus the inline tail (_sfpu_exp_21f_bf16_tti_tail_). Both
+    // counts MUST match exactly what is emitted, or the replay buffer will misalign.
     //
     //   Base body:                                                17
     //     SFPLOAD, SFPMAD, SFPNOP, SFPSWAP, SFPNOP,
     //     SFPEXEXP, SFPEXMAN8, SFPSHFT, SFPEXMAN9, SFPCAST,
     //     SFPMAD poly1, SFPNOP, SFPMAD poly2,
     //     SFPLOADI, SFPSETEXP, SFPSTORE. INCRWC
-    //   + SCALE_EN ? 1 : 0                  (SFPMULI scale + SFPNOP)
+    //   + SCALE_EN ? 2 : 0                  (SFPMULI scale + SFPNOP)
     //   + is_fp32_dest_acc_en ? 0 : 1       (SFP_STOCH_RND fp32→bf16)
-    //   + CLAMP_NEGATIVE ? 2 : 0            (SFPSWAP + SFPNOP)
+    //   + CLAMP_NEGATIVE ? 2 : 0            (SFPMOV + SFPSWAP)
     constexpr unsigned BODY_LEN = 17 + (SCALE_EN ? 2 : 0) + (is_fp32_dest_acc_en ? 0 : 1) + (CLAMP_NEGATIVE ? 2 : 0);
+    constexpr unsigned TAIL_LEN = EXP_21F_BF16_TTI_TAIL_LEN<is_fp32_dest_acc_en>;
+    constexpr unsigned REC_LEN = BODY_LEN - TAIL_LEN;
 
-    // Record the loop body into replay buffer slot 0 the first time
+    // The per-thread replay buffer is split between the two issuers at
+    // ckernel::math::replay_buf_offset: [0, 16) is the SFPU half, [16, 32) the
+    // FPU half, where matmul and reduce record their MOP body at init and replay
+    // it for every tile. The record here must stay inside the SFPU half: a record
+    // that runs past slot 15 rewrites the FPU program in place, and every matmul
+    // or reduce tile issued after the first exp call then replays a corrupted
+    // sequence. The full body is up to 22 instructions, so only its first REC_LEN
+    // are recorded and the TAIL_LEN that follow are issued inline after the
+    // record and after each replay (the ema kernel splits its body the same way).
+    // The split sits on the SFPNOP that pads SFPMAD poly1, so the instruction
+    // order, and with it the latency padding, is the same as when the whole body
+    // was issued inline.
+    static_assert(
+        REC_LEN <= ckernel::math::replay_buf_offset,
+        "exp replay record must stay inside the SFPU half of the replay buffer");
+
+    // Record the prefix into replay buffer slots [0, REC_LEN) the first time
     // through. Subsequent iterations replay the recorded sequence, which
     // shrinks the unrolled kernel binary from ~ITERATIONS*BODY_LEN
-    // instructions down to BODY_LEN + (ITERATIONS - 1) replays.
+    // instructions down to BODY_LEN + (ITERATIONS - 1) * (1 + TAIL_LEN).
     //
     // Per-element runtime is unchanged: the recorded instructions execute
-    // exactly as if they had been issued inline, and dst_reg is advanced
-    // by ADDR_MOD_6 inside the body so each replay walks to the next
-    // element correctly.
+    // exactly as if they had been issued inline, and the INCRWC in the tail
+    // advances dst_reg so each replay walks to the next element correctly.
     //
     // The accurate path (APPROXIMATION_MODE=false) does not otherwise use
-    // the replay buffer, so slot 0 is free here. Callers that mix this
-    // function with other replay-buffer clients should ensure they don't
-    // require slot 0 to survive across the call.
-    TTI_REPLAY(0, BODY_LEN, 1, 1);
+    // the replay buffer. Slots [0, REC_LEN) are shared with the other SFPU
+    // replay users; callers that mix this function with them should not
+    // require those slots to survive across the call.
+    TTI_REPLAY(0, REC_LEN, 1, 1);
 
     // val = sfpi::dst_reg[0]
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
@@ -377,40 +431,20 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // Polynomial refinement of 2^x_f on [0, 1] in Horner form:
     //   frac = c0 + frac * (c1 + frac * c2)
     //        = 1.0017248 + frac * (7.84e-08 + frac * 4.79e-15)
+    // The first step closes the recorded prefix; the second is the start of the tail.
     TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG5, p_sfpu::LREG2, 0);
     TTI_SFPNOP;
-    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG1, 0);
 
-    // Refresh LREG2 = 255.0f for next iteration's upper-clamp. Hidden in
-    // the SFPMAD's 2-cycle latency window before LREG1 is consumed.
-    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
-
-    // y = setexp(frac, exponential_part) — recombine 2^x_i * 2^x_f.
-    constexpr unsigned SFPSETEXP_MOD1_ARG_EXPONENT = 2;
-    TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPSETEXP_MOD1_ARG_EXPONENT);
-
-    if constexpr (!is_fp32_dest_acc_en) {
-        // Round float32 -> bfloat16 using round-to-nearest before
-        // SFPSTORE truncates. Avoids ULP loss on values like 9*9 = 80.8.
-        TTI_SFP_STOCH_RND(
-            sfpi::SFPSTOCHRND_RND_EVEN,
-            0,
-            p_sfpu::LREG0,
-            p_sfpu::LREG0,
-            p_sfpu::LREG0,
-            sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-    }
-
-    // sfpi::dst_reg[0] = y; sfpi::dst_reg++;
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-    TTI_INCRWC(0, 2, 0, 0);
+    // End of the recorded prefix (REC_LEN instructions since TTI_REPLAY/record).
+    _sfpu_exp_21f_bf16_tti_tail_<is_fp32_dest_acc_en>();
 
 #pragma GCC unroll 8
     for (std::uint32_t i = 1; i < ITERATIONS; i++) {
-        // Replay the recorded body for the remaining ITERATIONS - 1 elements.
-        // Each replay is one REPLAY-equivalent issue; the body executes as
-        // if it had been issued inline, dst_reg advancing via ADDR_MOD_6.
-        TTI_REPLAY(0, BODY_LEN, 0, 0);
+        // Replay the recorded prefix and issue the tail inline for each of the
+        // remaining ITERATIONS - 1 elements. The prefix executes as if it had been
+        // issued inline; the tail's INCRWC advances dst_reg to the next element.
+        TTI_REPLAY(0, REC_LEN, 0, 0);
+        _sfpu_exp_21f_bf16_tti_tail_<is_fp32_dest_acc_en>();
     }
 }
 
