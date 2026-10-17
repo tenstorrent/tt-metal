@@ -31,14 +31,13 @@ k_norm for the key) are permuted at load to [even | odd] (tt/rope.deinterleave_p
 SFPU composition and returns the reference's interleaved order (DS41-15). The latent stays fp32 up to fp4
 (DS41-47: model.py's bf16 points ahead of fp4 miss the chunk0 / small / big limits).
 
-The served caches (``TtServedRows``): bf16 ROW_MAJOR, one 32-token record (32 / r compressed rows) per ND shard
-round-robin over the DRAM banks. A compressed row j holds tokens [r j, r j + r); stored as r token rows of
-width / r values each, a record is byte-for-byte the [32 / r, width] record the contract defines, and the cache is
-addressed in TOKEN positions: the window cache's write path (tt/attention.TtWindowCache: server-order rows by
-ttnn.embedding from the load-time index row, then update_padded_kv_cache(kv_actual_global=start,
-valid_global=end)) works at every 32-aligned start, where a write in compressed rows (16-aligned) would not.
-Compressed KV TP-dedup (W / TP token stripes), index keys TP-replicated (the plan). Rows of groups not complete by
-actual_end ((j + 1) r > end) are zero; the last record ships whole with them zeroed.
+The served caches (``TtServedRows``): bf16 ROW_MAJOR [.., rows / r, width], one 32-token record (32 / r compressed
+rows of the full width, the contract's shard [1, 1, 32 / r, width]) per ND shard round-robin over the DRAM banks
+(tt/served.py). A compressed row j holds tokens [r j, r j + r). Writes go through the window cache's path
+(server-order rows by ttnn.embedding from the load-time index row, then update_padded_kv_cache) in compressed rows;
+a ratio-2 start (a multiple of 16 rows) takes the op's metadata path (DS41-54). Compressed KV TP-dedup (W / TP token
+stripes), index keys TP-replicated (the plan). Rows of groups not complete by actual_end ((j + 1) r > end) are zero;
+the last record ships whole with them zeroed.
 
 No host work in ``__call__`` / ``write``: the per-chunk inputs are integers (start, end) picking load-time tables.
 """
@@ -53,6 +52,7 @@ from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, tp_sum
 from .norm import TtDistributedRmsNorm
 from .quant import fp4_qdq, round_tf32
 from .rope import deinterleave_perm, rope_deinterleaved
+from .served import CacheSlab, alloc_served
 from .settings import settings
 
 CKV_BLOCK = 16  # fp4 block of the compressed KV (e4m3 scale per block)
@@ -108,15 +108,22 @@ class CompressRope:
 
 class TtServedRows:
     """One served compressed-row cache of one layer and slot (``width`` values per compressed row, ``ratio`` tokens
-    per row), held in token units: [1, 1, rows, width / ratio] bf16 ROW_MAJOR per chip, ND-sharded one 32-token
-    record per shard (init_kvpe_cache). ``dedup``: TP-dedup (update_padded_kv_cache's sp x tp order: token g on mesh
-    row (g / W) % SP, column (g mod W) / (W / TP)); else SP-sharded, TP-replicated (row (g / W) % SP, local row
-    (g / S) W + g mod W). ``write`` runs per chunk on the device; ``*_host`` is the harness / serving boundary."""
+    per row): a slab [1, 1, rows / r, width] bf16 ROW_MAJOR per chip of a served-cache tensor (tt/served.py), ND-sharded
+    one 32-token record (32 / r compressed rows) per shard, the contract's record. ``dedup``: TP-dedup
+    (update_padded_kv_cache's sp x tp order: token g on mesh row (g / W) % SP, column (g mod W) / (W / TP), compressed
+    row j at the local row of its first token / r); else SP-sharded, TP-replicated (row (g / W) % SP, local row
+    ((g / S) W + g mod W) / r). ``slab``: a (slot, layer) of the serving engine's cache tensor; None = a tensor of its
+    own (the ladder). ``rows`` counts local TOKEN rows (rows / r compressed rows per chip). ``write`` runs per chunk on
+    the device; ``*_host`` is the harness / serving boundary.
 
-    def __init__(self, mesh, tables, max_seq: int, width: int, ratio: int, dedup: bool):
-        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+    Writes: the chunk's rows in the server's order (the token-order index row of tables.srv, applied to token-width
+    pieces, then viewed as compressed rows: every SP run of the server order starts at a multiple of 32), then
+    update_padded_kv_cache in compressed rows. A ratio-2 start is a multiple of 16 rows, which the op's scalar path
+    refuses; its metadata path (start / valid / slot as 1-element device tensors sliced from load-time tables,
+    tt/served.DeviceScalars) works in page rows (DS41-54)."""
 
-        assert width % ratio == 0, (width, ratio)
+    def __init__(self, mesh, tables, max_seq: int, width: int, ratio: int, dedup: bool, slab: CacheSlab | None = None):
+        assert width % ratio == 0 and 32 % ratio == 0, (width, ratio)
         self.mesh, self.tables, self.geo = mesh, tables, tables.geo
         g = self.geo
         self.width, self.ratio, self.tok_width = width, ratio, width // ratio
@@ -124,21 +131,35 @@ class TtServedRows:
         self.stripe = g.stripe if self.tp_axis is not None else g.w  # tokens per chip per W block
         self.owners = g.n if self.tp_axis is not None else g.sp  # chips holding distinct stripes
         self.rows = -(-max_seq // g.chunk) * self.stripe  # local token rows per chip
+        self.crows = self.rows // ratio  # local compressed rows per chip
         self.max_seq = self.rows * self.owners
-        self.tensor = init_kvpe_cache(
-            kvpe_cache_head_dim=self.tok_width,
-            mesh_device=mesh,
-            seq_len=self.max_seq,
-            mesh_shape=list(mesh.shape),
-            sp_axis=SP_AXIS,
-            num_kvpe_cache_layers=1,
-            num_users=1,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            tp_axis=self.tp_axis,
-        )
+        if slab is None:
+            slab = CacheSlab(alloc_served(mesh, width, self.crows, 32 // ratio, 1, dedup=dedup), owned=True)
+        assert (slab.rows, slab.width) == (self.crows, width), (slab.rows, slab.width, self.crows, width)
+        self.slab = slab
+        if ratio > 1:  # metadata-path values (load time): starts / valid ends in compressed rows, slot ids
+            self._pos = tables.scalars(32 // ratio, max_seq // 32 + 1)
+            self._slot = tables.scalars(1, slab.slots)
 
     # ------------------------------------------------------------------ per chunk (device)
+    def _put(self, slab: ttnn.Tensor, start: int, end: int) -> None:
+        """slab [1, 1, W / r, width] bf16 ROW_MAJOR per SP row (the server's order) -> token positions [start, end) of
+        the cache, the last record whole (its rows past the complete groups are zero in ``slab``)."""
+        args = dict(layer_idx=self.slab.row, num_layers=self.slab.layers, cluster_axis=SP_AXIS, tp_axis=self.tp_axis)
+        if self.ratio == 1:
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                self.slab.tensor, slab, slot_idx=self.slab.slot, kv_actual_global=start, valid_global=end, **args
+            )
+            return
+        slot = self._slot.at(self.slab.slot)
+        kv = self._pos.at(start // 32)  # start / r
+        valid = self._pos.at(-(-end // 32))  # ceil32(end) / r: the last record's rows (zero past the groups)
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            self.slab.tensor, slab, slot, kv, valid_global=valid, **args
+        )
+        for t in (slot, kv, valid):
+            ttnn.deallocate(t)
+
     def write(self, rows_rm: ttnn.Tensor, start: int, end: int) -> None:
         """rows_rm [1, 1, S / r, width] bf16 ROW_MAJOR, the chunk's compressed rows in natural order, replicated, rows
         of incomplete groups zero: token positions [start, end) into the cache (the last record whole)."""
@@ -154,63 +175,55 @@ class TtServedRows:
             memory_config=DRAM,
         )
         ttnn.deallocate(idx)
-        slab = ttnn.reshape(rows, [1, 1, g.w, self.tok_width])
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            self.tensor,
-            slab,
-            slot_idx=0,
-            layer_idx=0,
-            num_layers=1,
-            kv_actual_global=start,
-            cluster_axis=SP_AXIS,
-            valid_global=end,
-            tp_axis=self.tp_axis,
-        )
+        slab = ttnn.reshape(rows, [1, 1, g.w // self.ratio, self.width])
+        self._put(slab, start, end)
+        view = slab.buffer_address() == rows.buffer_address()  # a reshape may return a view (K-1, DS41-52)
         ttnn.deallocate(rows)
+        if not view:
+            ttnn.deallocate(slab)
 
     # ------------------------------------------------------------------ harness / serving boundary (host)
     def _owner_shards(self) -> list[torch.Tensor]:
-        shards = [ttnn.to_torch(t).reshape(self.rows, self.tok_width) for t in ttnn.get_device_tensors(self.tensor)]
-        if self.tp_axis is None:  # replicated over TP: mesh column 0's copy of every SP row (chip-linear r TP + c)
+        shards = self.slab.host_rows()  # [crows, width] per chip, chip-linear r TP + c
+        if self.tp_axis is None:  # replicated over TP: mesh column 0's copy of every SP row
             shards = shards[:: self.geo.tp]
         return shards
 
     def to_host(self, length: int) -> torch.Tensor:
         """Natural-order compressed rows of token positions [0, ceil32(length)): host bf16 [ceil32(length) / r,
         width]."""
-        blocks = self.rows // self.stripe
-        stacked = torch.stack([s.view(blocks, self.stripe, self.tok_width) for s in self._owner_shards()], dim=1)
-        tok = stacked.reshape(blocks * self.owners * self.stripe, self.tok_width)[: -(-length // 32) * 32]
-        return tok.reshape(-1, self.width).to(torch.bfloat16)
+        hs = self.stripe // self.ratio  # compressed rows per owner stripe
+        blocks = self.crows // hs
+        stacked = torch.stack([s.view(blocks, hs, self.width) for s in self._owner_shards()], dim=1)
+        nat = stacked.reshape(blocks * self.owners * hs, self.width)
+        return nat[: -(-length // 32) * 32 // self.ratio].to(torch.bfloat16)
 
     def load_host(self, rows: torch.Tensor, p0: int) -> None:
         """Write host compressed rows [n, width] of token positions [p0, p0 + n r) (p0 % 32 == 0) through the device
         write path (a migrated / golden prefix)."""
-        g = self.geo
+        g, r = self.geo, self.ratio
         assert p0 % 32 == 0, p0
-        tok = rows.float().reshape(-1, self.tok_width)
-        n = tok.shape[0]
-        for a in range(0, n, g.chunk):
-            m = min(g.chunk, n - a)
-            nat = torch.zeros(g.chunk, self.tok_width)
-            nat[:m] = tok[a : a + m]
-            srv = nat[g.server_rows(p0 + a)].reshape(g.sp, 1, g.w, self.tok_width)
-            slab = _upload(self.mesh, srv, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (0, None))
-            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                self.tensor,
-                slab,
-                slot_idx=0,
-                layer_idx=0,
-                num_layers=1,
-                kv_actual_global=p0 + a,
-                cluster_axis=SP_AXIS,
-                valid_global=p0 + a + m,
-                tp_axis=self.tp_axis,
+        rows = rows.float().reshape(-1, self.width)
+        n, per = rows.shape[0], g.chunk // r
+        for a in range(0, n, per):
+            m = min(per, n - a)
+            nat = torch.zeros(per, self.width)
+            nat[:m] = rows[a : a + m]
+            t0 = p0 + a * r
+            srv = g.server_rows(t0)[:, ::r] // r  # compressed rows in the server's order
+            slab = _upload(
+                self.mesh,
+                nat[srv].reshape(g.sp, 1, g.w // r, self.width),
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
+                (0, None),
             )
+            self._put(slab, t0, t0 + m * r)
             ttnn.deallocate(slab)
 
     def free(self) -> None:
-        ttnn.deallocate(self.tensor)
+        """Frees the tensor only when it is the cache's own (never the engine's)."""
+        self.slab.free()
 
 
 def config_names(ratio: int) -> tuple[str, str]:
@@ -219,13 +232,15 @@ def config_names(ratio: int) -> tuple[str, str]:
 
 
 class TtCompressCaches:
-    """A KV-source layer's two served caches (one slot): compressed KV (TP-dedup) and index keys (TP-replicated)."""
+    """A KV-source layer's two served caches (one slot): compressed KV (TP-dedup) and index keys (TP-replicated).
+    ``slabs``: {config name: CacheSlab} of the serving engine's tensors; None = tensors of their own."""
 
-    def __init__(self, mesh, tables, max_seq: int, ratio: int, head_dim: int, index_dim: int):
+    def __init__(self, mesh, tables, max_seq: int, ratio: int, head_dim: int, index_dim: int, slabs=None):
         self.ratio = ratio
         self.names = config_names(ratio)
-        self.ckv = TtServedRows(mesh, tables, max_seq, head_dim, ratio, dedup=True)
-        self.index_k = TtServedRows(mesh, tables, max_seq, index_dim, ratio, dedup=False)
+        slabs = slabs or {}
+        self.ckv = TtServedRows(mesh, tables, max_seq, head_dim, ratio, dedup=True, slab=slabs.get(self.names[0]))
+        self.index_k = TtServedRows(mesh, tables, max_seq, index_dim, ratio, dedup=False, slab=slabs.get(self.names[1]))
 
     def by_config(self) -> dict:
         return {self.names[0]: self.ckv, self.names[1]: self.index_k}

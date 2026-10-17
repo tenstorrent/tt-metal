@@ -148,14 +148,11 @@ class TtIndexer:
 
     # ------------------------------------------------------------------ per chunk (device only)
     def _keys(self, cache) -> ttnn.Tensor:
-        """The served index-key cache [1, 1, rows, hd / r] bf16 ROW_MAJOR (token units, ND-sharded) -> compressed
-        rows [1, 1, rows / r, hd] bf16 TILE, interleaved: the ring's k_local (block-cyclic layout unchanged)."""
-        rm = ttnn.to_memory_config(cache.tensor, DRAM)
-        rows = rm.shape[-2]
-        view = ttnn.reshape(rm, [1, 1, rows // self.ratio, self.hd])
-        kt = ttnn.to_layout(view, ttnn.TILE_LAYOUT, memory_config=DRAM)
-        if rm is not cache.tensor:  # an interleaved cache would come back as itself (K-1): never free the cache
-            ttnn.deallocate(rm)
+        """The served index-key cache's slab [1, 1, rows / r, hd] bf16 ROW_MAJOR (ND-sharded) -> compressed rows
+        [1, 1, rows / r, hd] bf16 TILE, interleaved: the ring's k_local (block-cyclic layout unchanged)."""
+        rm = cache.slab.slice_rows(0, cache.crows)
+        kt = ttnn.to_layout(rm, ttnn.TILE_LAYOUT, memory_config=DRAM)
+        ttnn.deallocate(rm)
         return kt
 
     def _sub(self, t: ttnn.Tensor) -> ttnn.Tensor:
