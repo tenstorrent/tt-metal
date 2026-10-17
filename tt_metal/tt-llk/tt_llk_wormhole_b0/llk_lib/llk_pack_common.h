@@ -15,6 +15,20 @@
 using namespace ckernel;
 using namespace ckernel::packer;
 
+namespace llk_pack_internal
+{
+/**
+ * Which MOP the packer holds. The tile pack MOP (@ref _llk_pack_mop_config_) depends on the output format: a
+ * partial-face block-float tile is packed by one packer interface, every other tile by one interface per face.
+ * @ref _llk_pack_reconfig_data_format_ rebuilds that MOP when a format change flips the choice, and only that
+ * MOP: the untilize, row and fast-tilize MOP configs clear the flag so a reconfig issued while one of them is
+ * programmed leaves it in place.
+ */
+static bool tile_pack_mop_programmed = false;
+/** Whether the programmed tile pack MOP is the one-interface partial-face block-float sequence. */
+static bool tile_pack_mop_partial_face_bfp = false;
+} // namespace llk_pack_internal
+
 /**
  * @brief Stall the packer until the math thread has produced data to pack.
  *

@@ -217,16 +217,20 @@ inline void _llk_pack_mop_config_(
         }
     }
 
-    const std::uint32_t PACKCNT               = (partial_face && IS_BFP_FORMAT(pack_dst_format)) ? 1 : num_faces;
+    const bool partial_face_bfp               = partial_face && IS_BFP_FORMAT(pack_dst_format);
+    const std::uint32_t PACKCNT               = partial_face_bfp ? 1 : num_faces;
     constexpr std::uint32_t MEGAROW           = 1;
     constexpr std::uint32_t ZERO_OUTPUT_FLAG  = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
     constexpr std::uint32_t MOP_INNER_LOOP    = 1;
     llk_pack_internal::configured_num_tiles   = num_tiles;
     llk_pack_internal::configured_zero_output = ZERO_OUTPUT_FLAG;
+    // Only the default, data-emitting variant is rebuilt by a format reconfig (the variant every pack init in use builds).
+    llk_pack_internal::tile_pack_mop_programmed       = (pack_mode == PackMode::Default) && !zero_output;
+    llk_pack_internal::tile_pack_mop_partial_face_bfp = partial_face_bfp;
 
     if constexpr (pack_mode != PackMode::Untilize)
     {
-        if (partial_face && IS_BFP_FORMAT(pack_dst_format))
+        if (partial_face_bfp)
         {
             LLK_ASSERT(num_tiles == 1, "multi-tile partial-face BFP pack is not supported");
             constexpr std::uint32_t MOP_OUTER_LOOP = 1;
@@ -289,6 +293,13 @@ inline void _llk_pack_mop_config_(
  *
  * Used to switch the packer to a new data format without a full HW re-configure.
  *
+ * The tile pack MOP packs a partial-face block-float tile with one packer interface and every other tile with
+ * one interface per face, so it depends on the output format. When the tile pack MOP is programmed and this
+ * reconfig crosses that line (a matmul switching from its Float16_b partials to a short-face block-float
+ * output, or back), the MOP is rebuilt for the new format; the ADDR_MODs and the packer X counter are
+ * geometry-only state that the pack init already programmed. Any other MOP (untilize, rows, fast tilize) is
+ * left in place.
+ *
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
  * @param pack_src_format: Source (dest register) data format.
  * @param pack_dst_format: Destination (L1) data format.
@@ -297,21 +308,30 @@ inline void _llk_pack_mop_config_(
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param partial_face: True if packing a partial (sub-face-row) face.
  * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
+ * @return True when the tile pack MOP was rebuilt for the new format.
  */
 template <bool is_fp32_dest_acc_en>
-inline void _llk_pack_reconfig_data_format_(
+inline bool _llk_pack_reconfig_data_format_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    const std::uint32_t face_r_dim          = FACE_R_DIM,
-    const std::uint32_t num_faces           = 4,
-    const bool partial_face                 = false,
-    [[maybe_unused]] const bool narrow_tile = false)
+    const std::uint32_t face_r_dim = FACE_R_DIM,
+    const std::uint32_t num_faces  = 4,
+    const bool partial_face        = false,
+    const bool narrow_tile         = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!partial_face || face_r_dim < FACE_R_DIM, "partial_face requires a face shorter than FACE_R_DIM rows (one exponent chunk per tile)");
 
     reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face);
+
+    const bool partial_face_bfp = partial_face && IS_BFP_FORMAT(pack_dst_format);
+    if (!llk_pack_internal::tile_pack_mop_programmed || partial_face_bfp == llk_pack_internal::tile_pack_mop_partial_face_bfp)
+    {
+        return false;
+    }
+    _llk_pack_mop_config_<PackMode::Default, false>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, llk_pack_internal::configured_num_tiles);
+    return true;
 }
 
 /**

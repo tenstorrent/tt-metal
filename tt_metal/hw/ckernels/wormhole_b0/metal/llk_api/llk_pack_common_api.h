@@ -179,7 +179,10 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output) {
  * Reconfigure the packer for a new output operand's data format.
  *
  * Face geometry (face_r_dim, num_faces), partial-face flag, narrow-tile flag and tile size are
- * derived from the new output's CB metadata.
+ * derived from the new output's CB metadata. When the tile pack MOP is programmed and the new output
+ * moves it across the partial-face block-float line (one packer interface per tile instead of one per
+ * face, or back), the LLK rebuilds that MOP for the new format and the pack operation is seated on it
+ * again, as llk_pack_init would.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  new_output          New output circular buffer / operand index to configure for.
@@ -201,7 +204,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
         StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
         StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
+    [[maybe_unused]] const bool tile_pack_mop_rebuilt = _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         get_local_cb_interface(output_id).fifo_page_size,
@@ -209,6 +212,17 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         num_faces,
         partial_face,
         narrow_tile);
+    if (tile_pack_mop_rebuilt) {
+        // The rebuilt MOP bakes the new format in (the partial-face block-float PACR variant), exactly as
+        // llk_pack_init records it for a partial-face output.
+        SAN_HOOK(init<OperationPack>(
+            StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+            StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+            StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+            StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
+            StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
+            StateVal<OperationPack::NumTiles>(llk_pack_internal::configured_num_tiles)));
+    }
 }
 
 /**

@@ -86,6 +86,7 @@ template <
     std::uint32_t row_num_datums = TILE_C_DIM>
 inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
+    llk_pack_internal::tile_pack_mop_programmed = false; // a format reconfig must not rebuild the tile pack MOP over this one
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const std::uint32_t PACKCNT              = diagonal ? (num_faces > 2 ? num_faces / 2 : num_faces) : ((face_r_dim < FACE_R_DIM) ? 1 : num_faces);
     constexpr std::uint32_t MEGAROW          = 1;

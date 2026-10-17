@@ -45,6 +45,7 @@ inline void _llk_pack_rows_configure_addrmod_()
  */
 inline void _llk_pack_rows_mop_config_(const std::uint32_t num_rows)
 {
+    llk_pack_internal::tile_pack_mop_programmed = false; // a format reconfig must not rebuild the tile pack MOP over this one
     constexpr std::uint32_t PACKCNT          = 1; // Use only packer 0
     constexpr std::uint32_t MEGAROW          = 0; // Not using megarow mode
     constexpr std::uint32_t ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;

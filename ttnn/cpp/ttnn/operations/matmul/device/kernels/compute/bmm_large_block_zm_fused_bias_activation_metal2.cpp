@@ -302,18 +302,6 @@ void kernel_main() {
 
     constexpr bool spill = num_blocks_inner_dim > 1;
 
-    // The pack MOP is built by the pack init for the partials buffer. On Wormhole its shape also depends on
-    // the output format: a block-float output with faces shorter than a full face is packed by one packer
-    // interface (one exponent chunk per tile), every other output by one interface per face. A format-only
-    // reconfig between the partials buffer (Float16_b / Float32) and such an output would leave the wrong
-    // MOP in place, so every pack-output switch below rebuilds the MOP with the format. Quasar rebuilds it
-    // through its own pack_init calls at the same points and rejects the template flag.
-#ifdef ARCH_QUASAR
-    constexpr bool rebuild_pack_mop_on_reconfig = false;
-#else
-    constexpr bool rebuild_pack_mop_on_reconfig = true;
-#endif
-
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_id);
     matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
@@ -354,7 +342,7 @@ void kernel_main() {
 #endif
 
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
-                    PACK((pack_reconfig_data_format<rebuild_pack_mop_on_reconfig>(mm_partials_dfb_id)));
+                    PACK((pack_reconfig_data_format(mm_partials_dfb_id)));
 #ifdef ARCH_QUASAR
                     // Quasar (§7): BFDs live in the pack *init*, not the format reconfig above. A previous
                     // block-group's tail (last-block pack to mm_out, or the bias / untilize pack to out) left
@@ -487,7 +475,7 @@ void kernel_main() {
 #endif
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                                PACK((pack_reconfig_data_format<rebuild_pack_mop_on_reconfig>(mm_out_dfb_id)));
+                                PACK((pack_reconfig_data_format(mm_out_dfb_id)));
 #endif
 
 #ifdef PACKER_L1_ACC
@@ -593,7 +581,7 @@ void kernel_main() {
                 PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                PACK((pack_reconfig_data_format<rebuild_pack_mop_on_reconfig>(out_dfb_id)));
+                PACK((pack_reconfig_data_format(out_dfb_id)));
 #endif
 #ifdef PACKER_L1_ACC
                 PACK((llk_pack_reconfig_l1_acc(0)));
