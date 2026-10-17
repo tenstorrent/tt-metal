@@ -116,6 +116,11 @@ struct FlatRoutedExpertPlan {
     // half-width gate / up tiles (MIMO_FL_HG): a pair's two weight tiles hold [gate | up] of its h tile's left / right
     // 16 columns (the activation runs face-wise, se_glu_faces.hpp); the split granularity of 16 columns builds on it
     bool hg = false;
+    // 16-column units (MIMO_FL_HG_NU = units per core, HG only; np is then 0): a core's gate/up block is nu weight
+    // tiles a row ([gate | up] of units cg nu ..), its h a run of hpc h tiles from K tile cg nu / 2, the first / last
+    // one half its own when cg nu / (cg + 1) nu is odd. Generic widths: gwt weight tiles a row (2 np / nu), hpc h tiles
+    // a row (np / (nu + 1) / 2), ngrp column groups (It / np / 2 It / nu)
+    uint32_t nu = 0, gwt = 2, hpc = 1, ngrp = 0;
     std::vector<uint32_t> rgs, ps0, gu_off;
     uint32_t r_of(uint32_t r) const { return rgs.empty() ? r_ : rgs[r] * g; }
     uint32_t gu_at(uint32_t r, uint32_t j) const { return gu_off.empty() ? r * r_ + j : gu_off[r] + j; }

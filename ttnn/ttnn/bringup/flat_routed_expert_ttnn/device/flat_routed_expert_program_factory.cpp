@@ -902,6 +902,10 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         // (tests/ttnn/unit_tests/operations/noc_hang_probe, op_skeleton); with these writes on NOC1 it never did.
         // DRISC mode: the DRISC slots' receivers count their grants locally (SE_DRISC), the others credit their reader
         Defines recv_def = with(dyn_def, {{"SE_GU_ONLY", "1"}, {"SE_X_RELAY", "1"}, {"SE_NO_PARTNER", "1"}});
+        if (p.nu) {  // 16-column units: the h run from K-tile cg NU / 2, half tiles at the ends
+            recv_def["SE_HG_NU"] = std::to_string(p.nu);
+            recv_def["SE_HPC"] = std::to_string(p.hpc);
+        }
         if (x_two) {  // two x streams alternating by super-block (runs of SBT / KBLK blocks)
             recv_def["SE_X_RELAY2"] = std::to_string(p.sbt / KBLK);
             recv_def["SE_X_NRELAY"] = "2";
@@ -939,14 +943,21 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
              {"SE_ACT", std::to_string(cfg.activation)},
              {"SE_XMT", std::to_string(MT)}});
         if (gu_rp) {
-            cdef["SE_GU_RP"] = std::to_string(std::max(1u, 4 / (2 * NP)));
+            cdef["SE_GU_RP"] = std::to_string(std::max(1u, 4 / p.gwt));
             cdef["SE_XSLOTS"] = std::to_string(p.x_slots);
         }
         if (p.gu_l1acc) {
             cdef["SE_GU_L1ACC"] = "1";
         }
+        TT_FATAL(
+            !p.hg || cfg.activation == 0 || cfg.activation == 2 || cfg.activation == 3,
+            "flat_routed_expert: half-width gate / up tiles take SiLU / SiTU / clamped SiLU GLU only");
         if (p.hg) {  // half-width gate / up tiles: the face-wise activation
             cdef["SE_HG"] = "1";
+        }
+        if (p.nu) {  // 16-column units per core (RT 1: the core's first unit odd)
+            cdef["SE_HG_NU"] = std::to_string(p.nu);
+            cdef["SE_HPC"] = std::to_string(p.hpc);
         }
         if (std::getenv("MIMO_FL_NO_ACT")) {  // probe: no gate/up activation (wrong h), the bare matmul + pack
             cdef["SE_NO_ACT"] = "1";
@@ -985,7 +996,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                     .cat(dyn)
                     .lits(sgx(sg));
                 add_rt(dr ? kr_d : kr_t, gc, a);
-                SetRuntimeArgs(program, kc, gc, std::vector<uint32_t>{j % G});
+                const uint32_t cg_ = (p.ps0.empty() ? (r % p.n_rd_sg) * p.rg : p.ps0[r]) + j / G;
+                SetRuntimeArgs(program, kc, gc, std::vector<uint32_t>{j % G, (cg_ * p.nu) & 1u});
             }
         }
     }
@@ -1149,13 +1161,13 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     arena_cb(1, 0, p.ring_g * p.slot * w_tile, p.gu, wf, w_tile);
     arena_cb(0, p.x_off, p.x_slots * x_bytes, p.gu, x_fmt, p.x_tile);
     if (p.hl_in_arena) {  // bf16 x / h: gate/up h_local in the arena (out of the program-wide static CB region)
-        arena_cb(3, p.hl_off, p.hl_slots * MTG * NP * p.h_tile, p.gu, h_fmt, p.h_tile);
+        arena_cb(3, p.hl_off, p.hl_slots * MTG * p.hpc * p.h_tile, p.gu, h_fmt, p.h_tile);
     } else {
-        static_cb(3, p.hl_slots * MTG * NP * p.h_tile, p.gu, h_fmt, p.h_tile);
+        static_cb(3, p.hl_slots * MTG * p.hpc * p.h_tile, p.gu, h_fmt, p.h_tile);
     }
     static_cb(16, 2048, p.gu, tt::DataFormat::Float16_b, 2048);
     if (p.gu_l1acc) {
-        arena_cb(5, p.p_off, MTG * 2 * NP * 2048, p.gu, tt::DataFormat::Float16_b, 2048);
+        arena_cb(5, p.p_off, MTG * p.gwt * 2048, p.gu, tt::DataFormat::Float16_b, 2048);
     }
     arena_cb(2, p.h_off, p.hbuf * p.h_tiles * p.h_tile, p.down, h_fmt, p.h_tile);
     for (const auto& [pw, ds] : dgroups) {

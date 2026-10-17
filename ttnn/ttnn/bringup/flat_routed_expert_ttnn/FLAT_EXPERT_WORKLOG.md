@@ -882,3 +882,23 @@ TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1, rerun the logged compile + link from th
 test_flat_uneven_split.py with MIMO_FL_HG=1 (V4.1 E12 / E24 clamped SiLU, GLM SiLU, K3 SiTU): min PCC 0.998, the
 same as the standard layout. V4.1 E24 us / expert, standard / HG: M 32 45.9 / 45.8, 80 51.0 / 51.1, 256 68.9 / 68.8,
 1024 245.4 / 245.4. Next: odd 16-column units per core (V4.1: 48 cores x 3 units, 3 per reader).
+
+### Half-width tiles step 2: 16-column units per core, odd counts (2026-10-17) -> V4.1 default
+A core takes NU units ([gate | up] tiles of 16 columns each, plan nu; generic widths gwt / hpc / ngrp replace 2 np /
+np / It / np in the plan, factory, se3_compute and se5_recv). Its h is a run of HPC = (NU + 1) / 2 tiles from K-tile
+cg NU / 2: when cg NU is odd the first tile is only its right half (lead: the face-wise activation writes unit u to
+slot((u + lead) / 2), half (u + lead) & 1; slot(j) = j ? 2 j - lead : 0), when (cg + 1) NU is odd the last tile only
+its left half; se5_recv writes the full tiles as one run and the halves face by face (bfp8: 16 B exponents + 256 B
+data of faces 1 / 3 or 0 / 2; bf16: 512 B faces), the down cores' gather still counts one slice per gate/up core.
+Weights: _hg_units (unit u = [gate | up] of columns 16 u..), a column group's NU units in order.
+Default when no even pair split exists (MIMO_FL_HG_AUTO=0: off; MIMO_FL_HG_NU forces NU): the most gate/up cores that
+are a multiple of the 16 readers and fit; reader down columns off with units (they slowed the readers' streams).
+DeepSeek V4.1-Flash (I 2304 = 144 units): NU 3, 48 gate/up cores (3 a reader, banks / readers exactly balanced), 40
+down. test_flat_uneven_split.py (V4.1 E12 / E24, GLM, K3; MIMO_FL_HG_NU=3 also K3 with 64 x 3): min PCC 0.998.
+V4.1 us / expert (DRAM %), E 24:
+| plan | M 32 | M 80 | M 128 | M 256 | M 1024 |
+| uneven pairs, 72 gate/up, reader tails (previous default) | 45.9 (88%) | 51.0 (83%) | 55.4 | 68.9 | 245.4 |
+| units NU 3, 48 gate/up, reader tails | 46.9 | 52.3 | 55.8 | 67.1 | 242.0 |
+| units NU 3, 48 gate/up, no reader tails (default) | 44.3 (91%) | 48.2 (87%) | 51.9 (85%) | 62.8 (78%) | 226.5 |
+E 48 / E 12 at M 80: 47.5 (89%) / 49.8 (85%); M 1024: 225.8 / 229.7. Probes (NU 3): full-sync DST 284 (worse),
+MIMO_FL_ND=64 (untrimmed down) no gain, PCD_R 3 / 4 with tails 233 / 245.

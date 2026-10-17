@@ -404,6 +404,12 @@ def _hg_pair(Wg, Wu):
     return A, B
 
 
+def _hg_units(Wg, Wu):
+    """(Wg, Wu) [H, I] -> [H, 2 I]: unit u's 32 columns = gate 16 u..16 u + 15 then up 16 u..16 u + 15."""
+    H, I = Wg.shape
+    return torch.cat([Wg.reshape(H, I // 16, 16), Wu.reshape(H, I // 16, 16)], dim=2).reshape(H, 2 * I)
+
+
 def flat_weight_regions(W_l, lay):
     """One device's weights in the flat expert's per-core bank regions (the C++ op's flat_routed_expert_plan and this
     builder share it). W_l: per local expert (Wg [H, I], Wu [H, I], Wd [I, H]). Returns (gate/up regions per reader,
@@ -416,7 +422,10 @@ def flat_weight_regions(W_l, lay):
     * reader tail i: per expert, per K-block of kd_r tiles, [kd_r x pcd_r] columns from rem_cols + (i % n_rdn) pcd_r."""
     kblk = 8
     tiles = lambda w: w.view(w.shape[0] // 32, 32, w.shape[1] // 32, 32).permute(0, 2, 1, 3)
-    if lay.get("hg"):  # half-width tiles: a pair's "gate" tile [gate | up] of its columns 0..15, "up" tile of 16..31
+    nu = lay.get("nu") or 0
+    if nu:  # 16-column units: unit u's tile = [gate | up] of columns 16 u..; a column group's NU units in order
+        U_l = [tiles(_hg_units(a, b)) for a, b, _ in W_l]
+    elif lay.get("hg"):  # half-width tiles: a pair's "gate" tile [gate | up] of its columns 0..15, "up" tile of 16..31
         W_l = [_hg_pair(a, b) + (c,) for a, b, c in W_l]
     T_l = [(tiles(a), tiles(b), tiles(c)) for a, b, c in W_l]
     it = W_l[0][0].shape[1] // 32
@@ -426,10 +435,15 @@ def flat_weight_regions(W_l, lay):
     for r in range(lay["n_rd"]):
         rg_r, p0 = (rgs[r], ps0[r]) if rgs else (RG, (r % lay["n_rd_sg"]) * RG)
         blocks = []
-        for Wg_t, Wu_t, _ in T_l:
+        for e_, (Wg_t, Wu_t, _) in enumerate(T_l):
             for c in range(lay["nk_gu"]):
                 ks = slice(c * kblk, (c + 1) * kblk)
                 for pl in range(rg_r):
+                    if nu:
+                        Ut = U_l[e_]
+                        units = range((p0 + pl) * nu, (p0 + pl + 1) * nu)
+                        blocks.append(torch.stack([Ut[ks, u_] for u_ in units], dim=1).reshape(-1, 32, 32))
+                        continue
                     cols = [(p0 + pl) * NP + p_ for p_ in range(NP)]
                     blocks.append(
                         torch.stack([w_[ks, c_] for c_ in cols for w_ in (Wg_t, Wu_t)], dim=1).reshape(-1, 32, 32)
@@ -1903,6 +1917,8 @@ class FlatRoutedExpert:
                 layout["rgs"] = tuple(lay["rgs"])
             if lay.get("hg"):
                 layout["hg"] = True
+            if lay.get("nu"):
+                layout["nu"] = lay["nu"]
             key = hashlib.sha1(repr((sorted(layout.items()), gids, n_dev)).encode()).hexdigest()[:12]
             files = {n: f"{cache_prefix}.flat.{wdtype}.lay{key}.{n}.tensorbin" for n in names}
             _adopt_legacy(cache_prefix, wdtype, files)

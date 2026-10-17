@@ -54,7 +54,7 @@ def test_flat_uneven_split(device, case):
         f"{tag}: np {plan['np']} g {plan['g']} mt {plan['mt']} uneven {plan['uneven']} rgs {plan['rgs']} "
         f"gate/up cores {len(plan['gu'])} down {plan['nd']} rdown {plan['rdown']} hg {plan['hg']}"
     )
-    assert plan["uneven"] or not tag.startswith("v41"), f"{tag}: expected the uneven split"
+    assert plan["uneven"] or plan["nu"] or not tag.startswith("v41"), f"{tag}: expected the uneven split"
     q = lambda w: ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
     Wq = [[q(w_) for w_ in weights[0][e]] for e in range(E)]
     pinned = []
