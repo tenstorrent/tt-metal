@@ -31,7 +31,7 @@
 # blocks until result.json exists and exits with the leg's exit code. The server never pushes, never
 # touches GitHub, and never runs anything but the requested command. That command runs with cwd
 # <tree>/<cwd>, CHIP_ARCH=<arch> and the request's env, under the box's device lock
-# ${TT_DEVICE_LOCK:-/tmp/tt-device-<host>.lock}, after a `tt-smi -r 0` in the same lock hold (the reset
+# ${TT_DEVICE_LOCK:-/tmp/tt-device-<host>.lock}, after a `tt-smi -r 0` (bounded to 180 s) in the same lock hold (the reset
 # is skipped when TT_DEVICE_LOCK is set — that is the test harness). A request whose server died stays
 # "claimed" with no result: `rm -r claimed.d claimed` re-opens it. `legs.sh status` prints one line per
 # server that has a heartbeat (`serve <arch>: <host> pid=<pid> last seen <N>s ago (busy=<id|->)`, marked
@@ -175,10 +175,16 @@ serve_one() {  # serve_one <req dir>: prepare the tree, run the command under th
         cd "$tree/$r_cwd" || exit 97
         export CHIP_ARCH=$arch
         eval "$r_env_sh"
-        # branch mode takes the lock here; patch mode already holds it on the inherited fd 9
-        [ "$have_lock" = 1 ] || { exec 9>"$lock"; flock 9 || exit 97; }
-        # a hung test from an earlier session leaves the card wedged (workers die at startup): reset first
-        [ -n "${TT_DEVICE_LOCK:-}" ] || tt-smi -r 0 > /dev/null 2>&1 || true
+        # branch mode takes the lock here; patch mode already holds it on the inherited fd 9.
+        # The wait can be long (the local worker's own tests hold the same lock): log it, so an
+        # empty leg.log is readable from the run dir as "waiting", not "hung".
+        if [ "$have_lock" != 1 ]; then
+            exec 9>"$lock"
+            flock -n 9 || { log "$r_id waiting for device lock $lock"; flock 9 || exit 97; log "$r_id device lock acquired"; }
+        fi
+        # a hung test from an earlier session leaves the card wedged (workers die at startup): reset first,
+        # bounded so a wedged reset cannot block the serve loop outside the leg timeout
+        [ -n "${TT_DEVICE_LOCK:-}" ] || timeout --kill-after=10 180 tt-smi -r 0 > /dev/null 2>&1 || log "$r_id tt-smi -r 0 failed or timed out (rc=$?), running anyway"
         timeout --kill-after=60 "$r_timeout" bash -c "$r_cmd"
     ) > "$d/leg.log" 2>&1
     rc=$?
