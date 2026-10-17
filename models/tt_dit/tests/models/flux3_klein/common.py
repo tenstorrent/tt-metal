@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +65,9 @@ from ....pipelines.flux3_klein.weights_flux3_klein import (
 )
 
 GOLDENS_ENV = "FLUX3_KLEIN_GOLDENS"
+VAE_ORACLE_CACHE_ENV = "FLUX3_KLEIN_VAE_ORACLE_CACHE"
+SAMPLING_ORACLE_CACHE_ENV = "FLUX3_KLEIN_SAMPLING_ORACLE_CACHE"
+RENDERS_ENV = "FLUX3_KLEIN_OUT"
 REFERENCE_DEPTH_ENV = "FLUX3_KLEIN_REFERENCE_DEPTH"
 GOLDEN_PCC_ENV = "FLUX3_KLEIN_GOLDEN_PCC"
 DEFAULT_GOLDEN_PCC = 0.995
@@ -216,6 +220,50 @@ def golden_index(root: Path | None = None) -> dict:
         if index.is_file():
             return json.loads(index.read_text())
     return {}
+
+
+def golden_prompt(case: GoldenCase | Path) -> str:
+    """The recorded prompt of a golden case (``record.json`` ``upstream_record.prompt``, the text the golden's
+    ``text_tokens`` encode; ``input_prompt`` is the pre-upsampler text and is never used)."""
+    record = case.record if isinstance(case, GoldenCase) else json.loads((Path(case) / "record.json").read_text())
+    return record["upstream_record"]["prompt"]
+
+
+def vae_oracle_cache() -> Path | None:
+    """``$FLUX3_KLEIN_VAE_ORACLE_CACHE``: where the CPU reference decodes (~90 s per 1024 image on a login box) are
+    kept between runs, as the M3 / M5 oracle caches; ``None`` recomputes every time."""
+    value = os.environ.get(VAE_ORACLE_CACHE_ENV)
+    return Path(value) if value else None
+
+
+def sampling_oracle_cache() -> Path | None:
+    """``$FLUX3_KLEIN_SAMPLING_ORACLE_CACHE``: where the CPU reference sampling runs on a device-produced input (the
+    pipeline test's proper reference for a device-text row; ~9 min per distilled 1024 image on the node CPU) are kept
+    between runs; ``None`` recomputes every time."""
+    value = os.environ.get(SAMPLING_ORACLE_CACHE_ENV)
+    return Path(value) if value else None
+
+
+def renders_dir() -> Path | None:
+    """``$FLUX3_KLEIN_OUT``: where the pipeline tests save their PNGs (never inside the tree); ``None`` saves nothing."""
+    value = os.environ.get(RENDERS_ENV)
+    if not value:
+        return None
+    path = Path(value)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def psnr_uint8(a, b) -> float:
+    """PSNR between two uint8 RGB images (PIL or arrays); ``inf`` when identical."""
+    import numpy as np
+
+    x = np.asarray(a, dtype=np.float64)
+    y = np.asarray(b, dtype=np.float64)
+    if x.shape != y.shape:
+        raise ValueError(f"shape mismatch {x.shape} vs {y.shape}")
+    mse = float(np.mean((x - y) ** 2))
+    return float("inf") if mse == 0 else 10.0 * math.log10(255.0**2 / mse)
 
 
 def golden_pcc_floor() -> float:
