@@ -556,8 +556,8 @@ class Qwen38ForCausalLM:
         self.generator._release_traces()
         self.generator._batched_prefill_compiling = True
         try:
-            # Largest occupancy first. Its down_proj reduce_scatter needs ~37 MiB contiguous
-            # per bank, and the smaller passes leave the heap in holes too small for it.
+            # Largest occupancy first. Its widest pass asks for the largest contiguous block of
+            # the whole warmup, and the narrow ones leave the heap in pieces too small for it.
             for batch in range(self.batch_size, 0, -1):
                 slots = list(range(batch))
                 self.generator.reset_recurrent_slots(slots)

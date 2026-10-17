@@ -60,6 +60,26 @@ MAX_PREFIX_SNAPSHOTS = MAX_SERVING_BATCH
 MAX_RESIDENT_PREFILL = int(os.getenv("QWEN_RESIDENT_PREFILL_TRACES", "4"))
 
 
+def batched_prefill_passes(rows, chunk, budget):
+    """Row widths one grouped prefill runs as, so a single pass's activations fit the heap.
+
+    Every projection in a pass allocates rows * chunk * hidden * bf16 at once. Sixteen rows of
+    4096 tokens make that 640 MiB, needing 53.3 MiB contiguous in each of 12 banks; the heap at
+    that point holds 98 MiB free per bank but no block above 50.8 MiB, and the DRAM allocator
+    cannot compact. Splitting the rows is the only lever the model owns -- the widths are a
+    property of the graph, and minimal_matmul takes no preallocated output.
+
+    Widths are balanced rather than greedy because prefill_batch refuses a lone row, and a
+    greedy split of an odd count ends on one.
+    """
+    if budget <= 0 or rows * chunk <= budget:
+        return [rows]
+    passes = min(-(-rows * chunk // budget), rows // 2)
+    if passes <= 1:
+        return [rows]
+    return [rows // passes + (1 if i < rows % passes else 0) for i in range(passes)]
+
+
 def batched_prefill_shape(slots, starts, prompt_lens, all_logits):
     """What a grouped prefill compiles against, or None when the group cannot be grouped.
 
@@ -121,6 +141,9 @@ class Qwen38Generator:
         self.tokenizer = AutoTokenizer.from_pretrained(model.snapshot, local_files_only=True)
         self.host_sampling = host_sampling
         self.batched_prefill = os.getenv("QWEN_BATCHED_PREFILL", "0") == "1"
+        # Tokens one grouped pass may carry. 8 rows of 4096 is what the heap can hand a single
+        # projection output; see batched_prefill_passes. 0 removes the cap.
+        self.prefill_pass_tokens = int(os.getenv("QWEN_PREFILL_PASS_TOKENS", "32768"))
         self.skip_intermediate_prefill_head = os.getenv("QWEN_PREFILL_SKIP_INTERMEDIATE_HEAD", "0") == "1"
         self.seed = 0
         args = SimpleNamespace(
@@ -687,24 +710,33 @@ class Qwen38Generator:
             length, start = prompt_lens[0], starts[0]
             if not 1 <= length <= tokens.shape[-1] or start < 0 or start + length > kv_cache.capacity:
                 raise ValueError("Invalid batched prompt length or prefix")
-            for offset in range(0, length, 4096):
-                count = min(4096, length - offset)
-                ids = self.model.upload(
-                    tokens[:, offset : offset + count].int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
-                )
-                results = self.model.prefill_batch(
-                    ids,
-                    cache=kv_cache,
-                    page_table=table,
-                    length=count,
-                    start_pos=start + offset,
-                    slots=slots,
-                    **(
-                        {"return_logits": False}
-                        if getattr(self, "skip_intermediate_prefill_head", False) and offset + count < length
-                        else {}
-                    ),
-                )
+            results = []
+            row = 0
+            # Rows are independent here -- GDN state is per slot and KV per page -- so a pass
+            # carrying a subset reaches the same state as one carrying all of them.
+            for width in batched_prefill_passes(len(slots), min(4096, length), getattr(self, "prefill_pass_tokens", 0)):
+                for offset in range(0, length, 4096):
+                    count = min(4096, length - offset)
+                    ids = self.model.upload(
+                        tokens[row : row + width, offset : offset + count].int(),
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                    )
+                    produced = self.model.prefill_batch(
+                        ids,
+                        cache=kv_cache,
+                        page_table=table,
+                        length=count,
+                        start_pos=start + offset,
+                        slots=slots[row : row + width],
+                        **(
+                            {"return_logits": False}
+                            if getattr(self, "skip_intermediate_prefill_head", False) and offset + count < length
+                            else {}
+                        ),
+                    )
+                results.extend(produced)
+                row += width
             self.prefill_signatures.update(signatures)
             self.batched_prefill_shapes.add(batched_shape)
             self.counters["batched_prefill_calls"] += 1

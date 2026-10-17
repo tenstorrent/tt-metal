@@ -9,6 +9,7 @@ from types import MethodType, SimpleNamespace
 import torch
 
 from models.demos.qwen38_27b_t3k.tests.unit.test_serving_prefill_trace import load_methods
+from models.demos.qwen38_27b_t3k.tt.generator import batched_prefill_passes
 
 
 class BatchedPrefillDispatchTests(unittest.TestCase):
@@ -180,3 +181,108 @@ class PrefillSignatureCoverageTests(unittest.TestCase):
         self.releases.clear()
         self.run_prefill(4128)
         self.assertEqual(self.releases, [])
+
+
+class PassWidthTests(unittest.TestCase):
+    """A grouped pass is capped by the activations it allocates, not by the server's occupancy."""
+
+    def test_a_pass_inside_the_budget_is_not_split(self):
+        self.assertEqual(batched_prefill_passes(8, 4096, 32768), [8])
+
+    def test_the_serving_shape_splits_into_equal_halves(self):
+        # 16 x 4096 allocates 640 MiB per projection, needing 53.3 MiB contiguous per bank
+        # against a largest free block of 50.8 MiB. Two passes of 8 ask 26.7 MiB.
+        self.assertEqual(batched_prefill_passes(16, 4096, 32768), [8, 8])
+
+    def test_short_prompts_keep_the_full_occupancy(self):
+        # The budget is a token count, so a quarter-length chunk carries four times the rows.
+        self.assertEqual(batched_prefill_passes(16, 1024, 32768), [16])
+
+    def test_widths_are_balanced_rather_than_greedy(self):
+        # A greedy split would be [8, 1], and prefill_batch refuses a lone row.
+        self.assertEqual(batched_prefill_passes(9, 4096, 32768), [5, 4])
+
+    def test_no_width_is_ever_a_single_row(self):
+        for rows in range(2, 33):
+            for budget in (0, 2048, 4096, 32768, 65536):
+                with self.subTest(rows=rows, budget=budget):
+                    widths = batched_prefill_passes(rows, 4096, budget)
+                    self.assertEqual(sum(widths), rows)
+                    self.assertTrue(all(width >= 2 for width in widths))
+
+    def test_a_zero_budget_removes_the_cap(self):
+        self.assertEqual(batched_prefill_passes(16, 4096, 0), [16])
+
+
+class PassSplitDispatchTests(unittest.TestCase):
+    """The split has to reach prefill_batch as whole rows, in slot order, state untouched."""
+
+    def setUp(self):
+        self.calls = []
+        self.ops = SimpleNamespace(uint32="u32", ROW_MAJOR_LAYOUT="rm")
+        self.cache = SimpleNamespace(batch_size=16, capacity=16384)
+        self.table = torch.zeros(16, 512, dtype=torch.int32)
+        self.gen = SimpleNamespace(
+            batched_prefill=True,
+            prefill_prepared=None,
+            cache=self.cache,
+            prefill_signatures=set(),
+            batched_prefill_shapes=set(),
+            _batched_prefill_compiling=True,
+            page_table=self.table,
+            counters=Counter(),
+            # One row of 4096 is half the budget, so four rows split into two passes of two.
+            prefill_pass_tokens=8192,
+            model=SimpleNamespace(
+                config=SimpleNamespace(vocab_size=1000),
+                upload=lambda x, **kw: x,
+                prefill_batch=self.batch,
+                prefill=lambda x, **kw: self.calls.append(("single", x.clone(), kw)) or "single",
+            ),
+            _release_traces=lambda **kw: None,
+            _refresh_table=lambda table: None,
+            _slot_prefix_len=[0] * self.cache.batch_size,
+        )
+        methods = load_methods(
+            "generator.py", "Qwen38Generator", ["prefill_forward", "_begin_prefix", "_end_prefix"], self.ops
+        )
+        self.gen._begin_prefix = MethodType(methods["_begin_prefix"], self.gen)
+        self.gen._end_prefix = MethodType(methods["_end_prefix"], self.gen)
+        self.forward = MethodType(methods["prefill_forward"], self.gen)
+
+    def batch(self, tokens, **kwargs):
+        self.calls.append(("batch", tokens.clone(), kwargs))
+        return [f"slot{slot}" for slot in kwargs["slots"]]
+
+    def run_prefill(self, lengths, slots):
+        tokens = torch.stack([torch.full((max(lengths),), i + 1) for i in range(len(lengths))])
+        return self.forward(tokens, page_table=self.table, kv_cache=self.cache, prompt_lens=lengths, slots=slots)
+
+    def test_rows_split_into_passes_over_consecutive_slots(self):
+        self.run_prefill([4096] * 4, [0, 1, 2, 3])
+        self.assertEqual([call[2]["slots"] for call in self.calls], [[0, 1], [2, 3]])
+
+    def test_each_pass_carries_only_its_own_token_rows(self):
+        self.run_prefill([4096] * 4, [0, 1, 2, 3])
+        first, second = (call[1] for call in self.calls)
+        self.assertTrue(torch.all(first[0] == 1) and torch.all(first[1] == 2))
+        self.assertTrue(torch.all(second[0] == 3) and torch.all(second[1] == 4))
+
+    def test_results_come_back_in_slot_order_across_passes(self):
+        self.assertEqual(self.run_prefill([4096] * 4, [0, 1, 2, 3]), ["slot0", "slot1", "slot2", "slot3"])
+
+    def test_a_split_group_still_records_the_shape_the_caller_asked_for(self):
+        # The index is keyed on what the server requests; a later identical request must take
+        # the grouped path rather than recompile, whatever width the pass ran at.
+        self.run_prefill([4096] * 4, [0, 1, 2, 3])
+        self.assertIn((4, 0, 4096), self.gen.batched_prefill_shapes)
+
+    def test_every_chunk_of_every_pass_keeps_its_prefix(self):
+        self.run_prefill([8192] * 4, [0, 1, 2, 3])
+        self.assertEqual([c[2]["start_pos"] for c in self.calls], [0, 4096, 0, 4096])
+        self.assertEqual([c[2]["slots"] for c in self.calls], [[0, 1], [0, 1], [2, 3], [2, 3]])
+
+    def test_an_uncapped_generator_runs_one_pass(self):
+        self.gen.prefill_pass_tokens = 0
+        self.run_prefill([4096] * 4, [0, 1, 2, 3])
+        self.assertEqual([call[2]["slots"] for call in self.calls], [[0, 1, 2, 3]])

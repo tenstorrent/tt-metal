@@ -69,9 +69,9 @@ python -m pytest "$model_dir/tests/test_decode_conv.py" --timeout 300 --junitxml
 
 export QWEN_DECODE_BUCKETS=1 QWEN_COMPACT_DECODE_RESIDUAL=1 QWEN_COMPACT_DECODE_MLP=1
 export QWEN_BATCHED_DECODE_ROPE=1 QWEN_COMPACT_DECODE_ATTENTION=1
-# The pool has to clear vLLM's warmup prefill, which allocates max-num-batched-tokens of
-# activation at once: 262144 x 5120 x bf16 = 2560 MiB. At capacity 16 the GDN state for
-# 16 slots leaves 2684 MiB, so that warmup plus its 360 MiB reduce_scatter does not fit.
+# The pool leaves the prefill warmup room to allocate its activations. Capacity is not the
+# binding constraint -- the warmup dies with ~98 MiB per bank free but no block above 51 MiB --
+# so QWEN_PREFILL_PASS_TOKENS, not this number, is what keeps a pass inside the largest hole.
 export QWEN_VLLM_KV_POOL_TOKENS=458752 QWEN_BATCHED_PREFILL=1
 export QWEN_PREFILL_RESIDUAL_LAYOUT=sharded_replicated_norm QWEN_PREFILL_BATCHED_HEAD=1
 export QWEN_PREFILL_SKIP_INTERMEDIATE_HEAD=1 QWEN_PREFILL_STARTUP_WARMUP=1
