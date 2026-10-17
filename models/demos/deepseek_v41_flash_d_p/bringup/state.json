@@ -86,6 +86,27 @@
   "started": "2026-10-17T08:13:33",
   "status": "PASS"
  },
+ "C.dec_candidate.compressor": {
+  "attempts": 0,
+  "duration_s": 32.4,
+  "history": [
+   {
+    "s": 32.4,
+    "status": "PASS",
+    "t": "2026-10-17T08:37:14"
+   }
+  ],
+  "last_run": "2026-10-17T08:37:14",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.dec_candidate.compressor.log",
+  "metrics": {
+   "err_compressor_L20": 0.017659272998571396,
+   "err_compressor_L20_limit": 0.4865852892398834
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T08:36:42",
+  "status": "PASS"
+ },
  "C.dec_candidate.kv": {
   "attempts": 0,
   "duration_s": 29.1,
