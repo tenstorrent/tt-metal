@@ -164,9 +164,10 @@ inline InstrModLoadStore dbg_dest_row_save_mode()
 
 inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t row_addr, std::uint32_t *rd_data)
 {
-    // Dest offset is added to row_addr to dump currently used half of the dest accumulator (SyncHalf dest mode)
+    // Dest offset is added to row_addr to dump currently used half of the dest accumulator (SyncHalf dest mode).
+    // The SrcA dump borrows the first row of that half, so it needs the offset too.
     std::uint32_t dest_offset = 0;
-    if (array_id == dbg_array_id::DEST)
+    if (array_id == dbg_array_id::DEST || array_id == dbg_array_id::SRCA)
     {
         dest_offset = (dest_offset_id == 1) ? DEST_REGISTER_HALF_SIZE : 0;
     }
@@ -194,6 +195,14 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
 
         // Clear counters
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+
+        // SFPLOAD, MOVDBGA2D and SFPSTORE address dest relative to the thread's dest offset (SFPLOAD.md), while the
+        // debug array read below takes a physical row. Pin the offset to the base of the current half so the
+        // borrowed row is known; the base is 0 or DEST_REGISTER_HALF_SIZE, which maps to itself in both dest
+        // widths (Dst.md), so the read-back uses it as is. The offset stays at the base afterwards: that is the
+        // state a section flip leaves, and every LLK op re-establishes its own offset before it writes dest.
+        // The thread is drained (tensix_sync above), so the write needs no further stall.
+        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dest_offset);
         TT_SFPLOAD(p_sfpu::LREG3, save_mode, 0 /*sfpu_addr_mode*/, 0 /*dest_reg_addr*/); // Save dest addr 0 (even cols) to LREG_3
         TT_SFPLOAD(p_sfpu::LREG4, save_mode, 0 /*sfpu_addr_mode*/, 2 /*dest_reg_addr*/); // Save dest addr 0 (odd cols)  to LREG_4
 
@@ -256,8 +265,8 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
         */
     }
 
-    // Get actual row address and array id used in hw
-    std::uint32_t hw_row_addr = (array_id == dbg_array_id::SRCA) ? 0 : ((array_id == dbg_array_id::DEST) ? dest_offset + row_addr : row_addr & 0x1);
+    // Get actual row address and array id used in hw. The SrcA row was staged at the base of the current half.
+    std::uint32_t hw_row_addr = (array_id == dbg_array_id::SRCA) ? dest_offset : ((array_id == dbg_array_id::DEST) ? dest_offset + row_addr : row_addr & 0x1);
 
     std::uint32_t hw_array_id = (array_id == dbg_array_id::SRCA) ? dbg_array_id::DEST : array_id;
 
