@@ -17,6 +17,9 @@ namespace ckernel::sfpu {
 
 inline void selu_init() { math::_reset_counters_<p_setrwc::SET_ABD_F>(); }
 
+// Whether BF16 DEST runs the generated selu kernel as one call over the whole tile.
+inline constexpr bool selu_bf16_whole_tile = false;
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_selu(uint32_t scale, uint32_t alpha) {
     const sfpi::vFloat scale_val = Converter::as_float(scale);
