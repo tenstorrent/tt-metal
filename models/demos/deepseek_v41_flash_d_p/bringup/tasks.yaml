@@ -9006,11 +9006,47 @@ tasks:
       opportunities_listed: '>= 1'
   paths:
   - models/demos/deepseek_v41_flash_d_p/bringup/opportunities.md
+- id: P.1
+  title: 'Routed experts in bfp4 (owner pick: accuracy of bfp4 experts vs the exact bfp8, for the galaxy_4x4 memory budget)'
+  step: perf
+  role: perf
+  deps:
+  - X.2
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  ab:
+    change:
+      EXPERTS_IMPL: bfp4
+    env:
+      EXPERTS_IMPL: bfp8
+  brief:
+    details: 'Owner pick (2026-10-17): measure routed experts stored as bfloat4_b. Why: bfp8 experts are exact but 1.06 B per
+      value, 33.6 GiB per chip for 40 layers on galaxy_4x4 (DS41-10), over the chip; bfp4 is ~0.56 B per value (17.8 GiB)
+      but changes 16-17 % of the fp4 values (DS41-10). The owner decides bfp4 vs fp4_decode for the 4x4 from the on/off
+      table, on the end-to-end numbers. Change: add EXPERTS_IMPL value "bfp4" in tt/settings.py: every expert''s w1 | w3
+      and w2 converted to bfloat4_b ONCE at load, kept as stored [N, K] and used with transpose_b exactly like bfp8
+      (DS41-35: the groups of 16 run along K, inside one e8m0 scale group). Keep bfp8 the default and the max precision
+      (component and swap tests stay at bfp8; do not touch frozen tests). Same fidelity (HiFi4), same fp8 q(h), no other
+      change. Report in the commit: per layer the fraction of expert values bfp4 changes and the worst relative change of
+      a matrix (CPU, at load), expert weight GiB per chip (this run and galaxy_4x4 / galaxy_8x4 at 40 layers), the
+      experts section device time per layer per chunk (plain profile) bfp8 vs bfp4. The orchestrator produces the
+      on/off table (ladder rungs, profile) after the agent; do not run it by hand.'
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_total: '> 0'   # set to < the X.1 baseline once X.1 has run
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
   deps:
-  - X.2
+  - P.1
   gate:
     cmd: BRINGUP_RUNG=s55296 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
