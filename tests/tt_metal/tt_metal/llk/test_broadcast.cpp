@@ -1059,7 +1059,8 @@ void run_mul_bcast_col_custom(distributed::MeshDevice& mesh_device, const MulBca
         result_untilized, pack_vector<std::uint32_t, bfloat16>(golden), [&](const bfloat16& a, const bfloat16& b) {
             return is_close(a, b, k_broadcast_rtol);
         });
-    ASSERT_TRUE(close);
+    // Non-fatal so every case in the caller's list reports its own verdict.
+    EXPECT_TRUE(close);
 }
 }  // namespace unit_tests::compute::broadcast
 
@@ -1325,13 +1326,16 @@ TEST_F(LLKBlackholeSingleCardFixture, ComputeMulBcastColCustom) {
     using unit_tests::compute::broadcast::TileShape;
 
     const std::vector<MulBcastColCustomConfig> cases = {
+        // Full tiles first: checks the 32x32 path and primes the Src banks (see above).
         {.ct_dim = 4, .num_blocks = 2},
-        {.ct_dim = 4, .rt_dim = 2, .num_blocks = 1},
         // 16x32 inputs, 32x32 outputs: the lower half of every output tile must be exactly zero.
         {.ct_dim = 4, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
         {.ct_dim = 1, .num_blocks = 2, .tile_shape = TileShape::TINY_TILE_16x32},
-        {.ct_dim = 4, .rt_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
         {.ct_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
+        // Multi-row blocks: row r must land in dest slots [r * ct_dim, (r + 1) * ct_dim), i.e. the
+        // wrapper must honour a nonzero dst_index.
+        {.ct_dim = 4, .rt_dim = 2, .num_blocks = 1},
+        {.ct_dim = 4, .rt_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
     };
 
     for (const auto& cfg : cases) {
