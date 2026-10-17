@@ -193,7 +193,10 @@ class Qwen36DecoderLayer:
         n_users=1,
         state_blk_idx=None,
         conv_sel=None,
+        spec_ctrl=None,
     ):
+        # spec_ctrl: QWEN36_VERIFY_SPEC_STEP=1 -- the fused GDN spec op's ctrl page ({parity, mi, ring block | HOLD}),
+        # which replaces state_blk_idx / conv_sel for the recurrent verify; None (the default) leaves them in charge.
         # Validate up front: attention/norm treat non-"prefill" as decode while the MoE experts
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
         # paths. Fail fast instead.
@@ -305,6 +308,7 @@ class Qwen36DecoderLayer:
                             n_users=n_users,
                             state_blk_idx=state_blk_idx,
                             conv_sel=conv_sel,
+                            spec_ctrl=spec_ctrl,
                         )
                     elif gdn_collect:
                         # Batched per-user prefill: stash this user's from-scratch state for

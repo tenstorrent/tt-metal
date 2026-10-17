@@ -1801,6 +1801,7 @@ class Qwen36Model:
                     n_users=n_users,
                     state_blk_idx=self._vfy_state_idx,
                     conv_sel=self._vfy_conv_sel,
+                    spec_ctrl=getattr(self, "_vfy_ctrl", None),  # QWEN36_VERIFY_SPEC_STEP=1: the fused op's page
                 )
             ttnn.deallocate(x)
             x = x_new
@@ -1902,7 +1903,7 @@ class Qwen36Model:
         Idempotent for the same (B, T, nb); a different key releases any live trace first.
         """
         from models.demos.blackhole.qwen36.tt.attention.tp import KV_GROUP_WRITE_OK
-        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
+        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_ctrl_page, spec_state_blk_idx
 
         assert self.num_devices > 1, "traced verify is the TP path"
         assert self._paged_kv_caches is not None, "allocate_kv_caches first"
@@ -1994,26 +1995,53 @@ class Qwen36Model:
         assert gdn, "the hybrid verify needs GDN layers"
         Nv, Kc = gdn[0].Nv, gdn[0].K
         self._vfy_Nv, self._vfy_Kc = Nv, Kc
+        self._vfy_gdn = gdn
         _mi0 = [0] * B
-        self._vfy_state_idx = ttnn.from_torch(
-            spec_state_blk_idx(_mi0, B, Nv),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=dev,
-            mesh_mapper=rep,
-        )
-        self._vfy_conv_sel = ttnn.from_torch(
-            spec_conv_sel(_mi0, B, T, Kc),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=dev,
-            mesh_mapper=rep,
-        )
+        # QWEN36_VERIFY_SPEC_STEP=1: the fused GDN spec op reads ONE ctrl page {parity, mi, ring block | HOLD} instead
+        # of the two selectors (allocated below, once the layers' window pairs exist and have a parity).
+        self._vfy_fused = bool(getattr(gdn[0], "_spec_fused", False))
+        assert all(
+            bool(getattr(dn, "_spec_fused", False)) == self._vfy_fused for dn in gdn
+        ), "GDN layers disagree on QWEN36_VERIFY_SPEC_STEP"
+        if getattr(self, "_vfy_ctrl", None) is not None:  # a re-capture: drop the previous page (the trace is released)
+            ttnn.deallocate(self._vfy_ctrl)
+        self._vfy_ctrl = None
+        if self._vfy_fused:
+            self._vfy_state_idx = self._vfy_conv_sel = None
+        else:
+            self._vfy_state_idx = ttnn.from_torch(
+                spec_state_blk_idx(_mi0, B, Nv),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=dev,
+                mesh_mapper=rep,
+            )
+            self._vfy_conv_sel = ttnn.from_torch(
+                spec_conv_sel(_mi0, B, T, Kc),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                mesh_mapper=rep,
+            )
 
         # Allocate each GDN layer's spec-verify buffers (per-token state ring + conv window) before
         # the warmup pass: the trace bakes their addresses in, and nothing may allocate later.
         for dn in gdn:
             dn.prepare_spec_verify(B, T)
+        if self._vfy_fused:
+            # The shared ctrl page, at the layers' CURRENT window parity (a re-capture at the same spec shape keeps
+            # the pair and its parity; a fresh prepare_spec_verify resets it to 0). The page is data the op reads
+            # at replay, so the parity it is captured with does not bind later replays -- verify_traced restages
+            # it every iteration and flips every layer's parity afterwards, in lockstep.
+            _pars = {dn._spec_win_par for dn in gdn}
+            assert len(_pars) == 1, f"GDN window parities out of step: {sorted(_pars)}"
+            self._vfy_ctrl = ttnn.from_torch(
+                spec_ctrl_page(_mi0, B, Nv, parity=_pars.pop()),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=dev,
+                mesh_mapper=rep,
+            )
 
         # Throwaway seed, only to fill the program cache. The spec loop calls seed_spec_state() again after
         # this capture (the warmup/capture passes below overwrite the ring and the window), and that call
@@ -2102,7 +2130,7 @@ class Qwen36Model:
         before the next replay (the spec loop reads its anchor rows and reseeds the drafter within
         the iteration).
         """
-        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
+        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_ctrl_page, spec_state_blk_idx
 
         assert getattr(self, "_vfy_trace_id", None) is not None, "call record_verify_trace first"
         T, B = self._vfy_T, self._vfy_B
@@ -2153,25 +2181,48 @@ class Qwen36Model:
         ttnn.copy_host_to_device_tensor(_h, self._vfy_sin_buf)
         # The deferred commit (see prepare_verify_trace): where each user's recurrence and conv
         # window resume. Two small host-built tensors, shared by every GDN layer.
-        _h = ttnn.from_torch(
-            spec_state_blk_idx(mi_prev, B, self._vfy_Nv),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=None,
-            mesh_mapper=rep,
-        )
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_state_idx)
-        _h = ttnn.from_torch(
-            spec_conv_sel(mi_prev, B, T, self._vfy_Kc),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=None,
-            mesh_mapper=rep,
-        )
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_conv_sel)
+        _fused = bool(getattr(self, "_vfy_fused", False))
+        if _fused:
+            # QWEN36_VERIFY_SPEC_STEP=1: ONE ctrl page {parity, mi, ring block} for all GDN layers, at their current
+            # window parity (the half holding E_prev; the op writes the other half). No HOLD: a row left out of a
+            # step is parked on host by the engine (MTPSpecEngine.verify), and padding rows run at mi = 0 over the
+            # null block like the composite path's.
+            assert all(0 <= int(mi_prev[u]) < T for u in range(B)), f"mi_prev {list(mi_prev)} out of range [0,{T})"
+            _pars = {dn._spec_win_par for dn in self._vfy_gdn}
+            assert len(_pars) == 1, f"GDN window parities out of step: {sorted(_pars)}"
+            _h = ttnn.from_torch(
+                spec_ctrl_page(mi_prev, B, self._vfy_Nv, parity=_pars.pop()),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=None,
+                mesh_mapper=rep,
+            )
+            ttnn.copy_host_to_device_tensor(_h, self._vfy_ctrl)
+        else:
+            _h = ttnn.from_torch(
+                spec_state_blk_idx(mi_prev, B, self._vfy_Nv),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=None,
+                mesh_mapper=rep,
+            )
+            ttnn.copy_host_to_device_tensor(_h, self._vfy_state_idx)
+            _h = ttnn.from_torch(
+                spec_conv_sel(mi_prev, B, T, self._vfy_Kc),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=None,
+                mesh_mapper=rep,
+            )
+            ttnn.copy_host_to_device_tensor(_h, self._vfy_conv_sel)
 
         ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(dev)
+        if _fused:
+            # The replay rebuilt every user's conv window into win[1-par], so that half is now E_prev for every GDN
+            # layer; flip them together (verify_win_cur / the next page follow).
+            for dn in self._vfy_gdn:
+                dn._spec_win_par ^= 1
 
         # Replicated ids (the trace argmaxed the replicated logits): one replica is the whole answer,
         # and it is B*T uint32 instead of B*T x vocab floats.
@@ -4216,6 +4267,15 @@ class Qwen36Model:
         visible, model-scoped choice, never a side effect of building a SpeculativeDecoder, because
         on a shared model it changes every later plain decode as well.
         """
+        if enabled and self.gdn_verify_spec_step:
+            # QWEN36_VERIFY_SPEC_STEP=1: the verify (and the seed) run gdn_spec_step with gdn_decode_step's fast /
+            # fp32 arithmetic, so the matching plain decode is the gdn_decode_step op, NOT fused_recurrent. Keep
+            # decode there: switching it would re-open the decode/verify math gap this flag closes.
+            logger.info(
+                "[GDN] set_gdn_fused_decode(True) ignored: QWEN36_VERIFY_SPEC_STEP=1 keeps plain decode on "
+                "gdn_decode_step (the verify's gdn_spec_step arithmetic)"
+            )
+            enabled = False
         for layer in self.layers:
             if not layer.is_full_attention:
                 layer.attention.use_fused_recurrent_decode = bool(enabled)
@@ -4225,6 +4285,13 @@ class Qwen36Model:
         """True when every GDN layer decodes with the fused recurrent op (see set_gdn_fused_decode)."""
         gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
         return bool(gdn) and all(dn.use_fused_recurrent_decode for dn in gdn)
+
+    @property
+    def gdn_verify_spec_step(self) -> bool:
+        """True when every GDN layer runs the spec verify / seed through gdn_spec_step (QWEN36_VERIFY_SPEC_STEP=1);
+        plain decode then runs the gdn_decode_step op with the same arithmetic."""
+        gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
+        return bool(gdn) and all(getattr(dn, "_spec_fused", False) for dn in gdn)
 
     def prefill_chunked_peruser(self, token_ids_list, page_table, valid_lens=None):
         """Batched per-user LONG-prefill (TP, eager). Runs the single-user chunk-outer path

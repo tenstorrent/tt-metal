@@ -14,6 +14,7 @@ Verify row j of user u processes tokens[u, j] at start_pos[u] + j. After m accep
 committed_tokens[u, :m+1] = accepted drafts + bonus token, at committed_positions[u, :m+1] =
 start_pos + 1 .. start_pos + m + 1. The bonus is the next ``pending``; the anchor hidden is verify row m.
 The drafter pairs (hidden at slot s, token at s+1) -> slot s."""
+
 import math
 import os
 import time
@@ -333,6 +334,8 @@ def spec_memory_costs(
 
     ring = n_gdn * B * _tile_bytes([T * nv_tp, dk, dv], f32)  # [T*B*Nv, Dk, Dv]
     win_rows = [kconv - 1 + T, kconv] + ([T - 1] if T > 1 else [])  # _verify_win_buf, _conv_win_buf, _spec_win_pad
+    if os.environ.get("QWEN36_VERIFY_SPEC_STEP", "0") == "1":  # gdn_spec_step keeps E_prev as a ping-pong pair
+        win_rows.append(kconv - 1 + T)
     windows = n_gdn * B * sum(_tile_bytes([r, C], bf) for r in win_rows)
     hidden = B * _tile_bytes([1, 1, 1, dim_frac], bf)
     per_seq = {"gdn_ring": ring, "gdn_conv_windows": windows, "drafter_hidden": hidden}
@@ -411,8 +414,10 @@ class MTPSpecEngine:
             f"B={self.B} users x T={self.T} rows = {self.B * self.T} > {MAX_SPEC_ROWS}: the verify is one "
             f"decode tile. Lower K or the batch."
         )
-        # Verify runs the fused GDN op; plain decode must use the same math or greedy near-ties flip.
-        assert model.gdn_fused_decode, (
+        # Verify runs the fused GDN op; plain decode must use the same math or greedy near-ties flip. Under
+        # QWEN36_VERIFY_SPEC_STEP=1 the verify runs gdn_spec_step and plain decode the gdn_decode_step op (one
+        # kernel family), so set_gdn_fused_decode(True) is a no-op there (model.set_gdn_fused_decode).
+        assert model.gdn_fused_decode or model.gdn_verify_spec_step, (
             "MTPSpecEngine needs model.set_gdn_fused_decode(True) before construction: verify runs the "
             "fused GDN op, and decode must use the same math"
         )
@@ -779,7 +784,7 @@ class MTPSpecEngine:
             per_seq["gdn_ring"] += nbytes(dn._spec_ring)
             per_seq["gdn_conv_windows"] += sum(
                 nbytes(getattr(dn, n)) for n in ("_verify_win_buf", "_spec_win_pad", "_conv_win_buf")
-            )
+            ) + sum(nbytes(w) for w in (getattr(dn, "_verify_win_pair", None) or ()))
         per_seq["drafter_hidden"] = sum(nbytes(t) for t in self._last_hidden)
         vfy = (
             "token_buf",
