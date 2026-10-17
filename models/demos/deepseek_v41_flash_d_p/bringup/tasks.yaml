@@ -5389,6 +5389,13 @@ tasks:
     - ffn_hc
     - ffn_collapse
     layer: 3
+  frozen:
+    at: '2026-10-17T06:27:54'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_09_ffn_collapse.py: 2330fbe69d2141f4002207bc8cd8fc5abcfb825d39eeaa090bd574171025dc3b
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.enc_reuse.ffn_norm
   title: enc_reuse ffn_norm (norm) on device, layer 3
   step: implement
