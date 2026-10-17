@@ -39,6 +39,11 @@ bool find_device_with_neighbor_in_direction(
 std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping(
     const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords);
 
+// True when every eth coord in the mapping resolves to a physical chip on the current cluster, i.e. when
+// get_physical_chip_mapping_from_eth_coords_mapping() would succeed. Use to skip a fixed-topology test on a
+// cluster that reports the right type but does not expose the expected coordinates. Logs the missing coord.
+bool has_physical_chip_mapping_for_eth_coords(const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords);
+
 // Compare ASIC mapping YAML files (fabric node, ASIC ID, hostname, and tray placement)
 bool compare_asic_mapping_files(const std::filesystem::path& generated_file, const std::filesystem::path& golden_file);
 
