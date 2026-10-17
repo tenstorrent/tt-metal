@@ -756,9 +756,10 @@ void exp_init() {
 
         constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
         // THRESHOLD is divided by the scale below: a negative scale would turn the -88.5 input
-        // floor into a ceiling, and a denormal (a bf16 scale pasted in unshifted) into a huge one.
+        // floor into a ceiling, a denormal (a bf16 scale pasted in unshifted) into a huge one, and
+        // an infinite scale into -0 with an infinite A.
         static_assert(
-            scale_fp32 >= std::numeric_limits<float>::min(),
+            scale_fp32 >= std::numeric_limits<float>::min() && scale_fp32 <= std::numeric_limits<float>::max(),
             "exp_init: scale is FP32 bits (the bf16 scale << 16) and must be a positive normal number with "
             "CLAMP_NEGATIVE");
 

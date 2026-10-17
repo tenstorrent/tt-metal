@@ -2685,6 +2685,8 @@ const std::string kBf16MinusOne = "0xBF80";
 const std::string kFp32MinusOne = "0xBF800000";
 // bf16 1.0 left unshifted, which exp_tile_init reads as an FP32 denormal.
 const std::string kBf16OneUnshifted = "0x3F80";
+// FP32 +inf as exp_tile_init's scale.
+const std::string kFp32PlusInf = "0x7F800000";
 
 // Builds a single-core program whose compute kernel runs `chain` on one tile and compiles it
 // (never launches it). Returns the build failure's message, which carries the compiler log, or
@@ -2752,12 +2754,14 @@ TEST_F(LLKMeshDeviceSingleCardFixture, SfpuExpApproxRejectsRuntimeScale) {
         device,
         "exp_tile_init<true>(); exp_tile<true, true>(0, VectorMode::RC, " + kBf16MinusOne + ");",
         kApproxScaleGuard);
-    // The ClampToNegative init divides the -88.5 clamp by the template scale: a negative scale and an
-    // unshifted bf16 scale (an FP32 denormal) are both rejected.
+    // The ClampToNegative init divides the -88.5 clamp by the template scale: a negative scale, an
+    // unshifted bf16 scale (an FP32 denormal) and an infinite scale are all rejected.
     expect_build_rejected(
         device, "exp_tile_init<true, " + kFp32MinusOne + ">(); exp_tile<true, false>(0);", kInitScaleGuard);
     expect_build_rejected(
         device, "exp_tile_init<true, " + kBf16OneUnshifted + ">(); exp_tile<true, false>(0);", kInitScaleGuard);
+    expect_build_rejected(
+        device, "exp_tile_init<true, " + kFp32PlusInf + ">(); exp_tile<true, false>(0);", kInitScaleGuard);
 }
 
 void run_quasar_sfpu_unpack_to_dest_fp32(

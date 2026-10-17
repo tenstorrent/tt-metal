@@ -85,8 +85,9 @@ class MathOperation(Enum):
     Ema = OpSpec("ema", MathOpType.SFPU_UNARY)
     Exp = OpSpec("exponential", MathOpType.SFPU_UNARY)
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)
-    # b^x via the SCALE_EN path of calculate_exponential; dispatched with a bf16
-    # scale of 0.5 so the op computes exp(0.5*x).
+    # b^x = exp(0.5*x): in accurate mode via the SCALE_EN path of calculate_exponential
+    # with a bf16 scale of 0.5; in approximate mode the 0.5 is baked into exp_init's
+    # constants instead (SCALE_EN is rejected there).
     ExpWithBase = OpSpec("exp_with_base", MathOpType.SFPU_UNARY)
     Fill = OpSpec("fill", MathOpType.SFPU_UNARY)
     Gelu = OpSpec("gelu", MathOpType.SFPU_UNARY)
