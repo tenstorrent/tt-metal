@@ -28,6 +28,7 @@ import math
 import os
 import time
 from dataclasses import dataclass
+from typing import Callable
 
 import torch
 from loguru import logger
@@ -35,7 +36,7 @@ from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
-from models.demos.blackhole.qwen36.tt.tp_common import spec_hostfix_enabled
+from models.demos.blackhole.qwen36.tt.tp_common import spec_hostfix_enabled, verify_device_topk_m
 
 # Prompt length above which the reseed goes back to the per-slot loop (B == 1 only).
 EAGER_RESEED_PROMPT_LEN = 131072
@@ -45,16 +46,35 @@ MAX_SPEC_ROWS = ttnn.TILE_SIZE
 _WARM_PROMPT_LENS = (100, 128, 200, 256, 400, 512, 900, 1024, 1900, 2048, 2148, 2248, 2448, 2948, 3948, 4096)
 # Runner contract: token id for unused tail columns of a returned block.
 PLACEHOLDER_TOKEN_ID = -1
-SPEC_MODES = ("argmax_ids", "logits")
+# "topk" (QWEN36_VERIFY_DEVICE_TOPK): the exact per-position top-M candidates instead of the full logits, with the
+# full logits fetched lazily when a row cannot be served from them (note 26).
+SPEC_MODES = ("argmax_ids", "logits", "topk")
+# Token ids are packed below the value in the exact top-k sort key (exact_topk): the vocabulary must fit.
+_TOPK_ID_BITS = 20
+
+
+@dataclass
+class TopKCandidates:
+    """Exact per-position top-M of the verify logits under (value desc, token id asc): ``values`` fp32 [B, T, M]
+    are the raw bf16 logit values (no temperature), ``ids`` int32 [B, T, M] the global token ids."""
+
+    values: torch.Tensor
+    ids: torch.Tensor
 
 
 @dataclass
 class VerifyResult:
-    """decode_forward result: argmax_ids int32 [B, 1+K] (unused tail columns = -1), logits [B, 1+K, V] or None."""
+    """decode_forward result: argmax_ids int32 [B, 1+K] (unused tail columns = -1); logits [B, 1+K, V] fp32 in
+    "logits" mode; in "topk" mode topk_values / topk_ids [B, 1+K, M] (TopKCandidates, in runner slots) and
+    ``fetch_logits``, which returns the step's full [B, 1+K, V] fp32 logits in runner slots when called (one
+    device round trip in steady state, a host copy after a seed / join step)."""
 
     spec_mode: str
     argmax_ids: torch.Tensor
     logits: torch.Tensor | None = None
+    topk_values: torch.Tensor | None = None
+    topk_ids: torch.Tensor | None = None
+    fetch_logits: Callable[[], torch.Tensor] | None = None
 
 
 @dataclass
@@ -122,6 +142,52 @@ def reseed_rows_host(plan, pt, T, nb, scratch_block):
         if real:
             pt_rows[r] = pt[r // T]
     return tok, pos, pt_rows
+
+
+def exact_topk(values, m, ids=None):
+    """Top-``m`` per row under (value desc, token id asc), exact and deterministic. ``values`` [R, C] (any float
+    dtype; -0.0 ties with +0.0, as torch.sort does; no NaN), ``ids`` [R, C] int token ids (None = the column
+    index). Returns (values fp32 [R, m], ids int32 [R, m]). One torch.topk over a packed int64 key (the
+    float's order-preserving integer image above, ``2**_TOPK_ID_BITS - 1 - id`` below), so ties never depend on
+    torch.topk's own tie order: this is the plugin's fast-path tie rule (spec_accept._constrained_table)."""
+    v = torch.as_tensor(values).to(torch.float32)
+    R, C = v.shape
+    v = torch.where(v == 0, torch.zeros_like(v), v).contiguous()
+    key = v.view(torch.int32).to(torch.int64)
+    key = key ^ ((key >> 63) & 0x7FFFFFFF)  # negative floats: flip the magnitude bits (int order == float order)
+    span = 1 << _TOPK_ID_BITS
+    if ids is None:
+        id_key = (span - 1) - torch.arange(C, dtype=torch.int64)
+    else:
+        ids = torch.as_tensor(ids).to(torch.int64)
+        if ids.shape != v.shape or bool((ids < 0).any()) or bool((ids >= span).any()):
+            raise ValueError(f"exact_topk: ids must be [{R}, {C}] in [0, {span}), got {tuple(ids.shape)}")
+        id_key = (span - 1) - ids
+    key = (key << _TOPK_ID_BITS) | id_key
+    top, pos = torch.topk(key, int(m), dim=1)
+    out_ids = (span - 1) - (top & (span - 1))
+    return v.gather(1, pos), out_ids.to(torch.int32)
+
+
+def merge_shard_topk(values, local_ids, per_shard, m):
+    """Host merge of the topk trace's readback (model._forward_verify_topk_body): ``values`` [R, D*m] bf16 and
+    ``local_ids`` [R, D*m] (device d's block at columns d*m .. d*m+m-1, ids local to that vocab shard) ->
+    (values fp32 [R, m], ids int32 [R, m]) = the exact global top-m per row under (value desc, id asc).
+    Exact for stable AND unstable per-shard order: a token among the global top-m has fewer than m tokens
+    above it in its own shard, so it is in that shard's list (note 26, 3.1). Ties truncated at a shard's cut
+    are handled by the plugin's overflow rule (merged[m-1] >= the request's k-th value -> full logits).
+    Raises when a local id is not below ``per_shard``: only a -1e30 pad lane can produce one, and a pad can
+    only rank in the top-m of a padding row, which the caller never passes."""
+    values = torch.as_tensor(values)
+    local_ids = torch.as_tensor(local_ids).to(torch.int64)
+    R, W = values.shape
+    if local_ids.shape != (R, W) or W % m != 0:
+        raise ValueError(f"merge_shard_topk: values {tuple(values.shape)}, ids {tuple(local_ids.shape)}, m={m}")
+    if bool((local_ids >= per_shard).any()) or bool((local_ids < 0).any()):
+        bad = local_ids[(local_ids >= per_shard) | (local_ids < 0)]
+        raise ValueError(f"merge_shard_topk: local ids outside [0, {per_shard}) came back (pad lanes?): {bad[:8]}")
+    gid = local_ids + (torch.arange(W, dtype=torch.int64) // m) * per_shard
+    return exact_topk(values, m, gid)
 
 
 def parked_rows_host(ring, e_prev, s, T):
@@ -428,6 +494,13 @@ def spec_memory_costs(
         + _tile_bytes([1, 1, rows, dim_frac], bf)  # rows_out (drafter feed)
         + _rm_bytes([1, 1, rows], i32)  # ids_out
     )
+    topk_m = verify_device_topk_m()
+    if topk_m and vocab % tp == 0:  # QWEN36_VERIFY_DEVICE_TOPK: shard logits kept alive + the gathered candidates
+        verify_io += (
+            _tile_bytes([1, 1, rows, vocab // tp], bf)  # _vfy_shard_logits_out
+            + _tile_bytes([1, 1, 32, tp * topk_m], bf)  # _vfy_topk_vals_out
+            + _tile_bytes([1, 1, 32, tp * topk_m], i32)  # _vfy_topk_ids_out
+        )
     block_bytes = 2 * n_local_kv * int(block_size) * head_dim * int(kv_dtype_bytes)
     buckets = _MASK_BUCKETS_DEFAULT if mask_buckets is None else mask_buckets
     engine = (
@@ -530,6 +603,7 @@ class MTPSpecEngine:
         self._join_keep = None  # persistent one-hot [1,1,B*T,B*T]: verify-feed rows kept by a join
         self.eager_reseed_len = EAGER_RESEED_PROMPT_LEN  # B == 1 anchors past this reseed eagerly
         self._vfeed = None  # the verify trace's own output rows; valid until the next replay
+        self._topk_logits = None  # [B, T, vocab] fp32 host logits of a topk-mode seed / join step (fetch_verify_logits)
         # A/B + safety switch: 1 = run the drafter eagerly even when its trace is recorded
         self.recorded_drafter = os.environ.get("QWEN36_SPEC_EAGER_DRAFTER", "0") != "1"
         self._dr_bufs = []  # persistent drafter-trace inputs (all of the _dr_* tensors below)
@@ -1076,7 +1150,15 @@ class MTPSpecEngine:
     # Verify
     # --------------------------------------------------------------------- #
     def verify(
-        self, tokens, start_pos, accepted_counts, page_table, read_logits=False, active=None, num_valid_drafts=None
+        self,
+        tokens,
+        start_pos,
+        accepted_counts,
+        page_table,
+        read_logits=False,
+        active=None,
+        num_valid_drafts=None,
+        read_topk=False,
     ):
         """Replay the verify trace over [B, T] tokens at start_pos[u] + j. The first verify after prefill is
         the seed (see _seed): row 0 holds the first generated token, other rows are filler, accepted_counts = 1.
@@ -1085,8 +1167,13 @@ class MTPSpecEngine:
         ``active`` (bool [B], None = all): False rows are padding and run over the null block.
         ``num_valid_drafts`` ([B], None = all columns real): the target's KV writes use verify_write_table;
         the drafter keeps the full table.
-        Returns (ids int32 [B, T], logits [B, T, vocab] or None)."""
+        Returns (ids int32 [B, T], logits [B, T, vocab] or None). With ``read_topk`` (QWEN36_VERIFY_DEVICE_TOPK;
+        exclusive with ``read_logits``) the second item is a TopKCandidates [B, T, M] instead: in steady state
+        from the topk trace (merge_shard_topk), on a seed / join step from the host logits those steps read
+        anyway (exact_topk), which are then cached for fetch_verify_logits."""
         assert self.captured, "verify before capture"
+        if read_topk and read_logits:
+            raise ValueError("verify: read_logits and read_topk are exclusive")
         B, T = self.B, self.T
         tokens = self._ints(tokens, (B, T))
         start_pos = self._ints(start_pos, (B,))
@@ -1146,18 +1233,47 @@ class MTPSpecEngine:
                 self._prompts.pop(u, None)
                 self._fresh_dirty.discard(u)
             if set(fresh) == set(rows):
-                return self._seed(tokens, start_pos, vpt, read_logits)
-            return self._join(tokens, start_pos, mi_prev, vpt, active, fresh, read_logits)
+                out = self._seed(tokens, start_pos, vpt, read_logits or read_topk)
+            else:
+                out = self._join(tokens, start_pos, mi_prev, vpt, active, fresh, read_logits or read_topk)
+            return self._topk_from_logits(out) if read_topk else out
 
         args = (tokens.tolist(), start_pos.tolist(), mi_prev.tolist())
         kw = dict(read_logits=read_logits, page_tables=vpt, inactive=(~active).tolist())
+        if read_topk:
+            kw["read_topk"] = True  # only when asked: an older model.verify_traced has no such argument
         if self._timing:
             ids, vfeed, lt = self._verify_split(*args, **kw)
         else:
             ids, vfeed, lt = self.model.verify_traced(*args, **kw)
         self._vfeed = vfeed
         ids = torch.tensor(ids, dtype=torch.int32).reshape(B, T)
+        if read_topk:
+            self._topk_logits = None  # steady state: fetch_verify_logits replays the logits trace
+            vals, idx = merge_shard_topk(lt[0], lt[1], self.vocab // self.model.num_devices, self.model._vfy_topk_m)
+            return ids, TopKCandidates(vals.reshape(B, T, -1), idx.reshape(B, T, -1))
         return ids, (None if lt is None else lt.reshape(B, T, -1))
+
+    def _topk_from_logits(self, out):
+        """(ids, logits [B, T, vocab] fp32) of a seed / join step -> (ids, TopKCandidates); the logits are kept
+        (engine rows) for fetch_verify_logits, since no device replay can reproduce a seed step's rows."""
+        ids, logits = out
+        B, T = self.B, self.T
+        self._topk_logits = logits
+        vals, idx = exact_topk(logits.reshape(B * T, -1), self.model._vfy_topk_m)
+        return ids, TopKCandidates(vals.reshape(B, T, -1), idx.reshape(B, T, -1))
+
+    def fetch_verify_logits(self):
+        """The full logits [B, T, vocab] fp32, in runner slots, of the last ``decode_forward(spec_mode="topk")``:
+        the lazy fallback for rows the candidates cannot serve. Steady state replays the logits trace
+        (model.fetch_verify_logits: one device round trip); after a seed / join step the host copy is returned.
+        Valid until the next decode_forward; the plugin walks acceptance before it proposes."""
+        B, T = self.B, self.T
+        if self._topk_logits is not None:
+            logits = self._topk_logits
+        else:
+            logits = self.model.fetch_verify_logits().reshape(B, T, -1)[..., : self.vocab].to(torch.float32)
+        return self._to_slots(logits)[0]
 
     def _seed_rows(self, feed):
         """[1,1,B,dim/tp] seed feed -> [1,1,B*T,dim/tp] with user u's row at u*T (exact one-hot matmul)."""
@@ -1295,6 +1411,7 @@ class MTPSpecEngine:
             nv_rows,
             self.no_draft_streak,
         )
+        kw = {"read_topk": True} if spec_mode == "topk" else {}
         ids, logits = self.verify(
             clean,
             start0,
@@ -1303,7 +1420,17 @@ class MTPSpecEngine:
             read_logits=spec_mode == "logits",
             active=active,
             num_valid_drafts=nv_rows,
+            **kw,
         )
+        if spec_mode == "topk":
+            ids, vals, idx = self._to_slots(ids, logits.values, logits.ids)
+            return VerifyResult(
+                spec_mode,
+                mask_unused_columns(ids, num_valid_drafts),
+                topk_values=vals,
+                topk_ids=idx,
+                fetch_logits=self.fetch_verify_logits,
+            )
         ids, logits = self._to_slots(ids, logits)
         return VerifyResult(spec_mode, mask_unused_columns(ids, num_valid_drafts), logits)
 

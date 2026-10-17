@@ -23,7 +23,7 @@ from models.demos.blackhole.qwen36.tt.prefix_cache import alloc_zeros_like
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.demos.blackhole.qwen36.tt.tp_common import kv_cache_bf8_enabled
 from models.demos.blackhole.qwen36.tt.tp_common import lm_head_kwargs as _lm_head_kwargs
-from models.demos.blackhole.qwen36.tt.tp_common import spec_hostfix_enabled
+from models.demos.blackhole.qwen36.tt.tp_common import spec_hostfix_enabled, verify_device_topk_m
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
@@ -1830,8 +1830,11 @@ class Qwen36Model:
         With ``self._vfy_sharded`` (QWEN36_VERIFY_SHARDED_ARGMAX) the tail skips the logits all-gather,
         untilize and full-vocab argmax: ids come from the per-shard argmax + max combined on device
         (shard_argmax_max_rows + _dl_greedy_token_row_batched, as the batched decode loop does), and the
-        return is (None, rows, ids [1,1,1,32] uint32 lanes 0..R-1, None, normed). The full logits are then
-        produced only by the separate logits trace (_forward_verify_logits_body) when a sampled request asks.
+        return is (None, rows, ids [1,1,1,32] uint32 lanes 0..R-1, None, normed, shard_logits). The full
+        logits are then produced only by the separate logits trace (_forward_verify_logits_body) when a
+        sampled request asks. ``shard_logits`` ([1,1,R,vocab/TP] bf16 TILE, the tensor the argmax read) is
+        kept alive as a sixth persistent output only under QWEN36_VERIFY_DEVICE_TOPK (``self._vfy_topk``),
+        for the topk trace (_forward_verify_topk_body); otherwise it is freed here and the slot is None.
         """
         T = self._vfy_T
         rows = n_users * T
@@ -1882,9 +1885,13 @@ class Qwen36Model:
         if self._vfy_sharded:
             shard_logits, rows_out, normed = self._spec_tail(x, sharded=True)
             idx, val = self.shard_argmax_max_rows(shard_logits, rows)
-            ttnn.deallocate(shard_logits)
+            if getattr(self, "_vfy_topk", False):
+                keep = shard_logits  # the topk trace ranks this exact tensor (QWEN36_VERIFY_DEVICE_TOPK)
+            else:
+                ttnn.deallocate(shard_logits)
+                keep = None
             ids = self._dl_greedy_token_row_batched(idx, val, self._vfy_dl)  # [1,1,1,32] uint32 RM
-            return None, rows_out, ids, None, normed
+            return None, rows_out, ids, None, normed, keep
         logits, rows_out = self._spec_tail(x)  # [1,1,B*T,vocab] replicated, drafter feed [1,1,B*T,dim/tp]
         # Greedy acceptance compares token ids, so argmax the verify rows inside the trace and read back
         # B*T uint32 instead of B*T x 151936 floats. ttnn.argmax needs ROW_MAJOR input (a TILE tensor
@@ -1895,16 +1902,80 @@ class Qwen36Model:
         ids = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,B*T] uint32 ROW_MAJOR
         # `u` is NOT deallocated: it is handed back as the ROW_MAJOR logits copy. The sampling path
         # reads THAT back instead of the TILE `logits`, which costs an untilize on host.
-        return logits, rows_out, ids, u, None
+        return logits, rows_out, ids, u, None, None
 
     def _forward_verify_logits_body(self):
         """Second verify trace (sharded-argmax mode only): full replicated logits [1,1,R,vocab] + the ROW_MAJOR
         copy, recomputed from the first trace's persistent ``_vfy_normed_out`` (same linear program and input
         as the in-trace shard logits, so the values are the ones the argmax saw). Replayed right after the
-        main trace only when read_logits=True (sampled requests, spec_mode == "logits")."""
+        main trace only when read_logits=True (sampled requests, spec_mode == "logits"), or lazily by
+        fetch_verify_logits when a topk read needs the full row (spec_mode == "topk" fallback)."""
         logits = self._lm_head(self._vfy_normed_out)
         u = ttnn.untilize(logits, use_multicore=True)
         return logits, u
+
+    def _forward_verify_topk_body(self):
+        """Third verify trace (QWEN36_VERIFY_DEVICE_TOPK, sharded-argmax mode only): per-device top-M of the
+        main trace's persistent shard logits ``_vfy_shard_logits_out`` [1,1,R,vocab/TP] bf16 TILE, gathered
+        over the TP devices. Returns (values [1,1,32,TP*M] bf16, ids [1,1,32,TP*M] uint32); device d's block
+        is columns d*M .. d*M+M-1, sorted (value desc, LOCAL id asc) by ``stable=True``; the host adds
+        d * vocab/TP and merges (spec_engine.merge_shard_topk). Rows past R and lanes past vocab/TP are
+        -1e30 pads (ttnn.topk wants 32 rows and a power-of-two width; the pads never rank above a real
+        logit, so a local id >= vocab/TP can only come back from a pad row). The values are the shard
+        logits' own bf16 values, unchanged, so they equal what the logits trace's RM readback holds.
+        Replayed right after the main trace when read_topk=True (spec_mode == "topk")."""
+        x = self._vfy_shard_logits_out
+        rows = int(x.shape[2])
+        per_shard = int(x.shape[3])
+        pad_rows = ttnn.TILE_SIZE - rows
+        p = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_rows), (0, self._vfy_topk_w - per_shard)], value=-1e30)
+        vals, idx = ttnn.topk(p, k=self._vfy_topk_m, dim=-1, largest=True, sorted=True, stable=True)
+        ttnn.deallocate(p)
+        # uint16 -> uint32 before the gather: the uint32 TILE all-gather is the proven path
+        # (_dl_greedy_token_row_batched); the decode sampler gathers the uint16 and widens afterwards.
+        idx32 = ttnn.typecast(idx, ttnn.uint32)
+        ttnn.deallocate(idx)
+        g_vals = ttnn.all_gather(vals, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        g_idx = ttnn.all_gather(idx32, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(vals)
+        ttnn.deallocate(idx32)
+        return g_vals, g_idx
+
+    def _vfy_setup_device_topk(self):
+        """Resolve QWEN36_VERIFY_DEVICE_TOPK (default OFF) and QWEN36_VERIFY_TOPK_M (default 64) for this verify
+        bucket: ``_vfy_topk`` (bool), ``_vfy_topk_m`` (M candidates per shard) and ``_vfy_topk_w`` (the
+        power-of-two width the shard logits are padded to). Needs the sharded-argmax verify (the shard logits
+        exist only there); M <= 64 is the multi-core ttnn.topk ceiling and keeps 16-bit indices."""
+        self._vfy_topk = False
+        self._vfy_topk_m = self._vfy_topk_w = None
+        m = verify_device_topk_m()
+        if m == 0:
+            return
+        if not self._vfy_sharded:
+            logger.warning("QWEN36_VERIFY_DEVICE_TOPK ignored: the sharded-argmax verify is off")
+            return
+        per_shard = self.vocab_size // self.num_devices
+        w = 1 << (per_shard - 1).bit_length()
+        if not 1 <= m <= 64 or m > per_shard or w > 32768:
+            raise ValueError(
+                f"QWEN36_VERIFY_TOPK_M={m} unsupported: need 1 <= M <= 64 and M <= vocab/TP={per_shard}, "
+                f"and a padded shard width {w} <= 32768 for the multi-core stable top-k"
+            )
+        self._vfy_topk, self._vfy_topk_m, self._vfy_topk_w = True, m, w
+
+    def fetch_verify_logits(self):
+        """Lazy full logits of the LAST verify replay: replays the logits trace over the persistent
+        ``_vfy_normed_out`` the main trace wrote, synchronizes and reads the ROW_MAJOR copy -> torch
+        [B*T, vocab] bf16 (what verify_traced(read_logits=True) returns). The topk read's fallback when a
+        row cannot be served from its candidates. Valid until the next replay of any verify or seed body
+        (the drafter does not touch ``_vfy_normed_out``)."""
+        assert getattr(self, "_vfy_logits_trace_id", None) is not None, "no logits trace (sharded verify off)"
+        dev = self.device
+        rows = self._vfy_B * self._vfy_T
+        ttnn.execute_trace(dev, self._vfy_logits_trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(dev)
+        lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_rm_out)[0])
+        return lt.reshape(-1, self.vocab_size)[:rows]
 
     def _vfy_setup_sharded_argmax(self, rows):
         """Resolve QWEN36_VERIFY_SHARDED_ARGMAX (default ON) for this verify bucket and allocate the one
@@ -1991,6 +2062,9 @@ class Qwen36Model:
         if getattr(self, "_vfy_logits_trace_id", None) is not None:
             ttnn.release_trace(self.mesh_device, self._vfy_logits_trace_id)
             self._vfy_logits_trace_id = None
+        if getattr(self, "_vfy_topk_trace_id", None) is not None:
+            ttnn.release_trace(self.mesh_device, self._vfy_topk_trace_id)
+            self._vfy_topk_trace_id = None
 
     @staticmethod
     def _fit_spec_page_table(pt, nb):
@@ -2069,6 +2143,7 @@ class Qwen36Model:
         self._vfy_T, self._vfy_B = T, B
         self._vfy_nb = nb
         self._vfy_setup_sharded_argmax(rows)
+        self._vfy_setup_device_topk()
 
         # Persistent per-replay input buffers (addresses baked into the trace).
         self._vfy_token_buf = ttnn.from_torch(
@@ -2195,6 +2270,13 @@ class Qwen36Model:
                 ttnn.deallocate(t)
             ttnn.deallocate(self._vfy_normed_out)
             self._vfy_normed_out = None
+            if self._vfy_topk:
+                # ... and the topk trace's (pad, stable top-k, typecast, two all-gathers) on the kept shard logits.
+                self._vfy_shard_logits_out = outs[5]
+                for t in self._forward_verify_topk_body():
+                    ttnn.deallocate(t)
+                ttnn.deallocate(self._vfy_shard_logits_out)
+                self._vfy_shard_logits_out = None
         for t in outs[:4]:
             if t is not None:
                 ttnn.deallocate(t)
@@ -2222,6 +2304,7 @@ class Qwen36Model:
             self._vfy_ids_out,
             self._vfy_logits_rm_out,
             self._vfy_normed_out,
+            self._vfy_shard_logits_out,
         ) = self._forward_verify_bucket_tp(n_users=B)
         ttnn.end_trace_capture(dev, self._vfy_trace_id, cq_id=0)
         if self._vfy_sharded:
@@ -2230,6 +2313,13 @@ class Qwen36Model:
             self._vfy_logits_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
             self._vfy_logits_out, self._vfy_logits_rm_out = self._forward_verify_logits_body()
             ttnn.end_trace_capture(dev, self._vfy_logits_trace_id, cq_id=0)
+            if self._vfy_topk:
+                # QWEN36_VERIFY_DEVICE_TOPK: a third, smaller trace replaces the logits trace on sampled steps
+                # whose rows can be served from the exact top-M candidates (read_topk; the logits trace stays
+                # the fallback, replayed lazily by fetch_verify_logits).
+                self._vfy_topk_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
+                self._vfy_topk_vals_out, self._vfy_topk_ids_out = self._forward_verify_topk_body()
+                ttnn.end_trace_capture(dev, self._vfy_topk_trace_id, cq_id=0)
         self._vfy_capture_count = getattr(self, "_vfy_capture_count", 0) + 1
         # Fused grouped SDPA read (spec_multi_pos_tiles) or the legacy per-row call; a T with no
         # L1-fitting split (7, 11, ...) stays legacy.
@@ -2249,7 +2339,9 @@ class Qwen36Model:
             f"successfully! verify SDPA: {_how}; verify KV write: {_kvw}"
         )
 
-    def verify_traced(self, tokens, positions, mi_prev, read_logits=False, page_tables=None, inactive=None):
+    def verify_traced(
+        self, tokens, positions, mi_prev, read_logits=False, page_tables=None, inactive=None, read_topk=False
+    ):
         """Replay the captured verify trace for B users x T candidates.
 
         ``tokens``: B lists of T ids ([pending] + drafts per user). ``positions``: B ints, user u's
@@ -2259,10 +2351,13 @@ class Qwen36Model:
         window rows, so no state is copied between iterations.
 
         Returns (ids: B*T host ints, feed_rows: the trace's persistent [1,1,B*T,dim/tp] drafter feed,
-        logits: torch [B*T, vocab] or None). ``read_logits`` pulls the full logits to host (for the
-        sampler; greedy needs only the in-trace argmax ids). It reads the trace's ROW_MAJOR copy
-        (_vfy_logits_rm_out) with no cast, which avoids a host untilize; the sampler converts to
-        float32 lazily per row.
+        readback: None, logits torch [B*T, vocab] bf16, or the top-k pair). ``read_logits`` pulls the full
+        logits to host (for the sampler; greedy needs only the in-trace argmax ids). It reads the trace's
+        ROW_MAJOR copy (_vfy_logits_rm_out) with no cast, which avoids a host untilize; the sampler converts
+        to float32 lazily per row. ``read_topk`` (QWEN36_VERIFY_DEVICE_TOPK) replays the topk trace instead
+        and returns ``(values [B*T, TP*M] bf16, local_ids [B*T, TP*M] int)`` from _forward_verify_topk_body
+        (spec_engine.merge_shard_topk turns them into the exact global top-M per row); the full logits
+        stay available lazily through fetch_verify_logits. The two reads are exclusive.
 
         ``page_tables``: int32 [B, num_blocks] block tables (array-like; 1-D only for B == 1), one
         row per user. When given, every persistent page-table buffer is re-staged for this replay,
@@ -2280,6 +2375,11 @@ class Qwen36Model:
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_ctrl_page, spec_state_blk_idx
 
         assert getattr(self, "_vfy_trace_id", None) is not None, "call record_verify_trace first"
+        if read_topk:
+            if read_logits:
+                raise ValueError("verify_traced: read_logits and read_topk are exclusive reads")
+            if getattr(self, "_vfy_topk_trace_id", None) is None:
+                raise ValueError("verify_traced(read_topk=True) needs QWEN36_VERIFY_DEVICE_TOPK=1 at capture")
         T, B = self._vfy_T, self._vfy_B
         rows = B * T
         assert len(tokens) == B, f"expected {B} users, got {len(tokens)}"
@@ -2374,6 +2474,8 @@ class Qwen36Model:
         ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
         if read_logits and self._vfy_sharded:
             ttnn.execute_trace(dev, self._vfy_logits_trace_id, cq_id=0, blocking=False)
+        if read_topk:
+            ttnn.execute_trace(dev, self._vfy_topk_trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(dev)
         if _fused:
             # The replay rebuilt every user's conv window into win[1-par], so that half is now E_prev for every GDN
@@ -2389,6 +2491,12 @@ class Qwen36Model:
         if read_logits:
             lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_rm_out)[0])
             lt = lt.reshape(-1, self.vocab_size)[:rows]
+        if read_topk:
+            # Replicated by the all-gather: one replica holds every device's block (32 KB + 64 KB at M=64).
+            width = self.num_devices * self._vfy_topk_m
+            vals = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_topk_vals_out)[0]).reshape(-1, width)[:rows]
+            idx = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_topk_ids_out)[0]).reshape(-1, width)[:rows]
+            lt = (vals, idx)
         return ids, self._vfy_rows_out, lt
 
     def _forward_seed_bucket_tp(self, token_buf, kvpos, kvpt, cos, sin, n_users):

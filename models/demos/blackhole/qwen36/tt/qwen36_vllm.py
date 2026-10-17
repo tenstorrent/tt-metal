@@ -27,7 +27,7 @@ import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
 from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
 from models.demos.blackhole.qwen36.tt.model import serve_device_decode_env_enabled
-from models.demos.blackhole.qwen36.tt.tp_common import fabric_router_config
+from models.demos.blackhole.qwen36.tt.tp_common import fabric_router_config, verify_device_topk_m
 from models.tt_transformers.tt.generator import Generator
 
 # Sampler top-k limit (models/common/sampling TTSampling.max_top_k default; ttnn.sampling walks k <= 32 candidates).
@@ -1011,14 +1011,20 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             )
         except Exception as e:
             return SpecReject(reason=f"cost estimate failed: {e}", supported_k=())
+        # QWEN36_VERIFY_DEVICE_TOPK=1 adds the "topk" accept mode (exact top-M candidates from the device instead of
+        # the full logits on sampled steps, note 26) and tells the plugin the candidate count. Passed only when on, so
+        # a plugin without the field still admits the class with the flag off.
+        topk_m = verify_device_topk_m()
+        topk_kw = {"topk_candidates": topk_m} if topk_m else {}
         return SpecPlan(
             effective_k=k,
             lanes_per_request=1,
             extra_bytes_per_seq=per_seq,
             extra_bytes_per_token=per_token,
-            accept_modes=("argmax_ids", "logits"),
+            accept_modes=("argmax_ids", "logits") + (("topk",) if topk_m else ()),
             drafter_state="internal",
             supports_narrow_decode=True,
+            **topk_kw,
         )
 
     @classmethod
@@ -1142,6 +1148,17 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             slot_remap=remap,
         )
         logits = res.logits if spec_mode == "logits" else None
+        if spec_mode == "topk":
+            # The candidates plus the lazy full-logits fallback (one device round trip; the plugin walks acceptance on
+            # the runner thread before it proposes, see supports_async_spec_decode=False).
+            return VerifyOutput(
+                spec_mode=res.spec_mode,
+                argmax_ids=res.argmax_ids,
+                hidden=None,
+                topk_values=res.topk_values,
+                topk_ids=res.topk_ids,
+                fetch_logits=res.fetch_logits,
+            )
         return VerifyOutput(spec_mode=res.spec_mode, argmax_ids=res.argmax_ids, hidden=None, logits=logits)
 
     def _decode_narrow(self, tokens, start_pos, page_table, kwargs, remap=None):
