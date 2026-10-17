@@ -226,8 +226,10 @@ inline void _llk_unpack_AB_uninit_()
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param address_a: L1 memory address of source A tile
  * @param address_b: L1 memory address of source B tile
- * @param bcast_row_idx: Row index within source B tile for ROW broadcast (0..31; must be 0 for a BFP operand B)
- * @param srcb_format: Source B data format used to calculate ROW broadcast address offset
+ * @param bcast_row_idx: Row index within source B tile for ROW broadcast (0..31 of a 32x32 tile; must be 0 for a
+ *        BFP operand B or for any other tile shape, which this function cannot check: the API layer bounds it)
+ * @param srcb_format: Source B L1 data format; must be operand B's real format whenever bcast_row_idx > 0 (it sizes
+ *        the row offset and drives the BFP check)
  * @note Call @ref _llk_unpack_AB_init_ with matching template args before this function, and
  *       @ref _llk_unpack_AB_uninit_ after it to restore modified state.
  * @ref _llk_math_eltwise_binary_ on the math thread consumes the SrcA/SrcB tiles unpacked here.

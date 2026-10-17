@@ -1666,9 +1666,11 @@ class BCAST_ROW_IDX(RuntimeParameter):
 
 @dataclass
 class UNPACK_ISSUED(RuntimeParameter):
-    """Cross-thread gate in L1: the host writes 0 before every run, the unpack thread writes 1 to the
-    L1 copy of the runtime parameters (``__runtime_args_start``) once its unpack call has returned,
-    and math/pack spin on that word before issuing any Tensix instruction.
+    """Cross-thread gate in L1: the host writes 0 before the first run, the unpack thread writes 1 to
+    the L1 copy of the runtime parameters (``__runtime_args_start``) once its unpack call has
+    returned, and math/pack spin on that word before issuing any Tensix instruction. Bit-exact
+    re-runs relaunch the ELFs without rewriting the runtime block, so from the second run on the
+    gate already reads 1; that only shortens the wait.
 
     For a kernel whose unpack thread may stop in an ``LLK_ASSERT``: a math/pack thread left stalled
     on a Tensix instruction survives the per-test TRISC soft reset and hangs the next kernel, whereas
