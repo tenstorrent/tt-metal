@@ -28,19 +28,19 @@
 #endif
 
 void kernel_main() {
-    const uint32_t value_offset_tiles = 0;
-    const uint32_t index_offset_tiles = 2;
-    constexpr uint32_t row_elements = get_compile_time_arg_val(0);
-    constexpr uint32_t chunk_size = 1024;
-    constexpr uint32_t num_chunks = row_elements / chunk_size;              // number of 1024 element chunks
-    constexpr uint32_t num_remaining_elements = row_elements % chunk_size;  // number of remaining elements
-    constexpr uint32_t num_input_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t num_output_tiles = get_compile_time_arg_val(2);
+    const std::uint32_t value_offset_tiles = 0;
+    const std::uint32_t index_offset_tiles = 2;
+    constexpr std::uint32_t row_elements = get_compile_time_arg_val(0);
+    constexpr std::uint32_t chunk_size = 1024;
+    constexpr std::uint32_t num_chunks = row_elements / chunk_size;              // number of 1024 element chunks
+    constexpr std::uint32_t num_remaining_elements = row_elements % chunk_size;  // number of remaining elements
+    constexpr std::uint32_t num_input_tiles = get_compile_time_arg_val(1);
+    constexpr std::uint32_t num_output_tiles = get_compile_time_arg_val(2);
 
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
-    constexpr uint32_t cb_out1 = tt::CBIndex::c_17;
+    constexpr std::uint32_t cb_in0 = tt::CBIndex::c_0;
+    constexpr std::uint32_t cb_in1 = tt::CBIndex::c_1;
+    constexpr std::uint32_t cb_out0 = tt::CBIndex::c_16;
+    constexpr std::uint32_t cb_out1 = tt::CBIndex::c_17;
 
     CircularBuffer cb0(cb_in0);
     CircularBuffer cb1(cb_in1);
@@ -60,7 +60,7 @@ void kernel_main() {
     /*
     Algorithm implementation:
     1. unpack first 1024 elements from in0 and in1 into Dest
-        - with tranpose
+        - with transpose
     2. use top32 prep kernel to prepare the first 1024 elements for bitonic sort
     LOOP for number of remaining 1024 chunks:
         3. unpack next 1024 elements from in0 and in1 into Dest
@@ -85,8 +85,8 @@ void kernel_main() {
     transpose_tile(cb_in1, 0, index_offset_tiles);
 
     // step 2
-    const uint32_t decreasing = 0;
-    const uint32_t increasing = 1;
+    const std::uint32_t decreasing = 0;
+    const std::uint32_t increasing = 1;
     MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::_top32_rm_init_)));
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -97,8 +97,21 @@ void kernel_main() {
         VectorMode::RC_custom,
         value_offset_tiles));
 
+#if defined(TRISC_MATH)
+    if constexpr (get_compile_time_arg_val(3) != 0) {
+        // Model an intervening SFPU op replacing the shared replay contents.
+        // Recording NOPs changes only the replay buffer, not the live sort data.
+        ckernel::load_replay_buf(0 /*start*/, 16 /*len*/, [] {
+#pragma GCC unroll 16
+            for (std::uint32_t instruction = 0; instruction < 16; ++instruction) {
+                TTI_SFPNOP;
+            }
+        });
+    }
+#endif
+
     // loop for number of remaining chunks:
-    for (uint32_t i = 1; i < num_chunks; i++) {
+    for (std::uint32_t i = 1; i < num_chunks; i++) {
         // step 3
         reconfig_data_format_srca(cb_in0);
         transpose_init(cb_in0);
@@ -138,9 +151,9 @@ void kernel_main() {
         VectorMode::RC_custom,
         value_offset_tiles));
 
-    uint32_t num_faces = 4;
+    std::uint32_t num_faces = 4;
     // loop for number of remaining values:
-    for (uint32_t i = num_chunks * chunk_size; i < row_elements; i += 64) {
+    for (std::uint32_t i = num_chunks * chunk_size; i < row_elements; i += 64) {
         if (i + 64 > row_elements) {
             // process just 32 elements
             num_faces = 2;
