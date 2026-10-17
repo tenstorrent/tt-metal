@@ -8,7 +8,7 @@ import ttnn
 import pytest
 import numpy as np
 from ttnn import ReplicateTensorToMesh, ShardTensorToMesh, ShardTensor2dMesh
-from models.common.utility_functions import skip_for_slow_dispatch
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
 
 
 def is_ttnn_float_type(tt_dtype) -> bool:

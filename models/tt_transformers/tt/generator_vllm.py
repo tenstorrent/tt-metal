@@ -686,6 +686,7 @@ class LlamaForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "supports_device_grammar": True,
         "max_device_top_k": 32,
         # prefill_forward_single_user_text already routes a nonzero start_pos to
         # the chunked SDPA, and the generator floors the offset to what that op
@@ -780,6 +781,7 @@ class QwenForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "supports_device_grammar": True,
         "max_device_top_k": 32,
         # prefill_forward_single_user_text already routes a nonzero start_pos to
         # the chunked SDPA, and the generator floors the offset to what that op
@@ -875,6 +877,7 @@ class CohereForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "max_device_top_k": 32,
     }
 
     def __init__(self, *args, **kwargs):
@@ -927,6 +930,7 @@ class MistralForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "supports_device_grammar": True,
         "max_device_top_k": 32,
         # prefill_forward_single_user_text already routes a nonzero start_pos to
         # the chunked SDPA, and the generator floors the offset to what that op
@@ -1176,6 +1180,7 @@ class Exaone4_5_ForConditionalGeneration(HybridAttentionForCausalLM):
         "supports_prefix_caching": False,  # Sliding window => no prefix caching
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "max_device_top_k": 32,
     }
 
     # One prefill chunk on P150x8 (MAX_PREFILL_CHUNK_SIZES["EXAONE-4.5-33B"]).
@@ -1290,6 +1295,30 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        if (
+            "gpt-oss-120b" in model_name.lower()
+            and num_devices == 32
+            and tt_data_parallel == 4
+            and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
+        ):
+            # Allow two long contexts in each BH Galaxy lane. The plugin
+            # adds its per-user block padding to this per-lane token budget.
+            return 262_144
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
         # While hybrid KV cache groups are disabled (one full-attention group
