@@ -407,7 +407,13 @@ through a remote leg or CI silicon meanwhile — a missing board is never a reas
 **Fix:** `mkwt.sh <issue>-<item> <me>/<branch>`. Minimal fix derived from the codebase's correct
 sibling usage. **Check the sibling arch** for the same defect — same line is not the same bug, but a
 one-sided fix on a symmetric defect draws a valid bot comment; fix both only if both are proven,
-otherwise note it in the PR. Test goes in the most relevant existing test file; if new, wire it so CI
+otherwise note it in the PR. **Every architecture copy you change gets its own fail-without /
+pass-with** on that architecture's silicon when a board for it is reachable — this box, a worker's box
+through `legs.sh` (§0c), or CI silicon. "Compile-only" for a copy is acceptable only while no such board
+exists, must be stated in the PR body as such, and is **backfilled before the PR is called done**: when a
+worker for that architecture appears mid-run, every open PR of yours with a compile-only copy gets its
+remote legs (probe branch for fail-without, fix branch for pass-with) and the body updated — it is
+waiting in the CI queue anyway. Test goes in the most relevant existing test file; if new, wire it so CI
 collects it — and check the **lane** that runs it is one the fixed file's path triggers.
 
 **Verify, 3 ways, before any push:** fail-without + pass-with output captured to the ledger dir;
