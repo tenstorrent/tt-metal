@@ -315,7 +315,7 @@ Limits:
 
 ## Performance
 
-The tables below were measured on the previous image (`0.24.0-799a223-ffd1a57`); the benchmark workflow was re-run on this image only for the default 16-user, 262,144-token spec (first table). The prefix-caching and chunked-prefill numbers are in their own section.
+The tables below were measured on the previous image (`0.24.0-799a223-ffd1a57`); the benchmark workflow was re-run on this image only for the default 16-user 262,144-token spec and the 4-user 786,432-token and 1,048,576-token image specs (the tables marked with this image tag). The prefix-caching and chunked-prefill numbers are in their own section.
 
 Method for all tables:
 - GSM8K 8-shot prompts, about 700 tokens, 256 output tokens.
@@ -360,6 +360,16 @@ Total greedy throughput: 30.8 / 53.2 / 85.5 / 125.4 / 196.6 tok/s at 1 / 2 / 4 /
 
 Total greedy throughput: 32.8 / 50.0 / 94.4 / 120.7 / 189.4 tok/s.
 
+### 4 users, 1,048,576 tokens, images on (default spec, image `0.24.0-c9cfb00-ffd1a57`)
+
+| Concurrent requests | Greedy TTFT | Greedy TPOT | Greedy tok/s/user | Sampled TTFT | Sampled TPOT | Sampled tok/s/user |
+|---|---|---|---|---|---|---|
+| 1 | 1.51 s | 29.1 ms | 34.4 | 1.54 s | 29.5 ms | 33.9 |
+| 2 | 1.77 s | 34.3 ms | 29.1 | 1.80 s | 35.3 ms | 28.3 |
+| 4 | 1.88 s | 44.2 ms | 22.6 | 2.00 s | 46.3 ms | 21.6 |
+
+Total output throughput (greedy): 28.7 / 48.2 / 76.2 tok/s at 1 / 2 / 4 requests.
+
 ### 4 users, 1,048,576 tokens
 
 | Concurrent requests | Greedy TTFT | Greedy TPOT | Greedy tok/s/user | Sampled TTFT | Sampled TPOT | Sampled tok/s/user |
@@ -369,6 +379,16 @@ Total greedy throughput: 32.8 / 50.0 / 94.4 / 120.7 / 189.4 tok/s.
 | 4 | 1.86 s | 45.5 ms | 22.0 | 1.99 s | 44.8 ms | 22.3 |
 
 Total greedy throughput: 28.1 / 47.3 / 74.5 tok/s.
+
+### 4 users, 786,432 tokens, images on (default spec, image `0.24.0-c9cfb00-ffd1a57`)
+
+| Concurrent requests | Greedy TTFT | Greedy TPOT | Greedy tok/s/user | Sampled TTFT | Sampled TPOT | Sampled tok/s/user |
+|---|---|---|---|---|---|---|
+| 1 | 1.37 s | 29.0 ms | 34.5 | 1.39 s | 28.8 ms | 34.8 |
+| 2 | 1.58 s | 33.5 ms | 29.8 | 1.63 s | 35.1 ms | 28.5 |
+| 4 | 1.70 s | 42.9 ms | 23.3 | 1.75 s | 43.4 ms | 23.0 |
+
+Total output throughput (greedy): 29.2 / 50.0 / 79.3 tok/s at 1 / 2 / 4 requests.
 
 ### 4 users, 524,288 tokens, images on
 
