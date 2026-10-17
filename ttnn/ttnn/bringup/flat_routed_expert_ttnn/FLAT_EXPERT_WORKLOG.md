@@ -801,3 +801,22 @@ per-chip experts programs of 2357-2376 us (the unprofiled traced 2372) with tail
 did not work either way round (offsets of seconds), so "start skew vs a fabric hot spot" is unresolved. Profile-log
 parsing note: traced replays reuse the run host id - key program instances by (device, run id, trace id, trace id
 counter). Conclusion: the tail is <= ~1/3 of the gap and noisy; the steady-state DRAM efficiency (87%) is the bulk.
+
+### K3 routed experts: the DRAM read mix alone (zz_scratch_dram_mix.py, 2026-10-17)
+Plain NoC reads (transaction-id queues, no compute) replaying the K3 plan's weight streams per call on one chip, on
+the plan's own cores (flat_routed_expert_plan dumped at K3 shapes on the 12 x 10 grid: 16 gate/up readers in logical
+columns 0 / 1 / 7 / 8 next to the DRAM tiles, 28 down cores of 4 output tile columns, down blocks 4 x 4 bf4 = 9 KB):
+| pattern (DRAM in flight: gate/up 4, down 2 per core) | us | % of 512 GB/s |
+| gate/up alone (54 KB, own bank) | 1356 | 99.9 |
+| down alone (9 KB, rotating; depth 2 / 8) | 1044-1067 | 64-65 |
+| down alone 36 KB rotating / 9 KB pinned per bank | 1130 / 1108 | 60 / 54 |
+| down alone from 24 cores next to DRAM | 958-970 | 70-71 |
+| mix as today (depth 2 / 4) | 2256 / 2230 | 90.1 / 91.1 |
+| mix, down 36 KB / pinned | 2285-2302 / 2197-2202 | ~89 / ~89 |
+| mix, down from cores next to DRAM, depth 2 / 8 | 2300 / 2153 | 88.3 / 94.4 |
+(A first version with barrier-batched reads on arbitrary cores gave gate/up alone 62-67%: reader placement / queueing
+matter - the gate/up readers' one-hop placement is what gets them to 100%.) Reading: today's pattern bounds the
+experts at ~2230-2256 us of DRAM alone; the real program (2372) adds ~120-140 (x reads, compute coupling, the combine
+tail). The down stream is the weak part (~65% alone, whatever the block size, depth or bank pinning); bigger or
+pinned blocks do not help the mix; only down reads issued next to the DRAM columns with deeper queues lift it (+3%,
+~70-80 us) - i.e. down weights read by near-DRAM cores and forwarded to the down cores.
