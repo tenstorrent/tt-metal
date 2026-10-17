@@ -246,16 +246,19 @@ public:
 
 protected:
     void SetUp() override {
-        if (detail::detect_arch() != tt::ARCH::BLACKHOLE) {
-            GTEST_SKIP() << "This test can only be run on Blackhole cards";
-        }
-        ASSERT_FALSE(get_shared_devices().initialized)
-            << "Suite-shared devices are open; this fixture opens its own device after changing run-time options";
+        // Capture before any early exit: TearDown still runs after a skip or a failed assertion
+        // here, and must restore the real previous values, not the zero-initialised members.
         auto& rtoptions = MetalContext::instance().rtoptions();
         watcher_previous_enabled_ = rtoptions.get_watcher_enabled();
         watcher_previous_interval_ = rtoptions.get_watcher_interval();
         test_mode_previous_ = rtoptions.get_test_mode_enabled();
         llk_asserts_previous_ = rtoptions.get_llk_asserts();
+
+        if (detail::detect_arch() != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP() << "This test can only be run on Blackhole cards";
+        }
+        ASSERT_FALSE(get_shared_devices().initialized)
+            << "Suite-shared devices are open; this fixture opens its own device after changing run-time options";
         rtoptions.set_watcher_enabled(true);
         rtoptions.set_watcher_interval(250);
         // In test mode a watcher error stops the server and fails the wait instead of ending the process.
