@@ -45,13 +45,13 @@ namespace sfpu {
  *   normalisation below, which returned NaN for -0.0 and for positive subnormals, so
  *   fast mode now runs the same instructions as accurate mode.
  * @tparam HAS_BASE_SCALING If true, multiply the natural log by log_base_scale_factor, the fp32
- *   bits of 1/ln(base). Has no effect once IS_BASE_TWO is set: that path always applies the factor.
+ *   bits of 1/ln(base) (with IS_BASE_TWO, only the mantissa term is multiplied; see below)
  * @tparam is_fp32_dest_acc_en If true, use the fp32 polynomial; otherwise the bf16 one
  * @tparam IS_BASE_TWO If true, multiply only the mantissa term by log_base_scale_factor and add the
- *   exponent term as e_float * 2^-23, so log2 of a power of two is exact. The factor is applied
- *   whether or not HAS_BASE_SCALING is set, and the result is log2(a) only when the factor is the
- *   fp32 bits of 1/ln(2) (0x3FB8AA3B); with a factor of 0 the mantissa term vanishes and the
- *   result is just the exponent. Requires HAS_BASE_SCALING, enforced below.
+ *   exponent term as e_float * 2^-23, so log2 of a power of two is exact. log_base_scale_factor is
+ *   always applied, and the result is log2(a) only when the factor is the fp32 bits of 1/ln(2)
+ *   (0x3FB8AA3B); with a factor of 0 the mantissa term vanishes and the result is just the
+ *   exponent. Requires HAS_BASE_SCALING, enforced below.
  */
 template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, bool IS_BASE_TWO = false>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
@@ -160,7 +160,7 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
  * @tparam APPROXIMATION_MODE Ignored
  * @tparam FAST_APPROX Ignored (see calculate_log_body)
  * @tparam HAS_BASE_SCALING If true, multiply the natural log by log_base_scale_factor, the fp32
- *   bits of 1/ln(base). Has no effect once IS_BASE_TWO is set (see calculate_log_body)
+ *   bits of 1/ln(base) (with IS_BASE_TWO, only the mantissa term; see calculate_log_body)
  * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
  * @tparam ITERATIONS Number of iterations for given face
  * @tparam IS_BASE_TWO If true, take the exact log2 path: log_base_scale_factor is always applied to
