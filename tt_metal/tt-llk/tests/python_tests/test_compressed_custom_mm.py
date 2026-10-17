@@ -15,14 +15,16 @@
 # test_matmul_custom_compressed.py drives, so this test now mirrors its host side:
 #   - in0 is kt_dim*2 DENSELY packed in0_rows x 16 faces, not a run of padded 32x32 tiles (the unpacker's SrcB counter
 #     stride is one face, datum_size * FACE_C_DIM * face_r_dim). See helpers/custom_mm_utils.pack_in0_faces.
-#   - the output is a partial tile [in0_rows, ct_dim*32], packed with dense_packing (DEST tile stride 32 rows) and read
-#     back through helpers/custom_mm_utils.dense_result_rowmajor.
+#   - the output is a partial tile [in0_rows, ct_dim*32], packed with dense_packing (DEST tile stride 32 rows; the
+#     zero-tile tests also run the 64-row non-dense layout) and read back through
+#     helpers/custom_mm_utils.dense_result_rowmajor.
 #
 # Difference vs custom_mm: BOTH primitives take an extra base_address_meta argument (a buffer of packed 3-bit per-tile
 # compression-format codes). We route it through the harness's optional third operand (buffer_C). The codes are CONTROL
-# FLOW, not just numerics: code 0 means "zero tile", for which the unpacker emits no UNPACR at all and math takes the
-# STALLWAIT(SRCB_VLD) branch, so an all-zero meta buffer hangs Math/Packer forever. The grid tests give every tile the
-# one BFP format under test; test_compressed_custom_mm_zero_tile places single zero tiles in a full-width block.
+# FLOW, not just numerics: code 0 means "zero tile", for which the unpacker emits no UNPACR at all and math only steps
+# DEST over the tile's slot; a zero tile in the last column (and the finalize pass) instead waits on SrcA/SrcB valid,
+# which is why an all-zero meta buffer hangs Math/Packer forever. The grid tests give every tile the one BFP format
+# under test; the zero_tile tests place single zero tiles in a full-width block.
 #
 # The golden folds in1's BFP quantization in rather than charging it against PCC: in1 is packed to the BFP format and
 # then unpacked back to bf16, and that dequantized tensor is what the golden multiplies. This is what
@@ -55,11 +57,13 @@ from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
+    CUSTOM_MM_DENSE_PACKING,
     IN_FACE_DIMS,
     NUM_FACES,
     TILE_COUNT,
 )
-from helpers.utils import matmul_acc_atol, passed_test
+from helpers.tile_constants import FACE_C_DIM
+from helpers.utils import matmul_acc_atol, passed_test, tolerances
 
 # in0 (SrcB) is bf16; in1 (SrcA) is the BFP-compressed operand. Sweep the three BFP widths the LLK's exponent-section
 # MOP config supports.
@@ -175,11 +179,37 @@ def test_compressed_custom_mm_zero_tile(zero_tiles):
     )
 
 
+# The same with dense_packing=False: 64-row DEST tiles, so ct_dim=8 fills the half and the skip has to step the
+# non-dense stride (which only this test exercises -- both silicon kernels above pin dense_packing=true). Here the
+# last face of the half is the unused lower half of tile 7, so the old ZEROACC skip did not show; the cases guard the
+# stride and the layout. Columns span the ZEROACC's observed dense threshold (DEST counter >= 288 rows) both ways.
+ZERO_TILE_SHAPE_NON_DENSE = (8, 4, 8)  # (ct_dim, kt_dim, in0_rows)
+ZERO_TILE_CASES_NON_DENSE = [
+    pytest.param(((1, 3),), id="k1-c3"),
+    pytest.param(((1, 6),), id="k1-c6"),
+    pytest.param(((2, 5),), id="k2-c5"),
+    pytest.param(((1, 1), (2, 4), (3, 6)), id="k1-c1_k2-c4_k3-c6"),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize("zero_tiles", ZERO_TILE_CASES_NON_DENSE)
+def test_compressed_custom_mm_zero_tile_non_dense(zero_tiles):
+    """Zero-code weight tiles with the 64-row DEST tile stride, ct_dim=8 filling the half."""
+    _run_compressed_custom_mm(
+        COMPRESSED_MM_FORMATS[0],
+        ZERO_TILE_SHAPE_NON_DENSE,
+        zero_tiles=zero_tiles,
+        dense_packing=False,
+    )
+
+
 def _run_compressed_custom_mm(
     formats,
     ct_kt_rows,
     boot_mode=BootMode.DEFAULT,
     zero_tiles=(),
+    dense_packing=True,
 ):
     ct_dim, kt_dim, in0_rows = ct_kt_rows
     rt_dim = 1  # compressed_custom_mm contract: rt_dim is always 1
@@ -234,6 +264,7 @@ def _run_compressed_custom_mm(
     configuration = TestConfig(
         "sources/compressed_custom_mm_test.cpp",
         formats,
+        templates=[CUSTOM_MM_DENSE_PACKING(dense_packing)],
         runtimes=[
             # num_faces_A is in0's active face count and num_faces_B is in1's full 4; the kernel CROSSES them into the
             # unpB / unpA slots. num_faces is the pack count.
@@ -273,22 +304,24 @@ def _run_compressed_custom_mm(
         res_tensor.numel() == golden_tensor.numel()
     ), "Result tensor and golden tensor are not of the same length"
 
-    # Name the output tiles that miss, so a failure says where in DEST it landed.
-    tile_err = (
-        (res_tensor.float() - golden_tensor.float())
-        .abs()
-        .reshape(in0_rows, ct_dim, TILE_DIM)
-    )
+    # Name the output faces that miss the tolerance half of passed_test's gate (same atol/rtol isclose; PCC is
+    # whole-tensor and has no per-face reading), so a failure says where in DEST it landed.
     atol = matmul_acc_atol(golden_tensor, kt_dim)
-    bad_tiles = {
-        f"tile{c}.F{f}": round(tile_err[:, c, f * 16 : (f + 1) * 16].max().item(), 4)
-        for c in range(ct_dim)
-        for f in range(2)
-        if tile_err[:, c, f * 16 : (f + 1) * 16].max().item() > atol
-    }
+    rtol = tolerances[formats.output_format].rtol
+    faces_per_tile = TILE_DIM // FACE_C_DIM
+    by_face = lambda t: t.float().reshape(in0_rows, ct_dim, faces_per_tile, FACE_C_DIM)
+    res_faces, golden_faces = by_face(res_tensor), by_face(golden_tensor)
+    bad_faces = {}
+    for c in range(ct_dim):
+        for f in range(faces_per_tile):
+            res_face, golden_face = res_faces[:, c, f], golden_faces[:, c, f]
+            if not torch.isclose(res_face, golden_face, atol=atol, rtol=rtol).all():
+                bad_faces[f"tile{c}.F{f}"] = round(
+                    (res_face - golden_face).abs().max().item(), 4
+                )
     assert passed_test(
         golden_tensor.flatten(),
         res_tensor.flatten(),
         formats.output_format,
         custom_atol=atol,
-    ), f"Assert against golden failed; output tiles over atol={atol:.4g} (max abs err): {bad_tiles}"
+    ), f"Assert against golden failed; output faces outside atol={atol:.4g}/rtol={rtol} (max abs err): {bad_faces}"

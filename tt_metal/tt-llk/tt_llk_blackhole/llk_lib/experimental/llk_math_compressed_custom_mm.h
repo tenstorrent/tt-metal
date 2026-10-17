@@ -26,13 +26,17 @@ using namespace ckernel::math;
 // fidelity: LoFi only
 // throttle: not supported
 
+// DEST rows from one output tile to the next: 32 with dense_packing (the two faces of a partial tile), 64 otherwise.
+template <bool dense_packing>
+constexpr std::uint32_t COMPRESSED_CUSTOM_MM_DEST_TILE_ROWS = dense_packing ? 32 : 64;
+
 template <bool transpose, bool split_acc, bool dense_packing>
 inline void _llk_math_compressed_custom_mm_addrmod_config_()
 {
     constexpr std::uint8_t ADDR_MOD_0_SRCA_INCR  = transpose ? 32 : 16;
     constexpr std::uint8_t ADDR_MOD_1_SRCA_INCR  = transpose ? (64 - 16) : 16;
     constexpr std::uint16_t ADDR_MOD_1_DEST_INCR = split_acc ? (1024 - 8) : (1024 - 16);
-    constexpr std::uint8_t ADDR_MOD_2_DEST_INCR  = dense_packing ? 32 : 64;
+    constexpr std::uint8_t ADDR_MOD_2_DEST_INCR  = COMPRESSED_CUSTOM_MM_DEST_TILE_ROWS<dense_packing>;
 
     addr_mod_t {
         .srca = {.incr = ADDR_MOD_0_SRCA_INCR, .clr = 0, .cr = 0},
@@ -95,42 +99,26 @@ inline void _llk_math_compressed_custom_mm_addrmod_config_()
                           // for fusing matmul and activation
 }
 
-// Zero-tile skip (see _llk_math_compressed_custom_mm_): the DEST counter and its CR step over the tile's slot, the
-// 32 or 64 rows ADDR_MOD_2 would add, without any Dst or Src access. INCRWC is the only way to do that: ZEROACC is the
-// one instruction that applies an address mod without writing data, but on Blackhole its 16-row mode marks a face of
-// the current DEST half as zero even for the out-of-range 0xff row select, which lands on the last face of the half:
-// with 16 densely packed tiles that is tile 15's second face, and a skip at the tenth or later tile of a k-row wiped
-// its partial.
-// INCRWC carries a 4-bit row increment, so the step is five of them, recorded behind the longest MVMUL/finalize
-// sequence (11 entries) and replayed with one instruction per skip. REPLAY needs a constant start, hence the fixed slot.
-constexpr std::uint32_t COMPRESSED_CUSTOM_MM_SKIP_REPLAY_LEN   = 5;
-constexpr std::uint32_t COMPRESSED_CUSTOM_MM_SKIP_REPLAY_START = ckernel::math::replay_buf_offset + 11;
+// Zero-tile skip (see _llk_math_compressed_custom_mm_): step the DEST counter and its CR over the tile's slot, the rows
+// ADDR_MOD_2 would add, without any Dst or Src access. ZEROACC is the one instruction that applies an address mod
+// without writing data, but on Blackhole its 16-row mode marks a face of the current DEST half as zero even for the
+// out-of-range 0xff row select, which lands on the last face of the half: with 16 densely packed tiles that is tile
+// 15's second face, and a skip at the tenth or later tile of a k-row wiped its partial. So the step is INCRWC on the
+// DEST counter alone; its row increment is 4 bits, hence 15-row steps and a remainder.
+template <std::uint32_t rows>
+inline void _llk_math_compressed_custom_mm_skip_dest_()
+{
+    constexpr std::uint32_t step = rows < 15 ? rows : 15;
+    TTI_INCRWC(p_setrwc::CR_D, step, 0 /*rwc_b*/, 0 /*rwc_a*/);
+    if constexpr (rows > step)
+    {
+        _llk_math_compressed_custom_mm_skip_dest_<rows - step>();
+    }
+}
 
-template <bool dense_packing>
 inline void _llk_math_compressed_custom_mm_mop_config_(const std::uint32_t operandB_face_r_dim)
 {
     const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
-
-    // 4 * step + last == the DEST tile stride, 32 rows with dense_packing and 64 without
-    constexpr std::uint32_t skip_step = dense_packing ? 6 : 13;
-    constexpr std::uint32_t skip_last = (dense_packing ? 32 : 64) - 4 * skip_step;
-    static_assert(skip_step <= 15 && skip_last <= 15, "INCRWC row increment is 4 bits");
-    // The math thread's replay region is the 16 entries from replay_buf_offset
-    static_assert(
-        COMPRESSED_CUSTOM_MM_SKIP_REPLAY_START + COMPRESSED_CUSTOM_MM_SKIP_REPLAY_LEN <= ckernel::math::replay_buf_offset + 16,
-        "zero-tile skip does not fit behind the finalize sequence");
-
-    load_replay_buf(
-        COMPRESSED_CUSTOM_MM_SKIP_REPLAY_START,
-        COMPRESSED_CUSTOM_MM_SKIP_REPLAY_LEN,
-        []
-        {
-            TTI_INCRWC(p_setrwc::CR_D, skip_step, 0, 0);
-            TTI_INCRWC(p_setrwc::CR_D, skip_step, 0, 0);
-            TTI_INCRWC(p_setrwc::CR_D, skip_step, 0, 0);
-            TTI_INCRWC(p_setrwc::CR_D, skip_step, 0, 0);
-            TTI_INCRWC(p_setrwc::CR_D, skip_last, 0, 0);
-        });
 
     load_replay_buf(
         ckernel::math::replay_buf_offset,
@@ -179,12 +167,16 @@ template <bool transpose = false, bool split_acc = false, bool dense_packing = f
 inline void _llk_math_compressed_custom_mm_init_(const std::uint32_t operandB_face_r_dim)
 {
     _llk_math_compressed_custom_mm_addrmod_config_<transpose, split_acc, dense_packing>();
-    _llk_math_compressed_custom_mm_mop_config_<dense_packing>(operandB_face_r_dim);
+    _llk_math_compressed_custom_mm_mop_config_(operandB_face_r_dim);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
-template <bool finalize = true>
+/**
+ * @tparam finalize: Run the split-accumulation finalize pass on the last k-row (requires split_acc at init).
+ * @tparam dense_packing: Must match the init's dense_packing: it is the DEST stride a zero-tile skip steps over.
+ */
+template <bool finalize, bool dense_packing>
 inline void _llk_math_compressed_custom_mm_(
     const std::uint32_t base_address_meta,
     const std::uint32_t operandB_face_r_dim,
@@ -213,10 +205,12 @@ inline void _llk_math_compressed_custom_mm_(
             }
             else
             {
-                // Zero tile: nothing was unpacked for it, so only step DEST onto the next tile. The SrcA/SrcB counters
-                // are already 0 here (the previous tile's ADDR_MOD_2 or ADDR_MOD_3 cleared them), so this is the DEST
-                // part of ADDR_MOD_2 alone, as the INCRWCs recorded by the init (see COMPRESSED_CUSTOM_MM_SKIP_REPLAY_START).
-                lltt::replay(COMPRESSED_CUSTOM_MM_SKIP_REPLAY_START, COMPRESSED_CUSTOM_MM_SKIP_REPLAY_LEN);
+                // Zero tile: nothing was unpacked for it, so only step DEST onto the next tile. That is the DEST part
+                // of ADDR_MOD_2 alone, because the SrcA/SrcB counters are already 0 at every skip: whatever came
+                // before left them so -- a multiplied tile (its last MVMUL applies ADDR_MOD_2, clr), another skip
+                // (INCRWC leaves them untouched), a multiplied last-column tile (ADDR_MOD_3, clr), a zero last-column
+                // tile (SETRWC SET_ABD) or, for the first tile, the init's reset_counters.
+                _llk_math_compressed_custom_mm_skip_dest_<COMPRESSED_CUSTOM_MM_DEST_TILE_ROWS<dense_packing>>();
             }
             index++;
             if (index == 10)

@@ -242,13 +242,15 @@ struct MatmulExpertCompressedSRAM {
 
                         if (++sram_idx < num_sram_experts) {
                             if constexpr (CTArgs::use_compression) {
-                                compressed_custom_mm_block<false>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
+                                compressed_custom_mm_block<false, true /* dense_packing */>(
+                                    cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                             } else {
                                 custom_mm_block<false>(cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
                             }
                         } else {
                             if constexpr (CTArgs::use_compression) {
-                                compressed_custom_mm_block<true>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
+                                compressed_custom_mm_block<true, true /* dense_packing */>(
+                                    cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                             } else {
                                 custom_mm_block<true>(cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
                             }
@@ -295,7 +297,8 @@ struct MatmulExpertCompressedSRAM {
                     tile_regs_acquire();
 
                     if constexpr (CTArgs::use_compression) {
-                        compressed_custom_mm_block<true>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
+                        compressed_custom_mm_block<true, true /* dense_packing */>(
+                            cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                     } else {
                         // split_acc=false at init → finalize MUST be false (custom_mm.h:131:
                         // "finalize ... must be false if split_acc is false"). With

@@ -760,7 +760,7 @@ struct MatmulExpertCompressedDRAM {
                             }));
 
                             if (sb_k < CTArgs::num_subblocks_k - 1) {
-                                compressed_custom_mm_block<false>(
+                                compressed_custom_mm_block<false, false /* dense_packing */>(
                                     CTArgs::cb_in0,
                                     CTArgs::cb_in1,
                                     meta_addr,
@@ -768,7 +768,7 @@ struct MatmulExpertCompressedDRAM {
                                     CTArgs::subblock_k,
                                     CTArgs::subblock_n);
                             } else {
-                                compressed_custom_mm_block<true>(
+                                compressed_custom_mm_block<true, false /* dense_packing */>(
                                     CTArgs::cb_in0,
                                     CTArgs::cb_in1,
                                     meta_addr,
@@ -894,7 +894,7 @@ struct MatmulExpertCompressedDRAM {
                         }));
                         uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base_ptr + fmt_meta_offset);
                         if (sb_k < num_subblocks_k_local - 1) {
-                            compressed_custom_mm_block<false>(
+                            compressed_custom_mm_block<false, false /* dense_packing */>(
                                 CTArgs::cb_in0,
                                 CTArgs::cb_in1,
                                 meta_addr,
@@ -902,7 +902,7 @@ struct MatmulExpertCompressedDRAM {
                                 CTArgs::subblock_k,
                                 CTArgs::subblock_n);
                         } else {
-                            compressed_custom_mm_block<true>(
+                            compressed_custom_mm_block<true, false /* dense_packing */>(
                                 CTArgs::cb_in0,
                                 CTArgs::cb_in1,
                                 meta_addr,
@@ -1055,7 +1055,7 @@ struct MatmulExpertCompressedDRAM {
                             uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base_ptr + fmt_meta_offset);
 
                             if (sb_k < CTArgs::num_subblocks_k - 1) {
-                                compressed_custom_mm_block<false>(
+                                compressed_custom_mm_block<false, false /* dense_packing */>(
                                     CTArgs::cb_in0,
                                     CTArgs::cb_in1,
                                     meta_addr,
@@ -1063,7 +1063,7 @@ struct MatmulExpertCompressedDRAM {
                                     CTArgs::subblock_k,
                                     CTArgs::subblock_n);
                             } else {
-                                compressed_custom_mm_block<true>(
+                                compressed_custom_mm_block<true, false /* dense_packing */>(
                                     CTArgs::cb_in0,
                                     CTArgs::cb_in1,
                                     meta_addr,

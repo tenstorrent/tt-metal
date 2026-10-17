@@ -111,7 +111,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // bank when call c + 1 changes format. Without the delay math keeps up and neither boundary is contended.
             ckernel::wait(2000);
         }
-        _llk_math_compressed_custom_mm_<false>(params.buffer_C[0] + call * meta_bytes_per_call, params.in0_face_r_dim, 0, kt_per_call, CT_DIM);
+        _llk_math_compressed_custom_mm_<false /* finalize */, true /* dense_packing */>(
+            params.buffer_C[0] + call * meta_bytes_per_call, params.in0_face_r_dim, 0, kt_per_call, CT_DIM);
     }
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
