@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """DeepSeek-V4.1 indexer of an index-source layer with its own compressed index keys (reference/ds41_ref.py:_indexer,
 enc_source layers 2 / 8 / 14: ratio 2; the candidate source layer 20: ratio 1 plus the candidate pool,
-TtCandidateIndexer below) on the SP x TP mesh. Adapted from models/demos/hy4_preview_d_p/tt/indexer.py
+TtCandidateIndexer below; the re-index layers 24 / 28 / 32 / 36 over layer 20's keys and pool, TtReindexer) on the
+SP x TP mesh. Adapted from models/demos/hy4_preview_d_p/tt/indexer.py
 (ring score over SP, TP query sub-shard, topk_large_indices, TP gather) and deepseek_v3_d_p/tt/mla/indexer.py:
 TtCsaIndexer (compressed keys); no Hadamard (the DS41 reference has none), keys from the compressor's served cache.
 
@@ -360,6 +361,74 @@ class TtCandidateIndexer(TtIndexer):
         return out
 
 
+class TtReindexer(TtIndexer):
+    """indexer step of a decoder re-index layer (dec_reindex: 24, 28, 32, 36): its own queries and gates over the KV
+    source's (layer 20's) index keys at ratio 1, restricted to the candidate source's pool of the same queries
+    (reference/ds41_ref.py:_indexer, ``uses_candidates``: scores outside the query's candidate blocks -> -inf, then the
+    512 best). Per chip, the same Sq query rows as the candidate source (natural blocks, any 32-aligned start):
+
+        score    TtIndexer.scores on the KV source's served 4_index_k_r1 cache (ring over axis 0, ratio 1)
+        bias     ttnn.scatter of the chip's candidate block ids [1, 1, Sq, 2048] uint32 ROW_MAJOR (layer 20's device
+                 pool, any order; 0xFFFFFFFF = none, skipped by scatter as out of range) as 0 into a load-time
+                 -inf row [1, 1, Sq, nb] bf16 ROW_MAJOR (bf16: K-4) -> ttnn.repeat_interleave x block (8) ->
+                 [1, 1, Sq, kv_len]: 0 on every key of a candidate block, -inf elsewhere (exact)
+        mask     scores [:, :kv_len] + bias (ROW_MAJOR bf16: s + 0 = s, s + -inf = -inf; future keys stay -inf)
+        top-k    topk_large_indices(k 512) -> all_gather over axis 1 -> [1, 1, W, 512] uint32 (-inf -> 0xFFFFFFFF)
+
+    A query sees at least min(pos + 1, 2047 x 8 + 1) candidate keys, so -inf never fills the 512 where the
+    reference would count a masked key (its ``idx < lens`` keeps them) except below 512 visible keys, where both pad."""
+
+    def __init__(self, mesh, w, cfg, ratio: int, rope: RopeTable, chunk: int):
+        super().__init__(mesh, w, cfg, ratio, rope, chunk)
+        assert ratio == 1, "the re-index layers score the candidate source's key positions (ratio 1)"
+        self.block, self.ctopk = cfg.cand_block, cfg.cand_topk_blocks
+        assert 32 % self.block == 0, self.block  # kv_len (a multiple of 32) holds whole blocks
+        self.src = _upload(mesh, torch.zeros(1, 1, self.sq, self.ctopk), ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self._neg = {}  # capacity T -> the -inf block row [1, 1, Sq, ceil16(T / block)] bf16 ROW_MAJOR
+
+    def setup(self, cache) -> None:
+        super().setup(cache)
+        t = self._capacity(cache)
+        if t not in self._neg:
+            nb = -(-(t // self.block) // 16) * 16  # 32-byte ROW_MAJOR pages
+            self._neg[t] = _upload(
+                self.mesh, torch.full((1, 1, self.sq, nb), float("-inf")), ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+
+    def bias_of(self, cands: ttnn.Tensor, kv_len: int, t: int) -> ttnn.Tensor:
+        """The chip's candidate bias [1, 1, Sq, kv_len] bf16 ROW_MAJOR (0 on candidate keys, -inf elsewhere)."""
+        b, sq = self.block, self.sq
+        nb = -(-(kv_len // b) // 16) * 16
+        neg = self._neg[t]
+        base = ttnn.slice(neg, [0, 0, 0, 0], [1, 1, sq, nb], memory_config=DRAM)
+        blk = ttnn.scatter(base, -1, cands, self.src, memory_config=DRAM)  # does not write its input
+        if not _same(base, neg):  # K-1 / DS41-52: never free the load-time row
+            ttnn.deallocate(base)
+        full = ttnn.repeat_interleave(blk, b, dim=-1, memory_config=DRAM)  # [1, 1, Sq, nb b]
+        ttnn.deallocate(blk)
+        if nb * b == kv_len:
+            return full
+        out = ttnn.slice(full, [0, 0, 0, 0], [1, 1, sq, kv_len], memory_config=DRAM)
+        ttnn.deallocate(full)
+        return out
+
+    def __call__(self, x: ttnn.Tensor, qr: ttnn.Tensor, start: int, cache, cands: ttnn.Tensor) -> ttnn.Tensor:
+        """attn_norm, q_resid as TtIndexer; ``cands`` the candidate source's pool of the chip's Sq query rows
+        [1, 1, Sq, 2048] uint32 ROW_MAJOR (read, not consumed) -> top-k [1, 1, W, 512] uint32, gathered over TP."""
+        t = self._capacity(cache)
+        logits, kv_len = self.scores(x, qr, start, cache)
+        lg = ttnn.slice(logits, [0, 0, 0, 0], [1, 1, self.sq, kv_len], memory_config=DRAM)
+        bias = self.bias_of(cands, kv_len, t)
+        masked = ttnn.add(lg, bias, memory_config=DRAM)  # ROW_MAJOR bf16 [1, 1, Sq, kv_len]
+        if not _same(lg, logits):  # K-1 / DS41-52: a full-range slice is a wrapper over the scores' buffer
+            ttnn.deallocate(lg)
+        ttnn.deallocate(bias)
+        ttnn.deallocate(logits)
+        out = self.topk_of(masked, kv_len)
+        ttnn.deallocate(masked)
+        return out
+
+
 def indexer_weights(ck, layer: int) -> dict[str, torch.Tensor]:
     p = f"layers.{layer}.attn.indexer."
     return {
@@ -369,10 +438,16 @@ def indexer_weights(ck, layer: int) -> dict[str, torch.Tensor]:
 
 
 def build_indexer(mesh, ck, cfg, layer: int, max_seq: int, chunk: int, rope: RopeTable | None = None) -> TtIndexer:
-    """The indexer of a layer with its own index keys (enc_source; the candidate source, layer 20: TtCandidateIndexer)
-    with its own RoPE table (component tests); the assembled model passes the layer's shared table."""
+    """The indexer of an index-source layer (enc_source: own keys; the candidate source, layer 20: TtCandidateIndexer;
+    the re-index layers over layer 20's keys and pool: TtReindexer) with its own RoPE table (component tests); the
+    assembled model passes the layer's shared table."""
     from .kv import rope_freqs
 
     rope = rope or RopeTable(mesh, rope_freqs(cfg, layer), max_seq)
-    cls = TtCandidateIndexer if cfg.is_cand_source(layer) else TtIndexer
+    if cfg.is_cand_source(layer):
+        cls = TtCandidateIndexer
+    elif cfg.uses_candidates(layer):
+        cls = TtReindexer
+    else:
+        cls = TtIndexer
     return cls(mesh, indexer_weights(ck, layer), cfg, cfg.ratio(layer), rope, chunk)
