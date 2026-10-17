@@ -23,6 +23,7 @@ from models.demos.blackhole.qwen36.tt.prefix_cache import alloc_zeros_like
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.demos.blackhole.qwen36.tt.tp_common import kv_cache_bf8_enabled
 from models.demos.blackhole.qwen36.tt.tp_common import lm_head_kwargs as _lm_head_kwargs
+from models.demos.blackhole.qwen36.tt.tp_common import spec_hostfix_enabled
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
@@ -94,6 +95,44 @@ class _DeviceDecodeLoop:
 
 
 def spec_kv_write_conflicts(page_tables, positions, T, block_size):
+    """Cross-user collisions of the grouped verify KV write (see _spec_kv_write_conflicts_old for the rule).
+    QWEN36_SPEC_HOSTFIX (default 1): a [B, nb] tensor is read at the <= B*T needed entries instead of tolist() of the
+    whole table (~33k ints at nb = 4097); same result and same errors. Returns [(j, u_first, u_second, block, tile)]."""
+    if not (
+        spec_hostfix_enabled()
+        and isinstance(page_tables, torch.Tensor)
+        and page_tables.dim() == 2
+        and len(positions) <= page_tables.shape[0]
+    ):
+        return _spec_kv_write_conflicts_old(page_tables, positions, T, block_size)
+    nb = page_tables.shape[1]
+    users = [u for u, p in enumerate(positions) if int(p) >= 0]
+    if not users:
+        return []
+    base = torch.tensor([int(positions[u]) for u in users], dtype=torch.int64)
+    pos = base[None, :] + torch.arange(T, dtype=torch.int64)[:, None]  # [T, U]: call j, active user
+    col = pos // block_size
+    over = col >= nb
+    if bool(over.any()):
+        j, i = (int(x) for x in over.nonzero()[0])  # first in the old (j, u) order
+        raise IndexError(f"user {users[i]} writes position {int(pos[j, i])}, past its {nb}-block page table")
+    blks = page_tables[torch.tensor(users)[None, :].expand(T, -1), col].tolist()
+    tiles = ((pos % block_size) // ttnn.TILE_SIZE).tolist()
+    conflicts = []
+    for j in range(T):
+        owner = {}  # (block, tile) -> first user that writes it in call j
+        for i, u in enumerate(users):
+            blk = int(blks[j][i])
+            if blk == 0:
+                continue
+            key = (blk, tiles[j][i])
+            first = owner.setdefault(key, u)
+            if first != u:
+                conflicts.append((j, first, u, *key))
+    return conflicts
+
+
+def _spec_kv_write_conflicts_old(page_tables, positions, T, block_size):
     """Cross-user collisions of the grouped verify KV write. Call j writes candidate j of every
     user (one user per core) to the 32-row cache tile (page_tables[u][pos // block_size],
     (pos % block_size) // 32) at pos = positions[u] + j; two users on the same tile in the same
