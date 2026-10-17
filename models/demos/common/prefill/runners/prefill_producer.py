@@ -445,6 +445,8 @@ class ProducerConfig:
     interleave: str = "random"
     slot_lengths: dict = None
     multi_turn_prob: float = 0.0
+    prefix_len: int = 0
+    isl: int = 0
 
 
 def _config_from_env() -> ProducerConfig:
@@ -457,6 +459,20 @@ def _config_from_env() -> ProducerConfig:
     interleave = os.environ.get("PREFILL_PRODUCER_INTERLEAVE", "random")
     if interleave not in ("random", "round_robin"):
         raise ValueError(f"PREFILL_PRODUCER_INTERLEAVE must be 'random' or 'round_robin', got {interleave!r}")
+    # Tokens every request resumes after: a prefix an earlier producer run left in each slot's cache.
+    prefix_len = int(os.environ.get("PREFILL_PRODUCER_PREFIX_LEN", "0"))
+    if prefix_len % _KV_CHUNK_TOKENS or not 0 <= prefix_len <= MAX_SEQ_LEN - CHUNK_SIZE:
+        raise ValueError(
+            f"PREFILL_PRODUCER_PREFIX_LEN={prefix_len} must be a multiple of {_KV_CHUNK_TOKENS} in "
+            f"[0, {MAX_SEQ_LEN - CHUNK_SIZE}]"
+        )
+    # Exact new tokens per request; 0 keeps the PREFILL_PRODUCER_CHUNKS range.
+    isl = int(os.environ.get("PREFILL_PRODUCER_ISL", "0"))
+    # The last chunk is padded to CHUNK_SIZE and written whole, so it must fit the cache too.
+    if isl < 0 or prefix_len + -(-isl // CHUNK_SIZE) * CHUNK_SIZE > MAX_SEQ_LEN:
+        raise ValueError(
+            f"PREFILL_PRODUCER_ISL={isl} after a {prefix_len}-token prefix overruns MAX_SEQ_LEN={MAX_SEQ_LEN}"
+        )
 
     return ProducerConfig(
         num_users=int(os.environ.get("PREFILL_NUM_USERS", "1")),
@@ -473,6 +489,8 @@ def _config_from_env() -> ProducerConfig:
         pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.93")),
         interleave=interleave,
         multi_turn_prob=float(os.environ.get("PREFILL_PRODUCER_MULTI_TURN_PROB", "0.0")),
+        prefix_len=prefix_len,
+        isl=isl,
     )
 
 
@@ -537,7 +555,7 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
 
     next_req_id = 0
     for slot in slots:
-        _new_request(slot, next_req_id, cfg, rng)
+        _new_request(slot, next_req_id, cfg, rng, prefix_len=cfg.prefix_len)
         next_req_id += 1
 
     push_ms: list = []
@@ -566,7 +584,7 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
                 ):
                     _new_request(slot, next_req_id, cfg, rng, prefix_len=prefix, turn_idx=slot.turn_idx + 1)
                 else:
-                    _new_request(slot, next_req_id, cfg, rng)
+                    _new_request(slot, next_req_id, cfg, rng, prefix_len=cfg.prefix_len)
                 next_req_id += 1
 
     while (now_fn() - start) < cfg.duration_s and completed < cfg.max_requests:
@@ -1432,6 +1450,10 @@ def _load_token_pool(trace_dir, num_tokens: int) -> list:
 def _resolve_slot_prompts(cfg: ProducerConfig):
     default = os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)
     spec = os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", "").strip()
+    if spec and (cfg.prefix_len or cfg.isl):
+        raise ValueError(
+            "PREFILL_PRODUCER_SLOT_TRACES is incompatible with PREFILL_PRODUCER_PREFIX_LEN and PREFILL_PRODUCER_ISL"
+        )
     if spec and cfg.multi_turn_prob > 0:
         raise ValueError(
             "PREFILL_PRODUCER_SLOT_TRACES is incompatible with multi-turn "
@@ -1444,8 +1466,10 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
     if not spec:
         trace = resolve_trace_dir(default)
         slot_traces = {s: trace for s in range(cfg.num_users)}
-        pool_tokens = MAX_SEQ_LEN if cfg.multi_turn_prob > 0 else cfg.chunks_max * CHUNK_SIZE
-        return slot_traces, None, {trace: _load_token_pool(trace, pool_tokens)}
+        new_tokens = cfg.isl or cfg.chunks_max * CHUNK_SIZE
+        pool_tokens = MAX_SEQ_LEN if cfg.multi_turn_prob > 0 else cfg.prefix_len + new_tokens
+        slot_lengths = {s: cfg.isl for s in range(cfg.num_users)} if cfg.isl else None
+        return slot_traces, slot_lengths, {trace: _load_token_pool(trace, pool_tokens)}
 
     entries = [e.strip() for e in spec.split(",") if e.strip()]
     resolved = [resolve_trace_dir(e) for e in entries]
@@ -1577,7 +1601,8 @@ def main() -> None:
     logger.info(
         f"[producer] service_id={service_id!r} users={cfg.num_users} chunks=[{cfg.chunks_min},{cfg.chunks_max}] "
         f"max_requests={cfg.max_requests} duration={cfg.duration_s}s p_gap={cfg.p_gap} p_burst={cfg.p_burst} "
-        f"mid_end={cfg.mid_chunk_end_prob} interleave={cfg.interleave} verify={cfg.verify} seed={cfg.seed}"
+        f"mid_end={cfg.mid_chunk_end_prob} interleave={cfg.interleave} prefix={cfg.prefix_len} isl={cfg.isl} "
+        f"verify={cfg.verify} seed={cfg.seed}"
     )
 
     service = ttnn.H2DStreamService.connect(service_id, timeout_ms=timeout_s * 1000)
