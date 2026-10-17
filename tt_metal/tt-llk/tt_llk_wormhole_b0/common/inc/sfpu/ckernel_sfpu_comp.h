@@ -533,8 +533,11 @@ sfpi_inline bool apply_unary_eq_ne_nan_or_zero_threshold(std::uint32_t value)
  * @param value: The threshold's fp32 bit pattern (0x3F000000 for 0.5f), not a numeric value.
  * @note unary_eq / unary_ne follow IEEE equality: -0.0 equals +0.0, and a NaN threshold equals nothing, not even a datum with the
  *       same NaN bits (eq -> 0.0f, ne -> 1.0f in every lane). The vector == is a bit-pattern compare, so those two thresholds are
- *       handled by @ref apply_unary_eq_ne_nan_or_zero_threshold before it. unary_gt / unary_lt / unary_ge / unary_le keep the
- *       SFPU's sign-magnitude order (-0.0 below +0.0, a NaN ranked by its sign), which is not IEEE's.
+ *       handled by @ref apply_unary_eq_ne_nan_or_zero_threshold before it. unary_gt / unary_lt / unary_ge / unary_le are not IEEE
+ *       ordered compares either: on Wormhole the vector > / < lower to a subtraction (SFPMAD forming s - v or v - s) followed by a
+ *       sign test of the difference (SFPSETCC), so they are right wherever that difference carries the ordering's sign and wrong
+ *       where it does not: subtracting +inf from +inf comes out with the sign bit set in both orders, so a +inf datum against a
+ *       +inf threshold reads gt = 1, lt = 1, ge = 0, le = 0 (measured on silicon; -inf against -inf reads correctly).
  */
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_comp_unary_(std::uint32_t value)
