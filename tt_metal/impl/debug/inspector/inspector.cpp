@@ -44,8 +44,8 @@ inspector::Data* get_inspector_data(const distributed::MeshBuffer& buffer) {
 }
 
 // A program must not outlive its context, and is compiled only on devices of its context.
-// TODO: Remove the DEFAULT_CONTEXT_ID guard once legacy programs from CreateProgram() are gone. It exists because
-// MetalContext::instance() would create the default context, e.g. when a legacy program is destroyed after it.
+// TODO(#39849): Remove the DEFAULT_CONTEXT_ID guard once legacy programs from CreateProgram() are gone. It exists
+// because MetalContext::instance() would create the default context, e.g. when a legacy program is destroyed after it.
 inspector::Data* get_inspector_data(const detail::ProgramImpl& program) {
     const ContextId context_id = program.get_context_id();
     if (context_id == DEFAULT_CONTEXT_ID && !MetalContext::instance_exists(context_id)) {
@@ -264,9 +264,8 @@ void Inspector::mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_
     }
 }
 
-void Inspector::mesh_buffer_allocated(
-    const distributed::MeshBuffer* mesh_buffer, const distributed::MeshDevice* mesh_device) noexcept {
-    auto* data = get_inspector_data(mesh_device);
+void Inspector::mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer) noexcept {
+    auto* data = get_inspector_data(*mesh_buffer);
     if (!data) {
         return;
     }
@@ -281,9 +280,8 @@ void Inspector::mesh_buffer_allocated(
     }
 }
 
-void Inspector::mesh_buffer_deallocated(
-    const distributed::MeshBuffer* mesh_buffer, const distributed::MeshDevice* mesh_device) noexcept {
-    auto* data = get_inspector_data(mesh_device);
+void Inspector::mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buffer) noexcept {
+    auto* data = get_inspector_data(*mesh_buffer);
     if (!data) {
         return;
     }
