@@ -12,6 +12,8 @@ Per chip (row r, column c): x [1, 1, 640, 2880] bf16, the chunk's tokens p with 
         block-cyclic table built at load; the q / k weight rows are permuted to meta order at load, so K lands in
         the cache in meta order (serving_answers k_rope_layout meta) and q.k is unchanged
     update_padded_kv_cache: post-RoPE K and V (bfp8) into the served cache at kv_actual = chunk start
+    full layers (ATTN_CHUNK_KV_BF16): SDPA reads a per-call bf16 copy of the slot (slice + typecast, then the chunk's
+        own K / V written in bf16), not the bfp8 cache; K block SDPA_FULL_K_CHUNK (512)
     ring_joint_scaled_dot_product_attention over SP (axis 0): GQA 16:2, attention_sink = the column's 16 sinks / scale,
         scale 2^-3 (exact in bf16, so the sink fold is exact), sliding_window_size 128 (None on full layers)
     nlp_concat_heads -> [640, 1024]; o_proj in-features 1024c..1024c+1023 (row-parallel, [out, in] bfp8 + transpose_b) -> fp32 partial [640, 2880]
@@ -174,16 +176,17 @@ class TtAttention:
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=(rows, cols), dims=(None, 1)),
         )
         self.qkv_dtype = ttnn.float32 if settings.get("QKV_FP32") else ttnn.bfloat16
+        self.chunk_kv_bf16 = settings.get("ATTN_CHUNK_KV_BF16")
         self.mm_config = _compute_config(mesh, settings.get("ATTN_MM_FIDELITY"), settings.get("ATTN_MM_FP32_ACC"))
         self.sdpa_config = _compute_config(mesh, settings.get("SDPA_FIDELITY"), settings.get("SDPA_FP32_ACC"))
         self.sdpa_program = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ccl.ring_sdpa_grid,
             q_chunk_size=settings.get("SDPA_Q_CHUNK"),
-            k_chunk_size=settings.get("SDPA_K_CHUNK"),
+            k_chunk_size=settings.get("SDPA_K_CHUNK" if window else "SDPA_FULL_K_CHUNK"),
             exp_approx_mode=False,
         )
 
-    def _gather_buffers(self, cache_rows_local: int):
+    def _gather_buffers(self, cache_rows_local: int, dtype=ttnn.bfloat8_b):
         if self.window is None:  # full layers gather every chip's whole shard
             seq = cache_rows_local * self.sp
         else:  # sliding: two compact predecessor-halo slots (one, or two when Q wraps a ring group)
@@ -191,8 +194,8 @@ class TtAttention:
             seq = 2 * max(math.ceil((self.window - 1) / k) * k, ttnn.TILE_SIZE)
         tag = "full" if self.window is None else "slide"
         return (
-            self.ccl.ring_gather_buffer(f"k_{tag}", self.nkv, seq, HEAD_DIM, ttnn.bfloat8_b),
-            self.ccl.ring_gather_buffer(f"v_{tag}", self.nkv, seq, HEAD_DIM, ttnn.bfloat8_b),
+            self.ccl.ring_gather_buffer(f"k_{tag}", self.nkv, seq, HEAD_DIM, dtype),
+            self.ccl.ring_gather_buffer(f"v_{tag}", self.nkv, seq, HEAD_DIM, dtype),
         )
 
     def __call__(self, x: ttnn.Tensor, start: int, cache_k: ttnn.Tensor, cache_v: ttnn.Tensor, batch_idx: int = 0):
@@ -222,6 +225,27 @@ class TtAttention:
             q_rot.deallocate(True)
             q_rot = q_bf
         k.deallocate(True)
+        # full layers: SDPA reads a bf16 copy of this slot's cache holding the chunk's own K / V in bf16 (the served
+        # cache still gets bfp8). Full causal attention over the prefix: bfp8 on the chunk's own keys alone is rel 0.06
+        sdpa_kv, sdpa_batch = None, batch_idx
+        if self.window is None and self.chunk_kv_bf16:
+            sdpa_kv, sdpa_batch = [], 0
+            for cache, t in ((cache_k, k_rot), (cache_v, v)):
+                b = cache.shape
+                slot = ttnn.slice(
+                    cache,
+                    [batch_idx, 0, 0, 0],
+                    [batch_idx + 1, b[1], b[2], b[3]],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                shadow = ttnn.typecast(slot, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                slot.deallocate(True)
+                src = ttnn.typecast(t, ttnn.bfloat16)
+                ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                    shadow, src, slot_idx=0, layer_idx=0, num_layers=1, kv_actual_global=start, cluster_axis=SP_AXIS
+                )
+                src.deallocate(True)
+                sdpa_kv.append(shadow)
         for cache, t in ((cache_k, k_rot), (cache_v, v)):
             src = ttnn.typecast(t, ttnn.bfloat8_b)
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -237,11 +261,12 @@ class TtAttention:
         k_rot.deallocate(True)
         v.deallocate(True)
 
-        buf_k, buf_v = self._gather_buffers(cache_k.shape[-2])
+        sdpa_k, sdpa_v = sdpa_kv if sdpa_kv else (cache_k, cache_v)
+        buf_k, buf_v = self._gather_buffers(cache_k.shape[-2], sdpa_k.dtype)
         attn, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             q_rot,
-            cache_k,
-            cache_v,
+            sdpa_k,
+            sdpa_v,
             None,
             None,
             None,
@@ -262,12 +287,14 @@ class TtAttention:
             is_causal=True,
             scale=self.scale,
             is_balanced=False,
-            kv_cache_batch_idx=batch_idx,
+            kv_cache_batch_idx=sdpa_batch,
             kv_actual_isl=start,
             attention_sink=self.sinks,
             sliding_window_size=self.window,
         )
         q_rot.deallocate(True)
+        for t in sdpa_kv or ():
+            t.deallocate(True)
         heads = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn.deallocate(True)
         part = ttnn.linear(

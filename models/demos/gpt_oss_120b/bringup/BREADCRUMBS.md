@@ -76,3 +76,22 @@
 - Gate (first try): pcc 0.999992, vs_cpu rel 0.0032 (limit 0.0119), vs_golden rel 0.0040, ratio [0.9945, 1.0049],
   auto_margin_min 2.71, 79 device ops, host FLOPs 0, deterministic. Regressions of the 5 earlier C tasks PASS.
 - Re-run: `bfw job check --task C.sliding_moe.experts`.
+
+## C.attn_moe.attention (layer 1, full causal)
+
+- Same `tt/attention.py:TtAttention` with `window=None`. As-is it failed the auto checks: pcc 0.9978, vs_golden rel
+  0.067 (limit 0.046), bias +0.0068 (0.004), `big` rel 0.165 (0.069), margin 0.42.
+- Cause (CPU simulation of the step, fp32 SDPA): bfp8 K alone gives rel 0.063; V bfp8 0.005, bf16 Q 0.003. bfp8 on
+  the prefix keys is 0.017, on the chunk's own keys 0.061. The bf16 SDPA intermediates add nothing measurable. The
+  test's precision model rounds the golden prefix state to bfp8 but sees the chunk's fresh K / V in fp32. Reordering
+  the head dim before bfp8 (meta, by magnitude) did not help (0.067 to 0.075).
+- Fix, behind `ATTN_CHUNK_KV_BF16` (True, in MAX_PRECISION): on full layers SDPA reads a per-call bf16 copy of the
+  slot. `ttnn.slice` (DRAM interleaved out: typecast rejects ND-sharded to interleaved) -> `typecast` bf16 ->
+  `update_padded_kv_cache` with the chunk's K / V in bf16 -> ring SDPA on it (batch 0), bf16 gather buffers. The served
+  cache still gets the bfp8 K / V as before. Sliding layers are unchanged. Cost per chip at the 56320 target:
+  ~1.8 MB per copy, 14 MB per bf16 gather buffer (7 MB in bfp8).
+- Result: rel 0.0306, bias +0.0042 (limit 0.004), margin 0.95. Then `SDPA_FULL_K_CHUNK` 512 (was 128, a full-layer
+  K block of its own; sliding still needs 128): bias +0.0036, rel 0.0296, margin 1.03.
+- Gate: PASS. pcc 0.99957, auto_margin_min 1.03 (bias on golden is the closest check), 22 device ops, host FLOPs 0,
+  deterministic. All 8 earlier C regressions PASS (sliding attention too).
+- Re-run: `bfw job check --task C.attn_moe.attention`.
