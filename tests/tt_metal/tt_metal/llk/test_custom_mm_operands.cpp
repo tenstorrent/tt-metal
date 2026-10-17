@@ -173,14 +173,17 @@ std::string wait_for_watcher_exception() {
 // time; the CB-id overloads read face_r_dim at run time, so their only guard is the
 // LLK assert this exercises. Without it the 1..4-row program runs on a 16-row
 // operand and rows 8..15 of each face silently drop out of the product.
-void run_custom_mm_rows_guard(distributed::MeshDevice& mesh, std::uint32_t mode) {
+constexpr std::uint32_t kGuardRows = 16;
+
+// mode: 0 custom_mm, 1 compressed_custom_mm. thread: 0 unpack init (TRISC0), 1 math init (TRISC1).
+void run_custom_mm_rows_guard(distributed::MeshDevice& mesh, std::uint32_t mode, std::uint32_t thread) {
     // A legal CB-id height must not trip the guard.
-    run_custom_mm_operands(mesh, 8, true, mode, false);
+    run_custom_mm_operands(mesh, 8 /*rows*/, true /*mixed*/, mode, false /*full_sync*/);
     EXPECT_TRUE(MetalContext::instance().watcher_server()->exception_message().empty())
         << "rows=8 tripped the watcher: " << MetalContext::instance().watcher_server()->exception_message();
 
-    // Init-only kernel on a [16, 32] in0 CB: the init must assert.
-    const Tile tiny({16, 32});
+    // Init-only kernel, one thread, on a [kGuardRows, 32] in0 CB: that init must assert.
+    const Tile tiny({kGuardRows, 32});
     const Tile full;
     const auto weight_format = mode == 1 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
     const CoreCoord core{0, 0};
@@ -203,7 +206,7 @@ void run_custom_mm_rows_guard(distributed::MeshDevice& mesh, std::uint32_t mode)
             .math_fidelity = MathFidelity::LoFi,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
-            .compile_args = {mode}});
+            .compile_args = {mode, thread}});
     distributed::MeshWorkload workload;
     const distributed::MeshCoordinate zero(0, 0);
     workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
@@ -219,16 +222,18 @@ void run_custom_mm_rows_guard(distributed::MeshDevice& mesh, std::uint32_t mode)
     const std::string exception = wait_for_watcher_exception();
     if (exception.empty()) {
         // No guard: the init completed, so show what the product of the same shape looks like.
-        auto test_case = make_custom_mm_operands(mesh, 16, true, mode, false);
+        auto test_case = make_custom_mm_operands(mesh, kGuardRows, true /*mixed*/, mode, false /*full_sync*/);
         distributed::EnqueueMeshWorkload(cq, test_case.workload, false);
         distributed::Finish(cq);
         std::vector<std::uint32_t> result;
         distributed::EnqueueReadMeshBuffer(cq, result, test_case.result_buffer, true);
-        EXPECT_EQ(result, test_case.golden) << "rows=16 ran to completion with no diagnostic";
+        EXPECT_EQ(result, test_case.golden) << "rows=" << kGuardRows << " ran to completion with no diagnostic";
     }
     ASSERT_FALSE(exception.empty()) << "Timeout waiting for the watcher to report the in0 tile height assert";
     EXPECT_NE(exception.find("tripped an assert"), std::string::npos) << exception;
     EXPECT_NE(exception.find("custom_mm_operands_guard"), std::string::npos) << exception;
+    // The watcher records the first assert per core; only the chosen thread ran an init.
+    EXPECT_NE(exception.find(thread == 0 ? "TRISC0" : "TRISC1"), std::string::npos) << exception;
 }
 
 }  // namespace
@@ -239,6 +244,8 @@ void run_custom_mm_rows_guard(distributed::MeshDevice& mesh, std::uint32_t mode)
 // device opens, and a tripped assert parks a TRISC, so the device is reopened for every test.
 class LLKBlackholeAssertFixture : public MeshDispatchFixture {
 public:
+    static constexpr int kWatcherIntervalMs = 250;
+
     // No suite-shared device: the options below change the firmware build, so the device must open
     // after they are set, and a device the base suite opened first would be torn down underneath.
     static void SetUpTestSuite() {}
@@ -260,7 +267,7 @@ protected:
         ASSERT_FALSE(get_shared_devices().initialized)
             << "Suite-shared devices are open; this fixture opens its own device after changing run-time options";
         rtoptions.set_watcher_enabled(true);
-        rtoptions.set_watcher_interval(250);
+        rtoptions.set_watcher_interval(kWatcherIntervalMs);
         // In test mode a watcher error stops the server and fails the wait instead of ending the process.
         rtoptions.set_test_mode_enabled(true);
         rtoptions.set_llk_asserts(true);
@@ -311,12 +318,20 @@ TEST_F(LLKBlackholeSingleCardFixture, CustomMatmulOperandOverloads) {
     }
 }
 
-TEST_F(LLKBlackholeAssertFixture, CustomMatmulOperandRejectsSixteenRowActivation) {
-    run_custom_mm_rows_guard(*devices_.at(0), 0);
+TEST_F(LLKBlackholeAssertFixture, CustomMatmulUnpackInitRejectsSixteenRowActivation) {
+    run_custom_mm_rows_guard(*devices_.at(0), 0 /*mode: custom_mm*/, 0 /*thread: unpack*/);
 }
 
-TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulOperandRejectsSixteenRowActivation) {
-    run_custom_mm_rows_guard(*devices_.at(0), 1);
+TEST_F(LLKBlackholeAssertFixture, CustomMatmulMathInitRejectsSixteenRowActivation) {
+    run_custom_mm_rows_guard(*devices_.at(0), 0 /*mode: custom_mm*/, 1 /*thread: math*/);
+}
+
+TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulUnpackInitRejectsSixteenRowActivation) {
+    run_custom_mm_rows_guard(*devices_.at(0), 1 /*mode: compressed_custom_mm*/, 0 /*thread: unpack*/);
+}
+
+TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulMathInitRejectsSixteenRowActivation) {
+    run_custom_mm_rows_guard(*devices_.at(0), 1 /*mode: compressed_custom_mm*/, 1 /*thread: math*/);
 }
 
 }  // namespace tt::tt_metal

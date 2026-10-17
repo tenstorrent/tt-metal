@@ -21,9 +21,11 @@ void kernel_main() {
     constexpr std::uint32_t input_block_tiles = mode == 2 ? 5 : 3;
     constexpr std::uint32_t producer_ct = mode == 2 ? 2 : 1;
     constexpr auto weight_format = mode == 1 ? DataFormat::Bfp8_b : DataFormat::Float16_b;
-    // The typed in0 overloads reject a tile height outside {1, 2, 4, 8} at compile time, so a 16-row
-    // activation can only reach the LLK through the CB-id overloads (mixed). Keep the typed operand,
-    // unused on that path, at a legal height so the kernel still compiles for the guard test.
+    // The typed in0 overloads reject a tile height outside {1, 2, 4, 8} at compile time. The guard
+    // test's fallback (run_custom_mm_rows_guard, taken when the watcher reports no assert) builds
+    // this kernel with rows=16 and mixed=true to show the silent wrong product; clamping the typed
+    // operand, unused on that path, keeps that build compiling. custom_mm_reuse_dest_srcb_block
+    // <typed_rows> below runs in mixed mode 2, where typed_rows == rows.
     constexpr std::uint32_t typed_rows = rows <= 8 ? rows : 8;
     using Activation = experimental::LLKOperand<DataFormat::Float16_b, TensorShape{typed_rows, 16, 1, 2}>;
     using Weight = experimental::LLKOperand<weight_format, TensorShape{16, 16, 2, 2}>;

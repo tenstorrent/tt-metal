@@ -164,10 +164,8 @@ inline void _llk_math_compressed_custom_mm_(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1)
 {
-    LLK_ASSERT(
-        operandB_face_r_dim == 1 || operandB_face_r_dim == 2 || operandB_face_r_dim == 4 || operandB_face_r_dim == 8,
-        "compressed_custom_mm: in0 tile height must be 1, 2, 4 or 8");
-
+    // The height is checked in the init only: here it just selects the replay length, and a caller may
+    // legitimately pass 0 on the math thread when the real height was only read on the unpack thread.
     const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 

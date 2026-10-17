@@ -7,16 +7,33 @@
 #include "api/compute/experimental/compressed_custom_mm.h"
 #include "api/compute/experimental/custom_mm.h"
 
-// Runs only the CB-id full init of custom_mm (mode 0) or compressed_custom_mm (mode 1) and exits:
-// the in0 tile-height asserts in that init are what the guard test observes through the watcher.
+// Runs only the CB-id init of custom_mm (mode 0) or compressed_custom_mm (mode 1), on one thread
+// only (thread 0: unpack init, thread 1: math init), and exits: the in0 tile-height assert in that
+// init is what the guard test observes through the watcher, and one asserting thread per run is
+// what lets the test attribute the report to a RISC (the watcher keeps the first assert per core).
 // Nothing here waits on another thread, so a tripped assert parks only the thread that hit it and
 // the core can be re-initialized afterwards; a thread parked in a tile-register semaphore wait
 // cannot be, which is why the product run is not used for the asserting case.
 void kernel_main() {
-    constexpr std::uint32_t mode = get_compile_time_arg_val(0);  // plain, compressed
-    if constexpr (mode == 1) {
-        compressed_custom_mm_block_init<false, false, true>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    constexpr std::uint32_t mode = get_compile_time_arg_val(0);    // plain, compressed
+    constexpr std::uint32_t thread = get_compile_time_arg_val(1);  // unpack init, math init
+    constexpr auto in0 = tt::CBIndex::c_0;
+    constexpr auto in1 = tt::CBIndex::c_1;
+    if constexpr (thread == 0) {
+        UNPACK((llk_unpack_hw_configure<false /*fp32_dest_acc_en*/>(in1, in0)));
+        if constexpr (mode == 1) {
+            UNPACK((llk_unpack_AB_compressed_custom_mm_init<false /*transpose*/, true /*clear_src*/>(in0, in1)));
+        } else {
+            UNPACK((llk_unpack_AB_custom_mm_init<false /*transpose*/, true /*clear_src*/>(in0, in1, 1 /*ct_dim*/)));
+        }
     } else {
-        custom_mm_block_init<false, false, true>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16, 1);
+        MATH((llk_math_hw_configure<false /*fp32_dest_acc_en*/>(in0, in1)));
+        if constexpr (mode == 1) {
+            MATH((llk_math_compressed_custom_mm_init<false /*transpose*/, false /*split_acc*/, true /*dense_packing*/>(
+                in0, in1)));
+        } else {
+            MATH((llk_math_custom_mm_init<false /*transpose*/, false /*split_acc*/, true /*dense_packing*/>(
+                in0, in1, 1 /*ct_dim*/)));
+        }
     }
 }
