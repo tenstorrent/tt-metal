@@ -701,7 +701,7 @@ def test_reduce_scalar_fp32_exact(
         # Under cancellation the gate is two ulps of the sum of |terms|, the bound of any
         # fp32 summation order; without cancellation that is two ulps of the golden.
         tolerance = _fp32_ulps(magnitudes_of_terms[o], FP32_EXACT_GATE_ULPS)
-        if abs(device - golden) > tolerance:
+        if not math.isfinite(device) or abs(device - golden) > tolerance:
             failures.append(
                 f"device={device!r} golden={golden!r} error={device - golden:+.6g} "
                 f"(allowed +-{tolerance:.3g}); pre-fix model (TF32/BF16 partials): "

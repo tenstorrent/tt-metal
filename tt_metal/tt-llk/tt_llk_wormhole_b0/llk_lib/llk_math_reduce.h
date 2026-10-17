@@ -86,29 +86,12 @@ inline void reduce_row_perform_transpose()
 }
 
 /**
- * @brief First half of the fp32-DEST REDUCE_SCALAR SUM/AVG tail: load the fp32 partial sums into SFPU registers.
+ * @brief The fp32-DEST REDUCE_SCALAR SUM/AVG tail: result += sum_k s_k * P_k, all in fp32.
  *
  * The face pooling leaves the 16 per-column partial sums P_k in DEST as fp32 datums (block row 0 of the 4-row block
  * at REDUCE_SCALAR_SCRATCH_ROW). The FPU-only tail moves that row through SrcB and SrcA for the final GAPOOL, and a
  * Src datum holds 19 bits, so every partial is truncated to TF32 (BF16 for BF16 input) mid-reduction even though
- * is_fp32_dest_acc_en asked for fp32. With fp32 DEST the partials never cross Src: this loads them into LREG0 (even
- * columns, partial 2c in lane c) and LREG4 (odd columns), where @ref reduce_scalar_fp32_sum picks them up after
- * the FPU has copied the scaler row into DEST.
- *
- * Runs after the last face pool and before the scratch row is cleared.
- */
-inline void reduce_scalar_fp32_load_partials()
-{
-    // Let the FPU pooling writes (including the HiFi MOP) land in DEST before the SFPU reads them.
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_SCALAR_SCRATCH_ROW);
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_SCALAR_SCRATCH_ROW + SFPU_ODD_COLS);
-    // The FPU clears the scratch row next; let the loads finish first.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
-}
-
-/**
- * @brief Second half of the fp32-DEST REDUCE_SCALAR SUM/AVG tail: result += sum_k s_k * P_k, all in fp32.
+ * is_fp32_dest_acc_en asked for fp32. With fp32 DEST the partials never cross Src: this reads them from DEST.
  *
  * Runs after the FPU has (1) pooled a zeroed SrcA into the result rows, which adds nothing but leaves them defined
  * as the accumulation so far (zero on a fresh DEST section, or the running sum of a reduce-to-one), and (2) copied
@@ -124,16 +107,18 @@ inline __attribute__((noinline)) void reduce_scalar_fp32_sum()
 {
     constexpr std::uint32_t RESULT_ROW = 0;
 
-    // Let the zero pool and the scaler copy land in DEST before the SFPU reads them.
+    // Let the face pooling, the zero pool and the scaler copy land in DEST before the SFPU reads them.
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
 
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_SCALAR_SCALER_ROW);                 // s even
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_SCALAR_SCALER_ROW + SFPU_ODD_COLS); // s odd
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_0, RESULT_ROW);                               // acc in lane 0
+    // Even columns: partial 2c and scaler 2c in lane c; odd columns likewise. The loads fill the SFPMUL/SFPMAD
+    // latency slots.
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_SCALAR_SCRATCH_ROW);
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_SCALAR_SCALER_ROW);
     TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /*instr_mod1*/);
-    TTI_SFPNOP;                                                                               // the SFPMAD below reads LREG0
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_SCALAR_SCRATCH_ROW + SFPU_ODD_COLS);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_SCALAR_SCALER_ROW + SFPU_ODD_COLS);
     TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LREG0, p_sfpu::LREG4, 0 /*instr_mod1*/); // lane c: s*P of columns 2c, 2c+1
-    TTI_SFPNOP;
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_0, RESULT_ROW);              // acc in lane 0
 
     // Butterfly all-reduce over the 8 lanes of each sub-vector: rotate by 1, 2 and 4, adding each time. On both
     // architectures the instruction right after a SUBVEC_SHFLROR1 must not read its result (Wormhole additionally
@@ -414,18 +399,16 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 
         if constexpr (fp32_sfpu_tail)
         {
-            reduce_scalar_fp32_load_partials();
-
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
             // Pool a zeroed SrcA into the result rows: adds nothing, but defines them as the accumulation so far.
             TTI_ZEROSRC(0 /*zero_val*/, 1 /*write_mode*/, 0 /*bank_mask*/, 1 /*src_mask*/);
             TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             // Copy the scaler rows into DEST exactly (0 + SrcB) and release both source banks.
             TTI_ELWADD(p_setrwc::CLR_AB, 0 /*dest_accum_en*/, p_elwise::SRCB_NO_BCAST, ADDR_MOD_0, REDUCE_SCALAR_SCALER_ROW);
+            reduce_scalar_fp32_sum();
+
             // Clear the pooled row so the next pooling into this slot starts from zero.
             TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, ADDR_MOD_0, REDUCE_SCALAR_SCRATCH_ROW);
-
-            reduce_scalar_fp32_sum();
         }
         else
         {
