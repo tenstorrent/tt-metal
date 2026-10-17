@@ -53,15 +53,12 @@ inline void _llk_math_eltwise_unary_datacopy_(
         math::math_unpack_to_dest_tile_ready();
 
         // Pin the math dest offset to the bank base: hardware adds it to the MOVD2B/MOVB2D immediates
-        // (dst_index * 64 + row) of the broadcast sequences below, and a preceding op may have left another
-        // tile's offset here. A plain copy (NONE) only issues the budabackend#2730 ZEROACC below, whose CLR_16
-        // block index is absolute within the bank: the offset only feeds its bank select, which flips once
-        // offset + index reaches 512 (tt-metal#53693), and a 32-bit bank never gets there (offset <= 240,
-        // index <= 15). So NONE skips the write, as on Wormhole, and keeps its per-tile cost unchanged.
-        if constexpr (src_b_bcast_type != BroadcastType::NONE)
-        {
-            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
-        }
+        // (dst_index * 64 + row) of the broadcast sequences below, and the CLR_16 ZEROACC below derives its
+        // bank select from offset + block index (tt-metal#53693); a preceding op may have left another tile's
+        // offset here. With the offset at the bank base the block index is bank-relative for every sync mode:
+        // SyncHalf keeps dst_index below 4 so the index stays within the bank the offset selects, and SyncFull
+        // has one bank with the offset at 0, so the index spans the whole 32-bit DEST (tiles 0..7).
+        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
 
         // Due to bug in Blackhole Tensix (more details in budabackend/#2730) when an event with side effect of clearing DEST zero flags
         // (such as Unpack-to-dest or RISC-to-dest) and a ZEROACC instruction from packer occur in the same cycle,
@@ -73,13 +70,13 @@ inline void _llk_math_eltwise_unary_datacopy_(
         const int clear_fp32                  = static_cast<int>(
             dst_format_masked == (std::uint32_t)DataFormat::Float32 || dst_format_masked == (std::uint32_t)DataFormat::Int32 ||
             dst_format_masked == (std::uint32_t)DataFormat::UInt32);
-        const std::uint32_t tiles_per_bank = clear_fp32 ? 4 : 8;
-        const std::uint32_t local_tile     = dst_index & (tiles_per_bank - 1);
 #pragma GCC unroll 0
         for (std::uint32_t i = 0; i < num_faces; i++)
         {
-            // Clears zero flags in DEST for one face.
-            TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_3, get_dest_index_in_faces(local_tile, i));
+            // Clears zero flags in DEST for one face of the tile just unpacked. The index is the tile's own
+            // (dst_index * 4 + face), not dst_index folded into a 4-tile bank: under SyncFull with a 32-bit DEST
+            // dst_index runs 0..7 and folding it would re-validate tile dst_index - 4 instead.
+            TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_3, get_dest_index_in_faces(dst_index, i));
         }
 
         if constexpr (src_b_bcast_type != BroadcastType::NONE)

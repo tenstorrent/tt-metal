@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from conftest import blackhole_only
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import (
     get_valid_dest_accumulation_modes,
@@ -30,8 +31,11 @@ from helpers.param_config import (
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
+from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    DATACOPY_ZERO_FLAG_PROBE,
     DEST_INDEX,
+    DEST_SYNC,
     LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
@@ -281,3 +285,96 @@ def test_eltwise_unary_datacopy_sub_byte_bfp(
         input_dimensions,
         quantize_golden_input=True,
     )
+
+
+# --- 32-bit unpack-to-dest: zero-flag re-validation must hit the unpacked tile only ---------------
+#
+# After a 32-bit tile is unpacked straight into Dest, the Blackhole datacopy re-validates that
+# tile's rows with a zero-flag-clearing ZEROACC. With a full-Dest sync and a 32-bit Dest the
+# tile index runs 0..7; the probe below checks, for every such index, that the re-validation
+# lands on the unpacked tile and not on a tile four slots away. The partner tile is left stale
+# behind cleared zero flags (written, packed, released) and packed again after the probe copy:
+# it must come out as zeros, and its old data coming back means the re-validation hit it.
+
+ZERO_FLAG_PROBE_FORMATS = input_output_formats([DataFormat.Float32], same=True)
+ZERO_FLAG_PROBE_DST_INDICES = list(range(8))
+
+
+def _stale_tile_for(dst_index: int) -> int:
+    # The slot a bank-relative (dst_index mod 4) re-validation would hit instead, and for
+    # dst_index 0..3 a slot the re-validation must leave alone.
+    return dst_index ^ 4
+
+
+def _run_zero_flag_probe(formats, dst_index: int, probe_copy: bool):
+    stale_tile = _stale_tile_for(dst_index)
+    torch_format = format_dict[formats.output_format]
+    tile_elements = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
+
+    # Recognisable, non-zero stale data; the probe tile carries distinct values so a
+    # mis-placed copy would also show.
+    stale_data = torch.full((tile_elements,), 1.0, dtype=torch_format)
+    probe_data = torch.arange(1, tile_elements + 1, dtype=torch_format) * 0.5
+    src_A = torch.cat([stale_data, probe_data])
+    src_B = torch.zeros(tile_elements, dtype=torch_format)
+
+    zeros = torch.zeros(tile_elements, dtype=torch_format)
+    expected = [
+        ("stale tile after section 1", stale_data),
+        ("probe tile after section 2", probe_data if probe_copy else zeros),
+        ("stale tile after section 2", zeros),
+    ]
+
+    configuration = TestConfig(
+        test_name="sources/eltwise_unary_datacopy_zero_flag_test.cpp",
+        formats=formats,
+        templates=[
+            DEST_SYNC(
+                DestSync.Full
+            ),  # 32-bit Dest tiles 0..7 only exist with SyncFull.
+            DATACOPY_ZERO_FLAG_PROBE(probe_copy=probe_copy, stale_tile=stale_tile),
+        ],
+        runtimes=[DEST_INDEX(dst_index)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=2,
+            tile_count_B=1,
+            tile_count_res=len(expected),
+        ),
+        dest_acc=DestAccumulation.Yes,  # 32-bit Dest: the unpack-to-dest path.
+        unpack_to_dest=True,
+    )
+
+    res_from_L1 = configuration.run().result
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    assert len(res_tensor) == len(expected) * tile_elements
+
+    for i, (what, golden) in enumerate(expected):
+        got = res_tensor[i * tile_elements : (i + 1) * tile_elements]
+        assert torch.equal(got, golden), (
+            f"{what} (Dest tile {stale_tile if 'stale' in what else dst_index}) mismatch: "
+            f"first values {got[:4].tolist()} vs expected {golden[:4].tolist()}"
+        )
+
+
+@blackhole_only
+@parametrize(
+    formats=ZERO_FLAG_PROBE_FORMATS,
+    dst_index=ZERO_FLAG_PROBE_DST_INDICES,
+)
+def test_eltwise_unary_datacopy_unpack_to_dest_zero_flag(formats, dst_index):
+    _run_zero_flag_probe(formats, dst_index, probe_copy=True)
+
+
+@blackhole_only
+@parametrize(
+    formats=ZERO_FLAG_PROBE_FORMATS,
+    dst_index=[5],
+)
+def test_eltwise_unary_datacopy_unpack_to_dest_zero_flag_control(formats, dst_index):
+    # No probe copy: a released, unrewritten tile packs as zeros on its own.
+    _run_zero_flag_probe(formats, dst_index, probe_copy=False)
