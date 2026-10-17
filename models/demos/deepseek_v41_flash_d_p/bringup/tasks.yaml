@@ -3743,6 +3743,13 @@ tasks:
     - engram_add
     - attn_hc
     layer: 14
+  frozen:
+    at: '2026-10-17T00:55:39'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_04_attn_hc.py: 5844bf3d7e217e7d1aeda6efa70ed961b18fdc321c4a1699a061cabecc641651
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.enc_source_engram.attn_collapse
   title: enc_source_engram attn_collapse (op) on device, layer 14
   step: implement
