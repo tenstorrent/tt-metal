@@ -49,6 +49,13 @@ _FCFG = {
 POOL = math.gcd(int(os.environ.get("K3_POOL", "8")), E_ALL // N)
 ITERS = int(os.environ.get("K3_ITERS", "5"))
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
+# the forward's programs in order (default config), for naming the traced replay's per-program report
+K3_STAGE_PROGRAMS = (
+    ["router"] * 3
+    + ["routing_gather", "planner", "lat_down", "dispatch_prep", "arena_zero", "dispatch", "experts_combine"]
+    + ["lat_up"] * 4
+    + ["shared"] * 2
+)
 _PARAMS = [
     pytest.param(
         (SR, SC),
@@ -350,9 +357,22 @@ def test_k3_moe_layer_trace(mesh_device, device_params):
             logger.info(
                 f"K3_TRACE chip {chip}: {len(res)} programs, busy {busy:.0f} us, first start .. last end {span} cycles"
             )
+        f = 1.35e3  # cycles per us (AICLK 1350 MHz)
+        if spans and len({cnt for _, cnt, _, _ in spans}) == 1:  # per program over the chips (same trace: same order)
+            # gap: this program's start - the previous one's end on the same chip (one clock: no cross-chip sync
+            # needed), i.e. its launch plus any wait for it to start; dur: the program itself
+            names = (
+                K3_STAGE_PROGRAMS if len(K3_STAGE_PROGRAMS) == spans[0][1] else [f"p{i}" for i in range(spans[0][1])]
+            )
+            for i, nm in enumerate(names):
+                durs = [res[i].duration / 1e3 for _, _, _, res in spans]
+                gaps = [(res[i].start_timestamp - res[i - 1].end_timestamp) / f for _, _, _, res in spans if i > 0]
+                logger.info(
+                    f"K3_TRACE_PROG {i:2d} {nm:16s} dur max {max(durs):7.1f} min {min(durs):7.1f} us | gap before: "
+                    + (f"max {max(gaps):6.1f} median {statistics.median(gaps):6.1f} us" if gaps else "-")
+                )
         if spans:
             chip, cnt, busy, res = max(spans, key=lambda t: t[2])
-            f = 1.35e3  # cycles per us (AICLK 1350 MHz)
             t0_ = res[0].start_timestamp
             for r in res:
                 logger.info(
