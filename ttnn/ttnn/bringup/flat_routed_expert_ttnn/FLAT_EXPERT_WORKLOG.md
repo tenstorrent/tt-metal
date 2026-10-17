@@ -736,3 +736,28 @@ Layer (8K ctx, slowest chip busy, bfp8+UntilizeActive -> row-major y):
 | L5 GA+MoE | 640 | 4.40 -> 4.25 ms | 1801 -> 1923 us | 696 -> 440 us |
 | L1 SWA+MoE | 2048 | 6.81 -> 6.26 ms | 2075 -> 2123 us | 1782 -> 1195 us |
 | L5 GA+MoE | 2048 | 8.99 -> 8.56 ms | 2588 -> 2646 us | 1727 -> 1245 us |
+
+## In the K3 token-split MoE block (2026-10-16/17, bh-lb-09 2x4, 12x10 grid, 200G)
+The flat expert runs twice per K3 block (tt_k3_token_split_moe.py): the routed experts fused with combine_rf
+(flat_routed_expert_with_program, L1 hand-off, 56 experts / chip, ~91 tokens each, bf4 LoFi) and the shared expert
+(3 parts of I 2048 over the chip's 320 tokens, bf8 HiFi2, bf16 x / y). Block-level history and tables:
+FLAT_COMBINE_OVERLAP_WORKLOG.md ("K3 block ..." sections). The October flat-expert entries 8e-8g (DRISC gate/up
+senders, the x-read isolation, K3 / 4x4 routing) are only in the tt-metal-pr58093 worktree's copy of that worklog.
+
+Routed experts + combine, traced (experts program, us): 2433 -> 2372 with x read once (MIMO_FL_X1, set for this
+program only - read when the program is built). Floor at 512 GB/s ~2070 (1059 MB / chip / call).
+- DRAM bound at ~87%: with no weight traffic (W_NOREAD + W_NOFWD) the program takes 1221 (compute + x + h + combine);
+  the readers' gate/up forwarding alone (no DRAM) ~1990 (694 MB, ~350 GB/s); all DRAM reads, no forwarding 2430; the
+  gate/up reads alone stream at 93%, the full mix (gate/up + down + x) at 86-87%.
+- Weight source does not matter: dual / pure DRISC, DRISC tiles 1 / 2, DRISC forced (MAXCNT 1024): 2362-2380. K3's
+  busiest expert exceeds the pure mode's 96-token switch, so calls normally take the Tensix-reader gate/up path.
+  Down weights via the DRISCs: ruled out (the forwarding path would need ~2980 us for 1041 MB).
+- No effect: GDDR arbitration weights (MIMO_FL_DRISC_MPFE, 6 settings), combine release (CMB_EARLY), h transfer
+  (H_NODATA), MIMO_FL_DRISC_MAXCNT 160. Worse: X2 2659, XFWD 2859, NH 2 / 3 2471 / 2457, X1 + NH 2 2396.
+- Probe caveats on this path: W_NOREAD skips only DRAM reads (blocks are still forwarded; W_NOFWD stops that).
+  MIMO_FL_NO_MATH hangs (the gate/up side never publishes h; se6_dcompute waits in cb_wait_front(h_all_cb)) - broken.
+Shared expert (3 x 320-row parts): ~525-530 us, compute / pipeline bound (~160 TFLOP/s whatever the fidelity: LoFi
+510; bfp8 x, DRISC on / off, 4 parts no better); X1 hurts it (523 -> 702: one primary's tilize + double multicast caps
+320-row parts). Dense ttnn at TP shapes beats it (TP4 gate linear ~245 TFLOP/s at M 1280): zz_scratch_k3_se_tp.py.
+Next candidates: the down weights' bank layout / access order (the mix's 87% vs 93%), fixing NO_MATH for a clean
+traffic-only measurement.
