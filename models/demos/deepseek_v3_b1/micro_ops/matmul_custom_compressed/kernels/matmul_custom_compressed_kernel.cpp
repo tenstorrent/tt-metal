@@ -64,14 +64,21 @@ void kernel_main() {
     cb_wait_front(cb_in1, 1);
 
     // Get base addresses
+    // COMPRESSED_MM_IMPL == 6 ("new") calls compressed_custom_mm_block(), which addresses tiles
+    // via cb_in0/cb_in1 directly and never consumes addr_in0/addr_in1 -- so skip computing them
+    // for that impl to avoid an unused-but-set-variable warning on every JIT compile.
+#if COMPRESSED_MM_IMPL != 6
     uint32_t addr_in0 = 0;
     uint32_t addr_in1 = 0;
+#endif
     uint32_t in0_face_r_dim = 0;
     UNPACK(({
         uint32_t in0_id = get_operand_id(cb_in0);
         uint32_t in1_id = get_operand_id(cb_in1);
+#if COMPRESSED_MM_IMPL != 6
         addr_in0 = get_local_cb_interface(in0_id).fifo_rd_ptr - 1;
         addr_in1 = get_local_cb_interface(in1_id).fifo_rd_ptr - 1;
+#endif
         in0_face_r_dim = get_operand_face_r_dim(in0_id);
     }));
     MATH(({
