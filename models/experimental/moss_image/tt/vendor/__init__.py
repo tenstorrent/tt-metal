@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Unmodified Apache-2.0 upstream source, pinned by SHA-256 in checkpoint.py.
+"""Apache-2.0 upstream source, with formatting and SPDX attribution changes.
+
+PROVENANCE.json records the original and vendored SHA-256 values.
 
 Source: OpenMOSS-Team/MOSS-Image-Base, revision
 1ceede80badddd6a7812069619edaa5633587192, pipeline_moss_image.py.
