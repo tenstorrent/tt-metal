@@ -327,20 +327,25 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
 }
 
 /**
- * @brief Restore the Default packer strides after an untilize pack op.
+ * @brief Restore the packer Z stride after an untilize pack op.
  *
- * Stalls on the pack pipe and reprograms the Default stride layout (single-face Z) for pack_src_format,
- * undoing the strided-mode stride set in @ref _llk_pack_untilize_init_.
+ * Stalls on the pack pipe and reprograms the Z stride to its Default (single face) value, undoing the
+ * strided-mode stride set in @ref _llk_pack_untilize_init_; that completes the Default layout, see below.
  *
- * @param pack_src_format: Source (dest register) data format used to size the Default strides.
+ * @param pack_src_format: Source (dest register) data format used to size the Default Z stride.
  * @note Pairs with @ref _llk_pack_untilize_init_.
  */
 inline void _llk_pack_untilize_uninit_(const std::uint32_t pack_src_format)
 {
+    // Drain the untilize PACRs before touching the strides; the RMW below is a Configuration Unit
+    // instruction, which this block mask holds until the packer pipe is empty.
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
-    // The same setter the fast tilize/untilize uninits use: it programs the whole Default layout for this
-    // pack source format and records it, so the recorded layout is true by construction. (A Z-only restore
-    // sized with SCALE_DATUM_SIZE, which has no Tf32 case, left a quarter-size Z for a Tf32 pack source while
-    // the tracker said Default.)
-    set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
+    // The Y/W and channel-1 strides are already the Default layout for this pack source: the hw-configure /
+    // reconfig that armed the Default or TwoFaceZ layout programmed them (those two differ in Z only), and
+    // after another op-specific init _llk_pack_untilize_init_ programmed them itself. Restoring the one-face Z
+    // completes the layout, so the state recorded below is the programmed one. Sized with datum_size_in_bytes
+    // like set_packer_strides (SCALE_DATUM_SIZE has no Tf32 case and gave a quarter-size Z for a Tf32 pack
+    // source).
+    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_R_DIM * FACE_C_DIM * datum_size_in_bytes(pack_src_format));
+    armed_packer_strides = PackerStrides::Default;
 }

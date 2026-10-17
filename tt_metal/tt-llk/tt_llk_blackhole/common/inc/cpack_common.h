@@ -307,10 +307,11 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
 // pack`. The op-specific inits program every stride they read (Y/W/Z, and the channel-1 Y stride of the
 // strided fast untilize) from their own geometry, which a reconfig cannot reproduce (the pack-untilize init
 // takes the Default Y/W of the hw-configure / reconfig before it and programs them itself only after another
-// op-specific init), and each programs its own X (datum) counter end: while one of them is armed the
-// reconfig leaves the strides and the X counter as that init left them, and their uninits restore the
-// Default layout through set_packer_strides<PackMode::Default>. pack_init_apply asserts this layout when it
-// is asked to skip the strides. Raw stride writers
+// op-specific init, which it decides by reading this state), and each programs its own X (datum) counter
+// end: while one of them is armed the reconfig leaves the strides and the X counter as that init left them,
+// and their uninits restore the Default layout (the fast uninits through set_packer_strides<Default>, the
+// pack-untilize uninit by restoring the one-face Z, Y/W/channel-1 being Default already). pack_init_apply
+// asserts this layout when it is asked to skip the strides. Raw stride writers
 // bypass the tracker and that assert: _llk_pack_hw_cleanup_poison_pack_ambient_ zeroes Y/Z/W after
 // hw-configure recorded Default, and the custom-mm pack inits (_llk_pack_custom_mm_init_, the sdpa and
 // reuse-dest-srcb custom-mm compute APIs) RMW Z/W; a skip-strides init after one of them is not caught.
