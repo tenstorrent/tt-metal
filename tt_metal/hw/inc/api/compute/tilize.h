@@ -272,10 +272,11 @@ ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, u
 // clang-format off
 /**
  * Initializes the fast tilize operation. fast_tilize_init_skip_remap skips the DEST remap setup, and the
- * _with_dt variants first reconfigure the unpacker and math data formats for icb. The same icb, ocb and
- * full_dim must be passed to fast_tilize_block (as its block) and to fast_tilize_uninit: on each architecture
- * they select whether the block takes the fast-tilize path or the plain tilize path, and init, block and
- * uninit must take the same one.
+ * _with_dt variants first reconfigure the unpacker and math data formats for icb. On each architecture the
+ * tile geometry and L1 data format of icb and ocb, together with full_dim, select whether the block takes
+ * the fast-tilize path or the plain tilize path, and init, block and uninit must take the same one: the CBs
+ * passed to fast_tilize_block and fast_tilize_uninit may be different CBs but must have the same tile
+ * geometry and L1 data format as the ones given here, and full_dim must be the block width.
  *
  * Return value: None
  *
@@ -324,8 +325,9 @@ ALWI void fast_tilize_init_with_dt_skip_remap(uint32_t icb, uint32_t full_dim, u
 
 // clang-format off
 /**
- * Uninitializes the fast tilize operation. icb, ocb and full_dim must be the values fast_tilize_init
- * received: they select the path to undo (fast tilize or plain tilize), which must be the one init set up.
+ * Uninitializes the fast tilize operation. icb and ocb must have the tile geometry and L1 data format of the
+ * CBs fast_tilize_init received and full_dim must be its full_dim: they select the path to undo (fast tilize
+ * or plain tilize), which must be the one init set up.
  *
  * Return value: None
  *

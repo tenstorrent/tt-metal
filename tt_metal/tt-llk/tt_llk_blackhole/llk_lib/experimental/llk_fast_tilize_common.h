@@ -18,7 +18,7 @@ constexpr std::uint32_t FAST_TILIZE_MIN_UNIT_DIM = 2;
  * @brief Whether the Blackhole fast-tilize path supports a block of tiles of the given geometry and width.
  *
  * The path is 32x32-tile only, with four 16x16 faces, on every thread: the unpack MOP reads 32 tensor rows
- * per chunk, math copies them at the Tile32x32 DEST stride and pack replays 16 PACRs per 16-row face with
+ * per chunk, math copies them at the Tile32x32 DEST stride and pack replays 16 PACRs per tile (4 per 16-row face) with
  * a full-tile L1 advance. The face geometry is checked as well as the tile shape because a 32x32 tile may
  * also be declared with shorter faces (e.g. eight 8x16 faces), whose face order in L1 differs. A block
  * narrower than the smallest unit falls back as well. Any other block must take the plain tilize path.

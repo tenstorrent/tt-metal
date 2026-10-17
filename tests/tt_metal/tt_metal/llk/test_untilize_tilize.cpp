@@ -979,9 +979,10 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeTinyTile16x32) {
     // widths: 1 (unit_dim 1), 3 (one unit_dim-3 call) and 5 (a unit_dim-2 call then a unit_dim-3 call).
     const vector<vector<std::uint32_t>> num_tiles_bf16_dest = {
         {1, 2}, {1, 4}, {2, 2}, {2, 6}, {1, 8}, {1, 10}, {1, 18}, {1, 1}, {1, 3}, {2, 3}, {1, 5}};
-    // fp32 dest accumulation (4 tiles per dest on Wormhole): two dests (6 = 4 + 2 and 8 = 4 + 4) and
-    // three dests (10 = 4 + 4 + 2).
-    const vector<vector<std::uint32_t>> num_tiles_fp32_dest = {{1, 6}, {1, 8}, {1, 10}};
+    // fp32 dest accumulation (4 tiles per dest on Wormhole): two dests (6 = 4 + 2 and 8 = 4 + 4), three
+    // dests (10 = 4 + 4 + 2), and the odd widths 1, 3, 5 and 2x3 that take the plain tilize path with an
+    // fp32 dest (whose datacopy and pack differ from the bf16-dest one).
+    const vector<vector<std::uint32_t>> num_tiles_fp32_dest = {{1, 6}, {1, 8}, {1, 10}, {1, 1}, {1, 3}, {1, 5}, {2, 3}};
     for (bool fp32_dest_acc_en : {false, true}) {
         for (auto num_tile : fp32_dest_acc_en ? num_tiles_fp32_dest : num_tiles_bf16_dest) {
             unit_tests::compute::tilize::TestConfig test_config = {
