@@ -116,7 +116,12 @@ class Gemma4DecoderLayer:
         # hidden_states holds this TP device's 1/TP of the rows: gather the normed rows before each block, whose
         # closing reduce-scatter returns 1/TP again.
         residual = hidden_states
-        normed = self.input_layernorm.forward(hidden_states)
+        # At short M (chunk 2048) the attention block's gather is latency-bound: gathering bfp8 halves its bytes
+        # (41 -> 34 us) and the QKV projection reads bfp8 at no cost. The MLP gather stays bf16, since a bfp8 input
+        # slows gate/up by more than its gather saves.
+        tp = self.mesh_config.tp_degree
+        short_m = tp > 1 and short_m_gather_memcfg(hidden_states, tp) is not None
+        normed = self.input_layernorm.forward(hidden_states, output_dtype=ttnn.bfloat8_b if short_m else None)
         normed = self._gather_rows(normed)
         attn_output = self.self_attn(
             normed,
