@@ -56,9 +56,9 @@ ALWI void rope_sfpu_inplace_rows(const std::uint32_t scale_fp32) {
  */
 template <std::uint32_t Ht, std::uint32_t Wt>
 ALWI void rope_sfpu_inplace() {
-    static_assert(
-        Ht * Wt + 2 * Wt <= (DST_ACCUM_MODE ? 4 : 8),
-        "rope_sfpu: x + cos + sin must fit the Tile32x32 slots of half DEST (8 for 16-bit DEST, 4 for FP32 DEST)");
+    constexpr std::uint32_t dest_tiles =
+        get_dest_max_tiles<DstSync::SyncHalf, DST_ACCUM_MODE, DstTileShape::Tile32x32>();
+    static_assert(Ht * Wt + 2 * Wt <= dest_tiles, "rope_sfpu: x + cos + sin must fit in half DEST");
     constexpr std::uint32_t T = ROPE_SFPU_TILE_ROWS;
     rope_sfpu_inplace_rows<Ht, Wt, 0, T, (Ht * Wt) * T, (Ht * Wt + Wt) * T, T>(/*scale_fp32=*/0);
 }

@@ -5,7 +5,7 @@
 // Test for Blackhole SFPU RoPE (sfpu/experimental/ckernel_sfpu_rope.h).
 //
 // The call sequence mirrors what Compute API does.
-// Fused cos/sin supports both 16-bit and FP32 Dest; separate phases use 16-bit Dest.
+// Both the fused and the separate cos/sin paths support 16-bit and FP32 Dest.
 
 #include <cstdint>
 
