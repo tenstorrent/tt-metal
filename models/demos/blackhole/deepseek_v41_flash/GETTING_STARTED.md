@@ -204,7 +204,7 @@ Checked on the previous image (`0.24.0-799a223-ffd1a57`) with the API tests in `
 | `temperature`, `top_p`, `top_k` | Sampled on the device. `temperature` 0 or `top_k` 1 is greedy. Top-k up to 32 is fastest. A negative `temperature` gets HTTP 400. |
 | `seed` | Same seed, same text, whatever slot or batch position. |
 | `stop`, `stream`, `stream_options.include_usage` | Work as usual. |
-| `logprobs`, structured output, `logit_bias`, `bad_words`, `allowed_token_ids`, `min_tokens` | Not supported with speculation. HTTP 400 with an OpenAI-style error. |
+| `logprobs`, structured output, `logit_bias`, `bad_words`, `allowed_token_ids`, `min_tokens`, `min_p` | Not supported with speculation. HTTP 400 with an OpenAI-style error. |
 | `presence_penalty`, `frequency_penalty`, `repetition_penalty` | Accepted. Those requests decode without speculation (slower). |
 | `n` | `n` 2 returns two choices. |
 | `/v1/completions`, `/v1/models`, `/health` | Work. `/health` stays 200 under overload and after a client disconnect. |
