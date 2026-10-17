@@ -62,9 +62,9 @@ Not covered here, deliberately
   separately; their composition is not.
 * The 8-datum ``bitonic_top32_load8``/``store8`` helpers, which the header itself records
   as referenced by no kernel today.
-* The 7 ``llk_math_deepseek_top32_rm_*`` Metal wrappers on main, which still have no caller
-  anywhere: they wrap the same primitives this file drives, but through the Metal API layer,
-  so covering them needs a metal-side test (same shape as B1).
+* ``llk_math_top32_rm_init`` / ``llk_math_top32_rm``, the Metal math-side wrappers: the
+  ``via_wrappers`` tests route the SFPU calls and the unpack through the Metal layer (see
+  "the Metal wrapper layer" below), but the Dest-move half still drives the primitives.
 """
 
 import pytest
@@ -109,6 +109,14 @@ FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=
 # 256  four full chunks, and the largest row whose indices stay exact in bf16
 ROW_ELEMENTS = [64, 128, 160, 256]
 
+# The Metal unpack wrapper reads its operand through Metal's operand tables and CB interface,
+# which live under two roots the harness does not add for every test. Relative to tests/,
+# the compile cwd, like the roots in TestConfig.setup_compilation_options.
+METAL_WRAPPER_INCLUDE_DIRS = [
+    "-I../../hw/ckernels/blackhole/metal/llk_io",
+    "-I../../api",
+]
+
 
 def _stimuli(row_elements):
     """Distinct bf16-exact values straddling zero, plus their row-major indices."""
@@ -141,9 +149,15 @@ def _pad_to_tile(flat):
 )
 def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
     is_32bit = formats.input_format.is_32_bit()
-    if is_32bit and dest_acc == DestAccumulation.No:
+    # Through the Metal wrapper layer the unpack branch is the wrapper's choice, and it sends
+    # every format but Int32 through SrcA: a Float32 row is converted to the Dest width on the
+    # way in (Float16_b without fp32 Dest, Tf32 with), which is how the consumer's build
+    # configures Float32 scores. Driving the primitives directly, Float32 is too wide for SrcA
+    # and takes the unpack-to-dest branch, which needs fp32 Dest and whole chunks.
+    unpacks_to_dest = is_32bit and not via_wrappers
+    if unpacks_to_dest and dest_acc == DestAccumulation.No:
         pytest.skip("32-bit datums need fp32 Dest")
-    if is_32bit and row_elements % ELEMENTS_PER_CHUNK != 0:
+    if unpacks_to_dest and row_elements % ELEMENTS_PER_CHUNK != 0:
         pytest.skip(
             "a partially-filled chunk is broken on the 32-bit branch -- pinned by "
             "test_top32_rm_32bit_partial_chunk"
@@ -188,8 +202,9 @@ def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
             # Two result tiles: the top-32 values, then their indices.
             tile_count_res=2,
         ),
-        unpack_to_dest=is_32bit,
+        unpack_to_dest=unpacks_to_dest,
         dest_acc=dest_acc,
+        include_dirs=METAL_WRAPPER_INCLUDE_DIRS if via_wrappers else None,
     )
 
     result = configuration.run().result
@@ -203,6 +218,16 @@ def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
     ).to(torch.float32)
 
     golden_values, golden_indices = _golden(values_in, indices_in)
+
+    if row_elements > ELEMENTS_PER_CHUNK:
+        # Every chunk after the first is reached through a computed L1 offset. Make sure the
+        # answer depends on it: a wrong offset that re-reads earlier elements must not be able
+        # to pass because the whole top-32 happened to sit in chunk 0.
+        assert bool((golden_indices >= ELEMENTS_PER_CHUNK).any()), (
+            f"row_elements={row_elements}: no element of the top-32 lies beyond the first "
+            f"chunk (index >= {ELEMENTS_PER_CHUNK}), so this case does not exercise the chunk "
+            f"offset"
+        )
 
     assert passed_test(
         golden_values, device_values, formats.output_format, print_errors=False
@@ -330,6 +355,9 @@ def test_top32_rm_pre_sorted(formats, row_elements, via_wrappers=False):
         # only configuration this mode has ever run in.
         unpack_to_dest=True,
         dest_acc=DestAccumulation.Yes,
+        # The wrapper build defines the Metal operand tables in every mode, though mode 1's
+        # tail keeps the primitives (see the driver); the roots are needed to compile them.
+        include_dirs=METAL_WRAPPER_INCLUDE_DIRS if via_wrappers else None,
     )
 
     result = configuration.run().result
@@ -449,6 +477,16 @@ def test_top32_rm_32bit_partial_chunk(formats, row_elements, request):
 # makes itself), so the point is not new arithmetic: it is that the wrapper layer compiles, is
 # code-generated, and computes what the primitives compute. A signature drift or a wrong
 # template argument inside a wrapper is invisible without this.
+#
+# In the plain mode the unpack thread goes through the Metal wrapper as well
+# (`experimental/llk_unpack_A_top32_rm_api.h`, the consumer's entry point). That wrapper is not
+# thin: it picks the unpack branch from the src format and computes the L1 offset of each chunk
+# from the operand's formats, neither of which the primitives are handed. So the Float32 cells
+# here are a different test from their `test_top32_rm` namesakes: there Float32 is driven down
+# the unpack-to-dest branch, here it takes the SrcA branch the wrapper chooses for it, with the
+# unpacker narrowing to Float16_b (dest_acc=No) or Tf32 (dest_acc=Yes) -- the configurations
+# the consumer's build produces for Float32 scores, and the dest_acc=No one the only place a
+# wrapper that sizes the chunk offset by the Dest format rather than the L1 format can be seen.
 
 
 @parametrize(
@@ -462,7 +500,11 @@ def test_top32_rm_via_metal_wrappers(formats, row_elements, dest_acc):
     Same assertions as ``test_top32_rm`` -- values and indices, exactly -- so a wrapper that
     forwards the wrong argument or instantiates the wrong template shows up as a wrong answer
     rather than as nothing at all. Covers `llk_math_deepseek_top32_rm_init`, `_local_sort`,
-    `_merge` and `_rebuild`; the pre-sorted test below covers the other three.
+    `_merge` and `_rebuild`, plus `llk_unpack_A_top32_rm_init` / `llk_unpack_A_top32_rm` on
+    the unpack thread; the pre-sorted test below covers the other three SFPU entry points.
+
+    160 rather than 128 for the multi-chunk row: it has a chunk at tile_index 1 *and* a
+    32-element tail, so the wrapper's chunk offset is exercised twice and the tail path once.
     """
     test_top32_rm(formats, row_elements, dest_acc, via_wrappers=True)
 

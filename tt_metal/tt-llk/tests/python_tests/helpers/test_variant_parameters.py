@@ -1257,7 +1257,10 @@ class TOP32_RM(TemplateParameter):
                       calling the ``ckernel::sfpu::`` primitives directly. The wrappers are
                       thin -- each is the same ``_llk_math_eltwise_unary_sfpu_params_`` call --
                       so this is the same computation through one more layer, and the only thing
-                      in the tree that calls those 7 entry points at all.
+                      in the tree that calls those 7 entry points at all. In the plain mode the
+                      unpack goes through ``experimental/llk_unpack_A_top32_rm_api.h`` too,
+                      which picks the branch and the per-chunk L1 offset itself, so
+                      ``datum_bytes`` is then only the primitives' fallback for mode 1.
     """
 
     row_elements: int = 64
