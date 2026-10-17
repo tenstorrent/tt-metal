@@ -75,7 +75,6 @@ class TTBEVFormerLayer:
         use_spatial_cross_attention: bool = True,
         feedforward_channels: int = 1024,
         batch_first: bool = True,
-        value_memory: str = "auto",
         *,
         spatial_shapes,
         bev_shape,
@@ -99,7 +98,6 @@ class TTBEVFormerLayer:
                 num_levels=1,  # Single level for temporal attention
                 num_points=num_points,
                 batch_first=batch_first,
-                value_memory=value_memory,
                 spatial_shapes=bev_shape,
                 **kwargs,
             )
@@ -111,7 +109,6 @@ class TTBEVFormerLayer:
                 "num_heads": num_heads,
                 "num_levels": num_levels,
                 "num_points": num_points,
-                "value_memory": value_memory,
             }
             self.spatial_cross_attention = TTSpatialCrossAttention(
                 device=device,
@@ -318,7 +315,6 @@ class TTBEVFormerEncoder:
         dataset: str = "nuScenes",
         feedforward_channels: int = 1024,
         batch_first: bool = True,
-        value_memory: str = "auto",
         z_cfg: Dict[str, Any] = None,
         *,
         bev_h: int,
@@ -403,7 +399,6 @@ class TTBEVFormerEncoder:
                 num_cams=num_cams,
                 feedforward_channels=feedforward_channels,
                 batch_first=batch_first,
-                value_memory=value_memory,
                 spatial_shapes=spatial_shapes,
                 bev_shape=self.bev_shape,
                 **kwargs,

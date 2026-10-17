@@ -84,7 +84,7 @@ def _record_value_placement(monkeypatch):
     return placements
 
 
-def _run_tt(device, config, tt_parameters, torch_inputs):
+def _run_tt(device, config, tt_parameters, torch_inputs, value_memory="auto"):
     query, value, reference_points, spatial_shapes = torch_inputs
 
     tt_query = ttnn.from_torch(query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -96,6 +96,7 @@ def _run_tt(device, config, tt_parameters, torch_inputs):
         device=device,
         params=tt_parameters,
         spatial_shapes=spatial_shapes,
+        value_memory=value_memory,
     )
     out = tt_model(query=tt_query, value=tt_value, reference_points=tt_reference_points)
     return ttnn.to_torch(out).to(torch.float32)
@@ -144,12 +145,11 @@ def test_msda_output_is_deterministic(device):
 @pytest.mark.parametrize("value_memory, buffer_type", [("l1", ttnn.BufferType.L1), ("dram", ttnn.BufferType.DRAM)])
 def test_msda_value_memory_modes_match_reference(device, monkeypatch, value_memory, buffer_type):
     config, ref_model, tt_parameters, torch_inputs = _build(device, "nuscenes_tiny", 1, 64, 0)
-    config.value_memory = value_memory
     query, value, reference_points, spatial_shapes = torch_inputs
     placements = _record_value_placement(monkeypatch)
 
     expected = ref_model(query, value, reference_points=reference_points, spatial_shapes=spatial_shapes)
-    got = _run_tt(device, config, tt_parameters, torch_inputs)
+    got = _run_tt(device, config, tt_parameters, torch_inputs, value_memory=value_memory)
 
     assert placements == [buffer_type]
     passed, message = check_with_pcc(expected, got, pcc=0.999)

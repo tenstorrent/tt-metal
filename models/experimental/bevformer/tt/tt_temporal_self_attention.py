@@ -62,7 +62,6 @@ class TTTemporalSelfAttention:
         num_points: int = 4,
         num_bev_queue: int = 2,
         batch_first: bool = True,
-        value_memory: str = "auto",
         *,
         spatial_shapes,
         **kwargs,
@@ -95,7 +94,6 @@ class TTTemporalSelfAttention:
             num_levels=num_levels,
             num_points=num_points,
             batch_first=batch_first,
-            value_memory=value_memory,
         )
 
         # Initialize TTNN MSDeformableAttention using existing implementation

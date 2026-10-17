@@ -67,7 +67,6 @@ class BEVFormerModelConfig:
     im2col_step: int = 64
     memory_len: int = 256
     num_frames: int = 2
-    value_memory: str = "auto"
 
     def validate_with_dataset(self, dataset_config: DatasetConfig) -> bool:
         """
@@ -90,9 +89,6 @@ class BEVFormerModelConfig:
                 f"spatial_shapes levels ({len(dataset_config.spatial_shapes)}). "
                 f"Available levels: {len(dataset_config.spatial_shapes)}"
             )
-
-        if self.value_memory not in {"auto", "l1", "dram"}:
-            raise ValueError(f'value_memory must be "auto", "l1", or "dram", got {self.value_memory!r}')
 
         return True
 
@@ -227,7 +223,6 @@ class EncoderConfig:
             "feedforward_channels": self.model_config.feedforward_channels,
             "batch_first": self.model_config.batch_first,
             "return_intermediate": self.model_config.return_intermediate,
-            "value_memory": self.model_config.value_memory,
         }
 
     def get_spatial_shapes_tensor(self):

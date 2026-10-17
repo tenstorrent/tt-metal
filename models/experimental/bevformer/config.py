@@ -37,7 +37,6 @@ class DeformableAttentionConfig(AttentionConfig):
     """Configuration for MultiScale Deformable Attention"""
 
     query_embed_dims: int = None
-    value_memory: str = "auto"
 
     def __post_init__(self):
         """
@@ -52,8 +51,6 @@ class DeformableAttentionConfig(AttentionConfig):
 
         if self.embed_dims % self.num_heads != 0:
             raise ValueError(f"embed_dims ({self.embed_dims}) must be divisible by num_heads ({self.num_heads})")
-        if self.value_memory not in {"auto", "l1", "dram"}:
-            raise ValueError(f'value_memory must be "auto", "l1", or "dram", got {self.value_memory!r}')
 
 
 @dataclass

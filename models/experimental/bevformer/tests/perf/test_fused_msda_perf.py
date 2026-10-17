@@ -129,12 +129,13 @@ def _to_device(device, torch_inputs):
     )
 
 
-def _tt_model(device, config, tt_parameters, spatial_shapes):
+def _tt_model(device, config, tt_parameters, spatial_shapes, value_memory="auto"):
     return TTMSDeformableAttention(
         config=config,
         device=device,
         params=tt_parameters,
         spatial_shapes=spatial_shapes,
+        value_memory=value_memory,
     )
 
 
@@ -299,10 +300,9 @@ def test_fused_msda_module_perf(
     )
 
     config, ref_model, tt_parameters, torch_inputs = _build(device, config_name, batch_size, num_queries)
-    config.value_memory = value_memory
     query, value, reference_points, spatial_shapes = torch_inputs
     tt_query, tt_value, tt_refs = _to_device(device, torch_inputs)
-    model = _tt_model(device, config, tt_parameters, spatial_shapes)
+    model = _tt_model(device, config, tt_parameters, spatial_shapes, value_memory)
 
     def op_fn():
         return model(query=tt_query, value=tt_value, reference_points=tt_refs)
