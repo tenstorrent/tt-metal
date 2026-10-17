@@ -62,6 +62,10 @@ inline constexpr std::array where{DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::
 // support vs. mix eligibility) and are kept distinct.
 inline constexpr std::array mixed_float{DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B};
 
+// A fused binary activation runs its own SFPU kernel for BF16 operands only; its public op keeps its
+// composite for every other dtype.
+inline constexpr std::array fused_activation_bf16{DT::BFLOAT16};
+
 // Enum values that are not dispatched to binary_ng (e.g. ADDALPHA -> ADD).
 inline constexpr std::array<DT, 0> unsupported{};
 
