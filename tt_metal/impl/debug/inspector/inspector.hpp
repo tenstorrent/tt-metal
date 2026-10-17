@@ -62,11 +62,9 @@ public:
     static void mesh_device_destroyed(const distributed::MeshDeviceImpl* mesh_device) noexcept;
     static void mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_device) noexcept;
 
-    // `mesh_device` is the buffer's device, or nullptr if it is already gone; the event is then dropped.
-    static void mesh_buffer_allocated(
-        const distributed::MeshBuffer* mesh_buffer, const distributed::MeshDevice* mesh_device) noexcept;
-    static void mesh_buffer_deallocated(
-        const distributed::MeshBuffer* mesh_buffer, const distributed::MeshDevice* mesh_device) noexcept;
+    // Events on a mesh buffer whose mesh device is gone are dropped.
+    static void mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer) noexcept;
+    static void mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buffer) noexcept;
 
     static void mesh_socket_created(const distributed::MeshSocket* socket) noexcept;
 
