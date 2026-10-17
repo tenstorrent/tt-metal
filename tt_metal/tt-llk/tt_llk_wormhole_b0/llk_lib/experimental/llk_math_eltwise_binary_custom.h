@@ -93,7 +93,7 @@ inline void _llk_math_eltwise_binary_uninit_custom_()
 inline void _llk_math_sub_bcast_cols_reuse_custom_(
     const std::uint32_t ct_dim = 1, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
 {
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_ASSERT(validate_tensor_shape_sub_bcast_col_custom_(tensor_shape), "custom bcast-col path supports 32x32 and 16x32 tiles only");
     LLK_ASSERT(
         math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
         "bcast-col custom: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "

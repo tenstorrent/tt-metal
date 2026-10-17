@@ -22,7 +22,7 @@ using namespace ckernel::unpacker;
 // @param tensor_shape Shape of the operand tile (2 faces for 16x32 tiny tiles, 4 faces for full 32x32 tiles).
 inline void _llk_unpack_AB_sub_bcast_col_init_custom_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_ASSERT(validate_tensor_shape_sub_bcast_col_custom_(tensor_shape), "custom bcast-col path supports 32x32 and 16x32 tiles only");
 
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0); // transpose within the face
 

@@ -119,7 +119,7 @@ inline void _llk_math_bcast_cols_reuse_custom_(
         "bcast-col custom: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
         "this call left it at keep, so denormal Src operands would not be flushed");
 
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_ASSERT(validate_tensor_shape_sub_bcast_col_custom_(tensor_shape), "custom bcast-col path supports 32x32 and 16x32 tiles only");
 
     // Two faces make up one face-row; a full tile has two of them, a tiny tile one.
     const std::uint32_t num_face_rows = tensor_shape.num_faces_r_dim;
