@@ -16,7 +16,7 @@
 //   default:               the packer starts configured for c_16 itself and pack_reconfig_data_format(c_16)
 //                          runs before the first pack: the unconditional reconfig must program the
 //                          exponent-section geometry of the CB's tile.
-//   PACK_RECONFIG_TWO_ARG: the packer starts configured for c_2 (never written; the same Bfp8_b format as
+//   PACK_RECONFIG_TWO_ARG: the packer starts configured for c_2 (never written; the same format as
 //                          c_16 but a different tile geometry) and pack_reconfig_data_format<true>(c_2, c_16)
 //                          switches it: the conditional reconfig must act on the geometry change even
 //                          though the formats match.

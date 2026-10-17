@@ -1550,10 +1550,9 @@ TEST_F(LLKMeshDeviceFixture, TensixPackReconfigBfpFaceHeight) {
 }
 
 // Conditional pack_reconfig_data_format<true>(c_2, c_16) from a Bfp8_b 16x32 CB to a Bfp8_b 32x16 CB: same
-// format, same face height (16) and face count (two); only the tile width / narrow-tile flag differs. The
-// startup sized the 16x32 output's exponent section from the CB partial-face flag (one chunk), so the switch
-// must reconfigure to the two chunks of a two-full-face tile, and the sanitizer's tile-shape state must
-// follow the new output before its pack init.
+// format, same face height (16) and face count (two); only the tile width / narrow-tile flag differs. Both
+// tiles use two exponent chunks after hw startup. With the sanitizer enabled, this checks that the
+// reconfiguration updates its tile-shape state before the new output's pack init and execution.
 TEST_F(LLKMeshDeviceFixture, TensixPackReconfigBfpNarrowTile) {
     using unit_tests::compute::reconfig::PackReconfigMode;
     if (this->arch_ == tt::ARCH::QUASAR) {

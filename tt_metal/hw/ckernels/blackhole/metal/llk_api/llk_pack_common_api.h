@@ -34,9 +34,11 @@ inline void llk_pack_wait_fp32_dest_acc() {
 /**
  * Configure the packer hardware for the given output operand.
  *
- * Face geometry (face_r_dim, num_faces), tile column dimension, partial-face flag and tile
- * size are derived from the output CB metadata associated with the operand id. Relu is left
- * disabled here.
+ * Face geometry (face_r_dim, num_faces), tile column dimension and tile size are derived from
+ * the output CB metadata associated with the operand id. The packer's partial-face flag follows the
+ * face height (faces shorter than FACE_R_DIM rows share one block-float exponent chunk), not the
+ * CB's tile-height partial_face flag, as in llk_pack_reconfig_data_format; a block-float output with
+ * short faces must fit face_r_dim * num_faces <= FACE_R_DIM (asserted). Relu is left disabled here.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  pack_output         Output circular buffer / operand index.
@@ -64,7 +66,8 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
         StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
         StateVal<Operand<Exu::Pack>::TileWidth>(tile_c_dim),
         StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
-        // The sanitizer tracks the CB's partial_face flag, as the pack init / execute hooks do.
+        // The sanitizer's PartialFace field records the CB's partial_face flag (the Blackhole pack init /
+        // execute hooks do not model it); the hardware call below takes the face-height flag.
         StateVal<Operand<Exu::Pack>::PartialFace>(get_output_partial_face(output_id)),
         StateDiscard<std::uint32_t>(tile_size)));
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
@@ -195,8 +198,9 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
         StateVal<Operand<Exu::Pack>::TileWidth>(tile_c_dim),
         StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
-        // The sanitizer tracks the CB's partial_face flag, as the other pack hooks do; partial_face above is
-        // the packer's own exponent-chunk flag, which this hook does not model.
+        // The sanitizer's PartialFace field records the CB's partial_face flag, as llk_pack_hw_configure does
+        // (the Blackhole pack init / execute hooks do not model it); partial_face above is the packer's own
+        // exponent-chunk flag.
         StateVal<Operand<Exu::Pack>::PartialFace>(get_output_partial_face(output_id)),
         StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
@@ -214,9 +218,8 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
  * from the old one's and neither destination format is Invalid. Face height and face count are
  * compared because the reconfig programs the block-float exponent section size from them. The tile
  * column dimension feeds nothing the reconfig programs; it is compared to keep the sanitizer's
- * TileWidth state current and because it is the only term that changes on a same-format 16x32 ->
- * 32x16 switch, whose hw_configure sizing (one chunk, from the CB partial-face flag) the reconfig
- * must replace with the two chunks of a two-full-face tile.
+ * TileWidth state current on a same-format 16x32 -> 32x16 switch (both shapes have two full-height
+ * faces and use two exponent chunks in startup and reconfiguration).
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  old_output          Currently configured output operand index.

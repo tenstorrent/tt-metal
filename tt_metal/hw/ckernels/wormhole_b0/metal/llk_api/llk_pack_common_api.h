@@ -34,8 +34,11 @@ inline void llk_pack_wait_fp32_dest_acc() {
 /**
  * Configure the packer hardware for the given output operand.
  *
- * Face geometry (face_r_dim, num_faces), partial-face flag, narrow-tile flag and tile size are
- * derived from the output CB metadata associated with the operand id. Relu is left disabled here.
+ * Face geometry (face_r_dim, num_faces), narrow-tile flag and tile size are derived from the output
+ * CB metadata associated with the operand id. The packer's partial-face flag follows the face height
+ * (faces shorter than FACE_R_DIM rows share one block-float exponent chunk), not the CB's tile-height
+ * partial_face flag, as in llk_pack_reconfig_data_format; a block-float output with short faces must
+ * fit face_r_dim * num_faces <= FACE_R_DIM (asserted). Relu is left disabled here.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  pack_output         Output circular buffer / operand index.
@@ -236,9 +239,8 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
  * the old one's and neither destination format is Invalid. Face height and face count are compared
  * because the reconfig programs the block-float exponent section sizes from them. The narrow-tile
  * flag is the only term that changes on a same-format 16x32 -> 32x16 switch (same face height and
- * count): that switch must re-size the exponent section when the packer was configured for the
- * 16x32 output by llk_pack_hw_configure (one chunk, from the CB partial-face flag) and it keeps the
- * sanitizer's NarrowTile and PartialFace operand state current for the next pack init.
+ * count). Both shapes use two exponent chunks; the comparison keeps the sanitizer's NarrowTile and
+ * PartialFace operand state current for the next pack init.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  old_output          Currently configured output operand index.
