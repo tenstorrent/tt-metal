@@ -289,12 +289,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     std::uint32_t real_disabled_seen = 0;
     for (std::uint32_t i = 0; i < REAL_TRIALS; i++)
     {
-        _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>();
+        // A 16-bit pack source, so PCK_DEST_RD_CTRL_Read_32b_data follows `enable` and PACK can read
+        // the mode back from it.
+        _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(DataFormat::Float16_b);
         if (dest_acc_field_set(g_cfg))
         {
             real_enabled_seen++;
         }
-        _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>();
+        _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(DataFormat::Float16_b);
         if (!dest_acc_field_set(g_cfg))
         {
             real_disabled_seen++;

@@ -35,15 +35,30 @@ inline bool dest_acc_field_set(volatile std::uint32_t tt_reg_ptr* cfg)
 
 // Runs the released thread's side of every enable/disable cycle and counts the calls after which
 // the field already holds the value MATH programmed.
+// PACK reports a 16-bit pack source, so PCK_DEST_RD_CTRL_Read_32b_data follows `enable` and the
+// released threads can read the mode back from it.
+template <ThreadId thread_id>
+inline void handshake()
+{
+    if constexpr (thread_id == ThreadId::PackThreadId)
+    {
+        _llk_set_fp32_dest_acc_<thread_id>(DataFormat::Float16_b);
+    }
+    else
+    {
+        _llk_set_fp32_dest_acc_<thread_id>();
+    }
+}
+
 template <ThreadId thread_id>
 inline void released_side(std::uint32_t& enabled_seen, std::uint32_t& disabled_seen)
 {
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
     for (std::uint32_t i = 0; i < CYCLES; i++)
     {
-        _llk_set_fp32_dest_acc_<thread_id>();
+        handshake<thread_id>();
         enabled_seen += dest_acc_field_set(cfg) ? 1 : 0;
-        _llk_set_fp32_dest_acc_<thread_id>();
+        handshake<thread_id>();
         disabled_seen += dest_acc_field_set(cfg) ? 0 : 1;
     }
 }

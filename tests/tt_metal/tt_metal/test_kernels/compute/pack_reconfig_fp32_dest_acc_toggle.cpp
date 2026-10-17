@@ -32,7 +32,7 @@ void kernel_main() {
     copy_init(cb_in);
 
     // 16-bit Dest for the rest of the kernel, although it was built for a 32-bit one.
-    set_fp32_dest_acc<false>();
+    set_fp32_dest_acc<false>(cb_startup);
 
     for (uint32_t t = 0; t < num_tiles; ++t) {
         in.wait_front(1);
@@ -52,5 +52,5 @@ void kernel_main() {
         out.push_back(1);
     }
 
-    restore_fp32_dest_acc<false>();
+    restore_fp32_dest_acc<false>(cb_out);
 }
