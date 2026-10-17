@@ -94,6 +94,11 @@ TEST(HashCollisionTest, CPU_SignedZerosDoNotCollide) {
         hash_objects_with_default_seed(std::vector<float>{-0.0f, 1.0f}));
 }
 
+TEST(HashCollisionTest, CPU_LongDoubleStillHashes) {
+    EXPECT_EQ(hash_objects_with_default_seed(1.5L), hash_objects_with_default_seed(1.5L));
+    EXPECT_NE(hash_objects_with_default_seed(1.5L), hash_objects_with_default_seed(2.5L));
+}
+
 TEST(HashCollisionTest, CPU_NaNPayloadsDoNotCollide) {
     const float quiet = std::bit_cast<float>(uint32_t{0x7fc00000});
     const float payload = std::bit_cast<float>(uint32_t{0x7fc00001});
