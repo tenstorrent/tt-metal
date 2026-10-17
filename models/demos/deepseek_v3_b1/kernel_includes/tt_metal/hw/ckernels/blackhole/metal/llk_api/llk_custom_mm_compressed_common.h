@@ -7,6 +7,9 @@
 #include <cstdint>
 
 #include "llk_unpack_compressed.h"
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
+#include "experimental/llk_pack_custom_mm.h"
+#endif
 
 namespace compressed {
 
@@ -252,16 +255,16 @@ inline void llk_unpack_AB_custom_mm_compressed_init(const uint32_t operand0, con
  *            limiting replay buffer capacity). ct_dim 6/10/14 have a known
  *            loop-count bug; ct_dim >= 12 exceeds the 32-insn buffer limit.
  * @tparam ct_dim  Output width in tiles. Compile-time for static_assert validation.
+ * @tparam dense_packing  Pack consecutive output tiles 32 DEST rows apart. The packer W stride
+ *   is sized from out_cb_id's configured pack format by the shared PACK helper; pair with
+ *   compressed_custom_mm_block_uninit<dense_packing>(out_cb_id), which restores it.
  */
 template <bool use_barrier = true, uint32_t ct_dim = 1, bool split_acc = false, bool dense_packing = false>
 inline void custom_mm_compressed_block_init_short(
     const uint32_t in0_cb_id, const uint32_t in1_cb_id, const uint32_t out_cb_id) {
     llk_unpack_AB_custom_mm_compressed_init<use_barrier, ct_dim>(in0_cb_id, in1_cb_id);
     MATH((llk_math_custom_mm_init<false, split_acc, dense_packing>(in0_cb_id, in1_cb_id, ct_dim)));
-    if constexpr (dense_packing) {
-        PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
-            (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2)));
-    }
+    PACK((_llk_pack_custom_mm_init_<dense_packing>(pack_src_format[get_output_id(out_cb_id)])));
 }
 
 }  // namespace compressed

@@ -123,6 +123,8 @@ ALWI void custom_mm_block_init(
     PACK((_llk_pack_custom_mm_init_<dense_packing>(pack_src_format[get_output_id(out_cb_id)])));
 }
 
+// The short inits take ct_dim without a default: out_cb_id precedes it, so a call
+// that omits it fails to compile instead of binding ct_dim to out_cb_id.
 template <
     bool transpose = false,
     bool split_acc = false,
@@ -136,7 +138,7 @@ ALWI void custom_mm_block_init_short(
     experimental::LLKOperand<F0, S0> /*in0*/,
     experimental::LLKOperand<F1, S1> /*in1*/,
     const std::uint32_t out_cb_id,
-    const std::uint32_t ct_dim = 1) {
+    const std::uint32_t ct_dim) {
     SAN_HOOK(unsupported());
     static_assert(experimental::is_legal_tile_shape(S0), "custom_mm_block: illegal in0 tile shape");
     static_assert(experimental::is_legal_tile_shape(S1), "custom_mm_block: illegal in1 tile shape");
@@ -167,7 +169,7 @@ ALWI void custom_mm_block_init_short(
     const std::uint32_t in0_cb_id,
     experimental::LLKOperand<F1, S1> /*in1*/,
     const std::uint32_t out_cb_id,
-    const std::uint32_t ct_dim = 1) {
+    const std::uint32_t ct_dim) {
     SAN_HOOK(unsupported());
     static_assert(
         S1.face_r_dim == 16 && S1.face_c_dim == 16 && S1.num_faces_r_dim == 2 && S1.num_faces_c_dim == 2,

@@ -302,6 +302,20 @@ def test_custom_mm(formats, M, kt, ct):
     _run_custom_mm(M, kt, ct, formats, _dest_acc_for(formats))
 
 
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    M=[8],
+    kt=[2],
+    ct=[2, 16],
+)
+def test_custom_mm_bf16_output_fp32_dest(formats, M, kt, ct):
+    """Float16_b in/out over an fp32 DEST: the pack source stays 2 bytes while the DEST
+    datum is 4, so the dense W-stride must follow the pack-source format, not the DEST
+    width. ct > 1 so a wrong tile-to-tile stride shows."""
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.Yes)
+
+
 ODD_K_CASES = [
     pytest.param(
         1,

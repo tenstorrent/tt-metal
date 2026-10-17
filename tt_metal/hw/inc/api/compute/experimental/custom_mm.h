@@ -45,7 +45,7 @@ namespace ckernel {
  * | clear_src        | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)              | bool     | true/false                            | False (default true)  |
  * | in0_cb_id        | The identifier of the first input circular buffer (CB)                                 | uint32_t | 0 to 31                               | True                  |
  * | in1_cb_id        | The identifier of the second input circular buffer (CB)                                | uint32_t | 0 to 31                               | True                  |
- * | out_cb_id        | The identifier of the output circular buffer (CB)                                      | uint32_t | 0 to 31                               | True                  |
+ * | out_cb_id        | Output CB; with dense_packing its configured pack format sizes the dense stride        | uint32_t | 0 to 31                               | True                  |
  * | ct_dim           | The width of the output matrix in tiles                                                | uint32_t | 1 to 16                               | False (default 1)     |
  */
 // clang-format on
@@ -98,7 +98,7 @@ ALWI void custom_mm_block_init(
  * | clear_src      | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)              | bool     | true/false                            | False (default true)  |
  * | in0_cb_id      | The identifier of the first input circular buffer (CB)                                 | uint32_t | 0 to 31                               | True                  |
  * | in1_cb_id      | The identifier of the second input circular buffer (CB)                                | uint32_t | 0 to 31                               | True                  |
- * | out_cb_id      | The identifier of the output circular buffer (CB)                                      | uint32_t | 0 to 31                               | True                  |
+ * | out_cb_id      | Output CB; with dense_packing its configured pack format sizes the dense stride        | uint32_t | 0 to 31                               | True                  |
  * | ct_dim         | The width of the output matrix in tiles                                                | uint32_t | 1 to 16                               | False (default 1)     |
  */
 // clang-format on

@@ -19,11 +19,14 @@ import pytest
 # tests/python_tests -> tests -> tt-llk -> tt_metal
 _TT_METAL = Path(__file__).resolve().parents[3]
 _COMPUTE_API = _TT_METAL / "hw" / "inc" / "api" / "compute" / "experimental"
-_DRIVER = (
-    Path(__file__).resolve().parents[1]
-    / "sources"
-    / "custom_mm_uninit_restore_test.cpp"
-)
+_SOURCES = Path(__file__).resolve().parents[1] / "sources"
+_DRIVER = _SOURCES / "custom_mm_uninit_restore_test.cpp"
+# The matmul drivers pack dense through the same helper, so their format sweeps cover the
+# stride it programs.
+_MATMUL_DRIVERS = [
+    _SOURCES / "custom_mm_test.cpp",
+    _SOURCES / "compressed_custom_mm_test.cpp",
+]
 
 # Both compute APIs must delegate to the helper exercised by the device tests.
 _UNINIT_PAIR = [
@@ -107,6 +110,21 @@ def test_driver_and_compute_apis_use_the_shared_pack_helper():
             "the same PACK helper as the compute APIs."
         )
 
+    matmul_drivers = {}
+    for path in _MATMUL_DRIVERS:
+        if not path.is_file():
+            pytest.skip(f"driver not found: {path}")
+        matmul_drivers[path.name] = _normalize(path.read_text())
+        assert (
+            '#include "experimental/llk_pack_custom_mm.h"' in matmul_drivers[path.name]
+        )
+        for operation in ("init", "uninit"):
+            call = f"_llk_pack_custom_mm_{operation}_<true>(formats.pack_src);"
+            assert call in matmul_drivers[path.name], (
+                f"{path.name} no longer calls {call}; its format sweep must exercise "
+                "the same PACK helper as the compute APIs."
+            )
+
     # Typed overloads inherit the legacy header's PACK-helper include.
     for header in list(sources):
         typed_header = _COMPUTE_API / "2_0" / header
@@ -136,7 +154,7 @@ def test_driver_and_compute_apis_use_the_shared_pack_helper():
 
     # Duplicating the register write would restore the old blind spot: the driver
     # could pass while a compute API programs a different stride.
-    for name, source in {**sources, _DRIVER.name: driver}.items():
+    for name, source in {**sources, _DRIVER.name: driver, **matmul_drivers}.items():
         assert "PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW" not in _strip_comments(
             source
         ), f"{name} writes the stride directly instead of using the shared PACK helper."

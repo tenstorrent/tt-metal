@@ -35,6 +35,9 @@ constexpr std::uint32_t CUSTOM_MM_MAX_DEST_ROWS =
  * writes: faces 8 DEST rows apart, tiles 16.  Only the DEST-side read strides
  * change; the bytes packed to L1 are unchanged.
  *
+ * The strides are in bytes of a 2-byte pack source (Float16_b output, which is what
+ * every caller packs here); a 4-byte pack source would need both doubled.
+ *
  * Pair with custom_mm_reuse_dest_srcb_pack_uninit().  While active, the
  * `tile_index` given to pack_block_contiguous counts 16-row slots, not 32.
  */
@@ -52,7 +55,8 @@ ALWI void custom_mm_reuse_dest_srcb_pack_init() {
  * dense strides.
  *
  * A chaining core therefore needs only this call, not also
- * custom_mm_block_uninit<dense_packing>().
+ * custom_mm_block_uninit<dense_packing>(out_cb_id): for a 2-byte pack source both
+ * restore the same 64-row tile stride.
  */
 ALWI void custom_mm_reuse_dest_srcb_pack_uninit() {
     PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * FACE_R_DIM * 2)));

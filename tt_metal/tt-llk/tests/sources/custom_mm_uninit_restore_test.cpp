@@ -25,9 +25,11 @@
 //   run 0  Establish the Default pack baseline, apply the dense_packing W-stride if
 //          selected, then swap in the block-contiguous packer MOP -- what a caller's
 //          pack_block_contiguous_init (experimental/pack_block.h) does. Pack once
-//          through it; output deliberately NOT asserted, since with dense_packing the
-//          stride the packer assumes (32 rows) disagrees with where the datacopy put the
-//          tiles (64 rows) on purpose.
+//          through it into result tiles [2N, 3N). This is where the value the init
+//          wrote is observed: the datacopy put the tiles 64 DEST rows apart, so with the
+//          dense 32-row stride output tile i is DEST faces 2i..2i+3 (a deterministic
+//          reshuffle of the input), and any other stride produces a different reshuffle.
+//          The W-stride tests assert run 0 against that layout.
 //
 //   uninit Call the raw pack helper used by the compressed custom-mm compute API.
 //          It only restores the W-stride when dense_packing is enabled.
@@ -50,6 +52,8 @@
 //            deletes the only coverage that would catch a MOP restore being re-added.
 //
 // Expectation for the W-stride tests (4 faces), owned by the python side:
+//   run 0 is the dense reshuffle (dense_packing) or the plain tiles (not dense): the init
+//                          programmed the stride the pack-source format needs.
 //   run 1 is correct  <=>  dense_packing was not set, OR the uninit ran and restored the
 //                          stride.
 // UNINIT_SKIP is the negative control that drops the uninit entirely, proving the stride
@@ -66,10 +70,6 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
-
-// Scratch L1 for run 0's (unasserted) output. Well above the stimuli/result buffers,
-// which start at 0x21000 -- same convention as unpack_tilize_uninit_restore_test.cpp.
-constexpr std::uint32_t buffer_run0_scratch = 0xA0000;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -166,8 +166,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_packer_wait_for_math_done_();
 
-    // run 0: pack through the block MOP. Output intentionally not asserted.
-    _llk_pack_block_contiguous_<DST_SYNC, is_fp32_dest_acc_en>(0 /* tile_index */, L1_ADDRESS(buffer_run0_scratch), PACK_NUM_TILES);
+    // run 0: pack through the block MOP into result tiles [2N, 3N). Tiles [N, 2N) stay
+    // free as run 1's overrun headroom (a stale block MOP packs N tiles per call).
+    _llk_pack_block_contiguous_<DST_SYNC, is_fp32_dest_acc_en>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[2 * PACK_NUM_TILES]), PACK_NUM_TILES);
 
     // ---- the function under test ----
     if constexpr (!UNINIT_SKIP)

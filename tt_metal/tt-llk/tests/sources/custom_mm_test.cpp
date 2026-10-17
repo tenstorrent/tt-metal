@@ -184,6 +184,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "experimental/llk_pack_custom_mm.h"
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
@@ -195,14 +196,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Same pack setup the compressed driver uses: the in0 face geometry (M rows, 2 faces)
     // is what lands in DEST, so pack with that geometry and the dense-packing W-stride
-    // (tiles 32 rows apart) that custom_mm_block_init installs for the [M,32] output tiles.
+    // (tiles 32 rows apart) that custom_mm_block_init installs for the [M,32] output tiles,
+    // through the same PACK helper the compute API calls, so this sweep also checks the
+    // stride it programs for each pack-source format.
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true);
 
     _llk_pack_init_<PackMode::Default, false /*zero_output*/, false /*skip_addrmod_config*/, true /*skip_packer_strides*/>(
         formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
+    // dense_packing = true
+    _llk_pack_custom_mm_init_<true>(formats.pack_src);
 
     _llk_packer_wait_for_math_done_();
 
@@ -213,7 +217,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
+    _llk_pack_custom_mm_uninit_<true>(formats.pack_src);
 }
 
 #endif

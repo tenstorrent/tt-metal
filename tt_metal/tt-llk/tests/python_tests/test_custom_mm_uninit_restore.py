@@ -29,7 +29,11 @@ Three runs, per the header comment in sources/custom_mm_uninit_restore_test.cpp:
 
   run 0  Default pack baseline + the dense W-stride if selected, then the
          block-contiguous packer MOP swapped in -- what a caller's
-         ``pack_block_contiguous_init`` does. Output not asserted.
+         ``pack_block_contiguous_init`` does. Packed into result tiles [2N, 3N) and
+         asserted by the W-stride tests: the datacopy put the tiles 64 DEST rows apart,
+         so the dense 32-row stride reads output tile i from DEST faces 2i..2i+3. That
+         reshuffle is only reproduced when the init programmed the stride the pack-source
+         format needs (a 16-row or 64-row stride gives a different reshuffle).
   uninit The function under test: the conditional W-stride write, and nothing else.
   run 1  Plain per-tile ``_llk_pack_<PackMode::Default>``, no packer re-init, so it packs
          through whatever the uninit left.
@@ -72,6 +76,12 @@ FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=
 # 4 tiles is the smallest count that makes a tile-to-tile stride error visible on more
 # than one tile while staying inside DEST half-sync capacity at fp32 (4 tiles).
 NUM_TILES = 4
+FACES_PER_TILE = 4
+ELEMENTS_PER_FACE = ELEMENTS_PER_TILE // FACES_PER_TILE
+
+# Result buffer: run 1 writes tiles [0, N); [N, 2N) is run 1's overrun headroom; run 0
+# writes [2N, 3N).
+RESULT_TILES = 3 * NUM_TILES
 
 # Both compute uninits and the driver call the same raw PACK helper. A per-family
 # axis would build the identical ELF twice; the static parity test guards delegation
@@ -110,7 +120,8 @@ def _run(formats, dest_acc, dense_packing, skip_uninit, block_mop_num_faces=4):
             tile_count_B=tile_cnt_B,
             # Headroom: if a stale block MOP makes run 1 pack more than one tile's worth
             # per call, the overrun lands in spare result tiles instead of other buffers.
-            tile_count_res=2 * NUM_TILES,
+            # The last block holds run 0.
+            tile_count_res=RESULT_TILES,
         ),
         unpack_to_dest=formats.input_format.is_32_bit(),
         dest_acc=dest_acc,
@@ -128,9 +139,27 @@ def _run(formats, dest_acc, dense_packing, skip_uninit, block_mop_num_faces=4):
     )
 
     span = NUM_TILES * ELEMENTS_PER_TILE
-    device = torch.tensor(res_from_L1[:span], dtype=torch_format).flatten()
+    run1 = torch.tensor(res_from_L1[:span], dtype=torch_format).flatten()
+    run0 = torch.tensor(res_from_L1[2 * span : 3 * span], dtype=torch_format).flatten()
     golden = torch.tensor(golden[:span], dtype=torch_format).flatten()
-    return golden, device
+    return golden, run1, run0
+
+
+def _dense_layout(golden):
+    """What the block pack reads with the dense 32-row W-stride.
+
+    The datacopy left tile t at DEST rows 64t, i.e. DEST face k holds input face k. The
+    block pack reads output tile i at W = i (32 rows = 2 faces in) and walks 4 faces 16
+    rows apart from there, so output tile i is faces 2i .. 2i+3 of the input.
+    """
+    faces = golden.view(NUM_TILES * FACES_PER_TILE, ELEMENTS_PER_FACE)
+    return torch.cat(
+        [faces[2 * i : 2 * i + FACES_PER_TILE].flatten() for i in range(NUM_TILES)]
+    )
+
+
+def _run0_golden(golden, dense_packing):
+    return _dense_layout(golden) if dense_packing else golden
 
 
 def _skip_unsupported(formats, dest_acc):
@@ -157,9 +186,16 @@ def test_custom_mm_uninit_restores_dense_wstride(formats, dest_acc, dense_packin
     """
     _skip_unsupported(formats, dest_acc)
 
-    golden, device = _run(formats, dest_acc, dense_packing, skip_uninit=False)
+    golden, run1, run0 = _run(formats, dest_acc, dense_packing, skip_uninit=False)
 
-    assert passed_test(golden, device, formats.output_format), (
+    assert passed_test(
+        _run0_golden(golden, dense_packing), run0, formats.output_format
+    ), (
+        f"_block_init<dense_packing={dense_packing}> did not program the W-stride the "
+        "pack-source format needs: the block pack did not read the DEST tiles at the "
+        f"expected {'32' if dense_packing else '64'}-row spacing"
+    )
+    assert passed_test(golden, run1, formats.output_format), (
         f"custom_mm/compressed_custom_mm _block_uninit<dense_packing={dense_packing}> "
         "did not leave the packer able to pack plain tiles: the following plain "
         "_llk_pack_ did not reproduce the DEST tiles"
@@ -175,13 +211,18 @@ def test_custom_mm_uninit_is_load_bearing(formats, dest_acc):
 
     Without this, "the stride was restored" cannot be told apart from "nothing needed
     restoring". Only ``dense_packing=True`` is driven, because that is the only case in
-    which the uninit writes anything at all.
+    which the uninit writes anything at all. Run 0 is asserted first: the stride left in
+    place must be the dense one, not merely some non-default value.
     """
     _skip_unsupported(formats, dest_acc)
 
-    golden, device = _run(formats, dest_acc, dense_packing=True, skip_uninit=True)
+    golden, run1, run0 = _run(formats, dest_acc, dense_packing=True, skip_uninit=True)
 
-    assert not passed_test(golden, device, formats.output_format, print_errors=False), (
+    assert passed_test(_dense_layout(golden), run0, formats.output_format), (
+        "_block_init<dense_packing=True> did not program the 32-row W-stride for this "
+        "pack-source format, so the control below would not be testing the dense stride"
+    )
+    assert not passed_test(golden, run1, formats.output_format, print_errors=False), (
         "run 1 reproduced the DEST tiles even though the uninit was skipped and the "
         "dense 32-row W-stride was left in place. Either the stride no longer affects "
         "the pack, or the driver is not actually applying it -- in both cases the "
@@ -209,7 +250,9 @@ def test_custom_mm_uninit_leaves_the_caller_mop_installed(formats, dest_acc):
     """
     _skip_unsupported(formats, dest_acc)
 
-    golden, device = _run(
+    # Run 0 is not asserted here: the 2-face MOP packs a geometry the golden does not
+    # describe, and the stride is not what this test is about.
+    golden, run1, _ = _run(
         formats,
         dest_acc,
         dense_packing=False,
@@ -217,7 +260,7 @@ def test_custom_mm_uninit_leaves_the_caller_mop_installed(formats, dest_acc):
         block_mop_num_faces=2,
     )
 
-    assert not passed_test(golden, device, formats.output_format, print_errors=False), (
+    assert not passed_test(golden, run1, formats.output_format, print_errors=False), (
         "run 1 packed correctly through a 2-face block MOP that nothing reinstalled, "
         "which means the uninit restored the Default tile-pack MOP. Main's uninit does "
         "not do that, and callers inheriting the block MOP across ops depend on it not "
