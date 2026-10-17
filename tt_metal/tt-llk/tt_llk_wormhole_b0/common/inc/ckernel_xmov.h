@@ -80,6 +80,7 @@ inline void xmov_l1_to_l1_non_compact(const std::uint32_t src_addr_16B, const st
     SIZE_ADDR[0] = xfer_size_16B;
     DIR_ADDR[0]  = 3; // L1 to L1
     risc_compact_mov_instrn_u risc_mov_instrn;
+    risc_mov_instrn.val         = 0;
     risc_mov_instrn.f.instrn    = 0x40; // mov instruction
     risc_mov_instrn.f.no_params = 0;    // Use xmov inputs from param registers
     XMOV_CMD[0]                 = risc_mov_instrn.val;
