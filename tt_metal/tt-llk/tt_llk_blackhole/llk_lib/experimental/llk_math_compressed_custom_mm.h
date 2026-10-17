@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -145,6 +146,10 @@ inline void _llk_math_compressed_custom_mm_mop_config_(const std::uint32_t opera
 template <bool transpose = false, bool split_acc = false, bool dense_packing = false>
 inline void _llk_math_compressed_custom_mm_init_(const std::uint32_t operandB_face_r_dim)
 {
+    LLK_ASSERT(
+        operandB_face_r_dim == 1 || operandB_face_r_dim == 2 || operandB_face_r_dim == 4 || operandB_face_r_dim == 8,
+        "compressed_custom_mm: in0 tile height must be 1, 2, 4 or 8");
+
     _llk_math_compressed_custom_mm_addrmod_config_<transpose, split_acc, dense_packing>();
     _llk_math_compressed_custom_mm_mop_config_(operandB_face_r_dim);
 
@@ -159,6 +164,10 @@ inline void _llk_math_compressed_custom_mm_(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1)
 {
+    LLK_ASSERT(
+        operandB_face_r_dim == 1 || operandB_face_r_dim == 2 || operandB_face_r_dim == 4 || operandB_face_r_dim == 8,
+        "compressed_custom_mm: in0 tile height must be 1, 2, 4 or 8");
+
     const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 

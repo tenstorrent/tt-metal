@@ -1,7 +1,12 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
 #include <cstdint>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -12,12 +17,24 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
+#include "impl/context/metal_context.hpp"
+#include "impl/debug/watcher_server.hpp"
 #include "llk_device_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
 
 namespace tt::tt_metal {
 namespace {
 
-void run_custom_mm_operands(
+struct CustomMmOperandsCase {
+    distributed::MeshWorkload workload;
+    // The inputs must outlive the run: a freed DRAM region is reused by the next allocation.
+    std::shared_ptr<distributed::MeshBuffer> a_buffer;
+    std::shared_ptr<distributed::MeshBuffer> b_buffer;
+    std::shared_ptr<distributed::MeshBuffer> result_buffer;
+    std::vector<std::uint32_t> golden;
+};
+
+CustomMmOperandsCase make_custom_mm_operands(
     distributed::MeshDevice& mesh, std::uint32_t rows, bool mixed, std::uint32_t mode, bool full_sync) {
     constexpr std::uint32_t blocks = 3;
     const std::uint32_t input_block_tiles = mode == 2 ? 5 : 3;
@@ -116,17 +133,165 @@ void run_custom_mm_operands(
     distributed::EnqueueWriteMeshBuffer(cq, b_buffer, packed_weights, true);
     SetRuntimeArgs(program, reader, core, {a_buffer->address(), 0, b_buffer->address(), 0, input_tiles});
     SetRuntimeArgs(program, writer, core, {result_buffer->address(), 0, blocks});
+    CustomMmOperandsCase test_case;
+    const distributed::MeshCoordinate zero(0, 0);
+    test_case.workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
+    test_case.a_buffer = std::move(a_buffer);
+    test_case.b_buffer = std::move(b_buffer);
+    test_case.result_buffer = std::move(result_buffer);
+    test_case.golden = pack_bfloat16_vec_into_uint32_vec(golden);
+    return test_case;
+}
+
+void run_custom_mm_operands(
+    distributed::MeshDevice& mesh, std::uint32_t rows, bool mixed, std::uint32_t mode, bool full_sync) {
+    auto test_case = make_custom_mm_operands(mesh, rows, mixed, mode, full_sync);
+    auto& cq = mesh.mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, test_case.workload, false);
+    distributed::Finish(cq);
+    std::vector<std::uint32_t> result;
+    distributed::EnqueueReadMeshBuffer(cq, result, test_case.result_buffer, true);
+    EXPECT_EQ(result, test_case.golden);
+}
+
+std::string wait_for_watcher_exception() {
+    constexpr auto timeout = std::chrono::milliseconds(5000);
+    const auto start = std::chrono::steady_clock::now();
+    std::string exception;
+    while (std::chrono::steady_clock::now() - start < timeout) {
+        exception = MetalContext::instance().watcher_server()->exception_message();
+        if (!exception.empty()) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    return exception;
+}
+
+// A [16, 32] activation tile is a legal CB tile but outside the custom_mm family's
+// [1|2|4|8, 32] in0 contract. The typed LLKOperand overloads reject it at compile
+// time; the CB-id overloads read face_r_dim at run time, so their only guard is the
+// LLK assert this exercises. Without it the 1..4-row program runs on a 16-row
+// operand and rows 8..15 of each face silently drop out of the product.
+void run_custom_mm_rows_guard(distributed::MeshDevice& mesh, std::uint32_t mode) {
+    // A legal CB-id height must not trip the guard.
+    run_custom_mm_operands(mesh, 8, true, mode, false);
+    EXPECT_TRUE(MetalContext::instance().watcher_server()->exception_message().empty())
+        << "rows=8 tripped the watcher: " << MetalContext::instance().watcher_server()->exception_message();
+
+    // Init-only kernel on a [16, 32] in0 CB: the init must assert.
+    const Tile tiny({16, 32});
+    const Tile full;
+    const auto weight_format = mode == 1 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
+    const CoreCoord core{0, 0};
+    Program program = CreateProgram();
+    auto make_cb = [&](tt::CBIndex index, tt::DataFormat format, const Tile& tile) {
+        const auto bytes = tile.get_tile_size(format);
+        CreateCircularBuffer(
+            program,
+            core,
+            CircularBufferConfig(bytes, {{index, format}}).set_page_size(index, bytes).set_tile_dims(index, tile));
+    };
+    make_cb(tt::CBIndex::c_0, tt::DataFormat::Float16_b, tiny);
+    make_cb(tt::CBIndex::c_1, weight_format, full);
+    make_cb(tt::CBIndex::c_16, tt::DataFormat::Float16_b, tiny);
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/custom_mm_operands_guard.cpp",
+        core,
+        ComputeConfig{
+            .math_fidelity = MathFidelity::LoFi,
+            .fp32_dest_acc_en = false,
+            .math_approx_mode = false,
+            .compile_args = {mode}});
     distributed::MeshWorkload workload;
     const distributed::MeshCoordinate zero(0, 0);
     workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
-    std::vector<std::uint32_t> result;
-    distributed::EnqueueReadMeshBuffer(cq, result, result_buffer, true);
-    EXPECT_EQ(result, pack_bfloat16_vec_into_uint32_vec(golden));
+    auto& cq = mesh.mesh_command_queue();
+    // The wait aborts once the watcher reports the assert, but the program may complete first (no
+    // guard), so the throw is tolerated here and the watcher state is what is checked.
+    try {
+        distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("Aborting wait due to watcher error"), std::string::npos) << e.what();
+    }
+    const std::string exception = wait_for_watcher_exception();
+    if (exception.empty()) {
+        // No guard: the init completed, so show what the product of the same shape looks like.
+        auto test_case = make_custom_mm_operands(mesh, 16, true, mode, false);
+        distributed::EnqueueMeshWorkload(cq, test_case.workload, false);
+        distributed::Finish(cq);
+        std::vector<std::uint32_t> result;
+        distributed::EnqueueReadMeshBuffer(cq, result, test_case.result_buffer, true);
+        EXPECT_EQ(result, test_case.golden) << "rows=16 ran to completion with no diagnostic";
+    }
+    ASSERT_FALSE(exception.empty()) << "Timeout waiting for the watcher to report the in0 tile height assert";
+    EXPECT_NE(exception.find("tripped an assert"), std::string::npos) << exception;
+    EXPECT_NE(exception.find("custom_mm_operands_guard"), std::string::npos) << exception;
 }
 
 }  // namespace
+
+// Opens one Blackhole device per test with the watcher and LLK asserts enabled, so a device-side
+// LLK_ASSERT surfaces as a watcher exception instead of a silent hang. Mirrors MeshWatcherFixture
+// (tests/tt_metal/tt_metal/debug_tools/debug_tools_fixture.hpp); the options must be set before the
+// device opens, and a tripped assert parks a TRISC, so the device is reopened for every test.
+class LLKBlackholeAssertFixture : public MeshDispatchFixture {
+public:
+    // No suite-shared device: the options below change the firmware build, so the device must open
+    // after they are set, and a device the base suite opened first would be torn down underneath.
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
+protected:
+    void SetUp() override {
+        if (detail::detect_arch() != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP() << "This test can only be run on Blackhole cards";
+        }
+        ASSERT_FALSE(get_shared_devices().initialized)
+            << "Suite-shared devices are open; this fixture opens its own device after changing run-time options";
+        auto& rtoptions = MetalContext::instance().rtoptions();
+        watcher_previous_enabled_ = rtoptions.get_watcher_enabled();
+        watcher_previous_interval_ = rtoptions.get_watcher_interval();
+        test_mode_previous_ = rtoptions.get_test_mode_enabled();
+        llk_asserts_previous_ = rtoptions.get_llk_asserts();
+        rtoptions.set_watcher_enabled(true);
+        rtoptions.set_watcher_interval(250);
+        // In test mode a watcher error stops the server and fails the wait instead of ending the process.
+        rtoptions.set_test_mode_enabled(true);
+        rtoptions.set_llk_asserts(true);
+
+        const ChipId mmio_device_id = *MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        auto id_to_device = distributed::MeshDevice::create_unit_meshes(
+            {mmio_device_id},
+            l1_small_size_,
+            trace_region_size_,
+            1,
+            MetalContext::instance().resolve_dispatch_core_config());
+        devices_ = {id_to_device.at(mmio_device_id)};
+        arch_ = tt::ARCH::BLACKHOLE;
+        MetalContext::instance().watcher_server()->clear_log();
+    }
+
+    void TearDown() override {
+        for (auto& device : devices_) {
+            device->close();
+        }
+        devices_.clear();
+        auto& rtoptions = MetalContext::instance().rtoptions();
+        rtoptions.set_llk_asserts(llk_asserts_previous_);
+        rtoptions.set_test_mode_enabled(test_mode_previous_);
+        rtoptions.set_watcher_interval(watcher_previous_interval_);
+        rtoptions.set_watcher_enabled(watcher_previous_enabled_);
+    }
+
+private:
+    bool watcher_previous_enabled_{};
+    int watcher_previous_interval_{};
+    bool test_mode_previous_{};
+    bool llk_asserts_previous_{};
+};
 
 TEST_F(LLKBlackholeSingleCardFixture, CustomMatmulOperandOverloads) {
     for (const auto rows : {1u, 2u, 4u, 8u}) {
@@ -141,6 +306,14 @@ TEST_F(LLKBlackholeSingleCardFixture, CustomMatmulOperandOverloads) {
             }
         }
     }
+}
+
+TEST_F(LLKBlackholeAssertFixture, CustomMatmulOperandRejectsSixteenRowActivation) {
+    run_custom_mm_rows_guard(*devices_.at(0), 0);
+}
+
+TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulOperandRejectsSixteenRowActivation) {
+    run_custom_mm_rows_guard(*devices_.at(0), 1);
 }
 
 }  // namespace tt::tt_metal
