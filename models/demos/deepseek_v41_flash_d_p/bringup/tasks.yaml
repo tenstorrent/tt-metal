@@ -7019,6 +7019,13 @@ tasks:
     - attn_hc
     - attn_collapse
     layer: 24
+  frozen:
+    at: '2026-10-17T11:39:03'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_02_attn_collapse.py: 4bb4b9f2ede40f2273dcd648372a0b3d895b41e17fa7a6b416692f456a28218e
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_reindex.attn_norm
   title: dec_reindex attn_norm (norm) on device, layer 24
   step: implement
