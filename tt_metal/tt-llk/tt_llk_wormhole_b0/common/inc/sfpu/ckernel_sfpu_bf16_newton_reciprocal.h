@@ -47,9 +47,10 @@ inline void newton_reciprocal_pair()
     // Round y to BF16 before the scale: s is a power of two, so y s is then exact and equals the
     // rounded product wherever that is normal. Rounding after the multiply instead flushed the
     // product just below 2^-126 at x = +-2^126, whose correctly rounded result is 2^-126.
+    // FP32 -> BF16 reads no VB; ttsim rejects a nonzero one, so VB is L0.
     TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LREG0,
                       sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B); // fp32 -> bf16 RNE
-    TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG4, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
     TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0); // y s
     TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
     // ADDR_MOD_2 (ADDR_MOD_6 past the SFPU's +4 base) keeps stock's dest += 2, which other unary
