@@ -261,7 +261,8 @@ into the batch row. The dataflow RISC writes the 48 scales into each row's
 tail from the 1/scale tile the compute RISC leaves per block. Readers and
 senders only see a narrower token. The output is FP8_E4M3, and
 `post_combine_reduce(fp8_scale_block_w=128)` dequantizes it. A token must be a
-whole number of 64 B lines, so emb must be a multiple of 2048.
+whole number of 64 B lines, so the row is padded after its scales up to one:
+6336 B at emb 6144 needs none, 7392 B at emb 7168 becomes 7424 B.
 
 ---
 

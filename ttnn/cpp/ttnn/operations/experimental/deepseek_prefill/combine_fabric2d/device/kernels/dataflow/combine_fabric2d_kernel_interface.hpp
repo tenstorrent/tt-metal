@@ -27,6 +27,7 @@
 
 #include "../../combine_fabric2d_placement.hpp"
 #include "../../combine_fabric2d_types.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
@@ -47,16 +48,21 @@ inline tt::DataFormat token_data_format(const CombineFabric2dParams& args) {
     return tt::tt_metal::datatype_to_dataformat_converter(token_dtype(args));
 }
 
-// One token's row as it crosses the wire. Its width is read off the tensor's SHAPE, not its page: a ROW_MAJOR
-// dispatched buffer pages by exactly one token, a TILE one does not. Its bytes are token_dtype's whatever the
-// dispatched dtype, followed for fp8 by one fp32 scale per scale block.
-inline uint32_t token_size_bytes(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
-    const uint32_t emb = static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]);
-    const uint32_t values = emb * tt::datum_size(token_data_format(args));
-    if (args.fp8_scale_block != 0) {
-        return values + emb / args.fp8_scale_block * static_cast<uint32_t>(sizeof(float));
+// One token's row of the embedding as it crosses the wire: emb bf16 values, or with fp8_scale_block set the packed
+// [emb e4m3 | emb / fp8_scale_block fp32 scales] row, padded to whole 64 B lines so that it and its forwarding metadata
+// are a DRAM page of the forwarding buffer. The padding follows the scales and nothing reads it.
+inline uint32_t token_size_bytes(uint32_t emb, uint32_t fp8_scale_block) {
+    if (fp8_scale_block != 0) {
+        return per_token_cast_to_fp8::packed_row_bytes(emb, fp8_scale_block, 64);
     }
-    return values;
+    return emb * static_cast<uint32_t>(sizeof(uint16_t));
+}
+
+// Its width is read off the tensor's SHAPE, not its page: a ROW_MAJOR dispatched buffer pages by exactly one
+// token, a TILE one does not. Its format is token_dtype's whatever the dispatched dtype.
+inline uint32_t token_size_bytes(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
+    return token_size_bytes(
+        static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]), args.fp8_scale_block);
 }
 
 // The dispatched buffer's format as the untilize's input CB declares it: BFLOAT16 or BFLOAT8_B.
