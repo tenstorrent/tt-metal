@@ -1,0 +1,1790 @@
+{
+  "scope": "Fixed-input arithmetic diagnostics using historical native TTNN runtime; experimental alternatives are not current-main production or integrated qualification.",
+  "native_runtime": "0.1.dev1+ggec74d3b",
+  "sources": {
+    "encoder-pointwise/report.json": {
+      "sha256": "69c840f36f3660b735626a4bb92a917871abd20f8ea8bba521b156ec2956dc6f",
+      "report": {
+        "activation_injection": true,
+        "results": {
+          "0/conv_silu_native_tt": {
+            "pcc": 0.9999999713719397,
+            "relative_rms": 0.0002385457468552084,
+            "max_abs": 0.015625,
+            "exact_fraction": 0.9150005139802632
+          },
+          "0/conv_silu_precise": {
+            "pcc": 1.0000000000000018,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0
+          },
+          "0/swiglu_native_tt": {
+            "pcc": 0.9999991205203673,
+            "relative_rms": 0.0013273960316287571,
+            "max_abs": 0.00390625,
+            "exact_fraction": 0.9181058114035088
+          },
+          "0/swiglu_precise": {
+            "pcc": 1.0000000000000122,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0
+          },
+          "0/attention_residual_native_tt": {
+            "pcc": 0.9999993467803427,
+            "relative_rms": 0.001166511951378902,
+            "max_abs": 0.03125,
+            "exact_fraction": 0.8938759251644737
+          },
+          "0/attention_residual_precise": {
+            "pcc": 0.9999999999999948,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0
+          },
+          "0/mlp_residual_native_tt": {
+            "pcc": 0.9999998064595778,
+            "relative_rms": 0.0006259138877186962,
+            "max_abs": 0.001953125,
+            "exact_fraction": 0.8806537828947368
+          },
+          "0/mlp_residual_precise": {
+            "pcc": 0.999999999999999,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0
+          },
+          "1/conv_silu_native_tt": {
+            "pcc": 0.9999983955605184,
+            "relative_rms": 0.0017903879493218469,
+            "max_abs": 0.0078125,
+            "exact_fraction": 0.8837376644736842
+          },
+          "1/conv_silu_precise": {
+            "pcc": 0.9999999999999927,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0
+          },
+          "1/swiglu_native_tt": {
+            "pcc": 0.9999987180700052,
+            "relative_rms": 0.0016016518179225777,
+            "max_abs": 0.001953125,
+            "exact_fraction": 0.9190566748903509
+          },
+          "1/swiglu_precise": {
+            "pcc": 1.0000000000000082,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0
+          },
+          "1/attention_residual_native_tt": {
+            "pcc": 0.9999985877001343,
+            "relative_rms": 0.0017399958484518782,
+            "max_abs": 0.0625,
+            "exact_fraction": 0.8895841899671053
+          },
+          "1/attention_residual_precise": {
+            "pcc": 1.0000000000000016,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0
+          },
+          "1/mlp_residual_native_tt": {
+            "pcc": 0.9999988053116042,
+            "relative_rms": 0.0016008517691587607,
+            "max_abs": 0.0625,
+            "exact_fraction": 0.8866288034539473
+          },
+          "1/mlp_residual_precise": {
+            "pcc": 0.9999999999999998,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0
+          }
+        }
+      }
+    },
+    "encoder-stage-diagnostics/report.json": {
+      "sha256": "5e4b4f49753aadee59d029d6a356d0d9efc16663488c5638196a99db11928798",
+      "report": {
+        "activation_injection": true,
+        "results": {
+          "0/isolated/input_layernorm": {
+            "pcc": 0.9999999999999943,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0
+          },
+          "0/isolated/post_attention_layernorm": {
+            "pcc": 0.9999999999270471,
+            "relative_rms": 1.2079170871892654e-05,
+            "max_abs": 0.00048828125,
+            "exact_fraction": 0.9999743009868421
+          },
+          "0/isolated/linear_attn.in_proj_qkv": {
+            "pcc": 0.9999996670190265,
+            "relative_rms": 0.0008167606014805942,
+            "max_abs": 0.25,
+            "exact_fraction": 0.8896034642269737
+          },
+          "0/isolated/linear_attn.in_proj_a": {
+            "pcc": 0.999998784860187,
+            "relative_rms": 0.0015656291711255428,
+            "max_abs": 0.0625,
+            "exact_fraction": 0.71875
+          },
+          "0/isolated/linear_attn.in_proj_b": {
+            "pcc": 0.9999983126334429,
+            "relative_rms": 0.001653188402508756,
+            "max_abs": 0.03125,
+            "exact_fraction": 0.756578947368421
+          },
+          "0/isolated/linear_attn.in_proj_z": {
+            "pcc": 0.9999995661998862,
+            "relative_rms": 0.0008744830455601931,
+            "max_abs": 0.0625,
+            "exact_fraction": 0.9053890830592105
+          },
+          "0/isolated/linear_attn.out_proj": {
+            "pcc": 0.9999999848222054,
+            "relative_rms": 0.0001742156325703724,
+            "max_abs": 0.0009765625,
+            "exact_fraction": 0.8328536184210527
+          },
+          "0/isolated/mlp.gate_proj": {
+            "pcc": 0.9999963389178792,
+            "relative_rms": 0.0025896330703983833,
+            "max_abs": 0.0078125,
+            "exact_fraction": 0.6316988760964912
+          },
+          "0/isolated/mlp.up_proj": {
+            "pcc": 0.9999966094522613,
+            "relative_rms": 0.0026046132270402646,
+            "max_abs": 0.0078125,
+            "exact_fraction": 0.6233980948464912
+          },
+          "0/isolated/mlp.down_proj": {
+            "pcc": 0.999999701599104,
+            "relative_rms": 0.0007726146847872363,
+            "max_abs": 0.00048828125,
+            "exact_fraction": 0.8670333059210527
+          },
+          "0/gdn_from_native_norm/linear_attn.in_proj_qkv": {
+            "pcc": 0.9999996670190265,
+            "relative_rms": 0.0008167606014805942,
+            "max_abs": 0.25,
+            "exact_fraction": 0.8896034642269737
+          },
+          "0/gdn_from_native_norm/gdn_convolution": {
+            "pcc": 0.9999998110492094,
+            "relative_rms": 0.0006134747687662177,
+            "max_abs": 0.125,
+            "exact_fraction": 0.8356483861019737
+          },
+          "0/gdn_from_native_norm/linear_attn.in_proj_a": {
+            "pcc": 0.999998784860187,
+            "relative_rms": 0.0015656291711255428,
+            "max_abs": 0.0625,
+            "exact_fraction": 0.71875
+          },
+          "0/gdn_from_native_norm/linear_attn.in_proj_b": {
+            "pcc": 0.9999983126334429,
+            "relative_rms": 0.001653188402508756,
+            "max_abs": 0.03125,
+            "exact_fraction": 0.756578947368421
+          },
+          "0/gdn_from_native_norm/gdn_decay": {
+            "pcc": 0.9999997592646215,
+            "relative_rms": 0.0005893543016508554,
+            "max_abs": 0.0041637420654296875,
+            "exact_fraction": 0.2450657894736842
+          },
+          "0/gdn_from_native_norm/gdn_beta": {
+            "pcc": 0.9999928170427311,
+            "relative_rms": 0.0014358244461741565,
+            "max_abs": 0.00390625,
+            "exact_fraction": 0.8766447368421053
+          },
+          "0/gdn_from_native_norm/gdn_scan": {
+            "pcc": 0.9999905369951926,
+            "relative_rms": 0.007244229806229662,
+            "max_abs": 0.015625,
+            "exact_fraction": 0.14455694901315788
+          },
+          "0/gdn_from_native_norm/linear_attn.in_proj_z": {
+            "pcc": 0.9999995661998862,
+            "relative_rms": 0.0008744830455601931,
+            "max_abs": 0.0625,
+            "exact_fraction": 0.9053890830592105
+          },
+          "0/gdn_from_native_norm/gdn_norm_before_gate": {
+            "pcc": 0.9999969945938451,
+            "relative_rms": 0.002519685490762649,
+            "max_abs": 0.125,
+            "exact_fraction": 0.38507401315789475
+          },
+          "0/gdn_from_native_norm/gdn_norm_output": {
+            "pcc": 0.9999981859310741,
+            "relative_rms": 0.001923501750696907,
+            "max_abs": 0.015625,
+            "exact_fraction": 0.3873740748355263
+          },
+          "0/gdn_from_native_norm/linear_attn.out_proj": {
+            "pcc": 0.999998921298094,
+            "relative_rms": 0.0014834584706151733,
+            "max_abs": 0.03125,
+            "exact_fraction": 0.2570543791118421
+          },
+          "0/isolated/scan": {
+            "pcc": 0.9999902581253971,
+            "relative_rms": 0.00682977272312258,
+            "max_abs": 0.015625,
+            "exact_fraction": 0.12610505756578946
+          },
+          "0/isolated/gated_norm_before_gate": {
+            "pcc": 0.9999999999992414,
+            "relative_rms": 1.2289089529044998e-06,
+            "max_abs": 0.000244140625,
+            "exact_fraction": 0.9999743009868421
+          },
+          "0/isolated/gated_norm": {
+            "pcc": 0.999999999999637,
+            "relative_rms": 8.476978460020242e-07,
+            "max_abs": 1.52587890625e-05,
+            "exact_fraction": 0.9999743009868421
+          },
+          "1/isolated/input_layernorm": {
+            "pcc": 0.9999999999999867,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0
+          },
+          "1/isolated/post_attention_layernorm": {
+            "pcc": 0.9999999999999951,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0
+          },
+          "1/isolated/linear_attn.in_proj_qkv": {
+            "pcc": 0.9999995434516404,
+            "relative_rms": 0.0009561439067753629,
+            "max_abs": 0.03125,
+            "exact_fraction": 0.867052580180921
+          },
+          "1/isolated/linear_attn.in_proj_a": {
+            "pcc": 0.9999976651162958,
+            "relative_rms": 0.0019536951574897097,
+            "max_abs": 0.03125,
+            "exact_fraction": 0.662828947368421
+          },
+          "1/isolated/linear_attn.in_proj_b": {
+            "pcc": 0.9999963748076521,
+            "relative_rms": 0.0025991822219087126,
+            "max_abs": 0.015625,
+            "exact_fraction": 0.5641447368421053
+          },
+          "1/isolated/linear_attn.in_proj_z": {
+            "pcc": 0.9999995160494266,
+            "relative_rms": 0.000981977492654915,
+            "max_abs": 0.03125,
+            "exact_fraction": 0.8741133840460527
+          },
+          "1/isolated/linear_attn.out_proj": {
+            "pcc": 0.9999998541548084,
+            "relative_rms": 0.0005400920610113194,
+            "max_abs": 0.00048828125,
+            "exact_fraction": 0.8486970600328947
+          },
+          "1/isolated/mlp.gate_proj": {
+            "pcc": 0.9999964521869404,
+            "relative_rms": 0.002584793522645531,
+            "max_abs": 0.015625,
+            "exact_fraction": 0.6276127330043859
+          },
+          "1/isolated/mlp.up_proj": {
+            "pcc": 0.9999965097462276,
+            "relative_rms": 0.0026423500054046493,
+            "max_abs": 0.0078125,
+            "exact_fraction": 0.6124888637609649
+          },
+          "1/isolated/mlp.down_proj": {
+            "pcc": 0.9999994892111941,
+            "relative_rms": 0.0010108667527167056,
+            "max_abs": 0.0009765625,
+            "exact_fraction": 0.8586168791118421
+          },
+          "1/gdn_from_native_norm/linear_attn.in_proj_qkv": {
+            "pcc": 0.9999995434516404,
+            "relative_rms": 0.0009561439067753629,
+            "max_abs": 0.03125,
+            "exact_fraction": 0.867052580180921
+          },
+          "1/gdn_from_native_norm/gdn_convolution": {
+            "pcc": 0.9999977247424662,
+            "relative_rms": 0.0021300178923227804,
+            "max_abs": 0.0078125,
+            "exact_fraction": 0.7837492290296053
+          },
+          "1/gdn_from_native_norm/linear_attn.in_proj_a": {
+            "pcc": 0.9999976651162958,
+            "relative_rms": 0.0019536951574897097,
+            "max_abs": 0.03125,
+            "exact_fraction": 0.662828947368421
+          },
+          "1/gdn_from_native_norm/linear_attn.in_proj_b": {
+            "pcc": 0.9999963748076521,
+            "relative_rms": 0.0025991822219087126,
+            "max_abs": 0.015625,
+            "exact_fraction": 0.5641447368421053
+          },
+          "1/gdn_from_native_norm/gdn_decay": {
+            "pcc": 0.9999979700503366,
+            "relative_rms": 0.0016789806498132853,
+            "max_abs": 0.018933773040771484,
+            "exact_fraction": 0.023026315789473683
+          },
+          "1/gdn_from_native_norm/gdn_beta": {
+            "pcc": 0.9999889717284082,
+            "relative_rms": 0.0017828166835945733,
+            "max_abs": 0.00390625,
+            "exact_fraction": 0.8174342105263158
+          },
+          "1/gdn_from_native_norm/gdn_scan": {
+            "pcc": 0.9999904589305457,
+            "relative_rms": 0.0063525879069716166,
+            "max_abs": 0.00048828125,
+            "exact_fraction": 0.149658203125
+          },
+          "1/gdn_from_native_norm/linear_attn.in_proj_z": {
+            "pcc": 0.9999995160494266,
+            "relative_rms": 0.000981977492654915,
+            "max_abs": 0.03125,
+            "exact_fraction": 0.8741133840460527
+          },
+          "1/gdn_from_native_norm/gdn_norm_before_gate": {
+            "pcc": 0.9999866097680717,
+            "relative_rms": 0.005723792960517253,
+            "max_abs": 0.0625,
+            "exact_fraction": 0.206298828125
+          },
+          "1/gdn_from_native_norm/gdn_norm_output": {
+            "pcc": 0.99997617097452,
+            "relative_rms": 0.009276080948619975,
+            "max_abs": 0.015625,
+            "exact_fraction": 0.21794048108552633
+          },
+          "1/gdn_from_native_norm/linear_attn.out_proj": {
+            "pcc": 0.999989042692055,
+            "relative_rms": 0.00899045033034587,
+            "max_abs": 0.0625,
+            "exact_fraction": 0.17837685032894737
+          },
+          "1/isolated/scan": {
+            "pcc": 0.9999895461954528,
+            "relative_rms": 0.007437680522692092,
+            "max_abs": 0.00048828125,
+            "exact_fraction": 0.11546566611842106
+          },
+          "1/isolated/gated_norm_before_gate": {
+            "pcc": 0.9999999999999997,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0
+          },
+          "1/isolated/gated_norm": {
+            "pcc": 1.0000000000000029,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0
+          }
+        }
+      }
+    },
+    "encoder-recurrent-sfpu/report.json": {
+      "sha256": "ff77a95e01ec17f2ccace810208b1bbc55c68c1f8b7d2235628e734ddf2e2b2c",
+      "report": {
+        "activation_injection": true,
+        "results": {
+          "0/isolated/recurrent_sfpu": {
+            "pcc": 0.9999999999999792,
+            "relative_rms": 1.9468020210310835e-07,
+            "max_abs": 1.9073486328125e-06,
+            "exact_fraction": 0.9997815583881579
+          },
+          "1/isolated/recurrent_sfpu": {
+            "pcc": 0.9999999999974669,
+            "relative_rms": 2.248704242519552e-06,
+            "max_abs": 4.76837158203125e-07,
+            "exact_fraction": 0.9998586554276315
+          }
+        }
+      }
+    },
+    "encoder-full-all-pointwise-precise/report.json": {
+      "sha256": "8cb76ea234f9de65c82e1cc0a50f2ff4d939398c2cde15eda207dc4796c0fe47",
+      "report": {
+        "activation_injection": false,
+        "diagnostic_only": true,
+        "variant": "FP32 SFPU recurrent GDN replacing chunk algorithm only",
+        "results": {
+          "positive/layer_000.output": {
+            "pcc": 0.9999984089763607,
+            "relative_rms": 0.0018247656390814999,
+            "max_abs": 0.03125
+          },
+          "positive/layer_001.output": {
+            "pcc": 0.9999967214359227,
+            "relative_rms": 0.0025842667943822835,
+            "max_abs": 0.0625
+          },
+          "positive/layer_002.output": {
+            "pcc": 0.9999893525520094,
+            "relative_rms": 0.005116679603039773,
+            "max_abs": 0.125
+          },
+          "positive/layer_003.output": {
+            "pcc": 0.9999871515727415,
+            "relative_rms": 0.005099333084516774,
+            "max_abs": 0.125
+          },
+          "positive/layer_004.output": {
+            "pcc": 0.999981875453973,
+            "relative_rms": 0.006047277957679802,
+            "max_abs": 0.125
+          },
+          "positive/layer_005.output": {
+            "pcc": 0.9999788002425499,
+            "relative_rms": 0.006516046989094872,
+            "max_abs": 0.125
+          },
+          "positive/layer_006.output": {
+            "pcc": 0.9999843080848143,
+            "relative_rms": 0.005649900781987531,
+            "max_abs": 0.125
+          },
+          "positive/layer_007.output": {
+            "pcc": 0.9999750045270956,
+            "relative_rms": 0.007075942202513409,
+            "max_abs": 0.25
+          },
+          "positive/layer_008.output": {
+            "pcc": 0.9999692969671534,
+            "relative_rms": 0.007877443411263882,
+            "max_abs": 0.25
+          },
+          "positive/layer_009.output": {
+            "pcc": 0.999966901230885,
+            "relative_rms": 0.008179092783712049,
+            "max_abs": 0.125
+          },
+          "positive/layer_010.output": {
+            "pcc": 0.9999704402572208,
+            "relative_rms": 0.007700153934377199,
+            "max_abs": 0.25
+          },
+          "positive/layer_011.output": {
+            "pcc": 0.999960433152951,
+            "relative_rms": 0.00890150994602745,
+            "max_abs": 0.25
+          },
+          "positive/layer_012.output": {
+            "pcc": 0.9999543679731807,
+            "relative_rms": 0.009556609072963422,
+            "max_abs": 0.375
+          },
+          "positive/layer_013.output": {
+            "pcc": 0.9999507806484206,
+            "relative_rms": 0.009936272417868357,
+            "max_abs": 0.375
+          },
+          "positive/layer_014.output": {
+            "pcc": 0.9999534352242052,
+            "relative_rms": 0.009650426887614206,
+            "max_abs": 0.375
+          },
+          "positive/layer_015.output": {
+            "pcc": 0.9999429726704939,
+            "relative_rms": 0.010681169262061727,
+            "max_abs": 0.375
+          },
+          "positive/layer_016.output": {
+            "pcc": 0.999936901308787,
+            "relative_rms": 0.011236611024467769,
+            "max_abs": 0.375
+          },
+          "positive/layer_017.output": {
+            "pcc": 0.999930945213005,
+            "relative_rms": 0.011751334140649564,
+            "max_abs": 0.5
+          },
+          "positive/layer_018.output": {
+            "pcc": 0.999943100476476,
+            "relative_rms": 0.010675430160851119,
+            "max_abs": 0.5
+          },
+          "positive/layer_019.output": {
+            "pcc": 0.9999128516331993,
+            "relative_rms": 0.013203348244024898,
+            "max_abs": 0.625
+          },
+          "positive/layer_020.output": {
+            "pcc": 0.999907122977437,
+            "relative_rms": 0.013629199172760622,
+            "max_abs": 0.625
+          },
+          "positive/layer_021.output": {
+            "pcc": 0.9999059932524013,
+            "relative_rms": 0.013720485677021287,
+            "max_abs": 0.75
+          },
+          "positive/layer_022.output": {
+            "pcc": 0.9999248504666141,
+            "relative_rms": 0.012259172689017715,
+            "max_abs": 1.0
+          },
+          "positive/layer_023.output": {
+            "pcc": 0.999901985687701,
+            "relative_rms": 0.014000802839623433,
+            "max_abs": 0.625
+          },
+          "positive/layer_024.output": {
+            "pcc": 0.9998901032810081,
+            "relative_rms": 0.014838041745390888,
+            "max_abs": 1.0
+          },
+          "positive/layer_025.output": {
+            "pcc": 0.9998882026097694,
+            "relative_rms": 0.01495297175942615,
+            "max_abs": 0.5
+          },
+          "positive/layer_026.output": {
+            "pcc": 0.9999202040528875,
+            "relative_rms": 0.0126593550020661,
+            "max_abs": 2.0
+          },
+          "positive/layer_027.output": {
+            "pcc": 0.9998511816495702,
+            "relative_rms": 0.01725215120473573,
+            "max_abs": 1.0
+          },
+          "positive/layer_028.output": {
+            "pcc": 0.9998387587285772,
+            "relative_rms": 0.017956787618215706,
+            "max_abs": 1.25
+          },
+          "positive/layer_029.output": {
+            "pcc": 0.9998313913509518,
+            "relative_rms": 0.018363378052855543,
+            "max_abs": 1.0
+          },
+          "positive/layer_030.output": {
+            "pcc": 0.9998446809065176,
+            "relative_rms": 0.017630375385856153,
+            "max_abs": 1.0
+          },
+          "positive/layer_031.output": {
+            "pcc": 0.9998920970817586,
+            "relative_rms": 0.014696292839498231,
+            "max_abs": 2.0
+          },
+          "positive": {
+            "pcc": 0.999839168752244,
+            "relative_rms": 0.01794052986301825,
+            "max_abs": 0.875,
+            "seconds": 26.035131379961967,
+            "versus_cuda_fullacc": {
+              "pcc": 0.9998049251707398,
+              "relative_rms": 0.01977682853422289,
+              "max_abs": 0.875
+            }
+          },
+          "negative/layer_000.output": {
+            "pcc": 0.9999980685189611,
+            "relative_rms": 0.002082621983113415,
+            "max_abs": 0.03125
+          },
+          "negative/layer_001.output": {
+            "pcc": 0.9999967891962518,
+            "relative_rms": 0.002766643568978937,
+            "max_abs": 0.0625
+          },
+          "negative/layer_002.output": {
+            "pcc": 0.9999939757066014,
+            "relative_rms": 0.004467546855902441,
+            "max_abs": 0.125
+          },
+          "negative/layer_003.output": {
+            "pcc": 0.9999890405875508,
+            "relative_rms": 0.00518165171812498,
+            "max_abs": 0.125
+          },
+          "negative/layer_004.output": {
+            "pcc": 0.9999848637781549,
+            "relative_rms": 0.0058146447507877895,
+            "max_abs": 0.125
+          },
+          "negative/layer_005.output": {
+            "pcc": 0.9999827035936519,
+            "relative_rms": 0.005949780138954177,
+            "max_abs": 0.125
+          },
+          "negative/layer_006.output": {
+            "pcc": 0.9999881114807614,
+            "relative_rms": 0.005434256780851706,
+            "max_abs": 0.25
+          },
+          "negative/layer_007.output": {
+            "pcc": 0.9999746752619751,
+            "relative_rms": 0.007789425533409415,
+            "max_abs": 0.5
+          },
+          "negative/layer_008.output": {
+            "pcc": 0.999972175450914,
+            "relative_rms": 0.008118453292196858,
+            "max_abs": 0.5
+          },
+          "negative/layer_009.output": {
+            "pcc": 0.9999689904565147,
+            "relative_rms": 0.008370799055314628,
+            "max_abs": 0.5
+          },
+          "negative/layer_010.output": {
+            "pcc": 0.9999776287747908,
+            "relative_rms": 0.006866772867426416,
+            "max_abs": 0.5
+          },
+          "negative/layer_011.output": {
+            "pcc": 0.9999711827685696,
+            "relative_rms": 0.007681359081726202,
+            "max_abs": 0.5
+          },
+          "negative/layer_012.output": {
+            "pcc": 0.9999720857658548,
+            "relative_rms": 0.007520512515218463,
+            "max_abs": 0.375
+          },
+          "negative/layer_013.output": {
+            "pcc": 0.9999718310234545,
+            "relative_rms": 0.007540755346224071,
+            "max_abs": 0.25
+          },
+          "negative/layer_014.output": {
+            "pcc": 0.9999682205733841,
+            "relative_rms": 0.008065250108638702,
+            "max_abs": 0.5
+          },
+          "negative/layer_015.output": {
+            "pcc": 0.9999600960507381,
+            "relative_rms": 0.008957727777188004,
+            "max_abs": 0.375
+          },
+          "negative/layer_016.output": {
+            "pcc": 0.9999529219326744,
+            "relative_rms": 0.00973064092025681,
+            "max_abs": 0.375
+          },
+          "negative/layer_017.output": {
+            "pcc": 0.9999471076575923,
+            "relative_rms": 0.010297803876927376,
+            "max_abs": 0.375
+          },
+          "negative/layer_018.output": {
+            "pcc": 0.9999589074836185,
+            "relative_rms": 0.009070906954524335,
+            "max_abs": 0.25
+          },
+          "negative/layer_019.output": {
+            "pcc": 0.9999157565975899,
+            "relative_rms": 0.012978190371418124,
+            "max_abs": 0.3125
+          },
+          "negative/layer_020.output": {
+            "pcc": 0.9999012278943058,
+            "relative_rms": 0.014058058779043234,
+            "max_abs": 0.375
+          },
+          "negative/layer_021.output": {
+            "pcc": 0.9998748139231257,
+            "relative_rms": 0.015821032322974802,
+            "max_abs": 1.0
+          },
+          "negative/layer_022.output": {
+            "pcc": 0.9999042388449643,
+            "relative_rms": 0.013914623514754422,
+            "max_abs": 2.0
+          },
+          "negative/layer_023.output": {
+            "pcc": 0.9998771480326686,
+            "relative_rms": 0.015704244912172323,
+            "max_abs": 1.0
+          },
+          "negative/layer_024.output": {
+            "pcc": 0.9998625689651093,
+            "relative_rms": 0.01665455022623523,
+            "max_abs": 1.5
+          },
+          "negative/layer_025.output": {
+            "pcc": 0.9998596405575171,
+            "relative_rms": 0.016818862151636065,
+            "max_abs": 1.5
+          },
+          "negative/layer_026.output": {
+            "pcc": 0.999915192861956,
+            "relative_rms": 0.013273972708208107,
+            "max_abs": 2.0
+          },
+          "negative/layer_027.output": {
+            "pcc": 0.999786439139642,
+            "relative_rms": 0.020840555142330196,
+            "max_abs": 3.5
+          },
+          "negative/layer_028.output": {
+            "pcc": 0.999744715126649,
+            "relative_rms": 0.022700364043799725,
+            "max_abs": 3.5
+          },
+          "negative/layer_029.output": {
+            "pcc": 0.9997052199398576,
+            "relative_rms": 0.024311159363901973,
+            "max_abs": 3.5
+          },
+          "negative/layer_030.output": {
+            "pcc": 0.9997156700176515,
+            "relative_rms": 0.023849633259361805,
+            "max_abs": 3.0
+          },
+          "negative/layer_031.output": {
+            "pcc": 0.9997675921184339,
+            "relative_rms": 0.02173989286791837,
+            "max_abs": 5.5
+          },
+          "negative": {
+            "pcc": 0.9996706879354039,
+            "relative_rms": 0.025690567120593085,
+            "max_abs": 1.375,
+            "seconds": 25.73296995460987,
+            "versus_cuda_fullacc": {
+              "pcc": 0.9997364267423633,
+              "relative_rms": 0.022959220987628867,
+              "max_abs": 0.875
+            }
+          }
+        }
+      }
+    },
+    "encoder-diagnostic-source-hashes.json": {
+      "sha256": "f23697c4005867dfca5965a2ed94f76feb8ba1dfc60ba4ded03acd18699b15f1",
+      "report": {
+        "encoder_scan_prefixsum.py": "22c4f13c9d3de437af734ee2aa700b065352ff5f0ebbfd6d8179f19da8268cb7",
+        "encoder_matmul_rounding.py": "a43a3aa6b7070368fac8a7dc7979caeb898b26c93f96f99170bc363c993525d5",
+        "encoder_full_recurrent_precise_l1_128.py": "1508315cdf7127f8d6b9d6661ce646d31843e1be0d1948f770ca8b069b332ad9",
+        "encoder_scan_hi_lo.py": "8990aa111a4f3b213109866d1bff573c39293564f79f5008d923f51b058bfbdf",
+        "cuda_linear_rounding.py": "5d3cdcf6db3db4034dcad0c906aa21fce38f5bb307cf0dee2609ee17ad8cfd33",
+        "cuda_encoder_fullacc.py": "ab2afb60fb165ee60aab8df2fde1076e629cc6b77be3142e9a1981d87d1cec9e",
+        "encoder_recurrent_sfpu.py": "80418363c86f669d844c2108bb06b4ec7cd6ed8aada8dbe3bc74d8e312df8754",
+        "encoder_stage_diag.py": "3bbf18480ba9e2745d42fe148482ceddc4a2fa84cb640eec3e54de24244364c3",
+        "encoder_full_recurrent_precise.py": "9219747d94f267a00876f18e48ac8b5ee0d1caf511083b51bcaee86569459279"
+      }
+    },
+    "numeric-subops/report.json": {
+      "sha256": "b8be9bd431329f5b06f56441a78b77813c750f755f4cfc09030ec8744886297d",
+      "report": {
+        "scope": "Isolated native CUDA first-step activations; no model math modified",
+        "results": {
+          "00/situ/CPU_bf16_vs_savedCUDA": {
+            "pcc": 1.0000000000000009,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "00/situ/current": {
+            "pcc": 0.999994563914362,
+            "relative_rms": 0.003711033031884727,
+            "max_abs": 0.25,
+            "exact_fraction": 0.8483481407165527,
+            "gain": 1.0016919494720133,
+            "mean_error": 2.2367721433380616e-07
+          },
+          "00/situ/hidden_div25_current": {
+            "pcc": 0.9999977235279834,
+            "relative_rms": 0.0023501313991928776,
+            "max_abs": 0.001953125,
+            "exact_fraction": 0.8176088333129883,
+            "gain": 1.0009804197374605,
+            "mean_error": -1.4287929533951527e-08
+          },
+          "00/situ/gate_div4_current": {
+            "pcc": 0.9999999999999447,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "00/situ/tanh_hidden_current": {
+            "pcc": 0.9999976164875168,
+            "relative_rms": 0.0024096217758382736,
+            "max_abs": 0.001953125,
+            "exact_fraction": 0.8176007270812988,
+            "gain": 1.0010146699895466,
+            "mean_error": -1.2890945672028309e-08
+          },
+          "00/situ/sigmoid_current": {
+            "pcc": 0.9995778913777781,
+            "relative_rms": 0.0015511408329476242,
+            "max_abs": 0.00390625,
+            "exact_fraction": 0.9081053733825684,
+            "gain": 1.0001250085598206,
+            "mean_error": 6.944569759070873e-05
+          },
+          "00/situ/hidden_div25_fp32_then_bf16": {
+            "pcc": 1.0000000000001017,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "00/situ/all_ops_fp32_then_bf16": {
+            "pcc": 1.0000000000000009,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "00/situ/only_div25_fp32": {
+            "pcc": 0.9999956986205398,
+            "relative_rms": 0.003112900231575495,
+            "max_abs": 0.25,
+            "exact_fraction": 0.9311819076538086,
+            "gain": 1.0010341865467667,
+            "mean_error": 2.432714162753369e-07
+          },
+          "21/situ/CPU_bf16_vs_savedCUDA": {
+            "pcc": 1.000000000000006,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "21/situ/current": {
+            "pcc": 0.9999902808425081,
+            "relative_rms": 0.005352878655487702,
+            "max_abs": 0.5,
+            "exact_fraction": 0.8002471923828125,
+            "gain": 1.0030162019905837,
+            "mean_error": 6.301291892718552e-07
+          },
+          "21/situ/hidden_div25_current": {
+            "pcc": 0.9999977115533608,
+            "relative_rms": 0.002357779821304187,
+            "max_abs": 0.00390625,
+            "exact_fraction": 0.8176751136779785,
+            "gain": 1.000986525749835,
+            "mean_error": -8.912770799174297e-08
+          },
+          "21/situ/gate_div4_current": {
+            "pcc": 1.0000000000000149,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "21/situ/tanh_hidden_current": {
+            "pcc": 0.9999976982348155,
+            "relative_rms": 0.0023652161565289806,
+            "max_abs": 0.00390625,
+            "exact_fraction": 0.8176589012145996,
+            "gain": 1.00099077035602,
+            "mean_error": -9.052469185366618e-08
+          },
+          "21/situ/sigmoid_current": {
+            "pcc": 0.9999505304727254,
+            "relative_rms": 0.001715562402191204,
+            "max_abs": 0.00390625,
+            "exact_fraction": 0.8870019912719727,
+            "gain": 1.0000080639556816,
+            "mean_error": 7.515598554164171e-06
+          },
+          "21/situ/hidden_div25_fp32_then_bf16": {
+            "pcc": 0.9999999999999225,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "21/situ/all_ops_fp32_then_bf16": {
+            "pcc": 1.000000000000006,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "21/situ/only_div25_fp32": {
+            "pcc": 0.9999977960146678,
+            "relative_rms": 0.002113818570673854,
+            "max_abs": 0.015625,
+            "exact_fraction": 0.8769946098327637,
+            "gain": 1.00024116959719,
+            "mean_error": 1.346275338987013e-07
+          },
+          "41/situ/CPU_bf16_vs_savedCUDA": {
+            "pcc": 0.9999999999998889,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "41/situ/current": {
+            "pcc": 0.9999928036931708,
+            "relative_rms": 0.003915964908946177,
+            "max_abs": 0.75,
+            "exact_fraction": 0.785642147064209,
+            "gain": 1.0009572394268647,
+            "mean_error": 1.0039343111056809e-05
+          },
+          "41/situ/hidden_div25_current": {
+            "pcc": 0.9999976309298345,
+            "relative_rms": 0.002397589312970268,
+            "max_abs": 0.015625,
+            "exact_fraction": 0.817631721496582,
+            "gain": 1.001001176127953,
+            "mean_error": -7.776914129065116e-07
+          },
+          "41/situ/gate_div4_current": {
+            "pcc": 0.9999999999997805,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "41/situ/tanh_hidden_current": {
+            "pcc": 0.9999967445377074,
+            "relative_rms": 0.002875417493296562,
+            "max_abs": 0.00390625,
+            "exact_fraction": 0.8087954521179199,
+            "gain": 1.0013198536891033,
+            "mean_error": -8.016729692028601e-07
+          },
+          "41/situ/sigmoid_current": {
+            "pcc": 0.9999921881425767,
+            "relative_rms": 0.0012803250887322465,
+            "max_abs": 0.00390625,
+            "exact_fraction": 0.9207057952880859,
+            "gain": 0.9999446036965719,
+            "mean_error": -3.25112882819667e-05
+          },
+          "41/situ/hidden_div25_fp32_then_bf16": {
+            "pcc": 1.0000000000000553,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "41/situ/all_ops_fp32_then_bf16": {
+            "pcc": 0.9999999999998889,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "41/situ/only_div25_fp32": {
+            "pcc": 0.9999954371447014,
+            "relative_rms": 0.0030244701231697197,
+            "max_abs": 0.75,
+            "exact_fraction": 0.8632798194885254,
+            "gain": 1.0001412830223475,
+            "mean_error": 3.124154161371351e-05
+          },
+          "00/rope/q": {
+            "pcc": 0.9999956401854171,
+            "relative_rms": 0.003281016312286951,
+            "max_abs": 0.0625,
+            "exact_fraction": 0.7874163850496152,
+            "gain": 1.0014218798335532,
+            "mean_error": -3.8068531644626784e-07
+          },
+          "00/rope/k": {
+            "pcc": 0.9999956324884949,
+            "relative_rms": 0.0032818890417529176,
+            "max_abs": 0.0625,
+            "exact_fraction": 0.7880381575283516,
+            "gain": 1.0014181418455055,
+            "mean_error": 1.4504578547139565e-05
+          },
+          "00/attention/native/exp_approx_True": {
+            "pcc": 0.9999613195886079,
+            "relative_rms": 0.010431581998980909,
+            "max_abs": 0.25,
+            "exact_fraction": 0.1818309538274605,
+            "gain": 1.0055310790729148,
+            "mean_error": -2.3201590353196768e-05,
+            "seconds": 1.6399971768260002
+          },
+          "00/attention/native/exp_approx_False": {
+            "pcc": 0.9999744413005914,
+            "relative_rms": 0.009163584320143489,
+            "max_abs": 0.09375,
+            "exact_fraction": 0.20128610393884164,
+            "gain": 1.0056805683412455,
+            "mean_error": -1.7030266017148892e-05,
+            "seconds": 1.6349500007927418
+          },
+          "00/attention/native/exact_vs_approx": {
+            "pcc": 0.999967615207266,
+            "relative_rms": 0.008049641085025223,
+            "max_abs": 0.25,
+            "exact_fraction": 0.25940244975192384,
+            "gain": 1.0001031533499136,
+            "mean_error": 6.1713243360478776e-06
+          },
+          "00/attention/host_bf16_formula/exp_approx_True": {
+            "pcc": 0.9999623473808706,
+            "relative_rms": 0.010140840974132778,
+            "max_abs": 0.25,
+            "exact_fraction": 0.18776413464459296,
+            "gain": 1.005171520694316,
+            "mean_error": -2.305162815669836e-05,
+            "seconds": 0.18372029811143875
+          },
+          "00/attention/host_bf16_formula/exp_approx_False": {
+            "pcc": 0.9999766466074367,
+            "relative_rms": 0.008690759323931343,
+            "max_abs": 0.109375,
+            "exact_fraction": 0.22265545894086675,
+            "gain": 1.0053218119165526,
+            "mean_error": -1.729259682451738e-05,
+            "seconds": 0.194588340818882
+          },
+          "00/attention/host_bf16_formula/exact_vs_approx": {
+            "pcc": 0.999967684064302,
+            "relative_rms": 0.00804107287556985,
+            "max_abs": 0.25,
+            "exact_fraction": 0.2593838598622924,
+            "gain": 1.0001028955728712,
+            "mean_error": 5.7590313321809804e-06
+          },
+          "21/rope/q": {
+            "pcc": 0.9999969176571355,
+            "relative_rms": 0.002659943985976775,
+            "max_abs": 0.0625,
+            "exact_fraction": 0.7853034661046983,
+            "gain": 1.0009482024351244,
+            "mean_error": 2.4334457919828417e-05
+          },
+          "21/rope/k": {
+            "pcc": 0.99999675413733,
+            "relative_rms": 0.0027429692936055084,
+            "max_abs": 0.125,
+            "exact_fraction": 0.7854650794856217,
+            "gain": 1.0010090355381243,
+            "mean_error": 5.1521535837587534e-05
+          },
+          "21/attention/native/exp_approx_True": {
+            "pcc": 0.9999318974625027,
+            "relative_rms": 0.01169456912457284,
+            "max_abs": 0.25,
+            "exact_fraction": 0.1386070081510733,
+            "gain": 1.0006213785446199,
+            "mean_error": 2.0921639506114363e-05,
+            "seconds": 0.19425814598798752
+          },
+          "21/attention/native/exp_approx_False": {
+            "pcc": 0.9999742041006452,
+            "relative_rms": 0.007830821379624223,
+            "max_abs": 0.25,
+            "exact_fraction": 0.2805022909072499,
+            "gain": 1.003068369397837,
+            "mean_error": 3.1656250336024604e-05,
+            "seconds": 0.18296754360198975
+          },
+          "21/attention/native/exact_vs_approx": {
+            "pcc": 0.999948671776075,
+            "relative_rms": 0.01042441732697367,
+            "max_abs": 0.375,
+            "exact_fraction": 0.16754474230457675,
+            "gain": 1.0023516169652578,
+            "mean_error": 1.0734610829910245e-05
+          },
+          "21/attention/host_bf16_formula/exp_approx_True": {
+            "pcc": 0.9999371553179897,
+            "relative_rms": 0.011223678875347375,
+            "max_abs": 0.25,
+            "exact_fraction": 0.14867806108242204,
+            "gain": 0.999329901495019,
+            "mean_error": 1.0007845630986305e-05,
+            "seconds": 0.18609056435525417
+          },
+          "21/attention/host_bf16_formula/exp_approx_False": {
+            "pcc": 0.9999815805089897,
+            "relative_rms": 0.006337426765539047,
+            "max_abs": 0.125,
+            "exact_fraction": 0.34394230647529367,
+            "gain": 1.0017871771055016,
+            "mean_error": 2.2925790424035372e-05,
+            "seconds": 0.18530724942684174
+          },
+          "21/attention/host_bf16_formula/exact_vs_approx": {
+            "pcc": 0.9999484703467162,
+            "relative_rms": 0.010446434875902197,
+            "max_abs": 0.375,
+            "exact_fraction": 0.16767542527339005,
+            "gain": 1.002362742771767,
+            "mean_error": 1.2917944793049065e-05
+          },
+          "41/rope/q": {
+            "pcc": 0.9999968095918844,
+            "relative_rms": 0.0026702231561739893,
+            "max_abs": 1.0,
+            "exact_fraction": 0.7869868399402592,
+            "gain": 1.000859218807043,
+            "mean_error": 4.6141406163868805e-05
+          },
+          "41/rope/k": {
+            "pcc": 0.9999966346647188,
+            "relative_rms": 0.0027586440306253276,
+            "max_abs": 1.0,
+            "exact_fraction": 0.7864828561664642,
+            "gain": 1.0009311397669842,
+            "mean_error": 7.858018617582523e-05
+          },
+          "41/attention/native/exp_approx_True": {
+            "pcc": 0.9996104731307918,
+            "relative_rms": 0.027969466858616468,
+            "max_abs": 26.75,
+            "exact_fraction": 0.2327560974837991,
+            "gain": 1.001190487295587,
+            "mean_error": 0.00010148563423927894,
+            "seconds": 0.18265662901103497
+          },
+          "41/attention/native/exp_approx_False": {
+            "pcc": 0.9997049662401336,
+            "relative_rms": 0.024371459147912045,
+            "max_abs": 32.5,
+            "exact_fraction": 0.26549415881936006,
+            "gain": 1.0014973512753198,
+            "mean_error": 9.613296714838808e-05,
+            "seconds": 0.18333114124834538
+          },
+          "41/attention/native/exact_vs_approx": {
+            "pcc": 0.9998433943444,
+            "relative_rms": 0.017695334156303495,
+            "max_abs": 23.46875,
+            "exact_fraction": 0.3300031325941677,
+            "gain": 1.0000554693138815,
+            "mean_error": -5.352667090890844e-06
+          },
+          "41/attention/host_bf16_formula/exp_approx_True": {
+            "pcc": 0.9998320689442067,
+            "relative_rms": 0.01840033551813206,
+            "max_abs": 26.21875,
+            "exact_fraction": 0.27187088649250707,
+            "gain": 1.0013820197615282,
+            "mean_error": -0.00041633837100707357,
+            "seconds": 0.17835837230086327
+          },
+          "41/attention/host_bf16_formula/exp_approx_False": {
+            "pcc": 0.9999802536172706,
+            "relative_rms": 0.006530508577992138,
+            "max_abs": 3.625,
+            "exact_fraction": 0.35627365266808425,
+            "gain": 1.0017437634705697,
+            "mean_error": -0.000390373256037764,
+            "seconds": 0.1815536767244339
+          },
+          "41/attention/host_bf16_formula/exact_vs_approx": {
+            "pcc": 0.999842075741617,
+            "relative_rms": 0.017769668761395917,
+            "max_abs": 23.46875,
+            "exact_fraction": 0.3283846256075334,
+            "gain": 1.0000552395137676,
+            "mean_error": 2.5965114969309497e-05
+          }
+        },
+        "status": "complete"
+      }
+    },
+    "numeric-subops/attention-chunks32.json": {
+      "sha256": "9b33376be67855096cbdf98b37c5963cd0dbce97d229d9ecdafadf23f09afa2b",
+      "report": {
+        "scope": "Isolated native CUDA first-step activations; no model math modified",
+        "results": {
+          "00/rope/q": {
+            "pcc": 0.9999956401854171,
+            "relative_rms": 0.003281016312286951,
+            "max_abs": 0.0625,
+            "exact_fraction": 0.7874163850496152,
+            "gain": 1.0014218798335532,
+            "mean_error": -3.8068531644626784e-07
+          },
+          "00/rope/k": {
+            "pcc": 0.9999956324884949,
+            "relative_rms": 0.0032818890417529176,
+            "max_abs": 0.0625,
+            "exact_fraction": 0.7880381575283516,
+            "gain": 1.0014181418455055,
+            "mean_error": 1.4504578547139565e-05
+          },
+          "00/rope/manual_q": {
+            "pcc": 1.0000000000003304,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "00/rope/manual_k": {
+            "pcc": 1.0000000000009486,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "00/attention/native/exp_approx_True": {
+            "pcc": 0.9998653478660217,
+            "relative_rms": 0.021949603070577237,
+            "max_abs": 0.1875,
+            "exact_fraction": 0.06047275275921426,
+            "gain": 1.0143052281611664,
+            "mean_error": -8.28056872822793e-05,
+            "seconds": 0.19412595219910145
+          },
+          "00/attention/native/exp_approx_False": {
+            "pcc": 0.9998781256310629,
+            "relative_rms": 0.022396354269280536,
+            "max_abs": 0.1875,
+            "exact_fraction": 0.054587510125556904,
+            "gain": 1.0158117213162003,
+            "mean_error": -7.972778774546823e-05,
+            "seconds": 0.19058499485254288
+          },
+          "00/attention/native/exact_vs_approx": {
+            "pcc": 0.9999614747824188,
+            "relative_rms": 0.008906839470039372,
+            "max_abs": 0.25,
+            "exact_fraction": 0.21920936803867963,
+            "gain": 1.0014338647557726,
+            "mean_error": 3.0778995368110754e-06
+          },
+          "00/attention/manual_tt/exp_approx_True": {
+            "pcc": 0.9998654207986467,
+            "relative_rms": 0.021722820660010984,
+            "max_abs": 0.1875,
+            "exact_fraction": 0.062486472888821386,
+            "gain": 1.0139667505853471,
+            "mean_error": -8.286638219055111e-05,
+            "seconds": 0.173459367826581
+          },
+          "00/attention/manual_tt/exp_approx_False": {
+            "pcc": 0.9998796290340639,
+            "relative_rms": 0.022078638685065325,
+            "max_abs": 0.203125,
+            "exact_fraction": 0.057189303614823814,
+            "gain": 1.015464573085954,
+            "mean_error": -8.040554353306834e-05,
+            "seconds": 0.18807229585945606
+          },
+          "00/attention/manual_tt/exact_vs_approx": {
+            "pcc": 0.9999615365282413,
+            "relative_rms": 0.00889828697613162,
+            "max_abs": 0.25,
+            "exact_fraction": 0.2193234387656946,
+            "gain": 1.0014244391198097,
+            "mean_error": 2.460838657482772e-06
+          },
+          "21/rope/q": {
+            "pcc": 0.9999969176571355,
+            "relative_rms": 0.002659943985976775,
+            "max_abs": 0.0625,
+            "exact_fraction": 0.7853034661046983,
+            "gain": 1.0009482024351244,
+            "mean_error": 2.4334457919828417e-05
+          },
+          "21/rope/k": {
+            "pcc": 0.99999675413733,
+            "relative_rms": 0.0027429692936055084,
+            "max_abs": 0.125,
+            "exact_fraction": 0.7854650794856217,
+            "gain": 1.0010090355381243,
+            "mean_error": 5.1521535837587534e-05
+          },
+          "21/rope/manual_q": {
+            "pcc": 0.999999999999691,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "21/rope/manual_k": {
+            "pcc": 1.0000000000004632,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "21/attention/native/exp_approx_True": {
+            "pcc": 0.9998994114192845,
+            "relative_rms": 0.014187522472342678,
+            "max_abs": 0.25,
+            "exact_fraction": 0.12115743026022681,
+            "gain": 1.0001591834420946,
+            "mean_error": 4.979638255538131e-05,
+            "seconds": 0.1807316206395626
+          },
+          "21/attention/native/exp_approx_False": {
+            "pcc": 0.9999356335078956,
+            "relative_rms": 0.01181246990535837,
+            "max_abs": 0.25,
+            "exact_fraction": 0.23111789312474687,
+            "gain": 1.0031590295365047,
+            "mean_error": 6.380677528433084e-05,
+            "seconds": 0.1790088675916195
+          },
+          "21/attention/native/exact_vs_approx": {
+            "pcc": 0.9999463456623926,
+            "relative_rms": 0.010788712053308277,
+            "max_abs": 0.375,
+            "exact_fraction": 0.1597791521111786,
+            "gain": 1.0029092302340974,
+            "mean_error": 1.4010392728949533e-05
+          },
+          "21/attention/manual_tt/exp_approx_True": {
+            "pcc": 0.999903030401078,
+            "relative_rms": 0.013955763958846646,
+            "max_abs": 0.25,
+            "exact_fraction": 0.1250053000961928,
+            "gain": 0.9988870759279459,
+            "mean_error": 4.0361293282606915e-05,
+            "seconds": 0.17311632074415684
+          },
+          "21/attention/manual_tt/exp_approx_False": {
+            "pcc": 0.9999417266821571,
+            "relative_rms": 0.010980380879112815,
+            "max_abs": 0.203125,
+            "exact_fraction": 0.2616695461219117,
+            "gain": 1.0018908464984404,
+            "mean_error": 5.4914017062593596e-05,
+            "seconds": 0.1779900062829256
+          },
+          "21/attention/manual_tt/exact_vs_approx": {
+            "pcc": 0.999946241661956,
+            "relative_rms": 0.010799847956823524,
+            "max_abs": 0.375,
+            "exact_fraction": 0.15994748949473472,
+            "gain": 1.0029143927491708,
+            "mean_error": 1.4552723779986678e-05
+          },
+          "41/rope/q": {
+            "pcc": 0.9999968095918844,
+            "relative_rms": 0.0026702231561739893,
+            "max_abs": 1.0,
+            "exact_fraction": 0.7869868399402592,
+            "gain": 1.000859218807043,
+            "mean_error": 4.6141406163868805e-05
+          },
+          "41/rope/k": {
+            "pcc": 0.9999966346647188,
+            "relative_rms": 0.0027586440306253276,
+            "max_abs": 1.0,
+            "exact_fraction": 0.7864828561664642,
+            "gain": 1.0009311397669842,
+            "mean_error": 7.858018617582523e-05
+          },
+          "41/rope/manual_q": {
+            "pcc": 1.0000000000001474,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "41/rope/manual_k": {
+            "pcc": 1.0000000000003644,
+            "relative_rms": 0.0,
+            "max_abs": 0.0,
+            "exact_fraction": 1.0,
+            "gain": 1.0,
+            "mean_error": 0.0
+          },
+          "41/attention/native/exp_approx_True": {
+            "pcc": 0.9995489472658844,
+            "relative_rms": 0.03023724288068997,
+            "max_abs": 26.75,
+            "exact_fraction": 0.1900396162413933,
+            "gain": 1.002697120580591,
+            "mean_error": -0.0009574537044912308,
+            "seconds": 0.16131485998630524
+          },
+          "41/attention/native/exp_approx_False": {
+            "pcc": 0.9996495056796453,
+            "relative_rms": 0.026723973148680844,
+            "max_abs": 32.5,
+            "exact_fraction": 0.21332752695929527,
+            "gain": 1.0030060325512618,
+            "mean_error": -0.0006093700245637814,
+            "seconds": 0.1638740785419941
+          },
+          "41/attention/native/exact_vs_approx": {
+            "pcc": 0.9998286853317586,
+            "relative_rms": 0.018507502654719107,
+            "max_abs": 23.46875,
+            "exact_fraction": 0.28637653781895506,
+            "gain": 1.0000362787960417,
+            "mean_error": 0.0003480836799274493
+          },
+          "41/attention/manual_tt/exp_approx_True": {
+            "pcc": 0.9997758878643,
+            "relative_rms": 0.021425982116026487,
+            "max_abs": 26.21875,
+            "exact_fraction": 0.22064347914135277,
+            "gain": 1.002895234895862,
+            "mean_error": -0.0014750411845635791,
+            "seconds": 0.1623565685003996
+          },
+          "41/attention/manual_tt/exp_approx_False": {
+            "pcc": 0.9999238391947886,
+            "relative_rms": 0.012800900707915517,
+            "max_abs": 3.625,
+            "exact_fraction": 0.29385623924159576,
+            "gain": 1.003259823923946,
+            "mean_error": -0.0010922451845344974,
+            "seconds": 0.16508176177740097
+          },
+          "41/attention/manual_tt/exact_vs_approx": {
+            "pcc": 0.9998275061011251,
+            "relative_rms": 0.01857123635662225,
+            "max_abs": 23.46875,
+            "exact_fraction": 0.2849922634416768,
+            "gain": 1.0000431911628997,
+            "mean_error": 0.00038279600002908174
+          }
+        },
+        "status": "complete"
+      }
+    },
+    "numeric-subops/rounding_ties.json": {
+      "sha256": "3a4134e94ba02562a04587381724852f2840e163213ffbbda9a362d6c0a2077f",
+      "report": {
+        "input_a": [
+          1.0,
+          1.0078125,
+          1.015625,
+          1.0234375,
+          -1.0,
+          -1.0078125,
+          -1.015625,
+          -1.0234375
+        ],
+        "input_b": [
+          0.00390625,
+          0.00390625,
+          0.00390625,
+          0.00390625,
+          -0.00390625,
+          -0.00390625,
+          -0.00390625,
+          -0.00390625
+        ],
+        "exact_sum": [
+          1.00390625,
+          1.01171875,
+          1.01953125,
+          1.02734375,
+          -1.00390625,
+          -1.01171875,
+          -1.01953125,
+          -1.02734375
+        ],
+        "torch_bf16": [
+          1.0,
+          1.015625,
+          1.015625,
+          1.03125,
+          -1.0,
+          -1.015625,
+          -1.015625,
+          -1.03125
+        ],
+        "tt_direct": [
+          1.0078125,
+          1.015625,
+          1.0234375,
+          1.03125,
+          -1.0078125,
+          -1.015625,
+          -1.0234375,
+          -1.03125
+        ],
+        "tt_fp32_then_bf16": [
+          1.0,
+          1.015625,
+          1.015625,
+          1.03125,
+          -1.0,
+          -1.015625,
+          -1.015625,
+          -1.03125
+        ]
+      }
+    },
+    "numeric-subops/rope-cuda-verification.json": {
+      "sha256": "be69b77268e0b2c191dfb6bc5f5615686701aad1b451a3df5bc1f08edeeadebc",
+      "report": {
+        "00/q": {
+          "bitwise_equal": true,
+          "max_abs": 0.0
+        },
+        "00/k": {
+          "bitwise_equal": true,
+          "max_abs": 0.0
+        },
+        "21/q": {
+          "bitwise_equal": true,
+          "max_abs": 0.0
+        },
+        "21/k": {
+          "bitwise_equal": true,
+          "max_abs": 0.0
+        },
+        "41/q": {
+          "bitwise_equal": true,
+          "max_abs": 0.0
+        },
+        "41/k": {
+          "bitwise_equal": true,
+          "max_abs": 0.0
+        }
+      }
+    },
+    "numeric-subops/teacherforce-SFT-all-bf16ops.json": {
+      "sha256": "8ad67bcd1afb61f202e6ebef45d84e396abaa378b5f5ba99e0e1470277bc9ae5",
+      "report": {
+        "activation_injection": true,
+        "integrated_test": false,
+        "scope": "Teacher-forced complete DiT forward at selected CUDA trajectory steps",
+        "checkpoint": "/home/user/Projects/moss-image/checkpoints/SFT",
+        "capture": "/home/user/Projects/moss-image/captures/cuda-SFT-1024-50",
+        "cards": 1,
+        "verified_checkpoint_files": {
+          "transformer/config.json": {
+            "sha256": "3291c3a1c7adc22b8182a0de25ca8ec97474d72715ce84adbab09cc0be24f666",
+            "bytes": 240
+          },
+          "transformer/diffusion_pytorch_model-00001-of-00003.safetensors": {
+            "sha256": "e40d3444940a0b0fd7cd45ba7959a5bd3d5efd7ddf87aae5ce4d87ce8aa03d01",
+            "bytes": 4991978016
+          },
+          "transformer/diffusion_pytorch_model-00002-of-00003.safetensors": {
+            "sha256": "d106da790ec2924ffd8af04b4ffa8f8de281a974b58e55649c3ec596dc8ef033",
+            "bytes": 4983137016
+          },
+          "transformer/diffusion_pytorch_model-00003-of-00003.safetensors": {
+            "sha256": "11f637ab17c7093344a6110a1e87ffda8e56558dc55183d8e790222cfcdcf52d",
+            "bytes": 189549184
+          },
+          "transformer/diffusion_pytorch_model.safetensors.index.json": {
+            "sha256": "b609327fc75dbe5080e7e095d8b727d74d728b4f98e8b047133b0082cfa2fb03",
+            "bytes": 40298
+          }
+        },
+        "results": {
+          "step_000/positive": {
+            "pcc": 0.9999552546714687,
+            "relative_rms": 0.010192117017404733,
+            "max_absolute_error": 0.0625,
+            "seconds_including_weight_upload_and_comparison": 16.77588258497417
+          },
+          "step_000/negative": {
+            "pcc": 0.9999661492514481,
+            "relative_rms": 0.009352394090474113,
+            "max_absolute_error": 0.0625,
+            "seconds_including_weight_upload_and_comparison": 4.213409489020705
+          },
+          "step_049/positive": {
+            "pcc": 0.9996762998372135,
+            "relative_rms": 0.025417678109059424,
+            "max_absolute_error": 0.369140625,
+            "seconds_including_weight_upload_and_comparison": 3.983410220593214
+          },
+          "step_049/negative": {
+            "pcc": 0.9996779807769635,
+            "relative_rms": 0.0253475204370116,
+            "max_absolute_error": 0.4228515625,
+            "seconds_including_weight_upload_and_comparison": 3.7544527612626553
+          },
+          "step_000/host_combined_guided_velocity": {
+            "pcc": 0.9996008982859057,
+            "relative_rms": 0.02831493579841959,
+            "max_absolute_error": 0.1875
+          },
+          "step_049/host_combined_guided_velocity": {
+            "pcc": 0.9971264758129899,
+            "relative_rms": 0.07565452028457144,
+            "max_absolute_error": 0.916015625
+          }
+        },
+        "status": "complete",
+        "environment": {
+          "ttnn": "0.1.dev1+ggec74d3b",
+          "torch": "2.11.0+cpu",
+          "ttnn_module": "/home/user/Projects/voxcpm2-review-20261016/tt-metal/ttnn/ttnn/__init__.py"
+        },
+        "source_sha256": {
+          "tt/dit.py": "fb5d12cab62543b8de1a7e8d2c2f7aa58b3f37bca1172ffaa1df3931e990c7af",
+          "validation/dit_validate.py": "e62387da24ece1654560e89cfedee343f37a260873f7b70c9376d2e83f248337"
+        }
+      }
+    },
+    "pr-bias-projection-diagnostic.json": {
+      "sha256": "937a4587b54590c58f3b028c44bae88017c73adb0793725c44b0ab0db6b4a081",
+      "report": {
+        "shared_block_modulation": {
+          "current_separate_bf16_bias": {
+            "pcc": 0.999997029994404,
+            "relative_rms": 0.0025188931745372006,
+            "max_absolute_error": 0.125
+          },
+          "fp32_matmul_bias_then_bf16": {
+            "pcc": 0.9999999005280492,
+            "relative_rms": 0.0004439895937370739,
+            "max_absolute_error": 0.015625
+          },
+          "ttnn_linear_fused_bias": {
+            "pcc": 0.9999998904533693,
+            "relative_rms": 0.0004661708095011763,
+            "max_absolute_error": 0.015625
+          }
+        },
+        "video_head_modulation": {
+          "current_separate_bf16_bias": {
+            "pcc": 0.9999970697573791,
+            "relative_rms": 0.0025796907293633036,
+            "max_absolute_error": 0.03125
+          },
+          "fp32_matmul_bias_then_bf16": {
+            "pcc": 0.9999999719311095,
+            "relative_rms": 0.0002314578577455921,
+            "max_absolute_error": 0.00390625
+          },
+          "ttnn_linear_fused_bias": {
+            "pcc": 0.9999998502707098,
+            "relative_rms": 0.000538282406440763,
+            "max_absolute_error": 0.0078125
+          }
+        },
+        "video_embedder": {
+          "current_separate_bf16_bias": {
+            "pcc": 0.9999958902255686,
+            "relative_rms": 0.0028979670139363473,
+            "max_absolute_error": 0.125
+          },
+          "fp32_matmul_bias_then_bf16": {
+            "pcc": 0.9999994467451732,
+            "relative_rms": 0.0010530129310370262,
+            "max_absolute_error": 0.125
+          },
+          "ttnn_linear_fused_bias": {
+            "pcc": 0.9999992492438181,
+            "relative_rms": 0.001226539321226401,
+            "max_absolute_error": 0.125
+          }
+        }
+      }
+    },
+    "numeric-subops/teacherforce-SFT-all-bf16ops-bias.json": {
+      "sha256": "e8c7a29ec7913a7805d3aa2a88a4307f077cdf77d8adcab61088de71b4570938",
+      "report": {
+        "activation_injection": true,
+        "integrated_test": false,
+        "scope": "Teacher-forced complete DiT forward at selected CUDA trajectory steps",
+        "checkpoint": "/home/user/Projects/moss-image/checkpoints/SFT",
+        "capture": "/home/user/Projects/moss-image/captures/cuda-SFT-1024-50",
+        "cards": 1,
+        "verified_checkpoint_files": {
+          "transformer/config.json": {
+            "sha256": "3291c3a1c7adc22b8182a0de25ca8ec97474d72715ce84adbab09cc0be24f666",
+            "bytes": 240
+          },
+          "transformer/diffusion_pytorch_model-00001-of-00003.safetensors": {
+            "sha256": "e40d3444940a0b0fd7cd45ba7959a5bd3d5efd7ddf87aae5ce4d87ce8aa03d01",
+            "bytes": 4991978016
+          },
+          "transformer/diffusion_pytorch_model-00002-of-00003.safetensors": {
+            "sha256": "d106da790ec2924ffd8af04b4ffa8f8de281a974b58e55649c3ec596dc8ef033",
+            "bytes": 4983137016
+          },
+          "transformer/diffusion_pytorch_model-00003-of-00003.safetensors": {
+            "sha256": "11f637ab17c7093344a6110a1e87ffda8e56558dc55183d8e790222cfcdcf52d",
+            "bytes": 189549184
+          },
+          "transformer/diffusion_pytorch_model.safetensors.index.json": {
+            "sha256": "b609327fc75dbe5080e7e095d8b727d74d728b4f98e8b047133b0082cfa2fb03",
+            "bytes": 40298
+          }
+        },
+        "results": {
+          "step_000/positive": {
+            "pcc": 0.9999620388697722,
+            "relative_rms": 0.00975418944774983,
+            "max_absolute_error": 0.0625,
+            "seconds_including_weight_upload_and_comparison": 22.018060827627778
+          },
+          "step_000/negative": {
+            "pcc": 0.9999736939989453,
+            "relative_rms": 0.008789959651013708,
+            "max_absolute_error": 0.0625,
+            "seconds_including_weight_upload_and_comparison": 4.142080303281546
+          },
+          "step_049/positive": {
+            "pcc": 0.9997394097779646,
+            "relative_rms": 0.022843659390152884,
+            "max_absolute_error": 0.21923828125,
+            "seconds_including_weight_upload_and_comparison": 3.859957290813327
+          },
+          "step_049/negative": {
+            "pcc": 0.999732634607351,
+            "relative_rms": 0.02316154359242949,
+            "max_absolute_error": 0.26171875,
+            "seconds_including_weight_upload_and_comparison": 3.7367434184998274
+          },
+          "step_000/host_combined_guided_velocity": {
+            "pcc": 0.9996289106182116,
+            "relative_rms": 0.027338333062927787,
+            "max_absolute_error": 0.15625
+          },
+          "step_049/host_combined_guided_velocity": {
+            "pcc": 0.9972778816703325,
+            "relative_rms": 0.07366913307843885,
+            "max_absolute_error": 0.703125
+          }
+        },
+        "status": "complete",
+        "environment": {
+          "ttnn": "0.1.dev1+ggec74d3b",
+          "torch": "2.11.0+cpu",
+          "ttnn_module": "/home/user/Projects/voxcpm2-review-20261016/tt-metal/ttnn/ttnn/__init__.py"
+        },
+        "source_sha256": {
+          "tt/dit.py": "fb5d12cab62543b8de1a7e8d2c2f7aa58b3f37bca1172ffaa1df3931e990c7af",
+          "validation/dit_validate.py": "e62387da24ece1654560e89cfedee343f37a260873f7b70c9376d2e83f248337"
+        }
+      }
+    }
+  }
+}

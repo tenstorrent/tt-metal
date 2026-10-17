@@ -117,6 +117,46 @@ The initial CUDA capture used PyTorch's default BF16 matmul reduction policy. A 
 
 Disabling reduced-precision reductions changes native CUDA conditioning by 1.7555% positive / 2.1785% negative relative RMS and produces a substantial final-image difference even without TT. This demonstrates sensitivity to arithmetic policy, but **does not fix the TT/CUDA discrepancy**. It is not evidence that either backend's output can be declared accurate merely by choosing a different reference. Precision flags must be recorded and kept explicit, and both the historical and controlled results must remain visible. [Raw precision-policy comparison](results/2026-10-17-cuda-precision-policy.json) includes conditioning, first prediction, final latent and final pixel readings, plus the new reference manifest hashes.
 
+## Proven arithmetic differences and candidate corrections
+
+Fixed-input replays identified concrete arithmetic mismatches, beyond the general observation of denoising sensitivity. The following results are diagnostic alternatives on the historical native runtime. They do not assert that these changes have passed a corrected independent integrated run or current-main device suite. [Raw arithmetic diagnostic evidence](results/2026-10-17-arithmetic-diagnostics.json) preserves individual readings and source-file hashes.
+
+**BF16 pointwise rounding:** direct TT BF16 addition differs from PyTorch at exact halfway values. For example, `1 + 0.00390625` produces `1.0078125` on the tested direct TT path and `1.0` with PyTorch's nearest-even rounding. TT FP32 computation followed by BF16 conversion produces `1.0`, matching PyTorch. The paired positive/negative test values in `rounding_ties.json` establish this as an arithmetic-contract difference rather than a random generation discrepancy. This statement applies to the measured direct pointwise path, not every TT conversion or matmul implementation.
+
+Applying FP32 intermediates with BF16 conversion at the corresponding reference boundaries makes the following encoder operations bitwise equal on captured native inputs:
+
+| Encoder component | Original relative RMS, layer 0 / layer 1 | Corrected fixed-input relative RMS |
+|---|---:|---:|
+| Convolution SiLU | 0.0239% / 0.1790% | 0% / 0% |
+| SwiGLU | 0.1327% / 0.1602% | 0% / 0% |
+| Attention residual addition | 0.1167% / 0.1740% | 0% / 0% |
+| MLP residual addition | 0.0626% / 0.1601% | 0% / 0% |
+
+The DiT's bounded `_situ` activation also differs on native inputs: original relative RMS is 0.371%, 0.535%, and 0.392% at Base blocks 0, 21 and 41. FP32 pointwise intermediates with explicit reference BF16 boundaries match the saved CUDA output bitwise across all 6.29 million compared values. Native TT rotary application has roughly 0.27–0.33% relative RMS on captured Q/K inputs; explicit split-half arithmetic with the reference rounding boundaries matches all six complete Q/K tensors bitwise. The host RoPE constants were checked against the actual captured CUDA tensors and match bitwise, so this is not an incorrect positional formula.
+
+**GDN scan arithmetic:** using fixed native scan inputs, the initial chunk implementation has relative RMS approximately 0.683% and 0.744% in encoder layers 0 and 1. A diagnostic recurrence with more precise pointwise operations reduces those values to 0.0000195% and 0.0002249%; respectively 99.978% and 99.986% of BF16 elements match exactly. This proves an avoidable scan arithmetic contribution, while leaving the production implementation/performance choice subject to separate qualification.
+
+Combining encoder scan and pointwise alternatives improves full positive conditioning from PCC 0.999645 / relative RMS 2.665% to **PCC 0.999839 / relative RMS 1.794%**, and negative conditioning from PCC 0.999555 / relative RMS 2.984% to **PCC 0.999671 / relative RMS 2.569%**. Remaining encoder discrepancy is still material; isolated-operation equality must not be mistaken for a completely matched encoder.
+
+**Biased linear epilogues:** the initial DiT rounds a matmul to BF16 before adding the BF16 bias. Retaining the matmul result in FP32 through the bias addition and casting afterward better matches the reference epilogue. On fixed native inputs:
+
+| Projection | Original separate BF16 bias relative RMS | FP32 matmul + bias, then BF16 relative RMS | Original / corrected maximum absolute error |
+|---|---:|---:|---:|
+| Shared block modulation | 0.2519% | 0.0444% | 0.125 / 0.015625 |
+| Video head modulation | 0.2580% | 0.0231% | 0.03125 / 0.00390625 |
+| Video embedder | 0.2898% | 0.1053% | 0.125 / 0.125 |
+
+Modulation affects every transformer layer, so reducing this error is relevant even though projection PCC was already high. A partial DiT candidate using corrected pointwise/rotary arithmetic and a more precise attention exponential reduces SFT step-49 positive/negative relative RMS from 3.701% / 3.562% to approximately 2.54% / 2.53%; guided error remains about 7.57%.
+
+Adding the corrected bias epilogues produces the following matched-input SFT results:
+
+| Zero-based step | Positive PCC / relative RMS | Negative PCC / relative RMS | Guided PCC / relative RMS |
+|---:|---|---|---|
+| 0 | 0.999962039 / 0.9754% | 0.999973694 / 0.8790% | 0.999628911 / 2.7338% |
+| 49 | 0.999739410 / 2.2844% | 0.999732635 / 2.3162% | 0.997277882 / 7.3669% |
+
+These are activation-injected teacher-forced component measurements, using a 32-token attention query/key chunk diagnostic. They improve on the original implementation, but late-step branch error remains above 2% and guided error remains substantial. This is **not a resolved final-image accuracy result**. Attention chunk selection, the final production implementation and independent integrated runs require their own results before a passing claim.
+
 ## Runtime boundaries
 
 These are single qualification requests with compilation/cache effects, transfers and artifact writes; they are **not steady-state benchmark numbers**. They should not be compared directly against the heavily instrumented CUDA capture wall times.
