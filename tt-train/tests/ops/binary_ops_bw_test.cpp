@@ -169,6 +169,60 @@ TEST_F(BinaryOpsBackwardTest, MaxSameShape) {
     EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad, 1e-3F, 1e-3F));
 }
 
+TEST_F(BinaryOpsBackwardTest, MinBroadcastBackward) {
+    auto* device = &autograd::ctx().get_device();
+    xt::xarray<float> data_a = {{{{1.F, 5.F, 3.F, 2.F}}}};
+    xt::xarray<float> data_b = xt::ones<float>({2, 1, 3, 4}) * 4.0F;
+
+    auto a = autograd::create_tensor(core::from_xtensor(data_a, device), /* requires_grad */ true);
+    auto b = autograd::create_tensor(core::from_xtensor(data_b, device), /* requires_grad */ true);
+
+    auto out = min(a, b);
+    out->backward();
+
+    auto a_grad = core::to_xtensor(a->get_grad());
+    auto b_grad = core::to_xtensor(b->get_grad());
+
+    EXPECT_EQ(a_grad.shape(), data_a.shape());
+    EXPECT_EQ(b_grad.shape(), data_b.shape());
+
+    // a wins channels 0, 2, and 3 across 2 * 3 broadcast positions.
+    xt::xarray<float> expected_a_grad = {{{{6.F, 0.F, 6.F, 6.F}}}};
+    xt::xarray<float> expected_b_grad = xt::zeros_like(data_b);
+    for (size_t i = 0; i < expected_b_grad.size(); i += 4) {
+        expected_b_grad.flat(i + 1) = 1.F;
+    }
+    EXPECT_TRUE(xt::allclose(a_grad, expected_a_grad));
+    EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad));
+}
+
+TEST_F(BinaryOpsBackwardTest, MaxBroadcastBackward) {
+    auto* device = &autograd::ctx().get_device();
+    xt::xarray<float> data_a = {{{{1.F, 5.F, 3.F, 2.F}}}};
+    xt::xarray<float> data_b = xt::ones<float>({2, 1, 3, 4}) * 4.0F;
+
+    auto a = autograd::create_tensor(core::from_xtensor(data_a, device), /* requires_grad */ true);
+    auto b = autograd::create_tensor(core::from_xtensor(data_b, device), /* requires_grad */ true);
+
+    auto out = max(a, b);
+    out->backward();
+
+    auto a_grad = core::to_xtensor(a->get_grad());
+    auto b_grad = core::to_xtensor(b->get_grad());
+
+    EXPECT_EQ(a_grad.shape(), data_a.shape());
+    EXPECT_EQ(b_grad.shape(), data_b.shape());
+
+    // a wins channel 1 across 2 * 3 broadcast positions.
+    xt::xarray<float> expected_a_grad = {{{{0.F, 6.F, 0.F, 0.F}}}};
+    xt::xarray<float> expected_b_grad = xt::ones_like(data_b);
+    for (size_t i = 0; i < expected_b_grad.size(); i += 4) {
+        expected_b_grad.flat(i + 1) = 0.F;
+    }
+    EXPECT_TRUE(xt::allclose(a_grad, expected_a_grad));
+    EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad));
+}
+
 // ============================================================================
 // Parametrized broadcast backward tests
 // ============================================================================
