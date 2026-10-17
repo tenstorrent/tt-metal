@@ -1857,50 +1857,70 @@ narrow_row_untilize_golden(std::uint32_t row_num_datums) {
 // finished, one for a late report.
 constexpr int kNarrowRowWatcherIntervalMs = 250;
 constexpr int kPollsBeforeCleanCheck = 2;
-// Every guard-kernel CB and narrow row in this file is bf16.
+// Every narrow row in this file is bf16 unless a case says otherwise (the guard kernel's CBs take the case's format).
 constexpr tt::DataFormat kNarrowRowFormat = tt::DataFormat::Float16_b;
 constexpr std::uint32_t kNarrowRowDatumBytes = tt::datum_size(kNarrowRowFormat);
 
-// Builds the program for pack_untilize_narrow_row_guard.cpp, the init-only kernel, for row_num_datums across
-// full_ct_dim tile columns in blocks of block_ct_dim (default: one block) on one core with a bf16 CB pair; the
-// output CB carries output_tile's face geometry (default: a full 32x32 tile), which is what the init reads its
-// face_r_dim and num_faces from. The caller compiles or launches it.
+// Arguments of the one pack_untilize_dest the guard kernel issues when asked to (Wormhole dest-tile guards).
+struct NarrowRowGuardExecute {
+    std::uint32_t tile_dst_ct_offset = 0;
+    std::uint32_t block_rt_dim = 1;
+    std::uint32_t tile_dst_rt_offset = 0;
+};
+
+// Builds the program for pack_untilize_narrow_row_guard.cpp, the init(-only) kernel, for row_num_datums across
+// full_ct_dim tile columns in blocks of block_ct_dim (default: one block) on one core with a CB pair in `format`
+// (default bf16); the output CB carries output_tile's face geometry (default: a full 32x32 tile), which is what the
+// init reads its face_r_dim and num_faces from. With `execute` the kernel also issues one pack_untilize_dest with
+// those arguments. The caller compiles or launches it.
 Program make_pack_untilize_narrow_row_guard_program(
     std::uint32_t row_num_datums,
     std::uint32_t full_ct_dim,
     std::optional<std::uint32_t> block_ct_dim = std::nullopt,
-    std::optional<Tile> output_tile = std::nullopt) {
+    std::optional<Tile> output_tile = std::nullopt,
+    tt::DataFormat format = kNarrowRowFormat,
+    std::optional<NarrowRowGuardExecute> execute = std::nullopt) {
     const CoreCoord core{0, 0};
     Program program = CreateProgram();
-    const std::uint32_t tile_bytes = tt::tile_size(kNarrowRowFormat);
+    const std::uint32_t tile_bytes = tt::tile_size(format);
     CreateCircularBuffer(
         program,
         core,
-        CircularBufferConfig(tile_bytes, {{tt::CBIndex::c_0, kNarrowRowFormat}})
-            .set_page_size(tt::CBIndex::c_0, tile_bytes));
-    const std::uint32_t output_tile_bytes =
-        output_tile.has_value() ? output_tile->get_tile_size(kNarrowRowFormat) : tile_bytes;
-    CircularBufferConfig output_config(output_tile_bytes, {{tt::CBIndex::c_16, kNarrowRowFormat}});
+        CircularBufferConfig(tile_bytes, {{tt::CBIndex::c_0, format}}).set_page_size(tt::CBIndex::c_0, tile_bytes));
+    const std::uint32_t output_tile_bytes = output_tile.has_value() ? output_tile->get_tile_size(format) : tile_bytes;
+    CircularBufferConfig output_config(output_tile_bytes, {{tt::CBIndex::c_16, format}});
     output_config.set_page_size(tt::CBIndex::c_16, output_tile_bytes);
     if (output_tile.has_value()) {
         output_config.set_tile_dims(tt::CBIndex::c_16, *output_tile);
     }
     CreateCircularBuffer(program, core, output_config);
+    const NarrowRowGuardExecute exec = execute.value_or(NarrowRowGuardExecute{});
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize_narrow_row_guard.cpp",
         core,
-        ComputeConfig{.compile_args = {row_num_datums, full_ct_dim, block_ct_dim.value_or(full_ct_dim)}});
+        ComputeConfig{
+            .compile_args = {
+                row_num_datums,
+                full_ct_dim,
+                block_ct_dim.value_or(full_ct_dim),
+                exec.tile_dst_ct_offset,
+                exec.block_rt_dim,
+                exec.tile_dst_rt_offset,
+                execute.has_value() ? 1u : 0u}});
     return program;
 }
 
-// The guard kernel's geometry: datums per narrow row, tile columns, tiles per block (default: one block) and the
-// output tile (default: a full 32x32 tile, four 16-row faces).
+// The guard kernel's geometry: datums per narrow row, tile columns, tiles per block (default: one block), the
+// output tile (default: a full 32x32 tile, four 16-row faces), the CB format (default bf16) and, when set, the
+// arguments of one pack_untilize_dest the kernel issues after the init.
 struct NarrowRowGuardCase {
     std::uint32_t row_num_datums;
     std::uint32_t full_ct_dim = 1;
     std::optional<std::uint32_t> block_ct_dim = std::nullopt;
     std::optional<Tile> output_tile = std::nullopt;
+    tt::DataFormat format = kNarrowRowFormat;
+    std::optional<NarrowRowGuardExecute> execute = std::nullopt;
 };
 
 // Runs the guard program for the case. Returns true when the program completed; false when the wait aborted
@@ -1908,7 +1928,12 @@ struct NarrowRowGuardCase {
 // to read.
 bool run_pack_untilize_narrow_row_guard_kernel(distributed::MeshDevice& mesh, const NarrowRowGuardCase& guard_case) {
     Program program = make_pack_untilize_narrow_row_guard_program(
-        guard_case.row_num_datums, guard_case.full_ct_dim, guard_case.block_ct_dim, guard_case.output_tile);
+        guard_case.row_num_datums,
+        guard_case.full_ct_dim,
+        guard_case.block_ct_dim,
+        guard_case.output_tile,
+        guard_case.format,
+        guard_case.execute);
     distributed::MeshWorkload workload;
     const distributed::MeshCoordinate zero(0, 0);
     workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
@@ -1945,7 +1970,7 @@ void run_pack_untilize_narrow_row_rejects(
     // The program may complete (no guard), so completion is not checked here; the watcher state is.
     run_pack_untilize_narrow_row_guard_kernel(mesh, guard_case);
     const std::string exception = wait_for_narrow_row_watcher_exception();
-    ASSERT_FALSE(exception.empty()) << "a narrow row of " << guard_case.row_num_datums << " bf16 datums x "
+    ASSERT_FALSE(exception.empty()) << "a narrow row of " << guard_case.row_num_datums << " datums x "
                                     << guard_case.full_ct_dim << " tile columns in blocks of "
                                     << guard_case.block_ct_dim.value_or(guard_case.full_ct_dim)
                                     << " was accepted by the pack untilize init; " << consequence;
@@ -1996,9 +2021,10 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeNarrowRowWidths) {
 // consecutive datums of one face; 0 datums would wrap the packer X-end (row_num_datums - 1) and pass the 16-byte
 // check, so it does not compile either. Blocks: Blackhole packs a row split over several blocks only at a full face
 // width (the wrapper's block column offset is in face-column widths), Wormhole packs exactly one tile per call.
-// Each rejected case is pinned to its guard: the JIT build failure carries the compiler log, so the static_assert
-// message of the width or the block limit must be in the exception text. Quasar's compute API rejects narrow_row
-// itself, for every width.
+// Dest offset: Wormhole's narrow path packs dest tile 0 only, so a nonzero tile_dst_ct_offset does not compile
+// there (Blackhole honours it). Each rejected case is pinned to its guard: the JIT build failure carries the
+// compiler log, so the static_assert message of the width, block or dest-offset limit must be in the exception
+// text. Quasar's compute API rejects narrow_row itself, for every width.
 TEST_F(LLKMeshDeviceSingleCardFixture, PackUntilizeNarrowRowRejectsRowsWiderThanAFaceAtCompileTime) {
     const auto arch = detail::detect_arch();
     if (arch == tt::ARCH::QUASAR) {
@@ -2008,23 +2034,38 @@ TEST_F(LLKMeshDeviceSingleCardFixture, PackUntilizeNarrowRowRejectsRowsWiderThan
         std::uint32_t row_num_datums;
         std::uint32_t block_ct_dim;
         std::uint32_t full_ct_dim;
+        std::uint32_t tile_dst_ct_offset = 0;
     };
-    for (const auto [row_num_datums, block_ct_dim, full_ct_dim] : std::initializer_list<Case>{
-             {0, 1, 1}, {16, 1, 1}, {20, 1, 1}, {24, 1, 1}, {8, 1, 2}, {12, 1, 2}, {16, 1, 2}}) {
+    for (const auto [row_num_datums, block_ct_dim, full_ct_dim, tile_dst_ct_offset] : std::initializer_list<Case>{
+             {0, 1, 1}, {16, 1, 1}, {20, 1, 1}, {24, 1, 1}, {8, 1, 2}, {12, 1, 2}, {16, 1, 2}, {16, 1, 1, 1}}) {
         SCOPED_TRACE(fmt::format(
-            "row_num_datums={}, block_ct_dim={}, full_ct_dim={}", row_num_datums, block_ct_dim, full_ct_dim));
+            "row_num_datums={}, block_ct_dim={}, full_ct_dim={}, tile_dst_ct_offset={}",
+            row_num_datums,
+            block_ct_dim,
+            full_ct_dim,
+            tile_dst_ct_offset));
         const bool one_face_wide = row_num_datums >= 1 && row_num_datums <= constants::FACE_WIDTH;
         const bool blocks_accepted = arch == tt::ARCH::BLACKHOLE
                                          ? (block_ct_dim == full_ct_dim || row_num_datums == constants::FACE_WIDTH)
                                          : (block_ct_dim == 1 && full_ct_dim == 1);
-        // The width limit is checked first in both inits, so a wide row names it even when the blocks are wrong too.
+        const bool dest_offset_accepted = arch == tt::ARCH::BLACKHOLE || tile_dst_ct_offset == 0;
+        // The init's width limit is checked first, then its block limit; the dest offset is checked in the execute.
         const std::string expected_guard =
-            !one_face_wide ? "row_num_datums must be between 1 and FACE_C_DIM for narrow_row packing"
-            : arch == tt::ARCH::BLACKHOLE
-                ? "narrow_row packing with several blocks requires row_num_datums == FACE_C_DIM"
-                : "narrow_row packing requires block_ct_dim == full_ct_dim == 1";
-        Program program = make_pack_untilize_narrow_row_guard_program(row_num_datums, full_ct_dim, block_ct_dim);
-        if (one_face_wide && blocks_accepted) {
+            !one_face_wide     ? "row_num_datums must be between 1 and FACE_C_DIM for narrow_row packing"
+            : !blocks_accepted ? (arch == tt::ARCH::BLACKHOLE
+                                      ? "narrow_row packing with several blocks requires row_num_datums == FACE_C_DIM"
+                                      : "narrow_row packing requires block_ct_dim == full_ct_dim == 1")
+                               : "narrow_row packing packs dest tile 0: tile_dst_ct_offset must be 0";
+        // The dest-offset case compiles the execute as well (never launched); the others stay init-only.
+        Program program = make_pack_untilize_narrow_row_guard_program(
+            row_num_datums,
+            full_ct_dim,
+            block_ct_dim,
+            std::nullopt,
+            kNarrowRowFormat,
+            tile_dst_ct_offset != 0 ? std::optional{NarrowRowGuardExecute{.tile_dst_ct_offset = tile_dst_ct_offset}}
+                                    : std::nullopt);
+        if (one_face_wide && blocks_accepted && dest_offset_accepted) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
             continue;
         }
@@ -2202,6 +2243,32 @@ TEST_F(LLKWormholePackUntilizeAssertFixture, PackUntilizeNarrowRowRejectsShortFa
         *devices_.at(0),
         {.row_num_datums = 16, .output_tile = kShortFourFaceTile},
         "the narrow MOP packs TILE_R_DIM / 4 rows per packer, so an 8-row face leaves rows unpacked");
+}
+
+// Wormhole places packer k at k times the bytes of the eight rows a packer writes, floored to 16 bytes: 5 Int8
+// datums put packer 1 at 32 bytes while packer 0 writes 40, so the init rejects a 1-byte row that is not a
+// multiple of 16 bytes over eight rows (bf16 rows always are).
+TEST_F(LLKWormholePackUntilizeAssertFixture, PackUntilizeNarrowRowRejectsOddOneByteRows) {
+    run_pack_untilize_narrow_row_rejects(
+        *devices_.at(0),
+        {.row_num_datums = 5, .format = tt::DataFormat::Int8},
+        "the packers' start addresses are 16-byte granular, so packer 1 would start inside packer 0's 40 bytes");
+}
+
+// Wormhole's narrow MOP never advances the dest tile, so the execute rejects a second row block (wrapper) and a
+// nonzero runtime dest row offset (LLK) before any PACR is issued; both would re-pack dest tile 0.
+TEST_F(LLKWormholePackUntilizeAssertFixture, PackUntilizeNarrowRowRejectsSecondRowBlock) {
+    run_pack_untilize_narrow_row_rejects(
+        *devices_.at(0),
+        {.row_num_datums = 16, .execute = NarrowRowGuardExecute{.block_rt_dim = 2}},
+        "the narrow MOP does not advance the dest tile, so the second row block would re-pack dest tile 0");
+}
+
+TEST_F(LLKWormholePackUntilizeAssertFixture, PackUntilizeNarrowRowRejectsDestRowOffset) {
+    run_pack_untilize_narrow_row_rejects(
+        *devices_.at(0),
+        {.row_num_datums = 16, .execute = NarrowRowGuardExecute{.tile_dst_rt_offset = 1}},
+        "the narrow MOP runs without set_dst_write_addr, so a runtime dest row offset is ignored and tile 0 packed");
 }
 
 // ============================================================================

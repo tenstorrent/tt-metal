@@ -126,6 +126,12 @@ inline void llk_pack_untilize(
         StateDiscard<std::uint32_t>(block_c_index),
         StateDiscard<std::uint32_t>(tile_dst_rt_offset)));
 
+    // The narrow MOP never advances the dest tile, so a second row block would re-pack dest tile 0 into the next
+    // L1 row block (the LLK rejects the nonzero dest offset this loop would pass for it).
+    LLK_ASSERT(
+        !narrow_row || block_rt_dim == 1,
+        "narrow_row packing packs one row block per call (the narrow MOP does not advance the dest tile)");
+
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
             pack_tile_addr, pack_dst_format[output_id], face_r_dim, block_rt * block_ct_dim + tile_dst_rt_offset);

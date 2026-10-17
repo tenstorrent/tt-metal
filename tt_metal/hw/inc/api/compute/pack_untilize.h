@@ -130,7 +130,10 @@ ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
  * block_ct_dim == full_ct_dim == 1. Checked only with LLK asserts enabled (LLK_ASSERT, compiled out otherwise):
  * on Blackhole full_ct_dim * row_num_datums must span a multiple of 16 bytes in the output format (the L1 row
  * address advances in 16-byte units) and several blocks also require num_faces == 1; on Wormhole the output tile
- * must have four full-height faces.
+ * must have four full-height faces, and each packer's L1 start address is 16-byte granular, so the eight rows a
+ * packer writes ((TILE_R_DIM / 4) * row_num_datums datums) must span a multiple of 16 bytes (with 1-byte formats
+ * row_num_datums must be even). The Wormhole narrow path packs dest tile 0 of one row block only: tile_dst_ct_offset
+ * (static_assert) and tile_dst_rt_offset must be 0 and block_rt_dim must be 1 (LLK_ASSERT).
  */
 // clang-format on
 template <

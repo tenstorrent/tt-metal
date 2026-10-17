@@ -177,6 +177,12 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
  * (face_r_offset 8) would pack completely, but a 32x16 tile is a narrow tile with face_r_offset FACE_R_DIM, so packer
  * 1 starts at face 1 and rows 8-15 of each face are never packed; a short face misplaces the packers likewise.
  * Checked by static_assert (dims) and LLK_ASSERT (faces).
+ * @note The packers' L1 start addresses are 16-byte granular (program_packer_untilized_destination places packer k
+ * at k * row_num_datums * datum bytes * TILE_R_DIM / 4 bytes, floored to 16), so the eight rows a packer writes must
+ * span a multiple of 16 bytes: with 1-byte formats row_num_datums must be even. Checked by LLK_ASSERT.
+ * @note The narrow MOP never sets or advances the dest tile, so @ref _llk_pack_untilize_ packs dest tile 0 of one
+ * row block only: tile_dst_ct_offset and tile_dst_rt_offset must be 0 (static_assert / LLK_ASSERT there) and the
+ * wrapper's block_rt_dim must be 1 (LLK_ASSERT in llk_pack_untilize).
  */
 template <
     std::uint32_t block_ct_dim,
@@ -204,6 +210,13 @@ inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const 
     // packer's dest offset. A two-face tile may be 32x16 (a narrow tile, face_r_offset FACE_R_DIM), which loses rows
     // 8-15 of each face, and the init cannot tell it from a 16x32 tile; a short face misplaces the packers likewise.
     LLK_ASSERT(!narrow_row || (num_faces == 4 && face_r_dim == FACE_R_DIM), "narrow_row packing requires four full-height faces");
+    // program_packer_untilized_destination places packer k at (k * row_num_datums * block_size) / 16 / TILE_C_DIM
+    // 16-byte units, i.e. k times the bytes of the eight rows a packer writes, floored to 16 bytes; a 1-byte format
+    // with an odd row_num_datums (5 datums: packer 1 at 32 bytes while packer 0 writes 40) overlaps the packers.
+    LLK_ASSERT(
+        !narrow_row || (SCALE_DATUM_SIZE(pack_dst_format, (TILE_R_DIM / 4) * row_num_datums) % 16) == 0,
+        "narrow_row packing requires the eight rows a packer writes to span a multiple of 16 bytes (packer start addresses are "
+        "16-byte granular)");
 
     _llk_pack_untilize_configure_addrmod_<diagonal, narrow_row>();
 
@@ -254,13 +267,15 @@ inline void _llk_pack_untilize_uninit_()
  * @tparam diagonal: True to configure for diagonal (per-packer split) untilize packing.
  * @tparam narrow_row: True when packing at most FACE_C_DIM datums per row (see row_num_datums).
  * @tparam row_num_datums: Number of datums per output row when narrow_row is set, at most FACE_C_DIM.
- * @tparam tile_dst_ct_offset: Compile-time column-tile offset into the destination register.
+ * @tparam tile_dst_ct_offset: Compile-time column-tile offset into the destination register (0 with narrow_row).
  * @param address: L1 destination base address for the block.
  * @param pack_dst_format: Destination (L1) data format.
  * @param face_r_dim: Number of rows per face.
- * @param tile_dst_rt_offset: Runtime row-tile offset into the destination register.
+ * @param tile_dst_rt_offset: Runtime row-tile offset into the destination register (0 with narrow_row).
  * @note Call @ref _llk_pack_untilize_init_ with matching template/runtime args before this function, and
  *       @ref _llk_pack_untilize_uninit_ once all untilize-pack calls are complete.
+ * @note With narrow_row the MOP is run once as programmed, without the per-row set_dst_write_addr of the full-row
+ *       path, so it always packs dest tile 0: both dest offsets must be 0 (see the init's @note).
  */
 template <
     std::uint32_t block_ct_dim,
@@ -273,6 +288,10 @@ inline void _llk_pack_untilize_(
     const std::uint32_t address, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t tile_dst_rt_offset = 0)
 {
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
+    // The narrow branch below runs the MOP without set_dst_write_addr and the narrow MOP has no dest-tile advance,
+    // so a nonzero dest offset would be ignored and tile 0 packed in its place.
+    static_assert(!narrow_row || tile_dst_ct_offset == 0, "narrow_row packing packs dest tile 0: tile_dst_ct_offset must be 0");
+    LLK_ASSERT(!narrow_row || tile_dst_rt_offset == 0, "narrow_row packing packs dest tile 0: tile_dst_rt_offset must be 0");
 
     program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal, row_num_datums>(address, pack_dst_format);
 
