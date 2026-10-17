@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_polyval.h"
 #include "sfpi.h"
@@ -31,11 +33,16 @@ sfpi_inline sfpi::vFloat expm1_cw_clamped(sfpi::vFloat x)
 {
     // Clamp to prevent exponent underflow (k < -127 wraps setexp). sfpi::max is an SFPSWAP
     // total-order max, which ranks a sign-set NaN below -87.0 and would replace it with a
-    // finite value; keep NaN lanes as they came in so the result stays NaN. -inf still
-    // clamps (expm1(-inf) = -1). is_nan tests exponent/mantissa, not a float compare.
-    const sfpi::vFloat x_in = x;
-    x                       = sfpi::max(x, -87.0f);
-    v_if (sfpi::is_nan(x_in))
+    // finite value; keep those lanes as they came in so the result stays NaN. -inf still
+    // clamps (expm1(-inf) = -1). The guard is a signed compare of the raw bits against -inf
+    // (0xFF800000): of the negative floats only a sign-set NaN exceeds it, so -0, negative
+    // finite and -inf stay clamped. Positive lanes need no guard (max already returned them
+    // unchanged), so it does not matter that the compare's wrapping subtract misses +inf/+NaN.
+    // Cheaper than is_nan, which tests exponent and mantissa separately.
+    constexpr std::int32_t negative_infinity_bits = static_cast<std::int32_t>(0xFF800000);
+    const sfpi::vFloat x_in                       = x;
+    x                                             = sfpi::max(x, -87.0f);
+    v_if (sfpi::as<sfpi::vInt>(x_in) > negative_infinity_bits)
     {
         x = x_in;
     }
