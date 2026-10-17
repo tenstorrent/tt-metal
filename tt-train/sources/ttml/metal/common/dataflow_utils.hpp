@@ -13,6 +13,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
+#include "api/numeric/bfloat16.h"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 #ifndef FORCE_INLINE
@@ -301,12 +302,9 @@ inline float bfloat16_to_float(const uint16_t bf16) {
     return result;
 }
 
-// Converts a float to bfloat16 by extracting the upper 16 bits
-// of the float's 32-bit binary representation.
+// Converts a finite float to bfloat16 using round-to-nearest-even, matching the packer.
 inline uint16_t float_to_bfloat16(const float value) {
-    uint32_t tmp;
-    std::memcpy(&tmp, &value, sizeof(tmp));
-    return static_cast<uint16_t>(tmp >> 16);
+    return fp32_to_bf16(value);
 }
 
 // Converts a uint32_t bit pattern to a float (bitwise reinterpretation)
