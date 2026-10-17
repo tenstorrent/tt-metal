@@ -146,7 +146,8 @@ harness and direct-push-plan notes.
 The streaming profiler drains device zones to the host and hands decoded records to any callback you
 register. It is Blackhole only, and it needs the DRAM cores' DRISCs, the idle eth cores and eth links the clock sync
 runs on (§2.5) and, on a multi-chip mesh, a chain of those links from every chip to the root chip. Too few idle eth
-cores, or a chip with no chain of links to the root chip, is a `TT_FATAL` at bring-up. A link that never solves is a
+cores, or a chip with no chain of links to the root chip, is a `TT_FATAL` at bring-up. A single chip with no Ethernet
+cores at all (p100a) runs with degraded sync accuracy instead, and logs a warning (§2.5). A link that never solves is a
 `TT_FATAL` at capture end. It needs a Tracy-enabled build of tt-metal even when the Tracy sink itself is left off.
 
 ### 1.1 Three device-profiler modes (mutually exclusive)
@@ -467,6 +468,9 @@ for a free-running 50 MHz refclk and for IEEE 1588 frame stamping.
   rate is exact, because AICLK only takes whole FBDIV steps. While AICLK changes, the points are short averages of the
   raw samples. A second idle eth core ships the points to the host (`kernels/eth_relay.cpp`). Every capture plots the
   chips' mean AICLK in Tracy as `AICLK mean (GHz)`, and with the sync check on, each chip's as `AICLK chipN (GHz)`.
+  A chip with no Ethernet cores (p100a) can't run a wall-clock core. As a fallback, every millisecond the host reads
+  the wall clock of the Tensix core that dispatch reserves for the real-time profiler, and each read becomes one clock
+  point. Sync accuracy is degraded on such a chip.
 - **Link sync, refclk → refclk, per link.** A link's two ports, the active eth cores on its two sides, exchange 32 B
   stamped frames and keep their 1588 stamps (`kernels/link_sync.hpp`, over the hardware layer
   `hw/inc/internal/ethernet/eth_ptp.hpp`). Each of the two cores restarts its PTP timer when its side starts, so a stamp

@@ -39,6 +39,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 
 #include "context/metal_context.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/slow_dispatch.hpp"
@@ -265,7 +266,9 @@ bool DevicePrograms::boot(const std::shared_ptr<distributed::MeshDevice>& mesh_d
                 logical.str());
             return it->second;
         };
-        const int64_t wall_clock_offset = offset_of(CoreType::ETH, ctx.wall_clock.core.logical);
+        const int64_t wall_clock_offset = capture.fallback_wall_clock_core
+                                              ? offset_of(CoreType::WORKER, *capture.fallback_wall_clock_core)
+                                              : offset_of(CoreType::ETH, ctx.wall_clock.core.logical);
         for (size_t i = 0; i < ctx.producers.size(); i++) {
             const Producer& producer = ctx.producers[i];
             capture.clock_offsets[i] = wall_clock_offset - offset_of(producer.type, producer.logical);
@@ -286,6 +289,10 @@ bool DevicePrograms::boot(const std::shared_ptr<distributed::MeshDevice>& mesh_d
                 HalProgrammableCoreType::DRAM,
                 {{.cfg = drisc_l1_.cfg, .fifo_bytes = relay_fifo_bytes}},
                 relay_program(ctx, relay_index));
+        }
+        if (capture_.devices[ctx.index].fallback_wall_clock_core) {
+            write_producers_armed(ctx, 1);
+            return;
         }
         start_resident(ctx, ctx.wall_clock, HalProgrammableCoreType::IDLE_ETH, {}, wall_clock_program(ctx));
         if (ctx.check) {
@@ -530,6 +537,19 @@ void DevicePrograms::enumerate_eth_cores(DeviceCtx& ctx) {
     const auto& hal = mc_->hal();
     const uint32_t chip = ctx.chip_id;
     const std::vector<CoreCoord> idle = sorted_yx(ctx.device->get_inactive_ethernet_cores());
+    // A chip with no Ethernet cores (p100a) can't run the wall-clock core or the eth relay. As a fallback, the host
+    // reads the wall clock of the Tensix core that dispatch reserves for the realtime profiler, which is idle while
+    // the streaming profiler runs.
+    if (idle.empty() && ctx.device->get_active_ethernet_cores(false).empty()) {
+        TT_FATAL(!capture_.sync_check, "streaming profiler: device {} has no Ethernet cores for the sync check", chip);
+        const tt_cxy_pair core = mc_->get_dispatch_core_manager().get_reserved_realtime_profiler_core(chip).value();
+        capture_.devices[ctx.index].fallback_wall_clock_core = CoreCoord{core.x, core.y};
+        log_warning(
+            tt::LogMetal,
+            "[streaming profiler] device {} has no Ethernet cores; clock sync accuracy will be degraded!",
+            chip);
+        return;
+    }
     TT_FATAL(
         idle.size() >= 2,
         "streaming profiler: device {} has {} idle ethernet cores; the wall-clock core and its eth relay need two",
@@ -801,6 +821,9 @@ void DevicePrograms::start() {
     auto& cluster = mc_->get_cluster();
     const uint64_t go_addr = eth_l1_.ctrl + offsetof(kernel_profiler::ResidentCtrl, go);
     for (const DeviceCtx& ctx : devices_) {
+        if (capture_.devices[ctx.index].fallback_wall_clock_core) {
+            continue;
+        }
         write_u32(cluster, ctx.chip_id, ctx.wall_clock.core.virt, go_addr, 1);
         write_u32(cluster, ctx.chip_id, ctx.eth_relay.core.virt, go_addr, 1);
     }

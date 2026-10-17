@@ -11,6 +11,7 @@
 #include <array>
 #include <chrono>
 #include <iterator>
+#include <limits>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -49,6 +50,12 @@ constexpr uint32_t kProbeSleepCapUs = 100;
 // and 12 of the Blackhole PCIE_SS spec).
 constexpr uint64_t kSiiBase = 0xFFFFFFFFF0000000ull;
 constexpr uint32_t kCfrLo = 0xA8, kCfrHi = 0xAC;
+// A Tensix core's RISC debug register block, and its wall clock's low and high words inside it
+// (RISCV_DEBUG_REG_WALL_CLOCK_L and _H). Reading the low word latches the high word.
+constexpr uint64_t kRiscDebugRegs = 0xFFB12000ull;
+constexpr uint32_t kWallClockLo = 0x1F0, kWallClockHi = 0x1F8;
+
+constexpr uint32_t kWallClockReads = 30;
 
 // Returns the host address of the word at `offset` in `window`'s mapping. The clocks are read with plain loads from it,
 // because UMD's read32 times every access and, past its budget, runs a NoC hang check behind a lock that all slow
@@ -70,6 +77,26 @@ std::unique_ptr<tt::umd::IoWindow> open_sii_window(tt::Cluster& cluster, uint32_
         pcie.front(),
         kSiiBase,
         tt::umd::HostIoWindowConfig{.mapping = tt::umd::HostMemoryCaching::UC, .size = kCfrHi + sizeof(uint32_t)});
+}
+
+// Reads the wall clock through `window` kWallClockReads times and returns the read with the shortest round trip, as the
+// host TSC at its midpoint and the wall clock.
+std::pair<int64_t, uint64_t> read_wall_clock(tt::umd::IoWindow& window) {
+    const volatile uint32_t* lo_word = mapped_word(window, kWallClockLo);
+    const volatile uint32_t* hi_word = mapped_word(window, kWallClockHi);
+    int64_t best_rtt = std::numeric_limits<int64_t>::max(), best_tsc = 0;
+    uint64_t best_wall = 0;
+    for (uint32_t i = 0; i < kWallClockReads; i++) {
+        const int64_t before = tsc_now();
+        const uint32_t lo = *lo_word;
+        const int64_t after = tsc_now();
+        if (after - before < best_rtt) {
+            best_rtt = after - before;
+            best_tsc = std::midpoint(before, after);
+            best_wall = kernel_profiler::join_words(*hi_word, lo);
+        }
+    }
+    return {best_tsc, best_wall};
 }
 
 }  // namespace
@@ -111,6 +138,18 @@ Receiver::Receiver(tt::Cluster& cluster, std::unique_ptr<DevicePrograms> program
     programs_(std::move(programs)),
     root_refclk_(cluster, programs_->capture_context().devices[CaptureContext::kRootDevice].chip_id),
     clock_solver_(programs_->capture_context(), root_refclk_.bases()) {
+    // A chip with no Ethernet cores (p100a) has no links, so it can only be the root.
+    const CaptureContext::Device& root = capture_context().devices[CaptureContext::kRootDevice];
+    if (root.fallback_wall_clock_core) {
+        const CoreCoord core = cluster.get_virtual_coordinate_from_logical_coordinates(
+            root.chip_id, *root.fallback_wall_clock_core, CoreType::WORKER);
+        fallback_wall_clock_ = cluster.get_driver()->create_io_window(
+            root.chip_id,
+            tt::umd::CoreCoord(core, CoreType::TENSIX, CoordSystem::TRANSLATED),
+            kRiscDebugRegs,
+            tt::umd::HostIoWindowConfig{
+                .mapping = tt::umd::HostMemoryCaching::UC, .size = kWallClockHi + sizeof(uint32_t)});
+    }
     std::vector<std::unique_ptr<Stream>> sync_streams;
     for (const CapturedSocket& captured : programs_->sockets()) {
         auto stream = std::make_unique<Stream>();
@@ -396,6 +435,18 @@ void Receiver::sync_thread(const std::stop_token& stop) {
         service().steady().sample();
         return host_line;
     };
+    // On a chip with no Ethernet cores (p100a), the host's reads of its wall clock stand in for the wall-clock core.
+    const auto read_fallback_wall_clock = [&] {
+        if (!fallback_wall_clock_) {
+            return false;
+        }
+        const auto [tsc, wall] = read_wall_clock(*fallback_wall_clock_);
+        return clock_solver_.on_fallback_wall_clock(CaptureContext::kRootDevice, tsc, wall);
+    };
+    // On a chip with no Ethernet cores (p100a), a wall clock read needs the refclk-to-TSC map, so the map is fitted
+    // before the first read. Then even a short capture gets a read at its start and one at its end.
+    while (fallback_wall_clock_ && !refclk_burst()) {
+    }
     std::chrono::steady_clock::time_point next_burst{};
     while (true) {
         const uint32_t seen = sync_wake_.load(std::memory_order_acquire);
@@ -410,17 +461,26 @@ void Receiver::sync_thread(const std::stop_token& stop) {
             next_burst = now + kRefclkBurstPeriod;
             refclk_burst();
         }
+        if (read_fallback_wall_clock() && clock_solver_.on_batch_end()) {
+            service().wake_consumers();
+        }
         if (any) {
             continue;
         }
         if (stopping) {
             break;
         }
-        sync_wake_.wait(seen, std::memory_order_acquire);
+        // A chip with no Ethernet cores (p100a) has no sync stream to wake this thread, so it sleeps between reads.
+        if (fallback_wall_clock_) {
+            std::this_thread::sleep_for(kFallbackWallClockPeriod);
+        } else {
+            sync_wake_.wait(seen, std::memory_order_acquire);
+        }
     }
     // Bursts after the capture's last records extend the refclk-to-TSC map past them, until enough exist to fit it.
     while (!refclk_burst()) {
     }
+    read_fallback_wall_clock();
     clock_solver_.on_capture_end();
     for (const SyncStream& sync : sync_streams) {
         if (sync.dropped != 0) {
