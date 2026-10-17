@@ -188,6 +188,10 @@ DISABLE_WINDOW_WORDS = 16
 # enable_gathering() is a single csrrc that follows the recorded body; allow a few
 # scalar instructions between the body's last Tensix instruction and it.
 ENABLE_SLACK_WORDS = 8
+# A recorded body that takes runtime operands (TT_* rather than TTI_*) composes each Tensix
+# instruction in a register and stores it, so it spans more words than its record length;
+# the enable_gathering() csrrc lands correspondingly later.
+ENABLE_SLACK_WORDS_RUNTIME_OPERANDS = 48
 TT_OPCODE_REPLAY = 0x04
 
 
@@ -209,6 +213,60 @@ def _replay_records(words):
         if insn >> 24 == TT_OPCODE_REPLAY and insn & 0x1:
             records.append((i, (insn >> 4) & 0x3FF))
     return records
+
+
+def _unbracketed_records(words, records, enable_slack_words=ENABLE_SLACK_WORDS):
+    """The records in ``records`` that are not inside disable_gathering()/enable_gathering().
+
+    Bracketed means: the last three cfg0 CSR ops before the record are disable_gathering()'s
+    csrrs/csrrs/csrrc, and the first cfg0 CSR op after the recorded body (within
+    ``enable_slack_words``) is enable_gathering()'s csrrc. Requiring the *first* op after the
+    body to be the csrrc is what tells enable_gathering() apart from the csrrs that opens the
+    next disable_gathering().
+    """
+    unbracketed = []
+    for index, length in records:
+        before = [
+            _cfg0_csr_op(w) for w in words[max(0, index - DISABLE_WINDOW_WORDS) : index]
+        ]
+        before = [op for op in before if op]
+        after = [
+            _cfg0_csr_op(w)
+            for w in words[index + 1 + length : index + 1 + length + enable_slack_words]
+        ]
+        after = [op for op in after if op]
+        disabled = before[-3:] == ["s", "s", "c"]
+        enabled = after[:1] == ["c"]
+        if not (disabled and enabled):
+            unbracketed.append(
+                f"record at word {index} (len {length}): "
+                f"disable_gathering before={disabled}, enable_gathering after={enabled}"
+            )
+    return unbracketed
+
+
+def _assert_records_bracketed(words, records, enable_slack_words=ENABLE_SLACK_WORDS):
+    unbracketed = _unbracketed_records(words, records, enable_slack_words)
+    assert not unbracketed, (
+        "replay record(s) not bracketed by disable_gathering()/enable_gathering() with "
+        "ENABLE_GATHERING defined; record through ckernel::load_replay_buf instead of a raw "
+        "lltt::record / TTI_REPLAY:\n  " + "\n  ".join(unbracketed)
+    )
+
+
+def _math_elf_words(configuration):
+    """Build ``configuration`` and return the executable words of its math ELF."""
+    # Build only: the assertions are on the binary.
+    configuration.prepare()
+    math_elf = (
+        TestConfig.ARTEFACTS_DIR
+        / configuration.test_name
+        / configuration.variant_id
+        / "elf"
+        / "math.elf"
+    )
+    assert math_elf.is_file(), f"math ELF was not built: {math_elf}"
+    return _executable_words(math_elf)
 
 
 @blackhole_only
@@ -269,40 +327,126 @@ def test_replay_records_are_gathering_bracketed():
         ),
         dest_acc=DestAccumulation.No,
     )
-    # Build only: the assertions are on the binary.
-    configuration.prepare()
-
-    math_elf = (
-        TestConfig.ARTEFACTS_DIR
-        / configuration.test_name
-        / configuration.variant_id
-        / "elf"
-        / "math.elf"
-    )
-    assert math_elf.is_file(), f"math ELF was not built: {math_elf}"
-    words = _executable_words(math_elf)
+    words = _math_elf_words(configuration)
 
     records = _replay_records(words)
     assert (
         records
     ), "no replay record found in the exp math ELF; the bf16 TTI path moved"
+    _assert_records_bracketed(words, records)
 
-    unbracketed = []
-    for index, length in records:
-        before = [
-            _cfg0_csr_op(w) for w in words[max(0, index - DISABLE_WINDOW_WORDS) : index]
-        ]
-        before = [op for op in before if op]
-        after = words[index + 1 + length : index + 1 + length + ENABLE_SLACK_WORDS]
-        disabled = before[-3:] == ["s", "s", "c"]
-        enabled = any(_cfg0_csr_op(w) == "c" for w in after)
-        if not (disabled and enabled):
-            unbracketed.append(
-                f"record at word {index} (len {length}): "
-                f"disable_gathering before={disabled}, enable_gathering after={enabled}"
-            )
-    assert not unbracketed, (
-        "replay record(s) not bracketed by disable_gathering()/enable_gathering() with "
-        "ENABLE_GATHERING defined; record through ckernel::load_replay_buf instead of a raw "
-        "TTI_REPLAY:\n  " + "\n  ".join(unbracketed)
+
+@blackhole_only
+def test_welfords_replay_record_is_gathering_bracketed():
+    """With ENABLE_GATHERING, the Welford SFPU init's replay record must sit inside
+    disable_gathering()/enable_gathering().
+
+    _program_welfords_replay_buffer_ (shared with Wormhole) records the four per-LREG row
+    bodies at init; on Blackhole that record has to go through ckernel::load_replay_buf, the
+    only place the bracket is emitted. A functional sweep cannot see the difference (the
+    gathering hazard is a codegen lottery), so the binary is inspected instead.
+    """
+    from helpers.llk_params import DestAccumulation
+
+    formats = input_output_formats([DataFormat.Float16_b], same=True)[0]
+    input_dimensions = [32, 32]
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+    configuration = TestConfig(
+        "sources/welfords_sfpu_gathering_test.cpp",
+        formats,
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+        dest_acc=DestAccumulation.No,
+    )
+    words = _math_elf_words(configuration)
+
+    records = _replay_records(words)
+    assert records, (
+        "no replay record found in the welfords math ELF; "
+        "_llk_math_welfords_sfpu_init_ no longer programs the replay buffer"
+    )
+    _assert_records_bracketed(words, records)
+
+
+@blackhole_only
+def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
+    """With ENABLE_GATHERING and DISABLE_SFPLOADMACRO, the where kernel's replay record must
+    sit inside disable_gathering()/enable_gathering().
+
+    _calculate_where_ has three record sites: the two SFPLOADMACRO paths already record through
+    ckernel::load_replay_buf; the plain-SFPLOAD path selected by DISABLE_SFPLOADMACRO
+    (TT_METAL_DISABLE_SFPLOADMACRO=1) must do the same. Its recorded body takes runtime Dst
+    offsets, so the enable_gathering() csrrc lands further past the record than for an
+    all-immediate body.
+    """
+    from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
+    from helpers.test_variant_parameters import (
+        APPROX_MODE,
+        DEST_SYNC,
+        DISABLE_SRC_ZERO_FLAG,
+        NUM_BLOCKS,
+        NUM_TILES_IN_BLOCK,
+        SFPU_TERNARY_OP,
+        SFPU_TERNARY_SCALAR,
+    )
+
+    # bf16 is the LO16 where path; the record is the same for every supported format.
+    formats = input_output_formats([DataFormat.Float16_b], same=True)[0]
+    input_dimensions = [32, 32]
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+    configuration = TestConfig(
+        "sources/sfpu_ternary_gathering_nomacro_test.cpp",
+        formats,
+        templates=[
+            SFPU_TERNARY_OP(MathOperation.TTNNWhere),
+            SFPU_TERNARY_SCALAR(0x40000000),
+            APPROX_MODE(ApproximationMode.No),
+            DISABLE_SRC_ZERO_FLAG(True),
+            DEST_SYNC(),
+        ],
+        runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+            buffer_C=src_A,
+            stimuli_C_format=formats.input_format,
+            tile_count_C=tile_cnt_A,
+        ),
+        unpack_to_dest=False,
+        dest_acc=DestAccumulation.No,
+        compile_time_formats=True,
+    )
+    words = _math_elf_words(configuration)
+
+    records = _replay_records(words)
+    assert records, (
+        "no replay record found in the where math ELF; "
+        "the DISABLE_SFPLOADMACRO path of _calculate_where_ no longer records a replay"
+    )
+    _assert_records_bracketed(
+        words, records, enable_slack_words=ENABLE_SLACK_WORDS_RUNTIME_OPERANDS
     )
