@@ -23,6 +23,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/transpose_wh.h"
 #include "api/compute/tilize.h"
 #include "api/compute/transpose.h"
 #include "api/compute/pack_untilize.h"

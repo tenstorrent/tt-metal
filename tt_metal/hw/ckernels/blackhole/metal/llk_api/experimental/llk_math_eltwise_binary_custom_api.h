@@ -82,7 +82,7 @@ inline void llk_math_sub_bcast_cols_compensated(
  *
  * @param operandA: CB id of srcA; its num_faces drives the addr-mod setup.
  * @param operandB: CB id of srcB (the bcast-col operand).
- * @note No fidelity template arg (unlike the SUB init): the COL bcast init doesn't take one. Run before
+ * @note No fidelity template arg (unlike the SUB init): the fidelity is set on the MUL call itself. Run before
  *       @ref llk_math_eltwise_binary_mul_bcast_cols_custom on this thread.
  */
 inline void llk_math_eltwise_binary_mul_bcast_cols_init_custom(
@@ -100,10 +100,12 @@ inline void llk_math_eltwise_binary_mul_bcast_cols_init_custom(
  * Column j MACs onto dest[dst_index + j], so calling once per head into the same dst_index reduces
  * heads in place (see @ref _llk_math_bcast_cols_reuse_custom_).
  *
+ * @tparam math_fidelity: values = <LoFi/HiFi2/HiFi3/HiFi4>; one MUL per fidelity phase, each MACing into dest.
  * @param dst_index: First destination tile index.
  * @param ct_dim: Number of column tiles written, into dest range [dst_index, dst_index + ct_dim).
  * @note Run @ref llk_math_eltwise_binary_mul_bcast_cols_init_custom first.
  */
+template <MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void llk_math_eltwise_binary_mul_bcast_cols_custom(
     const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
     SAN_HOOK(unsupported());
@@ -112,6 +114,6 @@ inline void llk_math_eltwise_binary_mul_bcast_cols_custom(
         "dst range out of bounds");
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWMUL>(ct_dim);
+    _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWMUL, math_fidelity>(ct_dim);
     math::clear_dst_reg_addr();
 }
