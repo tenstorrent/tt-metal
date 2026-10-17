@@ -398,9 +398,10 @@ inline void _llk_unpack_bcastA_B_init_(const std::uint32_t unpack_dst_format)
 /**
  * @brief Restore unpacker state after an SDPA sub_bcast_row operation.
  *
- * Drains the unpacker, then leaves it in the configure_unpack_AB state for unpack_dst_format:
- * the per-unpacker x-end datum counts go back to the canonical face layout (init set A to one
- * row and B to a whole tile), and the srcA Y-stride is written to its canonical value. The
+ * Drains the unpacker, then writes the canonical srcA Y-stride (the configure_unpack_AB value
+ * for unpack_dst_format) and resets the x-end datum counts init changed (A to one row, B to a
+ * whole tile) to the canonical face layout. Only the Y-stride is configure state; the ADC x-end
+ * is programmed by each op's init, never by configure_unpack_AB. The
  * Y-stride write is a defensive reset, not a restore: _llk_unpack_bcastA_B_init_ programs the
  * same canonical_unpA_y_stride(unpack_dst_format), so with the dst format init was given (what
  * every caller passes) it rewrites the value already in the register. It is kept so this
