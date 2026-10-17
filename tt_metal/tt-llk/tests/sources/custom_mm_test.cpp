@@ -24,7 +24,7 @@
 //   in0 (A, the [M,K] operand)  -> SrcB, tile shape [{1,2,4,8}, 32]  (only the top two
 //                                  faces, each face_r_dim rows tall; face_r_dim = M)
 //   in1 (B, the [K,N] operand)  -> SrcA, full [32,32] tiles
-//   rt_dim = 1, ct_dim in [1,16], kt_dim in [1,256], LoFi only.
+//   rt_dim = 1, ct_dim in [1,16], kt_dim in [1,255], LoFi only.
 //
 // So the header restricts M to {1,2,4,8} rows: only those DEST rows are defined. The math
 // LLK (_llk_math_custom_mm_) runs one MVMUL walk per k-tile, accumulating A*B into DEST;
@@ -69,6 +69,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 constexpr std::uint32_t num_calls   = CUSTOM_MM_NUM_CALLS;
 constexpr std::uint32_t kt_per_call = KT_DIM / num_calls;
 static_assert(kt_per_call * num_calls == KT_DIM, "K tiles must split evenly across the calls");
+
+// The LLKs' kt_dim ceiling: the SrcB face walk reaches face 510 at most (llk_unpack_AB_custom_mm.h). A call past it is
+// rejected by the unpack and math LLK_ASSERTs before either issues an instruction; test_custom_mm_kt_past_max_asserts
+// expects that.
+constexpr std::uint32_t custom_mm_kt_max = 255;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -204,14 +209,32 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
 
-    _llk_packer_wait_for_math_done_();
-
-    for (std::uint32_t i = 0; i < CT_DIM; i++)
+    bool math_done = true;
+    if constexpr (kt_per_call > custom_mm_kt_max)
     {
-        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
+        // Expected-assert case: math rejects the block and never posts MATH_PACK. Poll the semaphore from the RISC with
+        // a bound instead of SEMWAITing on it, because a SEMWAIT left in the Tensix pack FIFO outlives the RISC soft
+        // reset and hangs the next kernel on this core. On a build without the asserts math finishes the block in a
+        // small fraction of the bound and pack runs normally, so the result can be checked against the golden.
+        constexpr std::uint64_t math_done_bound_cycles = 200'000'000; // ~0.15 s, the harness waits 2 s
+        const std::uint64_t start                      = ckernel::read_wall_clock();
+        while (semaphore_read(semaphore::MATH_PACK) == 0 && ckernel::read_wall_clock() - start < math_done_bound_cycles)
+        {
+        }
+        math_done = semaphore_read(semaphore::MATH_PACK) != 0;
     }
 
-    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    if (math_done)
+    {
+        _llk_packer_wait_for_math_done_();
+
+        for (std::uint32_t i = 0; i < CT_DIM; i++)
+        {
+            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
+        }
+
+        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    }
 
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
 }

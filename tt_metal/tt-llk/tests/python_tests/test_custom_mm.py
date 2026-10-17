@@ -17,7 +17,17 @@ A standard tiled matmul ``C[M,N] = A[M,K] @ B[K,N]`` with the header's tile-shap
   in0 (A)  -> SrcB, tile shape ``[{1,2,4,8}, 32]``: only the top two faces, each
               ``face_r_dim = M`` rows tall. So M is restricted to {1,2,4,8}.
   in1 (B)  -> SrcA, full ``[32,32]`` tiles.
-  rt_dim = 1, ct_dim in [1,16], kt_dim in [1,256], LoFi only.
+  rt_dim = 1, ct_dim in [1,16], kt_dim in [1,255], LoFi only.
+
+The kt_dim ceiling
+------------------
+The SrcB walk reads one face per UNPACR and forms the L1 face index from the low 8 bits
+of the Ch0 Y and Z counters, (Y & 0xff) + (Z & 0xff) (UNPACR_Regular.md, ADCs.md). Per
+k-tile it reads faces (Y=k, Z=k) and (Y=k, Z=k+1), so the highest face it can reach is
+510, at k = 254. kt_dim = 256 needs face 511: at k = 255 the Z counter has stepped to
+256, its low byte is 0, and the second UNPACR reads face 255 (k-tile 127's second face)
+instead. ``test_custom_mm_kt_past_max_asserts`` pins the LLK assert that rejects it, and
+``test_custom_mm_kt_max`` is the kt_dim = 255 positive control.
 
 ``split_acc=false`` / ``finalize=false``, so there is no finalization merge and DEST
 holds the plain accumulated product (custom_mm.h: finalize must be false when split_acc
@@ -47,6 +57,7 @@ from dataclasses import dataclass
 import pytest
 import torch
 from conftest import blackhole_only, skip_for_quasar, skip_for_wormhole
+from helpers.device import LLKAssertException
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import DestAccumulation, MathFidelity
@@ -276,7 +287,8 @@ CUSTOM_MM_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Float32], same=True
 )
 
-# kt is in [1,256]; small even values cover the paired MOP path.
+# kt is in [1,255]; small even values cover the paired MOP path. The ceiling is covered by
+# test_custom_mm_kt_max / test_custom_mm_kt_past_max_asserts below.
 KT_DIMS = [2, 4]
 
 # ct in [1,16]. Include 1, an even width, and the odd widths 7/9/11 that the header's
@@ -373,6 +385,59 @@ def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format):
     _run_custom_mm(
         M, kt, ct, formats, DestAccumulation.No, CUSTOM_MM_CALLS(num_calls=num_calls)
     )
+
+
+# The SrcB face walk reaches face 510 at most (see the module docstring), so kt_dim tops out at
+# 255. At the ceiling the operands are kt*2048 B each for ct=1 in Float16_b, which is the most
+# the harness's L1 window holds (Float32 tiles or ct>1 would not fit), so both tests use ct=1.
+KT_MAX = 255
+KT_CEILING_FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+
+
+@blackhole_only
+def test_custom_mm_kt_max():
+    """kt_dim = 255 is the last value the SrcB face walk covers; it must match the golden."""
+    _run_custom_mm(8, KT_MAX, 1, KT_CEILING_FORMATS, DestAccumulation.No)
+
+
+@blackhole_only
+def test_custom_mm_kt_past_max_asserts():
+    """kt_dim = 256 needs SrcB face 511, which the walk cannot address; the unpack LLK rejects it.
+
+    Without the assert the kernel runs to completion and multiplies k-tile 255's second half
+    of B with A's face 255 instead of face 511. The operands make that one swap decide the
+    result: A is 0 except face 511 (= +1) and face 255 (= -1), and B is 0 except the rows face
+    511 pairs with, so the golden is +16 * B_row and the misaddressed walk produces -16 * B_row.
+
+    The unpack and math LLKs both reject the block before issuing anything, and the test
+    kernel's pack thread gives up waiting for math (custom_mm_test.cpp), so the core is left
+    with no Tensix instruction pending and the next test runs clean after the RISC reset.
+    """
+    M, kt, ct = 8, KT_MAX + 1, 1
+    K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
+    last_face = slice(K - FACE_C_DIM, K)
+    aliased_face = slice(K // 2 - FACE_C_DIM, K // 2)
+
+    torch_a = torch.zeros((M, K), dtype=torch.float32)
+    torch_a[:, last_face] = 1.0
+    torch_a[:, aliased_face] = -1.0
+    torch_b = torch.zeros((K, N), dtype=torch.float32)
+    # Small integers so LoFi and the bf16 dest hold every product and sum exactly.
+    torch_b[last_face, :] = 1.0 + (torch.arange(N, dtype=torch.float32) % 8)
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        LLKAssertException
+    ) as assert_hit:
+        _run_custom_mm(
+            M,
+            kt,
+            ct,
+            KT_CEILING_FORMATS,
+            DestAccumulation.No,
+            operands=(torch_a, torch_b),
+        )
+    # The stack traces name the halted cores; TRISC0 is the unpack thread, where the walk lives.
+    assert "TRISC0" in str(assert_hit.value)
 
 
 # Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
