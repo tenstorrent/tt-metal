@@ -264,6 +264,17 @@ public:
     // Cores that connect to another cluster will show up as connected
     bool is_ethernet_link_up(ChipId chip_id, const tt::tt_metal::CoreCoord& logical_core) const;
 
+    // Experimental virtual cables: absent cables fabric treats as up (set by ControlPlane at init).
+    struct VirtualEthLink {
+        std::optional<ChipId> peer_chip;  // the far end, when it is a chip this Cluster manages
+        tt_fabric::chan_id_t peer_chan = 0;
+        std::uint64_t peer_unique_id = 0;
+    };
+    using VirtualEthLinks = std::map<ChipId, std::map<tt_fabric::chan_id_t, VirtualEthLink>>;
+    void set_virtual_ethernet_links(VirtualEthLinks links);
+    const VirtualEthLinks& get_virtual_ethernet_links() const { return virtual_eth_links_; }
+    bool is_virtual_ethernet_link(ChipId chip_id, const tt::tt_metal::CoreCoord& logical_core) const;
+
     // Returns connected ethernet core on the other chip
     // If the core is connected to a device not accessible through this Cluster, it will assert
     std::tuple<ChipId, tt::tt_metal::CoreCoord> get_connected_ethernet_core(
@@ -488,6 +499,10 @@ private:
 
     // Mapping of each devices' ethernet routing mode
     std::unordered_map<ChipId, std::unordered_map<tt::tt_metal::CoreCoord, EthRouterMode>> device_eth_routing_info_;
+
+    VirtualEthLinks virtual_eth_links_;
+    void apply_virtual_ethernet_links();  // every rebuild of device_eth_routing_info_ ends with this
+    const VirtualEthLink* find_virtual_ethernet_link(ChipId chip_id, std::uint32_t chan) const;
 
     std::unordered_map<ChipId, std::unordered_map<ChipId, std::vector<tt::tt_metal::CoreCoord>>> ethernet_sockets_;
 

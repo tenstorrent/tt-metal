@@ -95,6 +95,11 @@ void FabricBuilder::discover_channels() {
         size_t num_dispatch_links = 0;
         for (const auto& eth_chan : active_eth_chans) {
             if (is_dispatch_link(eth_chan, dispatch_link_idx)) {
+                TT_FATAL(
+                    !control_plane.bridged_cables().end(local_node_, eth_chan).has_value(),
+                    "{} chan {} is a virtual cable; the dispatch tunnel needs a real one",
+                    local_node_,
+                    eth_chan);
                 dispatch_links_.insert(eth_chan);
                 num_dispatch_links++;
             }
@@ -119,6 +124,7 @@ void FabricBuilder::create_routers() {
                 .remote_node = neighbor_node,
                 .direction = direction,
                 .is_dispatch_link = is_dispatch,
+                .virtual_cable = control_plane.bridged_cables().end(local_node_, eth_chan),
             };
 
             cluster.register_sim_fabric_endpoint_direction(

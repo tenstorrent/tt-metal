@@ -23,6 +23,7 @@
 #include "fabric_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "tt_metal/fabric/bridged_cables.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 namespace {
@@ -479,6 +480,50 @@ TEST_F(FactoryDescriptorControlPlaneFixture, StrictSystemHealthRejectsARelaxedMe
         const std::string what = e.what();
         EXPECT_NE(what.find("RELAXED mesh graph"), std::string::npos) << what;
         EXPECT_NE(what.find("STRICT system health"), std::string::npos) << what;
+    }
+}
+
+// Missing-links pod with TT_METAL_E2H_BRIDGE_DOWNED_LINKS=1: every hole is bridged, not routed around.
+// For that pod only: on a healthy system there is nothing to bridge, so it fails by design.
+TEST_F(FactoryDescriptorControlPlaneFixture, DownedCablesAreBridgedAndCloseEveryHole) {
+    if (getenv("TT_METAL_E2H_BRIDGE_DOWNED_LINKS") == nullptr) {
+        GTEST_SKIP() << "needs TT_METAL_E2H_BRIDGE_DOWNED_LINKS=1";
+    }
+    const auto& control_plane =
+        open_control_plane(tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    const auto& bridged = control_plane.bridged_cables();
+    ASSERT_FALSE(bridged.cables.empty());
+    EXPECT_FALSE(bridged.ends.empty());
+    for (const auto& cable : bridged.cables) {
+        EXPECT_EQ(cable.reason, experimental::BridgeReason::Downed);
+    }
+    ASSERT_NE(control_plane.get_link_health(), nullptr);
+    EXPECT_TRUE(control_plane.get_link_health()->get_downed_links().empty());
+    EXPECT_TRUE(control_plane.get_link_health()->get_unused_downed_links().empty());
+    EXPECT_FALSE(control_plane.fsd_rerouting_active());
+
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& unique_ids = cluster.get_unique_chip_ids();
+    for (const auto& cable : bridged.cables) {
+        for (const auto& [end, peer] : {std::pair{cable.a, cable.b}, std::pair{cable.b, cable.a}}) {
+            const auto chip = std::ranges::find_if(unique_ids, [&](const auto& id) { return id.second == *end.asic; });
+            if (chip == unique_ids.end()) {
+                continue;
+            }
+            const auto core =
+                cluster.get_soc_desc(chip->first).get_eth_core_for_channel(end.chan, CoordSystem::LOGICAL);
+            EXPECT_TRUE(cluster.is_ethernet_link_up(chip->first, tt::tt_metal::CoreCoord(core.x, core.y)))
+                << "chip " << chip->first << " chan " << int{end.chan};
+            // The mesh cable chip 0 chan 6 -- chip 4 chan 0 is one the mesh graph needs, so its ends get routers.
+            const auto here = std::pair{physical_chip_id(control_plane, end.asic), int{end.chan}};
+            const auto there = std::pair{physical_chip_id(control_plane, peer.asic), int{peer.chan}};
+            if (std::set{here, there} == std::set{std::pair{ChipId{0}, 6}, std::pair{ChipId{4}, 0}}) {
+                const auto node = control_plane.get_fabric_node_id_from_physical_chip_id(chip->first);
+                const auto active = control_plane.get_active_fabric_eth_channels(node);
+                EXPECT_TRUE(std::ranges::any_of(active, [&](const auto& c) { return c.first == end.chan; }))
+                    << "chip " << chip->first << " chan " << int{end.chan} << " has no fabric router";
+            }
+        }
     }
 }
 

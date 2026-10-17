@@ -925,10 +925,25 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
     const auto& soc_desc = cluster.get_soc_desc(device_id);
     const auto eth_chan = location_.eth_chan;
 
+    // Virtual cable: a bridged sender (E2H) and receiver (H2E) at once, with no handshake over the wire.
+    const auto& virtual_cable = location_.virtual_cable;  // found by FabricBuilder::create_routers
+    experimental::BridgedRouterLayout vc_layout;
+    if (virtual_cable.has_value()) {
+        // As THIS router's kernel sees it; the host bridge reads it back rather than assume the default config.
+        vc_layout = erisc_bridge::describe_bridged_router(*erisc_builder_);
+        TT_FATAL(
+            vc_layout.block_addr && vc_layout.recv_credits_addr,
+            "{} chan {}: no room for bridge blocks",
+            local_node_,
+            eth_chan);
+        control_plane.bridged_cables().record_layout(local_node_, eth_chan, vc_layout);
+    }
+
     // E2H host bridge: only chip 0's router on the forced eth channel; other chips have no socket.
     const auto& rtopts = fabric_context_.get_rtoptions();
     std::uint32_t e2h_block_addr = 0;  // nonzero iff this router is bridged
-    if (rtopts.get_e2h_bridge_enable() && rtopts.get_e2h_bridge_force_chan() == eth_chan &&
+    if (!virtual_cable.has_value() && rtopts.get_e2h_bridge_enable() &&
+        rtopts.get_e2h_bridge_force_chan() == eth_chan &&
         local_node_ == FabricNodeId(MeshId{0}, rtopts.get_e2h_bridge_force_chip())) {
         // Derived, not configured: the host opens its sockets against this same address.
         e2h_block_addr = erisc_bridge::bridge_block_addr(erisc_builder_->config);
@@ -938,7 +953,8 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
     // The RECEIVING end of that same link. Its credits have no cable home either, so it records
     // them in L1 and the host relays them. Resolved through the control plane, not configured.
     std::uint32_t e2h_recv_credits_addr = 0;
-    if (rtopts.get_e2h_bridge_enable() && rtopts.get_e2h_bridge_relay_credits() && e2h_block_addr == 0) {
+    if (!virtual_cable.has_value() && rtopts.get_e2h_bridge_enable() && rtopts.get_e2h_bridge_relay_credits() &&
+        e2h_block_addr == 0) {
         const FabricNodeId tx_node{MeshId{0}, rtopts.get_e2h_bridge_force_chip()};
         const auto peer = control_plane.try_get_connected_mesh_chip_chan_ids(
             tx_node, static_cast<tt::tt_fabric::chan_id_t>(rtopts.get_e2h_bridge_force_chan()));
@@ -998,6 +1014,20 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             named_ct_args["ENABLE_E2H_BRIDGE_RECV"] = 1u;
             named_ct_args["E2H_BRIDGE_RECV_CHANNEL"] = 0u;
             named_ct_args["E2H_BRIDGE_RECV_CREDITS_ADDR"] = e2h_recv_credits_addr;
+        }
+        if (virtual_cable.has_value()) {
+            named_ct_args["ENABLE_E2H_BRIDGE"] = 1u;
+            named_ct_args["E2H_BRIDGE_BLOCK_ADDR"] = vc_layout.block_addr;
+            named_ct_args["ENABLE_SPEEDY_VC0"] = 0u;
+            named_ct_args["DISABLE_RX_CH0_FORWARDING"] = 0u;
+            named_ct_args["E2H_BRIDGE_NO_FAR_RECEIVER"] = 0u;
+            named_ct_args["ENABLE_E2H_BRIDGE_RECV"] = 1u;
+            named_ct_args["E2H_BRIDGE_RECV_CREDITS_ADDR"] = vc_layout.recv_credits_addr;
+            named_ct_args["E2H_BRIDGE_SKIP_ETH_HANDSHAKE"] = 1u;
+            if (virtual_cable->downed) {
+                // A context switch hands the core to base firmware, which would chase a link that is not there.
+                named_ct_args["ENABLE_CONTEXT_SWITCH"] = 0u;
+            }
         }
 
         // Determine processor

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -18,6 +19,7 @@
 #include <tt-metalium/experimental/fabric/physical_node_id.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "llrt/tt_target_device.hpp"
+#include "tt_metal/fabric/bridged_cables.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -29,6 +31,7 @@ struct AsicSpec {
     uint32_t loc = 0;
     uint64_t label = 0;
     BoardType board = BoardType::N300;
+    uint32_t rank = 0;
 };
 
 // A cable to declare, by the labels of the ASICs it joins.
@@ -60,7 +63,7 @@ PhysicalSystemDescriptor make_descriptor(
                 static_cast<ChipId>(asic.label),
                 asic.host,
                 experimental::make_physical_node_id(asic.host, TrayID{asic.tray}, ASICLocation{asic.loc}),
-                /*mpi_rank=*/0});
+                asic.rank});
         graph[asic.host][id];  // an ASIC with no cables still exists
     }
 
@@ -98,7 +101,7 @@ std::vector<AsicSpec> three_asics(uint64_t base) {
     return {
         AsicSpec{"host-a", 1, 0, base + 0},
         AsicSpec{"host-a", 1, 1, base + 1},
-        AsicSpec{"host-b", 1, 0, base + 2},
+        AsicSpec{"host-b", 1, 0, base + 2, BoardType::N300, 1},
     };
 }
 
@@ -372,6 +375,124 @@ TEST(PhysicalSystemDescriptorDiff, DuplicateAddressIsFatal) {
             AsicSpec{"host-a", 1, 0, 1}, AsicSpec{"host-a", 1, 0, 2},  // same address, different label
         },
         {}));
+}
+
+// Virtual cables (tt_metal/fabric/bridged_cables.hpp): picking the cables to bridge, on the same fake systems.
+using namespace tt::tt_fabric::experimental;
+
+TEST(BridgedCables, ParsesEveryForm) {
+    EXPECT_EQ(parse_break_spec("").mode, BreakSpec::Mode::None);
+    EXPECT_EQ(parse_break_spec("list").mode, BreakSpec::Mode::List);
+    EXPECT_EQ(parse_break_spec("all").mode, BreakSpec::Mode::All);
+    EXPECT_EQ(parse_break_spec("cable:1,3").cable_indices, (std::vector<uint32_t>{1, 3}));
+    const auto random = parse_break_spec("random:2:7");
+    EXPECT_EQ(random.mode, BreakSpec::Mode::Random);
+    EXPECT_EQ(random.count, 2u);
+    EXPECT_EQ(random.seed, 7u);
+    EXPECT_EQ(parse_break_spec("random:3").seed, 0u);
+    for (const char* bad : {"none", "cable:", "cable:x", "random:", "random:1:2:3", "everything:1", "all:1"}) {
+        EXPECT_THROW(parse_break_spec(bad), std::invalid_argument) << bad;
+    }
+}
+
+TEST(BridgedCables, EnumeratesEachCableOnceInAddressOrder) {
+    const auto cables = enumerate_live_cables(make_descriptor(three_asics(100), three_asic_cables(100)));
+    // host-a/1/0 sorts first, so the local cable comes first and is named from chip a.
+    EXPECT_EQ(
+        cables,
+        (std::vector<BridgedCable>{
+            {{AsicID{100}, 0}, {AsicID{101}, 1}, false, PortType::TRACE, BridgeReason::Injected},
+            {{AsicID{101}, 2}, {AsicID{102}, 3}, true, PortType::QSFP_DD, BridgeReason::Injected}}));
+}
+
+TEST(BridgedCables, OrderDoesNotDependOnAsicLabels) {
+    // Same hardware, labels reversed: the order follows addresses, so the cables come out the same way.
+    auto asics = three_asics(0);
+    asics[0].label = 902;
+    asics[1].label = 901;
+    asics[2].label = 900;
+    const auto cables = enumerate_live_cables(
+        make_descriptor(asics, {CableSpec{902, 0, 901, 1}, CableSpec{901, 2, 900, 3, PortType::QSFP_DD, false}}));
+    ASSERT_EQ(cables.size(), 2u);
+    EXPECT_EQ(cables[0].a, (CableEnd{AsicID{902}, 0}));
+    EXPECT_EQ(cables[1].a, (CableEnd{AsicID{901}, 2}));
+}
+
+TEST(BridgedCables, SelectsByEveryMode) {
+    const auto cables = enumerate_live_cables(make_descriptor(three_asics(100), three_asic_cables(100)));
+    EXPECT_TRUE(select_injected_cables(cables, parse_break_spec("")).empty());
+    EXPECT_TRUE(select_injected_cables(cables, parse_break_spec("list")).empty());
+    EXPECT_EQ(select_injected_cables(cables, parse_break_spec("all")).size(), 2u);
+    EXPECT_EQ(select_injected_cables(cables, parse_break_spec("cable:1")), (std::vector<BridgedCable>{cables[1]}));
+    // Duplicates collapse; selections naming nothing throw.
+    EXPECT_EQ(select_injected_cables(cables, parse_break_spec("cable:0,0,1")).size(), 2u);
+    EXPECT_THROW(select_injected_cables(cables, parse_break_spec("cable:2")), std::invalid_argument);
+    EXPECT_THROW(select_injected_cables(cables, parse_break_spec("random:3")), std::invalid_argument);
+}
+
+TEST(BridgedCables, RandomIsReproducibleAndDistinct) {
+    std::vector<AsicSpec> asics;  // eight cables in a chain on one host
+    std::vector<CableSpec> chain;
+    for (uint32_t i = 0; i < 9; ++i) {
+        asics.push_back(AsicSpec{"host-a", 1, i, 200 + i});
+        if (i > 0) {
+            chain.push_back(CableSpec{200 + i - 1, 0, 200 + i, 1});
+        }
+    }
+    const auto cables = enumerate_live_cables(make_descriptor(asics, chain));
+    ASSERT_EQ(cables.size(), 8u);
+    const auto first = select_injected_cables(cables, parse_break_spec("random:3:42"));
+    EXPECT_EQ(first, select_injected_cables(cables, parse_break_spec("random:3:42")));
+    EXPECT_EQ(first.size(), 3u);
+    bool some_seed_differs = false;
+    for (uint64_t seed = 0; seed < 8 && !some_seed_differs; ++seed) {
+        some_seed_differs =
+            select_injected_cables(cables, parse_break_spec("random:3:" + std::to_string(seed))) != first;
+    }
+    EXPECT_TRUE(some_seed_differs);
+    EXPECT_EQ(select_injected_cables(cables, parse_break_spec("random:8:5")).size(), 8u);
+    EXPECT_TRUE(select_injected_cables(cables, parse_break_spec("random:0")).empty());
+}
+
+TEST(BridgedCables, FindsDownedCablesAndAddingThemClosesTheDiff) {
+    // The factory side labels chips 1..3, live labels them 100..102: only addresses join them.
+    const auto fsd = make_descriptor(three_asics(1), three_asic_cables(1));
+    auto live = make_descriptor(three_asics(100), {three_asic_cables(100)[0]});
+    const auto downed = find_downed_cables(fsd, live);
+    EXPECT_EQ(
+        downed,
+        (std::vector<BridgedCable>{
+            {{AsicID{101}, 2}, {AsicID{102}, 3}, true, PortType::QSFP_DD, BridgeReason::Downed}}));
+
+    add_bridged_cables_to_live(live, downed);
+    EXPECT_TRUE(experimental::diff_physical_system_descriptors(fsd, live).missing_links.empty());
+    EXPECT_TRUE(find_downed_cables(fsd, live).empty());
+    // A cross-rank cable is an exit node on both sides, and in the host graph.
+    for (const char* host : {"host-a", "host-b"}) {
+        EXPECT_EQ(live.get_exit_node_connection_table().at(host).size(), 1u) << host;
+    }
+    EXPECT_EQ(live.get_system_graph().host_connectivity_graph.at("host-a").at(0).first, "host-b");
+    // Idempotent.
+    const auto before = live.get_system_graph().asic_connectivity_graph;
+    const auto exits_before = live.get_exit_node_connection_table();
+    add_bridged_cables_to_live(live, downed);
+    EXPECT_EQ(live.get_system_graph().asic_connectivity_graph, before);
+    EXPECT_EQ(live.get_exit_node_connection_table(), exits_before);
+    // Removing it again (a simulated unplug) reopens the hole, exit nodes included.
+    remove_cables_from_live(live, downed);
+    EXPECT_EQ(find_downed_cables(fsd, live), downed);
+    for (const char* host : {"host-a", "host-b"}) {
+        EXPECT_TRUE(live.get_exit_node_connection_table().at(host).empty()) << host;
+    }
+}
+
+TEST(BridgedCables, MergeKeepsOverlapOnceAsDowned) {
+    const auto fsd = make_descriptor(three_asics(1), three_asic_cables(1));
+    const auto live = make_descriptor(three_asics(100), {three_asic_cables(100)[0]});
+    const auto downed = find_downed_cables(fsd, live);
+    const auto injected = select_injected_cables(
+        enumerate_live_cables(make_descriptor(three_asics(100), three_asic_cables(100))), parse_break_spec("all"));
+    EXPECT_EQ(merge_bridged_cables(downed, injected), (std::vector<BridgedCable>{downed.at(0), injected.at(0)}));
 }
 
 }  // namespace

@@ -2735,8 +2735,8 @@ void kernel_main() {
     init_ptr_val<sender_channel_free_slots_stream_ids[0]>(SENDER_NUM_BUFFERS_ARRAY[0]);  // LOCAL WORKER
     init_ptr_val<sender_channel_free_slots_stream_ids[1]>(SENDER_NUM_BUFFERS_ARRAY[1]);  // Compact index 0
 
-    // Init retrain sync reg
-    if (IS_RETRAIN_SYNC_MASTER()) {
+    // Init retrain sync reg; a virtual cable may have no sync master, so its erisc0 clears it.
+    if (IS_RETRAIN_SYNC_MASTER() || (e2h_bridge_skip_eth_handshake && MY_ERISC_ID == 0)) {
         write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::NORMAL_EXECUTION));
     }
@@ -3272,14 +3272,14 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
     if constexpr (enable_ethernet_handshake) {
-        if constexpr (is_handshake_sender) {
+        if constexpr (!e2h_bridge_skip_eth_handshake && is_handshake_sender) {
             erisc::datamover::handshake::fabric_sender_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
                 handshake_addr,
                 routing_table_l1->my_mesh_id,
                 routing_table_l1->my_device_id,
                 termination_signal_ptr,
                 DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
-        } else {
+        } else if constexpr (!e2h_bridge_skip_eth_handshake) {
             erisc::datamover::handshake::fabric_receiver_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
                 handshake_addr,
                 routing_table_l1->my_mesh_id,
@@ -3289,7 +3289,7 @@ void kernel_main() {
         }
 
         // After handshake completes, extract neighbor info and populate telemetry
-        {
+        if constexpr (!e2h_bridge_skip_eth_handshake) {
             volatile tt_l1_ptr auto* handshake_info =
                 reinterpret_cast<volatile tt_l1_ptr erisc::datamover::handshake::handshake_info_t*>(handshake_addr);
             volatile tt_l1_ptr FabricTelemetry* fabric_telemetry =

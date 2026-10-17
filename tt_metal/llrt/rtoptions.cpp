@@ -121,6 +121,8 @@ enum class EnvVarID {
     TT_METAL_E2H_BRIDGE_NO_FAR_RECEIVER,                // TEST ONLY: nothing downstream completes bridged frames
     TT_METAL_E2H_BRIDGE_RELAY_CREDITS,                  // TEST ONLY: bridged credits go via the host, not the cable
     TT_METAL_E2H_BRIDGE_FORCE_CHIP,                     // TEST ONLY: fabric node chip id carrying the bridge
+    TT_METAL_E2H_BRIDGE_DOWNED_LINKS,                   // EXPERIMENTAL: bridge factory-expected cables that are down
+    TT_METAL_E2H_BRIDGE_BREAK_LINKS,                    // EXPERIMENTAL, TEST ONLY: bridge working cables
     TT_METAL_USE_MGD_2_0,                               // Use mesh graph descriptor 2.0
     TT_METAL_FORCE_JIT_COMPILE,                         // Force JIT compilation
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
@@ -932,6 +934,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                     TT_THROW("TT_METAL_E2H_BRIDGE_FORCE_CHIP value out of range: {}", value);
                 }
             }
+            break;
+
+        case EnvVarID::TT_METAL_E2H_BRIDGE_DOWNED_LINKS:
+            this->e2h_bridge_downed_links = (value == nullptr) || (std::string_view(value) != "0");
+            break;
+
+        case EnvVarID::TT_METAL_E2H_BRIDGE_BREAK_LINKS:
+            this->e2h_bridge_break_links = value;
+            log_warning(tt::LogMetal, "E2H bridge break links '{}'. Test only.", value);
             break;
 
         // TT_METAL_USE_MGD_2_0

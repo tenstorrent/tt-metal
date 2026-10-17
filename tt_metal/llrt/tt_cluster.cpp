@@ -1168,9 +1168,24 @@ const std::unordered_set<ChipId>& Cluster::get_devices_controlled_by_mmio_device
 std::unordered_map<ChipId, std::vector<tt::tt_metal::CoreCoord>> Cluster::get_ethernet_cores_grouped_by_connected_chips(
     ChipId chip_id) const {
     std::unordered_map<ChipId, std::vector<tt::tt_metal::CoreCoord>> connected_chips;
+    // Virtual cables to a chip of this process join the group, as their cable would have.
+    auto with_virtual_links = [&] {
+        if (const auto chip = this->virtual_eth_links_.find(chip_id); chip != this->virtual_eth_links_.end()) {
+            for (const auto& [chan, link] : chip->second) {
+                if (link.peer_chip.has_value()) {
+                    const auto core = get_soc_desc(chip_id).get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
+                    auto& cores = connected_chips[*link.peer_chip];  // a simulated unplug is still in UMD's map
+                    if (std::find(cores.begin(), cores.end(), tt::tt_metal::CoreCoord(core.x, core.y)) == cores.end()) {
+                        cores.emplace_back(core.x, core.y);
+                    }
+                }
+            }
+        }
+        return connected_chips;
+    };
     const auto& all_eth_connections = this->get_cluster_desc()->get_ethernet_connections();
     if (!all_eth_connections.contains(chip_id)) {
-        return {};
+        return with_virtual_links();
     }
     for (const auto& [eth_chan, connected_chip_chan] : all_eth_connections.at(chip_id)) {
         const auto& other_chip_id = std::get<0>(connected_chip_chan);
@@ -1188,7 +1203,7 @@ std::unordered_map<ChipId, std::vector<tt::tt_metal::CoreCoord>> Cluster::get_et
             continue;
         }
     }
-    return connected_chips;
+    return with_virtual_links();
 }
 
 // Ethernet cluster api
@@ -1212,6 +1227,10 @@ void Cluster::initialize_ethernet_sockets() {
                 continue;
             }
             for (const auto& eth_core : eth_cores) {
+                // A virtual cable has no wire, so it is never a raw ethernet socket.
+                if (this->is_virtual_ethernet_link(chip_id, eth_core)) {
+                    continue;
+                }
                 if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::IDLE) {
                     this->ethernet_sockets_.at(chip_id).at(connected_chip_id).emplace_back(eth_core);
                     this->ethernet_sockets_.at(connected_chip_id)
@@ -1293,6 +1312,7 @@ void Cluster::initialize_ethernet_cores_router_mode() {
             }
         }
     }
+    this->apply_virtual_ethernet_links();
 }
 
 std::unordered_set<ChipId> Cluster::get_ethernet_connected_device_ids(ChipId chip_id) const {
@@ -1393,6 +1413,8 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
         }
     }
 
+    this->apply_virtual_ethernet_links();  // not in UMD's connection map, so the walk above never reached them
+
     // re-init sockets to reflect fabric routing
     this->ethernet_sockets_.clear();
     this->initialize_ethernet_sockets();
@@ -1439,14 +1461,60 @@ std::vector<tt::tt_metal::CoreCoord> Cluster::get_fabric_ethernet_routers_betwee
 }
 
 bool Cluster::is_ethernet_link_up(ChipId chip_id, const tt::tt_metal::CoreCoord& logical_core) const {
+    if (this->is_virtual_ethernet_link(chip_id, logical_core)) {
+        return true;
+    }
     const auto& soc_desc = get_soc_desc(chip_id);
     EthernetChannel eth_chan = soc_desc.logical_eth_core_to_chan_map.at(logical_core);
     return this->get_cluster_desc()->ethernet_core_has_active_ethernet_link(chip_id, eth_chan);
 }
 
+const Cluster::VirtualEthLink* Cluster::find_virtual_ethernet_link(ChipId chip_id, std::uint32_t chan) const {
+    const auto chip = this->virtual_eth_links_.find(chip_id);
+    if (chip == this->virtual_eth_links_.end()) {
+        return nullptr;
+    }
+    const auto link = chip->second.find(static_cast<tt_fabric::chan_id_t>(chan));
+    return link == chip->second.end() ? nullptr : &link->second;
+}
+
+bool Cluster::is_virtual_ethernet_link(ChipId chip_id, const tt::tt_metal::CoreCoord& logical_core) const {
+    if (this->virtual_eth_links_.empty()) {
+        return false;  // the common case: no virtual cables, no soc-descriptor lookup
+    }
+    const auto& map = get_soc_desc(chip_id).logical_eth_core_to_chan_map;
+    const auto chan = map.find(logical_core);
+    return chan != map.end() && find_virtual_ethernet_link(chip_id, chan->second) != nullptr;
+}
+
+void Cluster::set_virtual_ethernet_links(VirtualEthLinks links) {
+    this->virtual_eth_links_ = std::move(links);
+    this->apply_virtual_ethernet_links();
+    this->ethernet_sockets_.clear();  // sockets derive from routing info
+    this->initialize_ethernet_sockets();
+}
+
+void Cluster::apply_virtual_ethernet_links() {
+    // Straight to FABRIC_ROUTER: reservation walks UMD's connection map, which has never heard of these.
+    for (const auto& [chip_id, chans] : this->virtual_eth_links_) {
+        const auto& soc_desc = get_soc_desc(chip_id);
+        for (const auto& entry : chans) {
+            const auto core = soc_desc.get_eth_core_for_channel(entry.first, CoordSystem::LOGICAL);
+            this->device_eth_routing_info_[chip_id][tt::tt_metal::CoreCoord(core.x, core.y)] =
+                EthRouterMode::FABRIC_ROUTER;
+        }
+    }
+}
+
 std::tuple<ChipId, tt::tt_metal::CoreCoord> Cluster::get_connected_ethernet_core(std::tuple<ChipId, tt::tt_metal::CoreCoord> eth_core) const {
     const auto& soc_desc = get_soc_desc(std::get<0>(eth_core));
     EthernetChannel eth_chan = soc_desc.logical_eth_core_to_chan_map.at(std::get<1>(eth_core));
+    if (const auto* link = find_virtual_ethernet_link(std::get<0>(eth_core), eth_chan)) {
+        TT_FATAL(link->peer_chip, "Chip {} virtual cable chan {} leaves this process", std::get<0>(eth_core), eth_chan);
+        const auto peer_core =
+            get_soc_desc(*link->peer_chip).get_eth_core_for_channel(link->peer_chan, CoordSystem::LOGICAL);
+        return std::make_tuple(*link->peer_chip, tt::tt_metal::CoreCoord(peer_core.x, peer_core.y));
+    }
     TT_FATAL(
         this->is_ethernet_link_up(std::get<0>(eth_core), std::get<1>(eth_core)),
         "Logical eth core {} is not an active eth core on chip {}.",
@@ -1476,6 +1544,11 @@ std::tuple<uint64_t, tt::tt_metal::CoreCoord> Cluster::get_connected_ethernet_co
         "Logical eth core {} is not an active eth core on chip {}.",
         std::get<1>(eth_core).str(),
         std::get<0>(eth_core));
+    // A virtual cable to another process's chip: the far end is named by its unique id, as UMD would have.
+    if (const auto* link = find_virtual_ethernet_link(std::get<0>(eth_core), eth_chan); link && !link->peer_chip) {
+        return std::make_tuple(
+            link->peer_unique_id, soc_desc.get_eth_core_for_channel(link->peer_chan, CoordSystem::LOGICAL));
+    }
     const auto& ethernet_connections_to_remote_cluster = this->get_ethernet_connections_to_remote_devices();
     const auto& local_chip_id = std::get<0>(eth_core);
     const auto& local_eth_core = std::get<1>(eth_core);

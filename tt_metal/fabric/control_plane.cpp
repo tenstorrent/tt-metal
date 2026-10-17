@@ -27,6 +27,7 @@
 #include <yaml-cpp/yaml.h>
 #include <tt_stl/fmt.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "core_coord.hpp"
@@ -55,6 +56,7 @@
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/fabric/axis_route_topology.hpp"
 #include "tt_metal/fabric/fsd_host_filter.hpp"
+#include "tt_metal/fabric/bridged_cables.hpp"
 #include "tt_metal/fabric/mcast_reverse_tree.hpp"
 #include "tt_metal/fabric/routing_2d_table_builder.hpp"
 #include <tt-metalium/experimental/fabric/physical_descriptor_builder.hpp>
@@ -490,6 +492,7 @@ void ControlPlane::init_control_plane(
 
     // Before the mapper: when a factory descriptor is configured, that is what the mesh is placed on.
     this->ingest_factory_system_descriptor();
+    this->select_bridged_cables();
 
     auto topology_mapping_timeout = rtoptions.get_timeout_duration_for_operations();
     if (topology_mapping_timeout.count() <= 0.0f) {
@@ -590,6 +593,7 @@ void ControlPlane::init_control_plane(
 
     // After intermesh, so intra-mesh directions and the mesh graph are settled.
     this->construct_link_health_after_intermesh();
+    this->index_bridged_cable_ends();
 
     // Export the resolved inter-mesh port assignment (the port-determination output) to generated/fabric,
     // the same place as the ASIC mapping golden. Used by the inter-mesh golden test.
@@ -636,6 +640,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // as cabled, not as currently reachable, or a downed cable would shrink the mesh it is meant to be
     // routed around.
     this->ingest_factory_system_descriptor();
+    this->select_bridged_cables();
 
     // Generate Mesh graph based on physical system descriptor
     // Reliability mode is obtained from MetalContext inside the function
@@ -718,6 +723,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     // After intermesh, so intra-mesh directions and the mesh graph are settled.
     this->construct_link_health_after_intermesh();
+    this->index_bridged_cable_ends();
 
     // Export the resolved inter-mesh port assignment (the port-determination output) to generated/fabric,
     // the same place as the ASIC mapping golden. Used by the inter-mesh golden test.
@@ -1003,6 +1009,101 @@ void ControlPlane::ingest_factory_system_descriptor() {
         *this->fsd_physical_system_descriptor_, *this->physical_system_descriptor_);
 }
 
+void ControlPlane::select_bridged_cables() {
+    namespace eb = tt::tt_fabric::experimental;
+    const auto& rtoptions = this->rtoptions_.get();
+    const bool want_downed = rtoptions.get_e2h_bridge_downed_links();
+    const auto& break_links = rtoptions.get_e2h_bridge_break_links();
+    this->bridged_cables_ = std::make_unique<eb::BridgedCables>();
+    if (!want_downed && break_links.empty()) {
+        return;
+    }
+    auto& live = *this->physical_system_descriptor_;
+
+    // Inputs are global: decide locally, then agree before anyone acts. Only rank 0 prints the lists.
+    const auto& ctx = this->distributed_context_.get();
+    const bool print_lists = *ctx.rank() == 0;
+    std::vector<eb::BridgedCable> cables;
+    bool local_ok = true;
+    try {
+        const auto spec = eb::parse_break_spec(break_links);
+        const auto live_cables = eb::enumerate_live_cables(live);
+        if (spec.mode == eb::BreakSpec::Mode::List && print_lists) {
+            log_info(tt::LogFabric, "E2H bridge: {} live cable(s); break one with cable:<index>", live_cables.size());
+            for (std::size_t i = 0; i < live_cables.size(); ++i) {
+                log_info(tt::LogFabric, "  cable {}: {}", i, eb::describe_cable(live, live_cables[i]));
+            }
+        }
+        auto injected = eb::select_injected_cables(live_cables, spec);
+
+        std::vector<eb::BridgedCable> downed;
+        if (want_downed) {
+            TT_FATAL(
+                this->fsd_physical_system_descriptor_, "TT_METAL_E2H_BRIDGE_DOWNED_LINKS needs a factory descriptor");
+            // Test only: with downed bridging on, the break spec simulates unplugged cables for the diff to find.
+            eb::remove_cables_from_live(live, std::exchange(injected, {}));
+            downed = eb::find_downed_cables(*this->fsd_physical_system_descriptor_, live);
+            // The downed limit, applied before bridging hides these cables from link health's own check.
+            const auto expected = eb::enumerate_live_cables(*this->fsd_physical_system_descriptor_).size();
+            TT_FATAL(
+                static_cast<double>(downed.size()) <= kMaxDownedConnectionFraction * static_cast<double>(expected),
+                "E2H bridge: {} of {} factory cables are down (limit {:.0f}%); not bridging",
+                downed.size(),
+                expected,
+                100.0 * kMaxDownedConnectionFraction);
+        }
+        cables = eb::merge_bridged_cables(std::move(downed), injected);
+    } catch (const std::exception& e) {
+        local_ok = false;
+        log_error(tt::LogFabric, "E2H bridge cable selection failed on this rank: {}", e.what());
+    }
+
+    // A failed rank sends kFailed, so every rank sees the same verdict and throws the same text.
+    constexpr std::uint64_t kFailed = ~std::uint64_t{0};
+    std::uint64_t local = local_ok ? ttsl::hash::hash_objects_with_default_seed(cables) : kFailed, lo = 0, hi = 0;
+    using tt::tt_metal::distributed::multihost::ReduceOp;
+    ctx.all_reduce(ttsl::Span<std::uint64_t>(&local, 1), ttsl::Span<std::uint64_t>(&lo, 1), ReduceOp::MIN);
+    ctx.all_reduce(ttsl::Span<std::uint64_t>(&local, 1), ttsl::Span<std::uint64_t>(&hi, 1), ReduceOp::MAX);
+    TT_FATAL(lo == hi && hi != kFailed, "E2H bridge: ranks failed or disagree on which cables to bridge; see above");
+
+    if (print_lists) {
+        for (std::size_t i = 0; i < cables.size(); ++i) {
+            log_info(tt::LogFabric, "E2H bridge: bridging cable {}: {}", i, eb::describe_cable(live, cables[i]));
+        }
+        if (!cables.empty()) {
+            log_info(tt::LogFabric, "E2H bridge: link health counts the {} bridged cable(s) as present", cables.size());
+        }
+    }
+    // Downed cables are not in live; record them, so the mapper, intermesh pairing and link health see them cabled.
+    eb::add_bridged_cables_to_live(live, cables);
+
+    // And in the Cluster, whose link queries read UMD: a downed channel never trained, so it would get no router.
+    std::unordered_map<std::uint64_t, ChipId> local_chip_of;
+    for (const auto& [chip_id, unique_id] : this->cluster_.get().get_unique_chip_ids()) {
+        local_chip_of.emplace(unique_id, chip_id);
+    }
+    tt::Cluster::VirtualEthLinks virtual_links;
+    for (const auto& cable : cables) {
+        if (cable.reason != eb::BridgeReason::Downed) {
+            continue;
+        }
+        for (const auto& [end, peer] : {std::pair{cable.a, cable.b}, std::pair{cable.b, cable.a}}) {
+            const auto chip = local_chip_of.find(*end.asic);
+            if (chip == local_chip_of.end()) {
+                continue;
+            }
+            const auto peer_chip = local_chip_of.find(*peer.asic);
+            const auto peer_local = peer_chip == local_chip_of.end() ? std::nullopt : std::optional{peer_chip->second};
+            virtual_links[chip->second][end.chan] = tt::Cluster::VirtualEthLink{peer_local, peer.chan, *peer.asic};
+        }
+    }
+    if (!virtual_links.empty()) {
+        // ControlPlane holds the Cluster const; this is the one write it makes, at init, before any router exists.
+        const_cast<tt::Cluster&>(this->cluster_.get()).set_virtual_ethernet_links(std::move(virtual_links));
+    }
+    this->bridged_cables_->cables = std::move(cables);
+}
+
 void ControlPlane::construct_link_health_after_intermesh() {
     if (this->fsd_physical_system_descriptor_ == nullptr) {
         return;
@@ -1149,6 +1250,35 @@ const std::vector<experimental::LinkInfo>& ControlPlane::get_unused_downed_links
 
 const std::vector<experimental::LinkInfo>& ControlPlane::get_locally_unhealthy_links() const { return this->locally_unhealthy_; }
 
+experimental::BridgedCables& ControlPlane::bridged_cables() const { return *this->bridged_cables_; }
+
+void ControlPlane::index_bridged_cable_ends() {
+    auto& ends = this->bridged_cables_->ends;
+    const auto& live = *this->physical_system_descriptor_;
+    // By address: the mapper may have solved on the factory descriptor, which carries no UMD ids.
+    auto node_of = [&](tt::tt_metal::AsicID asic) -> std::optional<FabricNodeId> {
+        const auto address = live.find_physical_node_id(asic);
+        return address ? this->topology_mapper_->find_fabric_node_id_from_physical_node_id(*address) : std::nullopt;
+    };
+    std::size_t skipped = 0;
+    for (const auto& cable : this->bridged_cables_->cables) {
+        const auto a = node_of(cable.a.asic);
+        const auto b = node_of(cable.b.asic);
+        if (!a.has_value() || !b.has_value()) {
+            ++skipped;
+            continue;
+        }
+        const auto rank_a = live.get_mpi_rank_for_asic(cable.a.asic);
+        const auto rank_b = live.get_mpi_rank_for_asic(cable.b.asic);
+        const bool downed = cable.reason == experimental::BridgeReason::Downed;
+        ends[{*a, cable.a.chan}] = experimental::BridgedCableEnd{*b, cable.b.chan, rank_a, rank_b, downed};
+        ends[{*b, cable.b.chan}] = experimental::BridgedCableEnd{*a, cable.a.chan, rank_b, rank_a, downed};
+    }
+    if (skipped != 0 && *this->distributed_context_.get().rank() == 0) {
+        log_warning(tt::LogFabric, "E2H bridge: {} cable(s) join a chip the mesh does not use; not bridged", skipped);
+    }
+}
+
 void ControlPlane::refresh_connectivity_diff() {
     if (this->link_health_ == nullptr) {
         return;
@@ -1163,6 +1293,8 @@ void ControlPlane::refresh_connectivity_diff() {
             *this->cluster_.get().get_cluster_desc(),
             distributed_context,
             this->rtoptions_.get().get_target_device()));
+    // A bridged cable is still not plugged in; re-record it, or the refresh would report it downed again.
+    experimental::add_bridged_cables_to_live(*this->refreshed_live_descriptor_, this->bridged_cables_->cables);
     this->link_health_->refresh(nullptr, this->refreshed_live_descriptor_.get());
     // refresh() clears the unused-plane classification; reapply the routing-plane snapshot so holes
     // already classified as unused do not silently reactivate.
@@ -3137,6 +3269,14 @@ std::unordered_set<tt::tt_metal::CoreCoord> ControlPlane::get_active_ethernet_co
                     active_ethernet_cores.insert(eth_core);
                 }
             }
+        }
+    }
+    // Virtual cables: never trained, so UMD lists them idle, but they carry a fabric router (reserved-core rule above).
+    const auto& links = cluster.get_virtual_ethernet_links();
+    if (links.contains(chip_id) && (cluster.arch() == ARCH::BLACKHOLE || !skip_reserved_cores)) {
+        for (const auto& entry : links.at(chip_id)) {
+            const auto eth_core = soc_desc.get_eth_core_for_channel(entry.first, CoordSystem::LOGICAL);
+            active_ethernet_cores.insert(tt::tt_metal::CoreCoord(eth_core.x, eth_core.y));
         }
     }
     return active_ethernet_cores;
