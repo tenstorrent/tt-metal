@@ -63,7 +63,10 @@ python -m pytest "$model_dir/tests/test_decode_conv.py" --timeout 300 --junitxml
 
 export QWEN_DECODE_BUCKETS=1 QWEN_COMPACT_DECODE_RESIDUAL=1 QWEN_COMPACT_DECODE_MLP=1
 export QWEN_BATCHED_DECODE_ROPE=1 QWEN_COMPACT_DECODE_ATTENTION=1
-export QWEN_VLLM_KV_POOL_TOKENS=525312 QWEN_BATCHED_PREFILL=1
+# The pool has to clear vLLM's warmup prefill, which allocates max-num-batched-tokens of
+# activation at once: 262144 x 5120 x bf16 = 2560 MiB. At capacity 16 the GDN state for
+# 16 slots leaves 2684 MiB, so that warmup plus its 360 MiB reduce_scatter does not fit.
+export QWEN_VLLM_KV_POOL_TOKENS=458752 QWEN_BATCHED_PREFILL=1
 export QWEN_PREFILL_RESIDUAL_LAYOUT=sharded_replicated_norm QWEN_PREFILL_BATCHED_HEAD=1
 export QWEN_PREFILL_SKIP_INTERMEDIATE_HEAD=1 QWEN_PREFILL_STARTUP_WARMUP=1
 export QWEN_VLLM_HOST_COMPATIBILITY=1 VLLM_DEBUG_LOG_API_SERVER_RESPONSE=false
@@ -106,9 +109,16 @@ for capacity in 1 8 16; do
     server_pid=$!
     wait_started=$SECONDS
     while ! curl --max-time 2 -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; do
-        kill -0 "$server_pid"
+        # The server's own log is the only record of why it died, and it is not among the
+        # uploaded artifacts, so a death has to report itself here or the run is undiagnosable.
+        if ! kill -0 "$server_pid" 2>/dev/null; then
+            echo "Qwen3.8 server exited during startup at capacity=$capacity" >&2
+            tail -n 100 "$logs/qwen38_server_$capacity.log" >&2
+            exit 1
+        fi
         if (( SECONDS - wait_started > 1200 )); then
-            echo "Qwen3.8 readiness deadline exceeded at capacity=$capacity"
+            echo "Qwen3.8 readiness deadline exceeded at capacity=$capacity" >&2
+            tail -n 100 "$logs/qwen38_server_$capacity.log" >&2
             exit 1
         fi
         sleep 4
