@@ -621,40 +621,6 @@ class ReduceExpand:
         if norm is not None:
             assert residual is not None and self.can_norm
             return self._call_norm(gathered, out, residual, *norm)
-
-    def call_fabric(self, compact, out, residual, norm, fabric):
-        if isinstance(compact, PendingCompact):  # the producer runs in the same launch
-            return self._call_fabric(compact.rows, out, residual, norm, fabric, producer=compact)
-        return self._call_fabric(compact, out, residual, norm, fabric)
-
-    def _call_fabric(self, compact, out, residual, norm, fabric, producer=None):
-        """The row all-gather and the fused reduce + residual + RMSNorm in one launch per chip: ``compact`` is this
-        chip's [1, 1, 32, hidden / 8] compact rows (DRAM tiles), sent over the fabric to every chip of the row
-        (``fabric``: the row's FabricRowGather); returns (out, norm_out) as ``__call__`` with ``norm``. ``producer``
-        (a PendingCompact): the launch that writes ``compact`` runs in this one, on other cores."""
-        gamma, norm_out, eps = norm
-        for t in (compact, out, residual, gamma, norm_out):
-            assert t.layout == ttnn.TILE_LAYOUT and t.dtype == ttnn.bfloat16 and is_dram_interleaved(t)
-        assert compact.shape[-1] == self.compact_width
-        phase = fabric.next_phase()
-        kernels, cbs, semaphores = self._norm_kernels(
-            out, residual, gamma, norm_out, eps, gather_sem=fabric.sem_addr(phase)
-        )
-        # cb_in is the gather buffer of this phase (every chip's copies of this core's tiles land there)
-        cbs[self.cb_in] = ttnn.cb_descriptor_from_sharded_tensor(
-            self.cb_in, fabric.gather, address_offset=phase * fabric.phase_bytes, total_size=fabric.phase_bytes
-        )
-        extra_tensors = []
-        if producer is not None:
-            kernels = kernels + producer.section["kernels"]
-            cbs = cbs + producer.section["cbs"]
-            semaphores = semaphores + producer.section["semaphores"]
-            extra_tensors = producer.section["tensors"]
-        waits = producer.signals if producer is not None else 0
-        mesh_program = fabric.programs(kernels, cbs, semaphores, compact, phase, wait_count=waits)
-        io = [compact, residual, gamma, self.norm_consts, fabric.gather] + list(extra_tensors) + [out, norm_out]
-        ttnn.generic_op(io, mesh_program)
-        return out, norm_out
         tensors = (gathered, out) + ((residual,) if residual is not None else ())
         for t in tensors:
             assert t.layout == ttnn.TILE_LAYOUT and t.dtype == ttnn.bfloat16 and is_dram_interleaved(t)
@@ -715,6 +681,40 @@ class ReduceExpand:
         io = [gathered] + ([residual] if residual is not None else []) + [out]
         ttnn.generic_op(io, program)
         return out
+
+    def call_fabric(self, compact, out, residual, norm, fabric):
+        if isinstance(compact, PendingCompact):  # the producer runs in the same launch
+            return self._call_fabric(compact.rows, out, residual, norm, fabric, producer=compact)
+        return self._call_fabric(compact, out, residual, norm, fabric)
+
+    def _call_fabric(self, compact, out, residual, norm, fabric, producer=None):
+        """The row all-gather and the fused reduce + residual + RMSNorm in one launch per chip: ``compact`` is this
+        chip's [1, 1, 32, hidden / 8] compact rows (DRAM tiles), sent over the fabric to every chip of the row
+        (``fabric``: the row's FabricRowGather); returns (out, norm_out) as ``__call__`` with ``norm``. ``producer``
+        (a PendingCompact): the launch that writes ``compact`` runs in this one, on other cores."""
+        gamma, norm_out, eps = norm
+        for t in (compact, out, residual, gamma, norm_out):
+            assert t.layout == ttnn.TILE_LAYOUT and t.dtype == ttnn.bfloat16 and is_dram_interleaved(t)
+        assert compact.shape[-1] == self.compact_width
+        phase = fabric.next_phase()
+        kernels, cbs, semaphores = self._norm_kernels(
+            out, residual, gamma, norm_out, eps, gather_sem=fabric.sem_addr(phase)
+        )
+        # cb_in is the gather buffer of this phase (every chip's copies of this core's tiles land there)
+        cbs[self.cb_in] = ttnn.cb_descriptor_from_sharded_tensor(
+            self.cb_in, fabric.gather, address_offset=phase * fabric.phase_bytes, total_size=fabric.phase_bytes
+        )
+        extra_tensors = []
+        if producer is not None:
+            kernels = kernels + producer.section["kernels"]
+            cbs = cbs + producer.section["cbs"]
+            semaphores = semaphores + producer.section["semaphores"]
+            extra_tensors = producer.section["tensors"]
+        waits = producer.signals if producer is not None else 0
+        mesh_program = fabric.programs(kernels, cbs, semaphores, compact, phase, wait_count=waits)
+        io = [compact, residual, gamma, self.norm_consts, fabric.gather] + list(extra_tensors) + [out, norm_out]
+        ttnn.generic_op(io, mesh_program)
+        return out, norm_out
 
     def _call_norm(self, gathered, out, residual, gamma, norm_out, eps):
         for t in (gathered, out, residual, gamma, norm_out):

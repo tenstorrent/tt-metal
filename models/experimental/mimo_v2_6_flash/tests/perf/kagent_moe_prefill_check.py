@@ -9,8 +9,8 @@
    expert of one token fails it, and every value must be finite.
 2. A second call on the 4096 tokens must give a bitwise identical output (a race between cores shows up here).
 
-Decode is not checked here: the decode streams run correctly only inside the model's fused reduction (the
-standalone ``forward_decode`` path is broken independently of prefill), and prefill changes stay out of moe.py.
+Decode is not checked here (tests/test_moe_decode_tp8.py checks ``forward_decode`` against ``forward`` on the same
+tokens), and prefill changes stay out of moe.py.
 
 ``--write-base`` records the base outputs; they live outside the repository. Prints
 MOE_PREFILL_CORRECTNESS_PASS after every check passed.
