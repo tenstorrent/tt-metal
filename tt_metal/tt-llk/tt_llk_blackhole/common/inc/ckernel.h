@@ -820,6 +820,24 @@ inline void init_prng_seed(const std::uint32_t seed)
     }
 }
 
+inline constexpr std::uint32_t PRNG_SEED_WRITE_SPACING_CYCLES = 2000;
+inline constexpr std::uint32_t PRNG_SEED_SETTLE_CYCLES        = 1000;
+inline std::uint32_t prng_seed_write_time                     = 0;
+
+// No seed write within the spacing of the previous one, and no draw before the settle time; the low counter word is
+// exact across a wrap.
+inline void init_prng_seed_sfpu(const std::uint32_t seed)
+{
+    while (reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - prng_seed_write_time < PRNG_SEED_WRITE_SPACING_CYCLES)
+    {
+    }
+    get_cfg_pointer()[PRNG_SEED_Seed_Val_ADDR32] = seed;
+    prng_seed_write_time                         = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    while (reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - prng_seed_write_time < PRNG_SEED_SETTLE_CYCLES)
+    {
+    }
+}
+
 inline constexpr bool is_valid_instruction_mode(InstrModLoadStore mode)
 {
     return mode == InstrModLoadStore::INT32_2S_COMP || mode == InstrModLoadStore::INT32 || mode == InstrModLoadStore::LO16;
