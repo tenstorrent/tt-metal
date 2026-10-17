@@ -7753,6 +7753,14 @@ tasks:
     kind: mlp
     layer: 24
     stateful: false
+  frozen:
+    at: '2026-10-17T14:10:05'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_shared_expert.py: 88bec473cb772d21b63509a2dd1f29acf2dbe983a02b89d4d490665d346ba23a
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.dec_reindex.14
   title: 'dec_reindex block with steps 1-14 on device (last: shared_expert)'
   step: implement
