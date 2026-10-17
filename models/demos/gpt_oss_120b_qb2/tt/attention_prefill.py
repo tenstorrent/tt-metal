@@ -7,7 +7,6 @@ import ttnn
 from models.demos.gpt_oss.tt.attention.config import AttentionConfig, ProgramConfig
 from models.demos.gpt_oss.tt.attention.operations import (
     apply_allgather_and_slice,
-    apply_allreduce,
     apply_output_projection_fused_rs,
     apply_rope,
     concat_heads,
@@ -452,5 +451,27 @@ def _finish_prefill(
         projection_input.deallocate(True)
         ttnn.add(tt_out, weights.o_proj_bias, output_tensor=tt_out)
         tt_sdpa_out.deallocate(True)
-        tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
+        if mesh_config.tp == 1:
+            return tt_out
+
+        # Keep prefill on the supported all-reduce path. The separate async
+        # RS/AG calls corrupt rows at this model's padded physical width.
+        if total_seq_len % 128 == 0:
+            tt_out = ttnn.reshape(tt_out, (1, total_seq_len // 128, 128, -1))
+        reduced = ttnn.all_reduce(
+            tt_out,
+            num_links=ccl_manager.num_links,
+            topology=ccl_manager.topology,
+            cluster_axis=mesh_config.tp_axis,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_out.deallocate(True)
+        logical = ttnn.slice(
+            reduced,
+            starts=[0, 0, 0, 0],
+            ends=[reduced.shape[0], reduced.shape[1], reduced.shape[2], hidden_size],
+            steps=[1, 1, 1, 1],
+        )
+        reduced.deallocate(True)
+        tt_out_result = ttnn.reshape(logical, (1, 1, total_seq_len, hidden_size))
     return tt_out_result
