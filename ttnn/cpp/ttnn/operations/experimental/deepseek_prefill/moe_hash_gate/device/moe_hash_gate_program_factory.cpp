@@ -231,6 +231,9 @@ tt::tt_metal::ProgramDescriptor MoeHashGateDeviceOperation::ProgramFactory::crea
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.named_compile_time_args = std::move(compute_named_compile_time_args);
+    // The SFPU softplus picks its polynomial on this define, not on fp32_dest_acc_en: without it the
+    // sqrt-softplus score takes the bf16 fit, which drops the residual ln(1 + exp(-|t|)) for |t| > 5.
+    compute_kernel_desc.defines = {{"INP_FLOAT32", "1"}};
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = MathFidelity::HiFi4,
         .fp32_dest_acc_en = fp32_dest_acc_en,
