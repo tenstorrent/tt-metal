@@ -49,6 +49,16 @@ void kernel_main() {
     constexpr uint32_t dfb_xpowadd_id = tt::CBIndex::c_29;       // Add(|x + decimal|^p)
     constexpr uint32_t dfb_xpowsum_id = tt::CBIndex::c_30;       // Sum(|x + decimal|^p)
 
+    DataflowBuffer dfb_x_obj(dfb_x_id);
+    DataflowBuffer dfb_y_obj(dfb_y_id);
+    DataflowBuffer dfb_xabs_obj(dfb_xabs_id);
+    DataflowBuffer dfb_xpow_obj(dfb_xpow_id);
+    DataflowBuffer dfb_logx_obj(dfb_logx_id);
+    DataflowBuffer dfb_exp_lxmd_obj(dfb_exp_lxmd_id);
+    DataflowBuffer dfb_correct_xpow_obj(dfb_correct_xpow_id);
+    DataflowBuffer dfb_xpowadd_obj(dfb_xpowadd_id);
+    DataflowBuffer dfb_xpowsum_obj(dfb_xpowsum_id);
+
     constexpr uint32_t onetile = 1;
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
@@ -71,16 +81,17 @@ void kernel_main() {
             ckl::eltwise_chain(
                 ckl::IterationShape::tiles(onetile),
                 ckl::CopyTile<ckl::input(
-                    dfb_x_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
+                    dfb_x_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{dfb_x_obj},
                 ckl::runtime_if(
                     mask_this,
                     ckl::CopyTile<
                         ckl::input(dfb_mask_w_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
-                        ckl::Dst::D1>{},
+                        ckl::Dst::D1>{dfb_mask_w_obj},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{}),
                 ckl::Abs<ckl::Dst::D0>{},
                 ckl::PackTile<ckl::output(
-                    dfb_xabs_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                    dfb_xabs_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{
+                    dfb_xabs_obj});
 
             power_tile_to_dfb<
                 dfb_xabs_id,
@@ -88,13 +99,22 @@ void kernel_main() {
                 dfb_logx_id,
                 dfb_decimal_id,
                 dfb_exp_lxmd_id,
-                dfb_correct_xpow_id>(p, p_is_negative);
+                dfb_correct_xpow_id>(
+                dfb_xabs_obj,
+                dfb_xpow_obj,
+                dfb_logx_obj,
+                dfb_decimal_obj,
+                dfb_exp_lxmd_obj,
+                dfb_correct_xpow_obj,
+                p,
+                p_is_negative);
 
             // Add(|x|^p)
             if (col_idx == 0) {
-                copy_tile_to_dfb<dfb_correct_xpow_id, dfb_xpowadd_id>();
+                copy_tile_to_dfb<dfb_correct_xpow_id, dfb_xpowadd_id>(dfb_correct_xpow_obj, dfb_xpowadd_obj);
             } else {
-                add_tiles_to_dfb<dfb_correct_xpow_id, dfb_xpowadd_id, dfb_xpowadd_id>();
+                add_tiles_to_dfb<dfb_correct_xpow_id, dfb_xpowadd_id, dfb_xpowadd_id>(
+                    dfb_correct_xpow_obj, dfb_xpowadd_obj, dfb_xpowadd_obj);
             }
         }
         // Sum(|x|^p)
@@ -102,7 +122,14 @@ void kernel_main() {
             compute_kernel_lib::ReduceInputBlockShape::single());
 
         power_tile_to_dfb<dfb_xpowsum_id, dfb_xabs_id, dfb_xpow_id, dfb_recip_p_decimal_id, dfb_logx_id, dfb_y_id>(
-            recip_p, recip_p_is_negative);
+            dfb_xpowsum_obj,
+            dfb_xabs_obj,
+            dfb_xpow_obj,
+            dfb_recip_p_decimal_obj,
+            dfb_logx_obj,
+            dfb_y_obj,
+            recip_p,
+            recip_p_is_negative);
     }
 
     dfb_one_obj.pop_front(onetile);

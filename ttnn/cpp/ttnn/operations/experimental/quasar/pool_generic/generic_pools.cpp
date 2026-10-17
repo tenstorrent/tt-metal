@@ -337,7 +337,7 @@ static std::vector<Tensor> pool2d_L1(
 
     // call the halo uop
     const auto resolved_compute_kernel_config = init_device_compute_kernel_config(
-        tt::tt_metal::hal::get_arch(),
+        input_tensor.device()->arch(),
         compute_kernel_config,
         tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/true,
