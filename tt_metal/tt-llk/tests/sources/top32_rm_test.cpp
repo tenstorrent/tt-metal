@@ -142,6 +142,54 @@ static_assert(!PRE_SORTED_MODE || TOP32_ROW_ELEMENTS >= ELEMENTS_PER_TILE, "the 
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
 
+#if TOP32_VIA_WRAPPERS
+// The Metal unpack wrapper (experimental/llk_unpack_A_top32_rm_api.h) owns two decisions the
+// primitives below never see: which branch a format takes -- chosen on the src format being
+// Int32, so Float32 goes through SrcA like the 16-bit formats and is converted to the Dest
+// width on the way in -- and the L1 offset of chunk k. It reads the operand's formats and CB
+// read pointer through the tables the Metal JIT build generates per kernel; the harness has no
+// CBs, so the tables are defined here and filled from the runtime formats and buffers.
+// Operand 0 is the values row, operand 1 the indices.
+#include "internal/circular_buffer_interface.h"
+
+CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_src_format[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_dst_format[NUM_CIRCULAR_BUFFERS];
+// Read by llk_operands.h accessors the top32 wrapper does not call; defined so the header compiles.
+std::uint8_t unpack_tile_num_faces[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_partial_face[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_tile_face_r_dim[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_narrow_tile[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_tile_r_dim[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_tile_c_dim[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_num_faces_r_dim[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_num_faces_c_dim[NUM_CIRCULAR_BUFFERS];
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#include "experimental/llk_unpack_A_top32_rm_api.h"
+#pragma GCC diagnostic pop
+
+static constexpr std::uint32_t VALUES_OPERAND  = 0;
+static constexpr std::uint32_t INDICES_OPERAND = 1;
+
+inline void bind_operand(std::uint32_t operand, std::uint32_t buffer_address, std::uint32_t src_format, std::uint32_t dst_format)
+{
+    unpack_src_format[operand] = src_format;
+    unpack_dst_format[operand] = dst_format;
+    // Metal keeps CB pointers in 16-byte words; the wrapper applies the same -1 that L1_ADDRESS does.
+    get_local_cb_interface(operand).fifo_rd_ptr = buffer_address >> 4;
+}
+
+// One operand of one chunk through the Metal wrapper: branch, L1 offset and dummy valid are its.
+inline void unpack_chunk(std::uint32_t operand, std::uint32_t chunk, std::uint32_t num_faces)
+{
+    llk_unpack_A_top32_rm_init(operand);
+    llk_unpack_A_top32_rm(operand, chunk, num_faces);
+}
+#endif
+
 // One operand of one chunk. Re-initialising per call mirrors the consumer, which has to
 // because it reconfigures srcA between the value and index operands.
 //
@@ -209,6 +257,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t values_base  = L1_ADDRESS(params.buffer_A[0]);
     const std::uint32_t indices_base = L1_ADDRESS(params.buffer_B[0]);
 
+#if TOP32_VIA_WRAPPERS
+    bind_operand(VALUES_OPERAND, params.buffer_A[0], src_format, dst_format);
+    bind_operand(INDICES_OPERAND, params.buffer_B[0], src_format, dst_format);
+#endif
+
     // Mode 0 walks the whole row; mode 1 only the remainder after its whole tiles, which is
     // how top32_rm_dev_compute_v2.cpp finishes a row that is not a multiple of 1024. Both use
     // the same per-chunk pair, which branches on unpack_to_dest -- see unpack_chunk.
@@ -219,6 +272,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const std::uint32_t chunk     = first / ELEMENTS_PER_CHUNK;
         const std::uint32_t num_faces = chunk_num_faces(first);
 
+#if TOP32_VIA_WRAPPERS
+        // Mode 0 only. Mode 1 is Float32 and holds its operands in Dest (unpack_to_dest), while
+        // the Metal wrapper would send Float32 through SrcA -- a different configuration from
+        // the one the math thread above was built for.
+        if constexpr (!PRE_SORTED_MODE)
+        {
+            unpack_chunk(VALUES_OPERAND, chunk, num_faces);
+            unpack_chunk(INDICES_OPERAND, chunk, num_faces);
+            continue;
+        }
+#endif
         unpack_chunk(values_base, chunk, num_faces, src_format, dst_format);
         unpack_chunk(indices_base, chunk, num_faces, src_format, dst_format);
     }

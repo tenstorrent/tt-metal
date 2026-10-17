@@ -32,9 +32,11 @@ inline void llk_unpack_A_top32_rm(
     const std::uint32_t src_format = get_operand_src_format(operand_id);
     const std::uint32_t dst_format = get_operand_dst_format(operand_id);
     const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
-    const DataFormat dst_format_masked = static_cast<DataFormat>(dst_format & 0x3);
-    const std::uint32_t datum_size = dst_format_masked == DataFormat::Float32   ? 4
-                                     : dst_format_masked == DataFormat::Float16 ? 2
+    // The offset addresses L1, which holds the source format; the destination format can be narrower
+    // (Float32 input unpacked to Float16_b without fp32 dest accumulation) and would halve it.
+    const DataFormat src_format_masked = static_cast<DataFormat>(src_format & 0x3);
+    const std::uint32_t datum_size = src_format_masked == DataFormat::Float32   ? 4
+                                     : src_format_masked == DataFormat::Float16 ? 2
                                                                                 : 1;
     const std::uint32_t offset_address = (64 >> 4) * datum_size * tile_index;  // 64 elements per "tile"
     const std::uint32_t address = base_address + offset_address;
