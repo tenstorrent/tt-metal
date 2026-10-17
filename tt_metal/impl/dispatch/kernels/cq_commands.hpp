@@ -396,7 +396,8 @@ constexpr uint8_t CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET = 0xff;
 struct CQDispatchGoSignalMcastCmd {
     uint8_t multicast_go_offset;  // Index of the multicast go to write to. CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET - no
                                   // multicast gos.
-    uint16_t pad1;
+    uint8_t go_ring_slot;         // Launch message slot whose go message this go is written to.
+    uint8_t pad1;
     uint32_t go_signal;
     uint32_t wait_count;
     uint32_t wait_stream;  // Index of the stream to wait on
