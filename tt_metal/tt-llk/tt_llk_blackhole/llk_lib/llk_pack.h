@@ -530,14 +530,16 @@ inline void _llk_pack_init_(
         "which the mutex cannot cover");
 
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    // num_tiles is bounded by the whole DEST (what a SyncFull block may hold); the init has no DstSync
+    // input, so a SyncHalf overrun is left to the per-tile check at the pack call.
     const DataFormat src_format = static_cast<DataFormat>(pack_src_format);
     if (src_format == DataFormat::Float32)
     {
-        LLK_ASSERT(num_tiles <= 4, "Max supported num_tiles for FLOAT32 is 4.");
+        LLK_ASSERT(num_tiles <= 8, "Max supported num_tiles for FLOAT32 is 8 (the full DEST).");
     }
     else if ((src_format == DataFormat::Float16) || (src_format == DataFormat::Float16_b))
     {
-        LLK_ASSERT(num_tiles <= 8, "Max supported num_tiles for FLOAT16 or FLOAT16_B is 8.");
+        LLK_ASSERT(num_tiles <= 16, "Max supported num_tiles for FLOAT16 or FLOAT16_B is 16 (the full DEST).");
     }
 
     // 8bit datums in the unpack src format are not affected by the blackhole issue,

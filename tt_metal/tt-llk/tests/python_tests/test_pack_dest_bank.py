@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from conftest import blackhole_only
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TILE_DIMENSIONS
@@ -19,6 +20,7 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
+    DEST_SYNC,
     L1_ACC,
     NUM_BLOCKS,
     NUM_FACES,
@@ -86,7 +88,51 @@ def get_valid_num_faces_datacopy(tilize):
 def test_pack_dest_bank(
     formats, dest_acc, l1_acc, num_faces, tilize, dest_index, input_dimensions
 ):
+    _run_pack_dest_bank(
+        formats, dest_acc, l1_acc, num_faces, tilize, dest_index, input_dimensions
+    )
 
+
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    l1_acc=[L1Accumulation.No],
+    num_faces=4,
+    tilize=[Tilize.No],
+    dest_index=0,
+    input_dimensions=[[512, 32]],
+)
+def test_pack_dest_bank_sync_full(
+    formats, dest_acc, l1_acc, num_faces, tilize, dest_index, input_dimensions
+):
+    """One SyncFull block of the whole DEST: 16 tiles with a 16-bit pack source, 8 with fp32.
+
+    The pack MOP is initialised with that block width, which is twice the SyncHalf capacity the
+    init used to cap num_tiles at; the per-tile pack still packs the right data.
+    """
+    _run_pack_dest_bank(
+        formats,
+        dest_acc,
+        l1_acc,
+        num_faces,
+        tilize,
+        dest_index,
+        input_dimensions,
+        dest_sync=DestSync.Full,
+    )
+
+
+def _run_pack_dest_bank(
+    formats,
+    dest_acc,
+    l1_acc,
+    num_faces,
+    tilize,
+    dest_index,
+    input_dimensions,
+    dest_sync=DestSync.Half,
+):
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -104,7 +150,7 @@ def test_pack_dest_bank(
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+        dest_sync,
         dest_acc,
         formats,
         input_dimensions,
@@ -121,6 +167,7 @@ def test_pack_dest_bank(
         formats,
         templates=[
             TILIZE(tilize),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[
             generate_input_dim(input_dimensions, input_dimensions),
@@ -218,6 +265,7 @@ def test_pack_dest_bank_two_blocked_packs_of_4(
         formats,
         templates=[
             TILIZE(tilize),
+            DEST_SYNC(DestSync.Half),
         ],
         runtimes=[
             generate_input_dim(input_dimensions, input_dimensions),
