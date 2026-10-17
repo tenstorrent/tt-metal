@@ -6,6 +6,7 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/device.hpp"
 
 namespace ttnn::experimental {
@@ -23,7 +24,11 @@ ttnn::Tensor dit_rms_norm_unary_fused(
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
     auto rank = input_tensor.logical_shape().size();
-    TT_FATAL(rank > 0 && input_tensor.logical_volume() >= 0, "Input tensor must have rank > 0 and logical volume >= 0");
+    TT_FATAL(rank > 0, "Input tensor must have rank > 0");
+
+    if (input_tensor.logical_volume() == 0) [[unlikely]] {
+        return ttnn::clone(input_tensor, /*dtype=*/std::nullopt, output_memory_config, compute_kernel_config);
+    }
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
