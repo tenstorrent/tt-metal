@@ -17,6 +17,9 @@ from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
 CASES = [
     ("v41_e12", 5120, 2304, 12, 2048, 384, "clamped_silu"),
     ("v41_e24", 5120, 2304, 24, 2048, 384, "clamped_silu"),
+    # even splits (the half-width gate / up tiles under MIMO_FL_HG=1): GLM shape SiLU, K3 shape SiTU
+    ("glm_e12", 4096, 2048, 12, 2048, 256, "silu"),
+    ("k3_e12", 3584, 3072, 12, 2048, 896, "situ"),
 ]
 
 
@@ -32,6 +35,8 @@ def _counts(E, m, seed):
 def _act(g, u, act):
     if act == "clamped_silu":  # DeepSeek V4: silu(min(g, 10)) * clamp(u, -10, 10)
         return torch.nn.functional.silu(g.clamp(max=10)) * u.clamp(-10, 10)
+    if act == "situ":  # Kimi K3: 4 tanh(g / 4) sigmoid(g) * 25 tanh(u / 25)
+        return 4 * torch.tanh(g / 4) * torch.sigmoid(g) * (25 * torch.tanh(u / 25))
     return torch.nn.functional.silu(g) * u
 
 
@@ -47,9 +52,9 @@ def test_flat_uneven_split(device, case):
     plan = op.plan
     logger.info(
         f"{tag}: np {plan['np']} g {plan['g']} mt {plan['mt']} uneven {plan['uneven']} rgs {plan['rgs']} "
-        f"gate/up cores {len(plan['gu'])} down {plan['nd']} rdown {plan['rdown']}"
+        f"gate/up cores {len(plan['gu'])} down {plan['nd']} rdown {plan['rdown']} hg {plan['hg']}"
     )
-    assert plan["uneven"], f"{tag}: expected the uneven split"
+    assert plan["uneven"] or not tag.startswith("v41"), f"{tag}: expected the uneven split"
     q = lambda w: ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
     Wq = [[q(w_) for w_ in weights[0][e]] for e in range(E)]
     pinned = []

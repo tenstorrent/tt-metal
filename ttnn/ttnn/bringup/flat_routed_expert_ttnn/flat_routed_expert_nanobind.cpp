@@ -63,6 +63,7 @@ nb::dict plan_dict(
     d["mt"] = p->mt;
     d["rg"] = p->rg;
     d["uneven"] = p->uneven;
+    d["hg"] = p->hg;
     d["rgs"] = p->rgs;  // (uneven split: pair-sets per reader / first pair-set; empty when even)
     d["ps0"] = p->ps0;
     d["nk_gu"] = p->nk_gu;

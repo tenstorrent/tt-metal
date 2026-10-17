@@ -37,6 +37,9 @@
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
+#ifdef SE_HG  // (half-width gate / up tiles: the face-wise GLU, se_glu_faces.hpp)
+#include "se_glu_faces.hpp"
+#endif
 #if SE_ACT == 1
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
 #elif SE_ACT == 2
@@ -165,10 +168,26 @@ FORCE_INLINE void pop_used() {
 }
 
 // Gate/up activation on DST tiles [0, N) (gate t, up t + 1 -> t), on the PACK thread's SFPU (after tile_regs_wait).
+// SE_HG: tiles t, t + 1 hold [gate | up] of the h tile's left / right 16 columns: both activations land in tile t.
 FORCE_INLINE void act_dst(uint32_t n) {
 #ifndef SE_NO_ACT
     PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-#if SE_ACT == 1 || SE_ACT == 2 || SE_ACT == 3
+#ifdef SE_HG
+    // (one call site: two inlined copies of the SFPU body in this loop make the SFPI compiler's rvtt_synth_renumber
+    // pass ICE; unit u's activation goes to tile u & ~1, half u & 1)
+    for (uint32_t u = 0; u < n; ++u) {
+        PACK((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_glu_faces,
+            (DST_ACCUM_MODE, SE_ACT, 8),
+            u,
+            u,
+            u & ~1u,
+            VectorMode::C,
+            u & 1u)));
+    }
+#elif SE_ACT == 1 || SE_ACT == 2 || SE_ACT == 3
     for (uint32_t t = 0; t < n; t += 2) {  // one binary op: gate t, up t + 1 -> t
 #if SE_ACT == 1
         PACK((ckernel::llk_math_eltwise_binary_sfpu_swiglu<DST_ACCUM_MODE>(t, t + 1, t)));
@@ -505,7 +524,9 @@ void kernel_main() {
 #endif
     matmul_block_init(x_cb, in1_cb, false, gw, mt, kblk);
 #ifndef SE_NO_ACT
-#if SE_ACT == 1
+#if defined(SE_HG)  // (every face-wise GLU uses SiTU's sigmoid: tanh_init, no vConstFloatPrgm for the sigmoid)
+    PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init)));
+#elif SE_ACT == 1
     PACK((ckernel::llk_math_eltwise_binary_sfpu_swiglu_init()));
 #elif SE_ACT == 2
     PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init)));

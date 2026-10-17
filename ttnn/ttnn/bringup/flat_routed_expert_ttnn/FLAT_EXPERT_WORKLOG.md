@@ -867,3 +867,18 @@ V4.1 shape, us per expert (DRAM %), balanced sweep, one chip, bfp4, LoFi; E 24 (
 Bounds: M <= 128 DRAM / latency (~80-88%, DRISC off); large M down-bound: 72 gate/up (as if 108 cores) but 15 down
 cores at 8 columns (as if ~60) - the plan's trim drops down cores east of column 8 (slow for K3); keeping them gives
 -12% at M 1024. Even I 2048 at M 1024: 169.5 (ideal for I 2304 at its efficiency ~190).
+
+### Half-width gate / up tiles, step 1 (2026-10-17, MIMO_FL_HG=1)
+Idea (16-column split granularity without the slow tiny-tile matmul: zz_scratch_tiny_mm.py measured 32 x 16 and
+16 x 32 output tiles at the 32 x 32 tile's cycles, 17.3 / 16.1 per tile vs 17.3, i.e. half the MAC rate): a weight
+tile holds 16 gate columns then the same 16 up columns, so the full-tile matmul leaves gate in faces 0 / 2 and up in
+faces 1 / 3. A pair's two tiles A / B = [gate | up] of its h tile's left / right 16 columns (host: _hg_pair, a column
+permutation); the activation runs face-wise (se_glu_faces.hpp calculate_glu_faces under VectorMode::C: gate at the
+face, up one face on; A's result into its left half in place, B's into A's right half), so the packed h tile and
+everything downstream are unchanged. SiLU / SiTU / clamped SiLU (the sigmoid is SiTU's exp + Newton reciprocal).
+SFPI compiler trap: two inlined copies of the SFPU body in one loop (HALF 0 / HALF 1 calls) ICE in rvtt_synth_renumber
+(also a runtime half with two call sites); one call site per unit (out tile u & ~1, half u & 1) compiles. (Repro loop:
+TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1, rerun the logged compile + link from the kernel's trisc2 build dir, 0.6 s.)
+test_flat_uneven_split.py with MIMO_FL_HG=1 (V4.1 E12 / E24 clamped SiLU, GLM SiLU, K3 SiTU): min PCC 0.998, the
+same as the standard layout. V4.1 E24 us / expert, standard / HG: M 32 45.9 / 45.8, 80 51.0 / 51.1, 256 68.9 / 68.8,
+1024 245.4 / 245.4. Next: odd 16-column units per core (V4.1: 48 cores x 3 units, 3 per reader).

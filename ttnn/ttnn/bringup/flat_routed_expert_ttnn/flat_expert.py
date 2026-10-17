@@ -394,6 +394,16 @@ def _kd_of(pcd, it):
     return max(k for k in (8, 4, 2, 1) if k * pcd <= 16 and it % k == 0)
 
 
+def _hg_pair(Wg, Wu):
+    """(Wg, Wu) [H, I] -> (A, B) [H, I]: per 32-column group c, A's columns = gate 32c..+15 then up 32c..+15, B's =
+    gate 32c+16..+31 then up 32c+16..+31 (the matmul then leaves gate in faces 0 / 2, up in 1 / 3 of each tile)."""
+    H, I = Wg.shape
+    g, u = Wg.reshape(H, I // 32, 2, 16), Wu.reshape(H, I // 32, 2, 16)
+    A = torch.cat([g[:, :, 0], u[:, :, 0]], dim=2).reshape(H, I)
+    B = torch.cat([g[:, :, 1], u[:, :, 1]], dim=2).reshape(H, I)
+    return A, B
+
+
 def flat_weight_regions(W_l, lay):
     """One device's weights in the flat expert's per-core bank regions (the C++ op's flat_routed_expert_plan and this
     builder share it). W_l: per local expert (Wg [H, I], Wu [H, I], Wd [I, H]). Returns (gate/up regions per reader,
@@ -406,6 +416,8 @@ def flat_weight_regions(W_l, lay):
     * reader tail i: per expert, per K-block of kd_r tiles, [kd_r x pcd_r] columns from rem_cols + (i % n_rdn) pcd_r."""
     kblk = 8
     tiles = lambda w: w.view(w.shape[0] // 32, 32, w.shape[1] // 32, 32).permute(0, 2, 1, 3)
+    if lay.get("hg"):  # half-width tiles: a pair's "gate" tile [gate | up] of its columns 0..15, "up" tile of 16..31
+        W_l = [_hg_pair(a, b) + (c,) for a, b, c in W_l]
     T_l = [(tiles(a), tiles(b), tiles(c)) for a, b, c in W_l]
     it = W_l[0][0].shape[1] // 32
     RG, NP = lay["rg"], lay["np"]
@@ -1889,6 +1901,8 @@ class FlatRoutedExpert:
             layout = {k: lay[k] for k in WEIGHT_LAYOUT_KEYS if k in lay and (k != "dw_rot" or lay[k])}
             if lay.get("rgs"):  # (uneven split only: even plans keep their keys)
                 layout["rgs"] = tuple(lay["rgs"])
+            if lay.get("hg"):
+                layout["hg"] = True
             key = hashlib.sha1(repr((sorted(layout.items()), gids, n_dev)).encode()).hexdigest()[:12]
             files = {n: f"{cache_prefix}.flat.{wdtype}.lay{key}.{n}.tensorbin" for n in names}
             _adopt_legacy(cache_prefix, wdtype, files)

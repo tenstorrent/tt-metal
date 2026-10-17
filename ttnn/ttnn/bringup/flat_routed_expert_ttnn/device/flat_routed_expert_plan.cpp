@@ -261,6 +261,10 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         p.h_tile = 2048;
     }
     p.banks = device->dram_grid_size().x;
+    p.hg = std::getenv("MIMO_FL_HG") && std::atoi(std::getenv("MIMO_FL_HG")) != 0;
+    TT_FATAL(
+        !p.hg || cfg.activation == 0 || cfg.activation == 2 || cfg.activation == 3 || cfg.activation == 255,
+        "MIMO_FL_HG: SiLU / SiTU / clamped SiLU GLU only");
     const auto phys = [device](const Core& c) { return device->worker_core_from_logical_core(c); };
 
     // subgrids: 2 for It <= 16 (TP4-like), 3 for It <= 32 (TP2-like), else 1
