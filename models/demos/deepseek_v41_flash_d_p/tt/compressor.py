@@ -339,9 +339,17 @@ class TtCompressor:
             g = ttnn.all_gather(t, dim=2, cluster_axis=SP_AXIS, memory_config=DRAM)
         total = g.shape[-2]
         if valid < total:
-            iota = ttnn.slice(self.tables.iota, [0, 0, 0, 0], [1, 1, total, 1], memory_config=DRAM)
+            # ratio 1: total == the iota's rows, and a full-range slice returns a wrapper over the load-time iota's
+            # buffer (DS41-52, K-1): use the iota itself then, never free it
+            full = total == self.tables.iota.shape[-2]
+            iota = (
+                self.tables.iota
+                if full
+                else ttnn.slice(self.tables.iota, [0, 0, 0, 0], [1, 1, total, 1], memory_config=DRAM)
+            )
             keep = ttnn.lt(iota, float(valid), dtype=ttnn.bfloat16, memory_config=DRAM)
-            ttnn.deallocate(iota)
+            if not full:
+                ttnn.deallocate(iota)
             masked = ttnn.multiply(g, keep, dtype=ttnn.bfloat16, memory_config=DRAM)
             ttnn.deallocate(keep)
             if g is not t:
