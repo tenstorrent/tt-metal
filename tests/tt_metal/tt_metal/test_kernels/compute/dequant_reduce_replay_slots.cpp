@@ -22,7 +22,8 @@
 //   get_compile_time_arg_val(0) == 1 : dequant_tile_init, then reduce_init  (reduce records last)
 // CBs: c_0 reduce data (bf16), c_1 reduce scaler (bf16, row 0 of each face = 1.0), c_2 dequant input
 // (Int32), c_3 dequant scale (fp32), c_16 output (fp32): tile 0 = row sums in column 0, tile 1 = dequant.
-// Runtime arg 0: fp32 bit pattern of the negated zero point (the dequant body adds it, as ttnn does).
+// Runtime arg 0: fp32 bit pattern of the negated zero point (the dequant body adds it, which is the
+// quantization op's convention).
 
 namespace {
 constexpr std::uint32_t kInitOrder = get_compile_time_arg_val(0);
@@ -74,8 +75,8 @@ void kernel_main() {
     tile_regs_release();
     reduce_uninit();
 
-    // Tile 1: the dequant. Int32 input and fp32 scale go to Dest first (as the ttnn binary SFPU kernels
-    // do), then the SFPU body replays the SFPU-half recording.
+    // Tile 1: the dequant. Int32 input and fp32 scale go to Dest first (as the quantization op's binary
+    // SFPU kernels do), then the SFPU body replays the SFPU-half recording.
     reconfig_data_format_srca(cb_scaler, cb_q);
     copy_init(cb_q);
     tile_regs_acquire();
