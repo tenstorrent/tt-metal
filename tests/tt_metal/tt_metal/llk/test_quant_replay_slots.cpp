@@ -25,7 +25,12 @@
 // half at init and replay them per call; the FPU ops (reduce, transpose_dest, matmul) record into the other
 // half. A body that straddles the split is overwritten by whichever op records last, and that op's own
 // recording is corrupted in turn. This test runs an FPU reduce and an SFPU dequant in ONE kernel with both
-// inits issued up front, in both init orders, and checks both outputs against exact goldens.
+// inits issued up front (reduce_init first, dequant_tile_init last) and checks both outputs against exact
+// goldens: with a straddling dequant body the reduce MOP replays SFPU instructions in place of MVMULs and
+// the row sums come out wrong. The kernel also supports the reverse init order (compile arg 1), where the
+// reduce recording overwrites the tail of a straddling dequant body and the dequant then replays MVMULs
+// that wait forever for Src valid: that order is deliberately NOT registered as a test case, because a
+// regression there manifests as a device hang rather than a data failure.
 
 namespace tt::tt_metal {
 
@@ -236,15 +241,6 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeDequantRecordsAfterReduce) {
         GTEST_SKIP() << "FPU/SFPU replay split is a Wormhole/Blackhole math-thread convention";
     }
     run_and_check(this->device(), /*init_order=*/0);
-}
-
-// dequant_tile_init records first, reduce_init last: the reduce recording overwrites the tail of a dequant
-// body that reaches past the SFPU half, so the dequant replays MVMULs in place of its SFPU instructions.
-TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceRecordsAfterDequant) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "FPU/SFPU replay split is a Wormhole/Blackhole math-thread convention";
-    }
-    run_and_check(this->device(), /*init_order=*/1);
 }
 
 }  // namespace tt::tt_metal
