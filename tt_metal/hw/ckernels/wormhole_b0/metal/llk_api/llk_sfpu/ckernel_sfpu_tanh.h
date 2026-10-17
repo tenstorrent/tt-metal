@@ -150,8 +150,20 @@ sfpi_inline void _sfpu_tanh_polynomial_x2_(
     y1 = sfpi::copysgn(sfpi::min(r1, 1.0f), x1);
 }
 
+bool bf16_dest_tanh();
+template <int ITERATIONS>
+void calculate_tanh_bf16();
+// Whether BF16 DEST runs the generated tanh kernel as one call over the whole tile.
+inline constexpr bool tanh_bf16_whole_tile = true;
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanh() {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+        if (bf16_dest_tanh()) {
+            calculate_tanh_bf16<ITERATIONS>();
+            return;
+        }
+    }
     if constexpr (APPROXIMATION_MODE) {
         // Slopes in LReg0/1/2 packed hi/lo, intercepts in LReg4/5/6 -- where WH and BH keep a
         // 6-entry SFPLUTFP32 table. gelu_appx uses the same six registers the same way.
@@ -212,8 +224,16 @@ inline void calculate_tanh() {
     }
 }
 
+void init_tanh_bf16();
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+        if (bf16_dest_tanh()) {
+            init_tanh_bf16();
+            return;
+        }
+    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
         // 6-entry SFPLUTFP32 FP16 table, TABLE1 breakpoints |x| = 0.5, 1.0, 1.5, 2.0, 3.0.
@@ -265,3 +285,5 @@ inline void tanh_init() {
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_tanh_bf16.h"
