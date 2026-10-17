@@ -1300,3 +1300,6 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   from the framework, testing/contract.gap_feed (the golden block input of the run's first layer, as the ladder
   feeds it); None without PREFILL_LAYER_IDS or for a contiguous range. DeepSeek-V4.1 K.1 had put the golden reader in
   the model's adapter (GoldenGapFeed): a model never reads a golden, even behind a switch.
+- F103: a perf pick's ab switch may name a model setting (tt/settings.py): the A/B report sets its variable (prefix +
+  name) and refuses a value outside its choices; other names stay plain variables the code must read. DeepSeek-V4.1
+  P.1 named EXPERTS_IMPL, the code reads DS41_EXPERTS_IMPL: both sides ran bfp8 and the table was identical.
