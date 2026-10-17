@@ -1,10 +1,10 @@
 supported_archs: [wormhole, quasar]
 
 operands:
-  - {name: seed, dims: [32, 32], format: Float16_b}
-  - {name: a, dims: [32, 32], format: Float16_b}
-  - {name: b, dims: [32, 32], format: Float16_b}
-  - {name: out, dims: [32, 32], format: Float16_b}
+  - {name: seed, dims: [32, 32], format: Float16}
+  - {name: a, dims: [32, 32], format: Float16}
+  - {name: b, dims: [32, 32], format: Float16}
+  - {name: out, dims: [32, 32], format: Float16}
 
 operations:
   - dest_sync: SyncFull

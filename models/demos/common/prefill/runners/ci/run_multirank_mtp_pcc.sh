@@ -15,9 +15,11 @@ MANIFEST_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests
 MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/ci"
 
 CHUNK_SIZE=5120
+# Measured the way run_multirank_pcc.sh measures the no-MTP legs, so the two sets of numbers compare:
+# throwaway chunks first, which keeps JIT compile and trace capture off the timed request.
+WARMUP_CHUNKS=10
 GOLDEN_LEN=56320
 MAX_SEQ_LEN=${GOLDEN_LEN}
-NUM_USERS=1
 PCC_THRESHOLD=0.85
 # The MTP levels are decoder blocks chained on the trunk output, so their KV inherits the trunk error
 # and adds one block's worth per level. GLM-5.3 drifts ~0.03/level against its own CPU reference
@@ -34,6 +36,20 @@ case "${CONFIG}" in
   sc1|sc4) ;;
   *) echo "unknown config '${CONFIG}' (expected sc1 or sc4)" >&2; exit 2 ;;
 esac
+
+# The manifest count is the sc4 ceiling at the manifest's 1,044,480 context. The ranks take it through
+# setdefault but allocate it at MAX_SEQ_LEN, so the leg runs the full slot pool without gating capacity.
+# sc1 runs all 78 layers on one rank, so it overrides down to one user. The export has to be explicit:
+# the rank shell receives a fixed export list, so a value exported into this script does not reach it.
+RUNNER_NUM_USERS=""
+if [ "${CONFIG}" != sc4 ]; then
+  RUNNER_NUM_USERS=1
+fi
+if [ -n "${PREFILL_NUM_USERS:-}" ]; then
+  RUNNER_NUM_USERS=${PREFILL_NUM_USERS}
+fi
+RUNNER_NUM_USERS_EXPORT="${RUNNER_NUM_USERS:+export PREFILL_NUM_USERS=${RUNNER_NUM_USERS}; }"
+
 MANIFEST="${MANIFEST_DIR}/${MODEL}_mtp${LEVELS}.json"
 [ -f "${MANIFEST}" ] || { echo "no manifest for ${MODEL} MTP${LEVELS} at ${MANIFEST}" >&2; exit 2; }
 MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
@@ -63,7 +79,9 @@ TIMING_DIR="${MR_DIR}/timing"
 mkdir -p "${TIMING_DIR}"
 
 REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
-PROBE_CHUNKS="0,$((REAL_CHUNKS - 1))"
+# Start, ~50k, midpoint and tail: run_multirank_pcc.sh's probes over this leg's one window.
+PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((REAL_CHUNKS / 2 - 1))" \
+  "$((REAL_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
 
 cleanup() {
   if [ -n "${RUNNER_PID:-}" ] && kill -0 "${RUNNER_PID}" 2>/dev/null; then
@@ -108,7 +126,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo "resolved shape for ${MODEL} MTP${MTP_LEVELS}/${CONFIG}: layers=${NUM_LAYERS} max_seq_len=${MAX_SEQ_LEN} users=${NUM_USERS} chunks=${REAL_CHUNKS}"
+echo "resolved shape for ${MODEL} MTP${MTP_LEVELS}/${CONFIG}: layers=${NUM_LAYERS} max_seq_len=${MAX_SEQ_LEN} users=${RUNNER_NUM_USERS:-manifest} chunks=${REAL_CHUNKS}"
 
 cd "${TTRUN_CWD}"
 python3 "${TTRUN_PY}" \
@@ -120,18 +138,19 @@ python3 "${TTRUN_PY}" \
   --mpi-args "--bind-to none --tag-output --allow-run-as-root --wdir ${TT_METAL_HOME} --output-filename ${RANKLOGS}/runner -x PATH -x LD_LIBRARY_PATH" \
   bash -lc "cd '${TT_METAL_HOME}'; \
     export PYTHONPATH='${TT_METAL_HOME}'; \
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
+    export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
-    export PREFILL_NUM_USERS=${NUM_USERS}; \
+    ${RUNNER_NUM_USERS_EXPORT}\
     export PREFILL_SYNC_PER_CHUNK=1; \
     export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
-    export PREFILL_ENABLE_MIGRATION=1; \
-    export PREFILL_MOCK_MIGRATION=1; \
+    export PREFILL_ENABLE_MIGRATION=0; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_LAYER_ACK_D2H=1; \
     export TT_METAL_SHM_TRACKING_DISABLED=1; \
-    export LOGURU_LEVEL=INFO; \
+    export LOGURU_LEVEL=ERROR; \
     exec python3 -m models.demos.common.prefill.runners.prefill_runner" &
 RUNNER_PID=$!
 cd "${TT_METAL_HOME}"
@@ -167,6 +186,8 @@ echo "producer host order from tt-run discovery: ${HOSTS}"
 
 MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
 set +e
+# The producer pins itself to one slot rather than taking the manifest count the ranks allocate for:
+# the warmup chunks and the single measured request both go to slot 0.
 "${MPIRUN}" \
   --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
   --output-filename "${RANKLOGS}/producer" \
@@ -174,11 +195,14 @@ set +e
   -x PATH -x LD_LIBRARY_PATH \
   bash -lc "cd '${TT_METAL_HOME}'; \
     export PYTHONPATH='${TT_METAL_HOME}'; \
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
+    export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
-    export PREFILL_NUM_USERS=${NUM_USERS}; \
+    export PREFILL_NUM_USERS=1; \
     export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
+    export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
     export PREFILL_PRODUCER_MAX_REQUESTS=1; \
     export PREFILL_PRODUCER_MULTI_TURN_PROB=0; \
     export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \

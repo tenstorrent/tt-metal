@@ -44,7 +44,9 @@ class GLM53Adapter(MLAPrefillAdapter):
     # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores and rest for other needs.
     # 1216: the tp_sharded fallback gather (used wherever the snake ring
     # cannot close) adds two high_bw_all_gather programs at two 16 B/bank semaphores each.
-    l1_small_size = 1216
+    # 1536: #58681 gave every all_gather multicast program a second (done) semaphore, which pushed the
+    # traced path one 16 B slot past 1216 (Blaze run 37730295536). Keep in sync with GLM_L1_SMALL_SIZE.
+    l1_small_size = 1536
     routing_use_l1_small_for_semaphores = True
 
     supports_mtp = True

@@ -657,6 +657,9 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestSimpleProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
@@ -680,6 +683,9 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
@@ -731,6 +737,9 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
@@ -759,6 +768,9 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
@@ -923,6 +935,9 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
@@ -976,6 +991,9 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoTrace) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }

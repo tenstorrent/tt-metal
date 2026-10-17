@@ -14,6 +14,7 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import (
     BroadcastType,
     DestAccumulation,
+    GatedReduceScale,
     MathFidelity,
     MathOperation,
     PackerReluType,
@@ -36,11 +37,15 @@ from helpers.sfpu_dispatch_constants import (
     CLAMP_MAX,
     CLAMP_MIN,
     CLAMPED_SILU_GLU_LIMIT,
+    EMA_ALPHA,
+    EMA_BETA,
     EXP_WITH_BASE_SCALE,
     HARDSHRINK_LAMBDA,
     INT_MAXMIN_SCALAR,
     LRELU_NEGATIVE_SLOPE,
     PRELU_SLOPE,
+    RAND_FROM,
+    RAND_SCALE,
     RELU_MAX_THRESHOLD,
     RELU_MIN_THRESHOLD,
     REMAINDER_UINT32_SCALAR,
@@ -2282,6 +2287,23 @@ class PackGolden:
         return acceptable.all().item()
 
 
+def ema_down_columns(x: torch.Tensor, chain_rows: int = None) -> torch.Tensor:
+    """EMA down each column of a row-major [rows, cols] tensor, carry reset every ``chain_rows`` rows.
+
+    Float32 throughout, like the kernel's LREG carry; the caller applies the output rounding.
+    """
+    x = x.to(torch.float32)
+    chain_rows = chain_rows or x.shape[0]
+    out = torch.empty_like(x)
+    prev = torch.zeros_like(x[0])
+    for row in range(x.shape[0]):
+        if row % chain_rows == 0:
+            prev = torch.zeros_like(x[0])
+        prev = EMA_ALPHA * prev + EMA_BETA * x[row]
+        out[row] = prev
+    return out
+
+
 @register_golden
 class UnarySFPUGolden:
     # Ops whose NaN result carries a real sign, because the kernel moves the sign bit rather
@@ -2355,6 +2377,7 @@ class UnarySFPUGolden:
             MathOperation.Neg: self._neg,
             MathOperation.Tanh: self._tanh,
             MathOperation.Fill: self._fill,
+            MathOperation.Rand: self._rand,
             MathOperation.Elu: self._elu,
             MathOperation.Exp: self._exp,
             MathOperation.Exp2: self._exp2,
@@ -2408,6 +2431,7 @@ class UnarySFPUGolden:
             MathOperation.ReduceColumn: self._reduce_columns,
             MathOperation.ReduceRow: self._reduce_rows,
             MathOperation.Cumsum: self._cumsum,
+            MathOperation.Ema: self._ema,
             MathOperation.Typecast: self._typecast,
             # Integer unary ops (routed through the integer path in __call__).
             MathOperation.LeftShift: self._left_shift,
@@ -2471,6 +2495,8 @@ class UnarySFPUGolden:
         # relu_min's integer threshold, matching the kernel's RELU_MIN_INT_THRESHOLD default.
         # Signed: the kernel carries it as a two's-complement uint32 and static_casts to int.
         self._relu_min_int_threshold = int(RELU_MIN_THRESHOLD)
+        # polygamma's order, matching the kernel's default when SFPU_POLYGAMMA_ORDER is unset.
+        self._polygamma_order = 1
         self.data_format = None
         # Precision the SFPU actually evaluates at, which is Dest's and not the output
         # format's. The per-element ops below read this rather than data_format: no
@@ -2496,18 +2522,29 @@ class UnarySFPUGolden:
         shift_amount: int = 3,
         relu_min_int_threshold: int = int(RELU_MIN_THRESHOLD),
         relu_max_threshold: float = RELU_MAX_THRESHOLD,
+        max_min_scalar=None,
         tile_dimensions: tuple[int, int] = TILE_DIMENSIONS,
+        polygamma_order: int = 1,
     ):
         self.data_format = data_format
         self.dst_format = data_format
         self.dest_acc = dest_acc
         # Mirrors the SFPU_SHIFT_AMOUNT template parameter; only the unary shift ops read it.
         self._int_shift_amount = shift_amount
+        # Mirrors the SFPU_POLYGAMMA_ORDER template parameter; only polygamma reads it.
+        self._polygamma_order = polygamma_order
         # Mirrors the SFPU_RELU_MIN_INT_THRESHOLD template parameter; only relu_min on an
         # integer format reads it. Signed here, two's-complement uint32 on the kernel side.
         self._relu_min_int_threshold = relu_min_int_threshold
         # Mirrors the SFPU_RELU_MAX_THRESHOLD template parameter; only relu_max reads it.
         self._relu_max_threshold = relu_max_threshold
+        # Mirrors SFPU_UNARY_MAX_MIN_SCALAR; None restores the dispatcher defaults.
+        self._UNARY_MAX_MIN_VALUE = (
+            UNARY_MAX_MIN_VALUE if max_min_scalar is None else float(max_min_scalar)
+        )
+        self._int_maxmin_scalar = (
+            INT_MAXMIN_SCALAR if max_min_scalar is None else int(max_min_scalar)
+        )
 
         if operation not in self.ops:
             raise ValueError(f"Unsupported operation: {operation}")
@@ -2594,15 +2631,25 @@ class UnarySFPUGolden:
 
         result = tensor.clone().flatten()
 
-        # Cumsum accumulates down each tile's columns, so it cannot go through the
-        # per-element map below and is evaluated here on the untilized (row-major) view.
-        # The tilize that follows puts it in the layout the element-wise path produces, so
+        # Cumsum and EMA accumulate down each tile's columns, so they cannot go through the
+        # per-element map below and are evaluated here on the untilized (row-major) view.
+        # The tilize that follows puts them in the layout the element-wise path produces, so
         # every later stage (dest rounding, untilize, output conversion) stays shared.
-        whole_tensor_res = (
-            self._cumsum(result, dimensions)
-            if operation == MathOperation.Cumsum
-            else None
-        )
+        if operation not in (MathOperation.Cumsum, MathOperation.Ema):
+            whole_tensor_res = None
+        elif skip_tilize:
+            # The fuser passes Dest already tilized; permute in Float32 so neither direction rounds.
+            row_major = untilize_block(
+                result.to(torch.float32), DataFormat.Float32, dimensions
+            ).flatten()
+            whole_tensor_res = tilize_block(
+                self.ops[operation](row_major, dimensions),
+                dimensions,
+                DataFormat.Float32,
+                tile_dimensions=tile_dimensions,
+            ).flatten()
+        else:
+            whole_tensor_res = self.ops[operation](result, dimensions)
 
         if not skip_tilize:
             result = tilize_block(
@@ -3335,6 +3382,11 @@ class UnarySFPUGolden:
         cdf = 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
         return cdf + x * phi
 
+    def _rand(self, x):
+        # No element-wise golden exists: the midpoint is only valid ahead of a downstream op whose
+        # result is the same for every draw. test_rand_quasar checks rand statistically.
+        return RAND_FROM + RAND_SCALE / 2
+
     def _fill(self, x, const_value=5):
         input_tensor = (
             x
@@ -3479,7 +3531,6 @@ class UnarySFPUGolden:
     _REMAINDER_DIVISOR = 2.0
     _UNARY_COMP_THRESHOLD = UNARY_COMP_THRESHOLD
     _UNARY_MAX_MIN_VALUE = UNARY_MAX_MIN_VALUE
-    _POLYGAMMA_ORDER = 1
     _XIELU_ALPHA_P = 1.0
     _XIELU_ALPHA_N = 1.0
     _XIELU_BETA = 0.5
@@ -3559,8 +3610,8 @@ class UnarySFPUGolden:
         # Float16 rule would make the pole's inf a NaN, which the sweep never judges, so
         # any answer there would pass (see `_sinh`).
         if x <= 0 and float(x).is_integer():
-            return math.inf if self._POLYGAMMA_ORDER % 2 else math.nan
-        return self._torch_unary(x, lambda t: torch.polygamma(self._POLYGAMMA_ORDER, t))
+            return math.inf if self._polygamma_order % 2 else math.nan
+        return self._torch_unary(x, lambda t: torch.polygamma(self._polygamma_order, t))
 
     def _xielu(self, x):
         # Mirrors calculate_xielu: beta = 0.5, alpha_p/alpha_n learnable params.
@@ -3599,6 +3650,11 @@ class UnarySFPUGolden:
         rows, cols = dimensions[0], dimensions[1]
         tiles = x.reshape(rows // TILE_DIM, TILE_DIM, cols // TILE_DIM, TILE_DIM)
         return torch.cumsum(tiles.to(torch.float32), dim=1).flatten()
+
+    def _ema(self, x, dimensions: tuple[int, int]):
+        """Column-wise EMA inside each 32x32 tile, on the untilized view (see ema_down_columns)."""
+        rows, cols = dimensions[0], dimensions[1]
+        return ema_down_columns(x.reshape(rows, cols), chain_rows=TILE_DIM).flatten()
 
     # Pools whose NaN result is emitted by the datapath rather than selected from a lane, so
     # its sign is the ISA's to choose and the golden canonicalises it. Max and Min instead
@@ -3878,8 +3934,8 @@ class EltwiseBinaryGolden(FidelityMasking):
                 num_tiles_per_accumulation,
             )
 
-        # On Quasar with IMPLIED_MATH_FORMAT=Yes the dest register's physical storage is
-        # implied from the SrcA tag, so MX-output paths keep that precision through the golden
+        # On Quasar the dest register's physical storage follows the SrcA format,
+        # so MX-output paths keep that precision through the golden
         # and multi-tile accumulation rounds the same way as hardware.
         out_is_mx = data_format.is_mx_format()
         hw_dest_dtype = (
@@ -4266,6 +4322,16 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 result_row = torch.tensor(
                     [float(v) for v in row_values], dtype=torch.float32
                 )
+                if (
+                    operation == MathOperation.SfpuElwmul
+                    and dest_acc == DestAccumulation.No
+                    and get_chip_architecture() != ChipArchitecture.QUASAR
+                ):
+                    # 16-bit Dest mul stores +0 when either input is zero, including 0 * inf.
+                    zero_input = (src1_row == 0) | (src2_row == 0)
+                    result_row = torch.where(
+                        zero_input, torch.zeros_like(result_row), result_row
+                    )
                 result_row, generated_row = self._canonicalise_emitted_nan(
                     operation, result_row
                 )
@@ -4978,7 +5044,7 @@ class ReduceGapoolGolden(FidelityMasking):
 
         fidelity_iter_count = self.MATH_FIDELITY_TO_ITER_COUNT[math_fidelity]
 
-        # On Quasar with implied_math_format, HW dest precision follows the SrcA tag:
+        # On Quasar HW dest precision follows the SrcA format:
         # Float16 → FP16A; Float16_b / MX inputs → BF16. MX-output paths keep that
         # precision through the gapool + face-accumulation chain instead of collapsing
         # inputs to the output dtype, which would force fp16 → bf16 before any math.
@@ -5678,6 +5744,37 @@ class Top32RmGolden:
 
 
 @register_golden
+class WelfordsGolden:
+    """Per-column Welford mean / population variance over ``row_blocks``, in float64.
+
+    ``save_before_block`` also returns the state before that block, rounded to ``state_format`` (Dest).
+    """
+
+    def __call__(self, row_blocks, save_before_block=None, state_format=None):
+        columns = row_blocks[0].shape[1]
+        mean = torch.zeros(columns, dtype=torch.float64)
+        m2 = torch.zeros(columns, dtype=torch.float64)
+        count = 0
+        result = {}
+        for block_index, block in enumerate(row_blocks):
+            if block_index == save_before_block:
+                if state_format is not None:
+                    torch_format = format_dict[state_format]
+                    mean = mean.to(torch_format).to(torch.float64)
+                    m2 = m2.to(torch_format).to(torch.float64)
+                result["saved_mean"] = mean.clone()
+                result["saved_m2"] = m2.clone()
+            for row in block.to(torch.float64):
+                count += 1
+                delta = row - mean
+                mean = mean + delta / count
+                m2 = m2 + delta * (row - mean)
+        result["mean"] = mean
+        result["var"] = m2 / count
+        return result
+
+
+@register_golden
 class WhereGolden:
     def __call__(self, operand1, true_value, false_value):
         # Element-wise select matching the C++ sfpu_ternary_function:
@@ -5940,6 +6037,42 @@ class SdpaExpUnclampedGolden:
         return round_to_dest_width(result, DestAccumulation.No).to(
             format_dict[data_format]
         )
+
+
+@register_golden
+class GatedReduceGolden:
+    """Adjacent gate/up fusion: scale and activate in FP32, round only the result."""
+
+    def __call__(
+        self,
+        gate,
+        up,
+        gate_mode,
+        up_mode,
+        scale_flags,
+        scale,
+        out_scale,
+        limit,
+        alpha,
+        dest_acc,
+    ):
+        gate = gate.float()
+        up = up.float()
+        if scale_flags & GatedReduceScale.Gate:
+            gate = gate * scale
+        if scale_flags & GatedReduceScale.Up:
+            up = up * scale
+        if gate_mode == "ClampedSilu":
+            gate = gate.clamp(max=limit)
+            activated = gate * torch.sigmoid(alpha * gate)
+        else:
+            activated = torch.nn.functional.silu(gate)
+        if up_mode == "Clamp":
+            up = up.clamp(-limit, limit)
+        result = activated * up
+        if scale_flags & GatedReduceScale.Out:
+            result = result * out_scale
+        return round_to_dest_width(result, dest_acc)
 
 
 @register_golden
