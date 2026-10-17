@@ -3510,6 +3510,13 @@ class TPGatedDeltaNet:
         Nv, Dk, Dv, K, C = self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
         T = self._spec_shape[1]
         rows = {int(u) for u in rows}
+        if self.B == 1:
+            # B == 1: a ttnn.slice over the whole rec_state / window is a no-op that returns the buffer itself, so the
+            # per-row path below would hand the durable state to _write_spec_rows, which frees its parts. The one
+            # user is every user: the whole-slot seed is the same write.
+            assert rows == {0}, f"rows {sorted(rows)} outside range(1)"
+            self.seed_spec_state()
+            return
         self.sync_conv_win()
         ring_parts = {}
         for u in sorted(rows):
@@ -3544,18 +3551,21 @@ class TPGatedDeltaNet:
             ring_parts[u] if u in ring_parts else ttnn.slice(ring4, (0, u * Nv, 0, 0), (1, (u + 1) * Nv, Dk, Dv))
             for u in range(B)
         ]
-        blk0 = ttnn.concat(parts, dim=1)
-        for s in parts:
-            ttnn.deallocate(s)
+        # B == 1: ttnn.concat of ONE tensor returns that tensor (no copy), so the part must not be freed here.
+        blk0 = parts[0] if B == 1 else ttnn.concat(parts, dim=1)
+        if B > 1:
+            for s in parts:
+                ttnn.deallocate(s)
         sharded = ttnn.to_memory_config(blk0, self._row_shard_memcfg(B * Nv * Dk, Dv))
         ttnn.deallocate(blk0)
         ttnn.experimental.slice_write(sharded, ring4, [0, 0, 0, 0], [1, B * Nv, Dk, Dv], [1, 1, 1, 1])
         ttnn.deallocate(sharded)
         win = self.verify_win_cur()
         eparts = [e_parts[u] if u in e_parts else ttnn.slice(win, (u, 0, 0), (u + 1, K - 1 + T, C)) for u in range(B)]
-        new = ttnn.concat(eparts, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        for e in eparts:
-            ttnn.deallocate(e)
+        new = eparts[0] if B == 1 else ttnn.concat(eparts, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if B > 1:
+            for e in eparts:
+                ttnn.deallocate(e)
         ttnn.copy(new, win)
         ttnn.deallocate(new)
 
