@@ -106,7 +106,7 @@
     pytest --timeout 600 models/common/tests/test_tt_sampling.py
     # Complements the above: SeedManager slot/salt state machine, params broadcast/scatter,
     # host-level trace bookkeeping. -k drops the log-probs tests, the only ones needing >1 device.
-    pytest --timeout 600 models/common/tests/test_sampling.py -k "not log_probs and not logprobs"
+    pytest --timeout 600 models/common/tests/test_sampling.py -k "(not log_probs and not logprobs) or test_log_probs_calculation_single_device or test_log_probs_returns_none_when_disabled"
   model: sampling-common
   skus:
     wh_n150:
