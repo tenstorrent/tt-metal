@@ -485,14 +485,18 @@ def _fp32_random_normal_bits(count: int, seed: int) -> list[int]:
     return (sign | exponent | mantissa).tolist()
 
 
-def test_eltwise_unary_typecast_fp32_to_fp16b_rounding_specials():
-    # The SFPU half of Float32 -> Float16_b rounds the fp32 word in Dest to bfloat16
-    # precision and stores it back as fp32; the packer narrows it afterwards. Read
-    # that fp32 word back as it is (Float32 L1 output): the packer's own fp32 -> bf16
-    # conversion maps NaN to infinity, so a bf16 output could not show what the SFPU
-    # left in Dest.
+def _run_fp32_to_fp16b_specials(
+    formats: InputOutputFormat,
+) -> tuple[list[int], list[int], list[float]]:
+    """Run typecast_tile<Float32, Float16_b> over the special and random fp32 patterns.
+
+    ``formats`` is the L1 pair the patterns go in and the result comes out as; the
+    kernel pair is always Float32 -> Float16_b. Returns the input bit patterns, the
+    bfloat16 golden as fp32 bit patterns (torch rounds to nearest-even and overflows
+    to infinity like the kernel; it canonicalises NaN, dropping the sign, so NaN
+    lanes are for the caller to judge) and the values read back from L1.
+    """
     kernel_formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b)
-    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     dest_acc = DestAccumulation.Yes  # a Float32 input needs 32-bit Dest
     input_dimensions = [32, 32]
 
@@ -506,8 +510,6 @@ def test_eltwise_unary_typecast_fp32_to_fp16b_rounding_specials():
     assert len(specials) <= src_A.numel()
     bits = specials + _fp32_random_normal_bits(src_A.numel() - len(specials), seed=7301)
     src_A = _fp32_bits_to_tensor(bits)
-    # torch rounds float32 -> bfloat16 to nearest-even and overflows to inf, like the
-    # kernel; it canonicalises NaN (dropping the sign), so NaN lanes are checked apart.
     golden_bits = _tensor_to_fp32_bits(src_A.to(torch.bfloat16))
 
     configuration = _build_typecast_config(
@@ -525,6 +527,17 @@ def test_eltwise_unary_typecast_fp32_to_fp16b_rounding_specials():
     assert len(result) == len(
         bits
     ), f"expected {len(bits)} result elements, got {len(result)}"
+    return bits, golden_bits, result
+
+
+def test_eltwise_unary_typecast_fp32_to_fp16b_rounding_specials():
+    # The SFPU half of Float32 -> Float16_b rounds the fp32 word in Dest to bfloat16
+    # precision and stores it back as fp32; the packer narrows it afterwards. Read
+    # that fp32 word back as it is (Float32 L1 output): the packer's own fp32 -> bf16
+    # conversion maps NaN to infinity, so a bf16 output could not show what the SFPU
+    # left in Dest (the production pair is checked by the test below).
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    bits, golden_bits, result = _run_fp32_to_fp16b_specials(formats)
 
     mismatches = []
     for b, g, r in zip(bits, golden_bits, result):
@@ -545,6 +558,28 @@ def test_eltwise_unary_typecast_fp32_to_fp16b_rounding_specials():
             mismatches.append((hex(b), expected, hex(got)))
     assert not mismatches, (
         f"{len(mismatches)} fp32->bf16 mismatches (input bits, expected, got): "
+        f"{mismatches[:16]}"
+    )
+
+
+def test_eltwise_unary_typecast_fp32_to_fp16b_nan_packs_to_inf():
+    # The production pair (ttnn.typecast Float32 -> Float16_b, 32-bit Dest): the
+    # packer narrows the rounded fp32 word in Dest to bfloat16, and its narrowing
+    # turns a NaN into an infinity with the NaN's sign. So a NaN input reaches L1 as
+    # +/-inf with the input sign, whatever payload the SFPU left in Dest. What the
+    # user must not see is the rounding carrying a NaN out of its exponent into a
+    # signed zero (0x7FFFFFFF -> 0x80000000), which packs as -0.0 instead of +inf.
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b)
+    bits, golden_bits, result = _run_fp32_to_fp16b_specials(formats)
+
+    mismatches = []
+    for b, g, r in zip(bits, golden_bits, result):
+        got = struct.unpack("<I", struct.pack("<f", r))[0]
+        expected = (b & _FP32_SIGN_BIT) | _FP32_EXP_MASK if _fp32_is_nan(b) else g
+        if got != expected:
+            mismatches.append((hex(b), hex(expected), hex(got)))
+    assert not mismatches, (
+        f"{len(mismatches)} fp32->bf16 L1 mismatches (input bits, expected, got): "
         f"{mismatches[:16]}"
     )
 
