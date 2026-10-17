@@ -16,16 +16,21 @@ using namespace ckernel::math;
 /**
  * @brief Configure the math (FPU) thread's ALU control registers for the given source data formats.
  *
- * Sets ZEROACC bank auto-detect, enables INT8 math when either source is Int8/Int32, and programs FP32 dest
- * accumulation mode. Applies HW-bug workarounds (disables debug feature bit 11) for INT8 math and for the
- * UInt16-with-FP32-dest combination.
+ * Sets ZEROACC bank auto-detect, enables INT8 math when either source is Int8/Int32, programs FP32 dest
+ * accumulation mode for the FPU and the SFPU, clears the SrcA/SrcB ALU format override fields, and establishes
+ * the operand-driven Src zero-substitution baseline. No debug-feature workaround is applied here.
  *
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @param srca_data_format: Data format of source A (DataFormat enum underlying value).
  * @param srcb_data_format: Data format of source B (DataFormat enum underlying value).
- * @note The SFPU reads ALU_FORMAT_SPEC_REG1_SrcB (the SrcB ALU format, programmed unpack-side on Blackhole, not here) to
- *       interpret data it loads from DEST. For SFPU work, ensure that format's exponent family (BF16 vs FP16) matches
- *       the data in DEST (tt-llk #951).
+ * @note The Blackhole LLK does not program ALU_FORMAT_SPEC_REG1_SrcB anywhere (the unpack-side ALU RMW in
+ *       cunpack_common.h writes only the SrcA/SrcB-unsigned and stochastic-rounding bits). Per the SFPLOAD/SFPSTORE
+ *       ISA pages, both instructions in default mode (MOD0_FMT_SRCB) access DEST as FP32 when ALU_ACC_CTRL_SFPU_Fp32_enabled is
+ *       set (written here); otherwise the exponent family (BF16 vs FP16) resolves from the reset value of REG1_SrcB,
+ *       because this function clears the SrcB_val/SrcB_override bits below and SFPU_DEST_FMT_Enable is never set.
+ *       SFPU kernels that need a different default-mode DEST read must program SrcB_override/SrcB_val or
+ *       SFPU_DEST_FMT themselves; the Blackhole dest_acc=No skips in tests/python_tests/test_eltwise_unary_sfpu.py
+ *       and test_eltwise_binary_sfpu.py reflect this.
  */
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
@@ -170,7 +175,9 @@ inline void _llk_math_pack_sync_init_()
 }
 
 // Following functions do not need to program ALU_FORMAT_SPEC_REG0_SrcA/ALU_FORMAT_SPEC_REG1_SrcB
-// for blackhole since ALU format is inferred
+// for blackhole: the FPU takes the per-bank implied source format (see DISABLE_IMPLIED_SRCA_FMT), and the
+// SFPU's default-mode DEST read depends only on SFPU_Fp32_enabled and the override fields (see the
+// _llk_math_hw_configure_ note above), neither of which is a function of srca/srcb_data_format here.
 /**
  * @brief Reconfigure the math thread for a new source A data format.
  *

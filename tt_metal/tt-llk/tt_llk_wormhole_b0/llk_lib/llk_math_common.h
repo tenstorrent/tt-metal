@@ -16,9 +16,9 @@ using namespace ckernel::math;
 /**
  * @brief Configure the math (FPU) thread's ALU control registers for the given source data formats.
  *
- * Programs the source A/B ALU formats, enables INT8 math when either source is Int8/Int32, and sets FP32 dest
- * accumulation mode. Always clears debug feature bit 11 (32-bit dest mode workaround) to establish a known-good
- * baseline; bit 11 is never set by any math/SFPU path (tt-llk#1568).
+ * Programs the source A/B ALU formats, enables INT8 math when either source is Int8/Int32, clears the SrcA/SrcB
+ * ALU format override fields, sets FP32 dest accumulation mode for the FPU and the SFPU, and establishes the
+ * operand-driven Src zero-substitution baseline. No debug-feature workaround is applied here.
  *
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @param srca_data_format: Data format of source A (DataFormat enum underlying value).
