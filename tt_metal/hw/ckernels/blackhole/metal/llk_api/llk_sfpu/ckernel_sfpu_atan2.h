@@ -25,6 +25,13 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     // case handling.
     auto [min, max] = sfpi::min_max(sfpi::setsgn(x, 0), sfpi::setsgn(y, 0));
 
+    // Flush a subnormal max to +0 (SFPMAD treats subnormal inputs as zero; ±inf and
+    // NaN pass through). sfpu_reciprocal returns +inf for any zero-exponent divisor
+    // (zero or subnormal), so min * inf would be NaN below; with max = +0 the
+    // both-zero rescue applies instead, i.e. flush-to-zero semantics. x_abs below
+    // is flushed the same way so the bit-pattern compares see the same zero.
+    max = max * 1.0f + 0.0f;
+
     // a = min(|x|, |y|) / max(|x|, |y|), i.e. a is on [0, 1].
     sfpi::vFloat a = min * sfpu_reciprocal<is_bf16>(max);
 
@@ -57,7 +64,7 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     }
     sfpi::vFloat half_pi = 0x1.921fb6p+0f;
     sfpi::vFloat t = q * s;
-    sfpi::vFloat x_abs = sfpi::setsgn(x, 0);
+    sfpi::vFloat x_abs = sfpi::setsgn(x, 0) * 1.0f + 0.0f;
     r = t * a + a;
 
     // Special cases:
