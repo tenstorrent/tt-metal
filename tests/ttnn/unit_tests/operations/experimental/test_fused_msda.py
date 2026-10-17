@@ -635,8 +635,8 @@ def test_fused_msda_v2_bevformer_pillar_shape(device):
     ref_pts = _bf16(torch.rand(B, Q, Z, 2))
     offsets = _bf16(torch.randn(B, Q, H, L, P, 2) * 2.0)
     attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
-    # NOT _bf16(): the V2 reader reads bf16 reference points and offsets but forms
-    # the location in fp32 and samples at that unrounded position, so rounding it
+    # NOT _bf16(): the V2 op reads bf16 reference points and offsets but forms the
+    # location on the SFPU without rounding it and samples at that position, so rounding it
     # here would compare the kernel against a coarser sampler than it is. The
     # difference is not cosmetic at these shapes -- bf16 quantization of a
     # reference point near 0.5 is ~0.002, and W=50 turns that into ~0.1 px of

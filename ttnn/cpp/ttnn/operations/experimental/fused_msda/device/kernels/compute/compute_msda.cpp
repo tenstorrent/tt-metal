@@ -9,11 +9,13 @@
 // them. Solving one point ahead of the reduction is what keeps both busy.
 //
 // Reader contract (fused_msda_reader_common.hpp):
-//   * geom / offset / attn tiles: column 0 holds one query per row, bf16 0 past
-//     v_rows; columns 1..31 are zeroed once per CB slot.
+//   * geom / offset / attn tiles: column 0 holds one query per row, 0 past
+//     v_rows (float32 in geom_x/geom_y under float32 reference points, bf16
+//     otherwise); columns 1..31 are zeroed once per CB slot.
 //   * input_tile: rows that are in range and in bounds hold the gathered value
-//     stick; every other row is zeroed. This kernel builds the scalar and so
-//     cannot mask an out-of-bounds corner itself.
+//     stick; every other row is zeroed. This kernel builds the scalar from the
+//     fractions alone, with no bounds information, so it cannot mask an
+//     out-of-bounds corner itself.
 //
 // fp32_dest_acc_en is required. See msda_geometry.hpp.
 
@@ -146,10 +148,12 @@ void kernel_main() {
             if constexpr (RM_STAGING) {
                 mul_cb.wait_front(4 * n_d_tiles);
             }
+            // out[k] += input_c[k] * scalar_c (COL broadcast) over the four
+            // corners of every point. The scalar is per query row and
+            // independent of D, so one scalar tile serves all n_d_tiles.
             for (uint32_t c = 0; c < 4; ++c) {
-                // The block's first corner overwrites the accumulator; every
-                // other corner of every other point accumulates into it.
-                // solve_geometry left this at 0.
+                // The block's first corner overwrites the accumulator; all
+                // later corners and points accumulate into it.
                 pack_reconfig_l1_acc((j == 0 && c == 0) ? 0 : 1);
                 if constexpr (!RM_STAGING) {
                     mul_cb.wait_front(n_d_tiles);
@@ -165,7 +169,7 @@ void kernel_main() {
                     // explicit slot (= k); the L1-acc mode then decides
                     // overwrite vs accumulate. The default would auto-advance
                     // the write pointer and clobber L1 past the block after the
-                    // first group.
+                    // first corner.
                     pack_tile<true>(0, output_cb_index, k);
                     tile_regs_release();
                 }

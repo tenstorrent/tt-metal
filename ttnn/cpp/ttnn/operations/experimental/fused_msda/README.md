@@ -15,6 +15,9 @@ sampling geometry and the reduction), one writer kernel, two readers:
 | `ttnn.experimental.fused_msda`         | V1 — caller supplies materialized sampling locations  |
 | `ttnn.experimental.fused_msda_from_offsets` | V2 — locations derived on device from reference points + offsets |
 
+A host-only query, `ttnn.experimental.can_use_fused_msda_from_offsets_l1_value`
+(§2.4), tells a caller whether V2's `value` can be staged in L1.
+
 ---
 
 ## 1. Why a new op
@@ -108,11 +111,13 @@ scale_l = 0                            align_corners = true, singleton axis
 and then runs the identical bilinear + weight + reduce path as V1. `r(l, p)`
 depends on `reference_mode` — see §7.
 
-`sampling_offsets` are **raw**, in feature-map pixel units (spec §13 Option A).
+`sampling_offsets` are **raw**, in feature-map pixel units.
 `scale_l` is the pixel spacing of the mapping in §3, so one offset unit moves
-one pixel for either `align_corners`. The normalization is folded into the
-per-level `secondary_scale` and applied on the SFPU (§3, §6). No
-BEVFormer-specific pre-folding is baked into the op.
+one pixel for either `align_corners`. The op never divides by the extent:
+substituting `loc` into §3 gives `px = ref * W_l + off - 0.5` (or
+`ref * (W_l-1) + off` with `align_corners`), which the SFPU evaluates from the
+per-level constants (§3, §6). No BEVFormer-specific pre-folding is baked into
+the op.
 
 ### 2.3 Output shape
 
@@ -123,6 +128,23 @@ byte offset `h * D * 2` inside query `(b, q)`'s output page, so the head
 concatenation costs nothing and no post-op `reshape`/`permute` is needed.
 `(B, Q, H, D)` is deliberately **not** offered; it would be a strictly worse
 default and is one `ttnn.reshape` away for anyone who wants it.
+
+### 2.4 L1 staging query — `can_use_fused_msda_from_offsets_l1_value`
+
+```python
+fits = ttnn.experimental.can_use_fused_msda_from_offsets_l1_value(
+    value, reference_points, sampling_offsets, attention_weights, spatial_shapes,
+    *, reference_mode="level", align_corners=False,
+)
+# -> bool
+```
+
+True when `value`, staged as ROW_MAJOR interleaved L1, and the bf16 output fit
+below the L1 frontier together with this op's circular buffers, under
+`usable_program_l1_capacity` (95%). Per-bank sizes are rounded up to the
+allocator's DRAM-alignment granule; a `value` already in ROW_MAJOR L1 is not
+counted again. `value` may still be TILE or in DRAM. The answer reflects the
+allocator's current state, so call it right before the op and do not cache it.
 
 ---
 
@@ -153,11 +175,10 @@ it today, since BEVFormer uses `fused_msda_from_offsets` instead (§11).
 Both flags are resolved **on host**, into a per-level `(primary_scale,
 secondary_scale, bias)` triple that the SFPU geometry applies as
 `px = primary * primary_scale + secondary * secondary_scale + bias`
-(`axis_constants` in the program factory). Nothing on device branches on them,
-and the `int -> float` conversion of the extent that the old reader repeated
-per evaluation is gone with them. V2's two rows of that table follow from
-substituting `loc = ref + off / extent` into the `[0, 1]` rows, which is why
-`secondary_scale` is exactly 1 in the default case.
+(`axis_constants` in the program factory). Nothing on device branches on them.
+V2's two rows of that table follow from substituting `loc = ref + off * scale_l`
+into the `[0, 1]` rows, which is why `secondary_scale` is 1 except on a
+singleton `align_corners` axis.
 
 Padding: **zeros only**. Any of the four bilinear neighbours that falls outside
 `[0, W_l) x [0, H_l)` contributes 0, matching `padding_mode="zeros"`. The
@@ -237,7 +258,7 @@ compute -> compute   4 x scalar_tile            attn * corner coefficient
 | `c_3` `input_tile` | reader → compute, the `V_corner` values: tiles, or a row-major `[NW \| NE \| SW \| SE]` block per point when `D % 32 == 0` | `8 * n_d_tiles` | 2048 |
 | `c_4` `scalar_tile` | compute → compute, `attn * bilinear_coeff` per row | 8 | 2048 |
 | `c_5` `output_scratch` | writer-only assembly of one head's `D`-stick | 1 | `align(D*2)` |
-| `c_6` `ref_scratch` | **V2 only** — reference points arena, in the tensor's dtype. float32 builds a separate program so the point reaches the SFPU unrounded | 32*R | `align(2*sizeof(ref))` (raw stick 4 B bf16, 8 B fp32) |
+| `c_6` `ref_scratch` | **V2 only** — reference points arena, in the tensor's dtype. float32 builds a separate program, which keeps the point float32 through `geom_x` / `geom_y` | 32*R | `align(2*sizeof(ref))` (raw stick 4 B bf16, 8 B fp32) |
 | `c_7` `geom_x`, `c_8` `geom_y` | reader → compute, the primary operand (location, or reference point for V2) | 4 | 2048, or 4096 when the reference point is float32 |
 | `c_9` `offset_x`, `c_10` `offset_y` | reader → compute, the raw sampling offset (**V2**; allocated but unread on V1) | 4 | 2048 |
 | `c_11` `attn_tile` | reader → compute, the attention weight | 4 | 2048 |
@@ -247,7 +268,8 @@ compute -> compute   4 x scalar_tile            attn * corner coefficient
 | `c_17` `tiled_input` | compute → compute, the tilized corners (only when `D % 32 == 0`) | `8 * n_d_tiles` | 2048 |
 
 `n_d_tiles = ceil(D / 32)`. CB pressure for the BEVFormer shape
-(`D=32, L=4, P=4`) is ~105 KB.
+(`D=32, L=4, P=4, R=4`, packed) is ~126 KB, ~142 KB with float32 reference
+points.
 
 Deliberately **not** four separate `CB_VALUE_00/01/10/11` CBs and a separate
 `CB_INTERP` / `CB_ATTN_WEIGHT`: the four corners are streamed **sequentially**
@@ -272,14 +294,16 @@ reader ships the operands as column-0 tiles and gets `floor(px)` back, and
 the only arithmetic left in the reader is the integer decode, the bounds test
 and the page index. Those tiles are bf16, except `geom_x` / `geom_y` when
 `reference_points` are float32. The SFPU multiplies that point, and a bf16 tile
-would already have moved it in steps of up to 2^-8.
+would already have moved it in steps of up to 2^-8. Those two CBs are also
+unpacked straight into the 32-bit destination (`UnpackToDestFp32`):
+`copy_tile` through SrcA would keep only 10 mantissa bits.
 
 Both sides run **one sampling point ahead** of the work they feed — the reader
 pushes point `j+1`'s operand tiles before waiting for point `j`'s corners, and
 the compute kernel solves point `j+1` before reducing point `j`. Without that
 lookahead the two ping-pong, each idle through the other's turn. The CB depths
 above are what make it legal: `scalar_tile` and `input_tile` hold two points'
-worth, the geometry pipes three to four.
+worth, the reader ↔ compute geometry pipes three to four, `frac` two.
 
 The floored corner crosses as **bf16**, which is exact for every integer up to
 256 and only some beyond it, so each level's `H` and `W` must be at or below
@@ -374,9 +398,9 @@ reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (SFPU geometry, 
    page `(b*S + level_start[l] + cy*W_l + cx) * H + h` (canonical) or
    `b*S + ...` at byte offset `h*D*2` (packed).
 
-Only the readers differ between V1 and V2, and only in which staged pair
-step 2 calls the primary and which the secondary. The primary pair is float32
-when `reference_points` are float32.
+The two readers differ only in which staged pair step 2 ships as the primary
+and which as the secondary; compute additionally consumes the offset pipes on
+V2. The primary pair is float32 when `reference_points` are float32.
 
 **Compute** (shared), per sampling point, one point ahead of the reduction:
 
@@ -425,9 +449,12 @@ Known limitations, to revisit after profiling:
 * `fp32` accumulate not exposed; the L1 accumulator runs at the pack format.
   `fp32_dest_acc_en` is on unconditionally, but that is about the geometry's
   destination register, not the reduction's accumulator.
-* V2 does not accept BEVFormer's pre-folded offsets (`2/[W,H]` baked into the
-  Linear). Those callers use V1 with `locations_in_grid_space=True`, or keep
-  their Linear unfolded. A fused "pre-folded offsets" V2 variant is future work.
+* V2 does not accept pre-folded offsets (`2/[W,H]` baked into the Linear).
+  Such callers use V1 with `locations_in_grid_space=True`, or keep their Linear
+  unfolded; BEVFormer passes raw pixels (§11). A fused "pre-folded offsets" V2
+  variant is future work.
+* Packer L1 accumulation runs with `fp32_dest_acc_en`, a combination tt-metal
+  lists as unsupported (#28800). Validated on Blackhole only.
 
 ---
 
@@ -452,6 +479,7 @@ ttnn/cpp/ttnn/operations/experimental/fused_msda/
 
 tests/ttnn/unit_tests/operations/experimental/test_fused_msda.py
 models/experimental/bevformer/tests/pcc/test_fused_msda.py
+models/experimental/bevformer/tests/perf/test_fused_msda_perf.py
 ```
 
 ## 11. BEVFormer integration
@@ -464,16 +492,21 @@ module. The decoder passes float32 reference points: on its 200x200 BEV map a bf
 point in [0, 1] moves in steps of up to 0.8 px, and each layer's refined points feed
 the next.
 
-It feeds the op the **packed** rank-4 forms, which fall out of the existing code
-for free: the `sampling_offsets` Linear already emits channels ordered
-`(head, level, point, xy)`, and the joint softmax already produces
-`(bs, Q, heads, levels*points)`. The integration is a dimension split, not a permute.
+It feeds the op the **packed** rank-4 forms. The `sampling_offsets` Linear emits
+channels ordered `(head, level, point, xy)` and the joint softmax produces
+`(bs, Q, heads, levels*points)`, so the reshape is a dimension split, not a
+permute.
 
-The module passes raw pixel offsets; the SFPU applies `scale_l`.
+The module passes raw pixel offsets; the op's per-level constants account for
+`scale_l`.
+
+Before each call the module asks `can_use_fused_msda_from_offsets_l1_value`
+(§2.4) and stages `value`, and the op's output with it, in L1 when they fit,
+interleaved DRAM otherwise. The gather is bound by the DRAM endpoints' request
+rate, so L1 is the fast path.
 
 Numerics are pinned by
 `models/experimental/bevformer/tests/pcc/test_fused_msda.py` plus
 `test_ms_deformable_attention.py`, `test_spatial_cross_attention.py`,
-`test_temporal_self_attention.py`, `test_layer.py`, `test_encoder.py` and
-`test_decoder.py`. The float32 reference-point path is pinned by
+`test_temporal_self_attention.py`, `test_encoder.py` and `test_decoder.py`. The float32 reference-point path is pinned by
 `test_fused_msda_v2_float32_reference_points`.

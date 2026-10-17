@@ -7,7 +7,7 @@ TTNN Multi-Scale Deformable Attention implementation for BEVFormer.
 The core attention is a single device op: ``ttnn.experimental.fused_msda_from_offsets``.
 It takes the reference points and the raw sampling offsets and does the whole of
 MSDA -- sampling-location generation, bilinear sampling, the attention multiply
-and the reduction over (levels, points) -- inside one kernel. No intermediate
+and the reduction over (levels, points) -- inside one device op. No intermediate
 grid or per-level sampled-value tensor is materialized.
 
 Key components:
@@ -70,17 +70,19 @@ def multi_scale_deformable_attn_fused(
         value: (bs, num_keys, num_heads, head_dim) or packed (bs, num_keys, num_heads*head_dim)
         reference_points: (bs, num_queries, num_points_in_pillar, 2), normalized [0, 1]
         sampling_offsets: (bs, num_queries, num_heads, num_levels*num_points*2) ROW_MAJOR,
-            raw, in feature-map pixel units -- the reader applies the per-level
+            raw, in feature-map pixel units -- the op accounts for the per-level
             ``/ [W_l, H_l]`` normalization itself.
         attention_weights: (bs, num_queries, num_heads, num_levels*num_points) ROW_MAJOR
         spatial_shapes: torch (num_levels, 2) of (H, W)
         value_memory: ``"auto"`` selects L1 only when value, output, and fused-op
-            circular buffers fit safely; ``"dram"`` forces DRAM; ``"l1"`` requires L1
-            and raises ``RuntimeError`` when it does not fit.
+            circular buffers fit safely, and logs one warning per input shape when it
+            falls back; ``"dram"`` forces DRAM; ``"l1"`` requires L1 and raises
+            ``RuntimeError`` when it does not fit.
 
     Returns:
         (bs, num_queries, num_heads*head_dim) ROW_MAJOR -- the heads are already
-        concatenated by the op's writer, so no reshape/permute follows.
+        concatenated by the op's writer, so no reshape/permute follows. The output
+        lives in the memory ``value_memory`` selected (L1 or interleaved DRAM).
     """
     if use_signpost:
         signpost(header="fused_msda Start")

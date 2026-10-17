@@ -119,8 +119,9 @@ AxisConstants axis_constants(uint32_t extent, bool align_corners, bool grid_spac
 }
 
 // CB depths for the geometry pipeline. Both the reader and the compute kernel
-// run one sampling point ahead of the work they are feeding, so every pipe
-// between them has to hold two points' worth plus the one in flight.
+// run one sampling point ahead of the work they are feeding, so the pipes
+// between them hold up to two points' worth; each depth below is that pipe's
+// floor plus any slack, as noted.
 //
 // kScalarCbPages is a hard deadlock floor: at the fourth corner_weight of point
 // j+1 the PACK thread holds 7 pages and reserves the 8th, and UNPACK cannot free
@@ -168,6 +169,8 @@ uint32_t page_size_for_cb(const MSDACircularBufferPlan& plan, uint8_t index) {
 
 }  // namespace
 
+// Every CB the program allocates. can_use_fused_msda_from_offsets_l1_value sums
+// this same plan, so a CB added anywhere else is invisible to that L1 check.
 MSDACircularBufferPlan derive_circular_buffer_plan(
     const FusedMSDAOperation::operation_attributes_t& attrs,
     const FusedMSDAOperation::tensor_args_t& args,
@@ -255,7 +258,7 @@ MSDACircularBufferPlan derive_circular_buffer_plan(
     }
     push(scalar_tile_cb, kScalarCbPages, tile_nbytes, data_format);
     // The geometry pipeline. Always allocated, including the offset pipes on
-    // V1 where the compute kernel names but never reads them: 8 KB of L1
+    // V1 where the compute kernel names but never reads them: 16 KB of L1
     // against a conditional CB index the kernel would have to guard.
     //
     // float32 reference points use float32 geom_x/geom_y tiles. Packing them
@@ -396,8 +399,6 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     // ---- reader ----
     // Compile-time arg order is fixed by fused_msda_reader_common.hpp; both
     // readers read the same indices.
-    // The pixel mapping lives in the compute kernel's per-level constants, so
-    // no coordinate-convention flags are passed here.
     KernelDescriptor::CompileTimeArgs reader_ct{
         value_scratch_cb,
         attn_scratch_cb,
@@ -484,13 +485,12 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     //
     // This kernel also drives packer L1 accumulation, which #28800 records as
     // unsupported alongside a 32-bit destination (docs/L1_ACCUMULATION_FP32_ANALYSIS.md;
-    // sdpa_fw disables L1 acc when the flag is on). The combination is measured
-    // good on Blackhole here; it has not been checked on Wormhole.
+    // sdpa_fw disables L1 acc when the flag is on). Validated on Blackhole;
+    // Wormhole is unverified.
     ComputeConfigDescriptor compute_cfg{};
     compute_cfg.fp32_dest_acc_en = true;
-    // copy_tile through SrcA keeps 10 mantissa bits, which leaves a float32
-    // reference point only about 4x closer than a bf16 one. Unpacking straight
-    // into the 32-bit destination keeps all 23.
+    // copy_tile through SrcA keeps 10 of a float32 reference point's 23 mantissa
+    // bits; unpacking straight into the 32-bit destination keeps all of them.
     if (ref_fp32) {
         compute_cfg.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
         compute_cfg.unpack_to_dest_mode[geom_x_cb] = UnpackToDestMode::UnpackToDestFp32;

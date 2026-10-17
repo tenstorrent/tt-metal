@@ -82,12 +82,15 @@ struct FusedMSDAOperation {
 };
 
 // Derives (and fully validates) the problem geometry. Throws with a descriptive
-// TT_FATAL on any inconsistency.
+// TT_FATAL on any inconsistency. require_value_row_major is false only for the
+// L1-fit query, which runs before value is converted to ROW_MAJOR.
 MSDAShapes derive_shapes(
     const FusedMSDAOperation::operation_attributes_t& attrs,
     const FusedMSDAOperation::tensor_args_t& args,
     bool require_value_row_major = true);
 
+// The program's CBs. Shared by create_descriptor and the L1-fit check so both
+// see the same set.
 MSDACircularBufferPlan derive_circular_buffer_plan(
     const FusedMSDAOperation::operation_attributes_t& attrs,
     const FusedMSDAOperation::tensor_args_t& args,

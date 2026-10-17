@@ -75,7 +75,7 @@ ttnn::Tensor fused_msda(
 // sampling_offsets are raw, in feature-map pixel units. scale_l is
 // [1/W_l, 1/H_l] when align_corners is false and [1/(W_l-1), 1/(H_l-1)] when
 // it is true, matching the pixel spacing of the normalized -> pixel mapping; a
-// singleton axis has scale 0. The op applies scale_l on the SFPU.
+// singleton axis has scale 0. The op accounts for scale_l internally.
 // reference_points must be (B, Q, R, 2) normalized (x, y) in [0, 1], bfloat16
 // or float32. float32 keeps a point in [0, 1] from moving in steps of 2^-8.
 // The 4-D box form is rejected rather than reinterpreted.
@@ -93,6 +93,10 @@ ttnn::Tensor fused_msda_from_offsets(
     bool align_corners = false,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
+// Whether fused_msda_from_offsets can stage value (ROW_MAJOR, interleaved L1)
+// and its bf16 output in L1 alongside its circular buffers. value may still be
+// TILE or in DRAM. Reads the allocator's current state, so call it right before
+// the op and do not cache the answer.
 bool can_use_fused_msda_from_offsets_l1_value(
     const ttnn::Tensor& value,
     const ttnn::Tensor& reference_points,

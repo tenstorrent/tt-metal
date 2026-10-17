@@ -8,8 +8,9 @@
 `ttnn.experimental.fused_msda_from_offsets`. The sampling position is formed on
 the SFPU from the reference point and the raw offset.
 
-Same weights, same inputs, compared against the reference module rather than
-against another TT implementation.
+The numerics tests compare against the reference module, same weights and same
+inputs. The placement tests check where `multi_scale_deformable_attn_fused`
+stages value, and that the DRAM fallback is bit-identical to forced DRAM.
 
 Complements `test_ms_deformable_attention.py`, which checks the same module with
 the repo's usual tolerance bundle; here the gate is a tighter PCC across several
@@ -75,7 +76,11 @@ def _build(device, config_name, batch_size, num_queries, seed):
 
 
 def _record_value_placement(monkeypatch):
-    """Record the buffer type of each value the fused op actually receives."""
+    """Record the buffer type of each value the fused op receives.
+
+    Placement is decided and staged inside `multi_scale_deformable_attn_fused`,
+    so the op's input is the only place to observe it.
+    """
     placements = []
     fused_op = ttnn.experimental.fused_msda_from_offsets
 
@@ -88,7 +93,11 @@ def _record_value_placement(monkeypatch):
 
 
 def _force_value_memory(monkeypatch, value_memory):
-    """Pin the module's placement decision, which it otherwise makes from live L1 state."""
+    """Pin the module's placement decision, which it otherwise makes from live L1 state.
+
+    `forward` looks the function up in the module's globals at call time, so the
+    module attribute is what has to be patched.
+    """
     monkeypatch.setattr(
         tt_ms_deformable_attention,
         "multi_scale_deformable_attn_fused",
@@ -140,10 +149,10 @@ def test_msda_output_is_deterministic(device):
 
     The op distributes (batch, head, query-block) work units across cores and
     accumulates each unit's `levels * points` reduction locally, so the summation
-    order is fixed and the result should not vary run to run. A mismatch here
-    would point at uninitialized L1 being read -- the reader explicitly zeroes
-    the input rows whose bilinear corner it did not gather, so a nonzero
-    difference here points straight at that zeroing.
+    order is fixed and the result should not vary run to run. A mismatch points
+    at uninitialized L1 being read: the reader zeroes the input rows whose
+    bilinear corner it did not gather, and that zeroing is what keeps stale CB
+    bytes out of the result.
     """
     config, _, tt_parameters, torch_inputs = _build(device, "nuscenes_tiny", 1, 900, 0)
 
@@ -172,9 +181,10 @@ def test_msda_value_memory_modes_match_reference(device, monkeypatch, value_memo
 def test_msda_auto_keeps_value_in_l1_at_nuscenes_base(device, monkeypatch, batch_size):
     """The production default must stay on the L1 path at nuscenes_base.
 
-    DRAM is about 3x slower for this gather, and ``auto`` falls back silently
-    apart from a log line, so an over-conservative fit check would only show
-    up as lost performance. Six batch rows match SCA, which folds the cameras
+    DRAM is about 3x slower for this gather (re-measure with
+    ``test_fused_msda_perf.py::test_fused_msda_module_perf``), and ``auto``
+    falls back with only a one-time warning, so an over-conservative fit check
+    would only show up as lost performance. Six batch rows match SCA, which folds the cameras
     into the batch.
     """
     config, _, tt_parameters, torch_inputs = _build(device, "nuscenes_base", batch_size, 2500, 0)
@@ -237,6 +247,7 @@ def test_msda_auto_falls_back_to_dram_under_l1_pressure(device, expect_error):
     )
     expected_torch = ttnn.to_torch(expected)
 
+    # Without the blocker this case fits L1, so the blocker alone flips the decision.
     assert ttnn.experimental.can_use_fused_msda_from_offsets_l1_value(
         value,
         reference_points,
@@ -248,8 +259,10 @@ def test_msda_auto_falls_back_to_dram_under_l1_pressure(device, expect_error):
 
     l1_view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
     tile_bytes = 2048
-    # The fused program needs about 120 KiB/core for CBs. This leaves those CBs
-    # room to run from DRAM while making its additional L1 value and output unsafe.
+    # The fused program's CBs need ~121 KiB/core here. With 176 KiB free the 95%
+    # program-L1 margin leaves ~167 KiB: enough for the CBs alone (value in DRAM),
+    # not once the 6.4 MB of L1 value and output are spread over the banks
+    # (~59 KiB/bank at 110 banks, more with fewer), so the check must say unsafe.
     target_free_per_bank = 176 * 1024
     blocker_tiles_per_bank = (l1_view.largest_contiguous_bytes_free_per_bank - target_free_per_bank) // tile_bytes
     assert blocker_tiles_per_bank > 0
@@ -297,6 +310,8 @@ def test_msda_auto_falls_back_to_dram_under_l1_pressure(device, expect_error):
         assert actual.memory_config() == ttnn.DRAM_MEMORY_CONFIG
         torch.testing.assert_close(ttnn.to_torch(actual), expected_torch, rtol=0, atol=0)
 
+        # A second fallback, after the warning was emitted, takes the same path
+        # and leaks nothing.
         repeated = multi_scale_deformable_attn_fused(
             value,
             reference_points,

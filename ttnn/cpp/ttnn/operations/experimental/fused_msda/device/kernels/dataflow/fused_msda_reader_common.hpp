@@ -9,8 +9,9 @@
 // No float arithmetic happens here. The dataflow RISC has no FPU, so every
 // float operation would cost ~140 cycles of soft-float emulation. This file
 // moves bit patterns and decodes the floored corner with integer shifts.
-// geom_x/geom_y are float32 when REF_FP32 is set, so the reference point
-// reaches the SFPU unrounded; every other tile here is bf16.
+// geom_x/geom_y are float32 when REF_FP32 is set and compute unpacks them
+// straight into its 32-bit DST, so the reference point reaches the SFPU
+// unrounded; every other tile here is bf16.
 //
 // The reader pushes point j+1's geometry tiles before it waits for point j's
 // corners. Without that lookahead the reader is idle through every geometry
@@ -254,8 +255,8 @@ inline void zero_tile_cb(uint32_t cb_index, uint32_t pages, uint32_t tile_nbytes
     CircularBuffer cb(cb_index);
     cb.reserve_back(pages);
     CoreLocalMem<volatile uint32_t> base(cb.get_write_ptr());
-    // Page size follows the CB. A float32 geometry tile is 4096 B; zeroing the
-    // bf16 size would leave its upper half as stale L1.
+    // `tile_nbytes` must be the CB's page size: a float32 geometry tile is
+    // 4096 B, and zeroing the bf16 size would leave its upper half as stale L1.
     const uint32_t words = tile_nbytes / sizeof(uint32_t);
     for (uint32_t i = 0; i < pages * words; ++i) {
         base[i] = 0;
@@ -431,9 +432,8 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
             }
 
             for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
-                // Rows past v_rows go out as zero. A zero attn lane makes the
-                // scalar zero, which is the same contract the reduction already
-                // relies on for a partial trailing tile.
+                // Rows past v_rows go out as zero, so their attn lane, and with
+                // it their scalar, is zero.
 #ifdef REF_FP32
                 uint32_t gx = 0;
                 uint32_t gy = 0;
@@ -489,8 +489,9 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
             const int32_t w_i = static_cast<int32_t>(g.width);
             const int32_t h_i = static_cast<int32_t>(g.height);
 
-            // Corners solved on the SFPU. Only the decode, the bounds test and
-            // the page index stay here, all in integer arithmetic.
+            // The SFPU floors the corners; the reader only decodes them,
+            // bounds-tests them and builds page indices, all in integer
+            // arithmetic.
             x0_cb.wait_front(1);
             y0_cb.wait_front(1);
             const uint32_t x0_l1 = x0_cb.get_read_ptr();
@@ -514,6 +515,9 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
             if constexpr (RM_STAGING) {
                 input_tile_cb.reserve_back(4 * N_D_TILES);
                 const uint32_t block_l1 = input_tile_cb.get_write_ptr();
+                // value_stick_nbytes == D*2 here: the factory rejects a padded
+                // stick under row-major staging. 32 rows x 4 slots x D bf16 is
+                // exactly the 4 * N_D_TILES tiles reserved.
                 constexpr uint32_t row_nbytes = RM_ROW_WORDS * sizeof(uint32_t);
 
                 // c = 0, 1, 2, 3 is NW, NE, SW, SE, in lockstep with the four
@@ -582,7 +586,7 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
                 input_tile_cb.push_back(4 * N_D_TILES);
             } else {
                 for (uint32_t c = 0; c < 4; ++c) {
-                    // Hoist every c-invariant selector: c picks the (dy, dx) step to
+                    // Hoist the row-invariant selectors: c picks the (dy, dx) step to
                     // the corner and which validity arrays gate it.
                     //
                     // c = 0, 1, 2, 3 is NW, NE, SW, SE, and must stay in lockstep
