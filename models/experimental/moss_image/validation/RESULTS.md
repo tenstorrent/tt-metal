@@ -180,4 +180,41 @@ Current-main migration, fresh native build, latest CI registration, and any subs
 
 The native runtime was rebuilt from upstream `229f9d53365f7c13a33b750ef07a4ca95b8b9907` with Clang 20 and Python 3.10.12 in a separate environment. The release build and editable native import passed. All 22 host tests pass in that environment. A real-device half-way addition probe reproduces the direct BF16 rounding discrepancy on this new runtime; FP32 addition followed by BF16 typecast matches the PyTorch results. This independently verifies that the rounding finding is not limited to the historical runtime.
 
-Model commits `ad3108d8` and `790e7f30` contain the clean encoder/DiT corrections. A fresh independent one-card SFT 1024 × 1024, 50-step, seed-42 generation was launched with this source and runtime. At this recording it is encoding the raw prompt; its final-image accuracy is **pending**, not passed. The generation accepts no reference activations. Post-run comparison is configured to retain the original CUDA oracle. [Current-source build, host and rounding evidence](results/2026-10-17-current-source-start.json).
+Model commits `ad3108d8` and `790e7f30` contain the clean encoder/DiT corrections. A fresh independent one-card SFT 1024 × 1024, 50-step, seed-42 generation was launched with this source and runtime. That run completed: step-0 positive/negative prediction relative RMS improved to 0.790% / 0.666%, but the final latent relative RMS is 55.629% (PCC 0.844390) and decoded pixels 54.410% (PCC 0.851623), versus 52.733% / 56.709% historically. The fixes reduce early error by about 30% yet do not improve the final image; see the attention diagnostics below. The generation accepts no reference activations. Post-run comparison is configured to retain the original CUDA oracle. [Current-source build, host and rounding evidence](results/2026-10-17-current-source-start.json).
+
+## Attention and trajectory diagnostics, 2026-10-18
+
+Same current-source runtime and model commit `790e7f30`; SFT, 1024 × 1024, 50 steps, seed 42, one p150b per run. Scripts are in `validation/diagnostics/`. All runs except the last table are **activation-injected diagnostics**, not qualification. [Raw readings, per-step reports and script hashes](results/2026-10-18-attention-diagnostics.json).
+
+**Isolated attention.** Captured CUDA Q/K/V for blocks 0, 21 and 41, with RoPE applied on the host using eager BF16 rounding so every variant receives identical inputs. CUDA output agrees with a host FlashAttention-style emulation (FP32 scores, BF16 unnormalized probabilities) to 0.06–0.08% relative RMS.
+
+| Attention path vs CUDA | Block 0 | Block 21 | Block 41 | Gain |
+|---|---:|---:|---:|---|
+| Native TT SDPA, 128 chunks (production) | 0.869% | 0.634% | 0.653% | 1.0017–1.0053 |
+| Manual TT, FP32 scores, BF16 probabilities | 0.214% | 0.301% | 0.492% | 0.9991–0.9996 |
+| Manual TT, BF16 scores | 0.343% | 0.866% | 2.430% | ≈0.999 |
+| Manual TT, FP32 scores and probabilities | 0.246% | 0.292% | 0.491% | ≈0.999 |
+
+Score precision dominates; FP32 probabilities give no further gain. The earlier 1.1–3.0% attention figures used 32-element chunks with native TT RoPE and overstate the production 128-chunk error.
+
+**DiT trajectory with CUDA conditioning.** The text encoder is removed by supplying native CUDA conditioning. Teacher-forced runs start every step from the CUDA latent and measure the Euler increment error, i.e. local guided-velocity error.
+
+| Run | Latent rRMS step 21 | Step 37 | Step 50 (PCC) | Mean teacher increment rRMS / gain |
+|---|---:|---:|---:|---|
+| TT conditioning, native attention (2026-10-17 run) | 4.550% | 22.564% | 55.629% (0.8444) | — |
+| CUDA conditioning, native attention | 3.190% | 17.301% | 44.058% (0.9022) | 4.73% / 0.99742 |
+| CUDA conditioning, manual attention | 0.841% | 8.464% | **23.850% (0.9716)** | 4.39% / 0.99914 |
+
+Manual attention reduces local velocity error by only about 7% but halves the free-running final error. The native path shrinks every Euler increment by about 0.26% (step-0 positive gain 0.99837); a systematic bias accumulates coherently over the trajectory, unlike random error of similar RMS. The manual-attention final latent error is comparable to the native CUDA-vs-CUDA reduction-policy difference for SFT (26.573% latent, 24.148% pixels).
+
+**Independent generation with manual attention.** Raw prompt, TT encoder, TT DiT with the replacement, TT VAE; no reference activations. Noise and schedule match CUDA bitwise.
+
+| Metric | Native attention | Manual attention |
+|---|---:|---:|
+| Step-0 positive / negative prediction | 0.790% / 0.666% | 0.757% / 0.590% |
+| Latent step 20 / 40 | 4.085% / 30.250% | 3.656% / 27.434% |
+| Final latent (PCC) | 55.629% (0.8444) | 50.714% (0.8706) |
+| Decoded pixels (PCC) | 54.410% (0.8516) | 51.935% (0.8714) |
+| Denoising time | 396.4 s | 522.6 s |
+
+With TT conditioning the remaining drift is dominated by the prompt encoder (still 1.794% / 2.569% conditioning error): the same DiT gives 23.850% with CUDA conditioning and 50.714% with TT conditioning. Final-image accuracy is therefore **not passed**. The manual attention is an unoptimized per-head-group diagnostic, about 32% slower in denoising; a production change should be an SDPA path with FP32 score storage, separately qualified for accuracy and performance. Encoder accuracy is the next limiting item.
