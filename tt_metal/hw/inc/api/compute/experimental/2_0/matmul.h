@@ -27,21 +27,34 @@ namespace experimental {
 // Two LLKOperands (in0, in1); in0 -> SrcB, in1 -> SrcA (matmul role swap), applied via
 // compute_kernel_hw_startup<SrcOrder::Reverse>(in0, in1, out). Format-free at the op level -- these ops forward
 // only geometry (via the descriptors) and per-tile L1 addresses; packing is separate (experimental::pack_tile).
-// Throttle is fixed (MM_THROTTLE); dynamic throttle is not part of this surface.
+// Throttle is fixed (MM_THROTTLE); dynamic throttle is not part of this surface. Under MM_THROTTLE 4 / 5 at
+// HiFi2 or higher the LLK keeps its throttled program, which exists for the 32x32 by 32x32 pair only; the math
+// init rejects every other pair at compile time (any other pair wedges the math thread).
 
 // clang-format off
 /**
  * Short init for matmul_tiles. Configures the unpacker + math engine for matmul. compute_kernel_hw_startup
  * <SrcOrder::Reverse>(in0, in1, out) must already have run. in0 -> SrcB, in1 -> SrcA.
  *
- * | Function | in0 / in1 | Input operands (in0 -> SrcB, in1 -> SrcA) | LLKOperand | | True |
- * | Function | transpose | Transpose flag for tiles in B             | uint32_t   | | False |
+ * Operand pairs outside the Blackhole matmul support matrix -- in0 columns != in1 rows, a 16-column in0 with fewer
+ * than 32 rows (16x16), an in0 with faces shorter than 16 rows in more than one face row, an in1 with faces
+ * shorter than 16 rows, or an in1 other than 32x32 / 32x16 / 16x32 -- are compile-time rejected. `transpose` is a
+ * runtime argument and is not supported with a 32x16 in1 (that address pattern has no transpose form; the LLK
+ * checks the combination only with a runtime assert that production builds compile out).
+ *
+ * | Function | in0 / in1 | Input operands (in0 -> SrcB, in1 -> SrcA)            | LLKOperand | | True |
+ * | Function | transpose | Transpose flag for tiles in B (not with a 32x16 in1) | uint32_t   | | False |
  */
 // clang-format on
 template <DataFormat F0, TensorShape S0, DataFormat F1, TensorShape S1>
 ALWI void matmul_init(LLKOperand<F0, S0> /*in0*/, LLKOperand<F1, S1> /*in1*/, std::uint32_t transpose = 0) {
     static_assert(is_legal_tile_shape(S0), "matmul_init: illegal tile shape for in0.");
     static_assert(is_legal_tile_shape(S1), "matmul_init: illegal tile shape for in1.");
+    static_assert(
+        is_supported_matmul_operand_pair(S0, S1),
+        "matmul_init: unsupported operand pair: in0 columns must equal in1 rows, in0 must not be 16x16 (nor a "
+        "sub-16-row single face), an in0 with faces shorter than 16 rows must be a single face row, and in1 must be "
+        "32x32, 32x16 or 16x32 with 16-row faces; the LLK has no program for other pairs.");
     MATH((llk_math_matmul_init<
           LLKOperand<F0, S0>::descriptor,
           LLKOperand<F1, S1>::descriptor,
@@ -53,7 +66,9 @@ ALWI void matmul_init(LLKOperand<F0, S0> /*in0*/, LLKOperand<F1, S1> /*in1*/, st
 // clang-format off
 /**
  * Tile matmul C = A*B, accumulating into DST[idst]. Pair with matmul_init. DST must be acquired. in0_tile_index
- * / in1_tile_index index within in0 / in1. Geometry (for MATH partial_face + unpack) comes from the operands.
+ * / in1_tile_index index within in0 / in1. Geometry (for MATH partial_face + unpack) comes from the operands, so
+ * the execute deduces its own operand pair: a pair outside the Blackhole matmul support matrix (see matmul_init)
+ * is compile-time rejected here as well, not only at the init.
  *
  * | Function | in0 / in1                     | Input operands                   | LLKOperand | | True |
  * | Function | in0_tile_index / in1_tile_index | Tile indices within in0 / in1  | uint32_t   | | True |
@@ -69,6 +84,11 @@ ALWI void matmul_tiles(
     std::uint32_t idst) {
     static_assert(is_legal_tile_shape(S0), "matmul_tiles: illegal tile shape for in0.");
     static_assert(is_legal_tile_shape(S1), "matmul_tiles: illegal tile shape for in1.");
+    static_assert(
+        is_supported_matmul_operand_pair(S0, S1),
+        "matmul_tiles: unsupported operand pair: in0 columns must equal in1 rows, in0 must not be 16x16 (nor a "
+        "sub-16-row single face), an in0 with faces shorter than 16 rows must be a single face row, and in1 must be "
+        "32x32, 32x16 or 16x32 with 16-row faces; the LLK has no program for other pairs.");
     UNPACK((llk_unpack_AB_matmul<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor>(
         in0.l1_address, in1.l1_address, in0_tile_index, in1_tile_index)));
     // Math execute takes no operand id; format-free.
@@ -82,11 +102,17 @@ ALWI void matmul_tiles(
  * ct_dim / rt_dim / kt_dim are the output-block geometry (see matmul_block) and are RUNTIME args; the register
  * formats + tile geometry are FORMAT-FREE and come from the two operand descriptors.
  *
- * | Function | in0 / in1 | Input operands (in0 -> SrcB, in1 -> SrcA) | LLKOperand | | True |
- * | Function | transpose | Transpose flag for tiles in B             | uint32_t   | | False |
- * | Function | ct_dim    | Output block column dim (== B col dim)    | uint32_t   | | False |
- * | Function | rt_dim    | Output block row dim (== A row dim)       | uint32_t   | | False |
- * | Function | kt_dim    | Inner dim (== A col dim)                  | uint32_t   | | False |
+ * Operand pairs outside the Blackhole matmul support matrix -- in0 columns != in1 rows, a 16-column in0 with fewer
+ * than 32 rows (16x16), an in0 with faces shorter than 16 rows in more than one face row, an in1 with faces
+ * shorter than 16 rows, or an in1 other than 32x32 / 32x16 / 16x32 -- are compile-time rejected. `transpose` is a
+ * runtime argument and is not supported with a 32x16 in1 (that address pattern has no transpose form; the LLK
+ * checks the combination only with a runtime assert that production builds compile out).
+ *
+ * | Function | in0 / in1 | Input operands (in0 -> SrcB, in1 -> SrcA)            | LLKOperand | | True |
+ * | Function | transpose | Transpose flag for tiles in B (not with a 32x16 in1) | uint32_t   | | False |
+ * | Function | ct_dim    | Output block column dim (== B col dim)               | uint32_t   | | False |
+ * | Function | rt_dim    | Output block row dim (== A row dim)                  | uint32_t   | | False |
+ * | Function | kt_dim    | Inner dim (== A col dim)                             | uint32_t   | | False |
  */
 // clang-format on
 template <DataFormat F0, TensorShape S0, DataFormat F1, TensorShape S1>
@@ -99,6 +125,11 @@ ALWI void matmul_block_init(
     std::uint32_t kt_dim = 1) {
     static_assert(is_legal_tile_shape(S0), "matmul_block_init: illegal tile shape for in0.");
     static_assert(is_legal_tile_shape(S1), "matmul_block_init: illegal tile shape for in1.");
+    static_assert(
+        is_supported_matmul_operand_pair(S0, S1),
+        "matmul_block_init: unsupported operand pair: in0 columns must equal in1 rows, in0 must not be 16x16 (nor a "
+        "sub-16-row single face), an in0 with faces shorter than 16 rows must be a single face row, and in1 must be "
+        "32x32, 32x16 or 16x32 with 16-row faces; the LLK has no program for other pairs.");
     MATH((llk_math_matmul_init<
           LLKOperand<F0, S0>::descriptor,
           LLKOperand<F1, S1>::descriptor,
@@ -115,7 +146,9 @@ ALWI void matmul_block_init(
  * rt_dim x ct_dim tiles -- i.e. ct_dim*rt_dim output tiles produced in one call (kt_dim tiles along the shared
  * inner dim). The output must fit in DST. in0_tile_index / in1_tile_index are the base tile within in0 / in1;
  * the block strides across the operands from there. Geometry (partial_face + per-tile stride) comes from the
- * operand descriptors. transpose is programmed at matmul_block_init; the execute takes no transpose arg.
+ * operand descriptors, so the execute deduces its own operand pair: a pair outside the Blackhole matmul support
+ * matrix (see matmul_block_init) is compile-time rejected here as well, not only at the init. transpose is
+ * programmed at matmul_block_init; the execute takes no transpose arg.
  *
  * | Function | in0 / in1                       | Input operands (in0 -> SrcB, in1 -> SrcA)    | LLKOperand | | True |
  * | Function | in0_tile_index / in1_tile_index | Base tile indices within in0 / in1           | uint32_t   | | True |
@@ -137,6 +170,11 @@ ALWI void matmul_block(
     std::uint32_t kt_dim) {
     static_assert(is_legal_tile_shape(S0), "matmul_block: illegal tile shape for in0.");
     static_assert(is_legal_tile_shape(S1), "matmul_block: illegal tile shape for in1.");
+    static_assert(
+        is_supported_matmul_operand_pair(S0, S1),
+        "matmul_block: unsupported operand pair: in0 columns must equal in1 rows, in0 must not be 16x16 (nor a "
+        "sub-16-row single face), an in0 with faces shorter than 16 rows must be a single face row, and in1 must be "
+        "32x32, 32x16 or 16x32 with 16-row faces; the LLK has no program for other pairs.");
     UNPACK((llk_unpack_AB_matmul<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor>(
         in0.l1_address, in1.l1_address, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     // Block execute takes no operand id; format-free, fixed MM_THROTTLE (no dynamic throttle).
