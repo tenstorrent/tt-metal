@@ -40,9 +40,54 @@ never inside the tree):
                           call's verdict is P2's (bit-equality with the P2 digest), no band of its own.
   P4 test_trace_alloc_tracking   opt-in (``TT_METAL_TRACE_ALLOC_TRACKING=1`` on the pytest process): the P2 base
                           request twice (capture, then the replay path incl. the VAE input copy); the log must carry 0
-                          tracker lines (M4 precedent; checked by the operator's grep).
+                          tracker lines (M4 precedent; checked by the operator's grep). M8: the second generate's first
+                          DiT replay used to raise ``Found 2 device buffer(s) still alive before trace replay`` (the VAE
+                          trace's captured input and its CCL gather buffer, allocated by the first generate's decode
+                          AFTER the DiT capture; M7 had only ever run ONE generate under the tracker;
+                          logs/m8_verifier_device_tracker_4x8.log:37-49,114,180-186,252-266). The pipeline now captures
+                          the VAE trace of a canvas size BEFORE the DiT trace of a layout (pipeline docstring), and this
+                          row is the gate: run it with the tracker env on the ring and cite its passing line.
   test_t2i_b300             the real >= 30 dB gate vs our own B300 render: skipped until ``$FLUX3_KLEIN_GOLDENS``
                           carries a ``record.json`` with ``"device": "cuda"`` (PLAN decisions 4 and 8).
+M8 rows (references; design ``docs/M8_DESIGN.md`` section 9.4; cases = the goldens with references under
+``$FLUX3_KLEIN_GOLDENS``: distilled / base ``3_bandana`` (1 ref, seed 22), ``2_3_mugprint`` (2 refs, seed 23),
+``1_figurine`` (896x1120, seed 33); a case whose golden is not on disk is skipped by name):
+  P5a test_edit_golden_inputs[case]  ``Flux3KleinRequest(images=<the golden's reference images>, width / height None,
+                          text_override=<recorded text>, image_cond_override=<recorded cond_tokens / cond_ids>)``: the
+                          canvas == ``replay.size`` (default_size of the prepared references); ``final_tokens``
+                          ``torch.equal`` the denoiser's own traced ``denoise(request_from_golden)`` (the M4 path, now with
+                          image_cond); teacher-forced per-step velocity floor ``teacher_forced_floor`` (0.998); final
+                          ``(pcc, rel_rmse)`` vs the golden inside ``final_gate`` (0.99 / 0.15 distilled, 0.97 / 0.25
+                          base 50); render vs the CPU decode of its own ``final_tokens`` >= PSNR_DEC_FLOOR (896x1120:
+                          its own frozen floor); PSNR vs ``golden.png`` LOGGED only (calibration band: CPU golden vs the
+                          shipped BFL PNG 39.2-39.5 dB on man_dog, 57.19 / 56.22 / 32.45 dB on bandana / mugprint /
+                          figurine, logs/m8_designer_golden_distilled_*.log:31; recorded-text T2I rows 28.4 / 32.9
+                          dB); the admission's ``total_tokens`` == the record's token sum. ``distilled/1_figurine`` is a
+                          STRICT xfail at the unchanged band with its measurement (0.976069 / 0.2189, floor met at
+                          0.998783: ``test_denoise_flux3_klein.FINAL_BAND_XFAIL_CASES``), never a lowered band.
+  P5b test_edit_device_path[case]  the same request through the DEVICE text encoder and the DEVICE VAE encoder (no
+                          overrides), ``generate`` twice: deterministic; device cond tokens vs the golden ``cond_tokens``
+                          logged; the proper reference = the CPU sampler on the device's OWN text and cond rows
+                          (``cached_reference_sampling``, key extended with the cond rows): final band ``final_gate`` and
+                          render >= PSNR_PROPER_REFERENCE vs that reference's render. Distilled rows run the oracle by
+                          default (28 / 55 / 27 min of node CPU once, cached); base rows need
+                          ``FLUX3_KLEIN_BASE_PROPER_REFERENCE=1`` (2.5-5.5 h each) and otherwise log their numbers and
+                          skip the band. A distilled row that misses the band is carried as a strict xfail WITH its
+                          measurement (the P2 distilled precedent), never by a lowered band.
+  P5c test_edit_crop_back    a 1016x1016 synthetic reference, distilled, ``steps=1``: canvas 1024x1024, image (1016, 1016),
+                          ``crop == (4, 4, 1020, 1020)``, ``image_tokens == 4096`` (shape / crop only, no quality band;
+                          the design's 1000x1000 example pads to a 1008 canvas whose /8 VAE level is not tile-aligned and
+                          is refused by the policy, see test_references_flux3_klein.py).
+  P6 test_admission_before_device  a request over capacity (4096x4096 + 10 references + the prompt): ``generate`` raises
+                          ``Flux3KleinAdmissionError`` with ``budget == "total_tokens"`` and leaves the denoisers'
+                          captured keys, the DRAM / TRACE per bank and the encoder untouched, AND makes zero calls into
+                          any device entry point (``DeviceCallCounter``: ``ttnn.from_torch`` / ``to_device`` /
+                          ``allocate_tensor_on_device`` / ``copy``, ``utils.tensor.from_torch``, the VAE encoder's
+                          ``encode`` / ``upload``, the prompt encoder, the VAE decode, the denoiser's ``prepare`` /
+                          ``denoise_on_device``); a refusal that uploaded and freed a tensor would pass the memory check
+                          alone (M8 verifier finding; measured 0 calls on the ring for six refusals,
+                          logs/m8_verifier_device_probe_4x8_run3.log:274-292, run2:305).
+  P3 gains a distilled 1-reference call (bandana, device path) between the two base calls when that golden exists.
 
 Environment: ``FLUX3_KLEIN_MODEL_PATH`` / the HuggingFace cache (base and distilled snapshots), ``FLUX3_KLEIN_GOLDENS``,
 ``FLUX3_KLEIN_VAE_ORACLE_CACHE``, ``FLUX3_KLEIN_SAMPLING_ORACLE_CACHE``, ``FLUX3_KLEIN_OUT``, ``TT_DIT_CACHE_DIR``.
@@ -82,18 +127,29 @@ from .common import (
     golden_cases,
     golden_index,
     golden_prompt,
+    golden_reference_images,
     load_golden_case,
     pcc,
     psnr_uint8,
+    reference_golden_cases,
     renders_dir,
     sampling_oracle_cache,
     sha256_of,
     variant_checkpoint_dir,
 )
 from .device_params import ring_params_8k_flux3_klein_transformer
-from .test_denoise_flux3_klein import case_model, final_gate, reference_final, request_from_golden
+from .test_denoise_flux3_klein import (
+    FinalBandNotMet,
+    case_model,
+    final_gate,
+    golden_case_param,
+    reference_final,
+    request_from_golden,
+    teacher_forced_floor,
+    teacher_forced_table,
+)
 from .test_transformer_flux3_klein import checkpoint_blob, torch_dit
-from .test_vae_flux3_klein import PSNR_DEC_FLOOR, cached_reference_decode
+from .test_vae_flux3_klein import PSNR_DEC_FLOOR, PSNR_DEC_FLOOR_896x1120, cached_reference_decode
 
 # Interim PSNR gates vs golden.png (the CPU bf16 reference render), design 6.2. Measured band: the M4 device final
 # states decoded on CPU give 28.40 / 32.89 dB (logs/m4gate_decode_psnr.log:3,8); the same states through the DEVICE
@@ -132,6 +188,12 @@ PSNR_B300 = 30.0
 ORACLE_THREADS = 24
 RESIDENT = ("base", "distilled")
 DIGESTS_FILE = "digests.json"
+# M8: the proper-reference CPU runs of the base reference rows cost 2.5-5.5 h each; opt-in.
+BASE_PROPER_REFERENCE_ENV = "FLUX3_KLEIN_BASE_PROPER_REFERENCE"
+REFERENCE_CASES = reference_golden_cases()
+REFERENCE_CASE_IDS = [f"{p.parent.name}-{p.name}" for p in REFERENCE_CASES]
+# P5a params: the recorded final-band misses are strict xfails with their measurement (test_denoise FINAL_BAND_XFAIL_CASES).
+REFERENCE_CASE_PARAMS = [golden_case_param(p) for p in REFERENCE_CASES]
 
 mesh_rows = pytest.mark.parametrize(
     "mesh_device, device_params",
@@ -260,6 +322,8 @@ def cached_reference_sampling(
         "text": sha256_of(request.text[0]),
         "text_ids": sha256_of(request.text[1]),
         "text_null": sha256_of(request.text_null[0]) if request.text_null is not None else "",
+        "cond_tokens": sha256_of(request.image_cond[0]) if request.image_cond is not None else "",
+        "cond_ids": sha256_of(request.image_cond[1]) if request.image_cond is not None else "",
         "num_steps": request.num_steps,
         "guidance": request.guidance,
         "alpha": request.alpha,
@@ -324,17 +388,40 @@ def test_request_resolve(expect_error) -> None:
         Flux3KleinRequest(prompt="x", output_format="webp").resolve()
     with expect_error(ValueError, "text_override"):
         Flux3KleinRequest(prompt="x", text_override=((torch.zeros(80, 20480), packing.text_ids(80)), None)).resolve()
+    # generate.py:72 ``width or default_width``: 0 means "not given" (M8 verifier finding; was a ValueError).
+    zero = Flux3KleinRequest(prompt="x", width=0, height=0).resolve()
+    assert (zero.width, zero.height, zero.crop) == (1024, 1024, None)
+    with expect_error(ValueError, "negative"):
+        Flux3KleinRequest(prompt="x", width=-16).resolve()
 
     side = admit(Flux3KleinRequest(prompt="x", width=1000).resolve(), (4, 8))
     assert not side.ok and side.budget == "side", side
     big = admit(Flux3KleinRequest(prompt="x", height=4112).resolve(), (4, 8))
     assert not big.ok and big.budget == "side", big
-    refs = admit(Flux3KleinRequest(prompt="x", images=(object(),)).resolve(), (4, 8))
-    assert not refs.ok and refs.reason == REFERENCES_REASON and refs.budget == "references", refs
+    from PIL import Image
+
+    with expect_error(ValueError, REFERENCES_REASON):
+        Flux3KleinRequest(prompt="x", images=(Image.new("RGB", (64, 64)),) * 11).resolve()
     ok = admit(Flux3KleinRequest(prompt="x", width=1344, height=768).resolve(), (4, 8))
     assert ok.ok and ok.measured["image_tokens"] == 84 * 48, ok
-    with expect_error(Flux3KleinAdmissionError, "references land in M8"):
-        raise Flux3KleinAdmissionError(refs)
+    default = Flux3KleinRequest(prompt="x").resolve()
+    assert (default.width, default.height, default.crop) == (1024, 1024, None) and default.prepared.images == ()
+    # a 1000x1000 reference with width=0 / height=0: the 1008 canvas AND the crop-back, as upstream_glue(images, 0, 0)
+    zero_ref = Flux3KleinRequest(prompt="x", width=0, height=0, images=(Image.new("RGB", (1000, 1000)),)).resolve()
+    assert (zero_ref.width, zero_ref.height, zero_ref.crop) == (1008, 1008, (4, 4, 1004, 1004)), zero_ref
+    assert Flux3KleinRequest(prompt="x", width=1008, images=(Image.new("RGB", (1000, 1000)),)).resolve().crop is None
+    over = admit(
+        replace(
+            Flux3KleinRequest(
+                prompt="x", width=4096, height=4096, images=(Image.new("RGB", (1024, 1024)),) * 10
+            ).resolve(),
+            text_length=80,
+        ),
+        (4, 8),
+    )
+    assert not over.ok and over.budget == "total_tokens", over
+    with expect_error(Flux3KleinAdmissionError, "total tokens"):
+        raise Flux3KleinAdmissionError(over)
 
     noise = make_noise(7, 64, 64)
     assert noise.dtype == torch.float32 and torch.equal(noise, noise.to(torch.bfloat16).float())
@@ -472,8 +559,37 @@ def test_both_models_resident(mesh_device) -> None:
     pipeline = build_pipeline(mesh_device)
     name = f"both_models_resident {mesh_tag(mesh_device)}"
     results: dict[str, list[Flux3KleinResult]] = {v: [] for v in RESIDENT}
+    edit_golden = next((load_golden_case(d) for d in REFERENCE_CASES if case_model(d) == "distilled"), None)
+    calls = ["base", "distilled", "base"] if edit_golden is None else ["base", "distilled", "distilled-edit", "base"]
+    if edit_golden is None:
+        logger.warning(f"{name}: no distilled reference golden on disk; the 1-reference call is not made")
     try:
-        for i, variant in enumerate(("base", "distilled", "base")):
+        for i, call in enumerate(calls):
+            if call == "distilled-edit":
+                edit_request = request_for_edit(edit_golden, text_override=False, cond_override=False)
+                edit_resolved = replace(edit_request.resolve(), text_length=pipeline.text_length(edit_request.prompt))
+                if not admit(edit_resolved, pipeline.mesh_shape).ok:
+                    logger.warning(f"{name}: the 1-reference bucket is not measured yet; the edit call is not made")
+                    continue
+                result = pipeline.generate(edit_request, traced=True)
+                report(
+                    f"{name} call {i} distilled edit {edit_golden.name}",
+                    result,
+                    edit_golden,
+                    golden_png(edit_golden),
+                    None,
+                )
+                stored = stored_digest(f"distilled/{edit_golden.name}/edit")
+                logger.info(
+                    f"RESULT {name} call {i} distilled edit: final_tokens == P5b digest "
+                    f"{stored == sha256_of(result.final_tokens) if stored else 'n/a (no digest on disk)'}; "
+                    f"denoise trace captured {result.timings['trace_captured']}; captured keys "
+                    f"{ {v: d.captured_keys for v, d in pipeline.denoisers.items()} }"
+                )
+                if stored is not None:
+                    assert stored == sha256_of(result.final_tokens), "edit final_tokens differ from the P5b digest"
+                continue
+            variant = call
             golden = goldens[variant]
             result = pipeline.generate(request_for(golden, text_override=False), traced=True)
             results[variant].append(result)
@@ -521,6 +637,349 @@ def test_trace_alloc_tracking(mesh_device) -> None:
             "RESULT trace_alloc_tracking: two generates completed (capture + replay); grep the log for tracker lines "
             "(expected 0)"
         )
+    finally:
+        pipeline.close()
+        ttnn.synchronize_device(mesh_device)
+
+
+# --- M8: reference rows ---------------------------------------------------------------------------------------------------------------
+
+
+def request_for_edit(golden: GoldenCase, *, text_override: bool, cond_override: bool) -> Flux3KleinRequest:
+    """The golden's edit request: its reference images, width / height None (the canvas is ``default_size`` of the
+    prepared references, as the generator rendered it), the recorded text and / or cond rows as overrides."""
+    replay = golden.replay
+    inputs = golden.inputs
+    text = None
+    if text_override:
+        null = (inputs["text_null_tokens"], inputs["text_null_ids"]) if golden.model == "base" else None
+        text = ((inputs["text_tokens"], inputs["text_ids"]), null)
+    cond = (inputs["cond_tokens"], inputs["cond_ids"]) if cond_override else None
+    return Flux3KleinRequest(
+        prompt=golden_prompt(golden),
+        model=golden.model,
+        width=None,
+        height=None,
+        seed=int(replay["seed"]),
+        steps=golden.num_steps,
+        guidance=golden.guidance,
+        images=tuple(golden_reference_images(golden)),
+        alpha=golden.alpha,
+        text_override=text,
+        image_cond_override=cond,
+    )
+
+
+def golden_case_or_skip(case_dir: Path | None) -> GoldenCase:
+    if case_dir is None:
+        pytest.skip(f"{GOLDENS_ENV} not set or no reference case under it")
+    golden = load_golden_case(case_dir)
+    assert golden.replay["references"], golden.name
+    return golden
+
+
+def decode_floor(width: int, height: int) -> float | None:
+    """The PSNR floor of the device render vs the CPU decode of its own tokens for this canvas (1024: 50.0; 896x1120:
+    its own frozen floor, ``None`` = log only until measured)."""
+    if (width, height) == (896, 1120):
+        return PSNR_DEC_FLOOR_896x1120
+    return PSNR_DEC_FLOOR
+
+
+def check_decode(name: str, pipeline: Flux3KleinPipeline, result: Flux3KleinResult, golden: GoldenCase) -> float:
+    """PSNR of the (uncropped) device render vs the CPU reference decode of the device's OWN final tokens."""
+    width, height = (int(v) for v in golden.replay["size"])
+    h, w = packing.latent_shape(height, width)
+    reference = cached_reference_decode(
+        pipeline._snapshots[golden.model], result.final_tokens, h, w, f"{golden.name} device final_tokens {name}"
+    )
+    ref_png = to_pil(reference)
+    image = result.image if result.crop is None else result.image  # the goldens of these cases are not cropped
+    psnr_dec = psnr_uint8(image, ref_png)
+    floor = decode_floor(width, height)
+    logger.info(
+        f"RESULT {name}: PSNR device render vs CPU decode of its own final_tokens {psnr_dec:.2f} dB (floor {floor})"
+    )
+    if floor is not None:
+        assert psnr_dec >= floor, f"PSNR vs CPU decode {psnr_dec:.2f} dB < {floor}"
+    return psnr_dec
+
+
+def expected_total_tokens(golden: GoldenCase) -> int:
+    tokens = golden.replay["tokens"]
+    return int(tokens["image"]) + int(tokens["image_cond"]) + int(tokens["text"])
+
+
+def skip_unless_bucket_measured(pipeline: Flux3KleinPipeline, request: Flux3KleinRequest, name: str) -> None:
+    """A reference request is admitted only up to the largest MEASURED token bucket of the mesh (``policy.CAPACITY``);
+    until the bucket that holds it has run on the ring (and its DRAM / TRACE line is cited in the table) the row is
+    SKIPPED with the admission, not failed: the gate is unmeasured, not missed."""
+    resolved = request.resolve()
+    resolved = replace(resolved, text_length=pipeline.text_length(resolved.prompt))
+    admission = admit(resolved, pipeline.mesh_shape)
+    if not admission.ok and admission.budget == "total_tokens":
+        logger.info(f"RESULT {name}: SKIPPED, capacity bucket not measured: {admission.reason}; {admission.measured}")
+        pytest.skip(f"{name}: {admission.reason} (the bucket is measured on the ring before it enters policy.CAPACITY)")
+    assert admission.ok, admission
+
+
+@mesh_rows
+@pytest.mark.parametrize("case_dir", REFERENCE_CASE_PARAMS or [None], ids=REFERENCE_CASE_IDS or ["no_goldens"])
+def test_edit_golden_inputs(mesh_device, case_dir: Path | None) -> None:
+    golden = golden_case_or_skip(case_dir)
+    variant = golden.model
+    png = golden_png(golden)
+    pipeline = build_pipeline(mesh_device)
+    name = f"edit_golden_inputs[{golden.name}] {mesh_tag(mesh_device)}"
+    try:
+        request = request_for_edit(golden, text_override=True, cond_override=True)
+        skip_unless_bucket_measured(pipeline, request, name)
+        result = pipeline.generate(request, traced=True)
+        save_render(result, mesh_device, "golden_inputs")
+        numbers = report(name, result, golden, png, gates=None)
+        assert result.image.size == tuple(int(v) for v in golden.replay["size"]) == png.size
+        assert result.crop == (tuple(golden.replay["crop"]) if golden.replay["crop"] else None)
+        assert [list(s) for s in result.references] == golden.replay["prepared_reference_sizes"]
+        assert result.admission.measured["total_tokens"] == expected_total_tokens(golden), result.admission
+        assert result.admission.measured["cond_tokens"] == int(golden.replay["tokens"]["image_cond"])
+        assert torch.isfinite(result.final_tokens).all()
+        logger.info(
+            f"RECORD {name}: admission {result.admission.measured}; layout key {result.layout_key}; "
+            f"encode_refs {result.timings['encode_refs_s']:.3f}s (override)"
+        )
+        # Bit-identical to M4: the denoiser's own traced run of the golden request (with image_cond) on the same transformer.
+        denoiser = pipeline.denoisers[variant]
+        prepared = denoiser.prepare(request_from_golden(golden))
+        own = denoiser.denoise(prepared, traced=True)
+        equal = torch.equal(own, result.final_tokens)
+        logger.info(f"RESULT {name}: pipeline final_tokens == denoiser.denoise(request_from_golden) {equal}")
+        assert equal, "the pipeline's denoise differs from the M4 traced run of the golden request"
+        # The per-step floor (teacher forced, no accumulation) and the final band of the M4 method.
+        worst = teacher_forced_table(name, denoiser, prepared, golden)
+        floor = teacher_forced_floor(variant, smoke=False)
+        final_pcc, final_rmse = numbers["pcc"], rel_rmse(golden.steps["final_tokens"], result.final_tokens)
+        gate_pcc, gate_rmse = final_gate(variant, golden.num_steps, smoke=False)
+        logger.info(
+            f"RESULT {name}: teacher-forced worst velocity pcc {worst:.6f} (floor {floor}); final pcc {final_pcc:.6f} "
+            f"rel_rmse {final_rmse:.4f} (band {gate_pcc} / {gate_rmse}); PSNR vs golden.png {numbers['psnr_golden']:.2f} dB "
+            f"(calibration only: CPU golden vs BFL PNG 39.2-39.5 dB on man_dog, recorded-text T2I rows 28.4 / 32.9 dB)"
+        )
+        psnr_dec = check_decode(name, pipeline, result, golden)
+        logger.info(
+            f"RESULT {name} summary: final {final_pcc:.6f} / {final_rmse:.4f}, teacher-forced {worst:.6f}, decode "
+            f"{psnr_dec:.2f} dB, vs golden.png {numbers['psnr_golden']:.2f} dB; {pipeline.timings_init}"
+        )
+        assert worst >= floor, f"teacher-forced velocity floor {worst:.6f} < {floor}"
+        if not (final_pcc >= gate_pcc and final_rmse <= gate_rmse):
+            raise FinalBandNotMet(
+                f"{name}: final pcc {final_pcc:.6f} rel_rmse {final_rmse:.4f} outside the band {gate_pcc} / {gate_rmse} "
+                f"(teacher-forced floor {worst:.6f} >= {floor})"
+            )
+    finally:
+        pipeline.close()
+        ttnn.synchronize_device(mesh_device)
+
+
+@mesh_rows
+@pytest.mark.parametrize("case_dir", REFERENCE_CASES or [None], ids=REFERENCE_CASE_IDS or ["no_goldens"])
+def test_edit_device_path(mesh_device, case_dir: Path | None) -> None:
+    golden = golden_case_or_skip(case_dir)
+    variant = golden.model
+    png = golden_png(golden)
+    pipeline = build_pipeline(mesh_device)
+    name = f"edit_device_path[{golden.name}] {mesh_tag(mesh_device)}"
+    try:
+        request = request_for_edit(golden, text_override=False, cond_override=False)
+        skip_unless_bucket_measured(pipeline, request, name)
+        first = pipeline.generate(request, traced=True)
+        save_render(first, mesh_device, "device_path")
+        numbers = report(f"{name} first", first, golden, png, gates=None)
+        second = pipeline.generate(request, traced=True)
+        report(f"{name} second", second, golden, png, gates=None)
+        assert first.image.size == tuple(int(v) for v in golden.replay["size"])
+        assert first.text_length == int(golden.inputs["text_tokens"].shape[0])
+        assert first.image_cond is not None and first.image_cond[0].shape == golden.inputs["cond_tokens"].shape
+        assert torch.equal(first.image_cond[1], golden.inputs["cond_ids"]), "device cond ids differ from the golden"
+        assert torch.equal(second.text[0], first.text[0]) and torch.equal(second.image_cond[0], first.image_cond[0])
+        assert torch.equal(second.final_tokens, first.final_tokens), "second generate differs from the first"
+        assert not second.timings["trace_captured"] and not second.timings["vae_trace_captured"]
+        assert torch.isfinite(first.final_tokens).all()
+        record_digest(f"{variant}/{golden.name}/edit", numbers["digest"])
+        text_pcc = pcc(golden.inputs["text_tokens"].float(), first.text[0].float())
+        cond_pcc = pcc(golden.inputs["cond_tokens"].float(), first.image_cond[0].float())
+        cond_rr = rel_rmse(golden.inputs["cond_tokens"].float(), first.image_cond[0].float())
+        logger.info(
+            f"RESULT {name}: device text vs recorded pcc {text_pcc:.6f} (L {first.text_length}); device cond tokens vs "
+            f"golden cond_tokens pcc {cond_pcc:.6f} rel_rmse {cond_rr:.5f} ({first.image_cond[0].shape[0]} rows, "
+            f"encode_refs {first.timings['encode_refs_s']:.3f}s first / {second.timings['encode_refs_s']:.3f}s second)"
+        )
+        psnr_dec = check_decode(name, pipeline, first, golden)
+        if variant == "base" and os.environ.get(BASE_PROPER_REFERENCE_ENV) != "1":
+            logger.info(
+                f"RESULT {name}: base proper reference not run ({BASE_PROPER_REFERENCE_ENV} != 1; 2.5-5.5 h of node CPU); "
+                f"final pcc vs golden {numbers['pcc']:.6f}, PSNR vs golden.png {numbers['psnr_golden']:.2f} dB, decode {psnr_dec:.2f} dB"
+            )
+            pytest.skip(f"{BASE_PROPER_REFERENCE_ENV} != 1: the base proper-reference band is opt-in (numbers logged)")
+        snapshot = pipeline._snapshots[variant]
+        oracle_request = replace(request_from_golden(golden), text=first.text, image_cond=first.image_cond)
+        reference = cached_reference_sampling(snapshot, variant, oracle_request, f"{golden.name} device text + cond")
+        width, height = (int(v) for v in golden.replay["size"])
+        h, w = packing.latent_shape(height, width)
+        ref_png = to_pil(cached_reference_decode(snapshot, reference, h, w, f"{golden.name} reference(device inputs)"))
+        out_dir = renders_dir()
+        if out_dir is not None:
+            ref_png.save(out_dir / f"cpu_reference_{variant}_{width}x{height}_seed{first.seed}_device_inputs.png")
+        golden_final = golden.steps["final_tokens"]
+        ref_pcc, ref_rr = pcc(golden_final, reference), rel_rmse(golden_final, reference)
+        dev_pcc, dev_rr = pcc(reference, first.final_tokens), rel_rmse(reference, first.final_tokens)
+        psnr_ref = psnr_uint8(first.image, ref_png)
+        gate_pcc, gate_rmse = final_gate(variant, first.steps, smoke=False)
+        logger.info(
+            f"RESULT {name}: CPU reference with the device text + cond vs golden final_tokens pcc {ref_pcc:.6f} rel_rmse "
+            f"{ref_rr:.4f}, its render vs golden.png {psnr_uint8(ref_png, png):.2f} dB; DEVICE vs that reference: final pcc "
+            f"{dev_pcc:.6f} rel_rmse {dev_rr:.4f} (gate {gate_pcc} / {gate_rmse}), render {psnr_ref:.2f} dB (gate "
+            f"{PSNR_PROPER_REFERENCE})"
+        )
+        assert ref_pcc >= REFERENCE_TEXT_SWAP_PCC, f"oracle took a different input: pcc vs golden {ref_pcc:.6f}"
+        if not (dev_pcc >= gate_pcc and dev_rr <= gate_rmse and psnr_ref >= PSNR_PROPER_REFERENCE):
+            raise ProperReferenceBandNotMet(
+                f"device vs the CPU reference on the same device inputs: pcc {dev_pcc:.6f} rel_rmse {dev_rr:.4f} "
+                f"PSNR {psnr_ref:.2f} dB (band {gate_pcc} / {gate_rmse} / {PSNR_PROPER_REFERENCE})"
+            )
+    finally:
+        pipeline.close()
+        ttnn.synchronize_device(mesh_device)
+
+
+def synthetic_reference(width: int, height: int, seed: int):
+    import numpy as np
+    from PIL import Image
+
+    rng = np.random.default_rng(seed)
+    return Image.fromarray(rng.integers(0, 256, (height, width, 3), np.uint8))
+
+
+@mesh_rows
+def test_edit_crop_back(mesh_device, expect_error) -> None:
+    pipeline = build_pipeline(mesh_device)
+    name = f"edit_crop_back {mesh_tag(mesh_device)}"
+    try:
+        request = Flux3KleinRequest(
+            prompt="a photo", model="distilled", seed=3, steps=1, images=(synthetic_reference(1016, 1016, 3),)
+        )
+        resolved = request.resolve()
+        assert (resolved.width, resolved.height, resolved.crop) == (1024, 1024, (4, 4, 1020, 1020))
+        skip_unless_bucket_measured(pipeline, request, name)
+        result = pipeline.generate(request, traced=True)
+        save_render(result, mesh_device, "crop_back")
+        logger.info(
+            f"RESULT {name}: canvas 1024x1024, image {result.image.size}, crop {result.crop}, references {result.references}, "
+            f"admission {result.admission.measured}; encode_refs {result.timings['encode_refs_s']:.3f}s total "
+            f"{result.timings['total_s']:.3f}s"
+        )
+        assert result.image.size == (1016, 1016)
+        assert result.crop == (4, 4, 1020, 1020) and result.references == ((1024, 1024),)
+        assert result.admission.measured["image_tokens"] == 4096 and result.admission.measured["cond_tokens"] == 4096
+        assert torch.isfinite(result.final_tokens).all() and result.final_tokens.shape == (4096, 128)
+        # P6 in the same process (realistic residency): an over-capacity request leaves the device untouched.
+        check_admission_before_device(pipeline, name, expect_error)
+    finally:
+        pipeline.close()
+        ttnn.synchronize_device(mesh_device)
+
+
+class DeviceCallCounter:
+    """Counts the calls into the device entry points a refused request must never reach (every upload / allocation
+    path of the pipeline and the four stage entry points), by wrapping them for the duration of the ``with`` block.
+    "Memory unchanged" alone would pass a refusal that uploaded a tensor and freed it (M8 verifier finding)."""
+
+    def __init__(self, pipeline: Flux3KleinPipeline) -> None:
+        from ....utils import tensor as tensor_utils
+
+        self.counts: dict[str, int] = {}
+        self._patches: list[tuple[object, str, object]] = []
+        targets = [
+            (ttnn, "from_torch"),
+            (ttnn, "to_device"),
+            (ttnn, "allocate_tensor_on_device"),
+            (ttnn, "copy"),
+            (tensor_utils, "from_torch"),
+            (type(pipeline.vae_encode), "encode"),
+            (type(pipeline.vae_encode), "upload"),
+            (type(pipeline.prompt_encoder), "encode_host"),
+            (type(pipeline.vae), "decode"),
+        ]
+        denoiser = next(iter(pipeline.denoisers.values()))
+        targets += [(type(denoiser), "prepare"), (type(denoiser), "denoise_on_device")]
+        for owner, attr in targets:
+            key = f"{getattr(owner, '__name__', owner)}.{attr}"
+            if key in self.counts:
+                continue
+            self.counts[key] = 0
+            self._patches.append((owner, attr, getattr(owner, attr)))
+
+    def __enter__(self) -> DeviceCallCounter:
+        for owner, attr, original in self._patches:
+            setattr(owner, attr, self._wrap(f"{getattr(owner, '__name__', owner)}.{attr}", original))
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        for owner, attr, original in self._patches:
+            setattr(owner, attr, original)
+
+    def _wrap(self, key: str, original):
+        def wrapped(*args, **kwargs):
+            self.counts[key] += 1
+            return original(*args, **kwargs)
+
+        return wrapped
+
+    @property
+    def total(self) -> int:
+        return sum(self.counts.values())
+
+
+def check_admission_before_device(pipeline: Flux3KleinPipeline, name: str, expect_error) -> None:
+    from ....pipelines.flux3_klein.pipeline_flux3_klein import dram_per_bank
+
+    before = dram_per_bank(pipeline.device)
+    keys_before = {v: d.captured_keys for v, d in pipeline.denoisers.items()}
+    wall_before = pipeline.vae_encode.last_wall_s
+    request = Flux3KleinRequest(
+        prompt="a photo",
+        model="distilled",
+        width=4096,
+        height=4096,
+        images=(synthetic_reference(1024, 1024, 9),) * 10,
+    )
+    t0 = time.time()
+    with DeviceCallCounter(pipeline) as counter, expect_error(Flux3KleinAdmissionError, "total tokens") as info:
+        pipeline.generate(request, traced=True)
+    wall = time.time() - t0
+    admission = info.value.admission
+    ttnn.synchronize_device(pipeline.device)
+    after = dram_per_bank(pipeline.device)
+    keys_after = {v: d.captured_keys for v, d in pipeline.denoisers.items()}
+    logger.info(
+        f"RESULT {name} admission_before_device: refused budget {admission.budget} measured {admission.measured} in "
+        f"{wall:.3f}s host wall; DRAM/TRACE before == after {before == after} ({after}); captured keys unchanged "
+        f"{keys_before == keys_after}; encoder untouched {pipeline.vae_encode.last_wall_s == wall_before}; device "
+        f"entry-point calls during the refused generate {counter.total} {counter.counts}"
+    )
+    assert (
+        admission.budget == "total_tokens"
+        and admission.measured["total_tokens"] > admission.measured["max_total_tokens"]
+    )
+    assert before == after, "the refused request changed the device memory"
+    assert keys_before == keys_after and pipeline.vae_encode.last_wall_s == wall_before
+    assert counter.total == 0, f"the refused request reached a device entry point: {counter.counts}"
+
+
+@mesh_rows
+def test_admission_before_device(mesh_device, expect_error) -> None:
+    pipeline = build_pipeline(mesh_device)
+    try:
+        check_admission_before_device(pipeline, f"admission_before_device {mesh_tag(mesh_device)}", expect_error)
     finally:
         pipeline.close()
         ttnn.synchronize_device(mesh_device)

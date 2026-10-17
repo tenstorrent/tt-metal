@@ -2,34 +2,64 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""FLUX 3 Image Klein text-to-image on one tt_dit mesh: ``reference/flux3_klein/pipeline.py::Pipeline.generate``
-with every model stage on device (design record ``docs/M6_M7_DESIGN.md`` section 5).
+"""FLUX 3 Image Klein text-to-image and reference editing on one tt_dit mesh: ``reference/flux3_klein/pipeline.py::
+Pipeline.generate`` with every model stage on device (design records ``docs/M6_M7_DESIGN.md`` section 5 and
+``docs/M8_DESIGN.md`` section 5).
 
-Stages per request (``pipeline.py:55-83``), host work limited to noise, ids, the request schema and the PNG:
-  1. :meth:`Flux3KleinRequest.resolve` (the ``generate.py:36-42`` defaults and checks) and ``policy.admit`` (host,
-     before any device work; a rejection raises :class:`Flux3KleinAdmissionError`).
+Stages per request (``pipeline.py:55-83``, ``generate.py:65-77``), host work limited to the request schema, the
+reference sizing, noise, ids and the PNG:
+  1. :meth:`Flux3KleinRequest.resolve` (the ``generate.py:36-42`` defaults and checks, then the reference sizing of
+     ``references.prepare_references`` = ``generate.py:65-72``: one reference fitted under 4 MiP and padded to the
+     16-px grid, several each under 1 MiP; the canvas defaults to the first PREPARED reference's size, else 1024 x
+     1024) and ``policy.admit`` (host, before any device work; a rejection raises :class:`Flux3KleinAdmissionError`
+     and nothing has been allocated on the device).
   2. ``h, w = latent_shape(height, width)``; ``noise = make_noise(seed, h, w)`` = ``pipeline.py:69-70`` (CPU
      generator, ``randn`` rounded to bf16, fp32 state; hashes to the goldens' ``noise_sha256``); ``image_ids(h, w)``.
-  3. encode (device): ``Flux3KleinPromptEncoder.encode(prompt)`` on the co-resident Qwen3-VL encoder; the base model
-     also takes ``encode('')`` (computed once per pipeline and kept on the host). The rows go to the host
+  3. encode text (device): ``Flux3KleinPromptEncoder.encode(prompt)`` on the co-resident Qwen3-VL encoder; the base
+     model also takes ``encode('')`` (computed once per pipeline and kept on the host). The rows go to the host
      (``to_host``) and into the denoise request: the values are bf16 either way, so a device handoff is a later
      zero-numerics optimisation (M10).
-  4. denoise (traced): ``Flux3KleinDenoiser.prepare`` + :meth:`Flux3KleinDenoiser.denoise_on_device` on the resident
-     transformer of ``model`` (M4; with recorded text this is bit-identical to the M4 traced run).
-  5. decode (device, traced): :class:`Flux3KleinVaeDecode` (M6) on the fp32 state slot.
-  6. host: ``to_torch(out)[0].permute(2, 0, 1)`` and the reference ``to_pil`` (``pipeline.py:208-210``, truncation);
-     ``final_tokens`` is read AFTER the decode so no host read sits between replays.
+  4. encode references (device): :class:`Flux3KleinVaeEncode` (``Flux2VaeEncoder``, channels TP4) per prepared
+     reference -> bf16 ``[h_i * w_i, 128]`` tokens on the host, concatenated with ``packing.reference_ids(h_i, w_i,
+     i)`` into ``Flux3KleinDenoiseRequest.image_cond`` (``pipeline.py:84-95``); shared by both CFG samples.
+  5. denoise (traced): ``Flux3KleinDenoiser.prepare`` + :meth:`Flux3KleinDenoiser.denoise_on_device` on the resident
+     transformer of ``model`` (M4; with recorded text and recorded reference tokens this is bit-identical to the M4
+     traced run of the golden's request).
+  6. decode (device, traced): :class:`Flux3KleinVaeDecode` (M6) on the fp32 state slot (a replay of the trace captured
+     before the DiT trace, see the capture order below); a canvas whose latent height is not a multiple of the H
+     partition (896 x 1120: h 70) takes the replicated-rows decoder.
+  7. host: ``to_torch(out)[0].permute(2, 0, 1)`` and the reference ``to_pil`` (``pipeline.py:208-210``, truncation);
+     the single-reference crop-back (``generate.py:76-77``) when neither side was given; ``final_tokens`` is read AFTER
+     the decode so no host read sits between replays.
 
-Residency (decision 8 of the design): BOTH DiTs (1.5 GB per chip each), the text encoder (TP8 x FSDP4, 0.36 GB per
-chip) and the VAE decoder (0.1 GB) live on the 4x8 ring from ``__init__``; 34 GB per chip. Traces: one per denoiser
-(``max_live_traces=1``, base 25.6 MB + distilled 13.0 MB) plus the VAE's 2.3 MB of the 64 MB region.
+Residency (decision 8 of the design), measured 2026-10-17 on the 4x8 ring with everything resident
+(logs/m8_verifier_device_probe_4x8_run2.log:225-299, run3:236-268): after both DiTs 362.0 MB per bank (2.90 GB per
+chip), the text encoder (TP8 x FSDP4) +38.9 MB per bank, the VAE decoder weights +0.1 MB, the VAE encoder weights
++0.2 MB, and the warm-ups (the empty-prompt encode = the text encoder's persistent CCL buffers, one eager decode and
+one eager encode at ``warmup_size`` = the VAE kernels, the encoder's prepared conv weights and the VAE CCL manager's
+persistent buffers at that size) +91.7 MB, of which the encoder warm-up is 66.6 MB per bank = 0.53 GB per chip
+(M7 without the encoder: 426.3 MB per bank, logs/m67_builder_pipeline_4x8.log:94). Pipeline ready: 492.9 MB per
+bank = 3.94 GB per chip of 34 GB; a 1-reference 1024 request adds 20 MB per bank (513.1 after it, TRACE 2,121,728 B
+per bank); after ``close()`` 85-96 MB per bank stay allocated (persistent CCL buffers of the three managers, not
+released by ``deallocate_weights``). Traces: one per denoiser (``max_live_traces=1``, base 25.6 MB + distilled 13.0
+MB) plus the VAE decoder's 2.3 MB of the 64 MB region; the encoder runs eager.
 
 Trace aliasing rule (the M4 contract, ``denoise_flux3_klein.py`` docstring): a buffer allocated while a trace is
 live may sit where that trace's replay writes. Each denoiser releases ITS traces before allocating a new layout's
-slots; this pipeline extends the rule across modules: before a ``prepare`` that allocates (``has_layout`` False) and
-before building the fallback VAE decoder, EVERY live trace (both denoisers and the VAE) is released and recaptured on
-its next use (base capture 4.2 s, distilled 2.0 s, VAE 1.0 s). The text encoder's persistent CCL buffers and the VAE's
-kernels are warmed in ``__init__`` for the same reason.
+slots; this pipeline extends the rule across modules: before a ``prepare`` that allocates (``has_layout`` False),
+before building the fallback VAE decoder, before the first reference encode of a size the encoder has not seen (its
+CCL manager allocates persistent buffers per shape) and before a VAE capture of a size while a DiT trace is live,
+EVERY live trace (both denoisers and the VAE) is released and recaptured on its next use (base capture 4.2 s,
+distilled 2.0 s, VAE 1.0 s). Capture ORDER per layout (the M8 fix of the two-generate tracker gate, found 2026-10-17
+by the M8 device verifier, logs/m8_verifier_device_tracker_4x8.log:37-49,114,180-186,252-266): the denoiser's slots
+are allocated by ``prepare``, then the VAE decode trace of the canvas size is captured on a zero state
+(``_warm_vae(traced=True)``: its captured input buffer ``z`` and the VAE CCL manager's gather buffers are allocated
+HERE), and only then the DiT trace is captured by the first step; the per-request decode is then a replay whose
+only allocations are temporaries freed before the next DiT replay. With the M7 order (DiT first, VAE captured by the
+first decode) the second request's first DiT replay found the two VAE buffers allocated after its capture
+(``Found 2 device buffer(s) still alive before trace replay``). The text encoder's persistent CCL buffers and the VAE
+decoder's and encoder's kernels (and the encoder's prepared conv weights) are warmed in ``__init__`` for the same
+reason.
 """
 
 from __future__ import annotations
@@ -50,10 +80,16 @@ from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, P
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from .denoise_flux3_klein import Flux3KleinDenoiser, Flux3KleinDenoiseRequest, Flux3KleinPreparedRequest
-from .packing import FLUX3_KLEIN_IN_CHANNELS, image_ids, latent_shape, padded_length
+from .packing import FLUX3_KLEIN_IN_CHANNELS, FLUX3_KLEIN_MAX_REFERENCES, image_ids, latent_shape, padded_length
 from .policy import Admission, Flux3KleinAdmissionError, admit
 from .prompt_encoder import Flux3KleinPromptEncoder
+from .references import TOO_MANY_REFERENCES, CropBox, PreparedReferences, prepare_references
 from .scheduler import FLUX3_KLEIN_ALPHA, FLUX3_KLEIN_GUIDANCE, FLUX3_KLEIN_STEPS
+from .vae_encode_flux3_klein import (
+    Flux3KleinVaeEncode,
+    build_flux3_klein_vae_encoder,
+    load_flux3_klein_vae_encoder_weights,
+)
 from .vae_flux3_klein import Flux3KleinVaeDecode, build_flux3_klein_vae_decoder, load_flux3_klein_vae_weights
 from .weights_flux3_klein import dit_checkpoint, resolve_weights_dir
 
@@ -64,6 +100,7 @@ MODELS = {
 }
 OUTPUT_FORMATS = ("png", "jpeg")
 TextPair = tuple[torch.Tensor, torch.Tensor]
+CondPair = tuple[torch.Tensor, torch.Tensor]
 
 
 # --- host helpers (the reference's formulas) ---------------------------------------------------------------------------
@@ -93,14 +130,17 @@ def to_pil(image: torch.Tensor):
 
 @dataclass(frozen=True)
 class Flux3KleinRequest:
-    """One text-to-image request with BFL's field names (``generate.py`` / the API schema). ``images`` is accepted
-    for schema parity and rejected by ``policy.admit`` until M8. ``text_override`` (tests only) replaces the device
-    text encoder with recorded encodings: ``((tokens, ids), (null_tokens, null_ids) | None)``."""
+    """One request with BFL's field names (``generate.py`` / the API schema). ``width`` / ``height`` default to
+    ``None`` = ``default_size(references)`` (the first prepared reference's size, else 1024 x 1024). ``images`` holds
+    up to ``FLUX3_KLEIN_MAX_REFERENCES`` references as ``PIL.Image.Image`` s or paths. ``text_override`` (tests only)
+    replaces the device text encoder with recorded encodings: ``((tokens, ids), (null_tokens, null_ids) | None)``;
+    ``image_cond_override`` (tests only) replaces the device VAE encoder with recorded ``(cond_tokens, cond_ids)`` whose
+    row count must equal the prepared references' token count."""
 
     prompt: str
     model: str = "base"
-    width: int = 1024
-    height: int = 1024
+    width: int | None = None
+    height: int | None = None
     seed: int = 0
     steps: int | None = None
     guidance: float | None = None
@@ -108,12 +148,17 @@ class Flux3KleinRequest:
     alpha: float = FLUX3_KLEIN_ALPHA
     output_format: str = "png"
     text_override: tuple | None = None
+    image_cond_override: CondPair | None = None
 
     def resolve(self) -> Flux3KleinResolved:
         """``generate.py:36-42``: ``steps = steps or defaults``; ``guidance = defaults if None``; a flow-map model
-        accepts only ``None`` / ``1.0``. Raises ``ValueError``."""
+        accepts only ``None`` / ``1.0``; at most 10 references. Then ``generate.py:65-72`` on the host: the references
+        are prepared (sized), the canvas is ``(width or default_w, height or default_h)`` and the single-reference
+        crop-back box is kept only when neither side was given. Raises ``ValueError``."""
         if self.model not in MODELS:
             raise ValueError(f"unknown model {self.model!r}; expected one of {tuple(MODELS)}")
+        if len(self.images) > FLUX3_KLEIN_MAX_REFERENCES:
+            raise ValueError(TOO_MANY_REFERENCES)
         defaults = MODELS[self.model]
         flow_map = defaults["guidance"] is None
         if flow_map and self.guidance not in (None, 1.0):
@@ -130,12 +175,30 @@ class Flux3KleinRequest:
                 raise ValueError(
                     "text_override needs the empty-prompt encoding for the base model and none for a flow map"
                 )
+        # generate.py:72 ``width or default_width``: 0 (and None) means "not given", as in the reference API; the
+        # crop-back rule of generate.py:70 (``not (width or height)``) reads it the same way (M8 verifier finding).
+        for name, side in (("width", self.width), ("height", self.height)):
+            if side is not None and int(side) < 0:
+                raise ValueError(f"{name} must not be negative, got {side}")
+        width_given = int(self.width) if self.width else None
+        height_given = int(self.height) if self.height else None
+        prepared = prepare_references(self.images, width=width_given, height=height_given)
+        default_w, default_h = prepared.default_size
+        width = width_given if width_given else default_w
+        height = height_given if height_given else default_h
+        if self.image_cond_override is not None:
+            tokens, ids = self.image_cond_override
+            if tokens.shape[0] != prepared.cond_tokens() or ids.shape[0] != tokens.shape[0]:
+                raise ValueError(
+                    f"image_cond_override has {tokens.shape[0]} rows ({ids.shape[0]} ids); the prepared references "
+                    f"{prepared.sizes} need {prepared.cond_tokens()}"
+                )
         return Flux3KleinResolved(
             prompt=self.prompt,
             model=self.model,
             flow_map=flow_map,
-            width=int(self.width),
-            height=int(self.height),
+            width=width,
+            height=height,
             seed=int(self.seed),
             steps=int(steps),
             guidance=None if flow_map else guidance,
@@ -143,6 +206,9 @@ class Flux3KleinRequest:
             alpha=float(self.alpha),
             output_format=self.output_format,
             text_override=self.text_override,
+            image_cond_override=self.image_cond_override,
+            prepared=prepared,
+            crop=prepared.crop,
         )
 
 
@@ -160,6 +226,11 @@ class Flux3KleinResolved:
     alpha: float
     output_format: str
     text_override: tuple | None = None
+    image_cond_override: CondPair | None = None
+    prepared: PreparedReferences | None = None
+    """The references after the host sizing (``None`` only for a resolved object built by hand)."""
+    crop: CropBox | None = None
+    """The single-reference crop-back box applied to the decoded image (``generate.py:76-77``)."""
     text_length: int | None = None
     """The padded text length (a multiple of 80) once the tokenizer has seen the prompt; ``None`` before."""
 
@@ -181,6 +252,12 @@ class Flux3KleinResult:
     text: TextPair | None = None
     """The ``((L, 20480) bf16, ids)`` encoding the denoise consumed (the device encoder's output, or the override):
     the input a CPU reference run of the same request must take to be the device trajectory's proper reference."""
+    image_cond: CondPair | None = None
+    """The ``([N, 128] bf16, [N, 4] fp32)`` reference rows the denoise consumed (device encoder or override)."""
+    references: tuple[tuple[int, int], ...] = ()
+    """``(width, height)`` of every prepared reference."""
+    crop: CropBox | None = None
+    """The crop-back box applied to ``image`` (``None`` when nothing was cropped)."""
 
 
 # --- weights ---------------------------------------------------------------------------------------------------------------
@@ -358,6 +435,19 @@ class Flux3KleinPipeline:
         self.timings_init["load_vae_s"] = time.time() - t0
         logger.info(f"RECORD after vae: {dram_per_bank(mesh_device)}")
 
+        # VAE encoder (references): channels TP over the decoder's TP axis, spatial axes replicated; same CCL manager.
+        t0 = time.time()
+        encoder_vae, self._vae_encoder_parallel = build_flux3_klein_vae_encoder(
+            mesh_device, tp_axis=vae_tp_axis, ccl_manager=self._vae_ccl
+        )
+        load_flux3_klein_vae_encoder_weights(
+            encoder_vae, shared, parallel_config=self._vae_encoder_parallel, mesh_device=mesh_device
+        )
+        self._vae_encode = Flux3KleinVaeEncode(encoder_vae, device=mesh_device)
+        self._encoded_sizes: set[tuple[int, int]] = set()
+        self.timings_init["load_vae_encoder_s"] = time.time() - t0
+        logger.info(f"RECORD after vae encoder: {dram_per_bank(mesh_device)}")
+
         # Warm-ups BEFORE any trace exists: the empty prompt (base CFG; also allocates the encoder's persistent CCL
         # buffers) and one eager VAE decode of a zero state (kernel compile, ~95 s on a cold TT_METAL_CACHE).
         t0 = time.time()
@@ -367,6 +457,9 @@ class Flux3KleinPipeline:
             t0 = time.time()
             self._warm_vae(*warmup_size)
             self.timings_init["vae_warmup_s"] = time.time() - t0
+            t0 = time.time()
+            self._warm_vae_encoder(*warmup_size)
+            self.timings_init["vae_encoder_warmup_s"] = time.time() - t0
         ttnn.synchronize_device(mesh_device)
         self.timings_init["total_s"] = time.time() - t_init
         logger.info(f"RECORD pipeline ready in {self.timings_init['total_s']:.1f}s: {dram_per_bank(mesh_device)}")
@@ -408,13 +501,21 @@ class Flux3KleinPipeline:
         return self._vae
 
     @property
+    def vae_encode(self) -> Flux3KleinVaeEncode:
+        return self._vae_encode
+
+    @property
     def null_text(self) -> TextPair:
         """The empty prompt's encoding ``((80, 20480) bf16, ids)``, computed once."""
         return self._null_text
 
     # --- internals -------------------------------------------------------------------------------------------------------
 
-    def _warm_vae(self, height: int, width: int) -> None:
+    def _warm_vae(self, height: int, width: int, *, traced: bool = False) -> None:
+        """One decode of a zero state at ``height x width``: eager (``__init__``) compiles the kernels and allocates
+        the gather buffers; traced (``generate``, before the DiT capture of a layout) CAPTURES the decoder trace of
+        the size, so its captured input buffer and the VAE CCL buffers exist before any DiT trace (module docstring).
+        The traced output is the trace's buffer (never deallocated here)."""
         h, w = latent_shape(height, width)
         rows = padded_length(h * w, self._shape[self._sp_axis])
         zero = tensor.from_torch(
@@ -423,16 +524,32 @@ class Flux3KleinPipeline:
             dtype=ttnn.float32,
             mesh_axes=[None, self._sp_axis, None],
         )
-        out = self._vae.decode(zero, num_image_rows=h * w, height=height, width=width, traced=False)
+        out = self._vae.decode(zero, num_image_rows=h * w, height=height, width=width, traced=traced)
         ttnn.synchronize_device(self._device)
-        ttnn.deallocate(out)
+        if not traced:
+            ttnn.deallocate(out)
         ttnn.deallocate(zero)
+
+    def _warm_vae_encoder(self, height: int, width: int) -> None:
+        """One eager encode of a zero image: compiles the encoder's kernels and prepares its conv weights (long-lived
+        device buffers) before any trace exists."""
+        from PIL import Image
+
+        tokens = self._vae_encode.encode(Image.new("RGB", (width, height)))
+        assert tuple(tokens.shape) == (latent_shape(height, width)[0] * latent_shape(height, width)[1], 128)
+        self._encoded_sizes.add((width, height))
+
+    def traces_live(self) -> bool:
+        """Whether any denoiser or VAE trace is captured (the condition under which a long-lived allocation needs the
+        aliasing rule)."""
+        return any(d.captured_keys for d in self._denoisers.values()) or self._vae.trace_captured()
 
     def release_traces(self) -> None:
         """Release every live trace (both denoisers and the VAE); each is recaptured on its next traced use."""
         for denoiser in self._denoisers.values():
             denoiser.release_traces()
         self._vae.release_trace()
+        self._vae_encode.release_trace()
 
     def _encode(self, prompt: str) -> TextPair:
         return self._prompt_encoder.encode_host(prompt)
@@ -454,13 +571,15 @@ class Flux3KleinPipeline:
         resolved = replace(resolved, text_length=text_length)
         admission = admit(resolved, self._shape)
         if not admission.ok:
+            # Nothing has touched the device for this request: no upload, no encode, no slot allocation.
             raise Flux3KleinAdmissionError(admission)
 
         h, w = latent_shape(resolved.height, resolved.width)
         noise = make_noise(resolved.seed, h, w)
         ids = image_ids(h, w)
+        prepared_refs = resolved.prepared
 
-        # 3. encode
+        # 3. encode text
         t0 = time.time()
         if resolved.text_override is not None:
             text, null = resolved.text_override
@@ -469,6 +588,24 @@ class Flux3KleinPipeline:
             null = None if resolved.flow_map else self._null_text
         encode_s = time.time() - t0
 
+        # 4. encode references (device VAE encoder; the override is for the bit-comparable golden rows only). The
+        # first encode of a size the encoder has not seen allocates persistent CCL buffers (aliasing rule).
+        t0 = time.time()
+        image_cond: CondPair | None = None
+        if prepared_refs is not None and prepared_refs.images:
+            if resolved.image_cond_override is not None:
+                image_cond = resolved.image_cond_override
+            else:
+                new_sizes = {tuple(s) for s in prepared_refs.sizes} - self._encoded_sizes
+                if new_sizes and self.traces_live():
+                    logger.info(
+                        f"releasing every trace before the first encode of reference size(s) {sorted(new_sizes)}"
+                    )
+                    self.release_traces()
+                image_cond = self._vae_encode.encode_references(prepared_refs)
+                self._encoded_sizes |= {tuple(s) for s in prepared_refs.sizes}
+        encode_refs_s = time.time() - t0
+
         denoise_request = Flux3KleinDenoiseRequest(
             noise=noise,
             image_ids=ids,
@@ -476,24 +613,36 @@ class Flux3KleinPipeline:
             num_steps=resolved.steps,
             guidance=resolved.guidance,
             text_null=None if resolved.flow_map else null,
+            image_cond=image_cond,
             alpha=resolved.alpha,
         )
         denoiser = self._denoisers[resolved.model]
 
-        # 4. denoise (the aliasing rule of the module docstring before any long-lived allocation)
+        # 5. denoise (the aliasing rule of the module docstring before any long-lived allocation): slots first, then
+        # the VAE trace of the canvas size, then the DiT trace (capture order; module docstring).
         needs_fallback_vae = not self._vae.partitioned(resolved.height, resolved.width) and self._vae._fallback is None
-        if not denoiser.has_layout(denoise_request) or needs_fallback_vae:
+        vae_captured_before = (not traced) or self._vae.trace_captured_for(resolved.height, resolved.width)
+        if (
+            not denoiser.has_layout(denoise_request)
+            or needs_fallback_vae
+            or (not vae_captured_before and self.traces_live())
+        ):
             self.release_traces()
+            vae_captured_before = (not traced) or self._vae.trace_captured_for(resolved.height, resolved.width)
         t0 = time.time()
         prepared: Flux3KleinPreparedRequest = denoiser.prepare(denoise_request)
         prepare_s = time.time() - t0
+        t0 = time.time()
+        if not vae_captured_before:
+            assert not self.traces_live(), "a VAE capture must precede every DiT trace (aliasing rule)"
+            self._warm_vae(resolved.height, resolved.width, traced=True)
+        vae_capture_s = time.time() - t0
         captured_before = prepared.key in denoiser.captured_keys
         t0 = time.time()
         state = denoiser.denoise_on_device(prepared, traced=traced)
         denoise_s = time.time() - t0
 
-        # 5. decode
-        vae_captured_before = self._vae.trace_captured()
+        # 6. decode (a replay when traced: the trace was captured above, before the DiT trace)
         t0 = time.time()
         out = self._vae.decode(state, num_image_rows=h * w, height=resolved.height, width=resolved.width, traced=traced)
         ttnn.synchronize_device(self._device)
@@ -505,12 +654,16 @@ class Flux3KleinPipeline:
         if not traced:
             ttnn.deallocate(out)
         image = to_pil(img)
+        if resolved.crop is not None:
+            image = image.crop(resolved.crop)  # generate.py:76-77
         final_tokens = denoiser.read_state(prepared)
         to_host_s = time.time() - t0
 
         timings = {
             "encode_s": encode_s,
+            "encode_refs_s": encode_refs_s,
             "prepare_s": prepare_s,
+            "vae_capture_s": vae_capture_s,
             "denoise_s": denoise_s,
             "decode_s": decode_s,
             "to_host_s": to_host_s,
@@ -518,12 +671,15 @@ class Flux3KleinPipeline:
             "trace_captured": bool(traced and not captured_before),
             "vae_trace_captured": bool(traced and not vae_captured_before),
         }
+        references = prepared_refs.sizes if prepared_refs is not None else ()
         logger.info(
             f"RECORD generate[{resolved.model}] {resolved.width}x{resolved.height} seed {resolved.seed} steps "
-            f"{resolved.steps} guidance {resolved.guidance} text L {text_length}: encode {encode_s:.3f}s prepare "
-            f"{prepare_s:.3f}s denoise {denoise_s:.3f}s decode {decode_s:.3f}s to_host {to_host_s:.3f}s total "
-            f"{timings['total_s']:.3f}s (denoise trace captured {timings['trace_captured']}, vae trace captured "
-            f"{timings['vae_trace_captured']}); {dram_per_bank(self._device)}"
+            f"{resolved.steps} guidance {resolved.guidance} text L {text_length} references {list(references)} "
+            f"cond rows {0 if image_cond is None else int(image_cond[0].shape[0])} crop {resolved.crop}: encode "
+            f"{encode_s:.3f}s encode_refs {encode_refs_s:.3f}s prepare {prepare_s:.3f}s vae_capture {vae_capture_s:.3f}s "
+            f"denoise {denoise_s:.3f}s decode {decode_s:.3f}s to_host {to_host_s:.3f}s total {timings['total_s']:.3f}s "
+            f"(denoise trace captured {timings['trace_captured']}, vae trace captured {timings['vae_trace_captured']}); "
+            f"{dram_per_bank(self._device)}"
         )
         return Flux3KleinResult(
             image=image,
@@ -537,6 +693,9 @@ class Flux3KleinPipeline:
             admission=admission,
             text_length=text_length,
             text=text,
+            image_cond=image_cond,
+            references=tuple(references),
+            crop=resolved.crop,
         )
 
     def close(self) -> None:
@@ -545,7 +704,13 @@ class Flux3KleinPipeline:
         for denoiser in self._denoisers.values():
             denoiser.deallocate()
         ttnn.synchronize_device(self._device)
-        for module in (*self._transformers.values(), self._encoder, self._vae.decoder, self._vae._fallback):
+        for module in (
+            *self._transformers.values(),
+            self._encoder,
+            self._vae.decoder,
+            self._vae._fallback,
+            self._vae_encode.encoder,
+        ):
             if module is not None and hasattr(module, "deallocate_weights"):
                 module.deallocate_weights()
         ttnn.synchronize_device(self._device)

@@ -527,8 +527,12 @@ def test_base_real(mesh_device, submesh_shape, sp_axis, tp_axis, topology, num_l
     text320 = random_text(seed + 1, 320)
     text80 = random_text(seed + 2, EMPTY_PROMPT_TEXT_LENGTH)
     cond = random_cond(seed + 3, (64, 64))
+    # M8 T2b: two 64x64 references, l = -1 and -2 (reference_ids index 0 / 1), 8192 cond rows.
+    cond_b = random_cond(seed + 4, (64, 64))
+    cond2 = (torch.cat([cond[0], cond_b[0]]), torch.cat([cond[1], reference_ids(64, 64, 1)]))
     t2i = Request(image=image, text=text320)
     ref1 = Request(image=image, text=text320, image_cond=cond)
+    ref2 = Request(image=image, text=text320, image_cond=cond2)
     uncond = Request(image=image, text=text80)
     oracle = lambda case, samples, compute: cached_oracle(  # noqa: E731
         snapshot=snapshot,
@@ -541,8 +545,9 @@ def test_base_real(mesh_device, submesh_shape, sp_axis, tp_axis, topology, num_l
         compute=compute,
     )
 
-    # (a) T2I 1024 and (b) one 1024x1024 reference.
-    for case, request in (("t2i", t2i), ("ref1", ref1)):
+    # (a) T2I 1024, (b) one 1024x1024 reference, (b2) two 1024x1024 references (M8; gate = the M3 gate; the 1-ref row
+    # measured 0.999818 / 0.0192 on the ring, logs/m23_fix_dit_4x8.log:225; the 2-ref measurement goes here).
+    for case, request in (("t2i", t2i), ("ref1", ref1), ("ref2", ref2)):
         reference = oracle(
             case,
             [request.sample()],

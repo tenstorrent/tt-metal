@@ -8,6 +8,7 @@ import math
 from typing import ClassVar
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -17,6 +18,41 @@ from .module import Module, Parameter
 # Activations the fused distributed GroupNorm op can absorb into its output stage.
 # Anything else is applied as a separate op, exactly like Linear's unfused activations.
 _FUSABLE_GROUP_NORM_ACTIVATIONS = frozenset({"silu"})
+
+
+def plain_group_norm_virtual_cols(grid_x: int, groups: int, channels: int) -> int:
+    """``compute_num_virtual_cols`` of ``ttnn.group_norm`` (``groupnorm_grid_utils.cpp``): the largest
+    ``nvc <= min(grid_x, groups)`` with ``(channels / nvc) % 32 == 0`` and ``groups % nvc == 0``; 0 when none."""
+    nvc = min(grid_x, groups)
+    while nvc > 0 and ((channels // nvc) % 32 != 0 or groups % nvc != 0):
+        nvc -= 1
+    return nvc
+
+
+def plain_group_norm_grid(
+    rows: int, channels: int, groups: int, *, grid_x: int = 8, grid_y: int = 8, batch: int = 1
+) -> tuple[int, int]:
+    """The ``(x, y)`` core grid the plain (DRAM, interleaved) ``ttnn.group_norm`` accepts for ``rows`` (= H * W) rows
+    of ``channels`` channels in ``groups`` groups: ``grid_x x grid_y`` itself when its rule holds, else the largest
+    ``grid_x x y`` below it. The rule (``groupnorm.cpp`` ``validate_dram_grid``, ``groupnorm_grid_utils.cpp``
+    ``find_expected_dram_grid``): ``nvc = compute_num_virtual_cols(grid_x, groups, channels)``, ``num_virtual_rows =
+    (grid_x // nvc) * y``; valid iff ``Ht >= num_virtual_rows``, ``Ht % num_virtual_rows == 0`` and (``num_virtual_rows
+    < batch`` or ``num_virtual_rows % batch == 0``), ``Ht = ceil(rows / 32)``. Only ``y`` is lowered: the x extent fixes
+    ``nvc`` and with it the packed gamma / beta / mask layout a ``GroupNorm`` module prepared at construction. Raises
+    ``ValueError`` when no ``y`` serves the shape (then the row count is not tile-aligned or too small)."""
+    ht = -(-rows // 32)
+    nvc = plain_group_norm_virtual_cols(grid_x, groups, channels)
+    if nvc == 0 or grid_x // nvc == 0:
+        raise ValueError(f"group_norm: no virtual-column split of {channels} channels / {groups} groups on x={grid_x}")
+    rows_per_y = grid_x // nvc
+    for y in range(grid_y, 0, -1):
+        nvr = rows_per_y * y
+        if ht >= nvr and ht % nvr == 0 and (nvr < batch or nvr % batch == 0):
+            return grid_x, y
+    raise ValueError(
+        f"group_norm: no core grid with x={grid_x} serves Ht={ht} tiles ({rows} rows) of {channels} channels / "
+        f"{groups} groups (num_virtual_cols {nvc}, rows per y {rows_per_y})"
+    )
 
 
 class RMSNorm(Module):
@@ -568,6 +604,36 @@ class GroupNorm(Module):
         ]
         return torch.cat(torch_sharded_lst, dim=0)
 
+    def _core_grid_for(self, rows: int, batch_size: int) -> ttnn.CoreGrid:
+        """The core grid for ``rows`` (= H * W) input rows: ``self.core_grid`` when ``ttnn.group_norm``'s DRAM grid
+        rule accepts it, else the largest valid sub-grid with the SAME x (so ``num_virtual_cols`` and the packed
+        gamma / beta / mask layout are unchanged). Additive: every shape the fixed grid accepted keeps it (bit-identical
+        to before); a shape it rejected (e.g. ``Ht`` 490 / 1960 / 504 tiles of 128 channels, which needed 16 virtual
+        rows) used to ``TT_THROW`` in ``groupnorm.cpp`` ``validate_dram_grid`` and now runs on the sub-grid the same
+        rule suggests. Cached per ``(rows, batch)``; logged once per shape."""
+        if not hasattr(self, "_grid_cache"):
+            self._grid_cache: dict[tuple[int, int], ttnn.CoreGrid] = {}
+        key = (int(rows), int(batch_size))
+        grid = self._grid_cache.get(key)
+        if grid is None:
+            gx, gy = plain_group_norm_grid(
+                rows,
+                self.num_padded_channels,
+                self.num_padded_groups,
+                grid_x=self.core_grid.x,
+                grid_y=self.core_grid.y,
+                batch=batch_size,
+            )
+            grid = self.core_grid if (gx, gy) == (self.core_grid.x, self.core_grid.y) else ttnn.CoreGrid(x=gx, y=gy)
+            if grid is not self.core_grid:
+                logger.info(
+                    f"GroupNorm: rows {rows} (Ht {math.ceil(rows / 32)}) x {self.num_padded_channels} channels / "
+                    f"{self.num_padded_groups} groups: core grid {self.core_grid.x}x{self.core_grid.y} is invalid for "
+                    f"ttnn.group_norm's DRAM grid rule; using {gx}x{gy}"
+                )
+            self._grid_cache[key] = grid
+        return grid
+
     def forward(self, x: ttnn.Tensor, num_out_blocks=-1, compute_kernel_config=None) -> ttnn.Tensor:
         batch_size, height, width, channels = x.shape
         x = x.reshape([batch_size, 1, width * height, channels])
@@ -577,7 +643,7 @@ class GroupNorm(Module):
             input_mask=self.mask.data,
             num_groups=self.num_padded_groups,
             epsilon=self.eps,
-            core_grid=self.core_grid,
+            core_grid=self._core_grid_for(width * height, batch_size),
             inplace=False,
             num_out_blocks=num_out_blocks,
             output_layout=ttnn.TILE_LAYOUT,
