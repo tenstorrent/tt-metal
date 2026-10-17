@@ -8,6 +8,7 @@
 #include <chrono>
 #include <deque>
 #include <functional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -123,6 +124,14 @@ struct EriscH2HSocket::Impl {
     volatile uint64_t* credit_word(uint32_t arena) const {
         return reinterpret_cast<volatile uint64_t*>(cfg.region_base + credit_off(g, arena));
     }
+    std::set<uint32_t> peers;  // every rank a route names: a flush is per target
+    std::string flush_peers() {
+        std::string e;
+        for (auto p = peers.begin(); p != peers.end() && e.empty(); ++p) {
+            e = win->flush(*p);
+        }
+        return e;
+    }
 };
 
 EriscH2HSocket::EriscH2HSocket() : impl_(std::make_unique<Impl>()) {}
@@ -138,8 +147,12 @@ std::unique_ptr<EriscH2HSocket> EriscH2HSocket::create(const Config& cfg, std::s
     const bool page_ok = cfg.page_bytes > kBridgeDescriptorBytes && cfg.page_bytes % kBridgeSlotAlign == 0;
     const uint64_t need =
         page_ok ? bridge_region_bytes(cfg.arenas, cfg.ring_pages, cfg.page_bytes - kBridgeDescriptorBytes) : 0;
-    const bool args_ok = cfg.region_base != nullptr && cfg.arenas != 0 && cfg.ring_pages != 0 && page_ok &&
-                         cfg.region_bytes >= need;
+    bool routes_ok = cfg.routes.size() == (cfg.routed ? cfg.arenas : 0);
+    for (const auto& r : cfg.routes) {
+        routes_ok = routes_ok && r.peer_arena < r.peer_arenas;
+    }
+    const bool args_ok = cfg.region_base != nullptr && cfg.region_bytes != 0 && (cfg.routed || cfg.arenas != 0) &&
+                         cfg.ring_pages != 0 && page_ok && cfg.region_bytes >= need && routes_ok;
     if (!RdmaWindow::agree(args_ok, agree_err)) {
         err = args_ok ? agree_err
                       : "EriscH2HSocket::create: bad geometry, or region_bytes is short of the bridge layout";
@@ -148,6 +161,13 @@ std::unique_ptr<EriscH2HSocket> EriscH2HSocket::create(const Config& cfg, std::s
     std::unique_ptr<EriscH2HSocket> s(new EriscH2HSocket());
     auto& im = *s->impl_;
     im.cfg = cfg;
+    // Unrouted, arena a is the peer's arena a: offsets in the PEER's region use its arena index and count.
+    for (uint32_t a = 0; !cfg.routed && a < cfg.arenas; ++a) {
+        im.cfg.routes.push_back(Config::Route{cfg.peer_rank, a, cfg.arenas});
+    }
+    for (const auto& r : im.cfg.routes) {
+        im.peers.insert(r.peer_rank);
+    }
     im.g.arenas = cfg.arenas;
     im.g.chans_per_link = cfg.chans_per_link != 0 ? cfg.chans_per_link : 1;
     im.g.ring = cfg.ring_pages;
@@ -156,7 +176,10 @@ std::unique_ptr<EriscH2HSocket> EriscH2HSocket::create(const Config& cfg, std::s
 
     // AGREED BEFORE THE WINDOW EXISTS. RdmaWindow::create is collective, so a rank that laid
     // out differently would put into the wrong place with no error anywhere.
-    if (!RdmaWindow::agree_value(im.g.fingerprint(), agree_err)) {
+    // Routed regions differ in arena count by design, so only one arena's shape is agreed.
+    auto shape = im.g;
+    shape.arenas = cfg.routed ? 0 : shape.arenas;
+    if (!RdmaWindow::agree_value(shape.fingerprint(), agree_err)) {
         err = "EriscH2HSocket::create: geometry disagrees between ranks: " + agree_err;
         return nullptr;
     }
@@ -212,7 +235,6 @@ uint32_t EriscH2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     }
     ++im.stats.passes;
     uint32_t progress = 0;
-    const uint32_t peer = im.cfg.peer_rank;
     const uint32_t slot_sz = im.g.slot();
 
     // ---- send: payloads, ONE flush, descriptors, ONE flush -- two round trips per batch ----
@@ -261,12 +283,13 @@ uint32_t EriscH2HSocket::poll(const Retire& retire, const Deliver& deliver) {
                     break;
                 }
             }
+            const auto& [peer, peer_arena, peer_arenas] = im.cfg.routes[t.arena];
             if (descs) {
                 pe = im.win->put(
                     im.base() + desc_off(im.g, t.arena, BridgeArena::Tx, s0),
                     (j - i) * kBridgeDescriptorBytes,
                     peer,
-                    desc_off(im.g, t.arena, BridgeArena::Rx, s0),
+                    desc_off(im.g, peer_arena, BridgeArena::Rx, s0),
                     im.ops[nops++]);
                 ++im.stats.trailer_puts;
             } else {
@@ -274,13 +297,14 @@ uint32_t EriscH2HSocket::poll(const Retire& retire, const Deliver& deliver) {
                     im.base() + t.page_offset,
                     (j - i - 1) * slot_sz + std::min<uint32_t>(im.queue[im.sel[j - 1]].page_bytes, slot_sz),
                     peer,
-                    slot_off(im.g, t.arena, BridgeArena::Rx, s0),
+                    bridge_segment_offset(peer_arena, BridgeArena::Rx, peer_arenas, im.g.ring, im.g.capacity) +
+                        bridge_slot_offset_in_segment(s0, im.g.capacity),
                     im.ops[nops++]);
                 ++im.stats.payload_puts;
             }
         }
         if (pe.empty()) {
-            pe = im.win->flush(peer);
+            pe = im.flush_peers();
         }
         for (std::size_t i = 0; i < nops; ++i) {
             (void)im.win->test(im.ops[i]);  // complete after the flush; releases the Rput request
@@ -449,7 +473,8 @@ bool EriscH2HSocket::publish_credits() {
         if (im.consumed_total[a] == im.published[a]) {
             continue;
         }
-        if (const std::string e = im.win->put_word(im.consumed_total[a], im.cfg.peer_rank, credit_off(im.g, a));
+        const auto& r = im.cfg.routes[a];
+        if (const std::string e = im.win->put_word(im.consumed_total[a], r.peer_rank, credit_off(im.g, r.peer_arena));
             !e.empty()) {
             im.fail(e);
             return false;
@@ -459,7 +484,7 @@ bool EriscH2HSocket::publish_credits() {
         any = true;
     }
     if (any) {
-        if (const std::string e = im.win->flush(im.cfg.peer_rank); !e.empty()) {
+        if (const std::string e = im.flush_peers(); !e.empty()) {
             im.fail(e);
             return false;
         }
@@ -472,8 +497,9 @@ bool EriscH2HSocket::publish_word(uint32_t arena, tt::tt_fabric::BridgeCreditWor
     if (im.broken || !im.win || arena >= im.cfg.arenas) {
         return false;
     }
+    const auto& r = im.cfg.routes[arena];
     if (const std::string e =
-            im.win->put_word(value, im.cfg.peer_rank, bridge_credit_word_offset(arena, im.g.ring, w));
+            im.win->put_word(value, r.peer_rank, bridge_credit_word_offset(r.peer_arena, im.g.ring, w));
         !e.empty()) {
         im.fail(e);
         return false;
@@ -486,7 +512,7 @@ bool EriscH2HSocket::flush_words() {
     if (im.broken || !im.win) {
         return false;
     }
-    if (const std::string e = im.win->flush(im.cfg.peer_rank); !e.empty()) {
+    if (const std::string e = im.flush_peers(); !e.empty()) {
         im.fail(e);
         return false;
     }
@@ -522,9 +548,13 @@ std::string EriscH2HSocket::first_error() const { return impl_->err; }
 
 std::string EriscH2HSocket::describe() const {
     const Impl& im = *impl_;
+    std::string peers;  // every rank a route names (one, unrouted)
+    for (const auto p : im.peers) {
+        peers += (peers.empty() ? "" : ",") + std::to_string(p);
+    }
     return "erisc H2H: " + std::to_string(im.cfg.arenas) + " arenas x " + std::to_string(im.g.ring) + " slots x " +
-           std::to_string(im.g.slot()) + " B, peer rank " + std::to_string(im.cfg.peer_rank) + ", posts " +
-           std::to_string(im.stats.posts) + ", flushes " + std::to_string(im.stats.flushes);
+           std::to_string(im.g.slot()) + " B, peer rank " + peers + ", posts " + std::to_string(im.stats.posts) +
+           ", flushes " + std::to_string(im.stats.flushes);
 }
 
 }  // namespace tt::tt_metal::experimental

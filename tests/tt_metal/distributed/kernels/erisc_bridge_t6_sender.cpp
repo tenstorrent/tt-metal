@@ -64,6 +64,11 @@ void kernel_main() {
     status[0] = 1;  // started: stuck here means open() never completed
     sender.open<true>();
     status[0] = 2;  // connected
+#ifdef VC_VERIFY_SLOTS  // hold until the host has seen every checker ready
+    while (status[2] == 0) {
+        invalidate_l1_cache();
+    }
+#endif
 
     for (uint32_t i = 0; i < ITERATIONS; ++i) {
         payload[0] = i;
@@ -75,7 +80,13 @@ void kernel_main() {
         // host ring's backpressure surfaces -- the router declines, so this waits longer.
         sender.wait_for_empty_write_slot();
 
-        header->to_noc_unicast_write(NocUnicastCommandHeader{dst_noc_addr}, PAYLOAD_BYTES);
+#ifdef VC_VERIFY_SLOTS  // test_virtual_cables --verify: a ring of slots, and each frame's index in its last word too
+        payload[PAYLOAD_BYTES / sizeof(uint32_t) - 1] = i;
+        const uint64_t dst = dst_noc_addr + (i % VC_VERIFY_SLOTS) * PAYLOAD_BYTES;
+#else
+        const uint64_t dst = dst_noc_addr;
+#endif
+        header->to_noc_unicast_write(NocUnicastCommandHeader{dst}, PAYLOAD_BYTES);
 
         // Payload then header: the header is what completes the packet, so it goes last for
         // the same reason the bridge's guard does.

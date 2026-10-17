@@ -78,6 +78,8 @@
 #include "mesh_device_view_impl.hpp"
 #include "dummy_mesh_command_queue.hpp"
 #include "impl/context/metal_env_accessor.hpp"
+#include "tt_metal/fabric/bridged_cables.hpp"
+#include "tt_metal/distributed/experimental/virtual_cables.hpp"
 
 namespace tt::tt_metal {
 class SystemMemoryManager;
@@ -525,6 +527,17 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
 
     ctx.device_manager()->initialize_profiler();
     ctx.device_manager()->initialize_fabric_and_dispatch_fw();
+
+    // Fabric routers are up; bridged ones hold their traffic until the host bridge arms them. Collective.
+    if (!ctx.get_control_plane().bridged_cables().ends.empty()) {
+#if defined(OPEN_MPI)
+        std::string err;
+        mesh_device->pimpl_->virtual_cables_ = experimental::VirtualCableBridge::create(mesh_device, err);
+        TT_FATAL(mesh_device->pimpl_->virtual_cables_ != nullptr, "Virtual cables could not start: {}", err);
+#else
+        TT_THROW("Virtual cables need a build with MPI");
+#endif
+    }
 
     mesh_device->pimpl_->init_realtime_profiler_socket(mesh_device);
     mesh_device->pimpl_->init_streaming_profiler(mesh_device);
@@ -1089,6 +1102,9 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
         mesh_command_queues_.clear();
     }
+
+    // Collective; after the command queues (work may be crossing a cable), before devices go (it writes routers).
+    virtual_cables_.reset();
 
     // Release the pinned host region first: it names pages the NIC was told about, and
     // unpinning must happen while the cluster is still live. release() runs ahead of the

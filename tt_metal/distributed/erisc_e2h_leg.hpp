@@ -28,6 +28,8 @@ public:
         uint32_t ring_pages = 1;
         uint32_t link_idx = 0;
         uint8_t* alias_region_base = nullptr;  // where the sockets' shm is already mapped
+        // When set, socket i owns arena arena_base + i (links with different channel counts in one region).
+        std::optional<uint32_t> arena_base;
         // Fabric's own ack and completion counters, one per serviced channel, in socket order.
         // retire() writes them: without it the bridged sender halts once its outbound slots go.
         std::vector<tt::tt_fabric::erisc_bridge::E2HCreditReturn> credits;

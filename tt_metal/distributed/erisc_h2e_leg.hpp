@@ -30,6 +30,14 @@ public:
         // The chip that owns that channel, as a mesh coordinate (see E2HLeg::Config).
         uint32_t mesh_row = 0;
         uint32_t mesh_col = 0;
+        // Virtual cables: receiver VC, dense channel index, and buffer as built (0: from the default config).
+        uint32_t receiver_vc = 0;
+        uint32_t receiver_channel = 0;
+        uint32_t rx_base = 0;
+        uint32_t rx_slots = 0;
+        uint32_t slot_bytes = 0;
+        // Deliver in far-slot order; publish() returns false (no error) for a frame ahead of its turn.
+        bool in_far_slot_order = false;
         // Slack against the router's decrement being a proxy for "slot reusable" rather than a
         // guarantee: its wr_sent_counter also governs reuse.
         uint32_t credit_margin = 2;
