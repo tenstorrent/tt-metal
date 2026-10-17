@@ -53,13 +53,20 @@ def test_lgamma_bf16_input_fp32_output(device):
     Every element of its chain must then address full 32-bit Dest words; the where in the chain used
     to address 16-bit halves, which under a 32-bit Dest land on the Stirling tile instead, so the
     lower half of every tile came back corrupted. The tensor is dense so every row is checked."""
-    # bf16 non-integers on a 1/16 grid in [-4.5, 10), keeping 2/16 away from every integer (poles for
-    # x <= 0, and lgamma is exactly 0 at 1 and 2), repeated to fill the tensor.
-    grid = torch.arange(-4.5, 10.0, 1.0 / 16, dtype=torch.float32)
-    grid = grid[(grid - torch.round(grid)).abs() >= 2.0 / 16]
+    # bf16 non-integers on a GRID_STEP grid in [GRID_LO, GRID_HI), kept POLE_MARGIN away from every integer
+    # (poles for x <= 0, and lgamma is exactly 0 at 1 and 2), repeated to fill the tensor; the first lanes
+    # are the non-positive integer poles themselves, where the chain's where selects its true value (0)
+    # and lgamma must come back +inf.
+    GRID_STEP = 1.0 / 16
+    POLE_MARGIN = 2 * GRID_STEP
+    GRID_LO, GRID_HI = -4.5, 10.0
+    POLES = [0.0, -1.0, -2.0, -3.0]
+    grid = torch.arange(GRID_LO, GRID_HI, GRID_STEP, dtype=torch.float32)
+    grid = grid[(grid - torch.round(grid)).abs() >= POLE_MARGIN]
     shape = (1, 1, 64, 128)
     numel = torch.Size(shape).numel()
     x = grid.repeat(numel // grid.numel() + 1)[:numel].reshape(shape)
+    x.view(-1)[: len(POLES)] = torch.tensor(POLES)
     bf16_in = x.to(torch.bfloat16)
     assert torch.equal(bf16_in.float(), x), "inputs must be exact in bf16"
 
@@ -70,6 +77,11 @@ def test_lgamma_bf16_input_fp32_output(device):
     got = ttnn.to_torch(tt_out)
 
     assert got.dtype == torch.float32
+    is_pole = torch.isposinf(ref)
+    assert torch.equal(is_pole.view(-1)[: len(POLES)], torch.ones(len(POLES), dtype=torch.bool))
+    assert torch.all(torch.isposinf(got[is_pole])), f"poles: got {got.view(-1)[: len(POLES)].tolist()}"
+    got, ref = got[~is_pole], ref[~is_pole]
+    x = x[~is_pole]
     # The bf16 kernel evaluates Stirling plus a reflection, so a bf16-grade result is expected: |ref| < 16
     # here, so one bf16 ulp is at most 1/16; allow just under one ulp absolute plus a few ulps relative.
     abs_tol = 0.05
