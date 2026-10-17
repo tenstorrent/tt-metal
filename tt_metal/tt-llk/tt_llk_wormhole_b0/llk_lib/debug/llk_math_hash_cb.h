@@ -113,6 +113,12 @@ inline void _llk_math_hash_cb_init_()
  */
 inline void _llk_math_hash_cb_tile_(std::uint32_t /*dst_tile_idx*/)
 {
+    // Guard: SFPLOAD addresses Imm + DEST_TARGET_REG_CFG_MATH_Offset + RWC.Dst, and the RWC reset
+    // below leaves the Offset alone. A preceding op in this DEST window that targeted another slot
+    // (an SFPU op at dst_index N leaves it at base + 64 * N) would make the walk fold that slot,
+    // while the unpack-to-dest datacopy wrote slot 0 at an absolute address. Pin the Offset to
+    // the bank base so the walk reads slot 0 regardless of what else ran in the window.
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
     math::reset_counters(p_setrwc::SET_ABD_F);
 
 #pragma GCC unroll 0
@@ -163,6 +169,11 @@ inline void _llk_math_hash_cb_store_to_dest_()
 {
     TTI_SFPLOADI(LREG_ZERO, sfpi::SFPLOADI_MOD0_LOWER, 0u);
     TTI_SFPLOADI(LREG_ZERO, sfpi::SFPLOADI_MOD0_UPPER, 0u);
+
+    // Guard: same as in _llk_math_hash_cb_tile_ -- SFPSTORE adds the Offset too, so pin it to the
+    // bank base or the zeroing and the accumulator store land in whichever slot a preceding op
+    // in this window left the Offset pointing at, and the packed slot 0 is the untouched input.
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
 
     // Zero every row of the tile (ADDR_MOD_1 auto-advances the Dst row).
     math::reset_counters(p_setrwc::SET_ABD_F);

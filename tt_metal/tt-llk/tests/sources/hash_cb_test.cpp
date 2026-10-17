@@ -14,6 +14,13 @@
 //
 // The host XOR-folds the whole result tile; the zeroed rows cancel, leaving
 // XOR(32 accumulators). Uses only the proven INT32 DEST -> PACK -> L1 path.
+//
+// HASH_CB_PRECEDING_SFPU_ENABLED additionally runs a whole-tile SFPU op on DEST
+// slot HASH_CB_PRECEDING_SFPU_DST_INDEX inside the same DEST window, before the
+// tiles are datacopied into slot 0 and folded. That op leaves the math DEST
+// offset at base + 64 * dst_index (its _done_ only resets the RWC), which is the
+// state the hash must be immune to: the unpack-to-dest datacopy writes slot 0 at
+// an absolute address, so the fold and the store-back must still target slot 0.
 
 #include <cstdint>
 
@@ -53,12 +60,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "ckernel_defs.h"
+#include "ckernel_sfpu.h"
 #include "debug/llk_math_hash_cb.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #include "params.h"
 
 using namespace ckernel::sfpu;
+
+// A face is FACE_R_DIM x FACE_C_DIM = 256 datums and the SFPU moves 32 lanes per
+// dst_reg step, so one face is 8 steps.
+constexpr int FACE_SFPU_STEPS = (FACE_R_DIM * FACE_C_DIM) / 32;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -70,10 +84,34 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en>(4, formats.math);
+    if constexpr (HASH_CB_PRECEDING_SFPU_ENABLED)
+    {
+        _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    }
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
     _llk_math_hash_cb_init_();
+
+    if constexpr (HASH_CB_PRECEDING_SFPU_ENABLED)
+    {
+        // A whole-tile SFPU op on another slot in the same DEST window (what an
+        // eltwise SFPU op at that dst_index does): start_ points the math DEST
+        // offset at base + 64 * dst_index and done_ leaves it there. Slot 0 is
+        // not touched; its contents are produced by the datacopies below.
+        _llk_math_eltwise_unary_sfpu_params_(
+            []
+            {
+                for (int d = 0; d < FACE_SFPU_STEPS; ++d)
+                {
+                    const sfpi::vFloat v = sfpi::dst_reg[0];
+                    sfpi::dst_reg[0]     = -v;
+                    sfpi::dst_reg++;
+                }
+            },
+            HASH_CB_PRECEDING_SFPU_DST_INDEX,
+            VectorMode::RC);
+    }
 
     for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
     {

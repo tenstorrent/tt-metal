@@ -17,6 +17,8 @@
 #   1. The kernel runs and produces a non-zero 23-bit fingerprint.
 #   2. Two runs on the same input produce bit-identical results (determinism).
 #   3. Distinct inputs produce distinct fingerprints (discrimination).
+#   4. The fold and the store-back target DEST slot 0 even when an SFPU op on
+#      another slot ran earlier in the same DEST window (slot pinning).
 #
 # A bit-exact Python golden is intentionally omitted: the SFPU lane ordering and
 # the DEST/pack datum handling are hardware-specific. The properties above are
@@ -31,7 +33,11 @@ from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import TILE_COUNT, generate_input_dim
+from helpers.test_variant_parameters import (
+    HASH_CB_PRECEDING_SFPU,
+    TILE_COUNT,
+    generate_input_dim,
+)
 
 MASK23 = 0x7FFFFF
 
@@ -44,14 +50,31 @@ def _skip_if_unsupported():
         pytest.skip(f"SFPU hash not supported on {TestConfig.CHIP_ARCH}")
 
 
-def _run_hash_kernel(
-    formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc
+def _build_hash_kernel(
+    formats,
+    input_dimensions,
+    src_A,
+    src_B,
+    tile_cnt_A,
+    tile_cnt_B,
+    dest_acc,
+    preceding_sfpu_dst_index=None,
 ):
-    """Run the SFPU hash kernel and return the 23-bit hash."""
-    configuration = TestConfig(
+    """Build (do not run) one SFPU hash kernel variant.
+
+    ``preceding_sfpu_dst_index`` runs a whole-tile SFPU op on that DEST slot, inside
+    the same DEST window, before the tiles are datacopied into slot 0 and folded.
+    """
+    return TestConfig(
         "sources/hash_cb_test.cpp",
         formats,
-        templates=[generate_input_dim(input_dimensions, input_dimensions)],
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            HASH_CB_PRECEDING_SFPU(
+                enabled=preceding_sfpu_dst_index is not None,
+                dst_index=preceding_sfpu_dst_index or 0,
+            ),
+        ],
         runtimes=[TILE_COUNT(tile_cnt_A)],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -66,13 +89,33 @@ def _run_hash_kernel(
         dest_acc=dest_acc,
         unpack_to_dest=formats.input_format.is_32_bit(),
     )
+
+
+def _finish_hash_kernel(configuration):
+    """Run a built variant and return the 23-bit hash."""
     res_from_L1 = configuration.run().result
     # The result tile holds the 32 per-lane accumulators (DEST row 0) plus an
     # even number of identical packer-transformed zero words (rows 1..31). XOR-
     # folding the whole tile cancels the zero words and yields XOR(32 accumulators)
     # — a deterministic, input-sensitive fingerprint independent of lane layout.
+    return _xor_fold(res_from_L1)
+
+
+def _run_hash_kernel(
+    formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc
+):
+    """Build and run the SFPU hash kernel and return the 23-bit hash."""
+    return _finish_hash_kernel(
+        _build_hash_kernel(
+            formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc
+        )
+    )
+
+
+def _xor_fold(words):
+    """XOR-fold a flat sequence of 32-bit words (order-independent)."""
     h = 0
-    for v in res_from_L1:
+    for v in words:
         h ^= int(v) & 0xFFFFFFFF
     return h
 
@@ -171,3 +214,67 @@ def test_hash_cb_sfpu_discriminates(formats, num_tiles, seed, dest_acc):
     ha = _run_hash_kernel(formats, input_dimensions, a_A, a_B, a_tc_A, a_tc_B, dest_acc)
     hb = _run_hash_kernel(formats, input_dimensions, b_A, b_B, b_tc_A, b_tc_B, dest_acc)
     assert ha != hb, f"SFPU hash collided on distinct inputs: {hex(ha)}"
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    num_tiles=[1],
+    seed=[42],
+    dest_acc=[DestAccumulation.Yes],
+    preceding_sfpu_dst_index=[1, 2],
+)
+def test_hash_cb_sfpu_after_sfpu_op_on_other_slot(
+    formats, num_tiles, seed, dest_acc, preceding_sfpu_dst_index
+):
+    """The hash must fold and store DEST slot 0 after an SFPU op on another slot.
+
+    An eltwise SFPU op at dst_index N leaves the math DEST offset at base + 64 * N
+    for the rest of the DEST window, while the unpack-to-dest datacopy writes slot 0
+    at an absolute address. The hash has to pin the offset back to the bank base
+    itself; otherwise it folds slot N, stores the accumulators into slot N, and the
+    packed slot 0 is the untouched input tile.
+    """
+    _skip_if_unsupported()
+
+    torch.manual_seed(seed)
+    input_dimensions = [32 * num_tiles, 32]
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+
+    reference_cfg = _build_hash_kernel(
+        formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc
+    )
+    perturbed_cfg = _build_hash_kernel(
+        formats,
+        input_dimensions,
+        src_A,
+        src_B,
+        tile_cnt_A,
+        tile_cnt_B,
+        dest_acc,
+        preceding_sfpu_dst_index=preceding_sfpu_dst_index,
+    )
+    # prepare() both before running either: under --compile-producer run() skips
+    # as soon as the first variant is built, so the second would never emit its ELF.
+    reference_cfg.prepare()
+    perturbed_cfg.prepare()
+
+    reference = _finish_hash_kernel(reference_cfg)
+    hw_hash = _finish_hash_kernel(perturbed_cfg)
+
+    # The packed tile is the raw input exactly when the hash folded/stored another
+    # slot and never touched slot 0 (Int32 -> Int32 pack is a bitcast).
+    raw_input_fold = _xor_fold(src_A.flatten())
+    assert hw_hash != raw_input_fold, (
+        f"after an SFPU op on DEST slot {preceding_sfpu_dst_index}, the packed slot 0 "
+        f"is the untouched input tile (fold {hex(hw_hash)}): the hash folded and "
+        "stored another DEST slot"
+    )
+    assert hw_hash == reference, (
+        f"SFPU hash after an SFPU op on DEST slot {preceding_sfpu_dst_index}: "
+        f"{hex(hw_hash)} != {hex(reference)} (dedicated-window reference)"
+    )

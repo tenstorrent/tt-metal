@@ -677,6 +677,33 @@ class DST_WRITE_ADDR_OFFSET(TemplateParameter):
 
 
 @dataclass
+class HASH_CB_PRECEDING_SFPU(TemplateParameter):
+    """Compile-time knobs for ``hash_cb_test.cpp``.
+
+    ``HASH_CB_PRECEDING_SFPU_ENABLED``    run a whole-tile SFPU op on another DEST slot,
+                                          inside the same DEST window, before the tiles are
+                                          datacopied into slot 0 and folded. False is the
+                                          documented dedicated-window usage.
+    ``HASH_CB_PRECEDING_SFPU_DST_INDEX``  the ``dst_index`` handed to that SFPU op. Its
+                                          ``_llk_math_eltwise_sfpu_start_`` leaves the
+                                          math DEST offset at ``base + 64 * dst_index`` and
+                                          ``_done_`` only resets the RWC, which is the state
+                                          the hash must be immune to.
+    """
+
+    enabled: bool = False
+    dst_index: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr bool HASH_CB_PRECEDING_SFPU_ENABLED = {str(self.enabled).lower()};",
+                f"constexpr std::uint32_t HASH_CB_PRECEDING_SFPU_DST_INDEX = {self.dst_index}u;",
+            ]
+        )
+
+
+@dataclass
 class PACK_NUM_TILES(TemplateParameter):
     """Tile count for the block/per-tile pack drivers.
 
