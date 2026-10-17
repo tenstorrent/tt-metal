@@ -4,7 +4,7 @@
 
 """Torch oracle for ttnn.experimental.nomic_embed_text_v2_moe.routing_metadata.
 
-Shared by the op's tests and the nomic model's router test.
+Shared by the op's tests and the nomic model's router and expert tests.
 """
 
 from __future__ import annotations
@@ -77,6 +77,23 @@ def routing_reference(
     )
 
 
+def region_starts(expert_counts: torch.Tensor) -> torch.Tensor:
+    """Each expert's first gathered row: the exclusive scan of the counts, each rounded up to a block."""
+    region_rows = (expert_counts + BLOCK_ROWS - 1) // BLOCK_ROWS * BLOCK_ROWS
+    return torch.cumsum(region_rows, 0) - region_rows
+
+
+def block_experts(expert_counts: torch.Tensor, num_blocks: int) -> torch.Tensor:
+    """(num_blocks,) the expert each block of gathered rows runs through, derived from the counts alone.
+
+    A block belongs to the last expert whose region starts at or before it. An empty region starts
+    where the next one does, so it owns no block, and the blocks past the last region, which hold no
+    slot, take the last expert.
+    """
+    first_blocks = region_starts(expert_counts) // BLOCK_ROWS
+    return (first_blocks.unsqueeze(0) <= torch.arange(num_blocks).unsqueeze(1)).sum(1) - 1
+
+
 def to_host(outputs) -> RoutingMetadata:
     """The op's four device tensors as a RoutingMetadata."""
     gather_index, combine_index, combine_weights, expert_counts = outputs
@@ -120,8 +137,7 @@ def assert_matches_reference(
     ), "combine_weights: not bit-identical to the input values"
 
     window = indices[token_start : token_start + num_tokens].long().clamp(max=num_experts - 1)
-    region_rows = (got.expert_counts + BLOCK_ROWS - 1) // BLOCK_ROWS * BLOCK_ROWS
-    region_start = torch.cumsum(region_rows, 0) - region_rows
+    region_start = region_starts(got.expert_counts)
     rows = got.combine_index[:, :num_tokens].T
     tokens = torch.arange(token_start, token_start + num_tokens).unsqueeze(1).expand_as(rows)
     assert torch.equal(got.gather_index[rows], tokens), "a slot's row does not gather its own token"
