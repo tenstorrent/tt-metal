@@ -173,7 +173,8 @@ DEVICE_STEPS = {
         "attention",
     },
     # attn_hc .. kv passed C.dec_reindex.* (and S.dec_reindex.01-05) on the swa modules (DS41-28); the indexer is
-    # tt/indexer.py:TtReindexer over layer 20's served 4_index_k_r1 cache and its device candidate pool
+    # tt/indexer.py:TtReindexer over layer 20's served 4_index_k_r1 cache and its device candidate pool; the attention
+    # is tt/sparse_attention.py over layer 20's served 3_compress_kv_r1 with its own top-k (writes its 0_window_kv)
     "dec_reindex": {
         "attn_hc",
         "attn_collapse",
@@ -181,6 +182,7 @@ DEVICE_STEPS = {
         "q_a",
         "kv",
         "indexer",
+        "attention",
     },
 }
 
@@ -413,9 +415,9 @@ def _sparse_attention_host_fn(mesh, module, cfg, layer):
     """fn(ctx, q_resid_host [S, 1280], kv_host [S, 512][, compressed_host [S / r, head_dim + index_dim]][, topk_host
     [S, topk] int32]) -> attn_out host [S, H] fp32, for a compressed layer (harness boundary: q_resid, kv and the top-k
     row-split over axis 0, replicated over axis 1; the output's rows over axis 0, hidden over axis 1). ``compressed``
-    is an input only of a layer that is its own KV source, ``topk`` only of its own index source (enc_source); a
-    reader (enc_reuse) reads both from its sources (ds41_ref.Config.kv_source_of / index_source_of). The window cache
-    as _attention_host_fn.
+    is an input only of a layer that is its own KV source, ``topk`` only of its own index source (enc_source,
+    dec_candidate, dec_reindex); a reader (enc_reuse) reads both from its sources, a re-index layer (dec_reindex) the
+    compressed rows only (ds41_ref.Config.kv_source_of / index_source_of). The window cache as _attention_host_fn.
 
     Compressed rows: read on the device from the KV source's served compressed cache ctx.extra["compress_cache"].ckv
     (the hybrid model's: the layer's own, or for a reader its source's, which the source's device compressor wrote
@@ -433,7 +435,6 @@ def _sparse_attention_host_fn(mesh, module, cfg, layer):
     r, hd = cfg.ratio(layer), cfg.head_dim
     kv_src, idx_src = cfg.kv_source_of(layer), cfg.index_source_of(layer)
     own_kv, own_idx = kv_src == layer, idx_src == layer
-    assert own_kv or not own_idx, f"layer {layer}: its own top-k over another layer's KV is not built yet"
 
     def _source(ctx, j, name, a, b):
         """Rows [a, b) of source layer j's state tensor `name` (F65 source_state, else the reference state)."""
@@ -882,12 +883,9 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
     if step == "attention" and cfg.ratio(layer):
         from models.demos.deepseek_v41_flash_d_p.tt.sparse_attention import SparseIndexTables, build_sparse_attention
 
-        if cfg.uses_candidates(layer):
-            return None  # the decoder readers of the candidate pool (dec_reindex) are not built yet
-        # the candidate source (layer 20, ratio 1) is its own KV and top-k source: the same module as enc_source;
-        # its pool only restricts later indexers, never its own attention (reference _attention)
-        if cfg.is_index_source(layer) and not cfg.is_kv_source(layer):
-            return None  # its own top-k over another layer's KV (dec_reindex) is not built yet
+        # one module for every compressed layer (reference _attention is the same code): its own KV and top-k
+        # (enc_source, dec_candidate: layer 20's pool only restricts later indexers), a reader of both (enc_reuse),
+        # or its own top-k over another layer's KV (dec_reindex: layer 20's served compressed cache)
         tables = _window_tables(mesh, spec, shared)
         if "sparse_index_tables" not in shared:
             shared["sparse_index_tables"] = SparseIndexTables(mesh, tables, cfg.index_topk)

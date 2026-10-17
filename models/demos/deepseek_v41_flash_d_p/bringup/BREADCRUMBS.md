@@ -1466,3 +1466,19 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - C.dec_candidate.indexer and C.enc_source.indexer re-run after the host fn change: PASS, same errors (0.0260, 0.0174).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_indexer.py`;
   probes `PYTHONPATH=$PWD scripts/tt-probe.sh ds41_reindex < tests/ttnn/unit_tests/operations/ds41_reindex/probes/probe_00{2,3}.py`.
+
+## C.dec_reindex.attention implement (attempt 1)
+- No new module: layer 24 (ratio 1, its own top-k over layer 20's KV) runs `tt/sparse_attention.py:TtSparseAttention`
+  (reference `_attention` is the same code for every compressed layer). Table = [window 128 + S | layer 20's served
+  3_compress_kv_r1 rows in gather order]; index list = window ids + layer 24's own top-k mapped to table rows on the
+  device (`_topk_rows`), sentinel tail (SparseIndexTables for starts < 128).
+- hooks: removed the two `return None` guards in `_device_step_fn` (uses_candidates; index source without own KV) and
+  the matching assert in `_sparse_attention_host_fn`; its existing paths already cover the case (compressed rows from
+  ctx.extra compress_cache = layer 20's in the hybrid, else source_state[20] compress_kv [0, end); top-k = the step's
+  own `topk` input). `"attention"` added to `DEVICE_STEPS["dec_reindex"]` (DS41-28).
+- Components note on K-31 (fork refuses the sink under high_precision) is out of date, as earlier steps found: no fork
+  change.
+- Gate: component PASS, err_attention_L24 0.0409 <= 0.5549; vs CPU 0.0352 <= 0.0748; chunk0 0.0370 <= 0.0762; layer2
+  0.0485 <= 0.0840; mixed 0.0486 <= 0.0847; small 0.0347 <= 0.2; big 0.0303 <= 0.2. test_cache_starts
+  (BRINGUP_TASK=C.dec_reindex.attention, layers [20, 24], DS41-36): 4 passed, 0 failures each.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attention.py && BRINGUP_TASK=C.dec_reindex.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`
