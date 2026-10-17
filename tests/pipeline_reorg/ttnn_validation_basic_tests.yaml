@@ -3,6 +3,10 @@
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
 # For max allowed timeout refer to .github/time_budget.yaml (ttnn -> merge_gate; budget is shared with validation merge gate).
 # Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
+#
+# Do not grow this cmd. It already uses most of its 15 minutes on WH. New
+# reduction (or other) gtests belong in a sharded entry (gtest_shard_index),
+# not appended here.
 
 - name: ttnn validation basic
   cmd: /usr/bin/tt-nn-validation-basic

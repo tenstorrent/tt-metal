@@ -153,10 +153,13 @@
 # Matmul, fused and reduction coverage, reusing the Sanity op groups.
 #
 # The selection lives in the test files, as @pytest.mark.merge_gate (registered in pytest.ini),
-# not as a list of node IDs here.
+# not as a list of node IDs here. The collection-count guard compares that selection to
+# tests/pipeline_reorg/ttnn_matmul_fused_reduction_ops.count so a parametrize rewrite cannot
+# drop marks silently.
 - name: "ttnn matmul fused reduction ops"
   cmd: >-
-    pytest --timeout 60 -xv -m merge_gate
+    python3 tests/scripts/check_merge_gate_collection_count.py
+    && pytest --timeout 60 -xv -m merge_gate
     tests/ttnn/unit_tests/operations/matmul
     tests/ttnn/unit_tests/operations/fused
     tests/ttnn/unit_tests/operations/reduce
@@ -165,6 +168,21 @@
       timeout: 10
     bh_p150b_civ2_viommu:
       timeout: 10
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U084B1CES7M # Borys Bradel
+
+# Test functions a PR adds or changes under matmul/fused/reduce, including unmarked
+# ones. The marked selection above would miss a red test the PR just added.
+# Declared timeout is 5 minutes; the script no-ops when the diff touches none of
+# those test modules. BH merge_gate is at 45/45 with this entry — do not raise it.
+- name: "ttnn matmul fused reduction changed tests"
+  cmd: python3 tests/scripts/run_changed_matmul_fused_reduce_tests.py
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    bh_p150b_civ2_viommu:
+      timeout: 5
   team: ttnn
   budget_type: merge_gate
   owner_id: U084B1CES7M # Borys Bradel

@@ -1,0 +1,7 @@
+# Expected pytest collection count for:
+#   pytest -m merge_gate tests/ttnn/unit_tests/operations/{matmul,fused,reduce}
+#
+# The ttnn matmul fused reduction ops merge-gate entry fails when collection
+# returns a different number. Update this file in the same PR that adds or
+# removes merge_gate marks (or that rewrites a marked parametrize).
+717
