@@ -210,6 +210,91 @@ def test_the_talker_trace_replays_the_eager_step_exactly(device, frame_tail):
         ttnn.release_trace(device, cached.trace_id)
 
 
+# Longer than one fill can cover without a write run crossing a head boundary: 8 KV heads
+# of 9 tiles each is 72 runs, more than the 64 cores of an N150.
+LONG_PROMPT = 288
+
+
+def _external_cache(device, cached_like, blocks):
+    """A caller-owned paged cache shaped like the decoder's own, `blocks` blocks per layer."""
+    shape = (blocks, *tuple(cached_like.k_cache[0].shape)[1:])
+    empty = torch.zeros(shape)
+    make = lambda: ttnn.from_torch(empty, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    return [(make(), make()) for _ in range(cached_like.layers)]
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_the_talker_reads_and_writes_only_the_blocks_its_page_table_names(device, frame_tail):
+    """One request on scattered blocks of a shared cache gives the identical hidden states
+    to the same request on contiguous ones, and leaves the other request's blocks alone."""
+    tables, tail = frame_tail
+    embeddings, positions = talker_prompt()
+    length = embeddings.shape[1]
+    parameters = preprocess_cached_talker_parameters(device)
+    own = TtTalkerCachedDecoder(device, parameters, max_seq=length + STEPS + 8)
+    per_request = own.max_blocks
+    shared = TtTalkerCachedDecoder(
+        device, parameters, max_seq=length + STEPS + 8, kv_cache=_external_cache(device, own, 2 * per_request)
+    )
+    codes = [int(code) for code in code_predictor_prompt()[2][:STEPS]]
+    inputs = [talker_step_inputs(tables, tail, code) for code in codes]
+
+    def run(decoder):
+        ttnn.deallocate(decoder.prefill(embeddings, positions))
+        return [ttnn.to_torch(decoder.step(nxt, length + step)).float() for step, nxt in enumerate(inputs)]
+
+    first_blocks = torch.arange(per_request, dtype=torch.int32)
+    shared.set_page_table(first_blocks)
+    run(shared)
+    first_request = [ttnn.to_torch(cache).float()[:per_request].clone() for cache in shared.k_cache[:2]]
+
+    # The second request on the other half, in reverse block order.
+    shared.set_page_table(torch.arange(2 * per_request - 1, per_request - 1, -1, dtype=torch.int32))
+    scattered = run(shared)
+    contiguous = run(own)
+
+    for step, (left, right) in enumerate(zip(scattered, contiguous)):
+        difference = float((left - right).abs().max())
+        print(f"  step {step} max abs difference {difference:.3e}")
+        assert difference == 0.0, f"step {step} depends on where its blocks sit"
+    for layer, before in enumerate(first_request):
+        after = ttnn.to_torch(shared.k_cache[layer]).float()[:per_request]
+        assert torch.equal(before, after), f"the second request wrote into the first's blocks, layer {layer}"
+
+    # A cache with fewer blocks than `max_seq` asks for bounds the table and the context.
+    small = TtTalkerCachedDecoder(
+        device, parameters, max_seq=4 * own.max_seq, kv_cache=_external_cache(device, own, per_request)
+    )
+    assert small.max_blocks == per_request and small.max_seq == per_request * small.block_size
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_a_long_prefill_seeds_every_position(device, frame_tail):
+    """A prompt whose cache fill spans more head-runs than there are cores. An unseeded or
+    misplaced position shows up as the first step disagreeing with the uncached graph."""
+    tables, tail = frame_tail
+    head = codec_head()
+    short, _ = talker_prompt()
+    embeddings = short.repeat(1, -(-LONG_PROMPT // short.shape[1]), 1)[:, :LONG_PROMPT]
+    cached = TtTalkerCachedDecoder(device, preprocess_cached_talker_parameters(device), max_seq=LONG_PROMPT + 8)
+    plain = TtTalker(device, preprocess_talker_parameters(device))
+
+    ttnn.deallocate(cached.prefill(embeddings))
+    nxt = talker_step_inputs(tables, tail, int(code_predictor_prompt()[2][0]))
+    stepped = ttnn.to_torch(cached.step(nxt, LONG_PROMPT)).float().reshape(1, 1, -1)
+
+    prompt = torch.cat([embeddings, nxt], dim=1)
+    cos, sin, mask = plain.host_inputs(prompt.shape[1])
+    hidden = plain(*(to_device(device, tensor) for tensor in (prompt, cos, sin, mask)))
+    expected = ttnn.to_torch(hidden).float()[:, -1:, :]
+
+    score = pcc(stepped, expected)
+    distance = sampler_distance(expected.reshape(-1) @ head.T, stepped.reshape(-1) @ head.T)
+    print(f"step after a {LONG_PROMPT}-position prefill: pcc {score:.6f}, distance {distance:.4f}")
+    assert score > TALKER_STEP_PCC
+    assert distance < MAX_STEP_DISTANCE
+
+
 # ── the code predictor ──────────────────────────────────────────────────────
 
 
