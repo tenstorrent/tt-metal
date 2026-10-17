@@ -157,6 +157,10 @@ void kernel_main() {
             }
 #else
             {
+#if !INDEX_TILES_ON_COMPUTE
+                // Stage-1 index tiles: generated here and written to DRAM as the initial index tensor. When the
+                // compute kernel builds them in DEST (INDEX_TILES_ON_COMPUTE), stage 1 writes the first index
+                // tiles to DRAM itself and this loop only copies the values.
                 if (is_32_bit_data) {
                     dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index_tensor, w);
                 } else {
@@ -172,6 +176,7 @@ void kernel_main() {
                     {.page_id = h * Wt + w, .offset_bytes = 0});
                 noc.async_write_barrier();
                 index_tensor_dfb.pop_front(one_tile);
+#endif
 
                 input_tensor_dfb.reserve_back(one_tile);
                 noc.async_read(

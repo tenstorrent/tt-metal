@@ -117,6 +117,8 @@ void kernel_main() {
 
     // Runtime args
     std::uint32_t direction_init = get_arg_val<std::uint32_t>(0);
+    // First width tile of this core's chunk: the index tiles built in DEST carry global positions.
+    const std::uint32_t start_wt = get_arg_val<std::uint32_t>(1);
 
     // Constants
     // Dest indices for where to unpack the tiles for the llk
@@ -130,7 +132,12 @@ void kernel_main() {
     // Supports K only up to 64
     const int end_phase = (K <= 64) ? logk - 1 : 5;
 
+#if INDEX_TILES_ON_COMPUTE
+    // No index CB on this core: the index tiles are built in DEST.
+    compute_kernel_hw_startup(input_dfb_index, input_transposed_dfb_index, input_transposed_dfb_index);
+#else
     compute_kernel_hw_startup(input_dfb_index, index_dfb_index, input_transposed_dfb_index);
+#endif
     ckernel::topk_tile_init<fused_keys>();
     constexpr auto tie_order = ckernel::topk_tie_order_from_global_direction(largest != 0);
 
@@ -155,7 +162,8 @@ void kernel_main() {
             Wt,                          // Width tiles for this local chunk
             switch_dir,                  // Whether to alternate sort direction
             ascending,                   // Current sort direction
-            end_phase);                  // Ending phase for local sort
+            end_phase,                   // Ending phase for local sort
+            start_wt);                   // Global width tile of this chunk's first tile
 
         std::uint32_t num_k_sequences = (Wt * 32) / K;  // Number of K-element sequences in chunk
 
