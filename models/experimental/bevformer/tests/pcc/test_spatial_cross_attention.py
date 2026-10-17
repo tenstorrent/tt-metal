@@ -93,7 +93,7 @@ def test_spatial_cross_attention(device, reset_seeds, name, bev_shape, batch_siz
     if geometry == "full-plan":
         assert plan.capacity == FULL_PLAN_ROWS
     tt_output = tt_model(
-        to_device(query, device), to_device(camera_rows(inputs["value"]), device), tt_model.frame_inputs(plan)
+        to_device(query, device), to_device(camera_rows(inputs["value"]), device), tt_model.layer_inputs(plan)
     )
     tt_output = ttnn.to_torch(tt_output).float().reshape(torch_output.shape)
     assert_finite("the cross-attention output", tt_output)
@@ -122,7 +122,7 @@ def test_rebatch_plan_update(device, reset_seeds):
 
     torch_output = torch_model(query, inputs["value"], *second, torch.tensor(SPATIAL_SHAPES))
     tt_output = tt_model(
-        to_device(query, device), to_device(camera_rows(inputs["value"]), device), tt_model.frame_inputs(plan)
+        to_device(query, device), to_device(camera_rows(inputs["value"]), device), tt_model.layer_inputs(plan)
     )
     tt_output = ttnn.to_torch(tt_output).float().reshape(torch_output.shape)
     assert_pcc(torch_output - query, tt_output - query, 0.999)

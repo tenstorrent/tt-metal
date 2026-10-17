@@ -54,7 +54,8 @@ class SCARebatchPlan:
             rebatched row gathers.
         reference_points: ``[bs * num_cams, capacity, num_points_in_pillar, 2]`` ``GRID_DTYPE``
             ROW_MAJOR, the rebatched rows' pillar points in their camera's normalized image
-            coordinates.
+            coordinates; in bfloat16 a point near the image's right edge would move in steps of
+            2^-8, 0.8 px on the 200-wide first FPN level.
         scatter_ids: ``[bs, num_cams * capacity, 1]`` ROW_MAJOR, the query each row adds into, or the
             sink row ``num_queries``.
         inverse_count: ``[bs, num_queries, 1]``, one over the number of cameras that see each query
@@ -132,9 +133,7 @@ def build_rebatch_plan(reference_points_cam, bev_mask, embed_dims, device, capac
             (``model_preprocessing.camera_geometry``).
         bev_mask: Bool torch tensor ``[num_cams, bs, num_queries, num_points_in_pillar]``.
         embed_dims: Query width, for the scatter base.
-        device: Device the plan's buffers live on. The rebatched reference points are
-            ``GRID_DTYPE``: in bfloat16 a point near the image's right edge moves in steps of
-            2^-8, 0.8 px on the 200-wide first FPN level.
+        device: Device the plan's buffers live on.
         capacity: Rows per camera. By default the most queries any camera sees in this frame,
             tile-aligned, which fits this frame only: a plan refilled by :func:`update_rebatch_plan`
             needs a capacity that covers every later frame: a bound for the rig, or
@@ -215,7 +214,7 @@ class TTSpatialCrossAttention:
             residual=False,
         )
 
-    def frame_inputs(self, plan):
+    def layer_inputs(self, plan):
         """The device tensors every layer of a frame shares, derived from ``plan`` on device: the
         full-width scatter index. It is derived in the forward, not stored in the plan, so a
         refilled plan reaches it under trace replay."""
@@ -228,13 +227,13 @@ class TTSpatialCrossAttention:
             scatter_index=ttnn.repeat(plan.scatter_ids, ttnn.Shape((1, 1, self.embed_dims))),
         )
 
-    def __call__(self, query, value, frame):
+    def __call__(self, query, value, inputs):
         """``query`` bfloat16 ``(bs, num_queries, C)``, ``value`` ``(bs * num_cams, num_keys, C)``
-        (each sample's cameras in turn), ``frame`` from :meth:`frame_inputs`. Returns
+        (each sample's cameras in turn), ``inputs`` from :meth:`layer_inputs`. Returns
         ``(bs, num_queries, C)``. Deformable attention scores no key: two Linears on the query predict
         where to sample and with what weight. No positional encoding enters: upstream's encoder adds
         it in the self-attention only."""
-        plan = frame.plan
+        plan = inputs.plan
         bs, num_queries, embed_dims = query.shape
         assert (bs, num_queries) == (
             plan.batch_size,
@@ -255,7 +254,7 @@ class TTSpatialCrossAttention:
 
         # Unused rows add into the sink row past the last query, which the slice drops.
         attended = ttnn.reshape(attended, (bs, self.num_cams * plan.capacity, embed_dims))
-        slots = ttnn.scatter_add(plan.scatter_base, dim=1, index=frame.scatter_index, src=attended)
+        slots = ttnn.scatter_add(plan.scatter_base, dim=1, index=inputs.scatter_index, src=attended)
         slots = ttnn.to_layout(ttnn.slice(slots, (0, 0, 0), (bs, num_queries, embed_dims)), ttnn.TILE_LAYOUT)
         slots = ttnn.mul(slots, plan.inverse_count)
         slots = ttnn.linear(slots, self.params.output_proj.weight, bias=self.params.output_proj.bias)

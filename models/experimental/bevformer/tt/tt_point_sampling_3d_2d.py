@@ -30,7 +30,7 @@ def generate_reference_points_ttnn(
     batch_size: int = 1,
 ):
     """
-    Generate 3D reference points for BEV queries using TTNN operations with batch support.
+    The torch reference's 3D reference points for the BEV queries, uploaded to the device.
 
     Args:
         bev_h (int): Height of the BEV grid.
@@ -76,9 +76,6 @@ def point_sampling_3d_to_2d_ttnn(
     """
     Project 3D reference points to 2D camera coordinates using TTNN operations with batch support.
 
-    This function implements the core 3D to 2D transformation used in BEVFormer's
-    spatial cross-attention mechanism using TTNN for optimized execution.
-
     Args:
         reference_points: 3D reference points in normalized coordinates [0, 1].
             Shape: [bs, num_queries, num_points, 3] where last dim is (x, y, z).
@@ -117,7 +114,6 @@ def point_sampling_3d_to_2d_ttnn(
 
     signpost(header="Point Sampling Coordinate Scaling Start")
 
-    # Scale normalized coordinates [0, 1] to actual world coordinates
     reference_points_x = reference_points[:, :, :, 0:1]
     reference_points_y = reference_points[:, :, :, 1:2]
     reference_points_z = reference_points[:, :, :, 2:3]

@@ -4,17 +4,17 @@
 """Tracy harness for BEVFormer's fused multi-scale deformable attention.
 
 Same shapes as ``tests/pcc/test_fused_msda.py`` -- nuscenes tiny
-(Q=900, H=4, L=1) and base (Q=2500, H=8, L=4) -- and the same structure as
-``test_encoder_layer_perf.py``: a PCC gate that doubles as the warmup, then a signposted
-region so the report covers already-compiled, already-cached programs.
+(Q=900, H=4, L=1) and base (Q=2500, H=8, L=4): a PCC gate that doubles as the warmup, then
+the forward run eagerly, without a trace, in a signposted region, so the report covers
+already-compiled, already-cached programs.
 
 Two measured surfaces, because the interesting question is which of the two the
 time is in:
 
 ``test_fused_msda_module_perf``
     The whole ``TTMSDeformableAttention`` forward: value/attn/offset Linears,
-    softmax, the fused op, ``output_proj`` and the residual. This is what the
-    encoder actually pays.
+    softmax, the fused op, ``output_proj`` and the residual: the decoder
+    cross-attention's path.
 
 ``test_fused_msda_kernel_perf``
     Only ``ttnn.experimental.fused_msda_from_offsets``. The projections and the
@@ -281,7 +281,7 @@ def test_fused_msda_module_perf(
     reset_seeds,
     ensure_gc,
 ):
-    """Whole-module device time: what the encoder pays per MSDA call."""
+    """Whole-module device time: one ``TTMSDeformableAttention`` forward."""
     logger.info(f"device-perf run of commit {_head_sha()} -- module {config_name} q={num_queries}")
 
     config, ref_model, tt_parameters, torch_inputs = _build(device, config_name, batch_size, num_queries)

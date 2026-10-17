@@ -2,11 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-3D to 2D point sampling and transformation functions for BEVFormer.
-
-This module implements the core point sampling logic that projects 3D reference points
-to 2D camera coordinates. This is a crucial component for spatial cross-attention
-where BEV queries need to sample features from specific locations in camera views.
+Projects the BEV pillars' 3D reference points into the cameras for the spatial cross-attention.
 
 Based on the original BEVFormer implementation:
 https://github.com/fundamentalvision/BEVFormer/blob/master/projects/mmdet3d_plugin/bevformer/modules/encoder.py
@@ -79,10 +75,6 @@ def point_sampling_3d_to_2d(
     """
     Project 3D reference points to 2D camera coordinates with batch support.
 
-    This function implements the core 3D to 2D transformation used in BEVFormer's
-    spatial cross-attention mechanism. It projects 3D world coordinates to 2D image
-    coordinates using camera transformation matrices.
-
     Args:
         reference_points (torch.Tensor): 3D reference points in normalized coordinates [0, 1].
             Shape: [bs, num_queries, num_points, 3] where last dim is (x, y, z).
@@ -104,9 +96,9 @@ def point_sampling_3d_to_2d(
     x_min, y_min, z_min = pc_range[0], pc_range[1], pc_range[2]
     x_max, y_max, z_max = pc_range[3], pc_range[4], pc_range[5]
 
-    reference_points[..., 0:1] = reference_points[..., 0:1] * (x_max - x_min) + x_min  # X
-    reference_points[..., 1:2] = reference_points[..., 1:2] * (y_max - y_min) + y_min  # Y
-    reference_points[..., 2:3] = reference_points[..., 2:3] * (z_max - z_min) + z_min  # Z
+    reference_points[..., 0:1] = reference_points[..., 0:1] * (x_max - x_min) + x_min
+    reference_points[..., 1:2] = reference_points[..., 1:2] * (y_max - y_min) + y_min
+    reference_points[..., 2:3] = reference_points[..., 2:3] * (z_max - z_min) + z_min
 
     reference_points = torch.cat(
         (reference_points, torch.ones_like(reference_points[..., :1])), dim=-1
@@ -116,7 +108,6 @@ def point_sampling_3d_to_2d(
     reference_points = reference_points.permute(2, 0, 1, 3)
     D, B, num_queries = reference_points.size()[:3]
     num_cams = lidar2img.shape[1]  # lidar2img is [bs, num_cams, 4, 4]
-    # Reshape for batch matrix multiplication
     # reference_points: [D, B, 1, num_queries, 4] -> [D, B, num_cams, num_queries, 4]
     reference_points = reference_points.view(D, B, 1, num_queries, 4).repeat(1, 1, num_cams, 1, 1).unsqueeze(-1)
 
@@ -153,7 +144,6 @@ def point_sampling_3d_to_2d(
 
     bev_mask = bev_mask & valid_x & valid_y
 
-    # Permute to get expected output format: [num_cams, bs, num_queries, num_points, 2/1]
     reference_points_cam = reference_points_cam.permute(2, 1, 3, 0, 4)  # [num_cams, B, num_queries, D, 2]
     bev_mask = bev_mask.permute(2, 1, 3, 0, 4).squeeze(-1)  # [num_cams, B, num_queries, D]
 

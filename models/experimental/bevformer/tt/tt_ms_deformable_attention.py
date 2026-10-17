@@ -9,10 +9,6 @@ It takes the reference points and the raw sampling offsets and does the whole of
 MSDA -- sampling-location generation, bilinear sampling, the attention multiply
 and the reduction over (levels, points) -- inside one kernel. No intermediate
 grid or per-level sampled-value tensor is materialized.
-
-Key components:
-- multi_scale_deformable_attn_fused: Core attention computation function
-- TTMSDeformableAttention: Main attention class with parameter management
 """
 
 import torch
@@ -75,22 +71,17 @@ def multi_scale_deformable_attn_fused(value, reference_points, sampling_offsets,
 
 
 class TTMSDeformableAttention:
-    """
-    ttnn implementation of Multi-Scale Deformable Attention.
-    Based on the MMCV/BEVFormer approach.
-    """
+    """mmcv's MultiScaleDeformableAttention, batch-first, on the fused MSDA op."""
 
     def __init__(self, config: DeformableAttentionConfig, device, params=None, *, spatial_shapes, residual=True):
         """
-        Initialize TTNN Multi-Scale Deformable Attention module.
-
         Args:
             config (DeformableAttentionConfig): Configuration object containing:
                 - embed_dims (int): Feature embedding dimensions
                 - num_heads (int): Number of attention heads
                 - num_levels (int): Number of feature pyramid levels
-                - num_points (int): Number of sampling points per head
-                - batch_first (bool): Whether batch dimension comes first
+                - num_points (int): Sampling points per head and level
+                - batch_first (bool): Must be True; callers permute sequence-first tensors
             device: TTNN device for tensor operations
             params: Pre-computed TTNN parameters containing linear layer weights and biases.
                 Should include: value_proj, sampling_offsets, attention_weights, and output_proj
@@ -99,7 +90,7 @@ class TTMSDeformableAttention:
                 module: forward takes no shapes of its own, and they are handed to the
                 fused op as a static attribute. Features at a different resolution
                 require a new instance.
-            residual: Add ``identity`` to the output. BEVFormer's MSDeformableAttention3D, inside
+            residual: Add the query, before ``query_pos``, to the output. BEVFormer's MSDeformableAttention3D, inside
                 the spatial cross-attention, has no shortcut.
 
         Raises:
@@ -107,6 +98,9 @@ class TTMSDeformableAttention:
         """
         if config.embed_dims % config.num_heads != 0:
             raise ValueError(f"embed_dims ({config.embed_dims}) must be divisible by num_heads ({config.num_heads})")
+
+        if not config.batch_first:
+            raise ValueError("TTMSDeformableAttention takes batch-first tensors only")
 
         if spatial_shapes is None:
             raise ValueError("spatial_shapes is required")
@@ -127,7 +121,6 @@ class TTMSDeformableAttention:
         self.num_heads = config.num_heads
         self.num_levels = config.num_levels
         self.num_points = config.num_points
-        self.batch_first = config.batch_first
         self.device = device
         self.params = params
         self.spatial_shapes = spatial_shapes.to(dtype=torch.long).clone()
@@ -141,19 +134,14 @@ class TTMSDeformableAttention:
         *,
         query,
         value=None,
-        identity=None,
         query_pos=None,
-        key_padding_mask=None,
         reference_points=None,
-        **kwargs,
     ):
         """
         Args:
             query: [bs, num_queries, embed_dims] Query features
             value: [bs, num_keys, embed_dims] Value features (optional, defaults to query)
-            identity: [bs, num_queries, embed_dims] Identity for residual connection
             query_pos: [bs, num_queries, embed_dims] Query positional encoding
-            key_padding_mask: [bs, num_keys] Padding mask for keys
             reference_points: [bs, num_queries, num_points_in_pillar, 2] Reference points
 
         Returns:
@@ -162,18 +150,12 @@ class TTMSDeformableAttention:
 
         if value is None:
             value = query
-        if identity is None:
-            identity = query
+        identity = query
 
         if query_pos is not None:
             query = ttnn.add(query, query_pos)
 
         signpost(header=f"TT MS Deformable Attn Module Start, {query.shape[1]} - {self.total_keys}")
-
-        if not self.batch_first:
-            query = ttnn.permute(query, (1, 0, 2))
-            value = ttnn.permute(value, (1, 0, 2))
-            identity = ttnn.permute(identity, (1, 0, 2))
 
         assert reference_points is not None, "reference_points is required"
 
@@ -192,11 +174,6 @@ class TTMSDeformableAttention:
         # The fused op takes packed (B, S, H*D), which is what this Linear emits.
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
         value = ttnn.linear(value, self.params.value_proj.weight, bias=self.params.value_proj.bias)
-
-        if key_padding_mask is not None:
-            mask = ttnn.unsqueeze(key_padding_mask, -1)  # [bs, num_keys, 1]
-            zeros_like_value = ttnn.zeros_like(value)
-            value = ttnn.where(mask, zeros_like_value, value)
 
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
 
@@ -237,9 +214,6 @@ class TTMSDeformableAttention:
         if self.residual:
             output = ttnn.add(output, identity)
 
-        if not self.batch_first:
-            output = ttnn.permute(output, (1, 0, 2))
-
         signpost(header="TT MS Deformable Attn Module End")
 
         return output
@@ -250,6 +224,5 @@ class TTMSDeformableAttention:
     def extra_repr(self) -> str:
         return (
             f"embed_dims={self.embed_dims}, num_heads={self.num_heads}, "
-            f"num_levels={self.num_levels}, num_points={self.num_points}, "
-            f"batch_first={self.batch_first}"
+            f"num_levels={self.num_levels}, num_points={self.num_points}"
         )

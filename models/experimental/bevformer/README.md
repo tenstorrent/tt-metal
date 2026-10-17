@@ -80,8 +80,6 @@ so the checkpoint's `pts_bbox_head.transformer.encoder` loads into it unchanged.
   exactly the cells the reference picks.
 - `img_metas[b]["can_bus"]` is relative to the previous frame, as upstream's `forward_test` makes
   it (`reference/bevformer.py`'s `relative_can_bus`).
-- The reference matches upstream's `get_bev_features` exactly with the BEVFormer-base checkpoint,
-  over two frames, at batch sizes 1 and 2.
 
 ### Detector
 
@@ -328,13 +326,13 @@ models/experimental/bevformer/
 ├── tests/
 │   ├── common.py       # Test helpers: camera rigs, dataset presets, dummy weights, random inputs
 │   ├── pcc/            # Unit tests for individual components
-│   └── perf/           # Traced device-perf harnesses, one per stage and one for the detector
+│   └── perf/           # Device-perf harnesses, one per stage and one for the detector
 └── tt/                 # TTNN implementation; model_preprocessing.py prepares every part's parameters
 ```
 
-## Section 1: Test Files
+## Test Files
 
-The test suite validates the image backbone, the FPN, the individual components of the BEVFormer encoder, the detection decoder, and the detection head and box coder, ensuring correctness of both reference and TTNN implementations.
+The test suite validates the image backbone, the FPN, the individual components of the BEVFormer encoder, the detection decoder, and the detection head and box coder, each TTNN part against its PyTorch reference.
 
 ### PCC (Pearson Correlation Coefficient) Tests
 
@@ -415,7 +413,7 @@ Tests the detection head, and the coder on the head's outputs.
   over the 102.4 m axes does not bound
 - That the coder, on the head's outputs, selects pairs within twice the score error of the reference
   head's top 300 covering at least 90% of it, with the reference's scores at those pairs within
-  0.04 at the 99th percentile and 0.15 at worst (`MAX_SCORE_ERROR`, `MAX_WORST_SCORE_ERROR`), and
+  0.04 at the 99th percentile and 0.2 at worst (`MAX_SCORE_ERROR`, `MAX_WORST_SCORE_ERROR`), and
   that its device box decoding matches the host's on the same predictions
 
 The decoder and reg branches use `tests/common.py`'s dummy-weight init, and the reference
@@ -431,8 +429,8 @@ Tests the box coder on head-shaped inputs.
 
 **What it tests:**
 - Distinct logits, so the top 300 labels and queries must match the reference exactly, spread
-  evenly and in a background-dominated shape whose dense band defeats a bfloat16 top-k without
-  the pivot
+  evenly, in a background-dominated shape whose dense band defeats a bfloat16 top-k without
+  the pivot, and with the 300th logit alone just above a band that rounds to its bfloat16 value
 - The decoded boxes channel by channel, yaw through its sine and cosine, and the scores to a few
   float32 ulps
 - The kept boxes, with no score threshold, one some scores pass, and one none passes so the
@@ -544,13 +542,15 @@ pytest models/experimental/bevformer/tests/pcc/test_point_sampling_3d_2d.py
 
 Located in `models/experimental/bevformer/tests/perf/`. Each runs a stage, on the base 200x200 grid
 unless noted, behind a PCC gate that doubles as the warmup, captures its forward as a trace, which fails on any
-host read or write, and replays it once between Tracy's `start` and `stop` signposts:
+host read or write, and replays it once between Tracy's `start` and `stop` signposts.
+`test_fused_msda_perf.py` instead runs its forward eagerly between the signposts, without a trace,
+and its report takes no `--tracing-mode`:
 
 - `test_backbone_fpn_perf.py`: the backbone and the FPN on six 928x1600 images.
 - `test_fused_msda_perf.py`: the fused MSDA module and the fused op alone, on the nuScenes tiny
   and base attention shapes.
 - `test_encoder_layer_perf.py`: one encoder layer on a 100x100 grid, without the per-frame setup.
-- `test_encoder_perf.py`: the six-layer encoder on a second frame; it then replays the trace on the
+- `test_encoder_perf.py`: the six-layer encoder, and one layer alone, on a second frame; it then replays the trace on the
   next frame, with the plan refilled in place.
 - `test_decoder_perf.py`: the six-layer decoder.
 - `test_head_perf.py`: the head and the coder's top-k.
@@ -588,7 +588,7 @@ the port:
 - The box code and the coder's box layout, ranges and top-k size.
 - The image size, its padding and normalization.
 - The port's precision and memory choices: the weight dtypes, the float32 reference points and
-  class logits, the coder's candidate count, and the backbone and FPN's per-layer DRAM, sharding,
+  class logits, the coder's bisection steps (`CODER_BISECTION_STEPS`), and the backbone and FPN's per-layer DRAM, sharding,
   act_block_h and fp32-accumulation settings. `tt_resnet_kwargs()` and `tt_fpn_kwargs()` collect
   them; `create_resnet_parameters` and `create_fpn_parameters` prepare the weights for them and
   record them in the parameters, which `TTResNet` and `TTFPN` read them from.
