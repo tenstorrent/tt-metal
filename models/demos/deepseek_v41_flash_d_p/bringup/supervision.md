@@ -205,3 +205,8 @@ Every intervention by the supervising session: time, task, trigger, classificati
 ## 2026-10-17 00:35 S.enc_source_engram.02 gate FAIL (swap_engram_kv_out 0.041 > 0.0033)
 - engram_kv on device 8e-5 vs the CPU (limit 0.0034), err_swap_out 0.055 <= 0.109; the tail floor (nudge) was 1e-6.
   Class: framework (F98). Attempt 1 aborted as doomed (no tt/ edits); resumed.
+
+## 2026-10-17 09:00 C.dec_candidate.indexer passed (7997af168fa) after 1 attempt
+- Reviewed: _keep_candidates reads the device candidate pool back to host only when a reference state carries the
+  layer (harness bookkeeping); otherwise it stays on device (cand_store). To verify at the perf phase: the served
+  model / ladder timing path runs with no reference state (no per-chunk readback). Listed for the decision report.
