@@ -321,6 +321,10 @@ Each item moves through: `triage → repro → fix → verify → PR → bot-rev
   own `--lock` left at the default** — never hand it the device lock to queue on: it starts its 300 s
   silicon stall watchdog before its lock wait returns, and a trip kills every consumer pytest on the box
   and runs `tt-smi -r` under whoever holds the card (a harness defect; wrapping makes its wait zero).
+  **One run per hold, and a hold is minutes, not an hour:** never wrap a multi-phase sweep in one `flock`
+  (one 55-min hold on aus-wh-08 queued five local agents and 44 remote legs behind it). **Remote legs go
+  first:** this box's serve loop (§0c) waits on the same lock for the other workers' proofs; while
+  `legs/serve-<arch>.log` shows it `waiting for device lock`, start no new local hold until it has run.
   **Cap the queue:** at most 4 device legs waiting on the lock at once (`$SKILL/scripts/device_queue.sh`, which counts
   every holder and waiter whatever form took the lock); beyond
   that, batch an item's legs into one run and hold the rest — tonight 18–20 queued legs meant a 30-min wait
