@@ -42,13 +42,13 @@ Everything else in the launch stays the same.
 | Long context, 4 users | `runtime_spec_b4_k5_1048576.json` | 4 | 1,048,576 | no |
 | Long context with images, 4 users, 1M | `runtime_spec_b4_k5_1048576_vision.json` | 4 | 1,048,576 | yes |
 | Long context with images, 4 users | `runtime_spec_b4_k5_524288_vision.json` | 4 | 524,288 | yes |
-| Prefix caching + chunked prefill, 16 users | `runtime_spec_b16_k5_262144_vision_apc.json` | 16 | 262,144 | yes |
-| Prefix caching + chunked prefill, 4 users | `runtime_spec_b4_k5_1048576_vision_apc.json` | 4 | 1,048,576 | yes |
+| Default, 16 users (prefix caching + chunked prefill) | `runtime_spec_b16_k5_262144_vision.json` | 16 | 262,144 | yes |
+| Default, 4 users (prefix caching + chunked prefill) | `runtime_spec_b4_k5_1048576_vision.json` | 4 | 1,048,576 | yes |
 
 Shared settings:
 - Speculative decoding: 5 draft tokens per round, lossless.
 - Sampling on the device: temperature, top-k, top-p, per-request seed.
-- KV cache: fp8 pool. Prefix caching is off, except in the two `_apc` specs.
+- KV cache: fp8 pool. Prefix caching is on in the 262,144 / 524,288 / 1,048,576-token specs (token budget 4,096); the `_noapc` copies of those specs switch it off. The 131,072-token specs run without it.
 - Chat template: non-thinking.
 - More requests than users wait in the vLLM queue.
 
@@ -284,11 +284,11 @@ Other points on an earlier tree (plain decode, not re-run on this image):
 | 8 | 524,288 | 22 min | 141 s | works |
 | 8 | 1,048,576 | - | - | out of DRAM at warm-up |
 
-## Prefix caching and chunked prefill (opt-in)
+## Prefix caching and chunked prefill
 
-Start with `runtime_spec_b16_k5_262144_vision_apc.json` or `runtime_spec_b4_k5_1048576_vision_apc.json` (see Configurations).
+On in `runtime_spec_b16_k5_262144_vision.json`, `runtime_spec_b4_k5_524288_vision.json`, `runtime_spec_b4_k5_1048576.json` and `runtime_spec_b4_k5_1048576_vision.json`; the `_noapc` copies switch it off.
 They set `enable-prefix-caching`, `DSV41_APC=1` and a token budget of 4,096 per step.
-The default specs keep both off.
+The 131,072-token specs keep both off.
 
 What it does:
 - Requests that share a prefix (a system prompt, few-shot examples, a long document) skip the shared part.
@@ -300,11 +300,11 @@ Measured with speculation on (one server per row):
 | Configuration | Burst TTFT p50 | Worst decode stall during a 32k prompt | GSM8K |
 |---|---|---|---|
 | 16 users, 262,144 tokens, default spec | 5.5 s | 32.7 s | 94.09 % (workflow) |
-| 16 users, 262,144 tokens, `_apc` spec, this image | 2.2 s | 9.2 s | 95.60 % (workflow) |
+| 16 users, 262,144 tokens, default spec, this image | 2.2 s | 9.2 s | 95.60 % (workflow) |
 | 4 users, 1,048,576 tokens, no APC, budget 4,096 | 15.5 s | 12.6 s | 96.5 / 97.7 % (own client, 256 questions) |
-| 4 users, 1,048,576 tokens, `_apc` spec | 12.3 s | 12.7 s | 97.7 / 96.9 % (own client, 256 questions) |
+| 4 users, 1,048,576 tokens, default spec | 12.3 s | 12.7 s | 97.7 / 96.9 % (own client, 256 questions) |
 
-The burst and stall numbers of the default spec and of the 4-user rows come from tests of the same code on a branch (images off); the 16-user `_apc` row and the GSM8K scores marked workflow are from this image.
+The burst and stall numbers of the default spec and of the 4-user rows come from tests of the same code on a branch (images off); the 16-user row and the GSM8K scores marked workflow are from this image.
 
 Long shared prefix (cold, then a hit): 100,000 tokens 107-124 s then 39-46 s; 300,000 tokens at 4 users 504 s then 69 s.
 Limits:
@@ -409,7 +409,7 @@ All 1319 test questions, flexible-extract in percent, standard error about 0.6.
 | 16 users, 262,144 tokens, images on | 16 | **93.56** and **93.48** (two runs) | 70.1 and 70.5 |
 | Previous image, 16 users, 131,072 tokens | 16 | 95.45 | |
 | **This image**, 16 users, 262,144 tokens, images on | 16 | **94.09** | 68.4 |
-| **This image**, same, `_apc` spec | 16 | **95.60** | 66.2 |
+| **This image**, same, default spec | 16 | **95.60** | 66.2 |
 
 All pass the workflow gate (within 5 % of the model card's 93.0).
 Sampling at temperature 1.0 moves a score by about half a percent between runs.

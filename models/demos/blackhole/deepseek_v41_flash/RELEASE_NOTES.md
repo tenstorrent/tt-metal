@@ -15,7 +15,7 @@
 ## What changed since `0.24.0-799a223-ffd1a57`
 
 - **Plain decode is fixed.** A server without speculative decoding used the fused decode-indexer backend and answered wrongly at 16 users (GSM8K 85.67 % at 131,072 tokens, 80.59 % at 262,144). Plain decode now uses the matmul backend up to 262,144 index entries, like the speculative servers (`DSV41_IDX_SWITCH` default 262144 for every launch). See "Known issues" for how this was verified.
-- **Prefix caching (APC) and chunked prefill, opt-in.** New runtime specs `runtime_spec_b16_k5_262144_vision_apc.json` and `runtime_spec_b4_k5_1048576_vision_apc.json` start the server with APC on and a token budget of 4,096 per step. Shared-prefix bursts get their first token about 3x sooner at 16 users / 262,144 tokens, and a 32k-token prompt no longer stops decoding for 33 s (9 s). The default specs are unchanged (APC off, budget 67,584).
+- **Prefix caching (APC) and chunked prefill, on by default in the 262,144 / 524,288 / 1,048,576-token specs.** They start the server with APC on and a token budget of 4,096 per step (`_noapc` copies switch it off). Shared-prefix bursts get their first token about 3x sooner at 16 users / 262,144 tokens, and a 32k-token prompt no longer stops decoding for 33 s (9 s). The 131,072-token specs are unchanged (APC off, budget 67,584; APC is wrong with the unsharded prefill-indexer layout of those sizes).
 - **Image input at 4 users and 1,048,576 tokens** now works (`runtime_spec_b4_k5_1048576_vision.json`). The Engram reduce-scatter of the prefill trace capture is split into 4 pieces when vision is on (`DSV41_PFA_ENGRAM_RS_SPLIT`), which makes the contiguous blocks it needs 4 times smaller.
 
 ## What this release adds
@@ -30,8 +30,8 @@ The budget that fits one galaxy is about **1M tokens of context per mesh row** (
 | Smaller context, 16 users (the previous default) | 16 | 131,072 | k = 5 | optional | `assets/runtime_spec_b16_k5_131072.json` / `_vision.json` |
 | **Long context, 4 users** | 4 | **1,048,576** | k = 5 | optional | `assets/runtime_spec_b4_k5_1048576.json` / `_vision.json` |
 | **Long context with images, 4 users** | 4 | **524,288** | k = 5 | yes | `assets/runtime_spec_b4_k5_524288_vision.json` |
-| **APC + chunked prefill, 16 users** (opt-in) | 16 | 262,144 | k = 5 | yes | `assets/runtime_spec_b16_k5_262144_vision_apc.json` |
-| **APC + chunked prefill, 4 users** (opt-in) | 4 | 1,048,576 | k = 5 | yes | `assets/runtime_spec_b4_k5_1048576_vision_apc.json` |
+| **APC + chunked prefill, 16 users** (default) | 16 | 262,144 | k = 5 | yes | `assets/runtime_spec_b16_k5_262144_vision.json` |
+| **APC + chunked prefill, 4 users** (default) | 4 | 1,048,576 | k = 5 | yes | `assets/runtime_spec_b4_k5_1048576_vision.json` |
 
 Also measured on the same code (plain decode, not shipped as specs): 8 users at 524,288 tokens, and 8 users at 1,048,576 tokens does **not** fit (out of DRAM at warm-up).
 
@@ -161,7 +161,8 @@ Serving-API suite and overload test passed on the 4-user / 1,048,576-token serve
 - **Needle retrieval at about 8,000 tokens fails now and then even without a cache**, and single-digit errors at 64k appear cold as well (1 of 6 cold requests, 0 of 6 hits); this is retrieval noise of the model on filler text, not an APC defect.
 - APC and chunked prefill are opt-in: the snapshots live in host memory (budget 6 GiB, snapshot grid at powers of two of the prompt length), and a small token budget raises the first-token time of a long prompt by 1-3 s.
 - **The plain-decode RoPE fix is verified bit-exact on a 4-layer model** (24 of 24 steps on 7 batch compositions, `tests/test_decode_batch_sensitivity.py`); the same test on the full 40-layer model in this tree still shows differences between runs of the identical batch composition (max logit difference 2.4-3.3, deterministic), so independence from the other users of a mesh row is not shown at 40 layers on this tree. Speculative decoding (all shipped configurations) does not use the plain-decode path.
-- Full GSM8K was not run on the 4-user 524,288-token configuration, nor on the 4-user 1,048,576-token configuration with images or APC (a 256-question sample scored 96.9 % with images and 97.7 % / 96.9 % with APC on).
+- **4 users at 524,288 tokens with images score about 91 % on sampled GSM8K (256 questions, 8 runs: 87.5-93.0 %), against 94.5-97.7 % at 4 users with the same spec at 262,144 tokens (97.3 / 94.5), 786,432 tokens (97.7) and 1,048,576 tokens (96.9-97.7).** Not caused by images (text-only 87.5 / 91.8 %), APC (on 88.7 / 93.0, off 91.4 / 91.4), the column-sharded RoPE tables (off: 91.0 %) or the sharded prefill indexer (off: 91.4 %). The specs differ only in the context length; the cause is not identified. Use the 262,144 or 1,048,576 configuration at 4 users until it is.
+- Full GSM8K was not run on the 4-user 1,048,576-token configuration with images or APC (a 256-question sample scored 96.9 % with images and 97.7 % / 96.9 % with APC on).
 
 ## Tests still to run
 
