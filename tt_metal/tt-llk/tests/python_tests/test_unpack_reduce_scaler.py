@@ -10,6 +10,12 @@ scaler the unpacker delivered is not the one in the buffer.
 REDUCE_ROW SUM/AVG is not a variant: _llk_unpack_reduce_init_ rejects it at compile time
 (the math LLK runs that case with the operands swapped, which this unpack path does not
 produce). REDUCE_ROW MAX pools SrcA only and is covered.
+
+Scaler contract: the path unpacks only the first FACE_C_DIM datums of face 0 of the scaler
+tile (its first row) into SrcB and reuses them for every face. The ``face0_row0`` fill puts
+the scaler in that row only and 7x the scaler everywhere else; the golden uses the scaler for
+all faces, so the variant passes under the documented contract and would fail if the path
+stepped through the scaler tile face by face (as the AB reduce does).
 """
 
 import torch
@@ -44,6 +50,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     OUTPUT_TILE_CNT,
 )
+from helpers.tile_constants import FACE_C_DIM
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
@@ -66,8 +73,9 @@ def _pool_types_for_dim(reduce_dim):
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=_pool_types_for_dim,
+    scaler_fill=["uniform", "face0_row0"],
 )
-def test_unpack_reduce_scaler(formats, reduce_dim, pool_type):
+def test_unpack_reduce_scaler(formats, reduce_dim, pool_type, scaler_fill):
     tile_dimensions = [32, 32]
     tile_shape = construct_tile_shape(tile_dimensions)
     input_dimensions = [64, 32]
@@ -80,10 +88,12 @@ def test_unpack_reduce_scaler(formats, reduce_dim, pool_type):
         tile_dimensions=tile_dimensions,
     )
 
-    src_B = torch.full(
-        (tile_shape.total_tile_size(),),
-        reduce_scaler_value(pool_type, reduce_dim, tile_dimensions),
-    )
+    scaler = reduce_scaler_value(pool_type, reduce_dim, tile_dimensions)
+    src_B = torch.full((tile_shape.total_tile_size(),), scaler)
+    if scaler_fill == "face0_row0":
+        # Only face 0, row 0 carries the scaler; every other datum would corrupt the result if read.
+        src_B = torch.full((tile_shape.total_tile_size(),), 7 * scaler)
+        src_B[:FACE_C_DIM] = scaler
 
     generate_golden = get_golden_generator(ReduceGolden)
     golden_tensor = generate_golden(

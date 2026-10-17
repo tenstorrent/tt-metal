@@ -60,6 +60,7 @@ inline void _llk_unpack_reduce_mop_config_()
  * @param unpB_dst_format: Destination data format the scaler operand is converted to.
  * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose.
  * @note REDUCE_ROW is supported for MAX only; REDUCE_ROW SUM/AVG must use the AB reduce path (static_assert).
+ * @note The scaler is a single row: the first FACE_C_DIM datums of face 0 of the scaler tile, reused for every face.
  * @ref _llk_unpack_reduce_ is the matching execute call.
  * @ref _llk_math_reduce_init_ is the matching init on the math thread (single-operand unpack pairing).
  */
@@ -105,9 +106,12 @@ inline void _llk_unpack_reduce_init_(
  * @tparam type: Reduction pooling op, values = <SUM/AVG/MAX>
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param address: L1 address of the source tile.
- * @param scaler_address: L1 address of the scaler tile; its first row is unpacked into SrcB.
+ * @param scaler_address: L1 address of the scaler tile. Only its first FACE_C_DIM datums (face 0, row 0) are
+ *        unpacked into SrcB, and that one row is reused for every face of the data tile.
  * @note Call @ref _llk_unpack_reduce_init_ with matching template args before this function.
  * @note The scaler is an ordinary L1 tile (e.g. a circular-buffer tile) owned by the caller.
+ * @note Per-face or partial scaler tiles (different values in different faces) are not supported on this path;
+ *       use the AB reduce (_llk_unpack_AB_reduce_) for those.
  */
 template <PoolType type, ReduceDim dim>
 inline void _llk_unpack_reduce_(const std::uint32_t address, const std::uint32_t scaler_address)

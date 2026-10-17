@@ -19,6 +19,8 @@
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>; REDUCE_ROW is MAX only
  *         (SUM/AVG must use llk_unpack_AB_reduce_init / llk_unpack_AB_reduce).
  * @param scaler_operand: Circular buffer holding the scaler tile; its formats configure SrcB.
+ * @note Only the first FACE_C_DIM datums of face 0 of the scaler tile are used, for every face of the data tile;
+ *       per-face or partial scaler tiles need llk_unpack_AB_reduce_init / llk_unpack_AB_reduce.
  * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose.
  * @note Pair with @ref llk_unpack_reduce for the per-tile unpack.
  */
@@ -38,7 +40,8 @@ inline void llk_unpack_reduce_init(
  * @tparam type: Reduction pooling op, values = <SUM/AVG/MAX>
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param operand: Circular buffer holding the data tile.
- * @param scaler_operand: Circular buffer holding the scaler tile.
+ * @param scaler_operand: Circular buffer holding the scaler tile (only face 0, row 0 of it is used, for every
+ *        face of the data tile).
  * @param tile_index: Index of the data tile within its circular buffer.
  * @param scaler_tile_index: Index of the scaler tile within its circular buffer.
  * @note Call @ref llk_unpack_reduce_init with matching template args before this function.
