@@ -87,8 +87,16 @@ inline void xmov_l1_to_l1_non_compact(const std::uint32_t src_addr_16B, const st
 
 inline void xmov_wait_till_idle()
 {
+    volatile std::uint32_t *XMOV_CMD    = reinterpret_cast<volatile std::uint32_t *>(RISCV_TDMA_REG_COMMAND_ADDR);
     volatile std::uint32_t *XMOV_STATUS = reinterpret_cast<volatile std::uint32_t *>(RISCV_TDMA_REG_STATUS);
-    while (XMOV_STATUS[0] & 0x1)
+    // A load from the command register (reads return 0) is the one load the RISC emits after the
+    // store that issued the command; the TDMA block then processes the store, this load and the
+    // status loads in that order, so the first status read already sees the command queued.
+    (void)XMOV_CMD[0];
+    // The mover is reported busy only once the command processor has dequeued the command, so the
+    // queue has to be empty as well as the mover idle before the move is known to be done.
+    constexpr std::uint32_t mask = RISCV_TDMA_STATUS_FLAG_MOVER0_BUSY_MASK | RISCV_TDMA_STATUS_FLAG_FIFO_EMPTY_MASK;
+    while ((XMOV_STATUS[0] & mask) != RISCV_TDMA_STATUS_FLAG_FIFO_EMPTY_MASK)
     {
     }
 }
