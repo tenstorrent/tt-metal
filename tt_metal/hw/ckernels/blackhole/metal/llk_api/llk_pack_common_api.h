@@ -18,17 +18,28 @@
  * LLK PACK COMMON
  *************************************************************************/
 
+// Dest-acc mode a mid-kernel toggle left in effect, for the packer's data-format reconfig. Until the
+// first llk_pack_wait_fp32_dest_acc the reconfig uses the flag it is instantiated with; from then on it
+// uses the mode MATH programmed, sampled in llk_pack_wait_fp32_dest_acc once the handshake has ordered
+// this thread behind MATH's write. (Sampling the live bit at every reconfig instead would race MATH's
+// startup write of ALU_ACC_CTRL_Fp32_enabled.)
+inline bool pack_fp32_dest_acc_overridden = false;
+inline bool pack_fp32_dest_acc_live = false;
+
 /**
  * Pack-thread half of a mid-kernel FP32 dest-acc reconfiguration.
  *
- * Drains the packer FIFO, waits for MATH to program dest-acc CFG (including PCK_DEST_RD_CTRL),
- * then STALLWAITs.
+ * Drains the packer FIFO, waits for MATH to program dest-acc CFG (including PCK_DEST_RD_CTRL), then
+ * records the mode MATH programmed so that later llk_pack_reconfig_data_format calls keep
+ * PCK_DEST_RD_CTRL in step with it.
  *
  * @note Must be called together with llk_unpack_wait_fp32_dest_acc and llk_math_set_fp32_dest_acc.
  */
 inline void llk_pack_wait_fp32_dest_acc() {
     SAN_HOOK(unsupported());
     _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>();
+    pack_fp32_dest_acc_live = (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK) != 0;
+    pack_fp32_dest_acc_overridden = true;
 }
 
 /**
@@ -158,9 +169,11 @@ inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output)
  * Reconfigure the packer for a new output operand's data format.
  *
  * Face geometry (face_r_dim, num_faces), tile column dimension and tile size are derived from
- * the new output's CB metadata.
+ * the new output's CB metadata. The Dest read width follows the dest-acc mode in effect: the
+ * kernel-wide flag, or the mode a mid-kernel enable_fp32_dest_acc / disable_fp32_dest_acc /
+ * set_fp32_dest_acc left (pack_fp32_dest_acc_live).
  *
- * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
+ * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register (kernel-wide mode).
  * @param  new_output          New output circular buffer / operand index to configure for.
  */
 template <bool is_fp32_dest_acc_en>
@@ -168,22 +181,33 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const bool fp32_dest_acc_en = pack_fp32_dest_acc_overridden ? pack_fp32_dest_acc_live : is_fp32_dest_acc_en;
 
     SAN_HOOK(reconfigure(
-        StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Pack>::DestWidth32>(fp32_dest_acc_en),
         StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
         StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
         StateVal<Operand<Exu::Pack>::TileWidth>(tile_c_dim),
         StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
         StateVal<Operand<Exu::Pack>::PartialFace>(false),
         StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        get_local_cb_interface(output_id).fifo_page_size,
-        tile_c_dim,
-        num_faces,
-        false /* partial_face */);
+    if (fp32_dest_acc_en) {
+        _llk_pack_reconfig_data_format_<true>(
+            pack_src_format[output_id],
+            pack_dst_format[output_id],
+            get_local_cb_interface(output_id).fifo_page_size,
+            tile_c_dim,
+            num_faces,
+            false /* partial_face */);
+    } else {
+        _llk_pack_reconfig_data_format_<false>(
+            pack_src_format[output_id],
+            pack_dst_format[output_id],
+            get_local_cb_interface(output_id).fifo_page_size,
+            tile_c_dim,
+            num_faces,
+            false /* partial_face */);
+    }
 }
 
 /**
