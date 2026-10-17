@@ -277,6 +277,9 @@ class TtPrefillBlock(LightweightModule):
         overlap_shared_expert_with_dispatch: bool = True,
         dispatch_impl: str = "direct",
         combine_impl: str = "direct",
+        dispatch_wire: str = "bf16",
+        combine_wire: str = "bf16",
+        fp8_scale_block: int = 32,
         first_layer_idx: Optional[int] = None,
         llama4_scale_cache: Optional[dict] = None,
         use_fused_rmsnorm: Optional[bool] = None,
@@ -423,6 +426,9 @@ class TtPrefillBlock(LightweightModule):
                 overlap_shared_expert_with_dispatch=self.overlap_shared_expert_with_dispatch,
                 dispatch_impl=dispatch_impl,
                 combine_impl=combine_impl,
+                dispatch_wire=dispatch_wire,
+                combine_wire=combine_wire,
+                fp8_scale_block=fp8_scale_block,
             )
         else:
             # emb_dim/hidden_dim default to DSv3/Kimi's 7168/18432 in TtFfn; pass the variant's real dims
@@ -473,6 +479,9 @@ class TtPrefillBlock(LightweightModule):
         overlap_shared_expert_with_dispatch=True,
         dispatch_impl="direct",
         combine_impl="direct",
+        dispatch_wire="bf16",
+        combine_wire="bf16",
+        fp8_scale_block=32,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
@@ -550,6 +559,9 @@ class TtPrefillBlock(LightweightModule):
             is_balanced=is_balanced,
             dispatch_impl=dispatch_impl,
             combine_impl=combine_impl,
+            dispatch_wire=dispatch_wire,
+            combine_wire=combine_wire,
+            fp8_scale_block=fp8_scale_block,
         )
 
     def set_trace_controller(self, controller):

@@ -96,6 +96,30 @@ GLM_L1_SMALL_SIZE = 1536
 GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
 
 
+def _moe_transport_kwargs(transformer_cls) -> dict:
+    """MoE transport overrides for perf comparisons, from the same env vars as prefill_runner plus the
+    wire formats: PREFILL_MOE_DISPATCH / PREFILL_MOE_COMBINE ("direct" | "fabric2d"),
+    PREFILL_MOE_DISPATCH_WIRE / PREFILL_MOE_COMBINE_WIRE ("bf16" | "fp8") and PREFILL_MOE_FP8_SCALE_BLOCK.
+    Only the ones set are returned, so an unset environment builds the default model. Only
+    TtPrefillTransformer takes the wire formats."""
+    env = {
+        "dispatch_impl": "PREFILL_MOE_DISPATCH",
+        "combine_impl": "PREFILL_MOE_COMBINE",
+        "dispatch_wire": "PREFILL_MOE_DISPATCH_WIRE",
+        "combine_wire": "PREFILL_MOE_COMBINE_WIRE",
+        "fp8_scale_block": "PREFILL_MOE_FP8_SCALE_BLOCK",
+    }
+    kwargs = {k: os.environ[v].strip().lower() for k, v in env.items() if os.environ.get(v)}
+    wires = {"dispatch_wire", "combine_wire", "fp8_scale_block"} & kwargs.keys()
+    if wires and transformer_cls is not TtPrefillTransformer:
+        pytest.fail(f"{sorted(wires)} only apply to TtPrefillTransformer, not {transformer_cls.__name__}")
+    if "fp8_scale_block" in kwargs:
+        kwargs["fp8_scale_block"] = int(kwargs["fp8_scale_block"])
+    if kwargs:
+        logger.info(f"MoE transport overrides: {kwargs}")
+    return kwargs
+
+
 def _resolve_trace_dir(variant) -> Path:
     """Golden chunked-prefill trace dir for `variant`: PREFILL_TRACE_DIR overrides the variant's
     prefill_trace_default."""
@@ -1924,6 +1948,7 @@ def run_chunked_transformer_updated(
         kv_only_last_layer=True,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
         tp_shard_kv=tp_shard_kv,
+        **_moe_transport_kwargs(transformer_cls),
     )
 
     # Production overlap qualification asks this full-model harness to prove that the requested profile
