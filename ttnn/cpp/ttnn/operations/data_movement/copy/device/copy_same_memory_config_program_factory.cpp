@@ -15,6 +15,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/data_movement/common/datacopy_rounding.hpp"
 
 namespace ttnn::prim {
 
@@ -202,12 +203,23 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
     desc.kernels.push_back(std::move(writer_desc));
 
     if (convert_dtype) {
+        ComputeConfigDescriptor compute_config{};
+        KernelDescriptor::Defines compute_defines;
+        if (ttnn::operations::data_movement::datacopy_rounds_fp32_to_bf16(
+                input.device()->arch(), input_cb_data_format, output_cb_data_format)) {
+            compute_config.fp32_dest_acc_en = true;
+            compute_config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+            compute_config.unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+            compute_defines.emplace_back("ROUND_FP32_TO_BF16", "1");
+        }
+
         KernelDescriptor compute_g1;
         compute_g1.kernel_source = KERNEL_COMPUTE_ELTWISE_COPY;
         compute_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_g1.core_ranges = core_group_1;
         compute_g1.compile_time_args = {num_units_per_core_group_1};
-        compute_g1.config = ComputeConfigDescriptor{};
+        compute_g1.defines = compute_defines;
+        compute_g1.config = compute_config;
         desc.kernels.push_back(std::move(compute_g1));
 
         if (!core_group_2.ranges().empty()) {
@@ -216,7 +228,8 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
             compute_g2.source_type = KernelDescriptor::SourceType::FILE_PATH;
             compute_g2.core_ranges = core_group_2;
             compute_g2.compile_time_args = {num_units_per_core_group_2};
-            compute_g2.config = ComputeConfigDescriptor{};
+            compute_g2.defines = compute_defines;
+            compute_g2.config = compute_config;
             desc.kernels.push_back(std::move(compute_g2));
         }
     }

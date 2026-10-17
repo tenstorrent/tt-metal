@@ -21,16 +21,22 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_in_id, dfb_out_id);
 
-    compute_kernel_lib::copy<
-        compute_kernel_lib::input(
-            dfb_in_id,
-            compute_kernel_lib::WaitPolicy::PerTile,
-            compute_kernel_lib::PopPolicy::PerTile,
-            compute_kernel_lib::DataFormatReconfig::Disabled),
-        compute_kernel_lib::output(
-            dfb_out_id,
-            compute_kernel_lib::ReservePolicy::PerTile,
-            compute_kernel_lib::PushPolicy::PerTile,
-            compute_kernel_lib::DataFormatReconfig::Disabled)>(
+    constexpr auto input = compute_kernel_lib::input(
+        dfb_in_id,
+        compute_kernel_lib::WaitPolicy::PerTile,
+        compute_kernel_lib::PopPolicy::PerTile,
+        compute_kernel_lib::DataFormatReconfig::Disabled);
+    constexpr auto output = compute_kernel_lib::output(
+        dfb_out_id,
+        compute_kernel_lib::ReservePolicy::PerTile,
+        compute_kernel_lib::PushPolicy::PerTile,
+        compute_kernel_lib::DataFormatReconfig::Disabled);
+#ifdef ROUND_FP32_TO_BF16
+    // Round to nearest even like ttnn.typecast; the input was unpacked to a 32-bit DEST.
+    compute_kernel_lib::typecast<input, output>(
         compute_kernel_lib::IterationShape::tiles(per_core_tile_cnt), dfb_in, dfb_out);
+#else
+    compute_kernel_lib::copy<input, output>(
+        compute_kernel_lib::IterationShape::tiles(per_core_tile_cnt), dfb_in, dfb_out);
+#endif
 }

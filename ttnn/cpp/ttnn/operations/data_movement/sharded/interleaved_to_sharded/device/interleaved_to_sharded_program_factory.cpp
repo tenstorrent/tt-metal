@@ -12,6 +12,7 @@
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/data_movement/common/datacopy_rounding.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include <tt-metalium/tt_align.hpp>
@@ -296,12 +297,20 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     // the end core, so the other fork of this kernel, which reads it as a compile-time constant, does not
     // fit.
     if (convert_df) {
+        ComputeHardwareConfig compute_hw{};
+        KernelSpec::CompilerOptions::Defines compute_defines;
+        if (ttnn::operations::data_movement::datacopy_rounds_fp32_to_bf16(
+                input.device()->arch(), input_data_format, output_data_format)) {
+            compute_defines.emplace("ROUND_FP32_TO_BF16", "1");
+            compute_hw.enable_32_bit_dest = true;
+            compute_hw.unpack_modes = ComputeHardwareConfig::ComputeUnpackModes{{IN_DFB, UnpackMode::UnpackToDest}};
+        }
         kernels.push_back(KernelSpec{
             .unique_id = COMPUTE,
             .source = "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/compute/eltwise_copy_metal2.cpp",
             // The legacy ComputeConfigDescriptor set no opt_level, which resolves to O3 for a compute
             // kernel; Metal 2.0's CompilerOptions defaults to O2, so O3 has to be stated here.
-            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {DFBBinding{
                      .dfb_spec_name = IN_DFB,
@@ -318,8 +327,8 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             // Metal 2.0 ComputeHardwareConfig defaults match those field for field (HiFi4; math_approx_mode
             // false = Precise SFPU; bfp8_pack_precise false = Approximate pack; fp32_dest_acc_en
             // false; dst_full_sync_en false = double_buffer_dest true), so an all-default config
-            // reproduces the legacy settings exactly.
-            .hw_config = ComputeHardwareConfig{},
+            // reproduces the legacy settings exactly, except for the Float32 -> BFloat16 rounding above.
+            .hw_config = compute_hw,
         });
         work_unit_kernels.push_back(COMPUTE);
     }

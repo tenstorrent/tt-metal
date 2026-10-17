@@ -22,9 +22,14 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_in_id, dfb_out_id);
 
-    ckl::copy<
-        ckl::input(dfb_in_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-        ckl::output(
-            dfb_out_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>(
-        ckl::IterationShape::tiles(per_core_tile_cnt), dfb_in, dfb_out);
+    constexpr auto input =
+        ckl::input(dfb_in_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+    constexpr auto output = ckl::output(
+        dfb_out_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+#ifdef ROUND_FP32_TO_BF16
+    // Round to nearest even like ttnn.typecast; the input was unpacked to a 32-bit DEST.
+    ckl::typecast<input, output>(ckl::IterationShape::tiles(per_core_tile_cnt), dfb_in, dfb_out);
+#else
+    ckl::copy<input, output>(ckl::IterationShape::tiles(per_core_tile_cnt), dfb_in, dfb_out);
+#endif
 }
