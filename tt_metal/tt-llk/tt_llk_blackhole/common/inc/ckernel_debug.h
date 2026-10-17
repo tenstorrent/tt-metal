@@ -175,7 +175,12 @@ enum class DbgDestTileOp : std::uint8_t
 //   thread_id:  TRISC thread issuing the copy (defaults to `MathThreadId`).
 //
 // Parameters:
-//   fmt:             data format of the values stored in DEST.
+//   fmt:             data format of the values stored in DEST. Int32 and UInt32 move
+//                    as raw 32-bit DEST patterns with no sign conversion: a read returns
+//                    the pattern DEST holds (a sign-magnitude FPU accumulator reads back
+//                    as its raw bits) and a write stores the word unchanged (no two's
+//                    complement -> sign-magnitude conversion), so supply the encoding the
+//                    consumer expects (FPU integer math reads sign-magnitude).
 //   tile_id:         index of the tile within DEST to copy.
 //   buffer:          memory buffer holding TILE_HEIGHT * TILE_WIDTH elements of
 //                    `fmt`. For `DbgDestTileOp::Read` it receives the tile read
