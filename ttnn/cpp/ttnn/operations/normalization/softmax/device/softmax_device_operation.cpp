@@ -477,7 +477,7 @@ Tensor softmax(
 
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
     const auto dim_adjusted = dim < 0 ? input_tensor_4D.logical_shape().size() + dim : dim + (4 - rank);
-    if (dim_adjusted == rank - 1) {
+    if (dim_adjusted == input_tensor_4D.logical_shape().size() - 1) {
         // Input tensor formatting
         const ttnn::Shape input_pad_shape =
             ttnn::operations::data_movement::pad_to_tile_shape(input_tensor_4D.padded_shape());

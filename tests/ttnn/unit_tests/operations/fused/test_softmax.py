@@ -1121,3 +1121,21 @@ def test_scale_mask_softmax_in_place_row_major_mask_wrong_shape_rejected(device,
 
     with expect_error(RuntimeError, "Non-sharded mask shape must match expected shape"):
         ttnn.scale_mask_softmax_in_place(ttnn_input, 0.125, ttnn_mask)
+
+
+@pytest.mark.parametrize("shape", [(32,), (32, 64), (2, 32, 64)])
+@pytest.mark.parametrize("dim", [-1, 0])
+def test_softmax_in_place_rank_lt_4(device, shape, dim):
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    expected = torch.nn.functional.softmax(torch_input, dim=dim)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    # Validates rank < 4 dimension mapping after unsqueeze_to_4D
+    if dim == -1 or dim == len(shape) - 1:
+        tt_out = ttnn.softmax_in_place(tt_input, dim=dim)
+        result = ttnn.to_torch(tt_out)
+        assert torch.allclose(result, expected, atol=0.04, rtol=0.1)
+    else:
+        with pytest.raises(RuntimeError):
+            ttnn.softmax_in_place(tt_input, dim=dim)

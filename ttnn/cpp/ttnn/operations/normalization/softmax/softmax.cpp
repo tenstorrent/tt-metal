@@ -116,8 +116,9 @@ Tensor softmax_in_place(
 
     // Operation
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+    const int dim_4D = rank < 4 ? dim_calculated + (4 - rank) : dim_calculated;
     auto output_tensor = prim::softmax_in_place(
-        input_tensor_4D, static_cast<int8_t>(dim_calculated), program_config, compute_kernel_config, numeric_stable);
+        input_tensor_4D, static_cast<int8_t>(dim_4D), program_config, compute_kernel_config, numeric_stable);
 
     return output_tensor.reshape(input_shape);
 }
