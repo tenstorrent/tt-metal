@@ -32,6 +32,7 @@ import tempfile
 import torch
 
 from models.demos.common.bringup.core import metrics
+from models.demos.common.bringup.reference.generate_golden import run_starts
 from models.demos.common.bringup.reference.golden import Golden
 
 PAD = 0xFFFFFFFF
@@ -49,7 +50,8 @@ def served_layers(s) -> tuple[int, int]:
     """(first layer, layer count) the engine serves. A contiguous subset is served as itself (F41). A non-contiguous one
     (a partial run's representative layers) is served as ``count`` engine layers 0..count-1, the model layer of each
     listed in PREFILL_LAYER_IDS (F100): acks, the KV table and the producer's read-back use the engine index; the
-    runtime maps it with ``layer_ids_from_env`` and exposes the list as ``layer_ids``."""
+    runtime maps it with ``layer_ids_from_env`` and exposes the list as ``layer_ids``. A run of layers after a gap takes
+    its input from ``gap_feed`` (F102), never from the previous layer's output."""
     sel = s.layers()
     if sel == list(range(sel[0], sel[0] + len(sel))):
         return sel[0], len(sel)
@@ -64,6 +66,43 @@ def layer_ids_from_env(first_layer_idx: int, num_layers: int) -> list[int]:
         assert len(out) == num_layers, f"{LAYER_IDS_ENV}={ids} lists {len(out)} layers, the engine serves {num_layers}"
         return out
     return list(range(first_layer_idx, first_layer_idx + num_layers))
+
+
+class GapFeed:
+    """F102: the input of a served layer run that follows a gap in a non-contiguous subset (a partial bring-up's
+    representative layers): the golden block input of the run's first layer, as the ladder feeds it (the gaps never
+    run on the device). Framework-owned, so no model reads a golden: an adapter asks ``gap_feed(layer_ids, max_seq,
+    chunk)`` once and, at a layer ``i in feed.starts`` other than 0 (a run's first layer), feeds ``feed.rows(layer, start)``
+    [chunk, width] fp32 (zero rows past the golden) to the layer instead of the previous layer's output."""
+
+    def __init__(self, s, layer_ids: list[int], max_seq: int, chunk: int):
+        self.starts = set(run_starts(layer_ids))  # the first layer of each contiguous run
+        self.chunk, self.g, self._rows = chunk, None, {}
+        for rung in s.data.get("ladder", []):
+            try:
+                g = Golden.for_rung(s, rung["name"])
+            except FileNotFoundError:
+                continue
+            if g.seq >= max_seq and sorted(g.dumped_chunks) == list(range(g.n_chunks)):
+                self.g = g
+                break
+        assert self.g is not None, f"a gapped layer subset needs a golden rung with every chunk dumped up to {max_seq}"
+
+    def rows(self, layer: int, start: int) -> torch.Tensor:
+        if layer not in self._rows:
+            self._rows[layer] = torch.cat([self.g.layer(c, layer)["in"] for c in range(self.g.n_chunks)]).float()
+        x = self._rows[layer][start : start + self.chunk]
+        return torch.cat([x, x.new_zeros(self.chunk - x.shape[0], x.shape[1])]) if x.shape[0] < self.chunk else x
+
+
+def gap_feed(layer_ids: list[int], max_seq: int, chunk: int) -> GapFeed | None:
+    """F102: the bring-up's GapFeed when the engine serves a gapped subset under the bring-up contract
+    (PREFILL_LAYER_IDS set, a run starting at a layer other than 0); None otherwise (a served model)."""
+    if not os.environ.get(LAYER_IDS_ENV) or run_starts(layer_ids) == [0]:
+        return None
+    from models.demos.common.bringup.reference.golden import load_spec
+
+    return GapFeed(load_spec(), layer_ids, max_seq, chunk)
 
 
 def engine_env(s) -> dict:
