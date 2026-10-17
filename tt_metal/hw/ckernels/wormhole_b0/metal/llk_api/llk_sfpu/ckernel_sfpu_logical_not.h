@@ -36,8 +36,15 @@ inline void calculate_logical_not() {
     for (int d = 0; d < ITERATIONS; d++) {
         vType v = sfpi::dst_reg[0].mode<layout>();
         vType r = 0;
-        v_if(v == 0) { r = 1; }
-        v_endif;
+        if constexpr (std::is_same_v<vType, sfpi::vFloat>) {
+            // Float layout: -0.0 has its sign bit set, so a raw `v == 0` compare misses it (see #43831
+            // for the same issue in eqz/nez/ltz/gtz/lez/gez). Compare on |v| so both zeros match.
+            v_if(sfpi::abs(v) == 0.0f) { r = 1; }
+            v_endif;
+        } else {
+            v_if(v == 0) { r = 1; }
+            v_endif;
+        }
         sfpi::dst_reg[0].mode<layout>() = r;
         sfpi::dst_reg++;
     }
