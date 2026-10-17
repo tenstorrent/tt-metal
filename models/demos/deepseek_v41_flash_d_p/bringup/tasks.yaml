@@ -9042,11 +9042,104 @@ tasks:
       pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_total: '> 0'   # set to < the X.1 baseline once X.1 has run
+- id: P.2
+  title: 'Routed experts on the fused ttnn.bringup.unified_routed_expert_moe (fork options: routing weight on h, fp8 q(h) before w2)'
+  step: perf
+  role: perf
+  deps:
+  - P.1
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup/unified_routed_expert_ffn
+  - ttnn/ttnn/bringup/INDEX.md
+  ab:
+    change:
+      EXPERTS_KERNEL: unified
+    env:
+      EXPERTS_KERNEL: loop
+  brief:
+    details: 'Owner (2026-10-17): the per-expert ttnn.linear loop (tt/experts.py) must go: 2522 of 3025 ms device per
+      chunk (X.1, 83 %). Replace it with the fused ttnn.bringup.unified_routed_expert_moe. The op cannot run this expert
+      today (tt/experts.py:48, BREADCRUMBS FIX.1): the reference multiplies h = act(x w1, x w3) by the token''s routing
+      weight BEFORE the fp8 act quant of h (per 32, ue8m0, reference kernels.act_quant_dequant), and w2 reads that
+      quantized h. Extend the fork (skill bringup-fork-op, section 3 recipe): two opt-in arguments, default off = today''s
+      program unchanged for every other model: (1) scale h by the token''s routing weight inside the op (the op already
+      receives the routing; say which tensor), (2) fp8 e4m3 quant-dequant of h per 32 with a power-of-two (ue8m0) scale
+      before w2, bit-exact with tt/quant.fp8_qdq. Keep the ClampedSiluGlu activation, HiFi4, fp32 dest. Weights: bfp8
+      must stay exact (DS41-35: the stored [N, K] orientation; W^T rounds 48 matrices): read [N, K] in the op (transpose
+      inside) or prove exactness at load like _bfp8_exact. Fork tests for the new options (torch reference, refusals,
+      corrupt-output check), the fork''s full regression once at the end (every model''s cases, fork_source). In the
+      model: EXPERTS_KERNEL setting in tt/settings.py {loop (today), unified}, works with EXPERTS_IMPL bfp8 and bfp4;
+      default stays loop until the owner''s table. Frozen tests are never edited; every expert component and swap test
+      must pass at bfp8 (exact arithmetic). Report in the commit: the experts section ms per chunk (plain profile) loop vs
+      unified at bfp8 and at bfp4.'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done
+      && for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14 dec_reindex_13
+      dec_reuse_12; do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py
+      || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_experts: '< 2522'
+- id: P.3
+  title: 'Routed experts on Marko''s flat_routed_expert (V4.1-tuned, imported @ f080c8df021; options: routing weight on h, fp8 q(h), bf16 x / h / y, exact bfp8)'
+  step: perf
+  role: perf
+  deps:
+  - P.2
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup/flat_routed_expert_ttnn
+  - ttnn/ttnn/bringup/combine_rf
+  - ttnn/ttnn/bringup/INDEX.md
+  ab:
+    change:
+      EXPERTS_KERNEL: flat
+    env:
+      EXPERTS_KERNEL: loop
+  brief:
+    details: 'Owner (2026-10-17): try Marko Staletovic''s flat routed expert, tuned for DeepSeek-V4.1-Flash shapes
+      (ttnn/ttnn/bringup/flat_routed_expert_ttnn, imported by the overseer from mstaletovic/galaxy-unified-k3-v41-combine
+      @ f080c8df021; read its FLAT_EXPERT_WORKLOG.md and FLAT_COMBINE_OVERLAP_WORKLOG.md first: design, V4.1 defaults
+      (uneven gate/up split for I 2304, 16-column units, 48 x 3), the MIMO_FL_* knobs, known hangs). Compare with P.2
+      (EXPERTS_KERNEL=unified). Use the expert compute only (FlatRoutedExpert, act clamped_silu = DeepSeek V4''s limit-10
+      SwiGLU), keep the model''s dispatch / combine; combine_rf / the combine overlap is a later step. What this model
+      needs that the op lacks, each an opt-in argument whose default keeps today''s program (GLM-5.3 Flash uses this op:
+      tt/experts_ag.py; its cases must pass unchanged): (1) h scaled by the token''s routing weight before (2) fp8 e4m3
+      quant-dequant of h per 32 (ue8m0 scale, bit-exact with tt/quant.fp8_qdq) before the down projection; (3) x_bf16 and
+      h_bf16 on (bfp8 x / h tiles are not exact for fp8-rounded values), and a bf16 (or fp32) y instead of bfp8 y; (4)
+      exact bfp8 weights: its packing takes Wg [H, I] (x @ W), where bfp8 rounds values (DS41-35); pack from the stored
+      [N, K] orientation or prove exactness at load. HiFi4 and fp32 dest for every matmul (owner rule; Marko''s default
+      math is LoFi in places: find and switch them). In the model: EXPERTS_KERNEL value flat. Frozen tests are never
+      edited; every expert component and swap test must pass at bfp8. A hang: stop, triage, report (it is a new op on
+      this box). Report in the commit: experts section ms per chunk, flat vs unified vs loop, at bfp8 and bfp4.'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done
+      && for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14 dec_reindex_13
+      dec_reuse_12; do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py
+      || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_experts: '< 2522'
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
   deps:
-  - P.1
+  - P.3
   gate:
     cmd: BRINGUP_RUNG=s55296 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
