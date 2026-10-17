@@ -113,7 +113,7 @@ ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
  * | Template   | block_ct_dim    | Width of a single block in tiles                    | uint32_t  | 1 to max (see note)       | False (default = 8)   |
  * | Template   | full_ct_dim     | Width of a full input in tiles                      | uint32_t  | Divisible by block_ct_dim | False                 |
  * | Template   | narrow_row      | Whether the provided input is narrow                | bool      | true/false                | False                 |
- * | Template   | row_num_datums  | Number of datums per row                            | uint32_t  | >= 1                      | False                 |
+ * | Template   | row_num_datums  | Datums each tile contributes to an output row       | uint32_t  | >= 1                      | False                 |
  * | Template   | dense           | Packs two 2 face tiles in a single 4 face region    | bool      | true/false                | False (default false) |
  * | Template   | configure_remap      | Whether to (re)configure BH DEST remap (BH only)    | bool      | true/false                | False (default true)  |
  * | Template   | is_fp32_dest_acc_en  | DEST accumulation mode                              | bool      | true/false                | False                 |
@@ -298,7 +298,7 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
  * | Template   | full_ct_dim        | Width of a full input in tiles                                               | uint32_t  | Divisible by block_ct_dim               | False                 |
  * | Template   | diagonal           | Whether to use diagonal packing                                              | bool      | true/false                              | False                 |
  * | Template   | narrow_row         | Whether the provided input is narrow                                         | bool      | true/false                              | False                 |
- * | Template   | row_num_datums     | Number of datums per row                                                     | uint32_t  | >= 1                                    | False                 |
+ * | Template   | row_num_datums     | Datums each tile contributes to an output row (TILE_C_DIM unless narrow_row) | uint32_t  | >= 1                                    | False                 |
  * | Template   | tile_dst_ct_offset | Compile time offset for the index of the tile in the dest from which to pack | uint32_t  | 0 to 7 (0 to 3 if fp32 dest is enabled) | False (default=0)     |
  * | Template   | dense              | Packs two 2 face tiles in a single 4 face region                             | bool      | true/false                              | False (default false) |
  * | Function   | ocb                | Output circular buffer identifier                                            | uint32_t  | 0 to 31                                 | True                  |
