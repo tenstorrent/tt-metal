@@ -11,8 +11,11 @@ cache are bfloat8_b from the start (the prefill spec's dataformats), not switche
 
 from ._settings_base import Setting, Settings  # noqa: F401  (Setting: the entries agents add to TABLE)
 
-TABLE = {}
+TABLE = {
+    "NORM_FIDELITY": Setting("HiFi4", ("HiFi4", "HiFi3", "HiFi2", "LoFi"), "rule 7 default: rms_norm at HiFi4"),
+    "NORM_FP32_ACC": Setting(True, (True, False), "rule 7 default: rms_norm with fp32 dest accumulation"),
+}
 
-MAX_PRECISION = {}
+MAX_PRECISION = {"NORM_FIDELITY": "HiFi4", "NORM_FP32_ACC": True}
 
 settings = Settings("GPT_OSS_120B_", TABLE, max_precision=MAX_PRECISION)
