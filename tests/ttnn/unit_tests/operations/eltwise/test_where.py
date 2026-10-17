@@ -8,6 +8,7 @@ import pytest
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 from math import isfinite, isnan
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 
 
 def torch_equal_nan(a, b):
@@ -410,61 +411,55 @@ def test_bf8b_exponent_behaviour(device):
     assert torch_equal_nan(tt_result3, result3)
 
 
-@pytest.mark.parametrize("scalar_is_true", [False, True], ids=["tts", "tst"])
-@pytest.mark.parametrize("scalar", [-1.0, 15.5, -float("inf")])
-def test_where_scalar_bf16_inputs_fp32_output(device, scalar, scalar_is_true):
-    # Regression: with a float32 output, where read DEST as bf16 and packed the scalar as two bf16 halves.
-    torch.manual_seed(0)
-    C = (torch.rand((64, 128)) > 0.5).to(torch.bfloat16)
-    T = torch.rand((64, 128), dtype=torch.bfloat16).uniform_(-100, 100)
-    ttnn_C = ttnn.from_torch(C, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_T = ttnn.from_torch(T, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    out = ttnn.from_torch(torch.zeros((64, 128)), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-
-    if scalar_is_true:
-        ttnn.where(ttnn_C, scalar, ttnn_T, output_tensor=out)
-        expected = torch.where(C.bool(), torch.tensor(scalar), T.float())
-    else:
-        ttnn.where(ttnn_C, ttnn_T, scalar, output_tensor=out)
-        expected = torch.where(C.bool(), T.float(), torch.tensor(scalar))
-
-    assert torch.equal(ttnn.to_torch(out), expected)
+# Wormhole row broadcast of a bf16 operand into a 32-bit Dest comes back wrong for every SFPU binary op
+# (add, div, pow, maximum as well), independently of the where variant; Blackhole takes the software
+# broadcast path for these shapes and is expected to pass.
+_WH_ROW_BCAST_BF16_FP32_DEST = pytest.mark.xfail(
+    condition=is_wormhole_b0(),
+    strict=True,
+    reason="Wormhole row broadcast of a bf16 operand into a 32-bit Dest",
+)
 
 
 @pytest.mark.parametrize(
-    "c_shape",
+    "c_shape, t_shape",
     [
-        (2, 64, 1),
-        (1, 1, 1),
-        pytest.param(
-            (1, 1, 128),
-            marks=pytest.mark.xfail(
-                reason="Wormhole row broadcast of a bf16 operand into a 32-bit Dest is wrong for every SFPU "
-                "binary op (add, div, pow, maximum as well), independently of the where variant"
-            ),
-        ),
+        ((2, 64, 128), (2, 64, 128)),
+        ((2, 64, 1), (2, 64, 128)),
+        ((1, 1, 1), (2, 64, 128)),
+        pytest.param((1, 1, 128), (2, 64, 128), marks=_WH_ROW_BCAST_BF16_FP32_DEST),
+        pytest.param((1, 1, 128), (2, 64, 1), marks=_WH_ROW_BCAST_BF16_FP32_DEST),
+        pytest.param((2, 64, 1), (1, 1, 128), marks=_WH_ROW_BCAST_BF16_FP32_DEST),
     ],
-    ids=["col_bcast", "scalar_bcast", "row_bcast"],
+    ids=["no_bcast", "col_bcast", "scalar_bcast", "row_bcast", "row_a_col_b_bcast", "row_b_col_a_bcast"],
 )
 @pytest.mark.parametrize("scalar_is_true", [False, True], ids=["tts", "tst"])
-@pytest.mark.parametrize("scalar", [-1.0, 15.5])
-def test_where_scalar_bf16_inputs_fp32_output_bcast(device, c_shape, scalar, scalar_is_true):
+@pytest.mark.parametrize("scalar", [-1.0, 15.5, -float("inf")])
+@pytest.mark.parametrize("scalar_condition", [0, 1])
+def test_where_scalar_bf16_inputs_fp32_output(device, c_shape, t_shape, scalar, scalar_is_true, scalar_condition):
+    # Regression: with a float32 output, where read DEST as bf16 and packed the scalar as two bf16 halves.
     # The broadcast kernels take their where_tile variant from the condition dtype; with a float32 output
     # the Dest is 32-bit, so a bf16 condition must still select the Float32 variant (as no-bcast does).
-    torch.manual_seed(0)
     shape = (2, 64, 128)
-    C = (torch.rand(c_shape) > 0.5).to(torch.bfloat16)
-    T = torch.rand(shape, dtype=torch.bfloat16).uniform_(-100, 100)
+    if c_shape != (1, 1, 1) and scalar_condition == 1:
+        pytest.skip("scalar_condition only varies the single-element condition")
+    torch.manual_seed(0)
+    if c_shape == (1, 1, 1):
+        C = torch.full(c_shape, float(scalar_condition)).to(torch.bfloat16)
+    else:
+        C = (torch.rand(c_shape) > 0.5).to(torch.bfloat16)
+    T = torch.rand(t_shape, dtype=torch.bfloat16).uniform_(-100, 100)
     ttnn_C = ttnn.from_torch(C, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_T = ttnn.from_torch(T, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     out = ttnn.from_torch(torch.zeros(shape), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
+    cond = C.bool().expand(shape)
     if scalar_is_true:
         ttnn.where(ttnn_C, scalar, ttnn_T, output_tensor=out)
-        expected = torch.where(C.bool(), torch.tensor(scalar), T.float())
+        expected = torch.where(cond, torch.tensor(scalar), T.float().expand(shape))
     else:
         ttnn.where(ttnn_C, ttnn_T, scalar, output_tensor=out)
-        expected = torch.where(C.bool(), T.float(), torch.tensor(scalar))
+        expected = torch.where(cond, T.float().expand(shape), torch.tensor(scalar))
 
     assert torch.equal(ttnn.to_torch(out), expected)
 
