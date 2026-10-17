@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """GPQA-Diamond zero-shot eval client for an OpenAI-compatible server (vLLM)."""
+
 import argparse
 import asyncio
 import csv
@@ -25,6 +26,57 @@ def extract_answer(text):
         return None
     m = ANS_RE.findall(text)
     return m[-1].upper() if m else None
+
+
+def sampling_config(args):
+    """Sampling/extraction config as recorded in the summary (None = not sent)."""
+    return {
+        "temperature": args.temperature,
+        "top_p": args.top_p if args.top_p >= 0 else None,
+        "top_k": args.top_k if args.top_k > 0 else None,
+        "max_tokens": args.max_tokens if args.max_tokens > 0 else None,
+        "presence_penalty": getattr(args, "presence_penalty", None),
+        "no_think": args.no_think,
+        "final_only": args.final_only,
+        "extra_body": json.loads(args.extra_body) if args.extra_body else None,
+    }
+
+
+def build_request(args):
+    """Return (top-level kwargs, extra_body) for chat.completions.create; omits disabled params."""
+    kw = {"temperature": args.temperature}
+    if args.top_p >= 0:
+        kw["top_p"] = args.top_p
+    if args.max_tokens > 0:
+        kw["max_tokens"] = args.max_tokens
+    extra = {}
+    if args.top_k > 0:
+        extra["top_k"] = args.top_k
+    if args.no_think:
+        extra["chat_template_kwargs"] = {"enable_thinking": False}
+    if args.extra_body:
+        extra.update(json.loads(args.extra_body))  # after built-ins so it can override
+    return kw, extra
+
+
+def extract_with_source(extract, content, reasoning, final_only=False, allow_fallback=True):
+    """Return (answer, source) with source in "content" | "reasoning" | None."""
+    ext = extract(content)
+    if ext is not None:
+        return ext, "content"
+    if final_only or not allow_fallback or not reasoning:
+        return None, None
+    ext = extract(reasoning + "\n" + content)
+    return ext, ("reasoning" if ext is not None else None)
+
+
+def add_sampling_args(p):
+    p.add_argument(
+        "--final-only", action="store_true", help="extract answer only from final content (no reasoning fallback)"
+    )
+    p.add_argument(
+        "--extra-body", default=None, help="JSON object merged into request extra_body (overrides built-ins)"
+    )
 
 
 def load_questions(path, shuffle_seed=0):
@@ -55,9 +107,7 @@ def trunc(t, n=2000):
 
 
 async def run_one(client, model, q, args):
-    extra = {"top_k": args.top_k}
-    if args.no_think:
-        extra["chat_template_kwargs"] = {"enable_thinking": False}
+    req, extra = build_request(args)
     last_err = None
     for attempt in range(4):
         t0 = time.time()
@@ -65,9 +115,7 @@ async def run_one(client, model, q, args):
             resp = await client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": q["prompt"]}],
-                temperature=args.temperature,
-                top_p=args.top_p,
-                max_tokens=args.max_tokens,
+                **req,
                 seed=stable_seed(q["record_id"], args.seed_offset),
                 extra_body=extra,
             )
@@ -75,9 +123,7 @@ async def run_one(client, model, q, args):
             msg = ch.message
             content = msg.content or ""
             reasoning = getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None) or ""
-            ext = extract_answer(content)
-            if ext is None:
-                ext = extract_answer((reasoning + "\n" + content) if reasoning else content)
+            ext, src = extract_with_source(extract_answer, content, reasoning, args.final_only)
             u = resp.usage
             rt = None
             det = getattr(u, "completion_tokens_details", None) if u else None
@@ -87,6 +133,7 @@ async def run_one(client, model, q, args):
                 "record_id": q["record_id"],
                 "correct_letter": q["correct_letter"],
                 "extracted": ext,
+                "extracted_from": src,
                 "correct": ext == q["correct_letter"],
                 "finish_reason": ch.finish_reason,
                 "completion_tokens": u.completion_tokens if u else None,
@@ -102,6 +149,7 @@ async def run_one(client, model, q, args):
         "record_id": q["record_id"],
         "correct_letter": q["correct_letter"],
         "extracted": None,
+        "extracted_from": None,
         "correct": False,
         "error": last_err,
         "finish_reason": None,
@@ -112,7 +160,7 @@ async def run_one(client, model, q, args):
     }
 
 
-def summarize(path, wall):
+def summarize(path, wall, config=None):
     recs = {}
     with open(path) as f:
         for line in f:
@@ -132,12 +180,15 @@ def summarize(path, wall):
         "accuracy": (sum(r["correct"] for r in ok) / len(ok)) if ok else None,
         "n_correct": sum(r["correct"] for r in ok),
         "n_no_answer": sum(r["extracted"] is None for r in ok),
+        "n_from_reasoning": sum(r.get("extracted_from") == "reasoning" for r in ok),
         "n_finish_length": sum(r.get("finish_reason") == "length" for r in ok),
         "mean_completion_tokens": statistics.mean(toks) if toks else None,
         "p50_completion_tokens": pct(0.5),
         "p95_completion_tokens": pct(0.95),
         "wall_time_s_this_run": round(wall, 1),
     }
+    if config is not None:
+        s["sampling_config"] = config
     with open(path + ".summary.json", "w") as f:
         json.dump(s, f, indent=2)
     return s
@@ -191,7 +242,7 @@ async def amain(args):
         await asyncio.gather(*(worker(q) for q in todo))
         fout.close()
         await client.close()
-    s = summarize(args.out, time.time() - t0) if os.path.exists(args.out) else {}
+    s = summarize(args.out, time.time() - t0, sampling_config(args)) if os.path.exists(args.out) else {}
     print(json.dumps(s, indent=2))
 
 
@@ -206,13 +257,14 @@ def main():
     p.add_argument("--concurrency", type=int, default=32)
     p.add_argument("--no-think", action="store_true")
     p.add_argument("--temperature", type=float, default=0.6)
-    p.add_argument("--top-p", type=float, default=0.95)
-    p.add_argument("--top-k", type=int, default=20)
-    p.add_argument("--max-tokens", type=int, default=32768)
+    p.add_argument("--top-p", type=float, default=0.95, help="<0: do not send top_p")
+    p.add_argument("--top-k", type=int, default=20, help="<=0: do not send top_k")
+    p.add_argument("--max-tokens", type=int, default=32768, help="0: do not send max_tokens")
     p.add_argument("--seed-offset", type=int, default=0)
     p.add_argument("--shuffle-seed", type=int, default=0)
     p.add_argument("--timeout", type=float, default=7200)
     p.add_argument("--backoff", type=float, default=2.0)
+    add_sampling_args(p)
     asyncio.run(amain(p.parse_args()))
 
 
