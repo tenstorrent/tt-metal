@@ -20,6 +20,7 @@ import os
 
 import pytest
 import torch
+from conftest import skip_for_quasar
 from helpers.device import LLKAssertException
 from helpers.format_config import DataFormat
 from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
@@ -36,6 +37,9 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import BCAST_ROW_IDX, UNPACK_ISSUED
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
+
+# The driver includes llk_unpack_AB.h, which only the Wormhole and Blackhole LLK trees provide.
+pytestmark = skip_for_quasar
 
 FACE_DIM = 16
 FACE_SIZE = FACE_DIM * FACE_DIM
@@ -61,6 +65,10 @@ def row_broadcast_tile(tile_b: torch.Tensor, row_idx: int) -> torch.Tensor:
 
 
 def _make_config(formats, bcast_row_idx):
+    if TestConfig.SPEED_OF_LIGHT:
+        # Speed-of-light folds the runtime parameters into compile-time constants and empties
+        # RuntimeParams; the cross-thread UNPACK_ISSUED gate needs the mutable L1 copy.
+        pytest.skip("requires mutable runtime arguments for the cross-thread gate")
     src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=INPUT_DIMENSIONS,
