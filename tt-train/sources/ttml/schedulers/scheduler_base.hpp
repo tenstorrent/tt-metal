@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include "core/not_null.hpp"
 #include "serialization/serializable.hpp"
 
@@ -13,48 +15,59 @@ class OptimizerBase;
 
 namespace ttml::schedulers {
 
+// LRScheduler holds a base learning rate per optimizer param group and on every step computes
+// the new learning rate for each group.
 class LRSchedulerBase {
 public:
     explicit LRSchedulerBase(optimizers::OptimizerBase *optimizer);
 
     virtual ~LRSchedulerBase() = default;
 
+    // Advances the step count and applies the new LR of every param group.
     virtual void step() = 0;
 
-    // Last LR this scheduler computed (recorded by update_lr).
-    // SequentialScheduler overrides this to delegate to its active child.
-    [[nodiscard]] virtual float get_last_lr() const;
-
-    // Live LR currently held by the optimizer.
-    [[nodiscard]] virtual float get_current_lr() const;
+    // LRs this scheduler last computed, one per param group.
+    [[nodiscard]] virtual std::vector<float> get_last_lrs() const;
 
     [[nodiscard]] core::not_null<optimizers::OptimizerBase *> get_optimizer() const;
 
-    [[nodiscard]] virtual serialization::StateDict get_state_dict() const = 0;
-    virtual void set_state_dict(const serialization::StateDict &dict) = 0;
+    // Returns the step count and the per-group base and last LRs.
+    // Derived schedulers add their own hyperparameters on top.
+    [[nodiscard]] virtual serialization::StateDict get_state_dict() const;
+
+    // Restores the step count, the base LRs and the derived scheduler's own state, then writes the saved last LRs
+    // back to the optimizer. Throws without changing the scheduler if the state dict is rejected.
+    virtual void set_state_dict(const serialization::StateDict &dict);
 
 private:
     core::not_null<optimizers::OptimizerBase *> m_optimizer;
 
 protected:
-    // Write ``lr`` to the optimizer and record it as this scheduler's last LR.
-    // C++ counterpart of the Python ``_SchedulerBase._update_lr`` mixin,
-    // shared by every site that publishes a new LR:
-    //   * constructors — mirror PyTorch's construction-time initial step: each
-    //     scheduler applies its step-0 LR at construction;
-    //   * step() — publish the newly computed LR;
-    //   * set_state_dict() — push the restored live LR back to the optimizer.
-    //     The constructor wrote the construction-time LR, so if the optimizer's
-    //     state was loaded before the scheduler was constructed, the
-    //     checkpoint's live LR was overwritten and the first resumed step
-    //     would otherwise run at the wrong LR.
-    void update_lr(float lr);
+    // Reads and assigns the derived scheduler's own state.
+    virtual void restore_own_state(const serialization::StateDict &dict);
 
-    // Last LR recorded for this scheduler. Initialized to the optimizer's
-    // initial (base) LR, mirroring the Python ``_SchedulerBase``. Derived
-    // classes read it for state dicts; SequentialScheduler::step also writes
-    // it directly because the active child has already written the optimizer.
-    float m_last_lr = 0.F;
+    // Per-group base LRs, taken from the optimizer's initial LRs so that several schedulers on one optimizer
+    // (e.g. a warmup/decay chain) share the same base.
+    std::vector<float> m_base_lrs;
+
+    // Per-group LRs this scheduler last wrote. Initialized to the base LRs.
+    std::vector<float> m_last_lrs;
+    size_t m_last_step = 0;
+};
+
+// Scheduler whose LR for each group is a function of that group's base LR and the step count.
+class ClosedFormLRScheduler : public LRSchedulerBase {
+public:
+    explicit ClosedFormLRScheduler(optimizers::OptimizerBase *optimizer);
+
+    void step() override;
+
+protected:
+    // LR of one param group at m_last_step, given the group's base LR.
+    [[nodiscard]] virtual float compute_lr(float base_lr) const = 0;
+
+    // Sets every group's LR to compute_lr(its base LR) at m_last_step and records them as the last LRs.
+    void apply_lrs();
 };
 
 }  // namespace ttml::schedulers

@@ -394,6 +394,10 @@ int main(int argc, char **argv) {
         multihost_config = parse_multihost_config(YAML::LoadFile(multihost_config_name));
     }
 
+    if (is_pipeline_parallel_enabled(multihost_config)) {
+        optimizer_node["allow_empty_param_groups"] = true;
+    }
+
     // Calculate total number of devices from mesh shape (handles both 1D and 2D meshes)
     uint32_t num_devices = 1;
     for (uint32_t i = 0; i < device_config.mesh_shape.dims(); ++i) {
@@ -744,7 +748,7 @@ int main(int argc, char **argv) {
     } else {
         fmt::print("Optimizer: {}\n", optimizer->get_name());
         // TODO: Replace with print_stats() after #38756 is resolved
-        fmt::print("    Learning rate: {}\n", optimizer->get_lr());
+        fmt::print("    Learning rates: {}\n", optimizer->get_group_lrs());
     }
     auto scheduler = schedule_func(optimizer.get(), effective_max_steps);
 
