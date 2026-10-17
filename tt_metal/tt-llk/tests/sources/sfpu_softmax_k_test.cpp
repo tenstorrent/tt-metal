@@ -18,10 +18,12 @@
 // subtracting the max, and only calls SFPENCC after the exponential, so lanes
 // whose EVEN column holds exactly 0.0 skip both the subtract and the exp and stay
 // 0. Padding therefore has to be exact 0.0, and it predicates the even/odd column
-// PAIR (the odd lane inherits its even partner's condition code). That is why odd
-// k needs `_zero_paired_odd_tail_lane_`: for odd k the tail column k is odd and
-// its even partner k-1 is a valid non-zero lane, so it would otherwise be
-// exponentiated. Valid inputs must be non-zero.
+// PAIR (the odd lane inherits its even partner's condition code). Whatever the
+// exponential leaves in the padding columns is then re-zeroed by SFPU-instance
+// index in `_zero_padding_columns_`: for a 16-bit DEST only the odd tail column of
+// an odd k (its even partner k-1 is a valid non-zero lane), for a 32-bit DEST every
+// column >= k, because the sfpi fp32 exp re-enables all lanes before it stores.
+// Valid inputs must be non-zero.
 //
 // ckernel_sfpu_softmax_k.h self-includes its exp/reduce prerequisites and declares
 // SFPCONFIG_TARGET_LREG11 / SFPCONFIG_MOD_SET_LREG11 itself, so this driver needs no
@@ -31,8 +33,9 @@
 // tt-llk test build has to put that directory on the include path -- see
 // setup_compilation_options in helpers/test_config.py.
 //
-// Both even and odd k are swept. Odd k is what exercises
-// `_zero_paired_odd_tail_lane_` and its 1u << (k - 1) tail mask.
+// Both even and odd k are swept, with both DEST widths. Odd k is what exercises
+// the 16-bit tail-lane mask (1u << (k - 1)); dest_acc=Yes exercises the full
+// by-index clearing of both column blocks.
 
 #include <cstdint>
 

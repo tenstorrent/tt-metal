@@ -29,21 +29,24 @@ the sum runs over all 16 columns of the row and each lane is written back to the
 column it came from, so both the interleaved (even/odd) and half/half readings
 give the same expected tile.
 
-Both even and odd k are swept. Odd k is the interesting half: the tail column k is
-odd and its even partner k-1 is a valid non-zero lane, so the padding lane inherits
-an enabled condition code and would be exponentiated. `_zero_paired_odd_tail_lane_`
-is what clears it, via an SFPCONFIG write targeting LREG11 masked to the single SFPU
-instance holding lane k (1u << (k - 1)). That path is only reached for odd k < 16, so
-without odd k in the sweep it ships untested.
+Both even and odd k are swept. Odd k is the interesting half on a 16-bit DEST: the
+tail column k is odd and its even partner k-1 is a valid non-zero lane, so the padding
+lane inherits an enabled condition code and would be exponentiated.
+`_zero_padding_columns_` is what clears it, via an SFPCONFIG write targeting LREG11
+masked to the single SFPU instance holding lane k (1u << (k - 1)). That path is only
+reached for odd k < 16, so without odd k in the sweep it ships untested.
 
-dest_acc=Yes is swept for k=16 only. The kernel compiles for a 32-bit DEST and the
-full-width case is correct there, but every k < 16 returns a softmax taken over all
-16 lanes instead of k -- measured on Blackhole, e.g. k=2 comes back as
-[0, 1/8] x 8 per row (row still sums to 1, but over 16 live lanes rather than 2).
-The padding predication is what breaks: the condition code comes from the
-even-column value and covers the even/odd column PAIR, which only holds while two
-bf16 datums share one 32-bit DEST word. With a 32-bit DEST each datum owns a word,
-the pair relationship is gone, and the lanes meant to be masked stay enabled.
+dest_acc=Yes is swept for every k as well. The lane<->column pairing does not depend
+on the DEST width (SFPLOAD.md: lane L reads row L/8, column 2*(L%8) for address 0 and
+2*(L%8)+1 for address 2, for Dst16b and Dst32b alike), so the predicate itself is
+sound on a 32-bit DEST. What differs is the exponential: the fp32 path is sfpi code
+whose top-level v_endif re-enables every lane (SFPENCC) before the store, so the
+hand-set condition code does not survive `calculate_exponential`: the even block's
+padding lanes are stored from whatever the lane register held and the odd block is
+exponentiated unpredicated, exp(0) = 1 in every padding lane (measured on Blackhole:
+k=2 came back as [0, 1/8] x 8 per row, a softmax over 9 live lanes).
+`_zero_padding_columns_` re-zeroes the columns >= k by SFPU-instance index after the
+exp, so every k < 16 must pass here.
 Float32 input is skipped with dest_acc=No, as elsewhere in the SFPU suites.
 
 dest_acc also selects the exp implementation -- `_sfpu_exp_21f_bf16_tti_` for No,
@@ -77,7 +80,7 @@ FACE_DIM = 16
 SOFTMAX_ROWS = 4  # one SFPU row band: DEST rows 0-3
 MAX_ROW_BASE = 8  # the caller-supplied maxima live at DEST rows 8-11
 
-# Every supported k. Odd values exercise `_zero_paired_odd_tail_lane_` -- see docstring.
+# Every supported k. Odd values exercise the odd-tail clearing -- see docstring.
 ALL_K = list(range(2, FACE_DIM + 1))
 
 
@@ -115,10 +118,6 @@ def _build_input_tile(k: int, torch_format) -> tuple[torch.Tensor, torch.Tensor]
 def test_sfpu_softmax_k(formats, dest_acc, k):
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
-
-    if dest_acc == DestAccumulation.Yes and k < FACE_DIM:
-        # The padding predication only works on a 16-bit DEST -- see module docstring.
-        pytest.skip("k < 16 with a 32-bit dest exponentiates the padding lanes")
 
     torch.manual_seed(0)
 
@@ -176,7 +175,7 @@ def test_sfpu_softmax_k(formats, dest_acc, k):
     ), f"softmax over k={k} columns does not match golden"
 
     # The padding columns, checked exactly rather than through the 5% tolerance above.
-    # The whole point of odd k is `_zero_paired_odd_tail_lane_`, and a leaked
+    # The whole point of odd k is `_zero_padding_columns_`, and a leaked
     # exp(-m) / sum term is at most ~0.05 whenever the row max is >= ~2.95 -- i.e. the
     # common case for these stimuli -- so the tolerance check above turns detection of
     # a wrong `1u << (k - 1)` mask into a fixed-seed coin flip.
