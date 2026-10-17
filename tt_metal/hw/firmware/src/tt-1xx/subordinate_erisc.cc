@@ -19,6 +19,7 @@
 #include "api/debug/dprint.h"
 #include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
+#include "internal/ethernet/eth_fw_stage.h"
 // clang-format on
 
 // Required defines
@@ -105,6 +106,7 @@ inline __attribute__((always_inline)) void signal_subordinate_erisc_completion()
 int main() {
     configure_csr();
     WAYPOINT("I");
+    set_eth_fw_stage(ETH_FW_STAGE_FW_INIT);
     do_crt1((uint32_t*)INIT_LOCAL_L1_SCRATCH_BASE);
 
     noc_bank_table_init(BANK_TO_NOC_SCRATCH);
@@ -133,6 +135,7 @@ int main() {
     // Cleanup profiler buffer in case we never get the go message
     while (1) {
         WAYPOINT("W");
+        set_eth_fw_stage(ETH_FW_STAGE_FW_LOOP);
         while (*subordinate_erisc_run != RUN_SYNC_MSG_GO) {
             invalidate_l1_cache();
         }
@@ -148,6 +151,7 @@ int main() {
             my_logical_y_ - mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.sub_device_origin_y;
 
         WAYPOINT("R");
+        set_eth_fw_stage(ETH_FW_STAGE_KERNEL);
         uint32_t kernel_lma =
             kernel_config_base + mailboxes->launch[mailboxes->launch_msg_rd_ptr]
                                      .kernel_config.kernel_text_offset[internal_::get_hw_thread_idx()];
@@ -158,6 +162,7 @@ int main() {
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
 #endif
+        set_eth_fw_stage(ETH_FW_STAGE_FW_LOOP);
         WAYPOINT("D");
         DEVICE_PRINT_KERNEL_FINISHED();
 
