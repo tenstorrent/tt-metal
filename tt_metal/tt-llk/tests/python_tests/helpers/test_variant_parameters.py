@@ -680,14 +680,14 @@ class DST_WRITE_ADDR_OFFSET(TemplateParameter):
 class HAL_CFG_THREAD_WRITE_PROBE(TemplateParameter):
     """Compile-time knobs for ``hal_cfg_thread_write_contract_test.cpp``.
 
-    ``field``     the thread-CFG field the probe writes, as the C++ expression naming
+    ``probe_field`` the thread-CFG field the probe writes, as the C++ expression naming
                   it (``hal::cfg::CfgStateId::StateID`` or an ordinary register).
     ``spelling``  the public ``hal::cfg::write`` overload the probe goes through:
                   ``constant`` (compile-time value), ``runtime`` (runtime value),
                   ``prepacked`` (complete thread word) or ``grouped`` (``set`` batch).
     """
 
-    field: str
+    probe_field: str
     spelling: str
 
     SPELLINGS = ("constant", "runtime", "prepacked", "grouped")
@@ -699,7 +699,7 @@ class HAL_CFG_THREAD_WRITE_PROBE(TemplateParameter):
             )
         return "\n".join(
             [
-                f"#define HAL_CFG_PROBE_FIELD {self.field}",
+                f"#define HAL_CFG_PROBE_FIELD {self.probe_field}",
                 f"#define HAL_CFG_PROBE_{self.spelling.upper()}",
             ]
         )
