@@ -21,6 +21,37 @@ constexpr std::uint32_t MATH_DONE    = 0x46504110; // 'FPA' | 0x10
 // PACK's word: this tag in bits 31:8, its pack source format (DataFormat underlying value) in bits 7:0.
 constexpr std::uint32_t PACK_READY_TAG   = 0x46504200; // 'FPB' << 8
 constexpr std::uint32_t PACK_FORMAT_MASK = 0xFF;
+
+// PCK_DEST_RD_CTRL Read_32b_data / Read_int8 for a dest-acc mode and a pack source format. A 32-bit integer
+// source keeps the 32-bit Dest read whatever the mode: Int32 / UInt32 datums only ever exist in a 32-bit
+// Dest and the packer cannot widen 16-bit ones. A Float32 source follows the mode: inside a disabled
+// section the Dest holds 16-bit datums and the packer widens them, as fast-tilize packs a Float32 output
+// from a 16-bit Dest. An 8-bit source takes the 8-bit integer read only in a 16-bit Dest.
+constexpr bool read_32b_data(bool enable, std::uint32_t pack_src_format)
+{
+    return enable || pack_src_format == to_underlying(DataFormat::Int32) || pack_src_format == to_underlying(DataFormat::UInt32);
+}
+
+constexpr bool read_int8(bool enable, std::uint32_t pack_src_format)
+{
+    return !read_32b_data(enable, pack_src_format) &&
+           (pack_src_format == to_underlying(DataFormat::Int8) || pack_src_format == to_underlying(DataFormat::UInt8));
+}
+
+// Writes both bits in one RMW. Used by the MATH arm below and by the pack thread when it reprograms the
+// packer for an overridden mode.
+inline void write_dest_rd_ctrl(bool enable, std::uint32_t pack_src_format)
+{
+    static_assert(
+        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Read_int8_ADDR32 && PCK_DEST_RD_CTRL_Read_int8_SHAMT > PCK_DEST_RD_CTRL_Read_32b_data_SHAMT,
+        "PCK_DEST_RD_CTRL_Read_32b_data and Read_int8 must share ADDR32 for a combined RMW");
+    const std::uint32_t value = (read_32b_data(enable, pack_src_format) ? 1u : 0u) |
+                                (read_int8(enable, pack_src_format) ? (1u << (PCK_DEST_RD_CTRL_Read_int8_SHAMT - PCK_DEST_RD_CTRL_Read_32b_data_SHAMT)) : 0u);
+    cfg_reg_rmw_tensix<
+        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32,
+        PCK_DEST_RD_CTRL_Read_32b_data_SHAMT,
+        PCK_DEST_RD_CTRL_Read_32b_data_MASK | PCK_DEST_RD_CTRL_Read_int8_MASK>(value);
+}
 } // namespace fp32_dest_acc
 
 /**
@@ -29,10 +60,12 @@ constexpr std::uint32_t PACK_FORMAT_MASK = 0xFF;
  * Dest-acc CFG is MATH-owned. tensix_sync drains each thread's Tensix FIFO (including FPU / SFPU /
  * packer); the mailbox then holds RISC so no new work is issued until MATH has written dest-acc:
  *   1. UNPACK/PACK tensix_sync, signal MATH (PACK's word carries its pack source format), and wait.
- *   2. MATH tensix_syncs, waits for both, programs ALU_ACC_CTRL and PCK_DEST_RD_CTRL (derived from the
- *      new mode and PACK's source format the way configure_pack derives it), drains until
- *      those writes have retired, and only then releases UNPACK/PACK. The release is a RISC store,
- *      so the drain -- not a stall mask -- is what orders it behind the writes.
+ *   2. MATH tensix_syncs, waits for both, programs ALU_ACC_CTRL and the PCK_DEST_RD_CTRL Read_32b_data /
+ *      Read_int8 bits (from the new mode and PACK's source format), drains until those writes have
+ *      retired, and only then releases UNPACK/PACK. The release is a RISC store, so the drain -- not a
+ *      stall mask -- is what orders it behind the writes. The other packer fields the mode decides
+ *      (exponent threshold, Round_10b_mant) stay with the pack thread, which reprograms them after it
+ *      is released.
  *   3. UNPACK/PACK need no stall of their own: the drain in step 2 returns only once the writes
  *      have landed, so they are in effect before either thread is released.
  *
@@ -53,25 +86,9 @@ inline void _llk_set_fp32_dest_acc_(bool enable)
     LLK_ASSERT(unpack_ready == fp32_dest_acc::UNPACK_READY, "Unexpected dest-acc message from unpack thread.");
     LLK_ASSERT((pack_word & ~fp32_dest_acc::PACK_FORMAT_MASK) == fp32_dest_acc::PACK_READY_TAG, "Unexpected dest-acc message from pack thread.");
 
-    // The packer's Dest-read control, derived as configure_pack derives it: a 32-bit pack source keeps the
-    // 32-bit Dest read whatever the mode, an 8-bit source takes the 8-bit integer read only in a 16-bit Dest.
-    const std::uint32_t pack_src_format = pack_word & fp32_dest_acc::PACK_FORMAT_MASK;
-    const bool is_32b_format            = pack_src_format == to_underlying(DataFormat::Int32) || pack_src_format == to_underlying(DataFormat::UInt32) ||
-                               pack_src_format == to_underlying(DataFormat::Float32);
-    const bool is_int8_format = pack_src_format == to_underlying(DataFormat::Int8) || pack_src_format == to_underlying(DataFormat::UInt8);
-    const bool read_32b_data  = enable || is_32b_format;
-    const bool read_int8      = !read_32b_data && is_int8_format;
-
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(enable);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(enable);
-    static_assert(
-        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Read_int8_ADDR32 && PCK_DEST_RD_CTRL_Read_int8_SHAMT > PCK_DEST_RD_CTRL_Read_32b_data_SHAMT,
-        "PCK_DEST_RD_CTRL_Read_32b_data and Read_int8 must share ADDR32 for a combined RMW");
-    cfg_reg_rmw_tensix<
-        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32,
-        PCK_DEST_RD_CTRL_Read_32b_data_SHAMT,
-        PCK_DEST_RD_CTRL_Read_32b_data_MASK | PCK_DEST_RD_CTRL_Read_int8_MASK>(
-        (read_32b_data ? 1u : 0u) | (read_int8 ? (1u << (PCK_DEST_RD_CTRL_Read_int8_SHAMT - PCK_DEST_RD_CTRL_Read_32b_data_SHAMT)) : 0u));
+    fp32_dest_acc::write_dest_rd_ctrl(enable, pack_word & fp32_dest_acc::PACK_FORMAT_MASK);
 
     // The releases below are RISC stores, which the Wait Gate does not gate. Drain so the
     // config writes have retired before either thread is let go.
@@ -89,7 +106,7 @@ inline void _llk_set_fp32_dest_acc_(bool enable)
  *
  * @tparam thread_id: TRISC thread compiling this specialization, values = <PackThreadId>
  * @param pack_src_format: Pack source (Dest-side) data format of the output the packer is configured for.
- *        MATH derives PCK_DEST_RD_CTRL from it together with the new mode.
+ *        MATH derives PCK_DEST_RD_CTRL Read_32b_data / Read_int8 from it together with the new mode.
  */
 template <ThreadId thread_id>
 inline void _llk_set_fp32_dest_acc_(DataFormat pack_src_format)

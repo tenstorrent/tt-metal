@@ -19,45 +19,60 @@
  *************************************************************************/
 
 // Dest-acc mode a mid-kernel toggle left in effect, for the packer's data-format reconfig. Until the
-// first llk_pack_wait_fp32_dest_acc the reconfig uses the flag it is instantiated with; from then on it
-// uses the mode MATH programmed, sampled in llk_pack_wait_fp32_dest_acc once the handshake has ordered
-// this thread behind MATH's write. (Sampling the live bit at every reconfig instead would race MATH's
-// startup write of ALU_ACC_CTRL_Fp32_enabled.)
+// first llk_pack_wait_fp32_dest_acc the reconfig programs the flag it is instantiated with; from then on
+// it reprograms the mode-dependent fields for the mode the toggle set. llk_pack_hw_configure clears the
+// override: a compute_kernel_hw_startup returns the packer to the kernel-wide mode. (The mode is passed
+// in, not sampled from ALU_ACC_CTRL_Fp32_enabled: a sample after the handshake could race MATH's next
+// write of that bit, e.g. a fast-tilize init, and a sample at every reconfig could race MATH's startup
+// write.)
 inline bool pack_fp32_dest_acc_overridden = false;
 inline bool pack_fp32_dest_acc_live = false;
 
 /**
- * Pack-thread half of a mid-kernel FP32 dest-acc reconfiguration.
+ * Program the packer fields that the dest-acc mode decides for an output, the way configure_pack<mode>
+ * programs them: PCK_DEST_RD_CTRL Read_32b_data / Read_int8 (the toggle's derivation), the exponent
+ * threshold (fp32 Dest -> BFP-A underflow workaround) and Round_10b_mant (fp32 Dest -> Float16 source).
  *
- * Drains the packer FIFO, hands MATH the pack source format of `ocb` (PCK_DEST_RD_CTRL is derived from
- * it and the new mode as the packer's own configure derives it), waits for MATH to program dest-acc CFG,
- * then records the mode MATH programmed so that later llk_pack_reconfig_data_format calls keep
- * PCK_DEST_RD_CTRL in step with it, and reprograms the packer fields that the mode decides for `ocb`
- * (exponent threshold, 10-bit mantissa rounding) the way configure_pack<mode> would.
- *
- * @param ocb Output circular buffer the packer is configured for.
- * @note Must be called together with llk_unpack_wait_fp32_dest_acc and llk_math_set_fp32_dest_acc.
+ * @param enable    The dest-acc mode in effect: true for a 32-bit Dest, false for a 16-bit one.
+ * @param output_id Output operand index the packer is configured for.
  */
-inline void llk_pack_wait_fp32_dest_acc(const std::uint32_t ocb) {
-    SAN_HOOK(unsupported());
-    const std::uint32_t output_id = get_output_id(ocb);
-    _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(static_cast<DataFormat>(pack_src_format[output_id]));
-    pack_fp32_dest_acc_live = (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK) != 0;
-    pack_fp32_dest_acc_overridden = true;
-
-    // The packer fields the mode decides for this output, as configure_pack<mode> programs them: the
-    // exponent threshold (fp32 Dest -> BFP-A underflow workaround) and the 10-bit mantissa rounding
-    // (fp32 Dest -> Float16 source). MATH wrote the Dest read width; these stay with the pack thread.
+inline void llk_pack_apply_fp32_dest_acc_override(const bool enable, const std::uint32_t output_id) {
     const std::uint32_t pack_src = pack_src_format[output_id];
     const std::uint32_t pack_dst = pack_dst_format[output_id];
-    if (pack_fp32_dest_acc_live) {
+    fp32_dest_acc::write_dest_rd_ctrl(enable, pack_src);
+    if (enable) {
         ckernel::packer::reconfigure_exp_threshold<true>(masked_data_format(pack_dst));
     } else {
         ckernel::packer::reconfigure_exp_threshold<false>(masked_data_format(pack_dst));
     }
-    const bool round_10b_mant = (pack_fp32_dest_acc_live && pack_src == to_underlying(DataFormat::Float16)) ||
+    const bool round_10b_mant = (enable && pack_src == to_underlying(DataFormat::Float16)) ||
                                 (!IS_A_FORMAT(pack_src) && (pack_dst & 0x1F) == to_underlying(DataFormat::Fp8_e4m3));
     cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Round_10b_mant_RMW>(round_10b_mant);
+}
+
+/**
+ * Pack-thread half of a mid-kernel FP32 dest-acc reconfiguration.
+ *
+ * Drains the packer FIFO, hands MATH the pack source format of `ocb` (MATH derives PCK_DEST_RD_CTRL
+ * Read_32b_data / Read_int8 from it and the new mode), waits for MATH to program dest-acc CFG, then
+ * records the mode so that later llk_pack_reconfig_data_format calls keep the packer in step with it,
+ * and programs the packer fields that the mode decides for `ocb` (llk_pack_apply_fp32_dest_acc_override).
+ *
+ * @param ocb    Output circular buffer the packer is configured for (asserted against the packer config).
+ * @param enable The mode MATH programs: true for a 32-bit Dest, false for a 16-bit one.
+ * @note Must be called together with llk_unpack_wait_fp32_dest_acc and llk_math_set_fp32_dest_acc.
+ */
+inline void llk_pack_wait_fp32_dest_acc(const std::uint32_t ocb, const bool enable) {
+    SAN_HOOK(unsupported());
+    const std::uint32_t output_id = get_output_id(ocb);
+    const std::uint32_t pack_src = pack_src_format[output_id];
+    LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src, pack_dst_format[output_id]));
+    _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(static_cast<DataFormat>(pack_src));
+    pack_fp32_dest_acc_live = enable;
+    pack_fp32_dest_acc_overridden = true;
+    // MATH has written Read_32b_data / Read_int8 to the same values; the override is applied whole so that
+    // this is the one place the pack thread programs it.
+    llk_pack_apply_fp32_dest_acc_override(enable, output_id);
 }
 
 /**
@@ -72,6 +87,8 @@ inline void llk_pack_wait_fp32_dest_acc(const std::uint32_t ocb) {
  */
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_hw_configure(std::uint32_t pack_output) {
+    // A full configure programs the kernel-wide mode; a toggle's override ends here.
+    pack_fp32_dest_acc_overridden = false;
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
@@ -187,9 +204,10 @@ inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output)
  * Reconfigure the packer for a new output operand's data format.
  *
  * Face geometry (face_r_dim, num_faces), tile column dimension and tile size are derived from
- * the new output's CB metadata. The Dest read width follows the dest-acc mode in effect: the
- * kernel-wide flag, or the mode a mid-kernel enable_fp32_dest_acc / disable_fp32_dest_acc /
- * set_fp32_dest_acc left (pack_fp32_dest_acc_live).
+ * the new output's CB metadata. The mode-dependent fields follow the dest-acc mode in
+ * effect: the kernel-wide flag, or the mode a mid-kernel enable_fp32_dest_acc / disable_fp32_dest_acc /
+ * set_fp32_dest_acc left (pack_fp32_dest_acc_live), reprogrammed after the reconfig so that the
+ * kernel-wide instantiation of the reconfig is the only one in the kernel.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register (kernel-wide mode).
  * @param  new_output          New output circular buffer / operand index to configure for.
@@ -209,22 +227,16 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
         StateVal<Operand<Exu::Pack>::PartialFace>(false),
         StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
-    if (fp32_dest_acc_en) {
-        _llk_pack_reconfig_data_format_<true>(
-            pack_src_format[output_id],
-            pack_dst_format[output_id],
-            get_local_cb_interface(output_id).fifo_page_size,
-            tile_c_dim,
-            num_faces,
-            false /* partial_face */);
-    } else {
-        _llk_pack_reconfig_data_format_<false>(
-            pack_src_format[output_id],
-            pack_dst_format[output_id],
-            get_local_cb_interface(output_id).fifo_page_size,
-            tile_c_dim,
-            num_faces,
-            false /* partial_face */);
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        get_local_cb_interface(output_id).fifo_page_size,
+        tile_c_dim,
+        num_faces,
+        false /* partial_face */);
+    if (fp32_dest_acc_en != is_fp32_dest_acc_en) {
+        // A toggle moved the mode away from the kernel-wide flag: reprogram the fields the mode decides.
+        llk_pack_apply_fp32_dest_acc_override(fp32_dest_acc_en, output_id);
     }
 }
 
@@ -232,7 +244,8 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
  * Conditionally reconfigure the packer when switching output operands: only reprograms the data
  * format when the new output's destination format differs from the old one and neither is Invalid.
  *
- * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
+ * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register (kernel-wide mode;
+ *                             after a mid-kernel toggle the one-argument overload uses the toggled mode).
  * @param  old_output          Currently configured output operand index.
  * @param  new_output          New output operand index to switch to.
  */

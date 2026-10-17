@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Regression test for the mid-kernel FP32 dest-acc handshake (`_llk_set_fp32_dest_acc_`): when it
-// returns on UNPACK and PACK, the dest-acc config MATH just programmed must already be in effect.
+// returns on UNPACK and PACK, the dest-acc config MATH just programmed must already be in effect, and
+// the PCK_DEST_RD_CTRL Read_32b_data / Read_int8 bits must be the ones MATH derives from the mode and
+// the pack source format PACK reported (cycled over Int8, UInt8, Int32, Float16_b).
 //
 // Built with LLK_ASSERT compiled out, as tt-metal builds kernels by default, so the handshake runs
 // with its mailbox values unchecked, exactly as it does in production. The harness enables asserts
@@ -28,21 +30,37 @@ namespace
 {
 constexpr std::uint32_t CYCLES = 256;
 
-inline bool dest_acc_field_set(volatile std::uint32_t tt_reg_ptr* cfg)
+// Pack source formats PACK reports, one per handshake pair, so that every Read_32b_data / Read_int8
+// outcome of the MATH arm's derivation is read back: Int8 / UInt8 take the 8-bit integer read in a 16-bit
+// Dest, Int32 keeps the 32-bit read in both modes, Float16_b follows the mode.
+constexpr DataFormat PACK_FORMATS[]      = {DataFormat::Int8, DataFormat::UInt8, DataFormat::Int32, DataFormat::Float16_b};
+constexpr std::uint32_t NUM_PACK_FORMATS = sizeof(PACK_FORMATS) / sizeof(PACK_FORMATS[0]);
+
+// PCK_DEST_RD_CTRL Read_32b_data / Read_int8 the MATH arm must have programmed for `enable` and `format`.
+inline bool expected_read_32b(bool enable, DataFormat format)
 {
-    return (cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] & PCK_DEST_RD_CTRL_Read_32b_data_MASK) != 0;
+    return enable || format == DataFormat::Int32;
 }
 
-// Runs the released thread's side of every enable/disable cycle and counts the calls after which
-// the field already holds the value MATH programmed.
-// PACK reports a 16-bit pack source, so PCK_DEST_RD_CTRL_Read_32b_data follows `enable` and the
-// released threads can read the mode back from it.
+inline bool expected_read_int8(bool enable, DataFormat format)
+{
+    return !expected_read_32b(enable, format) && (format == DataFormat::Int8 || format == DataFormat::UInt8);
+}
+
+inline bool dest_rd_ctrl_matches(volatile std::uint32_t tt_reg_ptr* cfg, bool enable, DataFormat format)
+{
+    const std::uint32_t word = cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32];
+    const bool read_32b      = (word & PCK_DEST_RD_CTRL_Read_32b_data_MASK) != 0;
+    const bool read_int8     = (word & PCK_DEST_RD_CTRL_Read_int8_MASK) != 0;
+    return read_32b == expected_read_32b(enable, format) && read_int8 == expected_read_int8(enable, format);
+}
+
 template <ThreadId thread_id>
-inline void handshake()
+inline void handshake(DataFormat pack_format)
 {
     if constexpr (thread_id == ThreadId::PackThreadId)
     {
-        _llk_set_fp32_dest_acc_<thread_id>(DataFormat::Float16_b);
+        _llk_set_fp32_dest_acc_<thread_id>(pack_format);
     }
     else
     {
@@ -50,16 +68,19 @@ inline void handshake()
     }
 }
 
+// Runs the released thread's side of every enable/disable cycle and counts the calls after which
+// both Dest-read bits already hold what MATH programmed for that mode and PACK's reported format.
 template <ThreadId thread_id>
 inline void released_side(std::uint32_t& enabled_seen, std::uint32_t& disabled_seen)
 {
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
     for (std::uint32_t i = 0; i < CYCLES; i++)
     {
-        handshake<thread_id>();
-        enabled_seen += dest_acc_field_set(cfg) ? 1 : 0;
-        handshake<thread_id>();
-        disabled_seen += dest_acc_field_set(cfg) ? 0 : 1;
+        const DataFormat pack_format = PACK_FORMATS[i % NUM_PACK_FORMATS];
+        handshake<thread_id>(pack_format);
+        enabled_seen += dest_rd_ctrl_matches(cfg, true /*enable*/, pack_format) ? 1 : 0;
+        handshake<thread_id>(pack_format);
+        disabled_seen += dest_rd_ctrl_matches(cfg, false /*enable*/, pack_format) ? 1 : 0;
     }
 }
 } // namespace

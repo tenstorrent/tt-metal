@@ -4,11 +4,12 @@
 
 // Packer data-format reconfig inside a mid-kernel dest-acc override.
 //
-// Built with fp32_dest_acc_en = true. The kernel switches Dest to 16-bit mode with
-// set_fp32_dest_acc<false>(), copies each tile into Dest, reconfigures the packer from the
-// Float16_b output configured at startup (never written) to the Bfp8_b output, and packs.
-// The reconfig must keep the packer's Dest read width at what the override programmed:
-// re-deriving it from the kernel-wide flag makes the packer read 32-bit rows out of a 16-bit Dest.
+// The kernel switches Dest to the mode opposite to the one it was built with
+// (set_fp32_dest_acc<!DST_ACCUM_MODE>()), copies each tile into Dest with that mode, reconfigures the
+// packer from the Float16_b output configured at startup (never written) to the Bfp8_b output, and
+// packs. The reconfig must keep the packer's Dest read width at what the override programmed:
+// re-deriving it from the kernel-wide flag makes the packer read 32-bit rows out of a 16-bit Dest
+// (fp32 build) or 16-bit halves of 32-bit rows (16-bit build).
 
 #include <cstdint>
 
@@ -28,18 +29,21 @@ void kernel_main() {
     CircularBuffer in(cb_in);
     CircularBuffer out(cb_out);
 
-    compute_kernel_hw_startup(cb_in, cb_startup);
-    copy_init(cb_in);
+    // The Dest mode of the rest of the kernel: the opposite of the one it was built with.
+    constexpr bool section_fp32 = !DST_ACCUM_MODE;
 
-    // 16-bit Dest for the rest of the kernel, although it was built for a 32-bit one.
-    set_fp32_dest_acc<false>(cb_startup);
+    compute_kernel_hw_startup(cb_in, cb_startup);
+    // Explicit-mode APIs take the overridden mode.
+    copy_init<section_fp32>(cb_in);
+
+    set_fp32_dest_acc<section_fp32>(cb_startup);
 
     for (uint32_t t = 0; t < num_tiles; ++t) {
         in.wait_front(1);
         out.reserve_back(1);
 
         tile_regs_acquire();
-        copy_tile(cb_in, 0, 0);
+        copy_tile<section_fp32>(cb_in, 0, 0);
         tile_regs_commit();
 
         tile_regs_wait();
@@ -52,5 +56,5 @@ void kernel_main() {
         out.push_back(1);
     }
 
-    restore_fp32_dest_acc<false>(cb_out);
+    restore_fp32_dest_acc<section_fp32>(cb_out);
 }

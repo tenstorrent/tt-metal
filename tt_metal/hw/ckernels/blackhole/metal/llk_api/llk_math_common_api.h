@@ -37,10 +37,10 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
 /**
  * Math-thread half of a mid-kernel FP32 dest-acc reconfiguration.
  *
- * Programs ALU_ACC_CTRL and PCK_DEST_RD_CTRL after Unpack and Pack have drained. PCK_DEST_RD_CTRL is
- * derived from `enable` and the pack source format Pack reports (llk_pack_wait_fp32_dest_acc), as the
- * packer's own configure derives it, so a 32-bit output keeps its 32-bit Dest read when dest-acc is
- * disabled.
+ * Programs ALU_ACC_CTRL and the PCK_DEST_RD_CTRL Read_32b_data / Read_int8 bits after Unpack and Pack
+ * have drained. The bits come from `enable` and the pack source format Pack reports
+ * (llk_pack_wait_fp32_dest_acc): an Int32 / UInt32 output keeps its 32-bit Dest read when dest-acc is
+ * disabled. The pack thread reprograms the other mode-dependent packer fields itself.
  *
  * @param enable True to enable FP32 dest accumulation, false to disable.
  * @note Must be called together with llk_unpack_wait_fp32_dest_acc and llk_pack_wait_fp32_dest_acc.

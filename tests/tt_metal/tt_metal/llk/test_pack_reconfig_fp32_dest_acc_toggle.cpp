@@ -2,13 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Packer state across a mid-kernel dest-acc override, in a kernel built with fp32_dest_acc_en = true.
+// Packer state across a mid-kernel dest-acc override.
 //
-// TensixPackReconfigInsideFp32DestAccOverride: the kernel switches Dest to 16-bit mode with
-// set_fp32_dest_acc<false>(), copies a tile into Dest, reconfigures the packer from the Float16_b
-// output configured at startup to the Bfp8_b output, and packs. The reconfig must leave the packer's
-// Dest read width at what the override programmed; re-deriving it from the kernel-wide flag makes
-// the packer read 32-bit rows out of a 16-bit Dest and the tile comes out scrambled. Stimuli are whole
+// TensixPackReconfigInsideFp32DestAccOverride: the kernel switches Dest to the mode opposite to the one
+// it was built with (set_fp32_dest_acc<!DST_ACCUM_MODE>()), copies a tile into Dest, reconfigures the
+// packer from the Float16_b output configured at startup to the Bfp8_b output, and packs. The reconfig
+// must leave the packer's Dest read width at what the override programmed; re-deriving it from the
+// kernel-wide flag makes the packer read 32-bit rows out of a 16-bit Dest (fp32 build) or 16-bit halves
+// of 32-bit rows (16-bit build) and the tile comes out scrambled. Both builds are run. Stimuli are whole
 // numbers in [0, 127], which Float16_b and Bfp8_b both represent exactly, so the decoded output is
 // compared with the input datum for datum.
 //
@@ -57,11 +58,12 @@ static constexpr const char* kCfgDumpKernel =
 // smallest EXP_B a 5-bit exponent can hold (EXP_MIN_A = -14 -> 127 - 14).
 constexpr std::uint32_t kBfpAExpThreshold = 113;
 
-// c_0 (in_fmt) -> compute (fp32_dest_acc_en) -> c_16 (out_fmt). c_17 (startup_fmt) only configures the
-// packer at startup.
+// c_0 (in_fmt) -> compute (built with fp32_dest_acc_en) -> c_16 (out_fmt). c_17 (startup_fmt) only
+// configures the packer at startup.
 static vector<std::uint32_t> run_fp32_dest_acc_kernel(
     distributed::MeshDevice& mesh_device,
     const char* compute_kernel,
+    bool fp32_dest_acc_en,
     tt::DataFormat in_fmt,
     tt::DataFormat startup_fmt,
     tt::DataFormat out_fmt,
@@ -107,7 +109,11 @@ static vector<std::uint32_t> run_fp32_dest_acc_kernel(
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    CreateKernel(program, compute_kernel, core, ComputeConfig{.fp32_dest_acc_en = true, .compile_args = {kNumTiles}});
+    CreateKernel(
+        program,
+        compute_kernel,
+        core,
+        ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = {kNumTiles}});
 
     auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, /*blocking=*/true);
@@ -136,31 +142,37 @@ TEST_F(LLKMeshDeviceFixture, TensixPackReconfigInsideFp32DestAccOverride) {
     }
     const vector<std::uint32_t> src_vec = pack_bfloat16_vec_into_uint32_vec(input);
 
-    for (auto& device : this->devices_) {
-        const vector<std::uint32_t> result = run_fp32_dest_acc_kernel(
-            *device,
-            kReconfigKernel,
-            tt::DataFormat::Float16_b,
-            tt::DataFormat::Float16_b,
-            tt::DataFormat::Bfp8_b,
-            src_vec);
-        const vector<float> output = unpack_bfp8_tiles_into_float_vec(
-            ttsl::make_const_span(result), /*row_major_output=*/false, /*is_exp_a=*/false);
-        ASSERT_EQ(output.size(), input.size());
+    // fp32 build with a 16-bit section (the <false> reconfig arm), then a 16-bit build with a 32-bit
+    // section (the <true> arm).
+    for (bool fp32_dest_acc_en : {true, false}) {
+        for (auto& device : this->devices_) {
+            const vector<std::uint32_t> result = run_fp32_dest_acc_kernel(
+                *device,
+                kReconfigKernel,
+                fp32_dest_acc_en,
+                tt::DataFormat::Float16_b,
+                tt::DataFormat::Float16_b,
+                tt::DataFormat::Bfp8_b,
+                src_vec);
+            const vector<float> output = unpack_bfp8_tiles_into_float_vec(
+                ttsl::make_const_span(result), /*row_major_output=*/false, /*is_exp_a=*/false);
+            ASSERT_EQ(output.size(), input.size());
 
-        std::uint32_t mismatches = 0;
-        for (std::size_t i = 0; i < input.size(); ++i) {
-            const float expected = static_cast<float>(input[i]);
-            if (output[i] != expected) {
-                if (mismatches < 8) {
-                    log_error(tt::LogTest, "datum {}: expected {} got {}", i, expected, output[i]);
+            std::uint32_t mismatches = 0;
+            for (std::size_t i = 0; i < input.size(); ++i) {
+                const float expected = static_cast<float>(input[i]);
+                if (output[i] != expected) {
+                    if (mismatches < 8) {
+                        log_error(tt::LogTest, "datum {}: expected {} got {}", i, expected, output[i]);
+                    }
+                    ++mismatches;
                 }
-                ++mismatches;
             }
+            EXPECT_EQ(mismatches, 0u) << "fp32_dest_acc_en=" << fp32_dest_acc_en
+                                      << ": Bfp8_b pack after pack_reconfig_data_format inside "
+                                         "set_fp32_dest_acc<!DST_ACCUM_MODE>() differs from the input in "
+                                      << mismatches << " of " << input.size() << " datums";
         }
-        EXPECT_EQ(mismatches, 0u) << "Bfp8_b pack after pack_reconfig_data_format inside set_fp32_dest_acc<false>() "
-                                     "differs from the input in "
-                                  << mismatches << " of " << input.size() << " datums";
     }
 }
 
@@ -174,7 +186,13 @@ TEST_F(LLKMeshDeviceFixture, TensixPackCfgAfterFp32DestAccRestore) {
     const vector<std::uint32_t> src_vec(kNumTiles * kDatumsPerTile, 0u);
     for (auto& device : this->devices_) {
         const vector<std::uint32_t> words = run_fp32_dest_acc_kernel(
-            *device, kCfgDumpKernel, tt::DataFormat::Float32, tt::DataFormat::Float16, tt::DataFormat::Bfp8, src_vec);
+            *device,
+            kCfgDumpKernel,
+            /*fp32_dest_acc_en=*/true,
+            tt::DataFormat::Float32,
+            tt::DataFormat::Float16,
+            tt::DataFormat::Bfp8,
+            src_vec);
         ASSERT_GE(words.size(), 4u);
         log_info(
             tt::LogTest,

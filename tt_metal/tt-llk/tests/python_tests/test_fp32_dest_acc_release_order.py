@@ -4,8 +4,9 @@
 """Regression test for the mid-kernel FP32 dest-acc handshake (``_llk_set_fp32_dest_acc_``).
 
 When the handshake returns on UNPACK and PACK, the dest-acc config MATH just programmed must
-already be in effect. Each released thread reads the field back after every enable and disable,
-over many cycles.
+already be in effect. Each released thread reads PCK_DEST_RD_CTRL back after every enable and
+disable, over many cycles, and checks Read_32b_data / Read_int8 against what MATH derives from the
+mode and the pack source format PACK reported (cycled over Int8, UInt8, Int32, Float16_b).
 
 The kernel is built with LLK_ASSERT compiled out, as tt-metal builds kernels by default, so the
 handshake runs with the mailbox values unchecked, exactly as it does in production.
@@ -65,6 +66,7 @@ def test_fp32_dest_acc_release_order():
     }
     stale = {name: count for name, count in seen.items() if count != CYCLES}
     assert not stale, (
-        "_llk_set_fp32_dest_acc_ returned before MATH's dest-acc config was in effect: "
+        "_llk_set_fp32_dest_acc_ returned before MATH's dest-acc config was in effect, or "
+        "PCK_DEST_RD_CTRL Read_32b_data / Read_int8 differ from the derivation for the reported format: "
         + ", ".join(f"{name} {count}/{CYCLES}" for name, count in stale.items())
     )

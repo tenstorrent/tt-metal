@@ -122,14 +122,19 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
  *
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
  * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data and
- * Read_int8, derived from the new mode and the pack source format of `ocb`
- * the way the packer's own configure derives them) for 32-bit destination
- * reads. UNPACK/PACK tensix_sync then notify MATH and wait; MATH writes
- * dest-acc CFG, drains until those writes have retired, and only then
- * releases them -- the release is a RISC store, so the drain is what orders
- * it behind the writes. Safe to call mid-kernel without re-running
- * compute_kernel_hw_startup; a later pack_reconfig_data_format keeps the
- * packer in the mode this call set.
+ * Read_int8 from the new mode and the pack source format of `ocb`; the
+ * exponent threshold and Round_10b_mant the way the packer's own configure
+ * programs them) for 32-bit destination reads. UNPACK/PACK tensix_sync then
+ * notify MATH and wait; MATH writes dest-acc CFG, drains until those writes
+ * have retired, and only then releases them -- the release is a RISC store,
+ * so the drain is what orders it behind the writes. Safe to call mid-kernel
+ * without re-running compute_kernel_hw_startup; a later CB-id
+ * pack_reconfig_data_format keeps the packer in the mode this call set.
+ * Explicit-mode APIs (the id-free experimental pack_reconfig_data_format,
+ * 2.0 pack_untilize, fast_tilize_uninit, copy_tile<is_fp32_dest_acc_en>, ...)
+ * take the mode from their template argument and must be passed the
+ * overridden mode. A compute_kernel_hw_startup inside the override returns
+ * the packer to the kernel-wide mode.
  *
  * All three TRISC threads must call this together. TRISC mailboxes must not
  * be in use.
@@ -150,7 +155,7 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
 ALWI void enable_fp32_dest_acc(uint32_t ocb) {
     UNPACK((llk_unpack_wait_fp32_dest_acc()));
     MATH((llk_math_set_fp32_dest_acc(true)));
-    PACK((llk_pack_wait_fp32_dest_acc(ocb)));
+    PACK((llk_pack_wait_fp32_dest_acc(ocb, true)));
 }
 #endif
 
@@ -161,14 +166,21 @@ ALWI void enable_fp32_dest_acc(uint32_t ocb) {
  *
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
  * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data and
- * Read_int8, derived from the new mode and the pack source format of `ocb`
- * the way the packer's own configure derives them: a 32-bit output such as
- * Int32, UInt32 or Float32 keeps its 32-bit destination read). UNPACK/PACK
- * tensix_sync then notify MATH and wait; MATH writes dest-acc CFG, drains
- * until those writes have retired, and only then releases them -- the release
- * is a RISC store, so the drain is what orders it behind the writes. Safe to
- * call mid-kernel without re-running compute_kernel_hw_startup; a later
- * pack_reconfig_data_format keeps the packer in the mode this call set.
+ * Read_int8 from the new mode and the pack source format of `ocb`: an Int32
+ * or UInt32 output keeps its 32-bit destination read, a Float32 output is
+ * packed from the 16-bit datums the Dest now holds; the exponent threshold
+ * and Round_10b_mant the way the packer's own configure programs them).
+ * UNPACK/PACK tensix_sync then notify MATH and wait; MATH writes dest-acc
+ * CFG, drains until those writes have retired, and only then releases them
+ * -- the release is a RISC store, so the drain is what orders it behind the
+ * writes. Safe to call mid-kernel without re-running
+ * compute_kernel_hw_startup; a later CB-id pack_reconfig_data_format keeps
+ * the packer in the mode this call set. Explicit-mode APIs (the id-free
+ * experimental pack_reconfig_data_format, 2.0 pack_untilize,
+ * fast_tilize_uninit, copy_tile<is_fp32_dest_acc_en>, ...) take the mode
+ * from their template argument and must be passed the overridden mode. A
+ * compute_kernel_hw_startup inside the override returns the packer to the
+ * kernel-wide mode.
  *
  * All three TRISC threads must call this together. TRISC mailboxes must not
  * be in use.
@@ -186,7 +198,7 @@ ALWI void enable_fp32_dest_acc(uint32_t ocb) {
 ALWI void disable_fp32_dest_acc(uint32_t ocb) {
     UNPACK((llk_unpack_wait_fp32_dest_acc()));
     MATH((llk_math_set_fp32_dest_acc(false)));
-    PACK((llk_pack_wait_fp32_dest_acc(ocb)));
+    PACK((llk_pack_wait_fp32_dest_acc(ocb, false)));
 }
 #endif
 
@@ -197,9 +209,10 @@ ALWI void disable_fp32_dest_acc(uint32_t ocb) {
  *
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
  * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data and
- * Read_int8, derived from the mode and the pack source format of `ocb`).
- * This is a lightweight, standalone reconfiguration that is safe to call
- * mid-kernel without re-running compute_kernel_hw_startup.
+ * Read_int8 from the mode and the pack source format of `ocb`, plus the
+ * exponent threshold and Round_10b_mant). This is a lightweight, standalone
+ * reconfiguration that is safe to call mid-kernel without re-running
+ * compute_kernel_hw_startup.
  *
  * No-op when `enable` already matches the kernel's DST_ACCUM_MODE
  * (compute_kernel_hw_startup already programmed the requested mode).
@@ -236,9 +249,10 @@ ALWI void set_fp32_dest_acc(uint32_t ocb) {
  *
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
  * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data and
- * Read_int8, derived from the mode and the pack source format of `ocb`).
- * This is a lightweight, standalone reconfiguration that is safe to call
- * mid-kernel without re-running compute_kernel_hw_startup.
+ * Read_int8 from the mode and the pack source format of `ocb`, plus the
+ * exponent threshold and Round_10b_mant). This is a lightweight, standalone
+ * reconfiguration that is safe to call mid-kernel without re-running
+ * compute_kernel_hw_startup.
  *
  * No-op when `enable` already matches DST_ACCUM_MODE (the matching set
  * was also a no-op). Pass the same `enable` used at the set.
