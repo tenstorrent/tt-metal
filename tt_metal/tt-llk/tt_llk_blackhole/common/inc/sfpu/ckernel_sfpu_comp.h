@@ -444,7 +444,8 @@ sfpi_inline sfpi::vFloat fold_signed_zero(sfpi::vFloat v)
 template <>
 sfpi_inline void apply_unary_float_comp<SfpuType::unary_eq>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat& out_val)
 {
-    v_if (fold_signed_zero(v) == s)
+    v = fold_signed_zero(v); // its own predication region: must not sit inside the v_if condition
+    v_if (v == s)
     {
         out_val = 1.0f;
     }
@@ -459,7 +460,8 @@ sfpi_inline void apply_unary_float_comp<SfpuType::unary_eq>(sfpi::vFloat v, sfpi
 template <>
 sfpi_inline void apply_unary_float_comp<SfpuType::unary_ne>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat& out_val)
 {
-    v_if (fold_signed_zero(v) == s)
+    v = fold_signed_zero(v); // its own predication region: must not sit inside the v_if condition
+    v_if (v == s)
     {
         out_val = 0.0f;
     }
