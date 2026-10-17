@@ -45,27 +45,17 @@ public:
     static void program_created(const detail::ProgramImpl* program) noexcept;
     static void program_destroyed(const detail::ProgramImpl* program) noexcept;
     static void program_compile_started(
-        const MetalContext& context,
-        const detail::ProgramImpl* program,
-        const IDevice* device,
-        uint64_t build_key) noexcept;
+        const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept;
     static void program_compile_already_exists(
-        const MetalContext& context,
-        const detail::ProgramImpl* program,
-        const IDevice* device,
-        uint64_t build_key) noexcept;
+        const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept;
     static void program_kernel_compile_finished(
-        const MetalContext& context,
         const detail::ProgramImpl* program,
         const IDevice* device,
         const std::shared_ptr<Kernel>& kernel,
         const tt::tt_metal::JitBuildOptions& build_options,
         const std::string& binary_root) noexcept;
     static void program_compile_finished(
-        const MetalContext& context,
-        const detail::ProgramImpl* program,
-        const IDevice* device,
-        uint64_t build_key) noexcept;
+        const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept;
 
     static void mesh_device_created(
         const distributed::MeshDeviceImpl* mesh_device, std::optional<int> parent_mesh_id) noexcept;

@@ -4,6 +4,7 @@
 
 #include <tt_stl/fmt.hpp>
 #include "inspector.hpp"
+#include "context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/inspector/data.hpp"
 #include "impl/debug/inspector/rpc_server_generated.hpp"
@@ -43,9 +44,15 @@ inspector::Data* get_inspector_data(const distributed::MeshBuffer& buffer) {
     return buffer.is_allocated() ? get_inspector_data(buffer.device()) : nullptr;
 }
 
-// A program must not outlive its context.
+// A program must not outlive its context, and is compiled only on devices of its context.
+// TODO: Remove the DEFAULT_CONTEXT_ID guard once legacy programs from CreateProgram() are gone. It exists because
+// MetalContext::instance() would create the default context, e.g. when a legacy program is destroyed after it.
 inspector::Data* get_inspector_data(const detail::ProgramImpl& program) {
-    return MetalContext::instance(program.get_context_id()).get_inspector_data();
+    const ContextId context_id = program.get_context_id();
+    if (context_id == DEFAULT_CONTEXT_ID && !MetalContext::instance_exists(context_id)) {
+        return nullptr;
+    }
+    return MetalContext::instance(context_id).get_inspector_data();
 }
 }  // namespace
 
@@ -123,11 +130,8 @@ void Inspector::program_destroyed(const detail::ProgramImpl* program) noexcept {
 }
 
 void Inspector::program_compile_started(
-    const MetalContext& context,
-    const detail::ProgramImpl* program,
-    const IDevice* /*device*/,
-    uint64_t /*build_key*/) noexcept {
-    auto* data = context.get_inspector_data();
+    const detail::ProgramImpl* program, const IDevice* /*device*/, uint64_t /*build_key*/) noexcept {
+    auto* data = get_inspector_data(*program);
     if (!data) {
         return;
     }
@@ -137,16 +141,13 @@ void Inspector::program_compile_started(
         program_data.compile_started_timestamp = std::chrono::high_resolution_clock::now();
         data->logger.log_program_compile_started(program_data);
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG(data->rtoptions(), "Failed to log program destroyed: {}", e.what());
+        TT_INSPECTOR_LOG(data->rtoptions(), "Failed to log program compile started: {}", e.what());
     }
 }
 
 void Inspector::program_compile_already_exists(
-    const MetalContext& context,
-    const detail::ProgramImpl* program,
-    const IDevice* /*device*/,
-    uint64_t /*build_key*/) noexcept {
-    auto* data = context.get_inspector_data();
+    const detail::ProgramImpl* program, const IDevice* /*device*/, uint64_t /*build_key*/) noexcept {
+    auto* data = get_inspector_data(*program);
     if (!data) {
         return;
     }
@@ -160,13 +161,12 @@ void Inspector::program_compile_already_exists(
 }
 
 void Inspector::program_kernel_compile_finished(
-    const MetalContext& context,
     const detail::ProgramImpl* program,
     const IDevice* device,
     const std::shared_ptr<Kernel>& kernel,
     const tt::tt_metal::JitBuildOptions& build_options,
     const std::string& binary_root) noexcept {
-    auto* data = context.get_inspector_data();
+    auto* data = get_inspector_data(*program);
     if (!data) {
         return;
     }
@@ -198,11 +198,8 @@ void Inspector::program_kernel_compile_finished(
 }
 
 void Inspector::program_compile_finished(
-    const MetalContext& context,
-    const detail::ProgramImpl* program,
-    const IDevice* /*device*/,
-    uint64_t /*build_key*/) noexcept {
-    auto* data = context.get_inspector_data();
+    const detail::ProgramImpl* program, const IDevice* /*device*/, uint64_t /*build_key*/) noexcept {
+    auto* data = get_inspector_data(*program);
     if (!data) {
         return;
     }
