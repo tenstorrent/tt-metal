@@ -15,26 +15,29 @@ matmul laid out around what the Blackhole NoC / DRAM measured (zz_scratch_mcast_
            PNP(cx) columns (<= 8 fp32 DST tiles, full sync), each accumulated over all of K and packed once
   x        resident in L1 (CB 0, K / 32 tiles of row cy), multicast once along the row by its two ends (left core
            NOC0 even K blocks, right core NOC1 odd: XS = 2), before any W
-  W        step i = p NBLK + j (pass p, K block j of KB tiles): the KB x PNP tiles of column cx's pass-p columns, one
-           contiguous DRAM region (a bank-sharded tensor per group of equal-width columns, rotated over the banks
-           by column); sent down the column by its two ends (top NOC0 even steps, bottom NOC1 odd: WS = 2) into the
-           W ring (CB 1, NB slots), NSTW pieces read ahead; credits per ring slot (receivers -> the slot's sender)
+  W        step i = p NBLK + j (pass p, K block j of KB tiles): the KB x PNP tiles of column cx's pass-p columns; each
+           column's steps go out as two streams, q0 (even steps, NOC0 multicast by a BRISC) and q1 (odd, NOC1 by an
+           NCRISC, read by its core's BRISC), into the W ring (CB 1, NB slots); NSTW pieces read ahead; credits per
+           ring slot (receivers -> the stream's reader). A stream's pieces sit in one DRAM bank in order (a bank-sharded
+           tensor per group of equal-width columns, streams balanced over the banks). Readers (w_streams): the
+           column's top (q0) / bottom (q1) core, the ones that are a bank's optimal core (or its row neighbour) reading
+           that bank (L2D_NEAR, default; -8% time). L2D_FEED=1 makes the 16 bank-adjacent cores the readers of all 24
+           streams (multicasting from outside the column): correct but slower - the in-transit routes (NOC0 east then
+           south, NOC1 north then west) pile up to 5 streams on a link, e.g. every q1 along the bottom row
   RISCs    BRISC (NOC0): DRAM reads, the NOC0 sends, the receive loop (valid counters -> CB pushes, credits);
            NCRISC (NOC1): the NOC1 sends, then the y writes (bf16 TILE, interleaved DRAM or L1)
-K3 (bh-lb-09): latent down 7168 -> 3584 103 us, up 3584 -> 7168 95 us standalone (ttnn mm2d 117 / 122); bound by the
-DRAM reads (x then W at ~340 GB/s; reads-only probe 95 us). PROBE bits (L2D_PROBE) skip pieces for diagnosis; 512
+K3 (bh-lb-09): latent down 7168 -> 3584 93 us, up 3584 -> 7168 89 us standalone (ttnn mm2d 117 / 122); bound by the
+DRAM reads. PROBE bits (L2D_PROBE) skip pieces for diagnosis; 512
 records a per-core event trace (zz_scratch_k3_dense_mm.py::_lin2d_trace).
 """
 
+import collections
 import os
 
 import torch
 
 import ttnn
 
-# semaphores: x valid per sender XV0 / XV1, W valid WV0 / WV1 (counters), the feed handshake LANDED / SENT (x, W), XD
-# (cores of the column with all of x, on the W senders), W
-# credits per ring slot (on the slot's sender: even slots the top core, odd the bottom)
 _COMMON = r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -44,27 +47,31 @@ constexpr uint32_t GX = get_compile_time_arg_val(6), GY = get_compile_time_arg_v
 constexpr uint32_t PNP = get_compile_time_arg_val(9), NT = get_compile_time_arg_val(10);
 constexpr uint32_t PROBE = get_compile_time_arg_val(11);  // (1: no DRAM reads, 4: 64 B multicasts)
 constexpr uint32_t NBANK = get_compile_time_arg_val(12), NST = get_compile_time_arg_val(13);
-// senders per row (XS) / column (WS): 2 = both ends, alternating (x: left NOC0 even, right NOC1 odd; W: top NOC0 even,
-// bottom NOC1 odd); 1 = one (x: the right core on NOC1, W: the top core on NOC0: no NoC carries crossing multicasts)
-constexpr uint32_t XS = get_compile_time_arg_val(14), WS = get_compile_time_arg_val(15);
-// XBAR: the W multicasts start once every core of the column has all of x (XD: count of them, on the W senders), so
+// x senders per row (XS): 2 = both ends, alternating (left NOC0 even, right NOC1 odd); 1 = the right core on NOC1
+constexpr uint32_t XS = get_compile_time_arg_val(14), Q1S = get_compile_time_arg_val(15);  // (Q1S: q1 slots' offset)
+// XBAR: the W multicasts start once every core of the column has all of x (XDQ: count of them, on the W readers), so
 // the x row multicasts never cross W column multicasts on a NoC
 constexpr uint32_t XBAR = get_compile_time_arg_val(16), NSTW = get_compile_time_arg_val(17);  // (NST: x staging slots)
 // WPRE = 0: the W senders read nothing before every core of the column has x (the x reads get the DRAM to themselves)
-constexpr uint32_t WPRE = get_compile_time_arg_val(18);
+constexpr uint32_t WPRE = get_compile_time_arg_val(18), WBMAX = get_compile_time_arg_val(21);
 // GLU: the weight's tile columns are gate / up pairs; the output (NT tiles a row) is the activation, PNP / 2 a pass
 constexpr uint32_t GLU = get_compile_time_arg_val(19), PO = GLU ? PNP / 2 : PNP;
 // RES: y = r + x @ W (r [M, N] bf16 TILE: the NCRISC reads the core's tiles into CB 5, compute starts DST from them)
 constexpr uint32_t RES = get_compile_time_arg_val(20);
-constexpr auto x_args = TensorAccessorArgs<21>();
+constexpr auto x_args = TensorAccessorArgs<22>();
 constexpr auto y_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 constexpr auto d_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();  // (PROBE 512: event trace)
 constexpr auto r_args = TensorAccessorArgs<d_args.next_compile_time_args_offset()>();
 constexpr uint32_t XB = KB * 2048, WB = KB * PNPX * WTB, NS = NP * NBLK, WPT = KB * PNPX;
-constexpr uint32_t XV = 0, WV = 2, XD = 8, WC = 9;  // (WC: per W ring slot, NB of them)
-// multicast value words (16 B apart) in CB 10: [0, 128) the BRISC's, [128, 256) the NCRISC's; the feed handshake
-// (local semaphores: zero at every launch) per stream (x 0, W 1): LANDED (BRISC: pieces read into the staging),
-// SENT (NCRISC: multicast and flushed)
+// W streams: each column's steps go out as two streams, q0 (even steps, NOC0 multicast by a BRISC) and q1 (odd, NOC1
+// by an NCRISC, read by its core's BRISC); a stream's reader core holds its pieces in one DRAM bank, in order
+// (bank-adjacent readers: L2D_FEED=1, or the column's top / bottom core). Staging (CB 9, grid-wide): q0 slots
+// [0, NSTW), q1 [Q1S, Q1S + NSTW) (Q1S = NSTW when a core can read both, else 0), WBMAX apart (the largest piece)
+// semaphores: XV0 / XV1 x valid (per x sender), WV0 / WV1 W valid (per W stream of the column), LANDED / SENT the
+// BRISC -> NCRISC hand-over (x 4 / 6, W 5 / 7), XDQ0 / XDQ1 (on a W stream's reader: cores of its column with all of x),
+// WC (on a W stream's reader: credits per own ring slot, NB / 2 each for its q0 and q1 stream)
+constexpr uint32_t XV = 0, WV = 2, XDQ = 8, WCB = 10;
+// multicast value words (16 B apart) in CB 10: [0, 128) the BRISC's, [128, 256) the NCRISC's
 constexpr uint32_t LANDED = 4, SENT = 6;
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem(uint32_t i) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(i));
@@ -84,58 +91,58 @@ FORCE_INLINE void tr_dump(uint32_t d_addr, uint32_t page, uint32_t half) {
         noc_async_write_barrier();
     }
 }
-// W piece (column cx of the column group, step s): one contiguous region, exactly KB x PNP tiles (PNPX = PNP: one W
-// tensor per group of equal-width columns); g = cx NSP + s in bank (g + cx) % NBANK at (g / NBANK) WB (rotated by the
-// column: the columns' senders read different banks at the same step)
-constexpr uint32_t NSP = (NS + NBANK - 1) / NBANK * NBANK;
-FORCE_INLINE uint64_t w_piece(uint32_t w_addr, uint32_t cx, uint32_t step) {
-    const uint32_t g = cx * NSP + step;
-    return get_noc_addr_from_bank_id<true>((g + cx) % NBANK, w_addr + (g / NBANK) * WB);
-}
 // sender q's k-th own piece (x block / W step) and own count, S senders (S = 1: q = the only one)
 constexpr uint32_t own_at(uint32_t S, uint32_t q, uint32_t k) { return S == 2 ? 2 * k + q : k; }
 constexpr uint32_t n_own(uint32_t S, uint32_t n, uint32_t q) { return S == 2 ? (n + 1 - q) / 2 : n; }
 // the sender (q) and own index (k) of piece i
 constexpr uint32_t q_of(uint32_t S, uint32_t q1, uint32_t i) { return S == 2 ? (i & 1) : q1; }
 constexpr uint32_t k_of(uint32_t S, uint32_t i) { return S == 2 ? (i >> 1) : i; }
-// W credits per ring slot (a shared counter would let a fast core's credits stand in for a slow one's): step
-// s = 2 k + q goes once every column core freed slot s % NB for the (s / NB)-th time
+// W credits per ring slot (a shared counter would let a fast core's credits stand in for a slow one's): the q stream's
+// k-th piece (step s = 2 k + q) goes once every core of its column freed slot s % NB for the (s / NB)-th time
 FORCE_INLINE bool w_credit_ok(uint32_t q, uint32_t k) {
-    const uint32_t st = own_at(WS, q, k);
-    if (XBAR && *sem(XD) < GY) return false;
-    return st < NB || (PROBE & 128) || *sem(WC + st % NB) >= GY * (st / NB);
+    const uint32_t st = 2 * k + q;
+    if (XBAR && *sem(XDQ + q) < GY) return false;
+    return st < NB || (PROBE & 128) || *sem(WCB + q * (NB / 2) + (st % NB) / 2) >= GY * (st / NB);
 }
 """
 
 _BRISC = (
     _COMMON
     + r"""
-// one stream read by this BRISC into a staging ring of NST slots (read transaction id per slot); sent either by
-// this BRISC (send) or by the NCRISC (feed: landed / sent exchanged through L1 words)
+// one stream read by this BRISC into staging slots (a read transaction id each); sent by this BRISC (send) or by the
+// NCRISC (feed: landed / sent exchanged through the LANDED / SENT semaphores)
 struct Stream {
     bool on = false, send = false, isw = false;
-    uint32_t nst = NST, q = 0, n = 0, issued = 0, landed = 0, sent = 0, stage = 0, piece = 0, trid0 = 0, hs = 0;
+    uint32_t nst = NST, q = 0, n = 0, issued = 0, landed = 0, sent = 0, stage = 0, stride = 0, piece = 0, trid0 = 0;
+    uint32_t tcx = 0, w_addr = 0, bank = 0, o = 0;  // (W: the target column's NoC x, the pieces' tensor / bank / start)
 };
 
 void kernel_main() {
-    const uint32_t x_addr = get_arg_val<uint32_t>(0), w_addr = get_arg_val<uint32_t>(1);
+    const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t cx = get_arg_val<uint32_t>(2), cy = get_arg_val<uint32_t>(3);
     const uint32_t lx = get_arg_val<uint32_t>(4), rx = get_arg_val<uint32_t>(5), ry = get_arg_val<uint32_t>(6);  // row
     const uint32_t ty = get_arg_val<uint32_t>(7), by = get_arg_val<uint32_t>(8), cxv = get_arg_val<uint32_t>(9);  // col
+    // the readers of this column's q0 / q1 streams (credits and the x-done count go to them)
+    const uint32_t s0x = get_arg_val<uint32_t>(12), s0y = get_arg_val<uint32_t>(13);
+    const uint32_t s1x = get_arg_val<uint32_t>(14), s1y = get_arg_val<uint32_t>(15);
     const auto xg = TensorAccessor(x_args, x_addr, 2048);
     const uint32_t xres = get_write_ptr(0), wring = get_write_ptr(1), words = get_write_ptr(10);
-    // the left core sends the even x blocks (NOC0), the right core feeds the odd ones to its NCRISC (NOC1 multicast);
-    // the top core sends the even W steps, the bottom core feeds the odd ones
-    Stream S[2];
+    // x: the left core sends the even blocks (NOC0), the right core feeds the odd ones to its NCRISC (NOC1)
+    Stream S[3];
     Stream& X = S[0];
-    Stream& W = S[1];
     X.on = (XS == 2 && cx == 0) || cx == GX - 1, X.send = XS == 2 && cx == 0, X.q = X.send ? 0 : 1;
     X.n = n_own(XS, NBLK, X.q);
-    X.stage = get_write_ptr(8), X.piece = XB, X.trid0 = 1, X.hs = 0;
-    W.on = cy == 0 || (WS == 2 && cy == GY - 1), W.send = cy == 0, W.q = cy == 0 ? 0 : 1, W.n = n_own(WS, NS, W.q);
-    W.isw = true;
-    W.stage = get_write_ptr(9), W.piece = WB, W.trid0 = 1 + NST, W.hs = 16, W.nst = NSTW;
-    const uint32_t cg = get_arg_val<uint32_t>(11);  // (the column's index in its group: the W tensor's piece order)
+    X.stage = get_write_ptr(8), X.stride = XB, X.piece = XB, X.trid0 = 1;
+    // W streams this core reads: q0 (sent here, NOC0) and q1 (handed to the NCRISC); args per stream at 16 / 23:
+    // on, target column NoC x, tensor address, piece bytes, bank, first piece, count
+    for (uint32_t q = 0; q < 2; ++q) {
+        Stream& T = S[1 + q];
+        const uint32_t a = 16 + 7 * q;
+        T.on = get_arg_val<uint32_t>(a), T.send = q == 0, T.isw = true, T.q = q, T.nst = NSTW;
+        T.tcx = get_arg_val<uint32_t>(a + 1), T.w_addr = get_arg_val<uint32_t>(a + 2), T.piece = get_arg_val<uint32_t>(a + 3);
+        T.bank = get_arg_val<uint32_t>(a + 4), T.o = get_arg_val<uint32_t>(a + 5), T.n = get_arg_val<uint32_t>(a + 6);
+        T.stage = get_write_ptr(9) + q * Q1S * WBMAX, T.stride = WBMAX, T.trid0 = 1 + NST + q * NSTW;
+    }
     uint32_t xr = 0, r = 0, c = NB;  // (x blocks / W steps pushed; next W step to credit)
     tr(255);
     auto streams_busy = [&]() {
@@ -150,13 +157,13 @@ void kernel_main() {
                 invalidate_l1_cache();
                 T.sent = *sem(SENT + T.isw);
             }
-            while (T.issued < T.n && T.issued < T.sent + T.nst && (WPRE || !T.isw || *sem(XD) >= GY)) {
-                const uint32_t k = T.issued, slot = k % T.nst, dst = T.stage + slot * T.piece;
+            while (T.issued < T.n && T.issued < T.sent + T.nst && (WPRE || !T.isw || *sem(XDQ + T.q) >= GY)) {
+                const uint32_t k = T.issued, slot = k % T.nst, dst = T.stage + slot * T.stride;
                 if (T.send && !(PROBE & 256)) noc_async_writes_flushed();  // (the slot's earlier multicast has left)
                 noc_async_read_set_trid(T.trid0 + slot);
                 if (!(PROBE & 1)) {
                     if (T.isw) {
-                        if (!(PROBE & 16)) noc_async_read(w_piece(w_addr, cg, own_at(WS, T.q, k)), dst, WB);
+                        if (!(PROBE & 16)) noc_async_read(get_noc_addr_from_bank_id<true>(T.bank, T.w_addr + (T.o + k) * T.piece), dst, T.piece);
                     } else if (!(PROBE & 8)) {
                         const uint32_t j = own_at(XS, T.q, k);
                         for (uint32_t t = 0; t < KB; ++t) noc_async_read(xg.get_noc_addr(cy * KT + j * KB + t), dst + t * 2048, 2048);
@@ -173,12 +180,19 @@ void kernel_main() {
                 const uint32_t k = T.sent, slot = k % T.nst;
                 invalidate_l1_cache();
                 if (!T.isw || w_credit_ok(0, k)) {
-                    const uint32_t src = T.stage + slot * T.piece, bytes = (PROBE & (T.isw ? 36 : 68)) ? 64 : T.piece;
-                    const uint32_t vw = words + (T.hs * 4) + (k & 3) * 16;  // (x: words 0 .., W: 64 ..)
+                    const uint32_t src = T.stage + slot * T.stride, bytes = (PROBE & (T.isw ? 36 : 68)) ? 64 : T.piece;
+                    const uint32_t vw = words + (T.isw ? 64 : 0) + (k & 3) * 16;
                     *word(vw) = k + 1;
-                    if (T.isw) {
-                        noc_async_write_multicast_loopback_src(src, get_noc_multicast_addr(cxv, ty, cxv, by, wring + (own_at(WS, 0, k) % NB) * WB), bytes, GY);
-                        noc_semaphore_set_multicast_loopback_src(vw, get_noc_multicast_addr(cxv, ty, cxv, by, get_semaphore(WV)), GY);
+                    if (T.isw) {  // (into the target column; loopback when this core is in it)
+                        const uint64_t d = get_noc_multicast_addr(T.tcx, ty, T.tcx, by, wring + ((2 * k) % NB) * T.piece);
+                        const uint64_t v = get_noc_multicast_addr(T.tcx, ty, T.tcx, by, get_semaphore(WV));
+                        if (T.tcx == cxv) {
+                            noc_async_write_multicast_loopback_src(src, d, bytes, GY);
+                            noc_semaphore_set_multicast_loopback_src(vw, v, GY);
+                        } else {
+                            noc_async_write_multicast(src, d, bytes, GY);
+                            noc_semaphore_set_multicast(vw, v, GY);
+                        }
                     } else {
                         noc_async_write_multicast_loopback_src(src, get_noc_multicast_addr(lx, ry, rx, ry, xres + own_at(XS, 0, k) * XB), bytes, GX);
                         noc_semaphore_set_multicast_loopback_src(vw, get_noc_multicast_addr(lx, ry, rx, ry, get_semaphore(XV)), GX);
@@ -195,19 +209,20 @@ void kernel_main() {
             cb_push_back(0, KB);
             tr(64 + xr);
             if (++xr == NBLK && XBAR) {
-                noc_semaphore_inc(get_noc_addr(cxv, ty, get_semaphore(XD)), 1);
-                if (WS == 2) noc_semaphore_inc(get_noc_addr(cxv, by, get_semaphore(XD)), 1);
+                noc_semaphore_inc(get_noc_addr(s0x, s0y, get_semaphore(XDQ)), 1);
+                noc_semaphore_inc(get_noc_addr(s1x, s1y, get_semaphore(XDQ + 1)), 1);
             }
         }
-        if (r < NS && *sem(WV + q_of(WS, 0, r)) >= k_of(WS, r) + 1) {
+        if (r < NS && *sem(WV + (r & 1)) >= (r >> 1) + 1) {
             cb_reserve_back(1, WPT);
             cb_push_back(1, WPT);
             tr(r);
             ++r;
         }
-        // credit step c (>= NB) to its sender once the slot of step c - NB is free here
+        // credit step c (>= NB) to its stream's reader once the slot of step c - NB is free here
         if (c < NS && c < r + NB && cb_pages_reservable_at_back(1, WPT * (c - r + 1))) {
-            noc_semaphore_inc(get_noc_addr(cxv, q_of(WS, 0, c) ? by : ty, get_semaphore(WC + c % NB)), 1);
+            const uint32_t q = c & 1;
+            noc_semaphore_inc(get_noc_addr(q ? s1x : s0x, q ? s1y : s0y, get_semaphore(WCB + q * (NB / 2) + (c % NB) / 2)), 1);
             tr(96 + c - NB);
             ++c;
         }
@@ -239,9 +254,11 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(5, NP * PNP);
     }
-    // the odd x blocks (right core) / odd W steps (bottom core): the BRISC reads them into the staging
-    const bool xo = cx == GX - 1, wo = WS == 2 && cy == GY - 1;
-    const uint32_t nx = xo ? n_own(XS, NBLK, 1) : 0, nw = wo ? n_own(WS, NS, 1) : 0;
+    // the odd x blocks (right core) / this core's q1 W stream (args 12..14: target column NoC x, piece bytes, count):
+    // the BRISC reads them into the staging
+    const bool xo = cx == GX - 1;
+    const uint32_t tcx = get_arg_val<uint32_t>(12), wb = get_arg_val<uint32_t>(13), nw = get_arg_val<uint32_t>(14);
+    const uint32_t nx = xo ? n_own(XS, NBLK, 1) : 0;
     uint32_t xs = 0, ws = 0;
     while (xs < nx || ws < nw) {
         invalidate_l1_cache();
@@ -258,9 +275,16 @@ void kernel_main() {
         if (ws < nw && ws < *sem(LANDED + 1) && w_credit_ok(1, ws)) {
             const uint32_t vw = words + 192 + (ws & 3) * 16;
             *word(vw) = ws + 1;
-            noc_async_write_multicast_loopback_src(wst + (ws % NSTW) * WB, get_noc_multicast_addr(cxv, by, cxv, ty, wring + (own_at(WS, 1, ws) % NB) * WB),
-                                                   (PROBE & 36) ? 64 : WB, GY);
-            noc_semaphore_set_multicast_loopback_src(vw, get_noc_multicast_addr(cxv, by, cxv, ty, get_semaphore(WV + 1)), GY);
+            const uint32_t src = wst + (Q1S + ws % NSTW) * WBMAX, bytes = (PROBE & 36) ? 64 : wb;
+            const uint64_t d = get_noc_multicast_addr(tcx, by, tcx, ty, wring + ((2 * ws + 1) % NB) * wb);
+            const uint64_t v = get_noc_multicast_addr(tcx, by, tcx, ty, get_semaphore(WV + 1));
+            if (tcx == cxv) {
+                noc_async_write_multicast_loopback_src(src, d, bytes, GY);
+                noc_semaphore_set_multicast_loopback_src(vw, v, GY);
+            } else {
+                noc_async_write_multicast(src, d, bytes, GY);
+                noc_semaphore_set_multicast(vw, v, GY);
+            }
             if (!(PROBE & 256)) noc_async_writes_flushed();
             tr(256 + 160 + ws);
             *sem(SENT + 1) = ++ws;
@@ -357,6 +381,77 @@ def column_split(Nt, GX, unit):
     return [(base + (1 if i < rem else 0)) * unit for i in range(GX)]
 
 
+def w_streams(mesh_device, GX, GY, NS, feed, nbank):
+    """The W streams (column cx, q: q0 the even steps, q1 the odd) -> reader core, bank, piece count. feed: the readers
+    next to the DRAM - each bank's optimal worker (NOC0) and its row neighbour, streaming only that bank (98% of the
+    DRAM in zz_scratch_dram_mix.py::test_bank_readers); the streams balanced over the banks (min NoC hops), a reader
+    holding at most one q0 and one q1 stream. Else the column's top (q0) / bottom
+    (q1) core, bank (2 cx + q) % banks."""
+    streams = [dict(cx=cx, q=q, n=(NS + 1 - q) // 2) for cx in range(GX) for q in (0, 1)]
+    if not feed:  # (column ends; a column end that is a bank's reader core (or its row neighbour) reads that bank)
+        near = {}
+        if os.environ.get("L2D_NEAR", "1") == "1":
+            for b, c in enumerate(mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)):
+                near.setdefault((c.x, c.y), b)
+                near.setdefault((c.x + 1, c.y), b)
+        cap = -(-len(streams) // nbank)
+        load = collections.Counter()
+        within = os.environ.get("L2D_NEAR_COL", "0") == "1"  # (also a bank core elsewhere in the column: no gain)
+        for st_ in streams:
+            end = (st_["cx"], 0 if st_["q"] == 0 else GY - 1)
+            st_["reader"] = end
+            # the in-column bank cores, least transit to the stream's multicast start first (q0: south to row 0,
+            # q1: north to the last row; both wrap over the two non-worker rows)
+            hops = lambda y: ((0 - y) if st_["q"] == 0 else (y - (GY - 1))) % (GY + 2)  # noqa: E731
+            cands = [(st_["cx"], y) for y in range(GY) if (st_["cx"], y) in near and (within or (st_["cx"], y) == end)]
+            for c in sorted(cands, key=lambda c: hops(c[1])):
+                if load[near[c]] < cap:
+                    st_["reader"], st_["bank"] = c, near[c]
+                    load[near[c]] += 1
+                    break
+        for st_ in streams:  # (the rest: the least loaded bank, nearest the rotation (2 cx + q) % banks)
+            if "bank" not in st_:
+                b0 = (2 * st_["cx"] + st_["q"]) % nbank
+                st_["bank"] = min(range(nbank), key=lambda b: (load[b], (b - b0) % nbank))
+                load[st_["bank"]] += 1
+        return streams
+    opt = list(mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0))
+    assert len(opt) == nbank
+    readers = {}
+    for b, c in enumerate(opt):
+        nx = c.x + 1 if c.x + 1 < GX else c.x - 1
+        readers[b] = [(c.x, c.y), (nx, c.y)]
+        assert all(0 <= y < GY for _, y in readers[b]), ("a bank reader outside the grid rows", readers[b], GY)
+    # min-cost assignment (networkx flow): stream -> (reader, q) slot -> bank (<= ceil(streams / banks) each). Cost: the
+    # NoC hops from the reader to the column's multicast start - NOC0 runs east then south (to the top row), NOC1 west
+    # then north (to the bottom row), both wrapping (a q1 stream from a reader east of its column, a q0 from one west)
+    import networkx as nx
+
+    W_, H_ = GX + 3, GY + 2  # (the torus around the worker grid: DRAM / eth columns, rows; approximate)
+    cost = lambda st_, r: (  # noqa: E731
+        10 * ((st_["cx"] - r[0]) % W_) + (0 - r[1]) % H_
+        if st_["q"] == 0
+        else 10 * ((r[0] - st_["cx"]) % W_) + (r[1] - (GY - 1)) % H_
+    )
+    cap = -(-len(streams) // nbank)
+    g = nx.DiGraph()
+    for i, st_ in enumerate(streams):
+        g.add_edge("s", ("st", i), capacity=1, weight=0)
+        for b in range(nbank):
+            for r in readers[b]:
+                g.add_edge(("st", i), ("slot", r, st_["q"]), capacity=1, weight=cost(st_, r))
+    for b in range(nbank):
+        for r in readers[b]:
+            for q in (0, 1):
+                g.add_edge(("slot", r, q), ("bank", b), capacity=1, weight=0)
+        g.add_edge(("bank", b), "t", capacity=cap, weight=0)
+    flow = nx.max_flow_min_cost(g, "s", "t")
+    for i, st_ in enumerate(streams):
+        ((_, r, _q),) = [k for k, v in flow[("st", i)].items() if v]
+        st_["reader"], st_["bank"] = r, next(b for b in range(nbank) if r in readers[b])
+    return streams
+
+
 def lin2d_prepare(
     mesh_device,
     *,
@@ -390,7 +485,7 @@ def lin2d_prepare(
     wtb = {ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576, ttnn.bfloat16: 2048}[w_dtype]
     fid = fidelity if fidelity is not None else getattr(ttnn.MathFidelity, os.environ.get("L2D_FID", "HiFi2"))
     nstw = nstw if nstw is not None else int(os.environ.get("L2D_NSTW", "4"))
-    assert nst + nstw <= 15  # (a read transaction id per staging slot)
+    assert nst + 2 * nstw <= 15  # (a read transaction id per staging slot)
     xb = kb * 2048
     allc = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GX - 1, GY - 1))])
     vv = {
@@ -398,6 +493,7 @@ def lin2d_prepare(
         for cx in range(GX)
         for cy in range(GY)
     }
+    vv_any = lambda c: mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(*c))  # noqa: E731
     n0s = [sum(pns[:i]) for i in range(GX)]
     groups = {}
     for cx, pn in enumerate(pns):
@@ -408,11 +504,29 @@ def lin2d_prepare(
     xbar = int(os.environ.get("L2D_XBAR", "1"))
     wpre = int(os.environ.get("L2D_WPRE", "1"))
     nst = int(os.environ.get("L2D_NST", str(nst)))  # (W multicasts wait until every core of the column has its x)
-    assert xs in (1, 2) and ws in (1, 2) and nb <= 7
+    assert xs in (1, 2) and nb <= 6
     probe = int(os.environ.get("L2D_PROBE", "0"))  # (1: no DRAM reads, 2: no matmuls, 4: 64 B multicasts)
     state = {}
     nbank = mesh_device.dram_grid_size().x
-    layout = dict(pns=pns, NP=NP, kb=kb, banks=nbank, xs=xs, ws=ws, groups=sorted(groups.items()))
+    feed = int(os.environ.get("L2D_FEED", "0"))
+    NS = NP * nblk
+    streams = w_streams(mesh_device, GX, GY, NS, feed, nbank)
+    gidx = {cx: i for i, (pn, cols) in enumerate(sorted(groups.items())) for cx in cols}
+    wbs = [kb * (pn // NP) * wtb for pn, _ in sorted(groups.items())]
+    wbmax = max(wbs)
+    # a stream's pieces sit in its bank in order, after the earlier streams of its column group in that bank
+    used = {}
+    for st_ in streams:
+        key = (gidx[st_["cx"]], st_["bank"])
+        st_["o"], used[key] = used.get(key, 0), used.get(key, 0) + st_["n"]
+    layout = dict(
+        pns=pns, NP=NP, kb=kb, banks=nbank, xs=xs, groups=sorted(groups.items()), streams=streams, NS=NS, feed=feed
+    )
+    by_reader = {}
+    for st_ in streams:
+        by_reader.setdefault(st_["reader"], {})[st_["q"]] = st_
+    q1s = nstw if any(len(v) == 2 for v in by_reader.values()) else 0  # (q1 staging overlays q0's unless shared)
+    reader_of = {(st_["cx"], st_["q"]): st_["reader"] for st_ in streams}
 
     def build(x, wl, y, dbg, res):
         program = ttnn.ProgramDescriptor()
@@ -424,6 +538,9 @@ def lin2d_prepare(
             ttnn.CBDescriptor(total_size=Kt * 2048, core_ranges=allc, format_descriptors=fmt(0, ttnn.bfloat16, 2048)),
             ttnn.CBDescriptor(total_size=nst * xb, core_ranges=allc, format_descriptors=fmt(8, ttnn.bfloat16, 2048)),
             ttnn.CBDescriptor(total_size=512, core_ranges=allc, format_descriptors=fmt(10, ttnn.uint32, 512)),
+            ttnn.CBDescriptor(
+                total_size=(nstw + q1s) * wbmax, core_ranges=allc, format_descriptors=fmt(9, w_dtype, wtb)
+            ),
         ] + (
             [ttnn.CBDescriptor(total_size=2048, core_ranges=allc, format_descriptors=fmt(11, ttnn.uint32, 2048))]
             if probe & 512
@@ -432,29 +549,23 @@ def lin2d_prepare(
         for pn, cols in sorted(groups.items()):
             crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx, 0), ttnn.CoreCoord(cx, GY - 1)) for cx in cols])
             wbg = kb * (pn // NP) * wtb
-            program.cbs += (
+            program.cbs += [
+                ttnn.CBDescriptor(total_size=nb * wbg, core_ranges=crs, format_descriptors=fmt(1, w_dtype, wtb)),
+                ttnn.CBDescriptor(
+                    total_size=NP * (pn // NP // G) * 2048,
+                    core_ranges=crs,
+                    format_descriptors=fmt(4, out_dtype, 2048),
+                ),
+            ] + (
                 [
-                    ttnn.CBDescriptor(total_size=nb * wbg, core_ranges=crs, format_descriptors=fmt(1, w_dtype, wtb)),
                     ttnn.CBDescriptor(
-                        total_size=NP * (pn // NP // G) * 2048,
-                        core_ranges=crs,
-                        format_descriptors=fmt(4, out_dtype, 2048),
-                    ),
+                        total_size=pn * 2048, core_ranges=crs, format_descriptors=fmt(5, ttnn.bfloat16, 2048)
+                    )
                 ]
-                + (
-                    [
-                        ttnn.CBDescriptor(
-                            total_size=pn * 2048, core_ranges=crs, format_descriptors=fmt(5, ttnn.bfloat16, 2048)
-                        )
-                    ]
-                    if residual
-                    else []
-                )
-                + [
-                    ttnn.CBDescriptor(total_size=nstw * wbg, core_ranges=crs, format_descriptors=fmt(9, w_dtype, wtb)),
-                ]
+                if residual
+                else []
             )
-        program.semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=allc, initial_value=0) for i in range(9 + nb)]
+        program.semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=allc, initial_value=0) for i in range(10 + nb)]
         x_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         y_ct = list(ttnn.TensorAccessorArgs(y).get_compile_time_args())
         d_ct = list(ttnn.TensorAccessorArgs(dbg).get_compile_time_args())
@@ -469,7 +580,7 @@ def lin2d_prepare(
             pnp = pn // NP
             ct = (
                 [Kt, kb, pnp, nblk, NP, nb, GX, GY, wtb, pnp, Nt // G, probe, nbank, nst]
-                + [xs, ws, xbar, nstw, wpre, int(glu), int(residual)]
+                + [xs, q1s, xbar, nstw, wpre, int(glu), int(residual), wbmax]
                 + x_ct
                 + y_ct
                 + d_ct
@@ -480,7 +591,7 @@ def lin2d_prepare(
                 for cy in range(GY):
                     lx, rx, ry = vv[(0, cy)].x, vv[(GX - 1, cy)].x, vv[(cx, cy)].y
                     ty, by, cxv = vv[(cx, 0)].y, vv[(cx, GY - 1)].y, vv[(cx, cy)].x
-                    b_rt[cx][cy] = [
+                    ba = [
                         int(x.buffer_address()),
                         int(w.buffer_address()),
                         cx,
@@ -494,7 +605,25 @@ def lin2d_prepare(
                         int(dbg.buffer_address()),
                         cols.index(cx),
                     ]
-                    n_rt[cx][cy] = [
+                    for q in (0, 1):  # (this column's stream readers)
+                        rd = vv_any(reader_of[(cx, q)])
+                        ba += [rd.x, rd.y]
+                    mine = by_reader.get((cx, cy), {})
+                    for q in (0, 1):  # (the streams this core reads)
+                        st_ = mine.get(q)
+                        if st_ is None:
+                            ba += [0] * 7
+                        else:
+                            ba += [
+                                1,
+                                vv[(st_["cx"], 0)].x,
+                                int(wl[gidx[st_["cx"]]].buffer_address()),
+                                wbs[gidx[st_["cx"]]],
+                                st_["bank"],
+                                st_["o"],
+                                st_["n"],
+                            ]
+                    na = [
                         int(y.buffer_address()),
                         cx,
                         cy,
@@ -508,6 +637,9 @@ def lin2d_prepare(
                         int(dbg.buffer_address()),
                         int(res.buffer_address()) if res is not None else 0,
                     ]
+                    st1 = by_reader.get((cx, cy), {}).get(1)
+                    na += [vv[(st1["cx"], 0)].x, wbs[gidx[st1["cx"]]], st1["n"]] if st1 else [0, 0, 0]
+                    b_rt[cx][cy], n_rt[cx][cy] = ba, na
                     c_rt[cx][cy] = []
             comp = ttnn.ComputeConfigDescriptor()
             comp.math_fidelity = fid
@@ -582,31 +714,33 @@ def glu_weight(wg, wu):
 
 
 def upload_stacked(mesh_device, w, layout, dtype=ttnn.bfloat8_b):
-    """W [K, N] torch -> the device weights, one tensor per column group (equal pass widths PNP): column cg of the
-    group, step s = (pass p, K block j): the [kb x PNP] tiles (k major) of its pass-p columns, one contiguous region,
-    g = cg NSP + s in bank (g + cg) % banks at (g // banks) (flat_expert._bank_sharded; replicated over the mesh)."""
+    """W [K, N] torch -> the device weights, one tensor per column group (equal pass widths PNP): stream (column cx, q)'s
+    k-th piece (step s = 2 k + q = pass p, K block j: the [kb x PNP] tiles (k major) of its pass-p columns) is region
+    o + k of the stream's bank (flat_expert._bank_sharded: region i in bank i % banks at (i // banks); replicated)."""
     from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import _bank_sharded
 
-    pns, NP, kb, banks = layout["pns"], layout["NP"], layout["kb"], layout["banks"]
-    K = w.shape[0]
-    nblk = K // 32 // kb
-    NS = NP * nblk
-    NSP = -(-NS // banks) * banks
+    pns, NP, kb, banks, NS = layout["pns"], layout["NP"], layout["kb"], layout["banks"], layout["NS"]
+    nblk = NS // NP
     n0s = [sum(pns[:i]) for i in range(len(pns))]
     n_dev = mesh_device.get_num_devices()
     out = []
     for pn, cols in layout["groups"]:
         pnp = pn // NP
-        regs = [None] * (len(cols) * NSP)
+        mine = [st_ for st_ in layout["streams"] if st_["cx"] in cols]
+        per_bank = {}
+        for st_ in mine:
+            per_bank[st_["bank"]] = max(per_bank.get(st_["bank"], 0), st_["o"] + st_["n"])
+        slots = max(per_bank.values())
         zero = torch.zeros(kb * pnp * 32, 32, dtype=w.dtype)
-        for cg, cx in enumerate(cols):
-            for p in range(NP):
-                c0 = (n0s[cx] + p * pnp) * 32
-                for j in range(nblk):
-                    blk = w[j * kb * 32 : (j + 1) * kb * 32, c0 : c0 + pnp * 32]
-                    g = cg * NSP + p * nblk + j
-                    regs[(g // banks) * banks + (g + cg) % banks] = (
-                        blk.reshape(kb, 32, pnp, 32).permute(0, 2, 1, 3).reshape(-1, 32)
-                    )
-        out.append(_bank_sharded([[r if r is not None else zero for r in regs]] * n_dev, banks, dtype, mesh_device))
+        regs = [zero] * (slots * banks)
+        for st_ in mine:
+            for k in range(st_["n"]):
+                step = 2 * k + st_["q"]
+                p, j = divmod(step, nblk)
+                c0 = (n0s[st_["cx"]] + p * pnp) * 32
+                blk = w[j * kb * 32 : (j + 1) * kb * 32, c0 : c0 + pnp * 32]
+                regs[(st_["o"] + k) * banks + st_["bank"]] = (
+                    blk.reshape(kb, 32, pnp, 32).permute(0, 2, 1, 3).reshape(-1, 32)
+                )
+        out.append(_bank_sharded([regs] * n_dev, banks, dtype, mesh_device))
     return out

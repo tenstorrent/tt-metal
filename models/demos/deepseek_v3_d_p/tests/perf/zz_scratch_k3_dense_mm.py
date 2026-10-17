@@ -585,6 +585,8 @@ def test_lin2d(mesh_device):
                 except Exception as e:  # noqa: BLE001
                     logger.info(f"L2D {name:8s} {fid} kb{kb} nb{nb} prepare FAILED {str(e).splitlines()[0][:200]}")
                     continue
+                if os.environ.get("L2D_SHOW"):
+                    logger.info(f"L2DSTREAMS {[(t['cx'], t['q'], t['reader'], t['bank']) for t in layout['streams']]}")
                 key = (tuple(layout["pns"]), layout["NP"])
                 if key not in ws:
                     ws[key] = upload_stacked(mesh_device, w, layout, dtype=wdt)
@@ -642,16 +644,17 @@ def _lin2d_trace(dbg, layout, nb, nblk, clk_ghz=1.35):
             v = int(d[core(0, cy), 192 + j // 2]) if j % 2 == 0 else int(d[core(GX - 1, cy), 256 + 192 + j // 2])
             xs.append(f"{us(v):6.2f}/{us(int(d[core(0, cy):core(0, cy) + GX, 64 + j].max())):6.2f}")
         logger.info(f"L2DTR x row {cy}: send/last push " + " ".join(xs))
-    for cx in range(GX):  # W: per column, the senders' first sends
-        ws = [
-            f"{us(int(d[core(cx, 0) if r % 2 == 0 else core(cx, GY - 1), (160 if r % 2 == 0 else 416) + r // 2])):6.2f}"
-            for r in range(8)
-        ]
-        logger.info(f"L2DTR W col {cx}: sends " + " ".join(ws))
+    rdr = {(st_["cx"], st_["q"]): st_["reader"] for st_ in layout.get("streams", [])}
+
+    def wsend(cx, r):  # (stream q = r % 2 from its reader: q0 BRISC entries 160.., q1 NCRISC 416..)
+        rx_, ry_ = rdr.get((cx, r % 2), (cx, 0 if r % 2 == 0 else GY - 1))
+        return int(d[core(rx_, ry_), (160 if r % 2 == 0 else 416) + r // 2])
+
+    for cx in range(GX):  # W: per column, the streams' first sends
+        logger.info(f"L2DTR W col {cx}: sends " + " ".join(f"{us(wsend(cx, r)):6.2f}" for r in range(8)))
     for r in range(NS):
         push = d[:, r]
-        q, k = r & 1, r >> 1
-        snd = [int(d[core(cx, 0 if q == 0 else GY - 1), (160 if q == 0 else 256 + 160) + k]) for cx in range(GX)]
+        snd = [wsend(cx, r) for cx in range(GX)]
         cred = d[:, 96 + r - nb] if r >= nb else None
         xp = d[:, 64 + r] if r < nblk else None
         logger.info(

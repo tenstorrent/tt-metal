@@ -1065,3 +1065,19 @@ Correction (same day): the 2-a-bank drop was the neighbour's position, not the c
 worker's row (BR_HORIZ=1, x + 1: exactly the flat plan's 16 readers (0|1, y) / (7|8, y)): 1 a bank 507 GB/s, 2 a bank
 502 (98%), 3 a bank 450 (88%); vertical neighbours 398. The flat plan's readers on the gate/up stream alone: 511 (99.9%).
 So 16 bank-local readers (2 a bank, row neighbours) are the fast set for a lin2d W feed.
+
+### lin2d: W from the bank readers (2026-10-17) -> 3401 us traced
+lin2d's W path now is 24 streams (column x q0 / q1), each with a reader core and its pieces in order in one bank.
+L2D_FEED=1: the 16 bank readers (optimal core + row neighbour) read every stream and multicast into the column from
+outside it (min-cost-flow placement). Correct, but slower (lat_down 144-164 us vs 104): the trace showed 10 of 12
+columns done by ~83 us and two stalled ~45 us (a multicast left at 29 us, one core got it at 74). Cause: in-transit
+routes - NOC0 runs east then south, NOC1 NORTH then west (tt-npe's Blackhole model) - so a q1 stream climbs its
+reader's column and every q1 runs west along the bottom row. Offline link model (17 x 12 torus, translated coords):
+column-end senders put at most 1 stream on any link; the best bank-reader placement found (local search) still 5 on
+one link (~100 GB/s wanted vs ~86 a link) - the NoC caps it near the far readers' ~390 GB/s. Probes agreed: skeleton
+52 vs 23 us, reads-only 91 vs 95.
+Kept: column-end senders, the ends that are bank cores ((0,0) (0,9) (1,0) (1,9) (7,9) (8,9)) reading their bank,
+the rest balanced (L2D_NEAR=1, default): lat_down 103 -> 93, lat_up 95 -> 89, SE gate+up 291 -> 268, SE down
+153 -> 141 standalone. Bank cores elsewhere in the column (L2D_NEAR_COL=1): no gain (SE gate+up 284). The W staging is
+one grid-wide CB (q1 slots overlay q0's unless a core reads both: L1 for the SE gate/up). Block: lat_down 91.3,
+lat_up 76.7, SE gate/up 270.3, SE down 143.9; traced 3483 -> 3401 us, PCC 0.99622.
