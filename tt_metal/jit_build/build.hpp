@@ -136,12 +136,9 @@ protected:
     std::string extra_link_objs_;
     std::string weakened_firmware_name_;
 
-    // True for the TENSIX compute pack state (TRISC2) — the only state where the per-kernel
-    // RVV opt-in (JitBuildSettings::get_trisc2_rvv_enabled) may apply.
-    bool is_compute_pack_{};
     // HAL-provided compile flags enabling RVV codegen on this state; empty when the arch or
     // processor does not support it. Appended to a kernel's recipe cflags only when that
-    // kernel opted in, so default builds are unchanged.
+    // kernel opted in (JitBuildSettings::get_rvv_enabled), so default builds are unchanged.
     std::string rvv_cflags_;
 
     // Default compiler optimization setting
@@ -183,6 +180,8 @@ public:
     std::string get_target_out_path(const std::string& kernel_name) const {
         return this->out_path_ + kernel_name + target_full_path_;
     }
+    // True when the HAL can generate RISC-V Vector code for this processor.
+    bool supports_rvv() const { return !this->rvv_cflags_.empty(); }
 
     // Build a transport-ready target recipe from this build state and
     // kernel-specific settings.  Replaces the PoC pattern of exposing
