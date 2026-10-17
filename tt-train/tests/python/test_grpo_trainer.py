@@ -451,6 +451,7 @@ _HOST_GRPO_CONFIG = dict(
     max_completion_length=4,
     num_generations=2,
     warmup_steps=0,
+    rollout_source="ttml",
 )
 
 
