@@ -65,7 +65,7 @@ public:
     }
 
 private:
-    void setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender);
+    void setup_cb_buffers(BufferType buffer_type, BufferType config_buffer_type, uint32_t max_num_receivers_per_sender);
     // Allocates and writes the per-GCB sender state block in DRISC L1. DRAM-sender flavour only.
     void initialize_dram_sender_state_block(uint32_t max_num_receivers_per_sender);
 
@@ -78,6 +78,7 @@ private:
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
         BufferType buffer_type,
+        BufferType config_buffer_type,
         DramSenderTag);
 
     // GlobalCircularBufferImpl is implemented as a wrapper around a sharded buffer

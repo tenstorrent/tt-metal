@@ -13,8 +13,6 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels device/kernels/*)
-
 target_sources(
     ttnn_op_experimental_matmul_decode
     PUBLIC
@@ -25,7 +23,7 @@ target_sources(
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
+        FILES ${TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_KERNELS}
     PRIVATE
         ${TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_SRCS}
 )
@@ -39,10 +37,16 @@ install(
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/matmul_decode
         COMPONENT ttnn-runtime
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
+    LIBRARY
+        COMPONENT tar
 )
 
-install(TARGETS ttnn_op_experimental_matmul_decode FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
-
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here. The actual file list
+# (TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_NANOBIND_SRCS) lives in sources.cmake.
 if(TARGET ttnn)
     target_sources(ttnn PRIVATE ${TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_NANOBIND_SRCS})
 endif()
