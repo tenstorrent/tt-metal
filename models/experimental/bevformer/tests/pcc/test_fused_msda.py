@@ -178,15 +178,22 @@ def test_msda_value_memory_modes_match_reference(device, monkeypatch, value_memo
 
 
 @pytest.mark.parametrize("batch_size", [1, 6], ids=["tsa_like", "sca_six_cams"])
-def test_msda_auto_keeps_value_in_l1_at_nuscenes_base(device, monkeypatch, batch_size):
-    """The production default must stay on the L1 path at nuscenes_base.
+def test_msda_auto_keeps_value_in_l1_on_large_blackhole(device, monkeypatch, batch_size):
+    """The production default must stay on L1 for large-grid Blackhole.
 
     DRAM is about 3x slower for this gather (re-measure with
     ``test_fused_msda_perf.py::test_fused_msda_module_perf``), and ``auto``
     falls back with only a one-time warning, so an over-conservative fit check
     would only show up as lost performance. Six batch rows match SCA, which folds the cameras
-    into the batch.
+    into the batch. The capability gate stays independent of the fit query under test.
     """
+    if not ttnn.device.is_blackhole(device):
+        pytest.skip("strict fused-MSDA L1 placement requires Blackhole")
+
+    l1_num_banks = ttnn.get_memory_view(device, ttnn.BufferType.L1).num_banks
+    if l1_num_banks < 110:
+        pytest.skip(f"strict fused-MSDA L1 placement requires 110 L1 banks; found {l1_num_banks}")
+
     config, _, tt_parameters, torch_inputs = _build(device, "nuscenes_base", batch_size, 2500, 0)
     placements = _record_value_placement(monkeypatch)
 
