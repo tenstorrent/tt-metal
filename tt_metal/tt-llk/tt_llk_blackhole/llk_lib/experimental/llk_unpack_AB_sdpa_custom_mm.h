@@ -33,6 +33,9 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
     const std::uint32_t operandB_face_r_dim = 8,
     const std::uint32_t row_stride          = 0)
 {
+    // Reject an out-of-range block before the mask UNPACR below can leave a valid SrcB bank pending; the shared
+    // _llk_unpack_AB_custom_mm_run_ asserts the same range for its own callers.
+    LLK_ASSERT(kt_dim >= 1 && kt_dim <= 256, "sdpa_custom_mm: kt_dim must be 1 to 256");
     const std::uint32_t in1_row = row_stride ? row_stride : kt_dim;
     if constexpr (read_transposed)
     {
@@ -65,5 +68,5 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
         }
     }
 
-    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
+    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, tile_size_b, block_increment, inner_increment, kt_dim, ct_dim);
 }

@@ -19,6 +19,18 @@ A standard tiled matmul ``C[M,N] = A[M,K] @ B[K,N]`` with the header's tile-shap
   in1 (B)  -> SrcA, full ``[32,32]`` tiles.
   rt_dim = 1, ct_dim in [1,16], kt_dim in [1,256], LoFi only.
 
+The kt_dim ceiling
+------------------
+The SrcB walk reads one face per UNPACR and forms the L1 face index from the low 8 bits
+of the Ch0 Y and Z counters, (Y & 0xff) + (Z & 0xff) (UNPACR_Regular.md, ADCs.md). Per
+k-tile it reads faces (Y=k, Z=k) and (Y=k, Z=k+1), so one walk from a base covers at most
+255 k-tiles (faces 0..509): at k = 255 the Z counter has stepped to 256, its low byte is 0,
+and the second UNPACR would read face 255 (k-tile 127's second face) instead of face 511.
+The LLK therefore unpacks kt_dim = 256 as two runs of 128, restarting the counters from a
+SrcB base advanced by 128 tiles. ``test_custom_mm_kt_max`` pins the two-run case with
+operands that make the aliased face decide the sign of the result, and
+``test_custom_mm_kt_single_run_max`` is the kt_dim = 255 single-run control.
+
 ``split_acc=false`` / ``finalize=false``, so there is no finalization merge and DEST
 holds the plain accumulated product (custom_mm.h: finalize must be false when split_acc
 is false). The result is packed as ``ct_dim`` output tiles; inside each tile the two
@@ -42,11 +54,13 @@ Blackhole only: these LLKs live only in the Blackhole tree and cannot run on WH/
 This test writes a correct-by-construction golden; runtime pass/fail is a BH-card check.
 """
 
+import os
 from dataclasses import dataclass
 
 import pytest
 import torch
 from conftest import blackhole_only, skip_for_quasar, skip_for_wormhole
+from helpers.device import LLKAssertException
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import DestAccumulation, MathFidelity
@@ -137,10 +151,15 @@ def _run_custom_mm(
     calls=CUSTOM_MM_CALLS(),
     preserve_zero_flag=False,
     operands=None,
+    exact_arithmetic=False,
 ):
     """Run custom_mm and check it against the golden; return the (M, N) result.
 
     ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
+    ``exact_arithmetic`` says the operands were built so every product and sum is exact in
+    LoFi and the bf16 dest; the result is then compared exactly (atol = rtol = 0) instead of
+    with the K-aware atol below, which would hide a wrong face (it grows to ~1.3x the mean
+    golden at kt = 255).
     """
     K = kt * DEFAULT_TILE_R_DIM
     N = ct * DEFAULT_TILE_C_DIM
@@ -255,8 +274,10 @@ def _run_custom_mm(
     # unchanged, PCC is the real gate and stays ~0.99999). This mirrors the proven
     # compressed sibling (compressed_utils.run_compressed). Float32 dest accumulates in
     # fp32, so its noise is negligible and it keeps the default (tighter) atol.
-    custom_atol = None
-    if out_format == DataFormat.Float16_b:
+    custom_atol, custom_rtol = None, None
+    if exact_arithmetic:
+        custom_atol, custom_rtol = 0.0, 0.0
+    elif out_format == DataFormat.Float16_b:
         FLOAT16B_DEFAULT_ATOL = 0.05
         ACC_ATOL_PER_KT = 0.005
         active_golden = golden.abs()
@@ -265,7 +286,12 @@ def _run_custom_mm(
         custom_atol = max(FLOAT16B_DEFAULT_ATOL, ACC_ATOL_PER_KT * kt * mean_active)
 
     assert passed_test(
-        golden, res_tensor, out_format, custom_atol=custom_atol, print_pcc=True
+        golden,
+        res_tensor,
+        out_format,
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        print_pcc=True,
     ), f"custom_mm matmul failed for M={M} kt={kt} ct={ct} formats={formats}"
     return res_tensor
 
@@ -276,7 +302,8 @@ CUSTOM_MM_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Float32], same=True
 )
 
-# kt is in [1,256]; small even values cover the paired MOP path.
+# kt is in [1,256]; small even values cover the paired MOP path. The ceiling is covered by
+# the test_custom_mm_kt_* tests below.
 KT_DIMS = [2, 4]
 
 # ct in [1,16]. Include 1, an even width, and the odd widths 7/9/11 that the header's
@@ -373,6 +400,185 @@ def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format):
     _run_custom_mm(
         M, kt, ct, formats, DestAccumulation.No, CUSTOM_MM_CALLS(num_calls=num_calls)
     )
+
+
+# One SrcB face walk covers 255 k-tiles (faces 0..509, see the module docstring); kt_dim = 256 is
+# unpacked as two runs of 128. At the ceiling the harness reserves kt full tiles per operand, so
+# with Float16_b in1 only ct=1 fits its L1 window (Float32 does not fit at all); the ceiling tests
+# share that one shape, and the halo-MOP (ct >= 2) two-run case uses a Bfp8_b in1 at M=1, ct=2.
+KT_MAX = 256
+KT_SINGLE_RUN_MAX = 255
+KT_CEILING_M = 8
+KT_CEILING_CT = 1
+KT_CEILING_FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+# The DeepSeek post-SDPA matmul shape: 256 k-tiles into 2 output tiles of a single row, Bfp8_b weights.
+KT_CEILING_CT2_M = 1
+KT_CEILING_CT2_CT = 2
+KT_CEILING_CT2_FORMATS = InputOutputFormat(
+    DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp8_b
+)
+# A face's value tells the two counter halves apart: an aliased read lands 256 faces below.
+A_FACE_VALUE_LOW, A_FACE_VALUE_HIGH = 1.0, 2.0
+
+
+def _face_tagged_a(M, K):
+    """A with every face of the lower half = 1 and every face of the upper half = 2."""
+    torch_a = torch.full((M, K), A_FACE_VALUE_LOW, dtype=torch.float32)
+    torch_a[:, K // 2 :] = A_FACE_VALUE_HIGH
+    return torch_a
+
+
+def _last_k_tile_b(K, N):
+    """B that is 0 except the rows of the last k-tile, as small integers (1..8) exact in LoFi."""
+    torch_b = torch.zeros((K, N), dtype=torch.float32)
+    torch_b[K - DEFAULT_TILE_R_DIM :, :] = 1.0 + (
+        torch.arange(N, dtype=torch.float32) % 8
+    )
+    return torch_b
+
+
+def _sign_deciding_operands(M, K, N):
+    """Operands where the last k-tile's second face decides the sign of the result.
+
+    A is 0 except the last face (= +1) and the face 256 below it (= -1); B is 0 except the rows
+    the last face pairs with, as small integers (1..8) exact in LoFi. The golden is +16 * B_row;
+    a walk that reads the face 256 below (the aliasing the two-run split avoids) gives -16 * B_row.
+    """
+    last_face = slice(K - FACE_C_DIM, K)
+    aliased_face = slice(K // 2 - FACE_C_DIM, K // 2)
+    torch_a = torch.zeros((M, K), dtype=torch.float32)
+    torch_a[:, last_face] = 1.0
+    torch_a[:, aliased_face] = -1.0
+    torch_b = torch.zeros((K, N), dtype=torch.float32)
+    torch_b[last_face, :] = 1.0 + (torch.arange(N, dtype=torch.float32) % 8)
+    return torch_a, torch_b
+
+
+def _both_runs_operands(M, K, N):
+    """The sign-deciding operands plus a first face that makes the first run contribute too.
+
+    A's face 0 = 1 and B's rows of face 0 = 1 add 16 per lane from the first run of the walk, so
+    the expected result is 16 * (1 + B_last_row) = 16 * (2 + n % 8): losing the first run or
+    aliasing the last face each give a different exact value.
+    """
+    torch_a, torch_b = _sign_deciding_operands(M, K, N)
+    torch_a[:, :FACE_C_DIM] = 1.0
+    torch_b[:FACE_C_DIM, :] = 1.0
+    return torch_a, torch_b
+
+
+@blackhole_only
+def test_custom_mm_kt_max():
+    """kt_dim = 256 needs SrcB face 511, which one face walk cannot address; the LLK runs the walk twice.
+
+    A single walk would multiply k-tile 255's second half of B with A's face 255 instead of face
+    511; the operands make that one swap decide the sign of the result.
+    """
+    M, kt, ct = KT_CEILING_M, KT_MAX, KT_CEILING_CT
+    K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        KT_CEILING_FORMATS,
+        DestAccumulation.No,
+        operands=_sign_deciding_operands(M, K, N),
+        exact_arithmetic=True,
+    )
+
+
+@blackhole_only
+def test_custom_mm_kt_max_both_runs():
+    """kt_dim = 256 with both runs of the split contributing: 16 from the first face, 16..128 from the last."""
+    M, kt, ct = KT_CEILING_M, KT_MAX, KT_CEILING_CT
+    K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        KT_CEILING_FORMATS,
+        DestAccumulation.No,
+        operands=_both_runs_operands(M, K, N),
+        exact_arithmetic=True,
+    )
+
+
+@blackhole_only
+def test_custom_mm_kt_max_ct2_bfp8():
+    """kt_dim = 256 in the halo MOP mode (ct = 2) with Bfp8_b weights, the DeepSeek post-SDPA matmul shape.
+
+    Both runs contribute (first face and last face), and the small-integer operands are exact in
+    Bfp8_b, LoFi and the bf16 dest, so the result is compared exactly.
+    """
+    M, kt, ct = KT_CEILING_CT2_M, KT_MAX, KT_CEILING_CT2_CT
+    K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        KT_CEILING_CT2_FORMATS,
+        DestAccumulation.No,
+        operands=_both_runs_operands(M, K, N),
+        exact_arithmetic=True,
+    )
+
+
+@blackhole_only
+def test_custom_mm_kt_single_run_max():
+    """kt_dim = 255 is the last single-run value; the last k-tile (faces 508 and 509) must come from where it lives.
+
+    B is 0 except the rows of the last k-tile, so the golden is decided only by the two faces that
+    end the walk, and A's upper-half faces carry 2 where the lower half carries 1, so a face read
+    256 below halves the result instead of hiding in the K-scaled tolerance a random operand set
+    would need.
+    """
+    M, kt, ct = KT_CEILING_M, KT_SINGLE_RUN_MAX, KT_CEILING_CT
+    K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        KT_CEILING_FORMATS,
+        DestAccumulation.No,
+        operands=(_face_tagged_a(M, K), _last_k_tile_b(K, N)),
+        exact_arithmetic=True,
+    )
+
+
+@blackhole_only
+@pytest.mark.skipif(
+    os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1",
+    reason="LLK_ASSERT is compiled out (TT_LLK_DISABLE_ASSERTS=1); past the ceiling the walk then runs unguarded",
+)
+def test_custom_mm_kt_past_max_asserts():
+    """kt_dim = 257 is past the contract; the unpack and math LLKs both reject it before issuing anything.
+
+    The test kernel's pack thread gives up waiting for math (custom_mm_test.cpp), so the core is
+    left with no Tensix instruction pending and the next test runs clean after the RISC reset.
+    """
+    M, kt, ct = KT_CEILING_M, KT_MAX + 1, KT_CEILING_CT
+    K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        LLKAssertException
+    ) as assert_hit:
+        _run_custom_mm(
+            M,
+            kt,
+            ct,
+            KT_CEILING_FORMATS,
+            DestAccumulation.No,
+            operands=(_face_tagged_a(M, K), _last_k_tile_b(K, N)),
+            exact_arithmetic=True,
+        )
+    # The stack traces name the halted cores. Both threads must reject the block: the unpack thread
+    # (TRISC0) owns the face walk, and the math thread (TRISC1) must not queue MVMULs that would wait
+    # for SrcB data the unpacker never delivers (that wedge outlives the RISC soft reset).
+    stack_traces = str(assert_hit.value)
+    for thread in ("TRISC0", "TRISC1"):
+        assert (
+            thread in stack_traces
+        ), f"expected {thread} to reject kt_dim={kt}:\n{stack_traces}"
 
 
 # Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).

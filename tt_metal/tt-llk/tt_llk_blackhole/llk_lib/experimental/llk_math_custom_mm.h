@@ -193,7 +193,7 @@ inline void _llk_math_custom_mm_init_(const std::uint32_t operandB_face_r_dim, c
  * @tparam finalize: Merge the split accumulators at the end; must be false unless the init used split_acc.
  * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
  * @param dst_index: DEST tile index to write.
- * @param kt_dim: Number of k-tiles to accumulate.
+ * @param kt_dim: Number of k-tiles to accumulate, 1 to 256.
  * @param ct_dim: Number of output column tiles.
  * @note Call @ref _llk_math_custom_mm_init_ first, and again after any other math op (a copy init leaves the Src
  *       zero flag at keep).
@@ -207,6 +207,9 @@ inline void _llk_math_custom_mm_(
         math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
         "custom_mm: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
         "this call left it at keep, so denormal Src operands would not be flushed");
+    // Same range as the unpack side (kt_dim = 0 would wrap the loop below). Rejecting the block here too leaves no
+    // MVMUL waiting on SrcB data that the unpacker will never deliver.
+    LLK_ASSERT(kt_dim >= 1 && kt_dim <= 256, "custom_mm: kt_dim must be 1 to 256");
 
     const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);

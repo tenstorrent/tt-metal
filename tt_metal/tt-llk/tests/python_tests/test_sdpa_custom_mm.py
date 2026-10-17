@@ -40,11 +40,13 @@ The mask re-entry cases preload the mask from the host, then run masked and unma
 matmuls without reinitializing the unpacker. PACK consumes the FPU_SFPU notifications.
 """
 
+import os
 from dataclasses import dataclass
 
 import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.device import LLKAssertException
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import DestAccumulation, MathFidelity
@@ -219,10 +221,14 @@ def _run(
     input_tile_offset=0,
     preserve_zero_flag=False,
     operands=None,
+    exact_arithmetic=False,
 ):
     """Run sdpa_custom_mm and check it against the golden; return the (M, N) result.
 
     ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
+    ``exact_arithmetic`` says the operands were built so every product and sum is exact in
+    LoFi and the bf16 dest; the result is then compared exactly (atol = rtol = 0) instead of
+    with the K-aware atol below, which would hide a wrong face at a large kt.
     """
     kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM
     assert M in {1, 2, 4, 8}, "in0 row count M must be in {1,2,4,8}"
@@ -308,12 +314,14 @@ def _run(
     active = active[active > 0]
     mean_active = active.mean().item() if active.numel() else 0.0
     acc_atol = max(FLOAT16B_DEFAULT_ATOL, ACC_ATOL_PER_KT * kt * mean_active)
+    custom_atol, custom_rtol = (0.0, 0.0) if exact_arithmetic else (acc_atol, None)
 
     assert passed_test(
         golden,
         res_tensor,
         DataFormat.Float16_b,
-        custom_atol=acc_atol,
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
         print_pcc=True,
     ), f"sdpa_custom_mm failed for (M={M}, K={K}, N={N}, sg={signal_granularity}, read_transposed={read_transposed})"
     return res_tensor
@@ -499,6 +507,109 @@ def test_sdpa_custom_mm_mask_extent_restore(
     assert torch.equal(
         result, golden
     ), "Mask extent or SrcB geometry restoration changed the matmul"
+
+
+# The shared custom_mm SrcB face walk covers 255 k-tiles from one base, so kt_dim = 256 is unpacked
+# as two runs (llk_unpack_AB_custom_mm.h); with the even-only contract here the ceiling is 256 and
+# the first value past it is 258. ct = 1 in Float16_b is the most the harness's L1 window holds.
+KT_MAX = 256
+KT_CEILING_M = 8
+KT_CEILING_N = DEFAULT_TILE_C_DIM
+
+
+def _sign_deciding_operands(M, K, N):
+    """A is 0 except the last face (= +1) and the face 256 below it (= -1); B is 0 except the rows
+    the last face pairs with, as small integers (1..8) exact in LoFi. The golden is +16 * B_row; a
+    walk that reads the face 256 below gives -16 * B_row."""
+    last_face = slice(K - FACE_C_DIM, K)
+    aliased_face = slice(K // 2 - FACE_C_DIM, K // 2)
+    torch_a = torch.zeros((M, K), dtype=torch.bfloat16)
+    torch_a[:, last_face] = 1.0
+    torch_a[:, aliased_face] = -1.0
+    torch_b = torch.zeros((K, N), dtype=torch.bfloat16)
+    torch_b[last_face, :] = (1.0 + (torch.arange(N, dtype=torch.float32) % 8)).to(
+        torch.bfloat16
+    )
+    return torch_a, torch_b
+
+
+def _both_runs_operands(M, K, N):
+    """The sign-deciding operands plus a first face that makes the first run of the split contribute too:
+    A's face 0 = 1 and B's rows of face 0 = 1 add 16 per lane, so the expected result is
+    16 * (2 + n % 8)."""
+    torch_a, torch_b = _sign_deciding_operands(M, K, N)
+    torch_a[:, :FACE_C_DIM] = 1.0
+    torch_b[:FACE_C_DIM, :] = 1.0
+    return torch_a, torch_b
+
+
+def test_sdpa_custom_mm_kt_max(request):
+    """kt_dim = 256 needs SrcB face 511, which one custom_mm face walk cannot address; the LLK runs it twice.
+
+    sdpa_custom_mm runs the same unpack worker and init MOP as custom_mm, so it gets the same two-run
+    split. A single walk would multiply k-tile 255's second half of B with A's face 255 instead of
+    face 511; the operands make that one swap decide the sign of the result.
+    """
+    _skip_on_simulator(request)
+    M, K, N = KT_CEILING_M, KT_MAX * DEFAULT_TILE_R_DIM, KT_CEILING_N
+    _run(
+        M,
+        K,
+        N,
+        signal_granularity=1,
+        read_transposed=False,
+        mm_transpose=False,
+        operands=_sign_deciding_operands(M, K, N),
+        exact_arithmetic=True,
+    )
+
+
+def test_sdpa_custom_mm_kt_max_both_runs(request):
+    """kt_dim = 256 with both runs of the split contributing: 16 from the first face, 16..128 from the last."""
+    _skip_on_simulator(request)
+    M, K, N = KT_CEILING_M, KT_MAX * DEFAULT_TILE_R_DIM, KT_CEILING_N
+    _run(
+        M,
+        K,
+        N,
+        signal_granularity=1,
+        read_transposed=False,
+        mm_transpose=False,
+        operands=_both_runs_operands(M, K, N),
+        exact_arithmetic=True,
+    )
+
+
+@pytest.mark.skipif(
+    os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1",
+    reason="LLK_ASSERT is compiled out (TT_LLK_DISABLE_ASSERTS=1); past the ceiling the walk then runs unguarded",
+)
+def test_sdpa_custom_mm_kt_past_max_asserts(request):
+    """kt_dim = 258 is past the contract; the unpack and math LLKs both reject it before issuing anything.
+
+    The test kernel's pack thread gives up waiting for math (sdpa_custom_mm_test.cpp), so no Tensix
+    instruction is left pending for the next test.
+    """
+    _skip_on_simulator(request)
+    M, K, N = KT_CEILING_M, (KT_MAX + 2) * DEFAULT_TILE_R_DIM, KT_CEILING_N
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        LLKAssertException
+    ) as assert_hit:
+        _run(
+            M,
+            K,
+            N,
+            signal_granularity=1,
+            read_transposed=False,
+            mm_transpose=False,
+            operands=_sign_deciding_operands(M, K, N),
+        )
+    stack_traces = str(assert_hit.value)
+    for thread in ("TRISC0", "TRISC1"):
+        assert (
+            thread in stack_traces
+        ), f"expected {thread} to reject kt_dim={K // DEFAULT_TILE_R_DIM}:\n{stack_traces}"
 
 
 # Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
