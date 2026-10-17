@@ -13,6 +13,12 @@
 // on next reinit. Assumes full 32x32 tile (4 faces, 8 rows each).
 inline void _llk_math_eltwise_unary_datacopy_custom_(const std::uint32_t dest_index = 0)
 {
+    // MOVA2D flushes any SrcA datum with a zero exponent byte (bf16 -0.0, denormals) while the Src
+    // zero-substitution flag holds the operand default, so this copy owns the PRESERVE policy like
+    // copy_tile_init / transpose_dest do; skip-if-set keeps it cheap. The next compute init restores
+    // its own operand-driven value.
+    math::_configure_preserve_zero_flag_state_();
+
     addr_mod_t {
         .srca = {.incr = 8},
         .srcb = {.incr = 0},

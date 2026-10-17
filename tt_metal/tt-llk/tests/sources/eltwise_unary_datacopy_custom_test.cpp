@@ -6,6 +6,13 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "params.h"
+
+// Pack reads DEST raw so the bf16 output carries -0.0 and denormals as the copy left them (see the python side;
+// params.h carries the harness define, so it must come first).
+#ifndef DATACOPY_CUSTOM_PACK_RAW
+#define DATACOPY_CUSTOM_PACK_RAW false
+#endif
 
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
@@ -77,6 +84,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
     _llk_pack_dest_init_<DstSync::SyncHalf, false>();
+
+    if constexpr (DATACOPY_CUSTOM_PACK_RAW)
+    {
+        // The packer's default bf16 -> bf16 early conversion rounds, which flushes denormals and turns -0.0 into
+        // +0.0 before the datum reaches L1, hiding what the copy left in DEST. Read DEST raw (identity conversion)
+        // so the L1 output is bit-for-bit what DEST holds.
+        cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_int8_RMW>(1);
+    }
 
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
