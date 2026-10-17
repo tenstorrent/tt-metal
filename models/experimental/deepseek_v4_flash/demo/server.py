@@ -386,10 +386,27 @@ def _conversation_key(message: dict) -> str:
     every user turn. They mean the same thing, so the mirror is dropped: otherwise the
     first tool result of a session would appear to rewrite all the turns before it and
     re-prefill the whole conversation.
+
+    An assistant message is matched on what it says, not on how the client echoes it: a
+    continuation never re-renders it (its tokens are the model's own, already cached), and
+    harnesses routinely rename tool-call ids, re-serialize the arguments or trim the text.
+    So its content is compared stripped and its tool calls by name and parsed arguments.
     """
     message = {k: v for k, v in message.items() if k != "reasoning_content"}
     if message.get("content_blocks") == [{"type": "text", "text": message.get("content", "")}]:
         del message["content_blocks"]
+    if message.get("role") == "assistant":
+        message["content"] = (message.get("content") or "").strip()
+        calls = []
+        for call in message.pop("tool_calls", None) or []:
+            function = call.get("function", {})
+            try:
+                arguments = json.loads(function.get("arguments") or "{}")
+            except (TypeError, ValueError):
+                arguments = function.get("arguments")
+            calls.append([function.get("name"), arguments])
+        if calls:
+            message["tool_calls"] = calls
     return json.dumps(message, sort_keys=True, default=str)
 
 
@@ -828,9 +845,34 @@ class _Prefiller:
         self.engine.model.snapshot_resident_state()
         self._loud = False
 
-    def aligned(self, n_tokens: int) -> int:
-        """How many of a fresh ``n_tokens``-token prompt the prefill takes; decode replays the rest."""
+    # A prefill continues a session (``user.pos > 0``, see :meth:`aligned`) only from multiples of this;
+    # ``None``: the prefill model only starts sessions.
+    continue_alignment: int | None = None
+    # A session rewound to an earlier position (see _Scheduler._resume) is continued by a bounded replay: the
+    # prefill runs this many cached tokens before that position again, only to rebuild the sliding window, and
+    # reuses the cached compressed KV. ``None``: the prefill model has no bounded replay.
+    replay_window: int | None = None
+
+    def aligned(self, n_tokens: int, start: int = 0, bounded: bool = False) -> int:
+        """How many of ``n_tokens`` prompt tokens at positions ``start ..`` the prefill takes (0 for none);
+        decode replays the rest. ``bounded``: as a bounded replay from ``start`` (the first
+        :attr:`replay_window` of them the cached window). V4's prefill model only starts a session."""
+        if start or bounded:
+            return 0
         return min(n_tokens // ALIGNMENT * ALIGNMENT, self.max_len)
+
+    def _prefill(self, user: UserSession, ids: torch.Tensor, on_chunk, replayed: int = 0):
+        """``(logits, states)`` of the traced prefill of ``ids`` ``[1, n]`` at ``user.pos``, or, ``replayed``
+        (:attr:`replay_window`), as a bounded replay whose first ``replayed`` ids precede ``user.pos``."""
+        return self.model.prefill_traced(ids, on_chunk=on_chunk)
+
+    def _commit(self, user: UserSession, states) -> int:
+        """Write ``states`` into ``user``'s session; returns its new position."""
+        model = self.engine.model
+        # The previous conversation (or the capture step) must not leak into this one.
+        model.reset_session(user.sid)
+        model.reset_static_caches()
+        return model.commit_prefill_state(states, user.sid, bias_slots=self.bias_slots)
 
     def seconds(self, n_tokens: int) -> float:
         """Expected wall time of :meth:`run` over ``n_tokens`` (a multiple of 128)."""
@@ -843,9 +885,16 @@ class _Prefiller:
         on_progress=None,
         drain_seconds: float = 0.0,
         drained: int = 0,
+        replayed: int = 0,
     ) -> torch.Tensor:
-        """Prefill ``ids`` (a multiple of 128 tokens) into ``user``'s empty session; returns
-        the next-token logits ``[V]`` (host fp32) and leaves ``user.pos`` at ``len(ids)``.
+        """Prefill ``ids`` (as many tokens as :meth:`aligned` allows at ``user.pos``) into ``user``'s
+        session, empty or continued from ``user.pos``; returns the next-token logits ``[V]`` (host fp32) and
+        advances ``user.pos`` by ``len(ids) - replayed``. A continued prefill that fails rewinds the session, so the
+        next turn re-prefills the conversation whole. ``on_progress`` gets the count of new ``ids`` done.
+
+        ``replayed`` (:attr:`replay_window`) makes it a bounded replay: the first ``replayed`` of ``ids`` are the
+        cached tokens just before ``user.pos``, run again to rebuild the sliding window over the cached
+        compressed KV (``aligned(len(ids), user.pos - replayed, bounded=True)`` of them).
 
         Must run with no decode step in flight: the replays share decode's command queue and
         overwrite its L1 tensors, which are written back before anything else runs.
@@ -860,7 +909,7 @@ class _Prefiller:
         t_seat = time.perf_counter()
         user.activate()
         seat_seconds = time.perf_counter() - t_seat
-        n = len(ids)
+        n, base = len(ids), user.pos
         num_chunks = -(-n // self.chunk_size)
         chunk_times: list[tuple[int, float]] = []
         t0 = time.perf_counter()
@@ -868,21 +917,25 @@ class _Prefiller:
         def on_chunk(_i, start, end, seconds):
             chunk_times.append((end - start, seconds))
             if on_progress is not None:
-                on_progress(end)  # the status pane reads this from another thread
+                on_progress(max(0, end - base))  # the status pane reads this from another thread
 
         try:
-            logits, states = prefill.prefill_traced(torch.tensor(ids, dtype=torch.long).unsqueeze(0), on_chunk=on_chunk)
-        finally:
-            self.t_prefill_out = time.perf_counter()
-            model.reload_resident_state()
+            try:
+                ids_t = torch.tensor(ids, dtype=torch.long).unsqueeze(0)
+                logits, states = self._prefill(user, ids_t, on_chunk, replayed)
+            finally:
+                self.t_prefill_out = time.perf_counter()
+                model.reload_resident_state()
+        except Exception:
+            if base:
+                with contextlib.suppress(Exception):
+                    user.reset()
+            raise
         prefill_seconds = self.t_prefill_out - t0
         t1 = time.perf_counter()
         reload_seconds = t1 - self.t_prefill_out
         try:
-            # The previous conversation (or the capture step) must not leak into this one.
-            model.reset_session(user.sid)
-            model.reset_static_caches()
-            committed = model.commit_prefill_state(states, user.sid, bias_slots=self.bias_slots)
+            committed = self._commit(user, states)
         except Exception:
             with contextlib.suppress(Exception):
                 user.reset()
@@ -899,8 +952,12 @@ class _Prefiller:
             self.chunk_seconds = 0.5 * self.chunk_seconds + 0.5 * steady_seconds / len(steady)
         fill_seconds = max(total_seconds - (num_chunks - 1) * self.chunk_seconds, 0.0)
         self.fill_seconds = 0.5 * self.fill_seconds + 0.5 * fill_seconds
+        how = f" continuing from {base}" if base else ""
+        if replayed:
+            how += f" after replaying the {replayed}-token window before it"
         logger.info(
-            f"prefill model (user {user.index}): {n} tokens in {prefill_seconds:.2f}s = "
+            f"prefill model (user {user.index}): {n - replayed} tokens{how} in "
+            f"{prefill_seconds:.2f}s = "
             f"{n / prefill_seconds:.1f} tok/s, {num_chunks} chunk(s) of up to {self.chunk_size} through "
             f"{self.num_stages} stage(s), {piped} tok/s pipelined"
         )
@@ -928,9 +985,11 @@ class _Turn:
     (the client hung up), both of which are thread-safe.
 
     A turn starts in the ``prefill`` phase, feeding its prompt tokens, and moves to
-    ``decode`` once the last of them has been fed. A turn that starts a session from
-    position 0 has its 128-aligned prefix (:attr:`device_prefill` tokens) run by the
-    traced prefill model in one go, and only the rest replayed through decode.
+    ``decode`` once the last of them has been fed. A long prompt has :attr:`device_prefill`
+    of its tokens run by the traced prefill model in one go and only the rest replayed
+    through decode: from position 0 for a fresh session, or, continuing one, after
+    :attr:`prefill_from` tokens replayed to bring the cache to a position the prefill model
+    continues from.
     :attr:`pending` records the steps
     this turn has in flight, in dispatch order, so the scheduler knows how many
     outputs to collect for it and whether each one is a prompt token's (discarded) or
@@ -964,8 +1023,13 @@ class _Turn:
         self.phase = self.PREFILL
         self.ids: list[int] = []  # the turn's prompt tokens
         self.fed = 0  # how many of them have been dispatched
-        self.device_prefill = 0  # leading prompt tokens still to go through the traced prefill model
+        self.device_prefill = 0  # prompt tokens still to go through the traced prefill model
+        self.prefill_from = 0  # ... from this many fed (replayed through decode up to an aligned position)
         self.prefilled_on_device = 0  # ... and how many it took, once it has run
+        # A conversation resumed from an earlier turn (see _Scheduler._resume): the cached tokens before the
+        # rewound position that the prefill model replays first, to rebuild the sliding window.
+        self.replay_ids: list[int] = []
+        self.resumed_from = 0  # ... the position it rewound to (0: not resumed)
         self.rebuilt = False  # a continued conversation rewound and re-prefilled whole, since that was faster
         self.t_replay = 0.0  # when this turn's prompt tokens started going through decode
         self.next_id: int | None = None  # produced but not yet fed back
@@ -1283,18 +1347,19 @@ class _Scheduler:
         )
         try:
             self.server._apply_options(user, turn.body)
-            continuing = self.server._sync_messages(user, turn.body["messages"])
-            if continuing:
-                user.messages.append(turn.message)
-                turn.ids = self.server._render_ids(user, include_assistant=False)
-            else:
-                user.messages = user.messages + [turn.message]
-                user._next_render = 0
-                turn.ids = self.server._render_ids(user, include_assistant=True)
-            self._choose_feed(user, turn, continuing)
+            if _continues(turn.body["messages"], user.messages) or not self._resume(user, turn):
+                continuing = self.server._sync_messages(user, turn.body["messages"])
+                if continuing:
+                    user.messages.append(turn.message)
+                    turn.ids = self.server._render_ids(user, include_assistant=False)
+                else:
+                    user.messages = user.messages + [turn.message]
+                    user._next_render = 0
+                    turn.ids = self.server._render_ids(user, include_assistant=True)
+                self._choose_feed(user, turn, continuing)
             self._check_capacity(user, turn.ids)
         except Exception as e:  # noqa: BLE001 - reported to the client, the server stays up
-            if turn.rebuilt:
+            if turn.rebuilt or turn.resumed_from:
                 user.reset()  # the cache was already rewound: start the conversation afresh next time
             elif continuing:
                 user.messages.pop()  # nothing was fed: leave the conversation as it was
@@ -1307,7 +1372,10 @@ class _Scheduler:
             self.engine.tokenizer, lambda r, c: turn.events.put(("delta", r, c)), self.engine.chat_format
         )
         self._active.append(turn)
-        how = "re-prefill whole conversation" if turn.rebuilt else "continuing" if continuing else "fresh session"
+        if turn.resumed_from:
+            how = f"resumed from the cache at {turn.resumed_from}"
+        else:
+            how = "re-prefill whole conversation" if turn.rebuilt else "continuing" if continuing else "fresh session"
         logger.debug(
             f"user {turn.user_key!r} admitted: prefill {len(turn.ids)} tokens ({how}"
             f"{f', {turn.device_prefill} by the prefill model' if turn.device_prefill else ', all through decode'}), "
@@ -1317,12 +1385,15 @@ class _Scheduler:
     def _choose_feed(self, user: UserSession, turn: _Turn, continuing: bool) -> None:
         """Pick the faster way to get this turn's prompt into the cache.
 
-        The prefill model only starts an empty session and takes 128-aligned prefixes, and a
-        single chunk already costs a pass through every stage, so replaying a short prompt
-        through decode is quicker. For a fresh session the choice is how much the prefill
-        model takes (:attr:`_Turn.device_prefill`). A continued conversation can either
-        replay just its new turn onto the warm cache or rewind and re-prefill the whole
-        conversation with the prefill model; the latter wins once the new turn is long.
+        The prefill model takes 128-aligned runs of tokens, and a single chunk already costs
+        a pass through every stage, so replaying a short prompt through decode is quicker.
+        For a fresh session the choice is how much the prefill model takes
+        (:attr:`_Turn.device_prefill`). A continued conversation replays a short new turn
+        onto the warm cache. A long one goes through the prefill model on top of the cache
+        when the model can continue a session (:attr:`_Prefiller.continue_alignment`): decode
+        replays the few tokens up to the next position it continues from
+        (:attr:`_Turn.prefill_from`), the prefill model the bulk, decode the ragged rest.
+        Otherwise the whole conversation is rewound and re-prefilled, once that is faster.
         """
         prefiller = self.server.prefiller
         if prefiller is None:
@@ -1350,6 +1421,19 @@ class _Scheduler:
             return
         if replay_seconds <= prefiller.fill_seconds:
             return  # no prefill can beat appending the new turn to the warm cache
+        step = prefiller.continue_alignment
+        lead = -user.pos % step if step else 0
+        n = prefiller.aligned(len(turn.ids) - lead, user.pos + lead) if step and lead < len(turn.ids) else 0
+        if n:
+            seconds = prefiller.seconds(n) + (len(turn.ids) - n) / rate
+            if seconds < replay_seconds:
+                logger.debug(
+                    f"user {turn.user_key!r}: continuing the cache at {user.pos} with the prefill model: "
+                    f"{lead} tokens through decode, {n} by the prefill model, {len(turn.ids) - lead - n} through "
+                    f"decode (~{seconds:.1f}s instead of ~{replay_seconds:.1f}s replaying all {len(turn.ids)})"
+                )
+                turn.device_prefill, turn.prefill_from = n, lead
+            return
         next_render, user._next_render = user._next_render, 0
         try:
             full = self.server._render_ids(user, include_assistant=True)
@@ -1370,6 +1454,82 @@ class _Scheduler:
         turn.device_prefill = n
         turn.rebuilt = True
         note_overflow(len(full))
+
+    def _resume(self, user: UserSession, turn: _Turn) -> bool:
+        """Rewind ``user``'s cache to the latest turn the request still agrees with, instead of to position 0,
+        when the request is not a continuation (an edited, truncated or forked history); returns whether it did.
+
+        The resume point is a mark (:attr:`UserSession.marks`): the end of an assistant turn whose messages the
+        request repeats and which a non-assistant message follows, so the cache there holds exactly the
+        continuation render's prefix. The cache rewinds to ``Q`` at or before the mark, with ``Q - replay_window``
+        on the grid the prefill model continues from; the compressed KV before ``Q`` is kept, and the prefill model rebuilds
+        the sliding window by replaying the ``replay_window`` cached tokens before ``Q`` (SWA bounded replay),
+        then takes the cached tokens from ``Q`` to the mark and the newly rendered messages. Only when that beats
+        re-prefilling the whole conversation.
+        """
+        prefiller = self.server.prefiller
+        if prefiller is None or not prefiller.replay_window or not prefiller.continue_alignment:
+            return False
+        if not user.marks or len(user.tokens) != user.pos:
+            return False
+        window, step, rate = prefiller.replay_window, prefiller.continue_alignment, self.replay_rate
+        messages = turn.body["messages"]
+        keys = [_conversation_key(m) for m in messages]
+        common = next(
+            (i for i, old in enumerate(user.messages[: len(messages)]) if _conversation_key(old) != keys[i]),
+            min(len(messages), len(user.messages)),
+        )
+        mark = next(
+            (
+                m
+                for m in reversed(user.marks)
+                if m[0] <= common and m[0] < len(messages) and messages[m[0]].get("role") != "assistant"
+            ),
+            None,
+        )
+        if mark is None:
+            return False
+        n_messages, pos, pending = mark
+        start = (pos - window) // step * step  # the replay starts on the prefill's grid, not just Q
+        resume_at = start + window
+        if start <= 0:
+            return False
+
+        stored = (user.messages, user._next_render, user.pending_id)
+        user.messages, user._next_render, user.pending_id = list(messages), n_messages, pending
+        try:
+            rendered = self.server._render_ids(user, include_assistant=True, closing=True)
+        finally:
+            user.messages, user._next_render, user.pending_id = stored
+        ids = user.tokens[resume_at:pos] + rendered
+        n = prefiller.aligned(window + len(ids), start, bounded=True)
+        if not n:
+            return False
+        n -= window
+        seconds = prefiller.seconds(window + n) + (len(ids) - n) / rate
+        whole = pos + len(rendered)  # about what re-prefilling the conversation from 0 renders
+        n_whole = prefiller.aligned(whole)
+        whole_seconds = prefiller.seconds(n_whole) + (whole - n_whole) / rate if n_whole else whole / rate
+        if seconds >= whole_seconds:
+            return False
+
+        logger.debug(
+            f"user {turn.user_key!r}: resuming the cache at {resume_at} (message {n_messages} of {len(messages)}, "
+            f"cached to {user.pos}): {window} cached tokens replayed for the window, {n} by the prefill model, "
+            f"{len(ids) - n} through decode (~{seconds:.1f}s instead of ~{whole_seconds:.1f}s re-prefilling)"
+        )
+        self.engine.model.truncate_session(user.sid, resume_at)
+        turn.resumed_from = resume_at
+        user.pos = resume_at
+        user.pending_id = None
+        user.marks = [m for m in user.marks if m[1] <= resume_at and m[0] <= n_messages]
+        turn.replay_ids = user.tokens[start:resume_at]
+        del user.tokens[resume_at:]
+        user.messages = list(messages)
+        turn.ids = ids
+        turn.device_prefill = n
+        turn.prefill_from = 0
+        return True
 
     # -- KV pool reporting ------------------------------------------------------- #
     def pool_usage(self) -> dict:
@@ -1470,7 +1630,11 @@ class _Scheduler:
                     self._fail(turn, turn.error)  # its in-flight steps have now been read back
                 continue
             try:
-                if turn.phase == _Turn.PREFILL and turn.device_prefill:
+                if (
+                    turn.phase == _Turn.PREFILL
+                    and (turn.device_prefill or turn.replay_ids)
+                    and turn.fed == turn.prefill_from
+                ):
                     t_drain = time.perf_counter()
                     drained = len(self._inflight) + len(self.engine._replay_q)
                     if not self._settle():
@@ -1568,25 +1732,35 @@ class _Scheduler:
         ``drain_seconds`` / ``drained``: the wait for the decode steps in flight before it."""
         user = self.engine.users[turn.slot]
         n, turn.device_prefill = turn.device_prefill, 0
-        assert user.pos == 0 and turn.fed == 0, "the prefill model only starts a session"
+        replay, turn.replay_ids = turn.replay_ids, []
+        base = turn.fed
+        assert base == turn.prefill_from and not turn.pending, "device prefill before its lead tokens are back"
         logger.debug(
             f"user {turn.user_key!r}: prefilling {n} of {len(turn.ids)} tokens with the prefill model "
+            f"from pos {user.pos}{f' after a {len(replay)}-token window replay' if replay else ''} "
             f"({len(self._active) - 1} other turn(s) wait)"
         )
         # The turn's own clock starts here, so the pane's prefill tok/s covers this prefill.
         turn.t_admit = turn.t_admit or time.perf_counter()
 
         def progress(done: int) -> None:
-            turn.mark_prefill_chunk(done)
+            turn.mark_prefill_chunk(base + done)
 
         row = self.server.prefiller.run(
-            user, turn.ids[:n], on_progress=progress, drain_seconds=drain_seconds, drained=drained
+            user,
+            replay + turn.ids[base : base + n],
+            on_progress=progress,
+            drain_seconds=drain_seconds,
+            drained=drained,
+            replayed=len(replay),
         )
+        user.tokens.extend(turn.ids[base : base + n])
         turn.t_prefill_out = self.server.prefiller.t_prefill_out
-        turn.fed = turn.prefilled_on_device = n
+        turn.fed = base + n
+        turn.prefilled_on_device = n
         turn.t_replay = time.perf_counter()
         self.steps += n
-        if n == len(turn.ids):
+        if turn.fed == len(turn.ids):
             out = row.reshape(1, -1)
             turn.next_id = turn.sampler(out) if turn.sampler is not None else int(out[0].argmax().item())
             self._prompt_done(turn)
@@ -1606,12 +1780,16 @@ class _Scheduler:
             room = self.prefill_chunk - len(turn.pending)
             if not turn.prompt_left or room < (self.prefill_chunk + 1) // 2:
                 return []
-            if turn.fed == turn.prefilled_on_device:
+            # Tokens up to a pending device prefill (its lead to an aligned position) go through decode first.
+            left = turn.prefill_from - turn.fed if turn.device_prefill or turn.replay_ids else turn.prompt_left
+            if left <= 0:
+                return []
+            if turn.fed in (0, turn.prefill_from + turn.prefilled_on_device):
                 logger.debug(
-                    f"user {turn.user_key!r}: replaying {turn.prompt_left} prompt tokens through decode "
+                    f"user {turn.user_key!r}: replaying {left} prompt tokens through decode "
                     f"from pos {user.pos}, up to {self.prefill_chunk} in flight"
                 )
-            n = min(room, turn.prompt_left)
+            n = min(room, left)
             return [(int(turn.ids[turn.fed + i]), user.pos + i, turn.fed + i + 1 == len(turn.ids)) for i in range(n)]
         if turn.pending:
             return []
@@ -1658,6 +1836,7 @@ class _Scheduler:
                 self._reader.expect(turn)
                 self._inflight.append(turn)
                 turn.pending.append(last_prompt_token)
+                user.tokens.append(token_id)
                 user.pos += 1
                 if turn.phase == _Turn.PREFILL:
                     turn.fed += 1
@@ -1750,6 +1929,7 @@ class _Scheduler:
             engine.write_traced(token, user.pos)
             self._reader.expect(None)
             self._inflight.append(None)
+            user.tokens.append(token)
             user.pos += 1
             self.steps += 1
             user.pending_id = None if token == engine.eos_id else engine.eos_id
@@ -1774,6 +1954,8 @@ class _Scheduler:
         user.messages.append(assistant)
         user._next_render = len(user.messages)
         self._retire(turn)
+        if len(user.tokens) == user.pos:
+            user.marks.append((len(user.messages), user.pos, user.pending_id))
         replayed = len(turn.ids) - turn.prefilled_on_device
         if turn.prefilled_on_device:
             how = f"{turn.prefilled_on_device} by the prefill model + {replayed} through decode"
@@ -1781,6 +1963,8 @@ class _Scheduler:
             how = "all through decode"
         if turn.rebuilt:
             how += ", whole conversation re-prefilled"
+        if turn.resumed_from:
+            how += f", resumed from the cache at {turn.resumed_from}"
         prefill_rate = len(turn.ids) / turn.prefill_seconds if turn.prefill_seconds > 0 else 0.0
         logger.info(
             f"user {turn.user_key!r} (slot {user.index}): prefill {len(turn.ids)} tokens ({how}) in "
@@ -1937,6 +2121,21 @@ class GenerationServer:
         if _continues(messages, user.messages):
             user.messages.extend(messages[len(user.messages) : -1])
             return True
+        if user.messages:
+            differs = next(
+                (
+                    i
+                    for i, (new, old) in enumerate(zip(messages, user.messages))
+                    if _conversation_key(new) != _conversation_key(old)
+                ),
+                None,
+            )
+            why = (
+                f"message {differs} ({messages[differs].get('role')}) differs from the cached one"
+                if differs is not None
+                else f"the request has {len(messages)} messages, the cache holds {len(user.messages)}"
+            )
+            logger.debug(f"user {user.index}: not a continuation ({why}); rewinding the cache")
         user.reset()
         user.messages = list(messages[:-1])
         user._next_render = 0
@@ -2015,13 +2214,15 @@ class GenerationServer:
                 raise RequestError(400, f"reasoning_effort must be one of {list(efforts)}, but got {effort!r}")
             user.reasoning_effort = effort
 
-    def _render_ids(self, user: UserSession, include_assistant: bool) -> list[int]:
+    def _render_ids(self, user: UserSession, include_assistant: bool, closing: bool | None = None) -> list[int]:
         """Tokens for the not-yet-encoded part of ``user.messages``.
 
         With ``include_assistant`` (a fresh re-prefill) every message is rendered,
         past assistant turns included. Otherwise (a continuation) assistant turns
         are skipped -- the model's own tokens are in the cache already -- and the
-        turn starts with the pending token that closed the previous one."""
+        turn starts with the pending token that closed the previous one. ``closing``
+        overrides whether it does (a resumed conversation renders the assistant turns
+        after its resume point and still closes the cached one)."""
         engine = user.engine
         first_turn = user._next_render == 0
         rendered = "".join(
@@ -2030,7 +2231,9 @@ class GenerationServer:
             if include_assistant or user.messages[i]["role"] != "assistant"
         )
         ids = list(engine.tokenizer(rendered, add_special_tokens=first_turn)["input_ids"])
-        if include_assistant:
+        if closing is None:
+            closing = not include_assistant
+        if not closing:
             return ids
         prefix: list[int] = []
         if user.pending_id is not None:

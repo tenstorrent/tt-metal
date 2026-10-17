@@ -239,11 +239,51 @@ class _V41Prefiller(_Prefiller):
             # Sliding layers attend without an additive mask (the compressed ones stay masked): the masked SDPA's
             # mask buffers do not fit beside the L1 decode keeps resident.
             maskless=True,
+            # Fresh-window traces, so a conversation edited past an earlier turn resumes from its cached
+            # compressed KV (SWA bounded replay) instead of re-prefilling from 0.
+            bounded_replay=True,
             progress=self._note,
         )
 
     def _bias_slots(self):
         return None
+
+    @property
+    def continue_alignment(self) -> int | None:
+        return self.model.continue_alignment
+
+    @property
+    def replay_window(self) -> int | None:
+        return self.model.config.sliding_window
+
+    def aligned(self, n_tokens: int, start: int = 0, bounded: bool = False) -> int:
+        """Also continues a session: from a multiple of :attr:`continue_alignment` the prefill model starts from
+        the session's decode caches (see :meth:`DeepSeekV41Model.seed_prefill`), or, ``bounded``, from their
+        compressed KV alone."""
+        if not start:
+            return super().aligned(n_tokens)
+        return self.model.continuation_tokens(start, n_tokens, bounded_replay=bounded)
+
+    def _prefill(self, user, ids, on_chunk, replayed: int = 0):
+        if not user.pos:
+            return super()._prefill(user, ids, on_chunk)
+        model = self.engine.model
+        if replayed:
+            return self.model.prefill_traced(
+                ids,
+                on_chunk=on_chunk,
+                start=user.pos - replayed,
+                seed=lambda traced: model.seed_prefill(traced, user.sid, tails=False),
+                bounded_replay=True,
+            )
+        return self.model.prefill_traced(
+            ids, on_chunk=on_chunk, start=user.pos, seed=lambda traced: model.seed_prefill(traced, user.sid)
+        )
+
+    def _commit(self, user, states) -> int:
+        if not user.pos:
+            return super()._commit(user, states)
+        return self.engine.model.commit_prefill_state(states, user.sid, start=user.pos)
 
 
 def parse_args(argv: list[str] | None = None):
