@@ -130,6 +130,10 @@ inline void _llk_math_sdpa_custom_mm_init_(const std::uint32_t operandB_face_r_d
  */
 inline void _llk_math_sdpa_custom_mm_mask_dest_(const std::uint32_t dst_index, const std::uint32_t ct_dim, bool mask_chunk = false)
 {
+    LLK_ASSERT(dst_index % FACE_R_DIM == 0, "sdpa_custom_mm: dst_index must be a multiple of FACE_R_DIM (a result tile is FACE_R_DIM DEST rows)");
+    LLK_ASSERT(
+        dst_index + ct_dim * FACE_R_DIM <= DEST_REGISTER_HALF_SIZE,
+        "sdpa_custom_mm: the ct_dim result tiles starting at dst_index must fit inside the current DEST half");
     // Zero Dest
     std::uint32_t dst_offset = dst_index + get_dest_buffer_base();
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_offset);

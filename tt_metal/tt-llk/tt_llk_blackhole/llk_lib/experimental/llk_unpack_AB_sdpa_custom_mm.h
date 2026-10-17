@@ -33,11 +33,13 @@ using namespace ckernel::unpacker;
  * @param tile_size_a: in1 tile size, in 16-byte words.
  * @param tile_size_b: in0 tile size, in 16-byte words.
  * @param kt_dim: Inner dimension in tiles.
- * @param ct_dim: Output width in tiles, 1 to 16.
- * @param mask_chunk: Unpack the mask row into SrcB ahead of the block so the math side can seed DEST from it.
+ * @param ct_dim: Output width in tiles, 1 to 16; must match the math call.
+ * @param mask_chunk: Unpack the mask row into SrcB ahead of the block so the math side can seed DEST from it; must
+ *                    match the math call.
  * @param operandB_face_r_dim: in0 face height, 1, 2, 4 or 8. Must equal the unpB_face_r_dim given to
  *                             @ref _llk_unpack_AB_custom_mm_init_: every masked call restores it as unpacker 1's X
- *                             end after the mask read.
+ *                             end after the mask read, so a wrong value here leaves the in0 unpacks that follow
+ *                             reading the wrong number of rows per face. Required for that reason: no default.
  * @param row_stride: in1 tiles per stored row when read_transposed; zero uses kt_dim.
  * @note Call @ref _llk_unpack_AB_custom_mm_init_ first.
  * @note On the math thread, pair with @ref _llk_math_sdpa_custom_mm_ (same ct_dim and mask_chunk).
@@ -52,10 +54,10 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
     const std::uint32_t tile_size_a,
     const std::uint32_t tile_size_b,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim              = 1,
-    const bool mask_chunk                   = false,
-    const std::uint32_t operandB_face_r_dim = 8,
-    const std::uint32_t row_stride          = 0)
+    const std::uint32_t ct_dim,
+    const bool mask_chunk,
+    const std::uint32_t operandB_face_r_dim,
+    const std::uint32_t row_stride = 0)
 {
     const std::uint32_t in1_row = row_stride ? row_stride : kt_dim;
     if constexpr (read_transposed)
