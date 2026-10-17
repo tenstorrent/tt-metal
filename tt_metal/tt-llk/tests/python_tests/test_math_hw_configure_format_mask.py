@@ -53,6 +53,8 @@ Record = namedtuple("Record", ["writer", "srca", "srcb", "word"])
 
 
 def _int8_math_enabled(raw_format):
+    # Mirrors is_int8_or_int32_format (ckernel_defs.h): Int8 is matched after masking (so UInt8 = 30
+    # counts), Int32 only raw (so UInt32 = 24 does not enable INT8 math).
     return (raw_format & FIELD_WIDTH_MASK) == INT8 or raw_format == INT32
 
 
