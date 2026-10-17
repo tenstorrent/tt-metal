@@ -494,14 +494,15 @@ ttnn::Tensor chunked_flash_mla_prefill(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& input_tensor_v) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
     return ttnn::prim::sdpa(
         input_tensor_q,
         input_tensor_k,
-        std::nullopt,       // V is implied by K in MLA mode
+        input_tensor_v,     // empty: V is the first head_dim_v columns of K (MLA); else a paged V cache
         std::nullopt,       // attn_mask
         page_table_tensor,  // page_table
         std::nullopt,       // attention_sink

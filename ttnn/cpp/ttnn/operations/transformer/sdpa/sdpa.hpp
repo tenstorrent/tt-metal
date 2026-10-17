@@ -212,7 +212,8 @@ ttnn::Tensor chunked_flash_mla_prefill(
     std::optional<float> scale = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& input_tensor_v = std::nullopt);
 
 ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
