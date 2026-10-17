@@ -357,6 +357,9 @@ uv pip install --index-strategy unsafe-best-match -r "$(pwd)/tools/triage/requir
 echo "Installing tt-metal"
 uv pip install -e .
 
+echo "Installing perf_automation agent dependencies"
+uv pip install -r "$(pwd)/models/experimental/perf_automation/requirements-agent.txt"
+
 if [[ "$SKIP_COMPAT_CHECK" == "true" ]]; then
     echo "Skipping package compatibility check (--skip-compat-check)"
 else
