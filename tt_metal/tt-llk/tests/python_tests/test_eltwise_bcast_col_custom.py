@@ -72,12 +72,12 @@ class PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
 
 @dataclass
 class BCAST_COL_SHAPE_CONTRACT(TemplateParameter):
-    """Compile-time contract of the custom bcast-col shape predicate.
+    """Truth table of the custom bcast-col shape predicate, checked at compile time.
 
     Each grid is (face_r_dim, num_faces_r_dim, num_faces_c_dim); the test source static_asserts
-    that the predicate the unpack init and math execute assert on accepts every ``accepted`` grid
-    and rejects every ``rejected`` one, so the variant fails to compile instead of trapping on the
-    device.
+    that the predicate accepts every ``accepted`` grid and rejects every ``rejected`` one. The
+    guards that call it are pinned separately (ComputeBcastColCustomShapeCompileContract in
+    tests/tt_metal/tt_metal/llk/test_broadcast.cpp).
     """
 
     accepted: list[tuple[int, int, int]]
@@ -449,10 +449,12 @@ def test_eltwise_bcast_col_custom_shape_contract():
     face-row's first SrcB face for the second one, so it is only right for a two-face-column grid
     of full faces. A one-face-column tile (32x16: its second face is the next face-row, so the walk
     would pair SrcA face 1 with SrcB face 0 and then run a second face-row over rows that were never
-    unpacked) or a short-face tile (1x32 .. 8x32, 16x16) must be refused by the LLK asserts at the
-    unpack init and math execute. The predicate is constexpr, so the kernel source static_asserts
-    its truth table over face grids derived here from the tile dimensions, and the variant itself
-    is an ordinary 32x32 SUB run with asserts enabled, so the asserting call sites build too.
+    unpacked) or a short-face tile (1x32 .. 8x32, 16x16) must be refused. The predicate is
+    constexpr, so the kernel source static_asserts its truth table over face grids derived here
+    from the tile dimensions; the variant itself is an ordinary 32x32 SUB run. That the unpack-init
+    and math-execute guards actually use the predicate is pinned by the compile-contract gtest
+    (ComputeBcastColCustomShapeCompileContract in tests/tt_metal/tt_metal/llk/test_broadcast.cpp),
+    not here.
     """
     accepted = [[32, 32], [16, 32]]
     rejected = [[32, 16], [16, 16], [8, 32], [4, 32], [2, 32], [1, 32]]

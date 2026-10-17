@@ -8,8 +8,8 @@
 // compile-time arm (assert_tensor_shape_sub_bcast_col_custom_) decides whether this kernel builds: an
 // unsupported shape must fail the build, a supported one must not.
 //
-// Compile-time args: 0 = site (0 unpack init, 1 math execute), 1 = face_r_dim, 2 = num_faces_r_dim,
-// 3 = num_faces_c_dim.
+// Compile-time args: 0 = site (0 unpack init, 1 SUB math execute, 2 MUL math execute - Blackhole only),
+// 1 = face_r_dim, 2 = num_faces_r_dim, 3 = num_faces_c_dim.
 
 #include <cstdint>
 #include "tensor_shape.h"
@@ -32,10 +32,11 @@ void kernel_main() {
 #if defined(TRISC_MATH)
     if constexpr (site == 1) {
         _llk_math_sub_bcast_cols_reuse_custom_(1 /*ct_dim*/, shape, 0 /*dst_index*/);
-#ifdef ARCH_BLACKHOLE
-        // The MUL path shares the Blackhole scaffold; call it through its own entry too.
-        _llk_math_bcast_cols_reuse_custom_<ckernel::EltwiseBinaryType::ELWMUL>(1 /*ct_dim*/, shape, 0 /*dst_index*/);
-#endif
     }
+#ifdef ARCH_BLACKHOLE
+    if constexpr (site == 2) {
+        _llk_math_bcast_cols_reuse_custom_<ckernel::EltwiseBinaryType::ELWMUL>(1 /*ct_dim*/, shape, 0 /*dst_index*/);
+    }
+#endif
 #endif
 }

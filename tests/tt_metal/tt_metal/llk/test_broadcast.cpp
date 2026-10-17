@@ -1485,9 +1485,10 @@ TEST_F(LLKBlackholeSingleCardFixture, ComputeMulBcastColCustom) {
 
 // Compile-time contract of the custom bcast-col shape guards (SUB on Blackhole and Wormhole, MUL on
 // Blackhole): the real unpack-init and math-execute entry points, handed a literal shape, must build
-// for 32x32 and 16x32 and must fail to build for a one-face-column (32x16) or short-face (8x32) tile.
-// A guard that stopped using the strict predicate would let its rejected cases compile. Nothing is
-// launched.
+// for 32x32 and 16x32 and must fail to build for a one-face-column (32x16) or short-face (8x32) tile,
+// with the guard's own message in the compiler log. A guard that stopped using the strict predicate
+// would let its rejected cases compile. Each entry point is its own site so none hides another.
+// Nothing is launched.
 TEST_F(LLKMeshDeviceFixture, ComputeBcastColCustomShapeCompileContract) {
     if (this->arch_ != tt::ARCH::WORMHOLE_B0 && this->arch_ != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "the guards under test are the Wormhole and Blackhole ones";
@@ -1505,10 +1506,14 @@ TEST_F(LLKMeshDeviceFixture, ComputeBcastColCustomShapeCompileContract) {
         {16, 2, 1, false, "32x16"},
         {8, 1, 2, false, "8x32"},
     }};
+    // Site 2 is the Blackhole-only MUL scaffold entry.
+    const std::array<const char*, 3> site_names{{"unpack init", "SUB math execute", "MUL math execute"}};
+    const std::uint32_t num_sites = this->arch_ == tt::ARCH::BLACKHOLE ? 3 : 2;
+    constexpr const char* guard_message = "custom bcast-col path supports 32x32 and 16x32 tiles only";
     auto* device = this->devices_.at(0).get();
-    for (const std::uint32_t site : {0u, 1u}) {
+    for (std::uint32_t site = 0; site < num_sites; site++) {
         for (const auto& shape : shapes) {
-            SCOPED_TRACE(::testing::Message() << (site == 0 ? "unpack init" : "math execute") << ", " << shape.name);
+            SCOPED_TRACE(::testing::Message() << site_names.at(site) << ", " << shape.name);
             Program program = CreateProgram();
             CreateKernel(
                 program,
@@ -1517,8 +1522,15 @@ TEST_F(LLKMeshDeviceFixture, ComputeBcastColCustomShapeCompileContract) {
                 ComputeConfig{.compile_args = {site, shape.face_r_dim, shape.num_faces_r_dim, shape.num_faces_c_dim}});
             if (shape.supported) {
                 EXPECT_NO_THROW(program.impl().compile(device));
-            } else {
-                EXPECT_THROW(program.impl().compile(device), std::runtime_error);
+                continue;
+            }
+            // The build must fail, and for the guard's reason: the JIT exception carries the compiler log.
+            try {
+                program.impl().compile(device);
+                ADD_FAILURE() << "kernel built with an unsupported shape";
+            } catch (const std::runtime_error& e) {
+                EXPECT_NE(std::string(e.what()).find(guard_message), std::string::npos)
+                    << "build failed for another reason: " << e.what();
             }
         }
     }

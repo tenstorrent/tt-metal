@@ -218,10 +218,11 @@ __attribute__((error("custom bcast-col path supports 32x32 and 16x32 tiles only"
 /**
  * @brief Guard of the custom bcast-col entry points: @ref validate_tensor_shape_sub_bcast_col_custom_ or stop.
  *
- * The one call every unpack-init and math-execute site of the op makes. A shape the compiler can prove
- * unsupported (a literal at the call site, after inlining) fails the build through the error attribute
- * instead of trapping on the device - the compile-contract tests drive the real entry points this way.
- * Any other shape is checked by the LLK_ASSERT at run time, as before.
+ * The one call the Wormhole and Blackhole unpack-init and math-execute sites of the op make (Quasar's
+ * sites still LLK_ASSERT the predicate directly). A shape the compiler can prove unsupported (a literal
+ * at the call site, after inlining) fails the build through the error attribute instead of trapping on
+ * the device - the compile-contract test drives the real entry points this way. Any other shape is
+ * checked by the LLK_ASSERT at run time, as before.
  */
 inline void assert_tensor_shape_sub_bcast_col_custom_(const TensorShape& tensor_shape)
 {
