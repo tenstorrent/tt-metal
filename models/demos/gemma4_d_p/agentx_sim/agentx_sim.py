@@ -46,7 +46,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from cost_model import DEFAULT_DATA, Model  # noqa: E402
+from cost_model import CP, DEFAULT_DATA, Model  # noqa: E402
 
 BLOCK = 64
 # One finished request: sent / done (s), input tokens, cached prefix, where it resumed, rows computed, and the cached
@@ -69,16 +69,19 @@ CACHE_FIELDS = (
     ("dep_off", "q"),
     ("sess_off", "q"),
 )
+# Part of the cache stamp: bump it when parse_sessions or CACHE_FIELDS change, so an old cache is parsed again.
+CACHE_VERSION = 1
 
 
 def load_sessions(path):
     """Sessions of nodes for traces.jsonl, from the cache in <path>.simcache/ when it matches the file."""
     cache = path + ".simcache"
-    stamp = f"{os.path.getsize(path)} {os.path.getmtime(path)}"
+    stamp = f"v{CACHE_VERSION} {os.path.getsize(path)} {os.path.getmtime(path)}"
     try:
-        with open(os.path.join(cache, "source")) as f:
-            if f.read() == stamp:
-                return _read_cache(cache)
+        if _read_stamp(cache) == stamp:
+            sessions = _read_cache(cache)
+            if _read_stamp(cache) == stamp:  # not rewritten while it was read
+                return sessions
     except OSError:
         pass
     sessions = parse_sessions(path)
@@ -87,6 +90,19 @@ def load_sessions(path):
     except OSError:
         pass  # e.g. a read-only dataset directory: parse every run
     return sessions
+
+
+def _read_stamp(cache):
+    with open(os.path.join(cache, "source")) as f:
+        return f.read()
+
+
+def _replace_file(path, write):
+    """Write a file under a temporary name and rename it into place, so a reader never sees it half written."""
+    tmp = f"{path}.tmp-{os.getpid()}"
+    with open(tmp, "wb") as f:
+        write(f)
+    os.replace(tmp, path)
 
 
 def _write_cache(cache, sessions, stamp):
@@ -103,11 +119,12 @@ def _write_cache(cache, sessions, stamp):
             cols["dep_off"].append(len(cols["deps"]))
         cols["sess_off"].append(len(cols["in"]))
     os.makedirs(cache, exist_ok=True)
+    source = os.path.join(cache, "source")
+    # Invalidate first and stamp last, so a mix of old and new columns is never used.
+    _replace_file(source, lambda f: None)
     for name, col in cols.items():
-        with open(os.path.join(cache, name + ".bin"), "wb") as f:
-            col.tofile(f)
-    with open(os.path.join(cache, "source"), "w") as f:  # last, so a partial cache is never used
-        f.write(stamp)
+        _replace_file(os.path.join(cache, name + ".bin"), col.tofile)
+    _replace_file(source, lambda f: f.write(stamp.encode()))
 
 
 def _read_cache(cache):
@@ -462,14 +479,30 @@ def summarize(stats, makespan, busy, steps, rows):
 G = {}  # the model, the sessions and the fixed knobs, shared with the forked workers
 
 
+def parse_config(cfg, model):
+    """UNITxBUDGET:POLICY -> (unit, budget, policy); SystemExit naming what the model data covers otherwise."""
+    units = sorted(model.g)
+    max_budget = max(m for m, _ in model.dense_pts["global"]) * CP
+    try:
+        unit_budget, policy = cfg.split(":")
+        C, budget = (int(x) for x in unit_budget.split("x"))
+    except ValueError:
+        raise SystemExit(f"bad --config {cfg!r}: want UNITxBUDGET:POLICY, e.g. 2048x8192:pack")
+    if policy not in ("fcfs", "pack"):
+        raise SystemExit(f"bad --config {cfg!r}: POLICY is fcfs or pack")
+    if C not in units:
+        raise SystemExit(f"bad --config {cfg!r}: UNIT must be a measured chunk size, one of {units}")
+    if budget % C or not C <= budget <= max_budget:
+        raise SystemExit(f"bad --config {cfg!r}: BUDGET must be a multiple of UNIT, at most {max_budget} tokens a step")
+    return C, budget, policy
+
+
 def run_config(job):
     """One run of the grid, job = (UNITxBUDGET:POLICY, concurrency, cache, align, max_think_s, decode_tps); returns
     its JSON record (the knobs, the metrics and the run's wall time)."""
     cfg, concurrency, cache, align, max_think_s, decode_tps = job
     t0 = time.time()
-    unit_budget, policy = cfg.split(":")
-    C, budget = (int(x) for x in unit_budget.split("x"))
-    assert policy in ("fcfs", "pack"), policy
+    C, budget, policy = parse_config(cfg, G["model"])  # checked in main() before the workers fork
     r = run(
         G["model"],
         G["sessions"],
@@ -511,8 +544,11 @@ def main():
     a = ap.parse_args()
 
     t0 = time.time()
-    G.update(model=Model.load(a.data), sessions=load_sessions(a.traces), seed=a.seed, max_sessions=a.sessions)
     split = lambda s, f=str: [f(x) for x in s.split(",") if x]
+    G.update(model=Model.load(a.data), seed=a.seed, max_sessions=a.sessions)
+    for cfg in split(a.config):  # before the traces load and the workers fork
+        parse_config(cfg, G["model"])
+    G["sessions"] = load_sessions(a.traces)
     jobs = list(
         itertools.product(
             split(a.config),

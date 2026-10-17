@@ -42,13 +42,13 @@ One row per run (`--json` writes every metric):
 
 - Fitted on silicon: unbatched 8192, 4096, 2048; 2048-wide lanes, 1 to 4 per step.
 - Anything else (unbatched 1024 or 16384, wider or narrower lanes, more than 4 lanes) runs on the measured per-layer data with the nearest calibration, and is marked `*` with the reason. Treat it as an unvalidated estimate.
-- Per-layer data covers chunks of 1024 to 16384 and at most 16384 tokens per step.
+- Per-layer data covers five chunk sizes, 1024, 2048, 4096, 8192 and 16384, and at most 16384 tokens per step. UNIT must be one of the five and BUDGET a multiple of it; any other `--config` is rejected before the run starts.
 
 ## Accuracy
 
-- On held-out silicon replays (bh-glx-120-c05u08), batched busy time is within 0.2% and TTFT p50 / p90 / p99 within 2%. Unbatched TTFT p50 is within 1.5-3% on average; 8k near saturation reads up to 8% low.
+- On held-out silicon replays, batched busy time is within 0.2% and TTFT p50 / p90 / p99 within 1.7%. They ran on bh-glx-120-c05u08, the box the calibration was fitted on, with different slices. Unbatched TTFT p50 is within 1.5-3% on average; 8k near saturation reads up to 8% low.
 - The calibration is from one Galaxy; another box moved saturated TTFT tails by up to 10%.
-- The model goes stale as prefill gets faster. To check it, replay one slice on silicon (`../demo/agentx_replay.py`) and compare with `agentx_slice.py predict --measured`.
+- The model goes stale as prefill gets faster. To check it, replay one slice on silicon (`../demo/agentx_replay.py`, added with the continuous-batching PR) and compare with `agentx_slice.py predict --measured`.
 - Not modelled: loading a cached prefix into the device, and the first decode token.
 
 `--help` on each script lists its options and the other knobs (cache size, chunk-aligned or exact resume, think-time cap, decode rate).
