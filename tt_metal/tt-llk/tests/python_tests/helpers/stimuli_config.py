@@ -185,18 +185,21 @@ class StimuliConfig:
             self._operand_tile_size_bytes(name),
             self.num_faces,
             self.face_r_dim,
-            location,
         )
+        # Both writers take (..., face_r_dim, [tile_dimensions,] location, ...): the dense writer's tile
+        # dimensions come before the location.
         if dense:
             StimuliConfig.write_matrix_w_tile_dimensions(
                 *common_args,
                 self.tile_dimensions,
+                location,
                 use_srcs=self._operand_use_srcs(name),
                 twos_complement=self.twos_complement,
             )
         else:
             StimuliConfig.write_matrix(
                 *common_args,
+                location,
                 self.write_full_tiles,
                 use_srcs=self._operand_use_srcs(name),
                 twos_complement=self.twos_complement,
