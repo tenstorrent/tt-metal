@@ -1003,6 +1003,38 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeNarrowTile32x16) {
     }
 }
 
+// fast_tilize_* on a 16x32 tile declared as four 8x16 faces (Tile::from_face_grid(2, 2, {8, 16})). Its tile
+// dims match the two-face 16x32 tiny tile but the fast-tilize sequences are written for 16-row faces and
+// would treat num_faces == 4 as a 32-row tile (reading 16 rows past the input and advancing a full 32x32
+// tile per output page), so both compute APIs must route it to tilize_* at any width.
+TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeShortFace16x32) {
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar shortened-face tilize is not covered by this test";
+    }
+    constexpr std::uint32_t tile_shape_in_faces_r = 2;  // 16x32 = 2x2 faces of 8x16
+    constexpr std::uint32_t tile_shape_in_faces_c = 2;
+    constexpr std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT / 2;
+    constexpr std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;
+    constexpr std::uint32_t tile_bytes =
+        tile_shape_in_faces_r * tile_shape_in_faces_c * face_r_dim * face_c_dim * sizeof(std::uint16_t);
+    // Even widths only: these are the widths the two-face 16x32 fast path accepts.
+    vector<vector<std::uint32_t>> num_tiles = {{1, 2}, {1, 4}, {2, 2}};
+    for (auto num_tile : num_tiles) {
+        unit_tests::compute::tilize::TestConfig test_config = {
+            .fast_tilize = true,
+            .input_single_tile_size = tile_bytes,
+            .output_single_tile_size = tile_bytes,
+            .num_tiles_r = num_tile[0],
+            .num_tiles_c = num_tile[1],
+            .tile_shape_in_faces_r = tile_shape_in_faces_r,
+            .tile_shape_in_faces_c = tile_shape_in_faces_c,
+            .face_r_dim = face_r_dim,
+            .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+            .golden_function = ::unit_tests::compute::gold_standard_tilize};
+        unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
+    }
+}
+
 TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackTilizeA_BNarrowTile) {
     if (MetalContext::instance().get_cluster().arch() != ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "only the Wormhole tilizeA_B has a narrow-tile path";

@@ -322,8 +322,9 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, uint32_t full_dim) {
  * Performs the fast tilize operation on a block. The block width must match the full_dim given to
  * fast_tilize_init. Blocks the architecture's fast-tilize path does not support take the plain
  * tilize path, as decided by the architecture's llk_fast_tilize_needs_fallback: on Blackhole every
- * tile shape other than 32x32 (and a width of 1), on Wormhole every tile shape other than 32x32 and
- * 16x32, plus 16x32 at an odd block width (the two-face data path exists only for pairs of tiles).
+ * tile other than 32x32 with four 16x16 faces (and a width of 1), on Wormhole every tile other than
+ * 32x32 with four 16x16 faces and 16x32 with two 16x16 faces, plus the latter at an odd block width
+ * (the two-face data path exists only for pairs of tiles).
  *
  * Return value: None
  *

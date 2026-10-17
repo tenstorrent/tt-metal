@@ -16,9 +16,9 @@
  * @brief Whether fast_tilize_init/block/uninit must take the plain tilize path for this block.
  *
  * Blackhole fast-tilize is a 32x32-tile path with no unit_dim 1 (see ckernel::fast_tilize_block_supported). Both the
- * input and the output CB are checked through this thread's geometry arrays, which cover every CB index and are
- * generated from the same descriptor on every thread, so all three threads reach the same decision even when the two
- * CBs differ.
+ * input and the output CB are checked, tile shape and face geometry, through this thread's geometry arrays, which
+ * cover every CB index and are generated from the same descriptor on every thread, so all three threads reach the
+ * same decision even when the two CBs differ.
  *
  * @param icb: Input circular buffer identifier.
  * @param ocb: Output circular buffer identifier.
@@ -29,8 +29,18 @@ inline bool llk_fast_tilize_needs_fallback(
     const std::uint32_t in_id = get_output_id(icb);
     const std::uint32_t out_id = get_output_id(ocb);
     return !(
-        ckernel::fast_tilize_block_supported(get_output_tile_r_dim(in_id), get_output_tile_c_dim(in_id), block) &&
-        ckernel::fast_tilize_block_supported(get_output_tile_r_dim(out_id), get_output_tile_c_dim(out_id), block));
+        ckernel::fast_tilize_block_supported(
+            get_output_tile_r_dim(in_id),
+            get_output_tile_c_dim(in_id),
+            get_output_face_r_dim(in_id),
+            get_output_num_faces(in_id),
+            block) &&
+        ckernel::fast_tilize_block_supported(
+            get_output_tile_r_dim(out_id),
+            get_output_tile_c_dim(out_id),
+            get_output_face_r_dim(out_id),
+            get_output_num_faces(out_id),
+            block));
 }
 
 template <bool is_fp32_dest_acc_en>

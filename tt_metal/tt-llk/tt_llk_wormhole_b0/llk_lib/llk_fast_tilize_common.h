@@ -32,19 +32,27 @@ constexpr bool fast_tilize_unit_supports_faces(const std::uint32_t unit_dim, con
 }
 
 /**
- * @brief Whether the Wormhole fast-tilize path supports a block of tiles of the given shape and width.
+ * @brief Whether the Wormhole fast-tilize path supports a block of tiles of the given geometry and width.
  *
- * 32x32 tiles work at any width. 16x32 tiny tiles work only when the whole block is processed in pairs,
- * i.e. at an even width (a width of 1 or an odd tail would need unit_dim 1 or 3, which have no two-face
- * path). Any other shape (e.g. 32x16, also two faces but 16 wide) must take the plain tilize path.
+ * Faces must be 16 rows high: the unpack, math and pack sequences are written for 16x16 faces and never
+ * read the face height. 32x32 tiles (four faces) work at any width. 16x32 tiny tiles (two faces) work
+ * only when the whole block is processed in pairs, i.e. at an even width (a width of 1 or an odd tail
+ * would need unit_dim 1 or 3, which have no two-face path). Any other geometry must take the plain tilize
+ * path: 32x16 (also two faces but 16 wide), or a 16x32 tile declared as four 8x16 faces, which the
+ * num_faces == 4 sequences would treat as 32 rows high and read and write past its pages.
  *
  * @param tile_r_dim: Tile height in datums of the operand being tilized.
  * @param tile_c_dim: Tile width in datums of the operand being tilized.
+ * @param face_r_dim: Face height in datums of the operand being tilized.
+ * @param num_faces: Faces per tile of the operand being tilized.
  * @param block: Block width in tiles.
  */
-constexpr bool fast_tilize_block_supported(const std::uint32_t tile_r_dim, const std::uint32_t tile_c_dim, const std::uint32_t block)
+constexpr bool fast_tilize_block_supported(
+    const std::uint32_t tile_r_dim, const std::uint32_t tile_c_dim, const std::uint32_t face_r_dim, const std::uint32_t num_faces, const std::uint32_t block)
 {
-    return tile_c_dim == TILE_C_DIM && (tile_r_dim == TILE_R_DIM || (tile_r_dim == FACE_R_DIM && block % FAST_TILIZE_PAIR_UNIT_DIM == 0));
+    return face_r_dim == FACE_R_DIM && tile_c_dim == TILE_C_DIM &&
+           ((tile_r_dim == TILE_R_DIM && num_faces == TILE_NUM_FACES) ||
+            (tile_r_dim == FACE_R_DIM && num_faces == FAST_TILIZE_TINY_TILE_NUM_FACES && block % FAST_TILIZE_PAIR_UNIT_DIM == 0));
 }
 
 } // namespace ckernel
