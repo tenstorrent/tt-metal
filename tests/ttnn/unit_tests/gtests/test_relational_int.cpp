@@ -16,6 +16,7 @@
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -136,5 +137,109 @@ INSTANTIATE_TEST_SUITE_P(
         RelationalUnaryParam{17, -96, 64, 64},                    // gt, ge, ne
         RelationalUnaryParam{100, 458, 128, 128},                 // lt, ne
         RelationalUnaryParam{564, -118, 64, 128}));               // gt, ne
+
+// A float scalar against an INT32 tensor: the host converts the scalar by value, so an integral
+// float compares as that integer. The inputs include the bit pattern of the float scalar itself
+// (1088421888 == bits of 7.0f), which a bit-cast of the scalar would wrongly report as equal.
+struct RelationalUnaryFloatScalarParam {
+    int32_t scalar_input;
+    float scalar_param;  // integral-valued
+    uint32_t h;
+    uint32_t w;
+};
+
+class RelationalUnaryFloatScalarFixture : public TTNNFixtureWithSuiteDevice<RelationalUnaryFloatScalarFixture>,
+                                          public testing::WithParamInterface<RelationalUnaryFloatScalarParam> {};
+
+template <typename Op>
+void test_relational_float_scalar_impl(
+    ttnn::MeshDevice& device,
+    const RelationalUnaryFloatScalarParam& p,
+    const Op& op,
+    int32_t expected_value,
+    const char* op_name) {
+    auto input_tensor = make_int_tensor(device, p.h, p.w, p.scalar_input);
+    auto output = op(input_tensor, p.scalar_param);
+
+    auto expected = make_int_tensor(device, p.h, p.w, expected_value);
+
+    auto expected_host = ttnn::from_device(expected);
+    auto output_host = ttnn::from_device(output);
+
+    TT_FATAL(ttnn::allclose<int32_t>(expected_host, output_host), "{} result mismatch", op_name);
+}
+
+TEST_P(RelationalUnaryFloatScalarFixture, EqUnaryFloatScalar) {
+    auto p = GetParam();
+    const auto s = static_cast<int32_t>(p.scalar_param);
+    test_relational_float_scalar_impl(
+        *device_, p, [](const auto& t, float v) { return ttnn::eq_unary(t, v); }, p.scalar_input == s, "eq_unary");
+}
+
+TEST_P(RelationalUnaryFloatScalarFixture, NeUnaryFloatScalar) {
+    auto p = GetParam();
+    const auto s = static_cast<int32_t>(p.scalar_param);
+    test_relational_float_scalar_impl(
+        *device_, p, [](const auto& t, float v) { return ttnn::ne_unary(t, v); }, p.scalar_input != s, "ne_unary");
+}
+
+TEST_P(RelationalUnaryFloatScalarFixture, GtUnaryFloatScalar) {
+    auto p = GetParam();
+    const auto s = static_cast<int32_t>(p.scalar_param);
+    test_relational_float_scalar_impl(
+        *device_, p, [](const auto& t, float v) { return ttnn::gt_unary(t, v); }, p.scalar_input > s, "gt_unary");
+}
+
+TEST_P(RelationalUnaryFloatScalarFixture, LtUnaryFloatScalar) {
+    auto p = GetParam();
+    const auto s = static_cast<int32_t>(p.scalar_param);
+    test_relational_float_scalar_impl(
+        *device_, p, [](const auto& t, float v) { return ttnn::lt_unary(t, v); }, p.scalar_input < s, "lt_unary");
+}
+
+TEST_P(RelationalUnaryFloatScalarFixture, GeUnaryFloatScalar) {
+    auto p = GetParam();
+    const auto s = static_cast<int32_t>(p.scalar_param);
+    test_relational_float_scalar_impl(
+        *device_, p, [](const auto& t, float v) { return ttnn::ge_unary(t, v); }, p.scalar_input >= s, "ge_unary");
+}
+
+TEST_P(RelationalUnaryFloatScalarFixture, LeUnaryFloatScalar) {
+    auto p = GetParam();
+    const auto s = static_cast<int32_t>(p.scalar_param);
+    test_relational_float_scalar_impl(
+        *device_, p, [](const auto& t, float v) { return ttnn::le_unary(t, v); }, p.scalar_input <= s, "le_unary");
+}
+
+// The public scalar-first overloads route to the tensor-scalar compare with the operands swapped.
+TEST_P(RelationalUnaryFloatScalarFixture, ScalarFirstNe) {
+    auto p = GetParam();
+    const auto s = static_cast<int32_t>(p.scalar_param);
+    test_relational_float_scalar_impl(
+        *device_, p, [](const auto& t, float v) { return ttnn::ne(v, t); }, s != p.scalar_input, "ne(scalar, tensor)");
+}
+
+TEST_P(RelationalUnaryFloatScalarFixture, ScalarFirstGt) {
+    auto p = GetParam();
+    const auto s = static_cast<int32_t>(p.scalar_param);
+    test_relational_float_scalar_impl(
+        *device_, p, [](const auto& t, float v) { return ttnn::gt(v, t); }, s > p.scalar_input, "gt(scalar, tensor)");
+}
+
+TEST_P(RelationalUnaryFloatScalarFixture, ScalarFirstLt) {
+    auto p = GetParam();
+    const auto s = static_cast<int32_t>(p.scalar_param);
+    test_relational_float_scalar_impl(
+        *device_, p, [](const auto& t, float v) { return ttnn::lt(v, t); }, s < p.scalar_input, "lt(scalar, tensor)");
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    RelationalUnaryFloatScalarTests,
+    RelationalUnaryFloatScalarFixture,
+    ::testing::Values(
+        RelationalUnaryFloatScalarParam{7, 7.0f, 32, 32},           // equal
+        RelationalUnaryFloatScalarParam{1088421888, 7.0f, 32, 32},  // input is the bit pattern of 7.0f
+        RelationalUnaryFloatScalarParam{-5, -5.0f, 32, 32},         // equal, negative
+        RelationalUnaryFloatScalarParam{3, 2.0f, 32, 32}));         // gt, ge, ne
 
 }  // namespace ttnn::operations::unary::test
