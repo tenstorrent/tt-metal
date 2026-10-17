@@ -33,7 +33,7 @@ def test_experts(batch_size, seq_len, mesh_device, reset_seeds, request):
     run_experts(batch_size, seq_len, mesh_device, request)
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4), (8, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 4), (1, 8), (2, 4), (8, 4)])
 @pytest.mark.parametrize("seq_len", [128, 1024, 4096 + 128], ids=["prefill_128", "prefill_1024", "prefill_4224"])
 def test_experts_dispatch(seq_len, mesh_device, reset_seeds, request, monkeypatch):
     """Token-dispatch prefill (DeepSeek dispatch/combine + fused GeGLU experts) vs the HF reference; 4224 tokens
