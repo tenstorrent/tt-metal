@@ -1296,3 +1296,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   query it spans ~650 of the 512-of-3072 row (median +-94 % of the cutoff). Ladder index states stay plain overlap
   (no scores in the golden). DeepSeek-V4.1 device, vs the CPU step: indexers recall 0.9887-0.9996, recall_tie
   0.9911-0.9998, 0 unexplained; routers recall_tie 1.0 everywhere.
+- F102: the input of a served layer run after a gap (a partial run's non-contiguous subset under the contract) comes
+  from the framework, testing/contract.gap_feed (the golden block input of the run's first layer, as the ladder
+  feeds it); None without PREFILL_LAYER_IDS or for a contiguous range. DeepSeek-V4.1 K.1 had put the golden reader in
+  the model's adapter (GoldenGapFeed): a model never reads a golden, even behind a switch.
