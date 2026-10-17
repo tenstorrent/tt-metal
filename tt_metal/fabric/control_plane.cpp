@@ -1802,7 +1802,10 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physi
 
     // Stub: For mock or emulated devices, return a synthetic FabricNodeId for any unmapped chip
     // Required for large mock clusters (32+ chips) where fabric config may not be fully populated
-    if (this->cluster_.get().is_mock_or_emulated()) {
+    // LOCAL horizon_x2 spike (not for upstream): a partitioned simulator build's chips have no
+    // Ethernet, so auto-discovery maps none of them; give them synthetic ids too.
+    if (this->cluster_.get().is_mock_or_emulated() ||
+        this->cluster_.get().get_target_device_type() == tt::TargetDevice::Simulator) {
         return FabricNodeId(MeshId{0}, physical_chip_id);
     }
 
