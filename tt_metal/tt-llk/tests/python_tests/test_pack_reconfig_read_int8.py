@@ -60,6 +60,11 @@ _BF16_EXACT_WHOLE_LIMIT = 1 << 8
 # bf16 is the top 16 bits of fp32; its mantissa is the top 7 fraction bits.
 _FP32_TO_BF16_SHIFT = 16
 _BF16_MANTISSA_BITS = 7
+# Stimulus kinds of the Float16_b leg, drawn uniformly per datum.
+_KIND_NORMAL = 0
+_KIND_DENORMAL = 1
+_KIND_NAN = 2
+_NUM_KINDS = 3
 
 
 def _whole_numbers_below_int8_dest_limit(size, dtype, generator):
@@ -71,20 +76,22 @@ def _whole_numbers_below_int8_dest_limit(size, dtype, generator):
 
 
 def _normals_denormals_nan(size, dtype, generator):
-    # Thirds: exact whole numbers, bf16 denormals (zero exponent, non-zero mantissa in the top 7
-    # fraction bits, so the fp32 -> bf16 conversion is exact), and NaN.
+    # Exact whole numbers, bf16 denormals (zero exponent, non-zero mantissa in the top 7 fraction
+    # bits, so the fp32 -> bf16 conversion is exact), and NaN.
     values = torch.randint(1, _BF16_EXACT_WHOLE_LIMIT, (size,), generator=generator).to(
         torch.float32
     )
-    kind = torch.randint(0, 3, (size,), generator=generator)
+    kind = torch.randint(_KIND_NORMAL, _NUM_KINDS, (size,), generator=generator)
     denormal_bits = (
         torch.randint(
             1, 1 << _BF16_MANTISSA_BITS, (size,), generator=generator, dtype=torch.int32
         )
         << _FP32_TO_BF16_SHIFT
     )
-    values[kind == 1] = denormal_bits.view(torch.float32)[kind == 1]
-    values[kind == 2] = float("nan")
+    values[kind == _KIND_DENORMAL] = denormal_bits.view(torch.float32)[
+        kind == _KIND_DENORMAL
+    ]
+    values[kind == _KIND_NAN] = float("nan")
     return values.to(dtype)
 
 
