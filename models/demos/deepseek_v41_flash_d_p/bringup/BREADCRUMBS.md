@@ -1420,3 +1420,21 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   device_model [20], golden chunks 0, 1: out PCC 0.99973 / 0.99976, state candidates == golden, topk_idx 0.9777.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_indexer.py`;
   probes `PYTHONPATH=$PWD scripts/tt-probe.sh ds41_cand < tests/ttnn/unit_tests/operations/ds41_cand/probes/probe_00{3,4}.py`.
+
+## C.dec_candidate.attention implement (attempt 1)
+- No new module: layer 20 (ratio 1, its own KV and top-k source) runs `tt/sparse_attention.py:TtSparseAttention`, as
+  layer 2 does. The candidate pool restricts only later indexers (dec_reindex), never layer 20's attention (reference
+  `_attention` is the same code at r = 1). hooks: the attention dispatch now skips only `cfg.uses_candidates` (dec_reindex)
+  instead of `uses_candidates or is_cand_source`; `"attention"` added to `DEVICE_STEPS["dec_candidate"]` (DS41-28).
+  At r = 1: hs = stripe, table = [window 128 + S | N nb stripe compressed rows] (56 MB at 55k on 2x2), top-k always 512.
+- Fix in `tt/compressor.py:TtCompressor._gathered` (DS41-52, K-1): at ratio 1 a chunk ending before its last row
+  (actual_end < start + S) masks rows with a slice of the load-time `tables.iota` over its whole length; the full-range
+  slice returned a wrapper over the iota's buffer and the deallocate freed the shared iota ("Input Tensor is not
+  allocated" in the next slice). Now the iota itself is used when total == its rows and is never freed. Ratio 2
+  (total = S / 2) and full chunks (no mask) are unchanged, so earlier compressor gates are unaffected.
+- Components entry note (sparse_sdpa high_precision refuses the sink, cpp:132) is out of date: the fork takes the sink
+  (lines 127-139 only require fp32 DEST / bf16 q, kv); no fork change.
+- Gate: component PASS, err_attention_L20 0.0387 <= 0.4751; vs CPU 0.0335 <= 0.0709; chunk0 0.0340 <= 0.0722; mixed
+  0.0415 <= 0.0823; small 0.0384 <= 0.2; big 0.0282 <= 0.2; determinism bit-identical. test_cache_starts
+  (BRINGUP_TASK=C.dec_candidate.attention, layers [20]): 4 passed, 0 failures each.
+- Re-run: `PYTHONPATH=$PWD BRINGUP_TASK=C.dec_candidate.attention scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attention.py && PYTHONPATH=$PWD BRINGUP_TASK=C.dec_candidate.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`
