@@ -21,10 +21,11 @@
  * @param scaler_operand: Circular buffer holding the scaler tile; its formats configure the SrcB unpacker.
  * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose (no default: both
  *        arguments are required).
- * @note scaler_operand should also be the SrcB operand passed to hw_startup / reconfig_data_format_srcb (as reduce_init
+ * @note scaler_operand must also be the SrcB operand passed to hw_startup / reconfig_data_format_srcb (as reduce_init
  *       does via state_configure(icb, icb_scaler, ocb)), and llk_unpack_reduce must use a scaler CB with the same
- *       formats; on Blackhole the FPU takes the SrcB format from the unpacker output format this init programs, so
- *       a mismatch is not silently miscomputed here as it is on Wormhole.
+ *       formats: this init rewrites only the SrcB unpacker in/out formats, while the SrcB signedness bit and the
+ *       INT8 math enable stay keyed to that operand, and a later two-operand reconfig_data_format_srcb compares
+ *       against that operand's formats and may skip.
  * @note Only the first FACE_C_DIM datums of face 0 of the scaler tile are used, for every face of the data tile;
  *       per-face or partial scaler tiles need llk_unpack_AB_reduce_init / llk_unpack_AB_reduce.
  * @note Pair with @ref llk_unpack_reduce for the per-tile unpack.
@@ -51,6 +52,8 @@ inline void llk_unpack_reduce_init(
  * @param tile_index: Index of the data tile within its circular buffer.
  * @param scaler_tile_index: Index of the scaler tile within its circular buffer.
  * @note Call @ref llk_unpack_reduce_init with matching template args before this function.
+ * @note 32x32 tiles only: the unpack MOP always issues four 16-row face unpacks per tile, while the math takes
+ *       the face count from the data CB, so a 2-face or tiny-tile data CB would misalign the two threads.
  */
 template <PoolType type, ReduceDim dim>
 inline void llk_unpack_reduce(
@@ -70,6 +73,9 @@ inline void llk_unpack_reduce(
 
     LLK_ASSERT(
         cb_access_within_bounds(operand_id, tile_index, 1 /*num_tiles*/), "Indexed tile read exceeds CB boundary");
+    LLK_ASSERT(
+        get_operand_num_faces(operand_id) == 4 && get_operand_face_r_dim(operand_id) == FACE_R_DIM,
+        "Single-operand reduce supports 32x32 tiles only");
     LLK_ASSERT(
         cb_access_within_bounds(scaler_operand_id, scaler_tile_index, 1 /*num_tiles*/),
         "Indexed tile read exceeds CB boundary");

@@ -21,8 +21,6 @@ constexpr uint32_t scaler_tile_index = 1;
 
 template <PoolType pool_type, ReduceDim reduce_dim>
 void reduce_with_scaler_cb(uint32_t num_tiles) {
-    // The scaler CB is the SrcB operand of the startup, as the wrapper's contract requires.
-    compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
     UNPACK((llk_unpack_reduce_init<pool_type, reduce_dim>(cb_scaler, 0 /*within_face_16x16_transpose*/)));
     MATH((llk_math_reduce_init<pool_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(cb_in, cb_scaler)));
     PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(cb_out)));
@@ -51,6 +49,8 @@ void reduce_with_scaler_cb(uint32_t num_tiles) {
 
 void kernel_main() {
     const uint32_t num_tiles = get_compile_time_arg_val(0);
+    // Once per kernel; the scaler CB is the SrcB operand of the startup, as the wrapper's contract requires.
+    compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
     reduce_with_scaler_cb<PoolType::SUM, ReduceDim::REDUCE_COL>(num_tiles);
     reduce_with_scaler_cb<PoolType::MAX, ReduceDim::REDUCE_ROW>(num_tiles);
 }

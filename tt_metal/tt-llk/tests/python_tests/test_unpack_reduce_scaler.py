@@ -15,12 +15,23 @@ Scaler contract: the path unpacks only the first FACE_C_DIM datums of face 0 of 
 tile (its first row) into SrcB and reuses them for every face. The ``face0_row0`` fill puts
 the scaler in that row only and 7x the scaler everywhere else; the golden uses the scaler for
 all faces, so the variant passes under the documented contract and would fail if the path
-stepped through the scaler tile face by face (as the AB reduce does).
+stepped through the scaler tile face by face (as the AB reduce does). It is run for the
+COL/SCALAR SUM/AVG variants only: MAX pools SrcA alone, so for MAX it would repeat ``uniform``.
+
+Scaler format: ``scaler_format`` runs each data format with a scaler tile in the same format
+and in the other member of its exponent family (Float32 data with a Float16_b scaler, the
+usual tt-metal setup, and Float16_b data with a Float32 scaler). The SrcB unpacker formats
+come from the scaler operand and the math SrcB format follows the scaler register format.
+With the former derivation (SrcB L1 format fixed to Float32, register format taken from the
+data operand) only the ``face0_row0`` SUM/AVG variants with a Float16_b scaler fail: a
+uniform Float16_b tile read as Float32 still decodes to about the scaler value (every word is
+the same bf16 pattern twice), so the ``uniform`` mixed-format variants are coverage of the
+format plumbing rather than a fail/pass proof of it.
 """
 
 import torch
 from conftest import skip_for_quasar
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
@@ -69,13 +80,31 @@ def _pool_types_for_dim(reduce_dim):
     return [ReducePool.Max, ReducePool.Average, ReducePool.Sum]
 
 
+def _scaler_fills_for_pool(pool_type):
+    if pool_type == ReducePool.Max:
+        return ["uniform"]
+    return ["uniform", "face0_row0"]
+
+
+def _scaler_formats_for(formats):
+    other = (
+        DataFormat.Float16_b
+        if formats.input_format == DataFormat.Float32
+        else DataFormat.Float32
+    )
+    return [formats.input_format, other]
+
+
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    scaler_format=_scaler_formats_for,
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=_pool_types_for_dim,
-    scaler_fill=["uniform", "face0_row0"],
+    scaler_fill=_scaler_fills_for_pool,
 )
-def test_unpack_reduce_scaler(formats, reduce_dim, pool_type, scaler_fill):
+def test_unpack_reduce_scaler(
+    formats, scaler_format, reduce_dim, pool_type, scaler_fill
+):
     tile_dimensions = [32, 32]
     tile_shape = construct_tile_shape(tile_dimensions)
     input_dimensions = [64, 32]
@@ -83,7 +112,7 @@ def test_unpack_reduce_scaler(formats, reduce_dim, pool_type, scaler_fill):
     src_A, tile_cnt_A, _, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
+        stimuli_format_B=scaler_format,
         input_dimensions_B=tile_dimensions,
         tile_dimensions=tile_dimensions,
     )
@@ -109,8 +138,11 @@ def test_unpack_reduce_scaler(formats, reduce_dim, pool_type, scaler_fill):
 
     dest_acc = (
         DestAccumulation.Yes
-        if formats.input_format.is_32_bit()
+        if formats.input_format.is_32_bit() or scaler_format.is_32_bit()
         else DestAccumulation.No
+    )
+    test_formats = InputOutputFormat(
+        formats.input_format, formats.output_format, input_format_B=scaler_format
     )
 
     _, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -124,7 +156,7 @@ def test_unpack_reduce_scaler(formats, reduce_dim, pool_type, scaler_fill):
 
     configuration = TestConfig(
         "sources/unpack_reduce_scaler_test.cpp",
-        formats,
+        test_formats,
         templates=[
             MATH_OP(mathop=mathop_mapping[reduce_dim], pool_type=pool_type),
             MATH_FIDELITY(MathFidelity.HiFi4),
@@ -146,7 +178,7 @@ def test_unpack_reduce_scaler(formats, reduce_dim, pool_type, scaler_fill):
             src_A,
             formats.input_format,
             src_B,
-            formats.input_format,
+            scaler_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,

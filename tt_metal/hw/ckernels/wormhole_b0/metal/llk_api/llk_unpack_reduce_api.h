@@ -52,6 +52,8 @@ inline void llk_unpack_reduce_init(
  * @param tile_index: Index of the data tile within its circular buffer.
  * @param scaler_tile_index: Index of the scaler tile within its circular buffer.
  * @note Call @ref llk_unpack_reduce_init with matching template args before this function.
+ * @note 32x32 tiles only: the unpack MOP always issues four 16-row face unpacks per tile, while the math takes
+ *       the face count from the data CB, so a 2-face or tiny-tile data CB would misalign the two threads.
  */
 template <PoolType type, ReduceDim dim>
 inline void llk_unpack_reduce(
@@ -71,6 +73,9 @@ inline void llk_unpack_reduce(
 
     LLK_ASSERT(
         cb_access_within_bounds(operand_id, tile_index, 1 /*num_tiles*/), "Indexed tile read exceeds CB boundary");
+    LLK_ASSERT(
+        get_operand_num_faces(operand_id) == 4 && get_operand_face_r_dim(operand_id) == FACE_R_DIM,
+        "Single-operand reduce supports 32x32 tiles only");
     LLK_ASSERT(
         cb_access_within_bounds(scaler_operand_id, scaler_tile_index, 1 /*num_tiles*/),
         "Indexed tile read exceeds CB boundary");

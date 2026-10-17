@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <cstdio>
 
 #include "ckernel.h"
 #include "llk_defs.h"
@@ -78,7 +77,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+    // SrcB holds the scaler in the scaler operand's register format, which may differ from the data format.
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.unpack_B_dst);
     _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(tensor_shape);
 
     int remaining_tiles = params.INPUT_TILE_CNT;

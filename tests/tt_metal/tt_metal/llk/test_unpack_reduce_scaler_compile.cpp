@@ -5,8 +5,8 @@
 // Compile coverage for the single-operand reduce wrappers llk_unpack_reduce_init / llk_unpack_reduce
 // (hw/ckernels/<arch>/metal/llk_api/llk_unpack_reduce_api.h). No kernel in tree instantiates them and the
 // tt-llk test drives the _llk_unpack_reduce_* functions directly, so the wrapper's scaler CB address math,
-// scaler tile index, format selection and bounds asserts are only ever compiled here. The program is
-// compiled, not run.
+// scaler tile index, format selection and asserts (CB bounds, 32x32-only) are only ever compiled here. The
+// program is compiled, not run, so the asserts are not exercised at runtime.
 
 #include <cstdint>
 
