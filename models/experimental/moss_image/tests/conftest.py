@@ -8,6 +8,8 @@ import pytest
 
 from models.experimental.moss_image.tests.assets import Capture
 
+_verified_weights = set()
+
 
 @pytest.fixture
 def moss_assets(request):
@@ -27,4 +29,24 @@ def moss_assets(request):
 def verify_weights(checkpoint, capture, components):
     from models.experimental.moss_image.tt.checkpoint import verify_checkpoint_manifest
 
+    # Hash each immutable asset set once per pytest process. Recheck the
+    # directory listing and inode/size/mtime/ctime on every case so replacing,
+    # editing or adding an index/config invalidates this optimization. This
+    # avoids rereading ~25 GiB before every independent DiT block test.
+    selected = set(components or ("transformer", "text_encoder", "tokenizer", "vae", "scheduler"))
+    signature = []
+    for component in sorted(selected):
+        for path in sorted((checkpoint / component).iterdir()):
+            if path.is_file():
+                stat = path.stat()
+                signature.append((str(path), stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
+    key = (
+        str(checkpoint.resolve()),
+        tuple(sorted(selected)),
+        json.dumps(capture.manifest["checkpoint"], sort_keys=True),
+        tuple(signature),
+    )
+    if key in _verified_weights:
+        return
     verify_checkpoint_manifest(checkpoint, capture.manifest["checkpoint"], components=components)
+    _verified_weights.add(key)
