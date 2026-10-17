@@ -242,7 +242,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     // b itself. Recompute the remainder from the quotient instead of subtracting b from result: for
     // an exact multiple (floor_div + 1) * b is a and the difference is exactly zero, whereas
     // result - b keeps the rounding of the earlier product and can land just inside |b|.
-    // The b == +0 lanes take the first arm and are overwritten with NaN below.
+    // The b == +-0 lanes are overwritten with NaN below, whichever arm they take.
     sfpi::vFloat diff = a - (floor_div + sfpi::vFloat(1.0f)) * b;
     v_if(b < sfpi::vFloat(0.0f)) {
         v_if(diff <= sfpi::vFloat(0.0f)) { result = diff; }
