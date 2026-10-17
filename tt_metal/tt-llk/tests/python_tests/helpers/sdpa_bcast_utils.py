@@ -16,15 +16,18 @@ different function of the inputs (see its banner).
 
 Verified op semantics (measured on p100a, see run_sdpa_bcast_col_srcb_reuse below):
 
-    out = A0 * bcast_col(P1) + A1 * bcast_col(P2)
+    out = A0 * bcast_col(P1) + A1 * bcast_col(P2)          (ELWMUL)
+    out = (A0 op bcast_col(P1)) + (A1 op bcast_col(P2))    (ELWADD / ELWSUB, op = + / -)
 
 with everything an 8x32 tile (two 8x16 faces):
   - A0, A1  operand tiles streamed into SrcA, one llk_unpack_A each
   - P1, P2  column sources seeded into DEST[0] / DEST[1]; the math preamble MOVD2Bs DEST rows 0-7
             into SrcB rows 0-7 and DEST rows 64-71 into SrcB rows 8-15
   - bcast_col(P) row r  = P[r, 0] fanned across all 32 columns (SRCB_BCAST_COL)
-  - the MOP's ELWMULs accumulate into DEST, and the kernel passes clear_dest=true so the
-    column-source seed still sitting in DEST[DST_INDEX] is zeroed after the MOVD2Bs latch it
+  - the MOP's two passes accumulate into DEST (ELWMUL always does; the ADD/SUB MOP sets the
+    dest-accumulate bit so its second pass adds onto the first instead of replacing it), and the
+    kernel passes clear_dest=true so the column-source seed still sitting in DEST[DST_INDEX] is
+    zeroed after the MOVD2Bs latch it
 """
 
 import torch
@@ -46,7 +49,12 @@ from helpers.param_config import input_output_formats
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import IN_FACE_DIMS, NUM_FACES, TILE_COUNT
+from helpers.test_variant_parameters import (
+    IN_FACE_DIMS,
+    MATH_OP,
+    NUM_FACES,
+    TILE_COUNT,
+)
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
@@ -84,11 +92,25 @@ def _bcast_col_untilized(tilized_tile, fmt, generator):
     ).reshape(SDPA_FACE_R_DIM, 32)
 
 
-def run_sdpa_bcast_col_srcb_reuse(cpp_source, formats, boot_mode=BootMode.DEFAULT):
-    """Drive `cpp_source` (an SDPA bcast-col SrcB-reuse kernel) and assert against the golden."""
+def run_sdpa_bcast_col_srcb_reuse(
+    cpp_source,
+    formats,
+    mathop=MathOperation.Elwmul,
+    boot_mode=BootMode.DEFAULT,
+):
+    """Drive `cpp_source` (an SDPA bcast-col SrcB-reuse kernel) and assert against the golden.
+
+    `mathop` selects the FPU op (Elwmul / Elwadd / Elwsub) the kernel instantiates; it reaches the
+    kernel as ELTWISE_BINARY_OP through the MATH_OP template parameter.
+    """
     # A single-axis @parametrize passes the value as a 1-tuple; unwrap it.
     if isinstance(formats, tuple):
         (formats,) = formats
+    assert mathop in (
+        MathOperation.Elwmul,
+        MathOperation.Elwadd,
+        MathOperation.Elwsub,
+    ), f"sdpa_bcast_col_srcb_reuse supports ELWMUL/ELWADD/ELWSUB only, got {mathop}"
 
     torch_format = format_dict[formats.output_format]
     rows = SDPA_FACE_R_DIM
@@ -125,14 +147,15 @@ def run_sdpa_bcast_col_srcb_reuse(cpp_source, formats, boot_mode=BootMode.DEFAUL
 
     # Golden, in untilized (row-major) space to match the readback below. The column broadcast is
     # computed in TILIZED space because that is where the per-face column-0 value lives, then
-    # untilized; the two products are then formed by the eltwise golden and summed row-major (the
-    # MOP's two ELWMULs accumulate into DEST).
+    # untilized; the two per-tile terms (A_t op bcast_col(P_t)) are then formed by the eltwise
+    # golden and summed row-major (the MOP's two passes accumulate into DEST for every op).
     #
-    # EltwiseBinaryGolden rather than a raw torch multiply: the products come off the FPU at LoFi,
-    # which truncates the SrcA/SrcB mantissas before multiplying, and the generator models that
-    # fidelity masking. Both operands are already quantized here (stimuli in input_format, the
-    # scale straight out of BroadcastGolden), so input_format is left unset -- the same call shape
-    # test_eltwise_bcast_col_custom.py and test_experimental_reconfig_escape.py use.
+    # EltwiseBinaryGolden rather than a raw torch op: for MUL the products come off the FPU at
+    # LoFi, which truncates the SrcA/SrcB mantissas before multiplying, and the generator models
+    # that fidelity masking (ADD/SUB are fidelity-independent). Both operands are already quantized
+    # here (stimuli in input_format, the scale straight out of BroadcastGolden), so input_format is
+    # left unset -- the same call shape test_eltwise_bcast_col_custom.py and
+    # test_experimental_reconfig_escape.py use.
     per_tile = SDPA_NUM_FACES * SDPA_FACE_R_DIM * 16
     broadcast_golden = get_golden_generator(BroadcastGolden)
     eltwise_golden = get_golden_generator(EltwiseBinaryGolden)
@@ -146,7 +169,7 @@ def run_sdpa_bcast_col_srcb_reuse(cpp_source, formats, boot_mode=BootMode.DEFAUL
             broadcast_golden,
         ).to(torch_format)
         golden_tensor += eltwise_golden(
-            MathOperation.Elwmul,
+            mathop,
             operands[t * rows : (t + 1) * rows, :].flatten(),
             scale.flatten(),
             formats.output_format,
@@ -162,6 +185,7 @@ def run_sdpa_bcast_col_srcb_reuse(cpp_source, formats, boot_mode=BootMode.DEFAUL
             # immediate takes the "n" asm constraint), and it emits `constexpr num_faces`, which the
             # unpack/pack sides read just as happily as the math thread.
             NUM_FACES(SDPA_NUM_FACES, SDPA_NUM_FACES, SDPA_NUM_FACES),
+            MATH_OP(mathop=mathop),
         ],
         runtimes=[
             TILE_COUNT(1),
