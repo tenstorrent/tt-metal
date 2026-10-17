@@ -96,7 +96,10 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
             }
             return PadRmReaderWriterMultiCoreDefaultProgramFactory{};
         }
-        if (operation_attributes.use_multicore) {
+        bool has_front_padding = (
+            operation_attributes.input_tensor_start[0] != 0 || operation_attributes.input_tensor_start[1] != 0 ||
+            operation_attributes.input_tensor_start[2] != 0 || operation_attributes.input_tensor_start[3] != 0);
+        if (operation_attributes.use_multicore || has_front_padding) {
             return PadRmReaderWriterMultiCoreDefaultProgramFactory{};
         }
         return PadRmReaderWriterProgramFactory{};
