@@ -127,6 +127,15 @@ void kernel_main() {
         // Super-blocks b with b % (1 + NH) = h + 1 were read and tilized by helper h (se13_xhelp.cpp) into landing
         // ring h here (RT 14 helper 0 xy, 17.. helpers 1.. xy, 15 landing address (ring h follows ring h - 1), 16
         // landing slots; DATA sem se_help_sem(h) here counts arrivals, CREDIT sem 5 on the helper counts freed slots).
+#ifdef XMC_HELP_ALL  // (MIMO_FL_XHELP_ALL: every super-block from helper b % NH, the primary reads none)
+        constexpr uint32_t hs = SE_XNH;
+#ifdef SE_SMALL_T
+        const bool from_helper = own && !dyn.small;  // small-M role split: the primary tilized all
+#else
+        const bool from_helper = own;
+#endif
+        const uint32_t hh = ob % hs, hb = ob / hs;
+#else
         constexpr uint32_t hs = 1 + SE_XNH;
 #ifdef SE_SMALL_T
         const bool from_helper = !XMC_PRIM_ONLY && own && ob % hs != 0 && !dyn.small;  // small-M role split: the primary tilized all
@@ -134,6 +143,7 @@ void kernel_main() {
         const bool from_helper = !XMC_PRIM_ONLY && own && ob % hs != 0;
 #endif
         const uint32_t hh = ob % hs - 1, hb = ob / hs;
+#endif
         uint32_t src;
 #ifdef XMC_FWD
         if (!own) {  // the other half: forwarded by the other primary

@@ -96,12 +96,29 @@ void kernel_main() {
 #if defined(XHELP_SMALL) && defined(SE_SMALL_T)
     // small-M role split with helper relays: the primary (offset 0) reads all of x itself, the helper nothing
     if (dyn.small) {
-        if (soff) {
+#if defined(XRD_HELP_ALL_PRIM)
+        constexpr bool idle = false;
+#elif defined(XRD_HELP_ALL_HELPER)
+        constexpr bool idle = true;
+#else
+        const bool idle = soff != 0;
+#endif
+        if (idle) {
             dyn.n_act = 0;
             dyn.num_v = 0;
         }
         stride = 1;
         soff = 0;
+    }
+#endif
+#ifdef XRD_HELP_ALL_PRIM  // (MIMO_FL_XHELP_ALL: the helpers read all of x; the primary only on small-M calls)
+#ifdef SE_SMALL_T
+    if (!dyn.small) {
+#else
+    {
+#endif
+        dyn.n_act = 0;
+        dyn.num_v = 0;
     }
 #endif
     {

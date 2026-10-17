@@ -1005,3 +1005,15 @@ Tensix reader for each bank's second slot (the old hybrid: 8 cells free).
   reader layout leaves x a tile to itself (tile 1, NOC1). Left: all x on NOC0 by helpers (the primaries reading
   nothing: an se11_xmc change) with the down reads on NOC1 next to the DRISC DMA, or the hybrid (free-tile DRISC +
   Tensix readers, 8 cells).
+- **Helpers read all of x** (MIMO_FL_XHELP_ALL=1: the primaries only multicast, and read x themselves only on
+  small-M calls; helper j takes super-blocks g % NH == j). PCC as default (V4.1 E24 cases, also with DN_NOC0).
+  DRISC two tiles, us / expert M 80 / 256 / 1024 (baseline 47.5 / 69.8 / 216.4):
+  | helpers read on | NH | M 80 | M 256 | M 1024 |
+  | NOC1 | 1 | 47.7 | 79.4 | 238.2 |
+  | NOC0 | 1 | 53.9 | 100.7 | 322.6 |
+  | NOC0 | 2 | 50.2 | 78.3 | 226.6 |
+  | NOC0 | 3 | 49.7 | 75.6 | 227.6 |
+  | NOC0 + down reads NOC1 (DN_NOC0) | 1 | hang in the sweep (passed standalone at M 256 and the PCC test) |
+  One reader core cannot carry a rectangle's x (~24 GB/s of 2 KB reads), and NOC0 x reads (tile 0, with the down
+  weight reads) are slower per reader than NOC1's. DN_NOC0 hangs intermittently with these relay layouts (also with
+  NH 2 standalone, and with unlinked multicasts) - the one layout that would leave x a bank tile to itself.

@@ -778,22 +778,36 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         // primaries keep NOC1 reads next to their linked NOC0 multicasts, which must not share a NoC with other
         // traffic of the core)
         const bool xhelp_noc0 = std::getenv("MIMO_FL_XHELP_NOC0") != nullptr && !x_once;
+        // (probe MIMO_FL_XHELP_ALL=1: the helpers read and tilize all of x, the primaries only multicast - and read it
+        // all on small-M calls, the role split's)
+        const bool xhelp_all = std::getenv("MIMO_FL_XHELP_ALL") != nullptr;
+        TT_FATAL(
+            !xhelp_all || (!x_once && !x_two && !p.xfwd && !xsolo && !xprim_only),
+            "MIMO_FL_XHELP_ALL: not with X1 / X2 / XFWD / XSOLO / XPRIM_ONLY");
         std::vector<CoreCoord> xrel_p, xrel_h;
         for (const auto& c : xrel) {
             const bool helper = std::find(p.relays.begin(), p.relays.begin() + NR, c) == p.relays.begin() + NR;
-            (xhelp_noc0 && helper ? xrel_h : xrel_p).push_back(c);
+            ((xhelp_noc0 || xhelp_all) && helper ? xrel_h : xrel_p).push_back(c);
         }
         const std::vector<uint32_t> xrd_ct = {
             0, t.x.logical_shape()[-1] * 2, E, MT, p.nsb, S, xrd_batch, idx_arg, p.H / t.x.logical_shape()[-1]};
-        const auto kxr = dm("se11_xrd.cpp", xrel_p, DataMovementProcessor::RISCV_0, xrd_noc, xrd_ct, xrd_def, x_mode);
-        const KernelHandle kxr_h = xrel_h.empty() ? kxr
-                                                  : dm("se11_xrd.cpp",
-                                                       xrel_h,
-                                                       DataMovementProcessor::RISCV_0,
-                                                       NOC::NOC_0,
-                                                       xrd_ct,
-                                                       xrd_def,
-                                                       NOC_MODE::DM_DYNAMIC_NOC);
+        const auto kxr =
+            dm("se11_xrd.cpp",
+               xrel_p,
+               DataMovementProcessor::RISCV_0,
+               xrd_noc,
+               xrd_ct,
+               xhelp_all ? with(xrd_def, {{"XRD_HELP_ALL_PRIM", "1"}}) : xrd_def,
+               x_mode);
+        const KernelHandle kxr_h = xrel_h.empty()
+                                       ? kxr
+                                       : dm("se11_xrd.cpp",
+                                            xrel_h,
+                                            DataMovementProcessor::RISCV_0,
+                                            xhelp_noc0 ? NOC::NOC_0 : xrd_noc,
+                                            xrd_ct,
+                                            xhelp_all ? with(xrd_def, {{"XRD_HELP_ALL_HELPER", "1"}}) : xrd_def,
+                                            xhelp_noc0 ? NOC_MODE::DM_DYNAMIC_NOC : x_mode);
         // MIMO_FL_TZ_SKIP: the relays' tilizers only do the CB handshakes; MIMO_FL_XMC_NODATA: the multicasters send
         // only the XARR counts (garbage x on the gate/up cores)
         Defines tz_def = with(dyn_def, {{"SE_SBT", sbt}});
@@ -818,6 +832,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         if (std::getenv("MIMO_FL_XMC_UNLINKED")) {  // (probe: the x multicasts without linked chains)
             xmc_def["XMC_UNLINKED"] = "1";
+        }
+        if (xhelp_all) {
+            xmc_def["XMC_HELP_ALL"] = "1";
         }
         // (x read once with forwarding: one kernel per primary, its half XMC_FWD_K)
         std::vector<KernelHandle> kxms;
@@ -880,7 +897,15 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 xr.a(AddrSrc::TokenIndex);
                 xr.a(AddrSrc::Arena, p.ti_off);  // (XRD_IDX_ALL: the call's token index, read once)
             }
-            add_rt(xhelp_noc0 && idx >= NR ? kxr_h : kxr, rl, xr);
+            if (xhelp_all) {  // helper j: super-blocks g % NH == j; the primary none (its kernel idles off small M)
+                xr = Args{};
+                xr.a(AddrSrc::X).lit(idx < NR ? 1u : p.nh).lit(idx < NR ? 0u : (idx - NR) / NR).cat(dyn).lits(sgx(k));
+                if (indexed) {
+                    xr.a(AddrSrc::TokenIndex);
+                    xr.a(AddrSrc::Arena, p.ti_off);
+                }
+            }
+            add_rt((xhelp_noc0 || xhelp_all) && idx >= NR ? kxr_h : kxr, rl, xr);
             SetRuntimeArgs(program, ktz, rl, std::vector<uint32_t>{rl_sb(idx)});
             if (idx < NR) {
                 Args xm;
@@ -922,8 +947,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 hl.lit(pk(p.relays[idx % NR]))
                     .a(AddrSrc::Arena, p.land_off + j * p.land_slots * sbb)
                     .lit(xprim_only ? 0 : rl_sb(idx))
-                    .lit(1 + p.nh)
-                    .lit(xprim_only ? 0xFFFFFFu : j + 1)
+                    .lit(xhelp_all ? p.nh : 1 + p.nh)
+                    .lit(xprim_only ? 0xFFFFFFu : (xhelp_all ? j : j + 1))
                     .cat(dyn)
                     .lits(sgx(k));
                 if (x_two || p.xfwd) {  // (se13_xhelp.cpp SE_X2: the primary's own stream: every NR-th from k)
