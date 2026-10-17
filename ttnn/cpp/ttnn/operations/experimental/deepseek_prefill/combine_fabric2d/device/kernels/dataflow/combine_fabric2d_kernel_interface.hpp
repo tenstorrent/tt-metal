@@ -83,6 +83,7 @@ inline uint32_t my_dg_index(const CombineFabric2dParams& args, const ttnn::MeshC
 
 struct L1Layout {
     uint32_t pkt_hdr_drain;
+    uint32_t pkt_hdr_credit;  // the courier's own header, so a credit never races the drain's
     uint32_t drain_sink;
     uint32_t ring;          // num_l1_slots tokens, filled by the reader and drained by the sender
     uint32_t pkt_hdr_ring;  // one prebuilt payload header per ring slot
@@ -115,8 +116,14 @@ struct KernelPlan {
     uint32_t pages_per_stream = 0;
     uint32_t ring_filled_addr = 0;
     uint32_t ring_freed_addr = 0;
-    uint32_t fwd_arrived_addr = 0;
     uint32_t final_arrived_addr = 0;
+    uint32_t credit_done_addr = 0;
+    uint32_t vc_pages = 0;  // the free parameter: pages per channel
+    // One entry per channel, in channel order. Addresses are uniform across the mesh, so these are the
+    // same numbers on every core -- what differs is which core a given counter is read or bumped on.
+    std::vector<uint32_t> vc_arrived_addr;
+    std::vector<uint32_t> vc_freed_addr;
+    std::vector<uint32_t> vc_outbox_addr;
 };
 
 // The other end of one untilizer handshake: the core to address, and the counter that core's peer owns there.
@@ -179,8 +186,13 @@ constexpr uint32_t UNT_CB_BATCHES = 2;
 // Words per entry in a handshake block: [noc_x, noc_y, counter_addr].
 constexpr uint32_t UNT_PEER_WORDS = 3;
 
-// Words per assignment in the reader's assignment block: [dst_chip_id, dst_dg_index, split_idx, split_count].
-constexpr uint32_t ASSIGNMENT_WORDS = 4;
+// Words per assignment in the reader's assignment block:
+// [dst_chip_id, dst_dg_index, split_idx, split_count, vc] -- the channel this chip's tokens for that
+// destination land in downstream, or VC_NONE when the destination IS the neighbour and they are delivered.
+constexpr uint32_t ASSIGNMENT_WORDS = 5;
+// Words per channel in the reader's channel block:
+// [arrived_addr, freed_addr, outbox_addr, next_vc].
+constexpr uint32_t VC_WORDS = 4;
 // Words per chunk descriptor.
 constexpr uint32_t CHUNK_WORDS = 4;
 
@@ -235,6 +247,21 @@ constexpr ChunkDescriptor stream_chunk(
 // Marks a schedule entry as "relay forwarding chunk k" rather than "own assignment k".
 constexpr uint32_t SCHED_FWD = 0x80000000u;
 
+// Pages a reader frees in one channel before it posts them back to the chip that wrote them. Bigger means
+// fewer credit packets on the cable and more pages the writer cannot see are free.
+//
+// Deliberately NOT tied to the reader's batch or to its schedule: a credit is owed the moment a page is
+// lifted, and which loop happened to lift it is not the upstream chip's concern. A reader also flushes
+// whatever it holds before it blocks and at end of stream, so a partial batch is never what somebody is
+// waiting on.
+constexpr uint32_t CREDIT_RETURN_BATCH = 16;
+
+// Channels a forwarding region is split into, at most. The real count is half_extent*(half_extent-1)/2,
+// six for the extent-8 production ring; this only bounds the per-channel arrays the kernels carry.
+constexpr uint32_t MAX_VCS = 16;
+// "Not queued anywhere" -- a page delivered to the next chip's output rather than forwarded again.
+constexpr uint32_t VC_NONE = 0xFFFFFFFFu;
+
 // Ring slot = token + forwarding metadata. 64 rather than the 32 in use keeps the slot stride DRAM-aligned
 // (14336 + 64 = 64 * 225), which lets a fabric write target a (token_size + 64)-byte forwarding page
 // directly.
@@ -247,6 +274,9 @@ struct FwdMetadata {
     uint64_t dst_chip;    // final destination chip id
     uint64_t cmd;
     uint64_t this_addr;  // the address THIS hop writes to
+    // Channel this token lands in over there, so the sender knows which arrival counter to bump. Local
+    // to this hop and never sent: the receiving chip derives the channel from its own tables.
+    uint64_t vc;
 };
 
 // A forwarded packet is the token plus the first two words, sent as one contiguous run, so the layout below

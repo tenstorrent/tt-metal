@@ -28,8 +28,15 @@ struct SenderCtArgs {
     uint32_t freed_addr;
     uint32_t fwd_sem_noc_x;
     uint32_t fwd_sem_noc_y;
-    uint32_t fwd_sem_addr;
     uint32_t final_sem_addr;
+    uint32_t num_vcs;
+    // Courier duty. This sender carries the credits of the OPPOSITE direction's reader on this chip,
+    // because that reader owes them to the chip this sender already points at. Nothing to do with this
+    // stream's own tokens -- the two are peers.
+    uint32_t pkt_hdr_credit_addr;
+    uint32_t credit_noc_x;  // opposite stream's worker on the DOWNSTREAM chip, which is owed the credits
+    uint32_t credit_noc_y;
+    uint32_t credit_done_addr;  // that reader's end-of-stream flag, on this core
 
 #ifndef KERNEL_BUILD
     // `downstream` is the worker serving this stream on the next chip: the sender bumps its
@@ -39,6 +46,9 @@ struct SenderCtArgs {
         const op::CombineFabric2dInputs& tensor_args,
         const op::StreamPlacement& self,
         const op::StreamPlacement& downstream,
+        // The opposite direction's worker on the downstream chip: where this sender posts the credits it
+        // couriers, since that is the reader whose writes into this chip they free.
+        const op::StreamPlacement& downstream_opposite,
         const op::L1Layout& l1,
         const op::KernelPlan& plan) :
         num_l1_slots(NUM_L1_SLOTS),
@@ -55,11 +65,23 @@ struct SenderCtArgs {
         freed_addr(plan.ring_freed_addr),
         fwd_sem_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
         fwd_sem_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
-        fwd_sem_addr(plan.fwd_arrived_addr),
-        final_sem_addr(plan.final_arrived_addr) {}
+        final_sem_addr(plan.final_arrived_addr),
+        num_vcs(static_cast<uint32_t>(plan.vc_arrived_addr.size())),
+        pkt_hdr_credit_addr(l1.pkt_hdr_credit),
+        credit_noc_x(static_cast<uint32_t>(downstream_opposite.worker_virtual.x)),
+        credit_noc_y(static_cast<uint32_t>(downstream_opposite.worker_virtual.y)),
+        credit_done_addr(plan.credit_done_addr) {
+        // Per channel: where its arrival counter sits on the downstream reader, where the credit we
+        // courier lands over there, and where our own courier queue is on this core.
+        for (uint32_t v = 0; v < num_vcs; v++) {
+            blocks_.push_back(plan.vc_arrived_addr[v]);
+            blocks_.push_back(plan.vc_freed_addr[v]);
+            blocks_.push_back(plan.vc_outbox_addr[v]);
+        }
+    }
 
     std::vector<uint32_t> to_ct_word_arr() const {
-        return {
+        std::vector<uint32_t> word_arr{
             num_l1_slots,
             token_size_bytes,
             forwarding_metadata_size,
@@ -74,9 +96,20 @@ struct SenderCtArgs {
             freed_addr,
             fwd_sem_noc_x,
             fwd_sem_noc_y,
-            fwd_sem_addr,
-            final_sem_addr};
+            final_sem_addr,
+            num_vcs,
+            pkt_hdr_credit_addr,
+            credit_noc_x,
+            credit_noc_y,
+            credit_done_addr};
+        word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
+        return word_arr;
     }
+
+private:
+    std::vector<uint32_t> blocks_;
+
+public:
 #else
     constexpr SenderCtArgs() :
         num_l1_slots(get_compile_time_arg_val(0)),
@@ -93,8 +126,19 @@ struct SenderCtArgs {
         freed_addr(get_compile_time_arg_val(11)),
         fwd_sem_noc_x(get_compile_time_arg_val(12)),
         fwd_sem_noc_y(get_compile_time_arg_val(13)),
-        fwd_sem_addr(get_compile_time_arg_val(14)),
-        final_sem_addr(get_compile_time_arg_val(15)) {}
+        final_sem_addr(get_compile_time_arg_val(14)),
+        num_vcs(get_compile_time_arg_val(15)),
+        pkt_hdr_credit_addr(get_compile_time_arg_val(16)),
+        credit_noc_x(get_compile_time_arg_val(17)),
+        credit_noc_y(get_compile_time_arg_val(18)),
+        credit_done_addr(get_compile_time_arg_val(19)) {}
+
+    // Words per channel in the block that follows the scalars.
+    static constexpr uint32_t VC_WORDS = 3;
+    static constexpr uint32_t vc_base = 20;
+    uint32_t vc_arrived_addr(uint32_t v) const { return kernel_compile_time_args[vc_base + v * VC_WORDS + 0]; }
+    uint32_t vc_freed_addr(uint32_t v) const { return kernel_compile_time_args[vc_base + v * VC_WORDS + 1]; }
+    uint32_t vc_outbox_addr(uint32_t v) const { return kernel_compile_time_args[vc_base + v * VC_WORDS + 2]; }
 #endif
 
     constexpr uint32_t slot_stride() const { return token_size_bytes + forwarding_metadata_size; }
