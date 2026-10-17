@@ -172,6 +172,16 @@ DEVICE_STEPS = {
         "indexer",
         "attention",
     },
+    # attn_hc .. kv passed C.dec_reindex.* (and S.dec_reindex.01-05) on the swa modules (DS41-28); the indexer is
+    # tt/indexer.py:TtReindexer over layer 20's served 4_index_k_r1 cache and its device candidate pool
+    "dec_reindex": {
+        "attn_hc",
+        "attn_collapse",
+        "attn_norm",
+        "q_a",
+        "kv",
+        "indexer",
+    },
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcMixes): packed boundary [S, 4H + 4] (or streams [S, 4H]) in -> [S, 24].
@@ -541,21 +551,56 @@ def _compressor_host_fn(mesh, module, cfg, layer):
 
 
 def _indexer_host_fn(mesh, module, cfg, layer, tables):
-    """fn(ctx, x_host [S, H], qr_host [S, q_lora], compressed_host [S / r, head_dim + index_dim]) -> top-k host
+    """fn(ctx, x_host [S, H], qr_host [S, q_lora][, compressed_host [S / r, head_dim + index_dim]]) -> top-k host
     [S, topk] int32 (key positions, -1 = none) (harness boundary: attn_norm rows over axis 0 and hidden columns over
     axis 1, q_resid row-split and TP-replicated, in; the row-split, TP-replicated top-k back from mesh column 0).
-    The keys are read on the device from the layer's served index-key cache: ctx.extra["compress_cache"].index_k
-    (the hybrid model's, which the device compressor wrote this chunk into); without one (component tests) a cache
-    for the call is made and loaded with the golden prefix (state_prefix index_k) and this chunk's keys
-    (``compressed``'s last index_dim columns). With a reference state carrying the layer (the hybrid model), its
-    topk_idx rows of the chunk are updated as the reference step does (for the ladder state and reader layers). With
-    ctx.extra["topk_store"] (the hybrid model's {layer: (start, device top-k)}) the device output [1, 1, S/SP, K] uint32 stays
-    on the device there for this chunk's reader layers (the previous chunk's is freed)."""
+    The keys are read on the device from the KV source's served index-key cache: ctx.extra["compress_cache"].index_k
+    (the hybrid model's: the layer's own, or for a re-index layer its KV source's, which the source's device
+    compressor wrote this chunk into); without one (component tests) a cache for the call is made and loaded: an own
+    source with the golden prefix (state_prefix index_k) and this chunk's keys (``compressed``'s last index_dim
+    columns), a re-index layer (dec_reindex, no ``compressed``) with its KV source's index_k as of the chunk's end
+    (source_state, F65, else the reference state). A re-index layer also reads the candidate source's pool of the
+    chunk: ctx.extra["cand_device"] (the hybrid model's device pool [1, 1, Sq, 2048] uint32 per chip, read, not
+    consumed), else the source's candidates rows [start, start + S) uploaded per chip (chip (r, c): rows r W + c Sq).
+    With a reference state carrying the layer (the hybrid model), its topk_idx rows of the chunk are updated as the
+    reference step does (for the ladder state and reader layers). With ctx.extra["topk_store"] (the hybrid model's
+    {layer: (start, device top-k)}) the device output [1, 1, S/SP, K] uint32 stays on the device there for this
+    chunk's reader layers (the previous chunk's is freed)."""
     import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.common import SP_AXIS
     from models.demos.deepseek_v41_flash_d_p.tt.compressor import TtServedRows
     from models.demos.deepseek_v41_flash_d_p.tt.layout import hidden_split_to_device, row_split_to_device
 
     r, hd = module.ratio, cfg.head_dim
+    reindex = hasattr(module, "bias_of")
+    kv_src, cand_src = cfg.kv_source_of(layer), cfg.cand_source
+
+    def _source(ctx, j, name, a, b):
+        """Rows [a, b) of source layer j's state tensor `name` (F65 source_state, else the reference state)."""
+        src = (ctx.extra.get("source_state") or {}).get(j)
+        if src is not None:
+            return src[name][a:b]
+        st = ctx.state
+        assert st is not None, f"layer {layer}: no state of its source layer {j}"
+        return {"index_k": st.index_k, "candidates": st.cand}[name][j][a:b]
+
+    def _cands(ctx, start, s):
+        """The candidate pool of the chip's Sq query rows [1, 1, Sq, n] uint32 ROW_MAJOR (and whether it is ours)."""
+        dev = ctx.extra.get("cand_device")
+        if dev is not None:
+            return dev, False
+        rows = _source(ctx, cand_src, "candidates", start, start + s).to(torch.int32)  # -1 -> 0xFFFFFFFF
+        sp, tp = mesh.shape[0], mesh.shape[1]
+        dims = (0, 1) if SP_AXIS == 0 else (1, 0)
+        t = ttnn.from_torch(
+            rows.reshape(sp, tp, s // (sp * tp), -1).contiguous(),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=dims),
+        )
+        return t, True
 
     def fn(ctx, x, qr, compressed=None):
         start, s = int(ctx.start), x.shape[0]
@@ -564,17 +609,27 @@ def _indexer_host_fn(mesh, module, cfg, layer, tables):
         if own:
             max_seq = max(int(ctx.extra.get("max_seq") or 0), start + s)
             cache = TtServedRows(mesh, tables, max_seq, cfg.index_dim, r, dedup=False)
-            prefix = (ctx.extra.get("state_prefix") or {}).get("index_k")
-            keys = [prefix[: start // r].float()] if start else []
-            keys.append(compressed[:, hd:].float())
-            cache.load_host(torch.cat(keys), 0)
+            if compressed is not None:
+                prefix = (ctx.extra.get("state_prefix") or {}).get("index_k")
+                keys = [prefix[: start // r].float()] if start else []
+                keys.append(compressed[:, hd:].float())
+                keys = torch.cat(keys)
+            else:
+                assert reindex and kv_src != layer, f"layer {layer}: no index keys"
+                keys = _source(ctx, kv_src, "index_k", 0, (start + s) // r).float()
+            cache.load_host(keys, 0)
         else:
             cache = caches.index_k
         module.setup(cache)
         xd = hidden_split_to_device(mesh, x)
         qd = row_split_to_device(mesh, qr)
         cands = None
-        if hasattr(module, "candidates_of"):  # the candidate source (layer 20): top-k + the candidate pool
+        if reindex:  # a re-index layer (dec_reindex): top-k inside the candidate source's pool
+            cd, own_cd = _cands(ctx, start, s)
+            od = module(xd, qd, start, cache, cd)
+            if own_cd:
+                ttnn.deallocate(cd)
+        elif hasattr(module, "candidates_of"):  # the candidate source (layer 20): top-k + the candidate pool
             od, cands = module.forward(xd, qd, start, cache)
         else:
             od = module(xd, qd, start, cache)
@@ -856,8 +911,8 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
         from models.demos.deepseek_v41_flash_d_p.tt.indexer import build_indexer
 
         own_keys = cfg.is_kv_source(layer) and cfg.is_index_source(layer)
-        if not own_keys or cfg.uses_candidates(layer):
-            return None  # the indexers over their own keys (enc_source; dec_candidate with its pool) so far
+        if not (own_keys or cfg.uses_candidates(layer)):
+            return None  # own keys (enc_source, dec_candidate) or the re-index layers (dec_reindex) only
         tables = _window_tables(mesh, spec, shared)
         module = build_indexer(mesh, ck, cfg, layer, _max_seq(spec), _chunk(spec))
         return _indexer_host_fn(mesh, module, cfg, layer, tables)
@@ -1062,6 +1117,11 @@ class HybridDeviceModel:
                 ctx.extra["compress_cache"] = state.compress[ks]
             if js != i and js in state.topk and state.topk[js][0] == start:
                 ctx.extra["topk_device"] = state.topk[js][1]
+        if self.cfg.uses_candidates(i):
+            # a re-index layer (dec_reindex) reads the candidate source's device pool of this chunk
+            c = self.cfg.cand_source
+            if c in state.cands and state.cands[c][0] == start:
+                ctx.extra["cand_device"] = state.cands[c][1]
         return run_block(
             self.ref.block_graph(i), lambda n: self.ref.component(i, n), ctx, h, overrides=self.overrides[i]
         )
