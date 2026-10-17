@@ -61,6 +61,13 @@ class OutputStripeIterator {
     static_assert(slice_step == 1 || static_output_chunks_per_stripe != 0);
 
 public:
+    // Segmented prefix (gathered_segments > 1): logical chunk l of a stripe lives at physical chunk
+    // (l / active) * stride + l % active. Both 0 = contiguous prefix (the default fast path below).
+    FORCE_INLINE void set_segments(uint32_t stride_chunks, uint32_t active_chunks) {
+        seg_stride_ = stride_chunks;
+        seg_active_ = active_chunks;
+    }
+
     // Point at `stripe` for the chunk range [start, start + count).
     FORCE_INLINE void init(uint32_t stripe, uint32_t start, uint32_t count, uint32_t output_chunks_per_stripe) {
         if constexpr (linearized_mesh_ring) {
@@ -78,6 +85,15 @@ public:
         output_pages_per_row_ = stripe_distance_chunks_ / output_chunks_per_page;
         if constexpr (slice_step > 1) {
             static_assert(output_chunks_per_page == 1, "strided bank-owned schedule requires matched output pages");
+            stripe_ = stripe;
+            start_ = start;
+            sent_ = 0;
+            count_ = count;
+            return;
+        }
+        if (seg_active_ != 0) {
+            // Segmented: next() recomputes each chunk's address from its logical index (one divide per
+            // chunk; the host never pairs this with the bank-owned slice_step > 1 schedule).
             stripe_ = stripe;
             start_ = start;
             sent_ = 0;
@@ -113,6 +129,17 @@ public:
             // stripe group. Keep this strided hot path entirely compile-time and free of divide/modulo.
             return {stripe_ * static_output_chunks_per_stripe + local_chunk, 0};
         }
+        if (seg_active_ != 0) {
+            const uint32_t logical = start_ + sent_;
+            ++sent_;
+            const uint32_t seg = logical / seg_active_;
+            const uint32_t c = seg * seg_stride_ + (logical - seg * seg_active_);
+            const uint32_t row = c / output_chunks_per_stripe_;
+            const uint32_t s_pos = row * stripe_distance_chunks_ + (c - row * output_chunks_per_stripe_) +
+                                   stripe_ * output_chunks_per_stripe_;
+            const uint32_t page = s_pos / output_chunks_per_page;
+            return {page, (s_pos - page * output_chunks_per_page) * output_chunk_size};
+        }
         std::pair<uint32_t, uint32_t> loc{page_id_, byte_off_};
         sent_++;
         if (++chunk_in_stripe_ == output_chunks_per_stripe_) {
@@ -132,6 +159,7 @@ public:
 private:
     uint32_t page_id_, byte_off_, chunk_in_stripe_, sent_, count_, phase_, stripe_jump_, stripe_, start_;
     uint32_t output_chunks_per_stripe_, stripe_distance_chunks_, output_pages_per_row_;
+    uint32_t seg_stride_ = 0, seg_active_ = 0;
 };
 
 // Unicasts pages one hop to the single neighbor. Handles packetization (pack several pages into one

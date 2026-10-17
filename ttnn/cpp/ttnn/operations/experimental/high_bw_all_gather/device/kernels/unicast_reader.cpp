@@ -127,6 +127,13 @@ void kernel_main() {
     const uint32_t batch_slot_num_layers = get_common_arg_val<uint32_t>(4);
     const uint32_t batch_slot_layer_idx = get_common_arg_val<uint32_t>(5);
     const uint32_t gathered_prefix_meta_addr = get_common_arg_val<uint32_t>(2);
+    // Segmented prefix (0/0 = contiguous): input-page stride/active for the local reads, output-chunk
+    // stride/active for the relay iterator. Logical page p of a rank's active range is physical
+    // (p / active) * stride + p % active; the host never combines this with a slot base or metadata.
+    const uint32_t seg_stride_pages = get_common_arg_val<uint32_t>(6);
+    const uint32_t seg_active_pages = get_common_arg_val<uint32_t>(7);
+    const uint32_t seg_stride_chunks = get_common_arg_val<uint32_t>(8);
+    const uint32_t seg_active_chunks = get_common_arg_val<uint32_t>(9);
     const uint32_t ext_slice_idx = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t ext_link = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t ext_worker = get_arg_val<uint32_t>(arg_idx++);
@@ -232,6 +239,7 @@ void kernel_main() {
         mesh_rows,
         mesh_cols>
         it;
+    it.set_segments(seg_stride_chunks, seg_active_chunks);
 
     ///////////////////////////////////////////////////
     // MAIN
@@ -257,11 +265,16 @@ void kernel_main() {
                 cb.reserve_back(1);
                 uint32_t l1_write_addr = cb.get_write_ptr();
                 for (uint32_t i = 0; i < inputs_per_cb_page && page < page_end; ++i) {
+                    uint32_t src_page = page;
+                    if (seg_active_pages != 0) {
+                        const uint32_t seg = page / seg_active_pages;
+                        src_page = seg * seg_stride_pages + (page - seg * seg_active_pages);
+                    }
                     noc.async_read(
                         input_tensor_accessor,
                         CoreLocalMem<uint32_t>(l1_write_addr),
                         input_page_size,
-                        {.page_id = page},
+                        {.page_id = src_page},
                         {},
                         {});
                     l1_write_addr += input_page_size;

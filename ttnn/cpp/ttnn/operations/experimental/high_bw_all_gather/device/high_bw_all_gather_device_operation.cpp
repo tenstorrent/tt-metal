@@ -137,6 +137,8 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         // hashed -- it is structural (chunk_local * sp), identical for every chunk and layer.
         tensor_args.has_gathered_prefix_metadata(),
         args.gathered_slab_global,
+        // Structural: a segmented gather disables the bank-owned schedule and maps pages in-kernel.
+        args.gathered_segments,
         tensor_args);
 }
 
@@ -242,6 +244,57 @@ void validate_slot_extent_control_mix(const HighBwAllGatherParams& args, const H
         args.input_batch_index.value_or(0));
 }
 
+// Segmented prefix (gathered_segments > 1). Runs on cache hits too: the per-segment extent changes with
+// gathered_dim_size, which is hash-excluded.
+void validate_gathered_segments(const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
+    const uint32_t k = args.gathered_segments;
+    TT_FATAL(k >= 1, "high_bw_all_gather gathered_segments must be >= 1, got {}", k);
+    if (k == 1) {
+        return;
+    }
+    TT_FATAL(
+        args.gathered_dim_size.has_value(),
+        "high_bw_all_gather gathered_segments > 1 requires the scalar gathered_dim_size");
+    TT_FATAL(
+        !args.input_batch_index.has_value() && !tensor_args.has_batch_index_metadata() &&
+            !tensor_args.has_gathered_prefix_metadata(),
+        "high_bw_all_gather gathered_segments > 1 does not support slot select or the trace-safe extent");
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& shape = input_tensor.padded_shape();
+    const int32_t rank = static_cast<int32_t>(shape.rank());
+    const int32_t dim = args.dim < 0 ? args.dim + rank : args.dim;
+    TT_FATAL(
+        dim < rank - 1,
+        "high_bw_all_gather gathered_segments > 1 needs the gather dim ({}) to be outside the innermost dim",
+        dim);
+    TT_FATAL(
+        shape[dim] % k == 0,
+        "high_bw_all_gather input dim {} extent {} must split into {} equal segments",
+        dim,
+        shape[dim],
+        k);
+    const uint32_t gathered = *args.gathered_dim_size;
+    TT_FATAL(
+        gathered % (args.num_devices * k) == 0,
+        "high_bw_all_gather gathered_dim_size {} must divide evenly across {} devices x {} segments",
+        gathered,
+        args.num_devices,
+        k);
+    const uint32_t stride = shape[dim] / k;
+    const uint32_t active = gathered / (args.num_devices * k);
+    TT_FATAL(
+        active <= stride, "high_bw_all_gather per-segment extent {} exceeds the segment stride {}", active, stride);
+    if (input_tensor.layout() == Layout::TILE && dim == rank - 2) {
+        const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
+        TT_FATAL(
+            stride % tile_h == 0 && active % tile_h == 0,
+            "high_bw_all_gather segment stride {} and per-segment extent {} must be tile-height aligned ({})",
+            stride,
+            active,
+            tile_h);
+    }
+}
+
 }  // namespace
 
 void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
@@ -250,6 +303,7 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
     validate_batch_index_metadata(args, tensor_args);
     validate_gathered_prefix_metadata(args, tensor_args);
     validate_slot_extent_control_mix(args, tensor_args);
+    validate_gathered_segments(args, tensor_args);
 
     // Constraints on input tensor
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must to be on device!");
@@ -406,6 +460,7 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_hit(
     // The slot/prefix values are deliberately hash-excluded. Recheck only their cheap dynamic
     // bounds here; all tensor/layout/fabric structure belongs to the program key and was proven on
     // the miss path. This keeps a serving-loop cache hit to scalar validation plus direct RT-arg writes.
+    validate_gathered_segments(args, tensor_args);
     if (args.linearized_mesh_ring) {
         TT_FATAL(
             ttnn::operations::ccl::common::has_row_major_mesh_coordinates(tensor_args.input_tensor),
@@ -493,7 +548,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
     const std::optional<GlobalSemaphore>& ready_semaphore,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore) {
+    const std::optional<GlobalSemaphore>& data_valid_semaphore,
+    uint32_t gathered_segments) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -594,7 +650,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .gathered_dim_size = gathered_dim_size,
             .batch_slot_num_layers = batch_slot_num_layers,
             .batch_slot_layer_idx = batch_slot_layer_idx,
-            .gathered_slab_global = gathered_slab_global},
+            .gathered_slab_global = gathered_slab_global,
+            .gathered_segments = gathered_segments},
         HighBwAllGatherInputs{
             .input_tensor = input_tensor,
             .output_tensor = output_tensor,
@@ -622,7 +679,8 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
     const std::optional<GlobalSemaphore>& ready_semaphore,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore) {
+    const std::optional<GlobalSemaphore>& data_valid_semaphore,
+    uint32_t gathered_segments) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
         output_tensor,
@@ -639,7 +697,8 @@ Tensor high_bw_all_gather(
         gathered_prefix_tensor,
         gathered_slab_global,
         ready_semaphore,
-        data_valid_semaphore);
+        data_valid_semaphore,
+        gathered_segments);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);
 }
