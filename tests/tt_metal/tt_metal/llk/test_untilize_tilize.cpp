@@ -131,6 +131,7 @@ static void validate_result(
         .face_c_dim = 16,
         .num_faces = static_cast<int>(test_config.tile_shape_in_faces_r * test_config.tile_shape_in_faces_c),
         .datum_bytes = tt::datum_size(test_config.input_fmt),
+        .tile_shape_in_faces_c = static_cast<int>(test_config.tile_shape_in_faces_c),
     };
 
     std::visit(
@@ -933,8 +934,13 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilize) {
 // odd widths (unit_dim 1, or a trailing unit_dim-3 call) to tilize_*; Blackhole's fast-tilize path is
 // 32x32-only, so its compute API must route every tiny tile to tilize_* instead of running the 32x32
 // unpack/pack sequence over a 16-row tile (which reads 16 rows past the input and overruns the output
-// CB by a half tile per tile).
+// CB by one 16x32 tile, half a 32x32 tile, per tile).
 TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeTinyTile16x32) {
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        // Quasar fast_tilize_* forward to plain tilize, whose unpack tilize supports two-face tiles only
+        // with face heights 1 and 2 (1x32, 2x32), not the 16x32 tile this test exercises.
+        GTEST_SKIP() << "Quasar unpack tilize does not support 16x32 tiles";
+    }
     constexpr std::uint32_t tile_shape_in_faces_r = 1;  // 16x32 = 1x2 faces of 16x16
     constexpr std::uint32_t tile_shape_in_faces_c = 2;
     constexpr std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT;
@@ -964,6 +970,39 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeTinyTile16x32) {
 // tilizeA_B + eltwise add on narrow tiles: 32x16 (two vertically stacked 16x16 faces) and 16x16 (one face).
 // A is row-major, B is a constant, so every output datum is the tilized A datum plus that constant. Small
 // integer inputs keep the bf16 sum exact.
+// fast_tilize_* on a 32x16 narrow tile (2x1 faces of 16x16). Neither architecture has a fast-tilize data
+// path for it (Wormhole's two-face path assumes 32-wide rows and would pack the two faces side by side),
+// so both compute APIs route it to tilize_* at any block width. Only Wormhole's plain tilize has a
+// narrow-tile path (Blackhole's whole-tile tilize mode walks faces horizontally, Quasar supports two-face
+// tiles only with face heights 1 and 2), so the case can only run there.
+TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeNarrowTile32x16) {
+    if (MetalContext::instance().get_cluster().arch() != ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "only the Wormhole tilize path handles a 32x16 narrow tile";
+    }
+    constexpr std::uint32_t tile_shape_in_faces_r = 2;  // 32x16 = 2x1 faces of 16x16
+    constexpr std::uint32_t tile_shape_in_faces_c = 1;
+    constexpr std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT;
+    constexpr std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;
+    constexpr std::uint32_t tile_bytes =
+        tile_shape_in_faces_r * tile_shape_in_faces_c * face_r_dim * face_c_dim * sizeof(std::uint16_t);
+    // Even widths only: these are the widths the Wormhole two-face path would otherwise accept.
+    vector<vector<std::uint32_t>> num_tiles = {{1, 2}, {1, 4}, {2, 2}};
+    for (auto num_tile : num_tiles) {
+        unit_tests::compute::tilize::TestConfig test_config = {
+            .fast_tilize = true,
+            .input_single_tile_size = tile_bytes,
+            .output_single_tile_size = tile_bytes,
+            .num_tiles_r = num_tile[0],
+            .num_tiles_c = num_tile[1],
+            .tile_shape_in_faces_r = tile_shape_in_faces_r,
+            .tile_shape_in_faces_c = tile_shape_in_faces_c,
+            .face_r_dim = face_r_dim,
+            .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+            .golden_function = ::unit_tests::compute::gold_standard_tilize};
+        unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
+    }
+}
+
 TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackTilizeA_BNarrowTile) {
     if (MetalContext::instance().get_cluster().arch() != ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "only the Wormhole tilizeA_B has a narrow-tile path";

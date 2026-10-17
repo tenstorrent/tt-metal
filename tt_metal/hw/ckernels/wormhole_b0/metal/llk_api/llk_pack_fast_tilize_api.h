@@ -11,6 +11,27 @@
  * LLK PACK FAST TILIZE
  *************************************************************************/
 
+/**
+ * @brief Whether fast_tilize_init/block/uninit must take the plain tilize path for this block.
+ *
+ * Wormhole fast-tilize supports 32x32 tiles, and 16x32 tiny tiles only at an even width (see
+ * ckernel::fast_tilize_block_supported). Both the input and the output CB are checked through this thread's geometry
+ * arrays, which cover every CB index and are generated from the same descriptor on every thread, so all
+ * three threads reach the same decision even when the two CBs differ.
+ *
+ * @param icb: Input circular buffer identifier.
+ * @param ocb: Output circular buffer identifier.
+ * @param block: Block width in tiles (full_dim at init/uninit).
+ */
+inline bool llk_fast_tilize_needs_fallback(
+    const std::uint32_t icb, const std::uint32_t ocb, const std::uint32_t block) {
+    const std::uint32_t in_id = get_output_id(icb);
+    const std::uint32_t out_id = get_output_id(ocb);
+    return !(
+        ckernel::fast_tilize_block_supported(get_output_tile_r_dim(in_id), get_output_tile_c_dim(in_id), block) &&
+        ckernel::fast_tilize_block_supported(get_output_tile_r_dim(out_id), get_output_tile_c_dim(out_id), block));
+}
+
 inline void llk_pack_fast_tilize_init(
     const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t unit_dim) {
     const std::uint8_t input_id = get_output_id(input_operand);

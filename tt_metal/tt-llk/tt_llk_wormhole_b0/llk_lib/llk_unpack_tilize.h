@@ -14,6 +14,7 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
+#include "llk_fast_tilize_common.h"
 #include "llk_unpack_common.h"
 
 using namespace ckernel;
@@ -746,7 +747,7 @@ inline void _llk_unpack_fast_tilize_uninit_()
  * @param unit_dim: Tiles processed per iteration (1 only if full_dim is 1, otherwise 2 or 3).
  * @param num_units: Number of units processed in this call.
  * @param full_dim: Tensor width in number of tiles.
- * @param num_faces: Number of faces in the tile, valid values = <2, 4>.
+ * @param num_faces: Number of faces in the tile, valid values = <2, 4>; 2 (16x32 tiny tiles) only together with unit_dim 2.
  * @note Call @ref _llk_unpack_fast_tilize_init_ before this function, and
  *       @ref _llk_unpack_fast_tilize_uninit_ after it to restore modified state.
  * @note On the math thread, @ref _llk_math_fast_tilize_block_ consumes SrcA/SrcB; on the pack thread, @ref _llk_pack_fast_tilize_block_ writes the tilized L1
@@ -762,8 +763,7 @@ inline void _llk_unpack_fast_tilize_block_(
     const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4");
-    LLK_ASSERT(
-        (unit_dim == 2 && num_faces == 2) || num_faces == 4, "16x32 tiny tiles are only supported for tensors with even-sized tile widths for fast_tilize");
+    LLK_ASSERT(fast_tilize_unit_supports_faces(unit_dim, num_faces), FAST_TILIZE_TINY_TILE_UNIT_DIM_MSG);
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
 
     std::uint32_t address = base_address + (SCALE_DATUM_SIZE(unpack_src_format, tile_index * TILE_C_DIM) >> 4); // move by tile width in 16B words

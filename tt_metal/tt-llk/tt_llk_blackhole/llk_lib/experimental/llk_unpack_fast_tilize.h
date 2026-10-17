@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "experimental/llk_fast_tilize_common.h"
 #include "llk_unpack_tilize.h"
 
 // ============================================================================
@@ -116,9 +117,19 @@ inline void _llk_unpack_fast_tilize_reinit_xdim_(const std::uint32_t unit_dim)
     TT_SETADCXX(p_setadc::UNP_A, unit_dim * TILE_C_DIM - 1, 0x0);
 }
 
-// One call = one row-chunk (one unit_dim, one MOP run).
-// Block height is always 1; multiple rows and chunks are loops in the caller.
-// 32x32 tiles only: the MOP below always reads 32 tensor rows (TT_MOP count) per chunk.
+/**
+ * @brief Unpack one row-chunk of unit_dim 32x32 tiles into SrcA (one MOP run).
+ *
+ * Block height is always 1; multiple rows and chunks are loops in the caller. The MOP always reads 32 tensor
+ * rows per chunk, so only 32x32 tiles are supported.
+ *
+ * @param base_address: 16B L1 address of the chunk's first row; the caller folds the tile and column offset in.
+ * @param tile_index: Unused; the offset is folded into base_address.
+ * @param unpack_src_format: Unused; the format is programmed by the unpacker hw configure.
+ * @param unit_dim: Unused; the read width is programmed by @ref _llk_unpack_fast_tilize_init_ and @ref _llk_unpack_fast_tilize_reinit_xdim_.
+ * @param num_faces: Faces per tile; must be 4 (32x32 tiles only).
+ * @note Call @ref _llk_unpack_fast_tilize_init_ before this function and @ref _llk_unpack_fast_tilize_uninit_ after the last chunk.
+ */
 inline void _llk_unpack_fast_tilize_block_(
     const std::uint32_t base_address,
     [[maybe_unused]] const std::uint32_t tile_index,
