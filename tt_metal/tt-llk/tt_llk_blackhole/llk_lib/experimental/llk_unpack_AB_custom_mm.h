@@ -19,7 +19,7 @@ using namespace ckernel::unpacker;
 // CUSTOM_MM
 // Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
 // in0 tile shape: [{1, 2, 4, 8}, 32]
-// in1 tile shape: [32, 32]
+// in1 tile shape: [32, 32], or [32, 16] without transpose (16-wide output tiles)
 // rt_dim: 1
 // ct_dim: any integer from 1 to 16
 // kt_dim: any integer from 1 to 256 (inclusive)
@@ -193,21 +193,26 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
  * @param unpB_face_r_dim: Activation rows per face, 1, 2, 4 or 8. Sets unpacker 1's X end.
  * @param unpA_dst_format: Unpack destination format of the weights (SrcA); Bfp4_b selects a tuned sequence.
  * @param ct_dim: Output width in tiles, 1 to 16.
+ * @param unpA_num_faces: Faces per weight (SrcA) tile: 4 for [32, 32], 2 for [32, 16]. Sets unpacker 0's X end.
  * @note Call this before @ref _llk_unpack_AB_custom_mm_, and again after any other op has run, in particular one
  *       that writes SrcB: the execute does not reprogram the MOP, and the SrcB clear happens only here.
  * @note On the math thread, pair with @ref _llk_math_custom_mm_init_.
  */
 template <bool transpose = false, bool clear_src = true>
-inline void _llk_unpack_AB_custom_mm_init_(const std::uint32_t unpB_face_r_dim, const std::uint32_t unpA_dst_format, const std::uint32_t ct_dim = 1)
+inline void _llk_unpack_AB_custom_mm_init_(
+    const std::uint32_t unpB_face_r_dim,
+    const std::uint32_t unpA_dst_format,
+    const std::uint32_t ct_dim         = 1,
+    const std::uint32_t unpA_num_faces = TILE_NUM_FACES)
 {
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose ? 1 : 0);
 
-    // UnpA unpacks full tiles
-    constexpr std::uint32_t unpA_x_end = TILE_NUM_FACES * FACE_R_DIM * FACE_C_DIM - 1;
+    // UnpA unpacks whole weight tiles: 4 faces, or 2 for a [32, 16] tile (its two K halves)
+    const std::uint32_t unpA_x_end = unpA_num_faces * FACE_R_DIM * FACE_C_DIM - 1;
     // UnpB unpacks [{1, 2, 4, 8}, 32] tiles which only have top two faces and only a single face per instruction
     // so a single instruction only unpacks unpB_face_r_dim rows
     const std::uint32_t unpB_x_end = unpB_face_r_dim * FACE_C_DIM - 1;
-    TTI_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
+    TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
     TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
 
     // This is a profiling guided heuristic that slightly tunes the instruction sequence
@@ -301,6 +306,9 @@ inline void _llk_unpack_AB_custom_mm_run_(
  * @param tile_size_b: Activation tile size, in 16-byte words.
  * @param kt_dim: Inner dimension in tiles, 1 to 256.
  * @param ct_dim: Output width in tiles, 1 to 16.
+ * @param in1_stride: Weight tiles between consecutive K rows (consecutive output columns when read_transposed);
+ *                    0 means a packed block, ct_dim (kt_dim when read_transposed). A wider stride walks a
+ *                    ct_dim-wide window of a larger weight.
  * @note Call @ref _llk_unpack_AB_custom_mm_init_ first.
  * @note On the math thread, pair with @ref _llk_math_custom_mm_.
  */
@@ -313,12 +321,31 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t tile_size_a,
     const std::uint32_t tile_size_b,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim)
+    const std::uint32_t ct_dim,
+    const std::uint32_t in1_stride = 0)
 {
+    LLK_ASSERT(
+        in1_stride == 0 || in1_stride >= (read_transposed ? kt_dim : ct_dim),
+        "custom_mm: in1_stride must be 0, or at least ct_dim (kt_dim when read_transposed)");
+
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
-    const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
-    const std::uint32_t inner_increment = read_transposed ? -(((ct_dim - 1) * kt_dim) - 1) * tile_size_a : tile_size_a;
+    // The k-row's last tile steps with inner_increment, the others with block_increment. With ct_dim == 1 the
+    // single (full-unpack) tile steps with block_increment, so it takes the row step itself.
+    std::uint32_t block_increment;
+    std::uint32_t inner_increment;
+    if constexpr (read_transposed)
+    {
+        const std::uint32_t column_stride = in1_stride ? in1_stride : kt_dim;
+        block_increment                   = (ct_dim == 1 ? 1 : column_stride) * tile_size_a;
+        inner_increment                   = -(((ct_dim - 1) * column_stride) - 1) * tile_size_a;
+    }
+    else
+    {
+        const std::uint32_t row_stride = in1_stride ? in1_stride : ct_dim;
+        inner_increment                = (row_stride - ct_dim + 1) * tile_size_a;
+        block_increment                = ct_dim == 1 ? inner_increment : tile_size_a;
+    }
 
     const std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a;
     const std::uint32_t address_b = base_address_b + tile_size_b * tile_index_b;

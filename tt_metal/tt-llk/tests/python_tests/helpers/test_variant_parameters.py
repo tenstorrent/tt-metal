@@ -613,6 +613,34 @@ class CUSTOM_MM_CALLS(TemplateParameter):
 
 
 @dataclass
+class CUSTOM_MM_IN1_WINDOW(TemplateParameter):
+    """Read a ct_dim-wide column window of a wider in1 through the custom_mm in1_stride.
+
+    ``CUSTOM_MM_IN1_STRIDE``     in1 tiles per K row; 0 is a packed ct_dim-wide in1 (the default).
+    ``CUSTOM_MM_IN1_COL_START``  first in1 tile column of the window.
+    ``CUSTOM_MM_SPLIT_ACC``      accumulate in split DEST halves and finalize on the last call, the way a split_acc caller runs it;
+                                 off runs the plain accumulation with no finalization.
+    ``CUSTOM_MM_READ_TRANSPOSED`` in1 is column-major (each output column's K tiles contiguous) and is read with
+                                 read_transposed; the stride is then tiles per in1 column, 0 meaning kt_dim.
+    """
+
+    stride: int = 0
+    col_start: int = 0
+    split_acc: bool = False
+    in1_read_transposed: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t CUSTOM_MM_IN1_STRIDE = {self.stride}u;",
+                f"constexpr std::uint32_t CUSTOM_MM_IN1_COL_START = {self.col_start}u;",
+                f"constexpr bool CUSTOM_MM_SPLIT_ACC = {str(self.split_acc).lower()};",
+                f"constexpr bool CUSTOM_MM_READ_TRANSPOSED = {str(self.in1_read_transposed).lower()};",
+            ]
+        )
+
+
+@dataclass
 class SAMPLING_PRGM0_HAZARD(TemplateParameter):
     """Cross-op vConstFloatPrgm0 hazard switches for ``sfpu_sampling_test.cpp``.
 

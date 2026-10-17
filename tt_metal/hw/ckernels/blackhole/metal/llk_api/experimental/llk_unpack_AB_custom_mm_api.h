@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "experimental/llk_custom_mm_common_api.h"
 #include "experimental/llk_unpack_AB_custom_mm.h"
 #include "llk_unpack_common_api.h"
 #include "sanitizer/api.h"
@@ -12,7 +13,7 @@
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32], or [32, 16] without transpose
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
  * kt_dim: any integer from 1 to 256 (inclusive)
@@ -44,7 +45,8 @@ inline void llk_unpack_AB_custom_mm_init(
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
     const std::uint32_t operandA_unpack_dst_format = unpack_dst_format[operandA_id];
 
-    _llk_unpack_AB_custom_mm_init_<transpose, clear_src>(operandB_face_r_dim, operandA_unpack_dst_format, ct_dim);
+    _llk_unpack_AB_custom_mm_init_<transpose, clear_src>(
+        operandB_face_r_dim, operandA_unpack_dst_format, ct_dim, llk_custom_mm_in1_num_faces<transpose>(operandA_id));
 }
 
 /**
@@ -58,6 +60,8 @@ inline void llk_unpack_AB_custom_mm_init(
  * @param tile_index_1: First weight tile, relative to operand1's read pointer.
  * @param kt_dim: Inner dimension in tiles, 1 to 256.
  * @param ct_dim: Output width in tiles, 1 to 16.
+ * @param in1_stride: Weight tiles between consecutive K rows (output columns when read_transposed); 0 means
+ *                    a packed ct_dim-wide (kt_dim-tall) block.
  * @note Call @ref llk_unpack_AB_custom_mm_init first.
  * @note On the math thread, pair with @ref llk_math_custom_mm.
  */
@@ -68,7 +72,8 @@ inline void llk_unpack_AB_custom_mm(
     const std::uint32_t tile_index_0,
     const std::uint32_t tile_index_1,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1) {
+    const std::uint32_t ct_dim = 1,
+    const std::uint32_t in1_stride = 0) {
     SAN_HOOK(unsupported());
     // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
     const std::uint32_t operandA_id = get_operand_id(operand1);
@@ -80,5 +85,13 @@ inline void llk_unpack_AB_custom_mm(
     const std::uint32_t tile_size_A = get_local_cb_interface(operandA_id).fifo_page_size;
     const std::uint32_t tile_size_B = get_local_cb_interface(operandB_id).fifo_page_size;
     _llk_unpack_AB_custom_mm_<read_transposed>(
-        base_address_A, base_address_B, tile_index_A, tile_index_B, tile_size_A, tile_size_B, kt_dim, ct_dim);
+        base_address_A,
+        base_address_B,
+        tile_index_A,
+        tile_index_B,
+        tile_size_A,
+        tile_size_B,
+        kt_dim,
+        ct_dim,
+        in1_stride);
 }

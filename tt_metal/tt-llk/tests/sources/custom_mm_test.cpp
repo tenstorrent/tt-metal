@@ -69,6 +69,29 @@ std::uint32_t math_sync_tile_dst_index = 0;
 constexpr std::uint32_t num_calls   = CUSTOM_MM_NUM_CALLS;
 constexpr std::uint32_t kt_per_call = KT_DIM / num_calls;
 static_assert(kt_per_call * num_calls == KT_DIM, "K tiles must split evenly across the calls");
+// in1 tiles per K row: CT_DIM for a packed in1, wider when the kernel reads a column window of it.
+constexpr std::uint32_t in1_row_tiles = CUSTOM_MM_IN1_STRIDE ? CUSTOM_MM_IN1_STRIDE : CT_DIM;
+static_assert(CUSTOM_MM_READ_TRANSPOSED || CUSTOM_MM_IN1_COL_START + CT_DIM <= in1_row_tiles, "the in1 window must fit in an in1 row");
+// With CUSTOM_MM_READ_TRANSPOSED, in1 is column-major instead: in1_col_tiles tiles per output column, K tiles first.
+constexpr std::uint32_t in1_col_tiles = CUSTOM_MM_IN1_STRIDE ? CUSTOM_MM_IN1_STRIDE : KT_DIM;
+static_assert(!CUSTOM_MM_READ_TRANSPOSED || num_calls == 1 || CUSTOM_MM_IN1_STRIDE, "a split K needs the full column stride");
+static_assert(!CUSTOM_MM_READ_TRANSPOSED || KT_DIM <= in1_col_tiles, "the K tiles must fit in an in1 column");
+
+// First in1 tile of call c: its K row of the window, or its K offset into the window's first column.
+constexpr std::uint32_t in1_tile_index(const std::uint32_t call)
+{
+    return CUSTOM_MM_READ_TRANSPOSED ? CUSTOM_MM_IN1_COL_START * in1_col_tiles + call * kt_per_call
+                                     : call * kt_per_call * in1_row_tiles + CUSTOM_MM_IN1_COL_START;
+}
+
+#ifdef LLK_TRISC_UNPACK
+// TILE_SIZE_UNPACK_B is a full [32, 32] tile; a [32, 16] in1 (2 faces) is half of it in every format.
+template <typename Params>
+inline std::uint32_t in1_tile_size(const Params& params)
+{
+    return params.TILE_SIZE_UNPACK_B * params.num_faces_B / ckernel::TILE_NUM_FACES;
+}
+#endif
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -94,7 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.in0_face_r_dim,
         params.num_faces_B,
         params.num_faces_A,
-        params.TILE_SIZE_UNPACK_B,
+        in1_tile_size(params),
         params.TILE_SIZE_UNPACK_A);
 
     if constexpr (num_calls > 1)
@@ -107,23 +130,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // unpB_face_r_dim = in0 (SrcB) face rows in {1,2,4,8}; unpA_dst_format tunes the
     // instruction sequence (post1 only for Bfp4_b). transpose=false.
-    _llk_unpack_AB_custom_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM);
+    _llk_unpack_AB_custom_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM, params.num_faces_B);
 
     // SrcA=buffer_B (B matrix, full tiles), SrcB=buffer_A (A matrix). Call c takes K tiles
-    // [c * kt_per_call, (c + 1) * kt_per_call): B is k-major, so its tiles start at c * kt_per_call * ct,
+    // [c * kt_per_call, (c + 1) * kt_per_call), starting at in1_tile_index(c) in B,
     // and an in0 tile is 4 * in0_face_r_dim 16-byte words (TILE_SIZE_UNPACK_A is a full tile here).
     // Within a call the SrcA walk covers its kt*ct grid via CFGSHIFTMASK, the SrcB walk covers kt via counters.
     for (std::uint32_t call = 0; call < num_calls; call++)
     {
-        _llk_unpack_AB_custom_mm_<false /* read_transposed */>(
+        _llk_unpack_AB_custom_mm_<CUSTOM_MM_READ_TRANSPOSED>(
             L1_ADDRESS(params.buffer_B[0]),
             L1_ADDRESS(params.buffer_A[0]) + call * kt_per_call * 4 * params.in0_face_r_dim,
-            call * kt_per_call * CT_DIM /* tile_index_a */,
+            in1_tile_index(call) /* tile_index_a */,
             0 /* tile_index_b */,
-            params.TILE_SIZE_UNPACK_B,
+            in1_tile_size(params),
             params.TILE_SIZE_UNPACK_A,
             kt_per_call,
-            CT_DIM);
+            CT_DIM,
+            CUSTOM_MM_IN1_STRIDE);
     }
 }
 
@@ -158,12 +182,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // wrong DEST offset -- tile 0 is correct but every later tile is corrupt. Matches the
     // proven compressed sibling (matmul_custom_compressed_test.cpp), which passes
     // dense_packing=true for the identical pack setup.
-    _llk_math_custom_mm_init_<false /* transpose */, false /* split_acc */, true /* dense_packing */>(params.in0_face_r_dim, CT_DIM);
+    _llk_math_custom_mm_init_<false /* transpose */, CUSTOM_MM_SPLIT_ACC, true /* dense_packing */>(params.in0_face_r_dim, CT_DIM, params.num_faces_B);
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
     // finalize MUST be false when split_acc is false (custom_mm.h arg table): with no split
-    // accumulation there are no partials to merge, and the DEST already holds A*B.
+    // accumulation there are no partials to merge, and the DEST already holds A*B. With split_acc
+    // the last call finalizes, merging the split partials.
     for (std::uint32_t call = 0; call < num_calls; call++)
     {
         if constexpr (num_calls > 1)
@@ -174,7 +199,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // writes. Without the delay math keeps up with the unpacker and the boundary is never contended.
             ckernel::wait(2000);
         }
-        _llk_math_custom_mm_<false /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
+        if (CUSTOM_MM_SPLIT_ACC && call + 1 == num_calls)
+        {
+            _llk_math_custom_mm_<true /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM, params.num_faces_B);
+        }
+        else
+        {
+            _llk_math_custom_mm_<false /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM, params.num_faces_B);
+        }
     }
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
