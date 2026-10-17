@@ -16,6 +16,7 @@
 // real output, then tilize_block packs into c_16. Single tile per block.
 void kernel_main() {
     std::uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    constexpr std::uint32_t block = 1;
 
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb16(tt::CBIndex::c_16);
@@ -30,17 +31,17 @@ void kernel_main() {
     using ScratchOutOp = experimental::LLKOperand<DataFormat::Bfp8_b, out_desc.shape>;
 
     compute_kernel_hw_startup(InOp(in_cb.read_address()), ScratchOutOp(out_cb.write_address()));
-    experimental::tilize_init(InOp(in_cb.read_address()), 1 /*block*/, ScratchOutOp(out_cb.write_address()));
+    experimental::tilize_init(InOp(in_cb.read_address()), block, ScratchOutOp(out_cb.write_address()));
     experimental::pack_reconfig_data_format(OutOp(out_cb.write_address()));
 
     for (std::uint32_t b = 0; b < per_core_tile_cnt; ++b) {
-        cb0.wait_front(1);
-        cb16.reserve_back(1);
+        cb0.wait_front(block);
+        cb16.reserve_back(block);
 
-        experimental::tilize_block(InOp(in_cb.read_address()), 1 /*block*/, OutOp(out_cb.write_address()));
+        experimental::tilize_block(InOp(in_cb.read_address()), block, OutOp(out_cb.write_address()));
 
-        cb0.pop_front(1);
-        cb16.push_back(1);
+        cb0.pop_front(block);
+        cb16.push_back(block);
     }
 
     experimental::tilize_uninit(InOp(in_cb.read_address()), OutOp(out_cb.write_address()));

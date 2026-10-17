@@ -169,11 +169,12 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
 /**
  * @brief Initialize the packer for an untilize pack op.
  *
- * Configures ADDR_MODs and the untilize MOP, programs every packer stride (the Default Y/W strides for
- * pack_src_format and the untilize Z stride), and stores the per-row L1 destination address offset into a
- * scratch config slot so the MOP can advance the L1 address per row. The strides and the L1 offset are
- * derived from the formats and face height given here; a @ref _llk_pack_reconfig_data_format_ while this
- * init is armed leaves the strides untouched, so call it before this init when the formats change.
+ * Configures ADDR_MODs and the untilize MOP, programs the untilize Z stride (and, after another op-specific
+ * init that was not uninit-ed, the Default Y/W strides for pack_src_format as well), and stores the per-row
+ * L1 destination address offset into a scratch config slot so the MOP can advance the L1 address per row.
+ * The strides, the X (datum) counter end and the L1 offset are derived from the formats, face height and row
+ * width given here; a @ref _llk_pack_reconfig_data_format_ while this init is armed leaves them untouched,
+ * so call it before this init when the formats change.
  *
  * @tparam block_ct_dim: Number of input tiles per block.
  * @tparam full_ct_dim: Total number of input tiles across all blocks (must be divisible by block_ct_dim).
@@ -213,12 +214,17 @@ inline void _llk_pack_untilize_init_(
 
     _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces);
 
-    // Program every stride this op reads from its own pack_src_format: the Default Y/W (and zero channel-1)
-    // strides first, then CH0 Zstride = 2 x face_r_dim x FACE_C_DIM datums so .z_src = {.incr = 1} jumps two
-    // faces. A data-format reconfig leaves the strides alone while this init is armed (see
-    // armed_packer_strides), so the Y/W strides cannot be left to a reconfig in front of this init: after an
-    // untilize or fast tilize/untilize init that was not uninit-ed they would still be that init's.
-    set_packer_strides(pack_src_format, TILE_C_DIM, false /*two_face_z*/);
+    // The Default Y/W (and zero channel-1) strides for pack_src_format: the hw-configure / reconfig / Default
+    // init that recorded a Default or TwoFaceZ layout programmed them for the current pack source format, and
+    // the reconfig that precedes this init in the compute API does so again. While an op-specific init is armed
+    // the reconfig leaves every stride alone (see armed_packer_strides), so after an untilize or fast
+    // tilize/untilize init that was not uninit-ed the Y/W strides are still that init's: program them here in
+    // exactly that case, which keeps the instruction stream of a Default-armed init unchanged.
+    if (armed_packer_strides == PackerStrides::OpInit)
+    {
+        set_packer_strides(pack_src_format, TILE_C_DIM, false /*two_face_z*/);
+    }
+    // CH0 Zstride = 2 x face_r_dim x FACE_C_DIM datums so .z_src = {.incr = 1} jumps two faces.
     const std::uint32_t y_stride = FACE_C_DIM * datum_size_in_bytes(pack_src_format);
     const std::uint32_t z_stride = 2 * face_r_dim * y_stride;
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
@@ -321,20 +327,20 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
 }
 
 /**
- * @brief Restore the packer Z stride after an untilize pack op.
+ * @brief Restore the Default packer strides after an untilize pack op.
  *
- * Stalls on the pack pipe and reprograms the Z stride to its default (single face) value, undoing the
- * strided-mode stride set in @ref _llk_pack_untilize_init_.
+ * Stalls on the pack pipe and reprograms the Default stride layout (single-face Z) for pack_src_format,
+ * undoing the strided-mode stride set in @ref _llk_pack_untilize_init_.
  *
- * @param pack_src_format: Source (dest register) data format used to size the default Z stride.
+ * @param pack_src_format: Source (dest register) data format used to size the Default strides.
  * @note Pairs with @ref _llk_pack_untilize_init_.
  */
 inline void _llk_pack_untilize_uninit_(const std::uint32_t pack_src_format)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
-    const std::uint32_t z_stride = SCALE_DATUM_SIZE(pack_src_format, FACE_R_DIM * FACE_C_DIM);
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
-    // The init programmed the Default Y/W (and zero channel-1) strides for this pack_src_format, so
-    // restoring Z completes the Default layout.
-    armed_packer_strides = PackerStrides::Default;
+    // The same setter the fast tilize/untilize uninits use: it programs the whole Default layout for this
+    // pack source format and records it, so the recorded layout is true by construction. (A Z-only restore
+    // sized with SCALE_DATUM_SIZE, which has no Tf32 case, left a quarter-size Z for a Tf32 pack source while
+    // the tracker said Default.)
+    set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
 }

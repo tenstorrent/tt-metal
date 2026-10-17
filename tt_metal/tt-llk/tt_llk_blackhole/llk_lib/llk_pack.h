@@ -449,9 +449,10 @@ inline void pack_init_apply(
  *       skip_bh_tilize_workaround, 8-bit source datums, arms the one-face Default layout; a narrow tile
  *       keeps the one-face Z in every mode). Call it between such an init and its execute freely.
  * @note While an op-specific init is armed (@ref _llk_pack_untilize_init_, @ref _llk_pack_fast_tilize_init_,
- *       @ref _llk_pack_fast_untilize_init_) the strides are left exactly as that init programmed them, and
- *       that init also derived its L1 offsets from the formats it was given: call this reconfig before such
- *       an init, not between it and its execute, when the formats change.
+ *       @ref _llk_pack_fast_untilize_init_) the strides and the packer X (datum) counter end are left exactly
+ *       as that init programmed them, and that init also derived its L1 offsets from the formats it was
+ *       given: call this reconfig before such an init, not between it and its execute, when the formats
+ *       change.
  * @note With fp32 destination accumulation, do not call this reconfig between @ref _llk_pack_fast_tilize_init_
  *       and its execute even for unchanged formats: it re-enables the 32-bit DEST reads that init disables.
  */

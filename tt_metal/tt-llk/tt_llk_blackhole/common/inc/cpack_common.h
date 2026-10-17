@@ -305,9 +305,12 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
 // Default: the full-width Tilize/Untilize pack MOPs step Z by two faces per increment (see
 // set_packer_strides) and would otherwise pack faces 1,2 instead of 2,3 after `init<Tilize>; reconfig;
 // pack`. The op-specific inits program every stride they read (Y/W/Z, and the channel-1 Y stride of the
-// strided fast untilize) from their own geometry, which a reconfig cannot reproduce: while one of them is
-// armed the reconfig leaves every stride as that init left it, and their uninits restore the Default
-// layout. pack_init_apply asserts this layout when it is asked to skip the strides. Raw stride writers
+// strided fast untilize) from their own geometry, which a reconfig cannot reproduce (the pack-untilize init
+// takes the Default Y/W of the hw-configure / reconfig before it and programs them itself only after another
+// op-specific init), and each programs its own X (datum) counter end: while one of them is armed the
+// reconfig leaves the strides and the X counter as that init left them, and their uninits restore the
+// Default layout through set_packer_strides<PackMode::Default>. pack_init_apply asserts this layout when it
+// is asked to skip the strides. Raw stride writers
 // bypass the tracker and that assert: _llk_pack_hw_cleanup_poison_pack_ambient_ zeroes Y/Z/W after
 // hw-configure recorded Default, and the custom-mm pack inits (_llk_pack_custom_mm_init_, the sdpa and
 // reuse-dest-srcb custom-mm compute APIs) RMW Z/W; a skip-strides init after one of them is not caught.
@@ -596,17 +599,17 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(is_fp8_e4m3 ? to_underlying(DataFormat::Float16) : pack_output_src_format);
 
-    // Re-derive the packer strides for the new format in the layout that is armed. An op-specific init
-    // (pack-untilize, fast tilize/untilize) owns its strides: leave them as it programmed them.
+    // Re-derive the packer strides for the new format in the layout that is armed, and program the packer X
+    // (datum) counter end: _llk_pack_init_ owns that counter ("inits own SETADCXX"), but a reconfig is not
+    // always followed by an init and for the Default/Tilize/Untilize pack modes the value is a constant
+    // (single row, FACE_C_DIM - 1), so it is set here too. An op-specific init (pack-untilize, fast
+    // tilize/untilize) owns both: it programs its own strides and its own X end (a narrow-row pack-untilize
+    // packs row_num_datums per row) and its execute never re-programs them, so leave them as it left them.
     if (armed_packer_strides != PackerStrides::OpInit)
     {
         set_packer_strides(pack_output_src_format, tile_c_dim, armed_packer_strides == PackerStrides::TwoFaceZ /*two_face_z*/);
+        TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
     }
-
-    // Program the packer X (datum) counter. _llk_pack_init_ owns this counter ("inits own SETADCXX"),
-    // but reconfig also programs it here: a reconfig is not always followed by an init, and on Blackhole
-    // the value is a mode-independent constant (single row, FACE_C_DIM - 1), so it is safe to set here.
-    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
