@@ -160,7 +160,8 @@ DEVICE_STEPS = {
         "attention",
     },
     # attn_hc .. compressor passed C.dec_candidate.* (and S.dec_candidate.01-06) on the enc_source modules at ratio 1
-    # (DS41-28); the indexer is tt/indexer.py:TtCandidateIndexer (top-k + the candidate pool kept on the device)
+    # (DS41-28); the indexer is tt/indexer.py:TtCandidateIndexer (top-k + the candidate pool kept on the device); the
+    # attention is tt/sparse_attention.py at ratio 1 (reads the served 3_compress_kv_r1, writes 0_window_kv)
     "dec_candidate": {
         "attn_hc",
         "attn_collapse",
@@ -169,6 +170,7 @@ DEVICE_STEPS = {
         "kv",
         "compressor",
         "indexer",
+        "attention",
     },
 }
 
@@ -825,8 +827,10 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
     if step == "attention" and cfg.ratio(layer):
         from models.demos.deepseek_v41_flash_d_p.tt.sparse_attention import SparseIndexTables, build_sparse_attention
 
-        if cfg.uses_candidates(layer) or cfg.is_cand_source(layer):
-            return None  # the decoder layers (candidate pool) are not built yet
+        if cfg.uses_candidates(layer):
+            return None  # the decoder readers of the candidate pool (dec_reindex) are not built yet
+        # the candidate source (layer 20, ratio 1) is its own KV and top-k source: the same module as enc_source;
+        # its pool only restricts later indexers, never its own attention (reference _attention)
         if cfg.is_index_source(layer) and not cfg.is_kv_source(layer):
             return None  # its own top-k over another layer's KV (dec_reindex) is not built yet
         tables = _window_tables(mesh, spec, shared)

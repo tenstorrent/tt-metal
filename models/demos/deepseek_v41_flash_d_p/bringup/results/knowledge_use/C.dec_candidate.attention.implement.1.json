@@ -1,0 +1,56 @@
+{
+ "used": [
+  {
+   "id": "DS41-52",
+   "how": "found the contract failure (freed load-time iota after a full-range ttnn.slice at ratio 1) and fixed tt/compressor.py:_gathered to use the iota itself, never free it",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-1",
+   "how": "same root cause as DS41-52: a no-op slice returns its input's buffer, so the compressor no longer deallocates it",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-28",
+   "how": "added 'attention' to hooks DEVICE_STEPS['dec_candidate'] so the hybrid serves layer 20's caches",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-36",
+   "how": "ran test_cache_starts with BRINGUP_TASK=C.dec_candidate.attention so it runs layer 20 only",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "K-56",
+   "how": "deleted the tt-probe directory tests/ttnn/unit_tests/operations/ds41_cand_attn before finishing",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "components.yaml 'searched' notes copied from older entries can be out of date (sparse_sdpa high_precision does take attention_sink; sparse_sdpa_device_operation.cpp:127-139)"
+ ],
+ "overseer": [],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.dec_candidate.attention",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-17T09:21:41",
+  "head": "4be5ba3b6ba",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.dec_candidate.attention.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py"
+  ]
+ }
+}
