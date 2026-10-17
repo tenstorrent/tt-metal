@@ -604,8 +604,9 @@ def test_sqrt_custom_infinity_regression(request):
 
 # expm1_cw_clamped's underflow clamp, sfpi::max(x, -87.0f), is an SFPSWAP total-order max:
 # it ranks a sign-set NaN (0xFFC00000, the default quiet NaN x86 produces for 0/0 and
-# inf-inf) below -87.0 and replaces it, so without a NaN guard ELU and SELU returned the
-# finite -alpha (and the Expm1Cw wrapper -1) for a -NaN input while a +NaN input survived.
+# inf-inf) below -87.0 and replaces it, so without a NaN guard a -NaN input came back
+# finite -- -alpha from ELU, -scale*alpha (about -1.758) from SELU, -1 from the Expm1Cw
+# wrapper -- while a +NaN input survived.
 # Outside the edge sweep because FLOAT_SPECIALS carries only the positive NaN. Float32 ->
 # Float32 at dest_acc=Yes, where the unpack-to-dest path hands the kernel the signed NaN and
 # a NaN result reaches L1 as a NaN; the sign of the NaN out is not asserted (SFPMAD leaves
@@ -621,8 +622,8 @@ def test_sqrt_custom_infinity_regression(request):
 # The driver's own golden gate is what fails a regression: passed_test accepts a Float32
 # lane only if it is within tolerance or both sides are NaN, so a finite result on a lane
 # whose golden is NaN fails there (with its generic message) before this test's asserts run.
-# What they add is the check that the NaN probes were delivered and judged at all, and a
-# tighter band on the finite lanes than the op's tolerance.
+# What they add is the check that the NaN probes reached the golden (so the gate above had
+# NaN lanes to judge), and a tighter band on the finite lanes than the op's tolerance.
 _NEGATIVE_NAN = struct.unpack("<f", struct.pack("<I", 0xFFC00000))[0]
 
 _EXPM1_CW_NAN_OPS = [
