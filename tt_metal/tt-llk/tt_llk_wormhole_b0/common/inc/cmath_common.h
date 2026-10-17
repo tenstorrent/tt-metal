@@ -350,6 +350,11 @@ inline constexpr bool is_32bit_input(const std::uint32_t src_format, const std::
 // through this helper; writers that program one field mask it with masked_data_format() before the single-field RMW.
 inline constexpr std::uint32_t alu_src_format_cfg(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
+    // masked_data_format() only keeps SrcA's spill out of SrcB if each field is exactly DATA_FORMAT_BIT_COUNT wide and
+    // both live in the one word this helper packs.
+    static_assert((ALU_FORMAT_SPEC_REG0_SrcA_MASK >> ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) == DATA_FORMAT_CONFIG_MASK);
+    static_assert((ALU_FORMAT_SPEC_REG1_SrcB_MASK >> ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) == DATA_FORMAT_CONFIG_MASK);
+    static_assert(ALU_FORMAT_SPEC_REG0_SrcA_ADDR32 == ALU_FORMAT_SPEC_REG1_SrcB_ADDR32);
     return (masked_data_format(srca_data_format) << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) |
            (masked_data_format(srcb_data_format) << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT);
 }
