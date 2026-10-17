@@ -25,10 +25,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    // Explicit face grid: the legacy (face_r_dim, num_faces) helper always maps two faces to a wide
-    // 16x32 tile, so a narrow 32x16 (2x1) operand can only be expressed this way.
-    const ckernel::TensorShape tensor_shape =
-        ckernel::make_tensor_shape(params.TEST_FACE_R_DIM, ckernel::MAX_FACE_C_DIM, params.num_faces_r_dim_A, params.num_faces_c_dim_A);
+    const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces);
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src,
         formats.unpack_B_src,
@@ -55,15 +52,49 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "params.h"
 #include "tensor_shape.h"
 
+#ifdef BCAST_COL_SHAPE_CONTRACT
+// Compile-time contract of the shape predicate the unpack init and math execute assert on. The
+// harness passes the face grids (face_r_dim, num_faces_r_dim, num_faces_c_dim) it derives from the
+// tile dimensions, so a predicate that admitted a one-face-column or short-face tile again fails this
+// translation unit instead of trapping on the device.
+struct FaceGrid
+{
+    std::uint8_t face_r_dim;
+    std::uint8_t num_faces_r_dim;
+    std::uint8_t num_faces_c_dim;
+};
+
+constexpr bool bcast_col_shape_accepted(const FaceGrid grid)
+{
+    return ckernel::validate_tensor_shape_sub_bcast_col_custom_(
+        ckernel::make_tensor_shape(grid.face_r_dim, ckernel::MAX_FACE_C_DIM, grid.num_faces_r_dim, grid.num_faces_c_dim));
+}
+
+template <std::size_t N>
+constexpr bool bcast_col_shapes_all(const FaceGrid (&grids)[N], const bool accepted)
+{
+    for (const FaceGrid& grid : grids)
+    {
+        if (bcast_col_shape_accepted(grid) != accepted)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+constexpr FaceGrid BCAST_COL_ACCEPTED_GRIDS[] = {BCAST_COL_SHAPE_CONTRACT_ACCEPTED};
+constexpr FaceGrid BCAST_COL_REJECTED_GRIDS[] = {BCAST_COL_SHAPE_CONTRACT_REJECTED};
+static_assert(bcast_col_shapes_all(BCAST_COL_ACCEPTED_GRIDS, true), "custom bcast-col shape predicate must accept the 32x32 and 16x32 tiles");
+static_assert(bcast_col_shapes_all(BCAST_COL_REJECTED_GRIDS, false), "custom bcast-col shape predicate must reject one-face-column and short-face tiles");
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    // Explicit face grid: the legacy (face_r_dim, num_faces) helper always maps two faces to a wide
-    // 16x32 tile, so a narrow 32x16 (2x1) operand can only be expressed this way.
-    const ckernel::TensorShape tensor_shape =
-        ckernel::make_tensor_shape(params.TEST_FACE_R_DIM, ckernel::MAX_FACE_C_DIM, params.num_faces_r_dim_A, params.num_faces_c_dim_A);
+    const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     if constexpr (PRESERVE_SRC_ZERO_FLAG)
