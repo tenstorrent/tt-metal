@@ -116,12 +116,16 @@ inline void _llk_stall_cfg_on_()
 /**
  * @brief Advance the calling thread's dest bank section in SyncHalf mode.
  *
- * Each thread (math, pack, unpack) keeps its own view of which dest bank it is
- * currently operating on. After a thread has finished with one bank and handed
+ * The math thread's bank flip: after it has finished with one bank and handed
  * off via a semaphore, it must (1) flip its local dest-register offset to the
  * other bank, (2) wait for any in-flight instructions that still address the
  * old base to drain, and (3) reprogram its per-TRISC dest section base before
  * the next op issues. This helper performs those three steps in order.
+ *
+ * Only math-issued instructions consult the per-TRISC section base registers
+ * (DEST_TARGET_REG_CFG_MATH_SEC0..3), while other threads carry their bank
+ * where their engine reads it: the packer in THCON SRC_ADDR_OFFSET
+ * The unpacker in UNP_DEST tile index.
  *
  * @tparam TRISC_ID       The calling thread's id (ckernel::TRISC_ID = COMPILE_FOR_TRISC:
  *                        0=unpack, 1=math, 2=pack, 3=isolate-SFPU).
