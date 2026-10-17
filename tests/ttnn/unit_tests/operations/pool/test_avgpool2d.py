@@ -199,6 +199,40 @@ def test_avg_pool2d_dram_post_commit(
 
 
 @pytest.mark.parametrize(
+    "input_shape, kernel_size, stride, padding, ceil_mode",
+    (
+        ([1, 64, 40, 40], (5, 5), (1, 1), (2, 2), False),
+        ([1, 256, 81, 81], (2, 2), (2, 2), (0, 0), True),
+    ),
+)
+@pytest.mark.parametrize("count_include_pad", [True, False])
+def test_avg_pool2d_dram_slice_tile_out(
+    device, tensor_map, input_shape, kernel_size, stride, padding, ceil_mode, count_include_pad
+):
+    # TILE output rounds the output width of each height slice up to a tile. The extra outputs must not shift the
+    # windows, and must not change the divisor of the last window in ceil mode.
+    dram_slice_config = ttnn.Op2DSliceConfig(num_slices=2, slice_type=ttnn.Op2DDRAMSliceHeight)
+
+    run_avg_pool2d(
+        device=device,
+        tensor_map=tensor_map,
+        input_shape=input_shape,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        ceil_mode=ceil_mode,
+        divisor_override=None,
+        count_include_pad=count_include_pad,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        in_dtype=ttnn.bfloat16,
+        nightly_skips=False,
+        output_layout=ttnn.TILE_LAYOUT,
+        dram_slice_config=dram_slice_config,
+        config_tensor_in_dram=True,
+    )
+
+
+@pytest.mark.parametrize(
     "input_shape",  # NCHW
     (
         [1, 2048, 7, 7],  # ResNet-50 final layer
