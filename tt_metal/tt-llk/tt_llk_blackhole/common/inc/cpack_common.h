@@ -114,15 +114,23 @@ typedef union
 // whole field set with it, as the full configure does with a word write.
 constexpr std::uint32_t PCK_DEST_RD_CTRL_FIELDS_MASK =
     PCK_DEST_RD_CTRL_Read_32b_data_MASK | PCK_DEST_RD_CTRL_Read_unsigned_MASK | PCK_DEST_RD_CTRL_Read_int8_MASK | PCK_DEST_RD_CTRL_Round_10b_mant_MASK;
+// dest_rd_ctrl_t is four 1-bit fields at consecutive bit positions followed by the reserved bits; the
+// mask must be exactly that run of bits. (Checked arithmetically: clang cannot constant-evaluate a
+// bit cast of a bit-field struct.)
 static_assert(
-    PCK_DEST_RD_CTRL_FIELDS_MASK == __builtin_bit_cast(
-                                        std::uint32_t,
-                                        dest_rd_ctrl_t {
-                                            .PCK_DEST_RD_CTRL_Read_32b_data  = 1,
-                                            .PCK_DEST_RD_CTRL_Read_unsigned  = 1,
-                                            .PCK_DEST_RD_CTRL_Read_int8      = 1,
-                                            .PCK_DEST_RD_CTRL_Round_10b_mant = 1,
-                                            .PCK_DEST_RD_CTRL_Reserved       = 0}),
+    PCK_DEST_RD_CTRL_Read_32b_data_MASK == (1u << PCK_DEST_RD_CTRL_Read_32b_data_SHAMT) &&
+        PCK_DEST_RD_CTRL_Read_unsigned_MASK == (1u << PCK_DEST_RD_CTRL_Read_unsigned_SHAMT) &&
+        PCK_DEST_RD_CTRL_Read_int8_MASK == (1u << PCK_DEST_RD_CTRL_Read_int8_SHAMT) &&
+        PCK_DEST_RD_CTRL_Round_10b_mant_MASK == (1u << PCK_DEST_RD_CTRL_Round_10b_mant_SHAMT),
+    "PCK_DEST_RD_CTRL fields must be single bits");
+static_assert(
+    PCK_DEST_RD_CTRL_Read_unsigned_SHAMT == PCK_DEST_RD_CTRL_Read_32b_data_SHAMT + 1 &&
+        PCK_DEST_RD_CTRL_Read_int8_SHAMT == PCK_DEST_RD_CTRL_Read_unsigned_SHAMT + 1 &&
+        PCK_DEST_RD_CTRL_Round_10b_mant_SHAMT == PCK_DEST_RD_CTRL_Read_int8_SHAMT + 1,
+    "PCK_DEST_RD_CTRL fields must be consecutive bits, as laid out in dest_rd_ctrl_t");
+static_assert(
+    PCK_DEST_RD_CTRL_FIELDS_MASK ==
+        (((1u << (PCK_DEST_RD_CTRL_Round_10b_mant_SHAMT - PCK_DEST_RD_CTRL_Read_32b_data_SHAMT + 1)) - 1) << PCK_DEST_RD_CTRL_Read_32b_data_SHAMT),
     "PCK_DEST_RD_CTRL_FIELDS_MASK must cover every non-reserved field of dest_rd_ctrl_t");
 static_assert(
     PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Read_unsigned_ADDR32 &&
