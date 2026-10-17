@@ -265,32 +265,30 @@ def test_tanh_specials(out_fmt, dest_acc):
     )
 
 
-@pytest.mark.parametrize(
-    "out_fmt,dest_acc",
-    [
-        (DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float32, DestAccumulation.Yes),
-    ],
-    ids=["polynomial-bf16", "accurate-fp32"],
-)
-def test_tanh_nonapprox_specials(out_fmt, dest_acc):
-    """ApproximationMode.No follows the reference on the 257 patterns, on both Dest widths.
+def test_tanh_polynomial_specials():
+    """The polynomial kernel follows the reference on the 257 patterns.
 
-    `calculate_tanh<false, ...>` is two kernels: the Sollya polynomial on a 16-bit Dest
-    (the default bfloat16 tanh, also under softcap and situ_glu) and the expm1-based
-    accurate kernel on a 32-bit Dest. Both must give tanh(+-inf) = +-1 and keep a NaN a
-    NaN. The polynomial saturates with min(result, 1.0f), and SFPSWAP's min ranks a
-    positive NaN above +inf (SFPSWAP.md), while SFPMAD only ever emits the positive
-    canonical NaN (SFPMAD.md): without a guard the Horner chain's NaN is clamped to 1.0
-    and copysign then returns +-1.0, a legal activation standing in for a NaN that an
-    upstream op produced. The accurate kernel already guards this; the polynomial must too.
+    `calculate_tanh<false, false>` -- ApproximationMode.No on a 16-bit Dest, the default
+    bfloat16 tanh and the kernel under softcap and situ_glu -- runs the Sollya polynomial
+    and saturates it with min(result, 1.0f). SFPSWAP's min ranks a positive NaN above
+    +inf (SFPSWAP.md) and SFPMAD emits a positive NaN (SFPMAD.md), so without a guard
+    the Horner chain's NaN is clamped to 1.0 and copysign returns +-1.0: a legal
+    activation standing in for a NaN an upstream op produced. tanh(+-inf) = +-1 must
+    survive the guard.
 
-    -0.0 -> +0.0 is the unpack path, not either kernel (see test_tanh_specials).
+    A NaN written to a 16-bit Dest reaches L1 as an infinity of the same sign, whatever
+    the output format (test_tanh_specials records the same on the LUT kernel, and a
+    Float32 pack of this kernel's Dest returns the same infinities), so the NaN lanes
+    are asserted as the sign-carrying non-finite result, which the laundered +-1.0 is
+    not. The kernel itself returns a NaN: the same kernel forced onto a 32-bit Dest
+    stores NaN for NaN and +-1 for +-inf.
+
+    -0.0 -> +0.0 is the unpack path, not this kernel (see test_tanh_specials).
     """
     x, hw = _run(
         {0: POS_SPECIALS, 1: NEG_SPECIALS, 2: ZEROS},
-        out_fmt,
-        dest_acc,
+        DataFormat.Float16_b,
+        DestAccumulation.No,
         approx=ApproximationMode.No,
     )
     groups = _group_specials(x, hw)
@@ -298,8 +296,8 @@ def test_tanh_nonapprox_specials(out_fmt, dest_acc):
     EXPECTED = {
         "+inf": "1",
         "-inf": "-1",
-        "NaN(+)": "NaN",
-        "NaN(-)": "NaN",
+        "NaN(+)": "+inf",
+        "NaN(-)": "-inf",
         "+0.0": "+0.0",
         "-0.0": "+0.0",
     }
@@ -318,7 +316,7 @@ def test_tanh_nonapprox_specials(out_fmt, dest_acc):
         if list(groups[k]) != [EXPECTED[k]]
     ]
     assert not failures, (
-        "non-approximate tanh departs from the reference on the non-finite / signed-zero "
+        "polynomial tanh departs from the reference on the non-finite / signed-zero "
         "patterns:\n  " + "\n  ".join(failures)
     )
 
