@@ -6,6 +6,7 @@
 
 #include <bit>
 #include <cstdint>
+#include <string_view>
 #include <type_traits>
 
 #include "metal/ttnn_all_includes.hpp"
@@ -17,6 +18,45 @@ inline uint32_t get_block_size(uint32_t num_inner, const uint32_t max_block_size
         }
     }
     return 1U;
+}
+
+/**
+ *   Number of heads H when `head_major` is [.., T, V] over B*H leading rows and `head_merged` is the same tokens
+ *   laid out as [.., T, H*V] over B leading rows. Heads must start on tile boundaries unless H == 1.
+ */
+inline uint32_t get_num_heads_of_head_merged(
+    const ttnn::Tensor& head_major, const ttnn::Tensor& head_merged, const std::string_view name) {
+    const auto& major_shape = head_major.logical_shape();
+    const auto& merged_shape = head_merged.logical_shape();
+    TT_FATAL(
+        major_shape.rank() == 4U && merged_shape.rank() == 4U,
+        "{} must be 4D like the input, got {} and input {}",
+        name,
+        merged_shape,
+        major_shape);
+    const uint32_t head_dim = major_shape[-1];
+    TT_FATAL(
+        merged_shape[-1] % head_dim == 0,
+        "{} width {} must be a whole number of heads of the input width V = {}",
+        name,
+        merged_shape[-1],
+        head_dim);
+    const uint32_t num_heads = merged_shape[-1] / head_dim;
+    TT_FATAL(
+        num_heads == 1U || head_dim % tt::constants::TILE_WIDTH == 0,
+        "{} holds {} heads of V = {}; V must be a multiple of {} so heads start on tile boundaries",
+        name,
+        num_heads,
+        head_dim,
+        tt::constants::TILE_WIDTH);
+    TT_FATAL(
+        merged_shape[-2] == major_shape[-2] &&
+            merged_shape[0] * merged_shape[1] * num_heads == major_shape[0] * major_shape[1],
+        "{} shape {} is not the head-merged layout of input {}: expected [B, 1, T, H*V] for input [B*H, 1, T, V]",
+        name,
+        merged_shape,
+        major_shape);
+    return num_heads;
 }
 
 inline uint32_t pack_two_bfloat16_to_uint32(float value) {

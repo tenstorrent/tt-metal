@@ -4,11 +4,27 @@
 
 #include "rmsnorm_fw_device_operation.hpp"
 
+#include "metal/common/program_utils.hpp"
 #include "metal/common/tensor_validation.hpp"
 #include "rmsnorm_fw_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::rmsnorm_fw::device {
+
+namespace {
+
+ttnn::Shape get_rms_shape(const ttnn::Tensor& input) {
+    auto shape = input.logical_shape();
+    shape[-1] = 1U;  // RMS is a scalar per row
+    return shape;
+}
+
+// The output follows the gate's head-merged layout in gated mode and the input's otherwise.
+const ttnn::Shape& get_output_shape(const tensor_args_t& tensor_args) {
+    return tensor_args.gate.has_value() ? tensor_args.gate->logical_shape() : tensor_args.input.logical_shape();
+}
+
+}  // namespace
 
 void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -16,13 +32,36 @@ void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
     const auto& gamma_tensor = tensor_args.gamma;
     const auto& preallocated_rms_tensor = tensor_args.preallocated_rms;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
-    check_device_tensor(input_tensor, "RMSNormForward", "Input");
+    check_device_tensor(
+        input_tensor,
+        "RMSNormForward",
+        "Input",
+        {.dtypes = {tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::DataType::FLOAT32}});
     check_device_tensor(gamma_tensor, "RMSNormForward", "Gamma");
+    TT_FATAL(
+        gamma_tensor.logical_shape()[-1] == input_tensor.logical_shape()[-1],
+        "Gamma last dim {} must match input last dim {}",
+        gamma_tensor.logical_shape()[-1],
+        input_tensor.logical_shape()[-1]);
+    if (tensor_args.gate.has_value()) {
+        check_device_tensor(tensor_args.gate.value(), "RMSNormForward", "Gate");
+        get_num_heads_of_head_merged(input_tensor, tensor_args.gate.value(), "Gate");
+    }
     if (preallocated_rms_tensor.has_value()) {
         check_device_tensor(preallocated_rms_tensor.value(), "RMSNormForward", "Preallocated RMS");
+        TT_FATAL(
+            preallocated_rms_tensor->logical_shape() == get_rms_shape(input_tensor),
+            "Preallocated RMS shape {} must be {}",
+            preallocated_rms_tensor->logical_shape(),
+            get_rms_shape(input_tensor));
     }
     if (preallocated_output_tensor.has_value()) {
         check_device_tensor(preallocated_output_tensor.value(), "RMSNormForward", "Preallocated Output");
+        TT_FATAL(
+            preallocated_output_tensor->logical_shape() == get_output_shape(tensor_args),
+            "Preallocated Output shape {} must be {}",
+            preallocated_output_tensor->logical_shape(),
+            get_output_shape(tensor_args));
     }
 }
 
@@ -35,22 +74,19 @@ spec_return_value_t RMSNormForwardDeviceOperation::compute_output_specs(
         output_specs.push_back(tensor_args.preallocated_output->tensor_spec());
     } else {
         output_specs.emplace_back(
-            tensor_args.input.logical_shape(),
+            get_output_shape(tensor_args),
             tt::tt_metal::TensorLayout(
-                tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
+                tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
     }
 
     if (args.return_intermediates) {
         if (tensor_args.preallocated_rms.has_value()) {
             output_specs.push_back(tensor_args.preallocated_rms->tensor_spec());
         } else {
-            auto shape = tensor_args.input.logical_shape();
-            shape[-1] = 1U;  // RMS is a scalar per row
-
             output_specs.emplace_back(
-                shape,
+                get_rms_shape(tensor_args.input),
                 tt::tt_metal::TensorLayout(
-                    tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
+                    tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
         }
     }
 
@@ -85,8 +121,11 @@ ttsl::hash::hash_t RMSNormForwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();
+    // 0 is the ungated mode, which differs from gated mode with a single head.
+    const uint32_t num_heads =
+        tensor_args.gate.has_value() ? tensor_args.gate->logical_shape()[-1] / input_logical_shape[-1] : 0U;
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RMSNormForwardDeviceOperation>(
-        args, input_tensor.dtype(), input_logical_shape);
+        args, input_tensor.dtype(), input_logical_shape, num_heads);
 
     return hash;
 }
@@ -101,7 +140,8 @@ ttml::metal::ops::rmsnorm_fw::device::RMSNormForwardDeviceOperation::tensor_retu
     bool return_intermediates,
     float epsilon,
     const std::optional<ttnn::Tensor>& preallocated_rms,
-    const std::optional<ttnn::Tensor>& preallocated_output) {
+    const std::optional<ttnn::Tensor>& preallocated_output,
+    const std::optional<ttnn::Tensor>& gate) {
     using OperationType = ttml::metal::ops::rmsnorm_fw::device::RMSNormForwardDeviceOperation;
 
     auto operation_attributes =
@@ -111,6 +151,7 @@ ttml::metal::ops::rmsnorm_fw::device::RMSNormForwardDeviceOperation::tensor_retu
         .gamma = gamma_tensor,
         .preallocated_rms = preallocated_rms,
         .preallocated_output = preallocated_output,
+        .gate = gate,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
