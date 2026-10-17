@@ -40,19 +40,12 @@
 //
 // Therefore the end-to-end golden is a plain chained matmul:
 //     golden = (A0 @ B0) @ B1
-// evaluated in fp32 and then narrowed / tilized to the consumer's accumulator
-// tile layout for comparison.  Only the first `r`(=8) rows of the output tile
-// are DEFINED (in0 is 8 rows tall); rows 8..31 are undefined and NOT asserted —
-// the python side validates only the defined lanes.
+// with LoFi products and the producer result narrowed to the DEST format.  The
+// packer writes each output tile's `r`(=8) defined rows as two 8-row faces
+// (cols 0..15, then cols 16..31); the rest of the tile is undefined and the
+// python side validates only the defined rows.
 //
 // Fidelity is LoFi only (both custom_mm and the reuse LLK are LoFi-only).
-//
-// This test is marked xfail on the python side: it is a faithful, correct-by-
-// construction transcription of the header pipeline, but the fused two-op chain
-// (DEST bank sharing + cross-thread sync between the producer and the reuse
-// consumer) cannot be validated at runtime in this environment (no Blackhole
-// card).  The bar met here is a clean Blackhole compile plus a golden that
-// mirrors the header math; see BLAZE_PROMOTION_TESTS_DONE.md conventions.
 // ============================================================================
 
 #include <algorithm>
