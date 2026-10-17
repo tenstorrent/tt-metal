@@ -2245,6 +2245,9 @@ BINARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuElwGt,  # as SfpuElwLt, operands swapped
         MathOperation.SfpuElwLe,  # weak_ordered pre-stores 1, then 0 if either operand is NaN
         MathOperation.SfpuElwGe,  # as SfpuElwLe, operands swapped
+        # A NaN reaches the product through a multiply-add; at every special pair the kernel gives its
+        # golden's class (a zero's sign aside), as its bit model does on every BF16 pair.
+        MathOperation.SfpuSwigluOai,
     }
 )
 

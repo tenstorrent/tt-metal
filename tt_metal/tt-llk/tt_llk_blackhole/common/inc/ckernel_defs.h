@@ -375,6 +375,8 @@ enum class BinaryOp : std::uint8_t
     REQUANT   = 48,
     DEQUANT   = 49,
     COPY_DEST = 50,
+    // swiglu_oai has a Blackhole kernel only: the harness dispatches it on Blackhole.
+    SWIGLU_OAI = 54,
 };
 
 enum class PackMode : std::uint8_t

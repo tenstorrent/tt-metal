@@ -31,6 +31,24 @@
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
+#if defined(ARCH_BLACKHOLE)
+#include <type_traits>
+
+#include "ckernel_sfpu_swiglu_oai.h"
+
+namespace ckernel::sfpu {
+
+// A Config opts in to swiglu_oai's fitted kernel (ckernel_sfpu_swiglu_oai.h) with
+// `static constexpr bool fitted_swiglu_oai = true;`. It then must hold alpha = 1.702, clamp_limit = 7, and the
+// kernel runs for 16-bit (BF16) DEST; every other Config keeps this file's own body.
+template <class Config, class = void>
+struct uses_fitted_swiglu_oai : std::false_type {};
+template <class Config>
+struct uses_fitted_swiglu_oai<Config, std::void_t<decltype(Config::fitted_swiglu_oai)>>
+    : std::bool_constant<Config::fitted_swiglu_oai> {};
+
+}  // namespace ckernel::sfpu
+#endif
 
 namespace ckernel::sfpu {
 
@@ -67,6 +85,16 @@ sfpi_inline sfpi::vFloat _swiglu_sigmoid_(sfpi::vFloat x) {
 //-----------------------------------------------------------------------------
 template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, class Config = SwiGLUConfigGPTOSS>
 inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, const uint out_tile_idx) {
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (!is_fp32_dest_acc_en && uses_fitted_swiglu_oai<Config>::value) {
+        static_assert(
+            Config::alpha >= 1.7020000219345093f && Config::alpha <= 1.7020000219345093f &&
+                Config::clamp_limit >= 7.0f && Config::clamp_limit <= 7.0f,
+            "swiglu_oai is fitted for alpha = 1.702, clamp_limit = 7");
+        calculate_swiglu_oai<is_fp32_dest_acc_en, ITERATIONS>(gate_tile_idx, up_tile_idx, out_tile_idx);
+        return;
+    }
+#endif
     constexpr float alpha = Config::alpha;
     constexpr float clamp_limit = Config::clamp_limit;
 
