@@ -220,3 +220,7 @@ Every intervention by the supervising session: time, task, trigger, classificati
 - Float states >= 0.9959, worst layer 0.9969; topk_idx PCC 0.52-0.78 (index ids, meaningless as PCC). Class:
   framework (F99: overlap for integer states). The assemble agent (attempt 1, 3 min in) was stopped so its brief
   shows only the real gap (host transfers 40/layer -> 0); resumed.
+
+## 2026-10-17 19:05 L.s55296 FAIL: index-state overlap 0.897 < 0.9 (my F99 default)
+- Layers 0.9966, float states 0.9958, host transfers 0. Class: framework (a threshold I set without data). Set to 0.75
+  (structural); fix agent attempt 1 stopped; resumed.

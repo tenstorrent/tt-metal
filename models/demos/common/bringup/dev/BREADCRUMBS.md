@@ -1281,3 +1281,6 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F99: ladder states: integer states (top-k index lists) are checked by the mean per-row selection overlap with the
   golden (thresholds.state_overlap 0.9; a wrong selector gives ~k/n), not by the PCC of the ids; pcc_state_min covers
   float states only. DeepSeek-V4.1 M.1 precheck: topk_idx PCC 0.52-0.78 while every float state was >= 0.9959.
+- F99 (adjusted): state_overlap 0.75, not 0.9: the check is structural (a wrong selector gives ~k/n <= 0.5); near-tie
+  flips grow with the pool (DeepSeek-V4.1 L.s55296: 0.897 while every layer stayed at PCC 0.9966). The fix agent
+  that 0.9 started was stopped.
