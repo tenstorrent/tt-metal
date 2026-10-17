@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_binary_remainder.h"
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
@@ -61,6 +62,18 @@ inline void calculate_fmod() {
             v_endif;
         }
         v_if(sfpi::abs(v) - s == 0.0f) { v = 0.0f; }
+        v_endif;
+
+        // Infinite divisor: the host reciprocal of +-inf is 0, so v - quotient * s above is 0 * inf
+        // = NaN. fmod(val, +-inf) is val for finite val and NaN for an infinite val. Same rule as
+        // the tensor-tensor kernel in ckernel_sfpu_binary_fmod.h.
+        v_if(sfpi::as<sfpi::vInt>(s) == kInfBits) {
+            v = val;
+            v_if(sfpi::as<sfpi::vInt>(sfpi::setsgn(val, 0)) >= kInfBits) {
+                v = std::numeric_limits<float>::quiet_NaN();
+            }
+            v_endif;
+        }
         v_endif;
         sfpi::dst_reg[0] = v;
         sfpi::dst_reg++;
