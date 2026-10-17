@@ -45,9 +45,10 @@ OpPerformanceModelGeneral<OutputTensorsT>::OpPerformanceModelGeneral(
     }
 
     auto tensor_ns = [peak_dram_bw](const Tensor& t) {
-        int size_bytes = t.physical_volume() * t.element_size();
+        const uint64_t size_bytes = t.physical_volume() * t.element_size();
         if (t.memory_config().is_dram()) {
-            return size_bytes / peak_dram_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
+            // peak_dram_bw is in decimal GB/s, and bytes / (1e9 bytes/s) is nanoseconds.
+            return static_cast<float>(static_cast<double>(size_bytes) / peak_dram_bw);
         }
         if (t.memory_config().is_l1()) {
             return 1.0f;  // TODO: figure out better modelling scheme for L1->L1 Transfers

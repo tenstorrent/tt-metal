@@ -80,6 +80,7 @@ Tensor create_device_tensor(
     const TensorSpec& tensor_spec,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     std::optional<TensorTopology> tensor_topology) {
+    TT_FATAL(mesh_device != nullptr, "create_device_tensor requires a device");
     auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.allocate_tensor_on_device");
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::create_device_tensor",
