@@ -35,17 +35,16 @@ inline void calculate_add_top_row(const uint tile_idx_0 = 0, const uint tile_idx
         format == DataFormat::Int32 || format == DataFormat::UInt32 || format == DataFormat::Float32,
         "Unsupported data format. Supported formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::Float32");
 
-    // Determine instruction mode and replay buffer parameters based on format.
+    // Instruction mode and replay buffer parameters follow the format. The SFPLOAD/SFPSTORE mode comes
+    // from the shared format mapping, as in ckernel_sfpu_reduce.h: Float32 -> FP32, Int32/UInt32 -> INT32.
     // Int32 and UInt32 tiles hold raw two's-complement / unsigned words in Dest (a native 32-bit tile
-    // is moved L1 -> Dest unchanged), which is what SFPIADD consumes, so SFPLOAD/SFPSTORE use INT32 and
-    // leave the bits alone. INT32_2S_COMP would apply the sign-magnitude <-> two's-complement conversion
-    // on both the load and the store and corrupt the sum whenever an operand is negative and neither
-    // is zero (the two conversions are inverses, so a negative paired with a zero round-trips intact).
-    // This assumes native Int32 via unpack-to-dest. A sign-magnitude Dest (an Int8 tile promoted
-    // through the FPU by copy_tile with a 32-bit Dest) is only correct here for non-negative values;
+    // is moved L1 -> Dest unchanged), which is what SFPIADD consumes, so INT32 leaves the bits alone. INT32_2S_COMP
+    // would apply the sign-magnitude <-> two's-complement conversion on both the load and the store and corrupt the sum
+    // whenever an operand is negative and neither is zero (the two conversions are inverses, so a negative paired with
+    // a zero round-trips intact). This assumes native Int32 via unpack-to-dest. A sign-magnitude Dest (an Int8 tile
+    // promoted through the FPU by copy_tile with a 32-bit Dest) is only correct here for non-negative values;
     // supporting its negatives would need a SIGN_MAGNITUDE_FORMAT flag like _add_int_ has.
-    constexpr InstrModLoadStore INSTRUCTION_MODE =
-        (format == DataFormat::Float32) ? InstrModLoadStore::FP32 : InstrModLoadStore::INT32;
+    constexpr InstrModLoadStore INSTRUCTION_MODE = GetSfpLoadStoreInstrMod<format>();
 
     constexpr std::uint32_t REPLAY_BUFFER_INDEX = (format == DataFormat::Float32) ? 4 : 0;
     constexpr std::uint32_t REPLAY_BUFFER_COUNT = 4;
