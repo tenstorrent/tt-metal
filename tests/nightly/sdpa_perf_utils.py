@@ -77,6 +77,9 @@ class MeshConfig:
     # architecture. It has not been checked against a Wormhole T3000, whose compute grid is smaller;
     # left as-is rather than guessed at, since the Galaxy path above is the one measured here.
     NON_GALAXY_GRID: ClassVar[Tuple[int, int]] = (11, 10)  # (cols, rows)
+    # Blackhole LoudBox (8x p150b): measured compute_with_storage_grid_size is 12x10 -> 11x10 = 110 SDPA cores.
+    LOUDBOX_DEVICE_COUNT: ClassVar[int] = 8
+    LOUDBOX_GRID: ClassVar[Tuple[int, int]] = (12, 10)  # (cols, rows)
 
     # Instance fields (set by detect())
     is_galaxy: bool
@@ -112,6 +115,8 @@ class MeshConfig:
             import ttnn
 
             grid = cls.GALAXY_GRID if "blackhole" in ttnn.get_arch_name() else cls.WH_GALAXY_GRID
+        elif num_devices == cls.LOUDBOX_DEVICE_COUNT:
+            grid = cls.LOUDBOX_GRID
         else:
             grid = cls.NON_GALAXY_GRID
         return cls(
