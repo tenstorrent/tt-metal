@@ -182,6 +182,18 @@ class PrefillModelAdapter(ABC):
         """Load (and normalize) the HF config from PREFILL_HF_MODEL (falling back
         to ``hf_model_default``). The runner sets ``max_seq_len`` on the result."""
 
+    def hf_model_path(self) -> str:
+        """PREFILL_HF_MODEL, else ``hf_model_default``: the checkpoint the runner serves. For adapters whose own
+        package may not read the environment (the bring-up packages keep every switch in their settings table)."""
+        import os
+
+        return os.environ.get("PREFILL_HF_MODEL") or self.hf_model_default
+
+    # Producer KV read-back (prefill_producer._read_slot_kv_and_check_pcc calls it first when an adapter defines it):
+    #   read_slot_kv_and_check_pcc(table, device_map, slot_id, real_len, trace_dir, num_layers) -> {cache: min PCC}
+    # A model whose cache layout the producer's built-in readers do not know defines it instead of a name branch.
+    read_slot_kv_and_check_pcc = None
+
     @property
     def default_sparse_kv_cache_format(self) -> Optional[object]:
         """Semantic primary-cache format used when the runner builds ``PrefillRunParams``.
@@ -330,6 +342,8 @@ ADAPTER_PATHS = {
     "glm_5_3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3:GLM53Adapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
+    # GPT-OSS-120B bring-up package: 2 KV heads per TP column on 8x4, the bring-up device model's served cache.
+    "gpt_oss_120b": "models.demos.gpt_oss_120b.tt.adapter:GptOss120bPrefillAdapter",
     # Kimi-K2.7-Code: DeepSeek-V3 architecture (MLA + MoE), single expert group (adapters/kimi_k2_7.py).
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "kimi_k3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3:KimiK3Adapter",

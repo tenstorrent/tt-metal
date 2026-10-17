@@ -15,6 +15,11 @@ slot * num_layers + layer position, as gpt_oss_d_p allocate_kv_cache packs it. F
 residual cache of the same layout (ATTN_FULL_K_LO, tt/attention.py); it is prefill-only state, not served.
 """
 
+import json
+import socket
+import time
+from pathlib import Path
+
 import torch
 
 import ttnn
@@ -23,12 +28,13 @@ from ..reference._bringup_interface import Ctx, run_block
 from ..reference.gpt_oss_ref import GptOssReference
 from .attention import HEAD_DIM, meta_permute_cols
 from .ccl import SP_AXIS
-from .kv_cache import bfp8_round, block_cyclic_reorder, cache_memory_config
+from .kv_cache import RECORD_TOKENS, bfp8_round, block_cyclic_reorder, cache_memory_config
 from .layout import rows_to_device, rows_to_host
 from .residual import TtResidualAdd
 from .settings import settings
 
 PAD_ID = 0xFFFFFFFF
+BFP8_TILE_BYTES = 1088  # one 32 x 32 bfloat8_b tile: 1024 mantissa bytes + 64 shared exponents
 
 
 def block_graph(layer: int):
@@ -157,6 +163,76 @@ class TtKvState:
             if t is not None:
                 t.deallocate(True)
 
+    # ---------------------------------------------------------------- the KV address table (serving contract)
+    def build_kv_chunk_table(self, max_seq: int):
+        """The served cache as tt-d-gen's KV Manager reads it (serving_contract.md "Adapter and table"): one config per
+        KV head, k_h0..k_h{n-1} then v_h0..v_h{n-1}, zero-padded names (protobuf import orders configs by name), each
+        with one device group per SP row holding the TP column of that head. Every (slot, layer, 32-token position)
+        record is the address of one [1, 1, 32, 64] shard: the table replays the ROUND_ROBIN_1D walk of the cache, with
+        the block-cyclic position order of update_padded_kv_cache (the chunk is the period). ``max_seq`` (<= the
+        cache's rows) is what the table describes."""
+        from models.demos.common.prefill.runners.migration import get_num_dram_banks
+
+        D = ttnn.experimental.disaggregation
+        assert max_seq <= self.max_seq and max_seq % self.chunk == 0, (max_seq, self.max_seq, self.chunk)
+        n_layers, heads_local = len(self.layers), self.n_kv // self.tp
+        rows_local, chunk_local = self.max_seq // self.sp, self.chunk // self.sp
+        shards_per_head = rows_local // RECORD_TOKENS
+        record = HEAD_DIM // ttnn.TILE_SIZE * BFP8_TILE_BYTES
+        banks = get_num_dram_banks(self.mesh)
+        specs = [("k", self.k, h) for h in range(self.n_kv)] + [("v", self.v, h) for h in range(self.n_kv)]
+        width = max(2, len(str(len(specs) - 1)))
+        cfgs = {}
+        for i in range(len(specs)):
+            c = D.KvChunkAddressTableConfig()
+            c.num_layers, c.max_sequence_length, c.num_slots = n_layers, max_seq, self.slots
+            c.chunk_n_tokens, c.chunk_size_bytes = RECORD_TOKENS, record
+            cfgs[f"{i:0{width}d}"] = c
+        table = D.KvChunkAddressTable(cfgs)
+        host, hosts_set = socket.gethostname(), set()
+        for cid, (_, tensor, h) in enumerate(specs):
+            base, col, h_local = int(tensor.buffer_address()), h // heads_local, h % heads_local
+            for r in range(self.sp):
+                fid = self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(r, col))
+                group = table.add_device_group([fid])
+                if (int(fid.mesh_id), int(fid.chip_id)) not in hosts_set:
+                    table.set_fabric_node_host(fid, host_name=host)
+                    hosts_set.add((int(fid.mesh_id), int(fid.chip_id)))
+                for slot in range(self.slots):
+                    for li in range(n_layers):
+                        head_shard0 = ((slot * n_layers + li) * heads_local + h_local) * shards_per_head
+                        for c0 in range(0, max_seq, self.chunk):
+                            for off in range(0, chunk_local, RECORD_TOKENS):
+                                local_row = c0 // self.sp + off
+                                j = head_shard0 + local_row // RECORD_TOKENS
+                                loc = D.KvCacheLocation()
+                                loc.noc_addr = ((j % banks) << 32) | (base + (j // banks) * record)
+                                loc.size_bytes = record
+                                loc.device_group_index = group
+                                table.set(li, c0 + r * chunk_local + off, slot, loc, cid)
+        return table
+
+
+def cache_rows(max_seq: int, chunk: int) -> int:
+    """Positions the cache (and the RoPE tables) hold: at least two chunks, since ring SDPA's sliding path is
+    chunked-only (Q shorter than the per-chip K shard) and rejects a one-chunk cache (Q 640 == K 640 rows per chip);
+    the rows past max_seq stay zero, unread."""
+    return max(max_seq, 2 * chunk)
+
+
+def k_lo_layers(cfg: dict, layers) -> set:
+    from .attention import layer_window, uses_k_lo
+
+    return {i for i in layers if uses_k_lo(layer_window(cfg, i))}
+
+
+def new_kv_state(mesh, cfg: dict, layers, max_seq: int, chunk: int, slots: int | None = None) -> TtKvState:
+    """The served cache of ``layers`` for ``slots`` users (KV_SLOTS when None); ``cfg`` the checkpoint's config.json.
+    The prefill runner's adapter allocates it before the model exists, the ladder through TtModel.new_state."""
+    slots = settings.get("KV_SLOTS") if slots is None else slots
+    rows = cache_rows(max_seq, chunk)
+    return TtKvState(mesh, layers, k_lo_layers(cfg, layers), int(cfg["num_key_value_heads"]), rows, chunk, slots)
+
 
 class TtModel:
     """``blocks[i]``: layer i's validated device modules {"attn_norm": TtRmsNorm, "attention": TtAttention,
@@ -205,12 +281,8 @@ class TtModel:
 
     # ---------------------------------------------------------------- state
     def new_state(self, max_seq: int, slots: int | None = None) -> TtKvState:
-        k_lo = {i for i in self.layers if self.attention[i].k_lo}
-        slots = settings.get("KV_SLOTS") if slots is None else slots
-        # at least two chunks of rows: ring SDPA's sliding path is chunked-only (Q shorter than the per-chip K shard),
-        # so a one-chunk cache (Q 640 == K 640 rows per chip) is rejected; the rows past max_seq stay zero, unread
-        rows = max(max_seq, 2 * self.chunk)
-        return TtKvState(self.mesh, self.layers, k_lo, int(self.cfg["num_key_value_heads"]), rows, self.chunk, slots)
+        assert {i for i in self.layers if self.attention[i].k_lo} == k_lo_layers(self.cfg, self.layers)
+        return new_kv_state(self.mesh, self.cfg, self.layers, max_seq, self.chunk, slots)
 
     # ---------------------------------------------------------------- forward
     def embed(self, tokens: torch.Tensor, start: int = 0) -> ttnn.Tensor:
@@ -230,8 +302,15 @@ class TtModel:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=(self.sp, self.tp), dims=(0, None)),
         )
-        safe = ttnn.minimum(tt_ids, self.vocab - 1)  # PAD_ID rows embed a real row; their KV is zeroed (end=)
+        h = self.embed_ids(tt_ids)
         tt_ids.deallocate(True)
+        return h
+
+    def embed_ids(self, tt_ids: ttnn.Tensor) -> ttnn.Tensor:
+        """The engine's chunk input as it lands on the device (uint32 ROW_MAJOR [8, 1, 640] sharded over the SP rows,
+        replicated over TP, already in each row's position order; PAD_ID past actual_end) -> the residual stream. Does
+        not free ``tt_ids``."""
+        safe = ttnn.minimum(tt_ids, self.vocab - 1)  # PAD_ID rows embed a real row; their KV is zeroed (end=)
         h = ttnn.embedding(
             safe, self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -338,3 +417,55 @@ class TtModel:
 
     def sync(self) -> None:
         ttnn.synchronize_device(self.mesh)
+
+
+def load_model(mesh, hf_dir: Path, layers, max_seq: int, chunk: int, lm_head: bool = True) -> TtModel:
+    """The all-device model from the checkpoint at ``hf_dir``: every layer's validated step modules on one shared TtCcl
+    and TtRope (tables for ``max_seq`` positions in chunks of ``chunk``), the embedding, the final norm and (lm_head)
+    the vocab-sharded head. Load time only (host reads and uploads)."""
+    from ..reference.gpt_oss_ref import Checkpoint, LayerWeights, yarn_inv_freq
+    from .attention import ATTN_WEIGHTS, TtAttention, TtRope, layer_window
+    from .ccl import TtCcl
+    from .experts import TtExperts
+    from .norm import TtRmsNorm
+    from .router import TtRouter
+
+    t0 = time.time()
+    hf_dir = Path(hf_dir)
+    cfg = json.loads((hf_dir / "config.json").read_text())
+    seq_local = chunk // tuple(mesh.shape)[0]
+    eps = cfg["rms_norm_eps"]
+    inv_freq, att = yarn_inv_freq(cfg)
+    ccl, rope = TtCcl(mesh), TtRope(mesh, inv_freq, att, cache_rows(max_seq, chunk), chunk)
+    ck = Checkpoint(hf_dir)
+    blocks = {}
+    for i in layers:
+        lw = LayerWeights(ck, i, cfg, torch.float32, torch.bfloat16)  # mxfp4 dequantized (exact in bf16)
+        attn_w = {k: ck.get(f"model.layers.{i}.self_attn.{n}") for k, n in ATTN_WEIGHTS.items()}
+        router = TtRouter(mesh, lw.wr, lw.br, cfg["num_experts_per_tok"])
+        router.prepare(seq_local)
+        blocks[i] = {
+            "attn_norm": TtRmsNorm(mesh, lw.attn_norm, eps),
+            "attention": TtAttention(mesh, ccl, attn_w, cfg, rope, layer_window(cfg, i)),
+            "ffn_norm": TtRmsNorm(mesh, lw.ffn_norm, eps),
+            "router": router,
+            "experts": TtExperts(
+                mesh,
+                ccl,
+                lw.w_gu,
+                lw.b_gu,
+                lw.w_d,
+                lw.b_d,
+                cfg["num_experts_per_tok"],
+                float(cfg.get("swiglu_limit", 7.0)),
+                seq_local,
+            ),
+        }
+        del lw
+    embed_w = ck.get("model.embed_tokens.weight")
+    final_norm = TtRmsNorm(mesh, ck.get("model.norm.weight"), eps)
+    head = ck.get("lm_head.weight") if lm_head else None
+    ck.close()
+    model = TtModel(mesh, cfg, layers, embed_w, final_norm, head, blocks, chunk)
+    model.load_seconds = time.time() - t0
+    return model

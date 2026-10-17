@@ -215,3 +215,28 @@
 - Gate: cold_mid_end / follow_up_block / follow_up_tile / pulled_back K, V pcc 0.99990-0.99995 on L0 / L1, pad rows
   zero, prefix rows unchanged, rewrite identical.
 - Re-run: `bfw job check --task L.starts`.
+
+## K.1 (adapter: the served cache, its table and the prefill runner's adapter)
+
+- `tt/adapter.py:GptOss120bPrefillAdapter`, registered as `gpt_oss_120b` in `common/prefill/adapter.py`
+  ADAPTER_PATHS. `allocate_kv_cache` returns the device model's own `TtKvState` (`tt/model.py:new_kv_state`, the same
+  cache the ladder and L.starts ran on), registered as a `KvCaches`. `build_runtime` loads the model through
+  `tt/model.py:load_model`, which `hooks.device_model` uses now as well, so there is one loader. No lm_head.
+- `GptOss120bRuntime.prefill_chunk`: the engine's uint32 `[8, 1, 640]` input goes to `TtModel.embed_ids`, which
+  clamps PAD_ID and embeds it; the H2D reshuffle already put each row in the order `rotated_positions` gives
+  (CPU-checked at starts 0, 32, 1312, 2944, 4800, 5120, 11968, 47808, 51200). Then `TtModel.layer(i, h, start, kv,
+  end=)` runs for each served layer. After each layer: `ttnn.event_synchronize(ttnn.record_event(mesh, 0))`, then
+  `sink(layer, request_id)` (ack_mode host). `compile` warms the programs on a scratch cache with the same shape, so
+  the engine's cache stays zero.
+- Table: `TtKvState.build_kv_chunk_table` walks the table itself. gpt_oss_d_p's builder asserts 1 head per column.
+  The table has configs `00..15` = k_h0..7, v_h0..7, and one device group (row r, column h // 2) per head and SP row.
+  The record address is the ND shard of (slot * L + layer, h % 2, local_row / 32), with local_row from the
+  block-cyclic order, ROUND_ROBIN_1D over 8 banks, 2176 B. Entry 0 is the K cache's buffer address, which is what
+  `kv_migration_base_address` returns.
+- Producer read-back: the adapter's `read_slot_kv_and_check_pcc` reads K and V through the table over UMD and
+  compares them with the golden's kv_cache (K permuted to meta order), computing PCC in torch. The common producer
+  now calls this hook first; the base adapter declares it `None`. The common adapter also gains `hf_model_path()`
+  (PREFILL_HF_MODEL), because the package may not read the environment.
+- `prefill_runner.py`: a positive `TT_METAL_OPERATION_TIMEOUT_SECONDS` below `PREFILL_MIN_OPERATION_TIMEOUT_S`
+  (600 s) is raised at import. Without this, the 5 s from run_safe_pytest would kill the idle runner.
+- Gate: see the job summary. Re-run: `bfw job check --task K.1`.

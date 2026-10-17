@@ -10,7 +10,6 @@ the framework (bringup_fw); the framework's lint fails it if it does.
 """
 
 import json
-import time
 from pathlib import Path
 
 NORM_WEIGHTS = {"attn_norm": "input_layernorm.weight", "ffn_norm": "post_attention_layernorm.weight"}
@@ -52,19 +51,6 @@ class _HostBoundary:
         return out
 
 
-ATTN_WEIGHTS = {
-    "wq": "q_proj.weight",
-    "bq": "q_proj.bias",
-    "wk": "k_proj.weight",
-    "bk": "k_proj.bias",
-    "wv": "v_proj.weight",
-    "bv": "v_proj.bias",
-    "wo": "o_proj.weight",
-    "bo": "o_proj.bias",
-    "sinks": "sinks",
-}
-
-
 def _rope(mesh, spec, cfg):
     from models.demos.gpt_oss_120b.reference.gpt_oss_ref import yarn_inv_freq
     from models.demos.gpt_oss_120b.tt.attention import TtRope
@@ -74,15 +60,14 @@ def _rope(mesh, spec, cfg):
 
 
 def _attention(mesh, spec, layer):
-    from models.demos.gpt_oss_120b.tt.attention import TtAttention
+    from models.demos.gpt_oss_120b.tt.attention import ATTN_WEIGHTS, TtAttention, layer_window
     from models.demos.gpt_oss_120b.tt.ccl import TtCcl
 
     cfg = _config(spec)
     ck = _checkpoint(spec)
     w = {k: ck.get(f"model.layers.{layer}.self_attn.{n}") for k, n in ATTN_WEIGHTS.items()}
     ck.close()
-    window = int(cfg["sliding_window"]) if cfg["layer_types"][layer] == "sliding_attention" else None
-    return TtAttention(mesh, TtCcl(mesh), w, cfg, _rope(mesh, spec, cfg), window)
+    return TtAttention(mesh, TtCcl(mesh), w, cfg, _rope(mesh, spec, cfg), layer_window(cfg, layer))
 
 
 class _AttentionBoundary:
@@ -206,55 +191,12 @@ def device_component(mesh, spec, layer, step):
 
 
 def device_model(mesh, spec, layers, lm_head=True):
-    """The all-device model (tt/model.py): every layer's validated step modules on one shared TtCcl and TtRope, the
-    embedding, the final norm and (lm_head) the vocab-sharded head."""
-    import torch
+    """The all-device model (tt/model.py load_model, which the prefill runner's adapter tt/adapter.py builds too):
+    every layer's validated step modules on one shared TtCcl and TtRope, the embedding, the final norm and (lm_head)
+    the vocab-sharded head."""
+    from models.demos.gpt_oss_120b.tt.model import load_model
 
-    from models.demos.gpt_oss_120b.reference.gpt_oss_ref import LayerWeights
-    from models.demos.gpt_oss_120b.tt.attention import TtAttention
-    from models.demos.gpt_oss_120b.tt.ccl import TtCcl
-    from models.demos.gpt_oss_120b.tt.experts import TtExperts
-    from models.demos.gpt_oss_120b.tt.model import TtModel
-    from models.demos.gpt_oss_120b.tt.norm import TtRmsNorm
-    from models.demos.gpt_oss_120b.tt.router import TtRouter
-
-    t0 = time.time()
     _observable_ops()
-    cfg = _config(spec)
-    chunk = int(spec.get("target.chunk"))
-    seq_local = chunk // tuple(mesh.shape)[0]
-    eps = cfg["rms_norm_eps"]
-    ccl, rope = TtCcl(mesh), _rope(mesh, spec, cfg)
-    ck = _checkpoint(spec)
-    blocks = {}
-    for i in layers:
-        lw = LayerWeights(ck, i, cfg, torch.float32, torch.bfloat16)  # mxfp4 dequantized (exact in bf16)
-        attn_w = {k: ck.get(f"model.layers.{i}.self_attn.{n}") for k, n in ATTN_WEIGHTS.items()}
-        window = int(cfg["sliding_window"]) if cfg["layer_types"][i] == "sliding_attention" else None
-        router = TtRouter(mesh, lw.wr, lw.br, cfg["num_experts_per_tok"])
-        router.prepare(seq_local)
-        blocks[i] = {
-            "attn_norm": TtRmsNorm(mesh, lw.attn_norm, eps),
-            "attention": TtAttention(mesh, ccl, attn_w, cfg, rope, window),
-            "ffn_norm": TtRmsNorm(mesh, lw.ffn_norm, eps),
-            "router": router,
-            "experts": TtExperts(
-                mesh,
-                ccl,
-                lw.w_gu,
-                lw.b_gu,
-                lw.w_d,
-                lw.b_d,
-                cfg["num_experts_per_tok"],
-                float(cfg.get("swiglu_limit", 7.0)),
-                seq_local,
-            ),
-        }
-        del lw
-    embed_w = ck.get("model.embed_tokens.weight")
-    final_norm = TtRmsNorm(mesh, ck.get("model.norm.weight"), eps)
-    head = ck.get("lm_head.weight") if lm_head else None
-    ck.close()
-    model = TtModel(mesh, cfg, layers, embed_w, final_norm, head, blocks, chunk)
-    model.load_seconds = time.time() - t0
-    return model
+    return load_model(
+        mesh, Path(spec.hf_dir), layers, int(spec.get("target.seq")), int(spec.get("target.chunk")), lm_head=lm_head
+    )

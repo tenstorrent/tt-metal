@@ -51,6 +51,27 @@ def _apply_manifest_env():
 
 _apply_manifest_env()
 
+
+def _floor_operation_timeout() -> None:
+    """The request loop blocks on the H2D socket (a device-side wait) for as long as the scheduler is idle, so a
+    dispatch-hang timeout shorter than the gap between requests reports an idle runner as hung and kills it (e.g.
+    run_safe_pytest's 5 s TT_METAL_OPERATION_TIMEOUT_SECONDS inherited by a runner a test starts). Raise a positive
+    timeout to PREFILL_MIN_OPERATION_TIMEOUT_S (default 600 s; 0 keeps it as is). Runs before the metal context
+    exists, which reads the variable once."""
+    floor = float(os.environ.get("PREFILL_MIN_OPERATION_TIMEOUT_S", 600))
+    raw = os.environ.get("TT_METAL_OPERATION_TIMEOUT_SECONDS")
+    if not raw or floor <= 0:
+        return
+    if 0 < float(raw) < floor:
+        logger.warning(
+            f"[prefill] TT_METAL_OPERATION_TIMEOUT_SECONDS={raw} is shorter than an idle wait for the next chunk; "
+            f"raised to {floor:g} (PREFILL_MIN_OPERATION_TIMEOUT_S)"
+        )
+        os.environ["TT_METAL_OPERATION_TIMEOUT_SECONDS"] = f"{floor:g}"
+
+
+_floor_operation_timeout()
+
 SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
 METADATA_SIZE_BYTES = 12
 

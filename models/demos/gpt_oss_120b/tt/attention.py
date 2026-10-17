@@ -52,6 +52,29 @@ def meta_permute_cols(t: torch.Tensor) -> torch.Tensor:
     return t.reshape(*shape[:-1], 2, HEAD_DIM // 2).transpose(-1, -2).reshape(shape)
 
 
+ATTN_WEIGHTS = {
+    "wq": "q_proj.weight",
+    "bq": "q_proj.bias",
+    "wk": "k_proj.weight",
+    "bk": "k_proj.bias",
+    "wv": "v_proj.weight",
+    "bv": "v_proj.bias",
+    "wo": "o_proj.weight",
+    "bo": "o_proj.bias",
+    "sinks": "sinks",
+}
+
+
+def layer_window(cfg: dict, layer: int):
+    """128 on sliding layers, None on full ones."""
+    return int(cfg["sliding_window"]) if cfg["layer_types"][layer] == "sliding_attention" else None
+
+
+def uses_k_lo(window) -> bool:
+    """Whether a layer keeps the K residual cache (ATTN_FULL_K_LO on a full layer whose SDPA sees bf16 K / V)."""
+    return window is None and settings.get("ATTN_CHUNK_KV_BF16") and settings.get("ATTN_FULL_K_LO")
+
+
 def _compute_config(mesh, fidelity: str, fp32_acc: bool):
     return ttnn.init_device_compute_kernel_config(
         mesh.arch(),
@@ -266,7 +289,7 @@ class TtAttention:
         self.qkv_dtype = ttnn.float32 if settings.get("QKV_FP32") else ttnn.bfloat16
         self.chunk_kv_bf16 = settings.get("ATTN_CHUNK_KV_BF16")
         # full layers: a K residual cache (same layout as the served one) the caller allocates and passes as cache_k_lo
-        self.k_lo = window is None and self.chunk_kv_bf16 and settings.get("ATTN_FULL_K_LO")
+        self.k_lo = uses_k_lo(window)
         self.kv_split = window is not None and settings.get("ATTN_SLIDING_KV_SPLIT")
         self.mm_config = _compute_config(mesh, settings.get("ATTN_MM_FIDELITY"), settings.get("ATTN_MM_FP32_ACC"))
         self.sdpa_config = _compute_config(mesh, settings.get("SDPA_FIDELITY"), settings.get("SDPA_FP32_ACC"))
