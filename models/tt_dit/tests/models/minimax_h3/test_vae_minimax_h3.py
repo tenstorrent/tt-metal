@@ -4,9 +4,33 @@
 
 """Gates for the MiniMax-H3 visual VAE: host tiling geometry, tiled encode/decode vs the
 pinned diffusers reference, per-conv/resnet parity, the ViT decoder, and the chunked
-roundtrip. Uses the real checkpoint's encoder tensors when present, random otherwise."""
+roundtrip. Uses the real checkpoint's encoder tensors when present, random otherwise.
 
+Host stitching CPU measurements (2026-09-30, source base 7665eaca + this change):
+    AMD EPYC 9124, torch 2.11.0+cpu, 8 threads, seed 73, contiguous FP32,
+    4x7 grid at 1344x768; two independent invocations, each with 2 warmup
+    pairs and 10 measured pairs in alternating order. Median milliseconds:
+        frames  invocation  concatenation  preallocated  speedup
+        28      first       178.980        100.169       1.787x
+        28      repeat      225.622        158.421       1.424x
+        1       first        11.014         10.745       1.025x
+        1       repeat       11.705         12.049       0.971x
+    Timing includes allocation, blending and assembly; excludes tile creation
+    and device decode. All outputs matched bytewise; normal pytest collection
+    passed 28 correctness cases. TTNN native runtime 0dea474c was imported,
+    but these host tests request no device fixture and load no weights.
+    Host timing varies and small chunks can regress; no universal speedup
+    or current-main whole-generation improvement is claimed.
+Select stitch_tiles_bitwise for correctness. To reproduce timing, set
+MINIMAX_H3_RUN_HOST_STITCH_BENCH=1 and select stitch_tiles_performance;
+raw samples and metadata are written to JSON under pytest's tmp_path.
+"""
+
+import json
 import os
+import platform
+import statistics
+import time
 
 import pytest
 import torch
@@ -24,7 +48,7 @@ from ....models.vae.minimax_h3.rope_minimax_h3 import (
     reference_rotate,
     rope_tables,
 )
-from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig, split_tiles
+from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig, blend, split_tiles, stitch_tiles
 from ....utils.check import assert_quality
 from .common import load_config, psnr
 
@@ -87,6 +111,135 @@ def _build_reference(weights_dir: str | None):
             k for k in missing.missing_keys if k.startswith(("encoder.", "quant_conv."))
         ], "real encoder weights did not fully load"
     return reference, config
+
+
+def _stitch_tiles_with_concatenation(tiles, height_overlaps, width_overlaps):
+    """Previous host stitching, retained as a bitwise regression oracle."""
+    result_rows = []
+    for i, row in enumerate(tiles):
+        result_row = []
+        for j, tile in enumerate(row):
+            if i > 0:
+                tile = blend(tiles[i - 1][j], tile, height_overlaps[i - 1], dim=-2)
+            if j > 0:
+                tile = blend(row[j - 1], tile, width_overlaps[j - 1], dim=-1)
+            if i < len(tiles) - 1:
+                tile = tile[..., : -height_overlaps[i], :]
+            if j < len(row) - 1:
+                tile = tile[..., :, : -width_overlaps[j]]
+            result_row.append(tile)
+        result_rows.append(torch.cat(result_row, dim=-1))
+    return torch.cat(result_rows, dim=-2)
+
+
+@pytest.mark.parametrize(
+    ("height", "width", "ratio"),
+    [
+        (128, 128, 1),
+        (128, 512, 1),
+        (512, 128, 1),
+        (272, 272, 1),
+        (512, 512, 1),
+        (768, 1344, 1),
+        (768, 1344, 16),
+    ],
+)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("noncontiguous", [False, True])
+def test_stitch_tiles_bitwise(height, width, ratio, dtype, noncontiguous):
+    """Host-only: retain all seam bits and input tiles in pixel and encoder-latent grids."""
+    _, y_lengths, y_overlaps = split_tiles(height, 256, 64, 16)
+    _, x_lengths, x_overlaps = split_tiles(width, 256, 64, 16)
+    generator = torch.Generator().manual_seed(73)
+    tiles = []
+    channels = 48 if ratio > 1 else 3
+    for tile_height in y_lengths:
+        row = []
+        for tile_width in x_lengths:
+            h, w = tile_height // ratio, tile_width // ratio
+            tile = torch.randn(
+                1,
+                channels,
+                2,
+                h,
+                w * (2 if noncontiguous else 1),
+                generator=generator,
+                dtype=dtype,
+            )
+            row.append(tile[..., ::2] if noncontiguous else tile)
+        tiles.append(row)
+    originals = [[tile.clone() for tile in row] for row in tiles]
+    height_overlaps = [o // ratio for o in y_overlaps]
+    width_overlaps = [o // ratio for o in x_overlaps]
+
+    expected = _stitch_tiles_with_concatenation(tiles, height_overlaps, width_overlaps)
+    actual = stitch_tiles(tiles, height_overlaps, width_overlaps)
+
+    assert actual.shape == (1, channels, 2, height // ratio, width // ratio)
+    assert actual.dtype == expected.dtype
+    assert actual.is_contiguous()
+    assert torch.equal(actual.view(torch.uint8), expected.view(torch.uint8))
+    for row, original_row in zip(tiles, originals):
+        for tile, original in zip(row, original_row):
+            assert torch.equal(tile, original), "stitching mutated an input tile"
+
+
+@pytest.mark.skipif(
+    os.environ.get("MINIMAX_H3_RUN_HOST_STITCH_BENCH") != "1",
+    reason="opt-in host stitching benchmark; allocates production-size video tiles",
+)
+@pytest.mark.parametrize("num_frames", [1, 28])
+def test_stitch_tiles_performance(num_frames, tmp_path):
+    """Paired CPU module timings; exact output bits are a gate, speed is a report."""
+    _, heights, height_overlaps = split_tiles(768, 256, 64, 16)
+    _, widths, width_overlaps = split_tiles(1344, 256, 64, 16)
+    generator = torch.Generator().manual_seed(73)
+    tiles = [
+        [torch.randn(1, 3, num_frames, h, w, generator=generator, dtype=torch.float32) for w in widths] for h in heights
+    ]
+    previous_threads = torch.get_num_threads()
+    torch.set_num_threads(8)
+    try:
+        expected = _stitch_tiles_with_concatenation(tiles, height_overlaps, width_overlaps)
+        actual = stitch_tiles(tiles, height_overlaps, width_overlaps)
+        assert torch.equal(actual.view(torch.uint8), expected.view(torch.uint8))
+        del actual, expected
+
+        functions = {"original": _stitch_tiles_with_concatenation, "preallocated": stitch_tiles}
+        timings = {name: [] for name in functions}
+        for trial in range(12):
+            order = list(functions) if trial % 2 == 0 else list(reversed(functions))
+            for name in order:
+                start = time.perf_counter()
+                output = functions[name](tiles, height_overlaps, width_overlaps)
+                elapsed = time.perf_counter() - start
+                del output
+                if trial >= 2:
+                    timings[name].append(elapsed)
+        medians = {name: statistics.median(values) for name, values in timings.items()}
+        report = {
+            "boundary": "CPU host spatial stitching only; excludes tile generation and device decode",
+            "hostname": platform.node(),
+            "machine": platform.machine(),
+            "torch_version": torch.__version__,
+            "threads": torch.get_num_threads(),
+            "seed": 73,
+            "dtype": "float32",
+            "grid": [len(heights), len(widths)],
+            "output_shape": [1, 3, num_frames, 768, 1344],
+            "warmup_pairs": 2,
+            "measured_pairs": 10,
+            "bitwise_equal": True,
+            "times_s": timings,
+            "medians_s": medians,
+            "speedup": medians["original"] / medians["preallocated"],
+        }
+        report_path = tmp_path / "host-stitch-benchmark.json"
+        report_path.write_text(json.dumps(report, indent=2) + "\n")
+        print(json.dumps(report, indent=2))
+        print(f"Host stitch report: {report_path}")
+    finally:
+        torch.set_num_threads(previous_threads)
 
 
 @pytest.mark.parametrize(("width", "height", "num_frames"), PRODUCTION_CONFIGS)
