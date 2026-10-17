@@ -90,6 +90,27 @@ inline void _llk_pack_untilize_configure_addrmod_()
 }
 
 /**
+ * @brief Program the one-PACR-per-tile untilize MOP.
+ *
+ * One run packs row Y of every tile in the block: each PACR uses ADDR_MOD_1, which reloads Y from its CR so
+ * the next tile reads the same row, and INCADCZW steps W to the next tile. The caller advances the row
+ * between runs. The PACR packs the X range set by SETADCXX in init: a full face row for a single-face tile,
+ * the first row_num_datums datums of it for a narrow row.
+ *
+ * @tparam concat: PACR Concat field; only meaningful with compression (narrow rows keep 0, full rows MEGAROW).
+ * @param outer_loop: MOP outer loop count (tiles per block).
+ * @param inner_loop: MOP inner loop count (PACRs per tile, 1).
+ * @param pack_sel: Packer mask.
+ */
+template <std::uint32_t concat>
+inline void _llk_pack_untilize_program_row_mop_(const std::uint32_t outer_loop, const std::uint32_t inner_loop, const std::uint32_t pack_sel)
+{
+    ckernel::ckernel_template tmp(outer_loop, inner_loop, TT_OP_PACR(ADDR_MOD_1, p_pacr::P_ZERO_OUTPUT_DISABLED, pack_sel, 0, concat, 0, 0));
+    tmp.set_end_op(TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0)); // w cnt points to the next tile
+    tmp.program();
+}
+
+/**
  * @brief Build and program the packer MOP template for an untilize (tilized -> row-major) pack.
  *
  * Programs a MOP that walks face rows and tiles within the block, packing rows out in row-major
@@ -143,7 +164,13 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
             ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 0));
             tmp.program();
         }
-        else if (!narrow_row && num_faces > 1)
+        else if constexpr (narrow_row)
+        {
+            // Narrow row of every tile in the block; the row advances between MOP runs, so block_ct_dim tiles are
+            // covered per row, the layout program_packer_untilized_destination lays the per-packer L1 bases out for.
+            _llk_pack_untilize_program_row_mop_<0>(MOP_OUTER_LOOP, MOP_INNER_LOOP, PACK_SEL(PACKCNT));
+        }
+        else if (num_faces > 1)
         {
             // Two PACRs per tile, row Y of faces 0 and 1: inc ch0_y+=1 (addr_mod_0 will increment by 15)
             ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0));
@@ -155,16 +182,8 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
         }
         else
         {
-            // One PACR per tile packs row Y of the tile's first face: the full face row for a single-face tile,
-            // or its first row_num_datums datums for narrow_row (X range set by SETADCXX in init). ADDR_MOD_1
-            // reloads Y from its CR so the next tile reads the same row and INCADCZW steps W to the next tile;
-            // the row advances between MOP runs, so block_ct_dim tiles are covered per row, the layout
-            // program_packer_untilized_destination lays the per-packer L1 bases out for. Concat only matters
-            // with compression; narrow_row keeps its original encoding.
-            constexpr std::uint32_t CONCAT = narrow_row ? 0 : MEGAROW;
-            ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, CONCAT, 0, 0));
-            tmp.set_end_op(TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0)); // w cnt points to the next tile
-            tmp.program();
+            // Single-face tile: the full face row Y of every tile in the block.
+            _llk_pack_untilize_program_row_mop_<MEGAROW>(MOP_OUTER_LOOP, MOP_INNER_LOOP, PACK_SEL(PACKCNT));
         }
 
         if (block_ct_dim != full_ct_dim)
