@@ -25,12 +25,15 @@
 
 namespace ttnn::operations::unary::test {
 
-struct RelationalUnaryParam {
-    int32_t scalar_input;
-    int32_t scalar_param;
+template <typename T>
+struct RelationalUnaryParamT {
+    T scalar_input;
+    T scalar_param;
     uint32_t h;
     uint32_t w;
 };
+
+using RelationalUnaryParam = RelationalUnaryParamT<int32_t>;
 
 class RelationalUnaryFixture : public TTNNFixtureWithSuiteDevice<RelationalUnaryFixture>,
                                public testing::WithParamInterface<RelationalUnaryParam> {};
@@ -43,31 +46,27 @@ static ttnn::Tensor make_filled_tensor(
     return ttnn::fill(zero_tensor, fill_value);
 }
 
-static ttnn::Tensor make_int_tensor(ttnn::MeshDevice& device, uint32_t h, uint32_t w, int32_t fill_value) {
-    return make_filled_tensor(device, h, w, DataType::INT32, fill_value);
-}
-
-template <typename UnaryOp>
+template <typename T, DataType DTYPE, typename UnaryOp>
 void test_relational_unary_impl(
     ttnn::MeshDevice& device,
-    const RelationalUnaryParam& p,
+    const RelationalUnaryParamT<T>& p,
     const UnaryOp& unary_op,
-    int32_t expected_value,
+    T expected_value,
     const char* op_name) {
-    auto input_tensor = make_int_tensor(device, p.h, p.w, p.scalar_input);
+    auto input_tensor = make_filled_tensor(device, p.h, p.w, DTYPE, p.scalar_input);
     auto output = unary_op(input_tensor, p.scalar_param);
 
-    auto expected = make_int_tensor(device, p.h, p.w, expected_value);
+    auto expected = make_filled_tensor(device, p.h, p.w, DTYPE, expected_value);
 
     auto expected_host = ttnn::from_device(expected);
     auto output_host = ttnn::from_device(output);
 
-    TT_FATAL(ttnn::allclose<int32_t>(expected_host, output_host), "{} result mismatch", op_name);
+    TT_FATAL(ttnn::allclose<T>(expected_host, output_host), "{} result mismatch", op_name);
 }
 
 TEST_P(RelationalUnaryFixture, EqUnaryMatchesExpected) {
     auto p = GetParam();
-    test_relational_unary_impl(
+    test_relational_unary_impl<int32_t, DataType::INT32>(
         *device_,
         p,
         [](const auto& t, auto s) { return ttnn::eq_unary(t, s); },
@@ -77,7 +76,7 @@ TEST_P(RelationalUnaryFixture, EqUnaryMatchesExpected) {
 
 TEST_P(RelationalUnaryFixture, NeUnaryMatchesExpected) {
     auto p = GetParam();
-    test_relational_unary_impl(
+    test_relational_unary_impl<int32_t, DataType::INT32>(
         *device_,
         p,
         [](const auto& t, auto s) { return ttnn::ne_unary(t, s); },
@@ -87,7 +86,7 @@ TEST_P(RelationalUnaryFixture, NeUnaryMatchesExpected) {
 
 TEST_P(RelationalUnaryFixture, GtUnaryMatchesExpected) {
     auto p = GetParam();
-    test_relational_unary_impl(
+    test_relational_unary_impl<int32_t, DataType::INT32>(
         *device_,
         p,
         [](const auto& t, auto s) { return ttnn::gt_unary(t, s); },
@@ -97,7 +96,7 @@ TEST_P(RelationalUnaryFixture, GtUnaryMatchesExpected) {
 
 TEST_P(RelationalUnaryFixture, LtUnaryMatchesExpected) {
     auto p = GetParam();
-    test_relational_unary_impl(
+    test_relational_unary_impl<int32_t, DataType::INT32>(
         *device_,
         p,
         [](const auto& t, auto s) { return ttnn::lt_unary(t, s); },
@@ -107,7 +106,7 @@ TEST_P(RelationalUnaryFixture, LtUnaryMatchesExpected) {
 
 TEST_P(RelationalUnaryFixture, GeUnaryMatchesExpected) {
     auto p = GetParam();
-    test_relational_unary_impl(
+    test_relational_unary_impl<int32_t, DataType::INT32>(
         *device_,
         p,
         [](const auto& t, auto s) { return ttnn::ge_unary(t, s); },
@@ -117,7 +116,7 @@ TEST_P(RelationalUnaryFixture, GeUnaryMatchesExpected) {
 
 TEST_P(RelationalUnaryFixture, LeUnaryMatchesExpected) {
     auto p = GetParam();
-    test_relational_unary_impl(
+    test_relational_unary_impl<int32_t, DataType::INT32>(
         *device_,
         p,
         [](const auto& t, auto s) { return ttnn::le_unary(t, s); },
@@ -145,37 +144,14 @@ INSTANTIATE_TEST_SUITE_P(
 
 // UINT32 eq/ne against a scalar run through the same int32 kernel on the raw 32-bit word, so the
 // word 0x80000000 (2147483648 unsigned) is the UINT32 value that INT32_MIN's load mode decides.
-struct RelationalUnaryUInt32Param {
-    uint32_t scalar_input;
-    uint32_t scalar_param;
-    uint32_t h;
-    uint32_t w;
-};
+using RelationalUnaryUInt32Param = RelationalUnaryParamT<uint32_t>;
 
 class RelationalUnaryUInt32Fixture : public TTNNFixtureWithSuiteDevice<RelationalUnaryUInt32Fixture>,
                                      public testing::WithParamInterface<RelationalUnaryUInt32Param> {};
 
-template <typename UnaryOp>
-void test_relational_unary_uint32_impl(
-    ttnn::MeshDevice& device,
-    const RelationalUnaryUInt32Param& p,
-    const UnaryOp& unary_op,
-    uint32_t expected_value,
-    const char* op_name) {
-    auto input_tensor = make_filled_tensor(device, p.h, p.w, DataType::UINT32, p.scalar_input);
-    auto output = unary_op(input_tensor, p.scalar_param);
-
-    auto expected = make_filled_tensor(device, p.h, p.w, DataType::UINT32, expected_value);
-
-    auto expected_host = ttnn::from_device(expected);
-    auto output_host = ttnn::from_device(output);
-
-    TT_FATAL(ttnn::allclose<uint32_t>(expected_host, output_host), "{} result mismatch", op_name);
-}
-
 TEST_P(RelationalUnaryUInt32Fixture, EqUnaryMatchesExpected) {
     auto p = GetParam();
-    test_relational_unary_uint32_impl(
+    test_relational_unary_impl<uint32_t, DataType::UINT32>(
         *device_,
         p,
         [](const auto& t, uint32_t s) { return ttnn::eq_unary(t, s); },
@@ -185,7 +161,7 @@ TEST_P(RelationalUnaryUInt32Fixture, EqUnaryMatchesExpected) {
 
 TEST_P(RelationalUnaryUInt32Fixture, NeUnaryMatchesExpected) {
     auto p = GetParam();
-    test_relational_unary_uint32_impl(
+    test_relational_unary_impl<uint32_t, DataType::UINT32>(
         *device_,
         p,
         [](const auto& t, uint32_t s) { return ttnn::ne_unary(t, s); },
