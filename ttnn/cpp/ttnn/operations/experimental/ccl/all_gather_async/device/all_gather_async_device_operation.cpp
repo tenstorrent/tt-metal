@@ -84,7 +84,7 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     const auto& dtype = input_tensor.dtype();
     const auto& page_size = input_tensor.buffer()->page_size();
     TT_FATAL(
-        (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
+        (input_tensor.device()->arch() != tt::ARCH::BLACKHOLE) ||
             (input_tensor.memory_config().buffer_type() != BufferType::DRAM) ||
             !args.use_all_gather_async_llama_sharded,
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
@@ -229,9 +229,9 @@ AllGatherAsyncDeviceOperation::topology_return_value_t AllGatherAsyncDeviceOpera
     const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
     // After all_gather the gathered axis is Replicate and the other mesh axes keep their placements; without a
     // cluster_axis the op spans the whole mesh and every placement becomes Replicate. The helper expands a
-    // collapsed 1-D label to one placement per mesh axis first (the per-axis edit used to land on index 0 for any
-    // cluster_axis) and refuses a gather that would interleave the shards of a 1-D-mapped tensor. `args.dim` is
-    // already normalised (all_gather_async_build_operation_args). No honest label (nullopt, already reported): the
+    // collapsed 1-D label to one placement per mesh axis first and refuses a gather that would interleave the shards
+    // of a 1-D-mapped tensor. `args.dim` is already normalised (all_gather_async_build_operation_args). No honest
+    // label (nullopt, already reported): the
     // output keeps the input's label. Returning {} would instead hand the framework the union over every tensor
     // argument, the persistent output buffer's label included.
     const auto& input_tensor = tensor_args.input_tensor;

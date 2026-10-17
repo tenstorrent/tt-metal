@@ -22,12 +22,12 @@
 //
 // The label contract: a tensor's TensorTopology describes the bytes each device holds. The mesh composer and the
 // serialiser trust it -- a Replicate axis is deduplicated to one shard -- so an over-claimed Replicate is data loss
-// and an under-claimed one is a spurious concat. Every op in the family used to edit the input's placements by
-// mesh-axis index, which is only meaningful for an N-D label (one placement per mesh axis). The collapsed 1-D label
-// `{N},[placement]` that ShardTensorToMesh / ReplicateTensorToMesh produce has a single placement for the whole mesh,
-// so the per-axis edit landed on index 0 whatever `cluster_axis` was. These helpers expand a collapsed label to one
-// placement per mesh axis first, apply the op's edit on `cluster_axis`, then decide whether the result is still
-// expressible per axis or has to collapse back to a 1-D label.
+// and an under-claimed one is a spurious concat. Editing the input's placements by mesh-axis index is only
+// meaningful for an N-D label (one placement per mesh axis): the collapsed 1-D label `{N},[placement]` that
+// ShardTensorToMesh / ReplicateTensorToMesh produce has a single placement for the whole mesh, so a per-axis edit of
+// it would land on index 0 whatever `cluster_axis` was. These helpers expand a collapsed label to one placement per
+// mesh axis first, apply the op's edit on `cluster_axis`, then decide whether the result is still expressible per
+// axis or has to collapse back to a 1-D label.
 //
 // Coverage: the devices an op reaches are the mesh's, not the label's. A cluster-axis op spans the mesh's full extent
 // along that axis and a whole-mesh op every device, so a label that covers fewer devices along the axis addressed (a
@@ -52,10 +52,10 @@
 //
 // Intermediates: a host op that labels its result from its own input (all_reduce_async: a reduce_scatter + all_gather,
 // or an all_gather of an unsqueezed tensor + a local sum) runs device ops on tensors whose labels nobody reads. It
-// wraps them in a CallerRelabelsScope, inside which a refusal returns nullopt silently -- no log, no TT_FATAL -- so a
-// legitimate all_reduce is not refused for an intermediate no label describes (a collapsed Shard{d} reduce-scattered
-// on d along the outer axis is column-major). The op's own label is computed outside the scope, so a bad input still
-// fails loudly.
+// wraps them in a SilenceIntermediateRefusals scope, inside which a refusal returns nullopt silently -- no log, no
+// TT_FATAL -- so a legitimate all_reduce is not refused for an intermediate no label describes (a collapsed Shard{d}
+// reduce-scattered on d along the outer axis is column-major). The op's own label is computed outside the scope, so a
+// bad input still fails loudly.
 namespace ttnn::operations::ccl::common {
 
 using TopologyPlacement = tt::tt_metal::distributed::MeshMapperConfig::Placement;
@@ -63,12 +63,12 @@ using TopologyPlacements = ttsl::SmallVector<TopologyPlacement>;
 
 // While an object of this class is alive on the current thread, every refusal in this file returns nullopt without
 // logging or throwing (see "Intermediates" above). Scopes nest. Not copyable.
-class CallerRelabelsScope {
+class SilenceIntermediateRefusals {
 public:
-    CallerRelabelsScope();
-    ~CallerRelabelsScope();
-    CallerRelabelsScope(const CallerRelabelsScope&) = delete;
-    CallerRelabelsScope& operator=(const CallerRelabelsScope&) = delete;
+    SilenceIntermediateRefusals();
+    ~SilenceIntermediateRefusals();
+    SilenceIntermediateRefusals(const SilenceIntermediateRefusals&) = delete;
+    SilenceIntermediateRefusals& operator=(const SilenceIntermediateRefusals&) = delete;
 };
 
 // Which family a refusal belongs to (see "The fallback is not equally safe" above): a gather-family refusal is logged
@@ -77,9 +77,10 @@ enum class RefusalFamily { Gather, Scatter };
 
 // A refusal raised by a device op's hook rather than by a helper above: a label the op cannot renumber into its
 // output layout, a ring order no label can carry. Handled exactly like the helpers' own refusals -- silent nullopt
-// inside a CallerRelabelsScope, TT_FATAL under strict mode, otherwise one log line per distinct message -- so a hook's
-// "no honest label" is as visible as the helper's and strict mode covers it. Always returns nullopt (or throws), so a
-// hook writes `return {refuse(what, family).value_or(input_topology)};` or calls it and returns the input's label.
+// inside a SilenceIntermediateRefusals scope, TT_FATAL under strict mode, otherwise one log line per distinct message
+// -- so a hook's "no honest label" is as visible as the helper's and strict mode covers it. Always returns nullopt (or
+// throws), so a hook writes `return {refuse(what, family).value_or(input_topology)};` or calls it and returns the
+// input's label.
 std::optional<tt::tt_metal::TensorTopology> refuse(const std::string& what, RefusalFamily family);
 
 // Expands `in` to one placement per axis of `mesh_shape`. An N-D label (distribution dims == placements == mesh dims)

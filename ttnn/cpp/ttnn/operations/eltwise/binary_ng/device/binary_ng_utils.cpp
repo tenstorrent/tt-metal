@@ -419,6 +419,8 @@ OpConfig::OpConfig(
             postprocess = unary::UnaryOpType::SQRT;
             break;
         case BinaryOpType::ISCLOSE: binary_op = SfpuBinaryOp::ISCLOSE; break;
+        // situ_glu(gate=lhs, up=rhs) with Kimi K3's betas compiled into the LLK; see api/compute/situ_glu.h.
+        case BinaryOpType::SITU_GLU: binary_op = SfpuBinaryOp::SITU_GLU; break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -592,6 +594,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"where_tile_init();", fmt::format("where_tile<DataFormat::{}>", data_format)};
         }
         case ISCLOSE: return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
+        case SITU_GLU: return {"situ_glu_tile_init();", "situ_glu_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -830,6 +833,15 @@ bool is_native_L1_sharding(
         return false;
     }
 
+    // The native path sizes per-core work from the legacy 2D shard specs, which an ND_SHARDED config lacks.
+    auto lacks_2d_shard_spec = [](const MemoryConfig& config) {
+        return config.is_sharded() && !config.shard_spec().has_value();
+    };
+    if (lacks_2d_shard_spec(c) || lacks_2d_shard_spec(a.memory_config()) ||
+        (b.has_value() && lacks_2d_shard_spec(b->memory_config()))) {
+        return false;
+    }
+
     // Native sharding aliases operand buffers as circular buffers, which Metal permits only for L1. This
     // predicate is a router, not a validator: declining sends the op to the TensorAccessor path, which
     // serves DRAM-sharded tensors.
@@ -958,6 +970,10 @@ ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::S
 }
 
 MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const ttnn::Shape& shape_b) {
+    // An ND_SHARDED config has no 2D shard spec to adjust; its nd_shard_spec applies to any shape as is.
+    if (!input_tensor_a.memory_config().shard_spec().has_value()) {
+        return input_tensor_a.memory_config();
+    }
     // Compute adjusted shard spec for output shape
     const auto& padded_a_shape = input_tensor_a.padded_shape();
     const auto& logical_out_shape =

@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Output TensorTopology labels of the collective family, checked against the bytes they describe.
+"""Output TensorTopology labels of the collective family, and of mesh_partition, which shares the scatter rule, checked
+against the bytes they describe.
 
 Every test builds a mesh tensor whose label is either the collapsed 1-D form (``ShardTensorToMesh`` /
 ``ReplicateTensorToMesh``: ``{N}, [placement]``) or the N-D form (``ShardTensor2dMesh``: one placement per mesh axis),
@@ -177,19 +178,6 @@ def _all_reduce_async(tensor, mesh_device, cluster_axis):
         tensor,
         cluster_axis=cluster_axis,
         mesh_device=mesh_device,
-        math_op=ttnn.ReduceType.Sum,
-        topology=ttnn.Topology.Linear,
-    )
-
-
-def _all_reduce_async_whole_mesh(tensor, mesh_device):
-    """The `num_devices` overload: no cluster_axis, the ring is the whole mesh; explicit semaphores are required."""
-    return ttnn.experimental.all_reduce_async(
-        tensor,
-        num_devices=mesh_device.get_num_devices(),
-        barrier_semaphores=_semaphores(mesh_device, 2),
-        rs_global_semaphores=_semaphores(mesh_device, 3),
-        ag_global_semaphores=_semaphores(mesh_device, 2),
         math_op=ttnn.ReduceType.Sum,
         topology=ttnn.Topology.Linear,
     )
@@ -488,6 +476,430 @@ def test_reduce_scatter_nd_same_dim_outer_axis_is_refused(mesh_device, strict_cc
 
 
 # ---------------------------------------------------------------------------------------------------------------------
+# mesh_partition (a local scatter: every device keeps one piece of its own tensor, nothing moves between chips)
+# ---------------------------------------------------------------------------------------------------------------------
+#
+# mesh_partition labels through the scatter rule reduce_scatter uses (mesh_partition_output_topology, the partition
+# kind): Shard(dim) on the partitioned axis, the input's placement elsewhere, a same-dim Shard on the outer axis
+# collapsing to the row-major {N}, [Shard(dim)]. Nothing is summed, so a Shard of another dim is kept rather than
+# consumed, which is one refusal more than reduce_scatter has: neither the partitioned axis nor, for a whole-mesh
+# partition, any non-trivial axis may already shard another dim. The op needs no fabric, so these tests take no
+# device_params. Besides the label and the bytes it composes to, each test checks that device (r, c) holds its own
+# chunk. The device-free twins are the MeshPartition cases of CclTopologyUtils in
+# tests/ttnn/unit_tests/gtests/ccl/test_ccl_helpers.cpp.
+
+_LINE_MESHES = [2, 8]
+_LINE_MESH_IDS = ["1x2", "1x8"]
+
+
+def _coords(tensor):
+    return list(tensor.tensor_topology().mesh_coords())
+
+
+def _shard_2d(full, mesh_device, dims):
+    rows, cols, _ = _mesh(mesh_device)
+    return _from_torch(full, mesh_device, ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=dims))
+
+
+def _assert_partition_slices(tt_output, tt_input, dim, cluster_axis, mesh_device):
+    """Device (r, c) holds chunk r (cluster_axis 0), c (cluster_axis 1) or r * cols + c (whole mesh) of its own input
+    shard along `dim`, whatever the label says; get_device_tensors enumerates both tensors in row-major device order."""
+    rows, cols, num_devices = _mesh(mesh_device)
+    chunks = num_devices if cluster_axis is None else (rows, cols)[cluster_axis]
+    out_shards, in_shards = _shards(tt_output), _shards(tt_input)
+    assert len(out_shards) == len(in_shards) == num_devices
+    for index, (out_shard, in_shard) in enumerate(zip(out_shards, in_shards)):
+        r, c = divmod(index, cols)
+        chunk = index if cluster_axis is None else (r if cluster_axis == 0 else c)
+        assert torch.equal(out_shard, torch.chunk(in_shard, chunks, dim=dim)[chunk]), f"device ({r}, {c})"
+
+
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+@pytest.mark.parametrize(
+    "input_dims, dim, cluster_axis, expected",
+    [
+        ((2, None), 3, 1, [SHARD(2), SHARD(3)]),  # rows shard dim 2; partition dim 3 across the columns
+        ((2, None), -1, 1, [SHARD(2), SHARD(3)]),  # the label carries the normalised dim, not -1
+        ((None, 3), 2, 0, [SHARD(2), SHARD(3)]),  # columns shard dim 3; partition dim 2 across the rows
+        ((None, None), 1, 1, [REPLICATE, SHARD(1)]),  # replicated N-D label: the other axis stays Replicate
+        ((None, None), 1, 0, [SHARD(1), REPLICATE]),
+    ],
+    ids=["rows_shard_2", "rows_shard_2_negative_dim", "cols_shard_3", "replicated_axis_1", "replicated_axis_0"],
+)
+def test_mesh_partition_nd_label(mesh_device, input_dims, dim, cluster_axis, expected, strict_ccl_topology):
+    """A ShardTensor2dMesh input partitioned along one axis: Shard(dim) on that axis, the input's placement on the
+    other, over the input's coordinates. Composing by the label reassembles the input. The label is computed on the
+    host launch path, so a program-cache hit must carry the same one."""
+    torch.manual_seed(15)
+    rows, cols, _ = _mesh(mesh_device)
+    full = _integers([1, 8, 32 * rows, 32 * cols])
+    tt_input = _shard_2d(full, mesh_device, input_dims)
+
+    mesh_device.enable_program_cache()
+    tt_output = ttnn.mesh_partition(tt_input, dim, cluster_axis=cluster_axis)
+    cache_entries = mesh_device.num_program_cache_entries()
+
+    assert _placements(tt_output) == expected
+    assert _dist_shape(tt_output) == (rows, cols)
+    assert _coords(tt_output) == _coords(tt_input)
+    _assert_partition_slices(tt_output, tt_input, dim % full.ndim, cluster_axis, mesh_device)
+    assert torch.equal(_compose_by_label(tt_output), full)
+
+    tt_again = ttnn.mesh_partition(tt_input, dim, cluster_axis=cluster_axis)
+    assert mesh_device.num_program_cache_entries() == cache_entries
+    assert _placements(tt_again) == expected and _dist_shape(tt_again) == (rows, cols)
+
+
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+@pytest.mark.parametrize("dim", [3, -1])
+def test_mesh_partition_nd_same_dim_inner_axis_collapses(mesh_device, dim, strict_ccl_topology):
+    """ShardTensor2dMesh dims=(3, None): row r holds coarse slice r of dim 3; partitioning dim 3 along the columns
+    cuts each into fine slices, so device (r, c) holds slice r * cols + c -- row-major hierarchical sharding, which
+    only the collapsed {N}, [Shard(3)] states (reduce_scatter's same-dim inner-axis collapse). With dim=-1 the input
+    label carries Shard(-1) and the same-dim match normalises first."""
+    torch.manual_seed(16)
+    rows, cols, num_devices = _mesh(mesh_device)
+    full = _integers([1, 1, 32, 32 * num_devices])
+    tt_input = _shard_2d(full, mesh_device, (dim, None))
+
+    tt_output = ttnn.mesh_partition(tt_input, dim, cluster_axis=1)
+
+    assert _placements(tt_output) == [SHARD(3)]
+    assert _dist_shape(tt_output) == (num_devices,)
+    assert _coords(tt_output) == _coords(tt_input)
+    _assert_partition_slices(tt_output, tt_input, 3, 1, mesh_device)
+    assert torch.equal(_compose_by_label(tt_output), full)
+
+
+@pytest.mark.parametrize("mesh_device", _LINE_MESHES, indirect=True, ids=_LINE_MESH_IDS)
+def test_mesh_partition_nd_same_dim_on_a_size_1_axis_replicates(mesh_device, strict_ccl_topology):
+    """ShardTensor2dMesh dims=(3, None) on a 1xN mesh labels the size-1 row axis Shard(3): one chunk, the whole
+    extent. Partitioning dim 3 across the columns turns that axis into Replicate rather than leaving a second
+    Shard(3): [Replicate, Shard(3)]."""
+    torch.manual_seed(17)
+    _, cols, _ = _mesh(mesh_device)
+    full = _integers([1, 1, 32, 32 * cols])
+    tt_input = _shard_2d(full, mesh_device, (3, None))
+    assert _placements(tt_input) == [SHARD(3), REPLICATE]
+
+    tt_output = ttnn.mesh_partition(tt_input, 3, cluster_axis=1)
+
+    assert _placements(tt_output) == [REPLICATE, SHARD(3)]
+    assert _dist_shape(tt_output) == (1, cols)
+    assert _coords(tt_output) == _coords(tt_input)
+    _assert_partition_slices(tt_output, tt_input, 3, 1, mesh_device)
+    assert torch.equal(_compose_by_label(tt_output), full)
+
+
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+@pytest.mark.parametrize("dim", [1, 3])
+def test_mesh_partition_nd_replicated_whole_mesh_collapses(mesh_device, dim, strict_ccl_topology):
+    """Whole mesh (cluster_axis=None): device r * cols + c keeps chunk r * cols + c of its tensor. An N-D label would
+    need Shard(dim) on both axes, so a replicated N-D input yields the collapsed {N}, [Shard(dim)] over the input's
+    row-major coordinates -- what ShardTensorToMesh(dim) would have produced -- and composing by it reassembles the
+    input."""
+    torch.manual_seed(18)
+    _, _, num_devices = _mesh(mesh_device)
+    full = _integers([1, num_devices, 32, 32 * num_devices])
+    tt_input = _shard_2d(full, mesh_device, (None, None))
+
+    tt_output = ttnn.mesh_partition(tt_input, dim, cluster_axis=None)
+
+    assert _placements(tt_output) == [SHARD(dim)]
+    assert _dist_shape(tt_output) == (num_devices,)
+    assert _coords(tt_output) == _coords(tt_input)
+    _assert_partition_slices(tt_output, tt_input, dim, None, mesh_device)
+    assert torch.equal(_compose_by_label(tt_output), full)
+
+
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+def test_mesh_partition_nd_whole_mesh_same_dim_shard_is_overwritten(mesh_device, strict_ccl_topology):
+    """ShardTensor2dMesh dims=(3, None) gives [Shard(3), Replicate]; a whole-mesh partition of dim 3 yields the
+    collapsed {N}, [Shard(3)]. Unlike the replicated input, the label is not exact against the input: device (r, c)
+    holds chunk r * cols + c of its own row's slice, so the N pieces concatenate to each row's own pieces, 1/rows of
+    the input's extent. A label says how the outputs assemble, not that they tile the input (the reduce_scatter
+    stance); a Shard of another dim is refused instead (test_mesh_partition_refused_labels)."""
+    torch.manual_seed(19)
+    rows, cols, num_devices = _mesh(mesh_device)
+    full = _integers([1, 1, 32, 32 * num_devices * rows])
+    tt_input = _shard_2d(full, mesh_device, (3, None))
+
+    tt_output = ttnn.mesh_partition(tt_input, 3, cluster_axis=None)
+
+    assert _placements(tt_output) == [SHARD(3)]
+    assert _dist_shape(tt_output) == (num_devices,)
+    assert _coords(tt_output) == _coords(tt_input)
+    _assert_partition_slices(tt_output, tt_input, 3, None, mesh_device)
+    row_slices = _pieces(full, rows)
+    expected = torch.cat(
+        [_pieces(row_slices[r], num_devices)[r * cols + c] for r in range(rows) for c in range(cols)], dim=3
+    )
+    assert torch.equal(_compose_by_label(tt_output), expected)
+
+
+@pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
+@pytest.mark.parametrize("dim", [1, 3, -1])
+def test_mesh_partition_collapsed_replicate_whole_mesh(mesh_device, dim, strict_ccl_topology):
+    """ReplicateTensorToMesh gives {N}, [Replicate]; a whole-mesh partition yields {N}, [Shard(dim)] (the normalised
+    dim) over the same coordinates. A [Replicate] label here would be data loss: the serialiser dedups a Replicate
+    axis to one shard."""
+    torch.manual_seed(20)
+    _, _, num_devices = _mesh(mesh_device)
+    full = _integers([1, num_devices, 32, 32 * num_devices])
+    tt_input = _from_torch(full, mesh_device, ttnn.ReplicateTensorToMesh(mesh_device))
+
+    tt_output = ttnn.mesh_partition(tt_input, dim, cluster_axis=None)
+
+    assert _placements(tt_output) == [SHARD(dim % full.ndim)]
+    assert _dist_shape(tt_output) == (num_devices,)
+    assert _coords(tt_output) == _coords(tt_input)
+    _assert_partition_slices(tt_output, tt_input, dim % full.ndim, None, mesh_device)
+    assert torch.equal(_compose_by_label(tt_output), full)
+
+
+@pytest.mark.parametrize("mesh_device", _LINE_MESHES, indirect=True, ids=_LINE_MESH_IDS)
+@pytest.mark.parametrize("dim", [1, 3, -1])
+def test_mesh_partition_collapsed_replicate_along_the_line(mesh_device, dim, strict_ccl_topology):
+    """On a 1xN mesh with cluster_axis=1 the collapsed axis is the partitioned axis, so {N}, [Replicate] becomes
+    {N}, [Shard(dim)] over the same coordinates, exactly as for the whole-mesh partition."""
+    torch.manual_seed(21)
+    _, _, num_devices = _mesh(mesh_device)
+    full = _integers([1, num_devices, 32, 32 * num_devices])
+    tt_input = _from_torch(full, mesh_device, ttnn.ReplicateTensorToMesh(mesh_device))
+
+    tt_output = ttnn.mesh_partition(tt_input, dim, cluster_axis=1)
+
+    assert _placements(tt_output) == [SHARD(dim % full.ndim)]
+    assert _dist_shape(tt_output) == (num_devices,)
+    assert _coords(tt_output) == _coords(tt_input)
+    _assert_partition_slices(tt_output, tt_input, dim % full.ndim, 1, mesh_device)
+    assert torch.equal(_compose_by_label(tt_output), full)
+
+
+@pytest.mark.parametrize("mesh_device", _LINE_MESHES, indirect=True, ids=_LINE_MESH_IDS)
+def test_mesh_partition_collapsed_shard_along_the_line_is_overwritten(mesh_device, strict_ccl_topology):
+    """ShardTensorToMesh(dim=1) gives {N}, [Shard(1)]; partitioning dim 3 along the line (the label's only axis)
+    relabels it {N}, [Shard(3)]: the partitioned axis takes the new placement whatever it held (the reduce_scatter
+    stance, which tt-train relies on). Composing by the label gives the output bytes: device k's chunk k along dim 3
+    of its own dim-1 slice. On a multi-axis mesh the same input is read per axis and refused instead
+    (test_mesh_partition_refused_labels)."""
+    torch.manual_seed(22)
+    _, _, num_devices = _mesh(mesh_device)
+    full = _integers([1, num_devices, 32, 32 * num_devices])
+    tt_input = _from_torch(full, mesh_device, ttnn.ShardTensorToMesh(mesh_device, dim=1))
+
+    tt_output = ttnn.mesh_partition(tt_input, 3, cluster_axis=1)
+
+    assert _placements(tt_output) == [SHARD(3)]
+    assert _dist_shape(tt_output) == (num_devices,)
+    assert _coords(tt_output) == _coords(tt_input)
+    _assert_partition_slices(tt_output, tt_input, 3, 1, mesh_device)
+    dim1_slices = _pieces(full, num_devices, dim=1)
+    expected = torch.cat([_pieces(dim1_slices[k], num_devices)[k] for k in range(num_devices)], dim=3)
+    assert torch.equal(_compose_by_label(tt_output), expected)
+
+
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+@pytest.mark.parametrize("dim", [1, 3])
+@pytest.mark.parametrize("cluster_axis", [0, 1])
+def test_mesh_partition_collapsed_replicate_uncollapses_on_a_2d_mesh(
+    mesh_device, dim, cluster_axis, strict_ccl_topology
+):
+    """ReplicateTensorToMesh on a 2-D mesh gives {N}, [Replicate]. Partitioning along one axis leaves the tensor
+    replicated along the other, which only an N-D label over the device mesh states; the collapsed row-major
+    coordinates already enumerate that mesh and carry over. The deepseek_v3 mesh_partition path. Composing by the
+    label reassembles the input on every line of the replicated axis."""
+    torch.manual_seed(23)
+    rows, cols, num_devices = _mesh(mesh_device)
+    full = _integers([1, num_devices, 32, 32 * num_devices])
+    tt_input = _from_torch(full, mesh_device, ttnn.ReplicateTensorToMesh(mesh_device))
+
+    tt_output = ttnn.mesh_partition(tt_input, dim, cluster_axis=cluster_axis)
+
+    expected = [REPLICATE, REPLICATE]
+    expected[cluster_axis] = SHARD(dim)
+    assert _placements(tt_output) == expected
+    assert _dist_shape(tt_output) == (rows, cols)
+    assert _coords(tt_output) == _coords(tt_input)
+    _assert_partition_slices(tt_output, tt_input, dim, cluster_axis, mesh_device)
+    assert torch.equal(_compose_by_label(tt_output), full)
+
+
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+def test_mesh_partition_collapsed_shard_same_dim_inner_axis_collapses(mesh_device, strict_ccl_topology):
+    """{N}, [Shard(3)] on a 2-D mesh reads per axis as row-major hierarchical sharding; partitioning dim 3 along
+    the columns cuts each device's piece again in that order, so the result is the collapsed label once more
+    (reduce_scatter's same-dim inner-axis collapse; along the rows it is refused, test_mesh_partition_refused_labels).
+    Composing by the label gives the output bytes: device k's chunk k % cols of its own piece."""
+    torch.manual_seed(24)
+    _, cols, num_devices = _mesh(mesh_device)
+    full = _integers([1, 1, 32, 32 * num_devices * cols])
+    tt_input = _from_torch(full, mesh_device, ttnn.ShardTensorToMesh(mesh_device, dim=3))
+
+    tt_output = ttnn.mesh_partition(tt_input, 3, cluster_axis=1)
+
+    assert _placements(tt_output) == [SHARD(3)]
+    assert _dist_shape(tt_output) == (num_devices,)
+    assert _coords(tt_output) == _coords(tt_input)
+    _assert_partition_slices(tt_output, tt_input, 3, 1, mesh_device)
+    expected = torch.cat([_pieces(piece, cols)[k % cols] for k, piece in enumerate(_pieces(full, num_devices))], dim=3)
+    assert torch.equal(_compose_by_label(tt_output), expected)
+
+
+def _refused_partition(mesh_device, scenario):
+    """Inputs whose partition has no honest label: (tt_input, dim, cluster_axis, fragment of the helper's reason)."""
+    rows, cols, num_devices = _mesh(mesh_device)
+    if scenario == "nd_same_dim_outer_axis":
+        # Columns shard dim 3 (fine slices); partitioning dim 3 along the rows cuts each again, so device (r, c) holds
+        # slice c * rows + r: column-major, which neither an N-D label (dim 3 on two axes) nor the row-major collapsed
+        # label states.
+        full = _integers([1, 1, 32, 32 * num_devices])
+        return _shard_2d(full, mesh_device, (None, 3)), 3, 0, "no TensorTopology can express"
+    if scenario == "nd_partitioned_axis_shards_another_dim":
+        # Rows shard dim 3, columns shard dim 2; partitioning dim 3 along the columns leaves each device with its chunk
+        # of dim 2 next to its new piece of dim 3: two dims on one axis.
+        full = _integers([1, 1, 32 * cols, 32 * num_devices])
+        return _shard_2d(full, mesh_device, (3, 2)), 3, 1, "already shards dim"
+    if scenario == "nd_whole_mesh_other_shards":
+        # Sharded on dims 0 and 1 (the nightly test_mesh_partition input); a whole-mesh partition of dim 3 leaves those
+        # Shards next to the new piece, which no collapsed label states.
+        full = _integers([rows, cols, 32, 32 * num_devices])
+        return _shard_2d(full, mesh_device, (0, 1)), 3, None, "still sharded on dim"
+    if scenario == "collapsed_shard_other_dim":
+        # {N}, [Shard(1)] on a 2-D mesh reads per axis as [Shard(1), Shard(1)]; partitioning dim 3 along the columns
+        # meets a Shard of another dim on the partitioned axis (on a line the same input is relabelled instead,
+        # test_mesh_partition_collapsed_shard_along_the_line_is_overwritten).
+        full = _integers([1, num_devices, 32, 32 * cols])
+        return _from_torch(full, mesh_device, ttnn.ShardTensorToMesh(mesh_device, dim=1)), 3, 1, "already shards dim"
+    if scenario == "collapsed_shard_same_dim_outer_axis":
+        # {N}, [Shard(3)] partitioned along the rows: the outer axis would cut what the inner axis keeps apart.
+        full = _integers([1, 1, 32, 32 * num_devices * rows])
+        tt_input = _from_torch(full, mesh_device, ttnn.ShardTensorToMesh(mesh_device, dim=3))
+        return tt_input, 3, 0, "no TensorTopology can express"
+    raise AssertionError(scenario)
+
+
+_REFUSED_PARTITIONS = [
+    "nd_same_dim_outer_axis",
+    "nd_partitioned_axis_shards_another_dim",
+    "nd_whole_mesh_other_shards",
+    "collapsed_shard_other_dim",
+    "collapsed_shard_same_dim_outer_axis",
+]
+
+
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+@pytest.mark.parametrize("scenario", _REFUSED_PARTITIONS)
+def test_mesh_partition_refused_labels(mesh_device, scenario, strict_ccl_topology, expect_error):
+    """Partitions with no honest label (see _refused_partition): the partitioned axis, or any non-trivial axis of a
+    whole-mesh partition, already shards another dim (kept, not consumed as a reduction would consume it), or a
+    same-dim Shard sits on the inner axis. Strict mode makes each an error."""
+    tt_input, dim, cluster_axis, message = _refused_partition(mesh_device, scenario)
+
+    with expect_error(RuntimeError, message):
+        ttnn.mesh_partition(tt_input, dim, cluster_axis=cluster_axis)
+
+
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+@pytest.mark.parametrize("scenario", _REFUSED_PARTITIONS)
+def test_mesh_partition_refused_labels_warn_only_keep_the_input_label(mesh_device, scenario, warn_only_ccl_topology):
+    """The shipping default for the same inputs: a warning, and the output keeps the input's label (placements,
+    shape and coordinates). The data is partitioned regardless."""
+    tt_input, dim, cluster_axis, _ = _refused_partition(mesh_device, scenario)
+
+    tt_output = ttnn.mesh_partition(tt_input, dim, cluster_axis=cluster_axis)
+
+    assert _placements(tt_output) == _placements(tt_input)
+    assert _dist_shape(tt_output) == _dist_shape(tt_input)
+    assert _coords(tt_output) == _coords(tt_input)
+    _assert_partition_slices(tt_output, tt_input, dim, cluster_axis, mesh_device)
+
+
+def _forged_label(mesh_device, kind):
+    """A replicated tensor whose label is overwritten (the hook reads only the label). "fewer_devices": {C}, [Shard(2)]
+    over the first row of an R x C mesh. "sub_mesh": 1 x C [Replicate, Replicate] over that row, what a
+    mesh_shape_override that fits per axis produces."""
+    _, cols, num_devices = _mesh(mesh_device)
+    tt_input = _from_torch(
+        _integers([1, 1, 32, 32 * num_devices]), mesh_device, ttnn.ReplicateTensorToMesh(mesh_device)
+    )
+    block = _coords(tt_input)[:cols]
+    if kind == "fewer_devices":
+        label = ttnn.TensorTopology(ttnn.MeshShape([cols]), [ttnn.PlacementShard(2)], block)
+    else:
+        placements = [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]
+        label = ttnn.TensorTopology(ttnn.MeshShape([1, cols]), placements, block)
+    tt_input.update_tensor_topology(label)
+    return tt_input
+
+
+_REFUSED_FORGED_LABELS = [
+    ("fewer_devices", 1, "cover"),
+    ("fewer_devices", None, "cover"),
+    ("sub_mesh", 0, "devices the label does not describe"),
+    ("sub_mesh", None, "devices the label does not describe"),
+]
+_REFUSED_FORGED_LABEL_IDS = [
+    "fewer_devices_axis_1",
+    "fewer_devices_whole_mesh",
+    "sub_mesh_axis_0",
+    "sub_mesh_whole_mesh",
+]
+
+
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+@pytest.mark.parametrize("kind, cluster_axis, message", _REFUSED_FORGED_LABELS, ids=_REFUSED_FORGED_LABEL_IDS)
+def test_mesh_partition_label_not_covering_the_devices_is_refused(
+    mesh_device, kind, cluster_axis, message, strict_ccl_topology, expect_error
+):
+    """A label over the first row of an R x C mesh describes C of the R * C devices the op partitions across, so no
+    label can describe the output. {C}, [Shard(2)] with cluster_axis=1: the label's N equals the axis size by
+    coincidence and the line rule must not fire; whole mesh: the rule must not emit {C}, [Shard(3)] for an R * C-piece
+    output (a serialiser would save one row's pieces). The 1 x C sub-mesh label with cluster_axis=0 (the groups reach
+    row 1) or over the whole mesh (the block holds C of R * C pieces) is refused for the same reason."""
+    torch.manual_seed(25)
+    tt_input = _forged_label(mesh_device, kind)
+
+    with expect_error(RuntimeError, message):
+        ttnn.mesh_partition(tt_input, 3, cluster_axis=cluster_axis)
+
+
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+@pytest.mark.parametrize("kind, cluster_axis, _message", _REFUSED_FORGED_LABELS, ids=_REFUSED_FORGED_LABEL_IDS)
+def test_mesh_partition_label_not_covering_the_devices_warn_only_keeps_the_input_label(
+    mesh_device, kind, cluster_axis, _message, warn_only_ccl_topology
+):
+    """The shipping default for the same forged labels: the output keeps the input's label, and every device holds its
+    chunk of the (replicated) input."""
+    torch.manual_seed(25)
+    tt_input = _forged_label(mesh_device, kind)
+
+    tt_output = ttnn.mesh_partition(tt_input, 3, cluster_axis=cluster_axis)
+
+    assert _placements(tt_output) == _placements(tt_input)
+    assert _dist_shape(tt_output) == _dist_shape(tt_input)
+    assert _coords(tt_output) == _coords(tt_input)
+    _assert_partition_slices(tt_output, tt_input, 3, cluster_axis, mesh_device)
+
+
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+def test_mesh_partition_sub_mesh_label_is_partitioned_within_its_block(mesh_device, strict_ccl_topology):
+    """The 1 x C [Replicate, Replicate] label over row 0 with cluster_axis=1: the axis spans the mesh, so row 0 is a
+    complete partition group and the output is labelled within the block, 1 x C [Replicate, Shard(3)] over the same C
+    coordinates."""
+    torch.manual_seed(25)
+    _, cols, _ = _mesh(mesh_device)
+    tt_input = _forged_label(mesh_device, "sub_mesh")
+
+    tt_output = ttnn.mesh_partition(tt_input, 3, cluster_axis=1)
+
+    assert _placements(tt_output) == [REPLICATE, SHARD(3)]
+    assert _dist_shape(tt_output) == (1, cols)
+    assert _coords(tt_output) == _coords(tt_input)
+    _assert_partition_slices(tt_output, tt_input, 3, 1, mesh_device)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
 # all_reduce_async (host overload: composite all_gather + local sum, or reduce_scatter + all_gather)
 # ---------------------------------------------------------------------------------------------------------------------
 
@@ -504,7 +916,7 @@ def test_all_reduce_async_collapsed_shard(mesh_device, cluster_axis, rs_ag_branc
     control: before this change the composite branch returned {N}, [Replicate] for either axis (the inner
     all_broadcast edited index 0, the local sum kept it) -- along the columns that claims the two rows identical, and
     the same over-claim is what tt-train's force_replicate_axes papered over. Along the rows the gather itself would
-    now be refused as interleaving; all_reduce runs its intermediates inside the helper's CallerRelabelsScope because
+    now be refused as interleaving; all_reduce runs its intermediates inside the helper's SilenceIntermediateRefusals because
     it sums the gathered pieces rather than keeping them and labels the result itself."""
     torch.manual_seed(12)
     rows, cols, num_devices = _mesh(mesh_device)
@@ -536,7 +948,7 @@ def test_all_reduce_async_collapsed_shard_scattered_on_the_sharded_dim(mesh_devi
     tiles per device along dim 3 the reduce_scatter + all_gather branch scatters the sharded dim. The intermediates
     have no honest label -- the reduce_scatter leaves device (r, c) with piece c * R + r (column-major) and the
     all_gather of it interleaves -- but the result is labelled from the input: [Replicate, Shard(3)], one column sum
-    per column. Negative control: before CallerRelabelsScope the prim all_gather hook refused the intermediate
+    per column. Negative control: before SilenceIntermediateRefusals the prim all_gather hook refused the intermediate
     ("would interleave") and this call failed under strict mode although the label it returns is right."""
     torch.manual_seed(15)
     rows, cols, num_devices = _mesh(mesh_device)
@@ -589,7 +1001,16 @@ def test_all_reduce_async_whole_mesh_overload(mesh_device, sharded, rs_ag_branch
     mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3) if sharded else ttnn.ReplicateTensorToMesh(mesh_device)
     tt_input = _from_torch(full, mesh_device, mapper)
 
-    tt_output = _all_reduce_async_whole_mesh(tt_input, mesh_device)
+    # The `num_devices` overload takes no cluster_axis (the ring is the whole mesh) and requires explicit semaphores.
+    tt_output = ttnn.experimental.all_reduce_async(
+        tt_input,
+        num_devices=num_devices,
+        barrier_semaphores=_semaphores(mesh_device, 2),
+        rs_global_semaphores=_semaphores(mesh_device, 3),
+        ag_global_semaphores=_semaphores(mesh_device, 2),
+        math_op=ttnn.ReduceType.Sum,
+        topology=ttnn.Topology.Linear,
+    )
 
     assert _placements(tt_output) == [REPLICATE]
     assert _dist_shape(tt_output) == (num_devices,)
