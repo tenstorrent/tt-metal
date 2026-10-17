@@ -110,10 +110,10 @@ Quasar, Horizon and Trinity emulators.
 
 ### Test irregularities
 
-One entry is marked as "out-of-bounds" on the release build.
+One entry failed the top-1 classification check on the release build.
 
 #### Details
-The test passed for functionality, but it's return timing was marked out-of-bounds by the test platform.  This test has been investigated, and development has marked this as a safe value for this release.  The boundary conditions will be examined for our next release, to determine if the code or the test needs to be adjusted.
+The Horizon test failed its functional top-1 classification check despite final-logits PCC values above 0.99. Development has accepted this discrepancy for this release. Follow-up investigation will determine whether the implementation or the test needs to be adjusted.
 
 That test is:
 
@@ -263,7 +263,7 @@ with `TT_METAL_QUASAR_VARIANT=trinity`. Trinity test details will follow.
 - **All fast dispatch tests are green.** All 49 `2x3_DISPATCH` entries (47
   gtest entries and 2 profiler tests) and the 5 `2x3` gtest entries passed on
   the Quasar emulator in the release run.
-- **One test marked "failed" is based on a value out of bounds.  The team has determined this is not an issue for this release.** On the Horizon emulator, `test_resnet50_e2e` gives
+- **One accuracy failure has been accepted for this release.** On the Horizon emulator, `test_resnet50_e2e` gives
   a different top-1 class in each run (549, then 783; golden 610) with a
   final-logits PCC above 0.99. The first op with a different output is op011,
   `layer1_module2.conv2`. It is under investigation by the owners of

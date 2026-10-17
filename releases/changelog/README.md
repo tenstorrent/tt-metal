@@ -7,5 +7,5 @@
 > The files in this folder are no longer updated. The most recent entry is
 > `v0.65.0-dev20251205`.
 >
-> Changelogs can be found attached to releases.  Additional documentation is in
-> `/source` directory, under the speicfic release versions.
+> Changelogs are attached to releases on the [Releases](https://github.com/tenstorrent/tt-metal/releases) page.
+> Additional documentation is in [`releases/`](../), under the specific release versions.

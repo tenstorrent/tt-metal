@@ -76,9 +76,9 @@ Each op folder follows the standard shape: device/ (program factory), device/ker
 
 | Level | Program | Delivered from | Feature this release |
 | --- | --- | --- | --- |
-| L3.1 | 2.0.1 | ttnn/cpp/ttnn/operations/experimental/quasar/ | Quasar Llama related Kernel Ops (AIIPSW-7) |
-| L3.2 | 2.0.2 | ttnn/cpp/ttnn/operations/experimental/quasar/ |  |
-| L3.3 | 2.0.3 | ttnn/cpp/ttnn/operations/experimental/quasar/ |  |
+| L3.1 | 2.0.0 (Quasar) | ttnn/cpp/ttnn/operations/experimental/quasar/ | Quasar Llama related Kernel Ops (AIIPSW-7) |
+| L3.2 | 2.0.1 (Horizon) | ttnn/cpp/ttnn/operations/experimental/quasar/ |  |
+| L3.3 | 2.0.2 (Trinity) | ttnn/cpp/ttnn/operations/experimental/quasar/ |  |
 
 **This delivery contains:** all of Level 1 plus the full Quasar op tree (experimental/quasar/).
 
@@ -121,9 +121,9 @@ Each op folder follows the standard shape: device/ (program factory), device/ker
 
 | **Level** | **Program** | **Delivered from** | **Feature this release** |
 | --- | --- | --- | --- |
-| L3.1 | 2.0.1 | tt_metal/tt-llk/tt_llk_quasar/ |  |
-| L3.2 | 2.0.2 | tt_metal/tt-llk/tt_llk_quasar/ | Trinity port of LLK from Quasar to Trinity (AIIPSW-33) |
-| L3.3 | 2.0.3 | tt_metal/tt-llk/tt_llk_quasar/ |  |
+| L3.1 | 2.0.0 (Quasar) | tt_metal/tt-llk/tt_llk_quasar/ |  |
+| L3.2 | 2.0.1 (Horizon) | tt_metal/tt-llk/tt_llk_quasar/ |  |
+| L3.3 | 2.0.2 (Trinity) | tt_metal/tt-llk/tt_llk_quasar/ | Trinity port of LLK from Quasar to Trinity (AIIPSW-33) |
 
 **This delivery contains:**  All of Level 1 (common/, tests/, docs/, infra/) plus the full Quasar architecture folder (tt_llk_quasar/).
 
@@ -179,8 +179,8 @@ Runtime code is organized by RISC generation: tt-1xx covers Wormhole and Blackho
 
 | **Level** | **Program** | **Delivered from** | **Feature this release** |
 | --- | --- | --- | --- |
-| L3.1 | 2.0.1 | tt_metal/.../tt-2xx/quasar/ | Horizon ATT / flat address UA, UB (AIIPSW-56); Horizon overlay registers (AIIPSW-57) |
-| L3.2 | 2.0.2 | tt_metal/.../tt-2xx/quasar/ |  |
-| L3.3 | 2.0.3 | tt_metal/.../tt-2xx/quasar/ |  |
+| L3.1 | 2.0.0 (Quasar) | tt_metal/.../tt-2xx/quasar/ |  |
+| L3.2 | 2.0.1 (Horizon) | tt_metal/.../tt-2xx/quasar/ | Horizon ATT / flat address UA, UB (AIIPSW-56); Horizon overlay registers (AIIPSW-57) |
+| L3.3 | 2.0.2 (Trinity) | tt_metal/.../tt-2xx/quasar/ |  |
 
 **This delivery contains:** all of Level 1 plus the full Quasar generation and chip folders (llrt/hal/tt-2xx/, hw/firmware/src/tt-2xx/, hw/inc/internal/tt-2xx/, hw/ckernels/quasar/)
