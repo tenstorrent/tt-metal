@@ -300,32 +300,28 @@ void kernel_main() {
     CircularBuffer cb_page_table(cb_id_page_table);
 
     // Skipping masked blocks breaks the K/V chains, which win below about 40 percent masked; then the map is ignored.
-    // Every core samples the same map rows (in the still empty K CB) so all heads make the same choice.
+    // Every core reads the same sampled map rows, one at a time into the one-row map CB, so all heads agree.
     bool chain_ignores_map = false;
     if constexpr (use_mask_block_map && !is_causal) {
         if (is_chain_participant) {
-            constexpr uint32_t kv_cb_bytes = kv_slots * k_chunk_tiles * k_tile_bytes;
             constexpr uint32_t map_planes =
                 (broadcast_provided_mask_batch ? 1 : B) * (broadcast_provided_mask_heads ? 1 : NQH);
-            const uint32_t rows = std::max<uint32_t>(
-                1, std::min<uint32_t>(std::min<uint32_t>(4, q_num_chunks), kv_cb_bytes / block_map_stick_bytes));
+            const uint32_t rows = std::min<uint32_t>(4, q_num_chunks);
             const uint32_t plane_stride = map_planes / rows + 1;
-            const uint32_t scratch = cb_k.get_write_ptr();
+            const uint32_t scratch = CircularBuffer(cb_id_mask_block_map).get_write_ptr();
             const auto map_reader = TensorAccessor(block_map_args, block_map_addr);
-            for (uint32_t r = 0; r < rows; ++r) {
-                noc.async_read(
-                    map_reader,
-                    CoreLocalMem<uint32_t>(scratch + r * block_map_stick_bytes),
-                    block_map_stick_bytes,
-                    {.page_id = ((r * plane_stride) % map_planes) * q_num_chunks + r * q_num_chunks / rows},
-                    {});
-            }
-            noc.async_read_barrier();
             volatile tt_l1_ptr uint32_t* flags = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
             uint32_t visible = 0;
             for (uint32_t r = 0; r < rows; ++r) {
+                noc.async_read(
+                    map_reader,
+                    CoreLocalMem<uint32_t>(scratch),
+                    block_map_stick_bytes,
+                    {.page_id = ((r * plane_stride) % map_planes) * q_num_chunks + r * q_num_chunks / rows},
+                    {});
+                noc.async_read_barrier();
                 for (uint32_t k = 0; k < k_num_chunks; ++k) {
-                    visible += flags[r * (block_map_stick_bytes / 4) + k] != 0 ? 1 : 0;
+                    visible += flags[k] != 0 ? 1 : 0;
                 }
             }
             chain_ignores_map = visible * 5 > rows * k_num_chunks * 3;

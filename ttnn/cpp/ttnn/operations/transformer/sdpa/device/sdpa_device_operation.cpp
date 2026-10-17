@@ -185,9 +185,6 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             TT_FATAL(
                 attrs.program_config.has_value(), "attn_mask_block_map needs a program_config with the chunk sizes");
             TT_FATAL(
-                !is_windowed_mode(attrs.windowed_mode) && attrs.sliding_window_size.value_or(0) == 0,
-                "attn_mask_block_map cannot be combined with cu_window_seqlens or sliding_window_size");
-            TT_FATAL(
                 map.storage_type() == StorageType::DEVICE && q.device() == map.device(),
                 "attn_mask_block_map must be on the same device as Q");
             TT_FATAL(
@@ -554,6 +551,12 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
 
     check_conditions();
     bool is_chunked_mode = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
+
+    // The block map sets the reader's k range itself, which the windowed, sliding and chunked k ranges would fight.
+    TT_FATAL(
+        !tensors.attn_mask_block_map.has_value() ||
+            (!is_windowed_mode(attrs.windowed_mode) && !is_chunked_mode && attrs.sliding_window_size.value_or(0) == 0),
+        "attn_mask_block_map cannot be combined with cu_window_seqlens, sliding_window_size or chunked prefill");
 
     if (is_windowed_mode(attrs.windowed_mode)) {
         validate_windowed_mode();

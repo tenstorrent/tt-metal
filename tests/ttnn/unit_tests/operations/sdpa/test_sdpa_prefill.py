@@ -846,3 +846,74 @@ def test_sdpa_block_mask_needs_matching_shape(device, expect_error):
         ttnn.transformer.scaled_dot_product_attention(
             q, k, v, is_causal=False, attn_mask=mask, program_config=program_config, attn_mask_block_map=bad_map
         )
+
+
+# One map row (2048 int32 flags, 8 KB) is larger than the whole K CB (two bfp8 tiles), so map sampling must not use it.
+@pytest.mark.parametrize("p_masked", [0.25, 0.75], ids=["chain_keeps", "map_used"])
+def test_sdpa_block_map_row_larger_than_k_cb(device, p_masked):
+    torch.manual_seed(5)
+    b, nh, nkv, sq, sk, d, chunk = 1, 8, 1, 128, 65536, 32, 32
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=chunk,
+        k_chunk_size=chunk,
+        exp_approx_mode=True,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
+    )
+    Q, K, V = fa_rand(b, nh, sq, d), fa_rand(b, nkv, sk, d), fa_rand(b, nkv, sk, d)
+    masked = torch.bernoulli(torch.full((b, 1, sq // chunk, sk // chunk), p_masked))
+    masked[..., 0] = 0
+    mask = masked.repeat_interleave(chunk, dim=2).repeat_interleave(chunk, dim=3) * -1e9
+    tt_q = ttnn.from_torch(Q, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_k = ttnn.from_torch(K, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_v = ttnn.from_torch(V, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_map = ttnn.from_torch((masked == 0).to(torch.int32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    outs = []
+    for m in (None, tt_map):
+        out = ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            is_causal=False,
+            attn_mask=tt_mask,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            attn_mask_block_map=m,
+        )
+        outs.append(ttnn.to_torch(out))
+    K_rep, V_rep = (x.repeat(1, nh // nkv, 1, 1) for x in (K, V))
+    gt = torch.nn.functional.scaled_dot_product_attention(Q, K_rep, V_rep, attn_mask=mask)
+    for out in outs:
+        out_pass, out_pcc = comp_pcc(gt, out, 0.99)
+        logger.debug(f"python vs pytorch: {out_pcc}")
+        assert out_pass
+    assert (outs[0] - outs[1]).abs().max().item() < 0.02
+
+
+@pytest.mark.parametrize("mode", ["windowed", "sliding_window"])
+def test_sdpa_block_map_rejects_windowed_and_sliding(device, mode, expect_error):
+    s, d = 512, 128
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(), q_chunk_size=128, k_chunk_size=128
+    )
+    q, k, v = (
+        ttnn.from_torch(fa_rand(1, 1, s, d), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(3)
+    )
+    block_map = ttnn.from_torch(
+        torch.tensor([[[[1, 0, 0, 1]] * 4]], dtype=torch.int32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    if mode == "windowed":
+        cu = ttnn.from_torch(
+            torch.tensor([0, s], dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        kwargs = dict(cu_window_seqlens=cu)
+    else:
+        kwargs = dict(sliding_window_size=256)
+    with expect_error(RuntimeError, "attn_mask_block_map cannot be combined"):
+        ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, program_config=program_config, attn_mask_block_map=block_map, **kwargs
+        )
