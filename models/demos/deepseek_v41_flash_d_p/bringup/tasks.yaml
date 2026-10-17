@@ -5164,6 +5164,14 @@ tasks:
     kind: attention
     layer: 3
     stateful: true
+  frozen:
+    at: '2026-10-17T05:35:08'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attention.py: 43fa386ed718c982c15e54102c3e6e812e69ad336ae37c6431a0688f1d9711ba
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.enc_reuse.06
   title: 'enc_reuse block with steps 1-6 on device (last: attention)'
   step: implement
