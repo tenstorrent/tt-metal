@@ -242,6 +242,37 @@ WindowedSetup setup_windowed_cbs(
     return w;
 }
 
+// Single-K-chunk row sums on the math thread (compute_streaming.hpp), opt-in (math_thread_row_sums): normalize takes a
+// whole row group's denominators from the exp'd scores, so the recip scratch CB must hold a row group. Off by default:
+// the sum accumulates in one 16-bit DST tile per row, which rounds the whole running sum on every K tile, while the
+// pack thread's per-position L1 sums average their rounding out over the row (SDXL's 0.993 / 0.997 PCC bars fail on
+// it). The kernel uses the path only where `enabled` allows it (compute arg 29), so sizing and use cannot disagree;
+// every other call keeps the 1-tile scratch. The kernel derives the row group from its DEST_AUTO_LIMIT, which full sync
+// doubles (dest_helpers.hpp).
+struct SingleKChunkRowSums {
+    bool enabled = false;
+    uint32_t recip_scratch_tiles = 1;
+};
+SingleKChunkRowSums single_k_chunk_row_sums(
+    bool requested,
+    tt::ARCH arch,
+    bool use_streaming_compute,
+    bool use_attention_sink,
+    bool dst_full_sync_en,
+    uint32_t dst_size,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t Sq_chunk_t) {
+    const uint32_t kernel_dst_size = dst_full_sync_en ? 2 * dst_size : dst_size;
+    const uint32_t norm_row_h =
+        ttnn::transformer::sdpa::streaming_qktv_h(out_subblock_h, out_subblock_w, kernel_dst_size, Sq_chunk_t);
+    if (requested && use_streaming_compute && arch == tt::ARCH::BLACKHOLE && !use_attention_sink &&
+        Sq_chunk_t % norm_row_h == 0) {
+        return {true, norm_row_h};
+    }
+    return {};
+}
+
 }  // namespace
 
 ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
@@ -585,6 +616,17 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     const bool use_zigzag_balancing = use_causal_kernel;
 
+    const SingleKChunkRowSums row_sums = single_k_chunk_row_sums(
+        operation_attributes.math_thread_row_sums,
+        device->arch(),
+        use_streaming_compute,
+        use_attention_sink,
+        dst_full_sync_en,
+        dst_size,
+        out_out_subblock_h,
+        out_out_subblock_w,
+        Sq_chunk_t);
+
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       B,
                                                       NQH,
@@ -732,6 +774,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         k_partial_col,                                // arg 28: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 29: unified zigzag remap
         static_cast<uint32_t>(windowed_mode),         // arg 28: K-range narrowing (bounds from the ctrl CB)
+        static_cast<uint32_t>(row_sums.enabled),      // arg 29: single-K-chunk row sums on the math thread
     };
 
     std::map<std::string, std::string> defines_map;
@@ -856,10 +899,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         cb_ids.attention_sink = allocate_tile_cb(attention_sink_tiles, sink_tile_size, sink_df);
     }
 
-    // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
+    // Streaming compute v2: recip scratch CB for normalize_row_streaming. One tile normally, one per row of a
+    // normalize row group when the single-K-chunk path computes a whole row group's 1/sum at once
+    // (single_k_chunk_row_sums, compute arg 29), so sizing and use cannot disagree.
     // No row buffers needed — cb_push_back_hold_wr_ptr writes directly to cb_qkt_im.
     if (use_streaming_compute) {
-        cb_ids.recip_scratch = allocate_tile_cb(1, im_tile_size, im_df);
+        cb_ids.recip_scratch = allocate_tile_cb(row_sums.recip_scratch_tiles, im_tile_size, im_df);
     }
 
     cb_ids.qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);

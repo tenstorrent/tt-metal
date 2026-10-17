@@ -371,6 +371,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0u,         // arg 26: k_partial_col - unused on ring's non-streaming path
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 27: unified zigzag remap
         static_cast<uint32_t>(WindowedMode::None),    // arg 28: windowed mode — ring is never windowed
+        0u,                                           // arg 29: sum_rows_from_scores — non-streaming
     };
     std::map<std::string, std::string> defines_map;
     defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);
