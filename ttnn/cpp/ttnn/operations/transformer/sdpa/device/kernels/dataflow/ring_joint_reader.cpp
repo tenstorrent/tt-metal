@@ -309,6 +309,9 @@ void kernel_main() {
     // re-derive logical_nt / logical_lt / the ring masks from them.
     constexpr bool has_logical_n_tensor = get_compile_time_arg_val(41) == 1;
     constexpr bool has_logical_l_tensor = get_compile_time_arg_val(42) == 1;
+    // Slot 43: V is a batch-1 tensor (e.g. per-head V unrolled from the latent cache for this chunk) beside an
+    // indexed K cache, so V reads always come from batch 0 rather than the K cache slot.
+    constexpr bool v_single_slot = get_compile_time_arg_val(43) == 1;
     constexpr bool has_logical_length_tensor = has_logical_n_tensor || has_logical_l_tensor;
     // Live joint tail in tiles; equals the compile-time value unless logical_l arrives as a tensor.
     uint32_t logical_lt = logical_lt_compile;
@@ -322,9 +325,9 @@ void kernel_main() {
     constexpr bool has_gathered_joint_k = joint_is_sharded && has_joint_k;
 
     // Slots 33-35 are the sharded-joint scalars (Lt_local, joint_is_sharded, logical_lt), 36-39 the rank
-    // mapping, slot 40 the bounded sliding KV slab count, and 41-42 the logical-length transport flags, so
-    // the tensor accessors start at slot 43.
-    constexpr uint32_t kFirstAccessorArgOffset = 43;
+    // mapping, slot 40 the bounded sliding KV slab count, 41-42 the logical-length transport flags and 43
+    // v_single_slot, so the tensor accessors start at slot 44.
+    constexpr uint32_t kFirstAccessorArgOffset = 44;
     constexpr auto q_args = TensorAccessorArgs<kFirstAccessorArgOffset>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
@@ -790,7 +793,8 @@ void kernel_main() {
     const auto local_k_generator = PaddedAddrGenerator(local_k_reader, input_k_tile_logical);
     const auto gathered_k_generator = PaddedAddrGenerator(gathered_k_reader, gathered_k_input_tile_logical);
     const auto local_v_reader = TensorAccessor(v_args, v_addr);
-    const auto input_v_tile_logical = TensorTileShape(kv_batch_dim, NHV, kv_local_padded_Nt, v_row_Wt);
+    const auto input_v_tile_logical =
+        TensorTileShape(v_single_slot ? 1 : kv_batch_dim, NHV, kv_local_padded_Nt, v_row_Wt);
     const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr);
     const auto gathered_v_input_tile_logical =
         TensorTileShape(gathered_kv_batch_dim, NHV, gathered_padded_Nt, v_row_Wt);
@@ -1428,7 +1432,12 @@ void kernel_main() {
                     // V: either read locally (injector or not participant) or receive from chain.
                     const uint32_t nv = nq / q_heads_per_v;
                     const Slice v_slice(
-                        k_slice.d0, nv, k_slice.d2_start, k_slice.d2_end, v_col_offset_t, v_col_offset_t + vDHt);
+                        v_single_slot ? 0 : k_slice.d0,
+                        nv,
+                        k_slice.d2_start,
+                        k_slice.d2_end,
+                        v_col_offset_t,
+                        v_col_offset_t + vDHt);
                     CircularBuffer cb_v(cb_v_in);
                     cb_v.reserve_back(v_cb_entry_tiles);
                     uint32_t cb_v_start_address = cb_v.get_write_ptr();
