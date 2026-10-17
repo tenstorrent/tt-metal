@@ -6033,6 +6033,13 @@ tasks:
     - attn_norm
     - q_a
     layer: 20
+  frozen:
+    at: '2026-10-17T08:21:59'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_04_q_a.py: 22c7e124ae0ab6aaa7d3f4de03154878768b0f92ef232b70e3106379f825a5e4
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_candidate.kv
   title: dec_candidate kv (op) on device, layer 20
   step: implement
