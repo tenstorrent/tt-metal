@@ -13,13 +13,14 @@ void kernel_main() {
     constexpr std::uint32_t v_offset = get_compile_time_arg_val(5);
     constexpr std::uint32_t qk_tiles = get_compile_time_arg_val(6);
     constexpr bool separate_v = get_compile_time_arg_val(7);
+    constexpr bool transpose_v = get_compile_time_arg_val(8);
     compute_sdpa_chunk<
         chunk_size,
         row_tiles,
         v_tiles,
         0x3f800000,
         false,
-        false,
+        transpose_v,
         16,
         false,
         qk_granularity,

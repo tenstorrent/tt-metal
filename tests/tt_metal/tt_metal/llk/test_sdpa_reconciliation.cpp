@@ -576,7 +576,7 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSemaphoreCompileLimits) {
         SCOPED_TRACE(::testing::Message() << "chunk=" << args[0] << ", qk=" << args[1] << ", exp=" << args[2]);
         const bool fits = args[0] / args[1] + 1 <= 15 && args[0] / args[2] + 1 <= 15;
         auto compile_args = args;
-        compile_args.insert(compile_args.end(), {2, 2, 0, 0, 0});
+        compile_args.insert(compile_args.end(), {2, 2, 0, 0, 0, 0});
         auto program = make_sdpa_chunk_compile_program(compile_args);
         if (fits) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
@@ -587,24 +587,28 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSemaphoreCompileLimits) {
 }
 
 TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkMergedKvCompileLimits) {
-    // row_tiles, V width, V offset, contraction, separate-V, accepted.
+    // row_tiles, V width, V offset, contraction, separate-V, transpose-V, accepted.
     // An odd physical stride is valid when the QK contraction remains even.
-    const std::array<std::array<std::uint32_t, 6>, 8> cases{{
-        {6, 2, 3, 2, 0, 1},
-        {5, 2, 3, 2, 0, 1},
-        {2, 2, 0, 0, 1, 1},
-        {6, 2, 3, 1, 0, 0},
-        {6, 2, 3, 3, 0, 0},
-        {6, 2, 3, 8, 0, 0},
-        {6, 2, 5, 2, 0, 0},
-        {6, 2, 1, 2, 1, 0},
+    // The reuse-dest-SrcB OV matmul does not implement a V transpose, so
+    // transpose_v must be rejected at compile time rather than use V as stored.
+    const std::array<std::array<std::uint32_t, 7>, 9> cases{{
+        {6, 2, 3, 2, 0, 0, 1},
+        {5, 2, 3, 2, 0, 0, 1},
+        {2, 2, 0, 0, 1, 0, 1},
+        {6, 2, 3, 1, 0, 0, 0},
+        {6, 2, 3, 3, 0, 0, 0},
+        {6, 2, 3, 8, 0, 0, 0},
+        {6, 2, 5, 2, 0, 0, 0},
+        {6, 2, 1, 2, 1, 0, 0},
+        {6, 2, 3, 2, 0, 1, 0},
     }};
     for (const auto& test : cases) {
         SCOPED_TRACE(
             ::testing::Message() << "row_tiles=" << test[0] << ", v_tiles=" << test[1] << ", v_offset=" << test[2]
-                                 << ", qk_tiles=" << test[3] << ", separate_v=" << test[4]);
-        auto program = make_sdpa_chunk_compile_program({2, 1, 1, test[0], test[1], test[2], test[3], test[4]});
-        if (test[5]) {
+                                 << ", qk_tiles=" << test[3] << ", separate_v=" << test[4]
+                                 << ", transpose_v=" << test[5]);
+        auto program = make_sdpa_chunk_compile_program({2, 1, 1, test[0], test[1], test[2], test[3], test[4], test[5]});
+        if (test[6]) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
         } else {
             EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);

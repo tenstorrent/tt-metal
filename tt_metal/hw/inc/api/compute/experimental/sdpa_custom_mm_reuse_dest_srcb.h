@@ -36,7 +36,7 @@ namespace ckernel {
  * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                          | False    |
  * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                          | False    |
  * | out_cb_id      | The identifier of the output circular buffer (CB)             | uint32_t | 0 to 31                                          | False    |
- * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate transpose is set | False    |
+ * | transpose      | Transpose of operand B; not implemented by this matmul        | uint32_t | Must be 0                                        | False    |
  * | kt_dim         | The inner dim of the input matrices in tiles                  | uint32_t | even number from 2 to 256                        | False    |
  * | nt_dim         | The number of SrcA tiles per K iteration                      | uint32_t | 1 to 16                                          | False    |
  */
@@ -102,7 +102,7 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
  * | in0_tile_index | The index of the tile in block A from the first input CB                | uint32_t | Must be less than the size of the CB           | True     |
  * | in1_tile_index | The index of the tile in block B from the second input CB               | uint32_t | Must be less than the size of the CB           | True     |
  * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
- * | transpose      | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
+ * | transpose      | Transpose of operand B tiles; not implemented by this matmul.           | bool     | Must be false                                  | True     |
  * | kt_dim         | The inner dimension (K reduction dimension).                            | uint32_t | Must be equal to block A column dimension      | True     |
  * | in1_k_stride   | Stride between K tiles in in1 CB (default 1 for contiguous K tiles).    | uint32_t | >= 1                                           | False    |
  * | signal_output  | Signal SFPU semaphore for pipelining (default false).                   | bool     | true or false                                  | False    |
