@@ -1098,6 +1098,27 @@ def test_unary_rejects_unsupported_integer_dtype(ttnn_op, ttnn_dtype, extra_kwar
         ttnn_op(input_tensor, **extra_kwargs)
 
 
+def test_unary_chain_checks_ops_before_typecast(device, expect_error):
+    # FMOD has no integer kernel. Placed before the TYPECAST it would run on the raw int32 tile
+    # bits, so the chain must be rejected; placed after the cast it sees bfloat16 and is accepted.
+    input_tensor = ttnn.from_torch(
+        torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32),
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    fmod = ttnn.UnaryWithParam(ttnn.UnaryOpType.FMOD, 2.0)
+    to_bfloat16 = ttnn.UnaryWithParam(
+        ttnn.UnaryOpType.TYPECAST, ttnn.DataType.INT32.value, ttnn.DataType.BFLOAT16.value
+    )
+
+    with expect_error(RuntimeError, "does not support integer input dtype"):
+        ttnn.unary_chain(input_tensor, [fmod, to_bfloat16])
+
+    # Only the position matters: the same ops with the cast first pass validation.
+    ttnn.unary_chain(input_tensor, [to_bfloat16, fmod])
+
+
 @pytest.mark.parametrize(
     "ttnn_op, extra_kwargs",
     [
