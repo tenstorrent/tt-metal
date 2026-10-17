@@ -337,12 +337,14 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                   DataMovementProcessor proc,
                   NOC noc,
                   const std::vector<uint32_t>& ct,
-                  const Defines& defs) {
+                  const Defines& defs,
+                  NOC_MODE noc_mode = NOC_MODE::DM_DEDICATED_NOC) {
         const KernelHandle k = CreateKernel(
             program,
             std::string(KDIR) + name,
             rect_ranges(cores),
-            DataMovementConfig{.processor = proc, .noc = noc, .compile_args = ct, .defines = defs});
+            DataMovementConfig{
+                .processor = proc, .noc = noc, .noc_mode = noc_mode, .compile_args = ct, .defines = defs});
         krec.push_back({k, name, cores, ct, defs, proc == DataMovementProcessor::RISCV_0 ? 0 : 1});
         return k;
     };
@@ -389,13 +391,15 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         drisc_dual_def["SE_DRISC_MAXCNT"] =
             mc ? std::string(mc)
                : std::string(flat_drisc_pure() ? (p.rdown ? "0xFFFFFFFF" : "96") : (p.rdown ? "128" : "256"));
-        if (flat_drisc_tiles() == 3) {  // switch mode: the alternate tiles serve calls with counts up to this
-            const char* am = std::getenv("MIMO_FL_DRISC_ALT_MAXCNT");
-            // (two tiles up to: GLM-Flash 224, K2.7 E12 (reader down columns) 384: M 256 85.2 two tiles vs 89.1 / 98.1
-            // one tile, job 1 on NOC0 / NOC1)
-            drisc_dual_def["SE_DRISC_ALT_MAXCNT"] = am ? std::string(am) : std::string(p.rdown ? "384" : "224");
-        }
         drisc_dual_def["SE_GRANT_SEM"] = std::to_string(GRANT);
+    }
+    // switch mode: the alternate tiles serve calls with counts up to this (dual or not: without it a non-dual pure plan
+    // ran every bank's two slots on one tile, ~21-28 GB/s each: V4.1 units E 24 M 32 58.9 us / expert vs 43.2 dual)
+    if (p.drisc && flat_drisc_tiles() == 3) {
+        const char* am = std::getenv("MIMO_FL_DRISC_ALT_MAXCNT");
+        // (two tiles up to: GLM-Flash 224, K2.7 E12 (reader down columns) 384: M 256 85.2 two tiles vs 89.1 / 98.1
+        // one tile, job 1 on NOC0 / NOC1)
+        drisc_dual_def["SE_DRISC_ALT_MAXCNT"] = am ? std::string(am) : std::string(p.rdown ? "384" : "224");
     }
     if (p.drisc && flat_drisc_tiles() == 2) {  // both tiles of a bank every call (se_drisc.hpp SD_PAIRED)
         drisc_dual_def["SE_DRISC_PAIRED_ALWAYS"] = "1";
@@ -553,6 +557,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     const char* xnoc_env = std::getenv("MIMO_FL_DRISC_XNOC");
     const bool xswap = p.drisc && xnoc_env != nullptr && std::atoi(xnoc_env) != 0;
     const NOC x_rd_noc = xswap ? NOC::NOC_0 : NOC::NOC_1, x_mc_noc = xswap ? NOC::NOC_1 : NOC::NOC_0;
+    // (probe MIMO_FL_XRD_DYN=1: the relays' kernels in dynamic-NoC mode - per-RISC command buffers and counters - so
+    // their x reads and multicasts may share a NoC, e.g. MIMO_FL_XRD_NOC=0)
+    const NOC_MODE x_mode = std::getenv("MIMO_FL_XRD_DYN") ? NOC_MODE::DM_DYNAMIC_NOC : NOC_MODE::DM_DEDICATED_NOC;
     auto drisc_xy = [&](uint32_t r) {
         const auto v = device->virtual_core_from_logical_core(flat_drisc_logical(device, r, banks), tt::CoreType::DRAM);
         return static_cast<uint32_t>((v.x << 16) | v.y);
@@ -772,7 +779,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                DataMovementProcessor::RISCV_0,
                xrd_noc,
                {0, t.x.logical_shape()[-1] * 2, E, MT, p.nsb, S, xrd_batch, idx_arg, p.H / t.x.logical_shape()[-1]},
-               xrd_def);
+               xrd_def,
+               x_mode);
         // MIMO_FL_TZ_SKIP: the relays' tilizers only do the CB handshakes; MIMO_FL_XMC_NODATA: the multicasters send
         // only the XARR counts (garbage x on the gate/up cores)
         Defines tz_def = with(dyn_def, {{"SE_SBT", sbt}});
@@ -804,21 +812,22 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                    DataMovementProcessor::RISCV_1,
                    x_mc_noc,
                    {1, MT, p.x_tile, p.x_slots, XARR, WORD, KBLK, E, p.nsb},
-                   p.xfwd ? with(xmc_def, {{"XMC_FWD", "1"}, {"XMC_FWD_K", std::to_string(q)}}) : xmc_def));
+                   p.xfwd ? with(xmc_def, {{"XMC_FWD", "1"}, {"XMC_FWD_K", std::to_string(q)}}) : xmc_def,
+                   x_mode));
         }
         std::vector<KernelHandle> khl;
         for (uint32_t j = 0; j < p.nh; ++j) {
             const std::vector<CoreCoord> hl(
                 p.relays.begin() + NR + NR * j, p.relays.begin() + NR + NR * j + (x_once ? 1 : NR));
             const uint32_t data_sem = std::vector<uint32_t>{4, 7, 8, 10}[j];
-            khl.push_back(
-                dm("se13_xhelp.cpp",
-                   hl,
-                   DataMovementProcessor::RISCV_1,
-                   x_mc_noc,
-                   {1, MT, p.x_tile, p.land_slots, data_sem, 5, E, p.nsb},
-                   x_two || p.xfwd ? with(dyn_def, {{"SE_SBT", sbt}, {"SE_X2", "1"}})
-                                   : with(dyn_def, {{"SE_SBT", sbt}})));
+            khl.push_back(dm(
+                "se13_xhelp.cpp",
+                hl,
+                DataMovementProcessor::RISCV_1,
+                x_mc_noc,
+                {1, MT, p.x_tile, p.land_slots, data_sem, 5, E, p.nsb},
+                x_two || p.xfwd ? with(dyn_def, {{"SE_SBT", sbt}, {"SE_X2", "1"}}) : with(dyn_def, {{"SE_SBT", sbt}}),
+                x_mode));
         }
         const uint32_t sbb = MT * p.sbt * p.x_tile;
         for (uint32_t idx = 0; idx < p.relays.size(); ++idx) {

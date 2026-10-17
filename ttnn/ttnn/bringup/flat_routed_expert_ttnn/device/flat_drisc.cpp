@@ -239,6 +239,14 @@ void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t
     if (const char* m = std::getenv("MIMO_FL_DRISC_DMA_MAX")) {  // (probe: DMA reads in flight per stream)
         defs["SE_DRISC_DMA_MAX"] = m;
     }
+    // (probes, V4.1 E 24 one tile per bank, delivery isolated, M 80: 59.3 us / expert; DRAIN 60.5, FREE_SENT 62.6: one
+    // tile's DMA + writes are bounded by the tile itself, ~28 GB/s, not by the loop's structure or the ack latency)
+    if (env_or("MIMO_FL_DRISC_DRAIN", 0)) {  // (probe: all ready writes / flushes per loop pass)
+        defs["SE_DRISC_DRAIN"] = "1";
+    }
+    if (env_or("MIMO_FL_DRISC_FREE_SENT", 0)) {  // (probe: a block slot is refilled once its writes left L1)
+        defs["SE_DRISC_FREE_SENT"] = "1";
+    }
     if (const char* u = std::getenv("MIMO_FL_DRISC_UB")) {  // (probe: blocks per DRISC unit)
         defs["SE_DRISC_UB"] = u;
     }
@@ -269,6 +277,17 @@ void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t
             if ((env_or("MIMO_FL_DRISC_STREAM_SPLIT", 1) && flat_drisc_tiles() == 2 && c.y == 2) ||
                 alt_tiles.contains({c.x, c.y})) {
                 d["SE_DRISC_STREAM0"] = "1";
+            }
+            // (probes: the alternate tiles - each bank's NOC1 endpoint, whose DMA shares the port with the NOC1 DRAM
+            // reads (the x relays) - with their own DMA depth / burst size. V4.1 E 24 M 80 / 256: untouched 47.5 /
+            // 69.8, burst 4 49.9 / 66.2, DMA depth 1 50.2 / 65.3: x gains what the tile loses at small M)
+            if (alt_tiles.contains({c.x, c.y})) {
+                if (const char* m = std::getenv("MIMO_FL_DRISC_ALT_DMA_MAX")) {
+                    d["SE_DRISC_DMA_MAX"] = m;
+                }
+                if (const char* b = std::getenv("MIMO_FL_DRISC_ALT_BURST")) {
+                    d["SE_DRISC_BURST"] = b;
+                }
             }
             const auto k = CreateKernel(
                 *program,

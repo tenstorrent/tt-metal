@@ -186,8 +186,15 @@ void kernel_main() {
                 }
                 continue;
             }
-            while (!ncrisc_noc_nonposted_writes_sent(noc_index)) {
-            }  // the previous counter write has left L1 before its source word is reused
+            // the previous counter write has left L1 before its source word is reused (MIMO_FL_XRD_DYN: the relay's
+            // reads and multicasts share a NoC in dynamic-NoC mode, its counters are per RISC)
+            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+                while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc_index)) {
+                }
+            } else {
+                while (!ncrisc_noc_nonposted_writes_sent(noc_index)) {
+                }
+            }
             *word = sent + n;
             // One linked chain per rectangle (a linked chain must keep one destination set; its last piece is
             // unlinked), then that rectangle's XARR update, which follows the data on the same route and VC.

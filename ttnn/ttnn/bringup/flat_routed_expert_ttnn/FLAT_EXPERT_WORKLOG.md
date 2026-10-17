@@ -944,3 +944,36 @@ above 96 tokens / expert (MIMO_FL_HG_DRISC=0: off). E 24 us / expert M 32 / 80 /
 (DRISC_ASSIGN=0): the DRISC-only weight path itself is slower here, cause not found. NU 2 (72 gate/up cores) needs the
 freed cells (TT_FATAL: down arena does not fit with Tensix readers) and an uneven DRISC split (4 / 5 cores a slot);
 projected M 1024 ~150 us (gate/up 131, down 32 cores x 4.6 cols) but it would pay the DRISC-only cost at small M.
+
+### DRISC-only (all 16 slots on DRAM cores, Tensix reader cells free): what hurts it (2026-10-17, V4.1 E 24, units)
+Probes in the op (the real se_drisc_gu loop), MIMO_FL_DRISC_PROF section cycles, kernel wait zones (MIMO_FL_ZONES),
+NoC traces + tt-npe. us / expert; Tensix readers (the default) M 32 / 80 / 256 / 1024: 44.2 / 48.0 / 62.9 / 211.6.
+- **Bug: DRISC-only never used a bank's second tile.** Switch mode's threshold (SE_DRISC_ALT_MAXCNT) was only defined
+  for dual plans, so MIMO_FL_DRISC_DUAL=0 ran both of a bank's slots on one tile (profile: tile 1 of every bank 0
+  units, tile 2 2880): 58.9 / 61.3 at M 32 / 80. Fixed: 43.2 / 47.5 (better than Tensix), M 256 70.6, M 1024 215.1.
+- **Delivery alone is fine.** No math, x resident, no h (the call bound by weight delivery), M 80: DRISC two tiles
+  44.5 vs Tensix 44.0 (both ~95% DRAM); writes only 24.8 vs 27.8 (DRISC writes are faster).
+- **Mid M: tile 1's DMA delays the x reads.** M 256 DRISC two tiles 69.8: W_NOREAD 62.6, X_RESIDENT 62.6, both 55.0
+  (= Tensix floor); DMA only (W_NOFWD) 68.8, writes only (W_NOREAD) 61.0; XRD_SKIP (no x DRAM reads) 59.8, XMC_NODATA
+  69.3 -> the x DRAM reads vs the DRISC DMA. Relay zones (E 4 M 256, cycles per call): XRD_DRAM (read barrier) Tensix
+  60k / DRISC two tiles 221k / one tile 70k; XRD_FULL 118k / 2k / 155k; TZ_IN 12k / 72k / 12k. tt-npe on the traces
+  (Tensix side; the DRISC traffic is not traced): congestion impact 0%, max link 25-27% in both modes, relays issue at
+  the same rate (median 113 cycles a 2 KB read) but stall 118k vs 15-38k cycles a call. The x relays read on NOC1,
+  i.e. through each bank's NOC1 endpoint = DRISC tile 1: its DMA shares that tile's port with the x reads. With the
+  Tensix readers the weights + down reads use the NOC0 endpoint's port and x has the NOC1 port alone.
+- Things that do not fix it: MPFE weights (0,0,3 / 0,0,7 / 0,3,7 / 0,7,7 / 7,0,0 / 3,0,0: 69.8-73.2; tile 1's own port
+  is the x port, so favoring x favors its DMA too; also with DMA on tile 2 only, 0,0,7 / 1,0,0: no change), DMA depth
+  7 (75.5), 4 (74.5), more x reads in flight (XRD_BATCH 4: 75.7), all writes on NOC0 (71.2), x read once (X1 85.2,
+  XFWD 102.6), x reads NOC0 + multicast NOC1 (DRISC_XNOC 106.5), free-on-sent slots (69.2), draining the loop.
+  Partial: tile 1 throttled (ALT_BURST 4: 66.2, ALT_DMA_MAX 1: 65.3) but small M pays (M 80 ~50).
+- **One tile per bank cannot carry a bank** (x is then fine, XRD_DRAM 70k): isolated delivery 59.3 at M 80
+  (~28 GB/s a tile, 826 cycles a 13.8 KB block: DMA issue 186, write 199, flush + inc 158, loop 270; the tile's own
+  DMA + NoC writes, 8f's 37-47 GB/s ceiling); not the loop shape (DRAIN 60.5) nor the ack latency (FREE_SENT 62.6).
+- x reads on NOC0 (both relay kernels on NOC0) hang, also with Tensix readers and in dynamic-NoC mode
+  (MIMO_FL_XRD_DYN=1, which alone runs): the same-NoC reads + multicast on the relay; not debugged (needs triage).
+- The tensor prefetcher's author (drisc.md, the talk) uses the NOC1 endpoint tile for weights next to the free tile
+  (dual senders, 60 GB/s a bank) and lists DRAM priority vs NoC traffic as open; decode has little NOC1 DRAM read
+  traffic, flat's x path is exactly that.
+Where it stands: DRISC-only = Tensix at M <= ~224 (two tiles), +5..12% at M 256 (two tiles: x; one tile: rate),
++1.6% at M 1024. Options: x off NOC1 (fix the same-NoC hang, or move the relays so a NOC1 multicast works), or keep a
+Tensix reader for each bank's second slot (the old hybrid: 8 cells free).

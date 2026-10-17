@@ -79,7 +79,7 @@ inline void fast_inc(uint8_t noc, uint32_t coord) {
 
 struct Job {
     uint32_t gddr, chunk, blk, rg, R, G, per_e, land, units, slot0, ns, trid0, ub, dmax;
-    uint32_t rd, wr, fl;
+    uint32_t rd, wr, fl, sn;  // units DMA'd, written, flushed (acked), sent (left this L1: SE_DRISC_FREE_SENT)
     uint8_t noc;
     uint8_t loads[SD_MAX_LOADS], regions[SD_MAX_LOADS];
     uint32_t cr[SE_DRISC_MAX_R];
@@ -163,7 +163,7 @@ void kernel_main() {
             Job& J = jobs[k];
             if (!real[k]) {
                 J.units = 0;
-                J.rd = J.wr = J.fl = 0;
+                J.rd = J.wr = J.fl = J.sn = 0;
                 continue;
             }
             volatile uint32_t* d = word(se_drisc_desc(k));
@@ -210,7 +210,7 @@ void kernel_main() {
             J.ns = J.ns > 7 ? 7 : J.ns;  // (transaction ids 1-7 / 8-14 per job)
             J.trid0 = 1 + 7 * k;
             J.units = n_load * J.per_e * (J.rg / J.ub);
-            J.rd = J.wr = J.fl = 0;
+            J.rd = J.wr = J.fl = J.sn = 0;
             left += J.units;
             volatile uint32_t* st = word(se_drisc_state(k));
             st[0] = seen;
@@ -251,7 +251,12 @@ void kernel_main() {
                 // DMA ahead into free slots (unit rd: chunk rd / RG of load (rd / RG) / PER_E, block rd % RG)
                 {
                 PF_BEGIN
-                while (J.rd < J.units && J.rd - J.fl < J.ns &&
+#ifdef SE_DRISC_FREE_SENT  // a slot is free once its unit's writes left L1 (sent), not when they are acked
+                const uint32_t freed = J.sn;
+#else
+                const uint32_t freed = J.fl;
+#endif
+                while (J.rd < J.units && J.rd - freed < J.ns &&
                        (J.dmax >= 255 || experimental::dma_get_reads_outstanding(stream) < J.dmax)) {
                     const uint32_t upc = J.rg / J.ub, c = J.rd / upc, b = (J.rd % upc) * J.ub;
                     const uint32_t src = J.gddr + (J.loads[c / J.per_e] * J.per_e + c % J.per_e) * J.chunk + b * J.blk;
@@ -267,7 +272,17 @@ void kernel_main() {
                 }
                 PF_END(0)
                 }
-                if (J.wr < J.rd && J.wr < J.rd - experimental::dma_get_reads_outstanding(stream)) {
+#ifdef SE_DRISC_DRAIN  // (every unit ready this pass, not one: the loop's other work no longer delays them)
+#define SE_DRISC_STEP while
+#else
+#define SE_DRISC_STEP if
+#endif
+#ifdef SE_DRISC_FREE_SENT  // (transaction ids cycle over the 7 of the job, apart from the slots: <= 7 unacked units)
+                SE_DRISC_STEP(
+                    J.wr < J.rd && J.wr - J.fl < 7 && J.wr < J.rd - experimental::dma_get_reads_outstanding(stream)) {
+#else
+                SE_DRISC_STEP(J.wr < J.rd && J.wr < J.rd - experimental::dma_get_reads_outstanding(stream)) {
+#endif
                     const uint32_t upc = J.rg / J.ub, c = J.wr / upc, b = (J.wr % upc) * J.ub;
                     const uint32_t j0 = b * J.G, j1 = (b + J.ub) * J.G;  // the unit's receivers
                     bool granted = true;
@@ -296,7 +311,11 @@ void kernel_main() {
                         PF_BEGIN
                         const uint32_t src0 = J.slot0 + (J.wr % J.ns) * J.ub * J.blk;
                         const uint32_t dst = J.land + (J.regions[c / J.per_e] * J.per_e + c % J.per_e) * J.blk;
+#ifdef SE_DRISC_FREE_SENT
+                        const uint32_t trid = J.trid0 + J.wr % 7;
+#else
                         const uint32_t trid = J.trid0 + J.wr % J.ns;
+#endif
 #ifndef SE_W_NOFWD  // (perf probe: the weight blocks are not forwarded, only signalled)
                         for (uint32_t j = j0; j < j1; ++j) {  // receiver j gets block j / G (of the chunk)
                             const uint32_t src = src0 + (j / J.G - b) * J.blk;
@@ -315,10 +334,32 @@ void kernel_main() {
                         ++J.wr;
                         PF_END(2)
                     }
+#ifdef SE_DRISC_DRAIN
+                    else {
+                        break;
+                    }
+#endif
                 }
                 PF_BEGIN
-                if (J.fl < J.wr &&
-                    ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, J.trid0 + J.fl % J.ns)) {
+#ifdef SE_DRISC_FREE_SENT
+                const uint32_t fl_trid = J.trid0 + J.fl % 7;
+                if (J.sn < J.wr && ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, J.trid0 + J.sn % 7)) {
+                    ++J.sn;
+                }
+#else
+                const uint32_t fl_trid = J.trid0 + J.fl % J.ns;
+#endif
+#ifdef SE_DRISC_DRAIN
+#ifdef SE_DRISC_FREE_SENT
+                while (J.fl < J.wr && ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, J.trid0 + J.fl % 7)) {
+#else
+                while (J.fl < J.wr &&
+                       ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, J.trid0 + J.fl % J.ns)) {
+#endif
+                    (void)fl_trid;
+#else
+                if (J.fl < J.wr && ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, fl_trid)) {
+#endif
                     const uint32_t upc = J.rg / J.ub, b = (J.fl % upc) * J.ub;
                     for (uint32_t j = b * J.G; j < (b + J.ub) * J.G; ++j) {
                         if (J.blk <= NOC_MAX_BURST_SIZE) {
@@ -329,6 +370,9 @@ void kernel_main() {
                     }
                     ++J.fl;
                     --left;
+#ifdef SE_DRISC_FREE_SENT
+                    J.sn = J.sn > J.fl ? J.sn : J.fl;  // (acked implies sent)
+#endif
                 }
                 PF_END(3)
             }
