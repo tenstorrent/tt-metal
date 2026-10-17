@@ -179,7 +179,7 @@
     wh_n300_civ2:
       timeout: 10
     bh_p100:
-      timeout: 10
+      timeout: 15
     bh_p150b_civ2:
       timeout: 10
   owner_id: U08ADLJ4PLP # Aleksandar Stancov
