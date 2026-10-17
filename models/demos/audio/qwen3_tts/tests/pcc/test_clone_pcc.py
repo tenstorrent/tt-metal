@@ -38,6 +38,7 @@ from models.demos.audio.qwen3_tts import frontend, weights
 from models.demos.audio.qwen3_tts.tests.checkpoints import hidden_width
 from models.demos.audio.qwen3_tts.tests.reference_helpers import codebook_size, synthetic_voiced_clip
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import (
+    CONTROL_ID_COUNT,
     REFERENCE_TAIL_IDS,
     ROLE_IDS,
     TAIL_IDS,
@@ -45,6 +46,7 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import (
     HostEmbeddings,
     Qwen3TTSPipeline,
     build_clone_reference,
+    build_streaming_clone_prefill,
     build_voice_clone_prefill,
     build_x_vector_prefill,
 )
@@ -292,3 +294,44 @@ def test_generate_clone_produces_audio_of_the_right_length(device):
     assert torch.isfinite(waveform).all()
     assert waveform.abs().max() <= 1.0
     print(f"{codes.shape[0]} frames, {waveform.shape[1] / 24000:.2f} s, peak {waveform.abs().max():.4f}")
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_stepping_a_frame_at_a_time_reproduces_generate_clone(device):
+    """`start`, `codec_logits`, `predict` and `feed_back`, driven by hand with the request
+    held by the caller, give the codes `generate_clone` does from the same seed.
+
+    Streaming text, so the request also carries the text still to feed between frames.
+    The logits come back with every control id but end-of-speech already at `-inf`.
+    """
+    frames = 32
+    reference = build_clone_reference(device, synthetic_voiced_clip(seconds=CLIP_SECONDS), REFERENCE_TEXT)
+    pipeline = Qwen3TTSPipeline(device, max_frames=frames, seed=0)
+
+    _, expected = pipeline.generate_clone(TEXT, reference, language=LANGUAGE, max_frames=frames, streaming=True)
+
+    pipeline.reseed(0)
+    embeddings, feed = build_streaming_clone_prefill(TEXT, reference, LANGUAGE, pipeline.tables)
+    request, _ = pipeline.start(embeddings, frames, feed)
+    inner = pipeline._inner_pick()
+    penalty = pipeline.generation.get("repetition_penalty", 1.0)
+    vocab = pipeline.talker_config["vocab_size"]
+    stepped, seen = [], []
+    for _ in range(frames):
+        row = pipeline.codec_logits(request)
+        controls = row[vocab - CONTROL_ID_COUNT :]
+        eos = pipeline.eos - (vocab - CONTROL_ID_COUNT)
+        assert torch.isinf(torch.cat([controls[:eos], controls[eos + 1 :]])).all()
+        assert torch.isfinite(controls[eos]), "end-of-speech stays drawable"
+        first = pipeline._pick(row, seen=seen, penalty=penalty, emitted=len(stepped))
+        if first == pipeline.eos:
+            break
+        seen.append(first)
+        frame = pipeline.predict(request, first, inner)
+        stepped.append(frame)
+        pipeline.feed_back(request, frame)
+    pipeline.release()
+
+    assert request.position == embeddings.shape[1] + len(stepped)
+    assert torch.equal(torch.tensor(stepped, dtype=torch.long), expected), "stepping diverged from the loop"
+    print(f"{len(stepped)} frames stepped by hand, identical to generate_clone")
