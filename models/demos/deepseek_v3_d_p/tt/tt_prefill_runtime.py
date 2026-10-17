@@ -1120,7 +1120,9 @@ class TtPrefillRuntime:
                     )
                 ttnn.copy(src, self._trace_metadata.llama4_scale)
             self._stage_trace_inputs(input_tensor, metadata_msg, mtp_tokens)
-            self._controller.replay(variant=mtp_variant)
+            # replay_sync=False (set by a pipelined driver) returns once every segment is enqueued; the caller
+            # fences on an event and keeps enqueuing the next chunk's handoff ops meanwhile.
+            self._controller.replay(variant=mtp_variant, sync=getattr(self, "replay_sync", True))
 
             # Non-last rank: return the persistent output activation (replay just refreshed it) for the
             # driver to forward downstream over D2D. Last/single rank: the populated KV cache is the output.
