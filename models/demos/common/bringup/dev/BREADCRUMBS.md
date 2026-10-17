@@ -1275,3 +1275,6 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F97: an owner waiver passes a step only when its output is whole AND within component_scaled_rel (0.2) of the
   reference: it covers a precision gap, never a wrong module. F85 passed any finite output, so DeepSeek-V4.1 ffn_hc
   (waived) passed with a zero stub and its freeze sent a test agent to a test it could not fix.
+- F98: the after-step (tail) floor of a float step also runs the tail from the CPU step output rounded to bf16 (a
+  correct device's output is at least that): a top-k downstream flips near-ties on it. DeepSeek-V4.1 S.enc_source_
+  engram.02: engram_kv 8e-5 vs the CPU, block-out tail 0.041 vs a 0.0033 limit (the nudge moved nothing: floor 1e-6).
