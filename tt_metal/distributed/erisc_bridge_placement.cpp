@@ -25,13 +25,7 @@ namespace {
 const StreamAssignment& stream_assignment(const ControlPlane& cp, std::uint32_t mesh_id) {
     return cp.get_fabric_context().get_builder_context().get_stream_assignment(MeshId{mesh_id});
 }
-}  // namespace
 
-bool sender_credits_use_streams(const ControlPlane& cp, std::uint32_t mesh_id, std::uint32_t vc, std::uint32_t index) {
-    return stream_assignment(cp, mesh_id).has(StreamRole::SENDER_PKTS_COMPLETED, vc, index);
-}
-
-namespace {
 // has() first: id() fatals on an unallocated role rather than returning a sentinel.
 std::uint32_t stream_or_zero(
     const ControlPlane& cp, std::uint32_t mesh_id, StreamRole role, std::uint32_t vc, std::uint32_t index) {
@@ -39,6 +33,10 @@ std::uint32_t stream_or_zero(
     return sa.has(role, vc, index) ? sa.id(role, vc, index) : 0u;
 }
 }  // namespace
+
+bool sender_credits_use_streams(const ControlPlane& cp, std::uint32_t mesh_id, std::uint32_t vc, std::uint32_t index) {
+    return stream_assignment(cp, mesh_id).has(StreamRole::SENDER_PKTS_COMPLETED, vc, index);
+}
 
 std::uint32_t sender_pkts_completed_stream(
     const ControlPlane& cp, std::uint32_t mesh_id, std::uint32_t vc, std::uint32_t index) {
@@ -48,6 +46,11 @@ std::uint32_t sender_pkts_completed_stream(
 std::uint32_t sender_pkts_acked_stream(
     const ControlPlane& cp, std::uint32_t mesh_id, std::uint32_t vc, std::uint32_t index) {
     return stream_or_zero(cp, mesh_id, StreamRole::SENDER_PKTS_ACKED, vc, index);
+}
+
+std::uint32_t receiver_pkts_sent_stream(const ControlPlane& cp, std::uint32_t mesh_id, std::uint32_t channel) {
+    // id(), not stream_or_zero(): this one has no caller-visible "absent" case.
+    return stream_assignment(cp, mesh_id).id(StreamRole::RECEIVER_PKTS_SENT, channel, 0);
 }
 
 BridgePlacement EriscBridgePlacement::place(std::uint32_t want_bytes) const {

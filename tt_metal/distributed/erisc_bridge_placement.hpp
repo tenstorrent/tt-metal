@@ -53,6 +53,9 @@ std::uint32_t sender_pkts_completed_stream(
 std::uint32_t sender_pkts_acked_stream(
     const ControlPlane& cp, std::uint32_t mesh_id, std::uint32_t vc, std::uint32_t index);
 
+// The stream a router counts receiver `channel`'s arrivals on. Assigned per fabric, never fixed.
+std::uint32_t receiver_pkts_sent_stream(const ControlPlane& cp, std::uint32_t mesh_id, std::uint32_t channel);
+
 // Reads a live config; does not own it and must not outlive it.
 class EriscBridgePlacement {
 public:
