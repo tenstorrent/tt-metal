@@ -497,9 +497,10 @@ inline void eltwise_binary_run_with_dest_reuse(
         eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
 
         // Clear DEST face-by-face when reusing dest as source. ZEROACC's 16-row mode clears a
-        // physical 16-row block; a 32-bit DEST face spans two of them (its 16 rows live in the
-        // lower halves of two consecutive blocks), so the clear geometry follows the DEST width
-        // alone. ELWMUL always accumulates into DEST, so the clear is never optional.
+        // physical 16-row block; a 32-bit 16-row face fully occupies two consecutive blocks (each
+        // 32-bit row keeps both of its 16-bit halves inside one block: rows 0-7 fill the first
+        // block, rows 8-15 the second), so the clear geometry follows the DEST width alone.
+        // ELWMUL always accumulates into DEST, so the clear is never optional.
         auto base_address = (get_dest_buffer_base() >> 4) + (dst_index << (is_fp32_dest_acc_en ? 3 : 2));
         if constexpr (is_fp32_dest_acc_en)
         {
