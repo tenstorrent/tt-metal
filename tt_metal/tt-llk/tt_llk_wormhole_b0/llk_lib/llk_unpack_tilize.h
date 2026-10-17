@@ -762,6 +762,7 @@ inline void _llk_unpack_fast_tilize_block_(
     const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4");
+    LLK_ASSERT(unit_dim == 1 || unit_dim == 2 || unit_dim == 3, "unit_dim must be 1, 2, or 3");
     LLK_ASSERT(
         (unit_dim == 2 && num_faces == 2) || num_faces == 4, "16x32 tiny tiles are only supported for tensors with even-sized tile widths for fast_tilize");
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
@@ -789,11 +790,6 @@ inline void _llk_unpack_fast_tilize_block_(
     else if (unit_dim == 3)
     {
         TTI_SETADCXX(p_setadc::UNP_AB, 3 * TILE_C_DIM - 1, 0x0);
-    }
-    else
-    {
-        // replace this with a proper assert once it's available
-        // FWASSERT("Unsupported unit_dim", false);
     }
 
     wait_for_next_context(2);
