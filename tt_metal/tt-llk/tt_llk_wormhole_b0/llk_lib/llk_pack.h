@@ -333,9 +333,10 @@ static __attribute__((noinline, noclone)) bool rebuild_tile_pack_mop_for_format(
  * tile with one interface per face, so its form depends on the output format. When the tile pack MOP is
  * programmed and this reconfig crosses that line (a matmul switching from its Float16_b partials to a short-face
  * block-float output, or back), the MOP is rebuilt for the new format with the geometry the pack init built it
- * with: a reconfig reprograms the format-derived state (formats, strides, the block-float exponent section size,
- * the L1 offset) from its arguments and leaves the init-owned state (the ADDR_MODs, the packer X counter and,
- * apart from this rebuild, the MOP) alone, so a caller that changes the tile geometry re-inits. Any other MOP
+ * with: a reconfig reprograms the formats and strides and, from its geometry arguments, the block-float exponent
+ * section size and the L1 offset; it leaves the init-owned state (the ADDR_MODs, the packer X counter and, apart
+ * from this rebuild, the MOP) alone. A reconfig to another tile geometry without a re-init therefore leaves the
+ * packer on a mix of the two geometries; a caller that changes the tile geometry re-inits. Any other MOP
  * (untilize, rows, fast tilize, zero output) is left in place.
  *
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.

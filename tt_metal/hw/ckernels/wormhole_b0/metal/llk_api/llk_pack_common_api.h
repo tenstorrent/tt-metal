@@ -183,9 +183,10 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output) {
  * moves it across the partial-face block-float line (one packer interface per tile instead of one per
  * face, or back), the LLK rebuilds that MOP for the new format in the geometry the pack init built it
  * with, and the pack operation is seated on it again as llk_pack_init seated it: the new format, the
- * init geometry. A reconfig reprograms the format-derived state (formats, strides, the block-float exponent
- * section size, the L1 offset) from the new output and leaves the init-owned state (the ADDR_MODs, the packer X
- * counter and, apart from this rebuild, the MOP) alone; a caller that changes the tile geometry re-inits.
+ * init geometry. A reconfig reprograms the formats and strides and, from the new output's geometry, the
+ * block-float exponent section size and the L1 offset; it leaves the init-owned state (the ADDR_MODs, the packer
+ * X counter and, apart from this rebuild, the MOP) alone. A reconfig to another tile geometry without a re-init
+ * therefore leaves the packer on a mix of the two geometries; a caller that changes the tile geometry re-inits.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  new_output          New output circular buffer / operand index to configure for.
