@@ -1,13 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.device import BootMode
+from helpers.device import BootMode, LLKAssertException
 from helpers.format_config import DataFormat, is_dest_acc_needed
-from helpers.golden_generators import TILE_DIM, MatmulGolden, get_golden_generator
+from helpers.golden_generators import (
+    TILE_DIM,
+    MatmulGolden,
+    TransposeGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import DestAccumulation, MathFidelity, Transpose, format_dict
 from helpers.matmul_sweep import (
     calculate_matmul_output_faces,
@@ -85,6 +92,7 @@ def _run_matmul_custom(
     boot_mode: BootMode,
     in0_tile_r_dim: int = TILE_DIM,
     in1_tile_c_dim: int = TILE_DIM,
+    transpose: Transpose = Transpose.No,
 ):
     """Run one no-mop matmul variant and compare it against the golden.
 
@@ -92,6 +100,8 @@ def _run_matmul_custom(
     ``in1_tile_c_dim=16`` a 32x16 in1 tiny tile (two vertical faces, f0/f2). The input
     dimensions stay in 32x32 blocks: the tiny tile occupies the active faces of each
     block and the rest is zero, the same convention as test_math_matmul's tiny-tile sweep.
+    ``transpose`` transposes in1 (faces and within faces) on both the unpack and the math
+    thread, and the golden is computed against the transposed in1, as in test_math_matmul.
     """
     torch_format = format_dict[formats.output_format]
 
@@ -137,10 +147,28 @@ def _run_matmul_custom(
         tile_cnt_A = matmul_dims.tile_cnt_in0
         tile_cnt_B = matmul_dims.tile_cnt_in1
 
+    src_B_golden = src_B
+    if transpose == Transpose.Yes:
+        t_matrix = get_golden_generator(TransposeGolden)
+        src_B_golden = t_matrix.transpose_faces_multi_tile(
+            src_B,
+            formats.input_format,
+            num_tiles=tile_cnt_B,
+            tilize=True,
+            input_dimensions=input_B_dimensions,
+        )
+        src_B_golden = t_matrix.transpose_within_faces_multi_tile(
+            src_B_golden,
+            formats.input_format,
+            num_tiles=tile_cnt_B,
+            untilize=True,
+            input_dimensions=input_B_dimensions,
+        )
+
     generate_golden = get_golden_generator(MatmulGolden)
     golden_tensor = generate_golden(
         src_A,
-        src_B,
+        src_B_golden,
         formats.output_format,
         math_fidelity,
         input_A_dimensions=input_A_dimensions,
@@ -190,7 +218,7 @@ def _run_matmul_custom(
                 partial_b=False,
                 partial_face_math=in0_tile_r_dim < 16,
             ),
-            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_FACES(transpose),
         ],
         variant_stimuli=StimuliConfig(
             tilized_A.flatten(),
@@ -364,3 +392,41 @@ def test_matmul_custom_throttle_tiny_in0(
         boot_mode=boot_mode,
         in0_tile_r_dim=16,
     )
+
+
+@skip_for_wormhole
+@skip_for_quasar
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi],
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No],
+)
+def test_matmul_custom_transpose_in1_32x16_rejected(
+    math_fidelity,
+    formats,
+    dest_acc,
+    boot_mode=BootMode.DEFAULT,
+):
+    """transpose with a 32x16 in1 has no address-mod handling in the matmul LLK; the regular
+    _llk_math_matmul_init_ rejects the combination under LLK asserts. The no-mop init shares
+    the tiny-tile address mods with it and must reject it the same way, rather than run the
+    kernel with the transpose silently ignored. Without the assert the kernel completes and
+    the result is compared against the A*B^T golden, which it cannot match."""
+    if os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1":
+        pytest.skip("expects an LLK assert; asserts are disabled in this run")
+
+    input_A_dimensions, input_B_dimensions = THROTTLE_DIMS
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        LLKAssertException
+    ):
+        _run_matmul_custom(
+            math_fidelity,
+            formats,
+            dest_acc,
+            input_A_dimensions,
+            input_B_dimensions,
+            throttle_level=0,
+            boot_mode=boot_mode,
+            in1_tile_c_dim=16,
+            transpose=Transpose.Yes,
+        )

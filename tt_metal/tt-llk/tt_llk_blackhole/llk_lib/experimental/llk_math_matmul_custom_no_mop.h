@@ -46,6 +46,9 @@ inline void matmul_configure_addrmod_no_mop(
     const bool partial_face            = false)
 {
     static_assert(THROTTLE_LEVEL >= 0 && THROTTLE_LEVEL <= 5, "THROTTLE_LEVEL must be in range [0, 5]");
+    // in1=32x16 NOT supported with transpose (no addr_mod handling) -- same precondition as _llk_math_matmul_init_;
+    // checked here so both the init and matmul_configure_addrmod_reinit reject it instead of silently ignoring the transpose.
+    LLK_ASSERT(!(transpose && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == FACE_C_DIM)), "Transpose with input 1 dimensions 32x16 not supported");
 
     // For 16x32 tiny tiles (or any non-full-tile geometry) delegate to the tile-shape-aware regular
     // matmul address-modifier programming. That path programs the SrcB cr-reset / reduced increments
