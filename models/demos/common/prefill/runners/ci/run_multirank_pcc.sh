@@ -7,7 +7,7 @@ MODEL="${1:?usage: run_multirank_pcc.sh <model-key> [config]}"
 # First entry is the default; membership is the validation. mistral4 is PP4-only, so sc1 only.
 case "${MODEL}" in
   mistral4) MODEL_CONFIGS="sc1" ;;
-  *)        MODEL_CONFIGS="sc4 sc1" ;;
+  *)        MODEL_CONFIGS="sc4 sc1 sc2" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
 case " ${MODEL_CONFIGS} " in
@@ -48,7 +48,7 @@ PP_RANKS=0
 EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/${MODEL}"
 # sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
 SC1_MAX_SEQ_LEN=""
-SC1_NUM_LAYERS=""
+SC1_NUM_LAYERS="${PREFILL_SC1_NUM_LAYERS:-}"
 SC1_NUM_USERS=1
 
 case "${MODEL}" in
@@ -193,7 +193,7 @@ cleanup() {
     echo "$(basename "$f"): $(cat "$f")"
   done
   mkdir -p "${EVIDENCE_DIR}"
-  for path in "${PCC_DIR}" "${RANKLOGS}" "${BINDING:-}"; do
+  for path in "${PCC_DIR}" "${RANKLOGS}" "${TIMING_DIR}" "${BINDING:-}"; do
     [ -n "${path}" ] && [ -e "${path}" ] && cp -r "${path}" "${EVIDENCE_DIR}/" || true
   done
   if [ -d "${RANKLOGS}" ]; then
@@ -282,6 +282,7 @@ setsid python3 "${TTRUN_PY}" \
     ${NUM_LAYERS_ENV} \
     export LOGURU_LEVEL=INFO; \
     ${RUNNER_ENV} \
+    ${PREFILL_EXTRA_RUNNER_ENV:-} \
     exec python3 -m models.demos.common.prefill.runners.prefill_runner" &
 RUNNER_PID=$!
 cd "${TT_METAL_HOME}"
@@ -311,9 +312,17 @@ if [ "${PP_RANKS}" -eq 0 ]; then
   EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
 fi
 
+# prte ignores --host order under --map-by slot and always puts rank 0 on the local node, so a
+# producer rank can land on the other host from the runner rank it feeds (its H2D service
+# descriptor lives in that host's /dev/shm). Map by tt-run's own rankfile instead; prte only
+# accepts a path relative to the cwd, hence the cd.
+PRODUCER_MAP="--map-by slot"
+if [ "${PP_RANKS}" -eq 0 ] && [ -n "${RANKFILE:-}" ]; then
+  PRODUCER_MAP="--map-by rankfile:file=${RANKFILE#"${TTRUN_CWD}"/}"
+fi
 set +e
-"${MPIRUN}" \
-  -np "${EXPECTED_RANKS}" --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
+( [ "${PP_RANKS}" -eq 0 ] && cd "${TTRUN_CWD}"; "${MPIRUN}" \
+  -np "${EXPECTED_RANKS}" --host "${HOSTS}" ${PRODUCER_MAP} --bind-to none --tag-output --allow-run-as-root \
   --output-filename "${RANKLOGS}/producer" \
   --mca btl self,tcp --mca btl_tcp_if_include "${TCP_INTERFACE}" \
   -x PATH -x LD_LIBRARY_PATH \
@@ -335,7 +344,7 @@ set +e
     ${NUM_LAYERS_ENV} \
     ${PRODUCER_ENV} \
     export LOGURU_LEVEL=INFO; \
-    exec python3 -m models.demos.common.prefill.runners.prefill_producer"
+    exec python3 -m models.demos.common.prefill.runners.prefill_producer" )
 PROD_RC=$?
 set -e
 
