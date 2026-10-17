@@ -207,6 +207,7 @@ ALWI void silu_tile_init() {
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tanh_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(tanh, sfpu::tanh_init, (fast_and_approx, is_fp32_dest_acc_en)));
+    MATH(ckernel::sfpu::tanh_bf16_tile_init<!is_fp32_dest_acc_en && !fast_and_approx>());
 }
 
 // TODO: Move to trigonometry.h (https://github.com/tenstorrent/tt-metal/issues/47942)
@@ -230,6 +231,16 @@ ALWI void tanh_tile_init() {
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tanh_tile(uint32_t idst) {
 #ifndef ARCH_QUASAR
+    MATH(if constexpr (ckernel::sfpu::tanh_bf16_whole_tile && !is_fp32_dest_acc_en && !fast_and_approx) {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_tanh,
+            (fast_and_approx, is_fp32_dest_acc_en, 32),
+            idst,
+            VectorMode::None);
+        return;
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
