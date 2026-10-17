@@ -811,7 +811,7 @@ def fully_shard(
         # Match every alias of a tied parameter, not just the first-seen one.
         matched = _matching_replicate_patterns(names, replicate_res)
         if matched:
-            if _already_fsdp_sharded(_param_placements(parameter), axis_index):
+            if _already_fsdp_sharded(_param_placements(parameter), axis_index, n_axes):
                 raise RuntimeError(
                     f"replicate: parameter {rel_name!r} (matched by {matched}) is already sharded on mesh "
                     f"axis {mesh_axis!r}, so it cannot be kept replicated on it."
