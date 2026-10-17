@@ -812,6 +812,7 @@ def create_mesh_program_descriptor(
     cb_bytes=112 * 1024,
     inc_every=8,
     desync=False,
+    extra=None,
 ):
     page_bytes = int(input_tensor.buffer_aligned_page_size())
     num_banks = _num_banks(mesh_device)
@@ -926,6 +927,10 @@ def create_mesh_program_descriptor(
             ),
         ]
         r, c = coord
+        if extra is not None:  # (another op's CBs / kernels on the cores this one leaves)
+            cbs_x, kernels_x = extra[1]((r, c))
+            program.cbs = list(program.cbs) + list(cbs_x)
+            program.kernels = list(program.kernels) + list(kernels_x)
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
     return mesh_desc
 
@@ -979,6 +984,7 @@ def fabric_all_gather(
     sub_core_grid=None,
     ready_semaphore=None,
     data_valid_semaphore=None,
+    extra=None,
 ):
     """All-gather `input_tensor` (TILE or ROW_MAJOR, any dtype, DRAM interleaved, one shard per chip) over each group;
     returns the output.
@@ -1047,5 +1053,7 @@ def fabric_all_gather(
         num_links=num_links,
         ready_addr=ready_addr,
         desync=desync,
+        extra=extra,
     )
-    return ttnn.generic_op([input_tensor, output], desc)
+    # (extra = (tensors, fn((r, c)) -> (cbs, kernels)): another op merged in, off worker_cores(plan(..)[0]))
+    return ttnn.generic_op(([] if extra is None else list(extra[0])) + [input_tensor, output], desc)

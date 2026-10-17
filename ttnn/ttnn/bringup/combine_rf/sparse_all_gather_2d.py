@@ -548,10 +548,12 @@ def sparse_all_gather_2d(
     pack=None,
     debug=None,
     spin_limit=0,
+    extra=None,
 ):
     """output: [1, 1, N * S, W] ROW_MAJOR, DRAM interleaved, replicated layout per chip (each chip's own rows already at
     slots idx * S + t, idx = r * C + c); plan_tensor: [1, 1, 1, S] uint32 per chip, the route words of its own rows.
-    Fills every destination's slots; returns output."""
+    Fills every destination's slots; returns output. extra = (tensors, fn((r, c)) -> (cbs, kernels)): another op's
+    CBs / kernels appended to each chip's program, on cores off port_cores_all(..) (it runs under the dispatch)."""
     mesh_device = output.device()
     R, C = tuple(mesh_device.shape)
     N = R * C
@@ -714,5 +716,15 @@ def sparse_all_gather_2d(
                 config=dm("RISCV_0", NOC1),
             ),
         ]
+        if extra is not None:
+            cbs_x, kernels_x = extra[1](coord)
+            program.cbs = list(program.cbs) + list(cbs_x)
+            program.kernels = list(program.kernels) + list(kernels_x)
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(*coord), ttnn.MeshCoordinate(*coord))] = program
-    return ttnn.generic_op([plan_tensor, output], mesh_desc)
+    return ttnn.generic_op(([] if extra is None else list(extra[0])) + [plan_tensor, output], mesh_desc)
+
+
+def port_cores_all(mesh_device, *, num_links=2, torus=(False, False)):
+    """Every chip's port cores (logical CoreCoords, the union): the cores an extra op must stay off."""
+    chips, _, _ = mesh_plan(mesh_device, num_links, torus)
+    return sorted({(c.x, c.y) for c in place_ports(mesh_device, chips).values()})

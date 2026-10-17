@@ -28,8 +28,9 @@ from dataclasses import dataclass, field
 import torch
 from ttnn.bringup.combine_rf.combine_plan import combine_planner_prepare, port_luts
 from ttnn.bringup.combine_rf.dispatch_prep import all_chips_route_words, dispatch_prep_prepare, own_rows_copy_prepare
-from ttnn.bringup.combine_rf.sparse_all_gather_2d import ensure_semaphores, manifest_spec, sparse_all_gather_2d
-from ttnn.bringup.combine_rf.fabric_all_gather_py import fabric_all_gather
+from ttnn.bringup.combine_rf.sparse_all_gather_2d import ensure_semaphores, manifest_spec, port_cores_all, sparse_all_gather_2d
+from ttnn.bringup.combine_rf.fabric_all_gather_py import fabric_all_gather, worker_cores
+from ttnn.bringup.combine_rf.fabric_all_gather_py import plan as fag_plan
 from ttnn.bringup.combine_rf.l1_zero import l1_zero_program
 from ttnn.bringup.combine_rf.layout_ops import layout_op_prepare
 from ttnn.bringup.combine_rf.router_topk import router_topk_prepare
@@ -296,6 +297,20 @@ class TtK3TokenSplitMoE:
         self.planner = combine_planner_prepare(mesh_device, A=self.A, **self._planner_args) if self.A != 15 else probe
         if self.planner is not probe:  # (the combine baked the probe's tensors: give the planner those)
             self.planner.outs.update(probe.outs)
+        # the shared expert's x untilize in another op's program, on the cores it leaves: the planner's (60 us on 32
+        # cores; slows it to 76 - traced 3710 either way) or the sparse dispatch's (fabric bound, its port cores only)
+        self.se_x_where = os.environ.get("K3_SE_X_IN", "own")  # own | plan | dispatch (dispatch: 230 -> 284 us)
+        self.se_x_in_plan = self.se_x_where == "plan" and hasattr(self.planner, "programs")
+        if self.se_x_in_plan:
+            self.untilize_plan = layout_op_prepare(mesh_device, "untilize", exclude=self.planner.cores)
+            self._plan_merged = {}
+        if self.se_x_where == "gather":  # (the routing gather: a 160 KB fabric all-gather, latency bound, few cores)
+            chips_, _ = fag_plan(mesh_device, cluster_axis=None, topology=ttnn.Topology.Linear, num_links=1)
+            ex = [r_.start for r_ in worker_cores(chips_).ranges()]
+            self.untilize_gather = layout_op_prepare(mesh_device, "untilize", exclude=ex)
+        if self.se_x_where == "dispatch" and self.sparse_dispatch:
+            ex = [ttnn.CoreCoord(*c) for c in port_cores_all(mesh_device, num_links=2)]
+            self.untilize_disp = layout_op_prepare(mesh_device, "untilize", exclude=ex)
         # per-call buffers (allocated once)
         sh = ttnn.ShardTensorToMesh(mesh_device, dim=0)
         self.y = ttnn.from_torch(torch.zeros(self.N, rows_cap, d.latent, dtype=torch.bfloat16), dtype=ttnn.bfloat16,
@@ -375,7 +390,7 @@ class TtK3TokenSplitMoE:
         ttnn.deallocate(logits)
         return ids, wts
 
-    def gather_routing(self, ids, wts):
+    def gather_routing(self, ids, wts, x_se=None, x_rm=None):
         """ids (uint16 TILE [S, K]) / weights (bf16 row-major [S, K]) -> one [N S, 2 K] uint16 row-major tensor, each
         token's ids then its weights' bits (64 B a token), home-major (an all-gather over the columns, then the rows),
         replicated: the planner reads a page per token (row_pages, joint). With the custom top-k, ids are already the
@@ -401,7 +416,11 @@ class TtK3TokenSplitMoE:
             g = ttnn.reshape(buf, [N * S, 2 * K])
             return g, g
         if self.rgather == "fag":  # (one dense fabric all-gather, a snake over the whole mesh: chip order kept)
-            g = fabric_all_gather(both, cluster_axis=None, topology=ttnn.Topology.Linear, num_links=1, dim=0)
+            extra = None
+            if x_se is not None:  # (and the shared expert's row-major x, untilized under it)
+                ua = self.untilize_gather.programs(x_se, x_rm)
+                extra = ([x_se, x_rm], lambda coord: (list(ua[coord].cbs), list(ua[coord].kernels)))
+            g = fabric_all_gather(both, cluster_axis=None, topology=ttnn.Topology.Linear, num_links=1, dim=0, extra=extra)
             ttnn.deallocate(both)
             return g, g
         a = ttnn.all_gather(both, dim=0, cluster_axis=1)
@@ -409,6 +428,26 @@ class TtK3TokenSplitMoE:
         g = ttnn.all_gather(a, dim=0, cluster_axis=0)
         ttnn.deallocate(a)
         return g, g
+
+    def plan(self, gi, gw, x):
+        """The combine plan; with se_x_in_plan also the shared expert's row-major x ([S, H], DRAM), in one program."""
+        if not (self.se_x_in_plan and self.se_mode == "flat"):
+            return self.planner(gi, gw), None
+        x_rm = ttnn.allocate_tensor_on_device(ttnn.Shape([self.S, self.d.H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh,
+                                              ttnn.DRAM_MEMORY_CONFIG)
+        k = tuple(int(t.buffer_address()) for t in (gi, gw, x, x_rm))
+        if self._plan_merged.get("key") != k:
+            pa, ua = self.planner.programs(gi, gw), self.untilize_plan.programs(x, x_rm)
+            md = ttnn.MeshProgramDescriptor()
+            for (r, c), pp in pa.items():
+                pd, pu = ttnn.ProgramDescriptor(), ua[(r, c)]
+                pd.cbs = list(pp.cbs) + list(pu.cbs)
+                pd.semaphores = list(pp.semaphores)
+                pd.kernels = list(pp.kernels) + list(pu.kernels)
+                md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = pd
+            self._plan_merged = {"key": k, "desc": md}
+        ttnn.generic_op([gi, gw, x, x_rm] + self.planner.tensors, self._plan_merged["desc"])
+        return self.planner.outs, x_rm
 
     def latent_down(self, x):
         """[S, latent]: tiled (lat_direct: dispatch_prep untilizes it into the dispatch buffer), else row-major."""
@@ -445,7 +484,7 @@ class TtK3TokenSplitMoE:
             self.dprep(gi, lat_rm, xbuf, route)
         return xbuf, route
 
-    def dispatch(self, lat_rm, prep=None):
+    def dispatch(self, lat_rm, prep=None, x_se=None):
         """The gathered tokens [N S, latent] (row home * S + t). Sparse (default): each row only to the chips holding
         one of its experts (sparse_all_gather_2d, its neighbour fences and END markers make it a barrier as the
         dense all-gathers were); dense: two all-gathers."""
@@ -457,10 +496,17 @@ class TtK3TokenSplitMoE:
         xbuf, route = prep
         # (the port cores' manifest rings per call: a persistent one would hold ~123 KB of every core's L1)
         man = ttnn.allocate_tensor_on_device(*manifest_spec(self.mesh, self.S, num_links=2))
-        sparse_all_gather_2d(xbuf, route, num_links=2, manifest=man)
+        extra, x_rm = None, None
+        if x_se is not None:  # (the shared expert's row-major x, untilized under the dispatch)
+            x_rm = ttnn.allocate_tensor_on_device(ttnn.Shape([self.S, self.d.H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT,
+                                                  self.mesh, ttnn.DRAM_MEMORY_CONFIG)
+            ua = self.untilize_disp.programs(x_se, x_rm)
+            extra = ([x_se, x_rm], lambda coord: (list(ua[coord].cbs), list(ua[coord].kernels)))
+        sparse_all_gather_2d(xbuf, route, num_links=2, manifest=man, extra=extra)
         ttnn.deallocate(man)
         ttnn.deallocate(route)
-        return ttnn.reshape(xbuf, [self.N * self.S, self.d.latent])
+        g = ttnn.reshape(xbuf, [self.N * self.S, self.d.latent])
+        return (g, x_rm) if x_se is not None else g
 
     def alloc_arena(self):
         """The call's arena (uninitialized) with the combine's state zeroed."""
@@ -579,7 +625,7 @@ class TtK3TokenSplitMoE:
         self.se_counts, self.se_regions = row([S] * P), row([i * S for i in range(P)])
         self.se_tidx = row(list(range(S)) * P)
 
-    def shared(self, x, yr=None, parts_only=False):
+    def shared(self, x, yr=None, parts_only=False, x_rm=None):
         """The shared expert's y [S, H]; with yr (local flat SE, bf16 tile parts) the block's y = yr + the parts' sum
         in one pass (sum_ops) instead of ttnn.sum + ttnn.add."""
         if self.se_mode == "tp":  # (row all-gather, one flat expert on the row's tokens, reduce-scatter)
@@ -593,7 +639,7 @@ class TtK3TokenSplitMoE:
             ttnn.deallocate(y)
             return ys
         if self.se_flat:  # (x row major; y bfp8 tiles [P S, H]: the parts' outputs, summed)
-            x_rm = self.untilize(x)  # (layout_ops: 32 us vs ttnn's 49)
+            x_rm = self.untilize(x) if x_rm is None else x_rm  # (layout_ops: 32 us vs ttnn's 49; or the planner's)
             y = self.se(
                 x_rm, self.se_counts, self.se_regions, token_index=self.se_tidx, down_fp32=True, y_row_major=self.se_yrm,
                 pack_stochastic_rounding=self.se_srnd, y_bf16=self.se_ybf16, math_fidelity=self.se_fid,
@@ -628,9 +674,16 @@ class TtK3TokenSplitMoE:
         os.environ["MIMO_FL_Y_L1"] = "1"
         ids, wts, *logits = self.router(x, keep_logits=keep)
         mark("router")
-        gi, gw = self.gather_routing(ids, wts)
+        x_rm = None
+        if self.se_x_where == "gather" and self.rgather == "fag" and self.se_mode == "flat":
+            x_rm = ttnn.allocate_tensor_on_device(ttnn.Shape([self.S, self.d.H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT,
+                                                  self.mesh, ttnn.DRAM_MEMORY_CONFIG)
+            gi, gw = self.gather_routing(ids, wts, x_se=x, x_rm=x_rm)
+        else:
+            gi, gw = self.gather_routing(ids, wts)
         mark("routing_gather")
-        pl = self.planner(gi, gw)
+        pl, x_rm2 = self.plan(gi, gw, x)
+        x_rm = x_rm if x_rm is not None else x_rm2
         mark("planner")
         lat = self.latent_down(x)
         mark("lat_down")
@@ -642,13 +695,16 @@ class TtK3TokenSplitMoE:
         mark("dispatch_prep")
         arena = self.alloc_arena()
         mark("arena_zero")
-        xg = self.dispatch(lat, prep)  # (also the barrier: every chip zeroed its arena before any chip's experts start)
+        if x_rm is None and self.se_x_where == "dispatch" and self.sparse_dispatch and self.se_mode == "flat":
+            xg, x_rm = self.dispatch(lat, prep, x_se=x)  # (also the barrier: every chip zeroed its arena first)
+        else:
+            xg = self.dispatch(lat, prep)  # (also the barrier: every chip zeroed its arena before any chip's experts start)
         mark("dispatch")
         self.experts_combine(xg, pl, arena)
         ttnn.deallocate(arena)
         mark("experts_combine")
         if self.fuse_sum and not keep:  # (shared expert parts, latent up, then one sum; keep: ys separately, for checks)
-            parts = self.shared(x, parts_only=True)  # (first: its arena takes the whole L1, so yr may live in L1 after)
+            parts = self.shared(x, parts_only=True, x_rm=x_rm)  # (first: its arena takes all L1, so yr may live in L1)
             mark("shared")
             yr = self.latent_up(yr_l1="yr" in self.l1_set)
             mark("lat_up")
@@ -657,7 +713,7 @@ class TtK3TokenSplitMoE:
         else:
             yr = self.latent_up()
             mark("lat_up")
-            ys = self.shared(x)
+            ys = self.shared(x, x_rm=x_rm)
             mark("shared")
             y = ttnn.add(yr, ys, dtype=ttnn.bfloat16)
         mark("sum")

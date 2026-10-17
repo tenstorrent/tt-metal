@@ -922,8 +922,8 @@ def combine_planner_prepare(
             mesh_mapper=shard,
         )
 
-    def build_mc(ids, wts):
-        mesh_desc = ttnn.MeshProgramDescriptor()
+    def build_mc(ids, wts, per_chip=False):
+        mesh_desc, progs = ttnn.MeshProgramDescriptor(), {}
         for r in range(R):
             for cc in range(C):
                 me = r * C + cc
@@ -965,7 +965,8 @@ def combine_planner_prepare(
                     )
                 ]
                 mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, cc), ttnn.MeshCoordinate(r, cc))] = pd
-        return mesh_desc
+                progs[(r, cc)] = pd
+        return progs if per_chip else mesh_desc
 
     def build(ids, wts):
         if cores is not None:
@@ -1025,4 +1026,8 @@ def combine_planner_prepare(
 
     run.outs = outs
     run.tdbg = tdbg_t if cores is not None else None
+    if cores is not None:  # (the per-chip programs, for merging another op onto the cores it leaves)
+        run.programs = lambda ids, wts: build_mc(ids, wts, per_chip=True)
+        run.cores = [ttnn.CoreCoord(*x) for x in cores]
+        run.tensors = [outs["counts"], outs["regions"], outs["token_index"], outs["table"], outs["plan"]]
     return run
