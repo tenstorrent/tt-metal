@@ -18,7 +18,12 @@ import torch
 from conftest import skip_for_quasar
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ELEMENTS_PER_TILE
-from helpers.llk_params import ApproximationMode, DestAccumulation, format_dict
+from helpers.llk_params import (
+    ApproximationMode,
+    DestAccumulation,
+    VectorMode,
+    format_dict,
+)
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
@@ -26,6 +31,7 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     INT_SUM_DST_OFFSET,
     TILE_COUNT,
+    VECTOR_MODE,
 )
 
 # The Quasar copy of the kernel has its own harness entry (INT_SUM_ADD in sfpu_operations_quasar.h).
@@ -62,6 +68,7 @@ def _run(dst_offset: int) -> tuple[torch.Tensor, torch.Tensor]:
         templates=[
             APPROX_MODE(ApproximationMode.No),
             INT_SUM_DST_OFFSET(dst_offset),
+            VECTOR_MODE(VectorMode.RC),
         ],
         runtimes=[
             TILE_COUNT(TILE_CNT),

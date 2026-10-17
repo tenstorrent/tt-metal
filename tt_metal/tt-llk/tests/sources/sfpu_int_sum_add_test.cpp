@@ -77,13 +77,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             tile /*dst_index*/, formats.math, formats.math);
     }
 
-    // The compute API's sfpu_sum_int_init() followed by sfpu_add_int(0, INT_SUM_DST_OFFSET), including its
-    // bound on the operand tile (SFPU_UNARY_CALL only checks the destination index).
+    // The compute API's sfpu_sum_int_init() followed by sfpu_add_int(dst_index, INT_SUM_DST_OFFSET), including
+    // its bound on the operand tile (SFPU_UNARY_CALL only checks the destination index).
+    constexpr std::uint32_t dst_index = 0;
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::sum_int_init<APPROX_MODE>);
     LLK_ASSERT(
-        (0 + INT_SUM_DST_OFFSET < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()),
+        (static_cast<std::uint64_t>(dst_index) + INT_SUM_DST_OFFSET < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()),
         "sfpu_add_int operand tile idst + dst_offset exceeds max dest tiles");
-    SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, add_int, (APPROX_MODE, 8 /*ITERATIONS*/), 0 /*dst_index*/, VectorMode::RC, INT_SUM_DST_OFFSET);
+    SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, add_int, (APPROX_MODE, 8 /*ITERATIONS*/), dst_index, VECTOR_MODE, INT_SUM_DST_OFFSET);
 
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }

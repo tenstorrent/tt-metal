@@ -26,10 +26,11 @@ ALWI void sfpu_sum_int_row(uint32_t idst) {
 // clang-format off
 /**
  * Adds the Int32 tile at DST index idst + dst_offset onto the tile at DST index idst, in place; the
- * operand tile is left unchanged. The DST register buffer must be in acquired state via *acquire_dst*
- * call. This call is blocking and is only available on the compute engine.
+ * operand tile is left unchanged. Must be preceded by a call to *sfpu_sum_int_init*. The DST register
+ * buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * on the compute engine.
  *
- * On Quasar the operand tile is always idst + 1, so dst_offset must be 1 there.
+ * NOTE: On Quasar the operand tile is always idst + 1, so dst_offset must be 1 there.
  *
  * Return value: None
  *
@@ -44,7 +45,8 @@ ALWI void sfpu_add_int(uint32_t idst, uint32_t dst_offset = 2) {
     LLK_ASSERT(dst_offset == 1, "sfpu_add_int on Quasar always adds tile idst + 1; dst_offset must be 1");
 #else
     MATH(LLK_ASSERT(
-        (idst + dst_offset < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
+        (static_cast<std::uint64_t>(idst) + dst_offset <
+         get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "sfpu_add_int operand tile idst + dst_offset exceeds max dest tiles"));
 #endif
     MATH(SFPU_UNARY_CALL(
