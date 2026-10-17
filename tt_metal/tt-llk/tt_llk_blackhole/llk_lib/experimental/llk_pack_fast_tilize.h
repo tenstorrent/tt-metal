@@ -190,6 +190,8 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
+    // These strides are the op's own; a data-format reconfig must leave them (uninit restores Default).
+    armed_packer_strides = PackerStrides::OpInit;
 
     _llk_pack_fast_tilize_configure_addrmod_();
     _llk_pack_fast_tilize_load_replay_();
@@ -280,7 +282,8 @@ inline void _llk_pack_fast_tilize_uninit_(
         reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, TILE_C_DIM, num_faces, /*partial_face=*/false);
     }
     // DEST remap is NOT cleared here — set/owned by the math thread (see init comment).
-    // BH-specific: restore strides modified by fast-tilize init (WH doesn't modify them).
+    // BH-specific: restore strides modified by fast-tilize init (WH doesn't modify them). This also
+    // records the Default layout, which the skip-strides init below asserts.
     // Note: set_packer_strides's first param is semantically pack_src_format.
     set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
     // Restore X counter, addr_mods, and MOP via _llk_pack_init_ (aligned with WH approach); init owns

@@ -206,7 +206,11 @@ inline void _llk_pack_init_wrapper_(
     const std::uint32_t num_tiles            = 1)
 {
     // No-src wrapper: the packer strides are owned by the preceding hw-configure/reconfig, so we skip
-    // them here. Because strides are the only consumer of pack_src_format, we call the internal init
+    // them here. That requires the strides to be in the layout of this pack_mode already: hw-configure
+    // armed the same mode, or a reconfig re-derived it (a reconfig keeps the armed layout). The init
+    // asserts this; a test that changes the pack mode, or follows a pack-untilize / fast tilize /
+    // fast untilize init, must use _llk_pack_init_with_src_wrapper_ so the strides are programmed.
+    // Because strides are the only consumer of pack_src_format, we call the internal init
     // helper directly instead of the public _llk_pack_init_: that avoids fabricating a pack_src_format
     // (the src format is never read once strides are skipped) and bypasses the public entry point's
     // format-based num_tiles assert, which would otherwise validate against a placeholder value.

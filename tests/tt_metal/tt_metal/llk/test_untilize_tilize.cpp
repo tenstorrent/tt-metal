@@ -112,6 +112,10 @@ struct TestConfig {
     tt::DataFormat output_fmt = tt::DataFormat::Float16_b;
     // Pre-generated source data; if empty, create_arange_vector_of_bfloat16 is used.
     std::vector<std::uint32_t> src0_data;
+    // Compute kernel to run instead of the one untilize_type / tilize_type selects; the buffer setup and
+    // the defines of that type still apply, plus compute_defines.
+    std::string compute_kernel;
+    experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     GoldenFunc golden_function;
 };
 
@@ -338,7 +342,9 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
         {"per_core_block_cnt", test_config.num_tiles_r},
         {"per_core_block_tile_cnt", test_config.num_tiles_c},
     };
-    if (test_config.untilize_type.has_value()) {
+    if (!test_config.compute_kernel.empty()) {
+        compute_kernel = test_config.compute_kernel;
+    } else if (test_config.untilize_type.has_value()) {
         // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
         std::string untilize_type = enchantum::to_string(test_config.untilize_type.value()).data();
         std::transform(untilize_type.begin(), untilize_type.end(), untilize_type.begin(), [](unsigned char c) {
@@ -362,6 +368,9 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
         compute_defines.emplace("EXPLICIT_FACE_R_DIM", std::to_string(test_config.face_r_dim));
         compute_defines.emplace("EXPLICIT_NUM_FACES", std::to_string(num_faces));
         compute_defines.emplace("EXPLICIT_NARROW_ROW", test_config.explicit_untilize_narrow_row ? "1" : "0");
+    }
+    for (const auto& define : test_config.compute_defines) {
+        compute_defines.insert(define);
     }
     if (test_config.fp32_dest_acc_en) {
         compute_defines.emplace("DST_ACCUM_MODE", "1");
@@ -1974,6 +1983,32 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeExplicitGeometry) 
                     }
                 }
             }
+        }
+    }
+}
+
+// Blackhole: pack_reconfig_data_format between pack_untilize_dest_init and pack_untilize_dest
+// (pack_untilize_reconfig_after_tilize_init.cpp). The pack-untilize init programs the dest Z stride that steps
+// the untilize MOP from a tile's top face row to its bottom one; the reconfig must leave it. Exact golden on
+// 32x32 tiles, with and without a preceding tilize_init that no Default pack init follows: a reconfig that
+// resets the strides to the Default layout (one face) fails both variants, one that re-derives them for the
+// armed pack mode fails the plain variant only.
+TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeReconfigBetweenInitAndExecuteKeepsStride) {
+    for (const bool tilize_init_first : {false, true}) {
+        for (const bool full_sync : {false, true}) {
+            SCOPED_TRACE(fmt::format("tilize_init_first={}, full_sync={}", tilize_init_first, full_sync));
+            unit_tests::compute::tilize::TestConfig config{
+                .dst_full_sync_en = full_sync,
+                .input_single_tile_size = 2048,
+                .output_single_tile_size = 2048,
+                .num_tiles_r = 2,
+                .num_tiles_c = 4,
+                .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
+                .compute_kernel =
+                    "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize_reconfig_after_tilize_init.cpp",
+                .compute_defines = {{"TILIZE_INIT_FIRST", tilize_init_first ? "1" : "0"}},
+                .golden_function = ::unit_tests::compute::gold_standard_untilize};
+            unit_tests::compute::tilize::run_single_core_tilize_program(*devices_.at(0), config);
         }
     }
 }

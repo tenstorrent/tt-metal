@@ -171,6 +171,9 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
  *
  * Configures ADDR_MODs and the untilize MOP, programs the Z stride, and stores the per-row L1
  * destination address offset into a scratch config slot so the MOP can advance the L1 address per row.
+ * The Z stride and the L1 offset are derived from the formats and face height given here; a
+ * @ref _llk_pack_reconfig_data_format_ while this init is armed leaves the strides untouched, so call it
+ * before this init when the formats change.
  *
  * @tparam block_ct_dim: Number of input tiles per block.
  * @tparam full_ct_dim: Total number of input tiles across all blocks (must be divisible by block_ct_dim).
@@ -215,6 +218,8 @@ inline void _llk_pack_untilize_init_(
     std::uint32_t y_stride       = FACE_C_DIM * x_stride;
     const std::uint32_t z_stride = 2 * face_r_dim * y_stride;
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
+    // This Z stride is the op's own (face_r_dim rows per face); a data-format reconfig must leave it.
+    armed_packer_strides = PackerStrides::OpInit;
 
     std::uint32_t output_addr_offset;
     if constexpr (narrow_row)
@@ -326,4 +331,6 @@ inline void _llk_pack_untilize_uninit_(const std::uint32_t pack_src_format)
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     const std::uint32_t z_stride = SCALE_DATUM_SIZE(pack_src_format, FACE_R_DIM * FACE_C_DIM);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
+    // The Y/W strides were never changed by the init, so the Default layout is back in place.
+    armed_packer_strides = PackerStrides::Default;
 }
