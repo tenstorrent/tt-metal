@@ -5260,6 +5260,13 @@ tasks:
     - attention
     - attn_residual
     layer: 3
+  frozen:
+    at: '2026-10-17T06:09:02'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_07_attn_residual.py: a8ed8cb8abca3f73782f5d67d6f99b25d040c8e0ef618de73097ecf760bc975a
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.enc_reuse.ffn_hc
   title: enc_reuse ffn_hc (op) on device, layer 3
   step: implement
