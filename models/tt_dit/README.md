@@ -16,6 +16,7 @@ For detailed information about each model including performance metrics, usage i
 - **[Wan2.2-T2V-A14B](models/Wan2_2.md)** - Text-to-video generation model
 - See **[experimental/](experimental/)** for in-progress model variants (AniSora, Wan2.2-Distill, LoRA adapters)
 - **[LTX-2.3](models/LTX2.md)** - Joint audio-video generation model (Pro and Fast variants)
+- **[FLUX 3 Image Klein](models/Flux3Klein.md)** - Text-to-image and reference-image editing model (distilled and base variants; Blackhole Galaxy)
 
 ## Directory Structure
 

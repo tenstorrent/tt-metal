@@ -1,0 +1,16 @@
+{
+  "model": "distilled",
+  "prompt": "Create a photograph preserving the first image exactly as the canvas: keep the same golden retriever seated in the same position on the broad beach, with its body facing forward, front paws planted in the sand, head held near-frontally, and eyes looking directly toward the camera. Preserve the dog’s golden coat, wet fur, floppy ears, dark eyes, black nose, facial markings, and calm expression without alteration. Add a red triangular bandana tied securely around the dog’s neck, with the knot centered beneath its chin and the two pointed ends resting naturally over the wet chest fur. The bandana is solid red fabric with subtle woven texture, following the contours of the neck and sitting partly over the golden fur, with natural folds, contact shadows, and dampness consistent with the beach setting. Keep unchanged the pale gray sand scattered with small shells and footprints, the dog’s paw impressions, the calm gray-blue ocean with low waves, the distant horizon, and the expansive layered gray storm clouds with the narrow blue opening near the horizon. Preserve the original eye-level camera position, square composition, subdued overcast daylight, colors, perspective, and every other background detail exactly as photographed.",
+  "input_prompt": "put a red bandana around the dog's neck",
+  "boxes": null,
+  "width": 1024,
+  "height": 1024,
+  "steps": 16,
+  "guidance": null,
+  "seed": 22,
+  "upsampled": true,
+  "references": [
+    "examples/inputs/3.png"
+  ],
+  "dit": "weights/flux-3-image-klein"
+}

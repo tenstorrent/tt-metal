@@ -1,0 +1,12 @@
+{
+  "model": "distilled",
+  "prompt": "Digital double-exposure portrait in a muted blue monochrome palette, framed as a square head-and-shoulders composition with visible 35mm film grain. Centered in the foreground, a young East Asian man in his twenties faces the camera directly, shown from the shoulders up with fair skin, short black hair, dark eyes, and a neutral closed mouth. He wears a plain dark crew-neck shirt that merges into the shadowed lower portion of the image, and a polished silver hoop earring hangs from his left ear. His face remains sharply defined beneath a larger translucent profile of the same man layered across it, facing left. The oversized profile rises above and extends beyond the frontal head, its forehead, nose, lips, chin, and swept-back hair rendered as pale blue silhouettes with feathered edges. The translucent profile overlaps the frontal face so that both sets of eyes, cheekbones, and strands of hair intersect through the center. Behind them, the double exposure dissolves into a hazy blue field containing indistinct cloud forms and fine tonal texture, with no hard horizon. Cool diffused light catches the bridge of the frontal nose and the rim of the silver hoop, while deep navy shadows gather around the outer edges. Fine scratches, dust specks, uneven exposure, and dense analog grain run across the entire frame.",
+  "input_prompt": "double exposure portrait: a young East Asian man facing the camera, a larger translucent profile of him facing left layered over him, muted blues, film grain, silver hoop earring",
+  "boxes": null,
+  "width": 832,
+  "height": 1248,
+  "steps": 16,
+  "guidance": null,
+  "seed": 2,
+  "upsampled": true
+}

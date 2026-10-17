@@ -1,0 +1,63 @@
+{
+  "model": "distilled",
+  "prompt": "Macro photograph of a chunky knitted soft sculpture diorama, lit by a low, directional light source from the left that casts long, deep shadows across the textures. Filling the upper background is a dark indigo knitted backdrop. Across the lower third, a chaotic bed of thick looped yarn forms a churning sea. Rising from this base are three massive, conical icebergs constructed of stark white cable-knit yarn, positioned in a rhythmic frontal row: one on the left <iceberg_1>, a slightly taller one on the right <iceberg_2>, and a bulky central peak <iceberg_3>. Clinging to the slopes of the outer icebergs is a rhythmic repetition of tiny, identical pale blue knitted houses. Suspended in the upper frame between the peaks is a slightly curling strip of cream-colored stockinette fabric, bearing thick embroidered text <En_Text_1>. Disrupting the icy white and blue palette, a giant, vibrant magenta knitted whale tail <whale_tail_1> bursts vertically from the center of the teal sea, its thick ribbed surface covered in a halo of stray wool fibers illuminated by the raking light. [{\"id\": \"iceberg_1\", \"bbox\": [300, 50, 750, 350], \"desc\": \"A conical soft sculpture made of stark white, chunky roving yarn in a thick cable-knit pattern. The left side is brightly lit, while the right side falls into deep, fuzzy shadow.\"}, {\"id\": \"iceberg_2\", \"bbox\": [250, 650, 750, 950], \"desc\": \"A tall, asymmetrical peak of white cable-knit yarn, featuring a few visibly dropped stitches near the base and slightly uneven tension in the cables.\"}, {\"id\": \"iceberg_3\", \"bbox\": [200, 300, 650, 700], \"desc\": \"The largest central iceberg, a bulky mound of white and pale grey ribbed knitting, dominating the midground with thick, vertical columns of stitches.\"}, {\"id\": \"En_Text_1\", \"bbox\": [130, 220, 220, 780], \"desc\": \"The exact words \\\"KNITTED ICEBERG VILLAGE\\\" embroidered in thick, raised navy-blue yarn across the cream banner. The lettering is slightly uneven and puckered, conforming to the physical stretch of the knitted fabric beneath it.\"}, {\"id\": \"whale_tail_1\", \"bbox\": [500, 380, 850, 620], \"desc\": \"A giant whale tail knitted from bright magenta and coral-pink yarn, bursting vertically from the teal sea. It features thick ribs, a slightly asymmetrical fluke, and a fuzzy halo of stray wool fibers caught in the directional light.\"}]",
+  "input_prompt": "Macro photograph of a chunky knitted soft sculpture diorama, lit by a low, directional light source from the left that casts long, deep shadows across the textures. Filling the upper background is a dark indigo knitted backdrop. Across the lower third, a chaotic bed of thick looped yarn forms a churning sea. Rising from this base are three massive, conical icebergs constructed of stark white cable-knit yarn, positioned in a rhythmic frontal row: one on the left <iceberg_1>, a slightly taller one on the right <iceberg_2>, and a bulky central peak <iceberg_3>. Clinging to the slopes of the outer icebergs is a rhythmic repetition of tiny, identical pale blue knitted houses. Suspended in the upper frame between the peaks is a slightly curling strip of cream-colored stockinette fabric, bearing thick embroidered text <En_Text_1>. Disrupting the icy white and blue palette, a giant, vibrant magenta knitted whale tail <whale_tail_1> bursts vertically from the center of the teal sea, its thick ribbed surface covered in a halo of stray wool fibers illuminated by the raking light.",
+  "boxes": [
+    {
+      "id": "iceberg_1",
+      "desc": "A conical soft sculpture made of stark white, chunky roving yarn in a thick cable-knit pattern. The left side is brightly lit, while the right side falls into deep, fuzzy shadow.",
+      "bbox": [
+        0.3,
+        0.05,
+        0.75,
+        0.35
+      ]
+    },
+    {
+      "id": "iceberg_2",
+      "desc": "A tall, asymmetrical peak of white cable-knit yarn, featuring a few visibly dropped stitches near the base and slightly uneven tension in the cables.",
+      "bbox": [
+        0.25,
+        0.65,
+        0.75,
+        0.95
+      ]
+    },
+    {
+      "id": "iceberg_3",
+      "desc": "The largest central iceberg, a bulky mound of white and pale grey ribbed knitting, dominating the midground with thick, vertical columns of stitches.",
+      "bbox": [
+        0.2,
+        0.3,
+        0.65,
+        0.7
+      ]
+    },
+    {
+      "id": "En_Text_1",
+      "desc": "The exact words \"KNITTED ICEBERG VILLAGE\" embroidered in thick, raised navy-blue yarn across the cream banner. The lettering is slightly uneven and puckered, conforming to the physical stretch of the knitted fabric beneath it.",
+      "bbox": [
+        0.13,
+        0.22,
+        0.22,
+        0.78
+      ]
+    },
+    {
+      "id": "whale_tail_1",
+      "desc": "A giant whale tail knitted from bright magenta and coral-pink yarn, bursting vertically from the teal sea. It features thick ribs, a slightly asymmetrical fluke, and a fuzzy halo of stray wool fibers caught in the directional light.",
+      "bbox": [
+        0.5,
+        0.38,
+        0.85,
+        0.62
+      ]
+    }
+  ],
+  "width": 1184,
+  "height": 896,
+  "steps": 16,
+  "guidance": null,
+  "seed": 1,
+  "upsampled": false
+}

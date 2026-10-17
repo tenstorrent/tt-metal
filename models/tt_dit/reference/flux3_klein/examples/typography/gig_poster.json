@@ -1,0 +1,12 @@
+{
+  "model": "distilled",
+  "prompt": "Studio photograph of a letterpress gig poster printed on thick cream paper stock, shown straight-on against a plain neutral background with even, shadowless lighting. The rectangular sheet fills most of the frame, its deckled fibers and fine paper grain visible around the edges. A strict two-ink composition uses only black and brick red ink, with no illustrations, borders, logos, or additional wording. At the top, very large black wood type reads \"THE LOW TIDES\", set in bold uppercase slab-serif letters with uneven hand-pressed edges and shallow brick-red registration marks confined to the ink impressions. Directly below, small brick-red serif text reads \"with special guests\". In the center, medium-sized black wood type reads \"MOTH LIGHT\", followed by medium brick-red wood type reading \"HARBOUR SOUND\", both centered on separate lines with generous spacing. Along the bottom, compact black small-cap lettering reads \"Saturday 21 March, Doors 8pm, The Old Chapel, Margate\". Beneath it, smaller brick-red small caps read \"Tickets 12 pounds\". The typography is centered vertically and horizontally, with minor ink spread and irregular pressure texture characteristic of traditional letterpress printing; every other area remains unprinted cream stock.",
+  "input_prompt": "a letterpress gig poster on cream stock, wood type: 'THE LOW TIDES' very large at the top, below it 'with special guests' small, then 'MOTH LIGHT' and 'HARBOUR SOUND' medium, at the bottom 'Saturday 21 March, Doors 8pm, The Old Chapel, Margate' and 'Tickets 12 pounds' in small caps, two inks, black and brick red, nothing else written",
+  "boxes": null,
+  "width": 832,
+  "height": 1248,
+  "steps": 16,
+  "guidance": null,
+  "seed": 1,
+  "upsampled": true
+}

@@ -1,0 +1,16 @@
+{
+  "model": "base",
+  "prompt": "Create a photograph of a painted tabletop figurine based on the mecha from the first image, displayed on a desk. Preserve the mecha’s exact design as the sculpted figure: the towering bipedal robot with its broad armored torso, mustard-yellow and muted sage-green color blocking, dark mechanical joints, heavy fists, three long cylindrical launchers rising from its back, compact head housing, and wide tracked feet. Translate it into a solid collectible figurine mounted on a small round black display base, with the original desert terrain simplified into a miniature sculpted base featuring pale sand, tiny rocks, sparse tufts of grass, and a few raised dust marks. Place the figurine upright at the center of a plain wooden desk under even daylight from a nearby window. Replace the original sky and desert background with an ordinary home-office setting: a closed gray notebook and black pen at frame-left, a ceramic mug at frame-right, and a small desk lamp behind the display. Show the figurine at a believable tabletop scale, with visible painted edges, subtle seam lines, and a clear support connection between its base and the sculpted terrain. Add a few loose model-making tools near the back edge of the desk, including a paintbrush and a small bottle of paint.",
+  "input_prompt": "turn this into a figurine on a desk",
+  "boxes": null,
+  "width": 896,
+  "height": 1120,
+  "steps": 50,
+  "guidance": 3.5,
+  "seed": 33,
+  "upsampled": true,
+  "references": [
+    "examples/inputs/1.png"
+  ],
+  "dit": "weights/flux-3-image-klein-base"
+}

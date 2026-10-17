@@ -1,0 +1,12 @@
+{
+  "model": "base",
+  "prompt": "Traditional Japanese woodblock print in the Hiroshige register, rendered entirely in indigo and sumi ink on warm off-white washi paper with visible fibers and uneven carved edges. A broad wooden bridge crosses a rushing river from the lower left toward the center-right, its dark timber planks and low railings reduced to crisp, rhythmic lines. Sudden rain fills the upper half of the composition as dense, fine parallel indigo lines slanting diagonally across the entire scene. Above the bridge, layered blue-grey storm clouds sweep over distant mountains, their flattened silhouettes breaking into pale mist and deep indigo cloud bands. In the foreground, three small travelers stand close together beneath umbrellas on the bridge: one figure in a dark robe holds a round indigo umbrella, another carries a black umbrella, and a third wears a muted grey cloak beneath a smaller umbrella. Their bodies lean forward against the downpour, with hems and sleeves bending in the wind. Below them, white water surges around the bridge supports in curling sumi waves marked by sparse indigo foam crests. On the left bank, reeds and wet grasses rise beside a cluster of dark rocks; on the right, a windswept pine bends over the riverbank. The restrained composition uses broad areas of untouched paper, flat color separations, irregular hand-printed registration, and no lettering, seals, captions, or decorative inscriptions anywhere.",
+  "input_prompt": "a woodblock print of sudden rain over a wooden bridge, Hiroshige register, indigo and sumi, the rain as fine parallel lines, figures under umbrellas, no text",
+  "boxes": null,
+  "width": 832,
+  "height": 1248,
+  "steps": 50,
+  "guidance": 3.5,
+  "seed": 1,
+  "upsampled": true
+}

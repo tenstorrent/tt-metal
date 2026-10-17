@@ -1,0 +1,17 @@
+{
+  "model": "distilled",
+  "prompt": "Create a photograph preserving the first image exactly as the canvas: keep the white ceramic mug filled with dark coffee in the same position on the worn honey-brown wooden tabletop, with its handle pointing toward frame-right, the window directly behind it, the off-white curtain at frame-left, the weathered white window frame, the blue sky and green foliage visible through the glass, and the same low sunlight casting the mug’s long angular shadow across the table. Print the golden retriever from the second image onto the front of the mug as a centered ceramic decal, replacing only the plain white surface of the mug’s body. Depict the dog’s seated, near-frontal portrait from the second image, including its golden coat, wet-looking fur, dark eyes, black nose, floppy ears, and calm expression, but omit the beach, ocean, and cloudy sky from the printed image. Scale the dog to fit naturally within the mug’s visible front face, following the mug’s curved surface with correct perspective and subtle distortion. Integrate the print into the ceramic glaze so it follows the rounded contours, with the existing sunlight and shadow falling naturally across it. Leave every other element unchanged.",
+  "input_prompt": "print the dog from the second image onto the mug",
+  "boxes": null,
+  "width": 1024,
+  "height": 1024,
+  "steps": 16,
+  "guidance": null,
+  "seed": 23,
+  "upsampled": true,
+  "references": [
+    "examples/inputs/2.png",
+    "examples/inputs/3.png"
+  ],
+  "dit": "weights/flux-3-image-klein"
+}

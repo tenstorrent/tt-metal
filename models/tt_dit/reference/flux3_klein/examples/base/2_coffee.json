@@ -1,0 +1,16 @@
+{
+  "model": "base",
+  "prompt": "Create a photograph preserving the first image exactly as the canvas: keep the same close, slightly elevated camera position, the white ceramic mug in the same place on the worn honey-brown wooden tabletop, the window directly behind it, the cream curtain at frame-left, the white-painted window frame with its small chips and weathering, and the blue-green outdoor foliage visible through the glass. Keep the same warm sunlight entering from frame-right, the long diagonal mug shadow across the tabletop, the window reflections, and every existing scratch, seam, and mark in the wood. Fill the mug completely with dark brown coffee, with the liquid surface sitting just below the rim and the existing wisps of steam rising naturally above it. Add one golden-brown croissant beside the mug at frame-right, resting directly on the tabletop near the handle without covering it. Give the croissant its familiar curved, flaky layered form, with a few loose pastry flakes nearby. Match its scale and perspective to the mug, with warm highlights along its upper ridges and a soft contact shadow falling toward frame-left, consistent with the original sunlight.",
+  "input_prompt": "fill the mug with coffee and put a croissant next to it",
+  "boxes": null,
+  "width": 1024,
+  "height": 1024,
+  "steps": 50,
+  "guidance": 3.5,
+  "seed": 21,
+  "upsampled": true,
+  "references": [
+    "examples/inputs/2.png"
+  ],
+  "dit": "weights/flux-3-image-klein-base"
+}

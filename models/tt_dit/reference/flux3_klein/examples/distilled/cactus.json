@@ -1,0 +1,29 @@
+{
+  "model": "distilled",
+  "prompt": "Add a small potted cactus <obj_1> on the wooden tabletop in the lower-right area indicated by the locked placement box, with its pot resting near the lower-right edge of the white coffee mug <mug_1>. Give it a compact green cactus in a simple terracotta pot, matching the scene’s perspective, warm sunlight, and natural contact shadow. Keep the coffee mug and every other part of the image unchanged. [{\"id\": \"obj_1\", \"from\": \"target\", \"src_bbox\": null, \"tgt_bbox\": [550, 620, 850, 850], \"desc\": \"A small potted cactus with a compact upright green barrel cactus featuring several short vertical ribs and evenly spaced clusters of rounded spines, planted in dark soil inside a simple unadorned terracotta pot with a slightly flared rim.\"}, {\"id\": \"mug_1\", \"from\": \"ref_image_0\", \"src_bbox\": [354, 283, 768, 755], \"tgt_bbox\": [354, 283, 768, 755], \"desc\": \"A large plain white ceramic coffee mug with a rounded body and broad curved handle, filled with dark black coffee and a thin ring of steam rising above the rim.\"}]",
+  "input_prompt": "add a small potted cactus in the marked spot",
+  "boxes": [
+    {
+      "id": "obj_1",
+      "desc": "a small potted cactus",
+      "from": "target",
+      "src_bbox": null,
+      "tgt_bbox": [
+        0.55,
+        0.62,
+        0.85,
+        0.85
+      ]
+    }
+  ],
+  "width": 1024,
+  "height": 1024,
+  "steps": 16,
+  "guidance": null,
+  "seed": 1,
+  "upsampled": true,
+  "references": [
+    "examples/inputs/2.png"
+  ],
+  "dit": "weights/flux-3-image-klein"
+}

@@ -1,0 +1,12 @@
+{
+  "model": "base",
+  "prompt": "Two-ink risograph poster printed in fluorescent orange and blue on warm off-white paper, with coarse halftone grain, uneven ink coverage, and visible color misregistration along the edges of every shape. A swimmer dominates the upper center, captured mid-dive headfirst toward the lower left, body stretched diagonally into a long streamlined pose. The swimmer is constructed from flat geometric shapes: a fluorescent orange head and torso, blue limbs, and a blue cap with an orange face opening. One arm reaches forward while the other follows close behind, and the legs trail together above the waterline. Broad blue wave bands sweep across the middle as angular horizontal forms, interrupted by fluorescent orange circles and sharp splash shapes around the diver. Behind the swimmer, a large fluorescent orange sun sits near the top edge against a blue field, with offset orange contours creating narrow doubled outlines. At the bottom, the word \"LIDO\" spans nearly the full width in oversized uppercase block letters, alternating between fluorescent orange and blue with misregistered edges. The composition contains only the swimmer, abstract water, sun, and the single word \"LIDO\", with no additional lettering, numbers, logos, or symbols.",
+  "input_prompt": "a risograph poster in two inks, fluorescent orange and blue, slightly misregistered, a swimmer mid-dive in flat shapes, the word 'LIDO' large at the bottom, no other text",
+  "boxes": null,
+  "width": 832,
+  "height": 1248,
+  "steps": 50,
+  "guidance": 3.5,
+  "seed": 1,
+  "upsampled": true
+}
