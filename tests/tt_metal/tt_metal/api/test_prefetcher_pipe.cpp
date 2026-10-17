@@ -194,7 +194,8 @@ struct SenderKernelParams {
     uint32_t entry_size = 256;
     uint32_t num_entries = 4;
     // See prefetcher_pipe_sender.cpp: 0=broadcast, 1=strided, 2=write_to_receiver + push_back,
-    // 3=per-receiver credit, 4=decoupled broadcast, 5=entry-major per-receiver credit.
+    // 3=per-receiver credit, 4=decoupled broadcast, 5=entry-major per-receiver credit,
+    // 6=write_strided_and_push_back.
     uint32_t write_primitive = 0;
     uint32_t do_barrier = 0;
     uint32_t num_threads = 1;
@@ -1428,6 +1429,35 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_WriteStrided_1to4) {
     mesh_device->clear_loaded_sub_device_manager();
 }
 
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_WriteStridedAndPushBack_1to4) {
+    if (const auto reason = insufficient_worker_grid_reason(5); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {4, 0})), 1024);
+    prefetcher_pipe_test::zero_receiver_rings(*mesh_device, pipe);
+    EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pipe, 256, 4, /*write_primitive=*/6), 4u);
+}
+
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_WriteStrided_PageLargerThanBurst_1to2) {
+    if (const auto reason = insufficient_worker_grid_reason(3); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    // Each page is one entry, larger than a NoC burst on Wormhole (8 KiB) and Blackhole (16 KiB) and a
+    // multiple of neither, so it goes out as several packets, the last one partial.
+    constexpr uint32_t entry_size = 25 * 1024;
+    constexpr uint32_t num_entries = 2;
+    auto mesh_device = devices_[0];
+    auto pipe = make_pipe(
+        mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {2, 0})), num_entries * entry_size);
+    // Each run fills the ring exactly, so the next one starts again at the ring base.
+    for (const uint32_t write_primitive : {1u, 6u}) {
+        SCOPED_TRACE("write_primitive=" + std::to_string(write_primitive));
+        prefetcher_pipe_test::zero_receiver_rings(*mesh_device, pipe);
+        EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pipe, entry_size, num_entries, write_primitive), 2u);
+    }
+}
+
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_WriteToReceiver_ReceiverContiguous) {
     if (const auto reason = insufficient_worker_grid_reason(5); !reason.empty()) {
         GTEST_SKIP() << reason;
@@ -2635,50 +2665,56 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_CrossProgram_DifferentEntr
 // Coordinated live-peer resize
 // ============================================================================
 
-TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerNonDividingE2) {
-    if (!is_fast_dispatch()) {
-        GTEST_SKIP() << "Sub device managers are unsupported with slow dispatch";
+namespace {
+
+// Where set_entry_size(E2) finds the ring in a coordinated resize.
+enum class ResizePadRoom {
+    FITS,     // the pad fits, so the sender resizes before any receiver Program is enqueued
+    PENDING,  // the ring is full, so the sender resizes only once the E1 receiver frees room for the pad
+};
+
+// Polls sem_addr on core until it reads 1 or `polls` 1 ms polls pass.
+bool poll_sem_set(distributed::MeshDevice& mesh_device, const CoreCoord& core, uint32_t sem_addr, uint32_t polls) {
+    const auto device_id = mesh_device.get_device_ids()[0];
+    const auto physical_core = mesh_device.worker_core_from_logical_core(core);
+    for (uint32_t i = 0; i < polls; ++i) {
+        const auto sem_vals =
+            MetalContext::instance().get_cluster().read_core(device_id, physical_core, sem_addr, sizeof(uint32_t));
+        if (!sem_vals.empty() && sem_vals[0] == 1u) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
-        GTEST_SKIP() << reason;
-    }
-    // Live-peer E1→E2 prefetch with a non-dividing E2:
-    //   A (SD0): push E1 → set_entry_size(E2) without draining → signal → wait go → push E2
-    //   B (SD1): bound at E1, pop E1 → set_receiver_entry_size(E2), finish
-    //   C (SD1): bound at E2 while A is still alive; consume E2
-    //
-    // A reaches set_entry_size before B is even enqueued, proving resize itself does
-    // not wait for E1 acknowledgements. E2=384 has a 768-byte usable limit in the
-    // 1024-byte allocation; the second E2 push credits the 256-byte trailing gap.
-    auto mesh_device = devices_[0];
+    return false;
+}
+
+// Live-peer E1 -> E2 resize across two sub-devices, the sender on SD0 and the receiver on SD1:
+//   A (SD0): push E1 -> set_entry_size(E2) without draining -> signal -> wait go -> push E2
+//   B (SD1): bound at E1, pop E1 -> set_receiver_entry_size(E2), finish
+//   C (SD1): bound at E2 while A is still alive; consume E2
+// The sub-device manager must be loaded, and resized_sem / go_sem allocated before the pipe. Both cursors
+// start at sender_offset_e1. Returns whether C's E2 entries hold the expected bytes, starting from the E2
+// grid point at or after that offset.
+bool run_coordinated_resize(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    m2::PrefetcherPipe& pipe,
+    const GlobalSemaphore& resized_sem,
+    const GlobalSemaphore& go_sem,
+    uint32_t e1,
+    uint32_t total_entries_e1,
+    uint32_t e2,
+    uint32_t total_entries_e2,
+    uint32_t sender_offset_e1,
+    ResizePadRoom pad_room) {
     distributed::MeshDevice& device = *mesh_device;
-    constexpr uint32_t e1 = 256;
-    constexpr uint32_t e2 = 384;
-    constexpr uint32_t ring_depth_e1 = 4;  // 1024 bytes → 768 usable bytes / 2 entries at E2
-    constexpr uint32_t total_entries_e1 = 4;
-    constexpr uint32_t total_entries_e2 = 2;
     constexpr uint32_t data_pattern = 0;  // multicast counter
+    const CoreRangeSet sender_cores = pipe.sender_cores();
+    const CoreRangeSet receiver_cores = pipe.receiver_cores();
+    const CoreCoord sender_core = corerange_to_cores(sender_cores).front();
+    const CoreCoord receiver_core = corerange_to_cores(receiver_cores).front();
+    prefetcher_pipe_test::zero_receiver_rings(device, pipe);
 
-    const CoreCoord sender_core(0, 0);
-    const CoreCoord receiver_core(1, 0);
-    const CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
-    const CoreRangeSet receiver_cores = CoreRangeSet(CoreRange(receiver_core));
-
-    SubDevice sender_sub_device(std::array{sender_cores});
-    SubDevice receiver_sub_device(std::array{receiver_cores});
-    auto sub_device_manager =
-        mesh_device->create_sub_device_manager({sender_sub_device, receiver_sub_device}, /*local_l1_size=*/0);
-    mesh_device->load_sub_device_manager(sub_device_manager);
-
-    // Semaphores are allocated top-down before the PrefetcherPipe. The test-only
-    // sender staging scratch is placed immediately above the persistent arena.
-    auto resized_sem = CreateGlobalSemaphore(*mesh_device, sender_cores, /*initial_value=*/0);
-    auto go_sem = CreateGlobalSemaphore(*mesh_device, sender_cores, /*initial_value=*/0);
-
-    auto pipe = make_pipe(mesh_device.get(), sender_core, receiver_cores, e1 * ring_depth_e1);
-    distributed::Synchronize(*mesh_device, std::nullopt);
-
-    // --- Program A (SD0): push E1 → resize without drain → signal → wait go → push E2 ---
+    // --- Program A (SD0): push E1 -> resize without drain -> signal -> wait go -> push E2 ---
     m2::KernelSpec sender_kernel = make_dm_kernel(
         "sender", "tests/tt_metal/tt_metal/test_kernels/dataflow/prefetcher_pipe_coordinated_resize_sender.cpp");
     bind_pipe(sender_kernel, {pipe_param}, "out");
@@ -2728,27 +2764,21 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
     // Subsequent FD work waits for SD1 idle (not long-running A on SD0).
     mesh_device->set_sub_device_stall_group({{SubDeviceId{1}}});
 
-    // A must resize before any receiver is enqueued. This would time out if
-    // set_entry_size still contained an acked == sent barrier.
-    const auto device_id = mesh_device->get_device_ids()[0];
-    const auto physical_sender = mesh_device->worker_core_from_logical_core(sender_core);
-    bool resized = false;
-    for (uint32_t i = 0; i < 10000; ++i) {
-        const auto sem_vals = MetalContext::instance().get_cluster().read_core(
-            device_id, physical_sender, resized_sem.address(), sizeof(uint32_t));
-        if (!sem_vals.empty() && sem_vals[0] == 1u) {
-            resized = true;
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
+    // A resizes before any receiver is enqueued exactly when the pad fits.
+    const bool resized_early =
+        poll_sem_set(device, sender_core, resized_sem.address(), pad_room == ResizePadRoom::FITS ? 10000 : 100);
     const auto [sender_sent, sender_acked] = prefetcher_pipe_test::read_pipe_credits(device, pipe, sender_core);
-    ASSERT_TRUE(resized) << "Timed out waiting for barrier-free set_entry_size(E2); sender credits=" << sender_sent
-                         << "/" << sender_acked;
+    if (pad_room == ResizePadRoom::FITS) {
+        EXPECT_TRUE(resized_early) << "Timed out waiting for barrier-free set_entry_size(E2); sender credits="
+                                   << sender_sent << "/" << sender_acked;
+    } else {
+        EXPECT_FALSE(resized_early) << "set_entry_size(E2) published its pad into a full ring; sender credits="
+                                    << sender_sent << "/" << sender_acked;
+    }
     // Quasar: local pages_sent is updated via cached stores; mid-run host TL1 peeks of the
     // sender slot often still see 0 even after an L2 flush on emu. The receiver slot is
     // incremented by NOC atomics into TL1, so it is the reliable undrained-E1 probe.
-    if (is_quasar()) {
+    if (is_quasar_arch()) {
         const auto [recv_sent, recv_acked] = prefetcher_pipe_test::read_pipe_credits(device, pipe, receiver_core);
         EXPECT_LT(recv_acked, recv_sent)
             << "E1 unexpectedly drained before its receiver program was enqueued; receiver credits=" << recv_sent << "/"
@@ -2774,6 +2804,11 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
     workload_b.add_program(persistent_unit_mesh_device_range(), std::move(program_b));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload_b, false);
 
+    if (pad_room == ResizePadRoom::PENDING) {
+        EXPECT_TRUE(poll_sem_set(device, sender_core, resized_sem.address(), 10000))
+            << "set_entry_size(E2) still waiting after the E1 receiver freed room for its pad";
+    }
+
     // --- Program C (SD1): same-epoch bind at E2 while A is still alive ---
     Program program_c = make_receiver_program(device, pipe, e2, total_entries_e2);
     distributed::MeshWorkload workload_c;
@@ -2782,23 +2817,131 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
 
     // Release A to push at E2; C is already bound/running on the peer sub-device.
     MetalContext::instance().get_cluster().write_core(
-        device_id, physical_sender, std::vector<uint32_t>{1}, go_sem.address());
+        device.get_device_ids()[0],
+        device.worker_core_from_logical_core(sender_core),
+        std::vector<uint32_t>{1},
+        go_sem.address());
 
     mesh_device->reset_sub_device_stall_group();
     distributed::Finish(mesh_device->mesh_command_queue());
 
-    // E2 entries begin at checkpoint offset 0. Their expected counter values continue
-    // after the four E1 entries while the final E2 push also advances over the ring gap.
-    EXPECT_TRUE(prefetcher_pipe_test::verify_receiver_ring(
-        device,
+    // E2 entries start at the first E2 grid point at or after the E1 cursor and wrap at the usable limit.
+    // Their expected counter values continue after the E1 entries.
+    const uint32_t usable_e2 = pipe.ring_size() - pipe.ring_size() % e2;
+    uint32_t first_offset_e2 = (sender_offset_e1 + e2 - 1) / e2 * e2;
+    if (first_offset_e2 >= usable_e2) {
+        first_offset_e2 = 0;
+    }
+    const auto expected = cross_node_dfb_test::expected_receiver_ring_bytes(
+        data_pattern, e2, total_entries_e2, /*receiver_idx=*/0, /*num_receivers=*/1, total_entries_e1);
+    const auto ring = prefetcher_pipe_test::read_receiver_ring_bytes(device, pipe, receiver_core, usable_e2);
+    for (uint32_t k = 0; k < total_entries_e2; ++k) {
+        const uint32_t offset = (first_offset_e2 + k * e2) % usable_e2;
+        if (!std::equal(expected.begin() + k * e2, expected.begin() + (k + 1) * e2, ring.begin() + offset)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerNonDividingE2) {
+    if (!is_fast_dispatch()) {
+        GTEST_SKIP() << "Sub device managers are unsupported with slow dispatch";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    // A reaches set_entry_size before B is even enqueued, proving resize itself does
+    // not wait for E1 acknowledgements. E2=384 has a 768-byte usable limit in the
+    // 1024-byte allocation; the second E2 push credits the 256-byte trailing gap.
+    auto mesh_device = devices_[0];
+    constexpr uint32_t e1 = 256;
+    constexpr uint32_t e2 = 384;
+    constexpr uint32_t ring_depth_e1 = 4;  // 1024 bytes → 768 usable bytes / 2 entries at E2
+
+    const CoreCoord sender_core(0, 0);
+    const CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
+    const CoreRangeSet receiver_cores = CoreRangeSet(CoreRange({1, 0}));
+
+    SubDevice sender_sub_device(std::array{sender_cores});
+    SubDevice receiver_sub_device(std::array{receiver_cores});
+    auto sub_device_manager =
+        mesh_device->create_sub_device_manager({sender_sub_device, receiver_sub_device}, /*local_l1_size=*/0);
+    mesh_device->load_sub_device_manager(sub_device_manager);
+
+    // Semaphores are allocated top-down before the PrefetcherPipe. The test-only
+    // sender staging scratch is placed immediately above the persistent arena.
+    auto resized_sem = CreateGlobalSemaphore(*mesh_device, sender_cores, /*initial_value=*/0);
+    auto go_sem = CreateGlobalSemaphore(*mesh_device, sender_cores, /*initial_value=*/0);
+
+    auto pipe = make_pipe(mesh_device.get(), sender_core, receiver_cores, e1 * ring_depth_e1);
+    distributed::Synchronize(*mesh_device, std::nullopt);
+
+    // Four E1 entries from cursor 0 bring the cursor back to 0, on the E2 grid: there is no pad.
+    EXPECT_TRUE(run_coordinated_resize(
+        mesh_device,
         pipe,
-        receiver_core,
-        data_pattern,
+        resized_sem,
+        go_sem,
+        e1,
+        /*total_entries_e1=*/ring_depth_e1,
         e2,
-        total_entries_e2,
-        /*receiver_idx=*/0,
-        /*num_receivers=*/1,
-        /*counter_base=*/total_entries_e1));
+        /*total_entries_e2=*/2,
+        /*sender_offset_e1=*/0,
+        ResizePadRoom::FITS));
+
+    mesh_device->clear_loaded_sub_device_manager();
+}
+
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_ResizePadWaitsForRoom) {
+    if (!is_fast_dispatch()) {
+        GTEST_SKIP() << "Sub device managers are unsupported with slow dispatch";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    // set_entry_size(E2) into a full ring whose cursor is off the E2 grid. One E1 entry through the pipe
+    // first leaves both cursors at 256; four more fill the 1024-byte ring and bring the sender back to 256.
+    // E2=384 then snaps it to 384, a 128-byte pad the full ring has no room for. Published at once, the
+    // pad would push the outstanding credits past the ring, and the E2 pushes could then overwrite E1
+    // entries the receiver has not read. The pad waits until B frees room for it.
+    auto mesh_device = devices_[0];
+    constexpr uint32_t e1 = 256;
+    constexpr uint32_t e2 = 384;
+    constexpr uint32_t ring_depth_e1 = 4;
+
+    const CoreCoord sender_core(0, 0);
+    const CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
+    const CoreRangeSet receiver_cores = CoreRangeSet(CoreRange({1, 0}));
+
+    SubDevice sender_sub_device(std::array{sender_cores});
+    SubDevice receiver_sub_device(std::array{receiver_cores});
+    auto sub_device_manager =
+        mesh_device->create_sub_device_manager({sender_sub_device, receiver_sub_device}, /*local_l1_size=*/0);
+    mesh_device->load_sub_device_manager(sub_device_manager);
+
+    auto resized_sem = CreateGlobalSemaphore(*mesh_device, sender_cores, /*initial_value=*/0);
+    auto go_sem = CreateGlobalSemaphore(*mesh_device, sender_cores, /*initial_value=*/0);
+
+    auto pipe = make_pipe(mesh_device.get(), sender_core, receiver_cores, e1 * ring_depth_e1);
+    distributed::Synchronize(*mesh_device, std::nullopt);
+
+    run_persistent_sender_push(mesh_device, pipe, e1, 1);
+    ASSERT_EQ(run_persistent_receiver_pop(mesh_device, pipe, e1, 1), 1u);
+
+    EXPECT_TRUE(run_coordinated_resize(
+        mesh_device,
+        pipe,
+        resized_sem,
+        go_sem,
+        e1,
+        /*total_entries_e1=*/ring_depth_e1,
+        e2,
+        /*total_entries_e2=*/2,
+        /*sender_offset_e1=*/e1,
+        ResizePadRoom::PENDING));
 
     mesh_device->clear_loaded_sub_device_manager();
 }

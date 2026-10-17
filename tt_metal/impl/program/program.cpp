@@ -954,6 +954,7 @@ KernelGroup::KernelGroup(
     }
 
     std::set<NOC_MODE> noc_modes;
+    bool brisc_specifies_noc = false;
     for (auto kernel_id : this->kernel_ids) {
         const auto kernel = program.get_kernel(kernel_id);
         auto num_binaries = kernel->expected_num_binaries();
@@ -983,6 +984,7 @@ KernelGroup::KernelGroup(
                             noc_modes.insert(arg.noc_mode);
                             // Use brisc's noc if brisc specifies a noc
                             kernel_config.brisc_noc_id() = arg.noc;
+                            brisc_specifies_noc = true;
                             // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to
                             // DM_DEDICATED_NOC
                             if (arg.noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
@@ -992,10 +994,11 @@ KernelGroup::KernelGroup(
                             kernel->get_kernel_processor_type(0) ==
                             ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
                             noc_modes.insert(arg.noc_mode);
-                            // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
-                            // If both brisc and ncrisc set the noc, then this is safe due to prior correctness
-                            // validation
-                            kernel_config.brisc_noc_id() = 1 - arg.noc;
+                            // Use 1-ncrisc's noc (the other noc) unless brisc specifies a noc: the two agree
+                            // except when both kernels share one dedicated noc, where brisc's is the one in use
+                            if (!brisc_specifies_noc) {
+                                kernel_config.brisc_noc_id() = 1 - arg.noc;
+                            }
                             // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to
                             // DM_DEDICATED_NOC
                             if (arg.noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {

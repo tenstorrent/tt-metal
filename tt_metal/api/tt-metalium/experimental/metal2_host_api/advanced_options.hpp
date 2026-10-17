@@ -52,6 +52,10 @@ using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 //       re-declared here for use in AdvancedOptions to avoid circular dependency.
 //       This is legal so long as the declarations are identical, which is compiler-enforced.
 
+// Whether a dedicated-NOC data movement kernel may share its NOC with the other data movement kernel on
+// its nodes. See KernelAdvancedOptions::dedicated_noc_sharing.
+enum class DedicatedNocSharing : uint8_t { EXCLUSIVE, SHARED_DISJOINT_TRAFFIC };
+
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
     // Varargs
@@ -189,6 +193,36 @@ struct KernelAdvancedOptions {
         std::string accessor_name;  // pipe accessor name (used in the kernel source code)
     };
     Group<PrefetcherPipeBinding> prefetcher_pipe_bindings;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Shared dedicated NOC (TT-1.x.x data movement kernels)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // By default each DM_DEDICATED_NOC data movement kernel on a node needs a NOC of its own. When both
+    // data movement kernels on a node set SHARED_DISJOINT_TRAFFIC, they may name the same NOC
+    // (DataMovement1XXConfig::noc), which keeps the other NOC free without dynamic-NOC mode's
+    // per-transaction overhead. Ignored for other kernels.
+    //
+    // CAUTION: The caller guarantees that no kind of NoC transaction (reads, writes, atomics) is issued by
+    //          both kernels, e.g. one only reads and the other only writes and issues atomics. A kind issued
+    //          by both can let a barrier return before its transactions complete. Posted and non-posted
+    //          writes, inline writes included, are one kind: in dedicated mode both kernels issue them from
+    //          the same command buffers, so one kernel's write can redirect the other's stateful
+    //          (set_state / with_state) writes. Only the command buffers are checked: under the watcher's
+    //          NoC sanitizer the kernels record the command buffers they program on the shared NOC, and a
+    //          command buffer used by both is reported as a watcher error. The transaction-kind condition
+    //          itself goes unchecked.
+    //
+    // The NOC's hardware transaction counters count both kernels' traffic, but noc_async_full_barrier and
+    // the end-of-kernel checks (built with watcher or lightweight kernel asserts) compare each RISC's own
+    // counts against them. So neither kernel calls a full barrier, and each re-syncs its counters
+    // (ncrisc_noc_counters_init) before it returns, once the other kernel has nothing in flight on the NOC.
+    // Two other sources of NoC traffic also count against the condition:
+    //   - The device profiler pushes a full buffer to DRAM mid-kernel as posted writes on the kernel's NOC.
+    //   - On Blackhole, BRISC firmware sets up remote circular buffers with atomics on BRISC's NOC and then
+    //     waits for its own count of them, after it has started the NCRISC kernel. In a program with remote
+    //     circular buffers, the NCRISC kernel must not issue atomics on the shared NOC.
+    DedicatedNocSharing dedicated_noc_sharing = DedicatedNocSharing::EXCLUSIVE;
 };
 
 struct DFBAdvancedOptions {
