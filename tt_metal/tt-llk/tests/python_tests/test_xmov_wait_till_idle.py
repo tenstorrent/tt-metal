@@ -65,9 +65,11 @@ def test_xmov_wait_till_idle(xfer_16b, gap):
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            twos_complement=True,
         ),
     )
-    vals = [int(v) for v in configuration.run().result]
+    # Raw u32 words.
+    vals = [int(v) & 0xFFFFFFFF for v in configuration.run().result]
     (
         iterations,
         stale_iterations,
@@ -112,3 +114,11 @@ def test_xmov_wait_till_idle(xfer_16b, gap):
         f"iterations (first at iteration {first_stale_iter}: word {first_stale_word} and "
         f"{first_stale_words - 1} more did not yet hold the pattern of that iteration)"
     )
+    if (
+        get_chip_architecture() == ChipArchitecture.BLACKHOLE
+        and cfg0 & CFG0_L0_DCACHE_DISABLE
+    ):
+        pytest.skip(
+            f"the L0 data cache was disabled at boot (cfg0 {cfg0:#x}), so the cache invalidate "
+            "in xmov_wait_till_idle was not exercised"
+        )
