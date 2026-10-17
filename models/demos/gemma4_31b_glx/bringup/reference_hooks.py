@@ -9,6 +9,17 @@ The block-graph contract is in reference/_bringup_interface.py (vendored, do not
 the framework (bringup_fw).
 """
 
+from pathlib import Path
+
+import torch
+
 
 def reference(spec, layers=None, dtype=None):
-    raise NotImplementedError("reference stage: write models/demos/gemma4_31b_glx/reference/ and return it here")
+    from models.demos.gemma4_31b_glx.reference.gemma4_ref import Gemma4Reference
+
+    return Gemma4Reference(Path(spec.get("paths.hf")), layers=layers, dtype=dtype or torch.float32)
+
+
+def hf_layers(model):
+    """AutoModelForCausalLM loads Gemma4ForConditionalGeneration: the text decoder layers sit under language_model."""
+    return model.model.language_model.layers
