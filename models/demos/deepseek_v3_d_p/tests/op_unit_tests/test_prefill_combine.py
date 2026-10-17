@@ -451,9 +451,34 @@ def run_combine(
     # a cache hit, which builds nothing and writes nothing. It is not a warmup: the numbers still
     # come only from the replays. Its output is thrown away -- nothing reads it, and at 8x4 it is
     # 2.3 GB that the 55 phases after this one need back.
+    # DRAM the op keeps for itself, measured across this launch and no other. It has to be this one:
+    # an op allocates its internal buffers on the program cache MISS and holds them alive with the
+    # cached workload, so a later launch allocates nothing and would measure zero. combine_fabric2d's
+    # forwarding buffer is exactly such a buffer -- internal, no argument, no return value -- and this
+    # delta is the only place its size is observable from a test.
+    #
+    # The window closes AFTER the throwaway output is released, so what is left is the part the op
+    # kept, with no need to know the output's size and subtract it.
+    #
+    # Totalled over banks rather than left per-bank: the allocator reports per bank, a DRAM tensor is
+    # interleaved across all of them, and what anyone reading this wants is the bytes one chip spent.
+    # Every chip of the mesh runs the same program against the same shapes, so one chip's figure is
+    # every chip's.
+    #
+    # Reported, never asserted. How much scratch an op gives itself is the op's business; this test's
+    # job is to say what it was, not to pin it.
+    _dram_before = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
     cache_miss_output = tt_combine(*combine_inputs)
     ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(cache_miss_output)
+    _dram_after = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    logger.info(
+        "[dram] op_alloc_bytes={} banks={}".format(
+            (_dram_after.total_bytes_allocated_per_bank - _dram_before.total_bytes_allocated_per_bank)
+            * _dram_after.num_banks,
+            _dram_after.num_banks,
+        )
+    )
 
     # Capture does NOT execute -- the op runs again on the replays below, and `tt_output` ends up
     # holding the LAST replay's result, which is what the check further down reads. Checking the last
