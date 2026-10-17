@@ -16,6 +16,7 @@
 
 #include <cstdint>
 
+#include "experimental/llk_fast_tilize_common.h"
 #include "llk_pack.h"
 
 constexpr std::uint32_t REPLAY_TILE_OFFSET = 0;
@@ -131,14 +132,29 @@ inline void _llk_pack_fast_tilize_mop_config_(const std::uint32_t unit_dim)
     tmp.program();
 }
 
+/**
+ * @brief Initialize the packer for fast tilize: strides, DEST offsets, address mods, tile replay and MOP.
+ *
+ * The tile replay is 16 PACRs and the per-tile L1 advance is a full tile, so only 32x32 tiles are supported.
+ *
+ * @tparam Dst: Destination sync mode.
+ * @tparam is_fp32_dest_acc_en: Whether DEST accumulates in 32 bit; the packer is then borrowed in bf16 stride mode.
+ * @param use_32bit_dest: Unused; the DEST read width is derived from is_fp32_dest_acc_en.
+ * @param pack_dst_format: Output (L1) data format.
+ * @param unit_dim: Tiles per MOP run; programs the MOP outer loop.
+ * @param num_faces: Faces per tile; must be 4 (32x32 tiles only).
+ * @param pack_src_format: Packer source format of the caller, restored by uninit.
+ * @note Pair with @ref _llk_pack_fast_tilize_uninit_ after the last chunk.
+ */
 template <DstSync Dst, bool is_fp32_dest_acc_en = false>
 __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     [[maybe_unused]] const std::uint32_t use_32bit_dest,
     const std::uint32_t pack_dst_format,
     [[maybe_unused]] const std::uint32_t unit_dim,
-    [[maybe_unused]] const std::uint32_t num_faces = 4,
-    const std::uint32_t pack_src_format            = (std::uint32_t)DataFormat::Float16_b)
+    const std::uint32_t num_faces       = 4,
+    const std::uint32_t pack_src_format = (std::uint32_t)DataFormat::Float16_b)
 {
+    LLK_ASSERT(num_faces == 4, "Blackhole fast tilize supports 32x32 tiles only");
     // DEST remap (remap_addrs + swizzle_32b) is set by _llk_math_fast_tilize_init_
     // on the math thread (mirrors pack_untilize_dest_init; tracked by
     // tt-metal#17132 / tt-llk#989). No action needed here, no uninit.
@@ -227,9 +243,17 @@ inline void _llk_pack_fast_tilize_row_begin_(const std::uint32_t address)
     program_packer_destination(address);
 }
 
+/**
+ * @brief Pack one row-chunk of unit_dim 32x32 tiles from DEST to L1 (one MOP run) after @ref _llk_pack_fast_tilize_row_begin_.
+ *
+ * @param tile_index: Unused; the DEST read position is the counter state left by the previous chunk.
+ * @param unit_dim: Unused; the MOP outer loop is programmed by @ref _llk_pack_fast_tilize_init_ / @ref _llk_pack_fast_tilize_reinit_unit_dim_.
+ * @param num_faces: Faces per tile; must be 4 (32x32 tiles only).
+ */
 inline void _llk_pack_fast_tilize_row_chunk_(
-    [[maybe_unused]] const std::uint32_t tile_index, [[maybe_unused]] const std::uint32_t unit_dim, [[maybe_unused]] const std::uint32_t num_faces = 4)
+    [[maybe_unused]] const std::uint32_t tile_index, [[maybe_unused]] const std::uint32_t unit_dim, const std::uint32_t num_faces = 4)
 {
+    LLK_ASSERT(num_faces == 4, "Blackhole fast tilize supports 32x32 tiles only");
     // Only W needs resetting per chunk — it accumulates via W_Cr across tiles
     // (last_inner/last_outer each fire ADDRCRZW W+=1, and start_op restores W=W_Cr).
     // Z=0 naturally after every tile (ADDR_MOD_1: z_src={clr:1}); no reset needed.
@@ -249,14 +273,24 @@ inline void _llk_pack_fast_tilize_reinit_unit_dim_([[maybe_unused]] const std::u
     _llk_pack_fast_tilize_mop_config_(new_unit_dim);
 }
 
-// One call = one row-chunk (one MOP run). num_units loop removed; block
-// height is always 1 and chunk iteration is in the caller.
+/**
+ * @brief Pack one row-chunk of unit_dim 32x32 tiles from DEST to the given L1 address (one MOP run).
+ *
+ * Block height is always 1 and chunk iteration is in the caller.
+ *
+ * @param tile_index: Unused; the MOP starts from DEST tile 0 of the active half.
+ * @param address: 16B L1 address of the chunk's first output tile.
+ * @param unit_dim: Unused; the MOP outer loop is programmed by @ref _llk_pack_fast_tilize_init_ / @ref _llk_pack_fast_tilize_reinit_unit_dim_.
+ * @param num_faces: Faces per tile; must be 4 (32x32 tiles only).
+ * @note Call @ref _llk_pack_fast_tilize_init_ before this function.
+ */
 inline void _llk_pack_fast_tilize_block_(
     [[maybe_unused]] const std::uint32_t tile_index,
     const std::uint32_t address,
     [[maybe_unused]] const std::uint32_t unit_dim,
-    [[maybe_unused]] const std::uint32_t num_faces = 4)
+    const std::uint32_t num_faces = 4)
 {
+    LLK_ASSERT(num_faces == 4, "Blackhole fast tilize supports 32x32 tiles only");
     TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
     program_packer_destination(address);
     // Reset Z/W counters. MOP start_op restores from CR shadows.

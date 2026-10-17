@@ -79,39 +79,31 @@ std::vector<std::uint32_t> gold_standard_untilize(
 std::vector<std::uint32_t> gold_standard_tilize(const std::vector<std::uint32_t>& src_vec, const GoldenConfig& config) {
     std::vector<std::uint32_t> dst_vec;
 
-    int num_rows = config.num_tiles_r_dim * config.face_r_dim * (config.num_faces > 2 ? 2 : 1);
+    // Face grid of one tile: 2x2 for 32x32, 1x2 for a 16x32 tiny tile, 2x1 for a narrow 32x16 tile.
+    const int faces_c = std::min(config.tile_shape_in_faces_c, config.num_faces);
+    const int faces_r = config.num_faces / faces_c;
+    int num_rows = config.num_tiles_r_dim * config.face_r_dim * faces_r;
     // Number of uint32 words per row: face_c_dim elements × (faces across) × datum_bytes / 4 bytes per uint32
     // BF16 (datum_bytes=2): (nc*16*2)*2/4 = nc*16   FP8 (datum_bytes=1): (nc*16*2)*1/4 = nc*8
-    int num_cols = (config.num_tiles_c_dim * config.face_c_dim * (config.num_faces >= 2 ? 2 : 1)) *
-                   static_cast<int>(config.datum_bytes) / sizeof(std::uint32_t);
+    int num_cols = (config.num_tiles_c_dim * config.face_c_dim * faces_c) * static_cast<int>(config.datum_bytes) /
+                   sizeof(std::uint32_t);
     // Half-face width in uint32 words: face_c_dim/2 elements × datum_bytes / 4 bytes per uint32
     // BF16: 16*2/4 = 8   FP8: 16*1/4 = 4
     const int half_face_w = config.face_c_dim * static_cast<int>(config.datum_bytes) / sizeof(std::uint32_t);
     // Rows per tile-row: 32 for a full 32x32 tile (2 face-rows), 16 for a 16x32 tiny tile (1 face-row).
-    const int tile_r = config.face_r_dim * (config.num_faces > 2 ? 2 : 1);
+    const int tile_r = config.face_r_dim * faces_r;
+    const int tile_w = faces_c * half_face_w;
     for (int x = 0; x < num_rows; x += tile_r) {
-        for (int y = 0; y < num_cols; y += 2 * half_face_w) {
-            int start = (x * num_cols) + y;
-
-            // Top faces (face_r_dim rows each, not a hardcoded 16, so shortened faces work)
-            for (int j = 0; j < 2; j++) {
-                int start_ = start + (half_face_w * j);
-                for (int k = 0; k < config.face_r_dim; k++) {
-                    for (int i = 0; i < half_face_w; i++) {
-                        int idx = start_ + (num_cols * k) + i;
-                        dst_vec.push_back(src_vec.at(idx));
-                    }
-                }
-            }
-
-            if (config.num_faces > 2) {
-                // Bottom faces
-                start += config.face_r_dim * num_cols;
-                for (int j = 0; j < 2; j++) {
-                    int start_ = start + (half_face_w * j);
+        for (int y = 0; y < num_cols; y += tile_w) {
+            const int start = (x * num_cols) + y;
+            // Faces in tile order: each face row top to bottom, faces left to right within it; every face
+            // is face_r_dim rows (not a hardcoded 16, so shortened faces work) of half_face_w words.
+            for (int fr = 0; fr < faces_r; fr++) {
+                for (int j = 0; j < faces_c; j++) {
+                    const int start_ = start + (fr * config.face_r_dim * num_cols) + (half_face_w * j);
                     for (int k = 0; k < config.face_r_dim; k++) {
                         for (int i = 0; i < half_face_w; i++) {
-                            int idx = start_ + (num_cols * k) + i;
+                            const int idx = start_ + (num_cols * k) + i;
                             dst_vec.push_back(src_vec.at(idx));
                         }
                     }

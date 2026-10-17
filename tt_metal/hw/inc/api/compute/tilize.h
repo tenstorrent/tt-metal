@@ -241,12 +241,12 @@ namespace fast_tilize_detail {
 
 template <bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-#ifdef ARCH_BLACKHOLE
-    if (full_dim == 1) {
+    // Blocks the architecture's fast-tilize path does not support (decided per thread by its llk_api)
+    // take the plain tilize path; fast_tilize_block and fast_tilize_uninit make the same decision.
+    if (llk_fast_tilize_needs_fallback(icb, ocb, full_dim)) {
         tilize_init<is_fp32_dest_acc_en>(icb, full_dim, ocb, call_line);
         return;
     }
-#endif
 
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
@@ -262,8 +262,8 @@ ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, u
     PACK((llk_pack_fast_tilize_init<is_fp32_dest_acc_en>(icb, ocb, first_chunk)));
 #else
     UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
-    MATH((llk_math_fast_tilize_init(icb, full_dim == 1 ? 1 : 2)));
-    PACK((llk_pack_fast_tilize_init(icb, ocb, full_dim == 1 ? 1 : 2)));
+    MATH((llk_math_fast_tilize_init(icb, full_dim == 1 ? 1 : FAST_TILIZE_PAIR_UNIT_DIM)));
+    PACK((llk_pack_fast_tilize_init(icb, ocb, full_dim == 1 ? 1 : FAST_TILIZE_PAIR_UNIT_DIM)));
 #endif
 }
 
@@ -307,26 +307,43 @@ ALWI void fast_tilize_init_with_dt_skip_remap(uint32_t icb, uint32_t full_dim, u
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, uint32_t full_dim) {
-#ifdef ARCH_BLACKHOLE
-    if (full_dim == 1) {
+    if (llk_fast_tilize_needs_fallback(icb, ocb, full_dim)) {
         tilize_uninit(icb, ocb);
         return;
     }
-#endif
 
     UNPACK((llk_unpack_fast_tilize_uninit<is_fp32_dest_acc_en>()));
     MATH((llk_math_fast_tilize_uninit<is_fp32_dest_acc_en>(icb)));
     PACK((llk_pack_fast_tilize_uninit<is_fp32_dest_acc_en>(ocb)));
 }
 
+// clang-format off
+/**
+ * Performs the fast tilize operation on a block. The block width must match the full_dim given to
+ * fast_tilize_init. Blocks the architecture's fast-tilize path does not support take the plain
+ * tilize path, as decided by the architecture's llk_fast_tilize_needs_fallback: on Blackhole every
+ * tile shape other than 32x32 (and a width of 1), on Wormhole every tile shape other than 32x32 and
+ * 16x32, plus 16x32 at an odd block width (the two-face data path exists only for pairs of tiles).
+ *
+ * Return value: None
+ *
+ * | Param Type | Name             | Description                              | Type     | Valid Range | Required |
+ * |----------- |------------------|------------------------------------------|----------|-------------|----------|
+ * | Function   | icb              | Input circular buffer identifier         | uint32_t | 0 to 31     | True     |
+ * | Function   | block            | Size of tile block to work on            | uint32_t | > 0         | True     |
+ * | Function   | ocb              | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
+ * | Function   | input_tile_index | Index of the input tile in the icb       | uint32_t | >= 0        | False    |
+ * | Function   | output_tile_index| Index of the output tile in the ocb      | uint32_t | >= 0        | False    |
+ */
+// clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
-#ifdef ARCH_BLACKHOLE
-    if (block == 1) {
+    if (llk_fast_tilize_needs_fallback(icb, ocb, block)) {
         tilize_block<is_fp32_dest_acc_en>(icb, block, ocb, input_tile_index, output_tile_index);
         return;
     }
+#ifdef ARCH_BLACKHOLE
     ASSERT(block > 1);
 
     // BH fast-tilize: each row chunk calls llk_unpack_fast_tilize_block directly.
@@ -377,7 +394,7 @@ ALWI void fast_tilize_block(
     uint32_t packed_tiles = 0;
     uint32_t remaining_tiles = block;
     uint32_t dest_size = is_fp32_dest_acc_en ? 4 : 8;
-    uint32_t unit_dim = full_dim == 1 ? 1 : 2;
+    uint32_t unit_dim = full_dim == 1 ? 1 : FAST_TILIZE_PAIR_UNIT_DIM;
     uint32_t num_units = dest_size / unit_dim;
 
     while (packed_tiles < block) {
