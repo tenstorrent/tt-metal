@@ -191,7 +191,9 @@ enum class InstrModLoadStore
  * @param shift The number of bit positions to shift left.
  * @return The underlying value of @p mod shifted left by @p shift, as a std::uint32_t.
  */
-constexpr std::uint32_t operator<<(InstrModLoadStore mod, int shift)
+// gnu::const: a call with side effects would make __builtin_constant_p reject
+// the raw SFPU word built from it, losing its exact raw-LREG effect mask.
+[[gnu::const]] constexpr std::uint32_t operator<<(InstrModLoadStore mod, int shift)
 {
     return static_cast<std::uint32_t>(mod) << shift;
 }
@@ -206,12 +208,12 @@ constexpr std::uint32_t operator<<(InstrModLoadStore mod, int shift)
  * @param mod  The instruction mode whose underlying value is OR-ed in.
  * @return @p bits bitwise-OR the underlying value of @p mod, as a std::uint32_t.
  */
-constexpr std::uint32_t operator|(std::uint32_t bits, InstrModLoadStore mod)
+[[gnu::const]] constexpr std::uint32_t operator|(std::uint32_t bits, InstrModLoadStore mod)
 {
     return bits | static_cast<std::uint32_t>(mod);
 }
 
-constexpr std::uint32_t operator|(InstrModLoadStore mod, std::uint32_t bits)
+[[gnu::const]] constexpr std::uint32_t operator|(InstrModLoadStore mod, std::uint32_t bits)
 {
     return operator|(bits, mod);
 }
