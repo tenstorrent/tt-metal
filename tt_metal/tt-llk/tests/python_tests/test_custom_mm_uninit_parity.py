@@ -73,8 +73,8 @@ _STRIDE_REGISTER = "PCK0_ADDR_CTRL_ZW_REG_0_Wstride"
 _API_INIT_CALL = "PACK((llk_pack_custom_mm_init<dense_packing>(out_cb_id)));"
 _API_UNINIT_CALL = "PACK((llk_pack_custom_mm_uninit<dense_packing>(out_cb_id)));"
 _HELPER_CALL = {
-    "init": "_llk_pack_custom_mm_init_<dense_packing>(pack_src_format[get_output_id(output)]);",
-    "uninit": "_llk_pack_custom_mm_uninit_<dense_packing>(pack_src_format[get_output_id(output)]);",
+    "init": "_llk_pack_custom_mm_init_<dense_packing>(pack_src_format[output_id]);",
+    "uninit": "_llk_pack_custom_mm_uninit_<dense_packing>(pack_src_format[output_id]);",
 }
 
 _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)

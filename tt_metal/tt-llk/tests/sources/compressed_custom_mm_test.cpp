@@ -19,6 +19,10 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
+// The layout compressed_custom_mm_block_init<dense_packing = true> computes and packs: output tiles 32 DEST rows
+// apart. The math init and the pack helper below must agree on it.
+constexpr bool DENSE_PACKING = true;
+
 #ifdef LLK_TRISC_UNPACK
 
 // PRIMITIVE symbol under test (NOT the forked _api.h wrapper / compute_kernel_api entry).
@@ -90,7 +94,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // compressed_custom_mm is LoFi-only; init takes no MathFidelity template.
     // dense_packing == true brings the DEST tile-to-tile stride down from 64 rows to 32, matching the partial-tile
     // packer below and the silicon-validated matmul_custom_compressed_test.cpp:62.
-    _llk_math_compressed_custom_mm_init_<false /* transpose */, false /* split_acc */, true /* dense_packing */>(params.in0_face_r_dim);
+    _llk_math_compressed_custom_mm_init_<false /* transpose */, false /* split_acc */, DENSE_PACKING>(params.in0_face_r_dim);
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
@@ -114,9 +118,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
-
-// The layout compressed_custom_mm_block_init<dense_packing = true> packs: output tiles 32 DEST rows apart.
-constexpr bool DENSE_PACKING = true;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {

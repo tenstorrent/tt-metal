@@ -17,9 +17,13 @@ void kernel_main() {
     constexpr std::uint32_t blocks = get_compile_time_arg_val(0);
     constexpr std::uint32_t rows = get_compile_time_arg_val(1);
     constexpr bool mixed = get_compile_time_arg_val(2);
-    constexpr std::uint32_t mode = get_compile_time_arg_val(3);  // plain, compressed, DEST reuse
-    constexpr std::uint32_t input_block_tiles = mode == 2 ? 5 : 3;
-    constexpr std::uint32_t producer_ct = mode == 2 ? 2 : 1;
+    // 0 plain, 1 compressed, 2 DEST reuse, 3 dense pair: two output columns packed as one
+    // block through the dense tile stride, then again after the uninit restored the default.
+    constexpr std::uint32_t mode = get_compile_time_arg_val(3);
+    constexpr bool two_columns = mode == 2 || mode == 3;
+    constexpr std::uint32_t input_block_tiles = two_columns ? 5 : 3;
+    constexpr std::uint32_t producer_ct = two_columns ? 2 : 1;
+    constexpr std::uint32_t output_block_tiles = mode == 3 ? 4 : 1;
     constexpr auto weight_format = mode == 1 ? DataFormat::Bfp8_b : DataFormat::Float16_b;
     using Activation = experimental::LLKOperand<DataFormat::Float16_b, TensorShape{rows, 16, 1, 2}>;
     using Weight = experimental::LLKOperand<weight_format, TensorShape{16, 16, 2, 2}>;
@@ -43,7 +47,7 @@ void kernel_main() {
     for (std::uint32_t block = 0; block < blocks; ++block) {
         activation.wait_front(input_block_tiles);
         weight.wait_front(input_block_tiles);
-        output.reserve_back(1);
+        output.reserve_back(output_block_tiles);
         tile_regs_acquire();
 
         // Poisoned input tile zero must be skipped. Plain matmul exercises the
@@ -92,9 +96,20 @@ void kernel_main() {
         }
         tile_regs_commit();
         tile_regs_wait();
-        pack_block_contiguous(mode == 2 ? 4 : 0, tt::CBIndex::c_16, 1);
+        if constexpr (mode == 3) {
+            // The producer left column 0 at DEST row 0 and column 1 at row 32 (dense), and
+            // fill_tile(1) zeroed rows 64..127. Through the dense stride the pair is
+            // [col 0, col 1]; after the uninit the default 64-row stride makes the same
+            // pack read [col 0, zeros]. Either half is wrong whenever the stride the
+            // wrapper sized for c_16's pack-source format is not the one the packer needs.
+            pack_block_contiguous(0, tt::CBIndex::c_16, 2);
+            custom_mm_block_uninit<true>(tt::CBIndex::c_16);
+            pack_block_contiguous(0, tt::CBIndex::c_16, 2);
+        } else {
+            pack_block_contiguous(mode == 2 ? 4 : 0, tt::CBIndex::c_16, 1);
+        }
         tile_regs_release();
-        output.push_back(1);
+        output.push_back(output_block_tiles);
         activation.pop_front(mode == 1 && mixed ? input_block_tiles - 1 : input_block_tiles);
         weight.pop_front(input_block_tiles);
         if constexpr (mode == 2) {

@@ -571,6 +571,11 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
                                that run 0 packs into; run 1 packs block 0. The python
                                side reads run 0 back from the same index, so the
                                layout has one source.
+    ``UNINIT_BLOCK_MOP``       install the block-contiguous packer MOP for run 0 (what a
+                               caller's ``pack_block_contiguous_init`` does). When false
+                               run 0 is a per-tile pack through the Default MOP, the path
+                               ``pack_tile`` takes: the block MOP packs its whole block as
+                               one tile, which a block-float output cannot be laid out as.
     """
 
     dense_packing: bool = False
@@ -578,6 +583,7 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
     skip: bool = False
     block_mop_num_faces: int = 2
     run0_result_block: int = 2
+    block_mop: bool = True
 
     def convert_to_cpp(self) -> str:
         return "\n".join(
@@ -587,6 +593,7 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
                 f"constexpr bool UNINIT_SKIP = {str(self.skip).lower()};",
                 f"constexpr std::uint32_t BLOCK_MOP_NUM_FACES = {self.block_mop_num_faces}u;",
                 f"constexpr std::uint32_t RUN0_RESULT_BLOCK = {self.run0_result_block}u;",
+                f"constexpr bool UNINIT_BLOCK_MOP = {str(self.block_mop).lower()};",
             ]
         )
 

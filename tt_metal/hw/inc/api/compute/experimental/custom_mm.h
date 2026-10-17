@@ -249,7 +249,7 @@ ALWI void custom_mm_block_math(
  * | Argument              | Description                                                                            | Type     | Valid Range                  | Required              |
  * |-----------------------|----------------------------------------------------------------------------------------|----------|------------------------------|-----------------------|
  * | dense_packing         | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                   | False (default false) |
- * | out_cb_id             | The identifier of the output circular buffer (CB); its configured pack format sets the restored stride | uint32_t | 0 to 31                      | True                  |
+ * | out_cb_id             | The same output CB that was passed to the init; its configured pack format sets the restored stride    | uint32_t | 0 to 31                      | True                  |
  */
 // clang-format on
 template <bool dense_packing = false>

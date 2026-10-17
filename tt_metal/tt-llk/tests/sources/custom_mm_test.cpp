@@ -70,6 +70,10 @@ constexpr std::uint32_t num_calls   = CUSTOM_MM_NUM_CALLS;
 constexpr std::uint32_t kt_per_call = KT_DIM / num_calls;
 static_assert(kt_per_call * num_calls == KT_DIM, "K tiles must split evenly across the calls");
 
+// The layout custom_mm_block_init<dense_packing = true> computes and packs: output tiles 32 DEST rows apart.
+// The math init and the pack helper below must agree on it.
+constexpr bool DENSE_PACKING = true;
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "experimental/llk_unpack_AB_custom_mm.h"
@@ -158,7 +162,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // wrong DEST offset -- tile 0 is correct but every later tile is corrupt. Matches the
     // proven compressed sibling (matmul_custom_compressed_test.cpp), which passes
     // dense_packing=true for the identical pack setup.
-    _llk_math_custom_mm_init_<false /* transpose */, false /* split_acc */, true /* dense_packing */>(params.in0_face_r_dim, CT_DIM);
+    _llk_math_custom_mm_init_<false /* transpose */, false /* split_acc */, DENSE_PACKING>(params.in0_face_r_dim, CT_DIM);
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
@@ -188,9 +192,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
-// The layout custom_mm_block_init<dense_packing = true> packs: output tiles 32 DEST rows apart.
-constexpr bool DENSE_PACKING = true;
-
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -201,7 +202,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // is what lands in DEST, so pack with that geometry and the dense-packing W-stride
     // (tiles 32 rows apart) that custom_mm_block_init installs for the [M,32] output tiles,
     // through the same PACK helper the compute API calls, so this sweep also checks the
-    // stride it programs for each pack-source format.
+    // stride it programs for the 2- and 4-byte pack sources it covers (the 1-byte source is
+    // covered by test_custom_mm_uninit_restore.py).
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true);

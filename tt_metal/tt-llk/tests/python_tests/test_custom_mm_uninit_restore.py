@@ -18,10 +18,13 @@ restore and no such flag; the fused caller is expected to pair ``pack_block_cont
 with its own uninit instead. The MOP-restore coverage is therefore gone, because the
 behaviour is gone, and what replaces it is a test that the uninit does *not* touch the MOP.
 
-The driver calls the same raw PACK init/uninit helper as both compute APIs, because a
-tt-llk test cannot include tt_metal/hw/inc/api/compute. The stride implementation is shared
-rather than copied into the driver. ``test_custom_mm_uninit_parity.py`` guards that both
-compute APIs and the driver continue delegating to that helper.
+The driver calls the raw PACK init/uninit helper (``_llk_pack_custom_mm_{init,uninit}_``)
+with the pack-source format, because a tt-llk test cannot include
+tt_metal/hw/inc/api/compute. Both compute APIs reach the same helper through the Blackhole
+``llk_api`` wrapper pair, which derives that format from the output CB; the stride
+implementation is shared rather than copied into the driver.
+``test_custom_mm_uninit_parity.py`` guards that the wrappers, both compute APIs and the
+drivers keep delegating to it.
 
 How it works
 ------------
@@ -55,7 +58,7 @@ entirely, so "the stride was restored" cannot be confused with "nothing needed r
 import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import DataCopyGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
@@ -69,9 +72,17 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 ELEMENTS_PER_TILE = 1024
 
-# Same-in-same-out: this test varies packer *state*, not conversion. A mixed pair would
-# only add format-conversion noise on top of the layout question being asked.
-FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True)
+# Same-in-same-out for the 2- and 4-byte pack sources: this test varies packer *state*, not
+# conversion, and a mixed pair would only add format-conversion noise on top of the layout
+# question. The one mixed pair, Float16_b -> Bfp8_b, is the 1-byte pack source: with
+# dest_acc=Yes the harness (like tt-metal for a block-float output CB) gives the packer a
+# Bfp8_b source, so the dense and the restored stride are 512 and 1024 bytes there; with
+# dest_acc=No the source stays Float16_b and the packer does the conversion. Its cells pack
+# tile by tile through the Default MOP (``pack_tile``'s path) instead of the block MOP, see
+# ``_block_mop_for``; the W-stride layout they assert is the same.
+FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Float32], same=True
+) + [InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b)]
 
 # 4 tiles is the smallest count that makes a tile-to-tile stride error visible on more
 # than one tile while staying inside DEST half-sync capacity at fp32 (4 tiles).
@@ -85,9 +96,29 @@ ELEMENTS_PER_FACE = ELEMENTS_PER_TILE // FACES_PER_TILE
 RUN0_RESULT_BLOCK = 2
 RESULT_TILES = (RUN0_RESULT_BLOCK + 1) * NUM_TILES
 
-# Both compute uninits and the driver call the same raw PACK helper. A per-family
-# axis would build the identical ELF twice; the static parity test guards delegation
-# from each compute API to the implementation exercised here.
+# Both compute uninits reach the raw PACK helper the driver calls through one wrapper. A
+# per-family axis would build the identical ELF twice; the static parity test guards
+# delegation from each compute API to the implementation exercised here.
+
+
+def _is_block_float(formats):
+    return formats.output_format in (
+        DataFormat.Bfp8_b,
+        DataFormat.Bfp4_b,
+        DataFormat.Bfp2_b,
+    )
+
+
+def _block_mop_for(formats):
+    """Run 0's packer MOP: the block-contiguous one, except for block-float outputs.
+
+    The block MOP packs its whole block as one tile (one exponent section), which is not a
+    layout a block-float output can take -- in-tree, ``pack_block_contiguous`` is only used
+    with Float16_b outputs. Those cells pack tile by tile through the Default MOP instead,
+    the path ``pack_tile`` takes; it reads DEST at the same W-stride multiples, so the
+    stride is observed the same way.
+    """
+    return not _is_block_float(formats)
 
 
 def _run(formats, dest_acc, dense_packing, skip_uninit, block_mop_num_faces=4):
@@ -110,6 +141,7 @@ def _run(formats, dest_acc, dense_packing, skip_uninit, block_mop_num_faces=4):
                 skip=skip_uninit,
                 block_mop_num_faces=block_mop_num_faces,
                 run0_result_block=RUN0_RESULT_BLOCK,
+                block_mop=_block_mop_for(formats),
             ),
         ],
         runtimes=[],
@@ -255,6 +287,11 @@ def test_custom_mm_uninit_leaves_the_caller_mop_installed(formats, dest_acc):
     stride is not a second reason to fail.
     """
     _skip_unsupported(formats, dest_acc)
+    if _is_block_float(formats):
+        pytest.skip(
+            "block-float outputs do not go through the block MOP (see _block_mop_for), "
+            "and this test is about that MOP"
+        )
 
     # Run 0 is not asserted here: the 2-face MOP packs a geometry the golden does not
     # describe, and the stride is not what this test is about.

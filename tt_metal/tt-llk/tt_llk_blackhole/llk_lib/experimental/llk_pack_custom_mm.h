@@ -37,9 +37,9 @@ constexpr std::uint32_t custom_mm_pack_w_stride(const std::uint32_t rows, const 
  *
  * @tparam dense_packing: Lay output tiles 32 DEST rows apart instead of 64; no-op when false.
  * @param pack_src_format: The packer's configured source format for the output operand.
- * @note Call after the pack init that programmed the default strides, with the same dense_packing as
- *       @ref _llk_math_custom_mm_init_ on the math thread, and @ref _llk_pack_custom_mm_uninit_ with the same
- *       arguments after the last dense pack.
+ * @note Call after the pack init that programmed the default strides, with the same dense_packing as the math
+ *       init it is paired with (@ref _llk_math_custom_mm_init_ or @ref _llk_math_compressed_custom_mm_init_),
+ *       and @ref _llk_pack_custom_mm_uninit_ with the same arguments after the last dense pack.
  */
 template <bool dense_packing = false>
 inline void _llk_pack_custom_mm_init_(const std::uint32_t pack_src_format)
@@ -53,7 +53,8 @@ inline void _llk_pack_custom_mm_init_(const std::uint32_t pack_src_format)
 /**
  * @brief Restore the default 64-row packer W stride after the last dense custom_mm pack.
  *
- * @tparam dense_packing: Must match the preceding @ref _llk_pack_custom_mm_init_; no-op when false.
+ * @tparam dense_packing: Must match the preceding @ref _llk_pack_custom_mm_init_ (and so the math init it was
+ *         paired with, @ref _llk_math_custom_mm_init_ or @ref _llk_math_compressed_custom_mm_init_); no-op when false.
  * @param pack_src_format: The packer's configured source format for the output operand.
  * @note Call after the last pack of a dense custom_mm sequence and before the next op's pack init.
  */
