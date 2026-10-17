@@ -522,6 +522,18 @@ class TtK3TokenSplitMoE:
         return arena
 
     def experts_combine(self, xg, pl, arena):
+        # x read from DRAM once (MIMO_FL_X1, read when the program is built): routed experts 2433 -> 2372 us traced;
+        # the shared expert's flat op keeps reading it twice (X1 there: 523 -> 702 us). K3_EXP_X1=0: off
+        x1 = os.environ.get("K3_EXP_X1", "1") == "1" and "MIMO_FL_X1" not in os.environ
+        if x1:
+            os.environ["MIMO_FL_X1"] = "1"
+        try:
+            return self._experts_combine(xg, pl, arena)
+        finally:
+            if x1:
+                os.environ.pop("MIMO_FL_X1", None)
+
+    def _experts_combine(self, xg, pl, arena):
         return ttnn.bringup.flat_routed_expert_with_program(
             xg, pl["counts"], pl["regions"], self.op.gidx, self.op.w_gu, self.op.w_d, reader_down_weights=self.op.w_rd,
             done_words=self.op.done, intermediate=self.d.I, max_tokens_per_expert=self.op.m, arena=arena, y=self.y,

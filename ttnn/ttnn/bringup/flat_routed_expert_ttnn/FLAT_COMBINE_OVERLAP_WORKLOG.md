@@ -987,3 +987,12 @@ combine 1221, the DRISC push ~1990 - both hidden; the combine's release (CMB_EAR
 The gate/up DMA alone streams at 93%; the Tensix down-weight NoC reads into the same banks pull the mix to 86% (~170
 us), x reads ~105 us. GDDR arbitration weights (MIMO_FL_DRISC_MPFE 0,0,3 / 0,3,0 / 3,0,0 / 1,3,3 / 3,1,1 / 1,1,1):
 2418-2439, noise. Next lever: down weights through the DRISCs (one bank-local DMA path), then the x reads.
+
+### K3 block: x read once for the routed experts (2026-10-17) -> 3640 us traced
+x-path configs on the K3 trace (experts program / traced total, us; base 2433 / 3707): MIMO_FL_X1 (x read from DRAM once,
+rectangle 0's relays multicast to both) 2372 / 3819; X2 2659 / 4188; XFWD 2859 / 4495; NH 2 2471 / 3759; NH 3 2457 /
+3736; X1 + NH 2 2396 / 3858. X1's total got worse because the env knob also built the shared expert's flat op with it
+(523 -> 702 us: one primary's tilize + double multicast caps 320-row parts, as in the standalone sweep past M 128).
+Now set for the routed experts' program only (K3_EXP_X1, default 1; read when the program is built): traced 3643 / 3640
+(was 3700), PCC 0.99619 unchanged, shared expert 529 us. (Earlier x-read isolation and probe history: the pr58093
+worktree's worklog 8e-8g - x read twice at ~22 GB/s per relay, 1 KB requests.)
