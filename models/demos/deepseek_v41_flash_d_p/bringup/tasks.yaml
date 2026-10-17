@@ -4840,6 +4840,13 @@ tasks:
     - moe_add
     - ffn_residual
     layer: 14
+  frozen:
+    at: '2026-10-17T04:43:53'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_20_ffn_residual.py: fd883d0453057a1aab89bf7f8ba6cc703718b7e7b0e56415f16bb48473ce7e51
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.enc_reuse.attn_hc
   title: enc_reuse attn_hc (op) on device, layer 3
   step: implement
