@@ -103,8 +103,12 @@ inline void calculate_i1() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // Clamp to [-92, 92] — i1 exceeds FLT_MAX for |x| ≥ 91.906, so the
-        // clamped lanes overflow to ±inf exactly like the unclamped input would.
+        // Clamp to [-92, 92] — i1 exceeds FLT_MAX for |x| ≥ 91.906, so every
+        // clamped finite or ±inf lane overflows to ±inf, as the unclamped input
+        // would. NaN is not propagated: symmetric_clamp (min of |x| and the
+        // bound, sign copied back) maps a NaN lane onto the bound, so NaN comes
+        // back as +inf (measured on Wormhole for +NaN on both paths and for a
+        // sign-bit NaN on the bf16 path; a sign-bit NaN on the FP32 path stays NaN).
         x = sfpi::symmetric_clamp(x, I1_MAX_INPUT);
 
         const sfpi::vFloat abs_x = sfpi::abs(x);

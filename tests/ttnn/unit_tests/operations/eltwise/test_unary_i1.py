@@ -107,17 +107,20 @@ def _skip_on_quasar(device):
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_i1_clamp_boundary(device, dtype):
     _skip_on_quasar(device)
-    # Every value is exactly representable in bfloat16 (step 0.5 in [64, 128)).
+    # Every finite value is exactly representable in bfloat16 (step 0.5 in [64, 128)).
+    # +/-inf must come back as +/-inf, not as the finite i1 of a clamped input.
+    inf = float("inf")
     boundaries = torch.tensor(
-        [-1000.0, -100.0, -91.5, -90.0, -89.0, -88.5, -88.0, -10.5, -10.0, -9.5]
-        + [9.5, 10.0, 10.5, 88.0, 88.5, 89.0, 90.0, 91.5, 100.0, 1000.0],
+        [-inf, -1000.0, -100.0, -91.5, -90.0, -89.0, -88.5, -88.0, -10.5, -10.0, -9.5]
+        + [9.5, 10.0, 10.5, 88.0, 88.5, 89.0, 90.0, 91.5, 100.0, 1000.0, inf],
         dtype=torch.float32,
     )
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
     expected_input = boundaries.to(torch_dtype).to(torch.float32)
-    # torch's float32 i1 overflows at |x| >= 89 although the result still fits
-    # in float32 up to |x| ~= 91.9: evaluate in float64 and round once.
-    torch_output_tensor = torch.special.i1(expected_input.to(torch.float64)).to(torch.float32)
+    # The ttnn golden evaluates torch.special.i1 in float64 (torch's float32 i1
+    # overflows at |x| >= 89 although the result fits in float32 up to |x| ~= 91.9)
+    # and keeps +/-inf lanes, where torch.special.i1 returns NaN.
+    torch_output_tensor = ttnn.get_golden_function(ttnn.i1)(expected_input)
 
     # Pad to a tile-aligned shape so we can run on device.
     padded = torch.zeros((1, 1, 32, 32), dtype=torch.float32)
