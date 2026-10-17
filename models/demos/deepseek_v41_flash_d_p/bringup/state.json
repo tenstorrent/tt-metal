@@ -1291,6 +1291,57 @@
   "started": "2026-10-17T15:14:04",
   "status": "PASS"
  },
+ "C.dec_reuse.router": {
+  "attempts": 0,
+  "duration_s": 21.7,
+  "history": [
+   {
+    "s": 21.7,
+    "status": "PASS",
+    "t": "2026-10-17T16:37:47"
+   }
+  ],
+  "last_run": "2026-10-17T16:37:47",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.dec_reuse.router.log",
+  "metrics": {
+   "auto_router_L21_layer0_flip_frac": 0.0,
+   "auto_router_L21_layer0_flip_limit": 0.01904296875,
+   "auto_router_L21_layer0_flip_rows": 0,
+   "auto_router_L21_layer0_flips_unexplained": 0,
+   "auto_router_L21_layer0_matched": 1.0,
+   "auto_router_L21_layer0_overlap": 1.0,
+   "auto_router_L21_layer0_rel": 3.3133623219328e-05,
+   "auto_router_L21_layer0_rowsum": 3.5762786865234375e-07,
+   "auto_router_L21_mixed_flip_frac": 0.00244140625,
+   "auto_router_L21_mixed_flip_limit": 0.03515625,
+   "auto_router_L21_mixed_flip_rows": 5,
+   "auto_router_L21_mixed_flips_unexplained": 0,
+   "auto_router_L21_mixed_matched": 0.99755859375,
+   "auto_router_L21_mixed_overlap": 0.9995931386947632,
+   "auto_router_L21_mixed_rel": 6.891162774991244e-05,
+   "auto_router_L21_mixed_rowsum": 3.5762786865234375e-07,
+   "auto_router_L21_vs_cpu_flip_frac": 0.001953125,
+   "auto_router_L21_vs_cpu_flip_limit": 0.0146484375,
+   "auto_router_L21_vs_cpu_flip_rows": 4,
+   "auto_router_L21_vs_cpu_flips_unexplained": 0,
+   "auto_router_L21_vs_cpu_matched": 0.998046875,
+   "auto_router_L21_vs_cpu_overlap": 0.9996744394302368,
+   "auto_router_L21_vs_cpu_rel": 0.00011448148870840669,
+   "auto_router_L21_vs_cpu_rowsum": 2.980232238769531e-07,
+   "auto_router_L21_vs_golden_matched": 0.9931640625,
+   "auto_router_L21_vs_golden_overlap": 0.9988606572151184,
+   "auto_router_L21_vs_golden_rel": 0.0017327354289591312,
+   "auto_router_L21_vs_golden_rowsum": 0.0025973916053771973,
+   "det_router_L21": 1.0,
+   "err_router_L21": 0.03285561501979828,
+   "err_router_L21_limit": 0.18506594002246857,
+   "pcc_router_L21": 0.9994285962823648
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T16:37:25",
+  "status": "PASS"
+ },
  "C.enc_reuse.attention": {
   "agent": {
    "defs": {
