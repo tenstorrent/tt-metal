@@ -291,3 +291,25 @@ def test_a_measured_side_is_reused(mk):
     assert o.run() == HUMAN
     assert len(mk.calls) == n  # same code and switch: both sides reused, nothing re-run
     assert sum(": reused (" in x for x in mk.lines) == 2
+
+
+def test_a_setting_name_switches_its_variable(mk, monkeypatch):
+    """F103: ab names a model setting (EXPERTS_IMPL), the code reads its variable (DS41_EXPERTS_IMPL): the report sets
+    the variable on both sides (DeepSeek-V4.1 P.1 measured bfp8 against bfp8: an identical table); a value outside the
+    setting's choices is refused."""
+    from models.demos.common.bringup.core.model_settings import Setting, Settings
+    from models.demos.common.bringup.testing import model_precision
+
+    toy = Settings("TOY_", {"FIDELITY": Setting("hifi4", ("hifi4", "hifi2"))})
+    monkeypatch.setattr(model_precision, "model_settings", lambda spec, fresh=False: [toy])
+    o = mk([pick(ab={"env": {"FIDELITY": "hifi4"}, "change": {"FIDELITY": "hifi2"}})], CHANGE)
+    assert o.run() == HUMAN, mk.lines
+    assert [c["on"] for c in mk.calls] == [False] * 4 + [True] * 4
+    rec = o.led.state()["P.1"]["ab"]
+    assert rec["env"] == {"TOY_FIDELITY": "hifi4"} and rec["on"] == {"TOY_FIDELITY": "hifi2"} and not rec["note"]
+    assert model_precision.switch_env(None, {"TOY_FIDELITY": "hifi2", "OTHER": "1"}) == (
+        {"TOY_FIDELITY": "hifi2", "OTHER": "1"},
+        ["OTHER"],
+    )
+    with pytest.raises(ValueError, match="takes one of"):
+        model_precision.switch_env(None, {"FIDELITY": "lofi"})

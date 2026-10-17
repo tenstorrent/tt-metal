@@ -101,7 +101,7 @@ from models.demos.common.bringup.knowledge import check as kcheck
 from models.demos.common.bringup.knowledge import usage as kusage
 from models.demos.common.bringup.plan import approvals
 from models.demos.common.bringup.plan import op_request as OR
-from models.demos.common.bringup.testing import accuracy_guard
+from models.demos.common.bringup.testing import accuracy_guard, model_precision
 from models.demos.common.bringup.testing import serving as SV
 from models.demos.common.bringup.testing import settings_lint
 from models.demos.common.bringup.testing.noise_floor import TAPS_FILE
@@ -348,9 +348,12 @@ def ab_switch_text(task: dict) -> str:
     return f"change on: {fmt(on) or '(the default)'}; off (the old path): {fmt(off)}"
 
 
-def ab_switch_missing(task: dict, repo: Path, changed: list[str]) -> list[str]:
-    """Switch names of ab.env / ab.change that no changed file (or the task's paths) mentions: the switch would do nothing."""
-    names = set((task.get("ab") or {}).get("env") or {}) | set((task.get("ab") or {}).get("change") or {})
+def ab_switch_missing(task: dict, repo: Path, changed: list[str], names: set | None = None) -> list[str]:
+    """Switch names of ab.env / ab.change that no changed file (or the task's paths) mentions: the switch would do nothing.
+    ``names``: only these (F103: a model setting's name resolves to its variable instead, model_precision.switch_env).
+    """
+    if names is None:
+        names = set((task.get("ab") or {}).get("env") or {}) | set((task.get("ab") or {}).get("change") or {})
     files = [repo / p for p in changed if (repo / p).is_file()]
     for pat in task.get("paths") or []:
         base = repo / pat
@@ -1245,8 +1248,8 @@ class Orchestrator:
         table.md and the ledger record."""
         tid, ab = task["id"], task.get("ab") or {}
         d = self.run_dir / "ab" / tid
-        old = {k: str(v) for k, v in (ab.get("env") or {}).items()}
-        on = {k: str(v) for k, v in (ab.get("change") or {}).items()}
+        old, plain_old = model_precision.switch_env(self.spec, ab.get("env") or {})  # F103: setting -> its variable
+        on, plain_on = model_precision.switch_env(self.spec, ab.get("change") or {})
         if old and old == on:
             raise ValueError(f"{tid}: ab.env and ab.change are the same configuration")
         rec = {
@@ -1277,7 +1280,7 @@ class Orchestrator:
             rec[
                 "note"
             ] = "no `ab.change` in tasks.yaml: 'on' is the tree's default, which the agent may have left on the old path"
-        missing = ab_switch_missing(task, self.spec.repo, owned) if sides else []
+        missing = ab_switch_missing(task, self.spec.repo, owned, set(plain_old) | set(plain_on)) if sides else []
         if missing:
             rec[
                 "note"
