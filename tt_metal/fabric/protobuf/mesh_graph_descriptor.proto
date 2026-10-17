@@ -196,6 +196,13 @@ message MeshDescriptor {
     // Optional regular families of intra-mesh express links (sub-torus connectivity).
     // Declared by pattern rather than enumerated pairs; see ExpressLink.
     repeated ExpressLink express_links = 8;
+
+    // Optional fabric routing config for this mesh. When omitted (UNSPECIFIED), the control plane
+    // derives a default from device_topology.dim_types. A declared value overrides that default and
+    // must not request more connectivity than the mesh's topology provides. Different meshes in one
+    // MGD may declare different 2D configs (e.g. a RING,LINE mesh on FABRIC_2D_TORUS_Y alongside a
+    // LINE,LINE mesh on FABRIC_2D).
+    optional FabricConfig fabric_config = 9;
 }
 
 // -----------------------------------------------------------------------------
@@ -531,6 +538,21 @@ enum Architecture {
     WORMHOLE_B0 = 1;
     BLACKHOLE = 2;
     QUASAR = 3;
+}
+
+// Fabric routing config a mesh runs with. Mirrors tt::tt_fabric::FabricConfig. Declared per mesh
+// in MeshDescriptor.fabric_config; when UNSPECIFIED, the control plane derives a default from the
+// mesh's device_topology dim_types (1D -> FABRIC_1D / FABRIC_1D_RING, 2D -> FABRIC_2D / torus
+// variants per ring axis). A declared value overrides that default and is validated against the
+// mesh's own topology (it may only restrict connectivity, e.g. torus -> mesh, never add it).
+enum FabricConfig {
+    FABRIC_CONFIG_UNSPECIFIED = 0;  // derive from dim_types
+    FABRIC_1D = 1;
+    FABRIC_1D_RING = 2;
+    FABRIC_2D = 3;
+    FABRIC_2D_TORUS_X = 4;
+    FABRIC_2D_TORUS_Y = 5;
+    FABRIC_2D_TORUS_XY = 6;
 }
 
 // Channels specify the per-connection lane count and enforcement policy.

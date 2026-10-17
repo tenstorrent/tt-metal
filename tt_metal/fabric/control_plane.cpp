@@ -118,13 +118,6 @@ bool check_connection_requested(
     return std::string(enchantum::to_string(port_id.first)) + std::to_string(port_id.second);
 }
 
-struct MeshFabricConfigObservation {
-    MeshId mesh_id;
-    uint32_t rank;
-    uint32_t mesh_host_rank;
-    FabricConfig fabric_config;
-};
-
 }  // namespace
 
 const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
@@ -487,6 +480,7 @@ void ControlPlane::init_control_plane(
         *driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
+    this->adopt_local_mesh_fabric_config();
 
     // Before the mapper: when a factory descriptor is configured, that is what the mesh is placed on.
     this->ingest_factory_system_descriptor();
@@ -580,7 +574,7 @@ void ControlPlane::init_control_plane(
 
     // Mesh and rank identity are known at this point; enforce one consistent FabricConfig before
     // inter-mesh setup, routing table configuration, FabricContext, or router launch.
-    this->validate_fabric_config_across_ranks();
+    this->validate_fabric_config_compatibility();
 
     // Initialize routing table generator after validation to ensure no rank computes routing tables
     // with a FabricConfig that differs from peers.
@@ -645,6 +639,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     this->validate_system_health_against_mesh_graph_policy();
 
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
+    this->adopt_local_mesh_fabric_config();
 
     auto topology_mapping_timeout = rtoptions.get_timeout_duration_for_operations();
     if (topology_mapping_timeout.count() <= 0.0f) {
@@ -708,7 +703,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     // Mesh and rank identity are known at this point; enforce one consistent FabricConfig before
     // inter-mesh setup, routing table configuration, FabricContext, or router launch.
-    this->validate_fabric_config_across_ranks();
+    this->validate_fabric_config_compatibility();
 
     // Initialize routing table generator after validation to ensure no rank computes routing tables
     // with a FabricConfig that differs from peers.
@@ -816,7 +811,162 @@ ControlPlane::ControlPlane(
     initialize_fabric_context();
 }
 
-void ControlPlane::validate_fabric_config_across_ranks() {
+namespace {
+
+// One rank's view of a mesh's FabricConfig, gathered across ranks for validation. Trivially copyable so it
+// can be exchanged as raw bytes between ranks.
+struct MeshFabricConfigObservation {
+    MeshId mesh_id;
+    uint32_t rank;
+    uint32_t mesh_host_rank;
+    FabricConfig fabric_config;
+    // Process-wide channel-geometry knobs that must be IDENTICAL on every rank. They select the per-VC
+    // buffer-slot table and the channel buffer size; two inter-mesh-linked processes (and transitively the
+    // whole fabric) must agree on them or the inter-mesh channel geometry diverges -> silent credit stall.
+    // Unlike fabric_config these come from env/rtoptions + the router-config override, which the launcher
+    // does not otherwise guarantee uniform across ranks.
+    uint8_t vc2_enabled;
+    uint8_t mesh_pass_through_enabled;
+    uint64_t max_payload_override;  // std::numeric_limits<uint64_t>::max() == no override
+};
+
+// Validate the gathered per-mesh FabricConfigs. Rules:
+//   - every rank that owns a given mesh must report the same config,
+//   - a 1D config may not be used when more than one mesh is present (and cannot be mixed with 2D).
+// Different 2D configs across meshes are allowed, including meshes joined by an intermesh link.
+// Throws (TT_FATAL) on any violation; mesh_graph_path is only used for error context.
+void validate_fabric_configs(
+    const std::vector<MeshFabricConfigObservation>& observations, const std::string& mesh_graph_path) {
+    std::string observed_values;
+    for (const auto& o : observations) {
+        observed_values += fmt::format(
+            "\n  mesh_id={}, mesh_host_rank={}, rank={}, fabric_config={}",
+            *o.mesh_id,
+            o.mesh_host_rank,
+            o.rank,
+            enchantum::to_string(o.fabric_config));
+    }
+
+    // Every rank that owns a given mesh must report the same config; different meshes may differ.
+    // (The 1D-cannot-span-multiple-meshes rule lives in MeshGraph, which sees each mesh's *resolved*
+    // per-mesh config -- MGD-declared, process-wide override, or derived -- whereas these observations
+    // only carry the process-wide config and so cannot see an MGD-declared 1D mesh.)
+    std::map<MeshId, FabricConfig> per_mesh_config;
+    for (const auto& o : observations) {
+        const auto [it, inserted] = per_mesh_config.try_emplace(o.mesh_id, o.fabric_config);
+        TT_FATAL(
+            inserted || it->second == o.fabric_config,
+            "FabricConfig must match across all ranks of a mesh, but mesh {} has ranks reporting both {} and {}. "
+            "MGD path: {}. Observed:{}",
+            *o.mesh_id,
+            enchantum::to_string(it->second),
+            enchantum::to_string(o.fabric_config),
+            mesh_graph_path,
+            observed_values);
+    }
+
+    // Channel-geometry env knobs must be identical on EVERY rank (globally, not just per-mesh). Unlike
+    // fabric_config -- which may legitimately differ across 2D meshes -- enable_fabric_vc2,
+    // enable_fabric_mesh_pass_through, and the max_packet_payload_size override select the per-VC
+    // buffer-slot table and the channel buffer size. Any disagreement across an inter-mesh link (and these
+    // are process-wide env/override values the launcher does not guarantee uniform) makes the two ends of
+    // the channel size their buffers differently -> silent credit stall. Assert uniformity up front.
+    if (!observations.empty()) {
+        const auto& ref = observations.front();
+        for (const auto& o : observations) {
+            TT_FATAL(
+                o.vc2_enabled == ref.vc2_enabled && o.mesh_pass_through_enabled == ref.mesh_pass_through_enabled &&
+                    o.max_payload_override == ref.max_payload_override,
+                "Fabric channel-geometry settings must be identical on every rank, but rank {} (mesh {}) reports "
+                "(enable_fabric_vc2={}, enable_fabric_mesh_pass_through={}, max_packet_payload_size_override={}) "
+                "while rank {} (mesh {}) reports ({}, {}, {}). These select the per-VC buffer-slot counts and the "
+                "channel buffer size; a mismatch across an inter-mesh link silently stalls the fabric. Set the "
+                "fabric env (enable_fabric_vc2, enable_fabric_mesh_pass_through) and any max_packet_payload_size "
+                "override identically on all ranks. MGD path: {}.",
+                o.rank,
+                *o.mesh_id,
+                o.vc2_enabled != 0,
+                o.mesh_pass_through_enabled != 0,
+                o.max_payload_override == std::numeric_limits<uint64_t>::max() ? std::string("<default>")
+                                                                               : std::to_string(o.max_payload_override),
+                ref.rank,
+                *ref.mesh_id,
+                ref.vc2_enabled != 0,
+                ref.mesh_pass_through_enabled != 0,
+                ref.max_payload_override == std::numeric_limits<uint64_t>::max()
+                    ? std::string("<default>")
+                    : std::to_string(ref.max_payload_override),
+                mesh_graph_path);
+        }
+    }
+}
+
+}  // namespace
+
+void ControlPlane::adopt_local_mesh_fabric_config() {
+    // Each rank/process (tt-run launches one MPI rank per mesh, each with its own TT_MESH_ID) owns a
+    // single mesh, so build for that mesh's resolved config, not the raw process-wide override.
+    // MeshGraph::get_fabric_config() applies the precedence MGD per-mesh config > SetFabricConfig override
+    // > dim_types default, so single-config runs are unchanged. No-op when a rank owns several meshes
+    // (single-host multi-mesh testing). MetalEnvImpl aligns its runtime config to this (and warns if the
+    // two disagree), so the env and the control plane agree on exactly one config per process.
+    if (this->mesh_graph_ == nullptr || this->local_mesh_binding_.mesh_ids.size() != 1) {
+        return;
+    }
+    const auto local_mesh = this->local_mesh_binding_.mesh_ids.front();
+    const auto resolved = this->mesh_graph_->get_fabric_config(local_mesh);
+    if (resolved != this->fabric_config_ && this->fabric_config_ != FabricConfig::DISABLED) {
+        log_critical(
+            tt::LogFabric,
+            "Fabric config set in two places: SetFabricConfig requested {}, but the mesh graph descriptor "
+            "declares {} for this process's mesh (mesh {}). The MGD's per-mesh fabric_config takes precedence; "
+            "using {}. Set the fabric config in only one place to avoid this.",
+            enchantum::to_string(this->fabric_config_),
+            enchantum::to_string(resolved),
+            *local_mesh,
+            enchantum::to_string(resolved));
+    }
+    this->fabric_config_ = resolved;
+}
+
+void ControlPlane::validate_fabric_config_compatibility() {
+    // Inter-mesh dimensionality compatibility (moved out of MeshGraph): two meshes joined by an inter-mesh
+    // link must share routing dimensionality -- all 2D configs (FABRIC_2D, FABRIC_2D_TORUS_X/Y/XY) interoperate,
+    // a 1D config cannot be inter-mesh-linked to a 2D one. Uses each mesh's resolved per-mesh config.
+    {
+        auto is_2d = [](FabricConfig cfg) {
+            return cfg == FabricConfig::FABRIC_2D || cfg == FabricConfig::FABRIC_2D_TORUS_X ||
+                   cfg == FabricConfig::FABRIC_2D_TORUS_Y || cfg == FabricConfig::FABRIC_2D_TORUS_XY;
+        };
+        auto check_pair = [&](uint32_t src, uint32_t dst) {
+            if (this->mesh_graph_->is_switch_mesh(MeshId{src}) || this->mesh_graph_->is_switch_mesh(MeshId{dst})) {
+                return;  // switch instances carry no fabric config
+            }
+            const auto src_cfg = this->mesh_graph_->get_fabric_config(MeshId{src});
+            const auto dst_cfg = this->mesh_graph_->get_fabric_config(MeshId{dst});
+            TT_FATAL(
+                is_2d(src_cfg) == is_2d(dst_cfg),
+                "Inter-mesh link between mesh M{} (FabricConfig {}) and mesh M{} (FabricConfig {}) joins meshes of "
+                "different routing dimensionality (1D vs 2D). The two ends of an inter-mesh channel must share the "
+                "same packet geometry (payload/header size), so a 1D mesh cannot be inter-mesh-linked to a 2D mesh. "
+                "All 2D configs (FABRIC_2D, FABRIC_2D_TORUS_X/Y/XY) are mutually compatible.",
+                src,
+                enchantum::to_string(src_cfg),
+                dst,
+                enchantum::to_string(dst_cfg));
+        };
+        for (const auto& [src, dst_map] : this->mesh_graph_->get_requested_intermesh_connections()) {
+            for (const auto& [dst, count] : dst_map) {
+                check_pair(src, dst);
+            }
+        }
+        for (const auto& [src, dst_map] : this->mesh_graph_->get_requested_intermesh_ports()) {
+            for (const auto& [dst, ports] : dst_map) {
+                check_pair(src, dst);
+            }
+        }
+    }
+
     using tt::tt_metal::distributed::multihost::ReduceOp;
     const auto& distributed_context = this->distributed_context_.get();
     const auto world_size = static_cast<uint32_t>(*distributed_context.size());
@@ -838,6 +988,16 @@ void ControlPlane::validate_fabric_config_across_ranks() {
     distributed_context.all_reduce(
         ttsl::Span<uint32_t>(&local_binding_count, 1), ttsl::Span<uint32_t>(&max_binding_count, 1), ReduceOp::MAX);
 
+    // Process-wide channel-geometry knobs (same for every mesh this rank owns); gathered so we can assert
+    // they are identical on every rank -- see validate_fabric_configs.
+    const auto& rtoptions = this->rtoptions_.get();
+    const uint8_t vc2_enabled = rtoptions.get_enable_fabric_vc2() ? 1 : 0;
+    const uint8_t mesh_pass_through_enabled = rtoptions.get_enable_fabric_mesh_pass_through() ? 1 : 0;
+    const uint64_t max_payload_override =
+        this->fabric_router_config_.max_packet_payload_size_bytes.has_value()
+            ? static_cast<uint64_t>(*this->fabric_router_config_.max_packet_payload_size_bytes)
+            : std::numeric_limits<uint64_t>::max();
+
     std::vector<MeshFabricConfigObservation> local_observations(max_binding_count);
     for (uint32_t i = 0; i < local_binding_count; ++i) {
         const auto mesh_host_rank = this->topology_mapper_->get_local_host_rank(local_mesh_ids[i]);
@@ -849,7 +1009,10 @@ void ControlPlane::validate_fabric_config_across_ranks() {
             .mesh_id = local_mesh_ids[i],
             .rank = rank,
             .mesh_host_rank = *mesh_host_rank.value(),
-            .fabric_config = this->fabric_config_};
+            .fabric_config = this->fabric_config_,
+            .vc2_enabled = vc2_enabled,
+            .mesh_pass_through_enabled = mesh_pass_through_enabled,
+            .max_payload_override = max_payload_override};
     }
 
     std::vector<uint32_t> binding_counts(world_size);
@@ -881,48 +1044,19 @@ void ControlPlane::validate_fabric_config_across_ranks() {
             gathered_observations.begin() + rank_offset + count);
     }
 
-    std::string observed_values;
     for (const auto& observation : observations) {
         TT_FATAL(
             observation.mesh_host_rank != *MESH_HOST_RANK_UNSET,
             "mesh_host_rank must be set for all gathered observations (rank {}, mesh {})",
             observation.rank,
             *observation.mesh_id);
-        observed_values += fmt::format(
-            "\n  mesh_id={}, mesh_host_rank={}, rank={}, fabric_config={}",
-            *observation.mesh_id,
-            observation.mesh_host_rank,
-            observation.rank,
-            enchantum::to_string(observation.fabric_config));
     }
 
-    const auto reference_config = observations.front().fabric_config;
-    const bool all_ranks_agree = std::all_of(observations.begin(), observations.end(), [reference_config](const auto& o) {
-        return o.fabric_config == reference_config;
-    });
-
     const auto& mesh_graph_desc_path = this->mesh_graph_->get_mesh_graph_descriptor_path();
-    const std::string mesh_graph_path = mesh_graph_desc_path.has_value() ? mesh_graph_desc_path->string()
-                                                                          : std::string("<auto-discovered>");
-    TT_FATAL(
-        all_ranks_agree,
-        "FabricConfig must match across all ranks before control-plane and fabric initialization. MGD path: {}. "
-        "Observed:{}\nFuture support may allow different configs per mesh, but 1D and 2D configs cannot be mixed, "
-        "mesh host ranks within a big mesh must still align, and 1D meshes cannot be multi-mesh.",
-        mesh_graph_path,
-        observed_values);
+    const std::string mesh_graph_path =
+        mesh_graph_desc_path.has_value() ? mesh_graph_desc_path->string() : std::string("<auto-discovered>");
 
-    const auto mesh_count = this->mesh_graph_->get_mesh_ids().size();
-    const bool is_1d_fabric = reference_config == FabricConfig::FABRIC_1D || reference_config == FabricConfig::FABRIC_1D_RING;
-    const bool is_multi_mesh = mesh_count > 1;
-    TT_FATAL(
-        !is_1d_fabric || !is_multi_mesh,
-        "FabricConfig {} is not supported when more than one mesh is present (mesh_count={}, MGD path: {}). "
-        "Future support may allow different configs per mesh, but 1D and 2D configs cannot be mixed, mesh host "
-        "ranks within a big mesh must still align, and 1D meshes cannot be multi-mesh.",
-        enchantum::to_string(reference_config),
-        mesh_count,
-        mesh_graph_path);
+    validate_fabric_configs(observations, mesh_graph_path);
 
     this->validated_fabric_config_ = this->fabric_config_;
 }
@@ -1007,7 +1141,8 @@ void ControlPlane::construct_link_health_after_intermesh() {
     if (this->fsd_physical_system_descriptor_ == nullptr) {
         return;
     }
-    this->link_health_ = std::make_unique<experimental::LinkHealth>(*this->topology_mapper_, *this->physical_system_descriptor_);
+    this->link_health_ =
+        std::make_unique<experimental::LinkHealth>(*this->topology_mapper_, *this->physical_system_descriptor_);
     this->check_fsd_compatibility_and_downed_fraction();
     this->confirm_local_downed_links();
 }
@@ -1147,7 +1282,9 @@ const std::vector<experimental::LinkInfo>& ControlPlane::get_unused_downed_links
     return this->link_health_ == nullptr ? kNone : this->link_health_->get_unused_downed_links();
 }
 
-const std::vector<experimental::LinkInfo>& ControlPlane::get_locally_unhealthy_links() const { return this->locally_unhealthy_; }
+const std::vector<experimental::LinkInfo>& ControlPlane::get_locally_unhealthy_links() const {
+    return this->locally_unhealthy_;
+}
 
 void ControlPlane::refresh_connectivity_diff() {
     if (this->link_health_ == nullptr) {
@@ -1160,9 +1297,7 @@ void ControlPlane::refresh_connectivity_diff() {
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     this->refreshed_live_descriptor_ =
         std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(tt::tt_metal::run_physical_system_discovery(
-            *this->cluster_.get().get_cluster_desc(),
-            distributed_context,
-            this->rtoptions_.get().get_target_device()));
+            *this->cluster_.get().get_cluster_desc(), distributed_context, this->rtoptions_.get().get_target_device()));
     this->link_health_->refresh(nullptr, this->refreshed_live_descriptor_.get());
     // refresh() clears the unused-plane classification; reapply the routing-plane snapshot so holes
     // already classified as unused do not silently reactivate.
@@ -1694,7 +1829,8 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                             log_warning(
                                 tt::LogFabric,
                                 "STRICT + FSD: skipping fatal on short connection, {} of {} eth link(s) from "
-                                "physical chip {} to physical chip {}. FSD in use -- recording in experimental::LinkHealth, "
+                                "physical chip {} to physical chip {}. FSD in use -- recording in "
+                                "experimental::LinkHealth, "
                                 "not fatal.",
                                 connected_eth_cores.size(),
                                 edge.connected_chip_ids.size(),
@@ -1741,8 +1877,8 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                             // machine all use that name.
                             auto neighbor_host_rank =
                                 physical_system_descriptor_->get_mpi_rank_for_asic(exit_node.dst_exit_node);
-                            const auto neighbor_rank = tt::tt_metal::distributed::multihost::Rank{
-                                static_cast<int>(neighbor_host_rank)};
+                            const auto neighbor_rank =
+                                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)};
                             if (!this->global_logical_bindings_.contains(neighbor_rank)) {
                                 continue;
                             }
@@ -3771,8 +3907,7 @@ PortDescriptorTable ControlPlane::generate_port_descriptor_table() {
         if (!this->global_logical_bindings_.contains(neighbor_rank)) {
             continue;
         }
-        sorted_neighbors.emplace_back(
-            this->global_logical_bindings_.at(neighbor_rank).first, neighbor_host, dst_rank);
+        sorted_neighbors.emplace_back(this->global_logical_bindings_.at(neighbor_rank).first, neighbor_host, dst_rank);
     }
     std::sort(sorted_neighbors.begin(), sorted_neighbors.end(), [](const auto& a, const auto& b) {
         if (*std::get<0>(a) != *std::get<0>(b)) {

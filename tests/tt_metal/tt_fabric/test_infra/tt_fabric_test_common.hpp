@@ -314,7 +314,9 @@ public:
         return mesh_device_->worker_core_from_logical_core(logical_core);
     }
 
-    tt::tt_metal::CoreCoord get_worker_grid_size() const override { return mesh_device_->compute_with_storage_grid_size(); }
+    tt::tt_metal::CoreCoord get_worker_grid_size() const override {
+        return mesh_device_->compute_with_storage_grid_size();
+    }
 
     std::vector<tt::tt_metal::CoreCoord> get_available_worker_cores() const override {
         std::vector<tt::tt_metal::CoreCoord> all_cores;
@@ -837,10 +839,13 @@ public:
             hops[direction] = 0;
         }
 
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         const auto src_coord = get_device_coord(src_node_id);
-        const auto mesh_shape = tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_mesh_shape(
-            src_node_id.mesh_id, MeshScope::GLOBAL);
-        auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
+        const auto mesh_shape = control_plane.get_physical_mesh_shape(src_node_id.mesh_id, MeshScope::GLOBAL);
+        // Per-mesh resolved config, not the process-wide test config: a heterogeneous system may be globally
+        // TORUS_XY while this mesh is TORUS_Y, which would emit wrap hops the mesh has no eth channels for.
+        const auto per_mesh_fabric_config = control_plane.get_mesh_graph().get_fabric_config(src_node_id.mesh_id);
+        auto fabric_type = tt::tt_fabric::get_fabric_type(per_mesh_fabric_config, is_ubb_galaxy());
 
         if (tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape, EW_DIM)) {
             // EW dimension: need to cover (mesh_shape[EW_DIM] - 1) total hops
