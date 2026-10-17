@@ -4896,6 +4896,13 @@ tasks:
     swapped:
     - attn_hc
     layer: 3
+  frozen:
+    at: '2026-10-17T04:57:50'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_01_attn_hc.py: 3182bf18eefbbf6463fb608bc020c2315a16e86d9b569ac681393b35f6a1d1c2
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.enc_reuse.attn_collapse
   title: enc_reuse attn_collapse (op) on device, layer 3
   step: implement
