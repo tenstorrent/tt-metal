@@ -30,6 +30,7 @@ The budget that fits one galaxy is about **1M tokens of context per mesh row** (
 | Smaller context, 16 users (the previous default) | 16 | 131,072 | k = 5 | optional | `assets/runtime_spec_b16_k5_131072.json` / `_vision.json` |
 | **Long context, 4 users** | 4 | **1,048,576** | k = 5 | optional | `assets/runtime_spec_b4_k5_1048576.json` / `_vision.json` |
 | **Long context with images, 4 users** | 4 | **524,288** | k = 5 | yes | `assets/runtime_spec_b4_k5_524288_vision.json` |
+| Long context with images, 4 users | 4 | 786,432 | k = 5 | yes | `assets/runtime_spec_b4_k5_786432_vision.json` (GSM8K 97.7 / 97.7 / 97.3 %; use it instead of 524,288 for accuracy) |
 | **APC + chunked prefill, 16 users** (default) | 16 | 262,144 | k = 5 | yes | `assets/runtime_spec_b16_k5_262144_vision.json` |
 | **APC + chunked prefill, 4 users** (default) | 4 | 1,048,576 | k = 5 | yes | `assets/runtime_spec_b4_k5_1048576_vision.json` |
 

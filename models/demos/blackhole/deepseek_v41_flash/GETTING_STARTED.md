@@ -42,6 +42,7 @@ Everything else in the launch stays the same.
 | Long context, 4 users | `runtime_spec_b4_k5_1048576.json` | 4 | 1,048,576 | no |
 | Long context with images, 4 users, 1M | `runtime_spec_b4_k5_1048576_vision.json` | 4 | 1,048,576 | yes |
 | Long context with images, 4 users | `runtime_spec_b4_k5_524288_vision.json` | 4 | 524,288 | yes |
+| Long context with images, 4 users | `runtime_spec_b4_k5_786432_vision.json` | 4 | 786,432 | yes |
 | Default, 16 users (prefix caching + chunked prefill) | `runtime_spec_b16_k5_262144_vision.json` | 16 | 262,144 | yes |
 | Default, 4 users (prefix caching + chunked prefill) | `runtime_spec_b4_k5_1048576_vision.json` | 4 | 1,048,576 | yes |
 
