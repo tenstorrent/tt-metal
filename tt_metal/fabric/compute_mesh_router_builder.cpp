@@ -194,7 +194,7 @@ RouterChannelCounts compute_router_channel_counts(
         topology,
         direction,
         chip_capabilities,
-        control_plane.express_routing_enabled(fabric_node_id.mesh_id),
+        express_axis_of(control_plane, fabric_node_id.mesh_id),
         &intermesh_config);
 
     RouterChannelCounts counts;
@@ -273,9 +273,10 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // Inter-mesh routers never enable deadlock avoidance, whichever direction (both ends must agree on
     // Deadlock avoidance polarity, and the far end may be a plain Mesh rank). Intra-mesh keeps the existing policy.
     const bool is_inter_mesh = (local_node.mesh_id != location.remote_node.mesh_id);
-    // Express enablement is resolved once per router and reused below (the MUX guard, the
-    // archetype, the injection-flag derivation); the query itself is a cached lazy derivation.
-    const bool express_enabled = control_plane.express_routing_enabled(local_node.mesh_id);
+    // The express axis is resolved once per router and reused below (the MUX guard, the archetype,
+    // the injection-flag derivation); the queries behind it are cached lazy derivations.
+    const ExpressAxis express_axis = express_axis_of(control_plane, local_node.mesh_id);
+    const bool express_enabled = express_axis != ExpressAxis::NONE;
 
     // Get SOC descriptor for eth core lookup
     const auto& cluster = fabric_context.get_cluster();
@@ -308,7 +309,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
 
     // The facts behind this router's mappings are resolved once, each at its own scope: topology
-    // and the intermesh VC config (fabric), express_routing_enabled (mesh), the chip's edge
+    // and the intermesh VC config (fabric), the express axis (mesh), the chip's edge
     // capabilities and Z port role (chip, classified once at discovery and threaded in), facing
     // (router); the eth channel enters only at establishment. Both mappings are pure functions of
     // those facts, so routers with an identical fact tuple are byte-identical archetypes -- and
@@ -338,7 +339,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // the intermesh Z router and leak same-mesh traffic onto the boundary link.
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
     auto archetype = router_archetype(
-        topology, location.direction, chip_facts.per_direction_capabilities, express_enabled, &intermesh_config);
+        topology, location.direction, chip_facts.per_direction_capabilities, express_axis, &intermesh_config);
     const auto& vc_shape = archetype.shape;
 
     // Compute injection channel flags at router level BEFORE creating builders
@@ -911,9 +912,10 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             defines["FABRIC_2D_VC0_CROSSOVER_TO_VC1"] = "";
         }
 
-        // FABRIC_2D selects action-map decode for every 2D router. Express capacity is injected
-        // configuration-wide when any local mesh uses express routing; router behavior does not
-        // otherwise specialize on FABRIC_EXPRESS_ENABLED.
+        // FABRIC_2D selects action-map decode for every 2D router. FABRIC_EXPRESS_AXIS is injected
+        // configuration-wide by CreateKernel when any local mesh uses express routing (see
+        // FabricContext::get_fabric_kernel_defines), so it is not added here. The router reads it
+        // through FabricExpressConfig: a Z-facing router decodes the axis its chord runs along.
     }
 
     // Get SOC descriptor for eth core lookup

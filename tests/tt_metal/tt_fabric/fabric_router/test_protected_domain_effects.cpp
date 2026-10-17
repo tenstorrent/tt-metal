@@ -141,6 +141,7 @@ ProtectedRingQueries bind(const QuadGalaxy& fixture, uint32_t row) {
     queries.continuation_allowed = [&fixture, node](RoutingDirection ingress, RoutingDirection egress) {
         return fixture.continuation_allowed(node, ingress, egress);
     };
+    queries.express_axis = ExpressAxis::Y;  // the fixture's chords run along dim 0
     return queries;
 }
 
@@ -265,8 +266,55 @@ TEST(ProtectedDomainEffectsTest, IntrameshXIntoYIsRejectedRatherThanClassified) 
     // Connection mapping unwires this producer, so reaching the derivation means the maps and this
     // ladder disagree. It fails rather than returning a guess.
     EXPECT_ANY_THROW(classify_producer_effect(q, RoutingDirection::E, k_cardinal, RoutingDirection::Z, k_express));
-    EXPECT_TRUE(is_static_dor_forbidden(RoutingDirection::E, k_cardinal, RoutingDirection::Z, k_express));
-    EXPECT_FALSE(is_static_dor_forbidden(RoutingDirection::E, k_intermesh, RoutingDirection::Z, k_express));
+    EXPECT_TRUE(
+        is_static_dor_forbidden(RoutingDirection::E, k_cardinal, RoutingDirection::Z, k_express, ExpressAxis::Y));
+    EXPECT_FALSE(
+        is_static_dor_forbidden(RoutingDirection::E, k_intermesh, RoutingDirection::Z, k_express, ExpressAxis::Y));
+}
+
+// --- Chords along X: the chord is an X resource ---
+
+// A node whose every edge is protected and where no two hops share a directed ring, so the axis
+// comparison alone decides between ENTER and the rest of the ladder.
+ProtectedRingQueries x_express_queries() {
+    ProtectedRingQueries queries;
+    queries.is_protected_ring_edge = [](RoutingDirection) { return true; };
+    queries.are_same_directed_ring_edges = [](RoutingDirection, RoutingDirection) { return false; };
+    queries.continuation_allowed = [](RoutingDirection, RoutingDirection) { return true; };
+    queries.express_axis = ExpressAxis::X;
+    return queries;
+}
+
+TEST(ProtectedDomainEffectsTest, XExpressChordIsNotProtectedY) {
+    EXPECT_TRUE(is_protected_y_egress(RoutingDirection::Z, k_express, ExpressAxis::Y));
+    EXPECT_FALSE(is_protected_y_egress(RoutingDirection::Z, k_express, ExpressAxis::X));
+    EXPECT_TRUE(is_protected_y_egress(RoutingDirection::N, k_cardinal, ExpressAxis::X));
+
+    // E -> Z continues on X when the chords run along X, so it is not a re-entry into Y.
+    EXPECT_FALSE(
+        is_static_dor_forbidden(RoutingDirection::E, k_cardinal, RoutingDirection::Z, k_express, ExpressAxis::X));
+    // A chord along X is mid-X-phase and may not turn back into N/S; a chord along Y is Y and may.
+    EXPECT_TRUE(
+        is_static_dor_forbidden(RoutingDirection::Z, k_express, RoutingDirection::N, k_cardinal, ExpressAxis::X));
+    EXPECT_FALSE(
+        is_static_dor_forbidden(RoutingDirection::Z, k_express, RoutingDirection::N, k_cardinal, ExpressAxis::Y));
+}
+
+TEST(ProtectedDomainEffectsTest, XExpressTurnOntoTheChordAcquiresX) {
+    const auto q = x_express_queries();
+
+    // Y -> chord is the dimension change, so it acquires the X resource.
+    EXPECT_EQ(
+        classify_producer_effect(q, RoutingDirection::N, k_cardinal, RoutingDirection::Z, k_express),
+        ProtectedDomainEffect::ENTER);
+    // chord -> Y is dimension-order-unwired, so reaching the derivation is a map disagreement.
+    EXPECT_ANY_THROW(classify_producer_effect(q, RoutingDirection::Z, k_express, RoutingDirection::N, k_cardinal));
+}
+
+TEST(ProtectedDomainEffectsTest, ProducerEffectsRefuseQueriesWithoutAnExpressAxis) {
+    auto q = x_express_queries();
+    q.express_axis = ExpressAxis::NONE;
+    EXPECT_ANY_THROW(classify_producer_effect(q, RoutingDirection::N, k_cardinal, RoutingDirection::E, k_cardinal));
 }
 
 // Slot-level flags produced from the classified effects.
