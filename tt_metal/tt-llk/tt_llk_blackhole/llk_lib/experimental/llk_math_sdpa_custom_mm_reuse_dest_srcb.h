@@ -86,9 +86,13 @@ inline void sdpa_custom_mm_reuse_dest_srcb_configure_mop(
         });
 }
 
-// Programs the address mods and the MVMUL replay program, and establishes the operand-driven default Src
-// zero-substitution state, which _llk_math_sdpa_custom_mm_reuse_dest_srcb_ asserts under LLK asserts. Re-run
-// this init after any math op that leaves the flag at keep (a copy init does).
+/**
+ * @brief Configure the math thread for sdpa_custom_mm_reuse_dest_srcb: programs the address mods and the MVMUL replay program.
+ *
+ * @note Establishes the operand-driven default Src zero-substitution state, which
+ *       @ref _llk_math_sdpa_custom_mm_reuse_dest_srcb_ asserts under LLK asserts. Re-run this init after any math op
+ *       that leaves the flag at keep (a copy init does).
+ */
 template <MathFidelity math_fidelity>
 inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_init_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,

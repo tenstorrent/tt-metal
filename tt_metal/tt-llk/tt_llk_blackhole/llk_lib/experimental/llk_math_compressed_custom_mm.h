@@ -143,9 +143,13 @@ inline void _llk_math_compressed_custom_mm_mop_config_(const std::uint32_t opera
         });
 }
 
-// Programs the address mods and the MVMUL replay program, and establishes the operand-driven default Src
-// zero-substitution state, which _llk_math_compressed_custom_mm_ asserts under LLK asserts. Re-run this init
-// after any math op that leaves the flag at keep (a copy init does).
+/**
+ * @brief Configure the math thread for compressed_custom_mm: programs the address mods and the MVMUL replay program.
+ *
+ * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
+ * @note Establishes the operand-driven default Src zero-substitution state, which @ref _llk_math_compressed_custom_mm_
+ *       asserts under LLK asserts. Re-run this init after any math op that leaves the flag at keep (a copy init does).
+ */
 template <bool transpose = false, bool split_acc = false, bool dense_packing = false>
 inline void _llk_math_compressed_custom_mm_init_(const std::uint32_t operandB_face_r_dim)
 {
@@ -158,7 +162,12 @@ inline void _llk_math_compressed_custom_mm_init_(const std::uint32_t operandB_fa
     math::_configure_default_zero_flag_state_();
 }
 
-// Call _llk_math_compressed_custom_mm_init_ first; re-run it after any op that leaves the Src zero flag at keep.
+/**
+ * @brief Run the compressed_custom_mm MVMUL sequence over kt_dim k-tiles into DEST, skipping zero tiles per the metadata.
+ *
+ * @note Call @ref _llk_math_compressed_custom_mm_init_ first, and again after any other math op (a copy init leaves the
+ *       Src zero flag at keep).
+ */
 template <bool finalize = true>
 inline void _llk_math_compressed_custom_mm_(
     const std::uint32_t base_address_meta,

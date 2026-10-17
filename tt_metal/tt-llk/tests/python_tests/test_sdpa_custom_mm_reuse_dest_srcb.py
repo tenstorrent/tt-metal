@@ -152,6 +152,7 @@ def _run(math_fidelity, formats, dest_acc, preserve_zero_flag=False, operands=No
         v_cols = torch.rand(1, input_B_dimensions[1])
         src_V = v_cols.expand(input_B_dimensions[0], input_B_dimensions[1]).contiguous()
     else:
+        # Caller-supplied row-major (P, V) replace the layout-robust stimulus; the golden follows them.
         src_P, src_V = (t.reshape(-1).to(src_P.dtype) for t in operands)
 
     generate_golden = get_golden_generator(MatmulGolden)

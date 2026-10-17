@@ -344,6 +344,35 @@ inline void _llk_math_reduce_block_max_row_uninit_()
 }
 
 /**
+ * @brief Minimal reinit of reduce_block_max_row inside an SDPA inner loop: restores ADDR_MOD_1/2/6 only.
+ *
+ * Requires copy_tile_custom / matmul / sub_exp as the predecessors (they leave ADDR_MOD_3 and the reduce MOP intact).
+ *
+ * @note Also re-applies the operand-driven default Src zero-substitution state (skip-if-set): copy_tile_custom
+ *       leaves the flag at keep, and the GMPOOL must not run with it, exactly as @ref _llk_math_reduce_block_max_row_init_.
+ */
+inline void _llk_math_reduce_block_max_row_reinit_minimal_()
+{
+    reduce_max_row_configure_addrmod_reinit_minimal();
+    math::_configure_default_zero_flag_state_();
+}
+
+/**
+ * @brief Short reinit of reduce_block_max_row after an op that reprogrammed the MOP (e.g. an eltwise binary init):
+ *        restores all reduce address mods and reprograms the MOP from the intact replay buffer.
+ *
+ * @note Also re-applies the operand-driven default Src zero-substitution state (skip-if-set), as
+ *       @ref _llk_math_reduce_block_max_row_init_ does.
+ */
+template <std::uint32_t block_ct_dim>
+inline void _llk_math_reduce_block_max_row_reinit_with_mop_(const ckernel::TensorShape& tensor_shape)
+{
+    reduce_max_row_configure_addrmod();
+    _llk_math_reduce_block_max_row_mop_reprogram_only_<block_ct_dim>(tensor_shape);
+    math::_configure_default_zero_flag_state_();
+}
+
+/**
  * Performs block-based reduce_max_row operation across multiple tiles in the width dimension.
  *
  * This function works with the following assumptions:

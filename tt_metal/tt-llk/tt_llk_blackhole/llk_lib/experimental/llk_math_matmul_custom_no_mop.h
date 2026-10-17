@@ -447,6 +447,32 @@ inline void _llk_math_matmul_init_no_mop_(
         matmul_configure_mop_custom<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // A preceding datacopy (copy_tile_init / copy_tile_custom) leaves the Src zero flag at keep; MVMUL needs
+    // the operand-driven value.
+    math::_configure_default_zero_flag_state_();
+}
+
+/**
+ * @brief Re-establish the no-mop matmul math state after another op ran between the blocks (SDPA inner loop):
+ *        reprograms the address modifiers for the operand geometry and resets the counters. The replay buffer
+ *        recorded by @ref _llk_math_matmul_init_no_mop_ must still be intact.
+ *
+ * @note Also re-applies the operand-driven default Src zero-substitution state (skip-if-set): a preceding
+ *       copy_tile_custom leaves the flag at keep, and MVMUL would then keep bf16 denormal SrcB operands.
+ */
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
+inline void _llk_math_matmul_reinit_no_mop_(
+    const bool transpose               = false,
+    const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
+    const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
+    const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
+    const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
+    const bool partial_face            = false)
+{
+    matmul_configure_addrmod_reinit<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_configure_default_zero_flag_state_();
 }
 
 inline void _llk_math_matmul_uninit_no_mop_()

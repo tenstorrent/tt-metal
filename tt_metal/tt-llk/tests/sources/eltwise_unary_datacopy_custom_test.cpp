@@ -90,7 +90,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // The packer's default bf16 -> bf16 early conversion rounds, which flushes denormals and turns -0.0 into
         // +0.0 before the datum reaches L1, hiding what the copy left in DEST. Read DEST raw (identity conversion)
         // so the L1 output is bit-for-bit what DEST holds.
-        cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_int8_RMW>(1);
+        cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_int8_RMW>(1 /*val*/);
     }
 
     for (int block = 0; block < params.NUM_BLOCKS; ++block)

@@ -73,12 +73,11 @@ inline void llk_math_reduce_block_max_row(const std::uint32_t dst_index, const c
  */
 inline void llk_math_reduce_block_max_row_reinit_minimal() {
     SAN_HOOK(unsupported());
-    reduce_max_row_configure_addrmod_reinit_minimal();
+    _llk_math_reduce_block_max_row_reinit_minimal_();
 }
 
 template <std::uint32_t block_ct_dim>
 inline void llk_math_reduce_block_max_row_reinit_with_mop(const ckernel::TensorShape& tensor_shape) {
     SAN_HOOK(unsupported());
-    reduce_max_row_configure_addrmod();
-    _llk_math_reduce_block_max_row_mop_reprogram_only_<block_ct_dim>(tensor_shape);
+    _llk_math_reduce_block_max_row_reinit_with_mop_<block_ct_dim>(tensor_shape);
 }

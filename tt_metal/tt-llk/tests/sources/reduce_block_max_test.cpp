@@ -217,15 +217,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef ARCH_BLACKHOLE
         if constexpr (REINIT_MODE == 1)
         {
-            // reduce_block_max_row_reinit_short == reduce_max_row_configure_addrmod + mop_reprogram_only
-            // (matches llk_math_reduce_block_max_row_reinit_with_mop). Blackhole-only lib path.
-            reduce_max_row_configure_addrmod();
-            _llk_math_reduce_block_max_row_mop_reprogram_only_<REDUCE_BLOCK_CT_DIM>(tensor_shape);
+            // reduce_block_max_row_reinit_short: restore addrmods + reprogram the MOP (what
+            // llk_math_reduce_block_max_row_reinit_with_mop calls). Blackhole-only lib path.
+            _llk_math_reduce_block_max_row_reinit_with_mop_<REDUCE_BLOCK_CT_DIM>(tensor_shape);
         }
         else if constexpr (REINIT_MODE == 2)
         {
             // reduce_block_max_row_reinit_minimal: restore ADDR_MOD_1/2/6 only (Blackhole-only lib fn).
-            reduce_max_row_configure_addrmod_reinit_minimal();
+            _llk_math_reduce_block_max_row_reinit_minimal_();
         }
 #endif
 

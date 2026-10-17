@@ -188,7 +188,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Operation 3: Matmul FPU - Using experimental custom no-mop API
     // _llk_math_matmul_init_<0, 0>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, 0, 1, 1);
 
-    matmul_configure_addrmod_reinit();
+    _llk_math_matmul_reinit_no_mop_<ckernel::MathFidelity::LoFi, 0>();
 
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {

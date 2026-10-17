@@ -4,7 +4,7 @@
 from dataclasses import dataclass
 
 import torch
-from conftest import skip_for_wormhole
+from conftest import blackhole_only
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -41,12 +41,16 @@ class DATACOPY_CUSTOM_PACK_RAW(TemplateParameter):
         return f"#define DATACOPY_CUSTOM_PACK_RAW {str(self.pack_raw).lower()}"
 
 
+# One [128, 256] block = 32 tiles, enough to span several DEST sections.
+INPUT_DIMENSIONS = [128, 256]
+
+
 def _run_unary_datacopy_custom(formats, dest_acc, src_A=None, pack_raw=False):
-    """Run copy_tile_custom over a [128, 256] block; return (src_A, golden, result) as flat tensors.
+    """Run copy_tile_custom over INPUT_DIMENSIONS; return (src_A, golden, result) as flat tensors.
 
     ``src_A`` optionally replaces the seeded random stimulus (same flat shape).
     """
-    input_dimensions = [128, 256]
+    input_dimensions = INPUT_DIMENSIONS
     num_faces = 4
 
     seeded_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -107,7 +111,7 @@ def _run_unary_datacopy_custom(formats, dest_acc, src_A=None, pack_raw=False):
     return src_A, golden_tensor, res_tensor
 
 
-@skip_for_wormhole
+@blackhole_only
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
     dest_acc=[DestAccumulation.No],
@@ -125,7 +129,7 @@ BF16_DENORMAL_MIN = 2.0**-133
 BF16_DENORMAL_MANTISSAS = 1 << 7
 
 
-@skip_for_wormhole
+@blackhole_only
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
     dest_acc=[DestAccumulation.No],
@@ -140,9 +144,11 @@ def test_unary_datacopy_custom_preserves_signed_zero_and_denormals(formats, dest
     here), and the tolerance compare treats -0.0 == +0.0 and 1e-40 ~= 0 (so this checks the raw bf16 words).
     """
     torch.manual_seed(0)
-    n = 128 * 256
+    n = INPUT_DIMENSIONS[0] * INPUT_DIMENSIONS[1]
     src_A = torch.randn(n, dtype=torch.float32)
     lanes = torch.arange(n)
+    # Lane pattern per group of four: -0.0, +0.0, a denormal, a normal. Every other denormal lane
+    # (lane % 8 == 2) is negative so both signs of the denormal band are covered.
     src_A[lanes % 4 == 0] = -0.0
     src_A[lanes % 4 == 1] = 0.0
     denormal_lanes = lanes % 4 == 2

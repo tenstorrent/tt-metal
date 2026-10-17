@@ -425,6 +425,8 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
 inline void _llk_math_reduce_block_max_row_reinit_runtime_()
 {
     reduce_max_row_configure_addrmod_reinit_runtime();
+    // A preceding copy_tile_custom leaves the Src zero flag at keep; the GMPOOL needs the operand default.
+    math::_configure_default_zero_flag_state_();
 }
 
 /**
@@ -442,6 +444,8 @@ inline void _llk_math_reduce_block_max_row_reinit_short_runtime_(std::uint32_t b
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
     _llk_math_reduce_block_max_row_mop_reprogram_only_runtime_<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape);
+    // A preceding copy_tile_custom leaves the Src zero flag at keep; the GMPOOL needs the operand default.
+    math::_configure_default_zero_flag_state_();
 }
 
 /**
@@ -454,4 +458,6 @@ inline void _llk_math_reduce_block_max_row_reinit_minimal_runtime_()
     reduce_max_row_configure_addrmod_reinit_minimal_runtime();
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
+    // A preceding copy_tile_custom leaves the Src zero flag at keep; the GMPOOL needs the operand default.
+    math::_configure_default_zero_flag_state_();
 }
