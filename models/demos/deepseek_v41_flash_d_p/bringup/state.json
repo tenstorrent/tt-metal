@@ -23,6 +23,27 @@
   "started": "2026-10-14T23:01:38",
   "status": "PASS"
  },
+ "C.enc_reuse.attn_collapse": {
+  "attempts": 0,
+  "duration_s": 54.1,
+  "history": [
+   {
+    "s": 54.1,
+    "status": "PASS",
+    "t": "2026-10-17T05:06:59"
+   }
+  ],
+  "last_run": "2026-10-17T05:06:59",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.enc_reuse.attn_collapse.log",
+  "metrics": {
+   "err_attn_collapse_L03": 0.0026270688977092505,
+   "err_attn_collapse_L03_limit": 0.15659494698047638
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T05:06:05",
+  "status": "PASS"
+ },
  "C.enc_reuse.attn_hc": {
   "attempts": 0,
   "duration_s": 46.2,
