@@ -1649,6 +1649,42 @@ class L1_ACC(RuntimeParameter):
 
 
 @dataclass
+class BCAST_ROW_IDX(RuntimeParameter):
+    """Row of the SrcB tile that a ROW broadcast reads (``_llk_unpack_AB_<ROW>`` argument).
+
+    Valid values are 0..31 on a 32x32 non-BFP tile; the kernel asserts anything else.
+    """
+
+    bcast_row_idx: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t BCAST_ROW_IDX = {self.bcast_row_idx};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t BCAST_ROW_IDX;", "I"
+
+
+@dataclass
+class UNPACK_ISSUED(RuntimeParameter):
+    """Cross-thread gate in L1: the host writes 0 before every run, the unpack thread writes 1 to the
+    L1 copy of the runtime parameters (``__runtime_args_start``) once its unpack call has returned,
+    and math/pack spin on that word before issuing any Tensix instruction.
+
+    For a kernel whose unpack thread may stop in an ``LLK_ASSERT``: a math/pack thread left stalled
+    on a Tensix instruction survives the per-test TRISC soft reset and hangs the next kernel, whereas
+    a RISC spinning on L1 is reset cleanly.
+    """
+
+    unpack_issued: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t UNPACK_ISSUED = {self.unpack_issued};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t UNPACK_ISSUED;", "I"
+
+
+@dataclass
 class TILE_COUNT(RuntimeParameter):
     tile_cnt: int = 0
 
