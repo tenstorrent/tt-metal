@@ -5,6 +5,7 @@
 Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
 """
+
 import math
 import os
 
@@ -51,6 +52,13 @@ def fabric_router_config():
     router = ttnn.FabricRouterConfig()
     router.max_packet_payload_size_bytes = payload
     return router
+
+
+def spec_hostfix_enabled():
+    """Host-side spec-step fixes (QWEN36_SPEC_HOSTFIX, default 1; 0 = the old code paths): conflict check without
+    tolist, one read of the drafter ids, vectorized row loops, drafter page tables skipped when unchanged.
+    Same device inputs and outputs either way."""
+    return bool(int(os.environ.get("QWEN36_SPEC_HOSTFIX", "1")))
 
 
 def kv_cache_bf8_enabled():

@@ -33,6 +33,7 @@ from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
+from models.demos.blackhole.qwen36.tt.tp_common import spec_hostfix_enabled
 
 # Prompt length above which the reseed goes back to the per-slot loop (B == 1 only).
 EAGER_RESEED_PROMPT_LEN = 131072
@@ -154,6 +155,41 @@ def _int_vec(x, B, name):
 def sanitize_verify_block(tokens, start_pos, num_valid_drafts, K):
     """Validate a runner verify block [B, 1+K] -> (clean_tokens [B,T] int64, start0 [B] int64, active [B] bool).
     Active row (start_pos[u,0] >= 0): columns 0..n are real (tokens >= 0, consecutive positions); the padding
+    tail gets tokens[u,0]. Inactive row: start_pos[u,0] < 0, n == 0.
+    QWEN36_SPEC_HOSTFIX (default 1): checks and padding on plain lists (no tensor op per row); a block with any error
+    is re-run through the per-row code so the raised error is the same."""
+    if not spec_hostfix_enabled():
+        return _sanitize_verify_block_old(tokens, start_pos, num_valid_drafts, K)
+    T = K + 1
+    tokens = torch.as_tensor(tokens)
+    if tokens.ndim != 2 or tokens.shape[1] != T:
+        raise ValueError(f"tokens must have shape [B, {T}], got {tuple(tokens.shape)}")
+    B = tokens.shape[0]
+    tokens = tokens.to(torch.int64)
+    pos = _int_block(start_pos, B, T, "start_pos")
+    nv = _int_vec(num_valid_drafts, B, "num_valid_drafts")
+    tl, pl, nl = tokens.tolist(), pos.tolist(), nv.tolist()
+    clean, start0, active = [], [], []
+    for u in range(B):
+        n, s0 = nl[u], pl[u][0]
+        if s0 < 0:
+            ok, row = n == 0, [0] * T
+        else:
+            ok = 0 <= n <= K and min(tl[u][: n + 1]) >= 0 and pl[u][: n + 1] == list(range(s0, s0 + n + 1))
+            row = tl[u][: n + 1] + [tl[u][0]] * (T - n - 1)
+        if not ok:
+            return _sanitize_verify_block_old(tokens, start_pos, num_valid_drafts, K)  # raises the row's error
+        clean.append(row)
+        start0.append(max(s0, 0))
+        active.append(s0 >= 0)
+    if B == 0:
+        return _sanitize_verify_block_old(tokens, start_pos, num_valid_drafts, K)
+    return torch.tensor(clean, dtype=torch.int64), torch.tensor(start0, dtype=torch.int64), torch.tensor(active)
+
+
+def _sanitize_verify_block_old(tokens, start_pos, num_valid_drafts, K):
+    """Validate a runner verify block [B, 1+K] -> (clean_tokens [B,T] int64, start0 [B] int64, active [B] bool).
+    Active row (start_pos[u,0] >= 0): columns 0..n are real (tokens >= 0, consecutive positions); the padding
     tail gets tokens[u,0]. Inactive row: start_pos[u,0] < 0, n == 0."""
     T = K + 1
     tokens = torch.as_tensor(tokens)
@@ -205,7 +241,9 @@ def note_withheld_drafts(offered, marked, speculated, streak, num_valid_drafts, 
     Mutates ``offered``/``speculated``/``streak`` (offered is consumed); returns the new ``marked`` set."""
     nv = torch.as_tensor(num_valid_drafts).reshape(-1)
     marked = set(marked)
-    for u in range(nv.numel()):
+    if spec_hostfix_enabled():  # QWEN36_SPEC_HOSTFIX: one tolist() instead of a tensor index per row
+        nv = nv.tolist()
+    for u in range(len(nv)):
         if int(nv[u]) > 0:
             speculated.add(u)
             streak[u] = 0
@@ -567,6 +605,19 @@ class MTPSpecEngine:
         )
         ttnn.copy_host_to_device_tensor(h, dev)
 
+    def _stage_table(self, host, dev, dtype, layout):
+        """_stage for a page table that mostly repeats from step to step. QWEN36_SPEC_HOSTFIX (default 1): skip the
+        copy when ``dev`` already holds this exact table. Every write to a buffer must go through here, since the
+        cache is the host copy of what that buffer holds (keyed by the buffer, dropped when it is freed)."""
+        if not spec_hostfix_enabled():
+            return self._stage(host, dev, dtype, layout)
+        cache = self.__dict__.setdefault("_stage_cache", {})
+        hit = cache.get(id(dev))
+        if hit is not None and hit[0] is dev and hit[1].shape == host.shape and torch.equal(hit[1], host):
+            return
+        self._stage(host, dev, dtype, layout)
+        cache[id(dev)] = (dev, host.clone())
+
     def _alloc_host_replicated(self, host, dtype, layout):
         return ttnn.from_torch(
             host,
@@ -579,9 +630,9 @@ class MTPSpecEngine:
 
     def _stage_mtp_tables(self, pt):
         """Re-stage the persistent MTP page tables from the fitted host table [B, nb]."""
-        self._stage(pt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        self._stage_table(pt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         for u in range(self.B):
-            self._stage(pt[u : u + 1].contiguous(), self._mtp_pt_rows[u], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            self._stage_table(pt[u : u + 1].contiguous(), self._mtp_pt_rows[u], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
 
     def _check_scratch(self, pt):
         assert int(pt.max()) < self._scratch_block, (
@@ -810,6 +861,7 @@ class MTPSpecEngine:
         self._dr_outs, self._dr_bufs = [], []
         self._dr_tok0 = self._dr_rs_tok = self._dr_rs_pos = self._dr_rs_pt = self._dr_rs_cos = self._dr_rs_sin = None
         self._dr_pos, self._dr_cos, self._dr_sin = [], [], []
+        self.__dict__.pop("_stage_cache", None)  # QWEN36_SPEC_HOSTFIX table cache: its buffers are freed here
         bufs = [
             *self._last_hidden,
             *self._last_sel.values(),
@@ -1313,7 +1365,7 @@ class MTPSpecEngine:
                 dpt[torch.tensor(decline)] = self._scratch_block
                 p = [0 if d else pu for d, pu in zip(decline, p)]
                 pending = [0 if d else t for d, t in zip(decline, pending)]
-            self._stage(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            self._stage_table(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             drafts = self._propose_recorded(ctok, cpos, m, pending, p, pt, m_kv)
             if any(decline):
                 drafts[torch.tensor(decline)] = 0
@@ -1330,7 +1382,7 @@ class MTPSpecEngine:
         if any(decline):  # declined rows draft at position 0 over an all-scratch table; their ids are discarded
             dpt = pt.clone()
             dpt[torch.tensor(decline)] = self._scratch_block
-            self._stage(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            self._stage_table(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             p = [0 if d else pu for d, pu in zip(decline, p)]
             pending = [0 if d else t for d, t in zip(decline, pending)]
         drafts = self._draft(pending, self._hp_buf, p)
@@ -1364,7 +1416,20 @@ class MTPSpecEngine:
         pad = [False] * B if self._row_active is None else [not bool(a) for a in self._row_active]
         acc = acc.clone()
         acc[torch.tensor(pad)] = 1  # a padding row's count is 1
-        for u in range(B):
+        check_rows = range(B)
+        if spec_hostfix_enabled():  # QWEN36_SPEC_HOSTFIX: validate on plain lists; the per-row loop only names an error
+            ctl, cpl, al = ctok.tolist(), cpos.tolist(), acc.tolist()
+            ok = all(
+                pad[u]
+                or (
+                    min(ctl[u][: al[u]]) >= 0
+                    and cpl[u][0] >= 1
+                    and cpl[u][: al[u]] == list(range(cpl[u][0], cpl[u][0] + al[u]))
+                )
+                for u in range(B)
+            )
+            check_rows = () if ok else range(B)
+        for u in check_rows:
             if pad[u]:
                 continue
             c = int(acc[u])
@@ -1496,7 +1561,7 @@ class MTPSpecEngine:
         rcos, rsin = model._rope_tp_cos_sin_decode_torch(rpos)
         stage(rtok, self._dr_rs_tok, ttnn.uint32, rm)
         stage(rpos, self._dr_rs_pos, ttnn.int32, rm)
-        stage(rpt, self._dr_rs_pt, ttnn.int32, rm)
+        self._stage_table(rpt, self._dr_rs_pt, ttnn.int32, rm)
         stage(rcos, self._dr_rs_cos, bf, tile)
         stage(rsin, self._dr_rs_sin, bf, tile)
         tok0, poss = draft_step_plan(pending, p, K)
@@ -1509,7 +1574,7 @@ class MTPSpecEngine:
         ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
         if any(m):
             self.mtp_extra_steps += 1
-        steps = [self._id_to_host(t) for t in self._dr_outs]  # steps[k][u]
+        steps = self._ids_to_host(self._dr_outs)  # steps[k][u]
         return torch.tensor([[steps[k][u] for k in range(K)] for u in range(B)], dtype=torch.int32)
 
     def _draft_warmup(self, pending, Hp, p):
@@ -1524,6 +1589,15 @@ class MTPSpecEngine:
         """[*, B] uint32 device ids -> B ints, read from the device-0 replica."""
         t = ttnn.to_torch(ttnn.get_device_tensors(id_tt)[0])
         return [int(v) for v in t.reshape(-1)[: self.B]]
+
+    def _ids_to_host(self, id_tts):
+        """_id_to_host for several tensors. QWEN36_SPEC_HOSTFIX (default 1): all device-0 copies are enqueued
+        without blocking, then one synchronize, instead of one blocking read round trip per tensor."""
+        if not spec_hostfix_enabled():
+            return [self._id_to_host(t) for t in id_tts]
+        hosts = [ttnn.from_device(ttnn.get_device_tensors(t)[0], blocking=False) for t in id_tts]
+        ttnn.synchronize_device(self.mesh)
+        return [[int(v) for v in ttnn.to_torch(h).reshape(-1)[: self.B]] for h in hosts]
 
     # --------------------------------------------------------------------- #
     # MTP KV maintenance
