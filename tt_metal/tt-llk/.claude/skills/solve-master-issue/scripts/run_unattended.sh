@@ -32,13 +32,15 @@ root=${REPO_ROOT:-$PWD}
 sleep_s=${SLEEP:-900}; max=${MAX_ATTEMPTS:-96}
 log() { echo "$(date -u +%FT%TZ) $*" >> "$state/driver.log"; }
 sid_file=$state/session.id
+# fresh = no session to resume. Keyed on session.id, not on old attempt logs: moving a paused run's logs
+# under a worker dir must not make the driver try to resume a session that never existed.
+fresh=1; [ -s "$sid_file" ] && fresh=0
 [ -s "$sid_file" ] || python3 -c 'import uuid;print(uuid.uuid4())' > "$sid_file"
 sid=$(cat "$sid_file")
 args="$*"
 wopt=; [ -n "$worker" ] && wopt=" --worker $worker"
-log "start name=$name worker=${worker:-<single>} host=$(hostname) root=$root session=$sid args=$args"
+log "start name=$name worker=${worker:-<single>} host=$(hostname) root=$root session=$sid fresh=$fresh args=$args"
 n=$(ls "$state"/attempt-*.log 2>/dev/null | wc -l)
-fresh=1; [ "$n" -gt 0 ] && fresh=0   # a restarted driver resumes the session it had
 stop_requested() { [ -e "$run/STOP" ] || [ -e "$state/STOP" ]; }
 while [ "$n" -lt "$max" ]; do
     [ -e "$state/DONE" ] && { log "DONE present, exiting"; exit 0; }
