@@ -30,13 +30,22 @@
 
 // Program the packer for single-tile packing, taking the SETADCXX under the mutex.
 // Pair with llk_pack_mutex_ADC, never with plain llk_pack.
-template <bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
+template <
+    bool zero_output = false,
+    bool skip_addrmod_config = false,
+    bool skip_packer_strides = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 inline void llk_pack_init_mutex_ADC(
     const std::uint32_t pack_output, std::uint32_t num_tiles = 1, const std::uint32_t input_operand = 0) {
     SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(pack_output);
     // 8-bit datums (Int8, UInt8, Fp8_e4m3, Lf8) do not require the Blackhole tilize workaround.
     const bool is_input_8bit_format = IS_8BIT_FORMAT(static_cast<std::uint32_t>(unpack_src_format[input_operand]));
+
+    // Same block bound as llk_pack_init_impl: the MOP walks num_tiles tiles from the start tile.
+    LLK_ASSERT(
+        (num_tiles <= get_pack_init_dest_max_tiles<is_fp32_dest_acc_en>(pack_src_format[output_id])),
+        "Pack block exceeds the DEST tiles available in this sync mode and DEST width.");
 
     _llk_pack_init_<PackMode::Default, zero_output, skip_addrmod_config, skip_packer_strides, true /*mutex_ADC*/>(
         pack_src_format[output_id],

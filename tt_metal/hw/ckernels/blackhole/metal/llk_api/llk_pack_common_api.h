@@ -19,6 +19,24 @@
  *************************************************************************/
 
 /**
+ * DEST tiles a pack init block may span: the region this kernel synchronizes on (DST_SYNC_MODE), counted at
+ * the width the packer reads DEST with. That width is 32-bit when the DEST accumulates in fp32 or when the
+ * pack source is itself a 32-bit format (the same condition set_packer_config programs Read_32b_data from),
+ * so a 32-bit pack source on a 16-bit-accumulating kernel still gets the 32-bit capacity.
+ *
+ * @tparam is_fp32_dest_acc_en  DEST accumulates in fp32.
+ * @param  pack_src_reg_format  Pack source (DEST-side) data format.
+ */
+template <bool is_fp32_dest_acc_en>
+constexpr std::uint32_t get_pack_init_dest_max_tiles(const std::uint32_t pack_src_reg_format) {
+    const DataFormat src_format = static_cast<DataFormat>(pack_src_reg_format);
+    const bool dest_read_32b = is_fp32_dest_acc_en || (src_format == DataFormat::Float32) ||
+                               (src_format == DataFormat::Int32) || (src_format == DataFormat::UInt32);
+    return dest_read_32b ? get_dest_max_tiles<DST_SYNC_MODE, true, DstTileShape::Tile32x32>()
+                         : get_dest_max_tiles<DST_SYNC_MODE, false, DstTileShape::Tile32x32>();
+}
+
+/**
  * Pack-thread half of a mid-kernel FP32 dest-acc reconfiguration.
  *
  * Drains the packer FIFO, waits for MATH to program dest-acc CFG (including PCK_DEST_RD_CTRL),

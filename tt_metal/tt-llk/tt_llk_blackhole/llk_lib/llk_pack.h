@@ -504,6 +504,9 @@ inline void _llk_pack_hw_configure_(
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param num_tiles: Number of tiles processed per MOP run.
  * @param skip_bh_tilize_workaround: When true (8-bit src datums), skip the Blackhole tilize row-unswizzle workaround.
+ * @note Keep num_tiles within the DEST region the kernel synchronizes on, at the width the packer reads DEST
+ *       with (32-bit when the DEST accumulates in fp32 or the pack source is a 32-bit format). This init has
+ *       neither input and asserts only the whole-DEST bound for the pack source's datum width.
  * @note Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
  * @note mutex_ADC has to match the value given to @ref _llk_pack_ ; guarding only one of the two
  *       leaves unguarded SETADC issues. Supported for PackMode::Default only: the other modes embed ADC
@@ -533,10 +536,9 @@ inline void _llk_pack_init_(
     // Hard bound only: the whole DEST holds DEST_NUM_TILES_FP16 32x32 tiles of 16-bit datums and half as
     // many of 32-bit datums, keyed here on the pack source's datum width. This init has no DstSync and no
     // DEST-width input (a 16-bit pack source may read a 32-bit DEST), so the block width against the
-    // synchronized DEST region the kernel runs with is asserted by the caller that knows both
-    // (tt-metal llk_pack_init_impl).
+    // synchronized DEST region the kernel runs with is the caller's contract (see the @note on num_tiles).
     const DataFormat src_format = static_cast<DataFormat>(pack_src_format);
-    if (src_format == DataFormat::Float32)
+    if ((src_format == DataFormat::Float32) || (src_format == DataFormat::Int32) || (src_format == DataFormat::UInt32))
     {
         LLK_ASSERT(num_tiles <= DEST_NUM_TILES_FP16 / 2, "num_tiles exceeds the DEST capacity for 32-bit datums (DEST_NUM_TILES_FP16 / 2).");
     }

@@ -95,16 +95,9 @@ def test_pack_dest_bank(
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    l1_acc=[L1Accumulation.No],
-    num_faces=4,
-    tilize=[Tilize.No],
-    dest_index=0,
-    input_dimensions=[[512, 32]],
 )
-def test_pack_dest_bank_sync_full(
-    formats, dest_acc, l1_acc, num_faces, tilize, dest_index, input_dimensions
-):
-    """SyncFull pack blocks with a 16-bit (Float16_b) pack source.
+def test_pack_dest_bank_sync_full(formats, dest_acc):
+    """SyncFull pack blocks with a 16-bit (Float16_b) pack source, [512, 32] = 16 tiles.
 
     dest_acc=No: one block of 16 tiles, the whole 16-bit DEST, twice the width the Blackhole
     init used to cap a 16-bit pack source at. dest_acc=Yes: two blocks of 8 tiles on a 32-bit
@@ -114,43 +107,38 @@ def test_pack_dest_bank_sync_full(
     _run_pack_dest_bank(
         formats,
         dest_acc,
-        l1_acc,
-        num_faces,
-        tilize,
-        dest_index,
-        input_dimensions,
+        L1Accumulation.No,
+        4,  # num_faces
+        Tilize.No,
+        0,  # dest_index
+        [512, 32],
         dest_sync=DestSync.Full,
         pack_src=DataFormat.Float16_b,
     )
 
 
 @parametrize(
-    formats=input_output_formats([DataFormat.Float32]),
+    formats=input_output_formats([DataFormat.Float32, DataFormat.Int32], same=True),
     dest_acc=[DestAccumulation.Yes],
-    l1_acc=[L1Accumulation.No],
-    num_faces=4,
-    tilize=[Tilize.No],
-    dest_index=0,
-    input_dimensions=[[256, 32]],
 )
-def test_pack_dest_bank_sync_full_fp32_source(
-    formats, dest_acc, l1_acc, num_faces, tilize, dest_index, input_dimensions
-):
-    """One SyncFull block of 8 tiles, the whole 32-bit DEST, with a Float32 pack source.
+def test_pack_dest_bank_sync_full_32bit_source(formats, dest_acc):
+    """One SyncFull block of 8 tiles, the whole 32-bit DEST, with a 32-bit pack source.
 
-    Twice the width the Blackhole init used to cap a Float32 pack source at. The pack source is
-    asserted to be Float32 so the case keeps exercising the 32-bit bound.
+    [256, 32] = 8 tiles. Float32: twice the width the Blackhole init used to cap a Float32 pack
+    source at. Int32: the init used to have no bound for an integer source at all; the whole DEST
+    has to stay accepted. The pack source is asserted to be the 32-bit output format so each case
+    keeps exercising the 32-bit bound.
     """
     _run_pack_dest_bank(
         formats,
         dest_acc,
-        l1_acc,
-        num_faces,
-        tilize,
-        dest_index,
-        input_dimensions,
+        L1Accumulation.No,
+        4,  # num_faces
+        Tilize.No,
+        0,  # dest_index
+        [256, 32],
         dest_sync=DestSync.Full,
-        pack_src=DataFormat.Float32,
+        pack_src=formats.output_format,
     )
 
 
