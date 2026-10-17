@@ -457,11 +457,10 @@ def test_flat_combine_rf(mesh_device, device_params, routing):
         return statistics.median(calls[1:]) if len(calls) > 1 else calls[0]
 
     if os.environ.get("FC_PIPE") == "1":
-        t_fused, t_flat, t_comb = (
-            pipelined(run_fused, "fused"),
-            pipelined(run_flat, "flat alone"),
-            pipelined(lambda: alone(y, out), "combine alone"),
-        )
+        t_fused = pipelined(run_fused, "fused")
+        if os.environ.get("FC_DRISC_DUMP"):  # (DRISC per-section cycles of the last fused call: MIMO_FL_DRISC_PROF=1)
+            ttnn._ttnn.operations.bringup.flat_drisc_dump(mesh_device)
+        t_flat, t_comb = pipelined(run_flat, "flat alone"), pipelined(lambda: alone(y, out), "combine alone")
         logger.info(
             f"FC_SUMMARY {routing:16s} pipelined: flat {t_flat:.0f} + combine {t_comb:.0f} = {t_flat + t_comb:.0f} serial vs "
             f"fused {t_fused:.0f} us ({100 * (t_flat + t_comb - t_fused) / t_comb:.0f}% of the combine hidden; fused / flat "

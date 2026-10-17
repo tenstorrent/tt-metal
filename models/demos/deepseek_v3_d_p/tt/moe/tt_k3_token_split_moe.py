@@ -276,7 +276,11 @@ class TtK3TokenSplitMoE:
         # (the 16 Tensix reader cells go to the combine) and 28 down cores (4 columns each); both DRISC tiles of a bank
         # on every call. 2 x 4 overlap harness, fused us uniform / Zipf spread / packed: 2289 / 2590 / 5705 vs the
         # 48 gate/up Tensix-reader layout's 2442 / 2727 / 5920. (Plan options are process-wide env; explicit ones win.)
-        if os.environ.get("K3_GU64") == "1":
+        # Default on (K3_GU64=0: the 48 gate/up Tensix-reader layout); with it the routed experts read x twice (one
+        # multicaster per rectangle: a single one for 64 gate/up cores back-pressured the whole call; block traced
+        # forward 3407 -> 3315 us, experts_combine 2446 -> 2380 us; with x read once 3453 / 2476)
+        self.gu64 = os.environ.get("K3_GU64", "1") == "1"
+        if self.gu64:
             for k, v in (
                 ("MIMO_FL_CMB_DRISC", "1"),
                 ("MIMO_FL_DRISC_DUAL", "0"),
@@ -702,7 +706,7 @@ class TtK3TokenSplitMoE:
         # the shared expert's flat op keeps reading it twice (X1 there: 523 -> 702 us). K3_EXP_X1=0: off
         # K3_EXP_DW_BATCH=n: down-weight blocks per read barrier (MIMO_FL_DW_BATCH, 2 by default; 4: block-level noise)
         scoped = {
-            "MIMO_FL_X1": os.environ.get("K3_EXP_X1", "1") == "1",
+            "MIMO_FL_X1": os.environ.get("K3_EXP_X1", "0" if self.gu64 else "1") == "1",
             "MIMO_FL_DW_BATCH": os.environ.get("K3_EXP_DW_BATCH", ""),
         }
         scoped = {k: ("1" if v is True else v) for k, v in scoped.items() if v and v != "0" and k not in os.environ}

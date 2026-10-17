@@ -1168,3 +1168,9 @@ In the trace, experts_combine 2370 (base) vs 2414 us (64 gate/up). Not what the 
 queued): not the accumulator count (harness with 16: 2311), not x's buffer (both DRAM interleaved row pages), and not
 tile 1's x-read conflict (throttling tile 1 makes it worse). Open: profile the block's call (DRISC section cycles,
 relay / gate/up wait zones) against the harness's.
+**Found (profiling):** DRISC section cycles were the same in the block and the harness (dma / write / flush within
+1%), gate/up and relay waits alike; the block's down cores waited for combine slots (SE_OUT_WAIT mean 172k vs 6k
+cycles on chip 7). The block reads x once (MIMO_FL_X1 scoped around experts_combine: one primary multicasts into
+both rectangles, a win for 48 gate/up: 2433 -> 2372 us); with 64 gate/up cores that one multicaster cannot keep up.
+x read twice with 64 gate/up (K3_EXP_X1=0): experts_combine 2380 us, block traced forward 3315 us (base 3407, -2.7%),
+PCC 0.99622 as base. K3_GU64 is now the block's default (K3_GU64=0: the old layout), and it reads x twice.

@@ -257,6 +257,8 @@ def test_k3_moe_layer(mesh_device, device_params):
     logger.info(
         f"K3_MOE block (sum of the stages' device times, slowest chip per stage, median over {ITERS}): {total:.0f} us"
     )
+    if os.environ.get("K3_DRISC_DUMP"):  # (DRISC per-section cycles of the last experts call: MIMO_FL_DRISC_PROF=1)
+        ttnn._ttnn.operations.bringup.flat_drisc_dump(mesh_device)
 
 
 _TRACE_PARAMS = [
