@@ -300,42 +300,48 @@ def test_pack_untilize_narrow_row(
         ]
     ),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    # [64, 128] with a 32-bit Dest splits the tile-row into two blocks (block_ct_dim < full_ct_dim).
-    input_dimensions=[[32, 64], [64, 128]],
+    # 16x16 (one face, packer 0 walks all 16 rows) and 16x32 (two faces side by side, packers 0/1 x 8 runs);
+    # full_ct_dim 8 with a 32-bit Dest splits the tile-row into two blocks (block_ct_dim < full_ct_dim).
+    tile_dimensions=[[16, 16], [16, 32]],
+    full_ct_dim=[4, 8],
 )
-def test_pack_untilize_single_face_tile(
+def test_pack_untilize_small_tile(
     formats,
     dest_acc,
-    input_dimensions,
+    tile_dimensions,
+    full_ct_dim,
 ):
-    """16x16 tiles (num_faces == 1, face_r_dim == 16): all 16 rows of every tile must be packed."""
+    """16-row tiles: all 16 rows of every tile must be packed, with one or two packers."""
     _run_pack_untilize(
         formats,
         dest_acc,
-        input_dimensions,
-        tile_dimensions=[16, 16],
+        [2 * tile_dimensions[0], full_ct_dim * tile_dimensions[1]],
+        tile_dimensions=tile_dimensions,
     )
 
 
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    # [16, 16] is the one-tile path; [16, 128] with a 32-bit Dest splits the tile-row into two blocks.
-    input_dimensions=[[16, 16], [16, 128]],
+    # 16x16 (one packer) and 16x32 (packers 0/1); full_ct_dim 1 is the one-tile path, 8 with a 32-bit Dest
+    # splits the tile-row into two blocks (narrow partial-block stride).
+    tile_dimensions=[[16, 16], [16, 32]],
+    full_ct_dim=[1, 8],
     row_num_datums=[4, 8],
 )
-def test_pack_untilize_narrow_row_single_face_tile(
+def test_pack_untilize_narrow_row_small_tile(
     formats,
     dest_acc,
-    input_dimensions,
+    tile_dimensions,
+    full_ct_dim,
     row_num_datums,
 ):
-    """Narrow rows of single-face 16x16 tiles: one packer walks all 16 rows of each tile."""
+    """Narrow rows of 16-row tiles: one or two packers walk all 16 rows of each tile."""
     _run_pack_untilize(
         formats,
         dest_acc,
-        input_dimensions,
-        tile_dimensions=[16, 16],
+        [tile_dimensions[0], full_ct_dim * tile_dimensions[1]],
+        tile_dimensions=tile_dimensions,
         narrow_row=True,
         row_num_datums=row_num_datums,
     )
