@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import pytest
 
 import torch
@@ -87,6 +89,93 @@ def test_full_float(device, input_shape, fill_value, tt_dtype, layout):
     tt_output_cpu = ttnn.to_torch(tt_output)
 
     assert torch.equal(torch_output, tt_output_cpu)
+
+
+@pytest.mark.parametrize("input_shape", [[32, 32], [3, 300, 1, 300]])
+@pytest.mark.parametrize(
+    "fill_value", [0.0, 0.1, 1 / 3, 65504.0, 1e30, -1e-30, float("inf"), float("-inf"), float("nan")]
+)
+@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_full_tile_device_matches_host(device, input_shape, fill_value, tt_dtype, memory_config):
+    # Whichever path fills it, a TILE ttnn.full on a device must hold the same values as the tensor built on the host
+    host_output = ttnn.to_torch(ttnn.full(input_shape, fill_value, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT))
+    tt_output = ttnn.full(
+        input_shape, fill_value, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    assert ttnn.is_tensor_storage_on_device(tt_output)
+    device_output = ttnn.to_torch(tt_output)
+
+    assert device_output.shape == host_output.shape
+    assert torch.equal(torch.isnan(device_output), torch.isnan(host_output))
+    not_nan = ~torch.isnan(host_output)
+    assert torch.equal(device_output[not_nan], host_output[not_nan])
+
+
+# Mirrors k_min_device_fill_bytes in ttnn/cpp/ttnn/operations/creation/creation.cpp
+MIN_DEVICE_FILL_BYTES = 128 * 1024
+TILE_BYTES = {ttnn.bfloat16: 32 * 32 * 2, ttnn.float32: 32 * 32 * 4}
+
+
+# One tile below and exactly at the threshold for float32 (32 tiles) and bfloat16 (64 tiles), plus shapes whose
+# logical size is under the threshold while their tile-padded size is not
+@pytest.mark.parametrize(
+    "input_shape", [[32, 31 * 32], [32, 32 * 32], [31, 32 * 32], [32, 63 * 32], [32, 64 * 32], [32, 63 * 32 + 1]]
+)
+@pytest.mark.parametrize("fill_value", [1.0, float("nan")])
+@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.float32])
+def test_full_tile_device_fill_threshold(device, input_shape, fill_value, tt_dtype):
+    # From MIN_DEVICE_FILL_BYTES of tile-padded data a TILE ttnn.full is filled on the device by one program; a smaller
+    # one, or a bfloat16 NaN fill, keeps the host fill and upload. Either way it holds the values the host path builds.
+    device.clear_program_cache()
+    programs_before = device.num_program_cache_entries()
+    tt_output = ttnn.full(input_shape, fill_value, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    programs_added = device.num_program_cache_entries() - programs_before
+
+    tiles = math.prod(input_shape[:-2]) * math.ceil(input_shape[-2] / 32) * math.ceil(input_shape[-1] / 32)
+    device_fill = tiles * TILE_BYTES[tt_dtype] >= MIN_DEVICE_FILL_BYTES and not (
+        tt_dtype == ttnn.bfloat16 and math.isnan(fill_value)
+    )
+    assert programs_added == (1 if device_fill else 0)
+
+    host_output = ttnn.to_torch(ttnn.full(input_shape, fill_value, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT))
+    device_output = ttnn.to_torch(tt_output)
+    assert torch.equal(torch.isnan(device_output), torch.isnan(host_output))
+    not_nan = ~torch.isnan(host_output)
+    assert torch.equal(device_output[not_nan], host_output[not_nan])
+
+
+# bfloat8_b is filled on the device only for +0.0, which both paths store exactly, and from one tile up, since packing
+# bfloat8_b on the host costs more than the device fill: ranks 0 to 5, small and large padded shapes, a KV-cache-like shape
+@pytest.mark.parametrize(
+    "input_shape",
+    [[], [3], [32, 32], [1, 1, 33, 100], [31, 121 * 32], [64, 1, 64, 128], [2, 3, 300, 300], [2, 1, 3, 40, 70]],
+)
+@pytest.mark.parametrize("fill_value", [0.0, -0.0, 1.0])
+def test_full_tile_bfloat8_b_zero_device_fill(device, input_shape, fill_value):
+    positive_zero = fill_value == 0.0 and math.copysign(1.0, fill_value) > 0
+    device.clear_program_cache()
+    programs_before = device.num_program_cache_entries()
+    if positive_zero:
+        tt_output = ttnn.zeros(input_shape, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    else:
+        tt_output = ttnn.full(input_shape, fill_value, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    programs_added = device.num_program_cache_entries() - programs_before
+
+    assert programs_added == (1 if positive_zero else 0)
+
+    host_output = ttnn.to_torch(ttnn.full(input_shape, fill_value, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT))
+    assert torch.equal(ttnn.to_torch(tt_output), host_output)
+
+
+@pytest.mark.parametrize("input_shape", [[0, 32], [1, 0, 32, 32]])
+@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
+def test_zeros_tile_zero_volume(device, input_shape, tt_dtype):
+    # A zero-volume TILE ttnn.zeros keeps the host path: no program, an empty tensor of the requested shape
+    device.clear_program_cache()
+    tt_output = ttnn.zeros(input_shape, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    assert device.num_program_cache_entries() == 0
+    assert list(ttnn.to_torch(tt_output).shape) == input_shape
 
 
 # TODO (issue #16579): Add program cache test when ttnn.full is run on device
