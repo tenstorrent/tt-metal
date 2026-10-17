@@ -26,12 +26,8 @@ from models.experimental.bevformer.tests.common import (
     to_device,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_head_parameters
-from models.experimental.bevformer.tt.tt_head import TtBEVFormerHead
-from models.experimental.bevformer.tt.tt_nms_free_coder import TtNMSFreeCoder
-
-
-def _check(torch_outputs, tt_outputs):
-    check_head_outputs(torch_outputs, tuple(ttnn.to_torch(t).float() for t in tt_outputs))
+from models.experimental.bevformer.tt.tt_head import TTBEVFormerHead
+from models.experimental.bevformer.tt.tt_nms_free_coder import TTNMSFreeCoder
 
 
 @torch.no_grad()
@@ -44,8 +40,8 @@ def _check(torch_outputs, tt_outputs):
 def test_head_perf(device, reset_seeds):
     bev_shape = BEV_SHAPES["base"]
     torch_model = build_reference_head(bev_shape)
-    tt_model = TtBEVFormerHead(create_head_parameters(torch_model, device), device)
-    coder = TtNMSFreeCoder(device)
+    tt_model = TTBEVFormerHead(create_head_parameters(torch_model, device), device)
+    coder = TTNMSFreeCoder(device)
 
     generator = torch.Generator().manual_seed(0)
     bev_embed = random_bev(bev_shape, 1, generator).permute(1, 0, 2).contiguous()
@@ -58,7 +54,7 @@ def test_head_perf(device, reset_seeds):
         coder.topk(cls_scores[-1], bbox_preds[-1])
         return cls_scores, bbox_preds
 
-    _check(torch_outputs, run())
+    check_head_outputs(torch_outputs, run())
 
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
     tt_outputs = run()
@@ -73,6 +69,6 @@ def test_head_perf(device, reset_seeds):
     signpost("stop")
 
     try:
-        _check(torch_outputs, tt_outputs)
+        check_head_outputs(torch_outputs, tt_outputs)
     finally:
         ttnn.release_trace(device, trace_id)

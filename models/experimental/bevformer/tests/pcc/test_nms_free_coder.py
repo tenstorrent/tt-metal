@@ -19,8 +19,8 @@ from models.experimental.bevformer.model_config import (
     SCORE_DTYPE,
 )
 from models.experimental.bevformer.reference.nms_free_coder import NMSFreeCoder, bottom_center
-from models.experimental.bevformer.tests.common import assert_boxes_close, assert_pcc
-from models.experimental.bevformer.tt.tt_nms_free_coder import TtNMSFreeCoder
+from models.experimental.bevformer.tests.common import assert_boxes_close, assert_pcc, tt_coder_detections
+from models.experimental.bevformer.tt.tt_nms_free_coder import TTNMSFreeCoder
 
 NUM_SCORES = NUM_QUERY * NUM_CLASSES
 NUM_FOREGROUND = 50
@@ -95,7 +95,7 @@ def _head_outputs(logits, batch_size, generator):
 def test_nms_free_coder(device, reset_seeds, logits, batch_size, score_threshold):
     cls_scores, bbox_preds = _head_outputs(LOGITS[logits], batch_size, torch.Generator().manual_seed(0))
     reference = NMSFreeCoder(score_threshold=score_threshold)
-    tt_coder = TtNMSFreeCoder(device, score_threshold=score_threshold)
+    tt_coder = TTNMSFreeCoder(device, score_threshold=score_threshold)
     # The dtypes the head emits.
     tt_cls_scores = ttnn.from_torch(cls_scores, dtype=SCORE_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
     tt_bbox_preds = ttnn.from_torch(bbox_preds, dtype=BOX_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
@@ -114,9 +114,9 @@ def test_nms_free_coder(device, reset_seeds, logits, batch_size, score_threshold
 
     expected = reference.decode(cls_scores, bbox_preds)
     # The first decode compiles the range test; a second one must only hit the program cache.
-    tt_coder.decode(tt_cls_scores, tt_bbox_preds)
+    tt_coder_detections(tt_coder, tt_cls_scores, tt_bbox_preds)
     num_programs = device.num_program_cache_entries()
-    actual = tt_coder.decode(tt_cls_scores, tt_bbox_preds)
+    actual = tt_coder_detections(tt_coder, tt_cls_scores, tt_bbox_preds)
     assert device.num_program_cache_entries() == num_programs
     for i, (e, a) in enumerate(zip(expected, actual, strict=True)):
         assert 0 < len(e["bboxes"]) < reference.max_num, "the filters must drop some boxes and keep some"
@@ -134,7 +134,7 @@ def test_nms_free_coder_traced(device, reset_seeds, score_threshold):
     the validity mask, are upstream ``get_bboxes``' boxes."""
     cls_scores, bbox_preds = _head_outputs(LOGITS["background"], 2, torch.Generator().manual_seed(0))
     reference = NMSFreeCoder(score_threshold=score_threshold)
-    tt_coder = TtNMSFreeCoder(device, score_threshold=score_threshold)
+    tt_coder = TTNMSFreeCoder(device, score_threshold=score_threshold)
     tt_cls_scores = ttnn.from_torch(cls_scores, dtype=SCORE_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
     tt_bbox_preds = ttnn.from_torch(bbox_preds, dtype=BOX_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
 

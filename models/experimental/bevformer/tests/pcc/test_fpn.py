@@ -14,7 +14,7 @@ from models.experimental.bevformer.tests.common import (
     to_conv_layout,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_fpn_parameters
-from models.experimental.bevformer.tt.tt_fpn import TtFPN
+from models.experimental.bevformer.tt.tt_fpn import TTFPN
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
@@ -29,7 +29,7 @@ def test_fpn(device, reset_seeds):
     parameters = create_fpn_parameters(torch_model, input_tensors)
     torch_outputs = torch_model(input_tensors)
 
-    tt_model = TtFPN(parameters, device, input_dtypes=BACKBONE_OUTPUT_DTYPES)
+    tt_model = TTFPN(parameters, device, input_dtypes=BACKBONE_OUTPUT_DTYPES)
     tt_outputs = tt_model(
         [to_conv_layout(tensor, device, dtype) for tensor, dtype in zip(input_tensors, BACKBONE_OUTPUT_DTYPES)]
     )

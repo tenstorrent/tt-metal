@@ -18,7 +18,7 @@ from models.experimental.bevformer.tests.common import (
     to_device,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_perception_transformer_parameters
-from models.experimental.bevformer.tt.tt_perception_transformer import TtPerceptionTransformer
+from models.experimental.bevformer.tt.tt_perception_transformer import TTPerceptionTransformer
 
 CASES = [
     # (name, bev_shape, num_layers, batch_size, yaw_step_deg, num_frames)
@@ -47,7 +47,7 @@ def test_perception_transformer(device, reset_seeds, name, bev_shape, num_layers
     bev_pos = torch.randn(bev_h * bev_w, batch_size, EMBED_DIMS, generator=generator)
     frames = frame_metas(batch_size, num_frames, generator, yaw_step_deg)
 
-    tt_model = TtPerceptionTransformer(
+    tt_model = TTPerceptionTransformer(
         create_perception_transformer_parameters(torch_model, device),
         device,
         bev_h=bev_h,

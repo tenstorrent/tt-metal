@@ -5,26 +5,26 @@
 the FPN, the perception transformer and the detection head, on device end to end.
 
 A frame's host-derived inputs (CAN bus, ego shift, previous-BEV rotation, the cameras' rebatch
-plan) are prepared by :meth:`TtBEVFormer.prepare_frame` into buffers refilled in place, so the
+plan) are prepared by :meth:`TTBEVFormer.prepare_frame` into buffers refilled in place, so the
 forward runs on device only and a trace captured with a frame replays on the next one. The caller
 carries the previous BEV between frames, as upstream's ``forward_test`` does.
 
-:meth:`TtBEVFormer.detect` runs upstream's ``get_bboxes`` on device, in the forward's trace: the
+:meth:`TTBEVFormer.detect` runs upstream's ``get_bboxes`` on device, in the forward's trace: the
 coder's top-k, the box decoding, the range test as a validity mask and z moved to the box's bottom
-face, all fixed ``(bs, max_num)`` tensors. :meth:`TtBEVFormer.get_bboxes` only drops the invalid
-boxes on the host, as no device tensor can hold a data-dependent count (see ``TtNMSFreeCoder``).
+face, all fixed ``(bs, max_num)`` tensors. :meth:`TTBEVFormer.get_bboxes` only drops the invalid
+boxes on the host, as no device tensor can hold a data-dependent count (see ``TTNMSFreeCoder``).
 """
 
 import ttnn
 
-from models.experimental.bevformer.tt.tt_fpn import TtFPN
-from models.experimental.bevformer.tt.tt_head import TtBEVFormerHead
-from models.experimental.bevformer.tt.tt_nms_free_coder import TtNMSFreeCoder
-from models.experimental.bevformer.tt.tt_perception_transformer import TtPerceptionTransformer
-from models.experimental.bevformer.tt.tt_resnet import TtResNet
+from models.experimental.bevformer.tt.tt_fpn import TTFPN
+from models.experimental.bevformer.tt.tt_head import TTBEVFormerHead
+from models.experimental.bevformer.tt.tt_nms_free_coder import TTNMSFreeCoder
+from models.experimental.bevformer.tt.tt_perception_transformer import TTPerceptionTransformer
+from models.experimental.bevformer.tt.tt_resnet import TTResNet
 
 
-class TtBEVFormer:
+class TTBEVFormer:
     """The detector for the image shape its parameters were built for.
 
     The backbone's and FPN's convs are pinned to the image shape ``create_bevformer_parameters``
@@ -42,20 +42,20 @@ class TtBEVFormer:
         ), f"the detector's BEV is {config.bev_h}x{config.bev_w}, the head's {tuple(params.head.bev_shape)}"
         self.params = params
         self.batch_size = config.batch_size
-        self.backbone = TtResNet(params.backbone, device, out_indices=config.out_indices)
-        self.neck = TtFPN(params.neck, device, input_dtypes=self.backbone.output_dtypes)
-        self.transformer = TtPerceptionTransformer(
+        self.backbone = TTResNet(params.backbone, device, out_indices=config.out_indices)
+        self.neck = TTFPN(params.neck, device, input_dtypes=self.backbone.output_dtypes)
+        self.transformer = TTPerceptionTransformer(
             params.transformer, device, bev_h=config.bev_h, bev_w=config.bev_w, spatial_shapes=config.spatial_shapes
         )
-        self.head = TtBEVFormerHead(params.head, device)
+        self.head = TTBEVFormerHead(params.head, device)
         bev_pos = params.bev_pos
         if self.batch_size > 1:
             bev_pos = ttnn.repeat(bev_pos, ttnn.Shape((self.batch_size, 1, 1)))
         self.bev_pos = bev_pos
-        self.coder = TtNMSFreeCoder(device, **vars(params.coder))
+        self.coder = TTNMSFreeCoder(device, **vars(params.coder))
 
     def prepare_frame(self, img_metas, frame=None, capacity=None):
-        """See ``TtPerceptionTransformer.prepare_frame``."""
+        """See ``TTPerceptionTransformer.prepare_frame``."""
         assert (
             len(img_metas) == self.batch_size
         ), f"{len(img_metas)} samples, the detector is built for {self.batch_size}"
@@ -74,8 +74,8 @@ class TtBEVFormer:
         return cls_scores, bbox_preds, bev_embed
 
     def detect(self, cls_scores, bbox_preds):
-        """The last decoder layer's detections, on device: ``TtNMSFreeCoder.topk``'s scores, labels
-        and query indexes, and ``TtNMSFreeCoder.finalize``'s boxes and validity mask."""
+        """The last decoder layer's detections, on device: ``TTNMSFreeCoder.topk``'s scores, labels
+        and query indexes, and ``TTNMSFreeCoder.finalize``'s boxes and validity mask."""
         scores, labels, query_index, boxes = self.coder.topk(cls_scores[-1], bbox_preds[-1])
         boxes, valid = self.coder.finalize(scores, boxes)
         return scores, labels, query_index, boxes, valid
@@ -86,5 +86,5 @@ class TtBEVFormer:
         valid ones, as ``reference.bevformer.BEVFormer.get_bboxes`` returns them."""
         return [
             (sample["bboxes"], sample["scores"], sample["labels"])
-            for sample in TtNMSFreeCoder.compact(scores, labels, boxes, valid)
+            for sample in TTNMSFreeCoder.compact(scores, labels, boxes, valid)
         ]

@@ -129,7 +129,7 @@ def build_rebatch_plan(reference_points_cam, bev_mask, embed_dims, device, capac
 
     Args:
         reference_points_cam: float32 torch tensor ``[num_cams, bs, num_queries, num_points_in_pillar, 2]``
-            (``point_sampling_3d_2d.camera_geometry``).
+            (``model_preprocessing.camera_geometry``).
         bev_mask: Bool torch tensor ``[num_cams, bs, num_queries, num_points_in_pillar]``.
         embed_dims: Query width, for the scatter base.
         device: Device the plan's buffers live on. The rebatched reference points are
