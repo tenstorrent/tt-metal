@@ -151,18 +151,23 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
         )
 
 
-@pytest.mark.parametrize("tile_h, tile_w", [(16, 32), (8, 32), (4, 32), (32, 16), (32, 32)])
+@pytest.mark.parametrize("tile_h, tile_w", [(16, 32), (16, 16), (8, 32), (4, 32), (32, 16), (32, 32)])
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
-def test_tiny_tiles_bfloat_output(device, tile_h, tile_w, out_dtype):
+@pytest.mark.parametrize("k", [32, 64])
+def test_tiny_tiles_bfloat_output(device, tile_h, tile_w, out_dtype, k):
     """Pack a tiny-tile matmul output in a block-float format and compare with the host golden.
 
     Every block-float tile stores one exponent byte per 16-datum row ahead of the mantissas, in
     16-byte chunks. A 16x32 output tile has two full-height faces and so 32 exponent bytes (two
     chunks); the shorter tiles carry at most 16 (one chunk). The packer must be configured per
     face height, not per tile height, or the 16x32 tile's mantissa rows land one chunk early.
+
+    k=32 is a single K block: the packer is configured once for the output. k=64 with a one-tile
+    K block is two K blocks: the packer accumulates the partials in L1 and is reconfigured to the
+    block-float output for the last block, so the reconfigure path derives the flag as well.
     """
     torch.manual_seed(0)
-    m, k, n = 64, 32, 64
+    m, n = 64, 64
     in0 = torch.randn((1, 1, m, k), dtype=torch.bfloat16)
     in1 = torch.randn((1, 1, k, n), dtype=torch.bfloat16)
     in0_t = ttnn.from_torch(
@@ -176,7 +181,7 @@ def test_tiny_tiles_bfloat_output(device, tile_h, tile_w, out_dtype):
     out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(1, 1),
-        in0_block_w=k // 32,
+        in0_block_w=1,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
         per_core_M=out_block_h,
@@ -193,10 +198,12 @@ def test_tiny_tiles_bfloat_output(device, tile_h, tile_w, out_dtype):
     )
     output = ttnn.to_torch(output_t)
     golden = in0.float() @ in1.float()
+    # bfloat4_b keeps a 3-bit mantissa per datum: PCC 0.986 against the host golden for k=32 and
+    # 0.977 for k=64 on every tile shape; the mislaid layout gives 0.02-0.05.
     assert_numeric_metrics(
         golden,
         output,
-        pcc_threshold=0.999 if out_dtype == ttnn.bfloat8_b else 0.98,
+        pcc_threshold=0.999 if out_dtype == ttnn.bfloat8_b else 0.97,
         check_allclose=False,
         check_frobenius=False,
         check_ulp=False,

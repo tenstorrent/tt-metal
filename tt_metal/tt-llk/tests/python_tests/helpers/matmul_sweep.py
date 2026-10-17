@@ -573,7 +573,9 @@ def sweep_tiny_tiles_matmul(
                 partial_face_in0=True,  # SrcB
                 partial_face_in1=False,  # SrcA
                 partial_face_math=input0_dims[0] < 16,
-                partial_face_pack=True,
+                # Packer flag: output faces shorter than FACE_R_DIM rows (one exponent chunk per
+                # tile); a 16-row in0 tile packs into full-height faces. Not the unpacker flags.
+                partial_face_pack=input0_dims[0] < 16,
             )
 
             max_dst_index = get_max_dst_index(
