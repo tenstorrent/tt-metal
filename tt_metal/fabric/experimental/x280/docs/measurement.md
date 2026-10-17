@@ -526,6 +526,71 @@ hardware context, build instructions and clock-evidence limits are in this
 document and the suite documents. The tabulator reads only the current record format: it
 reads no console capture.
 
+### Run the whole manifest
+
+Needs one Blackhole card, plus a second card linked to it by Ethernet for eth_credit. Run
+from the tt-metal root, on a clean tree: the runner refuses uncommitted changes.
+
+1. Build.
+
+   ```sh
+   ./build_metal.sh --build-metal-tests --configure-only
+   cmake -B build -DTT_METAL_BUILD_X280=ON
+   ninja -C build $(ninja -C build -t targets all | grep -o '^x280_[a-z0-9_]*' | sort -u)
+   ```
+
+2. Set the paths and an ID helper.
+
+   ```sh
+   X=tt_metal/fabric/experimental/x280
+   C=$PWD/campaigns/$(date -u +%Y%m%d)
+   run() { python3 $X/tools/run_characterization.py --campaign $C --host-build build/test/tt_metal/x280 \
+       --fw-build build/x280 --metal-src $PWD --device 0 "$@"; }
+   ids() { python3 -c 'import json,sys; print(" ".join("--id " + c["id"]
+       for c in json.load(open(sys.argv[1]))["configurations"] if c["member"].split("/")[0] in sys.argv[2:]))' \
+       $X/characterization_manifest.json "$@"; }
+   ```
+
+3. Run p2p_latency, transport_bandwidth and core_sync on card 0.
+
+   ```sh
+   env -u TT_VISIBLE_DEVICES tt-smi -r 0
+   run $(ids p2p_latency transport_bandwidth core_sync)
+   ```
+
+4. Run packet_injection.
+
+   ```sh
+   env -u TT_VISIBLE_DEVICES tt-smi -r 0
+   run $(ids packet_injection)
+   ```
+
+5. Run pipeline_stage.
+
+   ```sh
+   env -u TT_VISIBLE_DEVICES tt-smi -r 0
+   run $(ids pipeline_stage)
+   ```
+
+6. Run eth_credit. It needs both cards reset together.
+
+   ```sh
+   env -u TT_VISIBLE_DEVICES tt-smi -r 0,1
+   run $(ids eth_credit)
+   ```
+
+7. Tabulate.
+
+   ```sh
+   python3 $X/tools/tabulate_suites.py --campaign $C --report-dir $C/report
+   ```
+
+   Read `$C/report/MASTER_RESULTS.md`. `coverage.json` lists every configuration that has no
+   passing attempt.
+
+A failed configuration stops its step. Reset that step's cards, then rerun the step with
+the IDs that have not passed yet. Attempts accumulate in the same `$C`.
+
 ### Tabulation
 
 Tabulate current-format JSONL records of the p2p_latency, transport_bandwidth,
