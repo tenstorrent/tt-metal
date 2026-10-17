@@ -8826,6 +8826,13 @@ tasks:
     - shared_expert
     - moe_add
     layer: 21
+  frozen:
+    at: '2026-10-17T17:25:02'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_14_moe_add.py: a14348d42354d3498ff1bb629442482e6d5a06f77a332d626acc6e20dff7df48
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_reuse.ffn_residual
   title: dec_reuse ffn_residual (residual) on device, layer 21
   step: implement
