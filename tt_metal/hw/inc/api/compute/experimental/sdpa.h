@@ -229,8 +229,9 @@ inline void init_fast_approx_exp_constants() {
 inline void fast_approx_exp(std::uint32_t dst_index) {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    // The scale comes from the exp_init template scale the caller programmed (exp_packthread_tile_init<true,
-    // scale> / exp_tile_init<true, scale>); the approximate kernel rejects SCALE_EN.
+    // The scale comes from the exp_init template scale the caller programmed on this (pack) thread, via
+    // exp_packthread_tile_init<true, scale> or PACK(SFPU_UNARY_INIT_FN(exponential, sfpu::exp_init, (true, scale,
+    // ...))); a math-thread exp_tile_init does not set up this thread. The approximate kernel rejects SCALE_EN.
     ckernel::sfpu::calculate_exponential<
         true /*APPROXIMATION_MODE*/,
         DST_ACCUM_MODE,

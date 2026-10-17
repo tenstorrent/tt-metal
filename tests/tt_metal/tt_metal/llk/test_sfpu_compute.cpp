@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <exception>
 #include <random>
-#include <stdexcept>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/program/program_impl.hpp"
@@ -2680,10 +2679,12 @@ TEST_F(LLKBlackholeSingleCardFixture, SfpuExp21fRetainedCoefficients) {
 namespace {
 
 constexpr std::string_view kApproxScaleGuard = "never reads the runtime scale";
-constexpr std::string_view kInitScaleSignGuard = "must be a positive normal number";
+constexpr std::string_view kInitScaleGuard = "must be a positive normal number";
 // bf16 -1.0 as exp_tile's runtime scale, and the same value as exp_tile_init's FP32-bit scale.
 const std::string kBf16MinusOne = "0xBF80";
 const std::string kFp32MinusOne = "0xBF800000";
+// bf16 1.0 left unshifted, which exp_tile_init reads as an FP32 denormal.
+const std::string kBf16OneUnshifted = "0x3F80";
 
 // Builds a single-core program whose compute kernel runs `chain` on one tile and compiles it
 // (never launches it). Returns the build failure's message, which carries the compiler log, or
@@ -2717,6 +2718,15 @@ std::string compile_sfpu_chain(distributed::MeshDevice& device, const std::strin
     return {};
 }
 
+// The chain must fail to build, and for `guard`'s reason (not some unrelated compile error).
+void expect_build_rejected(distributed::MeshDevice& device, const std::string& chain, std::string_view guard) {
+    SCOPED_TRACE(chain);
+    const std::string failure = compile_sfpu_chain(device, chain);
+    EXPECT_FALSE(failure.empty()) << "compiled; this chain must be rejected by the guard '" << guard << "'";
+    EXPECT_NE(failure.find(guard), std::string::npos) << "the build failed for a reason other than '" << guard << "':\n"
+                                                      << failure;
+}
+
 }  // namespace
 
 TEST_F(LLKMeshDeviceSingleCardFixture, SfpuExpApproxRejectsRuntimeScale) {
@@ -2737,22 +2747,17 @@ TEST_F(LLKMeshDeviceSingleCardFixture, SfpuExpApproxRejectsRuntimeScale) {
             device, "exp_tile_init<false>(); exp_tile<false, true>(0, VectorMode::RC, " + kBf16MinusOne + ");"),
         "");
 
-    const std::string runtime_scale = compile_sfpu_chain(
-        device, "exp_tile_init<true>(); exp_tile<true, true>(0, VectorMode::RC, " + kBf16MinusOne + ");");
-    EXPECT_FALSE(runtime_scale.empty()) << "exp_tile<true, true> compiled; the approximate kernel ignores the runtime "
-                                           "scale, so this must be a compile error";
-    EXPECT_NE(runtime_scale.find(kApproxScaleGuard), std::string::npos)
-        << "the build failed for a reason other than the approximate-scale guard:\n"
-        << runtime_scale;
-
-    const std::string negative_init_scale =
-        compile_sfpu_chain(device, "exp_tile_init<true, " + kFp32MinusOne + ">(); exp_tile<true, false>(0);");
-    EXPECT_FALSE(negative_init_scale.empty())
-        << "exp_tile_init<true, bf16(-1.0) << 16> compiled; the clamp init divides -88.5 by the scale, so a "
-           "negative scale must be a compile error";
-    EXPECT_NE(negative_init_scale.find(kInitScaleSignGuard), std::string::npos)
-        << "the build failed for a reason other than the init scale sign guard:\n"
-        << negative_init_scale;
+    // The approximate kernel ignores exp_tile's runtime scale, so asking for one is rejected.
+    expect_build_rejected(
+        device,
+        "exp_tile_init<true>(); exp_tile<true, true>(0, VectorMode::RC, " + kBf16MinusOne + ");",
+        kApproxScaleGuard);
+    // The ClampToNegative init divides the -88.5 clamp by the template scale: a negative scale and an
+    // unshifted bf16 scale (an FP32 denormal) are both rejected.
+    expect_build_rejected(
+        device, "exp_tile_init<true, " + kFp32MinusOne + ">(); exp_tile<true, false>(0);", kInitScaleGuard);
+    expect_build_rejected(
+        device, "exp_tile_init<true, " + kBf16OneUnshifted + ">(); exp_tile<true, false>(0);", kInitScaleGuard);
 }
 
 void run_quasar_sfpu_unpack_to_dest_fp32(
