@@ -601,7 +601,8 @@ void kernel_main() {
     // ========================================================================
 
     // ── CCL Broadcast / Mcast / Argmax (no-ops on TRISC) ────────────
-    using BcastCTArgs = deepseek_b1_ops::Broadcast::ComputeCTArgs;
+    // Only referenced inside the !skip_ccl branch; keep the single-device build warning-free.
+    using BcastCTArgs [[maybe_unused]] = deepseek_b1_ops::Broadcast::ComputeCTArgs;
     deepseek_b1_ops::Broadcast::ComputeArgs bcast_args{};
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
     deepseek_b1_ops::Mcast::ComputeArgs mcast_args{};
@@ -719,13 +720,15 @@ void kernel_main() {
         DST_ACCUM_MODE>;
 
     // ── HW compute startup ──────────────────────────────────────────
-    // Sampling needs fp32_dest_acc_en and an SFPU/FPU semaphore pair (see
-    // micro_ops/sampling/kernels/sampling_kernel.cpp). On non-sampling
-    // compute cores we fall back to the bare default init so we don't
-    // read metadata from sampling CBs that aren't allocated there.
+    // The DEST mode programmed here follows the host's fp32_dest_acc_en
+    // (DST_ACCUM_MODE / DST_SYNC_MODE, op.py trisc_compute_config): every
+    // DST_ACCUM_MODE consumer in this kernel -- the sampling SFPU helpers,
+    // pack_reconfig_data_format, the EH matmul subblock sizing in op.py --
+    // assumes the hardware is in that same mode. Sampling also needs the
+    // SFPU/FPU semaphore pair (see micro_ops/sampling/kernels/sampling_kernel.cpp).
     MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
     PACK(ckernel::t6_semaphore_init(ckernel::SFPU_FPU, 0, 1));
-    deepseek_compute_kernel_hw_startup<true>(
+    deepseek_compute_kernel_hw_startup<DST_ACCUM_MODE>(
         SamplingCTArgs::topk_in_scores_cb, SamplingCTArgs::topk_in_scores_cb, SamplingCTArgs::topk_out_scores_cb);
 #endif
 
