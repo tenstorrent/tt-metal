@@ -146,6 +146,10 @@ inline void _llk_math_compressed_custom_mm_mop_config_(const std::uint32_t opera
 /**
  * @brief Configure the math thread for compressed_custom_mm: programs the address mods and the MVMUL replay program.
  *
+ * @tparam transpose: Whether in1 is consumed transposed.
+ * @tparam split_acc: Store the next inner-dim partials at DEST rows 8 and 24 instead of 0 and 16 (the compute API
+ *                    never forwards it).
+ * @tparam dense_packing: Pack the in0 rows densely in DEST (tile-to-tile stride of 32 rows instead of 64).
  * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
  * @note Establishes the operand-driven default Src zero-substitution state, which @ref _llk_math_compressed_custom_mm_
  *       asserts under LLK asserts. Re-run this init after any math op that leaves the flag at keep (a copy init does).
@@ -165,6 +169,12 @@ inline void _llk_math_compressed_custom_mm_init_(const std::uint32_t operandB_fa
 /**
  * @brief Run the compressed_custom_mm MVMUL sequence over kt_dim k-tiles into DEST, skipping zero tiles per the metadata.
  *
+ * @tparam finalize: Run the accumulation finalize after the last k-tile (false for an intermediate K subblock).
+ * @param base_address_meta: L1 address of the per-tile compression metadata.
+ * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
+ * @param dst_index: Tile index in DEST that the result is written to.
+ * @param kt_dim: Inner dimension in tiles.
+ * @param ct_dim: Output width in tiles.
  * @note Call @ref _llk_math_compressed_custom_mm_init_ first, and again after any other math op (a copy init leaves the
  *       Src zero flag at keep).
  */

@@ -15,7 +15,6 @@ from helpers.llk_params import DestAccumulation, DestSync, format_dict
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
-    parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -111,17 +110,15 @@ def _run_unary_datacopy_custom(formats, dest_acc, src_A=None, pack_raw=False):
     return src_A, golden_tensor, res_tensor
 
 
+# The op is bf16 -> bf16 only, no fp32 DEST: bind the formats inline rather than sweeping one option.
+FORMATS = input_output_formats([DataFormat.Float16_b])[0]
+DEST_ACC = DestAccumulation.No
+
+
 @blackhole_only
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
-    dest_acc=[DestAccumulation.No],
-)
-def test_unary_datacopy_custom(
-    formats,
-    dest_acc,
-):
-    _, golden_tensor, res_tensor = _run_unary_datacopy_custom(formats, dest_acc)
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+def test_unary_datacopy_custom():
+    _, golden_tensor, res_tensor = _run_unary_datacopy_custom(FORMATS, DEST_ACC)
+    assert passed_test(golden_tensor, res_tensor, FORMATS.output_format)
 
 
 # Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
@@ -130,11 +127,7 @@ BF16_DENORMAL_MANTISSAS = 1 << 7
 
 
 @blackhole_only
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
-    dest_acc=[DestAccumulation.No],
-)
-def test_unary_datacopy_custom_preserves_signed_zero_and_denormals(formats, dest_acc):
+def test_unary_datacopy_custom_preserves_signed_zero_and_denormals():
     """A copy must pass bf16 -0.0 and denormals through bit-for-bit, as copy_tile does.
 
     MOVA2D flushes any datum with a zero exponent byte while the Src zero flag holds the operand default
@@ -161,7 +154,7 @@ def test_unary_datacopy_custom_preserves_signed_zero_and_denormals(formats, dest
     )
 
     src_A, _, res_tensor = _run_unary_datacopy_custom(
-        formats, dest_acc, src_A=src_A, pack_raw=True
+        FORMATS, DEST_ACC, src_A=src_A, pack_raw=True
     )
 
     expected_bits = src_A.to(torch.bfloat16).view(torch.int16)

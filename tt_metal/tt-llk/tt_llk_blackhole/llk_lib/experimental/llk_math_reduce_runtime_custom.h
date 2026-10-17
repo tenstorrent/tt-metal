@@ -362,6 +362,10 @@ template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
 {
     LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 1 && is_fp32_dest_acc_en), "16x32 reduce_block_max_row not supported in FP32 dest mode yet");
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "reduce_block_max_row_runtime: Src zero-substitution flag does not hold the operand-driven value; an op between the "
+        "init / reinit and this call left it at keep, so denormal Src operands would not be flushed");
     // Packer indexes at the 32x32 slot stride regardless of the operand's face count.
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 

@@ -230,12 +230,21 @@ BF16_DENORMAL_MANTISSAS = 1 << 7
 OPERAND_SCALE = 2.0**100
 
 
+# Positive control: the smallest normal-range P that still gives O(1) products with V ~ 2^100.
+NORMAL_P = 2.0**-100
+
+
 def test_sdpa_custom_mm_reuse_dest_srcb_flushes_denormal_srcb_after_keep_flag():
     """The init must restore the Src zero flag a preceding datacopy left at keep.
 
     P is all bf16 denormals. With the flag at keep the P preload carries them into DEST (as a copy_tile
     would), MOVD2B pulls them into SrcB, and a bf16 MVMUL must flush them: scaled by V ~ 2^100 the products
     are visibly nonzero if kept, so every defined output lane must come out exactly 0.
+
+    Positive control: the same keep-flag run with a constant normal P (2^-100, so the products stay O(1))
+    must match the P@V golden, which pins that the zero result above comes from the flush and not from a dead
+    V / MVMUL / pack path or a stale result buffer. Mixed P is not golden-comparable for this op (see the
+    module docstring), so the two runs are separate.
     """
     M, K, N = TILE_DIM, KT_DIM * TILE_DIM, NT_DIM * TILE_DIM
     torch.manual_seed(0)
@@ -254,3 +263,15 @@ def test_sdpa_custom_mm_reuse_dest_srcb_flushes_denormal_srcb_after_keep_flag():
     assert (
         torch.count_nonzero(kept) == 0
     ), f"denormal SrcB rows were not flushed: max |value| {kept.abs().max().item():.3e}"
+
+    golden, device = _run(
+        MathFidelity.LoFi,
+        formats,
+        DestAccumulation.No,
+        preserve_zero_flag=True,
+        operands=(torch.full((M, K), NORMAL_P), V),
+    )
+    assert passed_test(golden, device, formats.output_format), (
+        "positive control: constant normal P did not reproduce the P@V golden on the defined lanes, so the "
+        "flush check above is not evidence"
+    )

@@ -90,6 +90,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
+#ifdef ARCH_BLACKHOLE
+    // The reinit entry point is Blackhole-only; the branch is compiled out on Wormhole, where the switch is never set.
     if constexpr (MATMUL_NO_MOP_REINIT_AFTER_KEEP)
     {
         // Leave the Src zero flag at keep, as a preceding copy_tile_custom does, then take the inner-loop reinit
@@ -97,8 +99,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // should flush.
         math::_configure_preserve_zero_flag_state_();
         _llk_math_matmul_reinit_no_mop_<MATH_FIDELITY, THROTTLE_LEVEL>(
-            false /* transpose */, TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */);
+            false /*transpose*/, TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /*partial_face*/);
     }
+#endif
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     for (std::uint32_t j = 0; j < params.KT_DIM; j++)

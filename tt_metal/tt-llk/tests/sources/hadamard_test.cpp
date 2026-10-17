@@ -64,6 +64,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+
+    if constexpr (HADAMARD_PRESERVE_SRC_ZERO_FLAG)
+    {
+        // Leave the Src zero flag at keep, as a preceding copy_tile_init does. The init must restore the
+        // operand-driven value, which the execute asserts under LLK asserts.
+        math::_configure_preserve_zero_flag_state_();
+    }
+
     _llk_math_hadamard_h128_init_<MATH_FIDELITY, HADAMARD_NORMALIZE>();
 
     _llk_math_wait_for_dest_available_<dest_sync>();

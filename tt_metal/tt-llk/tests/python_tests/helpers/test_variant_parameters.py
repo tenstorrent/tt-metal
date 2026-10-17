@@ -796,6 +796,17 @@ class CLOBBER_OP(TemplateParameter):
 
 
 @dataclass
+class KEEP_SRC_ZERO_FLAG_BEFORE_REINIT(TemplateParameter):
+    """Math sets the Src zero flag to keep (as copy_tile_custom leaves it) immediately before the
+    reduce_block_max_row reinit; the reinit must re-apply the operand default."""
+
+    keep_before_reinit: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool KEEP_SRC_ZERO_FLAG_BEFORE_REINIT = {str(self.keep_before_reinit).lower()};"
+
+
+@dataclass
 class RESPECT_TRIGGER(TemplateParameter):
     """Enable the reduce_block_max_row producer/consumer trigger handshake.
 
@@ -1143,11 +1154,14 @@ class HADAMARD(TemplateParameter):
 
     hadamard_normalize: bool = True
     h16_tile_index: int = 0
+    # Math sets the Src zero flag to keep before the init, as a preceding copy_tile_init does.
+    preserve_src_zero_flag: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
             f"constexpr bool HADAMARD_NORMALIZE = {str(self.hadamard_normalize).lower()};",
             f"constexpr std::uint32_t HADAMARD_H16_TILE_INDEX = {self.h16_tile_index};",
+            f"constexpr bool HADAMARD_PRESERVE_SRC_ZERO_FLAG = {str(self.preserve_src_zero_flag).lower()};",
         ]
         return "\n".join(lines)
 

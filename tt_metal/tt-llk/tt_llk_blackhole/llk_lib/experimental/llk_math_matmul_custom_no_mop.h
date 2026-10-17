@@ -454,12 +454,20 @@ inline void _llk_math_matmul_init_no_mop_(
 }
 
 /**
- * @brief Re-establish the no-mop matmul math state after another op ran between the blocks (SDPA inner loop):
- *        reprograms the address modifiers for the operand geometry and resets the counters. The replay buffer
- *        recorded by @ref _llk_math_matmul_init_no_mop_ must still be intact.
+ * @brief Re-establish the no-mop matmul math state after another op ran between the blocks (SDPA inner loop).
  *
- * @note Also re-applies the operand-driven default Src zero-substitution state (skip-if-set): a preceding
- *       copy_tile_custom leaves the flag at keep, and MVMUL would then keep bf16 denormal SrcB operands.
+ * @tparam math_fidelity: Math fidelity the matmul was initialized with (selects the address-mod set).
+ * @tparam THROTTLE_LEVEL: Throttle level the matmul was initialized with, 0 to 5.
+ * @param transpose: Whether in1 is consumed transposed.
+ * @param in0_tile_r_dim: Row count of an in0 tile.
+ * @param in0_tile_c_dim: Column count of an in0 tile.
+ * @param in1_tile_r_dim: Row count of an in1 tile.
+ * @param in1_tile_c_dim: Column count of an in1 tile.
+ * @param partial_face: Whether the operand tiles are partial faces (fewer than 16 rows per face).
+ * @note Reprograms the address modifiers for the operand geometry and resets the counters; the replay buffer recorded
+ *       by @ref _llk_math_matmul_init_no_mop_ must still be intact. Also re-applies the operand-driven default Src
+ *       zero-substitution state (skip-if-set): a preceding copy_tile_custom leaves the flag at keep, and MVMUL would
+ *       then keep bf16 denormal SrcB operands.
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_reinit_no_mop_(

@@ -89,6 +89,14 @@ inline void sdpa_custom_mm_reuse_dest_srcb_configure_mop(
 /**
  * @brief Configure the math thread for sdpa_custom_mm_reuse_dest_srcb: programs the address mods and the MVMUL replay program.
  *
+ * @tparam math_fidelity: Math fidelity the address mods and the MVMUL replay program are built for.
+ * @param in0_tile_r_dim: Row count of an in0 (P) tile.
+ * @param in0_tile_c_dim: Column count of an in0 (P) tile.
+ * @param in1_tile_r_dim: Row count of an in1 (V) tile.
+ * @param in1_tile_c_dim: Column count of an in1 (V) tile.
+ * @param partial_face: Whether the operand tiles are partial faces (fewer than 16 rows per face).
+ * @param transpose: Nonzero to consume in1 transposed.
+ * @param kt_dim: Inner dimension in tiles.
  * @note Establishes the operand-driven default Src zero-substitution state, which
  *       @ref _llk_math_sdpa_custom_mm_reuse_dest_srcb_ asserts under LLK asserts. Re-run this init after any math op
  *       that leaves the flag at keep (a copy init does).

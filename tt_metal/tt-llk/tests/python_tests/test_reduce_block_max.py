@@ -42,6 +42,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CLOBBER_OP,
+    KEEP_SRC_ZERO_FLAG_BEFORE_REINIT,
     OVERLAP_FIRST_HALF,
     REDUCE_BLOCK_CT_DIM,
     REINIT_MODE,
@@ -101,6 +102,7 @@ def _run_reduce_block_max(
     clobber="none",
     respect_trigger=False,
     overlap_first_half=False,
+    keep_before_reinit=False,
     expect_mismatch=False,
     expected_nondeterministic=False,
 ):
@@ -109,6 +111,10 @@ def _run_reduce_block_max(
     ``expect_mismatch`` inverts the verdict: the run must diverge from golden. Used by
     the negative controls, which pin that a clobber left un-repaired really does corrupt
     the reduce (so the reinit cases are not passing for free).
+
+    ``keep_before_reinit`` sets the Src zero flag to keep (as copy_tile_custom leaves it)
+    immediately before the reinit; the reinit must re-apply the operand default, which the
+    reduce execute asserts under LLK asserts.
 
     ``expected_nondeterministic`` exempts the variant from the --bit-exact-runs
     determinism check: a run with a deliberately corrupt HW config leaves DEST
@@ -160,6 +166,7 @@ def _run_reduce_block_max(
             CLOBBER_OP(_CLOBBER_DEFINE[clobber]),
             RESPECT_TRIGGER(respect_trigger),
             OVERLAP_FIRST_HALF(overlap_first_half),
+            KEEP_SRC_ZERO_FLAG_BEFORE_REINIT(keep_before_reinit),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -289,6 +296,51 @@ def test_reduce_block_max_reinit_runtime(formats, block_ct_dim, reinit):
         use_runtime=True,
         reinit=reinit,
         clobber=_CLOBBER_FOR_REINIT[reinit],
+    )
+
+
+@pytest.mark.parametrize("reinit", ["short", "minimal"])
+def test_reduce_block_max_reinit_after_keep_flag(reinit):
+    """The compile-time reinits must re-apply the Src zero-flag default a preceding copy_tile_custom left at keep.
+
+    The reinit_minimal / reinit_with_mop lib entry points (what reduce_block_max_row_reinit_minimal / _short
+    call) run right after a copy_tile_custom in the SDPA inner loop, which leaves the flag at keep. The flag
+    is set to keep immediately before the reinit here; the reduce execute asserts the operand-driven value
+    under LLK asserts, so without the restore the run fails with an LLK assert. There is no cheap numeric
+    observable here (the SrcB scaler is a normal 1.0 and the pooled operand is not on the SrcA MOV path), so
+    the assert is the gate. bf16 only, block_ct_dim 2: the restore is independent of DEST precision and
+    block width.
+    """
+    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            "compile-time reduce_block_max_row reinit is a Blackhole-only lib path"
+        )
+    _run_reduce_block_max(
+        FORMATS[0],
+        2,
+        reinit=reinit,
+        clobber=_CLOBBER_FOR_REINIT[reinit],
+        keep_before_reinit=True,
+    )
+
+
+@pytest.mark.parametrize("reinit", ["short", "minimal", "full"])
+def test_reduce_block_max_reinit_runtime_after_keep_flag(reinit):
+    """Runtime twin of test_reduce_block_max_reinit_after_keep_flag: reinit_short_runtime, reinit_minimal_runtime
+    and the addrmod-only reinit_runtime must re-apply the Src zero-flag default after a keep. Blackhole-only: the
+    Wormhole runtime reinits do not restore the flag (and the Wormhole reduce does not assert it).
+    """
+    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            "the Wormhole runtime reinits do not re-apply the Src zero-flag default"
+        )
+    _run_reduce_block_max(
+        FORMATS[0],
+        2,
+        use_runtime=True,
+        reinit=reinit,
+        clobber=_CLOBBER_FOR_REINIT[reinit],
+        keep_before_reinit=True,
     )
 
 

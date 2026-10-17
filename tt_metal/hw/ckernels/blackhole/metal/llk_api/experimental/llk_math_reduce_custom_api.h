@@ -66,16 +66,22 @@ inline void llk_math_reduce_block_max_row(const std::uint32_t dst_index, const c
 /**
  * Reinitializes the block-based reduce_max_row operation after a matmul.
  *
- * This LLK API function is used only to re-initialize the address modifiers after a
- * matmul operation in an SDPA inner loop. Please don't use this function as a substitute for
- * the native llk_math_reduce_block_max_row_init LLK. This function is highly specialized
- * for a certain use case and the LLK team does not guarantee any degree of generality.
+ * This LLK API function re-initializes the address modifiers after a matmul operation in an SDPA
+ * inner loop and re-applies the operand-driven Src zero-flag default (a cfg RMW only when the value
+ * differs). Please don't use this function as a substitute for the native
+ * llk_math_reduce_block_max_row_init LLK. This function is highly specialized for a certain use
+ * case and the LLK team does not guarantee any degree of generality.
  */
 inline void llk_math_reduce_block_max_row_reinit_minimal() {
     SAN_HOOK(unsupported());
     _llk_math_reduce_block_max_row_reinit_minimal_();
 }
 
+/**
+ * Short reinitialization of the block-based reduce_max_row operation after an op that reprogrammed
+ * the MOP (e.g. an eltwise binary) in an SDPA inner loop: restores the reduce address modifiers,
+ * reprograms the MOP and re-applies the operand-driven Src zero-flag default.
+ */
 template <std::uint32_t block_ct_dim>
 inline void llk_math_reduce_block_max_row_reinit_with_mop(const ckernel::TensorShape& tensor_shape) {
     SAN_HOOK(unsupported());

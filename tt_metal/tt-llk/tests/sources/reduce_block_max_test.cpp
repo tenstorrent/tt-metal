@@ -29,6 +29,9 @@
 //                     inner-loop reinit paths: 0 = none, 1 = reinit_short (reprogram
 //                     MOP + addrmods), 2 = reinit_minimal (ADDR_MOD_1/2/6 only),
 //                     3 = reinit (all four addrmods; runtime only).
+//   * KEEP_SRC_ZERO_FLAG_BEFORE_REINIT - set the Src zero flag to keep (as copy_tile_custom
+//                     leaves it) immediately before the reinit; the reinit must re-apply the
+//                     operand default, which the reduce execute asserts under LLK asserts.
 //   * RESPECT_TRIGGER   - split the block reduce into two half-width unpack MOP runs
 //                     separated by a HW semaphore wait; the PACK thread plays the
 //                     producer and posts the tokens. Requires an even BLOCK_CT_DIM.
@@ -182,6 +185,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Overwrite the reduce MOP/addrmods so the reinit below must restore them.
         clobber_reduce_config(tensor_shape);
 
+        if constexpr (KEEP_SRC_ZERO_FLAG_BEFORE_REINIT)
+        {
+            // Leave the Src zero flag at keep, as a preceding copy_tile_custom does (after the clobber: an eltwise
+            // binary init re-applies the default itself). The reinit must restore the operand-driven value.
+            math::_configure_preserve_zero_flag_state_();
+        }
+
         if constexpr (REINIT_MODE == 1)
         {
             // reduce_block_max_row_reinit_short_runtime: reprogram MOP + restore addrmods (both arches).
@@ -190,7 +200,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef ARCH_BLACKHOLE
         else if constexpr (REINIT_MODE == 2)
         {
-            // reduce_block_max_row_reinit_minimal_runtime: restore ADDR_MOD_1/2/6 only (Blackhole-only lib fn).
+            // reduce_block_max_row_reinit_minimal_runtime: restore ADDR_MOD_1/2/6 + the Src zero-flag default
+            // (Blackhole-only lib fn).
             _llk_math_reduce_block_max_row_reinit_minimal_runtime_();
         }
 #endif
@@ -214,16 +225,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Overwrite the reduce MOP/addrmods so the reinit below must restore them.
         clobber_reduce_config(tensor_shape);
 
+        if constexpr (KEEP_SRC_ZERO_FLAG_BEFORE_REINIT)
+        {
+            // Leave the Src zero flag at keep, as a preceding copy_tile_custom does (after the clobber: an eltwise
+            // binary init re-applies the default itself). The reinit must restore the operand-driven value.
+            math::_configure_preserve_zero_flag_state_();
+        }
+
 #ifdef ARCH_BLACKHOLE
         if constexpr (REINIT_MODE == 1)
         {
-            // reduce_block_max_row_reinit_short: restore addrmods + reprogram the MOP (what
-            // llk_math_reduce_block_max_row_reinit_with_mop calls). Blackhole-only lib path.
+            // reduce_block_max_row_reinit_short: restore addrmods + reprogram the MOP + the Src zero-flag default
+            // (what llk_math_reduce_block_max_row_reinit_with_mop calls). Blackhole-only lib path.
             _llk_math_reduce_block_max_row_reinit_with_mop_<REDUCE_BLOCK_CT_DIM>(tensor_shape);
         }
         else if constexpr (REINIT_MODE == 2)
         {
-            // reduce_block_max_row_reinit_minimal: restore ADDR_MOD_1/2/6 only (Blackhole-only lib fn).
+            // reduce_block_max_row_reinit_minimal: restore ADDR_MOD_1/2/6 + the Src zero-flag default
+            // (Blackhole-only lib fn).
             _llk_math_reduce_block_max_row_reinit_minimal_();
         }
 #endif

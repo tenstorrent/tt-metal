@@ -61,7 +61,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
         {
-            _llk_math_eltwise_unary_datacopy_custom_(tile);
+            _llk_math_eltwise_unary_datacopy_custom_(tile, formats.math);
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, false>();
     }
