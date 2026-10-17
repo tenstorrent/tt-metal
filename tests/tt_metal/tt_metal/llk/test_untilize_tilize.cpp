@@ -929,10 +929,11 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilize) {
 }
 
 // fast_tilize_* on a 16x32 tiny tile (1x2 faces of 16x16) through the compute API. Wormhole has a
-// two-face fast-tilize data path for even block widths; Blackhole's fast-tilize path is 32x32-only, so
-// its compute API must route tiny tiles to tilize_* instead of running the 32x32 unpack/pack sequence
-// over a 16-row tile (which reads 16 rows past the input and overruns the output CB by a half tile per
-// tile).
+// two-face fast-tilize data path for even block widths only (unit_dim 2), so its compute API must route
+// odd widths (unit_dim 1, or a trailing unit_dim-3 call) to tilize_*; Blackhole's fast-tilize path is
+// 32x32-only, so its compute API must route every tiny tile to tilize_* instead of running the 32x32
+// unpack/pack sequence over a 16-row tile (which reads 16 rows past the input and overruns the output
+// CB by a half tile per tile).
 TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeTinyTile16x32) {
     constexpr std::uint32_t tile_shape_in_faces_r = 1;  // 16x32 = 1x2 faces of 16x16
     constexpr std::uint32_t tile_shape_in_faces_c = 2;
@@ -941,8 +942,9 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeTinyTile16x32) {
     constexpr std::uint32_t tile_bytes =
         tile_shape_in_faces_r * tile_shape_in_faces_c * face_r_dim * face_c_dim * sizeof(std::uint16_t);
     // Even block widths: one unit (2), two units (4), one and three units across two tile-rows, and a
-    // full bf16 dest bank (8 tiles at unit_dim 2 on Wormhole).
-    vector<vector<std::uint32_t>> num_tiles = {{1, 2}, {1, 4}, {2, 2}, {2, 6}, {1, 8}};
+    // full bf16 dest bank (8 tiles at unit_dim 2 on Wormhole). Odd block widths: a width of 1
+    // (unit_dim 1), 3 (one unit_dim-3 call) and 5 (a unit_dim-2 call followed by a unit_dim-3 call).
+    vector<vector<std::uint32_t>> num_tiles = {{1, 2}, {1, 4}, {2, 2}, {2, 6}, {1, 8}, {1, 1}, {1, 3}, {2, 3}, {1, 5}};
     for (auto num_tile : num_tiles) {
         unit_tests::compute::tilize::TestConfig test_config = {
             .fast_tilize = true,

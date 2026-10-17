@@ -123,6 +123,8 @@ inline void _llk_pack_fast_tilize_init_(
 {
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4");
     LLK_ASSERT(
+        (unit_dim == 2 && num_faces == 2) || num_faces == 4, "16x32 tiny tiles are only supported for tensors with even-sized tile widths for fast_tilize");
+    LLK_ASSERT(
         pack_dst_format == to_underlying(DataFormat::Float16_b) || pack_dst_format == to_underlying(DataFormat::Float32) || num_faces == 4,
         "16x32 tiny tiles are only supported with float16_b or float32 output formats");
     // instead of using the actual is_fp32_dest_acc_en flag dest 32 bit mode is enabled if unpack_dst_format is TF32
@@ -269,6 +271,8 @@ inline void _llk_pack_fast_tilize_block_(
     const std::uint32_t tile_index, const std::uint32_t address, const std::uint32_t unit_dim, const std::uint32_t num_units, const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4");
+    LLK_ASSERT(
+        (unit_dim == 2 && num_faces == 2) || num_faces == 4, "16x32 tiny tiles are only supported for tensors with even-sized tile widths for fast_tilize");
     // use false here so that the 31st bit of the address remains set as the offset addresses for the other packers continue to be used
     // while the address for the first packer is manipulated using ADDDMAREG and REG2FLOP
     program_packer_destination(address, false);

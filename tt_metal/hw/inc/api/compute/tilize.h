@@ -260,12 +260,31 @@ ALWI bool fast_tilize_uses_32x32_tiles([[maybe_unused]] uint32_t icb, [[maybe_un
     });
     return is_32x32;
 }
+#else
+// Wormhole fast-tilize has a two-face (16x32 tiny tile) data path only at unit_dim 2, and the block
+// loop below picks unit_dim from the block width (1 for a width of 1, a trailing unit_dim-3 call for
+// an odd width above 1). Those odd widths have no tiny-tile path, so route them to tilize_*. Each
+// thread reads the face count from the operand its LLK is driven by: unpack and math from the input,
+// pack from the output.
+ALWI bool fast_tilize_needs_tilize_fallback(
+    [[maybe_unused]] uint32_t icb, [[maybe_unused]] uint32_t ocb, uint32_t block) {
+    bool two_faces = false;
+    UNPACK({ two_faces = get_operand_num_faces(get_operand_id(icb)) == 2; });
+    MATH({ two_faces = get_operand_num_faces(get_operand_id(icb)) == 2; });
+    PACK({ two_faces = get_output_num_faces(get_output_id(ocb)) == 2; });
+    return two_faces && (block % 2 != 0);
+}
 #endif
 
 template <bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifdef ARCH_BLACKHOLE
     if (full_dim == 1 || !fast_tilize_uses_32x32_tiles(icb, ocb)) {
+        tilize_init<is_fp32_dest_acc_en>(icb, full_dim, ocb, call_line);
+        return;
+    }
+#else
+    if (fast_tilize_needs_tilize_fallback(icb, ocb, full_dim)) {
         tilize_init<is_fp32_dest_acc_en>(icb, full_dim, ocb, call_line);
         return;
     }
@@ -335,6 +354,11 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, uint32_t full_dim) {
         tilize_uninit(icb, ocb);
         return;
     }
+#else
+    if (fast_tilize_detail::fast_tilize_needs_tilize_fallback(icb, ocb, full_dim)) {
+        tilize_uninit(icb, ocb);
+        return;
+    }
 #endif
 
     UNPACK((llk_unpack_fast_tilize_uninit<is_fp32_dest_acc_en>()));
@@ -342,6 +366,24 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, uint32_t full_dim) {
     PACK((llk_pack_fast_tilize_uninit<is_fp32_dest_acc_en>(ocb)));
 }
 
+// clang-format off
+/**
+ * Performs the fast tilize operation on a block. The block width must match the full_dim given to
+ * fast_tilize_init. Tiles that the architecture's fast-tilize path does not support take the plain
+ * tilize path: on Blackhole every tile shape other than 32x32 (and a width of 1), on Wormhole a
+ * 16x32 tiny tile at an odd block width (the two-face data path exists only for pairs of tiles).
+ *
+ * Return value: None
+ *
+ * | Param Type | Name             | Description                              | Type     | Valid Range | Required |
+ * |----------- |------------------|------------------------------------------|----------|-------------|----------|
+ * | Function   | icb              | Input circular buffer identifier         | uint32_t | 0 to 31     | True     |
+ * | Function   | block            | Size of tile block to work on            | uint32_t | > 0         | True     |
+ * | Function   | ocb              | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
+ * | Function   | input_tile_index | Index of the input tile in the icb       | uint32_t | >= 0        | False    |
+ * | Function   | output_tile_index| Index of the output tile in the ocb      | uint32_t | >= 0        | False    |
+ */
+// clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
@@ -391,6 +433,11 @@ ALWI void fast_tilize_block(
         PACK((llk_pack_fast_tilize_row_end()));
     }
 #else
+    if (fast_tilize_detail::fast_tilize_needs_tilize_fallback(icb, ocb, block)) {
+        tilize_block<is_fp32_dest_acc_en>(icb, block, ocb, input_tile_index, output_tile_index);
+        return;
+    }
+
     uint32_t full_dim = block;
 
     // Not sure if input_tile_index can be arbitrary but it works for moving across rows of files,
