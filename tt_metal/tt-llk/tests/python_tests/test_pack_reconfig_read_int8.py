@@ -42,8 +42,6 @@ from helpers.test_variant_parameters import (
     CONFIGURE_TEST_RUN_IDX,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
-    TILE_COUNT,
-    generate_input_dim,
 )
 
 # 16-bit Dest is the point of the test: the 8-bit integer Dest read only exists there.
@@ -124,7 +122,6 @@ def test_pack_reconfig_read_int8(formats, input_dimensions):
 
     def runtimes(run_idx):
         return [
-            TILE_COUNT(tile_cnt_A),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             CONFIGURE_TEST_RUN_IDX(run_idx),
@@ -133,7 +130,6 @@ def test_pack_reconfig_read_int8(formats, input_dimensions):
     configuration = TestConfig(
         "sources/pack_reconfig_read_int8_test.cpp",
         formats,
-        templates=[generate_input_dim(input_dimensions, input_dimensions)],
         runtimes=runtimes(0),
         variant_stimuli=StimuliConfig(
             src_A,
