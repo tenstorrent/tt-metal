@@ -41,3 +41,48 @@ def test_sharded_argmax_ties_pick_lowest_global_index():
     ref = torch.argmax(logits, dim=-1)
     assert ref.tolist() == [5, per * 2 + 1, 0, per * 4 + 15]
     assert torch.equal(sharded_argmax_ref(logits, n).to(torch.int64), ref)
+
+
+# ---- QWEN36_VERIFY_STAGING_CACHE helpers ----------------------------------------------------------------
+import types  # noqa: E402
+
+from models.demos.blackhole.qwen36.tt.model import Qwen36Model  # noqa: E402
+
+
+def _fake_rope_model(max_seq_len=4096, rope_delta=0):
+    m = types.SimpleNamespace(
+        args=types.SimpleNamespace(rope_head_dim=64, rope_theta=10000000.0),
+        rope=types.SimpleNamespace(rope_delta=rope_delta, max_seq_len=max_seq_len),
+    )
+    for name in ("_rope_cos_sin_rows", "_rope_tp_cos_sin_decode_torch", "_rope_tp_cos_sin_decode_cached"):
+        setattr(m, name, types.MethodType(getattr(Qwen36Model, name), m))
+    return m
+
+
+def test_cached_rope_bit_identical_to_direct():
+    for delta in (0, 7):
+        m = _fake_rope_model(rope_delta=delta)
+        for pos in (torch.arange(0, 12), torch.tensor([0, 31, 32, 4000, 4088]), torch.randint(0, 4000, (32,))):
+            pos = pos.to(torch.int32)
+            c0, s0 = m._rope_tp_cos_sin_decode_torch(pos)
+            c1, s1 = m._rope_tp_cos_sin_decode_cached(pos)
+            assert c1.dtype == torch.bfloat16 and c1.shape == c0.shape == (1, pos.numel(), 1, 64)
+            assert torch.equal(c0, c1) and torch.equal(s0, s1)
+        # beyond the table: falls back to the direct computation
+        far = torch.tensor([5000, 5001], dtype=torch.int32)
+        assert torch.equal(m._rope_tp_cos_sin_decode_torch(far)[0], m._rope_tp_cos_sin_decode_cached(far)[0])
+
+
+def test_page_table_unchanged_detection():
+    f = Qwen36Model._vfy_pt_unchanged
+    a = torch.arange(24, dtype=torch.int32).reshape(2, 12)
+    assert not f(None, a)
+    assert f(a.clone(), a)
+    b = a.clone()
+    b[1, 11] += 1
+    assert not f(a, b)
+    assert not f(a, a[:, :11].contiguous())
+    # the cached copy must not alias a caller tensor mutated in place
+    cached = a.clone()
+    a[0, 0] = 99
+    assert not f(cached, a)

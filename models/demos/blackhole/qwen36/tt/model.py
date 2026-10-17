@@ -1722,17 +1722,40 @@ class Qwen36Model:
         (same inv_freq / outer / cat / bf16 cast). The hybrid verify pushes its candidates through the
         DECODE attention kernel as B pseudo-users, so it needs this per-row table, not the
         prefill [1,1,S,rd] one."""
-        rd = self.args.rope_head_dim
         pos_vec = positions.to(torch.int32).reshape(-1)
         # RoPE position is the KV position offset by rope_delta (0 for text); same as decode.
         rope_pos_vec = pos_vec + self.rope.rope_delta
         B = rope_pos_vec.shape[0]
+        cos, sin = self._rope_cos_sin_rows(rope_pos_vec)
+        return cos.reshape(1, B, 1, -1), sin.reshape(1, B, 1, -1)
+
+    def _rope_cos_sin_rows(self, rope_pos_vec):
+        """bf16 (cos, sin) [len(rope_pos_vec), rope_head_dim] for RoPE positions (rope_delta already applied)."""
+        rd = self.args.rope_head_dim
         inv_freq = 1.0 / (self.args.rope_theta ** (torch.arange(0, rd, 2).float() / rd))
         freqs = torch.outer(rope_pos_vec.float(), inv_freq)  # [B, rd/2], per-row rotation
         emb = torch.cat([freqs, freqs], dim=-1)
-        cos = emb.cos().reshape(1, B, 1, rd).to(torch.bfloat16)
-        sin = emb.sin().reshape(1, B, 1, rd).to(torch.bfloat16)
-        return cos, sin
+        return emb.cos().to(torch.bfloat16), emb.sin().to(torch.bfloat16)
+
+    def _rope_tp_cos_sin_decode_cached(self, positions):
+        """_rope_tp_cos_sin_decode_torch served from a host bf16 table built once (QWEN36_VERIFY_STAGING_CACHE):
+        row p = _rope_cos_sin_rows(p), so the result is bit-identical; positions outside the table fall back to
+        the direct computation. Saves the per-step outer/cos/sin on the host."""
+        tab = getattr(self, "_rope_host_table", None)
+        if tab is None:
+            tab = self._rope_host_table = self._rope_cos_sin_rows(torch.arange(self.rope.max_seq_len))
+        rope_pos = positions.to(torch.int32).reshape(-1) + self.rope.rope_delta
+        if rope_pos.numel() == 0 or int(rope_pos.min()) < 0 or int(rope_pos.max()) >= tab[0].shape[0]:
+            return self._rope_tp_cos_sin_decode_torch(positions)
+        B = rope_pos.shape[0]
+        idx = rope_pos.long()
+        return tab[0][idx].reshape(1, B, 1, -1), tab[1][idx].reshape(1, B, 1, -1)
+
+    @staticmethod
+    def _vfy_pt_unchanged(prev, new):
+        """True when host page table ``new`` equals the one last staged on device (``prev``): same shape and
+        values, so the verify's page-table H2D copies can be skipped."""
+        return prev is not None and prev.shape == new.shape and bool(torch.equal(prev, new))
 
     def _spec_tail(self, x, sharded=False):
         """Shared tail of the verify and seed bodies: residual ``x`` [1,1,R,dim] (freed here) ->
@@ -2025,6 +2048,11 @@ class Qwen36Model:
         # Grouped aliased KV write (TPAttention._write_kv_aliased): checked here for the warm passes and on
         # every replay (verify_traced), while the tables are still torch; see spec_kv_write_conflicts.
         self._vfy_pt_host = pt.clone()
+        # QWEN36_VERIFY_STAGING_CACHE (default ON): skip the page-table H2D when unchanged, and take RoPE
+        # cos/sin from a host table instead of recomputing them per replay.
+        self._vfy_staging_cache = bool(int(os.environ.get("QWEN36_VERIFY_STAGING_CACHE", "1")))
+        if self._vfy_staging_cache:
+            self._rope_tp_cos_sin_decode_cached(warm)  # builds the table now, not inside the first replay
         self._vfy_kv_grouped = B > 1 and T > 1 and KV_GROUP_WRITE_OK
         if self._vfy_kv_grouped:
             self._vfy_check_kv_writes(pt, warm_positions)
@@ -2210,11 +2238,16 @@ class Qwen36Model:
             chk = positions if inactive is None else [-1 if x else int(p) for p, x in zip(positions, inactive)]
             self._vfy_check_kv_writes(pt, chk)
         if page_tables is not None:
-            bufs = (self._vfy_kvpt_buf, self._vfy_kvpt_users, self._vfy_kvpt1_buf)
-            for host, buf in zip(self._vfy_page_table_host(pt), bufs):
-                _h = ttnn.from_torch(host, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
-                ttnn.copy_host_to_device_tensor(_h, buf)
-            self._vfy_pt_host = pt
+            # _vfy_pt_host mirrors what the three device buffers hold (set at prepare and here), so an equal
+            # table needs no copy. Stored as a clone: the caller may mutate its tensor in place.
+            if not (self._vfy_staging_cache and self._vfy_pt_unchanged(self._vfy_pt_host, pt)):
+                bufs = (self._vfy_kvpt_buf, self._vfy_kvpt_users, self._vfy_kvpt1_buf)
+                for host, buf in zip(self._vfy_page_table_host(pt), bufs):
+                    _h = ttnn.from_torch(
+                        host, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep
+                    )
+                    ttnn.copy_host_to_device_tensor(_h, buf)
+                self._vfy_pt_host = pt.clone()
 
         # Stage per-replay inputs into the persistent buffers (addresses preserved). Row-major flatten
         # of the B x T token lists is the user-major row order.
@@ -2226,7 +2259,10 @@ class Qwen36Model:
         pos = self._vfy_row_positions(positions)
         _h = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
         ttnn.copy_host_to_device_tensor(_h, self._vfy_kvpos_buf)
-        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos)
+        if self._vfy_staging_cache:
+            cos_t, sin_t = self._rope_tp_cos_sin_decode_cached(pos)
+        else:
+            cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos)
         _h = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
         ttnn.copy_host_to_device_tensor(_h, self._vfy_cos_buf)
         _h = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
