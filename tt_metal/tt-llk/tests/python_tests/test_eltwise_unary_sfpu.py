@@ -1700,7 +1700,7 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
         pytest.skip(f"{mathop.name} keeps the stock kernel on {TestConfig.CHIP_ARCH}")
     from helpers.sfpu_accuracy_budget import Metric, accuracy_contract
     from helpers.ulp import nonfinite_mismatches, ulp_distance
-    from helpers.ulp_sweep import flushed_inputs, measurable_mask, sweep_spec
+    from helpers.ulp_sweep import measurable_mask, sweep_spec
 
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     dest_acc = DestAccumulation.No
@@ -1710,7 +1710,7 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
         input_dimensions_A=dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=dimensions,
-        spec_A=sweep_spec(),
+        spec_A=sweep_spec(formats.input_format),
     )
     # The sweep pads with +0. The specials go in that padding, under the edge sweep's
     # gates for what the golden defines and the pipeline delivers.
@@ -1777,9 +1777,11 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
     # being NaN or infinite. Stricter than ulp_sweep.nonfinite_failures, which also excuses
     # a NaN golden, a store saturating past the output's range and inputs outside the op's
     # claim: a kernel replacing stock's on every BF16 input is held to the golden there too.
-    failures = nonfinite_mismatches(golden, result) & ~flushed_inputs(
-        src_A, formats.input_format
+    values = src_A.float()
+    flushed = (values != 0) & (
+        values.abs() < torch.finfo(torch.bfloat16).smallest_normal
     )
+    failures = nonfinite_mismatches(golden, result) & ~flushed
     assert (
         not failures.any()
     ), f"{mathop.name}: {int(failures.sum())} lanes disagree on finiteness"
