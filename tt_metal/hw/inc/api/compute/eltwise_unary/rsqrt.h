@@ -18,7 +18,10 @@ enum class RsqrtMode { Default, Fast };
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (APPROX))); }
+ALWI void rsqrt_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (APPROX)));
+    MATH(ckernel::sfpu::rsqrt_bf16_tile_init<!DST_ACCUM_MODE>());
+}
 
 // clang-format off
 /**
@@ -43,6 +46,18 @@ ALWI void rsqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (
 template <RsqrtMode mode = RsqrtMode::Default, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rsqrt_tile(uint32_t idst) {
     [[maybe_unused]] constexpr bool FAST_APPROX = mode == RsqrtMode::Fast;
+    MATH(if constexpr (
+        ckernel::sfpu::rsqrt_bf16_whole_tile && !is_fp32_dest_acc_en && mode == RsqrtMode::Default && !APPROX &&
+        !FAST_APPROX) {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_rsqrt,
+            (APPROX, 32, is_fp32_dest_acc_en, FAST_APPROX),
+            idst,
+            VectorMode::None);
+        return;
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
