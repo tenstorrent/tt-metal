@@ -131,6 +131,9 @@ inline void sfpu_rope_face(const std::uint32_t x_addr)
  * scale_fp32 is required rather than defaulted: under has_scale a missing value
  * would scale cos/sin by zero and silently zero every output. Callers with
  * has_scale=false pass 0.
+ *
+ * is_fp32_dest_acc_en selects the Dest representation the loads and stores use,
+ * as in sfpu_rope_fused_all_rows: BF16 inputs unpacked into FP32 DEST need it set.
  */
 template <
     std::uint32_t Ht,
@@ -140,7 +143,8 @@ template <
     std::uint32_t cos_base,
     std::uint32_t sin_base,
     std::uint32_t cs_stride,
-    bool has_scale = false>
+    bool has_scale           = false,
+    bool is_fp32_dest_acc_en = false>
 inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
 {
     constexpr std::uint32_t F = rope::FACE_ROWS;
@@ -156,7 +160,7 @@ inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
         for (std::uint32_t f = 0; f < 2; f++)
         {
             const std::uint32_t cs_off = w * cs_stride + f * F;
-            sfpu_rope_load_cos_sin(cos_base + cs_off, sin_base + cs_off);
+            sfpu_rope_load_cos_sin<is_fp32_dest_acc_en>(cos_base + cs_off, sin_base + cs_off);
             if constexpr (has_scale)
             {
                 // Amortized over the Ht heads that reuse this cos/sin pair.
@@ -165,7 +169,7 @@ inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
             std::uint32_t x_addr = x_base + w * x_stride + f * F;
             for (std::uint32_t h = 0; h < Ht; h++)
             {
-                sfpu_rope_face(x_addr);
+                sfpu_rope_face<is_fp32_dest_acc_en>(x_addr);
                 x_addr += head_stride;
             }
         }
