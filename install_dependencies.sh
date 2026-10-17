@@ -62,10 +62,23 @@ get_package_family() {
                 PKG_FAMILY="debian"
             elif [[ "$OS_ID_LIKE" == *"rhel"* ]] || [[ "$OS_ID_LIKE" == *"fedora"* ]]; then
                 PKG_FAMILY="redhat"
+            elif [[ "$PKG_MANAGER" == "apt" ]]; then
+                # Debian derivatives that don't set ID_LIKE (e.g. openKylin)
+                PKG_FAMILY="debian"
+            elif [[ "$PKG_MANAGER" == "dnf" ]] || [[ "$PKG_MANAGER" == "yum" ]]; then
+                PKG_FAMILY="redhat"
             else
                 PKG_FAMILY="unknown"
             fi
             ;;
+    esac
+}
+
+# Prebuilt toolchains (LLVM apt repo, Kitware CMake, SFPI, libc++-20) exist only for these hosts.
+has_prebuilt_toolchains() {
+    case "$(uname -m)" in
+        x86_64|aarch64) return 0 ;;
+        *) return 1 ;;
     esac
 }
 
@@ -89,6 +102,8 @@ is_supported_os() {
             if [[ "$OS_ID_LIKE" == *"debian"* ]] || [[ "$OS_ID_LIKE" == *"ubuntu"* ]]; then
                 return 0
             elif [[ "$OS_ID_LIKE" == *"rhel"* ]] || [[ "$OS_ID_LIKE" == *"fedora"* ]]; then
+                return 0
+            elif [[ "$PKG_FAMILY" != "unknown" ]]; then
                 return 0
             else
                 return 1
@@ -204,12 +219,32 @@ init_packages() {
                 "libstdc++6"
                 "libtbb-dev"
                 "libcapstone-dev"
-                "libc++-20-dev"
-                "libc++abi-20-dev"
                 "wget"
                 "curl"
                 "xxd"
             )
+            if has_prebuilt_toolchains; then
+                PACKAGES+=("libc++-20-dev" "libc++abi-20-dev")
+            else
+                # No prebuilt SFPI for this host: sfpi-info.sh BUILD compiles the RISC-V
+                # cross toolchain from source and needs the GCC build prerequisites.
+                echo "[INFO] $(uname -m) host: SFPI will be built from source, adding GCC build prerequisites"
+                PACKAGES+=(
+                    "libgmp-dev"
+                    "libmpc-dev"
+                    "libmpfr-dev"
+                    "libexpat1-dev"
+                    "texinfo"
+                    "flex"
+                    "bison"
+                    "gawk"
+                    "autoconf"
+                    "automake"
+                    "patchutils"
+                    "expect"
+                    "mold"
+                )
+            fi
             # Add cmake to packages only if not in Docker (Docker provides via tool image)
             if [ "$docker" -ne 1 ]; then
                 PACKAGES+=("cmake")
@@ -273,6 +308,12 @@ prep_ubuntu_system() {
     # Update package lists and install basic tools
     apt-get update
     apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg jq
+
+    if ! has_prebuilt_toolchains; then
+        echo "[INFO] $(uname -m) host: skipping LLVM apt repository and Kitware CMake download (using distro packages)"
+        apt-get update
+        return
+    fi
 
     # Add LLVM repository for Clang 17
     local llvm_keyring="/usr/share/keyrings/llvm-snapshot.gpg"
@@ -388,6 +429,11 @@ install_llvm() {
         return
     fi
 
+    if ! has_prebuilt_toolchains; then
+        echo "[INFO] Skipping LLVM installation on $(uname -m) (no apt.llvm.org packages; build_metal.sh uses GCC here)"
+        return
+    fi
+
     # Install LLVM 20:
     # - clang-20: default toolchain for tt-metal (build_metal.sh) and tt-train
     TEMP_DIR=$(mktemp -d)
@@ -416,6 +462,10 @@ install_sfpi() {
 	fi
     fi
     eval local $($version_file SHELL)
+    if [[ -z $sfpi_hash ]] && ! has_prebuilt_toolchains; then
+	echo "[INFO] No prebuilt SFPI for $sfpi_arch $sfpi_dist; build_metal.sh will build it from source (tt_metal/sfpi-info.sh BUILD)"
+	return
+    fi
     if [[ -z $sfpi_pkg ]] ; then
         echo "[ERROR] Unknown packaging system for $sfpi_dist" >&2
         exit 1

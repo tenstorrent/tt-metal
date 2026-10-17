@@ -27,6 +27,22 @@ option(TT_UMD_BUILD_SIMULATION "Force UMD to include its simulation harnessing" 
 option(TT_INSTALL "Define installation rules" ON)
 option(TT_USE_SYSTEM_SFPI "Use system path for SFPI. SFPI is used to compile firmware." OFF)
 option(TT_METAL_USE_EMULE "Build with tt-emule software emulation (no hardware required)" OFF)
+
+# emsdk only ships prebuilt Emscripten toolchains for x86_64 and aarch64 Linux hosts, so the
+# Tracy profiler WASM viewer defaults off elsewhere (e.g. riscv64). This is a property of the
+# machine running the build, hence CMAKE_HOST_SYSTEM_PROCESSOR rather than the target.
+if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|aarch64|arm64)$")
+    set(_tt_tracy_wasm_default ON)
+else()
+    set(_tt_tracy_wasm_default OFF)
+endif()
+option(
+    TT_BUILD_TRACY_WASM_VIEWER
+    "Build the Tracy profiler WASM viewer (requires emsdk support for the build host)"
+    ${_tt_tracy_wasm_default}
+)
+unset(_tt_tracy_wasm_default)
+
 set(TT_EMULE_PATH "" CACHE PATH "Path to a tt-emule checkout providing the tt-emule runtime")
 
 if(TT_METAL_USE_EMULE)
