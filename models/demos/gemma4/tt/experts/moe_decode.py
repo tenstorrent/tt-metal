@@ -39,7 +39,9 @@ class Gemma4MoEDecode:
         self.hidden = config.hidden_size
         self.top_k = config.top_k
         self.num_experts = config.num_experts
-        self.frame_rows = int(frame_rows or os.environ.get("GEMMA4_MOE_DECODE_FRAME", "128"))
+        # the proven module shape is 32 tokens per device along the dispatch axis (post-combine tilize path);
+        # a 128-row lane frame on 8 rows is padded to 256 rows
+        self.frame_rows = int(frame_rows or os.environ.get("GEMMA4_MOE_DECODE_FRAME", str(rows * ttnn.TILE_SIZE)))
         assert self.frame_rows % rows == 0, f"frame {self.frame_rows} must split over {rows} mesh rows"
         self.batch_per_device = self.frame_rows // rows
         data = yaml.safe_load(CONFIG_YAML.read_text())
@@ -50,7 +52,8 @@ class Gemma4MoEDecode:
         data["num_routed_experts"] = self.num_experts
         data["compute"]["intermediate_size"] = config.moe_intermediate_size
         self.tt_config = TTMoEDecodeConfig.from_yaml(
-            yaml.safe_dump(data, sort_keys=False), topology=ttnn.Topology.Linear
+            yaml.safe_dump(data, sort_keys=False),
+            topology=ttnn.Topology.Ring,  # the module requires the ring fabric + Ring topology
         )
         I = config.moe_intermediate_size
         # kernel layout: w0 = gate [L, E, H, N], w1 = up [L, E, H, N], w2 = down [L, E, N, H]

@@ -43,7 +43,10 @@ def test_experts_dispatch(seq_len, mesh_device, reset_seeds, request, monkeypatc
     run_experts(1, seq_len, mesh_device, request)
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4), (8, 4)])
+# the decode MoE kernel's ops require the ring fabric (models/common TTMoEDecode: "topology must be Ring")
+@parametrize_mesh_with_fabric(
+    mesh_shapes=[(2, 4), (8, 4)], device_params_extra={"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}
+)
 @pytest.mark.parametrize("seq_len", [64, 128, 256], ids=["frame_64", "frame_128", "frame_256"])
 def test_experts_decode_kernel(seq_len, mesh_device, reset_seeds, request, monkeypatch):
     """Decode-frame routed experts on the decode MoE kernel (dispatch within the column, moe_compute, bfp4 experts)
