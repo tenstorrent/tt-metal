@@ -28,6 +28,30 @@ from ttnn.bringup.flat_routed_expert_ttnn._helpers import BF8_TILE, noc_hops
 from ttnn.bringup.flat_routed_expert_ttnn._helpers import crs_single as _crs_single
 
 
+def _drisc_close_hook():
+    """DRISC mode (default; MIMO_FL_DRISC=0 off): the op's persistent DRISC gate/up senders keep running between calls;
+    stop them before the device closes (ttnn.close_device / close_mesh_device are wrapped once; a no-op when none
+    run)."""
+    if getattr(ttnn, "_flat_drisc_hooked", False):
+        return
+    ttnn._flat_drisc_hooked = True
+    stop = ttnn._ttnn.operations.bringup.flat_drisc_stop
+    dump = ttnn._ttnn.operations.bringup.flat_drisc_dump
+    for name in ("close_device", "close_mesh_device"):
+        orig = getattr(ttnn, name)
+
+        def wrapped(device, *a, _orig=orig, **kw):
+            dump(device)
+            stop(device)
+            return _orig(device, *a, **kw)
+
+        setattr(ttnn, name, wrapped)
+
+
+if os.environ.get("MIMO_FL_DRISC", "1") not in ("", "0"):  # (DRISC mode is the default where DRAM cores exist)
+    _drisc_close_hook()
+
+
 def _crs(cores):
     """crs_rects; ``MIMO_FL_CRS_SINGLE`` (prototype A/B): one CoreRange per core."""
     if os.environ.get("MIMO_FL_CRS_SINGLE"):
@@ -332,16 +356,15 @@ WEIGHT_LAYOUT_KEYS = (
 )  # fmt: skip
 
 
-def _adopt_legacy(cache_prefix, wdtype, files, lay):
+def _adopt_legacy(cache_prefix, wdtype, files):
     """Caches written before the layout-only key were keyed on the whole plan (capacity, h buffers, ...), so any
     plan change re-packed every layer (~1 h for 42 layers on the CPU). When the layout-keyed files are missing, hard
     link the newest whole-plan-keyed set of this layer (same weights, dtype and mesh directory): the packing depends
-    on the shape and the grid only, and no packing change was made while those keys were in use. Never for a rotated
-    down layout (dw_rot): every whole-plan-keyed set predates it and packs the down weights one bank per core, so
-    adopting one loads them in the wrong banks (garbage y). Set FLAT_CACHE_NO_ADOPT=1 to repack instead."""
+    on the shape and the grid only, and no packing change was made while those keys were in use. Set
+    FLAT_CACHE_NO_ADOPT=1 to repack instead."""
     import os
 
-    if lay.get("dw_rot") or os.environ.get("FLAT_CACHE_NO_ADOPT") or all(Path(f).is_file() for f in files.values()):
+    if os.environ.get("FLAT_CACHE_NO_ADOPT") or all(Path(f).is_file() for f in files.values()):
         return
     stem = Path(cache_prefix)
     sets = {}
@@ -371,32 +394,65 @@ def _kd_of(pcd, it):
     return max(k for k in (8, 4, 2, 1) if k * pcd <= 16 and it % k == 0)
 
 
+def _hg_pair(Wg, Wu):
+    """(Wg, Wu) [H, I] -> (A, B) [H, I]: per 32-column group c, A's columns = gate 32c..+15 then up 32c..+15, B's =
+    gate 32c+16..+31 then up 32c+16..+31 (the matmul then leaves gate in faces 0 / 2, up in 1 / 3 of each tile)."""
+    H, I = Wg.shape
+    g, u = Wg.reshape(H, I // 32, 2, 16), Wu.reshape(H, I // 32, 2, 16)
+    A = torch.cat([g[:, :, 0], u[:, :, 0]], dim=2).reshape(H, I)
+    B = torch.cat([g[:, :, 1], u[:, :, 1]], dim=2).reshape(H, I)
+    return A, B
+
+
+def _hg_units(Wg, Wu):
+    """(Wg, Wu) [H, I] -> [H, 2 I]: unit u's 32 columns = gate 16 u..16 u + 15 then up 16 u..16 u + 15."""
+    H, I = Wg.shape
+    return torch.cat([Wg.reshape(H, I // 16, 16), Wu.reshape(H, I // 16, 16)], dim=2).reshape(H, 2 * I)
+
+
 def flat_weight_regions(W_l, lay):
     """One device's weights in the flat expert's per-core bank regions (the C++ op's flat_routed_expert_plan and this
     builder share it). W_l: per local expert (Wg [H, I], Wu [H, I], Wd [I, H]). Returns (gate/up regions per reader,
     down regions per down core, reader-tail down regions or None), each a list of equal-size [tiles, 32, 32]:
     * reader r: per expert, per K-block of KBLK tiles, its RG pair-sets' [KBLK x (gate, up) x NP] blocks
-      (pair-set column (r % n_rd_sg) * RG + pl);
+      (pair-set column (r % n_rd_sg) * RG + pl; an uneven split: rgs[r] pair-sets from ps0[r], the region zero-padded
+      to the largest reader's);
     * down core d: per expert, per K-block of kd_of(pcds[d]) tiles, its [kd x pcds[d]] columns from col0s[d]
       (zero-padded to the widest core's region);
     * reader tail i: per expert, per K-block of kd_r tiles, [kd_r x pcd_r] columns from rem_cols + (i % n_rdn) pcd_r."""
     kblk = 8
     tiles = lambda w: w.view(w.shape[0] // 32, 32, w.shape[1] // 32, 32).permute(0, 2, 1, 3)
+    nu = lay.get("nu") or 0
+    if nu:  # 16-column units: unit u's tile = [gate | up] of columns 16 u..; a column group's NU units in order
+        U_l = [tiles(_hg_units(a, b)) for a, b, _ in W_l]
+    elif lay.get("hg"):  # half-width tiles: a pair's "gate" tile [gate | up] of its columns 0..15, "up" tile of 16..31
+        W_l = [_hg_pair(a, b) + (c,) for a, b, c in W_l]
     T_l = [(tiles(a), tiles(b), tiles(c)) for a, b, c in W_l]
     it = W_l[0][0].shape[1] // 32
     RG, NP = lay["rg"], lay["np"]
+    rgs, ps0 = lay.get("rgs") or [], lay.get("ps0") or []
     regions = []
     for r in range(lay["n_rd"]):
+        rg_r, p0 = (rgs[r], ps0[r]) if rgs else (RG, (r % lay["n_rd_sg"]) * RG)
         blocks = []
-        for Wg_t, Wu_t, _ in T_l:
+        for e_, (Wg_t, Wu_t, _) in enumerate(T_l):
             for c in range(lay["nk_gu"]):
                 ks = slice(c * kblk, (c + 1) * kblk)
-                for pl in range(RG):
-                    cols = [((r % lay["n_rd_sg"]) * RG + pl) * NP + p_ for p_ in range(NP)]
+                for pl in range(rg_r):
+                    if nu:
+                        Ut = U_l[e_]
+                        units = range((p0 + pl) * nu, (p0 + pl + 1) * nu)
+                        blocks.append(torch.stack([Ut[ks, u_] for u_ in units], dim=1).reshape(-1, 32, 32))
+                        continue
+                    cols = [(p0 + pl) * NP + p_ for p_ in range(NP)]
                     blocks.append(
                         torch.stack([w_[ks, c_] for c_ in cols for w_ in (Wg_t, Wu_t)], dim=1).reshape(-1, 32, 32)
                     )
-        regions.append(torch.cat(blocks))
+        reg = torch.cat(blocks)
+        if rg_r < RG:  # (the same region size for every reader: _bank_sharded)
+            pad = reg.shape[0] // rg_r * (RG - rg_r)
+            reg = torch.cat([reg, torch.zeros(pad, 32, 32, dtype=reg.dtype, device=reg.device)])
+        regions.append(reg)
     pcds, col0s = lay["pcds"], lay["col0s"]
 
     def dreg(d):
@@ -426,7 +482,9 @@ def flat_weight_regions(W_l, lay):
                 rot.append(torch.cat([mine, pad]))
         dregs = rot
     n_max = max(r_.shape[0] for r_ in dregs)
-    dregs = [torch.cat([r_, torch.zeros(n_max - r_.shape[0], 32, 32, dtype=r_.dtype, device=r_.device)]) for r_ in dregs]
+    dregs = [
+        torch.cat([r_, torch.zeros(n_max - r_.shape[0], 32, 32, dtype=r_.dtype, device=r_.device)]) for r_ in dregs
+    ]
     rregs = None
     if lay["rdown"]:
         kd_r, n_rdn, pcd_r, rem = lay["kd_r"], lay["n_rdn"], lay["pcd_r"], lay["rem_cols"]
@@ -653,7 +711,9 @@ class FlatExpert:
         x_blk = MT * KBLK
         x_bytes = x_blk * BF8_TILE
         h_tiles = It * MT  # h of one sub-block: [KT][4 row tiles]
-        out_tiles = MT * pcd
+        # (the out region at O_OFF is shared by the down cores and the reader tails: sized for the wider -- GLM 5.3:
+        # down cores 5 columns, tails 6; sized for 5, the tails' second out half ran past the arena)
+        out_tiles = MT * max(pcd, pcd_r if RDOWN else 0)
         pk = lambda c: (phys(c).x << 16) | phys(c).y
 
         # M-groups by rectangle (MIMO_FL_GROUP_RECT, auto: G == 2 and each rectangle holds its group's cores): halves
@@ -1853,9 +1913,15 @@ class FlatRoutedExpert:
             # size, h buffers or x / h formats' L1 choices change the plan, not where a weight tile goes
             # (dw_rot only when on: existing caches keep their keys)
             layout = {k: lay[k] for k in WEIGHT_LAYOUT_KEYS if k in lay and (k != "dw_rot" or lay[k])}
+            if lay.get("rgs"):  # (uneven split only: even plans keep their keys)
+                layout["rgs"] = tuple(lay["rgs"])
+            if lay.get("hg"):
+                layout["hg"] = True
+            if lay.get("nu"):
+                layout["nu"] = lay["nu"]
             key = hashlib.sha1(repr((sorted(layout.items()), gids, n_dev)).encode()).hexdigest()[:12]
             files = {n: f"{cache_prefix}.flat.{wdtype}.lay{key}.{n}.tensorbin" for n in names}
-            _adopt_legacy(cache_prefix, wdtype, files, lay)
+            _adopt_legacy(cache_prefix, wdtype, files)
         if isinstance(weights, str):
             assert weights == "fake", weights
             shapes = flat_weight_shapes(H, I, E, lay)
@@ -1911,6 +1977,8 @@ class FlatRoutedExpert:
         y_row_major=False,
         down_fp32=False,
         pack_stochastic_rounding=False,
+        y_bf16=False,
+        math_fidelity=0,
     ):
         """x: the row-major bf16 dispatch buffer [rows, H]; counts / regions: the routing's [1, n_global] uint32 rows.
         token_index ([1, rows] uint32): indexed mode, x is then e.g. the all-gathered tokens and flat row r reads x row
@@ -1939,4 +2007,6 @@ class FlatRoutedExpert:
             pack_stochastic_rounding=pack_stochastic_rounding,
             x_bf16=self.x_bf16,
             h_bf16=self.h_bf16,
+            y_bf16=y_bf16,
+            math_fidelity=math_fidelity,
         )

@@ -15,6 +15,9 @@
 #ifdef SE_DYN
 #include "se_dyn.hpp"
 #endif
+#ifdef SE_DRISC_LAUNCH  // (the runtime arg index of the se_drisc_post.hpp args)
+#include "se_drisc_post.hpp"
+#endif
 #ifdef SE_ZONES
 #include "tools/profiler/kernel_profiler.hpp"
 #define SE_MARK(name)            \
@@ -50,6 +53,14 @@ void kernel_main() {
     static_assert(nk_d == 0 && passes == 1 && !pipelined);
     SeDyn d;
     se_dyn_load<num_experts>(d, 4, get_write_ptr(tt::CBIndex::c_7), 1);
+#ifdef SE_DRISC_LAUNCH  // this reader also posts the call's DRISC jobs (DRISC slot 0's own reader: idle on DRISC calls)
+    se_drisc_post(d, SE_DRISC_LAUNCH, get_write_ptr(tt::CBIndex::c_7), 2 * SE_DYN_HALF);
+#endif
+#ifdef SE_DRISC_DUAL  // a DRISC call (small counts): this slot's weights come from its DRAM core (se_drisc.hpp)
+    if (d.max_cnt <= SE_DRISC_MAXCNT) {
+        d.n_load = 0;
+    }
+#endif
     const uint32_t chunk_bytes = gu_chunk_tiles * tile_bytes;
     const uint64_t base = src;
     for (uint32_t l = 0; l < d.n_load; ++l) {  // gate/up loads (a pinned expert's weights come once)
@@ -58,7 +69,7 @@ void kernel_main() {
                 cb_reserve_back(cb, slot_tiles * batch);
                 l1 = get_write_ptr(cb);
             }
-#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
+#if !defined(SE_W_NOREAD) && !defined(SE_GU_NOREAD)  // (perf probe: gate/up weights not read, garbage)
             noc_async_read(base + (d.load_eid[l] * nk_gu + c) * chunk_bytes, l1 + in_batch * slot_bytes, chunk_bytes);
 #endif
             if (++in_batch == batch) {
@@ -76,7 +87,7 @@ void kernel_main() {
                 l1 = get_write_ptr(cb);
             }
             const uint32_t bytes = (is_down ? get_arg_val<uint32_t>(3 + p) : gu_chunk_tiles) * tile_bytes;
-#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
+#if !defined(SE_W_NOREAD) && !defined(SE_GU_NOREAD)  // (perf probe: gate/up weights not read, garbage)
             noc_async_read(src, l1 + in_batch * slot_bytes, bytes);
 #endif
             src += bytes;

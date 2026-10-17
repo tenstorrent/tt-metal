@@ -736,3 +736,284 @@ Layer (8K ctx, slowest chip busy, bfp8+UntilizeActive -> row-major y):
 | L5 GA+MoE | 640 | 4.40 -> 4.25 ms | 1801 -> 1923 us | 696 -> 440 us |
 | L1 SWA+MoE | 2048 | 6.81 -> 6.26 ms | 2075 -> 2123 us | 1782 -> 1195 us |
 | L5 GA+MoE | 2048 | 8.99 -> 8.56 ms | 2588 -> 2646 us | 1727 -> 1245 us |
+
+## In the K3 token-split MoE block (2026-10-16/17, bh-lb-09 2x4, 12x10 grid, 200G)
+The flat expert runs twice per K3 block (tt_k3_token_split_moe.py): the routed experts fused with combine_rf
+(flat_routed_expert_with_program, L1 hand-off, 56 experts / chip, ~91 tokens each, bf4 LoFi) and the shared expert
+(3 parts of I 2048 over the chip's 320 tokens, bf8 HiFi2, bf16 x / y). Block-level history and tables:
+FLAT_COMBINE_OVERLAP_WORKLOG.md ("K3 block ..." sections). The October flat-expert entries 8e-8g (DRISC gate/up
+senders, the x-read isolation, K3 / 4x4 routing) are only in the tt-metal-pr58093 worktree's copy of that worklog.
+
+Routed experts + combine, traced (experts program, us): 2433 -> 2372 with x read once (MIMO_FL_X1, set for this
+program only - read when the program is built). Floor at 512 GB/s ~2070 (1059 MB / chip / call).
+- DRAM bound at ~87%: with no weight traffic (W_NOREAD + W_NOFWD) the program takes 1221 (compute + x + h + combine);
+  the readers' gate/up forwarding alone (no DRAM) ~1990 (694 MB, ~350 GB/s); all DRAM reads, no forwarding 2430; the
+  gate/up reads alone stream at 93%, the full mix (gate/up + down + x) at 86-87%.
+- Weight source does not matter: dual / pure DRISC, DRISC tiles 1 / 2, DRISC forced (MAXCNT 1024): 2362-2380. K3's
+  busiest expert exceeds the pure mode's 96-token switch, so calls normally take the Tensix-reader gate/up path.
+  Down weights via the DRISCs: ruled out (the forwarding path would need ~2980 us for 1041 MB).
+- No effect: GDDR arbitration weights (MIMO_FL_DRISC_MPFE, 6 settings), combine release (CMB_EARLY), h transfer
+  (H_NODATA), MIMO_FL_DRISC_MAXCNT 160. Worse: X2 2659, XFWD 2859, NH 2 / 3 2471 / 2457, X1 + NH 2 2396.
+- Probe caveats on this path: W_NOREAD skips only DRAM reads (blocks are still forwarded; W_NOFWD stops that).
+  MIMO_FL_NO_MATH hangs (the gate/up side never publishes h; se6_dcompute waits in cb_wait_front(h_all_cb)) - broken.
+Shared expert (3 x 320-row parts): ~525-530 us, compute / pipeline bound (~160 TFLOP/s whatever the fidelity: LoFi
+510; bfp8 x, DRISC on / off, 4 parts no better); X1 hurts it (523 -> 702: one primary's tilize + double multicast caps
+320-row parts). Dense ttnn at TP shapes beats it (TP4 gate linear ~245 TFLOP/s at M 1280): zz_scratch_k3_se_tp.py.
+Next candidates: the down weights' bank layout / access order (the mix's 87% vs 93%), fixing NO_MATH for a clean
+traffic-only measurement.
+
+### K3 routed experts: down-weight read layout / schedule (2026-10-17, traced, X1 on; experts / block us, base ~2375 / 3645)
+| knob | experts | block |
+|---|---|---|
+| MIMO_FL_DW_ROT=0 (one bank per down core) | 2565 | 3851 |
+| MIMO_FL_DRING=1.5 (down ring, experts) | 2365 | 3654 |
+| MIMO_FL_DRING=3 | plan TT_FATAL (out region / L1) | - |
+| MIMO_FL_PIN_RATIO=0 (always pin) | 2438 | 3723 |
+| MIMO_FL_PIN_RATIO=1000 | 2376 | 3644 |
+The defaults are right for K3: bank rotation of the down weights is worth ~190 us here (more than at K2.7 / GLM, worklog
+comment in the plan: 55% -> 65% alone); ring depth and pinning ratio change nothing or hurt. With the knobs exhausted
+the remaining ~13% (2375 vs ~2070 at 512 GB/s) needs a DRAM / NoC trace of the mix (tt-npe or the device NoC tracer)
+or a fixed MIMO_FL_NO_MATH for a clean traffic-only time.
+
+### K3 routed experts + combine under tt-npe and the per-core profiler (2026-10-17)
+NoC trace (python -m tracy -r -p --collect-noc-traces on scratch_flat_combine_rf.py, FC_EPC 12 FC_S 64 (~85 tokens /
+expert, K3-like), X1, TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT 4000; tt-npe kept off PYTHONPATH during collection - its
+automatic all-trace analysis exhausted host memory on the first try - then run by hand on one program / chip):
+complete (238 MB of DRAM reads vs ~230 expected; max 3963 events / RISC; se9_rdown's reads are present now).
+- tt-npe (P150 model, the run's soc descriptor): estimate 1.06 M cycles = 786 us vs 788 traced; congestion impact 0%,
+  link util avg 8% / max 35% (demand bursts to 170% cost nothing), DRAM util 70% over the whole span. Not NoC bound.
+- DRAM read rate in 20 us bins: ~400-500 GB/s (avg ~445, 87%) in steady state, then a drain: last gate/up read at 553
+  us, down 587, x 615, kernels p50 595 / p90 782, end 788. Traffic: gate/up 54 KB reads (BRISC), down 9 KB (NCRISC),
+  x 1 KB; each bank serves ~29 MB through one NoC endpoint and ~1 MB through the other. Down reads moved to the other
+  endpoint (MIMO_FL_DN_NOC0=1): worse (experts 2452 vs 2372, block 3792 vs 3649 - NOC1 DRAM reads are slower here).
+Full size, per-core kernel end times (device profiler), chip 0:
+| program | cores | bulk end (p50-p75) | last core |
+| flat alone (standalone, per-call sync) | 94 | 2386-2400 | 2407-2411 |
+| combine alone | 21 | 921-929 | 935-943 |
+| fused (standalone, per-call sync) | 115 | 2480-2500 | 2628-2685 |
+| fused, inside the K3 block trace (profiled) | 115 | 2305-2340 | ~2440 |
+So the fused program = the flat cores (slowed ~4% by the combine's traffic) + ~110-120 us of combine running alone
+after the experts (the last experts' rows: fabric hops, home accumulate, final writes). The drain is ~1/3 of the gap to
+the DRAM floor; the rest is the steady-state DRAM efficiency (87%).
+Follow-up (same day): the combine tail varies run to run - a second profiled trace (TT_METAL_PROFILER_SYNC=1) gives
+per-chip experts programs of 2357-2376 us (the unprofiled traced 2372) with tails of 17-51 us (chip 0 44-51), vs
+22-115 in the first. Cross-chip alignment from sync_device_info.csv (per-device frequency ratio + shift vs device 0)
+did not work either way round (offsets of seconds), so "start skew vs a fabric hot spot" is unresolved. Profile-log
+parsing note: traced replays reuse the run host id - key program instances by (device, run id, trace id, trace id
+counter). Conclusion: the tail is <= ~1/3 of the gap and noisy; the steady-state DRAM efficiency (87%) is the bulk.
+
+### K3 routed experts: the DRAM read mix alone (zz_scratch_dram_mix.py, 2026-10-17)
+Plain NoC reads (transaction-id queues, no compute) replaying the K3 plan's weight streams per call on one chip, on
+the plan's own cores (flat_routed_expert_plan dumped at K3 shapes on the 12 x 10 grid: 16 gate/up readers in logical
+columns 0 / 1 / 7 / 8 next to the DRAM tiles, 28 down cores of 4 output tile columns, down blocks 4 x 4 bf4 = 9 KB):
+| pattern (DRAM in flight: gate/up 4, down 2 per core) | us | % of 512 GB/s |
+| gate/up alone (54 KB, own bank) | 1356 | 99.9 |
+| down alone (9 KB, rotating; depth 2 / 8) | 1044-1067 | 64-65 |
+| down alone 36 KB rotating / 9 KB pinned per bank | 1130 / 1108 | 60 / 54 |
+| down alone from 24 cores next to DRAM | 958-970 | 70-71 |
+| mix as today (depth 2 / 4) | 2256 / 2230 | 90.1 / 91.1 |
+| mix, down 36 KB / pinned | 2285-2302 / 2197-2202 | ~89 / ~89 |
+| mix, down from cores next to DRAM, depth 2 / 8 | 2300 / 2153 | 88.3 / 94.4 |
+(A first version with barrier-batched reads on arbitrary cores gave gate/up alone 62-67%: reader placement / queueing
+matter - the gate/up readers' one-hop placement is what gets them to 100%.) Reading: today's pattern bounds the
+experts at ~2230-2256 us of DRAM alone; the real program (2372) adds ~120-140 (x reads, compute coupling, the combine
+tail). The down stream is the weak part (~65% alone, whatever the block size, depth or bank pinning); bigger or
+pinned blocks do not help the mix; only down reads issued next to the DRAM columns with deeper queues lift it (+3%,
+~70-80 us) - i.e. down weights read by near-DRAM cores and forwarded to the down cores.
+
+### K3 routed experts: three more ideas (2026-10-17, traced; base experts ~2372, block 3640-3650)
+1. Down-weight blocks per read barrier (MIMO_FL_DW_BATCH, now an env knob, default DW_BATCH 2): 4 / 6 / 8 -> experts
+   2354 / 2410 / 2448; batch 4 for the routed program only (K3_EXP_DW_BATCH): block 3651 / 3651 - noise. Off.
+2. Combine slot order (MIMO_FL_CMB_SLOT_ORDER): experts 2374, block 3650 - no change.
+3. Reader down columns (MIMO_FL_RDOWN=1, the near-DRAM readers take down columns - the direction the DRAM-mix
+   benchmark favours): crashes with the env on both flat ops (core_coord TT_THROW); scoped to the routed program
+   (K3_EXP_ENV=..., new: comma-separated flat knobs for that program only) it overflows the fused program's arena
+   (factory.cpp:1051 off + size <= arena.aligned_size_per_bank()) - needs the arena / combine L1 layout resized.
+
+### DeepSeek V4.1-Flash shapes (2026-10-17): H 5120, I 2304, 384 experts, top-6, clamped SwiGLU (limit 10)
+Balanced sweep (test_flat_balanced_sweep.py, one chip of bh-lb-09 12 x 10, bfp4, LoFi, clamped_silu, capacity 8192,
+E local = 48 / 24 / 12 = 2x4 / 4x4 / 4x8; the model's M at 5120 tokens = 80).
+**I 2304 is unsupported**: TT_FATAL "no gate/up split for 72 tile columns" (flat_routed_expert_plan.cpp gu_split): the
+per-core column count It / np (np 1..4) must be a multiple of the 16 readers - 72 / 36 / 24 / 18 are not (and np 1 is
+> 64 gate/up cores). Subgrid modes (8 / 4 readers) only for It <= 32. Everything else at H 5120 runs (bracket below).
+us per expert (DRAM % of 512 GB/s), balanced, slowest of the second (non-precompile) pass:
+| M | I 2048: E 48 | E 24 | E 12 | I 3072: E 48 | E 24 | E 12 |
+| 32 | 40.4 (89%) | 41.1 (87%) | 42.6 (84%) | 62.0 (86%) | 61.7 (86%) | 61.9 (86%) |
+| 80 | 45.1 (84%) | 45.6 (83%) | 47.5 (79%) | 69.1 (80%) | 70.4 (78%) | 72.2 (76%) |
+| 128 | 50.0 (79%) | 50.3 (79%) | 52.1 (76%) | 72.3 (79%) | 74.2 (77%) | 76.8 (74%) |
+| 256 | 61.1 (73%) | 62.1 (72%) | 64.9 (69%) | 82.6 (75%) | 84.2 (74%) | 88.8 (70%) |
+| 1024 | 169.5 (45%) | 171.8 (44%) | 176.8 (43%) | 270.7 (34%) | 273.4 (34%) | 278.1 (33%) |
+Both run at ~385-390 GB/s effective at M 80, so I 2304 (19.9 MB / expert) would be ~51 us / expert with a split of the
+same efficiency: ~2.45 / 1.22 / 0.62 ms a call at 48 / 24 / 12 experts. Padding to I 3072 (the K3 split) runs today
+at ~70 us / expert (+37%). Natural fix: np 3 -> 24 pair-sets over the 16 readers, 3 per bank (2 + 1 per reader, banks
+balanced), g 2 -> 48 gate/up cores as K3 - needs per-reader pair-set counts in the plan and readers.
+
+### Uneven gate/up split: DeepSeek V4.1-Flash I 2304 runs (2026-10-17)
+When no It / np is a multiple of the 16 readers, the plan now takes an uneven split (MIMO_FL_UNEVEN=0: off): the
+pair-sets spread over the 8 banks (shares 1 apart), each bank's over its 2 readers (rgs per reader, ps0 first pair-set,
+gu_off; reader kernels se_reader / se10_fwd / se9_rdown and the reader CB built per pair-set count; gate/up cores take
+pair-set ps0[r] + j / G; flat_weight_regions packs per reader, zero-padded to the largest region; the weight cache
+key gains rgs only for uneven plans). Receivers per reader up to 8 (credit semaphores 0..7 are free on reader cells;
+5 with reader down columns: se9 uses 5 / 12). More than 64 gate/up cores: the auto-shaped rectangles (12 x 10: 74
+cells), the smallest pair covering the split, extra cells idle. DRISC mode not ported yet (uneven plans use the Tensix
+readers). test_flat_uneven_split.py (H 5120 I 2304 E 12 / 24, clamped SwiGLU, counts incl. full capacity, two
+launches): min PCC 0.998 vs the bfp4 reference.
+V4.1 shape, us per expert (DRAM %), balanced sweep, one chip, bfp4, LoFi; E 24 (E 48 / 12 within ~3%):
+| plan | M 32 | M 80 | M 128 | M 256 | M 1024 |
+| np 3, 24 gate/up (rgs 2 / 1) | 52.5 | 59.8 (70%) | 71.9 | 140.9 | 555.2 |
+| np 2, 36 gate/up (rgs 3 / 2) | 48.1 | 51.7 (81%) | 55.1 | 70.5 | 271.6 |
+| np 1, 72 gate/up, reader down cols (rgs 5 / 4), 15 down | 45.9 (88%) | 51.0 (83%) | 55.4 | 68.9 | 245.4 |
+| same, all 26 down candidates (probe MIMO_FL_ND=64) | - | 51.4 (82%) | - | 67.4 | 217.1 |
+Bounds: M <= 128 DRAM / latency (~80-88%, DRISC off); large M down-bound: 72 gate/up (as if 108 cores) but 15 down
+cores at 8 columns (as if ~60) - the plan's trim drops down cores east of column 8 (slow for K3); keeping them gives
+-12% at M 1024. Even I 2048 at M 1024: 169.5 (ideal for I 2304 at its efficiency ~190).
+
+### Half-width gate / up tiles, step 1 (2026-10-17, MIMO_FL_HG=1)
+Idea (16-column split granularity without the slow tiny-tile matmul: zz_scratch_tiny_mm.py measured 32 x 16 and
+16 x 32 output tiles at the 32 x 32 tile's cycles, 17.3 / 16.1 per tile vs 17.3, i.e. half the MAC rate): a weight
+tile holds 16 gate columns then the same 16 up columns, so the full-tile matmul leaves gate in faces 0 / 2 and up in
+faces 1 / 3. A pair's two tiles A / B = [gate | up] of its h tile's left / right 16 columns (host: _hg_pair, a column
+permutation); the activation runs face-wise (se_glu_faces.hpp calculate_glu_faces under VectorMode::C: gate at the
+face, up one face on; A's result into its left half in place, B's into A's right half), so the packed h tile and
+everything downstream are unchanged. SiLU / SiTU / clamped SiLU (the sigmoid is SiTU's exp + Newton reciprocal).
+SFPI compiler trap: two inlined copies of the SFPU body in one loop (HALF 0 / HALF 1 calls) ICE in rvtt_synth_renumber
+(also a runtime half with two call sites); one call site per unit (out tile u & ~1, half u & 1) compiles. (Repro loop:
+TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1, rerun the logged compile + link from the kernel's trisc2 build dir, 0.6 s.)
+test_flat_uneven_split.py with MIMO_FL_HG=1 (V4.1 E12 / E24 clamped SiLU, GLM SiLU, K3 SiTU): min PCC 0.998, the
+same as the standard layout. V4.1 E24 us / expert, standard / HG: M 32 45.9 / 45.8, 80 51.0 / 51.1, 256 68.9 / 68.8,
+1024 245.4 / 245.4. Next: odd 16-column units per core (V4.1: 48 cores x 3 units, 3 per reader).
+
+### Half-width tiles step 2: 16-column units per core, odd counts (2026-10-17) -> V4.1 default
+A core takes NU units ([gate | up] tiles of 16 columns each, plan nu; generic widths gwt / hpc / ngrp replace 2 np /
+np / It / np in the plan, factory, se3_compute and se5_recv). Its h is a run of HPC = (NU + 1) / 2 tiles from K-tile
+cg NU / 2: when cg NU is odd the first tile is only its right half (lead: the face-wise activation writes unit u to
+slot((u + lead) / 2), half (u + lead) & 1; slot(j) = j ? 2 j - lead : 0), when (cg + 1) NU is odd the last tile only
+its left half; se5_recv writes the full tiles as one run and the halves face by face (bfp8: 16 B exponents + 256 B
+data of faces 1 / 3 or 0 / 2; bf16: 512 B faces), the down cores' gather still counts one slice per gate/up core.
+Weights: _hg_units (unit u = [gate | up] of columns 16 u..), a column group's NU units in order.
+Default when no even pair split exists (MIMO_FL_HG_AUTO=0: off; MIMO_FL_HG_NU forces NU): the most gate/up cores that
+are a multiple of the 16 readers and fit; reader down columns off with units (they slowed the readers' streams).
+DeepSeek V4.1-Flash (I 2304 = 144 units): NU 3, 48 gate/up cores (3 a reader, banks / readers exactly balanced), 40
+down. test_flat_uneven_split.py (V4.1 E12 / E24, GLM, K3; MIMO_FL_HG_NU=3 also K3 with 64 x 3): min PCC 0.998.
+V4.1 us / expert (DRAM %), E 24:
+| plan | M 32 | M 80 | M 128 | M 256 | M 1024 |
+| uneven pairs, 72 gate/up, reader tails (previous default) | 45.9 (88%) | 51.0 (83%) | 55.4 | 68.9 | 245.4 |
+| units NU 3, 48 gate/up, reader tails | 46.9 | 52.3 | 55.8 | 67.1 | 242.0 |
+| units NU 3, 48 gate/up, no reader tails (default) | 44.3 (91%) | 48.2 (87%) | 51.9 (85%) | 62.8 (78%) | 226.5 |
+E 48 / E 12 at M 80: 47.5 (89%) / 49.8 (85%); M 1024: 225.8 / 229.7. Probes (NU 3): full-sync DST 284 (worse),
+MIMO_FL_ND=64 (untrimmed down) no gain, PCD_R 3 / 4 with tails 233 / 245.
+
+### V4.1 large M: what bounds it; bf16 h + units hangs the chip (2026-10-17)
+M 1024 E 24 (units NU 3, 226.6 us / expert): probes NO_ACT 219.9, H_NODATA 210.3, X_RESIDENT 210.2, W_NOREAD +
+W_NOFWD 221.8, all of them 207.5 (matmul only). The gate/up FPU is the bound: 32 x 160 x 3 tile products (matmul_block,
+ct = 3, rt 1 a row pass) at ~18 cycles = ~205 us. Not SFPU overlap (-3%) nor h delivery (-7%). It is the gate/up vs down
+core balance: gate/up = units x 65.6 us, down = columns x 29.5 us -> NU 3: 197 / 118; NU 2: 131 / ~177 (28 down);
+NU 2 + DRISC readers (16 cells back): 131 / ~118 (~44 down). Ideal on 100 cores 142, on 116 122.
+
+bf16 h with units (GLM_SWEEP_HBF16=1, NU 3) HANGS the chip on the first launch (bfp8 h with the same plan is fine). Twice
+the whole host then rebooted: the dispatch timeout ran tt-triage (host MMIO reads into the wedged chip; plus the NOC0
+retry that was in scripts/lib/tt_safe_run.sh, now removed). With no probing (no triage, no watcher, os._exit on the
+timeout, no reset: scratch noprobe_run.sh) the same hang left the host up; the KMD then logged "Timeout waiting for ARC
+response" on close: the hang takes ARC with it. The planner refuses NU + bf16 h (MIMO_FL_HG_BF16_UNSAFE=1: mock /
+emulator only). Mock cluster (12 x 10) diff of every kernel's args (MIMO_FL_DUMP_RT=path) bf16 vs bfp8 h: same cores and
+NoC targets, arena fits (564 x 2 KB from 415744); differences: h tile 2048, x slots 32 (24), y rows 2 (4) and NO
+SE_DN_REG (bf16 h: dring 1.5, the unpinned down schedule, never run with the unit layout / 40 down cores). Suspects, in
+order: the unpinned down schedule with units, x slots 32, the 512 B bf16 half-tile h writes.
+Found (same day, one-variable A/B, probing off): bfp8 h with MIMO_FL_DRING=1.5 (the unpinned down schedule) hangs as
+well, bf16 h with DRING=2 (pinned) runs, the uneven pair split (15 down, reader tails) runs unpinned, and
+MIMO_FL_DW_BATCH=1 runs. Cause: se6_dw writes a batch linearly from the CB write pointer while the compute reads block b
+at ring slot b % ring; a 1.5-expert ring of 27 blocks with batch 2 put every other lap's second block past the ring end
+(onto the h buffers). Fix: an unpinned batch stops at the ring end (SE_DW_RING), as a pinned one stops at a load
+boundary. The planner guard is gone; test_flat_uneven_split.py gained v41_e24_hbf16 and v41_e24_pin0 (min PCC 0.998).
+
+bf16 h cost at large M (E 24 M 256 / 1024: 62.8 / 226.6 bfp8 -> 83.7 / 289.7 bf16) is all h delivery: MIMO_FL_H_NODATA
+207.8; x slots 24 283.0, X_RESIDENT 278.9, LINK_DEPTH 6 297.2, HPIECES 16 298.8 (not round-trip bound). It is the
+down chain layout: each gate/up core writes its slice to every chain head (7 heads), the chains forward it.
+| chains (MIMO_FL_DCH) | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 12 | 14 |
+| bfp8 h M 1024 | 211.7 | 211.6 | 213.4 | 232.1 | 226.6 | 230.6 | - | 236.1 | - | - |
+| bf16 h M 1024 (1.5 ring) | 217.3 | 221.1 | 246.2 | 243.8 | 289.7 | 298.0 | 257.9 | 264.6 | 338.4 | 348.9 |
+bf16 h + 4 chains + the 2-expert pinned ring (DRING 2): 48.8 / 63.6 / 209.1 at M 80 / 256 / 1024. Defaults for unit
+plans now: 4 chains, the 2-expert ring with bf16 h too. V4.1 E 24 us / expert at M 32 / 80 / 128 / 256 / 1024:
+bfp8 h 44.2 / 48.0 / 51.9 / 62.9 / 211.6 (was 226.6 at M 1024); bf16 h 44.6 / 48.8 / 52.5 / 63.6 / 208.8 (was 289.7).
+M 1024 is now at the h-off floor; what is left is the gate/up FPU (NU 2 + DRISC readers, ~131 us projected).
+DRISC with units (NU 3): the job descriptor is per slot (rg, R, region, receivers), nothing unit-specific; it just
+runs (PCC as Tensix readers). Default now as the other plans without reader down columns: pure slots, Tensix readers
+above 96 tokens / expert (MIMO_FL_HG_DRISC=0: off). E 24 us / expert M 32 / 80 / 256 / 1024: 44.2 / 48.0 / 62.9 /
+211.6 -> 43.2 / 48.2 / 62.9 / 211.7 (bf16 h 43.4 / 48.2 / 63.6 / 208.8). Without the Tensix readers (MIMO_FL_DRISC_DUAL=0:
+16 cells freed) 58.9 / 61.3 / 70.6 / 215.0, the same with the freed cells idle (RD_DOWN=0) or reader-distance assignment
+(DRISC_ASSIGN=0): the DRISC-only weight path itself is slower here, cause not found. NU 2 (72 gate/up cores) needs the
+freed cells (TT_FATAL: down arena does not fit with Tensix readers) and an uneven DRISC split (4 / 5 cores a slot);
+projected M 1024 ~150 us (gate/up 131, down 32 cores x 4.6 cols) but it would pay the DRISC-only cost at small M.
+
+### DRISC-only (all 16 slots on DRAM cores, Tensix reader cells free): what hurts it (2026-10-17, V4.1 E 24, units)
+Probes in the op (the real se_drisc_gu loop), MIMO_FL_DRISC_PROF section cycles, kernel wait zones (MIMO_FL_ZONES),
+NoC traces + tt-npe. us / expert; Tensix readers (the default) M 32 / 80 / 256 / 1024: 44.2 / 48.0 / 62.9 / 211.6.
+- **Bug: DRISC-only never used a bank's second tile.** Switch mode's threshold (SE_DRISC_ALT_MAXCNT) was only defined
+  for dual plans, so MIMO_FL_DRISC_DUAL=0 ran both of a bank's slots on one tile (profile: tile 1 of every bank 0
+  units, tile 2 2880): 58.9 / 61.3 at M 32 / 80. Fixed: 43.2 / 47.5 (better than Tensix), M 256 70.6, M 1024 215.1.
+- **Delivery alone is fine.** No math, x resident, no h (the call bound by weight delivery), M 80: DRISC two tiles
+  44.5 vs Tensix 44.0 (both ~95% DRAM); writes only 24.8 vs 27.8 (DRISC writes are faster).
+- **Mid M: tile 1's DMA delays the x reads.** M 256 DRISC two tiles 69.8: W_NOREAD 62.6, X_RESIDENT 62.6, both 55.0
+  (= Tensix floor); DMA only (W_NOFWD) 68.8, writes only (W_NOREAD) 61.0; XRD_SKIP (no x DRAM reads) 59.8, XMC_NODATA
+  69.3 -> the x DRAM reads vs the DRISC DMA. Relay zones (E 4 M 256, cycles per call): XRD_DRAM (read barrier) Tensix
+  60k / DRISC two tiles 221k / one tile 70k; XRD_FULL 118k / 2k / 155k; TZ_IN 12k / 72k / 12k. tt-npe on the traces
+  (Tensix side; the DRISC traffic is not traced): congestion impact 0%, max link 25-27% in both modes, relays issue at
+  the same rate (median 113 cycles a 2 KB read) but stall 118k vs 15-38k cycles a call. The x relays read on NOC1,
+  i.e. through each bank's NOC1 endpoint = DRISC tile 1: its DMA shares that tile's port with the x reads. With the
+  Tensix readers the weights + down reads use the NOC0 endpoint's port and x has the NOC1 port alone.
+- Things that do not fix it: MPFE weights (0,0,3 / 0,0,7 / 0,3,7 / 0,7,7 / 7,0,0 / 3,0,0: 69.8-73.2; tile 1's own port
+  is the x port, so favoring x favors its DMA too; also with DMA on tile 2 only, 0,0,7 / 1,0,0: no change), DMA depth
+  7 (75.5), 4 (74.5), more x reads in flight (XRD_BATCH 4: 75.7), all writes on NOC0 (71.2), x read once (X1 85.2,
+  XFWD 102.6), x reads NOC0 + multicast NOC1 (DRISC_XNOC 106.5), free-on-sent slots (69.2), draining the loop.
+  Partial: tile 1 throttled (ALT_BURST 4: 66.2, ALT_DMA_MAX 1: 65.3) but small M pays (M 80 ~50).
+- **One tile per bank cannot carry a bank** (x is then fine, XRD_DRAM 70k): isolated delivery 59.3 at M 80
+  (~28 GB/s a tile, 826 cycles a 13.8 KB block: DMA issue 186, write 199, flush + inc 158, loop 270; the tile's own
+  DMA + NoC writes, 8f's 37-47 GB/s ceiling); not the loop shape (DRAIN 60.5) nor the ack latency (FREE_SENT 62.6).
+- x reads on NOC0 (both relay kernels on NOC0) hang, also with Tensix readers and in dynamic-NoC mode
+  (MIMO_FL_XRD_DYN=1, which alone runs): the same-NoC reads + multicast on the relay; not debugged (needs triage).
+- The tensor prefetcher's author (drisc.md, the talk) uses the NOC1 endpoint tile for weights next to the free tile
+  (dual senders, 60 GB/s a bank) and lists DRAM priority vs NoC traffic as open; decode has little NOC1 DRAM read
+  traffic, flat's x path is exactly that.
+Where it stands: DRISC-only = Tensix at M <= ~224 (two tiles), +5..12% at M 256 (two tiles: x; one tile: rate),
++1.6% at M 1024. Options: x off NOC1 (fix the same-NoC hang, or move the relays so a NOC1 multicast works), or keep a
+Tensix reader for each bank's second slot (the old hybrid: 8 cells free).
+
+### x off the DRISC tile's port: linked multicasts, helper reads on NOC0 (2026-10-17, V4.1 E 24, units)
+- **The x-reads-on-NOC0 hang is the linked multicast.** The primary relay sends x as linked multicast chains on NOC0;
+  with MIMO_FL_XRD_NOC=0 its BRISC issues DRAM reads from another command buffer on the same NoC while a chain is
+  open, which deadlocks (the documented linked-mcast hazard; dynamic-NoC mode, MIMO_FL_XRD_DYN, does not help). With
+  MIMO_FL_XMC_UNLINKED=1 (every piece unlinked) x reads on NOC0 run.
+- **Unlinked multicasts cost too much**, us / expert M 80 / 256 / 1024:
+  | config | M 80 | M 256 | M 1024 |
+  | Tensix readers (default, linked) | 48.0 | 62.9 | 211.6 |
+  | Tensix, unlinked | 48.3 | 71.2 | 258.5 |
+  | Tensix, unlinked + x reads NOC0 (dynamic NoC) | 52.6 | 90.0 | 264.8 |
+  | DRISC two tiles (DUAL=0, ALT_MAXCNT 4096), linked | 47.5 | 69.8 | 216.4 |
+  | DRISC, unlinked | 47.9 | 78.2 | 266.1 |
+  | DRISC, unlinked + x reads NOC0 | 50.4 | 80.6 | 271.8 |
+  | DRISC, unlinked + x reads NOC0 + down reads NOC1 (DN_NOC0) | hang (passed standalone at M 256) |
+- **Helpers read on NOC0, primaries keep NOC1 reads + linked NOC0 multicasts** (MIMO_FL_XHELP_NOC0=1: the helpers'
+  reader + sender in dynamic-NoC mode; MIMO_FL_NH helpers per rectangle take (NH) / (NH + 1) of x):
+  | config | M 80 | M 256 | M 1024 |
+  | DRISC, helpers NOC0, NH 1 | 49.0 | 72.3 | 216.1 |
+  | DRISC, helpers NOC0, NH 2 | 49.0 | 69.9 | 216.4 |
+  | DRISC, helpers NOC0, NH 3 | 49.5 | 69.4 | 215.5 |
+  | Tensix, helpers NOC0, NH 1 | 49.5 | 82.4 | 213.1 |
+  | Tensix, helpers NOC0, NH 2 | 51.0 | 80.8 | 212.2 |
+  x reads are slow on whichever bank tile also carries a bulk stream: tile 0 (the NOC0 endpoint) has the down weight
+  reads (and, with Tensix readers, the gate/up weights: M 256 62.9 -> 82.4), tile 1 the DRISC DMA. Only the Tensix
+  reader layout leaves x a tile to itself (tile 1, NOC1). Left: all x on NOC0 by helpers (the primaries reading
+  nothing: an se11_xmc change) with the down reads on NOC1 next to the DRISC DMA, or the hybrid (free-tile DRISC +
+  Tensix readers, 8 cells).
+- **Helpers read all of x** (MIMO_FL_XHELP_ALL=1: the primaries only multicast, and read x themselves only on
+  small-M calls; helper j takes super-blocks g % NH == j). PCC as default (V4.1 E24 cases, also with DN_NOC0).
+  DRISC two tiles, us / expert M 80 / 256 / 1024 (baseline 47.5 / 69.8 / 216.4):
+  | helpers read on | NH | M 80 | M 256 | M 1024 |
+  | NOC1 | 1 | 47.7 | 79.4 | 238.2 |
+  | NOC0 | 1 | 53.9 | 100.7 | 322.6 |
+  | NOC0 | 2 | 50.2 | 78.3 | 226.6 |
+  | NOC0 | 3 | 49.7 | 75.6 | 227.6 |
+  | NOC0 + down reads NOC1 (DN_NOC0) | 1 | hang in the sweep (passed standalone at M 256 and the PCC test) |
+  One reader core cannot carry a rectangle's x (~24 GB/s of 2 KB reads), and NOC0 x reads (tile 0, with the down
+  weight reads) are slower per reader than NOC1's. DN_NOC0 hangs intermittently with these relay layouts (also with
+  NH 2 standalone, and with unlinked multicasts) - the one layout that would leave x a bank tile to itself.

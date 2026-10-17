@@ -45,6 +45,13 @@ struct FlatRoutedExpertConfig {
     // (twice the x / h bytes and L1; at LoFi about half the expert's error vs fp32 math on the same weights)
     bool x_bf16 = false;
     bool h_bf16 = false;
+    // y as bf16 tiles (else bfp8; tiled y only): the out CB single-buffered in the bfp8 double buffer's region; no
+    // effect on the plan
+    bool y_bf16 = false;
+    // the expert matmuls' fidelity (ckernel MathFidelity: 0 LoFi, 2 HiFi2, 3 HiFi3, 4 HiFi4): LoFi takes 5 bits of
+    // the weights, exact for bfp4; bfp8 weights need HiFi2 (LoFi truncates them: a ~2% gain loss); no effect on the
+    // plan
+    uint32_t math_fidelity = 0;
     // combine overlap (flat_combine_overlap): the y writers (down cores, reader tails) report each local expert to
     // combine's collector once its rows have landed; the 4 report args sit at this runtime-arg index (0: off)
     uint32_t cmb_rt = 0;
@@ -63,6 +70,8 @@ struct FlatRoutedExpertConfig {
         "pack_stochastic_rounding",
         "x_bf16",
         "h_bf16",
+        "y_bf16",
+        "math_fidelity",
         "cmb_rt");
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -79,6 +88,8 @@ struct FlatRoutedExpertConfig {
             pack_stochastic_rounding,
             x_bf16,
             h_bf16,
+            y_bf16,
+            math_fidelity,
             cmb_rt);
     }
 };
@@ -98,16 +109,52 @@ struct FlatRoutedExpertPlan {
     uint32_t np = 1, g = 1, mt = 1, mtg = 1, x_slots = 24, dst_tiles = 8;
     bool gu_rp = false, gu_fp32 = true, gu_l1acc = false;
     uint32_t s = 1, v = 1, nk_gu = 1, slot = 1, rg = 1, r_ = 1, ring_g = 1;
+    // uneven split (It / np pair-sets a multiple of the banks, not of the readers: e.g. DeepSeek V4.1 I 2304, 72
+    // columns = 24 pair-sets of 3 pairs over 16 readers): reader r forwards rgs[r] pair-sets (rg = their max, r_ = rg *
+    // g), pair-sets ps0[r] .., to gate/up cores gu[gu_off[r] ..]; each bank's readers together hold the bank's even
+    // share. Even plans: rgs = rg, ps0 = (r % n_rd_sg) * rg, gu_off = r * r_
+    bool uneven = false;
+    // half-width gate / up tiles (MIMO_FL_HG): a pair's two weight tiles hold [gate | up] of its h tile's left / right
+    // 16 columns (the activation runs face-wise, se_glu_faces.hpp); the split granularity of 16 columns builds on it
+    bool hg = false;
+    // 16-column units (MIMO_FL_HG_NU = units per core, HG only; np is then 0): a core's gate/up block is nu weight
+    // tiles a row ([gate | up] of units cg nu ..), its h a run of hpc h tiles from K tile cg nu / 2, the first / last
+    // one half its own when cg nu / (cg + 1) nu is odd. Generic widths: gwt weight tiles a row (2 np / nu), hpc h tiles
+    // a row (np / (nu + 1) / 2), ngrp column groups (It / np / 2 It / nu)
+    uint32_t nu = 0, gwt = 2, hpc = 1, ngrp = 0;
+    std::vector<uint32_t> rgs, ps0, gu_off;
+    uint32_t r_of(uint32_t r) const { return rgs.empty() ? r_ : rgs[r] * g; }
+    uint32_t gu_at(uint32_t r, uint32_t j) const { return gu_off.empty() ? r * r_ + j : gu_off[r] + j; }
     // relays
     uint32_t nh = 1, land_slots = 3, vstride = 2, sbt = 32, seg = 2048, nsb = 1;
     // x / h tile bytes and formats (bfp8 1088; config x_bf16 / h_bf16: bf16 2048), and the
     // relay's tilized super-block slots (fewer with bf16 x, so the relay arena fits)
     uint32_t x_tile = kBf8Tile, h_tile = kBf8Tile, sb_slots = kSbSlots;
+    // x relay row-major chunks (32 rows x SBT tiles) buffered (perf probe MIMO_FL_RM_CHUNKS)
+    uint32_t rm_chunks = kRmChunks;
     // gate/up fp32 in a full-sync DST (the whole sub-block in one K loop, x freed block by block: with bf16 x the x
     // ring holds one sub-block's blocks, row passes would keep them until the last pass and stall the relays)
     bool gu_full_sync = false;
     bool hl_in_arena = false;  // gate/up h_local (CB 3) in the arena (bf16 x / h), else a static CB
     bool group_rect = false;
+    // DRISC mode (MIMO_FL_DRISC, flat_drisc.hpp): the DRAM cores send the gate/up weights, the readers only post jobs
+    bool drisc = false;
+    // DRISC mode: the one Tensix core that posts every slot's job (the readers' cells are free: the down cores take
+    // them; MIMO_FL_DRISC_RD_DOWN=0 leaves them idle)
+    Core launcher{0, 0};
+    // DRISC mode: reader slots 0 .. drisc_n - 1 stream from the DRAM cores, the rest keep their Tensix reader +
+    // forwarder (MIMO_FL_DRISC_SLOTS; a DRISC tile sends one slot per bank at full rate)
+    uint32_t drisc_n = 0;
+    // dual (MIMO_FL_DRISC_DUAL, default): the DRISC slots keep their Tensix reader too; per call (every kernel the same
+    // rule) counts <= SE_DRISC_MAXCNT stream from the DRAM cores, larger ones from the Tensix readers
+    bool dual = false;
+    // x read once with forwarding (MIMO_FL_XFWD): the relays' forward ring (FW_SLOTS super-blocks at fw_off)
+    bool xfwd = false;
+    uint32_t fw_off = 0, fw_slots = 2;
+    // the relays' copy of the call's token index (indexed x): 4 B per capacity row at ti_off, read once per call
+    uint32_t ti_off = 0;
+    bool drisc_slot(uint32_t r) const { return drisc && r < drisc_n; }
+    bool tensix_reader(uint32_t r) const { return !drisc_slot(r) || dual; }
     // down
     bool rdown = false;
     uint32_t d_ch = 7, n_rdn = 0, pcd_r = 0, rem_cols = 0, kd_r = 0, nblk_r = 0, slot_dr = 0, ring_dr = 0;

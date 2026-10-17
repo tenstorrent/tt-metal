@@ -119,6 +119,11 @@ void kernel_main() {
         // a batch must not straddle a load boundary: its reservation could need slots of the load after it, which a
         // pinned schedule only frees once a later load retires (codex review: DW_BATCH 3, counts 1024,32,32 hung)
         n = n < per_e - b % per_e ? n : per_e - b % per_e;
+#else
+        // a batch must not straddle the ring's end either: block b sits in ring slot b % SE_DW_RING (as the compute
+        // reads it), a batch's writes are linear from the write pointer (a 1.5-expert ring of 27 blocks with batch 2
+        // put every other lap's second block past the ring, onto the h buffers, and hung the chip: V4.1 units, bf16 h)
+        n = n < SE_DW_RING - b % SE_DW_RING ? n : SE_DW_RING - b % SE_DW_RING;
 #endif
         uint32_t l1[batch];
         for (uint32_t i = 0; i < n; ++i) {
@@ -129,7 +134,7 @@ void kernel_main() {
             l1[i] = dst(b + i, i);
         }
         for (uint32_t i = 0; i < n; ++i) {
-#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
+#if !defined(SE_W_NOREAD) && !defined(SE_DN_NOREAD)  // (perf probe: down weights not read, garbage)
             noc_async_read(wsrc(blk(b + i)), l1[i], slot * tile_bytes);
 #endif
         }
@@ -167,6 +172,9 @@ void kernel_main() {
         invalidate_l1_cache();
         y_poll();
     }
+#ifdef SE_Y_L1
+    yw.finish();
+#endif
     noc_async_write_barrier();
 #ifdef SE_CMB_DONE_RT
     cmb.report();  // the experts this core writes nothing of
