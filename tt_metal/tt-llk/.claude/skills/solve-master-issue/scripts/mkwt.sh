@@ -10,7 +10,7 @@ wt=${WORKTREE_ROOT:-$(dirname "$main")}/wt-$1
 [ -e "$wt" ] && { echo "$wt already exists" >&2; exit 1; }
 mkdir -p "$(dirname "$wt")"
 free_gb=$(df -BG --output=avail "$(dirname "$wt")" | tail -1 | tr -dc 0-9)
-[ "${free_gb:-0}" -lt 60 ] && echo "warning: only ${free_gb}G free (a full build needs ~40G)" >&2
+[ "${free_gb:-0}" -lt 20 ] && echo "warning: only ${free_gb}G free (a checkout + Release build is ~8G, plus ~2G harness)" >&2
 git -C "$main" fetch -q origin main "$2" 2>/dev/null || git -C "$main" fetch -q origin main
 if git -C "$main" show-ref -q --verify "refs/heads/$2"; then
     git -C "$main" worktree add -q "$wt" "$2"

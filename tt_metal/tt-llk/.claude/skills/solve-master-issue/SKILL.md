@@ -154,7 +154,7 @@ boxes per architecture, a box with two kinds of card, any architecture the harne
 Nothing below is specific to two boxes or to those two names. Prerequisites, all
 verified in §0 step 1 on every box: `$MASTER_ISSUE_DIR` and the findings file on storage every box mounts
 (the run dir holds the claims and the leg requests; `mkdir` on it is the arbiter); a tt-metal checkout
-(built, if ttnn tests are expected) and the tt-llk harness (`sfpi`, `.venv`); `gh auth status` under the
+(built only if ttnn tests are expected — tt-llk pytest legs need just the harness, `sfpi` + `.venv`, ~2 GB; a Release build adds ~3 GB and 30–60 min and can be started after the worker); `gh auth status` under the
 same login (the CI budget is counted per login, so it is shared automatically); this skill reachable on
 that box (`~/.claude/skills/solve-master-issue` resolves there — a symlink into another box's local disk
 does not). The findings file's own sync (git or `--sync-cmd`) runs from whichever box marks; with one
@@ -280,7 +280,7 @@ Each item moves through: `triage → repro → fix → verify → PR → bot-rev
 **Resources:**
 - **Device** — serial, shared with other sessions. Every device run goes through
   `flock /tmp/tt-device-$(hostname).lock <cmd>`. Never hold it while reading code or building.
-- **Builds** — a full tt-metal build is ~40 GB and 30–60 min; do **not** build per worktree. Keep one
+- **Builds** — a Release build of tt-metal is ~3 GB and 30–60 min (a built worktree ~8 GB in all; the tt-llk harness, sfpi + .venv, another ~2 GB; tt-llk pytest needs no build); do **not** build per worktree. Keep one
   built worktree and A/B an item there by applying / reverse-applying its patch (`git apply`,
   `git apply -R`) — never `git stash` (the stash is shared across worktrees). tt-llk pytest items need
   no tt-metal build. At most 2 concurrent builds, always `run_in_background`.
