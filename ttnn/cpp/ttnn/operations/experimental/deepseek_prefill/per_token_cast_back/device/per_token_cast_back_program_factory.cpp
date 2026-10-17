@@ -73,7 +73,7 @@ PerTokenCastBackProgramFactory::cached_program_t create_tile_output_program(
     // One fp32 scale per scale_block_w values: per tile 32 e4m3 bytes + 128 / scale_block_w scale bytes.
     const uint32_t sbw = operation_attributes.scale_block_w;
     const uint32_t tiles_per_scale = sbw / 32;
-    const uint32_t seg_tiles = segs > 1 ? seg_bytes / 36 : row_bytes * sbw / (sbw + 4) / 32;
+    const uint32_t seg_tiles = segs > 1 ? seg_bytes / 36 : fp8::packed_row_h(row_bytes, sbw) / 32;
     const uint32_t Wt = segs * seg_tiles;
     const uint32_t H = Wt * 32;
     // Wide units (28 tiles = 896 B per row read) keep the per-read overhead down; measured flat from 16 to 28. A unit
@@ -273,8 +273,8 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     auto [M, H] = fold_M_H(shape);  // M = rows, H = width (last dim)
     const bool scales_in_row_tail = operation_attributes.scales_in_row_tail;
     if (scales_in_row_tail) {
-        // Packed row [H e4m3 | H/scale_block_w fp32]: H is the data width, the row is wider.
-        H = H * operation_attributes.scale_block_w / (operation_attributes.scale_block_w + 4);
+        // Packed row [H e4m3 | H/scale_block_w fp32 (| pad to 64 B)]: H is the data width, the row is wider.
+        H = fp8::packed_row_h(H, operation_attributes.scale_block_w);
     }
 
     // Tile / face dims come from the tensor's tile spec.
