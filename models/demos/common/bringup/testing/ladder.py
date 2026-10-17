@@ -149,15 +149,34 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
         if top5 < threshold(s, "top5"):
             out["failed"].append(f"top5 {top5:.4f}")
 
-    worst = 1.0
+    # F99: float states by PCC; integer states (top-k index lists) by the selection overlap, not the PCC of the ids
+    worst, worst_ov = 1.0, 1.0
     for i in layers:
         got = state.to_torch(i, rung["seq"])
         for name, want in g.state(i).items():
-            p = metrics.pcc(got[name].float(), want.float())
-            metrics.record(f"pcc_state_{name}_L{i:02d}", p)
-            worst = min(worst, p)
+            if want.is_floating_point():
+                p = metrics.pcc(got[name].float(), want.float())
+                metrics.record(f"pcc_state_{name}_L{i:02d}", p)
+                worst = min(worst, p)
+            else:
+                ov = index_overlap(got[name], want)
+                metrics.record(f"overlap_state_{name}_L{i:02d}", ov)
+                worst_ov = min(worst_ov, ov)
     metrics.record("pcc_state_min", worst)
-    print(f"worst state pcc {worst:.6f}")
+    metrics.record("overlap_state_min", worst_ov)
+    print(f"worst state pcc {worst:.6f}, worst index-state overlap {worst_ov:.6f}")
     if worst < threshold(s, "state"):
         out["failed"].append(f"state {worst:.5f}")
+    if worst_ov < threshold(s, "state_overlap"):
+        out["failed"].append(f"index-state overlap {worst_ov:.5f}")
     return out
+
+
+def index_overlap(got: torch.Tensor, want: torch.Tensor) -> float:
+    """Mean per-row share of the golden's selected ids (>= 0; negatives are padding) that the device also selected."""
+    k = want.shape[-1]
+    w, gs = want.long().reshape(-1, k), got.long().reshape(-1, k).sort(-1).values
+    hit = (gs.gather(-1, torch.searchsorted(gs, w).clamp(max=k - 1)) == w) & (w >= 0)
+    valid = (w >= 0).sum(-1)
+    rows = valid > 0
+    return float((hit.sum(-1)[rows] / valid[rows]).mean()) if bool(rows.any()) else 1.0

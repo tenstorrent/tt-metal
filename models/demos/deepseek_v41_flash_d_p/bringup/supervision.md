@@ -215,3 +215,8 @@ Every intervention by the supervising session: time, task, trigger, classificati
 - Source: 8 copies of K-31's old text in components.yaml (the plan copies knowledge; correcting the entry left the
   copies). Fixed (5329b6a08b9); that voided the plan approval (it hashes components.yaml); re-approved (delegated).
   Framework item for the decision list: plans should cite knowledge ids, not copy the text.
+
+## 2026-10-17 18:00 M.1 precheck: state 0.524 (topk_idx PCC)
+- Float states >= 0.9959, worst layer 0.9969; topk_idx PCC 0.52-0.78 (index ids, meaningless as PCC). Class:
+  framework (F99: overlap for integer states). The assemble agent (attempt 1, 3 min in) was stopped so its brief
+  shows only the real gap (host transfers 40/layer -> 0); resumed.
