@@ -177,7 +177,7 @@ ALWI void bcast_init(LLKOperand<AFormat, AShape> /*a*/) {
  * | Function   | a / b           | Input operands (A -> SrcA, broadcast B -> SrcB)        | LLKOperand        | N/A         | True     |
  * | Function   | itile0 / itile1 | Tile indices within A / B                              | uint32_t          | N/A         | True     |
  * | Function   | idst            | DST register index for the result                     | uint32_t          | Must be less than the acquired size of DST REG | True     |
- * | Function   | bcast_row_idx   | ROW broadcast: which row of B's tile to broadcast     | uint32_t          | N/A         | False    |
+ * | Function   | bcast_row_idx   | ROW broadcast: which row of B's tile to broadcast     | uint32_t          | 0 to 31 for a 32x32 non-BFP B, otherwise 0 | False    |
  */
 // clang-format on
 template <
@@ -198,7 +198,14 @@ ALWI void any_tiles_bcast(
     static_assert(is_legal_tile_shape(AShape), "any_tiles_bcast: illegal tile shape for operand A.");
     static_assert(is_legal_tile_shape(BShape), "any_tiles_bcast: illegal tile shape for operand B.");
     static_assert(tBcastDim != BroadcastType::NONE, "any_tiles_bcast: use add/sub/mul_tiles for BroadcastType::NONE.");
-    // bcast_row_idx selects which row of B's tile the ROW broadcast reads; ignored by COL / SCALAR.
+    // bcast_row_idx selects which row of B's tile the ROW broadcast reads; ignored by COL / SCALAR. The row
+    // select assumes a 32x32 B (16-row faces in a 2x2 layout), which the LLK cannot check itself.
+    if constexpr (tBcastDim == BroadcastType::ROW) {
+        LLK_ASSERT(
+            bcast_row_idx == 0 ||
+                (BShape.face_r_dim == 16 && BShape.num_faces_r_dim == 2 && BShape.num_faces_c_dim == 2),
+            "bcast_row_idx > 0 requires a 32x32 operand B");
+    }
     // ADD/SUB use LoFi (no fidelity multiplier), MUL uses MATH_FIDELITY; the ternary must stay inside MATH()
     // since MATH_FIDELITY is a MATH-thread-only macro.
     MATH((llk_math_eltwise_binary<

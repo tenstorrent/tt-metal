@@ -323,6 +323,7 @@ ALWI void any_tiles_bcast(
  * | in0_tile_index | The index of tile A within the first CB                  | uint32_t      | Must be less than the size of the CB           | True     |
  * | in1_tile_index | The index of tile B within the second CB                 | uint32_t      | Must be less than the size of the CB           | True     |
  * | dst_tile_index | The index of the tile in DST REG for the result C        | uint32_t      | Must be less than the acquired size of DST REG | True     |
+ * | bcast_row_idx  | ROW broadcast only: the row of tile B to broadcast       | uint32_t      | WH/BH: 0 to 31 (default 0) for a 32x32 non-BFP B, otherwise 0; Quasar: 0 only | False    |
  */
 // clang-format on
 template <BroadcastType tBcastDim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
