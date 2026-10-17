@@ -15,8 +15,10 @@
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/storage.hpp"
 #include "tensor/tensor_impl.hpp"
+#include <tt-metalium/experimental/host_bfp_conversion.hpp>
 #include <algorithm>
 #include <optional>
+#include <cstring>
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -431,14 +433,72 @@ private:
                             shard_spec.logical_shape(),
                             buffer_pin);
                     } else {
-                        std::vector<std::remove_const_t<T>> data_vec(
-                            xtensor_view->get().begin(), xtensor_view->get().end());
-                        shard_tensor = Tensor::from_vector(
-                            std::move(data_vec),
-                            shard_spec,
-                            /*device=*/nullptr,
-                            std::nullopt,
-                            pad_value);
+                        const auto& view = xtensor_view->get();
+                        using U = std::remove_const_t<T>;
+                        // A mesh chunk is a rectangular view of row-major source
+                        // storage. Copy its contiguous suffix in blocks, rather
+                        // than incrementing a dynamic xtensor iterator per value.
+                        size_t block_size = 1;
+                        size_t outer_rank = view.dimension();
+                        while (outer_rank > 0) {
+                            const size_t axis = outer_rank - 1;
+                            if (view.shape()[axis] != 1 && view.strides()[axis] != static_cast<ptrdiff_t>(block_size)) {
+                                break;
+                            }
+                            block_size *= view.shape()[axis];
+                            --outer_rank;
+                        }
+                        const U* source = view.data() + view.data_offset();
+                        // A matrix-like view can be packed directly with its
+                        // original row stride. This removes the temporary mesh
+                        // chunk allocation as well as the tile-layout buffer.
+                        std::optional<tt::tt_metal::HostTensor> packed;
+                        if constexpr (std::is_same_v<U, float> || std::is_same_v<U, bfloat16>) {
+                            if (view.dimension() >= 2 && view.size() != 0 && view.strides().back() == 1) {
+                                const auto row_stride = view.strides()[view.dimension() - 2];
+                                bool matrix_view = row_stride >= static_cast<ptrdiff_t>(view.shape().back());
+                                auto expected_stride = row_stride;
+                                for (size_t axis = view.dimension() - 1; axis-- > 0;) {
+                                    if (view.shape()[axis] != 1 && view.strides()[axis] != expected_stride) {
+                                        matrix_view = false;
+                                        break;
+                                    }
+                                    expected_stride *= view.shape()[axis];
+                                }
+                                if (matrix_view) {
+                                    const auto logical = shard_spec.logical_2d_shape();
+                                    const size_t extent = (logical.height() - 1) * row_stride + logical.width();
+                                    packed = tt::tt_metal::experimental::try_create_bfp_host_tensor(
+                                        std::span<const U>(source, extent), shard_spec, row_stride);
+                                }
+                            }
+                        }
+                        if (packed.has_value()) {
+                            shard_tensor = Tensor(std::move(*packed));
+                        } else if (outer_rank == 0) {
+                            // from_span owns its result when conversion is needed;
+                            // the existing can_borrow branch handles aliasing.
+                            shard_tensor = Tensor::from_span(
+                                ttsl::Span<const U>(source, view.size()), shard_spec, nullptr, std::nullopt, pad_value);
+                        } else {
+                            std::vector<U> data_vec(view.size());
+                            if (block_size > 1) {
+                                for (size_t output = 0; output < view.size(); output += block_size) {
+                                    size_t index = output / block_size;
+                                    ptrdiff_t offset = 0;
+                                    for (size_t axis = outer_rank; axis-- > 0;) {
+                                        offset +=
+                                            static_cast<ptrdiff_t>(index % view.shape()[axis]) * view.strides()[axis];
+                                        index /= view.shape()[axis];
+                                    }
+                                    std::memcpy(data_vec.data() + output, source + offset, block_size * sizeof(U));
+                                }
+                            } else {
+                                std::copy(view.begin(), view.end(), data_vec.begin());
+                            }
+                            shard_tensor =
+                                Tensor::from_vector(std::move(data_vec), shard_spec, nullptr, std::nullopt, pad_value);
+                        }
                     }
                     auto buffer = tt::tt_metal::host_buffer::get_host_buffer(shard_tensor);
                     converted_buffers.emplace(&xtensor_view->get(), buffer);
