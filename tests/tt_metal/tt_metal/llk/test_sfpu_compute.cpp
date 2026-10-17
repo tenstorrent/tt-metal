@@ -2680,6 +2680,7 @@ namespace {
 
 constexpr std::string_view kApproxScaleGuard = "never reads the runtime scale";
 constexpr std::string_view kInitScaleGuard = "must be a positive normal number";
+constexpr std::string_view kNoneScaleGuard = "must be a finite normal number";
 // bf16 -1.0 as exp_tile's runtime scale, and the same value as exp_tile_init's FP32-bit scale.
 const std::string kBf16MinusOne = "0xBF80";
 const std::string kFp32MinusOne = "0xBF800000";
@@ -2687,6 +2688,9 @@ const std::string kFp32MinusOne = "0xBF800000";
 const std::string kBf16OneUnshifted = "0x3F80";
 // FP32 +inf as exp_tile_init's scale.
 const std::string kFp32PlusInf = "0x7F800000";
+// FP32 +0.0 and a quiet NaN as exp_tile_init's scale.
+const std::string kFp32Zero = "0x00000000";
+const std::string kFp32NaN = "0x7FC00000";
 
 // Builds a single-core program whose compute kernel runs `chain` on one tile and compiles it
 // (never launches it). Returns the build failure's message, which carries the compiler log, or
@@ -2762,6 +2766,23 @@ TEST_F(LLKMeshDeviceSingleCardFixture, SfpuExpApproxRejectsRuntimeScale) {
         device, "exp_tile_init<true, " + kBf16OneUnshifted + ">(); exp_tile<true, false>(0);", kInitScaleGuard);
     expect_build_rejected(
         device, "exp_tile_init<true, " + kFp32PlusInf + ">(); exp_tile<true, false>(0);", kInitScaleGuard);
+
+    // The unclamped (InputClamping::None) init only multiplies by the template scale, so a negative
+    // scale is a supported way to compute exp(-|s| * x) there ...
+    EXPECT_EQ(
+        compile_sfpu_chain(
+            device,
+            "exp_tile_init<true, " + kFp32MinusOne +
+                ", InputClamping::None>(); exp_tile<true, false, InputClamping::None>(0);"),
+        "");
+    // ... but an unshifted bf16 scale (an FP32 denormal), zero, an infinite and a NaN scale all turn
+    // every output into the same constant or a non-finite value, and are rejected.
+    for (const std::string& scale : {kBf16OneUnshifted, kFp32Zero, kFp32PlusInf, kFp32NaN}) {
+        expect_build_rejected(
+            device,
+            "exp_tile_init<true, " + scale + ", InputClamping::None>(); exp_tile<true, false, InputClamping::None>(0);",
+            kNoneScaleGuard);
+    }
 }
 
 void run_quasar_sfpu_unpack_to_dest_fp32(
