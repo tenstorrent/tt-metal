@@ -847,3 +847,54 @@ def test_rm_reduce_padded_h_slices_rejected(device, reduce_op, dim, shape, expec
 
     with expect_error(RuntimeError, "only supported when N and C fold to a single"):
         _OPS[reduce_op][1](tt_input, dim=dim, keepdim=True)
+
+
+# float32 sum/mean along W on ROW_MAJOR input use the accurate SFPU row reduce, which processes W in chunks of
+# 8 tiles. Widths past one chunk (W > 256) used to over-count (#58695), and the row-major input was truncated to
+# TF32 while being tilized. Sums of ones are exact in fp32, so they must match W exactly.
+@pytest.mark.parametrize("w", [256, 257, 288, 1024, 4096])
+@pytest.mark.parametrize("op", ["sum", "mean"])
+def test_row_major_fp32_reduce_w_beyond_one_chunk(device, w, op):
+    torch_input = torch.ones((1, 1, 4, w), dtype=torch.float32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.float32, device=device)
+    assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    output = ttnn.to_torch(getattr(ttnn, op)(input_tensor, dim=-1)).flatten()
+    expected = torch.full_like(output, float(w) if op == "sum" else 1.0)
+    if op == "sum":
+        assert torch.equal(output, expected), f"sum of ones over W={w}: {output.tolist()}"
+    else:
+        assert torch.allclose(output, expected, rtol=1e-6, atol=0), f"mean of ones over W={w}: {output.tolist()}"
+
+
+# A single 1.0 at a chunk-internal column (16) must be counted exactly once.
+@pytest.mark.parametrize("col", [0, 15, 16, 17, 255, 256, 300, 512])
+def test_row_major_fp32_sum_one_hot(device, col):
+    torch_input = torch.zeros((1, 1, 1, 1024), dtype=torch.float32)
+    torch_input[..., col] = 1.0
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.float32, device=device)
+    output = ttnn.to_torch(ttnn.sum(input_tensor, dim=-1)).flatten()
+    assert torch.equal(output, torch.ones_like(output)), f"one-hot at column {col}: {output.tolist()}"
+
+
+# Values that need more than TF32's 10 mantissa bits must survive the row-major tilize unchanged.
+@pytest.mark.parametrize("w", [256, 1024])
+def test_row_major_fp32_sum_keeps_fp32_mantissa(device, w):
+    value = 1.0 + 2.0**-20
+    torch_input = torch.full((1, 1, 1, w), value, dtype=torch.float32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.float32, device=device)
+    output = ttnn.to_torch(ttnn.sum(input_tensor, dim=-1)).flatten()
+    expected = torch.full_like(output, w * value)
+    assert torch.equal(output, expected), f"sum over W={w}: {output.tolist()} (expected {w * value})"
+
+
+# Signed, non-uniform values over widths that are not a multiple of one chunk, against an fp64 reference.
+@pytest.mark.parametrize("w", [300, 1000, 2080])
+@pytest.mark.parametrize("op", ["sum", "mean"])
+def test_row_major_fp32_reduce_random_matches_fp64(device, w, op):
+    torch.manual_seed(0)
+    torch_input = torch.randn((2, 3, 5, w), dtype=torch.float32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.float32, device=device)
+    output = ttnn.to_torch(getattr(ttnn, op)(input_tensor, dim=-1)).double().flatten()
+    expected = getattr(torch, op)(torch_input.double(), dim=-1).flatten()
+    assert torch.allclose(output, expected, rtol=1e-5, atol=1e-4), f"max abs err {(output - expected).abs().max()}"

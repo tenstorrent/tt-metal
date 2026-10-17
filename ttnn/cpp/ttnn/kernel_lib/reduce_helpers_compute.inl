@@ -498,12 +498,21 @@ ALWI void reduce(
 
                 tile_regs_acquire();
 
-                // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
-                    accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
+                // SFPU SUM along rows: the SFPU row reduce only writes column 0 (faces 0/2); the other
+                // columns keep input values and the REDUCE_ROW pack mask keeps column 16 as well. Reloading
+                // that packed partial *before* the fold and row-reducing it again would re-add column 16 on
+                // every later chunk. So defer the accumulator: reduce this chunk on its own, then add the
+                // previous partial after the row reduce (only column 0 is meaningful in both).
+                constexpr bool defer_sfpu_row_sum_accum =
+                    is_sfpu && reduce_type == PoolType::SUM && is_accumulate_v<AccumulateT>;
+                if constexpr (!defer_sfpu_row_sum_accum) {
+                    // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
+                    reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
+                        accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
+                }
                 if constexpr (is_sfpu) {
                     // Fold needed if the axis has >1 tile, or Accumulate reloaded a result into DST.
-                    if (Wt > 1 || !detail::sfpu_is_first_tile(0, accumulate)) {
+                    if (Wt > 1 || (!defer_sfpu_row_sum_accum && !detail::sfpu_is_first_tile(0, accumulate))) {
                         detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
                     }
                 }
@@ -512,7 +521,8 @@ ALWI void reduce(
                 for (uint32_t wt = 0; wt < Wt; ++wt) {
                     if constexpr (is_sfpu) {
                         constexpr uint32_t sfpu_work_dst = 1;
-                        const bool is_first_tile = detail::sfpu_is_first_tile(wt, accumulate);
+                        const bool is_first_tile =
+                            defer_sfpu_row_sum_accum ? (wt == 0) : detail::sfpu_is_first_tile(wt, accumulate);
                         if constexpr (waits_per_tile(input_policy)) {
                             input_dfb.wait_front(onetile);
                             detail::sfpu_copy_and_fold<reduce_type, reduce_format>(
@@ -544,6 +554,24 @@ ALWI void reduce(
                 if constexpr (is_sfpu) {
                     sfpu_reduce_init<reduce_type, reduce_format>();
                     sfpu_reduce<reduce_type, reduce_format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
+                }
+
+                // Deferred accumulation (see above): add the previous partial to this chunk's row sums.
+                // Done before post_reduce_op so a mean's 1/N scaling still applies to the full sum.
+                if constexpr (defer_sfpu_row_sum_accum) {
+                    if (!accumulate.is_first()) {
+                        // Any DST slot other than dst_idx; fp32 half-sync DEST holds at least two tiles.
+                        const uint32_t sfpu_accum_dst = (dst_idx == 0) ? 1 : 0;
+                        accum_dfb.wait_front(onetile);
+                        reconfig_data_format_srca(input_dfb_id, accumulate.config.cb_accumulator);
+                        copy_init(accumulate.config.cb_accumulator);
+                        copy_tile(accumulate.config.cb_accumulator, 0, sfpu_accum_dst);
+                        accum_dfb.pop_front(onetile);
+                        detail::sfpu_reduce_sum_fold_init<reduce_format>();
+                        detail::sfpu_reduce_sum_fold_tile<reduce_format>(dst_idx, sfpu_accum_dst, dst_idx);
+                        reconfig_data_format_srca(accumulate.config.cb_accumulator, input_dfb_id);
+                        copy_init(input_dfb_id);
+                    }
                 }
 
                 // Call post-reduce operation (e.g., recip_tile for softmax)
