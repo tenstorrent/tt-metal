@@ -35,7 +35,7 @@ from models.experimental.bevformer.tests.common import (
     to_conv_layout,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_parameters
-from models.experimental.bevformer.tt.tt_bevformer import TtBEVFormer
+from models.experimental.bevformer.tt.tt_bevformer import TTBEVFormer
 
 PCC_THRESHOLD = 0.99
 
@@ -68,7 +68,7 @@ def test_bevformer_perf(device, reset_seeds):
         expected.append(outputs)
         *_, torch_prev = outputs
 
-    tt_model = TtBEVFormer(create_bevformer_parameters(torch_model, img, device), device)
+    tt_model = TTBEVFormer(create_bevformer_parameters(torch_model, img, device), device)
     # Uploaded once so the profiled replay measures the detector, not the transfer.
     tt_img = to_conv_layout(img.flatten(0, 1), device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 

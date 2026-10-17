@@ -30,8 +30,8 @@ from models.experimental.bevformer.tt.model_preprocessing import (
     create_fpn_parameters,
     create_resnet_parameters,
 )
-from models.experimental.bevformer.tt.tt_fpn import TtFPN
-from models.experimental.bevformer.tt.tt_resnet import TtResNet
+from models.experimental.bevformer.tt.tt_fpn import TTFPN
+from models.experimental.bevformer.tt.tt_resnet import TTResNet
 
 
 def _check(torch_outputs, tt_outputs):
@@ -56,8 +56,8 @@ def test_backbone_fpn_perf(device, reset_seeds):
 
     backbone_parameters = create_resnet_parameters(torch_backbone, torch_input)
     fpn_parameters = create_fpn_parameters(torch_fpn, torch_features)
-    tt_backbone = TtResNet(backbone_parameters, device, out_indices=RESNET_KWARGS["out_indices"])
-    tt_fpn = TtFPN(fpn_parameters, device, input_dtypes=tt_backbone.output_dtypes)
+    tt_backbone = TTResNet(backbone_parameters, device, out_indices=RESNET_KWARGS["out_indices"])
+    tt_fpn = TTFPN(fpn_parameters, device, input_dtypes=tt_backbone.output_dtypes)
 
     # Uploaded once so the profiled replay measures the backbone and FPN, not the transfer.
     tt_input = to_conv_layout(torch_input, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)

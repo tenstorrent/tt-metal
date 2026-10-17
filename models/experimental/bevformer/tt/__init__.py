@@ -3,7 +3,7 @@
 
 """TTNN port of BEVFormer-base.
 
-- ``tt_bevformer``: the detector, ``TtBEVFormer``
+- ``tt_bevformer``: the detector, ``TTBEVFormer``
 - ``model_preprocessing``: every part's parameters, ``create_bevformer_parameters`` for the whole
 - ``tt_resnet``, ``tt_fpn``, ``tt_modulated_deform_conv``, ``tt_common``: the backbone and neck
 - ``tt_perception_transformer``, ``tt_encoder``, ``tt_temporal_self_attention``,

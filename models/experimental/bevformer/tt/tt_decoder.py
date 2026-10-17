@@ -9,7 +9,7 @@ default the decoder takes and returns the reference's sequence-first
 ``(num_query, bs, embed_dims)`` tensors, permuting ``query``, ``query_pos`` and ``value`` on
 entry and the stacked layer outputs on exit; ``batch_first=True`` skips those permutes.
 Unlike the reference, it also returns each layer's box codes, the reg branches' raw output,
-so ``TtBEVFormerHead`` builds its box predictions without running the branches again.
+so ``TTBEVFormerHead`` builds its box predictions without running the branches again.
 Parameters come from ``model_preprocessing.create_decoder_parameters``. Forward runs
 on device only.
 
@@ -25,7 +25,7 @@ import math
 
 import ttnn
 from models.experimental.bevformer.model_config import CENTERS_FIRST_CENTERS, GRID_DTYPE, INVERSE_SIGMOID_EPS
-from models.experimental.bevformer.tt.tt_common import TtFFN, layer_norm, signpost
+from models.experimental.bevformer.tt.tt_common import TTFFN, layer_norm, signpost
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention
 
 # inverse_sigmoid's range: its eps clamp bounds the logits to +-log(1 / eps).
@@ -33,7 +33,7 @@ LOGIT_BOUND = math.log(1.0 / INVERSE_SIGMOID_EPS)
 CLAMP_LOGITS = [ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -LOGIT_BOUND, LOGIT_BOUND)]
 
 
-class TtMultiheadAttention:
+class TTMultiheadAttention:
     """Batch-first self-attention over the object queries, without the residual (the layer
     adds it inside the following LayerNorm).
 
@@ -60,7 +60,7 @@ class TtMultiheadAttention:
         return ttnn.linear(out, p.out_proj.weight, bias=p.out_proj.bias)
 
 
-class TtDetrTransformerDecoderLayer:
+class TTDetrTransformerDecoderLayer:
     """One decoder layer, ``self_attn -> norm -> cross_attn -> norm -> ffn -> norm``.
 
     The self-attention and FFN residuals are added inside the LayerNorm that follows them;
@@ -71,7 +71,7 @@ class TtDetrTransformerDecoderLayer:
         """``params`` is one entry of ``create_decoder_parameters(...).layers``. The cross-attention
         samples a ``bev_shape`` ``(bev_h, bev_w)`` map."""
         self.params = params
-        self.self_attn = TtMultiheadAttention(params.self_attn)
+        self.self_attn = TTMultiheadAttention(params.self_attn)
         # The module hands reference_points to the fused op unconverted, so they stay float32.
         self.cross_attn = TTMSDeformableAttention(
             dataclasses.replace(params.cross_attn.config, batch_first=True),
@@ -79,7 +79,7 @@ class TtDetrTransformerDecoderLayer:
             params.cross_attn,
             spatial_shapes=[list(bev_shape)],
         )
-        self.ffn = TtFFN(params.ffn)
+        self.ffn = TTFFN(params.ffn)
 
     def __call__(self, query, value, query_pos, reference_points):
         """All batch-first: ``query``/``query_pos`` ``(bs, nq, C)``, ``value`` ``(bs, bev_h * bev_w, C)``,
@@ -102,14 +102,14 @@ class TtDetrTransformerDecoderLayer:
         return query
 
 
-class TtDetectionTransformerDecoder:
+class TTDetectionTransformerDecoder:
     """Decoder over a ``bev_shape`` ``(bev_h, bev_w)`` BEV map."""
 
     def __init__(self, params, device, bev_shape, batch_first=False):
         """``params`` comes from ``create_decoder_parameters``; ``batch_first`` selects the
         layout of ``query``, ``query_pos``, ``value`` and the stacked outputs (see ``__call__``)."""
         self.batch_first = batch_first
-        self.layers = [TtDetrTransformerDecoderLayer(p, device, bev_shape) for p in params.layers]
+        self.layers = [TTDetrTransformerDecoderLayer(p, device, bev_shape) for p in params.layers]
 
     @staticmethod
     def _reg_branch(x, branch):

@@ -31,7 +31,7 @@ from models.experimental.bevformer.tt.model_preprocessing import (
     create_decoder_parameters,
     create_reg_branch_parameters,
 )
-from models.experimental.bevformer.tt.tt_decoder import TtDetectionTransformerDecoder
+from models.experimental.bevformer.tt.tt_decoder import TTDetectionTransformerDecoder
 
 
 @torch.no_grad()
@@ -49,7 +49,7 @@ def test_decoder_perf(device, reset_seeds):
     outputs, points = torch_model(**inputs, spatial_shapes=torch.tensor([bev_shape]), reg_branches=reg_branches)
     torch_outputs = (outputs, points, reference_box_codes(outputs, reg_branches))
 
-    tt_model = TtDetectionTransformerDecoder(create_decoder_parameters(torch_model, device), device, bev_shape)
+    tt_model = TTDetectionTransformerDecoder(create_decoder_parameters(torch_model, device), device, bev_shape)
     tt_reg_branches = create_reg_branch_parameters(reg_branches, device)
     # Uploaded once so the profiled replay measures the decoder, not the transfers.
     tt_inputs = {

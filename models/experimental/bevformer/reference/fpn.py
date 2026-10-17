@@ -123,7 +123,7 @@ class FPN(nn.Module):
         if isinstance(add_extra_convs, str):
             # Extra_convs_source choices: 'on_input', 'on_lateral', 'on_output'
             assert add_extra_convs in ("on_input", "on_lateral", "on_output")
-        elif add_extra_convs:  # True
+        elif add_extra_convs:
             self.add_extra_convs = "on_input"
 
         self.lateral_convs = nn.ModuleList()
@@ -177,23 +177,19 @@ class FPN(nn.Module):
     def forward(self, inputs):
         assert len(inputs) == len(self.in_channels)
 
-        # build laterals
         laterals = [lateral_conv(inputs[i + self.start_level]) for i, lateral_conv in enumerate(self.lateral_convs)]
 
-        # build top-down path
         used_backbone_levels = len(laterals)
         for i in range(used_backbone_levels - 1, 0, -1):
             # In some cases, fixing `scale factor` (e.g. 2) is preferred, but
             #  it cannot co-exist with `size` in `F.interpolate`.
             if "scale_factor" in self.upsample_cfg:
-                # fix runtime error of "+=" inplace operation in PyTorch 1.10
+                # Out of place: an in-place += on the upsampled sum fails under autograd.
                 laterals[i - 1] = laterals[i - 1] + F.interpolate(laterals[i], **self.upsample_cfg)
             else:
                 prev_shape = laterals[i - 1].shape[2:]
                 laterals[i - 1] = laterals[i - 1] + F.interpolate(laterals[i], size=prev_shape, **self.upsample_cfg)
 
-        # build outputs
-        # part 1: from original levels
         outs = [self.fpn_convs[i](laterals[i]) for i in range(used_backbone_levels)]
         # part 2: add extra levels
         if self.num_outs > len(outs):

@@ -6,7 +6,7 @@
 
 What changes from frame to frame and comes from the host, the CAN bus, the ego shift, the
 previous BEV's rotation and the cameras' projections, is prepared by
-:meth:`TtPerceptionTransformer.prepare_frame` into a :class:`PerceptionFrame` whose device
+:meth:`TTPerceptionTransformer.prepare_frame` into a :class:`PerceptionFrame` whose device
 buffers are allocated once and refilled in place, so the forward runs on device only and a trace
 captured with a frame replays on the next one.
 
@@ -65,7 +65,7 @@ def rotation_gather(img_metas, bev_h, bev_w, rotate_center):
     return torch.cat(indices).view(1, 1, 1, -1), torch.stack(masks).unsqueeze(-1)
 
 
-class TtPerceptionTransformer:
+class TTPerceptionTransformer:
     """The encoder and its glue over a ``(bev_h, bev_w)`` grid and FPN levels of ``spatial_shapes``."""
 
     def __init__(self, params, device, *, bev_h, bev_w, spatial_shapes):

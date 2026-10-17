@@ -5,14 +5,14 @@
 """FPN neck for BEVFormer.
 
 Lateral 1x1 convs, a top-down upsample-and-add, then the output convs. Extra
-convs, when the reference FPN has them, run on the lowest output.
+convs, when the reference FPN has them, run on the last (coarsest) output.
 """
 
 import ttnn
 from models.experimental.bevformer.tt.tt_common import TtnnConv2D, signpost
 
 
-class TtConvModule:
+class TTConvModule:
     """One FPN convolution.
 
     Accumulates in an fp32 destination register. The call returns the output tensor;
@@ -53,7 +53,7 @@ class TtConvModule:
         return x[0]
 
 
-class TtFPN:
+class TTFPN:
     """Feature pyramid over the backbone levels, built from ``create_fpn_parameters``' ``params``,
     whose ``tt_kwargs`` holds the memory and precision arguments below, the ones the weights were
     prepared for.
@@ -87,7 +87,7 @@ class TtFPN:
         output_conv_dtypes = [input_dtypes[0]] + [ttnn.bfloat16] * (num_levels - 1)
         for i in range(num_levels):
             self.lateral_convs.append(
-                TtConvModule(
+                TTConvModule(
                     conv_args.lateral_convs[i],
                     conv_pth.fpn.lateral_convs[str(i)],
                     device=device,
@@ -100,7 +100,7 @@ class TtFPN:
         for i in range(num_levels):
             block_sharded = i in block_sharded_levels
             self.fpn_convs.append(
-                TtConvModule(
+                TTConvModule(
                     conv_args.fpn_convs[i],
                     conv_pth.fpn.fpn_convs[str(i)],
                     device=device,
@@ -115,7 +115,7 @@ class TtFPN:
             )
         for i in range(num_levels, len(conv_args.fpn_convs)):
             self.fpn_convs.append(
-                TtConvModule(
+                TTConvModule(
                     conv_args.fpn_convs[i],
                     conv_pth.fpn.fpn_convs[str(i)],
                     device=device,

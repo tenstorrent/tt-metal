@@ -61,7 +61,7 @@ def grid_offset_order(kernel_positions):
     return source
 
 
-class TtModulatedDeformConv2dDevice:
+class TTModulatedDeformConv2dDevice:
     """Device-side modulated deformable conv 2D, groups and deform_groups 1.
 
     Per-instance constants (base grids, weight chunks, bias) are uploaded once, at

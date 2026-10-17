@@ -10,10 +10,10 @@ Each BatchNorm is already folded into the conv before it.
 
 import ttnn
 from models.experimental.bevformer.tt.tt_common import TtnnConv2D, signpost
-from models.experimental.bevformer.tt.tt_modulated_deform_conv import TtModulatedDeformConv2dDevice
+from models.experimental.bevformer.tt.tt_modulated_deform_conv import TTModulatedDeformConv2dDevice
 
 
-class TtModulatedDeformConv2dPack:
+class TTModulatedDeformConv2dPack:
     """DCNv2 conv together with the conv that predicts its offsets and mask.
 
     The geometry (stride, padding, dilation, input shape) comes from ``conv_args.conv_offset``,
@@ -31,7 +31,7 @@ class TtModulatedDeformConv2dPack:
         self.batch_size = offset_args.batch_size
 
         kernel_size = offset_args.kernel_size[0]
-        self.device_dcn = TtModulatedDeformConv2dDevice(
+        self.device_dcn = TTModulatedDeformConv2dDevice(
             weight_chunks=conv_pth.weight_chunks,
             bias=conv_pth.bias,
             kernel_size=kernel_size,
@@ -48,8 +48,8 @@ class TtModulatedDeformConv2dPack:
         # input dtype, since the offsets set the sampling positions.
         # Trained offsets reach tens of pixels, and accumulating in a bfloat16 destination
         # register errs by up to a few of them, so the register is fp32. The partial sums conv2d
-        # writes back between reduction blocks stay bfloat16 (packer_l1_acc is off); keeping
-        # those in fp32 too measured no better.
+        # writes back between reduction blocks stay bfloat16 (packer_l1_acc is off): fp32 partial
+        # sums gain no accuracy here.
         self.num_offset_channels = 2 * kernel_size * kernel_size
         self.conv_offset = TtnnConv2D(
             offset_args,
@@ -79,7 +79,7 @@ class TtModulatedDeformConv2dPack:
         return out, out_h, out_w
 
 
-class TtResLayer:
+class TTResLayer:
     """One ResNet layer (layer1 .. layer4), one bottleneck per block in ``conv_pth``.
 
     ``input_dtype``, ``input_layout`` and ``dram_input`` describe the layer input, which
@@ -106,7 +106,7 @@ class TtResLayer:
         for j in range(num_blocks):
             first = j == 0
             self.layer.append(
-                TtBottleneck(
+                TTBottleneck(
                     conv_args[j],
                     conv_pth[j],
                     device,
@@ -129,7 +129,7 @@ class TtResLayer:
         return x
 
 
-class TtBottleneck:
+class TTBottleneck:
     """One bottleneck block.
 
     Every conv's shape and stride come from ``conv_args``, recorded from one forward of
@@ -144,7 +144,7 @@ class TtBottleneck:
     activations fit in L1. ``block_sharded_downsample`` block-shards the downsample conv.
     ``fp32_acc`` turns on fp32 destination accumulation (``fp32_dest_acc_en``) for conv1, a
     non-DCN conv2, conv3 and the downsample; a DCN conv2 always has it
-    (TtModulatedDeformConv2dPack). ``conv2_act_block_h`` is a non-DCN conv2's act_block_h
+    (TTModulatedDeformConv2dPack). ``conv2_act_block_h`` is a non-DCN conv2's act_block_h
     override and ``weights_dtype`` every conv's weight dtype but the DCN's own.
     """
 
@@ -210,7 +210,7 @@ class TtBottleneck:
         else:
             # The BatchNorm is folded into the DCN weights (create_resnet_parameters); the ReLU
             # runs in the DCN's bias add.
-            self.conv2 = TtModulatedDeformConv2dPack(
+            self.conv2 = TTModulatedDeformConv2dPack(
                 conv_args.conv2,
                 conv_pth.conv2,
                 device,
@@ -264,7 +264,7 @@ class TtBottleneck:
         return x
 
 
-class TtResNet:
+class TTResNet:
     """Bottleneck ResNet built from ``create_resnet_parameters``' ``params``.
 
     ``params.conv_args`` holds what one forward of the reference model records: the conv shapes and
@@ -278,7 +278,7 @@ class TtResNet:
     matmul. A layer that follows one of them and is not listed itself reads its input from
     DRAM the same way. ``block_sharded_downsample_stages`` lists the layers whose downsample
     conv is block sharded, and ``fp32_acc_stages`` the layers whose convs accumulate in an fp32
-    destination register (see TtBottleneck). ``stem_act_block_h`` and ``conv2_act_block_h`` are
+    destination register (see TTBottleneck). ``stem_act_block_h`` and ``conv2_act_block_h`` are
     the stem conv's and the non-DCN conv2s' act_block_h overrides, None for conv2d's own, and
     ``weights_dtype`` the convs' weight dtype. ``model_config.tt_resnet_kwargs`` gives
     BEVFormer-base's values, and ``model_config.RESNET_KWARGS["out_indices"]`` its ``out_indices``.
@@ -314,7 +314,7 @@ class TtResNet:
         self.output_dtypes = []
         self.res_layers = []
         for i in range(self.num_layers):
-            res_layer = TtResLayer(
+            res_layer = TTResLayer(
                 conv_args=conv_args[f"layer{i+1}"],
                 conv_pth=conv_pth[f"layer{i+1}"],
                 device=device,
@@ -352,10 +352,10 @@ class TtResNet:
 
     @staticmethod
     def block_dram_convs(i, j, dram_activation_stages):
-        """``TtBottleneck.dram_convs`` of block ``j`` of layer ``i`` for TtResNet's
+        """``TTBottleneck.dram_convs`` of block ``j`` of layer ``i`` for TTResNet's
         ``dram_activation_stages``; only a layer's first block reads the layer input."""
-        layer = TtResNet.layer_kwargs(i, dram_activation_stages)
-        return TtBottleneck.dram_convs(layer["dram_activation"], layer["dram_input"] and j == 0)
+        layer = TTResNet.layer_kwargs(i, dram_activation_stages)
+        return TTBottleneck.dram_convs(layer["dram_activation"], layer["dram_input"] and j == 0)
 
     def __call__(self, x):
         signpost(header="TTNN ResNet Forward Start")

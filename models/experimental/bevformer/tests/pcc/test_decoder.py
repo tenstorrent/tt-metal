@@ -20,7 +20,7 @@ from models.experimental.bevformer.tt.model_preprocessing import (
     create_decoder_parameters,
     create_reg_branch_parameters,
 )
-from models.experimental.bevformer.tt.tt_decoder import TtDetectionTransformerDecoder
+from models.experimental.bevformer.tt.tt_decoder import TTDetectionTransformerDecoder
 
 CASES = [
     # (name, bev_shape, batch_size, traced, batch_first)
@@ -71,7 +71,7 @@ def test_decoder(device, reset_seeds, name, bev_shape, batch_size, traced, batch
         outputs, points = torch_model(**inputs, spatial_shapes=spatial_shapes, reg_branches=reg_branches)
         return outputs, points, reference_box_codes(outputs, reg_branches)
 
-    tt_model = TtDetectionTransformerDecoder(
+    tt_model = TTDetectionTransformerDecoder(
         create_decoder_parameters(torch_model, device), device, bev_shape, batch_first=batch_first
     )
     tt_reg_branches = create_reg_branch_parameters(reg_branches, device)

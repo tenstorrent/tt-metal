@@ -8,7 +8,7 @@
 The top-k selection, the box decoding, the ``post_center_range`` and ``score_threshold`` tests
 and upstream ``BEVFormerHead.get_bboxes``' move of z to the box's bottom face run on device, on
 fixed ``(bs, max_num)`` tensors, with the tests as a validity mask. Only dropping the invalid boxes
-runs on host (:meth:`TtNMSFreeCoder.compact`): it leaves a data-dependent number
+runs on host (:meth:`TTNMSFreeCoder.compact`): it leaves a data-dependent number
 of boxes, and ttnn and trace shapes are fixed. With BEVFormer's configs, which set no score
 threshold, it drops none: the head scales the centers into ``pc_range``, inside
 ``post_center_range``.
@@ -51,7 +51,7 @@ def denormalize_bbox(normalized_bboxes):
     )
 
 
-class TtNMSFreeCoder:
+class TTNMSFreeCoder:
     """BEVFormer's NMS-free box coder with top-k and decoding on device; the arguments after
     ``device`` are ``reference.nms_free_coder.NMSFreeCoder``'s."""
 
@@ -203,9 +203,3 @@ class TtNMSFreeCoder:
             {"bboxes": b.float()[v.bool()], "scores": s.float()[v.bool()], "labels": lab.long()[v.bool()]}
             for s, lab, b, v in zip(scores, labels, boxes, valid)
         ]
-
-    def decode(self, all_cls_scores, all_bbox_preds):
-        """The head's ``(L, bs, num_query, *)`` device outputs to :meth:`compact`'s per-sample dicts,
-        from the last decoder layer; all but dropping the invalid boxes on device."""
-        scores, labels, _, boxes = self.topk(all_cls_scores[-1], all_bbox_preds[-1])
-        return self.compact(scores, labels, boxes, self.valid(scores, boxes))

@@ -21,7 +21,7 @@ from models.experimental.bevformer.tests.common import (
     to_conv_layout,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_parameters
-from models.experimental.bevformer.tt.tt_bevformer import TtBEVFormer
+from models.experimental.bevformer.tt.tt_bevformer import TTBEVFormer
 
 NUM_FRAMES = 2
 PCC_THRESHOLD = 0.99
@@ -40,7 +40,7 @@ def test_bevformer(device, reset_seeds):
     img = random_image_batch()[None]
     frames = frame_metas(1, NUM_FRAMES, generator)
 
-    tt_model = TtBEVFormer(create_bevformer_parameters(torch_model, img, device), device)
+    tt_model = TTBEVFormer(create_bevformer_parameters(torch_model, img, device), device)
     tt_img = to_conv_layout(img.flatten(0, 1), device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     torch_prev = tt_prev = frame = None
