@@ -313,10 +313,6 @@ bool FabricContext::need_deadlock_avoidance_support(
             fabric_node_id.mesh_id, control_plane.eth_direction_to_routing_direction(direction));
     }
 
-    // Each rank/process owns a single mesh and builds its FabricContext with that mesh's resolved config
-    // (see ControlPlane::adopt_local_mesh_fabric_config), so topology_/fabric_config_ already reflect
-    // THIS rank's mesh -- a TORUS_X mesh's process has topology_ == Torus even when the launch set a plain
-    // Mesh override. No per-mesh lookup is needed here.
     if (topology_ == Topology::Ring) {
         return true;
     }
