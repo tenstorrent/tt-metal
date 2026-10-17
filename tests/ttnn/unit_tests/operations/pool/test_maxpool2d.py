@@ -5,6 +5,7 @@
 import math
 
 import pytest
+import torch
 
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max_pool2d
@@ -189,6 +190,42 @@ def test_max_pool2d_dram_slice(device, in_specs, input_spec):
         output_layout=output_layout,
         config_tensor_in_dram=False,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_max_pool2d_dram_slice_ceil_pad_program_cache(device):
+    # Both calls give a 37-wide output, but the full config's ceil_pad_w is 1 for the first and 0 for the second.
+    # Their last width slice differs only in that ceil padding, so each needs its own Pool2D program.
+    in_n, in_c, in_h, in_w = 1, 64, 32, 74
+    kernel_size, stride = [3, 3], [2, 2]
+    torch.manual_seed(0)
+    torch_input = torch.randn(in_n, in_c, in_h, in_w, dtype=torch.bfloat16)
+    for pad_t, pad_b, pad_l, pad_r in ([0, 0, 0, 0], [0, 0, 0, 1]):
+        ttnn_input = ttnn.from_torch(
+            torch_input.permute(0, 2, 3, 1).reshape(1, 1, in_n * in_h * in_w, in_c),
+            ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+        ttnn_output = ttnn.max_pool2d(
+            input_tensor=ttnn_input,
+            batch_size=in_n,
+            input_h=in_h,
+            input_w=in_w,
+            channels=in_c,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=[pad_t, pad_b, pad_l, pad_r],
+            dilation=[1, 1],
+            ceil_mode=True,
+            output_layout=ttnn.TILE_LAYOUT,
+            dram_slice_config=ttnn.Op2DSliceConfig(num_slices=2, slice_type=SliceWidth),
+        )
+        padded_input = torch.nn.functional.pad(torch_input.float(), (pad_l, pad_r, pad_t, pad_b), value=-math.inf)
+        torch_output = torch.nn.functional.max_pool2d(padded_input, kernel_size, stride, ceil_mode=True)
+        out_h, out_w = torch_output.shape[-2:]
+        ttnn_output = ttnn.to_torch(ttnn_output).float().reshape(in_n, out_h, out_w, in_c).permute(0, 3, 1, 2)
+        assert torch.equal(ttnn_output, torch_output), f"padding={[pad_t, pad_b, pad_l, pad_r]}"
 
 
 @pytest.mark.parametrize("input_spec", parameters["height_shard_tests"]["input_specs"])
