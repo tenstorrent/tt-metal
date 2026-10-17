@@ -85,7 +85,7 @@ LOW_PRECISION_KINDS = tuple(defaults.get("tests.low_precision_kinds"))
 SPARSE_ZEROS = 0.75
 SCALED_PROBES = ("small", "big")  # second inputs at synthetic scales (cases()): no own-floor checks (F83)
 COL_FLOOR = 1e-6  # a column is measured against at least this fraction of the mean column norm (as rows are)
-PAD_SENTINEL = 0xFFFFFFFF
+PAD_SENTINEL = NF.PAD_SENTINEL
 SMALL_RMS = 1e-3
 BIG_SCALE = 2.0
 
@@ -598,12 +598,16 @@ class Expect:
         elif self.kind == "selection":
             e, bad = selection_fails(got, ref, self.lim, f, L=self.golden_L if vs_golden else self.L[case.name])
             if not vs_golden and case.name in self.scores and got.numel() == ref.numel():
-                e2, bad2 = self._flips(got, case.name, f)
+                e2, bad2 = self._flips(got, case.name, f, ref)
                 e.update(e2)
                 bad += bad2
         elif self.kind == "index":
             L = self.golden_L if vs_golden else self.L[case.name]
             e, bad = index_fails(got, ref, case.start, self.lim, self.thr, f, L=L)
+            if not vs_golden and case.name in self.scores and got.numel() == ref.numel() and not bad:
+                e2, bad2 = self._flips(got.reshape(ref.shape), case.name, f, ref)  # F101: near ties, tie-aware recall
+                e.update(e2)
+                bad += bad2
         else:
             outs = self.floor[case.name] if not vs_golden else self.floor["golden"]
             mm = min(int_fails(m, ref, 0.0)[0].get("match", 1.0) for m in outs)
@@ -618,23 +622,28 @@ class Expect:
                 print(f"WARN {tag} (not gating, for the owner's review; do not work on it): {'; '.join(warn)}")
         return not bad
 
-    def _flips(self, got, case: str, f: float) -> tuple[dict, list[str]]:
-        """F80: every selection flip vs the CPU step must be explained by the nudge, and there are at most calib x
-        the nudge's own flips (at least one row)."""
+    def _flips(self, got, case: str, f: float, want) -> tuple[dict, list[str]]:
+        """F80: every selection flip vs the CPU step must be explained by the nudge (or be a near tie, F101), and there
+        are at most calib x the nudge's own flips (at least one row). Records the tie-aware recall (F101)."""
         sc, kk, nsc = self.scores[case]
-        fl = NF.flips(sc, kk, NF.support(got.reshape(-1, sc.shape[-1]), kk), nsc)
-        nudge_frac = max(NF.flips(sc, kk, NF.support(n, kk), [])["frac"] for n in nsc)
+        w = sc.shape[-1]
+        ws = NF.support(want, kk, w)
+        fl = NF.flips(sc, kk, NF.support(got, kk, w), nsc, ws)
+        nudge_frac = max(NF.flips(sc, kk, NF.support(n, kk, w), [], ws)["frac"] for n in self.floor[case])
         lim = f * self.k * max(nudge_frac, 1.0 / max(sc.shape[0], 1))
         e = {
             "flip_rows": fl["rows"],
             "flips_unexplained": fl["unexplained"],
             "flip_frac": fl["frac"],
             "flip_limit": lim,
+            "recall": fl["recall"],
+            "recall_tie": fl["recall_tie"],
+            "worst_recall_tie": fl["worst_recall_tie"],
         }
-        bad = [f"{fl['unexplained']} rows select another entry the nudge does not explain"] if fl["unexplained"] else []
+        bad = [f"{fl['unexplained']} rows select another entry the nudge does not explain" if fl["unexplained"] else ""]
         if fl["frac"] > lim:
             bad.append(f"{fl['frac']:.5f} of the rows select another entry (limit {lim:.5f})")
-        return e, bad
+        return e, [b for b in bad if b]
 
     def evaluate(self, outs: dict, quiet=False, stop_early=False) -> list[str]:
         """Every check of one module's outputs (outs[input name]); the names of the failed checks."""

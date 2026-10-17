@@ -1288,3 +1288,11 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   count engine layers 0..count-1, the model layer of each in PREFILL_LAYER_IDS (engine_env); adapters map with
   contract.layer_ids_from_env and expose rt.layer_ids, which the contract checks. Was a ValueError (DeepSeek-V4.1 K.1,
   layers 0-3,14,20,21,24).
+- F101: tie-aware top-k recall (owner, after Momcilo's MoE gate rule), recorded by default for every top-k output
+  (router weights and index lists) in component and swap tests: the reference's scores are tapped from every top-k
+  the CPU step takes (row blocks stacked, matched to the output by holding all its ids), and recall_tie counts a swap
+  whose both scores lie within noise_floor.tie_rtol (0.002) of the cutoff as a hit. Recorded, not gated (F76: no fixed
+  bars); index lists now also get the F80 "every flip explained" gate. The nudge band is not a tie rule: with an fp4
+  query it spans ~650 of the 512-of-3072 row (median +-94 % of the cutoff). Ladder index states stay plain overlap
+  (no scores in the golden). DeepSeek-V4.1 device, vs the CPU step: indexers recall 0.9887-0.9996, recall_tie
+  0.9911-0.9998, 0 unexplained; routers recall_tie 1.0 everywhere.

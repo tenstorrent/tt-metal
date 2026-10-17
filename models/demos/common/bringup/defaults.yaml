@@ -46,6 +46,7 @@ noise_floor:               # F80: the floor of every component / swap limit (tes
                            # swap test) and for the nudged block; the new step keeps `seeds`. CPU time: the floor runs
                            # every swapped step again (DeepSeek-V4.1 S.swa.15: 35 s -> >300 s with 3 everywhere)
   flip_spread: 2.0         # a selection flip is explained when both entries sit within this x the nudge's score spread of the cutoff
+  tie_rtol: 0.002          # F101: ... or within this x |cutoff| (a near tie by Momcilo's MoE-gate rule: the scores agree to rtol)
 
 tests:
   official_floor: true        # F80: task R.5 taps the official code per step (the reference arithmetic of every limit)
