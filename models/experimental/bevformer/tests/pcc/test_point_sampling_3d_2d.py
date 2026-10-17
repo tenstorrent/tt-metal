@@ -47,15 +47,10 @@ def test_generate_reference_points(
     batch_size,
     seed,
 ):
-    """Test 3D reference point generation using configuration system."""
     torch.manual_seed(seed)
 
     preset = PRESETS[config_name]
     z_cfg = preset.z_cfg
-
-    # --------------------------------------------------------------------------- #
-    # Function Execution                                                          #
-    # --------------------------------------------------------------------------- #
 
     torch_ref_points = generate_reference_points(bev_h, bev_w, z_cfg, batch_size=batch_size, device=torch.device("cpu"))
 
@@ -63,11 +58,6 @@ def test_generate_reference_points(
 
     ttnn_ref_points_torch = ttnn.to_torch(ttnn_ref_points, dtype=torch.float32)
 
-    # --------------------------------------------------------------------------- #
-    # Output Comparison                                                           #
-    # --------------------------------------------------------------------------- #
-
-    # Check shapes
     expected_shape = (batch_size, bev_h * bev_w, z_cfg["num_points"], 3)
     assert (
         torch_ref_points.shape == expected_shape
@@ -76,7 +66,6 @@ def test_generate_reference_points(
         ttnn_ref_points_torch.shape == expected_shape
     ), f"TTNN shape mismatch: {ttnn_ref_points_torch.shape} vs {expected_shape}"
 
-    # Check coordinate ranges (should be in [0, 1])
     assert torch.all(torch_ref_points >= 0.0), "Torch reference points should be >= 0"
     assert torch.all(torch_ref_points <= 1.0), "Torch reference points should be <= 1"
     assert torch.all(ttnn_ref_points_torch >= 0.0), "TTNN reference points should be >= 0"
@@ -104,7 +93,6 @@ def test_point_sampling_3d_to_2d(
     expected_pcc,
     seed,
 ):
-    """Test 3D to 2D point sampling transformation using configuration system."""
     torch.manual_seed(seed)
 
     preset = PRESETS[config_name]
@@ -114,20 +102,12 @@ def test_point_sampling_3d_to_2d(
     num_cams = preset.num_cams
     eps = 1e-5
 
-    # --------------------------------------------------------------------------- #
-    # Generate Inputs                                                             #
-    # --------------------------------------------------------------------------- #
-
     # The deterministic rig keeps bev_mask a property of the geometry rather than
     # of an RNG draw, so this test's projections match the encoder's.
     lidar2img = lidar2img_for_dataset(preset).unsqueeze(0).repeat(batch_size, 1, 1, 1)
     img_metas = img_metas_for_dataset(preset, batch_size)
 
     torch_ref_points = generate_reference_points(bev_h, bev_w, z_cfg, batch_size=batch_size, device=torch.device("cpu"))
-
-    # --------------------------------------------------------------------------- #
-    # Function Execution                                                          #
-    # --------------------------------------------------------------------------- #
 
     torch_ref_points_cam, torch_bev_mask = point_sampling_3d_to_2d(
         torch_ref_points,
@@ -149,11 +129,6 @@ def test_point_sampling_3d_to_2d(
     ttnn_ref_points_cam_torch = ttnn.to_torch(ttnn_ref_points_cam, dtype=torch.float32)
     ttnn_bev_mask_torch = ttnn.to_torch(ttnn_bev_mask, dtype=torch.bool)
 
-    # --------------------------------------------------------------------------- #
-    # Output Comparison                                                           #
-    # --------------------------------------------------------------------------- #
-
-    # Check shapes
     expected_points_shape = (num_cams, batch_size, bev_h * bev_w, z_cfg["num_points"], 2)
     expected_mask_shape = (num_cams, batch_size, bev_h * bev_w, z_cfg["num_points"])
 
@@ -166,7 +141,6 @@ def test_point_sampling_3d_to_2d(
     ), f"TTNN points shape mismatch: {ttnn_ref_points_cam_torch.shape}"
     assert ttnn_bev_mask_torch.shape == expected_mask_shape, f"TTNN mask shape mismatch: {ttnn_bev_mask_torch.shape}"
 
-    # Check projected coordinates are in valid range [0, 1] only for valid points
     # Invalid points (where mask is False) can have any coordinate values
 
     valid_torch_points = torch_ref_points_cam[torch_bev_mask]
@@ -183,7 +157,6 @@ def test_point_sampling_3d_to_2d(
     else:
         logger.warning("No valid points found in TTNN implementation - this might indicate camera matrix issues")
 
-    # Check that we have some valid points (at least some points should be visible)
     torch_valid_ratio = torch_bev_mask.float().mean()
     ttnn_valid_ratio = ttnn_bev_mask_torch.float().mean()
     logger.info(f"Valid point ratios - Torch: {torch_valid_ratio:.3f}, TTNN: {ttnn_valid_ratio:.3f}")

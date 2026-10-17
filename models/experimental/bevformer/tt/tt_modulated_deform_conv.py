@@ -85,7 +85,8 @@ class TTModulatedDeformConv2dDevice:
         emits its samples, and the ``(1, C_out)`` bias or None. ``kernel_size`` is the square
         kernel's K. ``input_shape`` is the (batch, height, width) of the NHWC input every call
         will see. It fixes the sampling base grid, which is built and uploaded here so a forward
-        does no host work. ``relu`` applies a ReLU to the output, inside its last add."""
+        does no host work. ``relu`` applies a ReLU to the output, inside the single chunk's matmul or
+        the last chunk's bias add."""
         self.device = device
         self.stride = stride
         self.padding = padding
@@ -99,8 +100,7 @@ class TTModulatedDeformConv2dDevice:
         self.weight_cat_chunks = [ttnn.to_device(chunk, device) for chunk in weight_chunks]
         self.bias = None if bias is None else ttnn.to_device(bias, device)
 
-        # HiFi4 + fp32 accumulator + no math approx. ttnn.grid_sample
-        # bilinear reads bf16 corner sticks and would normally accumulate
+        # ttnn.grid_sample bilinear reads bf16 corner sticks and would normally accumulate
         # in bf16; fp32_dest_acc_en lifts the bilinear pool reduction to
         # fp32. The matmul reuses this config so the K*K*C_in -> C_out
         # reduction also accumulates in fp32.
@@ -158,11 +158,10 @@ class TTModulatedDeformConv2dDevice:
         return grid.unsqueeze(0).expand(batch, H_out, W_out, 2 * self.K * self.K).contiguous()
 
     def __call__(self, x_nhwc, grid_offset_nhwc, mask_nhwc):
-        """Forward.
-
+        """
         Args:
-          x_nhwc: (B, H_in, W_in, C_in) NHWC on device, bfloat16 or bfloat8_b, preferably
-              already ROW_MAJOR, the layout it is sampled in.
+          x_nhwc: (B, H_in, W_in, C_in) NHWC bfloat16 on device, preferably already
+              ROW_MAJOR, the layout grid_sample reads.
           grid_offset_nhwc: (B, H_out, W_out, 2*K*K) bfloat16 NHWC TILE offsets in grid
               units (pixel offsets times ``2 / [W_in, H_in]``), in (x, y) order per kernel
               position, see `grid_offset_order`.
@@ -193,11 +192,8 @@ class TTModulatedDeformConv2dDevice:
         packed_grid = ttnn.add(self.base_grid, grid_offset)
         mask_b = ttnn.reshape(mask_nhwc, (B, H_out, W_out, K * K, 1))
 
-        # For each channel chunk: one grid_sample call over the K*K kernel
-        # positions, multiply by the mask (broadcast across c_chunk), matmul
-        # into C_out, accumulate. The matmul's fp32 accumulator covers the
-        # K*K*c_chunk reduction; only the C_out-wide bf16 partials are summed
-        # across channel chunks.
+        # The matmul's fp32 accumulator covers the K*K*c_chunk reduction; only the C_out-wide
+        # bf16 partials are summed across channel chunks.
         output_acc = None
         for q in range(self.n_c_chunks):
             c_start = q * self.c_chunk
@@ -213,9 +209,6 @@ class TTModulatedDeformConv2dDevice:
                 batch_output_channels=True,
                 compute_kernel_config=self.compute_kernel_config,
             )  # (B, H_out, W_out, K*K*c_chunk), kk-major
-            # Apply per-kk mask. Reshape sampled to expose the kk dim,
-            # broadcast-multiply by the (B, H_out, W_out, K*K, 1) mask, then
-            # reshape back to flatten kk into the channel axis.
             sampled = ttnn.reshape(sampled, (B, H_out, W_out, K * K, self.c_chunk))
             weighted = ttnn.multiply(sampled, mask_b)
             # Fold (B, H_out, W_out) into M so the matmul heuristic sees a large 2-D problem

@@ -9,7 +9,7 @@ Each BatchNorm is already folded into the conv before it.
 """
 
 import ttnn
-from models.experimental.bevformer.tt.tt_common import TtnnConv2D, signpost
+from models.experimental.bevformer.tt.tt_common import TTConv2D, signpost
 from models.experimental.bevformer.tt.tt_modulated_deform_conv import TTModulatedDeformConv2dDevice
 
 
@@ -51,7 +51,7 @@ class TTModulatedDeformConv2dPack:
         # writes back between reduction blocks stay bfloat16 (packer_l1_acc is off): fp32 partial
         # sums gain no accuracy here.
         self.num_offset_channels = 2 * kernel_size * kernel_size
-        self.conv_offset = TtnnConv2D(
+        self.conv_offset = TTConv2D(
             offset_args,
             conv_pth.conv_offset,
             device=device,
@@ -180,7 +180,7 @@ class TTBottleneck:
         conv3_dtype = ttnn.bfloat16 if self.with_dcn else input_dtype
         self.output_dtype = conv3_dtype
 
-        self.conv1 = TtnnConv2D(
+        self.conv1 = TTConv2D(
             conv_args.conv1,
             conv_pth.conv1,
             device=device,
@@ -194,7 +194,7 @@ class TTBottleneck:
         )
 
         if not self.with_dcn:
-            self.conv2 = TtnnConv2D(
+            self.conv2 = TTConv2D(
                 conv_args.conv2,
                 conv_pth.conv2,
                 device=device,
@@ -209,7 +209,7 @@ class TTBottleneck:
             )
         else:
             # The BatchNorm is folded into the DCN weights (create_resnet_parameters); the ReLU
-            # runs in the DCN's bias add.
+            # runs inside the DCN's last matmul or bias add.
             self.conv2 = TTModulatedDeformConv2dPack(
                 conv_args.conv2,
                 conv_pth.conv2,
@@ -219,7 +219,7 @@ class TTBottleneck:
                 weights_dtype=weights_dtype,
             )
 
-        self.conv3 = TtnnConv2D(
+        self.conv3 = TTConv2D(
             conv_args.conv3,
             conv_pth.conv3,
             device=device,
@@ -233,7 +233,7 @@ class TTBottleneck:
         )
 
         if self.is_downsample:
-            self.downsample = TtnnConv2D(
+            self.downsample = TTConv2D(
                 conv_args.downsample[0],
                 conv_pth.downsample,
                 device=device,
@@ -294,7 +294,7 @@ class TTResNet:
         self.out_indices = out_indices
         self.maxpool_args = conv_args.maxpool
 
-        self.conv1 = TtnnConv2D(
+        self.conv1 = TTConv2D(
             conv_args.conv1,
             conv_pth.conv1,
             device=device,

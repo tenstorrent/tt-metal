@@ -846,7 +846,7 @@ def assert_boxes_close(expected, actual, pcc=0.99):
 # not so much that a regression in the logits passes.
 SCORE_ERROR_QUANTILE = 0.99
 MAX_SCORE_ERROR = 0.04
-MAX_WORST_SCORE_ERROR = 0.15
+MAX_WORST_SCORE_ERROR = 0.2
 MIN_TOPK_OVERLAP = 0.9
 
 

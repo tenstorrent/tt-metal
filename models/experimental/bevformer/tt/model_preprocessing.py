@@ -34,7 +34,6 @@ from models.experimental.bevformer.tt.tt_common import is_pointwise
 from models.experimental.bevformer.tt.tt_modulated_deform_conv import GRID_SAMPLE_C_CAP, grid_offset_order
 from models.experimental.bevformer.tt.tt_resnet import TTResNet
 
-
 # --- Shared helpers ---------------------------------------------------------------------------
 
 
@@ -199,26 +198,15 @@ def create_perception_transformer_parameters(transformer, device, dtype=WEIGHT_D
 
 # --- Backbone and FPN -------------------------------------------------------------------------
 
-# Each BatchNorm is folded into the conv before it, and every conv's input shape is recorded from one
-# reference forward. The weights stay on the host: conv2d lays them out for its input on the
+# Each BatchNorm is folded into the conv before it. The backbone's conv input shapes are recorded
+# from one reference forward; the FPN's follow from its input levels' shapes. The weights stay on the host: conv2d lays them out for its input on the
 # device. A 1x1 conv whose activations are in DRAM runs as a matmul instead and gets a Linear's
 # weight; the DCNs get their device op's matmul weight chunks and an offset conv that emits the
 # offsets in its (x, y) order and grid units.
 
 
-def _fold_batch_norm(weight, bias, bn):
-    """``(weight, bias)`` of a conv with the eval-mode BatchNorm ``bn`` after it folded in."""
-    scale = bn.running_var.add(bn.eps).rsqrt()
-    shift = -bn.running_mean * scale
-    if bn.affine:
-        scale = scale * bn.weight
-        shift = shift * bn.weight + bn.bias
-    bias = torch.zeros_like(shift) if bias is None else bias.detach()
-    return weight * scale.view(-1, 1, 1, 1), bias * scale + shift
-
-
 def _conv_parameters(weight, bias, linear_dtype, staging_dtype):
-    """A conv's torch ``weight`` and ``bias`` as TtnnConv2D takes them: in ``staging_dtype`` for
+    """A conv's torch ``weight`` and ``bias`` as TTConv2D takes them: in ``staging_dtype`` for
     conv2d to lay out, or, with a ``linear_dtype``, a Linear's ``(in, out)`` weight in that dtype
     and ``(1, out)`` bias, laid out for ``ttnn.linear``."""
     if linear_dtype is not None:
@@ -243,7 +231,7 @@ def _dcn_parameters(conv, bn, offset_args):
     """
     if conv.groups != 1 or conv.deform_groups != 1:
         raise ValueError(f"the device DCN takes groups 1 and deform_groups 1, got {conv.groups}, {conv.deform_groups}")
-    weight, bias = _fold_batch_norm(conv.weight.detach(), conv.bias, bn)
+    weight, bias = (t.detach() for t in fold_batch_norm2d_into_conv2d(conv, bn))
     c_out, c_in, kernel_h, kernel_w = weight.shape
     c_chunk = min(c_in, GRID_SAMPLE_C_CAP)
     if c_in % c_chunk != 0:
@@ -337,7 +325,7 @@ def create_fpn_parameters(model, input_tensors, tt_kwargs=None):
     level it belongs to, except the extra output convs: the first reads the last level's
     output and each later one reads the previous extra conv's output.
 
-    ``conv_args`` holds, per conv, the attributes ``TtnnConv2D`` reads, as
+    ``conv_args`` holds, per conv, the attributes ``TTConv2D`` reads, as
     ``create_resnet_parameters`` records them for the backbone.
     """
     level_shapes = [(t.shape[0], t.shape[2], t.shape[3]) for t in input_tensors]
@@ -423,7 +411,7 @@ def _self_attn_parameters(mha, device, dtype):
 
 
 def _cross_attn_parameters(msda, device, dtype):
-    """The reference module's parameters and config."""
+    """The decoder's single-level cross-attention as TTMSDeformableAttention takes it, with its config."""
     if msda.num_levels != 1:
         raise ValueError(f"the decoder cross-attention is single-level, got {msda.num_levels} levels")
     params = create_ms_deformable_attention_parameters(msda, device=device, dtype=dtype)

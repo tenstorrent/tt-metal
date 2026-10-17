@@ -8,9 +8,6 @@
 `ttnn.experimental.fused_msda_from_offsets`. The sampling position is formed on
 the SFPU from the reference point and the raw offset.
 
-Same weights, same inputs, compared against the reference module rather than
-against another TT implementation.
-
 Complements `test_ms_deformable_attention.py`, which checks the same module over
 the presets and reference point dtypes; here the gate runs across several seeds,
 because a location-generation bug shows up as a seed-dependent drift rather than
