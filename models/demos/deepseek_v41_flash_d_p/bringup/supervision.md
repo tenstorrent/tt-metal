@@ -210,3 +210,8 @@ Every intervention by the supervising session: time, task, trigger, classificati
 - Reviewed: _keep_candidates reads the device candidate pool back to host only when a reference state carries the
   layer (harness bookkeeping); otherwise it stays on device (cand_store). To verify at the perf phase: the served
   model / ladder timing path runs with no reference state (no per-chunk readback). Listed for the decision report.
+
+## 2026-10-17 15:45 KNOWLEDGE CONTRADICTED K-31 again (C.dec_reuse.attention)
+- Source: 8 copies of K-31's old text in components.yaml (the plan copies knowledge; correcting the entry left the
+  copies). Fixed (5329b6a08b9); that voided the plan approval (it hashes components.yaml); re-approved (delegated).
+  Framework item for the decision list: plans should cite knowledge ids, not copy the text.
