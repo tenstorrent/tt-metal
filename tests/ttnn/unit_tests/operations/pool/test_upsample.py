@@ -197,7 +197,11 @@ def upsample_multicore_common(
                 pytest.skip("nshards_h or nshards_w is 0")
 
             ncores = (nshards_h, nshards_w)
-        shard_grid = get_shard_grid_from_num_cores(device, ncores)
+        grid_ncores = ncores
+        if shard_strategy == ttnn.ShardStrategy.BLOCK and shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
+            # COL_MAJOR block shards put the NHW shards along X and the channel shards along Y.
+            grid_ncores = (ncores[1], ncores[0])
+        shard_grid = get_shard_grid_from_num_cores(device, grid_ncores)
 
     if shard_strategy == ttnn.ShardStrategy.BLOCK:
         tensor_memory_layout = ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
@@ -277,9 +281,6 @@ def upsample_multicore_common(
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 @pytest.mark.parametrize("run_twice", [False])
 def test_upsample_multicore(device, input_shape, scale_h, scale_w, shard_strategy, shard_orientation, run_twice):
-    if (shard_strategy == ttnn.ShardStrategy.BLOCK) and (shard_orientation == ttnn.ShardOrientation.COL_MAJOR):
-        pytest.skip("Disabled until illegal shard configs are fixed (#17795)")
-
     (torch_result, output_tensor) = upsample_multicore_common(
         device,
         input_shape,
@@ -312,6 +313,7 @@ def test_upsample_multicore(device, input_shape, scale_h, scale_w, shard_strateg
     [
         [((1, 1), (6, 6))],
         [((2, 2), (5, 5))],
+        [((0, 1), (3, 4))],
         [((1, 1), (3, 3)), ((4, 4), (6, 6))],
         [((2, 2), (4, 5)), ((5, 3), (7, 6))],
     ],
@@ -320,9 +322,6 @@ def test_upsample_multicore(device, input_shape, scale_h, scale_w, shard_strateg
 def test_upsample_multicore_corerange(
     device, input_shape, scale_h, scale_w, shard_strategy, shard_orientation, core_range, run_twice
 ):
-    if (shard_strategy == ttnn.ShardStrategy.BLOCK) and (shard_orientation == ttnn.ShardOrientation.COL_MAJOR):
-        pytest.skip("Disabled until illegal shard configs are fixed (#17795)")
-
     if (len(core_range) != 1) and (shard_strategy == ttnn.ShardStrategy.BLOCK):
         pytest.skip("illegal core range for BLOCK strategy")
 
