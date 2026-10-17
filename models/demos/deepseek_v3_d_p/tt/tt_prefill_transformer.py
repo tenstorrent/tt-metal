@@ -214,6 +214,7 @@ class TtPrefillTransformer(LightweightModule):
         # local layer slice onto the global map.
         self.first_layer_idx = first_layer_idx
         self.indexer_types = getattr(config, "indexer_types", None)
+        self.last_indexer_indices = None
 
         tp_topology = topology[1] if isinstance(topology, tuple) else topology
         sp_topology = topology[0] if isinstance(topology, tuple) else topology
@@ -445,6 +446,23 @@ class TtPrefillTransformer(LightweightModule):
             host = host.squeeze(0)
         return host
 
+    @property
+    def receives_indexer_indices(self) -> bool:
+        return self.indexer_types is not None and self.indexer_types[self.first_layer_idx] == "shared"
+
+    @property
+    def forwards_indexer_indices(self) -> bool:
+        next_idx = self.first_layer_idx + self.num_layers
+        return (
+            not self.is_last_rank
+            and self.indexer_types is not None
+            and next_idx < len(self.indexer_types)
+            and self.indexer_types[next_idx] == "shared"
+        )
+
+    def indexer_indices_shape(self) -> tuple:
+        return self.layers[0].mla.indexer_indices_shape()
+
     def forward(
         self,
         token_ids: ttnn.Tensor,
@@ -466,6 +484,7 @@ class TtPrefillTransformer(LightweightModule):
         input_is_embedded: bool = False,
         provided_levels: int = 0,
         mtp_geometry=None,
+        seed_indexer_indices: Optional[ttnn.Tensor] = None,
     ):
         """
         Forward pass: [embed] -> [block x N]. The populated KV cache is the output.
@@ -511,6 +530,11 @@ class TtPrefillTransformer(LightweightModule):
             mtp_geometry: an `MTPTraceGeometry` the caller refreshed for this chunk. The MTP levels then
                         take every per-chunk decision from device tensors, so the forward can be captured;
                         `provided_levels` is ignored (the geometry carries it).
+            seed_indexer_indices: GLM-5.3 indexer reuse across a pipeline boundary. When this rank's first
+                        layer is ``shared``, the upstream rank's last ``full`` layer top-k indices (shape
+                        indexer_indices_shape()), reused by every leading ``shared`` layer. When
+                        forwards_indexer_indices is set, this rank's last ``full`` layer indices are left in
+                        last_indexer_indices for the caller to send downstream.
 
         Returns:
             On a non-last rank: the hidden-state activation tensor to hand to the next rank.
@@ -566,13 +590,13 @@ class TtPrefillTransformer(LightweightModule):
         # following "shared" layers. reuse=False (no indexer_types) leaves the call + 2-tuple return
         # exactly as before.
         reuse = self.indexer_types is not None
-        # reuse seeds from the first "full" layer within this forward; a stack starting on a "shared"
-        # layer has no prior indices (pipeline-parallel would need them threaded in from the prior rank).
         if reuse:
-            assert (
-                self.indexer_types[self.first_layer_idx] == "full"
-            ), f"first layer {self.first_layer_idx} must be 'full' to seed indexer reuse, got '{self.indexer_types[self.first_layer_idx]}'"
-        indexer_indices = None
+            assert self.indexer_types[self.first_layer_idx] == "full" or seed_indexer_indices is not None, (
+                f"first layer {self.first_layer_idx} is '{self.indexer_types[self.first_layer_idx]}': "
+                "a stack starting on a shared layer needs seed_indexer_indices from the upstream rank"
+            )
+        indexer_indices = seed_indexer_indices if reuse else None
+        self.last_indexer_indices = None
         for i, layer in enumerate(self.layers):
             signpost(f"forward_layer_{i}_start")
             mode = self.indexer_types[self.first_layer_idx + i] if reuse else "full"
@@ -617,6 +641,8 @@ class TtPrefillTransformer(LightweightModule):
                 intermediates[f"layer_{i}"] = self._to_host(h)
             if read_profiler:
                 ttnn.ReadDeviceProfiler(self.mesh_device)
+        if self.forwards_indexer_indices:
+            self.last_indexer_indices = indexer_indices
         # Drop the held reference. Python reference counting releases owned top-k allocations after
         # their last consumer; any TP gather scratch remains owned by TT_CCL.
         indexer_indices = None
