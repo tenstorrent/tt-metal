@@ -2522,6 +2522,7 @@ class UnarySFPUGolden:
         shift_amount: int = 3,
         relu_min_int_threshold: int = int(RELU_MIN_THRESHOLD),
         relu_max_threshold: float = RELU_MAX_THRESHOLD,
+        max_min_scalar=None,
         tile_dimensions: tuple[int, int] = TILE_DIMENSIONS,
         polygamma_order: int = 1,
     ):
@@ -2537,6 +2538,13 @@ class UnarySFPUGolden:
         self._relu_min_int_threshold = relu_min_int_threshold
         # Mirrors the SFPU_RELU_MAX_THRESHOLD template parameter; only relu_max reads it.
         self._relu_max_threshold = relu_max_threshold
+        # Mirrors SFPU_UNARY_MAX_MIN_SCALAR; None restores the dispatcher defaults.
+        self._UNARY_MAX_MIN_VALUE = (
+            UNARY_MAX_MIN_VALUE if max_min_scalar is None else float(max_min_scalar)
+        )
+        self._int_maxmin_scalar = (
+            INT_MAXMIN_SCALAR if max_min_scalar is None else int(max_min_scalar)
+        )
 
         if operation not in self.ops:
             raise ValueError(f"Unsupported operation: {operation}")
@@ -4314,6 +4322,16 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 result_row = torch.tensor(
                     [float(v) for v in row_values], dtype=torch.float32
                 )
+                if (
+                    operation == MathOperation.SfpuElwmul
+                    and dest_acc == DestAccumulation.No
+                    and get_chip_architecture() != ChipArchitecture.QUASAR
+                ):
+                    # 16-bit Dest mul stores +0 when either input is zero, including 0 * inf.
+                    zero_input = (src1_row == 0) | (src2_row == 0)
+                    result_row = torch.where(
+                        zero_input, torch.zeros_like(result_row), result_row
+                    )
                 result_row, generated_row = self._canonicalise_emitted_nan(
                     operation, result_row
                 )
@@ -5723,6 +5741,37 @@ class Top32RmGolden:
         # scores, matching the gtest comparator (score desc, orig_idx asc).
         order = torch.argsort(-row, stable=True)[:K]
         return row[order], order.to(torch.int64)
+
+
+@register_golden
+class WelfordsGolden:
+    """Per-column Welford mean / population variance over ``row_blocks``, in float64.
+
+    ``save_before_block`` also returns the state before that block, rounded to ``state_format`` (Dest).
+    """
+
+    def __call__(self, row_blocks, save_before_block=None, state_format=None):
+        columns = row_blocks[0].shape[1]
+        mean = torch.zeros(columns, dtype=torch.float64)
+        m2 = torch.zeros(columns, dtype=torch.float64)
+        count = 0
+        result = {}
+        for block_index, block in enumerate(row_blocks):
+            if block_index == save_before_block:
+                if state_format is not None:
+                    torch_format = format_dict[state_format]
+                    mean = mean.to(torch_format).to(torch.float64)
+                    m2 = m2.to(torch_format).to(torch.float64)
+                result["saved_mean"] = mean.clone()
+                result["saved_m2"] = m2.clone()
+            for row in block.to(torch.float64):
+                count += 1
+                delta = row - mean
+                mean = mean + delta / count
+                m2 = m2 + delta * (row - mean)
+        result["mean"] = mean
+        result["var"] = m2 / count
+        return result
 
 
 @register_golden

@@ -90,7 +90,7 @@ on:
         default: true
         type: boolean
       threshold:
-        description: "Relative slowdown counting as a regression (BH 0.02, WH 0.08)"
+        description: "Relative slowdown counting as a regression (BH 0.02, WH 0.13)"
         required: false
         default: "0.02"
         type: string
