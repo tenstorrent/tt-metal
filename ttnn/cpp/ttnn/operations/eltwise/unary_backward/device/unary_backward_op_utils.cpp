@@ -26,6 +26,15 @@ const UnaryBackwardKernelSpec& get_kernel_spec(UnaryBackwardOpType op_type) {
             };
             return spec;
         }
+        case UnaryBackwardOpType::SOFTSIGN_BW: {
+            // The generated kernel evaluates the gradient over BF16 DEST.
+            static const UnaryBackwardKernelSpec spec{
+                .compute_kernel_path =
+                    "ttnn/cpp/ttnn/operations/eltwise/unary_backward/device/kernels/compute/"
+                    "eltwise_bw_softsign.cpp",
+            };
+            return spec;
+        }
         case UnaryBackwardOpType::TANH_BW: {
             // d/dx tanh = sech^2(x), computed directly by TanhDerivative rather than as
             // 1 - tanh^2, so there is no cancellation to hold at float32 and DEST follows the
@@ -66,6 +75,7 @@ const UnaryBackwardKernelSpec& get_kernel_spec(UnaryBackwardOpType op_type) {
 std::string_view to_string(UnaryBackwardOpType op_type) {
     switch (op_type) {
         case UnaryBackwardOpType::SIGMOID_BW: return "SIGMOID_BW";
+        case UnaryBackwardOpType::SOFTSIGN_BW: return "SOFTSIGN_BW";
         case UnaryBackwardOpType::TANH_BW: return "TANH_BW";
         case UnaryBackwardOpType::GELU_BW: return "GELU_BW";
         case UnaryBackwardOpType::GELU_TANH_BW: return "GELU_TANH_BW";
