@@ -15,15 +15,6 @@ namespace sfpu
 // packed hi/lo, intercepts in LReg4/5/6. It is a 6-entry SFPLUTFP32 FP16 table fitted for
 // sech^2 through 1 - lut^2, not the 3-entry SFPLUT this kernel used to read -- the two halves
 // must move together, since nothing in the build couples them but this register convention.
-
-// Where +-inf are moved before the lut. The breakpoints are the lut mode's, not the table's:
-// sfpi::lut's 6-entry default is SFPLUTFP32's TABLE1, whose last split is |x| = 3.0, and the
-// only other 6-entry mode, TABLE2, splits at 4.0, so either mode reads this input from the
-// tail pair. What the value relies on is that pair staying (A=0, B=1.0), which makes the lut
-// exactly 1.0 and 1 - lut^2 exactly 0, and the lut staying in a 6-entry mode. A re-fit of
-// tanh_derivative_init cannot move a breakpoint; one that changes the tail pair breaks this.
-constexpr float SATURATED_TAIL_INPUT = 4.0f;
-
 template <bool APPROXIMATION_MODE, int WITH_PRECOMPUTED_TANH, int ITERATIONS>
 inline void _calculate_tanh_derivative_(const int iterations)
 {
@@ -46,6 +37,15 @@ inline void _calculate_tanh_derivative_(const int iterations)
             // lut returns exactly 1.0 there and the result is 0 = sech^2(+-inf), as for every
             // finite |x| >= 3. A NaN input stays NaN. Guarding the input rather than the
             // result because the six table registers leave no LReg to keep it live past the lut.
+            //
+            // The breakpoints are the lut mode's, not the table's: sfpi::lut's 6-entry default
+            // is SFPLUTFP32's TABLE1, whose last split is |x| = 3.0, and the only other 6-entry
+            // mode, TABLE2, splits at 4.0, so either mode reads this input from the tail pair.
+            // What the value relies on is that pair staying (A=0, B=1.0), which makes the lut
+            // exactly 1.0 and 1 - lut^2 exactly 0, and the lut staying in a 6-entry mode. A
+            // re-fit of tanh_derivative_init cannot move a breakpoint; one that changes the
+            // tail pair breaks this.
+            constexpr float SATURATED_TAIL_INPUT = 4.0f;
             v_if (sfpi::is_inf(val))
             {
                 val = SATURATED_TAIL_INPUT;
