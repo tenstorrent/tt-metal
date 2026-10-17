@@ -32,16 +32,32 @@ inline bool pack_fp32_dest_acc_live = false;
  * Drains the packer FIFO, hands MATH the pack source format of `ocb` (PCK_DEST_RD_CTRL is derived from
  * it and the new mode as the packer's own configure derives it), waits for MATH to program dest-acc CFG,
  * then records the mode MATH programmed so that later llk_pack_reconfig_data_format calls keep
- * PCK_DEST_RD_CTRL in step with it.
+ * PCK_DEST_RD_CTRL in step with it, and reprograms the packer fields that the mode decides for `ocb`
+ * (exponent threshold, 10-bit mantissa rounding) the way configure_pack<mode> would.
  *
  * @param ocb Output circular buffer the packer is configured for.
  * @note Must be called together with llk_unpack_wait_fp32_dest_acc and llk_math_set_fp32_dest_acc.
  */
 inline void llk_pack_wait_fp32_dest_acc(const std::uint32_t ocb) {
     SAN_HOOK(unsupported());
-    _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(static_cast<DataFormat>(pack_src_format[get_output_id(ocb)]));
+    const std::uint32_t output_id = get_output_id(ocb);
+    _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(static_cast<DataFormat>(pack_src_format[output_id]));
     pack_fp32_dest_acc_live = (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK) != 0;
     pack_fp32_dest_acc_overridden = true;
+
+    // The packer fields the mode decides for this output, as configure_pack<mode> programs them: the
+    // exponent threshold (fp32 Dest -> BFP-A underflow workaround) and the 10-bit mantissa rounding
+    // (fp32 Dest -> Float16 source). MATH wrote the Dest read width; these stay with the pack thread.
+    const std::uint32_t pack_src = pack_src_format[output_id];
+    const std::uint32_t pack_dst = pack_dst_format[output_id];
+    if (pack_fp32_dest_acc_live) {
+        ckernel::packer::reconfigure_exp_threshold<true>(masked_data_format(pack_dst));
+    } else {
+        ckernel::packer::reconfigure_exp_threshold<false>(masked_data_format(pack_dst));
+    }
+    const bool round_10b_mant = (pack_fp32_dest_acc_live && pack_src == to_underlying(DataFormat::Float16)) ||
+                                (!IS_A_FORMAT(pack_src) && (pack_dst & 0x1F) == to_underlying(DataFormat::Fp8_e4m3));
+    cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Round_10b_mant_RMW>(round_10b_mant);
 }
 
 /**
