@@ -258,6 +258,19 @@ class Gemma4ModelArgs:
 
         from pathlib import Path
 
+        if not Path(weights_path).is_dir():
+            # A hub id: resolve to the local snapshot so the safetensors path below
+            # serves it. The AutoModel fallback hands out tensors that die with the
+            # model object (transformers 5 loads lazily from an mmap it closes), and
+            # weights nothing touches while the model is alive -- the vision encoders
+            # -- then read as NaN / inf / zeros.
+            try:
+                from huggingface_hub import snapshot_download
+
+                weights_path = snapshot_download(weights_path, local_files_only=True)
+                logger.info(f"Resolved hub id to local snapshot {weights_path}")
+            except Exception as e:  # not cached locally: keep the hub id for the fallback
+                logger.info(f"No local snapshot for {weights_path} ({e}); using the AutoModel loader")
         safetensor_files = sorted(Path(weights_path).glob("*.safetensors"))
         if safetensor_files:
             from safetensors.torch import load_file
@@ -277,7 +290,8 @@ class Gemma4ModelArgs:
 
         logger.info(f"No safetensors found, loading via AutoModelForCausalLM from {weights_path}")
         model = AutoModelForCausalLM.from_pretrained(weights_path, torch_dtype="auto")
-        state_dict = model.state_dict()
+        # Materialise every tensor before the model goes away (see above).
+        state_dict = {k: v.detach().clone() for k, v in model.state_dict().items()}
         del model
 
         if any(v.dtype == torch.float32 for v in state_dict.values()):

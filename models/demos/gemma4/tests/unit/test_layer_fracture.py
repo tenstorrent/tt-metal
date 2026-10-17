@@ -30,8 +30,6 @@ from .test_layer import _create_hf_rope, _hf_state_to_tt_state
 @pytest.mark.parametrize("seq_len", [128], ids=["seq128"])
 def test_layer_fracture_prefill(layer_type, seq_len, mesh_device, reset_seeds, request):
     hf_text_config = TestFactory.create_hf_text_config()
-    if getattr(hf_text_config, "num_experts", 0):
-        pytest.skip("fracture layer test targets the dense (SharedMLP) variant")
     try:
         layer_idx = find_layer_idx(hf_text_config, layer_type)
     except ValueError:

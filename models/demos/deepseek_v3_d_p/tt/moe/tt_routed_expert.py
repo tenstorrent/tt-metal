@@ -50,6 +50,9 @@ ROUTED_EXPERT_ACTIVATION_BY_NAME = {
     "situ": ttnn.RoutedExpertActivation.SituGlu,
     "clamped_silu_glu": ttnn.RoutedExpertActivation.ClampedSiluGlu,
 }
+# Gemma 4 GeGLU (gelu_tanh(gate) * up); absent from a ttnn build that predates the variant.
+if hasattr(ttnn.RoutedExpertActivation, "GeluTanhGlu"):
+    ROUTED_EXPERT_ACTIVATION_BY_NAME["gelu_tanh"] = ttnn.RoutedExpertActivation.GeluTanhGlu
 
 # Activations allowed to carry expert biases. ClampedSiluGlu is excluded because
 # DeepSeek-V4's experts are bias-free, not because the kernel lacks a bias branch.

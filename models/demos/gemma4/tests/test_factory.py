@@ -418,6 +418,9 @@ def _is_device_discovery_failure(exc):
     return any(marker in msg for marker in _DEVICE_DISCOVERY_FAILURE_MARKERS)
 
 
+GEMMA4_TEST_L1_SMALL_SIZE = 32768
+
+
 def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
     """Universal mesh parametrization with FABRIC_1D.
 
@@ -483,6 +486,10 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
         mesh_shapes = [max(mesh_shapes, key=lambda s: s[0] * s[1])]
 
     extra = dict(device_params_extra or {})
+    # Collective semaphores live in L1_SMALL when the device has that region; without it a collective
+    # first compiled after a trace capture puts them in worker L1, where the replay's intermediates land
+    # (see models/demos/gemma4/tt/ccl.py::ccl_semaphores_in_l1_small and test_ccl_semaphores.py).
+    extra.setdefault("l1_small_size", GEMMA4_TEST_L1_SMALL_SIZE)
     if not mesh_shapes:
         params = [
             pytest.param(
@@ -506,3 +513,23 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
         return pytest.mark.parametrize("mesh_device, device_params", params, indirect=True)(func)
 
     return decorator
+
+
+def skip_unless_siglip_vision():
+    """Module-level mark for the SigLIP vision-tower unit tests: skip on checkpoints
+    whose vision path is the unified (encoder-free) embedder (12B) or that have no
+    vision config at all, so the per-model unit jobs can run the whole directory."""
+    import pytest
+
+    model_path = os.environ.get("HF_MODEL", "google/gemma-4-31B-it")
+    try:
+        from transformers import AutoConfig
+
+        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        vision_type = getattr(getattr(cfg, "vision_config", None), "model_type", None)
+    except Exception as e:  # unreadable config: let the test itself report it
+        return pytest.mark.skipif(False, reason=str(e))
+    return pytest.mark.skipif(
+        vision_type != "gemma4_vision",
+        reason=f"{model_path}: vision_config.model_type={vision_type!r} is not the SigLIP tower (gemma4_vision)",
+    )

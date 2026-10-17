@@ -163,6 +163,7 @@ class Gemma4DecoderLayer:
                 dtype=experts_dtype,
                 router_dtype=router_dtype,
                 tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/moe" if tensor_cache_path else None,
+                layer_idx=layer_idx,
             )
 
         # Per-layer input embeddings (E2B/E4B feature)
@@ -216,6 +217,7 @@ class Gemma4DecoderLayer:
         packed=None,
         chunk_start_idx=None,
         chunk_page_table=None,
+        mm_attn_mask=None,
     ):
         """
         Decoder layer forward pass.
@@ -261,6 +263,7 @@ class Gemma4DecoderLayer:
             packed=packed,
             chunk_start_idx=chunk_start_idx,
             chunk_page_table=chunk_page_table,
+            mm_attn_mask=mm_attn_mask,
         )
 
         if isinstance(attn_output, torch.Tensor):

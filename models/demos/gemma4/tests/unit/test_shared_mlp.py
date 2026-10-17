@@ -21,7 +21,7 @@ from ...tests.test_factory import (
 )
 
 
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 2), (1, 4), (1, 8), (2, 4), (8, 4)])
 @parametrize_batch_seq()
 def test_shared_mlp(batch_size, seq_len, mesh_device, reset_seeds, request):
     """Test SharedMLP against HF Gemma4TextMLP (GeGLU)."""
@@ -39,8 +39,13 @@ def test_shared_mlp(batch_size, seq_len, mesh_device, reset_seeds, request):
     }
 
     hf_config = TestFactory.create_hf_config()
-    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
+    # (8,4): the Galaxy one-instance orientation (TP on the size-8 axis 0, fractured dense weights).
+    galaxy = hasattr(mesh_device, "shape") and tuple(mesh_device.shape) == (8, 4)
+    tp = (mesh_device.shape[0] if galaxy else mesh_device.shape[1]) if hasattr(mesh_device, "shape") else 1
+    if galaxy:
+        mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp), tp_axis=0, weight_fracture=True)
+    else:
+        mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
     ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
 
     tt_mlp = SharedMLP(

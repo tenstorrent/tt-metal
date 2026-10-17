@@ -241,10 +241,29 @@ class SharedMLP:
         # laid out as [up_i | gate_i]. Split with the padded half-width so TILE
         # slice bounds stay aligned (264 would round to 288 and break down_proj).
         lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
+        owner_fast = None
         if lane_sharded:
             # Slice-3 choreography: rows are lane-local but the weights are
             # fractured across lanes, so gather all lanes' rows first ...
             hidden_states = ccl_lane_gather_rows(hidden_states, self.mesh_config)
+            owner = getattr(self.mesh_config, "_g4_single_lane_prefill_owner", None)
+            if (
+                owner is not None
+                and self.ccl_manager is not None  # the lane all-reduce needs the manager's topology
+                and os.environ.get("GEMMA4_MLP_LANE_FASTPATH", "1") != "0"
+                and int(hidden_states.shape[2]) > 32
+            ):
+                # Single-user prefill: only the owner lane's block of rows is real. The weights' K
+                # chunks are spread over the lanes, so every lane still computes its partial, but on
+                # the owner's rows only (1x instead of lanes x rows); the lane all-reduce then sums
+                # the K partials and every lane holds the owner's result (the other lanes' rows are
+                # discarded downstream), the same fast path the routed experts take.
+                block = int(hidden_states.shape[2]) // self.mesh_config.lanes
+                lo, hi = owner * block, (owner + 1) * block
+                owner_rows = ttnn.slice(hidden_states, [0, 0, lo, 0], [1, 1, hi, hidden_states.shape[-1]])
+                hidden_states.deallocate(True)
+                hidden_states = owner_rows
+                owner_fast = owner
         gate_up = self.gate_up_proj(hidden_states)
         shard = self._inter_per_device
         s = gate_up.shape[-2]
@@ -264,7 +283,18 @@ class SharedMLP:
         hidden.deallocate(True)
 
         # Allreduce after row-parallel down_proj
-        if lane_sharded:
+        if lane_sharded and owner_fast is not None:
+            # owner rows on every lane: sum the lanes' K partials, then the tp partials
+            output = ccl_allreduce(
+                output,
+                self.mesh_config,
+                self.ccl_manager,
+                axis=self.mesh_config.ep_axis,
+                group_size=self.mesh_config.lanes,
+            )
+            if self.mesh_config.tp > 1:
+                output = ccl_allreduce(output, self.mesh_config, self.ccl_manager)
+        elif lane_sharded:
             # ... and reduce_scatter re-shards rows to their lanes while
             # summing the cross-lane K-chunks (plus the tp-axis all-reduce).
             output = ccl_lane_scatter_rows(output, self.mesh_config)

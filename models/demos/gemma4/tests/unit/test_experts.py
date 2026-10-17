@@ -9,6 +9,7 @@
     pytest -k "prefill"    # prefill only
 """
 
+import pytest
 import torch
 
 import ttnn
@@ -26,9 +27,39 @@ from ...tests.test_factory import (
 
 
 @skip_if_not_moe
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 2), (1, 4), (2, 4), (8, 4)])
 @parametrize_batch_seq()
 def test_experts(batch_size, seq_len, mesh_device, reset_seeds, request):
+    run_experts(batch_size, seq_len, mesh_device, request)
+
+
+# single-row meshes (the 4-chip and 8-chip entries) are not supported by the dispatch stack's table sharding yet
+@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4), (8, 4)])
+@pytest.mark.parametrize("seq_len", [128, 1024, 4096 + 128], ids=["prefill_128", "prefill_1024", "prefill_4224"])
+def test_experts_dispatch(seq_len, mesh_device, reset_seeds, request, monkeypatch):
+    """Token-dispatch prefill (DeepSeek dispatch/combine + fused GeGLU experts) vs the HF reference; 4224 tokens
+    exercise a partial second dispatch chunk."""
+    monkeypatch.setenv("GEMMA4_MOE_DISPATCH_PREFILL", "1")
+    monkeypatch.setenv("GEMMA4_MOE_DISPATCH_MIN_TOKENS", "128")
+    run_experts(1, seq_len, mesh_device, request)
+
+
+# the decode MoE kernel's ops require the ring fabric (models/common TTMoEDecode: "topology must be Ring")
+@parametrize_mesh_with_fabric(
+    mesh_shapes=[(2, 4), (8, 4)], device_params_extra={"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}
+)
+@pytest.mark.parametrize("seq_len", [64, 128, 256], ids=["frame_64", "frame_128", "frame_256"])
+def test_experts_decode_kernel(seq_len, mesh_device, reset_seeds, request, monkeypatch):
+    """Decode-frame routed experts on the decode MoE kernel (dispatch within the column, moe_compute, bfp4 experts)
+    vs the HF reference; the frame is the call size so each mesh row takes seq_len / rows tokens."""
+    monkeypatch.setenv("GEMMA4_MOE_DECODE_KERNEL", "1")
+    monkeypatch.setenv("GEMMA4_MOE_DECODE_FRAME", str(seq_len))
+    # the kernel quantizes the expert weights to bfloat4_b: 0.98 vs the bf16 HF reference (the module's own
+    # golden test reports 0.991); the bf8 sparse path reaches 0.9993
+    run_experts(1, seq_len, mesh_device, request, pcc_threshold=0.97)
+
+
+def run_experts(batch_size, seq_len, mesh_device, request, pcc_threshold=None):
     """Test MoE experts against HF reference.
 
     1x1: Uses reduced experts (8) and bfloat16 weights for fast single-card test.
@@ -36,8 +67,11 @@ def test_experts(batch_size, seq_len, mesh_device, reset_seeds, request):
     """
     from models.demos.gemma4.config import MeshConfig, ModeConfig
 
-    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
     is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    # (8,4): the Galaxy one-instance orientation (TP on the size-8 axis 0, fractured dense weights,
+    # EP over the 4 columns); every other 2-D mesh: TP over axis 1, EP over axis 0.
+    galaxy = is_mesh and tuple(mesh_device.shape) == (8, 4)
+    tp = (mesh_device.shape[0] if galaxy else mesh_device.shape[1]) if hasattr(mesh_device, "shape") else 1
 
     if tp > 1:
         # Multi-device: real model dims, TP-sharded, HF reference layer for weights
@@ -71,7 +105,19 @@ def test_experts(batch_size, seq_len, mesh_device, reset_seeds, request):
     hidden_size = hf_config.hidden_size
 
     expert_config = Gemma4ExpertConfig(hf_config)
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
+    # 2-D meshes: TP over axis 1, expert parallelism over axis 0 (one local-expert slice per row)
+    if galaxy:
+        ep = mesh_device.shape[1]
+        mesh_config = MeshConfig(
+            mesh_device.shape,
+            decode=ModeConfig(tp=tp, ep=ep),
+            prefill=ModeConfig(tp=tp, ep=ep),
+            tp_axis=0,
+            weight_fracture=True,
+        )
+    else:
+        ep = mesh_device.shape[0] if hasattr(mesh_device, "shape") and mesh_device.shape[0] > 1 else 1
+        mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp, ep=ep), prefill=ModeConfig(tp=tp, ep=ep))
     ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
 
     tt_experts = Gemma4Experts(
@@ -117,5 +163,7 @@ def test_experts(batch_size, seq_len, mesh_device, reset_seeds, request):
         .float()[:seq_len]
     )
 
-    passing, pcc_msg = compare_tensors(tt_out_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
+    passing, pcc_msg = compare_tensors(
+        tt_out_torch, ref_output, pcc_threshold=pcc_threshold or get_pcc_threshold(request)
+    )
     assert passing, f"Experts (tp={tp}) PCC too low: {pcc_msg}"

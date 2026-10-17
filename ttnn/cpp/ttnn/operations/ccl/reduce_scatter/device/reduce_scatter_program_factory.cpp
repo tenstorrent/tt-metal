@@ -34,17 +34,41 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     // create semaphores
     // 3 semaphores used for within op synchronizations
-    auto sem_buffer_type = operation_attributes.use_l1_small_for_semaphores ? tt::tt_metal::BufferType::L1_SMALL
-                                                                            : tt::tt_metal::BufferType::L1;
+    // They live as long as the cached program. Prefer L1_SMALL whenever the device has that region (as
+    // all_gather does): a program first compiled after a trace capture would otherwise place them in
+    // worker L1, where the replay's intermediates land and overwrite them.
+    const bool have_l1_small = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL) > 0;
+    auto sem_buffer_type = (operation_attributes.use_l1_small_for_semaphores || have_l1_small)
+                               ? tt::tt_metal::BufferType::L1_SMALL
+                               : tt::tt_metal::BufferType::L1;
+    // A full L1_SMALL region (many cached collective shapes) must not fail the op: fall back to worker L1 for
+    // this program and say so, since that placement is only safe when no trace is captured afterwards.
+    auto create_semaphore = [&]() {
+        if (sem_buffer_type == tt::tt_metal::BufferType::L1_SMALL &&
+            !operation_attributes.use_l1_small_for_semaphores) {
+            try {
+                return ttnn::global_semaphore::create_global_semaphore(
+                    mesh_device, subdevice_core_range_set, 0, sem_buffer_type);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogOp,
+                    "reduce_scatter: L1_SMALL has no room for a global semaphore ({}); allocating it in worker L1, "
+                    "which a later trace replay may overwrite. Open the device with a larger l1_small_size.",
+                    e.what());
+                sem_buffer_type = tt::tt_metal::BufferType::L1;
+            }
+        }
+        return ttnn::global_semaphore::create_global_semaphore(
+            mesh_device, subdevice_core_range_set, 0, sem_buffer_type);
+    };
     std::vector<tt::tt_metal::GlobalSemaphore> multidevice_semaphores = {
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type),
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type),
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type),
+        create_semaphore(),
+        create_semaphore(),
+        create_semaphore(),
     };
     // 1 barrier semaphore used to ensure that all the buffers are allocated
     ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevice_ids = {sd_id};
-    auto barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type);
+    auto barrier_semaphore = create_semaphore();
     tt::tt_metal::distributed::Synchronize(
         *mesh_device, std::nullopt, subdevice_ids);  // interaction with subdevice needs to be investigated
 

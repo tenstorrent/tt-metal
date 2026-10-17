@@ -101,6 +101,11 @@
 #include "api/compute/situ_glu.h"
 #endif
 
+#ifdef GELU_TANH_GLU
+// GeGLU (Gemma 4): gelu_tanh(gate) * up. Unary SFPU pass on the gate accumulators (same structure
+// as SiLU below), then multiply_phase; nothing else changes.
+#include "api/compute/eltwise_unary/gelu.h"
+#endif
 #ifdef CLAMPED_SILU_GLU
 // Computes silu(min(gate,L)) * clamp(up,±L). Bakes ClampedSiluGluConfigDsV4 (limit=10.0).
 #include "api/compute/clamped_silu_glu.h"
@@ -649,9 +654,13 @@ FORCE_INLINE void matmul_phase_fused_gu(
             copy_tile(partials_gu_cb_id, i, i);
         }
         partials_gu_cb.pop_front(out_subblock_num_tiles);
-        // MATH-thread SFPU pass: apply silu to each dst tile before pack.
+        // MATH-thread SFPU pass: apply the gate activation to each dst tile before pack.
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+#ifdef GELU_TANH_GLU
+            gelu_tanh_tile(i);
+#else
             silu_tile(i);
+#endif
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -1009,6 +1018,8 @@ void kernel_main() {
     // SiLU-GLU, tanh for SiTU-GLU) instead of silu's. The recip table sets
     // vConstFloatPrgm0 = 2.0f, which nothing between here and the tile calls reprograms.
     BINARY_ACT_INIT();
+#elif defined(GELU_TANH_GLU)
+    gelu_tanh_tile_init();
 #else
     silu_tile_init();
 #endif

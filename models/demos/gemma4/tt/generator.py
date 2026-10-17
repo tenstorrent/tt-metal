@@ -3,6 +3,7 @@
 
 import os
 import time
+from collections import defaultdict
 from pathlib import Path
 
 import torch
@@ -23,6 +24,12 @@ from models.demos.gemma4.tt.generator_trace import (
     should_auto_enable_chunked_bounded,
     warmup_gemma4_model_prefill,
 )
+from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
+from models.demos.gemma4.tt.vision.multimodal_embedder import Gemma4MultimodalEmbedder
+from models.demos.gemma4.tt.vision.unified_embedder import Gemma4UnifiedVisionEmbedder, has_unified_vision_weights
+from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
+from models.demos.gemma4.tt.vision.vision_tower import VisionTower
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import (
     Mode,
     get_block_size,
@@ -37,7 +44,133 @@ from models.tt_transformers.tt.generator import (
     _pad_or_create_page_table,
     batched_prefill_padded_batch,
 )
+from models.tt_transformers.tt.load_checkpoints import standardize_hf_keys_multimodal
 from models.tt_transformers.tt.model_config import determine_device_name
+
+# ── Vision tower weight conversion (HF -> Meta, per-block RoPE) ─────────────
+# Replicated from models/demos/gemma4/tests/unit/test_vision_attention.py so
+# the runtime does not import from tests/. Gemma-4 vision uses 2D (per-block)
+# RoPE, so q/k weights and q/k norms are interleaved per RoPE block, not across
+# the full head_dim.
+_VISION_BLOCK_PROJ_RENAMES = [
+    (".q_proj.", ".wq."),
+    (".k_proj.", ".wk."),
+    (".v_proj.", ".wv."),
+    (".o_proj.", ".wo."),
+    (".gate_proj.", ".w1."),
+    (".up_proj.", ".w3."),
+    (".down_proj.", ".w2."),
+]
+
+
+def _meta_permute_qk_weight(weight, n_heads, head_dim, ndim=2):
+    blk = head_dim // ndim
+    in_dim = weight.shape[-1]
+    weight = weight.view(n_heads, ndim, 2, blk // 2, in_dim)
+    weight = weight.transpose(2, 3)
+    return weight.reshape(n_heads * head_dim, in_dim)
+
+
+def _meta_permute_norm_weight(weight, head_dim, ndim=2):
+    blk = head_dim // ndim
+    weight = weight.view(ndim, 2, blk // 2)
+    weight = weight.transpose(1, 2)
+    return weight.reshape(head_dim)
+
+
+def _convert_vision_block_hf_to_meta(state_dict, n_heads, n_kv_heads, head_dim, ndim=2):
+    converted = {}
+    for key, tensor in state_dict.items():
+        if "q_proj.linear.weight" in key:
+            tensor = _meta_permute_qk_weight(tensor, n_heads, head_dim, ndim)
+        elif "k_proj.linear.weight" in key:
+            tensor = _meta_permute_qk_weight(tensor, n_kv_heads, head_dim, ndim)
+        elif "q_norm.weight" in key or "k_norm.weight" in key:
+            tensor = _meta_permute_norm_weight(tensor, head_dim, ndim)
+        new_key = key
+        for old, new in _VISION_BLOCK_PROJ_RENAMES:
+            new_key = new_key.replace(old, new)
+        converted[new_key] = tensor
+    # NOTE: deliberately NOT calling map_hf_to_meta_keys here — it would rename
+    # self_attn->attention and the layernorms, which the Gemma-4 vision modules
+    # do NOT expect (they keep self_attn / input_layernorm / post_*_layernorm).
+    return converted
+
+
+def _build_vision_state_dict(full_state_dict, vision_args):
+    """Extract ``model.vision_tower.*`` from the full checkpoint and convert to
+    the ``visual.*`` Meta-format keys ``VisionTower`` expects."""
+    prefix = "model.vision_tower."
+    vision_sd = {k[len(prefix) :]: v for k, v in full_state_dict.items() if k.startswith(prefix)}
+    vision_sd = standardize_hf_keys_multimodal(vision_sd)
+    vision_sd = _convert_vision_block_hf_to_meta(
+        vision_sd, vision_args.n_heads, vision_args.n_kv_heads, vision_args.head_dim
+    )
+    return {f"visual.{k}": v for k, v in vision_sd.items()}
+
+
+VISION_KEY_PREFIXES = ("model.vision_tower.", "model.vision_embedder.", "model.embed_vision.", "model.embed_audio.")
+
+
+def load_vision_state_dict(model_path):
+    """The vision-side tensors of a Gemma-4 checkpoint, read for real from safetensors.
+
+    The text model's warm weight cache (models/common/weight_cache.py) replaces the HF
+    state dict with a dataless placeholder (``torch.empty`` per manifest entry) once its
+    tensorbins are complete. The vision encoders are not part of that cache, so on a
+    warm run they must read their weights from the checkpoint themselves: the 31B
+    SigLIP tower and the 12B unified embedder (~1.1 GB / ~80 MB) via the safetensors
+    index, selecting only the vision keys. Hub ids resolve to the local snapshot.
+    """
+    import glob
+    from pathlib import Path
+
+    path = Path(model_path)
+    if not path.is_dir():
+        from huggingface_hub import snapshot_download
+
+        path = Path(snapshot_download(str(model_path), local_files_only=True))
+    from safetensors import safe_open
+
+    out = {}
+    for fn in sorted(glob.glob(str(path / "*.safetensors"))):
+        with safe_open(fn, "pt") as f:
+            for k in f.keys():
+                if k.startswith(VISION_KEY_PREFIXES):
+                    t = f.get_tensor(k)
+                    out[k] = t.to(torch.bfloat16) if t.dtype == torch.float32 else t
+    if not out:
+        raise FileNotFoundError(f"no vision tensors ({VISION_KEY_PREFIXES}) under {path}")
+    return out
+
+
+def vision_state_dict_for(state_dict, model_path):
+    """``state_dict`` itself when it carries real vision tensors, else the real ones from disk."""
+    if getattr(state_dict, "is_placeholder", False):
+        logger.info("Warm text weight cache: loading the vision tensors from the checkpoint")
+        return load_vision_state_dict(model_path)
+    probe = [k for k in state_dict if k.startswith(VISION_KEY_PREFIXES)][:2]
+    for k in probe:
+        v = state_dict[k].float()
+        if not torch.isfinite(v).all() or v.abs().max() > 1e6:
+            logger.warning(f"vision tensor {k} is not real data; reloading the vision tensors from the checkpoint")
+            return load_vision_state_dict(model_path)
+    return state_dict
+
+
+def _vision_encoder_seq_len(num_patches: int, max_qkv_mm_seq_len: int = 2048) -> int:
+    """Padded encoder seq length >= num_patches that the vision blocks can run at.
+
+    The attention chunks its qkv matmul by ``max_qkv_mm_seq_len`` rows above that
+    length and its output projection by 1024, the MLP by 512, so a sequence above
+    ``max_qkv_mm_seq_len`` must be a multiple of it; below, a multiple of 1024 is
+    enough. That halves the rows a 630-patch video frame runs at (1024, not 2048);
+    a 2520-patch image still pads to 4096.
+    """
+    if num_patches <= max_qkv_mm_seq_len:
+        return max(1024, -(-num_patches // 1024) * 1024)
+    return -(-num_patches // max_qkv_mm_seq_len) * max_qkv_mm_seq_len
+
 
 # Same 128k batched-prefill token ceiling as the shared Generator
 # (padded_batch × padded_prefill_seq_len).
@@ -280,6 +413,34 @@ def _patch_model_args(
     model_args.encode_prompt = _encode_prompt
 
 
+def _g4_dram_bottom_up_bytes(view) -> int:
+    """Bytes allocated below the largest free gap: the bottom-up region where trace intermediates live.
+
+    Kernel binaries are allocated top-down (above the gap) and never collide with a replay, so they are
+    left out; a persistent tensor placed into a hole below the gap counts, since that hole was free (and
+    therefore usable by the trace) at capture time. Falls back to the allocated total without a block table.
+    """
+    try:
+        table = list(view.block_table)
+    except Exception:  # noqa: BLE001
+        table = []
+    if not table:
+        return int(view.total_bytes_allocated_per_bank)
+    free_start, free_size = 0, -1
+    for b in table:
+        if str(b.get("allocated", "")).lower() in ("no", "false", "0"):
+            size = int(b.get("size", 0))
+            if size > free_size:
+                free_start, free_size = int(b.get("address", 0)), size
+    total = 0
+    for b in table:
+        if str(b.get("allocated", "")).lower() in ("yes", "true", "1"):
+            addr = int(b.get("address", 0))
+            if free_size < 0 or addr < free_start:
+                total += int(b.get("size", 0))
+    return total
+
+
 class ChunkedPrefillPageTableGuardMixin:
     """Gemma4 prefill guards + async decode continuity (no ``tt_transformers`` edits).
 
@@ -418,7 +579,9 @@ class ChunkedPrefillPageTableGuardMixin:
         """
         if not hasattr(model, "update_persistent_per_layer_page_tables"):
             return
-        model.update_persistent_per_layer_page_tables(page_tables_per_layer)
+        # A prefill always re-uploads: the host-side "unchanged" shortcut must not reuse a device
+        # table that a decode-trace replay may have overwritten since the last upload.
+        model.update_persistent_per_layer_page_tables(page_tables_per_layer, force=(writer == "prefill"))
         rows = cls._page_tables_rows(page_tables_per_layer)
         if rows is None:
             return
@@ -900,6 +1063,14 @@ class ChunkedPrefillPageTableGuardMixin:
     def prefill_forward_single_user_text(
         self, tokens, page_table=None, *, kv_cache=None, num_cached_tokens=0, **kwargs
     ):
+        # vLLM multimodal: the shared per-user loop hands every user its ``pixel_values``
+        # entry; the bridge stages the user's host-merged prompt embeddings there
+        # (``_stage_multimodal_prefill``) and text users carry None.
+        mm_embeds = kwargs.pop("pixel_values", None)
+        if torch.is_tensor(mm_embeds):
+            return self._prefill_single_user_with_embeds(
+                mm_embeds, tokens, page_table, kv_cache=kv_cache, num_cached_tokens=num_cached_tokens, **kwargs
+            )
         # Lane-sharded page tables are stacked on the request's owner lane (_page_table_host_layout);
         # bind it from global_user_id before any per-layer staging in this forward.
         _gid = kwargs.get("global_user_id", None)
@@ -1000,6 +1171,9 @@ class ChunkedPrefillPageTableGuardMixin:
             # Lane-sharded KV stacks each chunk's page table on the owner column host-side; the traced replay's
             # chunk-table refresh cannot, so chunked prompts stay eager under lanes.
             and not bool(getattr(getattr(self.model[model_id], "mesh_config", None), "lane_sharded", False))
+            # A multimodal prefill feeds merged embeddings (``_g4_mm_prefill_embeds``); the
+            # captured chunk's input is the token ids, so it stays eager.
+            and getattr(self.model[model_id], "_g4_mm_prefill_embeds", None) is None
         )
         if not use_traced_chunks:
             # Eager path stays in gemma4 (do not patch models/tt_transformers):
@@ -1222,6 +1396,40 @@ class ChunkedPrefillPageTableGuardMixin:
             out[lane] = host[0, 0, last_in_chunk[lane] % 32, : model.vocab_size]
         tt_logits.deallocate(True)
         return out
+
+    def _prefill_single_user_with_embeds(
+        self, mm_embeds, tokens, page_table=None, *, kv_cache=None, num_cached_tokens=0, **kwargs
+    ):
+        """Prefill one user from precomputed prompt embeddings (multimodal).
+
+        ``mm_embeds`` is the host ``[prompt_len, hidden]`` embedding of the FULL prompt:
+        text rows embedded and scaled as ``embed_tokens`` does, soft tokens in their
+        placeholder slots. The text prefill then runs unchanged -- page tables,
+        per-layer tables, chunking, cached-prefix offsets, bounded rings -- except
+        that ``prepare_inputs_prefill`` reads the installed override instead of
+        embedding ``tokens`` (which still drive every shape). Eager only.
+        """
+        if int(kwargs.get("batch_size", 1) or 1) != 1 or isinstance(kwargs.get("user_id"), (list, tuple)):
+            raise NotImplementedError("multimodal prefill is per user (batched prefill is off for multimodal batches)")
+        model = self.model[kwargs.get("model_id", -1)]
+        base = int(num_cached_tokens or 0)
+        suffix = mm_embeds[base : base + int(tokens.shape[-1])]
+        if int(suffix.shape[0]) == 0:
+            raise ValueError(f"cached prefix {base} covers the whole merged prompt ({int(mm_embeds.shape[0])} rows)")
+        model._g4_mm_prefill_embeds = (suffix.contiguous(), base)
+        # Image-span bidirectional attention (HF ``use_bidirectional_attention="vision"``): block ids of the
+        # prompt's vision placeholders; the model turns them into masks for a whole-prompt single-chunk prefill.
+        if base == 0 and getattr(self, "image_token_id", None) is not None:
+            from models.demos.gemma4.tt.mm_attention_mask import vision_block_ids
+
+            model._g4_mm_prefill_blocks = vision_block_ids(tokens.reshape(-1), self.image_token_id)
+        try:
+            return self.prefill_forward_single_user_text(
+                tokens, page_table, kv_cache=kv_cache, num_cached_tokens=num_cached_tokens, **kwargs
+            )
+        finally:
+            model._g4_mm_prefill_embeds = None
+            model._g4_mm_prefill_blocks = None
 
     def _prefill_forward_single_user_text_eager(
         self,
@@ -1731,6 +1939,130 @@ class ChunkedPrefillPageTableGuardMixin:
             for model, tables in zip(self.model, previous):
                 model._active_page_tables_per_layer = tables
 
+    # ── Decode-trace allocation guard ──────────────────────────────────────
+    # A trace replay writes its intermediates to the addresses they had at capture time. Anything
+    # allocated after the capture and still alive at a replay (per-layer page tables for a new batch
+    # key, a sliding-window tail stash, a program's semaphores, ...) can sit in that range and be
+    # overwritten: the symptom is a request that is right until the first traced decode and wrong
+    # afterwards. The allocator level right after a capture is the quiescent baseline; a higher level
+    # at the next replay means such an allocation happened, so the traces are released and re-captured
+    # against the new layout. Bounded by GEMMA4_TRACE_ALLOC_GUARD_MAX re-captures (default 8);
+    # GEMMA4_TRACE_ALLOC_GUARD=0 disables the guard.
+    _g4_trace_alloc_baseline: dict = {}
+    _g4_trace_guard_recaptures: int = 0
+
+    _g4_alloc_dump_count: int = 0
+
+    def _g4_alloc_dump(self, prefix: str) -> None:
+        """GEMMA4_ALLOC_DUMPS=1: write the allocator block tables (generated/reports) at trace captures and
+        the first prefills, to diff for allocations that outlive a capture."""
+        if os.environ.get("GEMMA4_ALLOC_DUMPS", "0") != "1" or self._g4_alloc_dump_count >= 40:
+            return
+        self._g4_alloc_dump_count += 1
+        try:
+            mesh = self.model_args[0].mesh_device
+            ttnn.synchronize_device(mesh)
+            ttnn.dump_device_memory_state(mesh, f"{self._g4_alloc_dump_count:02d}_{prefix}")
+            logger.info(
+                "Gemma4: allocator dump {:02d}_{} (levels {})",
+                self._g4_alloc_dump_count,
+                prefix,
+                self._g4_alloc_levels(),
+            )
+        except Exception as exc:  # noqa: BLE001 - diagnostics only
+            logger.warning("Gemma4: allocator dump failed: {}", exc)
+
+    def _g4_alloc_levels(self):
+        """Per mesh: (DRAM bytes allocated bottom-up, worker-L1 bytes allocated).
+
+        Trace intermediates are bottom-up in DRAM and top-down in L1, so a persistent allocation that
+        can collide with a replay raises the DRAM bottom-up total (kernel binaries are top-down and
+        excluded) or the L1 total.
+        """
+        levels = []
+        for args in self.model_args:
+            mesh = getattr(args, "mesh_device", None)
+            try:
+                view = ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM)
+                levels.append(_g4_dram_bottom_up_bytes(view))
+            except Exception:  # noqa: BLE001 - no view means nothing to guard
+                levels.append(0)
+            try:
+                levels.append(int(ttnn.get_memory_view(mesh, ttnn.BufferType.L1).total_bytes_allocated_per_bank))
+            except Exception:  # noqa: BLE001
+                levels.append(0)
+        return tuple(levels)
+
+    def _g4_trace_guard_should_recapture(self, decode_trace_key) -> bool:
+        if os.environ.get("GEMMA4_TRACE_ALLOC_GUARD", "1") == "0":
+            return False
+        baseline = self._g4_trace_alloc_baseline.get(decode_trace_key)
+        if baseline is None:
+            # Captured by a warmup path: the level at this first replay is the baseline.
+            self._g4_trace_alloc_baseline[decode_trace_key] = self._g4_alloc_levels()
+            return False
+        if not getattr(self, "_g4_alloc_check_pending", True):
+            return False  # nothing but replays since the last check: no new persistent allocation
+        self._g4_alloc_check_pending = False
+        current = self._g4_alloc_levels()
+        if all(c <= b for b, c in zip(baseline, current)):
+            # The level right after the capture can still include tensors the warmup frees later; the
+            # lowest level seen at a replay is the true quiescent baseline, so track it downwards.
+            self._g4_trace_alloc_baseline[decode_trace_key] = tuple(min(b, c) for b, c in zip(baseline, current))
+            return False
+        limit = int(os.environ.get("GEMMA4_TRACE_ALLOC_GUARD_MAX", "8"))
+        if self._g4_trace_guard_recaptures >= limit:
+            if self._g4_trace_guard_recaptures == limit:
+                self._g4_trace_guard_recaptures += 1
+                logger.error(
+                    "Gemma4: device allocations grew again after a decode-trace capture (baseline {} -> {}) "
+                    "but the re-capture limit ({}) is spent; replays may overwrite the new buffers",
+                    baseline,
+                    current,
+                    limit,
+                )
+            return False
+        self._g4_trace_guard_recaptures += 1
+        logger.warning(
+            "Gemma4: device allocations grew after the decode-trace capture (bytes per bank {} -> {}); "
+            "re-capturing the decode traces ({}/{})",
+            baseline,
+            current,
+            self._g4_trace_guard_recaptures,
+            limit,
+        )
+        return True
+
+    def _g4_release_decode_traces(self, reason: str) -> None:
+        """Release every captured decode trace (and the sampling traces bound to its logits)."""
+        released = 0
+        for _key, tids in list(self.trace_ids_decode.items()):
+            if not tids:
+                continue
+            for mid, tid in tids.items():
+                try:
+                    ttnn.release_trace(self.model_args[mid].mesh_device, tid)
+                    released += 1
+                except Exception as exc:  # noqa: BLE001 - keep going, the dict is reset below
+                    logger.warning("Gemma4: decode trace release failed: {}", exc)
+        for m in self.model:
+            sampling = getattr(m, "sampling", None)
+            if sampling is not None and hasattr(sampling, "reset_trace"):
+                sampling.reset_trace()
+        # The bound input/output tensors are only dropped, not freed: the sampler and the serving loop
+        # may still hold the token/log-prob outputs of the last step. The old buffers stay allocated,
+        # which also keeps the re-capture from landing on them.
+        self.trace_ids_decode = defaultdict(lambda: None)
+        self.trace_inputs_decode = defaultdict(lambda: None)
+        self.trace_output_decode = defaultdict(lambda: None)
+        # ``_prev_decode_batch`` is kept: the step re-captures the same batch key, and the sampled-token
+        # feedback (``_gemma4_eager_token_feedback_buffer``) finds the new trace inputs through it; with
+        # it cleared the token would go to the warmup dummy and the next step would replay the old token.
+        self.prev_page_table = None
+        self._g4_trace_alloc_baseline = {}
+        self._g4_recapture_without_precompile = True
+        logger.warning("Gemma4: released {} decode trace(s): {}", released, reason)
+
     def _decode_forward_trace_text(
         self,
         tokens,
@@ -1755,7 +2087,14 @@ class ChunkedPrefillPageTableGuardMixin:
 
         batch = int(tokens[0].shape[0]) if tokens else 1
         decode_trace_key = self._decode_trace_key(on_device_sampling, tokens)
+        if self.trace_ids_decode[decode_trace_key] and self._g4_trace_guard_should_recapture(decode_trace_key):
+            self._g4_release_decode_traces("device allocations grew after the decode-trace capture")
         if not self.trace_ids_decode[decode_trace_key]:
+            # A re-capture after a guard release happens inside a live request: the programs are warm,
+            # and the compile pass would run the sampler's warmup-only precompile (all configs, token
+            # count update) against that request's device state, so only the graph is recorded.
+            skip_precompile = skip_precompile or bool(getattr(self, "_g4_recapture_without_precompile", False))
+            self._g4_recapture_without_precompile = False
             trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
                 tokens,
                 current_pos,
@@ -1767,6 +2106,8 @@ class ChunkedPrefillPageTableGuardMixin:
             self.trace_ids_decode[decode_trace_key] = trace_ids
             self.trace_inputs_decode[decode_trace_key] = device_inputs
             self.trace_output_decode[decode_trace_key] = tt_out_trace
+            self._g4_trace_alloc_baseline[decode_trace_key] = self._g4_alloc_levels()
+            self._g4_alloc_dump(f"cap_b{batch}_")
 
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
@@ -1799,10 +2140,42 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         "resumed_prefill_token_alignment": SDPA_CHUNK_ALIGN,
     }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, vision_tower=None, embed_vision=None, image_token_id=None, pad_token_id=None, **kwargs):
         super().__init__(*args, **kwargs)
         # Gemma4 decode already returns sampled tokens when on-device sampling is enabled.
         self.enable_split_sampling = False
+        # Multimodal components (None for text-only builds). ``is_multimodal`` gates the
+        # vision path (encode_vision / prefill_forward_multimodal / warmup_vision).
+        self.vision_tower = vision_tower
+        self.embed_vision = embed_vision
+        self.image_token_id = image_token_id
+        self.pad_token_id = pad_token_id
+        # The SigLIP path needs tower + projector; the unified (encoder-free)
+        # embedder projects straight to text space and carries no projector.
+        self.is_multimodal = vision_tower is not None and (
+            embed_vision is not None or getattr(vision_tower, "projects_to_text", False)
+        )
+
+    def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
+        """Warmup tokens with *unique* per-user page-table rows.
+
+        Stock ``Generator._mock_tokens`` fills the page table with zeros, so every
+        user maps to physical block 0. That is fine for B=1 but wedges batched
+        prefill (B≥2) when concurrent ``paged_fill_cache`` writers collide —
+        indefinite stall after the first all_gather on P150x8 (batch-32 demo).
+        """
+        ret = super()._mock_tokens(batch_size, seq_len, kv_cache, model_id)
+        page_table = ret.get("page_table")
+        if page_table is not None and batch_size > 1:
+            num_blocks = int(page_table.shape[1])
+            needed = batch_size * num_blocks
+            # Paged K: [num_blocks_total, n_heads, block_size, head_dim] (see get_block_size).
+            pool = needed
+            if kv_cache is not None and kv_cache[model_id] is not None:
+                pool = int(kv_cache[model_id][0][0].shape[0])
+            flat = torch.arange(needed, dtype=torch.int32) % max(pool, 1)
+            ret["page_table"] = flat.reshape(batch_size, num_blocks)
+        return ret
         # Used by batch-keyed decode traces / async-ahead feedback (mixin).
         self._prev_decode_batch = None
 
@@ -1903,6 +2276,7 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         warmup_prefill=True,
         **kwargs,
     ):
+        self._g4_alloc_check_pending = True  # a prefill may leave persistent allocations behind
         if model_id_warmup is not None:
             warmup_prefill = False
 
@@ -2082,12 +2456,14 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         num_layers=None,
         paged_attention_config=None,
         bounded_sliding_kv_cache=False,
+        multimodal: bool = True,
+        vision_dtype=ttnn.bfloat8_b,
     ):
         tokenizer = _load_text_tokenizer(model_path)
         if not hasattr(tokenizer, "stop_tokens"):
             tokenizer.stop_tokens = [tokenizer.eos_token_id]
 
-        model_args, model, tt_kv_cache, _ = create_tt_model(
+        model_args, model, tt_kv_cache, state_dict = create_tt_model(
             mesh_device=mesh_device,
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
@@ -2114,5 +2490,421 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             has_per_layer_inputs=bool(getattr(model, "hidden_size_per_layer_input", 0)),
             bounded_sliding=bounded_sliding_kv_cache,
         )
-        generator = cls([model], [model_args], mesh_device, processor=None, tokenizer=tokenizer)
+
+        vision_tower = None
+        embed_vision = None
+        image_token_id = None
+        pad_token_id = None
+        if multimodal:
+            hf_config = Gemma4ModelArgs.load_hf_config(model_path)
+            image_token_id = getattr(hf_config, "image_token_id", None)
+            if image_token_id is None:
+                raise ValueError("HF config has no image_token_id — not a multimodal Gemma-4 checkpoint?")
+            pad_token_id = getattr(getattr(hf_config, "text_config", hf_config), "pad_token_id", tokenizer.pad_token_id)
+
+            # VisionModelArgs reads HF_MODEL env for the checkpoint path (like ModelArgs).
+            os.environ.setdefault("HF_MODEL", model_path)
+            # Share the text model's mesh/CCL setup so the vision tower's TP
+            # all-reduces reuse the same semaphores and link/topology tuning.
+            # The text model's warm weight cache hands over a dataless placeholder
+            # dict; the vision encoders are not in that cache, so take their tensors
+            # from the checkpoint (measured 2026-10-07: NaN / inf / 1e34 otherwise).
+            state_dict = vision_state_dict_for(state_dict, model_path)
+            if has_unified_vision_weights(state_dict):
+                # 12B "unified": no SigLIP tower; raw patches project straight to text space.
+                vision_tower = Gemma4UnifiedVisionEmbedder(
+                    mesh_device,
+                    state_dict,
+                    text_hidden_size=model.hidden_size,
+                    weight_cache_path=model_args.weight_cache_path(ttnn.bfloat16),
+                )
+                embed_vision = None
+            else:
+                vision_args = VisionModelArgs(
+                    mesh_device,
+                    dummy_weights=True,
+                    max_batch_size=1,
+                    max_seq_len=8192,
+                    mesh_config=model.mesh_config,
+                    ccl_manager=model.ccl_manager,
+                )
+                vision_state_dict = _build_vision_state_dict(state_dict, vision_args)
+                vision_tower = VisionTower(
+                    args=vision_args,
+                    dtype=vision_dtype,
+                    state_dict=vision_state_dict,
+                    tt_ccl=TT_CCL(mesh_device),
+                    weight_cache_path=vision_args.weight_cache_path(vision_dtype),
+                )
+                embed_vision = Gemma4MultimodalEmbedder.from_state_dict(
+                    mesh_device=mesh_device,
+                    state_dict=state_dict,
+                    vision_args=vision_args,
+                    text_hidden_size=model.hidden_size,
+                    dtype=ttnn.bfloat16,
+                    weight_cache_path=vision_args.weight_cache_path(ttnn.bfloat16),
+                )
+
+        generator = cls(
+            [model],
+            [model_args],
+            mesh_device,
+            processor=None,
+            tokenizer=tokenizer,
+            vision_tower=vision_tower,
+            embed_vision=embed_vision,
+            image_token_id=image_token_id,
+            pad_token_id=pad_token_id,
+        )
         return generator, [tt_kv_cache], tokenizer
+
+    # ── Multimodal (vision) path ───────────────────────────────────────────
+    # These are only used when the generator was built with ``multimodal=True``.
+    # The text-only path (prefill_forward_text / decode_forward) is unchanged.
+
+    def encode_vision(self, pixel_values: torch.Tensor, image_position_ids: torch.Tensor):
+        """Run the on-device vision tower + on-device projector and return the VALID
+        projected soft tokens on device.
+
+        The vision tower returns a *padded* ``[1, batch, output_length, vision_hidden]``
+        pooled tensor plus a boolean ``[batch, output_length]`` mask (True = valid soft
+        token). The projector (RMSNorm + Linear, ttnn) lifts it to text-embedding space,
+        then a ttnn ``gather`` strips the padded slots so the returned tensor is the
+        compact ``[num_valid, text_hidden]`` set of soft tokens, in order, ready to
+        scatter into the ``image_token_id`` slots of the text stream.
+
+        Args:
+            pixel_values: ``[1, num_patches, in_dim]`` torch (from Gemma4Processor).
+            image_position_ids: ``[1, num_patches, 2]`` torch.
+
+        Returns:
+            ttnn.Tensor ``[num_valid, text_hidden]`` bfloat16 on device.
+        """
+        if not self.is_multimodal:
+            raise RuntimeError("encode_vision requires from_pretrained(..., multimodal=True).")
+        start_time = time.time()
+        if getattr(self.vision_tower, "projects_to_text", False):
+            # Unified (encoder-free) embedder: patches -> text space in one module.
+            projected_tt, mask = self.vision_tower(pixel_values, image_position_ids)
+        else:
+            num_patches = image_position_ids.shape[1]
+            seq_len = _vision_encoder_seq_len(num_patches)
+            pooled_tt, mask = self.vision_tower(pixel_values, image_position_ids, seq_len)
+            # On-device projection (scale-free RMSNorm + Linear) -> text embedding space.
+            projected_tt = self.embed_vision(pooled_tt)  # [1, batch, output_length, text_hidden]
+            if hasattr(pooled_tt, "deallocate"):
+                pooled_tt.deallocate(True)
+        model_time = time.time() - start_time
+        logger.info(f"vision_model time {model_time}")
+
+        # Strip padded soft tokens with an on-device gather. ``mask`` is host metadata
+        # (small bool tensor); only the integer valid indices touch the host. The 4D
+        # dim=2 gather with a uint16 TILE index is the tested ttnn.gather configuration.
+        valid_indices = torch.where(mask[0])[0].to(torch.uint16)  # [num_valid]
+        num_valid = int(valid_indices.numel())
+        text_hidden = projected_tt.shape[-1]
+        gather_index = valid_indices.view(1, 1, num_valid, 1).expand(1, 1, num_valid, text_hidden).contiguous()
+        gather_index_tt = ttnn.from_torch(
+            gather_index,
+            device=self.mesh_device,
+            dtype=ttnn.uint16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._replicate_mapper(),
+        )
+        image_embeds_tt = ttnn.gather(projected_tt, 2, index=gather_index_tt)  # [1,1,num_valid,text_hidden]
+        if hasattr(projected_tt, "deallocate"):
+            projected_tt.deallocate(True)
+        return ttnn.reshape(image_embeds_tt, (num_valid, text_hidden))
+
+    def encode_vision_batch(self, pixel_values_batch: torch.Tensor, image_position_ids_batch: torch.Tensor):
+        """Run the vision tower + embedder for a batch of images, one image at a time,
+        and return the per-user valid projected soft tokens as a list of HOST tensors.
+
+        The tower is tensor-parallel across the whole mesh, so a single image already
+        uses every device; batching is a plain loop over users.
+
+        Args:
+            pixel_values_batch: ``[B, num_patches, in_dim]`` torch.
+            image_position_ids_batch: ``[B, num_patches, 2]`` torch.
+
+        Returns:
+            list of ``B`` host tensors, each ``[num_valid_u, text_hidden]`` (bf16), in user
+            order.
+        """
+        if not self.is_multimodal:
+            raise RuntimeError("encode_vision_batch requires from_pretrained(..., multimodal=True).")
+        is_mesh = hasattr(self.mesh_device, "shape")
+        batch_size = int(pixel_values_batch.shape[0])
+
+        per_user_embeds: list[torch.Tensor] = []
+        _t0 = time.perf_counter()
+        for u in range(batch_size):
+            # encode_vision returns the compact, valid-only soft tokens, replicated
+            # across the mesh; take one device's copy back to host.
+            embeds_tt = self.encode_vision(pixel_values_batch[u : u + 1], image_position_ids_batch[u : u + 1])
+            ttnn.synchronize_device(self.mesh_device)
+            if is_mesh:
+                user_embeds = ttnn.to_torch(ttnn.get_device_tensors(embeds_tt)[0])
+            else:
+                user_embeds = ttnn.to_torch(embeds_tt)
+            if hasattr(embeds_tt, "deallocate"):
+                embeds_tt.deallocate(True)
+            per_user_embeds.append(user_embeds.contiguous().to(torch.bfloat16))
+        logger.info(
+            f"Vision batch encode: {batch_size} image(s), one per iteration (TP) "
+            f"in {(time.perf_counter() - _t0) * 1000.0:.1f} ms"
+        )
+        return per_user_embeds
+
+    def _replicate_mapper(self):
+        return ttnn.ReplicateTensorToMesh(self.mesh_device) if hasattr(self.mesh_device, "shape") else None
+
+    def prefill_forward_multimodal(
+        self,
+        tokens: torch.Tensor,
+        pixel_values: torch.Tensor = None,
+        image_position_ids: torch.Tensor = None,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        enable_trace: bool = False,
+        image_embeds_tt=None,
+    ) -> torch.Tensor:
+        """Prefill an image+text prompt and return next-token logits on host.
+
+        Feeds precomputed merged embeddings straight into
+        ``Gemma4Model.ttnn_prefill_forward`` (which accepts hidden states
+        directly), so the only deviation from the text path is the embedding
+        step — the decoder body, RoPE, paged attention and lm_head are
+        unchanged. Decode reuses the inherited ``decode_forward``.
+
+        Args:
+            tokens: ``[1, prompt_len]`` long ids (image_token_id placeholders included).
+            pixel_values / image_position_ids: from Gemma4Processor. Optional if
+                ``image_embeds_tt`` is supplied (precomputed vision embeds).
+            page_table: ``[1, num_blocks]`` int32 identity page table (or None).
+            kv_cache: ``[per_model_cache]`` list as returned by ``from_pretrained``
+                (unwrapped to the per-layer ``[k, v]`` list internally).
+            prompt_lens: list[int] of real (unpadded) prompt lengths.
+            image_embeds_tt: optional precomputed vision soft tokens on device
+                (``[num_valid, text_hidden]``, replicated) — skips the vision
+                encoder. Used by the batched demo, which runs the tower 4-at-a-time
+                (DP) once for all users and reuses the per-user embeds here.
+
+        Returns:
+            torch logits ``[1, vocab]`` for the last prompt token.
+        """
+        del enable_trace  # Multimodal prefill is not traced (vision encoder + on-device merge).
+        if not self.is_multimodal:
+            raise RuntimeError("prefill_forward_multimodal requires from_pretrained(..., multimodal=True).")
+        model = self.model[0]
+        if getattr(model, "hidden_size_per_layer_input", 0):
+            raise NotImplementedError(
+                "Multimodal prefill + per-layer inputs (PLI) is not supported. "
+                "Use a non-PLI multimodal checkpoint (gemma-4 12B / 26B-A4B / 31B IT)."
+            )
+        prompt_len = int(tokens.shape[1])
+        last_token_idx = (prompt_lens[0] if prompt_lens is not None else prompt_len) - 1
+        prefill_seq_len = get_padded_prefill_len(prompt_len)
+
+        # 1. Vision -> valid projected soft tokens on device: [num_valid, text_hidden].
+        _vision_t0 = time.perf_counter()
+        if image_embeds_tt is None:
+            if pixel_values is None or image_position_ids is None:
+                raise ValueError(
+                    "prefill_forward_multimodal needs either pixel_values+image_position_ids "
+                    "or a precomputed image_embeds_tt."
+                )
+            image_embeds_tt = self.encode_vision(pixel_values, image_position_ids)
+            vision_prefill_ms = (time.perf_counter() - _vision_t0) * 1000.0
+            logger.info(f"Vision encoder prefill: {vision_prefill_ms:.1f} ms")
+        else:
+            # Precomputed embeds (batched demo): vision already timed by encode_vision_batch.
+            vision_prefill_ms = time.perf_counter() - _vision_t0
+        num_valid = int(image_embeds_tt.shape[0])
+        text_hidden = int(image_embeds_tt.shape[1])
+
+        # 2. Build llm_ids on host (cheap int ops): replace image_token_id with pad,
+        #    then pad the prompt out to the prefill bucket with pad_token_id. Embedding
+        #    this on device yields the text embeddings with pad-token rows already in
+        #    place, so only the image_token slots need filling.
+        input_ids = tokens[0].to(torch.long)
+        image_mask = input_ids == self.image_token_id
+        n_image = int(image_mask.sum().item())
+        if n_image != num_valid:
+            raise ValueError(
+                f"Image placeholder count ({n_image}) != vision soft tokens ({num_valid}). "
+                "The processor's image_seq_length and the image processor's max_soft_tokens must agree."
+            )
+        image_positions = torch.where(image_mask)[0].to(torch.int32)  # [num_valid], within prompt_len
+        llm_ids = input_ids.clone()
+        llm_ids[image_mask] = self.pad_token_id
+        pad = prefill_seq_len - prompt_len
+        if pad > 0:
+            llm_ids = torch.cat([llm_ids, torch.full((pad,), self.pad_token_id, dtype=torch.long)], dim=0)
+        llm_ids_tt = ttnn.from_torch(
+            llm_ids.view(1, prefill_seq_len),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._replicate_mapper(),
+        )
+
+        # 3. Text embeddings on device (lookup + sqrt(hidden) scale + all-gather).
+        text_embeds_tt = model.embed_tokens(llm_ids_tt)  # [1, prefill_seq, text_hidden] (or 4D under TP)
+        text_embeds_tt = ttnn.reshape(text_embeds_tt, (prefill_seq_len, text_hidden))
+        # scatter wants interleaved DRAM; force it regardless of the embed output layout.
+        text_embeds_tt = ttnn.to_layout(text_embeds_tt, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # 4. Scatter the projected vision tokens into the image_token slots (on device).
+        scatter_index = image_positions.view(num_valid, 1).expand(num_valid, text_hidden).contiguous()
+        scatter_index_tt = ttnn.from_torch(
+            scatter_index,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._replicate_mapper(),
+        )
+        merged_tt = ttnn.scatter(text_embeds_tt, 0, scatter_index_tt, image_embeds_tt)  # [prefill_seq, text_hidden]
+        if hasattr(text_embeds_tt, "deallocate"):
+            text_embeds_tt.deallocate(True)
+        if hasattr(image_embeds_tt, "deallocate"):
+            image_embeds_tt.deallocate(True)
+        merged_tt = ttnn.reshape(merged_tt, (1, 1, prefill_seq_len, text_hidden))
+
+        # 5. Page table -> device.
+        tt_page_table = None
+        if page_table is not None:
+            tt_page_table = ttnn.from_torch(
+                page_table.to(torch.int32),
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self._replicate_mapper(),
+            )
+
+        # 6. Prefill: feed merged embeddings directly (bypass embed_tokens).
+        # ``from_pretrained`` returns ``[tt_kv_cache]`` (a list indexed by model_id,
+        # matching the base Generator contract), so unwrap once to get the per-layer
+        # cache the model expects (``caches[i]`` -> ``[k_cache, v_cache]``).
+        model_id = 0
+        model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
+        logger.info(
+            f"Multimodal prefill: prompt={prompt_len} (image tokens={n_image}), "
+            f"padded={prefill_seq_len}, last_token={last_token_idx}"
+        )
+        get_last_token = (last_token_idx // 32) * 32
+        _llm_t0 = time.perf_counter()
+        # Image-span bidirectional attention masks for this whole-prompt prefill (GEMMA4_MM_BIDIR_MASK=1).
+        from models.demos.gemma4.tt.mm_attention_mask import vision_block_ids
+
+        model._g4_mm_prefill_blocks = vision_block_ids(input_ids, self.image_token_id)
+        try:
+            logits_tt = model.ttnn_prefill_forward(
+                x=merged_tt,
+                page_table=tt_page_table,
+                kv_cache=model_kv_cache,
+                get_last_token=get_last_token,
+                batch_size=1,
+                input_ids_torch=None,
+                embeds_torch=None,
+            )
+        finally:
+            model._g4_mm_prefill_blocks = None
+        ttnn.synchronize_device(self.mesh_device)
+        llm_prefill_ms = (time.perf_counter() - _llm_t0) * 1000.0
+        logger.info(
+            f"LLM prefill: {llm_prefill_ms:.1f} ms "
+            f"(vision+LLM prefill total ≈ {vision_prefill_ms + llm_prefill_ms:.1f} ms)"
+        )
+
+        # 7. Read last-token logits to host.
+        if model.mesh_config is not None and model.mesh_config.tp > 1:
+            torch_logits = ttnn.to_torch(ttnn.get_device_tensors(logits_tt)[0])
+        else:
+            torch_logits = ttnn.to_torch(logits_tt)
+        return torch_logits[..., last_token_idx % 32, : model.vocab_size]
+
+    def warmup_vision(self, pixel_values: torch.Tensor, image_position_ids: torch.Tensor):
+        """Compile the vision tower + projector + gather on a real (or dummy) image."""
+        if not self.is_multimodal:
+            raise RuntimeError("warmup_vision requires from_pretrained(..., multimodal=True).")
+        logger.info("Warming up vision tower + projector...")
+        image_embeds_tt = self.encode_vision(pixel_values, image_position_ids)
+        if hasattr(image_embeds_tt, "deallocate"):
+            image_embeds_tt.deallocate(True)
+        logger.info("Vision warmup complete")
+
+
+# ---------------------------------------------------------------------------------------------
+# GEMMA4_PREFILL_PHASE_TIMING=1: synchronized per-phase timing of every single-user prefill call
+# (sliding-tail readbacks, per-layer page-table installs, attention, experts), logged per call.
+# Diagnostic only: the synchronizations change nothing but the timing.
+# ---------------------------------------------------------------------------------------------
+if os.environ.get("GEMMA4_PREFILL_PHASE_TIMING", "0") == "1":
+    import models.demos.gemma4.tt.attention as _g4_attn_mod
+    from models.demos.gemma4.tt import experts as _g4_experts_mod
+    from models.demos.gemma4.tt import model as _g4_model_mod
+    from models.demos.gemma4.tt.attention import prefill as _g4_attn_prefill_mod
+
+    _G4_PHASE = defaultdict(float)
+    _G4_PHASE_N = defaultdict(int)
+
+    def _g4_phase_timed(name, fn, mesh_getter):
+        def wrapper(*a, **k):
+            mesh = mesh_getter(a)
+            if mesh is not None:
+                ttnn.synchronize_device(mesh)
+            t0 = time.perf_counter()
+            try:
+                return fn(*a, **k)
+            finally:
+                if mesh is not None:
+                    ttnn.synchronize_device(mesh)
+                _G4_PHASE[name] += time.perf_counter() - t0
+                _G4_PHASE_N[name] += 1
+
+        return wrapper
+
+    def _g4_mesh_of_tensor(a):
+        try:
+            return a[0].device()
+        except Exception:
+            return None
+
+    _g4_attn_prefill_mod._read_sliding_tail_from_paged_cache = _g4_phase_timed(
+        "sliding_tail_readback", _g4_attn_prefill_mod._read_sliding_tail_from_paged_cache, _g4_mesh_of_tensor
+    )
+    _g4_model_mod.Gemma4Model.update_persistent_per_layer_page_tables = _g4_phase_timed(
+        "page_table_install",
+        _g4_model_mod.Gemma4Model.update_persistent_per_layer_page_tables,
+        lambda a: getattr(a[0], "mesh_device", None),
+    )
+    _g4_experts_mod.Gemma4Experts.__call__ = _g4_phase_timed(
+        "experts", _g4_experts_mod.Gemma4Experts.__call__, lambda a: getattr(a[0], "mesh_device", None)
+    )
+    _g4_attn_mod.Gemma4Attention.__call__ = _g4_phase_timed(
+        "attention", _g4_attn_mod.Gemma4Attention.__call__, lambda a: getattr(a[0], "mesh_device", None)
+    )
+
+    _g4_orig_single_user = Gemma4Generator.prefill_forward_single_user_text
+
+    def _g4_single_user_with_phases(self, *a, **k):
+        _G4_PHASE.clear()
+        _G4_PHASE_N.clear()
+        t0 = time.perf_counter()
+        try:
+            return _g4_orig_single_user(self, *a, **k)
+        finally:
+            total = time.perf_counter() - t0
+            parts = ", ".join(
+                f"{n} {v*1000:.0f} ms/{_G4_PHASE_N[n]}" for n, v in sorted(_G4_PHASE.items(), key=lambda kv: -kv[1])
+            )
+            logger.info(
+                f"[gemma4-prefill-phases] single-user prefill {total*1000:.0f} ms"
+                f" (seq {k.get('seq_len', '?')}, start_pos {k.get('start_pos', k.get('num_cached_tokens', '?'))}): {parts}"
+            )
+
+    Gemma4Generator.prefill_forward_single_user_text = _g4_single_user_with_phases

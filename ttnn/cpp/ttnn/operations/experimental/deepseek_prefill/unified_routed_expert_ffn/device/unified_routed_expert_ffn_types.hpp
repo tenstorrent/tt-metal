@@ -57,6 +57,9 @@ enum class RoutedExpertActivation : uint8_t {
     SituGlu = 2,
     // clamped SiLU-GLU: silu(min(gate,L)) * clamp(up,±L)  (DeepSeek V4)
     ClampedSiluGlu = 3,
+    // GeGLU with the tanh GELU: gelu_tanh(gate) * up  (Gemma 4 routed experts). Same unary-SFPU-on-dst
+    // structure as Silu (gate pass + multiply), only the SFPU op differs.
+    GeluTanhGlu = 4,
 };
 
 // Attributes (the constants known at host time).
