@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <bit>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 #include <array>
@@ -13,6 +14,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "blockfloat_common.hpp"
+#include "bfp_simd.hpp"
 #include "common/executor.hpp"
 #include "constants.hpp"
 #include "hal_types.hpp"
@@ -372,6 +374,63 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     TT_ASSERT(input_data.size() % num_float_in_tile == 0);
     uint32_t num_tiles = input_data.size() / num_float_in_tile;
 
+    // Encode directly into the final allocation. The old converter allocates
+    // vectors per face row and tile, then concatenates every worker's result.
+    // Restrict the SIMD loads to FP32/BF16 and 16-value face rows. Other input
+    // types, exponent-A formats and geometries retain their existing converter.
+    if constexpr (
+        (std::is_same_v<T, float> || std::is_same_v<T, bfloat16>) &&
+        (BfpFormat == tt::DataFormat::Bfp2_b || BfpFormat == tt::DataFormat::Bfp4_b ||
+         BfpFormat == tt::DataFormat::Bfp8_b)) {
+        if (!is_exp_a && face_W == 16 && std::endian::native == std::endian::little) {
+            constexpr int bits = BfpFormat == tt::DataFormat::Bfp8_b ? 7 : BfpFormat == tt::DataFormat::Bfp4_b ? 3 : 1;
+            const uint32_t rows = tile_HW / 16;
+            const uint32_t exponent_bytes = exponent_padding ? tt::round_up(rows, l1_alignment) : rows;
+            const uint32_t packed_bytes = exponent_bytes + tile_HW * (bits + 1) / 8;
+            std::vector<uint32_t> result(static_cast<size_t>(num_tiles) * packed_bytes / 4, 0);
+            const auto pack_row = tt::tt_metal::bfp_simd::select_row_packer<bits, T>();
+            auto process = [&](uint32_t begin, uint32_t end) {
+                for (uint32_t t = begin; t < end; ++t) {
+                    const T* input = input_data.data() + static_cast<size_t>(t) * tile_HW;
+                    auto* output = reinterpret_cast<uint8_t*>(result.data()) + static_cast<size_t>(t) * packed_bytes;
+                    uint32_t row = 0;
+                    for (uint32_t tr = 0; tr < subtiles_in_tile_row; ++tr) {
+                        for (uint32_t tc = 0; tc < subtiles_in_tile_col; ++tc) {
+                            for (uint32_t r = 0; r < face_H; ++r, ++row) {
+                                const uint32_t offset =
+                                    row_major_input ? (tr * face_H + r) * tile_W + tc * face_W : row * face_W;
+                                pack_row(input + offset, output + row, output + exponent_bytes + row * 2 * (bits + 1));
+                            }
+                        }
+                    }
+                }
+            };
+            // Use Metal's existing bounded pool, including its nested-call and
+            // fork handling. Do not create a second runtime's thread team.
+            if (num_tiles < 256) {
+                process(0, num_tiles);
+                return result;
+            }
+            const uint32_t workers = static_cast<uint32_t>(tt::tt_metal::detail::GetExecutor().num_workers());
+            const uint32_t chunks = std::max(1u, std::min(workers, num_tiles / 128));
+            if (chunks == 1) {
+                process(0, num_tiles);
+            } else {
+                std::vector<std::shared_future<void>> pending;
+                pending.reserve(chunks);
+                for (uint32_t chunk = 0; chunk < chunks; ++chunk) {
+                    const uint32_t begin = static_cast<uint64_t>(num_tiles) * chunk / chunks;
+                    const uint32_t end = static_cast<uint64_t>(num_tiles) * (chunk + 1) / chunks;
+                    pending.emplace_back(tt::tt_metal::detail::async([&, begin, end] { process(begin, end); }));
+                }
+                for (auto& future : pending) {
+                    future.get();
+                }
+            }
+            return result;
+        }
+    }
+
     int num_exponents_in_dword = 4;
     int num_mantissas_in_dword;
     if constexpr (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b) {
@@ -382,36 +441,51 @@ std::vector<uint32_t> pack_as_bfp_tiles(
         num_mantissas_in_dword = 4;
     }
 
-    // Lambda to process a range of tiles
-    auto process_tile_range = [&](int start_tile, int end_tile) -> std::vector<uint32_t> {
-        const int rows_per_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows;
-        const int mantissa_dwords_per_tile = num_float_in_tile / num_mantissas_in_dword;
-        const int exp_dwords_per_tile =
-            exponent_padding ? static_cast<int>(tt::round_up(static_cast<uint32_t>(rows_per_tile), l1_alignment)) /
-                                   num_exponents_in_dword
-                             : rows_per_tile / num_exponents_in_dword;
+    // Every tile is `exponent dwords` followed by `mantissa dwords`, and both widths are known
+    // up front, so each dword can be written straight into its final slot of the output buffer.
+    // The exponent section is padded to the L1 alignment only when it is smaller than that.
+    // This addresses Issue #8621 item 3 (redundant copies / intermediate buffers).
+    const int rows_per_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows;
+    const int mantissa_dwords_per_tile = num_float_in_tile / num_mantissas_in_dword;
+    const size_t exp_pad_to = exponent_padding ? static_cast<size_t>(l1_alignment)
+                                               : static_cast<size_t>(num_exponents_in_dword);
+    const int exp_dwords_per_tile = static_cast<int>(
+        tt::round_up(static_cast<uint32_t>(rows_per_tile), static_cast<uint32_t>(exp_pad_to)) /
+        static_cast<uint32_t>(num_exponents_in_dword));
+    const size_t dwords_per_tile = static_cast<size_t>(exp_dwords_per_tile + mantissa_dwords_per_tile);
 
-        std::vector<uint32_t> local_result;
-        local_result.reserve(
-            static_cast<size_t>(end_tile - start_tile) * (exp_dwords_per_tile + mantissa_dwords_per_tile));
-        std::vector<uint8_t> exponents;
-        exponents.reserve(num_exponents_in_dword);
+    // Lambda to process a range of tiles, writing into `out` which must hold
+    // (end_tile - start_tile) * dwords_per_tile dwords.
+    auto process_tile_range = [&](int start_tile, int end_tile, uint32_t* out) {
+        // Scratch reused by every row and tile in this range. Hoisting these out of the inner
+        // loops removes one heap allocation per subtile row of a tilized tensor.
+        std::vector<uint32_t> single_row;
+        single_row.reserve(subtile_cols);
         std::vector<uint32_t> data;
         data.reserve(num_mantissas_in_dword);
+        std::vector<uint8_t> tile_exponents;
+        tile_exponents.reserve(static_cast<size_t>(rows_per_tile) + exp_pad_to);
+        std::vector<uint8_t> exp_dword;
+        exp_dword.reserve(num_exponents_in_dword);
 
+        size_t out_base = 0;
         for (int tile_index = start_tile; tile_index < end_tile; ++tile_index) {
-            std::vector<uint32_t> packed_data;
-            packed_data.reserve(mantissa_dwords_per_tile);
-            std::vector<uint8_t> exponents_with_padding;
-            exponents_with_padding.reserve(l1_alignment * subtiles_in_tile_row * subtiles_in_tile_col);
+            tile_exponents.clear();
+
+            // Exponents are prepended to follow data packing order:
+            //  16 exponents for sub-tile 0, then sub-tile 1, 2, 3
+            //  entire sub-tile 0 (RM layout), then sub-tile 1, 2, 3
+            uint32_t* tile_out = out + out_base;
+            out_base += dwords_per_tile;
+            size_t exp_slot = 0;
+            size_t mantissa_slot = static_cast<size_t>(exp_dwords_per_tile);
 
             size_t fp32_element_base = row_major_input ? 0 : (tile_index * num_float_in_tile);
 
             for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
                 for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
                     for (int i = 0; i < subtile_rows; ++i) {
-                        std::vector<uint32_t> single_row;
-                        single_row.reserve(subtile_cols);
+                        single_row.clear();
                         // populate a single row
                         for (int j = 0; j < subtile_cols; ++j) {
                             size_t data_index;
@@ -429,51 +503,32 @@ std::vector<uint32_t> pack_as_bfp_tiles(
                         }
 
                         uint8_t exp = get_max_exp(single_row, is_exp_a);
-
-                        // check if it satisfies the 16B alignment
-                        if (exponent_padding) {
-                            exponents_with_padding.push_back(exp);
-                        } else {
-                            exponents.push_back(exp);
-                            if (exponents.size() % num_exponents_in_dword == 0) {
-                                local_result.push_back(get_exp_dword(exponents));
-                                exponents.clear();
-                            }
-                        }
+                        tile_exponents.push_back(exp);
 
                         for (uint32_t u32_datum : single_row) {
                             data.push_back(u32_datum);
-                            if (data.size() % num_mantissas_in_dword == 0) {
-                                uint32_t datum = create_packed_bfp_packed_as_u32<BfpFormat>(data, exp, is_exp_a);
-                                packed_data.push_back(datum);
+                            if (data.size() == static_cast<size_t>(num_mantissas_in_dword)) {
+                                tile_out[mantissa_slot++] =
+                                    create_packed_bfp_packed_as_u32<BfpFormat>(data, exp, is_exp_a);
                                 data.clear();
                             }
                         }
                     }
                 }
             }
-            // prepend exponents to follow data packing order:
-            //  16 exponents for sub-tile 0​
-            //      exp_row0, exp_row1, … exp_row15​
-            //  16 exponents for sub-tile 1​
-            //  16 exponents for sub-tile 2​
-            //  16 exponents for sub-tile 3​
-            //  entire sub-tile 0 (RM layout)​
-            //  entire sub-tile 1 (RM layout)​
-            //  entire sub-tile 2 (RM layout)​
-            //  entire sub-tile 3 (RM layout)
-            // align the exponent section to 16B
-            if (exponent_padding) {
-                std::vector<uint8_t> pads(
-                    tt::round_up(exponents_with_padding.size(), l1_alignment) - exponents_with_padding.size(), 0);
-                exponents_with_padding.insert(exponents_with_padding.end(), pads.begin(), pads.end());
-                std::vector<uint32_t> packed = pack_exponents(exponents_with_padding, num_exponents_in_dword);
-                local_result.insert(local_result.end(), packed.begin(), packed.end());
-            }
-            local_result.insert(local_result.end(), packed_data.begin(), packed_data.end());
-        }
 
-        return local_result;
+            // Align the exponent section, then pack it into the slots reserved ahead of the data.
+            if (tile_exponents.size() % exp_pad_to != 0) {
+                tile_exponents.resize(((tile_exponents.size() + exp_pad_to - 1) / exp_pad_to) * exp_pad_to, 0);
+            }
+            for (size_t e = 0; e < tile_exponents.size(); e += static_cast<size_t>(num_exponents_in_dword)) {
+                exp_dword.clear();
+                exp_dword.assign(
+                    tile_exponents.begin() + static_cast<long>(e),
+                    tile_exponents.begin() + static_cast<long>(e + num_exponents_in_dword));
+                tile_out[exp_slot++] = get_exp_dword(exp_dword);
+            }
+        }
     };
 
     // Determine how many parallel work items to split the tiles into.
@@ -486,9 +541,14 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     uint32_t num_chunks = std::min(max_chunks, num_tiles / MIN_TILES_PER_CHUNK);
     num_chunks = std::max(1u, num_chunks);
 
+    // One allocation for the whole result: every chunk writes into its own slice, so there is no
+    // per-chunk buffer to concatenate afterwards.
+    std::vector<uint32_t> packed_result(static_cast<size_t>(num_tiles) * dwords_per_tile);
+
     if (num_chunks == 1) {
         // Single-threaded execution
-        return process_tile_range(0, num_tiles);
+        process_tile_range(0, num_tiles, packed_result.data());
+        return packed_result;
     }
 
     log_debug(
@@ -498,7 +558,6 @@ std::vector<uint32_t> pack_as_bfp_tiles(
         num_chunks,
         num_tiles / num_chunks);
 
-    std::vector<std::vector<uint32_t>> chunk_results(num_chunks);
     std::vector<std::shared_future<void>> futures;
     futures.reserve(num_chunks);
 
@@ -510,9 +569,10 @@ std::vector<uint32_t> pack_as_bfp_tiles(
         uint32_t tiles_for_this_chunk = tiles_per_chunk + (t < remainder ? 1 : 0);
         uint32_t end_tile = start_tile + tiles_for_this_chunk;
 
-        futures.emplace_back(
-            tt::tt_metal::detail::async([&chunk_results, &process_tile_range, t, start_tile, end_tile]() {
-                chunk_results[t] = process_tile_range(start_tile, end_tile);
+        futures.emplace_back(tt::tt_metal::detail::async(
+            [&packed_result, &process_tile_range, start_tile, end_tile, dwords_per_tile]() {
+                process_tile_range(
+                    start_tile, end_tile, packed_result.data() + static_cast<size_t>(start_tile) * dwords_per_tile);
             }));
 
         start_tile = end_tile;
@@ -521,18 +581,6 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     // Wait for all chunks to complete. get() also rethrows the first exception raised in any chunk.
     for (auto& future : futures) {
         future.get();
-    }
-
-    // Concatenate results from all chunks
-    std::vector<uint32_t> packed_result;
-    size_t total_size = 0;
-    for (const auto& result : chunk_results) {
-        total_size += result.size();
-    }
-    packed_result.reserve(total_size);
-
-    for (auto& result : chunk_results) {
-        packed_result.insert(packed_result.end(), result.begin(), result.end());
     }
 
     return packed_result;
