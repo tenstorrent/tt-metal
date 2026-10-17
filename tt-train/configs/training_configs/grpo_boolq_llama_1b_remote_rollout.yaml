@@ -23,7 +23,7 @@ training_config:
     rollout_mode: "remote_sync"
     # Push the policy weights to the rollout rank every N optimizer steps.
     weight_sync_every: 1
-    epsilon: 0.2
+    epsilon: 0.4
     per_device_train_batch_size: 2
     num_iterations: 1
     gradient_accumulation_steps: 4
