@@ -3490,6 +3490,11 @@ class UnarySFPUGolden:
         # against an accurate tanh would fail by design.
         # These six segments must match tanh_derivative_init's 6-entry SFPLUTFP32 table
         # exactly (TABLE1 breakpoints). It is fitted for sech^2 and is not tanh_init's table.
+        # NaN first: abs(NaN) fails every breakpoint test below and would fall into the
+        # saturated tail, reporting 0 where the kernel propagates the NaN. +/-inf take that
+        # tail on purpose: sech^2(+/-inf) = 0, and the kernel guards them to the same value.
+        if math.isnan(x):
+            return x
         a = abs(x)
         if a < 0.5:
             t = 0.93701171875 * a
