@@ -26,8 +26,8 @@ The budget that fits one galaxy is about **1M tokens of context per mesh row** (
 
 | Serving configuration | Users | Context | Speculative decoding | Image input | Runtime spec |
 |---|---|---|---|---|---|
-| Default (unchanged) | 16 | 131,072 | k = 5 | optional | `assets/runtime_spec_b16_k5_131072.json` / `_vision.json` |
-| **Long context, 16 users** | 16 | **262,144** | k = 5 | yes | `assets/runtime_spec_b16_k5_262144_vision.json` |
+| **Default, 16 users** | 16 | **262,144** | k = 5 | yes | `assets/runtime_spec_b16_k5_262144_vision.json` |
+| Smaller context, 16 users (the previous default) | 16 | 131,072 | k = 5 | optional | `assets/runtime_spec_b16_k5_131072.json` / `_vision.json` |
 | **Long context, 4 users** | 4 | **1,048,576** | k = 5 | optional | `assets/runtime_spec_b4_k5_1048576.json` / `_vision.json` |
 | **Long context with images, 4 users** | 4 | **524,288** | k = 5 | yes | `assets/runtime_spec_b4_k5_524288_vision.json` |
 | **APC + chunked prefill, 16 users** (opt-in) | 16 | 262,144 | k = 5 | yes | `assets/runtime_spec_b16_k5_262144_vision_apc.json` |
@@ -155,6 +155,7 @@ Serving-API suite and overload test passed on the 4-user / 1,048,576-token serve
 
 - **Plain decode on the previous image `0.24.0-799a223-ffd1a57` answered wrongly at 16 users (GSM8K 85.67 % at 131,072 tokens, 80.59 % at 262,144 tokens; speculation 95.2 % and 93.5 %).** Cause: servers without a speculative config used the fused decode-indexer backend (default switch 65,536 entries); speculative servers ran matmul. With the matmul backend plain decode scored 95.22 % and 94.47 %. This image makes matmul the default up to 262,144 index entries for plain decode too, and it was verified on plain-decode servers of this image (no speculative config, no environment override): **95.83 %** at 16 users / 131,072 tokens and **93.40 %** at 262,144 tokens (workflow, flexible-extract; the old default scored 85.67 % and 80.59 %). The fused backend is still in the code (it is selected above 262,144 entries and by `DSV41_IDX_BACKEND=fused`) and still answers wrongly at 4 users per mesh row; why is not understood. Ruled out: the plain-decode RoPE change (the old fused RoPE kernel scores 74.68 %), the sampler (0.02-0.04 % mismatch against a CPU reference at the same random numbers), request admission, vision.
 - **16 users at 262,144 tokens score about 2 points lower on GSM8K** (93.5 % against 95.2-95.4 % at 131,072 tokens), cause not identified (see "Accuracy"). Use the default 131,072-token configuration where that accuracy matters.
+- **An APC + chunked-prefill spec for 16 users / 131,072 tokens scored 88.7 % and 88.3 % on a sampled GSM8K client** (the same server without APC and with the large token budget: 95.3 %; the APC specs at 262,144 and 1,048,576 tokens: 96.5-98.4 %). Cause not isolated (controls with APC only and with chunking only were running when these notes were written). That spec is not shipped.
 - **APC restore is wrong when the prefill indexer is forced to the unsharded layout at 262,144 tokens** (`DSV41_PIDX_SHARD=0`): cache hits answer wrongly from a 16,384-token snapshot upward (cold requests are right; `DSV41_ROPE_SHARD=0` alone is fine). The default configurations shard the indexer from 131,072 index entries and are not affected; cause not found.
 - **APC is switched off for prompts that contain images** (the vision guard); text prompts of a vision server are cached.
 - **Needle retrieval at about 8,000 tokens fails now and then even without a cache**, and single-digit errors at 64k appear cold as well (1 of 6 cold requests, 0 of 6 hits); this is retrieval noise of the model on filler text, not an APC defect.
@@ -177,6 +178,6 @@ Serving-API suite and overload test passed on the 4-user / 1,048,576-token serve
 
 ## Upgrade notes
 
-- New runtime specs (above): 4 users / 1,048,576 tokens with images, and the two APC + chunked-prefill specs; the default 131,072-token specs and the earlier long-context specs are unchanged. Use `SPEC=...` in step 3 of `GETTING_STARTED.md`.
+- New runtime specs (above): 4 users / 1,048,576 tokens with images, and the two APC + chunked-prefill specs; the 16-user default is now the 262,144-token spec with images; the 131,072-token specs and the earlier long-context specs are unchanged. Use `SPEC=...` in step 3 of `GETTING_STARTED.md`.
 - Startup of the long-context servers takes about 25-40 minutes (weight cache and kernel cache populated).
 - Environment variables added or changed: `DSV41_SPEC_MAX_CTX` (final word on the spec context cap), `DSV41_VLLM_SPEC_GUARD` (0 disables the vLLM-side guard), `DSV41_ROPE_ROWS_FUSED`, `DSV41_KEY_EXPORT_PIECE`, `DSV41_SPEC_SCORE_PIECE`, `DSV41_DEC_PRECAPTURE_WARM`, `DSV41_SPEC_PRECAPTURE_WARM`, `DSV41_PIDX_SHARD`, `DSV41_PF_FIFO_CHUNK`, `DSV41_PF_PRECAPTURE_WARM`; new in this image: `DSV41_APC` (1 = prefix caching, with `--enable-prefix-caching`), `DSV41_PFA_ENGRAM_RS_SPLIT` (default 4 with `DSV41_VISION=1`, else 1), and `DSV41_IDX_SWITCH` now defaults to 262144 for plain decode as well.

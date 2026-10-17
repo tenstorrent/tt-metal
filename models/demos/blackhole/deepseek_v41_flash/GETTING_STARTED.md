@@ -36,9 +36,9 @@ Everything else in the launch stays the same.
 
 | Configuration | Runtime spec | Users | Context | Image input |
 |---|---|---|---|---|
-| Default | `runtime_spec_b16_k5_131072.json` | 16 | 131,072 | no |
-| Default with images | `runtime_spec_b16_k5_131072_vision.json` | 16 | 131,072 | yes |
-| Long context, 16 users | `runtime_spec_b16_k5_262144_vision.json` | 16 | 262,144 | yes |
+| **Default, 16 users** | `runtime_spec_b16_k5_262144_vision.json` | 16 | 262,144 | yes |
+| Smaller context, 16 users | `runtime_spec_b16_k5_131072.json` | 16 | 131,072 | no |
+| Smaller context with images, 16 users | `runtime_spec_b16_k5_131072_vision.json` | 16 | 131,072 | yes |
 | Long context, 4 users | `runtime_spec_b4_k5_1048576.json` | 4 | 1,048,576 | no |
 | Long context with images, 4 users, 1M | `runtime_spec_b4_k5_1048576_vision.json` | 4 | 1,048,576 | yes |
 | Long context with images, 4 users | `runtime_spec_b4_k5_524288_vision.json` | 4 | 524,288 | yes |
@@ -83,7 +83,7 @@ docker pull $IMAGE
 export CKPT=/path/to/deepseek-v41-flash        # the checkpoint (read-only for the container)
 export CACHE=/path/to/dsv41_cache              # weights/ and kernels/, reused across starts
 export STATE=/path/to/dsv41_state              # scratch dirs the server writes to
-export SPEC=$PWD/assets/runtime_spec_b16_k5_131072.json   # run from models/demos/blackhole/deepseek_v41_flash/ in tt-metal
+export SPEC=$PWD/assets/runtime_spec_b16_k5_262144_vision.json   # run from models/demos/blackhole/deepseek_v41_flash/ in tt-metal
 export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-c9cfb00-ffd1a57
 
 mkdir -p $CKPT $CACHE/weights $CACHE/unified $CACHE/kernels $STATE/cache_root $STATE/logs $STATE/traces
@@ -424,7 +424,7 @@ Checks so far:
 
 The cause is not identified yet.
 The 262,144-token server passes every functional test.
-Where accuracy matters, use the default 131,072-token spec or the 4-user 1M spec.
+Where the last point of accuracy matters, use the 131,072-token spec or the 4-user 1M spec.
 
 ### Run the evaluation
 
@@ -442,7 +442,7 @@ Start the server (steps 1-5), then:
 
 ```bash
 cd models/demos/blackhole/deepseek_v41_flash        # in the tt-metal checkout
-IMAGE=$IMAGE CKPT=$CKPT SPEC=$PWD/assets/runtime_spec_b16_k5_131072.json STATE=$STATE ./assets/run_gsm8k_eval.sh
+IMAGE=$IMAGE CKPT=$CKPT SPEC=$PWD/assets/runtime_spec_b16_k5_262144_vision.json STATE=$STATE ./assets/run_gsm8k_eval.sh
 ```
 
 - The script also takes `URL` (default `http://127.0.0.1:8000`), `CONCURRENCY` (default 16), `HF_CACHE` and `DOCKER`.
