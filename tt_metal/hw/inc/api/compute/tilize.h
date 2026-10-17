@@ -272,8 +272,8 @@ ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, u
 // clang-format off
 /**
  * Initializes the fast tilize operation. fast_tilize_init_skip_remap skips the DEST remap setup, and the
- * _with_dt variants first reconfigure the unpacker and math data formats for icb. On each architecture the
- * tile geometry and L1 data format of icb and ocb, together with full_dim, select whether the block takes
+ * _with_dt variants first reconfigure the unpacker and math data formats for icb. The tile geometry of icb
+ * and ocb (and, on Wormhole, their L1 data format), together with full_dim, select whether the block takes
  * the fast-tilize path or the plain tilize path, and init, block and uninit must take the same one: the CBs
  * passed to fast_tilize_block and fast_tilize_uninit may be different CBs but must have the same tile
  * geometry and L1 data format as the ones given here, and full_dim must be the block width.

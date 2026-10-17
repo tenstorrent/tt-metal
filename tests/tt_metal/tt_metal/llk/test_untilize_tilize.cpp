@@ -25,7 +25,6 @@
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/float8.hpp>
 #include <tt-metalium/int8.hpp>
@@ -164,31 +163,6 @@ static void validate_result(
         for (auto i = 0; i < golden_unpacked.size(); i++) {
             golden[i] = std::bit_cast<std::uint32_t>(static_cast<float>(golden_unpacked[i]));
         }
-    }
-
-    if (test_config.output_fmt == tt::DataFormat::Bfp8_b) {
-        // Decode the device's Bfp8_b tiles with the test's tile geometry and compare as floats; the golden
-        // stays in the tilized bf16 layout.
-        const auto tile = Tile::from_face_grid(
-            test_config.tile_shape_in_faces_r,
-            test_config.tile_shape_in_faces_c,
-            {test_config.face_r_dim, constants::FACE_WIDTH});
-        const std::vector<float> result_f = unpack_bfp8_tiles_into_float_vec(
-            ttsl::make_const_span(result_vec), /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-        const std::vector<bfloat16> golden_bf16 = unpack_vector<bfloat16, std::uint32_t>(golden);
-        bool pass_bfp8 = (golden_bf16.size() == result_f.size());
-        for (std::size_t i = 0; pass_bfp8 && i < golden_bf16.size(); i++) {
-            pass_bfp8 &= is_close(result_f[i], static_cast<float>(golden_bf16[i]), 0.001f, 0.001f);
-        }
-        log_info(
-            tt::LogTest,
-            "Done running test with: num_tiles_r = {}, num_tiles_c = {}, output Bfp8_b, FastTilize = {}, pass = {}",
-            test_config.num_tiles_r,
-            test_config.num_tiles_c,
-            test_config.fast_tilize,
-            pass_bfp8);
-        ASSERT_TRUE(pass_bfp8);
-        return;
     }
 
     bool pass = true;
@@ -981,7 +955,8 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeTinyTile16x32) {
         {1, 2}, {1, 4}, {2, 2}, {2, 6}, {1, 8}, {1, 10}, {1, 18}, {1, 1}, {1, 3}, {2, 3}, {1, 5}};
     // fp32 dest accumulation (4 tiles per dest on Wormhole): two dests (6 = 4 + 2 and 8 = 4 + 4), three
     // dests (10 = 4 + 4 + 2), and the odd widths 1, 3, 5 and 2x3 that take the plain tilize path with an
-    // fp32 dest (whose datacopy and pack differ from the bf16-dest one).
+    // fp32 dest (whose datacopy and pack differ from the bf16-dest one). The output stays Float16_b: fast
+    // tilize is not used with a Float32 output (the kernel_lib tilize helper excludes it for every tile shape).
     const vector<vector<std::uint32_t>> num_tiles_fp32_dest = {{1, 6}, {1, 8}, {1, 10}, {1, 1}, {1, 3}, {1, 5}, {2, 3}};
     for (bool fp32_dest_acc_en : {false, true}) {
         for (auto num_tile : fp32_dest_acc_en ? num_tiles_fp32_dest : num_tiles_bf16_dest) {
@@ -989,60 +964,56 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeTinyTile16x32) {
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .fast_tilize = true,
                 .input_single_tile_size = tile_bytes,
-                .output_single_tile_size = tile_bytes * (fp32_dest_acc_en ? 2 : 1),
+                .output_single_tile_size = tile_bytes,
                 .num_tiles_r = num_tile[0],
                 .num_tiles_c = num_tile[1],
                 .tile_shape_in_faces_r = tile_shape_in_faces_r,
                 .tile_shape_in_faces_c = tile_shape_in_faces_c,
                 .face_r_dim = face_r_dim,
                 .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
-                .output_fmt = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b,
                 .golden_function = ::unit_tests::compute::gold_standard_tilize};
             unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
         }
     }
 }
 
-// fast_tilize_* on a 16x32 tiny tile with a Bfp8_b output CB. The Wormhole two-face pack sequence writes two
-// tiny tiles as one 32x32 tile, which only the fixed-size Float16_b and Float32 layouts allow, so both
-// compute APIs must route this to tilize_* even at an even width. Integer inputs in [-50, 50] are exact in
-// Bfp8_b (a 16-datum block with that maximum has a step of 0.5), so the output must match the golden.
-// Wormhole-only: Blackhole's packer sizes the exponent section of a 16-row tile as one face
-// (exp_section_size = partial_face ? 1 : num_faces), so its plain tilize writes a different Bfp8_b
-// 16x32 layout than the host's, with or without fast_tilize.
-TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeTinyTile16x32Bfp8Out) {
-    if (MetalContext::instance().get_cluster().arch() != ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "only the Wormhole tilize path packs a 16x32 tile to Bfp8_b in the host layout";
+// fast_tilize_* on 16x32 tiny tiles in Float16. The Wormhole two-face path handles only Float16_b and Float32
+// (unpack and pack), so both compute APIs must route this to tilize_* even at an even width. Input and output
+// are both Float16 because a program's CBs must share one exponent family; tilize only moves datums, so the
+// tilized input words are the expected output bit for bit.
+TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeTinyTile16x32Float16) {
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar unpack tilize does not support 16x32 tiles";
     }
     constexpr std::uint32_t tile_shape_in_faces_r = 1;  // 16x32 = 1x2 faces of 16x16
     constexpr std::uint32_t tile_shape_in_faces_c = 2;
     constexpr std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT;
     constexpr std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;
-    constexpr std::uint32_t input_tile_bytes =
+    constexpr std::uint32_t tile_bytes =
         tile_shape_in_faces_r * tile_shape_in_faces_c * face_r_dim * face_c_dim * sizeof(std::uint16_t);
-    const std::uint32_t output_tile_bytes =
-        Tile::from_face_grid(tile_shape_in_faces_r, tile_shape_in_faces_c).get_tile_size(tt::DataFormat::Bfp8_b);
     // Even widths only: these are the widths the two-face 16x32 fast path accepts.
     vector<vector<std::uint32_t>> num_tiles = {{1, 2}, {1, 4}, {2, 2}};
     for (auto num_tile : num_tiles) {
-        const std::uint32_t num_datums = num_tile[0] * num_tile[1] * input_tile_bytes / sizeof(std::uint16_t);
-        std::vector<bfloat16> src(num_datums);
+        const std::uint32_t num_datums = num_tile[0] * num_tile[1] * tile_bytes / sizeof(std::uint16_t);
+        // Distinct half-precision bit patterns per datum (finite, normal values: exponent field 1..30).
+        std::vector<std::uint32_t> src((num_datums + 1) / 2, 0);
         for (std::uint32_t i = 0; i < num_datums; i++) {
-            // 37 and 101 are coprime, so (i * 37) % 101 visits every residue once per 101 datums.
-            src[i] = bfloat16(static_cast<float>(static_cast<int>((i * 37) % 101) - 50));
+            const std::uint32_t half_bits = ((((i * 37) % 30) + 1) << 10) | (i & 0x3FFu) | ((i & 1u) << 15);
+            src[i / 2] |= half_bits << (16 * (i % 2));
         }
         unit_tests::compute::tilize::TestConfig test_config = {
             .fast_tilize = true,
-            .input_single_tile_size = input_tile_bytes,
-            .output_single_tile_size = output_tile_bytes,
+            .input_single_tile_size = tile_bytes,
+            .output_single_tile_size = tile_bytes,
             .num_tiles_r = num_tile[0],
             .num_tiles_c = num_tile[1],
             .tile_shape_in_faces_r = tile_shape_in_faces_r,
             .tile_shape_in_faces_c = tile_shape_in_faces_c,
             .face_r_dim = face_r_dim,
             .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
-            .output_fmt = tt::DataFormat::Bfp8_b,
-            .src0_data = pack_vector<std::uint32_t, bfloat16>(src),
+            .input_fmt = tt::DataFormat::Float16,
+            .output_fmt = tt::DataFormat::Float16,
+            .src0_data = src,
             .golden_function = ::unit_tests::compute::gold_standard_tilize};
         unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
     }
