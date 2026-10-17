@@ -5,17 +5,20 @@
 // Zero-flag probe for the 32-bit unpack-to-dest datacopy.
 //
 // After a tile is unpacked straight into Dest, the Blackhole datacopy re-validates the rows of
-// exactly that tile with a zero-flag-clearing ZEROACC. This kernel checks that the re-validation
-// lands on the tile that was unpacked and on no other one:
+// that tile with a zero-flag-clearing ZEROACC. The unpack write itself already validates the
+// tile's rows (unless the same-cycle race the ZEROACC guards against hits), so where the ZEROACC
+// lands is only observable through a tile it should not touch. This kernel checks that the
+// re-validation for DST_INDEX does not land on STALE_TILE = DST_INDEX ^ 4, the tile a
+// dst_index-folded-into-four-slots index would hit:
 //
 //   section 1: unpack-to-dest a tile of known data into Dest tile STALE_TILE, pack it. The
 //              section release marks every Dest row as zero, so STALE_TILE now packs as zeros
 //              although its stale data is still in the SRAM.
 //   section 2: (PROBE_COPY) unpack-to-dest a second tile into Dest tile DST_INDEX, then pack
 //              DST_INDEX and STALE_TILE. STALE_TILE was not rewritten and must still pack as
-//              zeros; stale data coming out means the re-validation hit STALE_TILE instead of
-//              DST_INDEX. With PROBE_COPY off, section 2 packs the two tiles without any copy and
-//              is the control that packing a released tile yields zeros at all.
+//              zeros; stale data coming out means the re-validation hit STALE_TILE. With
+//              PROBE_COPY off, section 2 packs the two tiles without any copy and is the control
+//              that packing a released tile yields zeros at all.
 //
 // Compile-time: dest_sync, is_fp32_dest_acc_en, unpack_to_dest, PROBE_COPY, STALE_TILE.
 // Runtime: DST_INDEX (the probe tile), buffer_A[0] = stale-tile data, buffer_A[1] = probe data,
@@ -49,21 +52,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /* transpose_of_faces */,
-        0 /* within_face_16x16_transpose */,
+    _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+        0 /*transpose_of_faces*/,
+        0 /*within_face_16x16_transpose*/,
         ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, TILE_NUM_FACES),
         formats.unpack_A_src,
         formats.unpack_A_dst);
 
     // Section 1: the tile that is left stale in Dest.
-    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+    _llk_unpack_A_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         L1_ADDRESS(buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
 
     // Section 2: the probe tile.
     if constexpr (PROBE_COPY)
     {
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+        _llk_unpack_A_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             L1_ADDRESS(buffer_A[1]), formats.unpack_A_src, formats.unpack_A_dst);
     }
 }
@@ -93,7 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     LLK_ASSERT(probe_tile < MAX_TILES, "DST_INDEX exceeds max dest tiles");
     LLK_ASSERT(probe_tile != STALE_TILE, "the probe tile must differ from the stale tile");
 
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /*is_int_fpu_en*/, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -134,8 +137,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t probe_tile = static_cast<std::uint32_t>(DST_INDEX);
 
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+        formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES /*tile_size*/, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+    _llk_pack_init_wrapper_<PackMode::Default, false /*zero_output*/>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
 
     // Section 1: pack the stale tile, then release Dest. The release marks every Dest row as zero

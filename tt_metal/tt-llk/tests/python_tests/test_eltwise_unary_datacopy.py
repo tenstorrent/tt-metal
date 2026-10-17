@@ -287,21 +287,24 @@ def test_eltwise_unary_datacopy_sub_byte_bfp(
     )
 
 
-# --- 32-bit unpack-to-dest: zero-flag re-validation must hit the unpacked tile only ---------------
+# --- 32-bit unpack-to-dest: zero-flag re-validation must not hit the tile four slots away --------
 #
 # After a 32-bit tile is unpacked straight into Dest, the Blackhole datacopy re-validates that
-# tile's rows with a zero-flag-clearing ZEROACC. With a full-Dest sync and a 32-bit Dest the
-# tile index runs 0..7; the probe below checks, for every such index, that the re-validation
-# lands on the unpacked tile and not on a tile four slots away. The partner tile is left stale
-# behind cleared zero flags (written, packed, released) and packed again after the probe copy:
-# it must come out as zeros, and its old data coming back means the re-validation hit it.
+# tile's rows with a zero-flag-clearing ZEROACC. The unpack write already validates those rows
+# (short of the same-cycle race the ZEROACC guards against), so the probe cannot see the ZEROACC
+# land on the unpacked tile; it can only see it land somewhere else. With a full-Dest sync and a
+# 32-bit Dest the tile index runs 0..7; for every such index the probe checks that the
+# re-validation does not land on dst_index ^ 4, the tile an index folded into four slots
+# (dst_index & 3) would hit. That partner tile is left stale behind cleared zero flags (written,
+# packed, released) and packed again after the probe copy: it must come out as zeros, and its old
+# data coming back means the re-validation hit it.
 
 ZERO_FLAG_PROBE_FORMATS = input_output_formats([DataFormat.Float32], same=True)
 ZERO_FLAG_PROBE_DST_INDICES = list(range(8))
 
 
 def _stale_tile_for(dst_index: int) -> int:
-    # The slot a bank-relative (dst_index mod 4) re-validation would hit instead, and for
+    # The slot a re-validation indexed with dst_index & 3 would hit instead, and for
     # dst_index 0..3 a slot the re-validation must leave alone.
     return dst_index ^ 4
 
