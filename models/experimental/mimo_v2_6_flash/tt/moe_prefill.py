@@ -46,7 +46,7 @@ class GroupedExperts:
     X_BLOCK = 16
     X_BUFFERS = 3
     PLAN_WORDS = 1024  # one fp32-tile-sized page per team: [jobs, (expert, first group, groups) ...]
-    CB_PLAN, CB_WGU, CB_WD, CB_X, CB_RW, CB_H_OWN, CB_H_ALL, CB_Y = range(8)
+    CB_PLAN, CB_WGU, CB_WD, CB_X, CB_RW, CB_H_OWN, CB_H_ALL, CB_Y, CB_WROW = range(9)
 
     def __init__(self, moe):
         device = moe.plan.mesh_device
@@ -101,6 +101,11 @@ class GroupedExperts:
             cb(self.CB_H_OWN, bf, 4),
             cb(self.CB_H_ALL, bf, 2 * self.ikt),
             cb(self.CB_Y, bf, 8),
+            ttnn.CBDescriptor(
+                total_size=64,
+                core_ranges=self.ranges,
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=self.CB_WROW, data_format=bf, page_size=64)],
+            ),
         ]
 
     def plan(self, groups):
@@ -126,13 +131,15 @@ class GroupedExperts:
         return torch.tensor(table, dtype=torch.int32)
 
     def __call__(self, packed, row_weights, plan, out):
-        """packed [1, 1, G * 32, H] bf16 tiles (rows in group order), row_weights [1, 1, G * 32, 32] bf16 tiles (row r:
-        its routing weight in every column), plan from ``plan`` (uint32 row-major, DRAM) -> fills ``out`` (bf16 tiles,
-        like packed) with each row's weighted expert output."""
+        """packed [1, 1, R, H] bf16 tiles (rows in group order), row_weights [1, R] bf16 row-major (each packed row's
+        routing weight), plan uint32 row-major [teams, PLAN_WORDS] (DRAM) -> fills the planned groups of ``out`` (bf16
+        tiles, like packed) with each row's weighted expert output."""
         moe = self.moe
         w_gu, w_d = moe.w_gate_up, moe.w_down
-        for t in (packed, row_weights, out, w_gu, w_d):
+        for t in (packed, out, w_gu, w_d):
             assert is_dram_interleaved(t) and t.layout == ttnn.TILE_LAYOUT
+        assert row_weights.layout == ttnn.ROW_MAJOR_LAYOUT and row_weights.dtype == ttnn.bfloat16
+        assert row_weights.shape[-1] == packed.shape[-2]
         assert w_gu.dtype == self.w_dtype and w_d.dtype == self.w_dtype
 
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -177,6 +184,8 @@ class GroupedExperts:
                 self.wd_tiles,
                 self.w_tile_bytes,
                 self.PLAN_WORDS * 4,
+                self.CB_WROW,
+                row_weights.shape[-1] * 2,
             ],
             reader_rt,
             ttnn.DataMovementProcessor.RISCV_1,
@@ -230,12 +239,99 @@ class GroupedExperts:
         return out
 
 
+class DevicePlan:
+    """The expert-major plan on one core from the device's top-k (tt/kernels/prefill/plan.cpp): no read back. Shapes
+    are static per T, sized for the most groups the routing can need (8T / 32 + E): rows past the used groups are
+    simply not in the team plan."""
+
+    CB_TILES, CB_STATE, CB_TOKENS, CB_WEIGHTS, CB_PAIRS, CB_PLAN = range(6)
+
+    def __init__(self, moe, grouped):
+        self.moe, self.grouped = moe, grouped
+        self.core = ttnn.CoreCoord(0, 0)
+        self.ranges = ttnn.CoreRangeSet([ttnn.CoreRange(self.core, self.core)])
+
+    @staticmethod
+    def max_rows(num_tokens, k, experts):
+        return (num_tokens * k // TILE + experts) * TILE
+
+    def _cb(self, index, size):
+        fmt = ttnn.CBFormatDescriptor(buffer_index=index, data_format=ttnn.uint32, page_size=size)
+        return ttnn.CBDescriptor(total_size=size, core_ranges=self.ranges, format_descriptors=[fmt])
+
+    def __call__(self, indices, weights):
+        """indices uint32 / weights fp32 [1, 1, T, K] tiles -> (row_token uint32 [1, R], row_weight bf16 [1, R],
+        pair_row uint32 [1, K * T] (k-major), plan uint32 [teams, PLAN_WORDS]), all row-major DRAM."""
+        moe, grouped = self.moe, self.grouped
+        T, K, E = indices.shape[-2], indices.shape[-1], moe.num_experts
+        assert indices.dtype == ttnn.uint32 and weights.dtype == ttnn.float32
+        for t in (indices, weights):
+            assert t.layout == ttnn.TILE_LAYOUT and is_dram_interleaved(t) and K <= 16
+        R = self.max_rows(T, K, E)
+        device = moe.plan.mesh_device
+
+        def empty(shape, dtype):
+            return ttnn.empty(
+                shape, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+
+        row_token = empty([1, R], ttnn.uint32)
+        row_weight = empty([1, R], ttnn.bfloat16)
+        pair_row = empty([1, K * T], ttnn.uint32)
+        plan = empty([grouped.num_teams, grouped.PLAN_WORDS], ttnn.uint32)
+        rt = ttnn.RuntimeArgs()
+        rt[self.core.x][self.core.y] = [
+            indices.buffer_address(),
+            weights.buffer_address(),
+            row_token.buffer_address(),
+            row_weight.buffer_address(),
+            pair_row.buffer_address(),
+            plan.buffer_address(),
+        ]
+        kernel = ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/plan.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=self.ranges,
+            compile_time_args=[
+                T,
+                K,
+                E,
+                grouped.num_teams,
+                grouped.PLAN_WORDS,
+                R,
+                self.CB_TILES,
+                self.CB_STATE,
+                self.CB_TOKENS,
+                self.CB_WEIGHTS,
+                self.CB_PAIRS,
+                self.CB_PLAN,
+            ],
+            runtime_args=rt,
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+            ),
+        )
+        cbs = [
+            self._cb(self.CB_TILES, 2 * 4096),
+            self._cb(self.CB_STATE, 3 * E * 4),
+            self._cb(self.CB_TOKENS, R * 4),
+            self._cb(self.CB_WEIGHTS, R * 2),
+            self._cb(self.CB_PAIRS, K * T * 4),
+            self._cb(self.CB_PLAN, grouped.num_teams * grouped.PLAN_WORDS * 4),
+        ]
+        program = ttnn.ProgramDescriptor(kernels=[kernel], cbs=cbs, semaphores=[])
+        ttnn.generic_op([indices, weights, row_token, row_weight, pair_row, plan], program)
+        return row_token, row_weight, pair_row, plan
+
+
 class PrefillExperts:
     def __init__(self, moe):
         self.moe = moe
         self.all_experts = None  # the sparsity operand indexed sparse_matmul takes (not read)
         self.grouped = None
         self.grouped_failed = False
+        self.device_plan = None
+        self.host_plan = False  # True: build the plan on the host (reads the routing back; for testing)
 
     def _upload(self, t, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
         moe = self.moe
@@ -281,25 +377,28 @@ class PrefillExperts:
         moe = self.moe
         T, H = x.shape[-2], moe.hidden
         K = indices.shape[-1]
-        row_token, row_weight, groups, pair_row = self.plan(indices, weights, T)
-        G = int(groups.sum())
-        R = G * TILE
+        grouped = self._grouped()
+        if grouped is not None and not self.host_plan:
+            if self.device_plan is None:
+                self.device_plan = DevicePlan(moe, grouped)
+            row_token_tt, row_weight_tt, pair_row_tt, plan = self.device_plan(indices, weights)
+            R = row_token_tt.shape[-1]
+        else:
+            row_token, row_weight, groups, pair_row = self.plan(indices, weights, T)
+            R = int(groups.sum()) * TILE
+            row_token_tt = self._upload(row_token.reshape(1, -1), ttnn.uint32)
+            pair_row_tt = self._upload(pair_row, ttnn.uint32)
+            if grouped is not None:
+                row_weight_tt = self._upload(row_weight.reshape(1, -1).to(torch.bfloat16), ttnn.bfloat16)
+                plan = self._upload(grouped.plan(groups), ttnn.uint32)
 
         x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (T, H))
-        row_token_tt = self._upload(row_token.reshape(1, -1), ttnn.uint32)
         packed = ttnn.embedding(row_token_tt, x_rm, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1, R, H]
         x_rm.deallocate(True)
         row_token_tt.deallocate(True)
 
-        grouped = self._grouped()
         if grouped is not None:
             packed = ttnn.reshape(packed, (1, 1, R, H))
-            row_weights_rm = self._upload(
-                row_weight.reshape(1, 1, R, 1).expand(1, 1, R, TILE).to(torch.bfloat16).contiguous(), ttnn.bfloat16
-            )
-            row_weights = ttnn.to_layout(row_weights_rm, ttnn.TILE_LAYOUT)  # tilized on device: much cheaper
-            row_weights_rm.deallocate(True)
-            plan = self._upload(grouped.plan(groups), ttnn.uint32)
             y = ttnn.empty(
                 [1, 1, R, H],
                 dtype=ttnn.bfloat16,
@@ -307,14 +406,13 @@ class PrefillExperts:
                 device=moe.plan.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            grouped(packed, row_weights, plan, y)
-            for t in (packed, row_weights, plan):
+            grouped(packed, row_weight_tt, plan, y)
+            for t in (packed, row_weight_tt, plan):
                 t.deallocate(True)
         else:
             y = self._sparse_groups(packed, row_weight, groups)
         y_rm = ttnn.reshape(ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT), (R, H))
         y.deallocate(True)
-        pair_row_tt = self._upload(pair_row, ttnn.uint32)
         pairs = ttnn.embedding(pair_row_tt, y_rm, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1, K * T, H]
         y_rm.deallocate(True)
         pair_row_tt.deallocate(True)

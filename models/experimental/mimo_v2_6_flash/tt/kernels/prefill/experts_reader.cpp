@@ -6,8 +6,8 @@
 // this core's slice of the expert's BFP4 weights, kept in L1 for all of the job's groups: from DRAM banks b0 and
 // b1, the gate|up rows of w_gate_up (bank b holds gate column b and up column b of every expert, 256 contiguous
 // tiles [kt][gate, up]) and the w_down rows (bank b holds output columns b, b + 8, ...: 128 contiguous tiles
-// [kt][16]). Per group: the routing-weight tile (row r = the weight of packed row r) and the group's 128 x tiles
-// in blocks of x_block tiles.
+// [kt][16]). Per group: the routing-weight tile, built here from the group's 32 bf16 weights (row-major, one per
+// packed row): row r holds weight r in every column; and the group's 128 x tiles in blocks of x_block tiles.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
@@ -23,6 +23,8 @@ void kernel_main() {
     constexpr uint32_t wd_tiles = get_compile_time_arg_val(8);  // down tiles per bank per expert = 8 * 16
     constexpr uint32_t w_tile_bytes = get_compile_time_arg_val(9);
     constexpr uint32_t plan_bytes = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_wrow = get_compile_time_arg_val(11);        // 64 B: one group's row weights
+    constexpr uint32_t weights_bytes = get_compile_time_arg_val(12);  // the row weights' page: rows_max bf16
     constexpr uint32_t tile_bytes = 2048;  // bf16 32x32
 
     const uint32_t plan_addr = get_arg_val<uint32_t>(0);
@@ -44,7 +46,9 @@ void kernel_main() {
     const uint32_t jobs = plan[0];
 
     const InterleavedAddrGen<true> x_gen = {.bank_base_address = x_addr, .page_size = tile_bytes};
-    const InterleavedAddrGen<true> rw_gen = {.bank_base_address = rw_addr, .page_size = tile_bytes};
+    const InterleavedAddrGen<true> rw_gen = {.bank_base_address = rw_addr, .page_size = weights_bytes};
+    const uint32_t wrow_l1 = get_write_ptr(cb_wrow);
+    volatile tt_l1_ptr uint16_t* wrow = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(wrow_l1);
     constexpr uint32_t gu_bytes = gu_tiles * w_tile_bytes;
     constexpr uint32_t wd_bytes = wd_tiles * w_tile_bytes;
 
@@ -69,8 +73,19 @@ void kernel_main() {
         for (uint32_t i = 0; i < groups; i++) {
             const uint32_t g = first + i;
             cb_reserve_back(cb_rw, 1);
-            noc_async_read(rw_gen.get_noc_addr(g, 0), get_write_ptr(cb_rw), tile_bytes);
+            noc_async_read(rw_gen.get_noc_addr(0, g * 64), wrow_l1, 64);
             noc_async_read_barrier();
+            // bf16 32 x 32 tile: row r, columns 0-15 in face (r / 16) * 2 (row r % 16), columns 16-31 in the next face
+            volatile tt_l1_ptr uint32_t* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_rw));
+            for (uint32_t r = 0; r < 32; r++) {
+                const uint32_t v = wrow[r];
+                const uint32_t word = v | (v << 16);
+                volatile tt_l1_ptr uint32_t* left = tile + (r >> 4) * 256 + (r & 15) * 8;
+                for (uint32_t w = 0; w < 8; w++) {
+                    left[w] = word;
+                    left[128 + w] = word;
+                }
+            }
             cb_push_back(cb_rw, 1);
             for (uint32_t k0 = 0; k0 < kt; k0 += x_block) {
                 cb_reserve_back(cb_x, x_block);
