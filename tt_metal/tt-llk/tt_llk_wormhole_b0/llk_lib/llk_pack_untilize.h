@@ -19,6 +19,9 @@
 using namespace ckernel;
 using namespace ckernel::packer;
 
+/// Packer L1 addresses (the per-row stride GPR, a block start) are kept in units of this many bytes.
+constexpr std::uint32_t PACK_UNTILIZE_L1_ADDRESS_UNIT_BYTES = 16;
+
 /**
  * @brief Dest rows (MOP runs) an untilize pack walks per block.
  *
@@ -254,13 +257,17 @@ inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const 
         // A narrow row holds row_num_datums datums per tile.
         const std::uint32_t row_datums_per_tile = narrow_row ? row_num_datums : ((num_faces == 1) ? 1 : 2) * FACE_C_DIM;
         const std::uint32_t output_addr_offset  = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * row_datums_per_tile);
-        // The per-row stride below and the caller's block start are 16 B units: a narrow row of one block that is
-        // not a multiple of 16 B would be truncated and the rows would overlap. full_ct_dim is a multiple of
-        // block_ct_dim, so this also covers the row stride.
+        // The per-row stride below and the caller's block start are kept in L1 address units: a narrow row of one
+        // block that is not a multiple of the unit would be truncated and the rows would overlap. full_ct_dim is a
+        // multiple of block_ct_dim, so this also covers the row stride.
         LLK_ASSERT(
-            SCALE_DATUM_SIZE(pack_dst_format, block_ct_dim * row_datums_per_tile) % 16 == 0,
+            SCALE_DATUM_SIZE(pack_dst_format, block_ct_dim * row_datums_per_tile) % PACK_UNTILIZE_L1_ADDRESS_UNIT_BYTES == 0,
             "block_ct_dim * row_num_datums datums must be a multiple of 16 bytes for a partial block");
-        TT_SETDMAREG(0, LOWER_HALFWORD(output_addr_offset / 16), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET)); // store 16B aligned row offset address
+        TT_SETDMAREG(
+            0,
+            LOWER_HALFWORD(output_addr_offset / PACK_UNTILIZE_L1_ADDRESS_UNIT_BYTES),
+            0,
+            LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET)); // row offset in L1 address units
     }
 
     // Pack row by row
