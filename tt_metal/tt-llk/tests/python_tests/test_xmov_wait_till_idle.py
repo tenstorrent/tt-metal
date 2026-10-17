@@ -1,0 +1,105 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""Regression test for ``xmov_wait_till_idle``: once it returns, the move issued just before it has
+been carried out, so the destination can be read straight away.
+
+Each iteration PACK writes a fresh pattern to the source buffer, issues an L1-to-L1 move through
+``xmov_l1_to_l1_non_compact``, calls ``xmov_wait_till_idle`` and reads the destination back. An
+iteration in which any destination word still holds the previous pattern is a stale read.
+
+``xfer_16b`` is the move size in 16-byte units; ``gap`` is the number of ``nop``s between the wait
+returning and the first destination read.
+"""
+
+import pytest
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.format_config import DataFormat
+from helpers.param_config import input_output_formats
+from helpers.stimuli_config import StimuliConfig
+from helpers.stimuli_generator import generate_stimuli
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import ITERATIONS, XMOV_READ_GAP, XMOV_XFER_16B
+
+# Must match sources/xmov_wait_till_idle_test.cpp
+NUM_ITERATIONS = 8192
+
+
+@pytest.mark.skipif(
+    get_chip_architecture()
+    not in (ChipArchitecture.BLACKHOLE, ChipArchitecture.WORMHOLE),
+    reason="The TDMA-RISC mover interface exists on Blackhole and Wormhole only.",
+)
+@pytest.mark.parametrize("gap", [0, 64])
+@pytest.mark.parametrize("xfer_16b", [1, 16, 256])
+def test_xmov_wait_till_idle(xfer_16b, gap):
+    formats = input_output_formats([DataFormat.Int32])[0]
+    input_dimensions = [32, 32]
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+
+    configuration = TestConfig(
+        "sources/xmov_wait_till_idle_test.cpp",
+        formats,
+        templates=[
+            ITERATIONS(NUM_ITERATIONS),
+            XMOV_XFER_16B(xfer_16b),
+            XMOV_READ_GAP(gap),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+    )
+    vals = [int(v) for v in configuration.run().result]
+    (
+        iterations,
+        stale_iterations,
+        first_stale_iter,
+        first_stale_word,
+        first_stale_words,
+        src_mismatches,
+        kernel_xfer_16b,
+        kernel_gap,
+        cfg0_before,
+        cfg0_during,
+    ) = vals[:10]
+
+    print(
+        f"\nxmov_wait_till_idle, {xfer_16b} x 16 B per move, {gap} nops before the read, "
+        f"cfg0 {cfg0_before:#x} -> {cfg0_during:#x}:"
+        f"\n  stale destination reads: {stale_iterations}/{iterations} iterations"
+        + (
+            f" (first at iteration {first_stale_iter}, word {first_stale_word}, "
+            f"{first_stale_words}/{xfer_16b * 4} words stale)"
+            if stale_iterations
+            else ""
+        )
+    )
+
+    assert (
+        iterations == NUM_ITERATIONS
+    ), f"kernel ran {iterations} iterations, expected {NUM_ITERATIONS}"
+    assert (kernel_xfer_16b, kernel_gap) == (
+        xfer_16b,
+        gap,
+    ), "kernel was built with other parameters"
+    assert (
+        src_mismatches == 0
+    ), f"the source pattern was not in L1 before the move: {src_mismatches} mismatching words"
+    assert stale_iterations == 0, (
+        f"xmov_wait_till_idle returned before the move was done in {stale_iterations}/{iterations} "
+        f"iterations (first at iteration {first_stale_iter}: word {first_stale_word} and "
+        f"{first_stale_words - 1} more still held the previous pattern)"
+    )
