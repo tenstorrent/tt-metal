@@ -25,7 +25,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
-from models.demos.minimax_m3.tt.attention.dense_sp import dense_sp_attention
+from models.demos.minimax_m3.tt.attention.dense_sp import dense_sp_attention, dense_sp_sdpa_configs
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 
@@ -41,7 +41,6 @@ from .ring_joint_cache_read_helpers import (
     make_kv_chunk,
     make_q_chunk,
     meta_scalar,
-    sdpa_configs,
     torch_gqa_causal,
 )
 
@@ -86,7 +85,7 @@ class _Setup:
         ttnn.synchronize_device(mesh_device)
 
         self.tt_q = self.make_q(self.last)
-        self.prog, self.kcfg = sdpa_configs(mesh_device)
+        self.prog, self.kcfg = dense_sp_sdpa_configs(mesh_device, cache_read=True)
         self.common = dict(
             n_kv=NKV,
             cache_global=self.cache_global,
