@@ -201,10 +201,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef ARCH_BLACKHOLE
     // Blackhole run-0 used PackMode::Tilize; re-establish a Default-mode packer
     // for the plain datacopy result. Wormhole's tilize pack cfg mode is already
-    // Default, so it needs no reconfig here.
+    // Default, so it needs no reconfig here. The reconfig keeps the strides of the
+    // armed (Tilize) mode, so the Default init must program its own strides (with-src wrapper).
     _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en>(
         formats_array[run].pack_src, formats_array[run].pack_dst, tile_size, face_r_dim, TILE_C_DIM, num_faces);
-    _llk_pack_init_wrapper_<ckernel::PackMode::Default, false /* zero_output */>(formats_array[run].pack_dst, face_r_dim, TILE_C_DIM, num_faces);
+    _llk_pack_init_with_src_wrapper_<ckernel::PackMode::Default, false /* zero_output */>(
+        formats_array[run].pack_src, formats_array[run].pack_dst, face_r_dim, TILE_C_DIM, num_faces);
 #endif
 
     _llk_packer_wait_for_math_done_();

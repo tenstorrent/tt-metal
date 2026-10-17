@@ -229,8 +229,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tile_size); // need to reconfigure data formats_array for next pack, also calls set_packer_strides to readjust strides after pack tilizing
 
 #ifdef ARCH_BLACKHOLE
-    // Strides + X counter were re-established by the reconfig above, so skip strides here.
-    _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+    // The reconfig above re-derived the strides for the pack mode armed at that point (Tilize), so this
+    // Default-mode init must program the Default strides itself.
+    _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, false /* skip_packer_strides */>(
         formats_array[run].pack_src, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 #endif
 

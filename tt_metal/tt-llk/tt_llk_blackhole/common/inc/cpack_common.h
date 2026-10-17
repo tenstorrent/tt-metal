@@ -297,6 +297,15 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
     return is_packer_to_L1_early_conversion_supported(in_reg, out_l1) || is_packer_to_L1_late_conversion_supported(in_reg, out_l1);
 }
 
+// Pack mode the packer is currently armed for (ADDR_MODs + MOP + strides). Written by configure_pack
+// (hw-configure) and by every _llk_pack_init_ (pack_init_apply); read by reconfig_packer_data_format so
+// that a data-format reconfig re-derives the strides for the mode that is armed instead of resetting
+// them to Default: the Tilize/Untilize MOPs step Z by two faces per increment (see set_packer_strides)
+// and would otherwise pack faces 1,2 instead of 2,3 after `init<Tilize>; reconfig; pack`.
+// Only the pack-init / hw-configure paths are tracked; pack-untilize and the fast tilize/untilize
+// paths program their own strides in their own init and uninit.
+static PackMode armed_pack_mode = PackMode::Default;
+
 template <PackMode pack_mode = PackMode::Default>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
@@ -557,8 +566,17 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(is_fp8_e4m3 ? to_underlying(DataFormat::Float16) : pack_output_src_format);
 
-    // Set packer strides
-    set_packer_strides<PackMode::Default>(pack_output_src_format, tile_c_dim);
+    // Set packer strides for the pack mode that is armed. set_packer_strides only distinguishes Default
+    // from the two-interface modes (Tilize/Untilize share the two-face Z stride), so one non-Default
+    // instantiation covers both.
+    if (armed_pack_mode == PackMode::Default)
+    {
+        set_packer_strides<PackMode::Default>(pack_output_src_format, tile_c_dim);
+    }
+    else
+    {
+        set_packer_strides<PackMode::Tilize>(pack_output_src_format, tile_c_dim);
+    }
 
     // Program the packer X (datum) counter. _llk_pack_init_ owns this counter ("inits own SETADCXX"),
     // but reconfig also programs it here: a reconfig is not always followed by an init, and on Blackhole
@@ -595,6 +613,7 @@ inline void configure_pack(
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
 
     set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
+    armed_pack_mode = pack_mode;
 
     // NOTE: the packer X (datum) counter (SETADCXX PAC) is intentionally NOT programmed here. It is
     // owned by _llk_pack_init_, which runs after hw-configure and sets its own value per the

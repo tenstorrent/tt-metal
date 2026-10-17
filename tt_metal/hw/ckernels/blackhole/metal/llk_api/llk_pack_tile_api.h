@@ -38,8 +38,8 @@ inline void llk_pack_init_impl(
     const std::uint32_t num_tiles,
     const bool is_input_8bit_format) {
     // Blackhole's MOP does not take the format at all; set_packer_strides is its only consumer here and
-    // reconfig_packer_data_format re-derives that, so a format reconfig between init and execute is legal
-    // and must not read as drift.
+    // reconfig_packer_data_format re-derives that for the armed pack mode, so a format reconfig between
+    // init and execute is legal and must not read as drift.
     SAN_HOOK(init<OperationPack>(
         StateDiscard<std::uint32_t>(pack_src_reg_format),
         StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),

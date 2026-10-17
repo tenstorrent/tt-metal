@@ -402,6 +402,9 @@ inline void pack_init_apply(
         _llk_pack_configure_addrmod_<pack_mode>();
     }
     _llk_pack_mop_config_<pack_mode, zero_output>(face_r_dim, tile_c_dim, num_faces, num_tiles);
+    // Record the armed mode even when the strides are skipped: a later data-format reconfig re-derives
+    // the strides for this mode (see armed_pack_mode in cpack_common.h).
+    armed_pack_mode = pack_mode;
     if constexpr (!skip_packer_strides)
     {
         set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
@@ -494,7 +497,9 @@ inline void _llk_pack_hw_configure_(
  * @tparam zero_output: When true, packer emits zeros instead of dest data.
  * @tparam skip_addrmod_config: When true, leave ADDR_MOD slots untouched (assume already programmed).
  * @tparam skip_packer_strides: When true, do not re-program the packer strides (e.g. when a prior
- *         hw-configure / reconfig already established them, or the caller programs them itself).
+ *         hw-configure / reconfig in this same pack mode already established them, or the caller
+ *         programs them itself). A reconfig re-derives the strides for the mode armed at that time, so
+ *         an init that changes the pack mode must not skip them.
  * @tparam mutex_ADC: When true, serialize the SETADCXX issue against mutex::THREAD2_ADC. Needed only
  *         when another thread borrows the pack thread's ADCs. Exposed upstream as
  *         llk_pack_init_mutex_ADC / pack_init_mutex_ADC.
