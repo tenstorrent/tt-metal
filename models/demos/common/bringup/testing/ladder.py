@@ -173,7 +173,9 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
 
 
 def index_overlap(got: torch.Tensor, want: torch.Tensor) -> float:
-    """Mean per-row share of the golden's selected ids (>= 0; negatives are padding) that the device also selected."""
+    """Mean per-row share of the golden's selected ids (>= 0; negatives are padding) that the device also selected.
+    Plain, not tie-aware: the golden holds no selection scores (a full rung's would be [tokens, keys] per layer); the
+    component and swap tests carry the tie-aware recall (F101)."""
     k = want.shape[-1]
     w, gs = want.long().reshape(-1, k), got.long().reshape(-1, k).sort(-1).values
     hit = (gs.gather(-1, torch.searchsorted(gs, w).clamp(max=k - 1)) == w) & (w >= 0)

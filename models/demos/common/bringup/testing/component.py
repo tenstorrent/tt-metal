@@ -434,6 +434,20 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
             print(f"{'ok  ' if good else 'FAIL'} {tag}_vs_golden_err: rel={e:.6f} (<= {gl_lim:.6f}, {how})")
             ok = good and ok
     if not cpu.is_floating_point():
+        sc = (model or {}).get("scores") if isinstance(model, dict) else None
+        if sc is not None and got.numel() == cpu.numel():  # F101: an index output's near ties and tie-aware recall
+            scores, kk, nsc = sc
+            w = scores.shape[-1]
+            want = NF.support(cpu, kk, w)
+            fl = NF.flips(scores, kk, NF.support(got.reshape(cpu.shape), kk, w), nsc, want)
+            for k_, v in fl.items():
+                metrics.record(f"{tag}_flip_{k_}", v)
+            good = not fl["unexplained"]
+            print(
+                f"{'ok  ' if good else 'FAIL'} {tag} near ties: flips={fl['rows']} unexplained={fl['unexplained']} "
+                f"recall={fl['recall']:.6f} recall_tie={fl['recall_tie']:.6f} worst_row={fl['worst_recall_tie']:.4f}"
+            )
+            ok = good and ok
         return ok
     if got.numel() != cpu.numel():
         print(f"FAIL {tag}: {got.numel()} elements, the CPU step has {tuple(cpu.shape)}")
@@ -467,7 +481,8 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
         sc = (model or {}).get("scores")
         if sc is not None:  # a selection with tapped scores: every flip must be explained by the nudge
             scores, kk, nsc = sc
-            fl = NF.flips(scores, kk, NF.support(got.float().reshape(-1, scores.shape[-1]), kk), nsc)
+            w = scores.shape[-1]
+            fl = NF.flips(scores, kk, NF.support(got.float(), kk, w), nsc, NF.support(cpu, kk, w))
             for k_, v in fl.items():
                 metrics.record(f"{tag}_flip_{k_}", v)
     else:  # no floor: the step's own component-gate error (F73), else the spec's fixed limits (printed)
@@ -530,7 +545,7 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
         f"(<= {rel_lim:.5f}{f', component error {err:.5f}' if err is not None else ''}) row={e['row']:.6f} "
         f"ratio=[{e['ratio_min']:.5f}, {e['ratio_max']:.5f}] bias={e['bias']:+.6f}"
         + (f" reselected={e['reselected']:.4f}" if "reselected" in e else "")
-        + (f" flips={fl['rows']} unexplained={fl['unexplained']}" if fl else "")
+        + (f" flips={fl['rows']} unexplained={fl['unexplained']} recall_tie={fl['recall_tie']:.6f}" if fl else "")
         + (
             f" own-floor row={own['row_floor']:.3g} col={own.get('col_floor', 0):.3g} bias={own.get('bias_floor', 0):.3g}"
             if own
