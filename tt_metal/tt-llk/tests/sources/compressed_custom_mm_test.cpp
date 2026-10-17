@@ -115,6 +115,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_common.h"
 #include "params.h"
 
+// The layout compressed_custom_mm_block_init<dense_packing = true> packs: output tiles 32 DEST rows apart.
+constexpr bool DENSE_PACKING = true;
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -129,15 +132,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true /* partial_face */);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, params.in0_face_r_dim, TILE_C_DIM, params.num_faces);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    // dense_packing = true
-    _llk_pack_custom_mm_init_<true>(formats.pack_src);
+    _llk_pack_custom_mm_init_<DENSE_PACKING>(formats.pack_src);
     _llk_packer_wait_for_math_done_();
     for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
     {
         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
     }
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    _llk_pack_custom_mm_uninit_<true>(formats.pack_src);
+    _llk_pack_custom_mm_uninit_<DENSE_PACKING>(formats.pack_src);
 }
 
 #endif

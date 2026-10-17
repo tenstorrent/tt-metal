@@ -188,6 +188,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
+// The layout custom_mm_block_init<dense_packing = true> packs: output tiles 32 DEST rows apart.
+constexpr bool DENSE_PACKING = true;
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -205,8 +208,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_init_<PackMode::Default, false /*zero_output*/, false /*skip_addrmod_config*/, true /*skip_packer_strides*/>(
         formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
-    // dense_packing = true
-    _llk_pack_custom_mm_init_<true>(formats.pack_src);
+    _llk_pack_custom_mm_init_<DENSE_PACKING>(formats.pack_src);
 
     _llk_packer_wait_for_math_done_();
 
@@ -217,7 +219,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
-    _llk_pack_custom_mm_uninit_<true>(formats.pack_src);
+    _llk_pack_custom_mm_uninit_<DENSE_PACKING>(formats.pack_src);
 }
 
 #endif

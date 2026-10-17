@@ -549,7 +549,7 @@ class SFPU_FAST_APPROX(TemplateParameter):
 class CUSTOM_MM_UNINIT(TemplateParameter):
     """The custom_mm_block_uninit / compressed_custom_mm_block_uninit configuration.
 
-    Emits the three compile-time switches ``custom_mm_uninit_restore_test.cpp`` reads:
+    Emits the compile-time constants ``custom_mm_uninit_restore_test.cpp`` reads:
 
     ``UNINIT_DENSE_PACKING``   the ``dense_packing`` template argument, applied to both
                                the run-0 init (W-stride -> 32 rows) and the uninit
@@ -567,12 +567,17 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
                                restoring are indistinguishable, while at 2 (a 16x32 tiny
                                tile) the un-restored MOP packs the wrong face count --
                                the hazard the uninit's comment describes.
+    ``RUN0_RESULT_BLOCK``      index of the result block (``PACK_NUM_TILES`` tiles each)
+                               that run 0 packs into; run 1 packs block 0. The python
+                               side reads run 0 back from the same index, so the
+                               layout has one source.
     """
 
     dense_packing: bool = False
     restore_mop: bool = False
     skip: bool = False
     block_mop_num_faces: int = 2
+    run0_result_block: int = 2
 
     def convert_to_cpp(self) -> str:
         return "\n".join(
@@ -581,6 +586,7 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
                 f"constexpr bool UNINIT_RESTORE_MOP = {str(self.restore_mop).lower()};",
                 f"constexpr bool UNINIT_SKIP = {str(self.skip).lower()};",
                 f"constexpr std::uint32_t BLOCK_MOP_NUM_FACES = {self.block_mop_num_faces}u;",
+                f"constexpr std::uint32_t RUN0_RESULT_BLOCK = {self.run0_result_block}u;",
             ]
         )
 

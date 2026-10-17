@@ -25,7 +25,8 @@
 //   run 0  Establish the Default pack baseline, apply the dense_packing W-stride if
 //          selected, then swap in the block-contiguous packer MOP -- what a caller's
 //          pack_block_contiguous_init (experimental/pack_block.h) does. Pack once
-//          through it into result tiles [2N, 3N). This is where the value the init
+//          through it into result block RUN0_RESULT_BLOCK (tiles [2N, 3N); the python
+//          side emits the constant and reads the same block). This is where the value the init
 //          wrote is observed: the datacopy put the tiles 64 DEST rows apart, so with the
 //          dense 32-row stride output tile i is DEST faces 2i..2i+3 (a deterministic
 //          reshuffle of the input), and any other stride produces a different reshuffle.
@@ -166,9 +167,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_packer_wait_for_math_done_();
 
-    // run 0: pack through the block MOP into result tiles [2N, 3N). Tiles [N, 2N) stay
-    // free as run 1's overrun headroom (a stale block MOP packs N tiles per call).
-    _llk_pack_block_contiguous_<DST_SYNC, is_fp32_dest_acc_en>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[2 * PACK_NUM_TILES]), PACK_NUM_TILES);
+    // run 0: pack through the block MOP into result block RUN0_RESULT_BLOCK. The blocks
+    // between run 1's (block 0) and it stay free as run 1's overrun headroom (a stale
+    // block MOP packs N tiles per call).
+    _llk_pack_block_contiguous_<DST_SYNC, is_fp32_dest_acc_en>(
+        0 /* tile_index */, L1_ADDRESS(params.buffer_Res[RUN0_RESULT_BLOCK * PACK_NUM_TILES]), PACK_NUM_TILES);
 
     // ---- the function under test ----
     if constexpr (!UNINIT_SKIP)

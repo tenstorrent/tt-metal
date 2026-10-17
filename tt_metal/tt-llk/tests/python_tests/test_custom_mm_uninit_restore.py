@@ -29,7 +29,7 @@ Three runs, per the header comment in sources/custom_mm_uninit_restore_test.cpp:
 
   run 0  Default pack baseline + the dense W-stride if selected, then the
          block-contiguous packer MOP swapped in -- what a caller's
-         ``pack_block_contiguous_init`` does. Packed into result tiles [2N, 3N) and
+         ``pack_block_contiguous_init`` does. Packed into result block ``RUN0_RESULT_BLOCK`` and
          asserted by the W-stride tests: the datacopy put the tiles 64 DEST rows apart,
          so the dense 32-row stride reads output tile i from DEST faces 2i..2i+3. That
          reshuffle is only reproduced when the init programmed the stride the pack-source
@@ -79,9 +79,11 @@ NUM_TILES = 4
 FACES_PER_TILE = 4
 ELEMENTS_PER_FACE = ELEMENTS_PER_TILE // FACES_PER_TILE
 
-# Result buffer: run 1 writes tiles [0, N); [N, 2N) is run 1's overrun headroom; run 0
-# writes [2N, 3N).
-RESULT_TILES = 3 * NUM_TILES
+# Result buffer in blocks of NUM_TILES: run 1 writes block 0, block 1 is run 1's overrun
+# headroom, run 0 writes block RUN0_RESULT_BLOCK. The driver receives the index through
+# CUSTOM_MM_UNINIT, so both sides read the same layout.
+RUN0_RESULT_BLOCK = 2
+RESULT_TILES = (RUN0_RESULT_BLOCK + 1) * NUM_TILES
 
 # Both compute uninits and the driver call the same raw PACK helper. A per-family
 # axis would build the identical ELF twice; the static parity test guards delegation
@@ -107,6 +109,7 @@ def _run(formats, dest_acc, dense_packing, skip_uninit, block_mop_num_faces=4):
                 dense_packing=dense_packing,
                 skip=skip_uninit,
                 block_mop_num_faces=block_mop_num_faces,
+                run0_result_block=RUN0_RESULT_BLOCK,
             ),
         ],
         runtimes=[],
@@ -140,7 +143,10 @@ def _run(formats, dest_acc, dense_packing, skip_uninit, block_mop_num_faces=4):
 
     span = NUM_TILES * ELEMENTS_PER_TILE
     run1 = torch.tensor(res_from_L1[:span], dtype=torch_format).flatten()
-    run0 = torch.tensor(res_from_L1[2 * span : 3 * span], dtype=torch_format).flatten()
+    run0 = torch.tensor(
+        res_from_L1[RUN0_RESULT_BLOCK * span : (RUN0_RESULT_BLOCK + 1) * span],
+        dtype=torch_format,
+    ).flatten()
     golden = torch.tensor(golden[:span], dtype=torch_format).flatten()
     return golden, run1, run0
 

@@ -70,7 +70,7 @@ ALWI void custom_mm_block_init(
     PACK((llk_pack_dest_init<fp32_dest_acc_en, ckernel::PackMode::Default>(out_cb_id)));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
     PACK((llk_pack_init<ckernel::PackMode::Default, false>(out_cb_id)));
-    PACK((_llk_pack_custom_mm_init_<dense_packing>(pack_src_format[get_output_id(out_cb_id)])));
+    PACK((llk_pack_custom_mm_init<dense_packing>(out_cb_id)));
 }
 
 template <
@@ -120,7 +120,7 @@ ALWI void custom_mm_block_init(
     PACK((llk_pack_dest_init<fp32_dest_acc_en, ckernel::PackMode::Default>(out_cb_id)));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
     PACK((llk_pack_init<ckernel::PackMode::Default, false>(out_cb_id)));
-    PACK((_llk_pack_custom_mm_init_<dense_packing>(pack_src_format[get_output_id(out_cb_id)])));
+    PACK((llk_pack_custom_mm_init<dense_packing>(out_cb_id)));
 }
 
 // The short inits take ct_dim without a default: out_cb_id precedes it, so a call
@@ -155,7 +155,7 @@ ALWI void custom_mm_block_init_short(
         S0.face_r_dim, static_cast<std::uint32_t>(in1_register_format), ct_dim)));
     MATH((_llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(S0.face_r_dim, ct_dim)));
 
-    PACK((_llk_pack_custom_mm_init_<dense_packing>(pack_src_format[get_output_id(out_cb_id)])));
+    PACK((llk_pack_custom_mm_init<dense_packing>(out_cb_id)));
 }
 
 template <
@@ -185,7 +185,7 @@ ALWI void custom_mm_block_init_short(
         _llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(get_operand_face_r_dim(in0_id), ct_dim);
     }));
 
-    PACK((_llk_pack_custom_mm_init_<dense_packing>(pack_src_format[get_output_id(out_cb_id)])));
+    PACK((llk_pack_custom_mm_init<dense_packing>(out_cb_id)));
 }
 
 template <

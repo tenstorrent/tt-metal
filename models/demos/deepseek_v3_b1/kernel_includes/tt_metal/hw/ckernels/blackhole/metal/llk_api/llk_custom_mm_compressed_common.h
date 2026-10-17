@@ -8,7 +8,7 @@
 
 #include "llk_unpack_compressed.h"
 #if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
-#include "experimental/llk_pack_custom_mm.h"
+#include "experimental/llk_pack_custom_mm_api.h"
 #endif
 
 namespace compressed {
@@ -264,7 +264,7 @@ inline void custom_mm_compressed_block_init_short(
     const uint32_t in0_cb_id, const uint32_t in1_cb_id, const uint32_t out_cb_id) {
     llk_unpack_AB_custom_mm_compressed_init<use_barrier, ct_dim>(in0_cb_id, in1_cb_id);
     MATH((llk_math_custom_mm_init<false, split_acc, dense_packing>(in0_cb_id, in1_cb_id, ct_dim)));
-    PACK((_llk_pack_custom_mm_init_<dense_packing>(pack_src_format[get_output_id(out_cb_id)])));
+    PACK((llk_pack_custom_mm_init<dense_packing>(out_cb_id)));
 }
 
 }  // namespace compressed
