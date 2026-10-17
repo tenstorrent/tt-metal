@@ -187,3 +187,49 @@ def test_rms_norm_0d(device, x, eps, w, b, dtype):
     assert torch.allclose(
         output.reshape(1), expected, rtol=rtol, atol=atol
     ), f"x={x} eps={eps} w={w} b={b}: ttnn={output.item()!r} torch={expected.item()!r}"
+
+
+@pytest.mark.parametrize(
+    "x, res, eps, w, b",
+    [
+        (2.0, 1.5, 1e-5, None, None),
+        (-1.0, 3.0, 0.25, 2.0, 0.5),
+        (0.5, -0.5, 1e-4, 1.2, -0.1),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_rms_norm_0d_with_residual(device, x, res, eps, w, b, dtype):
+    """Verify RMSNorm correctly applies residual_input_tensor on 0D scalar tensors."""
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch_input = torch.tensor(x, dtype=torch_dtype)
+    torch_residual = torch.tensor(res, dtype=torch_dtype)
+    torch_weight = None if w is None else torch.tensor(w, dtype=torch_dtype)
+    torch_bias = None if b is None else torch.tensor(b, dtype=torch_dtype)
+
+    summed_input = torch_input + torch_residual
+    expected = torch.nn.functional.rms_norm(
+        summed_input.reshape(1).double(),
+        (1,),
+        None if torch_weight is None else torch_weight.reshape(1).double(),
+        eps,
+    )
+    if torch_bias is not None:
+        expected = expected + torch_bias.double()
+
+    def to_device(t):
+        return None if t is None else ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.rms_norm(
+        to_device(torch_input),
+        epsilon=eps,
+        weight=to_device(torch_weight),
+        bias=to_device(torch_bias),
+        residual_input_tensor=to_device(torch_residual),
+    )
+    output = ttnn.to_torch(output).double()
+
+    assert output.shape == torch_input.shape
+    rtol, atol = (1e-3, 1e-6) if dtype == ttnn.float32 else (2e-2, 1e-4)
+    assert torch.allclose(
+        output.reshape(1), expected, rtol=rtol, atol=atol
+    ), f"0D with residual mismatch: ttnn={output.item()!r} torch={expected.item()!r}"
