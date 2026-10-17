@@ -84,11 +84,12 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     // bitonic merge tree whose schedule assumes a power-of-2 tile count. A non-power-of-2 Wt hangs
     // the device (odd Wt) or silently drops candidate tiles (even non-power-of-2 Wt), so reject it
     // here instead of timing out. See https://github.com/tenstorrent/tt-metal/issues/44558.
+    // The local sort consumes tiles in pairs, so a single tile (Wt = 1) hangs as well (#53781).
     const uint32_t Wt = input_shape[3] / 32;
     TT_FATAL(
-        (Wt & (Wt - 1)) == 0,
-        "Input inner dim ({}) must yield a power-of-2 number of tiles (Wt = W/32 = {}); pad W up to the "
-        "next power-of-2 multiple of 32 (e.g. with -inf values and dummy indices) if needed!",
+        Wt >= 2 && (Wt & (Wt - 1)) == 0,
+        "Input inner dim ({}) must yield a power-of-2 number of tiles, at least 2 (Wt = W/32 = {}); pad W up "
+        "to the next power-of-2 multiple of 32, at least 64 (e.g. with -inf values and dummy indices) if needed!",
         input_shape[3],
         Wt);
 
