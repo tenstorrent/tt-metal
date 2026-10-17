@@ -8,7 +8,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/math.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -301,9 +300,11 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
         .advanced_options = {.num_runtime_varargs = 3 * N},
     };
 
-    bool fp32_dest_acc_en = cb_data_format_output == tt::DataFormat::Float32 ||
-                            cb_data_format_output == tt::DataFormat::Int32 ||
-                            cb_data_format_output == tt::DataFormat::UInt32;
+    // UInt8 needs 32-bit Dest on WH/BH.
+    bool fp32_dest_acc_en =
+        cb_data_format_output == tt::DataFormat::Float32 || cb_data_format_output == tt::DataFormat::Int32 ||
+        cb_data_format_output == tt::DataFormat::UInt32 || cb_data_format_output == tt::DataFormat::UInt8;
+    // BH UInt8 RM workaround (issue #58106) handled centrally in ttnn::prim::permute via UInt8->UInt32 cast; factory never sees UInt8 on BH.
     // Style B compute config: build ComputeHardwareConfig directly, matching the legacy
     // ComputeConfigDescriptor{.fp32_dest_acc_en=...} (all other fields at legacy defaults).
     ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};

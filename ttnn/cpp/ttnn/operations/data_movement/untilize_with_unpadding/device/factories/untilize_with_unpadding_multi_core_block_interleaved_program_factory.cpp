@@ -260,7 +260,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
         // buffers would set it on the cliffrow set's input even when that set is empty -- a
         // buffer that exists on no core -- and would do so in the full-set kernels too.
         ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
-        if (fp32_dest_acc_en) {
+        if (fp32_dest_acc_en && a.dtype() != DataType::UINT8) {
             compute_hw_config.unpack_modes = {{in_name, UnpackMode::UnpackToDest}};
         }
 

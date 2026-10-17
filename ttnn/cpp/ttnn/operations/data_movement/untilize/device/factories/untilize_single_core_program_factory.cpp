@@ -147,7 +147,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
     // Compute kernel (untilize). ComputeConfig set directly: only fp32_dest_acc_en is set by the
     // legacy op -> enable_32_bit_dest; the fp32 unpack mode mirrors the legacy UnpackToDestFp32.
     ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (fp32_dest_acc_en) {
+    if (fp32_dest_acc_en && a.dtype() != DataType::UINT8) {
         compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
     }
     KernelSpec::CompilerOptions::Defines compute_defines;

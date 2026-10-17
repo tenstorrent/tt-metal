@@ -45,7 +45,9 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
 
     MeshDevice* device = input_tensor.device();
 
-    bool fp32_dest_acc_en = src0_dfb_data_format == tt::DataFormat::Float32;
+    // UInt8 needs 32-bit Dest on WH/BH; UnpackToDest stays Float32-only below.
+    bool fp32_dest_acc_en =
+        src0_dfb_data_format == tt::DataFormat::Float32 || src0_dfb_data_format == tt::DataFormat::UInt8;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
