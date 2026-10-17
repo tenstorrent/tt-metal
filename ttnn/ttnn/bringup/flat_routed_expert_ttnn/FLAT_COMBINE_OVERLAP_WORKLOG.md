@@ -950,3 +950,17 @@ Dead ends this round (numbers in the scratch tests):
   76 us, traced neutral; into the sparse dispatch 230 -> 284 us; into the routing gather 50 -> 150 us. The fabric
   ops are very sensitive to co-scheduled DRAM / NoC traffic.
 - combine depth K3_D 2: 3727 (worse), 6: does not fit L1. MIMO_FL_DRISC_MAXCNT 160 / 1024: neutral.
+
+### TP-sharded shared expert, piece by piece (2026-10-17, zz_scratch_k3_se_tp.py, 2x4 200G)
+ttnn CCLs (num_links 2, Linear) + the SE as dense ttnn (bf8 weights, HiFi2, mm2d), slowest chip, us; output vs fp32:
+| layout | all-gather x | dense SE (gate, up, situ_glu, down) | reduce-scatter | serial sum | rel / PCC |
+| TP4 row bf16 | 316.5 | 484 (115 + 115 + 89 + 165) | 371 | 1172 | 1.53% / 0.99975 |
+| TP4 row bf8 payloads | 199.7 | 484 | 343 | 1027 | 2.65% / 0.99830 |
+| TP2 col bf16 | 129.2 | 461 (118 + 118 + 89 + 136) | 160 | 750 | 1.55% / 0.99975 |
+| TP2 col bf8 payloads | 90.2 | 461 | 145 | 696 | 2.22% / 0.99834 |
+| local dense (replicated) | - | 765 (197 + 197 + 176 + 196) | - | 765 | 1.58% / 0.99975 |
+(local flat, the default: 549 incl. its x untilize; TP4 flat was 560 for the SE alone.) Findings: at TP shapes dense
+beats flat (more rows per weight: 245 TFLOP/s on the gate linear at M 1280); ttnn.situ_glu is a 5-program composite,
+89 us at TP shapes (176 local) - one fused op would be ~15-20; the collectives are near the 200G link floor (TP4 edge
+chips: one neighbour) and bf8 payloads cut the AG 30-37% but the RS only 8-10% at +0.7-1.1% error. Serially even TP2
+(~680 with a fused activation) loses to local flat 549: TP pays off only with the collectives overlapped.
