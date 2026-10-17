@@ -117,7 +117,9 @@ def generate(
     }
     source_root = Path(__file__).parent
     report["source_files"] = {
-        str(path.relative_to(source_root)): sha256(path) for path in sorted((source_root / "tt").rglob("*.py"))
+        str(path.relative_to(source_root)): sha256(path)
+        for path in sorted((source_root / "tt").rglob("*"))
+        if path.is_file() and path.suffix in {".py", ".json"}
     }
     report["source_files"]["demo.py"] = sha256(Path(__file__))
 
