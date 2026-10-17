@@ -80,6 +80,20 @@ inline void calculate_mish() {
         }
         v_endif;
 
+        // Below -80, mish(x) equals x * exp(x) to fp32 precision, but u = exp(x) flushes to zero near -87.3 and
+        // mish(x) came out exactly 0 (#55711). Evaluate the tail as (x * exp(x/2)) * exp(x/2), which stays normal
+        // down to about -103.
+        v_if(x < -80.0f) {
+            sfpi::vFloat half_exp;
+            if constexpr (APPROXIMATION_MODE) {
+                half_exp = _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(0.5f * x);
+            } else {
+                half_exp = _sfpu_exp_accurate_<is_fp32_dest_acc_en>(0.5f * x);
+            }
+            result = (x * half_exp) * half_exp;
+        }
+        v_endif;
+
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }

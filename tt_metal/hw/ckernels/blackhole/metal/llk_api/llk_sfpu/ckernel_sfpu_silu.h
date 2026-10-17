@@ -18,6 +18,19 @@ inline void calculate_silu() {
 
         // silu(x) = x * sigmoid(x)
         sfpi::vFloat result = x * _sfpu_sigmoid_<is_fp32_dest_acc_en>(x);
+        // Below -80, sigmoid(x) equals exp(x) to fp32 precision, but 1 / (1 + exp(-x)) flushes to zero near -87.3
+        // and silu(x) came out exactly 0 (#55711). x * exp(x) is still normal down to about -103; evaluate it as
+        // (x * exp(x/2)) * exp(x/2) so no intermediate leaves the normal range.
+        v_if(x < -80.0f) {
+            sfpi::vFloat half_exp;
+            if constexpr (is_fp32_dest_acc_en) {
+                half_exp = _sfpu_exp_accurate_<true>(0.5f * x);
+            } else {
+                half_exp = _sfpu_exp_21f_bf16_<true>(0.5f * x);
+            }
+            result = (x * half_exp) * half_exp;
+        }
+        v_endif;
 
         // Round to bfloat16 if not in fp32 accumulation mode
         if constexpr (!is_fp32_dest_acc_en) {
