@@ -147,7 +147,8 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     // value on every face. Ops relying on ADDR_MOD_6 from their own init (e.g. topk, square, sfpu reduce)
     // must re-run that init after rand. This is the only state rand re-establishes: an init that changes
     // SFPU control state (topk enables index tracking, which replaces this kernel's LREG4-7 results) must
-    // be followed by rand_init before rand.
+    // be followed by rand_tile_init before rand -- its generic SFPU config init clears that state;
+    // rand_init alone does not touch it.
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 
     // Load scale param to lreg1
