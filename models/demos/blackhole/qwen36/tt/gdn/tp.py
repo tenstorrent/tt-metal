@@ -50,14 +50,14 @@ def gdn_decode_step_fp32_state_enabled():
 
 
 def gdn_verify_spec_step_enabled():
-    """QWEN36_VERIFY_SPEC_STEP (default "0"): run the batched spec verify AND its T = 1 seed through
+    """QWEN36_VERIFY_SPEC_STEP (default "1"): run the batched spec verify AND its T = 1 seed through
     ttnn.experimental.kda.gdn_spec_step -- ONE fused op per GDN layer (conv-window rebuild + depthwise conv + SiLU +
     l2norms + gates + T-step gated delta rule with per-token ring writes + gated RMSNorm + silu(z)) with
     gdn_decode_step's fast_mode / fp32_state arithmetic, in place of the ~70-op composite chain of
-    _verify_fullbatch / _seed_fullbatch. "1" uses the op (device-validated builds only); "0" keeps the composite
+    _verify_fullbatch / _seed_fullbatch. "1" (default) uses the op; "0" keeps the composite
     path byte for byte. With the op, plain decode stays on gdn_decode_step (set_gdn_fused_decode(True) is ignored),
     so decode, seed and verify share one kernel family."""
-    return os.environ.get("QWEN36_VERIFY_SPEC_STEP", "0") == "1"
+    return os.environ.get("QWEN36_VERIFY_SPEC_STEP", "1") == "1"
 
 
 def pack_head_tiles(rows, Nv, Nk, Dk, Dv, parity=0, both_parities=False):

@@ -20,7 +20,7 @@ condense. The engine keeps every request in the engine row its prefill chose and
 ``_phys`` (runner slot -> engine row). The runner-facing calls ``decode_forward`` / ``propose_draft_tokens`` /
 ``prefill`` / ``release`` take runner slots: per-row inputs are scattered to engine rows, outputs gathered back.
 ``verify`` / ``propose`` (the demo API) and every ``_fresh`` / ``_active`` / ... set are in engine rows; the demo never
-remaps, so there the two numberings coincide. With the flag at 0 a remap permutes the GDN state on the device.
+remaps, so there the two numberings coincide. With the flag at 0 (not the default) a remap permutes the GDN state on the device.
 Every per-row device input the verify stages (tokens, positions, mi_prev -> state_blk_idx / conv_sel, or under
 QWEN36_VERIFY_SPEC_STEP=1 the gdn_spec_step ctrl page {parity, mi, ring block}) is built from ENGINE rows."""
 
@@ -405,7 +405,7 @@ def spec_memory_costs(
 
     ring = n_gdn * B * _tile_bytes([T * nv_tp, dk, dv], f32)  # [T*B*Nv, Dk, Dv]
     win_rows = [kconv - 1 + T, kconv] + ([T - 1] if T > 1 else [])  # _verify_win_buf, _conv_win_buf, _spec_win_pad
-    if os.environ.get("QWEN36_VERIFY_SPEC_STEP", "0") == "1":  # gdn_spec_step keeps E_prev as a ping-pong pair
+    if os.environ.get("QWEN36_VERIFY_SPEC_STEP", "1") == "1":  # gdn_spec_step keeps E_prev as a ping-pong pair
         win_rows.append(kconv - 1 + T)
     windows = n_gdn * B * sum(_tile_bytes([r, C], bf) for r in win_rows)
     hidden = B * _tile_bytes([1, 1, 1, dim_frac], bf)
