@@ -70,10 +70,11 @@ inline void llk_math_reduce_block_max_row_runtime(
 /**
  * Reinitializes the block-based reduce_max_row operation after a matmul.
  *
- * This LLK API function is used only to re-initialize the address modifiers after a
- * matmul operation in an SDPA inner loop. Please don't use this function as a substitute for
- * the native llk_math_reduce_block_max_row_init LLK. This function is highly specialized
- * for a certain use case and the LLK team does not guarantee any degree of generality.
+ * This LLK API function re-initializes the address modifiers after a matmul operation in an SDPA
+ * inner loop and re-applies the operand-driven Src zero-flag default (a cfg RMW only when the value
+ * differs). Please don't use this function as a substitute for the native
+ * llk_math_reduce_block_max_row_init LLK. This function is highly specialized for a certain use
+ * case and the LLK team does not guarantee any degree of generality.
  */
 inline void llk_math_reduce_block_max_row_reinit_runtime() {
     SAN_HOOK(unsupported());
@@ -84,8 +85,8 @@ inline void llk_math_reduce_block_max_row_reinit_runtime() {
  * Short reinitialization for block-based reduce_max_row operation after a matmul.
  * Reprograms address modifiers and MOP configuration with runtime block_ct_dim.
  *
- * This LLK API function is used only to re-initialize the address modifiers and MOP
- * after a matmul operation in an SDPA inner loop.
+ * This LLK API function re-initializes the address modifiers and MOP after a matmul operation in
+ * an SDPA inner loop and re-applies the operand-driven Src zero-flag default.
  */
 template <bool is_fp32_dest_acc_en>
 inline void llk_math_reduce_block_max_row_reinit_short_runtime(
@@ -96,7 +97,8 @@ inline void llk_math_reduce_block_max_row_reinit_short_runtime(
 
 /**
  * Minimal reinitialization for block-based reduce_max_row operation.
- * Only reconfigures ADDR_MOD_1, ADDR_MOD_2, and ADDR_MOD_6 (preserves ADDR_MOD_3).
+ * Reconfigures ADDR_MOD_1, ADDR_MOD_2, and ADDR_MOD_6 (preserves ADDR_MOD_3) and re-applies the
+ * operand-driven Src zero-flag default.
  */
 inline void llk_math_reduce_block_max_row_reinit_minimal_runtime() {
     SAN_HOOK(unsupported());

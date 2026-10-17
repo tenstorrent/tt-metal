@@ -1,8 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
+
 import pytest
 import torch
+from conftest import blackhole_only
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, is_dest_acc_needed
@@ -22,9 +25,25 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     THROTTLE_LEVEL,
     TILE_COUNT,
+    TemplateParameter,
 )
-from helpers.tilize_untilize import tilize_block
+from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
+
+# C++ selector: math leaves the Src zero flag at keep (as copy_tile_custom does) after hw_configure and re-arms the
+# matmul before running it. 0 = no keep, 1 = the no-mop reinit (the SDPA inner-loop path), 2 = a second no-mop init.
+_REARM_DEFINE = {"none": 0, "reinit": 1, "init": 2}
+
+
+@dataclass
+class MATMUL_NO_MOP_REARM_AFTER_KEEP(TemplateParameter):
+    """Math leaves the Src zero flag at keep (as copy_tile_custom does) and re-arms the no-mop matmul before running it."""
+
+    rearm_after_keep: str = "none"
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MATMUL_NO_MOP_REARM_AFTER_KEEP {_REARM_DEFINE[self.rearm_after_keep]}"
+
 
 # Throttle levels supported by the no-mop matmul math LLK. Throttle only inserts
 # NOPs between MVMULs to cap compute throughput, so the numeric result is IDENTICAL
@@ -73,7 +92,13 @@ def _run_matmul_custom(
     input_B_dimensions,
     throttle_level: int,
     boot_mode: BootMode,
+    rearm_after_keep: str = "none",
+    operands=None,
 ):
+    """Run the no-mop matmul and check it against the golden; return the tilized result.
+
+    ``operands`` optionally supplies row-major ``(A, B)`` float tensors instead of the seeded uniform ones.
+    """
     torch_format = format_dict[formats.output_format]
 
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
@@ -85,6 +110,8 @@ def _run_matmul_custom(
         spec_A=sfpu_false_spec,
         spec_B=sfpu_false_spec,
     )
+    if operands is not None:
+        src_A, src_B = (t.reshape(-1).to(src_A.dtype) for t in operands)
 
     # Calculate all matmul dimensions using helper function
     matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
@@ -118,7 +145,11 @@ def _run_matmul_custom(
     configuration = TestConfig(
         "sources/matmul_custom_test.cpp",
         formats,
-        templates=[MATH_FIDELITY(math_fidelity), THROTTLE_LEVEL(throttle_level)],
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            THROTTLE_LEVEL(throttle_level),
+            MATMUL_NO_MOP_REARM_AFTER_KEEP(rearm_after_keep),
+        ],
         runtimes=[
             NUM_FACES(),
             TILE_COUNT(matmul_dims.output_tile_cnt),
@@ -149,6 +180,59 @@ def _run_matmul_custom(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+    return res_tensor
+
+
+# Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
+BF16_DENORMAL_MIN = 2.0**-133
+BF16_DENORMAL_MANTISSAS = 1 << 7
+# B is scaled up so a kept denormal gives a visibly nonzero product; the normal rows of A are scaled down
+# by the same amount so their products stay O(1).
+OPERAND_SCALE = 2.0**100
+
+
+@blackhole_only
+@pytest.mark.parametrize("rearm", ["reinit", "init"])
+def test_matmul_custom_rearm_flushes_denormal_srcb_after_keep_flag(rearm):
+    """The no-mop reinit and init must restore the Src zero flag a preceding copy_tile_custom left at keep.
+
+    The flag is set to keep after hw_configure (which applies the default itself) and the matmul is re-armed
+    through the reinit (the SDPA inner-loop path) or a second init; the execute asserts the operand-driven value
+    under LLK asserts. Rows 0-3 of A (SrcB) are bf16 denormals, which a bf16 MVMUL flushes to zero; scaled by B
+    they give nonzero products if kept, so those rows must come out exactly 0. The golden cannot tell flushed rows
+    from kept ones at its tolerance, so only the exact-zero check guards them. The other rows check the rest of the
+    product.
+    """
+    dims = [32, 32]
+    denormal_rows = 4
+    torch.manual_seed(0)
+    torch_a = torch.randn(dims, dtype=torch.float32) / OPERAND_SCALE
+    torch_a[:denormal_rows] = (
+        BF16_DENORMAL_MIN
+        * torch.randint(1, BF16_DENORMAL_MANTISSAS, (denormal_rows, dims[1])).float()
+    )
+    torch_b = torch.randn(dims, dtype=torch.float32) * OPERAND_SCALE
+
+    formats = input_output_formats([DataFormat.Float16_b])[0]
+    res = _run_matmul_custom(
+        MathFidelity.LoFi,
+        formats,
+        DestAccumulation.No,
+        dims,
+        dims,
+        throttle_level=0,
+        boot_mode=BootMode.DEFAULT,
+        rearm_after_keep=rearm,
+        operands=(torch_a, torch_b),
+    )
+    rows = untilize_block(
+        res, stimuli_format=formats.output_format, dimensions=dims
+    ).reshape(dims)
+    kept = rows[:denormal_rows].float()
+    assert (
+        torch.count_nonzero(kept) == 0
+    ), f"denormal SrcB rows were not flushed: max |value| {kept.abs().max().item():.3e}"
 
 
 @parametrize(

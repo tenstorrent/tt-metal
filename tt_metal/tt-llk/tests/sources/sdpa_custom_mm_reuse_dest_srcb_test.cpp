@@ -64,6 +64,13 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "params.h"
+
+// Math leaves the Src zero flag at keep before the P preload and the reuse init, as a preceding copy_tile_init
+// does (see the python side; params.h carries the harness define, so it must come first).
+#ifndef SDPA_REUSE_PRESERVE_SRC_ZERO_FLAG
+#define SDPA_REUSE_PRESERVE_SRC_ZERO_FLAG false
+#endif
 
 // Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
@@ -168,6 +175,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_wait_for_dest_available_<DST_SYNC>();
+
+    if constexpr (SDPA_REUSE_PRESERVE_SRC_ZERO_FLAG)
+    {
+        // Leave the Src zero flag at keep, as a preceding copy_tile_init does. Set before the P preload so the
+        // preload's MOVA2D carries P's bf16 denormals into DEST (as a copy_tile would); the reuse init must then
+        // restore the operand-driven value, or MVMUL keeps the denormal SrcB rows MOVD2B pulls out of DEST.
+        math::_configure_preserve_zero_flag_state_();
+    }
 
     // -- P (=B) preload: datacopy the P stimulus into DEST at tile base SRC_TILE.
     // dst_index here is a TILE index (datacopy writes 32x32 tiles), so ceil(KT_DIM/2)

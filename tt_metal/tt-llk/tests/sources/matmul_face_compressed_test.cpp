@@ -10,6 +10,12 @@
 #include "llk_defs.h"
 #include "params.h"
 
+// Math leaves the Src zero flag at keep before the init, as a preceding copy_tile_init does (see the python side;
+// params.h carries the harness define, so it must come first).
+#ifndef FACE_MM_PRESERVE_SRC_ZERO_FLAG
+#define FACE_MM_PRESERVE_SRC_ZERO_FLAG false
+#endif
+
 // Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
@@ -60,6 +66,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+
+    if constexpr (FACE_MM_PRESERVE_SRC_ZERO_FLAG)
+    {
+        // Leave the Src zero flag at keep, as a preceding copy_tile_init does. The init must restore the
+        // operand-driven value, which the execute asserts under LLK asserts.
+        math::_configure_preserve_zero_flag_state_();
+    }
 
     _llk_math_face_compressed_mm_init_<CT_DIM>(params.in0_face_r_dim);
 

@@ -100,7 +100,7 @@ inline void _llk_math_reconfig_remap_wrapper_(const bool remap_enable)
 template <std::uint32_t block_ct_dim /*maybe_unused*/, bool is_fp32_dest_acc_en /*maybe_unused*/ = false>
 inline void _llk_math_reduce_block_max_row_reinit_wrapper_([[maybe_unused]] const ckernel::TensorShape& tensor_shape)
 {
-    reduce_max_row_configure_addrmod_reinit_minimal();
+    _llk_math_reduce_block_max_row_reinit_minimal_();
 }
 
 #else

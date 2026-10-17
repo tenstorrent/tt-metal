@@ -7,6 +7,11 @@
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
+// Shares compute_streaming.hpp with ring_joint_sdpa.cpp, which sits at the kernel-config buffer limit: inlining the
+// LLK Src zero-flag DEFAULT configurator at every init / reinit / reconfig site costs TRISC1 text (+232 B measured on
+// the plain SDPA kernel). Force it out-of-line here as ring_joint_sdpa.cpp does.
+#define LLK_ZEROFLAG_OUTLINE 1
+
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include <tt-metalium/constants.hpp>

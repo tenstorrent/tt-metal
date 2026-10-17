@@ -13,6 +13,13 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
+#include "params.h"
+
+// Math leaves the Src zero flag at keep before the init, as a preceding copy_tile_init does (see the python side; params.h
+// carries the harness define, so it must come first).
+#ifndef COMPRESSED_MM_PRESERVE_SRC_ZERO_FLAG
+#define COMPRESSED_MM_PRESERVE_SRC_ZERO_FLAG false
+#endif
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -86,6 +93,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+
+    if constexpr (COMPRESSED_MM_PRESERVE_SRC_ZERO_FLAG)
+    {
+        // Leave the Src zero flag at keep, as a preceding copy_tile_init does. The init must restore the
+        // operand-driven value, or MVMUL keeps the denormal SrcB operands it should flush.
+        math::_configure_preserve_zero_flag_state_();
+    }
 
     // compressed_custom_mm is LoFi-only; init takes no MathFidelity template.
     // dense_packing == true brings the DEST tile-to-tile stride down from 64 rows to 32, matching the partial-tile

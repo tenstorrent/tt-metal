@@ -72,7 +72,6 @@ inline void llk_math_matmul_reinit_no_mop(
     // Re-derive operand tile geometry so reinit restores the shape-aware addrmods for 16x32 tiny
     // tiles (SDPA reinits the QK^T matmul between q-subblocks). Mirrors llk_math_matmul_init_no_mop.
     const MatmulNoMopGeom g = matmul_no_mop_geom(operandA, operandB);
-    matmul_configure_addrmod_reinit<math_fidelity, THROTTLE_LEVEL>(
+    _llk_math_matmul_reinit_no_mop_<math_fidelity, THROTTLE_LEVEL>(
         transpose, g.in0_tile_r_dim, g.in0_tile_c_dim, g.in1_tile_r_dim, g.in1_tile_c_dim, g.partial_face);
-    math::reset_counters(p_setrwc::SET_ABD_F);
 }

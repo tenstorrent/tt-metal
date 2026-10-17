@@ -344,6 +344,36 @@ inline void _llk_math_reduce_block_max_row_uninit_()
 }
 
 /**
+ * @brief Minimal reinit of reduce_block_max_row inside an SDPA inner loop: restores ADDR_MOD_1/2/6 only.
+ *
+ * Requires copy_tile_custom / matmul / sub_exp as the predecessors (they leave ADDR_MOD_3 and the reduce MOP intact).
+ *
+ * @note Also re-applies the operand-driven default Src zero-substitution state (skip-if-set): copy_tile_custom
+ *       leaves the flag at keep, and the GMPOOL must not run with it, exactly as @ref _llk_math_reduce_block_max_row_init_.
+ */
+inline void _llk_math_reduce_block_max_row_reinit_minimal_()
+{
+    reduce_max_row_configure_addrmod_reinit_minimal();
+    math::_configure_default_zero_flag_state_();
+}
+
+/**
+ * @brief Short reinit of reduce_block_max_row after an op that reprogrammed the MOP: restores the reduce address mods and the MOP.
+ *
+ * @tparam block_ct_dim: Number of tiles in the block width, as passed to @ref _llk_math_reduce_block_max_row_init_.
+ * @param tensor_shape: Shape of the operand tile (4 faces for 32x32, 2 faces for a 16x32 tiny tile).
+ * @note Reprograms the MOP from the intact replay buffer (e.g. after an eltwise binary init). Also re-applies the
+ *       operand-driven default Src zero-substitution state (skip-if-set), as @ref _llk_math_reduce_block_max_row_init_ does.
+ */
+template <std::uint32_t block_ct_dim>
+inline void _llk_math_reduce_block_max_row_reinit_with_mop_(const ckernel::TensorShape& tensor_shape)
+{
+    reduce_max_row_configure_addrmod();
+    _llk_math_reduce_block_max_row_mop_reprogram_only_<block_ct_dim>(tensor_shape);
+    math::_configure_default_zero_flag_state_();
+}
+
+/**
  * Performs block-based reduce_max_row operation across multiple tiles in the width dimension.
  *
  * This function works with the following assumptions:
@@ -363,6 +393,10 @@ inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 1 && is_fp32_dest_acc_en), "16x32 reduce_block_max_row not supported in FP32 dest mode yet");
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "reduce_block_max_row: Src zero-substitution flag does not hold the operand-driven value; an op between the init / "
+        "reinit and this call left it at keep, so denormal Src operands would not be flushed");
 
     // Packer indexes at the 32x32 slot stride regardless of the operand's face count.
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);

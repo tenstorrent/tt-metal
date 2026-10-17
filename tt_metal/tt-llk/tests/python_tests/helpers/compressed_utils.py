@@ -372,6 +372,7 @@ def run_compressed(
     make_meta,
     pcc_threshold=None,
     calls=CUSTOM_MM_CALLS(),
+    extra_templates=(),
 ):
     # Shared driver for both compressed-matmul tests. Kernel-specific parts are passed
     # flat: kernel (C++ source), granularity (assignment unit — 32 tile / 16 face),
@@ -382,7 +383,7 @@ def run_compressed(
     # ku/cu are the assignment row/col counts (K//granularity, N//granularity), which
     # differ from the 32-tile grid kt/ct (K//32, N//32) on the face kernel.
     # calls (CUSTOM_MM_CALLS) splits K over back-to-back calls; pack_b / make_meta then lay B and its meta
-    # out per call.
+    # out per call. extra_templates are appended to the kernel's compile-time parameters (kernel-specific switches).
     kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM  # 32-tile kernel grid
     ku, cu = (
         K // granularity,
@@ -477,6 +478,7 @@ def run_compressed(
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
             calls,
+            *extra_templates,
         ],
         runtimes=[
             NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),

@@ -325,6 +325,8 @@ inline void _llk_math_face_compressed_mm_mop_config_(const std::uint32_t face_r_
  * @note Call this before @ref _llk_math_face_compressed_mm_ with the same ct_dim. This thread has no
  *       uninit: it leaves behind only addrmods, the MOP and the replay buffer, which the next op's init
  *       reprograms anyway.
+ * @note Establishes the operand-driven default Src zero-substitution state, which @ref _llk_math_face_compressed_mm_
+ *       asserts under LLK asserts. Re-run this init after any math op that leaves the flag at keep (a copy init does).
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_face_compressed_mm_init_.
  */
 template <std::uint32_t ct_dim = 1>
@@ -337,6 +339,9 @@ inline void _llk_math_face_compressed_mm_init_(const std::uint32_t face_r_dim)
     _llk_math_face_compressed_mm_mop_config_<ct_dim>(face_r_dim);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // A preceding datacopy leaves the Src zero flag at keep; MVMUL needs the operand-driven value.
+    math::_configure_default_zero_flag_state_();
 }
 
 /**
@@ -391,6 +396,10 @@ inline void _llk_math_face_compressed_mm_(
     static_assert(ct_dim >= 1 && ct_dim <= 16, "face_compressed_mm (math): ct_dim must be in [1, 16]");
     LLK_ASSERT(kt_dim >= 2 && kt_dim <= 256 && kt_dim % 2 == 0, "face_compressed_mm (math): kt_dim must be an even number in [2, 256]");
     LLK_ASSERT(face_r_dim == 1 || face_r_dim == 8, "face_compressed_mm (math): unsupported face_r_dim (expected 1 or 8)");
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "face_compressed_mm: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
+        "this call left it at keep, so denormal Src operands would not be flushed");
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 

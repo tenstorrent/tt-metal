@@ -425,6 +425,24 @@ inline void matmul_configure_mop_throttled_no_mop()
     // MOP template programming removed - will use direct replay calls
 }
 
+/**
+ * @brief Configure the math thread for the no-MOP matmul: programs the address mods and records the MVMUL replay program.
+ *
+ * @tparam math_fidelity: Math fidelity; LoFi issues one MVMUL per step, HiFi2/3/4 add fidelity phases.
+ * @tparam THROTTLE_LEVEL: 0 runs the full-rate sequence; 1 to 5 insert NOPs between the MVMULs to cap throughput
+ *                        (see @ref matmul_configure_mop_throttled_no_mop for the levels).
+ * @param in0_tile_r_dim: Row count of an in0 tile.
+ * @param in0_tile_c_dim: Column count of an in0 tile.
+ * @param in1_tile_r_dim: Row count of an in1 tile.
+ * @param in1_tile_c_dim: Column count of an in1 tile.
+ * @param partial_face: Whether the operand tiles are partial faces (fewer than 16 rows per face).
+ * @param transpose: Nonzero to consume in1 transposed.
+ * @param ct_dim: Output width in tiles.
+ * @param rt_dim: Output height in tiles.
+ * @note Establishes the operand-driven default Src zero-substitution state, which @ref _llk_math_matmul_no_mop_ asserts
+ *       under LLK asserts. Re-run this init (or @ref _llk_math_matmul_reinit_no_mop_) after a copy that leaves the flag
+ *       at keep (copy_tile_init / copy_tile_custom), or MVMUL keeps bf16 denormal SrcB operands.
+ */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_init_no_mop_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
@@ -447,6 +465,40 @@ inline void _llk_math_matmul_init_no_mop_(
         matmul_configure_mop_custom<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // A preceding datacopy (copy_tile_init / copy_tile_custom) leaves the Src zero flag at keep; MVMUL needs
+    // the operand-driven value.
+    math::_configure_default_zero_flag_state_();
+}
+
+/**
+ * @brief Re-establish the no-mop matmul math state after another op ran between the blocks (SDPA inner loop).
+ *
+ * @tparam math_fidelity: Math fidelity the matmul was initialized with (selects the address-mod set).
+ * @tparam THROTTLE_LEVEL: Throttle level the matmul was initialized with, 0 to 5.
+ * @param transpose: Whether in1 is consumed transposed.
+ * @param in0_tile_r_dim: Row count of an in0 tile.
+ * @param in0_tile_c_dim: Column count of an in0 tile.
+ * @param in1_tile_r_dim: Row count of an in1 tile.
+ * @param in1_tile_c_dim: Column count of an in1 tile.
+ * @param partial_face: Whether the operand tiles are partial faces (fewer than 16 rows per face).
+ * @note Reprograms the address modifiers for the operand geometry and resets the counters; the replay buffer recorded
+ *       by @ref _llk_math_matmul_init_no_mop_ must still be intact. Also re-applies the operand-driven default Src
+ *       zero-substitution state (skip-if-set): a preceding copy_tile_custom leaves the flag at keep, and MVMUL would
+ *       then keep bf16 denormal SrcB operands.
+ */
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
+inline void _llk_math_matmul_reinit_no_mop_(
+    const bool transpose               = false,
+    const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
+    const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
+    const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
+    const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
+    const bool partial_face            = false)
+{
+    matmul_configure_addrmod_reinit<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_configure_default_zero_flag_state_();
 }
 
 inline void _llk_math_matmul_uninit_no_mop_()
@@ -465,6 +517,11 @@ inline void _llk_math_matmul_no_mop_(
     const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
     const bool partial_face            = false)
 {
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "matmul_no_mop: Src zero-substitution flag does not hold the operand-driven value; an op between the init / reinit and "
+        "this call left it at keep, so denormal Src operands would not be flushed");
+
     const bool reuse_a                = ct_dim >= rt_dim;
     const std::uint32_t t_dim         = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim       = reuse_a ? ct_dim : rt_dim; // reuse-dim
