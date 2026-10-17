@@ -356,6 +356,17 @@ class PagedKVManager:
             self.pools[name].free([b for b in tail if b != ZERO_BLOCK])
             row[g.ring_blocks :] = [ZERO_BLOCK] * g.compressed_blocks
 
+    def truncate_session(self, sid: int, pos: int) -> None:
+        """Rewind a session to position ``pos``: keep the compressed blocks holding the entries of
+        positions ``< pos`` and release the rest (back to ``ZERO_BLOCK``). ``pos == 0`` is
+        :meth:`reset_session`."""
+        session = self._sessions[sid]
+        for name, g in self.groups.items():
+            row = session.rows[name]
+            keep = g.ring_blocks + (g.compressed_blocks_for(pos - 1) if pos else 0)
+            self.pools[name].free([b for b in row[keep:] if b != ZERO_BLOCK])
+            row[keep:] = [ZERO_BLOCK] * (len(row) - keep)
+
     def has_session(self, sid: int) -> bool:
         """Whether ``sid`` is currently open."""
         return sid in self._sessions

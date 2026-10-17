@@ -565,6 +565,10 @@ class UserSession:
     sampled from), so the next feed always starts with it. ``_next_render`` is the
     first ``messages`` entry not yet encoded into the caches, so each turn only
     renders (and prefills) what is genuinely new.
+
+    The server also keeps ``tokens`` (the id fed at each position ``< pos``) and ``marks``,
+    the ``(n_messages, pos, pending_id)`` at the end of each assistant turn, so it can rewind
+    the caches to an earlier turn of an edited conversation instead of to position 0.
     """
 
     def __init__(self, engine: ChatEngine, index: int, args):
@@ -578,6 +582,8 @@ class UserSession:
         self.messages: list[dict] = []
         self.pos = 0
         self.pending_id: int | None = None
+        self.tokens: list[int] = []
+        self.marks: list[tuple[int, int, int | None]] = []
         self._next_render = 0
         self._seed_messages()
 
@@ -601,6 +607,8 @@ class UserSession:
         self.engine.model.reset_session(self.sid)
         self.pos = 0
         self.pending_id = None
+        self.tokens = []
+        self.marks = []
         self._seed_messages()
 
     def set_system_prompt(self, text: str | None) -> None:
