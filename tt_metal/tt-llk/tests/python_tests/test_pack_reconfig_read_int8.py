@@ -29,7 +29,6 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
-    format_dict,
 )
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block, parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -130,20 +129,27 @@ def test_pack_reconfig_read_int8(formats, dest_acc, input_dimensions):
         for fmt_config in configuration.formats_config:
             fmt_config.pack_src = DataFormat.UInt8
 
-    torch_format = format_dict[formats.output_format]
-    # Compare bit patterns: NaN never compares equal as a float.
-    bits_format = torch.uint8 if int8_out else torch.int16
+    def run_and_collect_raw_bytes():
+        # The decoded result canonicalizes NaN and re-encodes the datums; the bit-identity gate is
+        # on the bytes the packer wrote to L1.
+        configuration.run()
+        return configuration.variant_stimuli.collect_raw_result_bytes(
+            TestConfig.TENSIX_LOCATION
+        )
 
     # Run 0: full configure straight onto the output format.
-    direct = torch.tensor(configuration.run().result, dtype=torch_format)
+    direct = run_and_collect_raw_bytes()
+    expected_bytes = formats.output_format.num_bytes_per_tile(src_A.numel())
     assert (
-        len(direct) == src_A.numel()
-    ), f"result has {len(direct)} datums, input has {src_A.numel()}"
+        len(direct) == expected_bytes
+    ), f"result has {len(direct)} bytes, {expected_bytes} expected"
     if int8_out:
         golden_tensor = (
             src_A.to(torch.float32).round().clamp(0, 65535).to(torch.int64) & 0xFF
         ).to(torch.uint8)
-        assert torch.equal(direct, golden_tensor), (
+        assert torch.equal(
+            torch.frombuffer(bytearray(direct), dtype=torch.uint8), golden_tensor
+        ), (
             "UInt8 pack from a 16-bit Dest after a full configure does not keep the low byte of "
             "the Dest datum magnitude"
         )
@@ -151,8 +157,10 @@ def test_pack_reconfig_read_int8(formats, dest_acc, input_dimensions):
     # Run 1: full configure for the previous format, then reconfig onto the output format.
     # Only the runtime parameter changes between the runs.
     configuration.runtimes = runtimes(1)
-    reconfigured = torch.tensor(configuration.run().result, dtype=torch_format)
-    assert torch.equal(reconfigured.view(bits_format), direct.view(bits_format)), (
+    reconfigured = run_and_collect_raw_bytes()
+    differing = sum(a != b for a, b in zip(direct, reconfigured))
+    assert reconfigured == direct, (
         f"{formats.output_format.name} pack from a 16-bit Dest after "
-        "_llk_pack_reconfig_data_format_ differs from the same pack after a full configure"
+        "_llk_pack_reconfig_data_format_ differs from the same pack after a full configure in "
+        f"{differing} of {len(direct)} bytes"
     )
