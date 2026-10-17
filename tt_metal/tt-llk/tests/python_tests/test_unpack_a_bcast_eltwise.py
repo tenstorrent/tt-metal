@@ -41,8 +41,9 @@ from helpers.utils import passed_test
 MATHOPS = [MathOperation.Elwsub, MathOperation.Elwadd, MathOperation.Elwmul]
 DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 SRCA_REUSE_COUNTS = [2, 4, 8]
-# One fidelity for the golden and the MATH_FIDELITY template: Elwadd and Elwsub ignore it,
-# and Elwmul at LoFi is the single-phase multiply this test has always checked.
+# One fidelity for the golden and, through the MATH_FIDELITY template, the kernel's math init:
+# Elwadd and Elwsub ignore it (the init static_asserts anything above LoFi for them), and
+# Elwmul at LoFi is the single-phase multiply this test has always checked.
 FIDELITY = MathFidelity.LoFi
 INPUT_DIMENSIONS = [
     [128, 32],
@@ -166,7 +167,7 @@ def _run_unp_bcast_sub_sdpa(
     golden_tensor = binary_golden(
         mathop,
         bcast_a,
-        src_B[: input_tiles * 1024],
+        src_B,
         formats.output_format,
         FIDELITY,
         formats.input_format,

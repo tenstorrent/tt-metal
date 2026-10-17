@@ -57,7 +57,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, ckernel::MathFidelity::LoFi>(params.SRCA_REUSE_COUNT);
+    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY>(params.SRCA_REUSE_COUNT);
 
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
