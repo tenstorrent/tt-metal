@@ -49,6 +49,9 @@ struct MulReduceScalarConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     uint32_t seed = 12345;
     bool accumulate_in_one_tile = false;
+    // Reduction scale. The op applies it twice (see the golden below), so the
+    // documented contract is result = scaler^2 * sum(A * B).
+    float scaler = 1.0f;
     float rel_tol = 0.01f;
 };
 
@@ -131,7 +134,7 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
 
     SetRuntimeArgs(program, unary_writer_kernel, core, {dst_dram_buffer->address(), 0, 1});
 
-    SetRuntimeArgs(program, mul_reduce_kernel, core, {config.num_tiles});
+    SetRuntimeArgs(program, mul_reduce_kernel, core, {config.num_tiles, std::bit_cast<uint32_t>(config.scaler)});
 
     uint32_t byte_size = config.num_tiles * tile_byte_size;
     auto packed_input0 = test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
@@ -162,14 +165,18 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
         float val1 = static_cast<float>(std::bit_cast<bfloat16>(u16_src1_vec[i]));
         golden_scalar += val0 * val1;
     }
+    // The scaler sits in SrcB for both GAPOOL passes (column accumulate and final
+    // collapse), so it multiplies the result twice.
+    golden_scalar *= config.scaler * config.scaler;
 
     auto u16_result_vec = u16_from_u32_vector(result_vec);
     float device_scalar = static_cast<float>(std::bit_cast<bfloat16>(u16_result_vec[0]));
 
     log_info(
         LogTest,
-        "num_tiles={}: Golden={}, Device={}, Diff={}",
+        "num_tiles={}, scaler={}: Golden={}, Device={}, Diff={}",
         config.num_tiles,
+        config.scaler,
         golden_scalar,
         device_scalar,
         std::abs(device_scalar - golden_scalar));
@@ -226,6 +233,29 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(1, 2, 3, 7, 8),
     [](const testing::TestParamInfo<int>& info) {
         return "MulReduceScalar_16x32_" + std::to_string(info.param) + "_Tiles";
+    });
+
+// The scaler lands on the result twice (scaler^2 * sum), the contract mul_reduce_scalar.h documents and the
+// deepseek rmsnorm caller relies on (it passes 1/sqrt(N) for a mean). One value either side of 1.0 pins the
+// square: a single-application golden would be off by a factor of scaler.
+class MulReduceScalarScalerTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<bool> {};
+
+TEST_P(MulReduceScalarScalerTest, MulReduceScalarScaler) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP()
+            << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+    }
+    bool doubling = GetParam();
+    ASSERT_TRUE(run_mul_reduce_scalar_test(
+        this->device(), {.num_tiles = 4, .tile_height = 32, .scaler = doubling ? 2.0f : 0.5f}));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MulReduceScalarScalerTests,
+    MulReduceScalarScalerTest,
+    testing::Bool(),
+    [](const testing::TestParamInfo<bool>& info) {
+        return info.param ? "MulReduceScalar_Scaler_2" : "MulReduceScalar_Scaler_0p5";
     });
 
 // One-tile accumulation, parametrized past the 8-tile DEST capacity.

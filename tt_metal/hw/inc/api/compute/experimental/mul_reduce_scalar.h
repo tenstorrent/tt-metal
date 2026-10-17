@@ -129,7 +129,11 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
  *
  * This function performs:
  * 1. Element-wise multiplication: C = A * B
- * 2. Scalar reduction: result = sum(all elements of C)
+ * 2. Scalar reduction: result = sum(all elements of C) * scaler^2
+ *
+ * NOTE the square: scaler is loaded into SrcB once and both GAPOOL passes (the per-tile column
+ * accumulate and the final scalar collapse) multiply by it, so it lands on the result twice. To scale
+ * the sum by 1/N, pass 1/sqrt(N). sum_reduce_scalar_tile() shares this tail and the same contract.
  *
  * The final scalar result is stored in dest[0] at element position [0].
  *
@@ -146,7 +150,7 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
  * | Function   | icb1                   | Input circular buffer 1 (tensor B)                         | uint32_t | 0 to 31     | True     |
  * | Function   | ocb                    | Output circular buffer (used to program packer face_r_dim) | uint32_t | 0 to 31     | True     |
  * | Function   | num_tiles              | Number of tiles to process                                 | uint32_t | 1 to the DEST tile capacity (4 in fp32 half-sync), or any with accumulate_in_one_tile | True |
- * | Function   | scalar                 | Scalar multiplier for reduction (default: 1.0)             | float    | Any float   | False    |
+ * | Function   | scaler                 | Reduction scale, applied twice: result = scaler^2 * sum (default: 1.0) | float | Any float | False |
  *
  * Return value: None
  */
