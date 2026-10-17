@@ -24,16 +24,25 @@
 #ifdef SE_DYN
 #include "se_dyn.hpp"
 #endif
-#ifdef SE_ZONES
+#if defined(SE_ZONES) || defined(XRD_SOLO)
 #include "tools/profiler/kernel_profiler.hpp"
+#endif
+#ifdef SE_ZONES
 #define ZW(name) DeviceZoneScopedN(name)
 #else
 #define ZW(name)
 #endif
 
 void kernel_main() {
-#ifdef SE_X_RESIDENT
+#if defined(SE_X_RESIDENT) && !defined(XRD_SOLO)
     return;  // perf probe: x never moves (program factory, MIMO_FL_X_RESIDENT)
+#endif
+    // XRD_SOLO (perf probe MIMO_FL_XSOLO=N): x is resident for everyone else; N relays only read their share of one
+    // copy of x (super-blocks g % N == k) from DRAM into the same L1 chunk ring, no CB hand-off; one profiler zone
+    // times it. XRD_SOLO_K=k: every k-th super-block's row segment is read as one k-segment request (same bytes, k x
+    // larger transactions; garbage layout)
+#ifdef XRD_SOLO
+    DeviceZoneScopedN("XRD_SOLO");
 #endif
     constexpr uint32_t rm_cb = get_compile_time_arg_val(0);
     constexpr uint32_t row_bytes = get_compile_time_arg_val(1);  // x page bytes
@@ -59,7 +68,12 @@ void kernel_main() {
         0,
         InterleavedAddrGen<true>{
             .bank_base_address = get_arg_val<uint32_t>(get_compile_time_arg_val(7)), .page_size = 4});
+#ifdef XRD_IDX_ALL
+    // the call's whole token index in this relay's arena (RT CT 7 + 1), read once below, after the schedule
+    const uint32_t idx_l1 = get_arg_val<uint32_t>(get_compile_time_arg_val(7) + 1);
+#else
     const uint32_t idx_l1 = get_write_ptr(tt::CBIndex::c_7);  // MT x 32 words (<= 512 B <= 2 SE_DYN_HALF)
+#endif
 #endif
     uint32_t in_batch = 0, l1 = 0;
     auto flush = [&]() {
@@ -67,7 +81,9 @@ void kernel_main() {
             ZW("XRD_DRAM");
             noc_async_read_barrier();
         }
+#ifndef XRD_SOLO
         cb_push_back(rm_cb, 32 * in_batch);
+#endif
         in_batch = 0;
     };
     uint32_t stride = get_arg_val<uint32_t>(1), soff = get_arg_val<uint32_t>(2);
@@ -80,12 +96,29 @@ void kernel_main() {
 #if defined(XHELP_SMALL) && defined(SE_SMALL_T)
     // small-M role split with helper relays: the primary (offset 0) reads all of x itself, the helper nothing
     if (dyn.small) {
-        if (soff) {
+#if defined(XRD_HELP_ALL_PRIM)
+        constexpr bool idle = false;
+#elif defined(XRD_HELP_ALL_HELPER)
+        constexpr bool idle = true;
+#else
+        const bool idle = soff != 0;
+#endif
+        if (idle) {
             dyn.n_act = 0;
             dyn.num_v = 0;
         }
         stride = 1;
         soff = 0;
+    }
+#endif
+#ifdef XRD_HELP_ALL_PRIM  // (MIMO_FL_XHELP_ALL: the helpers read all of x; the primary only on small-M calls)
+#ifdef SE_SMALL_T
+    if (!dyn.small) {
+#else
+    {
+#endif
+        dyn.n_act = 0;
+        dyn.num_v = 0;
     }
 #endif
     {
@@ -95,6 +128,19 @@ void kernel_main() {
             tot > soff ? (tot - soff + stride - 1) / stride : 0;
         cb_push_back(tt::CBIndex::c_6, 1);
     }
+#if defined(XRD_INDEXED) && defined(XRD_IDX_ALL)
+    {  // every row this call reads: up to the end of the last active region (regions are padded to 32 rows)
+        uint32_t rows = 0;
+        for (uint32_t a = 0; a < dyn.n_act; ++a) {
+            const uint32_t end = dyn.off[a] + (dyn.cnt[a] + 31) / 32 * 32;
+            rows = end > rows ? end : rows;
+        }
+        if (rows) {
+            noc_async_read(idx_base, idx_l1, rows * 4);
+            noc_async_read_barrier();
+        }
+    }
+#endif
     for (uint32_t a = 0; a < dyn.n_act; ++a) {
         const uint32_t off = dyn.off[a], count = dyn.cnt[a];
 #else
@@ -103,13 +149,19 @@ void kernel_main() {
 #endif
         const uint32_t subs = (count + mt * 32 - 1) / (mt * 32);
         for (uint32_t s = 0; s < subs; ++s) {
-#ifdef XRD_INDEXED
+#if defined(XRD_INDEXED) && defined(XRD_IDX_ALL)
+            volatile tt_l1_ptr uint32_t* idx =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1) + off + s * mt * 32;
+#elif defined(XRD_INDEXED)
             volatile tt_l1_ptr uint32_t* idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
             {
                 bool mine = false;  // does this relay take any of the sub-block's super-blocks
                 for (uint32_t j = 0; j < nsb && !mine; ++j) {
                     mine = (g + j) % stride == soff;
                 }
+#ifdef XRD_SOLO_NOIDX  // (probe MIMO_FL_XSOLO_NOIDX: no token-index read / barrier per sub-block)
+                mine = false;
+#endif
                 if (mine) {
                     const uint32_t rows = count - s * mt * 32 < mt * 32 ? count - s * mt * 32 : mt * 32;
                     // whole 32-row groups: the region is padded to 32 rows, so the read stays inside it
@@ -126,7 +178,9 @@ void kernel_main() {
                 for (uint32_t m = 0; m < mt; ++m) {
                     if (in_batch == 0) {
                         ZW("XRD_FULL");
+#ifndef XRD_SOLO
                         cb_reserve_back(rm_cb, 32 * batch);
+#endif
                         l1 = get_write_ptr(rm_cb);
                     }
                     const uint32_t dst = l1 + in_batch * 32 * seg;
@@ -138,7 +192,31 @@ void kernel_main() {
                     for (uint32_t r = 0; r < 32 && r0 + r < count; ++r) {
 #endif
 #ifdef XRD_INDEXED
+#ifdef XRD_BIG  // perf probe (MIMO_FL_XRD_BIG=k): the same bytes as k-segment requests (super-blocks j % k == 0 read
+                // segments j .. j + k - 1 of each row at once, the others none; garbage layout, inside the reserved
+                // chunks)
+                        if (j % XRD_BIG == 0) {
+                            const uint32_t nseg = nsb - j < XRD_BIG ? nsb - j : XRD_BIG;
+                            const uint32_t bytes = nseg * seg;
+                            const uint32_t o = (in_batch * 32 + r) * seg, cap = batch * 32 * seg - bytes;
+                            noc_async_read(
+                                get_noc_addr(idx[m * 32 + r] * ppr, xg, j * seg), l1 + (o < cap ? o : cap), bytes);
+                        }
+#else
+#if defined(XRD_SOLO) && defined(XRD_SOLO_K)
+                        if (j % XRD_SOLO_K == 0) {
+                            constexpr uint32_t kb = XRD_SOLO_K * seg;
+                            noc_async_read<kb>(
+                                get_noc_addr(idx[m * 32 + r] * ppr, xg, j * seg), l1 + (r * kb) % (2 * 32 * seg), kb);
+                        }
+#else
+#ifdef XRD_SOLO_SEQ  // (probe MIMO_FL_XSOLO_SEQ=mask: consecutive rows & mask - round-robin banks - not the token ids)
+                        read_seg((off + r0 + r) & XRD_SOLO_SEQ, j, dst + r * seg);
+#else
                         read_seg(idx[m * 32 + r], j, dst + r * seg);
+#endif
+#endif
+#endif
 #else
                         read_seg(off + r0 + r, j, dst + r * seg);
 #endif

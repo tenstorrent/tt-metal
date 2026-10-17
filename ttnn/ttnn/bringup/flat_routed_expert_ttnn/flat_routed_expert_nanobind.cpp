@@ -12,6 +12,7 @@
 #include <tt-metalium/global_semaphore.hpp>
 
 #include "flat_routed_expert.hpp"
+#include "device/flat_drisc.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::bringup::detail {
@@ -61,6 +62,11 @@ nb::dict plan_dict(
     d["g"] = p->g;
     d["mt"] = p->mt;
     d["rg"] = p->rg;
+    d["uneven"] = p->uneven;
+    d["hg"] = p->hg;
+    d["nu"] = p->nu;
+    d["rgs"] = p->rgs;  // (uneven split: pair-sets per reader / first pair-set; empty when even)
+    d["ps0"] = p->ps0;
     d["nk_gu"] = p->nk_gu;
     d["kblk"] = 8;
     d["nd"] = p->down.size();
@@ -86,6 +92,24 @@ nb::dict plan_dict(
     d["gu"] = cores(p->gu);
     d["relays"] = cores(p->relays);
     d["down"] = cores(p->down);
+    d["gu_idle"] = cores(p->gu_idle);
+    d["arena_cores"] = cores(p->arena_cores());
+    // DRISC: which reader cells still run Tensix readers (the others are free unless they became down cores) and the
+    // launcher (posts the DRISC jobs when no Tensix reader is left to)
+    d["drisc"] = p->drisc;
+    d["dual"] = p->dual;
+    {
+        std::vector<tt::tt_metal::CoreCoord> trd;
+        for (uint32_t r = 0; r < p->readers.size(); ++r) {
+            if (p->tensix_reader(r)) {
+                trd.push_back(p->readers[r]);
+            }
+        }
+        if (p->drisc && !p->dual) {
+            trd.push_back(p->launcher);
+        }
+        d["tensix_readers"] = cores(trd);
+    }
     {  // the wiring, for NoC models: reader tails (reader, chain tail), down chains (down -> successor)
         nb::list rdn, succ;
         for (const auto& [r, t] : p->rdn) {
@@ -141,6 +165,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
             x_bf16 (bool): x as bf16 tiles (the relays tilize to bf16; else bfp8). Must match the plan the weights were
                 laid out with (flat_routed_expert_plan(..., x_bf16)).
             h_bf16 (bool): h (gate/up -> down) as bf16 tiles (else bfp8); as x_bf16.
+            y_bf16 (bool): y as bf16 tiles (else bfp8; tiled y only): no bfp8 rounding of the output.
+            math_fidelity (int): the expert matmuls' fidelity (0 LoFi: exact for bfp4 weights; 2 HiFi2 for bfp8).
 
         Returns:
             ttnn.Tensor: y [rows, H] bfp8 TILE, or bf16 ROW_MAJOR with y_row_major (rows: token_index's length in
@@ -166,7 +192,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("down_fp32") = false,
         nb::arg("pack_stochastic_rounding") = false,
         nb::arg("x_bf16") = false,
-        nb::arg("h_bf16") = false);
+        nb::arg("h_bf16") = false,
+        nb::arg("y_bf16") = false,
+        nb::arg("math_fidelity") = 0);
 
     ttnn::bind_function<"flat_combine_overlap", "ttnn.bringup.">(
         mod,
@@ -208,6 +236,41 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("h_bf16") = false,
         nb::arg("y_row_major") = true,
         nb::arg("y_out") = nb::none());
+    ttnn::bind_function<"flat_routed_expert_with_program", "ttnn.bringup.">(
+        mod,
+        R"doc(
+        The flat routed expert with another op's programs appended, one program per chip: the flat expert's arguments
+        as for flat_routed_expert, plus the caller's persistent arena (over the flat expert's cores and the other op's
+        cells) and y ([rows, H] bf16 ROW_MAJOR, DRAM), the other op's MeshProgramDescriptor (extra_key: its cache key),
+        and where the y writers report each local expert (counts[e] += 1 per writer and call at counts_addr on the
+        logical collector core; writers: the expected writer count). Returns y.
+        )doc",
+        &fre::flat_routed_expert_with_program,
+        nb::arg("dispatched_buffer").noconvert(),
+        nb::arg("expert_token_counts").noconvert(),
+        nb::arg("expert_region_offsets").noconvert(),
+        nb::arg("global_expert_ids").noconvert(),
+        nb::arg("gate_up_weights").noconvert(),
+        nb::arg("down_weights").noconvert(),
+        nb::arg("reader_down_weights") = nb::none(),
+        nb::arg("done_words").noconvert(),
+        nb::arg("intermediate"),
+        nb::arg("max_tokens_per_expert"),
+        nb::kw_only(),
+        nb::arg("arena").noconvert(),
+        nb::arg("y").noconvert(),
+        nb::arg("extra"),
+        nb::arg("extra_key"),
+        nb::arg("collector"),
+        nb::arg("counts_addr"),
+        nb::arg("writers"),
+        nb::arg("activation") = 0,
+        nb::arg("pin") = 1,
+        nb::arg("token_index") = nb::none(),
+        nb::arg("down_fp32") = false,
+        nb::arg("x_bf16") = false,
+        nb::arg("h_bf16") = false,
+        nb::arg("l1_args") = std::vector<std::vector<uint32_t>>{});
     mod.def(
         "flat_routed_expert_plan",
         &plan_dict,
@@ -222,6 +285,21 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("x_bf16") = false,
         nb::arg("h_bf16") = false,
         "The flat_routed_expert layout plan (weight bank layout, coordinator cores for the done words).");
+    mod.def(
+        "flat_drisc_stop",
+        [](tt::tt_metal::distributed::MeshDevice* device) {
+            ttnn::operations::bringup::flat_routed_expert::flat_drisc_stop(device);
+        },
+        nb::arg("device"),
+        "Stops the flat expert's persistent DRISC gate/up senders on this mesh device (MIMO_FL_DRISC); call before "
+        "closing it.");
+    mod.def(
+        "flat_drisc_dump",
+        [](tt::tt_metal::distributed::MeshDevice* device) {
+            ttnn::operations::bringup::flat_routed_expert::flat_drisc_dump(device);
+        },
+        nb::arg("device"),
+        "Logs the flat expert's DRISC senders' words (debug).");
 }
 
 }  // namespace ttnn::operations::bringup::detail

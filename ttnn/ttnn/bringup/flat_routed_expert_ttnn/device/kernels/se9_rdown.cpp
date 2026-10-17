@@ -68,9 +68,15 @@ void kernel_main() {
 #ifdef SE_E2E
     // y is the bfp8 tile buffer shaped like the dispatch buffer: virtual expert v = (e, s) writes row tiles
     // region_tile(e) + s * MT + r, only those below the expert's token count (RT: per expert region tile, count tiles)
+#ifdef SE_Y_BF16  // (bf16 tiles)
+    constexpr uint32_t out_page = 2048;
+    constexpr auto y_fmt = DataFormat::Float16_b;
+#else
     constexpr uint32_t out_page = 1088;
+    constexpr auto y_fmt = DataFormat::Bfp8_b;
+#endif
     const InterleavedAddrGenFast<true> y = {
-        .bank_base_address = get_arg_val<uint32_t>(10), .page_size = out_page, .data_format = DataFormat::Bfp8_b};
+        .bank_base_address = get_arg_val<uint32_t>(10), .page_size = out_page, .data_format = y_fmt};
     const uint32_t e2e_args = 12;
 #else
     constexpr uint32_t out_page = 2048;
@@ -98,7 +104,11 @@ void kernel_main() {
     constexpr bool small = false;
 #endif
     se_dyn_publish(dyn, tt::CBIndex::c_6, small);
+#ifdef SE_DRISC_DUAL  // a DRISC call (small counts): this slot's gate/up weights come from its DRAM core
+    const uint32_t gu_chunks = dyn.max_cnt <= SE_DRISC_MAXCNT ? 0 : dyn.n_load * gu_per_e;
+#else
     const uint32_t gu_chunks = dyn.n_load * gu_per_e;  // gate/up loads (a pinned expert's weights come once)
+#endif
 #ifdef SE_DN_REG
     const uint32_t d_blocks = small ? 0 : dyn.n_load * d_per_e, num_v = small ? 0 : dyn.num_v;  // pinned: per load
 #else
@@ -138,7 +148,7 @@ void kernel_main() {
                 const uint64_t src = gu_src + gu_iss * gu_bytes;
 #endif
                 noc_async_read_set_trid(1 + gu_iss % gu_depth);
-#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
+#if !defined(SE_W_NOREAD) && !defined(SE_GU_NOREAD)  // (perf probe: gate/up weights not read, garbage)
                 noc_async_read(src, gu_l1 + (gu_iss % gu_slots) * gu_bytes, gu_bytes);
 #endif
                 ++gu_iss;
@@ -159,7 +169,7 @@ void kernel_main() {
                 const uint64_t src = d_src + d_iss * d_bytes;
 #endif
                 noc_async_read_set_trid(8 + d_iss % d_depth);
-#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
+#if !defined(SE_W_NOREAD) && !defined(SE_DN_NOREAD)  // (perf probe: down weights not read, garbage)
                 noc_async_read(src, d_dst, d_bytes);
 #endif
                 ++d_iss;
@@ -191,14 +201,14 @@ void kernel_main() {
         }
 #endif
         if (rd_gu) {
-#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
+#if !defined(SE_W_NOREAD) && !defined(SE_GU_NOREAD)  // (perf probe: gate/up weights not read, garbage)
             noc_async_read(gu_src, get_write_ptr(gu_cb), gu_bytes);
 #endif
             gu_src += gu_bytes;
         }
         if (rd_d) {
 #ifndef SE9_SKIP_DW  // perf experiment only: down weights not read (garbage)
-#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
+#if !defined(SE_W_NOREAD) && !defined(SE_DN_NOREAD)  // (perf probe: down weights not read, garbage)
             noc_async_read(d_src, get_write_ptr(d_cb), d_bytes);
 #endif
 #endif

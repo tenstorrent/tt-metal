@@ -94,20 +94,66 @@ void kernel_main() {
         return lo;
     };
     uint32_t sent = 0;
+#ifdef XMC_FWD
+    // x read once (MIMO_FL_XFWD): this rectangle's relays read / tilize the super-blocks g with g % 2 == XMC_FWD_K
+    // (helpers sharing them as before, in this half's own order n = g / 2); this primary multicasts them here and
+    // forwards each (tilized) to the other primary's forward ring, and multicasts the other half from its own forward
+    // ring. RT after the dyn args: the forward ring address, the other primary's xy, the ring's slots. Semaphores
+    // (relays): 14 forwarded super-blocks landed here, 15 forward slots the other primary freed.
+    constexpr uint32_t fw_data_sem = 14, fw_credit_sem = 15;
+    const uint32_t fw_a = dyn0 + SE_DYN_NARGS;
+    const uint32_t fw_ring = get_arg_val<uint32_t>(fw_a), oxy = get_arg_val<uint32_t>(fw_a + 1);
+    const uint32_t fw_slots = get_arg_val<uint32_t>(fw_a + 2);
+    const uint64_t o_ring = get_noc_addr(oxy >> 16, oxy & 0xFFFF, fw_ring);
+    const uint64_t o_data = get_noc_addr(oxy >> 16, oxy & 0xFFFF, get_semaphore(fw_data_sem));
+    const uint64_t o_credit = get_noc_addr(oxy >> 16, oxy & 0xFFFF, get_semaphore(fw_credit_sem));
+    volatile tt_l1_ptr uint32_t* fw_data = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(fw_data_sem));
+    volatile tt_l1_ptr uint32_t* fw_credit =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(fw_credit_sem));
+    constexpr uint32_t sb_bytes = sb_tiles * tb;
+#endif
     for (uint32_t b = 0; b < num_sb; ++b) {
+#ifdef XMC_FWD
+        const bool own = b % 2 == XMC_FWD_K;
+        const uint32_t ob = b / 2;  // this super-block's place in its half
+#else
+        constexpr bool own = true;
+        const uint32_t ob = b;
+#endif
 #ifdef XMC_HELPER
+#ifndef XMC_PRIM_ONLY
+#define XMC_PRIM_ONLY 0  // (perf probe MIMO_FL_XPRIM_ONLY: the primary reads and tilizes every super-block)
+#endif
         // Super-blocks b with b % (1 + NH) = h + 1 were read and tilized by helper h (se13_xhelp.cpp) into landing
         // ring h here (RT 14 helper 0 xy, 17.. helpers 1.. xy, 15 landing address (ring h follows ring h - 1), 16
         // landing slots; DATA sem se_help_sem(h) here counts arrivals, CREDIT sem 5 on the helper counts freed slots).
+#ifdef XMC_HELP_ALL  // (MIMO_FL_XHELP_ALL: every super-block from helper b % NH, the primary reads none)
+        constexpr uint32_t hs = SE_XNH;
+#ifdef SE_SMALL_T
+        const bool from_helper = own && !dyn.small;  // small-M role split: the primary tilized all
+#else
+        const bool from_helper = own;
+#endif
+        const uint32_t hh = ob % hs, hb = ob / hs;
+#else
         constexpr uint32_t hs = 1 + SE_XNH;
 #ifdef SE_SMALL_T
-        const bool from_helper = b % hs != 0 && !dyn.small;  // small-M role split: the primary tilized everything
+        const bool from_helper =
+            !XMC_PRIM_ONLY && own && ob % hs != 0 && !dyn.small;  // small-M role split: the primary tilized all
 #else
-        const bool from_helper = b % hs != 0;
+        const bool from_helper = !XMC_PRIM_ONLY && own && ob % hs != 0;
 #endif
-        const uint32_t hh = b % hs - 1, hb = b / hs;
+        const uint32_t hh = ob % hs - 1, hb = ob / hs;
+#endif
         uint32_t src;
-        if (from_helper) {
+#ifdef XMC_FWD
+        if (!own) {  // the other half: forwarded by the other primary
+            ZW("XMC_FW");
+            noc_semaphore_wait_min(fw_data, ob + 1);
+            src = fw_ring + (ob % fw_slots) * sb_bytes;
+        } else
+#endif
+            if (from_helper) {
             ZW("XMC_HELP");
             constexpr uint32_t help_sem[4] = {4, 7, 8, 10};
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])), hb + 1);
@@ -151,16 +197,31 @@ void kernel_main() {
                 }
                 continue;
             }
-            while (!ncrisc_noc_nonposted_writes_sent(noc_index)) {
-            }  // the previous counter write has left L1 before its source word is reused
+            // the previous counter write has left L1 before its source word is reused (MIMO_FL_XRD_DYN: the relay's
+            // reads and multicasts share a NoC in dynamic-NoC mode, its counters are per RISC)
+            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+                while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc_index)) {
+                }
+            } else {
+                while (!ncrisc_noc_nonposted_writes_sent(noc_index)) {
+                }
+            }
             *word = sent + n;
             // One linked chain per rectangle (a linked chain must keep one destination set; its last piece is
             // unlinked), then that rectangle's XARR update, which follows the data on the same route and VC.
             for (uint32_t q = 0; q < nrect; ++q) {
                 for (uint32_t k = 0; k < n; ++k) {
                     const uint32_t dst = ring + (gidx(sent + k) % x_slots) * blk_bytes;
+#ifdef XMC_NODATA  // perf probe (MIMO_FL_XMC_NODATA): only the XARR counts go out
+                    continue;
+#endif
                     for (uint32_t m = m0; m < m1; ++m) {
+#ifdef XMC_UNLINKED  // (MIMO_FL_XMC_UNLINKED: no linked chains - an open chain holds the NoC path, so other traffic
+                     // from this core on the same NoC, e.g. x reads with MIMO_FL_XRD_NOC=0, could deadlock with it)
+                        const bool last = true;
+#else
                         const bool last = k + 1 == n && m + 1 == m1;  // the chain ends before the next rectangle's
+#endif
                         noc_async_write_multicast(
                             src + (m * SE_SBT + (i + k) * kblk) * tb,
                             rects[q] | (dst + m * piece),
@@ -175,6 +236,19 @@ void kernel_main() {
             i += n;
             noc_async_writes_flushed();
         }
+#ifdef XMC_FWD
+        if (own) {  // forward it to the other primary (its slot ob % fw_slots, once freed there)
+            if (ob >= fw_slots) {
+                noc_semaphore_wait_min(fw_credit, ob + 1 - fw_slots);
+            }
+            noc_async_write(src, o_ring + (ob % fw_slots) * sb_bytes, sb_bytes);
+            noc_async_write_barrier();  // (landed before its count moves; and the source slot is released below)
+            noc_semaphore_inc(o_data, 1);
+        } else {
+            noc_semaphore_inc(o_credit, 1);  // its forward slot is free again (the multicasts have left: flushed above)
+            continue;
+        }
+#endif
 #ifdef XMC_HELPER
         if (from_helper) {
             const uint32_t hxy = get_arg_val<uint32_t>(hh ? 16 + hh : 14);
