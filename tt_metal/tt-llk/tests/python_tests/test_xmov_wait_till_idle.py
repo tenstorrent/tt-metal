@@ -21,7 +21,7 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import ITERATIONS, XMOV_READ_GAP, XMOV_XFER_16B
 
-# Must match sources/xmov_wait_till_idle_test.cpp
+# Passed to the kernel as ITERATIONS; the kernel echoes it back as its first result word.
 NUM_ITERATIONS = 8192
 
 
@@ -72,13 +72,12 @@ def test_xmov_wait_till_idle(xfer_16b, gap):
         src_mismatches,
         kernel_xfer_16b,
         kernel_gap,
-        cfg0_before,
-        cfg0_during,
-    ) = vals[:10]
+        cfg0,
+    ) = vals[:9]
 
     print(
         f"\nxmov_wait_till_idle, {xfer_16b} x 16 B per move, {gap} nops before the read, "
-        f"cfg0 {cfg0_before:#x} -> {cfg0_during:#x}:"
+        f"cfg0 {cfg0:#x} (L0 data cache {'disabled' if cfg0 & (1 << 3) else 'enabled'}):"
         f"\n  stale destination reads: {stale_iterations}/{iterations} iterations"
         + (
             f" (first at iteration {first_stale_iter}, word {first_stale_word}, "
