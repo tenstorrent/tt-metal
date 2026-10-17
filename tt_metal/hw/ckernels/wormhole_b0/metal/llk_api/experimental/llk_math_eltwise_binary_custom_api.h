@@ -35,7 +35,8 @@ inline void llk_math_eltwise_binary_sub_bcast_cols_custom(
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
     // dst_index is the absolute base dest tile slot; the LLK helper writes ct_dim
-    // consecutive tiles from there and restores the dest base on exit.
+    // consecutive tiles from there and clears the dest RWC counter on exit (the dest base offset
+    // register is left at the last slot written).
     _llk_math_sub_bcast_cols_reuse_custom_(ct_dim, tensor_shape, dst_index);
 }
 

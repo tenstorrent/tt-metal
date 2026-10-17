@@ -70,6 +70,32 @@ class PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
         return f"constexpr bool PRESERVE_SRC_ZERO_FLAG = {str(self.bcast_preserve).lower()};"
 
 
+@dataclass
+class BCAST_COL_SHAPE_CONTRACT(TemplateParameter):
+    """Truth table of the custom bcast-col shape predicate, checked at compile time.
+
+    Each grid is (face_r_dim, num_faces_r_dim, num_faces_c_dim); the test source static_asserts
+    that the predicate accepts every ``accepted`` grid and rejects every ``rejected`` one. The
+    guards that call it are pinned separately (ComputeBcastColCustomShapeCompileContract in
+    tests/tt_metal/tt_metal/llk/test_broadcast.cpp).
+    """
+
+    accepted: list[tuple[int, int, int]]
+    rejected: list[tuple[int, int, int]]
+
+    def convert_to_cpp(self) -> str:
+        def grids(face_grids):
+            return ", ".join(f"{{{r}, {nr}, {nc}}}" for r, nr, nc in face_grids)
+
+        return "\n".join(
+            [
+                "#define BCAST_COL_SHAPE_CONTRACT",
+                f"#define BCAST_COL_SHAPE_CONTRACT_ACCEPTED {grids(self.accepted)}",
+                f"#define BCAST_COL_SHAPE_CONTRACT_REJECTED {grids(self.rejected)}",
+            ]
+        )
+
+
 # Row height of the srcA operand. 32 -> full 32x32 tiles (num_faces=4);
 # 16 -> 16x32 "tiny tiles" (one face-row, num_faces=2).
 _TILE_ROWS = [32, 16]
@@ -413,4 +439,113 @@ def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag(mathop):
     ), f"denormal SrcB rows were not flushed: max |difference| {diff.max().item():.3e}"
     assert passed_test(
         golden.flatten(), res.flatten(), formats.output_format
+    ), "Assert against golden failed"
+
+
+def test_eltwise_bcast_col_custom_shape_contract():
+    """The op-specific shape predicate accepts 32x32 and 16x32 tiles and nothing else.
+
+    The blocked bcast-col walk covers a face-row with two full 16-row faces and re-reads the
+    face-row's first SrcB face for the second one, so it is only right for a two-face-column grid
+    of full faces. A one-face-column tile (32x16: its second face is the next face-row, so the walk
+    would pair SrcA face 1 with SrcB face 0 and then run a second face-row over rows that were never
+    unpacked) or a short-face tile (1x32 .. 8x32, 16x16) must be refused. The predicate is
+    constexpr, so the kernel source static_asserts its truth table over face grids derived here
+    from the tile dimensions; the variant itself is an ordinary 32x32 SUB run. That the unpack-init
+    and math-execute guards actually use the predicate is pinned by the compile-contract gtest
+    (ComputeBcastColCustomShapeCompileContract in tests/tt_metal/tt_metal/llk/test_broadcast.cpp),
+    not here.
+    """
+    accepted = [[32, 32], [16, 32]]
+    rejected = [[32, 16], [16, 16], [8, 32], [4, 32], [2, 32], [1, 32]]
+    assert get_tile_params([32, 16])[1:] == (2, 1)
+
+    formats = input_output_formats([DataFormat.Float16_b])[0]
+    math_fidelity = MathFidelity.LoFi
+    dest_acc = DestAccumulation.No
+    rt_dim = 1
+    tile_rows, ct_dim = DEFAULT_TILE_R_DIM, 2
+    tile_dims = [tile_rows, DEFAULT_TILE_C_DIM]
+    input_dimensions_A = [tile_rows, ct_dim * DEFAULT_TILE_C_DIM]
+    input_dimensions_B = tile_dims
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)
+    num_faces = num_faces_r_dim * num_faces_c_dim
+
+    torch.manual_seed(0)
+    src_A = torch.randn(input_dimensions_A).to(torch.bfloat16)
+    # One value per row, so the column broadcast reads it whichever column it takes.
+    src_B = (
+        torch.randn(tile_rows)[:, None].expand(input_dimensions_B).to(torch.bfloat16)
+    )
+    golden = get_golden_generator(EltwiseBinaryGolden)(
+        MathOperation.Elwsub,
+        src_A.flatten(),
+        src_B.repeat(1, ct_dim).flatten(),
+        formats.output_format,
+        math_fidelity,
+    )
+
+    def _tilize(t, dims):
+        return tilize_block(
+            t.flatten(),
+            dims,
+            formats.input_format,
+            num_faces=num_faces,
+            tile_dimensions=tile_dims,
+            face_r_dim=face_r_dim,
+        ).flatten()
+
+    configuration = TestConfig(
+        "sources/multiple_tiles_eltwise_custom_test.cpp",
+        formats,
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            INPUT_DIMENSIONS(
+                full_rt_dim=rt_dim,
+                full_ct_dim=ct_dim,
+                block_ct_dim=ct_dim,
+                block_rt_dim=rt_dim,
+            ),
+            MATH_OP(mathop=MathOperation.Elwsub),
+            BROADCAST_TYPE(BroadcastType.Column),
+            CT_DIM(ct_dim),
+            PRESERVE_SRC_ZERO_FLAG(False),
+            BCAST_COL_SHAPE_CONTRACT(
+                accepted=[get_tile_params(dims) for dims in accepted],
+                rejected=[get_tile_params(dims) for dims in rejected],
+            ),
+        ],
+        runtimes=[
+            TILE_COUNT(ct_dim),
+            NUM_FACES(num_faces, num_faces, num_faces),
+            TEST_FACE_DIMS(face_r_dim),
+            NUM_BLOCKS(1),
+            NUM_TILES_IN_BLOCK(ct_dim),
+        ],
+        variant_stimuli=StimuliConfig(
+            _tilize(src_A, input_dimensions_A),
+            formats.input_format,
+            _tilize(src_B, input_dimensions_B),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=ct_dim,
+            tile_count_B=1,
+            tile_count_res=ct_dim,
+            num_faces=num_faces,
+            face_r_dim=face_r_dim,
+            tile_dimensions=tile_dims,
+            use_dense_tile_dimensions=True,
+        ),
+        dest_acc=dest_acc,
+    )
+    res = untilize_block(
+        configuration.run().result,
+        formats.output_format,
+        input_dimensions_A,
+        num_faces=num_faces,
+        tile_dimensions=tile_dims,
+        face_r_dim=face_r_dim,
+    ).flatten()
+    assert passed_test(
+        golden.flatten(), res, formats.output_format
     ), "Assert against golden failed"
