@@ -19,8 +19,6 @@ and V is not padded: 320 values per token instead of 2 x 384.
 softmax scale because the SDPA kernels apply ``scale`` to the sink logit too.
 """
 
-import os
-
 import torch
 
 import ttnn
@@ -28,7 +26,7 @@ import ttnn
 from .proj_stream import BankStreamMatmul
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config, decode_linear_config, pad_to
 from .kv import kv_replication
-from .moe_stream import KERNEL_DIR, CompactRows, PendingCompact, fabric_transport_noc
+from .moe_stream import KERNEL_DIR, zero_output
 from .rope import permute_heads_for_rope
 
 # SWA layers page by absolute position (kv.SwaBlockTable, the layout of vLLM's SlidingWindowSpec block tables):
@@ -430,7 +428,6 @@ class TtMiMoAttention:
 
         hidden = cfg.hidden_size
         self.qkv_stream = self.o_stream = None
-        self.qkv_staged = None  # set by the model: the L1 staging tensor that holds this layer's qkv weight
         self.swa_qkv = None  # set by the model: the shared SwaDecodeQkv of the SWA layers' compact decode
         self.fabric_gather = False  # set by the model: forward_decode(compact=True) returns the un-gathered rows
         self.mm_config = compute_config(ttnn.MathFidelity.HiFi2)
@@ -489,8 +486,7 @@ class TtMiMoAttention:
             self.decode_o_program = decode_linear_config(plan.mesh_device, self.nh_local * self.v_head_dim, hidden)
             # Bank-local streaming qkv (4096 x 1920 per chip, read padded to 2048 columns once: 23.9 us instead of
             # 32.4 us). It reads its own padded copy; prefill keeps the interleaved weight. The SWA o projection
-            # (1024 x 4096) streams too (o_stream above).
-            # Off the bank cores, so the previous layer's reductions can stage these weights in L1 (qkv_prefetch).
+            # (1024 x 4096) streams too (o_stream above). It runs on the cores after each bank core (as measured).
             self.qkv_stream = self._bank_stream(hidden, self.qkv_width, skip_bank_core=True)
             if self.qkv_stream is not None:
                 self.wqkv_stream = self.qkv_stream.prepare(self.wqkv)
@@ -501,10 +497,9 @@ class TtMiMoAttention:
                 decode_sinks, plan, plan.shard(0), ttnn.bfloat16, cache_name(cache_dir, prefix, "decode_sinks")
             )
 
-        # Decode with the users in rows 0-3 (forward_decode(compact=True)): rows 0-3 of the o-projection output go to a
-        # persistent compact [1, 1, 32, hidden / 8] tensor, so the row reduction is one all-gather of 1/8 of the tile.
-        self.compact_rows = CompactRows(plan, hidden)
-        self.compact_buf = self.compact_rows.output(plan)
+        # Decode with the users in rows 0-3 (forward_decode(compact=True)): the o stream writes rows 0-3 of its output
+        # into a persistent compact [1, 1, 32, hidden / 8] tensor, so the row reduction moves 1/8 of the tile.
+        self.compact_buf = zero_output(plan, hidden // (TILE // 4))
         # Decode: SDPA output -> concatenated heads (V's real dims) in one launch.
         self.concat_heads = ConcatHeads(plan, self.nh_decode if self.split_users else self.nh_local, self.v_head_dim)
 
@@ -602,16 +597,11 @@ class TtMiMoAttention:
         sample.deallocate(True)
         return op
 
-    def qkv_prefetch(self, staging, k0, k1):
-        """(kernels, tensors) that stage rows [k0, k1) of this layer's decode qkv weight into ``staging`` (to add to
-        a launch of the previous layer); see BankStreamMatmul.prefetch_section."""
-        return self.qkv_stream.prefetch_section(self.wqkv_stream, staging, k0, k1)
-
     def _decode_qkv(self, x, weight, program_config, compact=False):
         # Keep the fused qkv row in L1: the decode head split reads it with many small per-user row reads. The bank
         # stream computes rows 0-3 only, so it serves the compact (users in rows 0-3) decode.
         if compact and weight is self.wqkv and self.qkv_stream is not None:
-            return self.qkv_stream(x, self.wqkv_stream, staged=self.qkv_staged)
+            return self.qkv_stream(x, self.wqkv_stream)
         return ttnn.linear(
             x,
             weight,
@@ -705,42 +695,25 @@ class TtMiMoAttention:
         )
 
     def _decode_o(self, attn_cat, compact):
-        """o projection and the row reduction (consumes ``attn_cat``). ``compact``: the users are in rows 0-3; returns
-        the row all-gather of every chip's compact rows (CompactRows) for ReduceExpand instead of the all-reduced
-        [1, 1, 32, hidden]."""
-        if compact and self.o_stream is not None:
-            # Rows 0-3 written straight in the compact rows layout (no CompactRows launch). MIMO_MERGE_O=1 runs the
-            # projection inside the fabric reduction's launch instead; that launch's dispatch (~10 us, 42 cores) then
-            # cannot hide behind the short head concat before it, so the default launches the projection alone.
-            if self.fabric_gather and os.environ.get("MIMO_MERGE_O") == "1":
-                section = self.o_stream(
-                    attn_cat,
-                    self.wo_decode,
-                    compact_out=self.compact_buf,
-                    signal=fabric_transport_noc(self.plan.mesh_device),
-                    launch=False,
-                )
-                return PendingCompact(section, self.compact_buf, len(self.o_stream.cores), release=[attn_cat])
+        """o projection and the row reduction (consumes ``attn_cat``). ``compact``: the users are in rows 0-3; the o
+        stream writes them straight into the compact rows (``compact_buf``), and this returns them un-gathered when the
+        reduction all-gathers over the fabric, else their row all-gather, instead of the all-reduced [1, 1, 32, hidden].
+        """
+        if compact:
+            assert self.o_stream is not None, "compact decode needs the bank-local o stream"
             rows = self.o_stream(attn_cat, self.wo_decode, compact_out=self.compact_buf)
             attn_cat.deallocate(True)
             return rows if self.fabric_gather else self.plan.all_gather(rows, dim=3)
-        else:
-            out = ttnn.linear(
-                attn_cat,
-                self.wo_decode,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.L1_MEMORY_CONFIG if compact else ttnn.DRAM_MEMORY_CONFIG,
-                program_config=self.decode_o_program,
-                compute_kernel_config=self.mm_config,
-            )
+        out = ttnn.linear(
+            attn_cat,
+            self.wo_decode,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self.decode_o_program,
+            compute_kernel_config=self.mm_config,
+        )
         attn_cat.deallocate(True)
-        if not compact:
-            return self.plan.all_reduce(out)
-        rows = self.compact_rows(out, self.compact_buf)
-        out.deallocate(True)
-        if self.fabric_gather:
-            return rows  # the reduction all-gathers it over the fabric
-        return self.plan.all_gather(rows, dim=3)  # [1, 1, 32, tp * hidden / 8]
+        return self.plan.all_reduce(out)
 
     def forward_decode(self, x, rot_mats, cur_pos, page_table, kv_cache, compact=False):
         """x [1, 1, B, hidden] (B users padded to a tile).

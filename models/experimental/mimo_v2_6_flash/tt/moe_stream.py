@@ -622,16 +622,16 @@ class ReduceExpand:
             assert residual is not None and self.can_norm
             return self._call_norm(gathered, out, residual, *norm)
 
-    def call_fabric(self, compact, out, residual, norm, fabric, extra=None):
+    def call_fabric(self, compact, out, residual, norm, fabric):
         if isinstance(compact, PendingCompact):  # the producer runs in the same launch
-            return self._call_fabric(compact.rows, out, residual, norm, fabric, extra, producer=compact)
-        return self._call_fabric(compact, out, residual, norm, fabric, extra)
+            return self._call_fabric(compact.rows, out, residual, norm, fabric, producer=compact)
+        return self._call_fabric(compact, out, residual, norm, fabric)
 
-    def _call_fabric(self, compact, out, residual, norm, fabric, extra=None, producer=None):
+    def _call_fabric(self, compact, out, residual, norm, fabric, producer=None):
         """The row all-gather and the fused reduce + residual + RMSNorm in one launch per chip: ``compact`` is this
         chip's [1, 1, 32, hidden / 8] compact rows (DRAM tiles), sent over the fabric to every chip of the row
-        (``fabric``: the row's FabricRowGather); returns (out, norm_out) as ``__call__`` with ``norm``. ``extra``:
-        (kernels, tensors) on other cores to run in the same launch (e.g. staging the next layer's weights)."""
+        (``fabric``: the row's FabricRowGather); returns (out, norm_out) as ``__call__`` with ``norm``. ``producer``
+        (a PendingCompact): the launch that writes ``compact`` runs in this one, on other cores."""
         gamma, norm_out, eps = norm
         for t in (compact, out, residual, gamma, norm_out):
             assert t.layout == ttnn.TILE_LAYOUT and t.dtype == ttnn.bfloat16 and is_dram_interleaved(t)
@@ -644,20 +644,16 @@ class ReduceExpand:
         cbs[self.cb_in] = ttnn.cb_descriptor_from_sharded_tensor(
             self.cb_in, fabric.gather, address_offset=phase * fabric.phase_bytes, total_size=fabric.phase_bytes
         )
-        extra_kernels, extra_tensors = extra if extra is not None else ([], [])
-        kernels = kernels + list(extra_kernels)
+        extra_tensors = []
         if producer is not None:
-            kernels += producer.section["kernels"]
+            kernels = kernels + producer.section["kernels"]
             cbs = cbs + producer.section["cbs"]
             semaphores = semaphores + producer.section["semaphores"]
-            extra_tensors = list(extra_tensors) + producer.section["tensors"]
+            extra_tensors = producer.section["tensors"]
         waits = producer.signals if producer is not None else 0
         mesh_program = fabric.programs(kernels, cbs, semaphores, compact, phase, wait_count=waits)
         io = [compact, residual, gamma, self.norm_consts, fabric.gather] + list(extra_tensors) + [out, norm_out]
         ttnn.generic_op(io, mesh_program)
-        if producer is not None:
-            for t in producer.release:
-                t.deallocate(True)
         return out, norm_out
         tensors = (gathered, out) + ((residual,) if residual is not None else ())
         for t in tensors:
@@ -966,9 +962,8 @@ class PendingCompact:
     tensors) writes ``rows``, and each of its ``signals`` cores then raises semaphore 0 of every transport core.
     ReduceExpand.call_fabric runs it in the same launch as the all-gather and the reduce."""
 
-    def __init__(self, section, rows, signals, release=()):
-        """``release``: tensors to deallocate once the merged launch is enqueued (the producer's inputs)."""
-        self.section, self.rows, self.signals, self.release = section, rows, signals, list(release)
+    def __init__(self, section, rows, signals):
+        self.section, self.rows, self.signals = section, rows, signals
 
 
 _FABRIC_GATHERS = {}
@@ -980,67 +975,3 @@ def fabric_row_gather(plan, reduce):
     if key not in _FABRIC_GATHERS:
         _FABRIC_GATHERS[key] = FabricRowGather(plan, reduce)
     return _FABRIC_GATHERS[key]
-
-
-class CompactRows:
-    """Rows 0-3 of a [1, 1, 32, hidden] bf16 tile tensor (L1 or DRAM interleaved) -> DownStream's compact
-    [1, 1, 32, hidden / 8] layout (rows 4c..4c+3 of compact tile t % compact_tiles hold rows 0-3 of tile column t,
-    c = t / compact_tiles), so a row all-gather and ``ReduceExpand`` all-reduce only the user rows. One data-movement
-    kernel on 16 cores, each moving the rows of hidden / 32 / 16 tile columns."""
-
-    ROWS = 4
-    GRID = (8, 2)
-
-    def __init__(self, plan, hidden):
-        nt = hidden // TILE
-        self.row_blocks = TILE // self.ROWS
-        assert nt % self.row_blocks == 0
-        self.hidden = hidden
-        self.compact_tiles = nt // self.row_blocks
-        self.compact_width = self.compact_tiles * TILE
-        gx, gy = self.GRID
-        self.cores = [ttnn.CoreCoord(x, y) for y in range(gy) for x in range(gx)]
-        assert nt % len(self.cores) == 0
-        self.tiles_per_core = nt // len(self.cores)
-        self.core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
-        tiny = ttnn.Tile([self.ROWS, TILE])
-        page = tiny.get_tile_size(ttnn.bfloat16)
-        fmt = ttnn.CBFormatDescriptor(
-            buffer_index=0, data_format=ttnn.bfloat16, page_size=page, tile=ttnn.TileDescriptor(tiny)
-        )
-        self.cbs = [
-            ttnn.CBDescriptor(
-                total_size=self.tiles_per_core * page, core_ranges=self.core_ranges, format_descriptors=[fmt]
-            )
-        ]
-
-    def output(self, plan):
-        """Persistent [1, 1, 32, hidden / 8] bf16 DRAM tiles; every call rewrites all of it."""
-        return zero_output(plan, self.compact_width)
-
-    def __call__(self, x, out):
-        """x [1, 1, 32, hidden] bf16 interleaved tiles -> ``out`` from ``output``; returns ``out``."""
-        mc = x.memory_config()
-        assert x.layout == ttnn.TILE_LAYOUT and x.dtype == ttnn.bfloat16
-        assert mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
-        assert x.shape[-2] == TILE and x.shape[-1] == self.hidden
-        assert out.layout == ttnn.TILE_LAYOUT and out.dtype == ttnn.bfloat16 and is_dram_interleaved(out)
-        assert out.shape[-2] == TILE and out.shape[-1] == self.compact_width
-        in_dram = 1 if mc.buffer_type == ttnn.BufferType.DRAM else 0
-
-        rt = ttnn.RuntimeArgs()
-        for i, core in enumerate(self.cores):
-            rt[core.x][core.y] = [x.buffer_address(), out.buffer_address(), i * self.tiles_per_core]
-        kernel = ttnn.KernelDescriptor(
-            kernel_source=f"{KERNEL_DIR}/attn/attn_compact_rows.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=self.core_ranges,
-            compile_time_args=[0, self.tiles_per_core, self.compact_tiles, in_dram],
-            runtime_args=rt,
-            config=ttnn.DataMovementConfigDescriptor(
-                processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_0_default
-            ),
-        )
-        program = ttnn.ProgramDescriptor(kernels=[kernel], cbs=self.cbs, semaphores=[])
-        ttnn.generic_op([x, out], program)
-        return out

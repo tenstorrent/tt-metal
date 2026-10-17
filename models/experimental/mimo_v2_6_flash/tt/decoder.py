@@ -171,8 +171,6 @@ class TtMiMoDecoderLayer:
         else:
             self.mlp = TtMiMoDenseMLP(plan, layer_idx, w.get("mlp"), cache_dir=cache_dir, weight_dtype=mlp_dtype)
         self.fused_norm = None
-        # Set by the model: (kernels, tensors) staging the next layer's qkv weight, for this layer's two reductions.
-        self.prefetch = None
 
     def can_fuse_norms(self):
         return self._compact_decode() and self.mlp.reduce_expand.can_norm
@@ -250,8 +248,7 @@ class TtMiMoDecoderLayer:
         if own_h:
             h.deallocate(True)
         if fused is not None and self.attn.fabric_gather:
-            extra = self.prefetch[0] if self.prefetch is not None else None
-            x2, h2 = self.mlp.reduce_residual(None, x, norm=fused["post"], compact=gathered, extra=extra)
+            x2, h2 = self.mlp.reduce_residual(None, x, norm=fused["post"], compact=gathered)
         elif fused is not None:
             x2, h2 = self.mlp.reduce_residual(gathered, x, norm=fused["post"])
         else:
@@ -261,11 +258,7 @@ class TtMiMoDecoderLayer:
         if fused is None:
             h2 = self.post_norm(x2)
         nxt = fused["next"] if fused is not None and return_norm else None
-        extra = self.prefetch[1] if self.prefetch is not None and nxt is not None else None
-        out = self.mlp.forward_decode(h2, token_mask, residual=x2, norm=nxt, extra=extra)
-        if self.prefetch is not None and nxt is None:  # no fused reduction to carry the second half: its own launch
-            kernels, tensors = self.prefetch[1]
-            ttnn.generic_op(list(tensors), ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[]))
+        out = self.mlp.forward_decode(h2, token_mask, residual=x2, norm=nxt)
         if fused is None:
             h2.deallocate(True)
         x2.deallocate(True)
