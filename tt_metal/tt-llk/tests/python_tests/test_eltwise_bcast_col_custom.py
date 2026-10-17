@@ -269,8 +269,14 @@ def test_eltwise_bcast_col_custom(
             r_sample,
         )
 
+    # Elwmul: the golden sums the fidelity phases of the product, rounding each phase to the output
+    # format, so the FPU (which accumulates the exact phase products in dest) lands within 2 bf16
+    # steps of it at every fidelity. A scaffold that walks the tile once regardless of fidelity
+    # (LoFi numerics) is 12+ steps off the HiFi2/3/4 golden on these full-mantissa operands, which
+    # the atol/rtol 0.05 tolerance gate cannot see; the step budget can.
+    gate = {"max_ulp": 2} if mathop == MathOperation.Elwmul else {}
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor, res_tensor, formats.output_format, **gate
     ), "Assert against golden failed"
 
 
