@@ -436,8 +436,14 @@ def test_custom_mm_kt_past_max_asserts():
             DestAccumulation.No,
             operands=(torch_a, torch_b),
         )
-    # The stack traces name the halted cores; TRISC0 is the unpack thread, where the walk lives.
-    assert "TRISC0" in str(assert_hit.value)
+    # The stack traces name the halted cores. Both threads must reject the block: the unpack thread
+    # (TRISC0) owns the face walk, and the math thread (TRISC1) must not queue MVMULs that would wait
+    # for SrcB data the unpacker never delivers (that wedge outlives the RISC soft reset).
+    stack_traces = str(assert_hit.value)
+    for thread in ("TRISC0", "TRISC1"):
+        assert (
+            thread in stack_traces
+        ), f"expected {thread} to reject kt_dim={kt}:\n{stack_traces}"
 
 
 # Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
