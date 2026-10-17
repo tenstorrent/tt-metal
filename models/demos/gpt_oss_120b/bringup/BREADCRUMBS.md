@@ -34,3 +34,12 @@
   input (x2) at rel 0.0451 against 0.0454 is the closest check. 14 device ops, host FLOPs 0, deterministic.
 - Component boundary (`hooks._AttentionBoundary`) loads the golden KV prefix into a fresh served cache each call.
 - Re-run: `bfw job check --task C.sliding_moe.attention`.
+
+## C.sliding_moe.attn_residual (layer 0)
+
+- `tt/residual.py:TtResidualAdd`: one local `ttnn.add` (bf16 out, DRAM). Both operands are the residual stream's
+  layout ([1, 1, S/8, 2880] per chip, rows split over axis 0, replicated over axis 1), so no collective. The same
+  class serves mlp_residual (hooks map both steps to it).
+- `hooks._HostBoundary` now takes any number of [S, H] inputs (`*xs`), each sent with `rows_to_device`.
+- Gate: pcc 0.9999985, auto_margin_min 1.97, device_ops 1, host FLOPs 0; attn_norm and attention regressions PASS.
+- Re-run: `bfw job check --task C.sliding_moe.attn_residual`.

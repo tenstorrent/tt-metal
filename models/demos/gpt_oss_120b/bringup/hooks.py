@@ -35,19 +35,19 @@ def _observable_ops():
 
 
 class _HostBoundary:
-    """Component harness boundary: [S, H] host in -> device module on the mesh layout -> [S, H] host out."""
+    """Component harness boundary: each [S, H] host input -> device module on the mesh layout -> [S, H] host out."""
 
     def __init__(self, mesh, module):
         self.mesh, self.module = mesh, module
 
-    def __call__(self, ctx, x):
+    def __call__(self, ctx, *xs):
         from models.demos.gpt_oss_120b.tt.layout import rows_to_device, rows_to_host
 
-        tt_x = rows_to_device(self.mesh, x)
-        tt_y = self.module(tt_x)
+        tt_xs = [rows_to_device(self.mesh, x) for x in xs]
+        tt_y = self.module(*tt_xs)
         out = rows_to_host(self.mesh, tt_y)
-        tt_x.deallocate(True)
-        tt_y.deallocate(True)
+        for t in (*tt_xs, tt_y):
+            t.deallocate(True)
         return out
 
 
@@ -128,6 +128,10 @@ def device_component(mesh, spec, layer, step):
         return _HostBoundary(mesh, TtRmsNorm(mesh, w, _config(spec)["rms_norm_eps"]))
     if step == "attention":
         return _AttentionBoundary(mesh, _attention(mesh, spec, layer), int(spec.get("target.chunk")))
+    if step in ("attn_residual", "mlp_residual"):
+        from models.demos.gpt_oss_120b.tt.residual import TtResidualAdd
+
+        return _HostBoundary(mesh, TtResidualAdd())
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 
