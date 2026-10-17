@@ -7520,6 +7520,13 @@ tasks:
     - ffn_hc
     - ffn_collapse
     layer: 24
+  frozen:
+    at: '2026-10-17T13:18:28'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_10_ffn_collapse.py: 86c716a878ae510973187d400a2692903f9604c3b1da6cf4167cb740c8eb3d3d
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_reindex.ffn_norm
   title: dec_reindex ffn_norm (norm) on device, layer 24
   step: implement
