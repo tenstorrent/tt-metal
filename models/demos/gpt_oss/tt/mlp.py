@@ -17,7 +17,7 @@ from .experts_throughput import (
     ThroughputExperts,
     create_fused_moe_gpt_config,
 )
-from .fused_decode.config import fused_decode_supported
+from .fused_decode.config import DENSE_MOE_TOKENS, dense_moe_decode_supported, fused_decode_supported
 from .topk import TopKRouter
 
 
@@ -62,6 +62,7 @@ class MLP:
         )
 
         self.use_throughput_experts = use_throughput_experts
+        self.dense_decode = False
         if self.use_throughput_experts:
             # Create TT config
             throughput_expert_config = ThroughputExpertConfig(
@@ -153,6 +154,11 @@ class MLP:
 
             # Use GPT-OSS specific program config
             program_config = GPTOSSProgramConfig()
+            # One 32-token tile per device (batch 32 on Blackhole 1x4): decode routes into dense [tokens, experts]
+            # weights and computes every expert (router.dense_decode + Experts decode_forward_dense).
+            self.dense_decode = dense_moe_decode_supported(
+                mesh_device, mesh_config, hf_config, use_throughput_experts, tokens_per_device
+            )
 
             # Create experts with new modular implementation
             self.experts = Experts(
@@ -165,6 +171,7 @@ class MLP:
                 weight_dtype=ttnn.bfloat4_b,
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
                 indexed_decode=self.indexed_decode,
+                dense_decode_tokens=DENSE_MOE_TOKENS if self.dense_decode else None,
             )
 
     def __call__(self, hidden_states, is_decode):
@@ -185,6 +192,10 @@ class MLP:
             return self.experts(
                 x, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=True
             )
+        if is_decode and self.dense_decode:
+            # Batched decode (dense MoE): dense [tokens, experts] routing weights straight from the router.
+            expert_weights = self.router.dense_decode(hidden_states)
+            return self.experts(hidden_states, topk_expert_weights=expert_weights, is_decode=True)
         expert_indices, expert_weights = self.router(hidden_states, self.use_throughput_experts)
         expert_output = self.experts(
             hidden_states, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=is_decode

@@ -23,28 +23,28 @@ constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Disabled;
 // Optional masks are absent from the generated DFB accessor header when not bound. These macros
 // therefore remove their complete operation (including the accessor name), rather than merely
 // making its predicate false at runtime.
-#define MAYBE_MASK(predicate, dfb_mask)        \
-    ckl::runtime_if(                           \
-        predicate,                             \
-        ckl::CopyTile<                         \
-            ckl::input(                        \
-                dfb_mask,                      \
-                ckl::WaitPolicy::None,         \
-                ckl::PopPolicy::None,          \
-                ckl::InputTileMapping::Scalar, \
-                kDataFormatReconfig,           \
-                ckl::TileAddressing::Offset),  \
-            ckl::Dst::D1>{0},                  \
+#define MAYBE_MASK(predicate, dfb_mask, dfb_mask_obj) \
+    ckl::runtime_if(                                  \
+        predicate,                                    \
+        ckl::CopyTile<                                \
+            ckl::input(                               \
+                dfb_mask,                             \
+                ckl::WaitPolicy::None,                \
+                ckl::PopPolicy::None,                 \
+                ckl::InputTileMapping::Scalar,        \
+                kDataFormatReconfig,                  \
+                ckl::TileAddressing::Offset),         \
+            ckl::Dst::D1>{dfb_mask_obj, 0},           \
         ckl::Mask<>{}),
 
 #ifdef DO_MASK_H
-#define MAYBE_MASK_H(predicate) MAYBE_MASK(predicate, dfb::mask_h)
+#define MAYBE_MASK_H(predicate) MAYBE_MASK(predicate, dfb::mask_h, dfb_mask_h_obj)
 #else
 #define MAYBE_MASK_H(predicate)
 #endif
 
 #ifdef DO_MASK_W
-#define MAYBE_MASK_W(predicate) MAYBE_MASK(predicate, dfb::mask_w)
+#define MAYBE_MASK_W(predicate) MAYBE_MASK(predicate, dfb::mask_w, dfb_mask_w_obj)
 #else
 #define MAYBE_MASK_W(predicate)
 #endif
@@ -60,6 +60,21 @@ void kernel_main() {
 
     DataflowBuffer dfb_scaler_obj(dfb::scaler);
     DataflowBuffer dfb_dycopy_obj(dfb::dycopy);
+    DataflowBuffer dfb_dy_obj(dfb::dy);
+#ifdef GAMMA_GRAD_HAS_VALUE
+    DataflowBuffer dfb_x_obj(dfb::x);
+    DataflowBuffer dfb_mean_obj(dfb::mean);
+    DataflowBuffer dfb_rstd_obj(dfb::rstd);
+    DataflowBuffer dfb_xmm_obj(dfb::xmm);
+    DataflowBuffer dfb_y_obj(dfb::y);
+    DataflowBuffer dfb_ydy_obj(dfb::ydy);
+    DataflowBuffer dfb_ydyadd_obj(dfb::ydyadd);
+    DataflowBuffer dfb_dgamma_obj(dfb::dgamma);
+#endif
+#ifdef BETA_GRAD_HAS_VALUE
+    DataflowBuffer dfb_dyadd_obj(dfb::dyadd);
+    DataflowBuffer dfb_dbeta_obj(dfb::dbeta);
+#endif
 #ifdef DO_MASK_H
     DataflowBuffer dfb_mask_h_obj(dfb::mask_h);
 #endif
@@ -105,24 +120,27 @@ void kernel_main() {
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
                 ckl::CopyTile<ckl::input(
-                    dfb::dy, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
+                    dfb::dy, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{dfb_dy_obj},
                 MAYBE_MASK_H((h_idx + 1) % origin_Ht == 0) MAYBE_MASK_W((w_idx + 1) % origin_Wt == 0)
                     ckl::PackTile<ckl::output(
-                        dfb::dycopy, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                        dfb::dycopy, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{
+                        dfb_dycopy_obj});
 
 #ifdef BETA_GRAD_HAS_VALUE
             // Compute dyadd
             if (inner_idx == 0) {
 #ifdef GAMMA_GRAD_HAS_VALUE
-                copy_tile_to_dfb<dfb::dycopy, dfb::dyadd>(0, 0);
+                copy_tile_to_dfb<dfb::dycopy, dfb::dyadd>(dfb_dycopy_obj, dfb_dyadd_obj, 0, 0);
 #else
-                copy_tile_to_dfb<dfb::dycopy, dfb::dyadd>(0, 1);
+                copy_tile_to_dfb<dfb::dycopy, dfb::dyadd>(dfb_dycopy_obj, dfb_dyadd_obj, 0, 1);
 #endif
             } else {
 #ifdef GAMMA_GRAD_HAS_VALUE
-                add_tiles_to_dfb<dfb::dyadd, dfb::dycopy, dfb::dyadd>(0, 0, 1, 0);
+                add_tiles_to_dfb<dfb::dyadd, dfb::dycopy, dfb::dyadd>(
+                    dfb_dyadd_obj, dfb_dycopy_obj, dfb_dyadd_obj, 0, 0, 1, 0);
 #else
-                add_tiles_to_dfb<dfb::dyadd, dfb::dycopy, dfb::dyadd>(0, 0, 1, 1);
+                add_tiles_to_dfb<dfb::dyadd, dfb::dycopy, dfb::dyadd>(
+                    dfb_dyadd_obj, dfb_dycopy_obj, dfb_dyadd_obj, 0, 0, 1, 1);
 #endif
             }
 #endif  // BETA_GRAD_HAS_VALUE
@@ -139,10 +157,11 @@ void kernel_main() {
                         is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
                         ckl::WaitPolicy::PerTile,
                         ckl::PopPolicy::PerTile,
-                        kDataFormatReconfig)>{},
+                        kDataFormatReconfig)>{dfb_x_obj, dfb_mean_obj},
                 MAYBE_MASK_H((h_idx + 1) % origin_Ht == 0) MAYBE_MASK_W((w_idx + 1) % origin_Wt == 0)
                     ckl::PackTile<ckl::output(
-                        dfb::xmm, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                        dfb::xmm, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{
+                        dfb_xmm_obj});
 
             // Compute dfb::y: (x - mean) * rstd.
             ckl::mul<
@@ -154,19 +173,19 @@ void kernel_main() {
                     ckl::PopPolicy::PerTile,
                     kDataFormatReconfig),
                 ckl::output(dfb::y, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
-                ckl::IterationShape::one_tile());
+                ckl::IterationShape::one_tile(), dfb_xmm_obj, dfb_rstd_obj, dfb_y_obj);
 
 #ifdef BETA_GRAD_HAS_VALUE
             // Compute ydy
-            mul_tiles_to_dfb<dfb::y, dfb::dycopy, dfb::ydy>(0, 0, 1, 0);
+            mul_tiles_to_dfb<dfb::y, dfb::dycopy, dfb::ydy>(dfb_y_obj, dfb_dycopy_obj, dfb_ydy_obj, 0, 0, 1, 0);
 #else
-            mul_tiles_to_dfb<dfb::y, dfb::dycopy, dfb::ydy>(0, 0, 1, 1);
+            mul_tiles_to_dfb<dfb::y, dfb::dycopy, dfb::ydy>(dfb_y_obj, dfb_dycopy_obj, dfb_ydy_obj, 0, 0, 1, 1);
 #endif
             // Compute ydyadd
             if (inner_idx == 0) {
-                copy_tile_to_dfb<dfb::ydy, dfb::ydyadd>();
+                copy_tile_to_dfb<dfb::ydy, dfb::ydyadd>(dfb_ydy_obj, dfb_ydyadd_obj);
             } else {
-                add_tiles_to_dfb<dfb::ydyadd, dfb::ydy, dfb::ydyadd>();
+                add_tiles_to_dfb<dfb::ydyadd, dfb::ydy, dfb::ydyadd>(dfb_ydyadd_obj, dfb_ydy_obj, dfb_ydyadd_obj);
             }
 #endif  // GAMMA_GRAD_HAS_VALUE
 
@@ -183,7 +202,7 @@ void kernel_main() {
                 compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
             // Just copy
-            copy_tile_to_dfb<dfb::ydyadd, dfb::dgamma>();
+            copy_tile_to_dfb<dfb::ydyadd, dfb::dgamma>(dfb_ydyadd_obj, dfb_dgamma_obj);
         }
 #endif  // GAMMA_GRAD_HAS_VALUE
 #ifdef BETA_GRAD_HAS_VALUE
@@ -194,7 +213,7 @@ void kernel_main() {
                 compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
             // Just copy
-            copy_tile_to_dfb<dfb::dyadd, dfb::dbeta>();
+            copy_tile_to_dfb<dfb::dyadd, dfb::dbeta>(dfb_dyadd_obj, dfb_dbeta_obj);
         }
 #endif  // BETA_GRAD_HAS_VALUE
     }  // outer_idx loop
