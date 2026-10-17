@@ -17,6 +17,9 @@
 
 namespace ttnn::operations::unary {
 
+// Rejects float-only unary ops on integer input. Also used for the fused activations of binary_ng (#57211).
+void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype);
+
 struct UnaryDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
