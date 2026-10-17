@@ -179,10 +179,8 @@ def _canonical_operands(value, offsets, attn, model):
 def _per_level_operands(device, value, offsets, attn, model, spatial_shapes):
     """Host-side per-level slices of the packed operands, one set per level.
 
-    Sliced through torch rather than ``ttnn.slice`` on purpose: this runs
-    outside the measured region, and a host round trip has no device cost to
-    attribute, whereas a device slice would land inside the measured region and
-    be counted as launch overhead.
+    Sliced before the measured region, so the variant's region holds only the
+    per-level launches and the adds that accumulate them.
 
     ``reference_points`` is not sliced. In ``reference_mode="pillar"`` the
     reference index is ``p % R``, independent of the level, so each single-level
