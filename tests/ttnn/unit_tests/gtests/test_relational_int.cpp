@@ -313,6 +313,29 @@ TEST(RelationalUnaryScalarWord, UnrepresentableFloatScalarIsRejected) {
     EXPECT_NO_THROW(emit(UnaryOpType::UNARY_LE, 4294967040.0f, DataType::UINT32));
 }
 
+// Host side only: an op placed after a TYPECAST is generated for the cast's target dtype. A relational
+// op on an INT32 tensor cast to FLOAT32 gets the float compare with the scalar's float bit pattern
+// (and a fractional scalar is accepted there); one on a FLOAT32 tensor cast to INT32 gets the int32
+// compare with the integer value.
+TEST(RelationalUnaryScalarWord, OpsAfterTypecastUseTheCastDtype) {
+    using ttnn::operations::unary::utils::get_block_defines;
+    const auto typecast = [](DataType from, DataType to) {
+        return EltwiseUnaryWithParam(UnaryOpType::TYPECAST, static_cast<float>(from), static_cast<float>(to));
+    };
+    const auto func_1 = [](const std::vector<EltwiseUnaryWithParam>& chain, DataType input_dtype) {
+        return get_block_defines(chain, "0", "0", input_dtype).at("SFPU_OP_CHAIN_0_FUNC_1");
+    };
+    const std::vector<EltwiseUnaryWithParam> int_to_float_gt = {
+        typecast(DataType::INT32, DataType::FLOAT32), EltwiseUnaryWithParam(UnaryOpType::UNARY_GT, 2.0f)};
+    EXPECT_EQ(func_1(int_to_float_gt, DataType::INT32), "unary_gt_tile(0, 0x40000000u);");
+    const std::vector<EltwiseUnaryWithParam> int_to_float_gt_half = {
+        typecast(DataType::INT32, DataType::FLOAT32), EltwiseUnaryWithParam(UnaryOpType::UNARY_GT, 0.5f)};
+    EXPECT_EQ(func_1(int_to_float_gt_half, DataType::INT32), "unary_gt_tile(0, 0x3f000000u);");
+    const std::vector<EltwiseUnaryWithParam> float_to_int_gt = {
+        typecast(DataType::FLOAT32, DataType::INT32), EltwiseUnaryWithParam(UnaryOpType::UNARY_GT, 2.0f)};
+    EXPECT_EQ(func_1(float_to_int_gt, DataType::FLOAT32), "unary_gt_tile_int32(0, 2);");
+}
+
 // A float scalar the integer dtype cannot hold exactly (fractional, non-finite, out of range) is
 // rejected at the host instead of being truncated or converted through undefined behaviour.
 struct RelationalUnaryRejectParam {
