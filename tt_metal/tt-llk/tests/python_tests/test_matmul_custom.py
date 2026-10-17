@@ -40,6 +40,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
+from helpers.tile_constants import MAX_FACE_R_DIM
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
@@ -96,10 +97,11 @@ def _run_matmul_custom(
 ):
     """Run one no-mop matmul variant and compare it against the golden.
 
-    ``in0_tile_r_dim=16`` selects a 16x32 in0 tiny tile (two horizontal faces, f0/f1);
-    ``in1_tile_c_dim=16`` a 32x16 in1 tiny tile (two vertical faces, f0/f2). The input
-    dimensions stay in 32x32 blocks: the tiny tile occupies the active faces of each
-    block and the rest is zero, the same convention as test_math_matmul's tiny-tile sweep.
+    ``in0_tile_r_dim=16`` selects a 16x32 in0 tiny tile (two horizontal faces, f0/f1), 8 an
+    8x32 one (partial face); ``in1_tile_c_dim=16`` a 32x16 in1 tiny tile (two vertical faces,
+    f0/f2). The input dimensions stay in 32x32 blocks: the tiny tile occupies the active
+    faces of each block and the rest is zero, the same convention as test_math_matmul's
+    tiny-tile sweep.
     ``transpose`` transposes in1 (faces and within faces) on both the unpack and the math
     thread, and the golden is computed against the transposed in1, as in test_math_matmul.
     """
@@ -111,7 +113,9 @@ def _run_matmul_custom(
         in0_tile_r_dim=in0_tile_r_dim,
         in1_tile_c_dim=in1_tile_c_dim,
     )
-    num_faces_in0 = 4 if in0_tile_r_dim == TILE_DIM else 2
+    is_tiny_in0 = in0_tile_r_dim < TILE_DIM
+    in0_face_r_dim = min(in0_tile_r_dim, MAX_FACE_R_DIM)
+    num_faces_in0 = 2 if is_tiny_in0 else 4
     num_faces_in1 = 4 if in1_tile_c_dim == TILE_DIM else 2
     num_faces = calculate_matmul_output_faces(
         num_faces_in0, num_faces_in1, is_in0_horizontal=True
@@ -137,6 +141,7 @@ def _run_matmul_custom(
             stimuli_format=formats.input_format,
             input_dimensions=input_A_dimensions,
             is_matrix_A=True,  # in0 (SrcB) uses f0,f1 in 2-face mode
+            face_r_dim=in0_face_r_dim,
         )
         src_B = generate_face_matmul_data(
             num_faces=num_faces_in1,
@@ -213,10 +218,10 @@ def _run_matmul_custom(
             # in0 (SrcB) unpack and the pack run partial-face for a sub-32-row in0 tile,
             # the math only below one face row.
             PARTIAL_FACE(
-                partial_a=in0_tile_r_dim < TILE_DIM,
-                partial_face_pack=in0_tile_r_dim < TILE_DIM,
+                partial_a=is_tiny_in0,
+                partial_face_pack=is_tiny_in0,
                 partial_b=False,
-                partial_face_math=in0_tile_r_dim < 16,
+                partial_face_math=in0_tile_r_dim < MAX_FACE_R_DIM,
             ),
             UNPACK_TRANS_FACES(transpose),
         ],
@@ -352,44 +357,6 @@ def test_matmul_custom_throttle(
     )
 
 
-# 16x32 in0 tiny tile (one face row, two faces), the geometry the Blackhole SDPA tiny-tile
-# path feeds this LLK through the operand tensor shape. The throttled replay sequences are
-# hand-written for a full 32x32 tile, so on this geometry the no-mop init must record the
-# unthrottled geometry-aware replay and the execute must replay it (the fallback the regular
-# _llk_math_matmul_init_ takes). Because the execute makes the same decision, the fallback
-# holds at every level and fidelity, including HiFi at throttle levels 4/5 -- which the
-# full-tile test above has to skip because there the throttled sequence does run.
-TINY_IN0_THROTTLE_LEVELS = [level for level in THROTTLE_LEVELS if level > 0]
-
-
-@skip_for_wormhole
-@skip_for_quasar
-@parametrize(
-    throttle_level=TINY_IN0_THROTTLE_LEVELS,
-    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
-    formats=THROTTLE_FORMATS,
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-)
-def test_matmul_custom_throttle_tiny_in0(
-    throttle_level,
-    math_fidelity,
-    formats,
-    dest_acc,
-    boot_mode=BootMode.DEFAULT,
-):
-    input_A_dimensions, input_B_dimensions = THROTTLE_DIMS
-    _run_matmul_custom(
-        math_fidelity,
-        formats,
-        dest_acc,
-        input_A_dimensions,
-        input_B_dimensions,
-        throttle_level=throttle_level,
-        boot_mode=boot_mode,
-        in0_tile_r_dim=16,
-    )
-
-
 @skip_for_wormhole
 @skip_for_quasar
 @parametrize(
@@ -407,13 +374,17 @@ def test_matmul_custom_transpose_in1_32x16_rejected(
     _llk_math_matmul_init_ rejects the combination under LLK asserts. The no-mop init shares
     the tiny-tile address mods with it and must reject it the same way, rather than run the
     kernel with the transpose silently ignored. Without the assert the kernel completes and
-    the result is compared against the A*B^T golden, which it cannot match."""
+    the result is compared against the A*B^T golden, which it cannot match.
+
+    Defined before the tiny-tile tests so that, in file order, the tests that follow it on
+    the same core prove the rejected kernel leaves nothing pending (the test kernel neither
+    loads the sources nor leaves the packer waiting on MATH_PACK in this case)."""
     if os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1":
         pytest.skip("expects an LLK assert; asserts are disabled in this run")
 
     input_A_dimensions, input_B_dimensions = THROTTLE_DIMS
     with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        LLKAssertException
+        LLKAssertException, match=r"llk_math_matmul_custom_no_mop\.h"
     ):
         _run_matmul_custom(
             math_fidelity,
@@ -426,3 +397,105 @@ def test_matmul_custom_transpose_in1_32x16_rejected(
             in1_tile_c_dim=16,
             transpose=Transpose.Yes,
         )
+
+
+# Tiny in0 tiles: 16x32 (one face row, two faces), the geometry the Blackhole SDPA tiny-tile
+# path feeds this LLK through the operand tensor shape, and 8x32 (a partial face, the 4-MVMUL
+# image). The throttled replay sequences are hand-written for a full 32x32 tile, so on these
+# geometries the no-mop init must record the unthrottled geometry-aware replay and the
+# execute must replay it (the fallback the regular _llk_math_matmul_init_ takes). Because the
+# execute makes the same decision, the fallback holds at every level and fidelity, including
+# HiFi at throttle levels 4/5 -- which the full-tile test above has to skip because there the
+# throttled sequence does run.
+TINY_IN0_THROTTLE_LEVELS = [level for level in THROTTLE_LEVELS if level > 0]
+TINY_IN0_ROWS = [16, 8]
+
+
+@skip_for_wormhole
+@skip_for_quasar
+@parametrize(
+    throttle_level=TINY_IN0_THROTTLE_LEVELS,
+    in0_tile_r_dim=TINY_IN0_ROWS,
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
+    formats=THROTTLE_FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_matmul_custom_throttle_tiny_in0(
+    throttle_level,
+    in0_tile_r_dim,
+    math_fidelity,
+    formats,
+    dest_acc,
+    boot_mode=BootMode.DEFAULT,
+):
+    input_A_dimensions, input_B_dimensions = THROTTLE_DIMS
+    _run_matmul_custom(
+        math_fidelity,
+        formats,
+        dest_acc,
+        input_A_dimensions,
+        input_B_dimensions,
+        throttle_level=throttle_level,
+        boot_mode=boot_mode,
+        in0_tile_r_dim=in0_tile_r_dim,
+    )
+
+
+# 32x16 in1 tiny tile (two vertical faces, f0/f2) with a full in0: the other non-full
+# geometry the fallback applies to (the 7-MVMUL image). Throttle 0 covers the image itself,
+# 1 and 3 the fallback dispatch on both fidelity paths.
+@skip_for_wormhole
+@skip_for_quasar
+@parametrize(
+    throttle_level=[level for level in THROTTLE_LEVELS if level in (0, 1, 3)],
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No],
+)
+def test_matmul_custom_throttle_tiny_in1(
+    throttle_level,
+    math_fidelity,
+    formats,
+    dest_acc,
+    boot_mode=BootMode.DEFAULT,
+):
+    input_A_dimensions, input_B_dimensions = THROTTLE_DIMS
+    _run_matmul_custom(
+        math_fidelity,
+        formats,
+        dest_acc,
+        input_A_dimensions,
+        input_B_dimensions,
+        throttle_level=throttle_level,
+        boot_mode=boot_mode,
+        in1_tile_c_dim=16,
+    )
+
+
+# Full 32x32 tiles with in1 transposed (faces and within faces): the positive counterpart of
+# the rejection test below the throttle test, checking the transpose address-mod branches of
+# the full-tile no-mop image and the A*B^T golden on hardware.
+@parametrize(
+    throttle_level=[level for level in THROTTLE_LEVELS if level in (0, 1)],
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No],
+)
+def test_matmul_custom_transpose(
+    throttle_level,
+    math_fidelity,
+    formats,
+    dest_acc,
+    boot_mode=BootMode.DEFAULT,
+):
+    input_A_dimensions, input_B_dimensions = THROTTLE_DIMS
+    _run_matmul_custom(
+        math_fidelity,
+        formats,
+        dest_acc,
+        input_A_dimensions,
+        input_B_dimensions,
+        throttle_level=throttle_level,
+        boot_mode=boot_mode,
+        transpose=Transpose.Yes,
+    )

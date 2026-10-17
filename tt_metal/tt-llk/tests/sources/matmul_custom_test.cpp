@@ -52,6 +52,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.num_faces_A,     // in0
         params.PARTIAL_FACE_B,  // in1
         params.PARTIAL_FACE_A); // in0
+    // Expected-assert case (transpose with a 32x16 in1, rejected by the math init under LLK asserts): leave nothing
+    // pending for the next kernel on this core -- do not load SrcA/SrcB or set dvalid, math never consumes them.
+    if (params.UNPACK_TRANSPOSE_FACES && params.in1_tile_r_dim == TILE_R_DIM && params.in1_tile_c_dim == FACE_C_DIM)
+    {
+        return;
+    }
     for (std::uint32_t j = 0; j < params.KT_DIM; j++)
     {
         _llk_unpack_AB_matmul_<>(
@@ -129,12 +135,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, pack_face_r_dim, TILE_C_DIM, params.num_faces, params.PARTIAL_FACE_PACK);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, pack_face_r_dim, TILE_C_DIM, params.num_faces);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    _llk_packer_wait_for_math_done_();
-    for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
+
+    bool math_done = true;
+    if (params.UNPACK_TRANSPOSE_FACES && params.in1_tile_r_dim == TILE_R_DIM && params.in1_tile_c_dim == FACE_C_DIM)
     {
-        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
+        // Expected-assert case: math rejects the geometry at init and never posts MATH_PACK. Poll the semaphore from
+        // the RISC with a bound instead of SEMWAITing on it, because a SEMWAIT left in the Tensix pack FIFO outlives
+        // the RISC soft reset and hangs the next kernel on this core. The bound stays inside the harness's 2 s
+        // completion window.
+        constexpr std::uint64_t math_done_bound_cycles = 1'500'000'000;
+        const std::uint64_t start                      = ckernel::read_wall_clock();
+        while (semaphore_read(semaphore::MATH_PACK) == 0 && ckernel::read_wall_clock() - start < math_done_bound_cycles)
+        {
+        }
+        math_done = semaphore_read(semaphore::MATH_PACK) != 0;
     }
-    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+
+    if (math_done)
+    {
+        _llk_packer_wait_for_math_done_();
+        for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
+        {
+            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
+        }
+        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    }
 }
 
 #endif
