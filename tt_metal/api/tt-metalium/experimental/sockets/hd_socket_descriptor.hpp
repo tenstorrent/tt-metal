@@ -76,7 +76,10 @@ struct HDSocketDescriptor {
         uint32_t fifo_size,
         uint32_t config_buffer_address,
         MeshDevice* mesh_device,
-        const MeshCoreCoord& core);
+        const MeshCoreCoord& core,
+        // False for a socket on a non-Tensix (active Ethernet) core: `core` is then not a Tensix
+        // logical coordinate, so it is recorded as-is rather than translated through the worker grid.
+        bool core_is_tensix = true);
 
     /**
      * @brief Serialize this descriptor to a flatbuffer file.
