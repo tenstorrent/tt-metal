@@ -1,0 +1,47 @@
+name: "🎯 Refresh SFPU Accuracy Baseline"
+
+# Manual entry point: run the SFPU accuracy sweep on one arch and upload a
+# freshly generated baseline CSV (tests/python_tests/accuracy/baselines/<arch>.csv)
+# as an artifact. Download it and commit it; the PR diff is the review of the
+# new reference numbers. This is how the Blackhole baseline is created and
+# refreshed without a Blackhole card on your desk.
+#
+# Run this from the branch whose kernels should become the reference (usually
+# main). The gate itself never rewrites the baseline; see
+# .github/workflows/run-accuracy-tests.yml and
+# docs/superpowers/specs/2026-09-07-sfpu-accuracy-ci-gate-design.md
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "Architecture to regenerate the baseline for"
+        required: true
+        type: choice
+        options:
+          - wormhole
+          - blackhole
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  build-images:
+    name: "🐳️ Docker setup"
+    uses: ./.github/workflows/build-images.yml
+    secrets: inherit
+
+  refresh:
+    name: "🎯 Refresh baseline (${{ inputs.arch }})"
+    uses: ./.github/workflows/run-accuracy-tests.yml
+    needs: [check-harbor, build-images]
+    with:
+      docker_image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-images.outputs.docker-image) }}
+      runs_on: ${{ inputs.arch == 'blackhole' && 'tt-ubuntu-2204-p150b-stable' || 'tt-ubuntu-2204-n150-stable' }}
+      update_baseline: true
+      timeout_minutes: 60
