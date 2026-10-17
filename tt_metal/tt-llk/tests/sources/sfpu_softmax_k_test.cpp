@@ -15,10 +15,11 @@
 // supplied by the caller in rows 8-11 rather than computed here.
 //
 // Padding: the sequence sets a condition code from |even-column value| before
-// subtracting the max, and only calls SFPENCC after the exponential, so lanes
-// whose EVEN column holds exactly 0.0 skip both the subtract and the exp and stay
-// 0. Padding therefore has to be exact 0.0, and it predicates the even/odd column
-// PAIR (the odd lane inherits its even partner's condition code). Whatever the
+// subtracting the max, and only calls SFPENCC after the exponential, so on a
+// 16-bit DEST lanes whose EVEN column holds exactly 0.0 skip both the subtract and
+// the exp and stay 0 (the fp32 exp re-enables all lanes, see below). Padding
+// therefore has to be exact 0.0, and it predicates the even/odd column PAIR (the
+// odd lane inherits its even partner's condition code). Whatever the
 // exponential leaves in the padding columns is then re-zeroed by SFPU-instance
 // index in `_zero_padding_columns_`: for a 16-bit DEST only the odd tail column of
 // an odd k (its even partner k-1 is a valid non-zero lane), for a 32-bit DEST every

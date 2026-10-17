@@ -20,9 +20,11 @@ Only 4 rows are processed (one SFPU row band); the rest of the tile is left alon
 
 Padding contract: columns >= k must be exactly 0.0. The kernel derives a condition
 code from |even-column value| before subtracting the max and only re-enables all
-lanes (SFPENCC) after the exponential, so a 0.0 lane skips the subtract and the
-exp and stays 0, then gets multiplied by the reciprocal (0 * r = 0). Valid inputs
-must be non-zero, so the stimuli deliberately avoid 0.
+lanes (SFPENCC) after the exponential, so on a 16-bit DEST a 0.0 lane skips the
+subtract and the exp and stays 0, then gets multiplied by the reciprocal
+(0 * r = 0); on a 32-bit DEST the exp itself re-enables the lanes and the padding
+is re-zeroed by index afterwards (see below). Valid inputs must be non-zero, so the
+stimuli deliberately avoid 0.
 
 Note that the golden here is independent of how SFPU lanes map onto DEST columns:
 the sum runs over all 16 columns of the row and each lane is written back to the
