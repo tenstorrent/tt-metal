@@ -15,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <variant>
 #include <vector>
@@ -1335,6 +1336,125 @@ TEST_F(LLKMeshDeviceFixture, TensixReconfigFormatAndGeometry) {
             word = (hi << 16) | lo;
         }
         run_both({tt::DataFormat::Float32, &tiny, tt::DataFormat::Float16_b, nullptr}, src_vec, "tiny 8x32 -> full");
+    }
+}
+
+// ============================================================================
+// Pack-side reconfig onto a Bfp8_b output CB whose tile is not the full 32x32 tile. The payload is copied
+// c_0 -> DST -> c_16 and c_16 is decoded on the host. The inputs are non-zero integers in [-127, 127] with one
+// |value| in [64, 127] per 16-datum row, so a Bfp8_b row (shared exponent, 7-bit mantissa) holds every datum
+// exactly and the decoded output must equal the input bit-for-bit. A wrong exponent-section size moves the
+// mantissa stream inside every tile, so the decode fails on the first tile.
+// ============================================================================
+namespace unit_tests::compute::reconfig {
+
+enum class PackReconfigMode : std::uint8_t { OneArg };
+
+// Tiled-order payload: one anchor datum per 16-datum row keeps the shared exponent at 2^6.
+std::vector<float> make_bfp8_exact_payload(std::uint32_t num_datums, std::uint32_t seed) {
+    std::mt19937 rng(seed);
+    std::uniform_int_distribution<int> small(1, 63);
+    std::uniform_int_distribution<int> anchor(64, 127);
+    std::uniform_int_distribution<int> sign(0, 1);
+    std::vector<float> payload(num_datums);
+    for (std::uint32_t i = 0; i < num_datums; ++i) {
+        const int magnitude = (i % 16 == 0) ? anchor(rng) : small(rng);
+        payload[i] = static_cast<float>(sign(rng) ? -magnitude : magnitude);
+    }
+    return payload;
+}
+
+// Copies num_tiles tiles of `payload` (Float16_b, out_tile shape) through DST into a Bfp8_b CB of the same
+// tile shape. OneArg: the packer is configured for the output CB and pack_reconfig_data_format(c_16) runs
+// before the first pack. Returns c_16 decoded to floats in tiled order.
+std::vector<float> run_pack_reconfig_bfp_geometry(
+    distributed::MeshDevice& mesh_device,
+    PackReconfigMode mode,
+    const Tile& out_tile,
+    const std::vector<float>& payload,
+    std::uint32_t num_tiles) {
+    static constexpr std::uint32_t k_dram_bank_id = 0;
+    Program program = CreateProgram();
+    CoreCoord core = {0, 0};
+
+    const std::uint32_t in_tile_size = out_tile.get_tile_size(tt::DataFormat::Float16_b);
+    const std::uint32_t out_tile_size = out_tile.get_tile_size(tt::DataFormat::Bfp8_b);
+    if (payload.size() != num_tiles * out_tile.get_tile_hw()) {
+        throw std::invalid_argument("payload must hold num_tiles tiles");
+    }
+
+    auto src_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_tiles * in_tile_size},
+        {.page_size = num_tiles * in_tile_size, .buffer_type = BufferType::DRAM},
+        &mesh_device);
+    auto dst_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_tiles * out_tile_size},
+        {.page_size = num_tiles * out_tile_size, .buffer_type = BufferType::DRAM},
+        &mesh_device);
+
+    auto add_cb = [&](tt::CBIndex cb, tt::DataFormat fmt, std::uint32_t page_size, const Tile* cb_tile) {
+        CircularBufferConfig config = CircularBufferConfig(page_size, {{cb, fmt}}).set_page_size(cb, page_size);
+        if (cb_tile != nullptr) {
+            config.set_tile_dims(cb, *cb_tile);
+        }
+        CreateCircularBuffer(program, core, config);
+    };
+    add_cb(tt::CBIndex::c_0, tt::DataFormat::Float16_b, in_tile_size, &out_tile);
+    std::map<std::string, std::string> defines;
+    add_cb(tt::CBIndex::c_16, tt::DataFormat::Bfp8_b, out_tile_size, &out_tile);
+
+    auto reader = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    auto writer = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_pack_bfp_geometry.cpp",
+        core,
+        ComputeConfig{.compile_args = {num_tiles}, .defines = defines});
+
+    // Two bf16 datums per word, tiled order; every payload value is bf16-exact.
+    std::vector<std::uint32_t> src_vec(payload.size() / 2);
+    for (std::size_t i = 0; i < src_vec.size(); ++i) {
+        const std::uint32_t lo = std::bit_cast<std::uint32_t>(payload[2 * i]) >> 16;
+        const std::uint32_t hi = std::bit_cast<std::uint32_t>(payload[2 * i + 1]) >> 16;
+        src_vec[i] = (hi << 16) | lo;
+    }
+
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, /*blocking=*/true);
+    SetRuntimeArgs(program, reader, core, {src_buffer->address(), k_dram_bank_id, num_tiles});
+    SetRuntimeArgs(program, writer, core, {dst_buffer->address(), k_dram_bank_id, num_tiles});
+    LaunchProgram(mesh_device, std::move(program));
+
+    std::vector<std::uint32_t> result_vec;
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_buffer, /*blocking=*/true);
+    return unpack_bfp8_tiles_into_float_vec(result_vec, /*row_major_output=*/false, /*is_exp_a=*/false, out_tile);
+}
+
+}  // namespace unit_tests::compute::reconfig
+
+// Unconditional pack_reconfig_data_format(c_16) onto a Bfp8_b 8x32 CB (two 8-row faces): the exponent
+// section is one 16-byte chunk, as hw_configure programs for the same CB, not one chunk per face.
+TEST_F(LLKMeshDeviceFixture, TensixPackReconfigBfpPartialFace) {
+    using unit_tests::compute::reconfig::PackReconfigMode;
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar programs the packer geometry from buffer descriptors at op init";
+    }
+    constexpr std::uint32_t num_tiles = 4;
+    const Tile out_tile({8, 32});
+    const auto payload =
+        unit_tests::compute::reconfig::make_bfp8_exact_payload(num_tiles * out_tile.get_tile_hw(), /*seed=*/42);
+    for (auto& device : this->devices_) {
+        const auto result = unit_tests::compute::reconfig::run_pack_reconfig_bfp_geometry(
+            *device, PackReconfigMode::OneArg, out_tile, payload, num_tiles);
+        EXPECT_EQ(payload, result);
     }
 }
 

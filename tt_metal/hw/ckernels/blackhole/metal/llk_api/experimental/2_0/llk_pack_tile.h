@@ -116,5 +116,6 @@ inline void llk_pack_reconfig_data_format() {
         tile_size,
         DESC.shape.total_col_dim(),
         DESC.shape.total_num_faces(),
-        false /* partial_face */);
+        // partial_face: derived from the output geometry, as llk_pack_hw_configure does.
+        ckernel::experimental::is_partial_height(DESC.shape));
 }

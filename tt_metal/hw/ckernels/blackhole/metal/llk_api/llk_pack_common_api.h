@@ -157,8 +157,8 @@ inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output)
 /**
  * Reconfigure the packer for a new output operand's data format.
  *
- * Face geometry (face_r_dim, num_faces), tile column dimension and tile size are derived from
- * the new output's CB metadata.
+ * Face count, tile column dimension, partial-face flag and tile size are derived from the new
+ * output's CB metadata, as in llk_pack_hw_configure.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  new_output          New output circular buffer / operand index to configure for.
@@ -168,6 +168,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const bool partial_face = get_output_partial_face(output_id);
 
     SAN_HOOK(reconfigure(
         StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
@@ -175,7 +176,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
         StateVal<Operand<Exu::Pack>::TileWidth>(tile_c_dim),
         StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
-        StateVal<Operand<Exu::Pack>::PartialFace>(false),
+        StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
         StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
         pack_src_format[output_id],
@@ -183,7 +184,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         get_local_cb_interface(output_id).fifo_page_size,
         tile_c_dim,
         num_faces,
-        false /* partial_face */);
+        partial_face);
 }
 
 /**
