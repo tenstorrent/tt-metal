@@ -220,10 +220,6 @@ from ttnn._ttnn.d2d_stream_service import (
     D2D_STAGE_GATE_UNGATED_SLOT,
 )
 
-from ttnn._ttnn.counter_channel import (
-    InterProcessCounterChannel,
-)
-
 from ttnn._ttnn.layer_ack_service import (
     LayerAckService,
 )
