@@ -19,6 +19,8 @@
 #include "global_semaphore_impl.hpp"
 #include "impl/dispatch/host_device_transfer.hpp"
 #include "mesh_device.hpp"
+#include "distributed/mesh_command_queue_base.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/inspector/inspector.hpp"
@@ -64,7 +66,11 @@ void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value) const {
     const auto& rtoptions = MetalContext::instance(extract_context_id(&mesh_device)).rtoptions();
     bool using_fast_dispatch = rtoptions.get_fast_dispatch();
     bool using_simulator = rtoptions.get_simulator_enabled();
-    if (using_fast_dispatch && !using_simulator) {
+    // On the simulator, the direct write is kept only while the command queue has not been used, as
+    // during fabric bring-up. Once work is queued, a direct write can land before that work and be
+    // overwritten when the semaphore reuses the address of a buffer the queued work still writes.
+    bool cq_in_use = using_fast_dispatch && using_simulator && mesh_device.impl().mesh_command_queue_base().in_use();
+    if (using_fast_dispatch && (!using_simulator || cq_in_use)) {
         mesh_device.mesh_command_queue().enqueue_write_mesh_buffer(buffer_, host_buffer.data(), /*blocking=*/true);
     } else {
         for (const auto& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {

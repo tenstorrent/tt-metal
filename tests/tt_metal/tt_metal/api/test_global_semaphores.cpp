@@ -129,4 +129,42 @@ TEST_F(MeshDispatchFixture, ResetGlobalSemaphores) {
     }
 }
 
+// Under fast dispatch a reset is ordered behind work already in the command queue. A kernel that writes a
+// marker to the semaphore is enqueued without waiting, then the semaphore is reset: the reset must land last.
+TEST_F(MeshDispatchFixture, ResetGlobalSemaphoreAfterQueuedWork) {
+    if (this->IsSlowDispatch()) {
+        GTEST_SKIP() << "Ordering behind queued work applies to fast dispatch";
+    }
+    constexpr uint32_t marker = 0xC0FFEE01;
+    constexpr uint32_t reset_value = 0;
+    CoreRangeSet cores(CoreRange({0, 0}, {1, 1}));
+
+    auto cores_vec = corerange_to_cores(cores);
+    for (const auto& mesh_device : devices_) {
+        auto device_id = mesh_device->get_device_ids()[0];
+        auto global_semaphore = tt::tt_metal::GlobalSemaphore(*mesh_device, cores, reset_value);
+        auto address = static_cast<uint32_t>(global_semaphore.address());
+        distributed::Synchronize(*mesh_device, std::nullopt);
+
+        Program program = CreateProgram();
+        KernelHandle kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/write_l1_marker.cpp",
+            cores,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        SetRuntimeArgs(program, kernel, cores, {address, marker});
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
+
+        global_semaphore.reset_semaphore_value(reset_value);
+        distributed::Synchronize(*mesh_device, std::nullopt);
+        for (const auto& core : cores_vec) {
+            auto sem_vals = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                device_id, mesh_device->worker_core_from_logical_core(core), address, sizeof(uint32_t));
+            EXPECT_EQ(sem_vals[0], reset_value) << "the reset must land after the queued kernel's write";
+        }
+    }
+}
+
 } // namespace tt::tt_metal
