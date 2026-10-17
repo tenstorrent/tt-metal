@@ -102,6 +102,21 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
     }
 }
 
+/**
+ * @brief Initialize the unpacker for the rmsnorm bcast-scalar dest-reuse op: num_tiles tiles of SrcA from one
+ * _llk_unpack_A_ call, SrcB fed a dummy dvalid for the MOVD2B on the math thread.
+ *
+ * Owns unpacker A's X span: every real UNPACR of the MOP targets SrcA, so this init programs x_end on
+ * unpacker A (where DEST_TO_SRCB also routes the operand address) and relies on nothing a previous op left.
+ *
+ * @tparam num_tiles: Tiles the MOP walks per _llk_unpack_A_ call.
+ * @tparam BType/acc_to_dest/binary_reuse_dest: Must be SCALAR / true / DEST_TO_SRCB (static_assert).
+ * @param transpose_of_faces, within_face_16x16_transpose: Fold a 32x32 transpose into the unpack (num_tiles == 1,
+ *        num_faces == 4 only).
+ * @param face_r_dim: Rows per face; sets the X span.
+ * @param num_faces: Faces per tile (1, 2 or 4).
+ * @note Pairs with @ref _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_ on the math thread.
+ */
 template <
     std::uint32_t num_tiles,
     BroadcastType BType                          = BroadcastType::NONE,

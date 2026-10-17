@@ -59,7 +59,11 @@ import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat
-from helpers.golden_generators import EltwiseBinaryGolden, round_to_dest_width
+from helpers.golden_generators import (
+    TILE_DIM,
+    EltwiseBinaryGolden,
+    round_to_dest_width,
+)
 from helpers.llk_params import (
     DestAccumulation,
     MathFidelity,
@@ -81,6 +85,10 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 ELEMENTS_PER_TILE = 1024
 ELEMENTS_PER_FACE = 256
+
+# Operand range of the main sweep: wide enough that a MOVD2B fetching the wrong row cannot land
+# on a numerically similar scalar. Also used for the seed tile around a hand-placed scalar.
+OPERAND_LOW, OPERAND_HIGH = -4.0, 4.0
 
 # Same-in-same-out: this test is about the MOP and the MOVD2B scalar path, not about format
 # conversion, so a mixed pair would only add unpack/pack noise.
@@ -173,15 +181,14 @@ def _run(
     torch.manual_seed(0)
 
     if operands is None:
-        # src_B carries the broadcast scalar at element [0]. Spread over a wide range so a
-        # MOVD2B that fetched the wrong row cannot land on a numerically similar value.
+        # src_B carries the broadcast scalar at element [0].
         src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
             stimuli_format_A=formats.input_format,
-            input_dimensions_A=[num_tiles * 32, 32],
+            input_dimensions_A=[num_tiles * TILE_DIM, TILE_DIM],
             stimuli_format_B=formats.input_format,
-            input_dimensions_B=[32, 32],
-            spec_A=StimuliSpec.uniform(low=-4.0, high=4.0),
-            spec_B=StimuliSpec.uniform(low=-4.0, high=4.0),
+            input_dimensions_B=[TILE_DIM, TILE_DIM],
+            spec_A=StimuliSpec.uniform(low=OPERAND_LOW, high=OPERAND_HIGH),
+            spec_B=StimuliSpec.uniform(low=OPERAND_LOW, high=OPERAND_HIGH),
         )
     else:
         src_A, src_B = operands
@@ -559,22 +566,29 @@ BF16_DENORMAL_MANTISSAS = 1 << 7
 # from [DENORMAL_SRCA_LOW, DENORMAL_SRCA_HIGH) so no operand is itself zero or denormal.
 DENORMAL_SRCA_SCALE = 2.0**100
 DENORMAL_SRCA_LOW, DENORMAL_SRCA_HIGH = 1.0, 4.0
-# The seed tile around the scalar follows the main sweep's operand range.
-SEED_LOW, SEED_HIGH = -4.0, 4.0
+# Positive-control scalar: a tiny bf16 NORMAL (min normal is 2^-126), so the same keep-flag sequence
+# must NOT flush it; against 2^100 SrcA its products land in [1, 4), inside the golden's tolerance.
+TINY_NORMAL_SCALAR = 2.0**-100
 
 
 @pytest.mark.parametrize("math_fidelity", _fidelities(MathOperation.Elwmul))
+@pytest.mark.parametrize("scalar_kind", ["denormal", "tiny_normal"])
 def test_rmsnorm_bcast_scalar_dest_reuse_flushes_denormal_scalar_after_keep_flag(
-    math_fidelity,
+    math_fidelity, scalar_kind
 ):
     """The math init must restore the Src zero flag a preceding copy_init left at keep.
 
-    The broadcast scalar is a bf16 denormal, which a bf16 ELWMUL flushes to zero under the
-    operand-driven flag; multiplied by 2^100 it gives a nonzero product if kept, so every
-    output must come out exactly 0. The seed datacopy runs with the flag at keep (as
-    ``copy_init`` sets it) so the denormal reaches DEST intact and the flag is still at keep
-    when the rmsnorm init runs -- the production sequence in which copy_init precedes the
-    rmsnorm ELWMUL init.
+    ``denormal``: the broadcast scalar is a bf16 denormal, which a bf16 ELWMUL flushes to
+    zero under the operand-driven flag; multiplied by 2^100 it gives a nonzero product if
+    kept, so every output must come out exactly 0. The seed datacopy runs with the flag at
+    keep (as ``copy_init`` sets it) so the denormal reaches DEST intact and the flag is still
+    at keep when the rmsnorm init runs -- the production sequence in which copy_init precedes
+    the rmsnorm ELWMUL init.
+
+    ``tiny_normal``: positive control on the identical sequence with a tiny *normal* scalar
+    (2^-100), checked against the golden. An all-zero result there would mean the scalar
+    never reached SrcB or the MOP never ran -- which ``count_nonzero == 0`` alone cannot tell
+    from a flushed denormal, since clear_dest zeroes DEST first.
     """
     formats = FORMATS[0]
     assert formats.input_format == DataFormat.Float16_b
@@ -583,18 +597,22 @@ def test_rmsnorm_bcast_scalar_dest_reuse_flushes_denormal_scalar_after_keep_flag
 
     torch.manual_seed(0)
     src_A = (
-        torch.rand(num_tiles * 32, 32) * (DENORMAL_SRCA_HIGH - DENORMAL_SRCA_LOW)
+        torch.rand(num_tiles * TILE_DIM, TILE_DIM)
+        * (DENORMAL_SRCA_HIGH - DENORMAL_SRCA_LOW)
         + DENORMAL_SRCA_LOW
     ) * DENORMAL_SRCA_SCALE
-    src_B = torch.rand(32, 32) * (SEED_HIGH - SEED_LOW) + SEED_LOW
-    src_B[0, 0] = (
-        BF16_DENORMAL_MIN * torch.randint(1, BF16_DENORMAL_MANTISSAS, (1,)).item()
-    )
+    src_B = torch.rand(TILE_DIM, TILE_DIM) * (OPERAND_HIGH - OPERAND_LOW) + OPERAND_LOW
+    if scalar_kind == "denormal":
+        src_B[0, 0] = (
+            BF16_DENORMAL_MIN * torch.randint(1, BF16_DENORMAL_MANTISSAS, (1,)).item()
+        )
+    else:
+        src_B[0, 0] = TINY_NORMAL_SCALAR
     src_A = src_A.to(torch.bfloat16)
     src_B = src_B.to(torch.bfloat16)
-    assert src_B[0, 0].item() != 0.0, "denormal scalar did not survive the bf16 cast"
+    assert src_B[0, 0].item() != 0.0, "scalar did not survive the bf16 cast"
 
-    device, _seen_A, _seed, scalar = _run(
+    device, seen_A, _seed, _scalar = _run(
         formats,
         dest_acc,
         MathOperation.Elwmul,
@@ -604,11 +622,29 @@ def test_rmsnorm_bcast_scalar_dest_reuse_flushes_denormal_scalar_after_keep_flag
         preserve_src_zero_flag=True,
         operands=(src_A, src_B),
     )
-    assert scalar != 0.0
 
-    kept = torch.count_nonzero(device).item()
-    assert kept == 0, (
-        f"denormal broadcast scalar was not flushed (fidelity={math_fidelity.name}): "
-        f"{kept} nonzero outputs, max |value| {device.abs().max().item():.3e} -- the math "
-        "init left the Src zero flag at keep"
+    if scalar_kind == "denormal":
+        kept = torch.count_nonzero(device).item()
+        assert kept == 0, (
+            f"denormal broadcast scalar was not flushed (fidelity={math_fidelity.name}): "
+            f"{kept} nonzero outputs, max |value| {device.abs().max().item():.3e} -- the "
+            "math init left the Src zero flag at keep"
+        )
+        return
+
+    golden = _expected(
+        seen_A,
+        TINY_NORMAL_SCALAR,
+        MathOperation.Elwmul,
+        math_fidelity,
+        formats.output_format,
+    )
+    assert torch.count_nonzero(device).item() == device.numel(), (
+        f"tiny normal scalar 2^-100 produced zero outputs (fidelity={math_fidelity.name}) -- "
+        "the scalar did not reach SrcB or the MOP did not run, so the denormal case above "
+        "would pass for the wrong reason"
+    )
+    assert passed_test(golden, device, formats.output_format), (
+        f"tiny normal scalar 2^-100 product mismatch (fidelity={math_fidelity.name}) under "
+        "the keep-flag sequence"
     )
