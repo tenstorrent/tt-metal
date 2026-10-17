@@ -37,6 +37,9 @@ namespace ckernel::sfpu {
  *   n_packed:     order n (as float bits)
  *   scale_packed: precomputed (-1)^(n+1) * n! (as float bits)
  */
+// Whether BF16 DEST runs the generated polygamma kernel as one call over the whole tile.
+inline constexpr bool polygamma_bf16_whole_tile = false;
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_packed) {
     // Exact terms (k=0..NUM_TERMS-1). The Euler-Maclaurin tail (with B2,B4,B6 corrections)
@@ -134,7 +137,7 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void polygamma_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     _init_reciprocal_<APPROXIMATION_MODE>();
