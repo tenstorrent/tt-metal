@@ -88,6 +88,9 @@ def test_pipeline_distilled(
     no_prompt,
 ):
     """LTX-2.3 distilled 2-stage AV pipeline."""
+    mesh_shape = tuple(mesh_device.shape)
+    if mesh_shape == (4, 8) and topology == ttnn.Topology.Ring and not is_fsdp:
+        pytest.skip("Temporarily disabled on BH 4x8 ring (4x8sp1tp0nl2_ring_is_fsdp0): cache-load hang, refs #53089")
     skip_if_unsupported_num_links(mesh_device, num_links)
     ckpt = default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")
     gemma = default_ltx_gemma()
