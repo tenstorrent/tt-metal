@@ -4221,6 +4221,14 @@ tasks:
     kind: residual
     layer: 14
     stateful: false
+  frozen:
+    at: '2026-10-17T02:37:16'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_residual.py: 20b5cc4df74bacbbb111227b1a92a80906279b96a756f39cf51fd12649ca6399
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.enc_source_engram.12
   title: 'enc_source_engram block with steps 1-12 on device (last: attn_residual)'
   step: implement
