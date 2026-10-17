@@ -46,12 +46,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
+    // A narrow (16-wide) tile stacks its faces vertically (num_faces x 1 face grid); the legacy helper would
+    // read two faces as one face row.
+    const ckernel::TensorShape tensor_shape = params.NARROW_TILE ? ckernel::make_tensor_shape(FACE_R_DIM, FACE_C_DIM, params.num_faces, 1 /* num_faces_c_dim */)
+                                                                 : ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces);
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /* transpose_of_faces */,
-        0 /* within_face_16x16_transpose */,
-        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces),
-        formats.unpack_A_src,
-        formats.unpack_A_dst);
+        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
 
     const std::uint32_t num_blocks_per_col = FULL_CT_DIM / BLOCK_CT_DIM;
 
@@ -128,17 +128,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     const bool UNTILIZE                    = true;
+    const bool narrow_tile                 = params.NARROW_TILE; // 16-wide tile: its faces are stacked vertically
+    const std::uint32_t tile_c_dim         = narrow_tile ? FACE_C_DIM : TILE_C_DIM;
     const std::uint32_t NUM_DATUMS_IN_TILE = FACE_R_DIM * FACE_C_DIM * params.num_faces;
+    // Faces side by side in one tile row: 2 for a 32x32 tile, 1 for a single-face or narrow tile.
+    const std::uint32_t faces_per_tile_row = narrow_tile ? 1 : ((params.num_faces > 2) ? params.num_faces / 2 : params.num_faces);
     const std::uint32_t row_stride_16B     = (FULL_CT_DIM * NUM_DATUMS_IN_TILE * format_size_in_bytes(formats.pack_dst)) / L1_ACCESS_ADDRESS_GRANULARITY;
     const std::uint32_t block_stride_16B =
-        (BLOCK_CT_DIM * ((params.num_faces > 2) ? params.num_faces / 2 : params.num_faces) * FACE_C_DIM * format_size_in_bytes(formats.pack_dst)) /
-        L1_ACCESS_ADDRESS_GRANULARITY;
+        (BLOCK_CT_DIM * faces_per_tile_row * FACE_C_DIM * format_size_in_bytes(formats.pack_dst)) / L1_ACCESS_ADDRESS_GRANULARITY;
     const std::uint32_t base_addr_16B = L1_ADDRESS(params.buffer_Res[0]);
 
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(
-        formats.pack_src, formats.pack_dst, NUM_DATUMS_IN_TILE /* tile_size */);
-    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
-    _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst, FACE_R_DIM, params.num_faces);
+        formats.pack_src,
+        formats.pack_dst,
+        NUM_DATUMS_IN_TILE /* tile_size */,
+        FACE_R_DIM,
+        tile_c_dim,
+        params.num_faces,
+        false /* partial_face */,
+        narrow_tile);
+    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(FACE_R_DIM, narrow_tile);
+    _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst, FACE_R_DIM, params.num_faces, narrow_tile);
     const std::uint32_t num_blocks_per_col = FULL_CT_DIM / BLOCK_CT_DIM;
 
     for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++) // Loop over all tiles vertically
@@ -149,7 +159,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             _llk_packer_wait_for_math_done_();
             _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, false /* narrow_row */, TILE_C_DIM, TILE_DST_CT_OFFSET>(
-                pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /* tile_dst_rt_offset */);
+                pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /* tile_dst_rt_offset */, narrow_tile);
             _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
     }

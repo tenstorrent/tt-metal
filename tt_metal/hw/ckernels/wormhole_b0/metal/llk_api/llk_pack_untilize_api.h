@@ -15,7 +15,7 @@
 /**
  * Initialize the packer for an untilize operation on the given output operand.
  *
- * Face geometry (face_r_dim, num_faces) is derived from the output CB metadata. In
+ * Face geometry (face_r_dim, num_faces, narrow_tile) is derived from the output CB metadata. In
  * debug builds, validates that the packers are configured correctly for the resolved
  * face row dimension before programming the untilize init sequence.
  *
@@ -39,6 +39,7 @@ inline void llk_pack_untilize_init(std::uint32_t output) {
     const std::uint32_t output_id = get_output_id(output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const bool narrow_tile = get_output_narrow_tile(output_id);
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
 
@@ -55,19 +56,20 @@ inline void llk_pack_untilize_init(std::uint32_t output) {
         StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
         StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
         StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateDiscard<bool>(narrow_tile),
         StateDiscard<bool>(narrow_row),
         StateDiscard<std::uint32_t>(row_num_datums)));
 
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
-        pack_dst_format[output_id], face_r_dim, num_faces);
+        pack_dst_format[output_id], face_r_dim, num_faces, narrow_tile);
 }
 
 /**
  * Pack an untilized block of tiles from the destination register into the output CB.
  *
  * Iterates over block_rt_dim tile rows, computing the packer write address from the
- * output CB fifo state for each row. Face geometry (face_r_dim, num_faces) is derived
- * from the output CB metadata.
+ * output CB fifo state for each row. Face geometry (face_r_dim, num_faces, narrow_tile) is
+ * derived from the output CB metadata.
  *
  * @tparam block_ct_dim       Width of a single block in tiles.
  * @tparam full_ct_dim        Width of the full input in tiles (defaults to block_ct_dim).
@@ -98,11 +100,13 @@ inline void llk_pack_untilize(
     const std::uint32_t output_id = get_output_id(output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const bool narrow_tile = get_output_narrow_tile(output_id);
+    // A block starts block_ct_dim tile rows of face columns into the output row (one face column for a narrow tile).
     std::uint32_t pack_tile_addr =
         get_local_cb_interface(output_id).fifo_wr_ptr - 1 +
         SCALE_DATUM_SIZE(
             pack_dst_format[output_id],
-            (block_c_index * ((num_faces > 2) ? num_faces / 2 : num_faces) * block_ct_dim * FACE_C_DIM)) /
+            (block_c_index * _llk_pack_untilize_num_faces_c_dim_(num_faces, narrow_tile) * block_ct_dim * FACE_C_DIM)) /
             16;
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
@@ -120,6 +124,7 @@ inline void llk_pack_untilize(
         StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
         StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
         StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateDiscard<bool>(narrow_tile),
         StateDiscard<bool>(narrow_row),
         StateDiscard<std::uint32_t>(row_num_datums),
         StateDiscard<std::uint32_t>(block_rt_dim),
@@ -128,7 +133,11 @@ inline void llk_pack_untilize(
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
-            pack_tile_addr, pack_dst_format[output_id], face_r_dim, block_rt * block_ct_dim + tile_dst_rt_offset);
+            pack_tile_addr,
+            pack_dst_format[output_id],
+            face_r_dim,
+            block_rt * block_ct_dim + tile_dst_rt_offset,
+            narrow_tile);
 
         pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
     }

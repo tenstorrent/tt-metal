@@ -44,7 +44,11 @@ inline void configure_explicit_geometry(std::uint32_t ocb, std::uint32_t face_r_
         partial_face,
         0);
     llk_pack_untilize_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
-        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        face_r_dim,
+        num_faces,
+        tile_c_dim == FACE_C_DIM /* narrow_tile */);
 }
 
 template <
@@ -69,6 +73,7 @@ inline void pack_explicit_geometry(
         full_ct_dim * get_local_cb_interface(output_id).fifo_page_size,
         face_r_dim,
         num_faces,
+        num_faces == 1 /* narrow_tile: the geometry mapping above puts two faces in one face row */,
         block_c_index,
         tile_dst_rt_offset);
 }
