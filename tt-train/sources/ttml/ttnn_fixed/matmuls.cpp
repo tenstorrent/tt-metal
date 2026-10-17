@@ -39,10 +39,11 @@ std::pair<ttnn::Tensor, ttnn::Tensor> matmul_backward(
     auto grad_shape = out_grad.logical_shape();
 
     auto volume_without_features_a = a.logical_volume() / static_cast<uint64_t>(a.logical_shape()[-1]);
+    auto volume_without_features_grad = out_grad.logical_volume() / static_cast<uint64_t>(out_grad.logical_shape()[-1]);
     auto reshaped_a =
         ttnn::reshape(a, ttnn::Shape({static_cast<uint32_t>(volume_without_features_a), a.logical_shape()[-1]}));
     auto reshaped_grad = ttnn::reshape(
-        out_grad, ttnn::Shape({static_cast<uint32_t>(volume_without_features_a), out_grad.logical_shape()[-1]}));
+        out_grad, ttnn::Shape({static_cast<uint32_t>(volume_without_features_grad), out_grad.logical_shape()[-1]}));
 
     ttnn::Tensor reshaped_a_grad;
     ttnn::Tensor reshaped_b_grad;
