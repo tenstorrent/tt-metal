@@ -9,7 +9,6 @@
 #include <numeric>
 #include <random>
 #include <string>
-#include <tuple>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
@@ -96,6 +95,7 @@ bool run(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const std:
     const tt::DataFormat data_format = tt::DataFormat::Int32;
     const uint32_t single_tile_size = tt::tile_size(data_format);
     const uint32_t dram_buffer_size = single_tile_size * num_tiles;
+    constexpr uint32_t cb_num_pages = 2;  // double-buffered CBs
 
     distributed::ReplicatedBufferConfig global_config{.size = dram_buffer_size};
     distributed::DeviceLocalBufferConfig dram_config{.page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
@@ -104,8 +104,9 @@ bool run(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const std:
     auto dst_dram_buffer = distributed::MeshBuffer::create(global_config, dram_config, mesh_device.get());
 
     for (auto cb_index : {CBIndex::c_0, CBIndex::c_1, CBIndex::c_16}) {
-        CircularBufferConfig cb_config = CircularBufferConfig(2 * single_tile_size, {{cb_index, data_format}})
-                                             .set_page_size(cb_index, single_tile_size);
+        CircularBufferConfig cb_config =
+            CircularBufferConfig(cb_num_pages * single_tile_size, {{cb_index, data_format}})
+                .set_page_size(cb_index, single_tile_size);
         CreateCircularBuffer(program_, core, cb_config);
     }
 
@@ -149,13 +150,14 @@ bool run(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const std:
         program_, reader_kernel_id, core, {src0_dram_buffer->address(), 0, src1_dram_buffer->address(), 0, num_tiles});
     SetRuntimeArgs(program_, writer_kernel_id, core, {dst_dram_buffer->address(), 0, num_tiles});
 
-    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
     distributed::Finish(cq);
 
     std::vector<uint32_t> result;
     distributed::EnqueueReadMeshBuffer(cq, result, dst_dram_buffer, /*blocking=*/true);
     EXPECT_EQ(result.size(), numel);
 
+    constexpr size_t max_logged_mismatches = 8;
     size_t mismatches = 0;
     for (size_t i = 0; i < numel && i < result.size(); ++i) {
         const int32_t a = static_cast<int32_t>(src0[i]);
@@ -163,7 +165,7 @@ bool run(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const std:
         const int32_t expected = spec.golden(a, b);
         const int32_t actual = static_cast<int32_t>(result[i]);
         if (actual != expected) {
-            if (mismatches < 8) {
+            if (mismatches < max_logged_mismatches) {
                 log_error(
                     tt::LogTest,
                     "{}: element {} (a={}, b={}): expected {}, got {}",
@@ -193,7 +195,8 @@ TEST_P(SfpuBinaryInt32AfterFpuInitFixture, TensixSfpuBinaryInt32AfterFpuInit) {
         GTEST_SKIP() << "Int32 copy_tile + FPU binary init path not validated on Quasar";
     }
     const std::string op_name = GetParam();
-    EXPECT_TRUE(unit_tests::compute::sfpu::binary_int32_after_fpu_init::run(this->devices_.at(0), op_name, 1));
+    EXPECT_TRUE(
+        unit_tests::compute::sfpu::binary_int32_after_fpu_init::run(this->devices_.at(0), op_name, 1 /*num_tiles*/));
 }
 
 INSTANTIATE_TEST_SUITE_P(

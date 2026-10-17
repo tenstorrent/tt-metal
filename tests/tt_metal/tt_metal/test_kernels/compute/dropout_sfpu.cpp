@@ -24,7 +24,8 @@ void kernel_main() {
 
 #ifdef DROPOUT_INPUT_FPU_ADD
     // Fused FPU add + dropout: the tile dropout works on is produced in DST by the FPU (c_0 + c_0 = 2x),
-    // so the FPU binary init, not a datacopy init, is the last ADDR_MOD programmer before dropout_tile.
+    // so the FPU binary init, not a datacopy init, is the last ADDR_MOD_3 programmer before dropout_tile
+    // (dropout_kernel_init below programs ADDR_MOD_7, the slot the SFPU op addresses Dest through).
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
     add_init(tt::CBIndex::c_0, tt::CBIndex::c_0);
 #else
@@ -37,11 +38,12 @@ void kernel_main() {
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             tile_regs_acquire();
 
-            // Pop tile after tile, copy to DST and pack
+            // Tile after tile: produce the tile in DST (datacopy, or FPU add of c_0 with itself),
+            // apply dropout, pack, pop
             cb0.wait_front(1);
 
 #ifdef DROPOUT_INPUT_FPU_ADD
-            add_tiles(tt::CBIndex::c_0, tt::CBIndex::c_0, 0, 0, 0);
+            add_tiles(tt::CBIndex::c_0, tt::CBIndex::c_0, 0 /*itile0*/, 0 /*itile1*/, 0 /*idst*/);
 #else
             copy_tile(tt::CBIndex::c_0, 0, 0);
 #endif
