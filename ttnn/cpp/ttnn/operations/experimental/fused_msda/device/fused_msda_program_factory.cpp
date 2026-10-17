@@ -433,6 +433,14 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     // good on Blackhole here; it has not been checked on Wormhole.
     ComputeConfigDescriptor compute_cfg{};
     compute_cfg.fp32_dest_acc_en = true;
+    // copy_tile through SrcA keeps 10 mantissa bits, which leaves a float32
+    // reference point only about 4x closer than a bf16 one. Unpacking straight
+    // into the 32-bit destination keeps all 23.
+    if (ref_fp32) {
+        compute_cfg.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        compute_cfg.unpack_to_dest_mode[geom_x_cb] = UnpackToDestMode::UnpackToDestFp32;
+        compute_cfg.unpack_to_dest_mode[geom_y_cb] = UnpackToDestMode::UnpackToDestFp32;
+    }
     compute_desc.config = compute_cfg;
 
     // ---- writer (shared by V1 and V2) ----
