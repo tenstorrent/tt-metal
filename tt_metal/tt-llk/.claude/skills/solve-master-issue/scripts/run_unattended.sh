@@ -6,8 +6,11 @@
 # Each attempt is one `claude -p` turn in auto mode, from $REPO_ROOT (default: cwd). The first attempt
 # invokes the skill; every later attempt resumes the SAME session and says "continue from the ledger".
 # A turn ends when the model stops — normally because every item is waiting on bots / CI / a device.
-# The driver then sleeps $SLEEP seconds (default 900) and resumes, which is how an unattended run
-# "wakes up" to handle finished runs: the skill arms nothing that must outlive the turn.
+# The driver then sleeps and resumes, which is how an unattended run "wakes up" to handle finished runs:
+# the skill arms nothing that must outlive the turn. Sleep = $SLEEP seconds (default 900), unless the turn
+# left <state>/NEXT_WAKE holding a unix epoch: then the driver sleeps until that time (at most $MAX_SLEEP,
+# default 7200) — a worker that is only waiting on CI runs that end hours from now writes the earliest
+# expected completion there, so idle turns (each one costs tokens) are not spent every 15 min.
 #
 # Layout under $MASTER_ISSUE_DIR/<run-name>/ (put $MASTER_ISSUE_DIR on storage every box mounts):
 #   single worker (no --worker):  driver.log · session.id · attempt-NN.log/.err · ledger.md · DONE · STOP
@@ -17,7 +20,8 @@
 #   through to the skill, which then takes groups by claim instead of by list order.
 # Stops when its DONE exists (the skill writes it with the final report), when its own STOP or the run's
 # top-level STOP exists (touch $MASTER_ISSUE_DIR/<run-name>/STOP stops every worker after its current
-# turn), or after $MAX_ATTEMPTS (default 96 ≈ a day at 15 min).
+# turn), after $MAX_ATTEMPTS turns (default 2000), or after $MAX_DAYS days (default 7) — the CI tail of a
+# big run takes days; a worker must not die before its PRs are green.
 # Check:  tail -f <state>/driver.log ;  pgrep -af run_unattended
 set -uo pipefail
 name=$1; shift
@@ -29,7 +33,8 @@ state=$run
 [ -n "$worker" ] && state=$run/workers/$worker
 mkdir -p "$state"
 root=${REPO_ROOT:-$PWD}
-sleep_s=${SLEEP:-900}; max=${MAX_ATTEMPTS:-96}
+sleep_s=${SLEEP:-900}; max=${MAX_ATTEMPTS:-2000}; max_sleep=${MAX_SLEEP:-7200}; max_days=${MAX_DAYS:-7}
+t0=$(date +%s)
 log() { echo "$(date -u +%FT%TZ) $*" >> "$state/driver.log"; }
 sid_file=$state/session.id
 # fresh = no session to resume. Keyed on session.id, not on old attempt logs: moving a paused run's logs
@@ -66,6 +71,15 @@ while [ "$n" -lt "$max" ]; do
     fi
     [ -e "$state/DONE" ] && { log "DONE present, exiting"; exit 0; }
     stop_requested && { log "STOP present, exiting"; exit 0; }
-    sleep "$sleep_s"
+    [ $(( $(date +%s) - t0 )) -gt $(( max_days * 86400 )) ] && { log "max days ($max_days) reached, exiting"; exit 0; }
+    nap=$sleep_s
+    if [ -s "$state/NEXT_WAKE" ]; then
+        want=$(tr -dc 0-9 < "$state/NEXT_WAKE"); rm -f "$state/NEXT_WAKE"
+        [ -n "$want" ] && nap=$(( want - $(date +%s) ))
+        [ "$nap" -lt "$sleep_s" ] && nap=$sleep_s
+        [ "$nap" -gt "$max_sleep" ] && nap=$max_sleep
+    fi
+    log "sleeping ${nap}s"
+    sleep "$nap"
 done
 log "max attempts ($max) reached, exiting"
