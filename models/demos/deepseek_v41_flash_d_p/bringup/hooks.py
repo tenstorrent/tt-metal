@@ -132,6 +132,22 @@ DEVICE_STEPS = {
         "indexer",
         "attention",
     },
+    # enc_source + engram: the engram steps are the swa_engram modules, the rest the enc_source ones (every step
+    # listed passed its C.enc_source_engram.* component gate on them, DS41-28; the attention is
+    # tt/sparse_attention.py, which writes layer 14's served window cache and reads its served compressed cache)
+    "enc_source_engram": {
+        "engram_rows",
+        "engram_kv",
+        "engram_add",
+        "attn_hc",
+        "attn_collapse",
+        "attn_norm",
+        "q_a",
+        "kv",
+        "compressor",
+        "indexer",
+        "attention",
+    },
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcMixes): packed boundary [S, 4H + 4] (or streams [S, 4H]) in -> [S, 24].
