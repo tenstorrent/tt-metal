@@ -126,3 +126,26 @@ def test_nonfinite_comparison_fails():
         ValueError, match="Nonfinite"
     ):  # allow-pytest.raises: host-only checks run without native TTNN fixtures
         metrics(torch.tensor([float("nan")]), torch.ones(1))
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"height": 255},
+        {"width": 257},
+        {"height": 256.0},
+        {"steps": 0},
+        {"steps": 1001},
+        {"steps": 1.5},
+        {"guidance_scale": float("nan")},
+        {"guidance_scale": 0.5},
+        {"prompt": ["fox"]},
+    ],
+)
+def test_invalid_generation_options_fail_on_host(overrides):
+    from models.experimental.moss_image.demo import validate_generation_options
+
+    options = dict(height=1024, width=1024, steps=50, prompt="fox", negative_prompt="", guidance_scale=3.0)
+    options.update(overrides)
+    with pytest.raises((ValueError, TypeError)):  # allow-pytest.raises: pure host validation, no native fixtures
+        validate_generation_options(**options)
