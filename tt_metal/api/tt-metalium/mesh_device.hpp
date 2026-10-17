@@ -227,13 +227,12 @@ public:
 
     // Returns the devices in the mesh in row-major order.
     std::vector<IDevice*> get_devices() const;
-    [[deprecated(
-        "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
-        "28-02-2026.")]]
+    // Returns the IDevice for a physical chip id or a mesh coordinate. Both throw if the device is remote (not
+    // local to this host). The chip-id overload also throws if the id is not in the mesh; the coordinate overload
+    // returns nullptr if `coord` is outside the mesh.
+    // Not deprecated: there is no replacement yet for callers that need per-device queries or access. Once one
+    // exists (e.g. get_info(coord)), callers should migrate and these can be deprecated again.
     IDevice* get_device(ChipId physical_device_id) const;
-    [[deprecated(
-        "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
-        "28-02-2026.")]]
     IDevice* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
