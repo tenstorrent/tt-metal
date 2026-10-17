@@ -76,9 +76,9 @@ inline void tanh_derivative_init() {
     // That tail entry saturates the finite range only. The hardware evaluates A*|x| + B, so
     // an infinite input computes 0 * inf + 1 = NaN; do not read (0, 1.0) as handling the
     // infinities. tt-llk's _calculate_tanh_derivative_ handles them itself: it moves +-inf
-    // onto the tail before the lut (its SATURATED_TAIL_INPUT, chosen past the 3.0 breakpoint
-    // and to be moved with it) and returns 0 for them. calculate_tanh_derivative above is
-    // unguarded and still returns NaN there.
+    // onto the tail before the lut (its SATURATED_TAIL_INPUT, past the lut mode's last split
+    // at 3.0) and returns 0 for them. calculate_tanh_derivative above is unguarded and still
+    // returns NaN there.
     //
     // UnarySFPUGolden._tanh_derivative_lut mirrors these six pairs by hand, and
     // test_tanh_lut_consistency.py holds all three copies together.
