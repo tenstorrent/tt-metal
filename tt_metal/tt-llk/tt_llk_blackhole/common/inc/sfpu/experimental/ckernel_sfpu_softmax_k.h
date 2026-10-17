@@ -71,8 +71,11 @@ inline void _zero_marked_instances_()
 template <int k, bool is_fp32_dest_acc_en>
 inline void _zero_padding_columns_()
 {
-    constexpr std::uint32_t even_block_mask = is_fp32_dest_acc_en ? _instances_from_((k + 1) / 2) : 0u;
-    constexpr std::uint32_t odd_block_mask  = is_fp32_dest_acc_en ? _instances_from_(k / 2) : ((k & 1) ? (1u << (k - 1)) : 0u);
+    // k is the number of valid columns of the 16-wide row; the 16-bit tail mask below shifts by k - 1 into
+    // SFPCONFIG's 16-bit immediate, so anything past 16 would spill into the opcode.
+    static_assert(k >= 1 && k <= 16, "softmax_k: k must be in 1..16");
+    constexpr std::uint32_t even_block_mask = is_fp32_dest_acc_en ? _instances_from_((k + 1) / 2 /*first_instance*/) : 0u;
+    constexpr std::uint32_t odd_block_mask  = is_fp32_dest_acc_en ? _instances_from_(k / 2 /*first_instance*/) : ((k & 1) ? (1u << (k - 1)) : 0u);
     static_assert((odd_block_mask & even_block_mask) == even_block_mask, "the odd block clears a superset of the even block's instances");
 
     if constexpr (even_block_mask != 0 || odd_block_mask != 0)
@@ -87,7 +90,7 @@ inline void _zero_padding_columns_()
         if constexpr (even_block_mask != 0)
         {
             TTI_SFPCONFIG(even_block_mask, SFPCONFIG_TARGET_LREG11, SFPCONFIG_MOD_SET_LREG11);
-            _zero_marked_instances_<0>();
+            _zero_marked_instances_<0 /*addr*/>();
         }
         if constexpr (odd_block_mask != 0)
         {
@@ -96,7 +99,7 @@ inline void _zero_padding_columns_()
                 // Superset of even_block_mask and LREG0 still holds 1.0: marking the extra instances is enough.
                 TTI_SFPCONFIG(odd_block_mask, SFPCONFIG_TARGET_LREG11, SFPCONFIG_MOD_SET_LREG11);
             }
-            _zero_marked_instances_<2>();
+            _zero_marked_instances_<2 /*addr*/>();
         }
 
         _restore_lconst_neg1_();
