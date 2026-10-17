@@ -1202,15 +1202,24 @@ std::map<std::string, std::string> get_block_defines(
     std::optional<DataType> input_dtype) {
     std::map<std::string, std::string> block_defines;
     std::string block_define;
+    // A TYPECAST changes the dtype of the tile the ops after it see, so their kernel text is generated for
+    // the cast's target dtype (its second parameter), not for the tensor's dtype: a dtype-dispatched op
+    // such as UNARY_GT after an INT32->FLOAT32 cast must get the float compare, not the int32 one.
+    std::optional<DataType> op_dtype = input_dtype;
     for (uint32_t i = 0; i < op_chain.size(); i++) {
         std::string init_def = fmt::format("SFPU_OP_CHAIN_{}_INIT_{}", block_id, i);
         std::string func_def = fmt::format("SFPU_OP_CHAIN_{}_FUNC_{}", block_id, i);
         block_define += init_def + " " + func_def + " ";
         block_defines.merge(std::visit(
             [&](auto params) {
-                return get_defines_impl(op_chain[i].type(), params, idst, init_def, func_def, input_dtype);
+                return get_defines_impl(op_chain[i].type(), params, idst, init_def, func_def, op_dtype);
             },
             op_chain[i].get_params()));
+        if (op_chain[i].type() == UnaryOpType::TYPECAST) {
+            if (const auto target_dtype = op_chain[i].get_param_if<float>(1)) {
+                op_dtype = static_cast<DataType>(*target_dtype);
+            }
+        }
     }
     block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
     return block_defines;
