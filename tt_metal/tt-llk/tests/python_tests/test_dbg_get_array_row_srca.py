@@ -2,17 +2,31 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-``dbg_get_array_row(dbg_array_id::SRCA, ...)`` borrows dest row 0 to stage the SrcA row it
-cannot read directly, and must put that row back before returning. The row is 32 datums wide
-and the SFPU saves it in two halves, so it needs two registers; sharing one loses the first
-half and the restore writes the surviving half over both.
+``dbg_get_array_row(dbg_array_id::SRCA, ...)`` borrows a dest row to stage the SrcA row it
+cannot read directly, and must put that row back before returning. Two tests, one per contract:
 
-Every in-tree caller passes ``dbg_array_id::DEST``, which never enters that path, so without
-this test the save/restore can regress undetected. The kernel writes a known tile into DEST,
-calls the helper, and reads DEST back -- the tile must come back bit-exact with either DEST width.
-Row 0 carries planted patterns a converting save would change: integer values that read as float
-denormals, and float denormals and negative zero, which a flush or a half-width save alters.
+* ``test_srca_row_dump_restores_dest_row_0`` (Blackhole, which has the RISC-V window into DEST):
+  the row is 32 datums wide and the SFPU saves it in two halves, so it needs two registers;
+  sharing one loses the first half and the restore writes the surviving half over both. The
+  kernel writes a known tile into DEST, calls the helper, and reads DEST back -- the tile must
+  come back bit-exact with either DEST width. Row 0 carries planted patterns a converting save
+  would change: integer values that read as float denormals, and float denormals and negative
+  zero, which a flush or a half-width save alters.
+
+* ``test_srca_row_dump_reads_srca_row`` (both architectures): the dump must be the SrcA row
+  wherever the math thread's dest offset sits. The kernel unpacks a tile into SrcA, datacopies
+  it into a dest tile (so the offset is where a real op leaves it: tile 0, tile 2, or the upper
+  half), dumps SrcA row 0 and hands back the raw debug-bus words. The datacopy consumed the
+  faces in order, so the bank the dump reads holds the last face: the words must be row 0 of
+  face 3 in the dest BF16 bit layout (the host builds them from the tile it wrote). The helper
+  stages and restores through the thread's offset but reads back a physical row, so without
+  pinning the offset first a nonzero offset returns a stale row.
+
+Every in-tree caller passes ``dbg_array_id::DEST``, which never enters this path, so without
+these tests the SrcA path can regress undetected.
 """
+
+import struct
 
 import pytest
 import torch
@@ -23,6 +37,7 @@ from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import DBG_SRCA_DUMP
 
 # Int32 bit patterns a converting save would change: an FP32-mode save flushes the ones that read as
 # denormals (exponent 0) and a BF16-mode save drops their low half. Planted in dest row 0 so the
@@ -50,6 +65,21 @@ FP32_AT_RISK_BITS = [
 ]
 BF16_AT_RISK_BITS = [0x0001, 0x007F, 0x8001, 0x8000, 0x0080, 0x7F7F]
 
+TILE_ELEMENTS = 32 * 32
+FACE_ELEMENTS = 16 * 16
+ROW_ELEMENTS = 16
+# Result layout the kernel writes: tile 0 holds the raw debug-bus words, tile 1 the DEST tile read back.
+WORDS_PER_ROW = 8
+NUM_FACES = 4
+RESULT_TILE_DEST = 1
+
+# Where the datacopy leaves the math thread's dest offset before the dump: (dest tile, upper half).
+DEST_OFFSETS = {
+    "tile_0": (0, False),
+    "tile_2": (2, False),
+    "upper_half": (0, True),
+}
+
 
 def as_float_bits(bits, width):
     """A float tensor whose raw bits are the given patterns (sign-bit patterns overflow a signed literal)."""
@@ -62,6 +92,74 @@ def as_float_bits(bits, width):
 def bit_view(tensor):
     """The tensor's raw bits as a same-width integer tensor, so negative zero and NaN compare exactly."""
     return tensor.view(torch.int16 if tensor.dtype == torch.bfloat16 else torch.int32)
+
+
+def dest_bf16_bits(ieee_bits):
+    """A BF16 datum as DEST stores it: sign, then the 7 mantissa bits, then the 8 exponent bits.
+
+    The debug bus returns DEST's own bit layout. With a 32-bit DEST the read returns the high half
+    of each datum, which carries the same three fields in the same order, so the words are the
+    same in both DEST widths.
+    """
+    return (
+        (ieee_bits & 0x8000) | ((ieee_bits & 0x7F80) >> 7) | ((ieee_bits & 0x007F) << 8)
+    )
+
+
+def dest_row_words(bf16_row):
+    """The 8 debug-bus words of a 16-datum BF16 row: datum 2i in the low half of word i."""
+    bits = [dest_bf16_bits(int(b) & 0xFFFF) for b in bit_view(bf16_row).tolist()]
+    return tuple(bits[2 * i] | (bits[2 * i + 1] << 16) for i in range(WORDS_PER_ROW))
+
+
+def face_row(tile, face, row):
+    """Row ``row`` of face ``face`` of a 32x32 tile laid out face by face, as the kernel reads it."""
+    start = face * FACE_ELEMENTS + row * ROW_ELEMENTS
+    return tile[start : start + ROW_ELEMENTS]
+
+
+def make_config(formats, dest_acc, src_A, src_B, tile_cnt, dump):
+    return TestConfig(
+        "sources/dbg_get_array_row_srca_test.cpp",
+        formats,
+        templates=[dump],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=2,
+        ),
+        dest_acc=dest_acc,
+    )
+
+
+def dest_tile_from(res_from_L1, output_format):
+    """The DEST tile the kernel read back, as a tensor of the output format."""
+    assert (
+        len(res_from_L1) == 2 * TILE_ELEMENTS
+    ), f"Result length {len(res_from_L1)} does not match the two-tile layout the kernel writes"
+    tile = res_from_L1[
+        RESULT_TILE_DEST * TILE_ELEMENTS : (RESULT_TILE_DEST + 1) * TILE_ELEMENTS
+    ]
+    return torch.tensor(tile, dtype=format_dict[output_format])
+
+
+def assert_dest_tile_restored(expected, res_tensor):
+    # Only the borrowed row is at risk, so report on it directly rather than letting a whole-tile
+    # mismatch hide which half came back wrong.
+    differing = (
+        (bit_view(expected) != bit_view(res_tensor)).nonzero().flatten().tolist()
+    )
+    assert not differing, (
+        "dbg_get_array_row(SRCA) did not restore the dest row it borrowed. "
+        f"{len(differing)} datum(s) differ, first at index {differing[0]}: "
+        f"expected {expected[differing[0]]}, got {res_tensor[differing[0]]}. "
+        "The save must hold both halves of the row, without converting them."
+    )
 
 
 @parametrize(
@@ -84,47 +182,84 @@ def test_srca_row_dump_restores_dest_row_0(formats, dest_acc):
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
     )
+    # The kernel plants buffer_B into DEST; put the at-risk patterns there.
     if formats.input_format == DataFormat.Int32:
-        src_A[: len(INT32_AT_RISK)] = torch.tensor(INT32_AT_RISK, dtype=src_A.dtype)
+        src_B[: len(INT32_AT_RISK)] = torch.tensor(INT32_AT_RISK, dtype=src_B.dtype)
     elif formats.input_format == DataFormat.Float32:
-        src_A[: len(FP32_AT_RISK_BITS)] = as_float_bits(FP32_AT_RISK_BITS, 32)
+        src_B[: len(FP32_AT_RISK_BITS)] = as_float_bits(FP32_AT_RISK_BITS, 32)
     elif formats.input_format == DataFormat.Float16_b:
-        src_A[: len(BF16_AT_RISK_BITS)] = as_float_bits(BF16_AT_RISK_BITS, 16)
+        src_B[: len(BF16_AT_RISK_BITS)] = as_float_bits(BF16_AT_RISK_BITS, 16)
 
-    configuration = TestConfig(
-        "sources/dbg_get_array_row_srca_test.cpp",
+    configuration = make_config(
+        formats, dest_acc, src_A, src_B, tile_cnt_A, DBG_SRCA_DUMP(srca_row_check=False)
+    )
+
+    res_from_L1 = configuration.run().result
+    res_tensor = dest_tile_from(res_from_L1, formats.output_format)
+    expected = src_B.to(format_dict[formats.output_format])
+    assert_dest_tile_restored(expected, res_tensor)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_offset=list(DEST_OFFSETS),
+)
+def test_srca_row_dump_reads_srca_row(formats, dest_acc, dest_offset):
+
+    dst_index, upper_half = DEST_OFFSETS[dest_offset]
+    input_dimensions = [32, 32]
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+
+    configuration = make_config(
         formats,
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
+        dest_acc,
+        src_A,
+        src_B,
+        tile_cnt_A,
+        DBG_SRCA_DUMP(
+            srca_row_check=True, dump_dst_index=dst_index, dump_upper_half=upper_half
         ),
-        dest_acc=dest_acc,
     )
 
     res_from_L1 = configuration.run().result
 
-    assert (
-        len(res_from_L1) == src_A.numel()
-    ), f"Result tensor length {len(res_from_L1)} does not match source length {src_A.numel()}"
-
-    torch_format = format_dict[formats.output_format]
-    expected = src_A.to(torch_format)
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
-
-    # Only row 0 is at risk -- the helper borrows that row and nothing else -- so report on it
-    # directly rather than letting a whole-tile mismatch hide which half came back wrong.
-    differing = (
-        (bit_view(expected) != bit_view(res_tensor)).nonzero().flatten().tolist()
+    raw = configuration.variant_stimuli.collect_raw_result_bytes(
+        TestConfig.TENSIX_LOCATION
     )
-    assert not differing, (
-        "dbg_get_array_row(SRCA) did not restore the dest row it borrowed. "
-        f"{len(differing)} datum(s) differ, first at index {differing[0]}: "
-        f"expected {expected[differing[0]]}, got {res_tensor[differing[0]]}. "
-        "The save must hold both halves of the row, without converting them."
+    srca_row = struct.unpack_from(f"<{WORDS_PER_ROW}I", raw, 0)
+
+    # The datacopy consumed the tile face by face, alternating SrcA banks, and the dump reads the
+    # bank used last: the last face. The expectation comes from the host tile rather than from a
+    # DEST read-back, so it does not depend on how DEST happens to be addressed on the card.
+    expected = dest_row_words(face_row(src_A, NUM_FACES - 1, 0))
+    face_hits = [
+        face
+        for face in range(NUM_FACES)
+        if dest_row_words(face_row(src_A, face, 0)) == srca_row
+    ]
+    if face_hits:
+        got = f"it is row 0 of face {face_hits[0]} instead"
+    elif srca_row == dest_row_words(face_row(src_B, 0, 0)):
+        got = "it is row 0 of the tile planted in dest: a stale physical row was read back"
+    elif not any(srca_row):
+        got = "it is all zero: a stale, never-written physical row was read back"
+    else:
+        got = "it matches no row the test wrote"
+    assert srca_row == expected, (
+        f"dbg_get_array_row(SRCA) with the math dest offset at {dest_offset} returned "
+        f"{[hex(w) for w in srca_row]}, expected SrcA row 0 of the last face "
+        f"{[hex(w) for w in expected]} ({got})"
     )
+
+    if get_chip_architecture() == ChipArchitecture.BLACKHOLE:
+        # The row the helper borrowed, in the first tile of the current half, must have come back intact.
+        res_tensor = dest_tile_from(res_from_L1, formats.output_format)
+        expected_tile = src_B.to(format_dict[formats.output_format])
+        assert_dest_tile_restored(expected_tile, res_tensor)

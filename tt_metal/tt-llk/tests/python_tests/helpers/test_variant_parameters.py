@@ -677,6 +677,33 @@ class DST_WRITE_ADDR_OFFSET(TemplateParameter):
 
 
 @dataclass
+class DBG_SRCA_DUMP(TemplateParameter):
+    """Compile-time knobs for ``dbg_get_array_row_srca_test.cpp``.
+
+    ``SRCA_ROW_CHECK``   unpack a tile into SrcA and datacopy it into dest before the
+                         dump, so the host can check the dumped row against the copied
+                         one. False keeps the kernel to the dest save/restore check.
+    ``DUMP_DST_INDEX``   the dest tile the datacopy lands in, which is where the math
+                         thread's dest offset is left when the dump runs.
+    ``DUMP_UPPER_HALF``  run the datacopy in the upper dest half (``dest_section_flip``)
+                         instead of the lower one.
+    """
+
+    srca_row_check: bool = False
+    dump_dst_index: int = 0
+    dump_upper_half: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr bool SRCA_ROW_CHECK = {str(self.srca_row_check).lower()};",
+                f"constexpr std::uint32_t DUMP_DST_INDEX = {self.dump_dst_index}u;",
+                f"constexpr bool DUMP_UPPER_HALF = {str(self.dump_upper_half).lower()};",
+            ]
+        )
+
+
+@dataclass
 class PACK_NUM_TILES(TemplateParameter):
     """Tile count for the block/per-tile pack drivers.
 
