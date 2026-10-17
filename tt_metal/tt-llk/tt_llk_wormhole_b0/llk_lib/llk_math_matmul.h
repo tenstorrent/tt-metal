@@ -1040,9 +1040,15 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
                         TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD); // Clear srcA valid as reuse is done and move to next srcA bank
                         TTI_CLEARDVALID(p_setrwc::CLR_B, 0);                        // Clear srcB valid as reuse is done and move to next srcB bank
                     }
-                    else
+                    else if ((t + 1) < t_dim)
                     {
                         TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD); // Move to the next srcB and srcA bank
+                    }
+                    else
+                    {
+                        // Unpaired last tile: only one srcB bank was run, and srcB valid clear is disabled, so
+                        // flipping srcB would park the next rut on a bank the unpacker never fills. Move srcA only.
+                        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
                     }
                 }
                 else
@@ -1053,9 +1059,15 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
                         TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD); // Clear srcB valid as reuse is done and move to next srcB bank
                         TTI_CLEARDVALID(p_setrwc::CLR_A, 0);                        // Clear srcA valid as reuse is done and move to next srcA bank
                     }
-                    else
+                    else if ((t + 1) < t_dim)
                     {
                         TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD); // Move to the next srcA and srcB bank
+                    }
+                    else
+                    {
+                        // Unpaired last tile: only one srcA bank was run, and srcA valid clear is disabled, so
+                        // flipping srcA would park the next rut on a bank the unpacker never fills. Move srcB only.
+                        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
                     }
                 }
             }
