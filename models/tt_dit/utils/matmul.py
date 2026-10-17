@@ -852,6 +852,11 @@ def get_agmm_config(
     table_hit = (M, K, N) in _legacy_table or _same_m_per_core_match(_legacy_table, M, K, N, m_cores) is not None
     if core_grid is not None or default_block_size is not None or use_heuristic or table_hit:
         config = get_matmul_config(M, K, N, legacy_grid, default_block_size, use_heuristic)
+        # A heuristic (or generic) blocking on this branch was derived from the global K and can pick a
+        # K_block the ring op rejects (K_tiles_per_device % K_block != 0); snap it like the fallback below
+        # does. Swept table hits and a caller-supplied default_block_size are left bit-identical.
+        if default_block_size is None and not table_hit:
+            config = _ring_safe_k_block(config, M, K, N, cluster_size)
         return legacy_grid, config, legacy_workers
 
     v3 = None

@@ -55,7 +55,13 @@ from pathlib import Path
 import pytest
 import torch
 
-from ....pipelines.flux3_klein.weights_flux3_klein import MODEL_PATH_ENV, WeightsNotFoundError, resolve_weights_dir
+from ....pipelines.flux3_klein.weights_flux3_klein import (
+    MODEL_PATH_ENV,
+    WeightsNotFoundError,
+    cached_snapshot,
+    names_other_variant,
+    resolve_weights_dir,
+)
 
 GOLDENS_ENV = "FLUX3_KLEIN_GOLDENS"
 REFERENCE_DEPTH_ENV = "FLUX3_KLEIN_REFERENCE_DEPTH"
@@ -87,18 +93,35 @@ def load_record(record_set: str, name: str) -> dict:
 
 
 def checkpoint_dir(variant: str = "distilled", required: tuple[str, ...] | None = None) -> Path | None:
-    """The checkpoint snapshot of ``variant`` or ``None`` when it cannot be resolved (callers skip)."""
-    try:
-        return resolve_weights_dir(variant, required=required)
-    except WeightsNotFoundError:
-        return None
+    """The checkpoint snapshot of ``variant`` or ``None`` when it cannot be resolved (callers skip). Variant-aware:
+    see ``variant_checkpoint_dir``."""
+    return variant_checkpoint_dir(variant, required)
 
 
 def require_checkpoint_dir(variant: str = "distilled", required: tuple[str, ...] | None = None) -> Path:
+    """``variant_checkpoint_dir`` that skips the test instead of returning ``None``."""
+    found = variant_checkpoint_dir(variant, required)
+    if found is None:
+        try:
+            resolve_weights_dir(variant, required=required)
+        except WeightsNotFoundError as error:
+            pytest.skip(f"{MODEL_PATH_ENV} unresolved: {error}")
+        pytest.skip(f"{MODEL_PATH_ENV} names another variant's snapshot and the HuggingFace cache has no '{variant}'")
+    return found
+
+
+def variant_checkpoint_dir(variant: str, required: tuple[str, ...] | None = None) -> Path | None:
+    """The snapshot of ``variant`` for a test that needs THAT variant (the device block tests read the base
+    checkpoint). ``resolve_weights_dir`` lets an explicit ``FLUX3_KLEIN_MODEL_PATH`` win even when it names another
+    variant's snapshot; here such a path is passed over and the HuggingFace cache is searched instead. ``None`` when
+    nothing resolves (callers skip)."""
     try:
-        return resolve_weights_dir(variant, required=required)
-    except WeightsNotFoundError as error:
-        pytest.skip(f"{MODEL_PATH_ENV} unresolved: {error}")
+        resolved = resolve_weights_dir(variant, required=required)
+    except WeightsNotFoundError:
+        resolved = None
+    if resolved is not None and not names_other_variant(resolved, variant):
+        return resolved
+    return cached_snapshot(variant, required)
 
 
 def goldens_root() -> Path | None:

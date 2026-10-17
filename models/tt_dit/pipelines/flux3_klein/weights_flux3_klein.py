@@ -133,6 +133,23 @@ def _explicit_dir(explicit: Path, variant: str, required: tuple[str, ...]) -> Pa
     )
 
 
+def variant_markers(variant: str) -> set[str]:
+    """Path components that identify ``variant``: ``models--<org>--<repo>`` (the HuggingFace cache), the bare
+    repository name (upstream's ``WEIGHTS_DIR/<repo>/`` layout) and the variant name (``_explicit_dir``'s
+    ``<root>/<variant>/`` child)."""
+    return {f"models--{repo_id(variant).replace('/', '--')}", repo_name(variant), variant}
+
+
+def names_other_variant(path: Path, variant: str) -> bool:
+    """True when ``path`` identifiably belongs to a DIFFERENT variant: one of its components is another variant's
+    marker and none is a marker of ``variant`` itself. A path that names neither (a renamed copy, a smoke
+    checkpoint) is trusted as given."""
+    parts = set(Path(path).resolve().parts)
+    if parts & variant_markers(variant):
+        return False
+    return any(parts & variant_markers(other) for other in FLUX3_KLEIN_REPO_IDS if other != variant)
+
+
 def resolve_weights_dir(
     variant: str = "distilled",
     *,
@@ -142,8 +159,8 @@ def resolve_weights_dir(
 ) -> Path:
     """The snapshot directory of ``variant``.
 
-    ``weights_dir`` (or ``$FLUX3_KLEIN_MODEL_PATH``) wins when it is set; otherwise the HuggingFace cache is
-    searched and then, with ``$TT_DIT_ALLOW_HF_DOWNLOAD=1``, fetched. Raises ``WeightsNotFoundError`` when
+    ``weights_dir`` wins when it is set, then ``$FLUX3_KLEIN_MODEL_PATH`` unless its path identifiably names a
+    different variant (``names_other_variant``); otherwise the HuggingFace cache is searched and then, with ``$TT_DIT_ALLOW_HF_DOWNLOAD=1``, fetched. Raises ``WeightsNotFoundError`` when
     nothing resolves and downloads are off. ``required`` narrows the completeness check (a test that only reads
     ``model.safetensors`` may pass ``("model.safetensors",)``).
     """
@@ -152,9 +169,15 @@ def resolve_weights_dir(
     if allow_download is None:
         allow_download = os.environ.get(ALLOW_DOWNLOAD_ENV) == "1"
 
-    explicit = weights_dir or os.environ.get(MODEL_PATH_ENV)
-    if explicit:
-        return _explicit_dir(Path(explicit), variant, required)
+    if weights_dir:
+        return _explicit_dir(Path(weights_dir), variant, required)
+    env_dir = os.environ.get(MODEL_PATH_ENV)
+    if env_dir and names_other_variant(Path(env_dir), variant):
+        # One $FLUX3_KLEIN_MODEL_PATH serves one variant; asking for the other falls back to the cache so a
+        # base pipeline under a distilled export does not silently load distilled weights (and vice versa).
+        logger.info(f"{MODEL_PATH_ENV}={env_dir} names another variant; resolving '{variant}' from the cache")
+    elif env_dir:
+        return _explicit_dir(Path(env_dir), variant, required)
 
     cached = cached_snapshot(variant, required)
     if cached is not None:
