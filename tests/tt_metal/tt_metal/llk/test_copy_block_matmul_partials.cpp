@@ -554,7 +554,7 @@ std::vector<std::uint32_t> run_pack_block_dest_capacity(
     return result;
 }
 
-std::string wait_for_watcher_exception() {
+std::string wait_for_pack_watcher_exception() {
     constexpr auto timeout = std::chrono::milliseconds(5000);
     constexpr auto poll_interval = std::chrono::milliseconds(100);
     const auto start = std::chrono::steady_clock::now();
@@ -595,7 +595,7 @@ void run_pack_block_dest_overrun(distributed::MeshDevice& mesh, bool id_free) {
 
     run_pack_block_dest_capacity(mesh, src, kFp32HalfSyncDestTiles, kOverrunTiles, id_free, completed);
     EXPECT_FALSE(completed) << path << ": the overrun program completed instead of aborting on the watcher error";
-    const std::string exception = wait_for_watcher_exception();
+    const std::string exception = wait_for_pack_watcher_exception();
     ASSERT_FALSE(exception.empty()) << path << ": packed " << kOverrunTiles << " tiles from a "
                                     << kFp32HalfSyncDestTiles
                                     << "-tile DEST window without tripping the DST-capacity assert";
