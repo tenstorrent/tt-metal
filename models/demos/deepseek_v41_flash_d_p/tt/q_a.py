@@ -96,15 +96,22 @@ class TtQa:
         assert q_norm.numel() == self.q1 - self.q0, (q_norm.shape, proj.cols)
         self.norm = TtDistributedRmsNorm(mesh, q_norm.float(), eps, split=False)
 
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def with_proj(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """(q_resid, the fused projection's output p [1, 1, S/SP, proj.width] fp32): the assembled model's q_a step
+        keeps p for the kv step (tt/kv.py:TtWindowKv.from_proj), one matmul and one exchange for both. The caller
+        frees p."""
         xq = fp8_qdq(x, dtype=ttnn.bfloat16)
         p = self.proj(xq)
         ttnn.deallocate(xq)
         rows = p.shape[-2]
         q = ttnn.slice(p, [0, 0, 0, self.q0], [1, 1, rows, self.q1], memory_config=DRAM)
-        ttnn.deallocate(p)
         y = self.norm(q)
         ttnn.deallocate(q)
+        return y, p
+
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        y, p = self.with_proj(x)
+        ttnn.deallocate(p)
         return y
 
 

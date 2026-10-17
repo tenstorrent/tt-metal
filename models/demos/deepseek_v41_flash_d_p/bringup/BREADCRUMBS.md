@@ -1499,3 +1499,34 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   removed after the run: there is no layer_22 golden.)
 - Re-run: `PYTHONPATH=$PWD BRINGUP_TASK=C.dec_reuse.attention scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attention.py && PYTHONPATH=$PWD BRINGUP_TASK=C.dec_reuse.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`;
   probe `PYTHONPATH=$PWD scripts/tt-probe.sh ds41_dec_reuse < tests/ttnn/unit_tests/operations/ds41_dec_reuse/probes/probe_001.py`.
+
+## M.1 assemble (attempt 2)
+- Attempt 1 left no code in the tree (only the orchestrator's hybrid M.1 run: host_transfers_per_layer 40). Built the
+  all-device model from scratch: `tt/model.py` (`TtDS41Model`, `TtDS41Block`, `DS41DeviceState`, `DevH`); hooks
+  `device_model` returns it; setting `DEVICE_MODEL=hybrid` (env `DS41_DEVICE_MODEL=hybrid`) returns the hybrid
+  (rule 10: no other env var).
+- Resting layout (components.yaml header): block boundary `DevH` = streams [1, 1, S/SP, 4 x H/TP] fp32 + pending pre
+  [1, 1, S/SP, 4] fp32 (DS41-3); every step is the validated module, no rewrite. Every layer runs every step on the
+  device, including the steps hooks `DEVICE_STEPS` never listed (DS41-28: swa_engram's FFN side, the other types'
+  FFN side passed their C.* gates on the swa modules).
+- Shared work: q_a and kv share one fused [wq_a | wkv] projection (`TtQa.with_proj` added -> `TtWindowKv.from_proj`,
+  kv.py's documented plan); experts and shared expert return fp32 partials, `moe_add` sums them and does the one TP
+  exchange (`TtExperts.reduce`; components.yaml moe_add notes); experts get the router's top-k ids. RoPE tables (one
+  per rope type), CompressRope (per ratio), WindowTables, SparseIndexTables: built once at load, shared.
+- State (`DS41DeviceState`, one slot): served caches (0_window_kv every layer, compress / index per KV source); each
+  index source's device top-k kept per chunk start (readers take their start's entry; `to_torch` reads them back for
+  the ladder's state check), layer 20's candidate pool likewise; indexer `setup` (ring key buffer, -inf rows) in
+  new_state, outside the forward. compress_partial reported as zeros (starts and S multiples of 32: never pending).
+- Engram rows (host input): `begin_chunk` hashes + looks up + uploads per engram layer with the active state's tail
+  (new_state registers itself as the model's active slot); the engram_rows step only hands the tensor on.
+  `load_tokens` sets the tail from the last 3 ids. Embedding: [V, H/TP] bf16 ROW_MAJOR per chip, ttnn.embedding on
+  host-clamped ids (K-72; uploaded in `embed`, outside `layer`).
+- Freeing: each boundary is freed after its last reader; "in" never (the caller frees it), the caller's tensors and
+  a step's own outputs protected (an engram layer's x shares in's pre); `Keep` marks state-owned outputs.
+- Gate: PASS. host_transfers_per_layer 0; pcc_layer L00 0.99983, L01 0.99951, L02 0.99865, L03 0.99692, L14 0.99840,
+  L20 0.99975, L21 0.99853, L24 0.99978; pcc_state_min 0.99588 (compress_kv L02); overlap_state_min 0.9672. Chunks
+  8.3 s / 11.8 s (hybrid 61.5 / 57.8). model_load_s 288: ~34 s per layer, the routed experts' bfp8 conversion at
+  load (DS41-24; the hybrid loaded experts for layer 0 only).
+- test_cache_starts (all spec layers, no BRINGUP_TASK, `--no-precompile`) on the device model: 4 passed (cold_mid_end,
+  follow_block, follow_tile, pulled-back last chunk), 19 min (each case reloads the model, ~5 min).
+- Re-run: `PYTHONPATH=$PWD BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py`

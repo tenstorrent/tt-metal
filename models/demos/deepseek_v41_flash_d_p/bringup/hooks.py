@@ -1149,5 +1149,14 @@ class HybridDeviceModel:
 
 
 def device_model(mesh, spec, layers, lm_head=True):
-    """The hybrid model (CPU reference + the validated device steps); the all-device model comes with assemble."""
-    return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
+    """The all-device model (tt/model.py:TtDS41Model, M.1): hidden state on the device from the embedding to the final
+    norm, every block through run_block with the validated modules. Setting DEVICE_MODEL=hybrid (DS41_DEVICE_MODEL)
+    returns the hybrid model instead (CPU reference + the device steps, host in / host out per step; debugging)."""
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
+
+    if settings.get("DEVICE_MODEL") == "hybrid":
+        return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
+    from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.deepseek_v41_flash_d_p.tt.model import TtDS41Model
+
+    return TtDS41Model(mesh, hf_path(spec), layers, max_seq=_max_seq(spec), chunk=_chunk(spec), lm_head=lm_head)
