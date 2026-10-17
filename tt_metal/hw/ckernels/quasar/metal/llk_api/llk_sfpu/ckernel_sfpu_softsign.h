@@ -16,11 +16,8 @@ inline void calculate_softsign() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        // Clamp |v| at 2**26 (vConstFloatPrgm1): from there on v / (1 + |v|) rounds to +-1.0f in float32, and the clamp
-        // keeps 1 / (1 + |v|) far from the smallest normal, below which it flushes to zero. poison = v - v is NaN for
-        // +-inf and NaN inputs and +0 otherwise, so those inputs still produce NaN. It is subtracted rather than added:
-        // -0 - (+0) stays -0, while -0 + (+0) rounds to +0. The sign goes on before the multiply, so the result is
-        // never re-signed and a NaN keeps the sign the hardware gives it.
+        // |v| clamped at 2**26 keeps 1 / (1 + |v|) normal; poison = v - v is NaN for +-inf and NaN inputs.
+        // Subtracting poison keeps -0 as -0; the sign goes on before the multiply, so NaNs stay canonical.
         sfpi::vFloat va = sfpi::min(sfpi::setsgn(v, 0), sfpi::vFloat(sfpi::vConstFloatPrgm1));
         sfpi::vFloat denom = va + 1.0f;
         sfpi::vFloat poison = v - v;

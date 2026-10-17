@@ -15,17 +15,13 @@ inline void calculate_softsign() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        // Clamp |v| at 2**26: from there on v / (1 + |v|) rounds to +-1.0f in float32, and the clamp keeps
-        // 1 / (1 + |v|) far from the smallest normal, below which it flushes to zero. poison = v - v is NaN for +-inf
-        // and NaN inputs and 0 otherwise, so those inputs still produce NaN. sfpu_reciprocal uses all three
-        // programmable constants on Wormhole, so 2**26 is loaded as an immediate.
+        // |v| clamped at 2**26 keeps 1 / (1 + |v|) normal; poison = v - v is NaN for +-inf and NaN inputs.
+        // 2**26 is an immediate because sfpu_reciprocal uses all three programmable constants on Wormhole.
         sfpi::vFloat va = sfpi::min(sfpi::setsgn(v, 0), sfpi::vFloat(0x1.0p26f));
         sfpi::vFloat denom = va + 1.0f;
         sfpi::vFloat poison = v - v;
         sfpi::vFloat tmp = va * sfpu_reciprocal<APPROXIMATION_MODE>(denom) + poison;
-        // tmp is computed from |v|; re-signing it after the multiply gives the result the input's sign, so a zero
-        // result keeps it and a NaN result follows the input. Blackhole signs the clamped value before the multiply
-        // instead, so its NaNs stay canonical.
+        // Re-signing after the multiply keeps the sign of a zero result; a NaN result follows the input.
         // ADDR_MOD_2 here is ADDR_MOD_6 once the SFPU address-mode base is applied.
         sfpi::dst_reg[0].mode(ADDR_MOD_2) = sfpi::copysgn(tmp, v);
     }
