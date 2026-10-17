@@ -58,7 +58,8 @@ def test_lgamma_bf16_input_fp32_output(device):
     grid = torch.arange(-4.5, 10.0, 1.0 / 16, dtype=torch.float32)
     grid = grid[(grid - torch.round(grid)).abs() >= 2.0 / 16]
     shape = (1, 1, 64, 128)
-    x = grid.repeat(torch.Size(shape).numel() // grid.numel() + 1)[: torch.Size(shape).numel()].reshape(shape)
+    numel = torch.Size(shape).numel()
+    x = grid.repeat(numel // grid.numel() + 1)[:numel].reshape(shape)
     bf16_in = x.to(torch.bfloat16)
     assert torch.equal(bf16_in.float(), x), "inputs must be exact in bf16"
 

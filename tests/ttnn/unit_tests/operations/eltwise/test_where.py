@@ -14,6 +14,10 @@ def torch_equal_nan(a, b):
     return torch.all((a == b) | (torch.isnan(a) & torch.isnan(b)))
 
 
+# A float32 value is bf16-exact iff these bits are all zero.
+FP32_LOW_16_BITS_MASK = 0xFFFF
+
+
 def make_condition_tensor(shape, dtype, condition, stride=8):
     C = torch.ones(shape, dtype=dtype) * condition
     C_flat = C.flatten()
@@ -607,7 +611,9 @@ def test_where_tss_bf16_condition_fp32_output(device, h, w, scalar1, scalar2):
     torch.manual_seed(0)
     for scalar in (scalar1, scalar2):
         if isfinite(scalar):
-            assert torch.tensor(scalar, dtype=torch.float32).view(torch.int32) & 0xFFFF, "scalar must not be bf16-exact"
+            assert (
+                torch.tensor(scalar, dtype=torch.float32).view(torch.int32) & FP32_LOW_16_BITS_MASK
+            ), "scalar must not be bf16-exact"
 
     C = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
     C = (C > 0).to(torch.bfloat16)
