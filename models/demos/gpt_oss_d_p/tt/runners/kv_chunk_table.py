@@ -25,12 +25,10 @@ build with zero-padded names so map order == intended config_id order across exp
 
 from __future__ import annotations
 
-import socket
-
 from loguru import logger
 
 import ttnn
-from models.demos.common.prefill.runners.migration import get_num_dram_banks
+from models.demos.common.prefill.runners.migration import _host_tag_int, get_num_dram_banks
 from models.demos.gpt_oss_d_p.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
 
 # bf8_b / bf16 TILE byte sizes (32x32 tile). bf8_b = 1024 mantissa + 64 exponent; bf16 = 2048.
@@ -131,7 +129,8 @@ def build_kv_chunk_address_table(
             "(protobuf-safe naming broken)"
         )
 
-    host_name = socket.gethostname()
+    # Native KV Manager hashes its raw KV_MANAGER_TABLE_HOST with the same common convention.
+    host_name = f"host-{_host_tag_int():08x}"
     hosts_set = set()
 
     for config_id, (label, tensor, group_cols, dtype) in enumerate(specs):
