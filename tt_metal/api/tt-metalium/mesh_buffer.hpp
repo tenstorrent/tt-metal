@@ -97,6 +97,13 @@ public:
         const DeviceLocalBufferConfig& device_local_config,
         MeshDevice* mesh_device,
         std::optional<DeviceAddr> address = std::nullopt);
+    // Allocate and own an L1 range at exactly this address. Throws if the range is
+    // unavailable. Unlike create(..., address), this reserves allocator storage.
+    static std::shared_ptr<MeshBuffer> allocate_at_address(
+        const MeshBufferConfig& mesh_buffer_config,
+        const DeviceLocalBufferConfig& device_local_config,
+        MeshDevice* mesh_device,
+        DeviceAddr address);
     ~MeshBuffer();
 
     // MeshBuffer manages device memory and owns the backing allocation. Copying would create
@@ -135,8 +142,8 @@ public:
     // attributes to do so without having to keep track of MeshDevice attributes.
     Buffer* get_reference_buffer() const;
     // The backing buffer represents the buffer object keeping the MeshBuffer alive/allocated
-    // at its specific address. The backing buffer will not be populated if an address was passed
-    // into the creation API.
+    // at its specific address. It is absent for non-owning create(..., address) views,
+    // but present for owning allocate_at_address(...) allocations.
     Buffer* get_backing_buffer() const;
 
     uint32_t datum_size_bytes() const;
@@ -146,6 +153,13 @@ public:
     uint32_t num_pages() const { return page_size() == 0 ? 0 : device_local_size_ / page_size(); }
 
 private:
+    static std::shared_ptr<MeshBuffer> create_impl(
+        const MeshBufferConfig& mesh_buffer_config,
+        const DeviceLocalBufferConfig& device_local_config,
+        MeshDevice* mesh_device,
+        std::optional<DeviceAddr> address,
+        bool allocate_at_address);
+
     // Creates an owning `MeshBuffer`, backed by an allocation made through `backing_buffer`.
     MeshBuffer(
         const MeshBufferConfig& config,
