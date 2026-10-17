@@ -1438,3 +1438,31 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   0.0415 <= 0.0823; small 0.0384 <= 0.2; big 0.0282 <= 0.2; determinism bit-identical. test_cache_starts
   (BRINGUP_TASK=C.dec_candidate.attention, layers [20]): 4 passed, 0 failures each.
 - Re-run: `PYTHONPATH=$PWD BRINGUP_TASK=C.dec_candidate.attention scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attention.py && PYTHONPATH=$PWD BRINGUP_TASK=C.dec_candidate.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`
+
+## C.dec_reindex.indexer implement (attempt 1)
+- New `tt/indexer.py:TtReindexer(TtIndexer)` (picked by `build_indexer` for `cfg.uses_candidates`): TtIndexer.scores at
+  ratio 1 on the KV source's (layer 20's) served 4_index_k_r1 cache (ring_indexer_score_dsa fork, fp32 DEST + HiFi4,
+  k_chunk 32: K-13 / K-14; natural_query_blocks: DS41-49; no fork change), then the candidate restriction per chip:
+  `ttnn.scatter` of layer 20's pool ids [1, 1, Sq, 2048] uint32 RM as 0 into a load-time -inf [1, 1, Sq, ceil16(T/8)]
+  bf16 RM row (K-4: bf16, not fp32 TILE; DS41-53: 0xFFFFFFFF ids are skipped by scatter, input not written) ->
+  `ttnn.repeat_interleave(8, dim=-1)` -> slice to kv_len -> RM `ttnn.add` to the scores (exact: s + 0, s + -inf) ->
+  topk_large_indices(512) -> all_gather axis 1. Same chip rows as layer 20's pool (not gathered over TP), so no
+  reorder. No query blocking (the components note's 128 rows per pass at 1M): the existing indexers score whole chip
+  rows; left for perf.
+- hooks: `_indexer_host_fn` takes the re-index case (keys: ctx.extra compress_cache = the KV source's, else
+  source_state[20] index_k [0, end); pool: ctx.extra cand_device, else source_state[20] candidates rows uploaded per
+  chip (r, c) = rows r W + c Sq); the indexer dispatch builds it for `uses_candidates`; `HybridDeviceModel.layer`
+  passes `state.cands[20]` of the same chunk as cand_device; `DEVICE_STEPS["dec_reindex"]` = attn_hc .. kv + indexer
+  (DS41-28: attn_hc .. kv had passed without an agent). The attention of layer 24 stays on the CPU (not built yet).
+- Gate: PASS, err_indexer_L24 0.0306 <= 0.0577; vs CPU 0.9887 (worst 0.9688), vs golden 0.9694 / 0.9219, chunk0
+  0.9955 / 0.9727, layer0 0.9902 / 0.9082; A,B,A bit-identical. The gate chunk (s4096 chunk 1, <= 512 blocks) never
+  restricts the pool, so probe ds41_reindex/probe_002 checks it at 53k (s55296 golden chunk 26, 6912 blocks): every
+  pick inside the row's candidate blocks (2048/2048 rows), no future pick, 512 valid per row, no repeats; vs the
+  reference masking on the device's own bf16 scores 0.9806, all 2016 differing rows pure ties; unmasked control
+  0.364; vs golden 0.948 (worst 0.902; layer 20's top-k there 0.958, bf16 scores K-42). Time per chunk at 53k on 2x2:
+  16.4 ms (scores + top-k 12.5, bias 3.3).
+- Hybrid probe_003 (device_model [20, 24], golden chunks 0, 1): layer 24 read cand_device and layer 20's device cache
+  both chunks; block out PCC 0.99973 / 0.99979; topk_idx state overlap 0.9737 (worst 0.910).
+- C.dec_candidate.indexer and C.enc_source.indexer re-run after the host fn change: PASS, same errors (0.0260, 0.0174).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_indexer.py`;
+  probes `PYTHONPATH=$PWD scripts/tt-probe.sh ds41_reindex < tests/ttnn/unit_tests/operations/ds41_reindex/probes/probe_00{2,3}.py`.

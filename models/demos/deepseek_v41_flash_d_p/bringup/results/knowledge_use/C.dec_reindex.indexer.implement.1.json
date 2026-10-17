@@ -1,0 +1,90 @@
+{
+ "used": [
+  {
+   "id": "K-4",
+   "how": "candidate bias scattered in bf16 ROW_MAJOR (no fp32 TILE scatter)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-13",
+   "how": "scores through ttnn.bringup.ring_indexer_score_dsa with fp32 DEST (TtIndexer.scores reused)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-14",
+   "how": "k_chunk 32 kept for the score op",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-42",
+   "how": "judged the 53k probe by set overlap + structure (inside candidate blocks, causal, no repeats, count) and tie analysis",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-1",
+   "how": "full-range slices of the load-time -inf row and of the scores are not freed (_same)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-52",
+   "how": "buffer_address comparison before freeing slices in TtReindexer.bias_of / __call__",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-49",
+   "how": "natural_query_blocks scores, so the pool of layer 20's chip rows lines up with layer 24's rows at any 32-aligned start",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-28",
+   "how": "added DEVICE_STEPS['dec_reindex'] with attn_hc .. kv (passed without an agent) + indexer",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-52",
+   "how": "ignored the precompile pass's FAIL lines (stubbed first pass)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-56",
+   "how": "probes kept only as probes/probe_NNN.py under ds41_reindex",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "ttnn.scatter's handling of out-of-range indices (skipped, so 0xFFFFFFFF none ids need no remap): added DS41-53"
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-53"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.dec_reindex.indexer",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-17T12:20:31",
+  "head": "92606c9e0cc",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.dec_reindex.indexer.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py"
+  ]
+ }
+}
