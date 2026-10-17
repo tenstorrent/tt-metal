@@ -5082,13 +5082,18 @@ def test_matmul_fp32_crossblock_reload_untilize_precision(device, packer_l1_acc)
     )
 
 
-@pytest.mark.parametrize("in1_tile_w", [32, 16])
-def test_matmul_1d_untilize_out_in1_tile_width(device, in1_tile_w):
+# (in1 tile width, out_subblock_w): per_core_N is 64 / in1_tile_w, so 2 or 4 tiles; out_subblock_w equal to
+# it packs one subblock per tile row, out_subblock_w 2 with 4 tiles packs two, the second at a non-zero block
+# column start.
+@pytest.mark.parametrize("in1_tile_w, out_subblock_w", [(32, 2), (16, 4), (16, 2)])
+def test_matmul_1d_untilize_out_in1_tile_width(device, in1_tile_w, out_subblock_w):
     """untilize_out on the 1D multicast factory with the output tile width set by in1's tile.
 
     in1_tile_w=16 gives a 32x16 output tile whose two faces are stacked, so the untilize pack has to
     emit 16-datum rows with the second face below the first; in1_tile_w=32 is the 32x32 control.
-    The row-major output is written into an L1 shard, as the models that use untilize_out do.
+    With out_subblock_w < per_core_N the kernel untilizes the tile row as two subblocks, so the second
+    one starts a block column into the output row. The row-major output is written into an L1 shard,
+    as the models that use untilize_out do.
     """
     torch.manual_seed(0)
     m, k, n = 32, 32, 64
@@ -5108,12 +5113,11 @@ def test_matmul_1d_untilize_out_in1_tile_width(device, in1_tile_w):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     per_core_N = n // in1_tile_w
-    # out_subblock == out_block (single subblock) as required for untilize_out.
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(1, 1),
         in0_block_w=k // 32,
         out_subblock_h=m // 32,
-        out_subblock_w=per_core_N,
+        out_subblock_w=out_subblock_w,
         per_core_M=m // 32,
         per_core_N=per_core_N,
         fuse_batch=True,
