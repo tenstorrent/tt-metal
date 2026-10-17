@@ -17,7 +17,7 @@ sources/math_hw_configure_format_mask_test.cpp for the result layout.
 from collections import namedtuple
 
 from conftest import wormhole_only
-from helpers.format_config import DataFormat
+from helpers.format_config import WORMHOLE_DATA_FORMAT_ENUM_VALUES, DataFormat
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats
 from helpers.stimuli_config import StimuliConfig
@@ -44,8 +44,11 @@ SRCB_SHAMT, SRCB_MASK = 21, 0x1E00000
 INT8_MATH_SHAMT, INT8_MATH_MASK = 31, 0x80000000
 
 FIELD_WIDTH_MASK = 0xF  # DATA_FORMAT_BIT_COUNT = 4
-INT8 = 14
-INT32 = 8
+
+# The records carry the raw DataFormat values the kernel passed to the writers.
+FORMAT_BY_RAW_VALUE = {
+    raw: fmt for fmt, raw in WORMHOLE_DATA_FORMAT_ENUM_VALUES.items()
+}
 
 # One result record: the writer index, the (srcA, srcB) formats it was given, and the
 # ALU_FORMAT_SPEC_REG config word read back after it ran.
@@ -53,9 +56,8 @@ Record = namedtuple("Record", ["writer", "srca", "srcb", "word"])
 
 
 def _int8_math_enabled(raw_format):
-    # Mirrors is_int8_or_int32_format (ckernel_defs.h): Int8 is matched after masking (so UInt8 = 30
-    # counts), Int32 only raw (so UInt32 = 24 does not enable INT8 math).
-    return (raw_format & FIELD_WIDTH_MASK) == INT8 or raw_format == INT32
+    # Int8/UInt8/Int32 enable INT8 math, UInt32 does not (is_int8_or_int32_format in ckernel_defs.h).
+    return FORMAT_BY_RAW_VALUE[raw_format].needs_int8_math_config()
 
 
 def test_math_alu_format_writers_mask_to_field_width():
@@ -131,7 +133,8 @@ def test_math_alu_format_writers_mask_to_field_width():
 
         if (got_srca, got_srcb, got_int8) != (want_srca, want_srcb, want_int8):
             failures.append(
-                f"{WRITERS[writer]}(srcA={srca}, srcB={srcb}): word {word:#010x} -> "
+                f"{WRITERS[writer]}(srcA={FORMAT_BY_RAW_VALUE[srca]}={srca}, "
+                f"srcB={FORMAT_BY_RAW_VALUE[srcb]}={srcb}): word {word:#010x} -> "
                 f"SrcA={got_srca} SrcB={got_srcb} INT8={got_int8}, "
                 f"expected SrcA={want_srca} SrcB={want_srcb} INT8={want_int8}"
             )
