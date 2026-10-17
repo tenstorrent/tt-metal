@@ -516,36 +516,32 @@ class OptimizedDecoder(LightweightModule):
                 ),
             )
         else:
-            q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
-            # Preserve FP32 long-context recurrence for decode as well as prefill.
-            # All position arithmetic and row selection stays on device. Repeated Q
-            # rows cover the current 32-token page; only the current row is returned.
-            per_request = []
-            for b in range(batch):
-                pos = ttnn.to_layout(ttnn.reshape(current_pos[b : b + 1], (1, 1, 1, 1)), ttnn.TILE_LAYOUT)
-                # Cache writes skip inactive (-1) slots; the attention reader's
-                # uint32 offset must still be valid for their discarded output.
-                pos = ttnn.maximum(pos, 0)
-                offset = ttnn.reshape(ttnn.to_layout(ttnn.bitwise_and(pos, -32), ttnn.ROW_MAJOR_LAYOUT), (1,))
-                index = ttnn.repeat(ttnn.typecast(ttnn.bitwise_and(pos, 31), ttnn.uint32), (1, 32, 1, 128))
-                query = ttnn.repeat(ttnn.permute(q[:, b : b + 1, :, :], (0, 2, 1, 3)), (1, 1, 32, 1))
-                table = page_table[b : b + 1, :]
-                # Flexible SDPA requires a 32-byte table row. Unused entries point
-                # to this request's final page and are hidden by the causal mask.
-                padding = (-table.shape[1]) % 8
-                if padding:
-                    table = ttnn.concat([table, ttnn.repeat(table[:, -1:], (1, padding))], dim=1)
-                attended = self._attention(
-                    query,
-                    kv_cache[0],
-                    kv_cache[1],
-                    table,
-                    chunk_start_idx_tensor=offset,
-                    q_chunk_size=32,
-                    k_chunk_size=128,
-                )
-                per_request.append(ttnn.permute(ttnn.gather(attended, 2, index), (0, 2, 1, 3)))
-            attention = ttnn.concat(per_request, dim=1) if batch > 1 else per_request[0]
+            # Beyond the bound: stock split-K decode with fp32_accumulation (FP32 scores and online-softmax
+            # state, accurate exponentials) on every worker. The K256 reader fetches whole eight-page chunks
+            # before causal masking; pad with a valid request-owned page.
+            padding = (-page_table.shape[1]) % 8
+            table = (
+                ttnn.concat([page_table, ttnn.repeat(page_table[:, -1:], (1, padding))], dim=1)
+                if padding
+                else page_table
+            )
+            attention = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                q,
+                kv_cache[0],
+                kv_cache[1],
+                page_table_tensor=table,
+                cur_pos_tensor=current_pos,
+                compute_kernel_config=self.compute,
+                program_config=ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=(11, 10),
+                    q_chunk_size=0,
+                    k_chunk_size=256,
+                    exp_approx_mode=False,
+                    max_cores_per_head_batch=64,
+                    fp32_accumulation=True,
+                ),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         # [1,B,H,D] is already in concatenated logical order. Tile reshape
         # avoids the dedicated concat op's compulsory L1 sharding roundtrip.
         attention = ttnn.reshape(attention, (1, 1, batch, 4096))

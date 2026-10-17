@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Model-local full-context paged SDPA with FP32 accumulator recurrence.
+"""Model-local chunked prefill SDPA with FP32 accumulator recurrence.
 
 Run ``python -m models.demos.k2_horizon_7b_qb2.tt.accurate_attention.build``
 once during setup. Kernel compilation occurs through the normal TTNN JIT.
@@ -59,35 +59,13 @@ def accurate_attention(
     *,
     chunk_start_idx=None,
     chunk_start_idx_tensor=None,
-    chunk_start_idx_tensors=None,
     q_chunk_size=128,
     k_chunk_size=128,
     fp32_output_accumulator=True,
-    packed_gqa=False,
     grid=(8, 8),
     math_fidelity="HiFi4",
 ):
-    """Same paged causal tensor contract as chunked_scaled_dot_product_attention.
-
-    Scalar offsets retain the original reader/compute/writer contract. A list
-    of B=2/4/8/16/32 scalar owners binds each request's offset to its independent
-    reader cores while preserving the existing FP32 kernel arithmetic.
-    """
-    offsets = [] if chunk_start_idx_tensors is None else list(chunk_start_idx_tensors)
-    if packed_gqa and len(offsets) < 2:
-        raise ValueError("Packed GQA requires at least two per-request raw position owners")
-    if chunk_start_idx_tensors is not None:
-        if chunk_start_idx is not None or chunk_start_idx_tensor is not None:
-            raise ValueError("Provide either one offset or a list of per-request offsets")
-        if not offsets:
-            raise ValueError("Per-request offsets cannot be empty")
-        if len(offsets) not in (1, 2, 4, 8, 16, 32) or q_chunk_size != 32 or k_chunk_size != 128:
-            raise ValueError("Per-request offsets require B=1/2/4/8/16/32 and Q32/K128")
-        if not fp32_output_accumulator:
-            raise ValueError("Per-request offsets preserve FP32 output recurrence")
-        chunk_start_idx_tensor = offsets[0]
-        if len(offsets) == 1:
-            offsets = []  # Keep the original B1 descriptor and cache contract.
+    """Same paged causal tensor contract as chunked_scaled_dot_product_attention, with FP32 recurrence."""
     module, kernel = _load()
     return module.attention(
         q,
@@ -101,24 +79,7 @@ def accurate_attention(
         kernel,
         str(Path(kernel).parent),
         fp32_output_accumulator,
-        offsets,
-        packed_gqa,
-        str(Path(kernel).with_name("writer_packed_gqa.cpp")) if packed_gqa else "",
         grid[0],
         grid[1],
         {"LoFi": 0, "HiFi2": 2, "HiFi3": 3, "HiFi4": 4}[math_fidelity],
-    )
-
-
-def accurate_flash_decode(q, k, v, page_table, cur_pos, *, max_cores_per_head=16, k_chunk_size=128):
-    """Paged causal decode with the stock split-K contract and FP32 recurrence.
-
-    Same tensors as ``paged_scaled_dot_product_attention_decode``. Stock work split and
-    tree reduction; accurate exponentials, FP32 scores and FP32 SFPU recurrence at
-    every per-chunk and tree merge. HiFi4, as the accurate fallback.
-    """
-    module, kernel = _load()
-    decode = Path(kernel).with_name("sdpa_flash_decode.cpp")
-    return module.flash_decode(
-        q, k, v, page_table, cur_pos, max_cores_per_head, k_chunk_size, str(decode), str(decode.parent)
     )

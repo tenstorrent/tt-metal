@@ -32,6 +32,9 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 !tensors.chunk_start_idx_tensor.has_value(),
             "output_concat_heads is supported for the plain (non-chunked, non-paged) SDPA only");
     }
+    TT_FATAL(
+        !(attrs.program_config.has_value() && attrs.program_config->fp32_accumulation),
+        "SDPAProgramConfig.fp32_accumulation is supported by the SDPA decode ops only");
 
     const Tensor& q = tensors.q;
     const Tensor& k = tensors.k;

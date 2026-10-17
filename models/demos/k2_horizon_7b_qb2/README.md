@@ -23,13 +23,15 @@ whose `<think>` segments need the `k2_horizon` reasoning and tool-call parsers t
   The policy was selected against HF logits with a teacher-forced gate (top-1/5/100 agreement
   98/100/100 on the AIME fixture) and a repeated-boundary stress fixture (PCC 0.995).
 - **Attention in two regimes.** Prompts up to 64K tokens use the stock chunked SDPA with 64-row
-  Q chunks (bitwise identical to the 128-row default, 1.28x faster). Beyond that, the model's own
-  kernels in `tt/accurate_attention` take over: an FP32 online-softmax prefill kernel on the full
-  11x10 core grid and a split-K flash-decode kernel generated from the stock decode program with
-  FP32 statistics. They exist because the stock long-context paths lose accuracy (approximate
-  exponentials on half tiles and BF16 running statistics gave 7 % error at 512K) and the fallback
-  "accurate" path only used 8 of 64 cores. The host binding and kernels build on first use
-  (`python -m models.demos.k2_horizon_7b_qb2.tt.accurate_attention.build`).
+  Q chunks (bitwise identical to the 128-row default, 1.28x faster), and decode stays on the stock
+  paged decode while each worker's share of the context is short. Beyond that, both phases keep the
+  online-softmax state in FP32. Prefill runs the model's own kernel in `tt/accurate_attention`, an
+  FP32-recurrence variant of the stock chunked SDPA on the full 11x10 core grid (Q64, K up to 1024,
+  HiFi4), whose host binding and kernel build on first use
+  (`python -m models.demos.k2_horizon_7b_qb2.tt.accurate_attention.build`). Decode runs the stock
+  split-K paged decode with `SDPAProgramConfig(fp32_accumulation=True)` (up to 64 cores per KV head,
+  K256, HiFi4). The default BF16 recurrence drifts with context length (relative L2 vs FP64: decode
+  2-2.7 %, prefill 4.6 % at 64K and 59 % at 512K; 0.18-0.33 % with FP32 state).
 - **Prefill in 8192-token chunks**, so causal work balances across the grid; output tokens are
   identical to 4096-token chunks.
 - **Sampling.** Requests inside the device sampler's domain (`top_k` in 1..32, no penalties or

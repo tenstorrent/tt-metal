@@ -28,6 +28,7 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/operations/transformer/sdpa_decode/device/kernels/compute/fp32_accumulation.hpp"
 
 // Code size: the tree-reduction / finalize move_block calls run once per head, not per K chunk.
 // Without noclone, GCC IPA-CP emits a separate constprop clone of move_block<true> (~0.3-1.7 KB per
@@ -35,7 +36,11 @@
 // through one non-cloneable out-of-line copy saves ~4-6 KB of kernel-config buffer under LLK
 // asserts. The per-K-chunk moves in the flash-attention loop keep calling move_block<true> directly.
 __attribute__((noinline, noclone)) void move_block_ool(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
-    move_block<true>(in_cb, out_cb, num_tiles);
+    if constexpr (sdpa_fp32_accumulation) {
+        sdpa_fp32::move_block_reconfig<true>(in_cb, out_cb, num_tiles);
+    } else {
+        move_block<true>(in_cb, out_cb, num_tiles);
+    }
 }
 
 void kernel_main() {
@@ -90,6 +95,13 @@ void kernel_main() {
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool untilize_output = tilize_q;
+    // SDPAProgramConfig::fp32_accumulation (fp32_accumulation.hpp): FP32 scores, sums, outputs, correction factors
+    // and tree-exchange buffers, read only through lossless copies. The factory selects full tiles (VectorMode::RC,
+    // hence the accurate clamped exponential) and validates the supported configuration.
+    static_assert(
+        !sdpa_fp32_accumulation ||
+            (is_causal && !tilize_q && !use_attention_sink && !use_attention_mask && !use_half_tile && !spec_multi_pos),
+        "fp32_accumulation supports causal, tiled-Q decode without attention mask, sink or speculative positions");
 
     // CB index definitions
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
@@ -100,6 +112,7 @@ void kernel_main() {
     constexpr uint32_t cb_block_pad_mask = tt::CBIndex::c_14;          // Block padding mask (block_size < TILE_HEIGHT)
     constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_11;
     constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
     constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
     constexpr uint32_t cb_q_rm = tt::CBIndex::c_10;
@@ -503,8 +516,17 @@ void kernel_main() {
                 pack_reconfig_data_format(cb_cur_sum);
 
                 /* reduce_c performs CUR_SUM = sum(QK, dim = -1) */
-                reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
-                    cb_cur_sum, cb_cur_sum, Sk_chunk_t_dynamic, false);
+                if constexpr (sdpa_fp32_accumulation) {
+                    sdpa_fp32::row_sum<Sq_chunk_t>(cb_qk_im, cb_col_identity, cb_cur_sum, Sk_chunk_t_dynamic);
+                } else {
+                    reduce_c<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_ROW,
+                        cb_qk_im,
+                        cb_identity_scale_in,
+                        Sq_chunk_t,
+                        vector_mode>(cb_cur_sum, cb_cur_sum, Sk_chunk_t_dynamic, false);
+                }
 
                 /* OUT_IM = QK @ V_CHUNK */
                 reconfig_data_format(cb_v_in, cb_qk_im);  // DEBUG
@@ -543,35 +565,48 @@ void kernel_main() {
                     sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
                     CircularBuffer(cb_prev_max).pop_front(Sq_chunk_t);
 
-                    /* PREV_SUM *= EXP_MAX_DIFF */
-                    mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                    if constexpr (sdpa_fp32_accumulation) {
+                        /* CUR_SUM += PREV_SUM * EXP_MAX_DIFF (FP32 SFPU) */
+                        sdpa_fp32::sum_update(cb_cur_sum, cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                        /* OUT_ACC = OUT_ACC * EXP_MAX_DIFF + OUT_IM (FP32 SFPU) */
+                        sdpa_fp32::out_update<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_out_im, cb_exp_max_diff);
+                    } else {
+                        /* PREV_SUM *= EXP_MAX_DIFF */
+                        mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
-                    /* OUT_ACC *= EXP_MAX_DIFF */
-                    reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff);
-                    pack_reconfig_data_format(cb_out_accumulate_im);
-                    mul_block_bcast_cols<Sq_chunk_t, vDHt, true, false>(
-                        cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im);
+                        /* OUT_ACC *= EXP_MAX_DIFF */
+                        reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff);
+                        pack_reconfig_data_format(cb_out_accumulate_im);
+                        mul_block_bcast_cols<Sq_chunk_t, vDHt, true, false>(
+                            cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im);
 
-                    /* CUR_SUM += PREV_SUM */
-                    reconfig_data_format(cb_cur_sum, cb_prev_sum);
-                    pack_reconfig_data_format(cb_cur_sum);
-                    add_block_inplace<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+                        /* CUR_SUM += PREV_SUM */
+                        reconfig_data_format(cb_cur_sum, cb_prev_sum);
+                        pack_reconfig_data_format(cb_cur_sum);
+                        add_block_inplace<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
 
-                    /* OUT_ACC += OUT_IM */
-                    reconfig_data_format(cb_out_accumulate_im, cb_out_im);
-                    pack_reconfig_data_format(cb_out_accumulate_im);
-                    add_block_inplace<true>(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
+                        /* OUT_ACC += OUT_IM */
+                        reconfig_data_format(cb_out_accumulate_im, cb_out_im);
+                        pack_reconfig_data_format(cb_out_accumulate_im);
+                        add_block_inplace<true>(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
+                    }
                 }
 
                 // More local chunks to process - move intermediate sum and max values to ping-pong buffers
                 reconfig_data_format(cb_cur_max, cb_cur_max);
                 pack_reconfig_data_format(cb_prev_max);
 
-                // PREV_MAX <- CUR_MAX
-                move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
+                if constexpr (sdpa_fp32_accumulation) {
+                    // PREV_MAX <- CUR_MAX (BF16), PREV_SUM <- CUR_SUM (FP32)
+                    sdpa_fp32::move_block_reconfig<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
+                    sdpa_fp32::move_block_reconfig<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+                } else {
+                    // PREV_MAX <- CUR_MAX
+                    move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
 
-                // PREV_SUM <- CUR_SUM
-                move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+                    // PREV_SUM <- CUR_SUM
+                    move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+                }
         }
 
         /* END OF FLASH ATTENTION LOOP */
@@ -615,27 +650,46 @@ void kernel_main() {
                     // * 4. EXP_MAX_DIFF = exp((PREV_MAX - CUR_MAX)*scale)
                     // * 5. PREV_SUM *= EXP_MAX_DIFF
                     // * 6. CUR_SUM = PREV_SUM_2 + PREV_SUM
-                    correction_block<scale_fp32, vector_mode>(
-                        cb_m_in,        // cb child max
-                        cb_prev_sum_2,  // cb child sum
-                        cb_cur_max,
-                        cb_prev_max,
-                        cb_cur_sum,
-                        cb_prev_sum,
-                        cb_exp_max_diff,
-                        cb_exp_max_diff_2,
-                        Sq_chunk_t);
+                    if constexpr (sdpa_fp32_accumulation) {
+                        sdpa_fp32::correction_block<scale_fp32, vector_mode>(
+                            cb_m_in,
+                            cb_prev_sum_2,
+                            cb_cur_max,
+                            cb_prev_max,
+                            cb_cur_sum,
+                            cb_prev_sum,
+                            cb_exp_max_diff,
+                            cb_exp_max_diff_2,
+                            Sq_chunk_t);
+                    } else {
+                        correction_block<scale_fp32, vector_mode>(
+                            cb_m_in,        // cb child max
+                            cb_prev_sum_2,  // cb child sum
+                            cb_cur_max,
+                            cb_prev_max,
+                            cb_cur_sum,
+                            cb_prev_sum,
+                            cb_exp_max_diff,
+                            cb_exp_max_diff_2,
+                            Sq_chunk_t);
+                    }
 
                     // OUT_ACC_2 <- CHILD_OUT
                     move_block_ool(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
 
                     // OUT_ACC *= EXP_MAX_DIFF (scale local accumulator)
                     // OUT_ACC_2 *= EXP_MAX_DIFF_2 (scale child's accumulator)
-                    mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_exp_max_diff);
-                    mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im_2, cb_exp_max_diff_2);
+                    if constexpr (sdpa_fp32_accumulation) {
+                        // OUT_ACC = OUT_ACC * EXP_MAX_DIFF + OUT_ACC_2 * EXP_MAX_DIFF_2 (FP32 SFPU)
+                        sdpa_fp32::out_merge<Sq_chunk_t, vDHt>(
+                            cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im_2, cb_exp_max_diff_2);
+                    } else {
+                        mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_exp_max_diff);
+                        mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im_2, cb_exp_max_diff_2);
 
-                    // OUT_ACC = OUT_ACC + OUT_ACC_2
-                    add_block_inplace<true>(cb_out_accumulate_im, cb_out_accumulate_im_2, out_chunk_tiles);
+                        // OUT_ACC = OUT_ACC + OUT_ACC_2
+                        add_block_inplace<true>(cb_out_accumulate_im, cb_out_accumulate_im_2, out_chunk_tiles);
+                    }
 
                     // Update prev buffers for next round
                     // PREV_MAX <- CUR_MAX
@@ -693,7 +747,11 @@ void kernel_main() {
             pack_reconfig_data_format(cb_out_accumulate_im);
 
             // cb_prev_sum is consumed and popped by mul_block_bcast_cols_inplace
-            mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_prev_sum);
+            if constexpr (sdpa_fp32_accumulation) {
+                sdpa_fp32::scale_output<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_prev_sum);
+            } else {
+                mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_prev_sum);
+            }
             pack_reconfig_data_format(cb_out_final);
 
             // Pop the max buffer that still has data

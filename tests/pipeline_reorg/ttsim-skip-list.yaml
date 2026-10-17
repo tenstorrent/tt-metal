@@ -31,6 +31,14 @@ blackhole:
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
+  # SDPAProgramConfig.fp32_accumulation broadcasts FP32 per-row factors with the 32-bit unpack-to-dest column
+  # broadcast (llk_math_eltwise_unary_datacopy.h), whose SETDVALID ttsim rejects (UnsupportedFunctionality:
+  # "interaction between SETDVALID and implied src format is ill-specified"). The validation test still runs;
+  # the numeric tests pass on bh_p150b and wh_n300 hardware. Remove both entries once #60449 (UNPACR_NOP
+  # SET_DVALID instead of SETDVALID in that broadcast) lands.
+  - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_fp32_accumulation.py::test_paged_decode_fp32_accumulation
+  - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_fp32_accumulation.py::test_unpaged_decode_fp32_accumulation
+
   # fp8 operands in tensix_elw_op (e.g. src_a_fmt=4 src_b_fmt=10) are not modeled by ttsim
   - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py
   - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py
