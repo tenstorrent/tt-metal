@@ -1,154 +1,110 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tracy harness for the BEVFormer encoder device path.
+"""Tracy harness for the encoder device path.
 
-Same inputs as ``test_bevformer_encoder_forward``: a PCC gate that doubles as
-the warmup, then signposted iterations so the report covers already-compiled,
-already-dispatched programs.
+Inputs shaped like ``test_encoder``'s second frame, a smooth random previous BEV and an ego
+shift: a PCC gate that doubles as the warmup, then the forward captured as a trace and one
+signposted replay, so the report covers already-compiled programs with no host dispatch in
+between. ``num_layers=1`` measures a single layer.
 
-Camera geometry comes from the dataset's fixed rig, not from random matrices.
-``lidar2img`` decides ``bev_mask`` and therefore the spatial-cross-attention
-rebatch length, which sizes every spatial-path tensor; drawing it from the RNG
-would make the measured workload depend on the seed and on how many tensors were
-allocated before it.
-
-No trace capture. ``build_rebatch_plan`` still calls ``ttnn.to_torch`` on
-``bev_mask`` and the host result decides ``max_len`` / tensor shapes for the
-ops that follow; reads and writes both TT_FATAL inside a capture region.
-Until that host round-trip is gone the signposted region carries host dispatch,
-so read it as end-to-end device time, not as a traced-replay figure.
+The camera geometry (``prepare_frame``) runs before the capture, once per frame as in the
+detector, which refills the same plan for every later frame. The capture is also the check that
+the forward has no host operations: any read or write between host and device inside a capture
+region fails it. After the profiled replay, the trace replays once more on the next frame of the
+same rig: a new previous BEV and shift written into the captured buffers and the plan refilled
+in place with the same geometry, checked against the reference.
 """
-
-import subprocess
 
 import pytest
 import torch
-from loguru import logger
-from tracy import signpost
 
 import ttnn
-from models.experimental.bevformer.config.encoder_config import get_preset_config
-from models.experimental.bevformer.tests.camera_rig import img_metas_for_dataset
-from models.experimental.bevformer.reference.encoder import BEVFormerEncoder
-from models.experimental.bevformer.tests.test_utils import check_with_pcc
+from models.experimental.bevformer.model_config import ENCODER_NUM_LAYERS, GRID_DTYPE, SPATIAL_SHAPES
+from models.experimental.bevformer.tests.common import (
+    BEV_SHAPES,
+    assert_pcc,
+    build_reference_encoder,
+    camera_rows,
+    sample_ego_shifts,
+    random_bev,
+    random_encoder_inputs,
+    signposted_trace,
+    to_device,
+)
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_encoder_parameters
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
-
-DEVICE_PERF_ITERS = 1
-
-
-def _head_sha():
-    try:
-        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
-    except (subprocess.CalledProcessError, OSError):
-        return "unknown"
 
 
 @torch.no_grad()
 @pytest.mark.timeout(1200)
-@pytest.mark.parametrize("config_name", ["nuscenes_base"])
-@pytest.mark.parametrize("bev_size", [(100, 100)])
-@pytest.mark.parametrize("num_layers", [6])
-@pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("expected_pcc", [0.997])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
-def test_bevformer_encoder_perf(
-    device,
-    config_name,
-    bev_size,
-    num_layers,
-    batch_size,
-    expected_pcc,
-    reset_seeds,
-    ensure_gc,
-):
-    logger.info(f"device-perf run of commit {_head_sha()}")
+@pytest.mark.parametrize("num_layers", [ENCODER_NUM_LAYERS, 1])
+@pytest.mark.parametrize(
+    "device_params",
+    # Headroom for the encoder's recorded commands, not a measured size.
+    [{"l1_small_size": 32 * 1024, "trace_region_size": 64 * 1024 * 1024}],
+    indirect=True,
+)
+def test_encoder_perf(device, reset_seeds, num_layers):
+    bev_h, bev_w = BEV_SHAPES["base"]
+    torch_model = build_reference_encoder(num_layers)
+    inputs = random_encoder_inputs((bev_h, bev_w), 1)
+    prev_bev = random_bev((bev_h, bev_w), 1, torch.Generator().manual_seed(1))
+    shift = sample_ego_shifts(1)
 
-    config = get_preset_config(config_name)
-    assert config is not None, f"Configuration '{config_name}' not found"
-
-    dataset_config = config.dataset_config
-    model_config = config.model_config
-
-    bev_h, bev_w = bev_size
-    num_queries = bev_h * bev_w
-    embed_dims = model_config.embed_dims
-    num_cams = dataset_config.num_cams
-    num_levels = model_config.num_levels
-
-    spatial_shapes = torch.tensor(dataset_config.spatial_shapes[:num_levels], dtype=torch.long)
-    level_start_index = config.get_level_start_index()[:num_levels]
-
-    bev_query = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
-    bev_pos = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
-
-    key_length = sum(h * w for h, w in spatial_shapes.tolist())
-    camera_features = torch.randn(num_cams, key_length, batch_size, embed_dims, dtype=torch.float32)
-
-    img_metas = img_metas_for_dataset(dataset_config, batch_size)
-
-    encoder_kwargs = config.get_encoder_kwargs()
-    encoder_kwargs.update({"num_layers": num_layers, "batch_first": True, "return_intermediate": False})
-
-    ref_model = BEVFormerEncoder(**encoder_kwargs)
-    ref_model.eval()
-    ref_output = ref_model(
-        bev_query=bev_query,
-        key=camera_features,
-        value=camera_features,
-        bev_h=bev_h,
-        bev_w=bev_w,
-        bev_pos=bev_pos,
-        spatial_shapes=spatial_shapes,
-        level_start_index=level_start_index,
-        prev_bev=None,
-        img_metas=img_metas,
-    )
-
-    tt_model = TTBEVFormerEncoder(
-        device=device,
-        params=create_bevformer_encoder_parameters(torch_model=ref_model, device=device, dtype=ttnn.bfloat16),
-        bev_h=bev_h,
-        bev_w=bev_w,
-        spatial_shapes=spatial_shapes,
-        **encoder_kwargs,
-    )
-
-    # Uploaded once so the profiled iterations measure the encoder, not the transfer
-    tt_bev_query = ttnn.from_torch(bev_query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_bev_pos = ttnn.from_torch(bev_pos, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-
-    def op_fn():
-        return tt_model(
-            bev_query=tt_bev_query,
-            key=tt_camera_features,
-            value=tt_camera_features,
-            bev_pos=tt_bev_pos,
-            prev_bev=None,
-            img_metas=img_metas,
+    def reference(frame_prev_bev, frame_shift):
+        return torch_model(
+            inputs["bev_query"],
+            inputs["value"],
+            bev_h,
+            bev_w,
+            inputs["bev_pos"],
+            torch.tensor(SPATIAL_SHAPES),
+            inputs["img_metas"],
+            prev_bev=frame_prev_bev,
+            shift=frame_shift,
         )
 
-    # Doubles as the warmup: this call compiles the kernels and fills the program
-    # cache, so the signposted iterations already run at steady state.
-    tt_output = op_fn()
-    tt_output_torch = ttnn.to_torch(tt_output, dtype=torch.float32)
-    passed, message = check_with_pcc(ref_output, tt_output_torch, expected_pcc)
-    assert passed, f"PCC check failed: {message}"
-    logger.info(f"PCC gate: {message}")
-    ttnn.deallocate(tt_output)
+    torch_output = reference(prev_bev, shift)
 
-    ttnn.synchronize_device(device)
-    outputs = []
-    # Drains and resets the device profiler buffers so the signposted region starts
-    # from empty; the PCC call's markers would otherwise eat into the same budget.
-    ttnn.ReadDeviceProfiler(device)
-    signpost("start")
-    for _ in range(DEVICE_PERF_ITERS):
-        outputs.append(op_fn())
-        ttnn.synchronize_device(device)
-    signpost("stop")
+    tt_model = TTBEVFormerEncoder(
+        create_bevformer_encoder_parameters(torch_model, device),
+        device,
+        bev_h=bev_h,
+        bev_w=bev_w,
+        spatial_shapes=SPATIAL_SHAPES,
+    )
+    plan = tt_model.prepare_frame(inputs["img_metas"])
+    # Uploaded once so the profiled replay measures the encoder, not the transfers.
+    tt_inputs = dict(
+        bev_query=to_device(inputs["bev_query"].permute(1, 0, 2), device),
+        value=to_device(camera_rows(inputs["value"]), device),
+        bev_pos=to_device(inputs["bev_pos"].permute(1, 0, 2), device),
+        plan=plan,
+        prev_bev=to_device(prev_bev.permute(1, 0, 2), device),
+        shift=to_device(shift.view(1, 1, 1, 2), device, GRID_DTYPE, ttnn.ROW_MAJOR_LAYOUT),
+    )
 
-    for out in outputs:
-        ttnn.deallocate(out)
+    def check(expected, tt_output):
+        assert_pcc(expected, ttnn.to_torch(tt_output).float().reshape(expected.shape), 0.997)
+
+    # Doubles as the warmup: this call compiles the kernels and fills the program cache.
+    check(torch_output, tt_model(**tt_inputs))
+
+    with signposted_trace(device, lambda: tt_model(**tt_inputs)) as (trace_id, tt_output):
+        check(torch_output, tt_output)
+        # The next frame of the same rig through the same trace: the replay must read the new
+        # previous BEV and shift from the captured buffers; the refilled plan keeps its geometry.
+        next_prev_bev = random_bev((bev_h, bev_w), 1, torch.Generator().manual_seed(2))
+        next_shift = -2 * shift
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(next_prev_bev.permute(1, 0, 2), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            tt_inputs["prev_bev"],
+        )
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(next_shift.view(1, 1, 1, 2), dtype=GRID_DTYPE, layout=ttnn.ROW_MAJOR_LAYOUT),
+            tt_inputs["shift"],
+        )
+        tt_model.prepare_frame(inputs["img_metas"], plan=plan)
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        check(reference(next_prev_bev, next_shift), tt_output)

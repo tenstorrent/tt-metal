@@ -4,17 +4,17 @@
 """Tracy harness for BEVFormer's fused multi-scale deformable attention.
 
 Same shapes as ``tests/pcc/test_fused_msda.py`` -- nuscenes tiny
-(Q=900, H=4, L=1) and base (Q=2500, H=8, L=4) -- and the same structure as
-``test_encoder_layer_perf.py``: a PCC gate that doubles as the warmup, then a signposted
-region so the report covers already-compiled, already-cached programs.
+(Q=900, H=4, L=1) and base (Q=2500, H=8, L=4): a PCC gate that doubles as the warmup, then
+the forward run eagerly, without a trace, in a signposted region, so the report covers
+already-compiled, already-cached programs.
 
 Two measured surfaces, because the interesting question is which of the two the
 time is in:
 
 ``test_fused_msda_module_perf``
     The whole ``TTMSDeformableAttention`` forward: value/attn/offset Linears,
-    softmax, the fused op, ``output_proj`` and the residual. This is what the
-    encoder actually pays.
+    softmax, the fused op, ``output_proj`` and the residual: the decoder
+    cross-attention's path.
 
 ``test_fused_msda_kernel_perf``
     Only ``ttnn.experimental.fused_msda_from_offsets``. The projections and the
@@ -46,10 +46,9 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.experimental.bevformer.config import DeformableAttentionConfig
-from models.experimental.bevformer.config.encoder_config import get_preset_config
+from models.experimental.bevformer.model_config import DeformableAttentionConfig
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
-from models.experimental.bevformer.tests.test_utils import check_with_pcc
+from models.experimental.bevformer.tests.common import PRESETS, assert_pcc
 from models.experimental.bevformer.tt.model_preprocessing import create_ms_deformable_attention_parameters
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import (
     TTMSDeformableAttention,
@@ -80,19 +79,16 @@ def _build(device, config_name, batch_size, num_queries):
     Deliberately the same construction as the PCC file: a perf number measured
     on a different shape than the correctness gate is not comparable to it.
     """
-    preset_config = get_preset_config(config_name)
-    assert preset_config is not None, f"Configuration '{config_name}' not found"
-
-    model_config = preset_config.model_config
-    num_levels = model_config.num_levels
-    spatial_shapes = torch.tensor(preset_config.dataset_config.spatial_shapes[:num_levels], dtype=torch.long)
+    preset = PRESETS[config_name]
+    num_levels = preset.num_levels
+    spatial_shapes = torch.tensor(preset.spatial_shapes, dtype=torch.long)
     num_keys = int(spatial_shapes.prod(dim=1).sum().item())
 
     config = DeformableAttentionConfig(
-        embed_dims=model_config.embed_dims,
-        num_heads=model_config.num_heads,
+        embed_dims=preset.embed_dims,
+        num_heads=preset.num_heads,
         num_levels=num_levels,
-        num_points=model_config.num_points,
+        num_points=preset.num_points,
     )
 
     query = torch.randn(batch_size, num_queries, config.embed_dims, dtype=torch.float32)
@@ -102,9 +98,7 @@ def _build(device, config_name, batch_size, num_queries):
     ref_model = MSDeformableAttention(config)
     ref_model.eval()
 
-    tt_parameters = create_ms_deformable_attention_parameters(
-        torch_model=ref_model, device=device, config=config, dtype=ttnn.float32
-    )
+    tt_parameters = create_ms_deformable_attention_parameters(ref_model, device=device, dtype=ttnn.float32)
 
     logger.info(
         f"{config_name}: Q={num_queries} heads={config.num_heads} D={config.embed_dims // config.num_heads} "
@@ -185,10 +179,8 @@ def _canonical_operands(value, offsets, attn, model):
 def _per_level_operands(device, value, offsets, attn, model, spatial_shapes):
     """Host-side per-level slices of the packed operands, one set per level.
 
-    Sliced through torch rather than ``ttnn.slice`` on purpose: this runs
-    outside the measured region, and a host round trip has no device cost to
-    attribute, whereas a device slice would land inside the measured region and
-    be counted as launch overhead.
+    Sliced before the measured region, so the variant's region holds only the
+    per-level launches and the adds that accumulate them.
 
     ``reference_points`` is not sliced. In ``reference_mode="pillar"`` the
     reference index is ``p % R``, independent of the level, so each single-level
@@ -287,7 +279,7 @@ def test_fused_msda_module_perf(
     reset_seeds,
     ensure_gc,
 ):
-    """Whole-module device time: what the encoder pays per MSDA call."""
+    """Whole-module device time: one ``TTMSDeformableAttention`` forward."""
     logger.info(f"device-perf run of commit {_head_sha()} -- module {config_name} q={num_queries}")
 
     config, ref_model, tt_parameters, torch_inputs = _build(device, config_name, batch_size, num_queries)
@@ -303,9 +295,7 @@ def test_fused_msda_module_perf(
     # Doubles as the warmup: this call compiles the kernels and fills the program
     # cache, so the signposted iterations already run at steady state.
     tt_output = op_fn()
-    passed, message = check_with_pcc(expected, ttnn.to_torch(tt_output, dtype=torch.float32), expected_pcc)
-    assert passed, f"PCC check failed: {message}"
-    logger.info(f"PCC gate: {message}")
+    assert_pcc(expected, ttnn.to_torch(tt_output, dtype=torch.float32), expected_pcc)
     ttnn.deallocate(tt_output)
 
     _signposted(device, op_fn)
@@ -360,13 +350,7 @@ def test_fused_msda_kernel_perf(
     assert (
         list(warmup.shape) == expected_shape
     ), f"variant {variant} produced {list(warmup.shape)}, want {expected_shape}"
-    passed, message = check_with_pcc(
-        ttnn.to_torch(golden, dtype=torch.float32),
-        ttnn.to_torch(warmup, dtype=torch.float32),
-        pcc=0.999,
-    )
-    assert passed, f"variant {variant} diverged from packed_multi: {message}"
-    logger.info(f"variant gate vs packed_multi: {message}")
+    assert_pcc(ttnn.to_torch(golden, dtype=torch.float32), ttnn.to_torch(warmup, dtype=torch.float32), 0.999)
     ttnn.deallocate(golden)
     ttnn.deallocate(warmup)
 

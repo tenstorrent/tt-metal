@@ -2,292 +2,127 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
 import pytest
+import torch
 
-from models.experimental.bevformer.tt.tt_spatial_cross_attention import TTSpatialCrossAttention
-from models.experimental.bevformer.reference.spatial_cross_attention import SpatialCrossAttention
-
-
-from models.experimental.bevformer.config.encoder_config import (
-    get_preset_config,
+import ttnn
+from models.experimental.bevformer.model_config import NUM_CAMS, NUM_POINTS_IN_PILLAR, SPATIAL_SHAPES
+from models.experimental.bevformer.reference.point_sampling_3d_2d import camera_geometry
+from models.experimental.bevformer.tests.common import (
+    BEV_SHAPES,
+    assert_finite,
+    assert_pcc,
+    build_reference_encoder,
+    camera_rows,
+    camera_img_metas,
+    preset_pc_range,
+    random_bev,
+    random_encoder_inputs,
+    to_device,
+)
+from models.experimental.bevformer.tt.model_preprocessing import create_spatial_cross_attention_parameters
+from models.experimental.bevformer.tt.tt_spatial_cross_attention import (
+    TTSpatialCrossAttention,
+    build_rebatch_plan,
+    full_capacity,
+    update_rebatch_plan,
 )
 
-from models.experimental.bevformer.tests.test_utils import (
-    print_detailed_comparison,
-    check_with_tolerances,
-    check_with_pcc,
-    print_sparsity_analysis,
-)
-
-from models.experimental.bevformer.tt.model_preprocessing import (
-    create_spatial_cross_attention_parameters,
-)
-
-from loguru import logger
-
-# Enable/disable logging output
-ENABLE_LOGGING = True
-
-# Default Test Configuration
-PRINT_DETAILED_COMPARISON_FLAG = False
-
-# Empirical threshold for gather-scatter row-routing regressions that global PCC can dilute; not an accuracy tolerance.
-MAX_REBATCH_ROW_REL_ERROR = 0.3
-
-# Module-scoped device: opens once per file instead of once per test case.
-pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
+CASES = [
+    # (name, bev_shape, batch_size, geometry)
+    ("tiny", BEV_SHAPES["tiny"], 1, "nuscenes"),
+    ("base", BEV_SHAPES["base"], 1, "nuscenes"),
+    # The second sample's rig is turned, so its cameras see other cells: as upstream, both samples
+    # gather the first sample's visible queries, each with its own points and camera count.
+    ("tiny-bs2-turned-rig", BEV_SHAPES["tiny"], 2, "nuscenes-turned"),
+    # Non-square, so a swapped (h, w) in the pillar grid shows.
+    ("50x100", (50, 100), 1, "nuscenes"),
+    ("tiny-carla", BEV_SHAPES["tiny"], 1, "carla"),
+    # No camera sees anything: every row lands in the sink, and the output is the query plus the
+    # output projection's bias, as in the reference.
+    ("tiny-empty", BEV_SHAPES["tiny"], 1, "empty"),
+    # Every camera sees exactly one plan's worth of queries: no padding rows.
+    ("tiny-full-plan", BEV_SHAPES["tiny"], 1, "full-plan"),
+]
+# Two tiles: one tile is also the plan's minimum capacity, which would hide whether the capacity
+# came from the mask.
+FULL_PLAN_ROWS = 2 * ttnn.TILE_SIZE
 
 
-@pytest.mark.parametrize(
-    "config_name, batch_size, bev_h, bev_w, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio, blank_cams, valid_per_pair",
-    [
-        ("nuscenes_tiny", 1, 30, 30, 0.997, 0.06, 0.5, 0.5, (), None),  # NuScenes tiny model - 30x30 BEV grid
-        ("nuscenes_base", 1, 100, 100, 0.999, 0.04, 1.3, 0.5, (), None),  # NuScenes base model - 100x100 BEV grid
-        ("nuscenes_base", 1, 200, 200, 0.998, 0.04, 1.3, 0.5, (), None),  # NuScenes base model - 200x200 BEV grid
-        # CARLA's rig projects symmetrically, NuScenes' does not, so max_len spreads
-        # across cameras differently and pads the rebatch differently.
-        ("carla_base", 1, 100, 100, 0.998, 0.04, 1.3, 0.5, (), None),  # CARLA base model
-        ("nuscenes_base", 2, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 1),), None),  # bs=2, blind cam in one item
-        ("nuscenes_base", 1, 30, 30, 0.998, 0.04, 1.3, 0.5, "all", None),  # max_len == 0: residual-only return
-        ("nuscenes_base", 1, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 0),), 32),  # max_len == rebatch_len: no padding
-        # Off: a grid size between the 30x30 and 100x100 cases, no distinct path.
-        # ("nuscenes_base", 1, 50, 50, 0.999, 0.04, 1.3, 0.5, (), None),  # NuScenes base model - 50x50 BEV grid
-    ],
-)
-@pytest.mark.parametrize("seed", [0])
-def test_spatial_cross_attention_forward(
-    device,
-    config_name,
-    batch_size,
-    bev_h,
-    bev_w,
-    expected_pcc,
-    expected_abs_error,
-    expected_rel_error,
-    expected_high_error_ratio,
-    blank_cams,
-    valid_per_pair,
-    seed,
-):
-    """Test TTSpatialCrossAttention against PyTorch reference implementation using configurations."""
-    torch.manual_seed(seed)
-
-    # Get configuration from preset
-    preset_config = get_preset_config(config_name)
-    if preset_config is None:
-        pytest.fail(f"Configuration '{config_name}' not found")
-
-    dataset_config = preset_config.dataset_config
-    model_config = preset_config.model_config
-
-    # Extract parameters from configs
-    embed_dims = model_config.embed_dims
-    num_heads = model_config.num_heads
-    num_levels = model_config.num_levels
-    num_points = model_config.num_points
-    num_cams = dataset_config.num_cams
+def _geometry(kind, bev_shape, batch_size):
+    """``reference_points_cam`` and ``bev_mask`` for a case."""
+    bev_h, bev_w = bev_shape
+    if kind in ("nuscenes", "nuscenes-turned", "carla"):
+        preset = "carla_tiny" if kind == "carla" else "nuscenes_base"
+        metas = camera_img_metas(batch_size, preset, yaw_step_deg=40.0 if kind == "nuscenes-turned" else 0.0)
+        return camera_geometry(metas, bev_h, bev_w, NUM_POINTS_IN_PILLAR, preset_pc_range(preset))
+    generator = torch.Generator().manual_seed(2)
     num_queries = bev_h * bev_w
+    points = torch.rand(NUM_CAMS, batch_size, num_queries, NUM_POINTS_IN_PILLAR, 2, generator=generator)
+    mask = torch.zeros(NUM_CAMS, batch_size, num_queries, NUM_POINTS_IN_PILLAR, dtype=torch.bool)
+    if kind == "full-plan":
+        for cam in range(NUM_CAMS):
+            seen = torch.randperm(num_queries, generator=generator)[:FULL_PLAN_ROWS]
+            mask[cam, :, seen, : 1 + cam % 4] = True
+    return points, mask
 
-    # Use spatial shapes from dataset config (limited to num_levels)
-    spatial_shapes_list = dataset_config.spatial_shapes[:num_levels]
-    spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
 
-    sca_total_key_length = [h * w for h, w in spatial_shapes.tolist()]
-
-    # --------------------------------------------------------------------------- #
-    # Generate Inputs                                                             #
-    # --------------------------------------------------------------------------- #
-
-    # Create input tensors
-    bev_queries = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
-
-    # Camera features: [num_cams, H*W, batch_size, embed_dims] - use only first level
-    camera_features = torch.randn(num_cams, sum(sca_total_key_length), batch_size, embed_dims, dtype=torch.float32)
-
-    # Pre-projected reference points: [num_cams, batch_size, num_queries, D, 2]
-    D = 4  # Number of points per pillar
-    reference_points_cam = torch.rand(num_cams, batch_size, num_queries, D, 2, dtype=torch.float32)
-
-    # Validity mask: [num_cams, batch_size, num_queries, D]
-    if valid_per_pair is None:
-        bev_mask = torch.ones(num_cams, batch_size, num_queries, D, dtype=torch.bool)
-        # Randomly mask out some invalid points for realism
-        # Randomly mask out 95% of points as invalid for realism
-        total_points = bev_mask.numel()
-        num_invalid = int(0.95 * total_points)
-        invalid_indices = torch.randperm(total_points)[:num_invalid]
-        bev_mask.view(-1)[invalid_indices] = False
-    else:
-        # Strided visible queries, alternating between two offsets so cameras share queries (which
-        # exercises accumulation) and the parity flips per batch item so the items differ.
-        assert valid_per_pair * 2 <= num_queries, f"valid_per_pair ({valid_per_pair}) too large for {num_queries}"
-        bev_mask = torch.zeros(num_cams, batch_size, num_queries, D, dtype=torch.bool)
-        stride = num_queries // valid_per_pair
-        for cam_idx in range(num_cams):
-            for batch_idx in range(batch_size):
-                offset = ((cam_idx + batch_idx) % 2) * (stride // 2)
-                visible = torch.arange(valid_per_pair) * stride + offset
-                bev_mask[cam_idx, batch_idx, visible] = True
-
-    if blank_cams == "all":
-        bev_mask[:] = False
-    else:
-        for cam_idx, batch_idx in blank_cams:
-            bev_mask[cam_idx, batch_idx] = False
-
-    # Level start index
-    indices = spatial_shapes.prod(1).cumsum(0)
-    level_start_index = torch.cat([torch.tensor([0], dtype=torch.long), indices[:-1]], 0)
-
-    # Convert tensors to ttnn format for ttnn model
-    tt_bev_queries = ttnn.from_torch(bev_queries, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    # SCA takes camera features batch-first; the encoder owns the permute.
-    tt_camera_features = ttnn.from_torch(
-        camera_features.permute(2, 0, 1, 3), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-    )
-    tt_reference_points_cam = ttnn.from_torch(
-        reference_points_cam, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-    )
-    tt_bev_mask = ttnn.from_torch(bev_mask, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-
-    # --------------------------------------------------------------------------- #
-    # Models Init                                                                 #
-    # --------------------------------------------------------------------------- #
-
-    # Create PyTorch reference model using extracted parameters
-    ref_model = SpatialCrossAttention(
-        embed_dims=embed_dims,
-        num_cams=num_cams,
-        batch_first=True,
-        deformable_attention={
-            "embed_dims": embed_dims,
-            "num_levels": num_levels,
-            "num_points": num_points,
-            "num_heads": num_heads,
-        },
-    )
-    ref_model.eval()
-
-    # Create preprocessed parameters from PyTorch model
-    tt_parameters = create_spatial_cross_attention_parameters(
-        torch_model=ref_model,
-        device=device,
-        dtype=ttnn.float32,
+def _tt_model(torch_model, device):
+    return TTSpatialCrossAttention(
+        create_spatial_cross_attention_parameters(torch_model, device),
+        device,
+        spatial_shapes=SPATIAL_SHAPES,
     )
 
-    # Create ttnn model with preprocessed parameters using extracted parameters
-    tt_model = TTSpatialCrossAttention(
-        device=device,
-        params=tt_parameters,
-        embed_dims=embed_dims,
-        num_cams=num_cams,
-        batch_first=True,
-        deformable_attention={
-            "embed_dims": embed_dims,
-            "num_levels": num_levels,
-            "num_points": num_points,
-            "num_heads": num_heads,
-        },
-        spatial_shapes=spatial_shapes,
+
+@torch.no_grad()
+@pytest.mark.parametrize("name, bev_shape, batch_size, geometry", CASES, ids=[case[0] for case in CASES])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
+def test_spatial_cross_attention(device, reset_seeds, name, bev_shape, batch_size, geometry):
+    """The first layer's cross-attention: each BEV query gathered into the cameras its pillar
+    projects into, attending to their FPN features, averaged over those cameras."""
+    torch_model = build_reference_encoder(num_layers=1).layers[0].attentions[1]
+    inputs = random_encoder_inputs(bev_shape, batch_size)
+    query = random_bev(bev_shape, batch_size, torch.Generator().manual_seed(1)).permute(1, 0, 2)
+    reference_points_cam, bev_mask = _geometry(geometry, bev_shape, batch_size)
+
+    torch_output = torch_model(query, inputs["value"], reference_points_cam, bev_mask, torch.tensor(SPATIAL_SHAPES))
+
+    tt_model = _tt_model(torch_model, device)
+    plan = build_rebatch_plan(reference_points_cam, bev_mask, tt_model.embed_dims, device)
+    if geometry == "full-plan":
+        assert plan.capacity == FULL_PLAN_ROWS
+    tt_output = tt_model(
+        to_device(query, device), to_device(camera_rows(inputs["value"]), device), tt_model.layer_inputs(plan)
+    )
+    tt_output = ttnn.to_torch(tt_output).float().reshape(torch_output.shape)
+    assert_finite("the cross-attention output", tt_output)
+    assert_pcc(torch_output, tt_output, 0.999)
+    if geometry != "empty":
+        # The attended part alone: the residual would carry the PCC on its own.
+        assert_pcc(torch_output - query, tt_output - query, 0.999)
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
+def test_rebatch_plan_update(device, reset_seeds):
+    """A plan refilled in place for another frame's cameras matches the reference on them."""
+    bev_shape = BEV_SHAPES["tiny"]
+    torch_model = build_reference_encoder(num_layers=1).layers[0].attentions[1]
+    inputs = random_encoder_inputs(bev_shape, 1)
+    query = random_bev(bev_shape, 1, torch.Generator().manual_seed(1)).permute(1, 0, 2)
+    first = camera_geometry(camera_img_metas(1), *bev_shape, NUM_POINTS_IN_PILLAR, preset_pc_range())
+    second = camera_geometry(
+        camera_img_metas(2, yaw_step_deg=25.0)[1:], *bev_shape, NUM_POINTS_IN_PILLAR, preset_pc_range()
     )
 
-    # --------------------------------------------------------------------------- #
-    # Models Forward                                                              #
-    # --------------------------------------------------------------------------- #
+    tt_model = _tt_model(torch_model, device)
+    plan = build_rebatch_plan(*first, tt_model.embed_dims, device, full_capacity(bev_shape[0] * bev_shape[1]))
+    update_rebatch_plan(plan, *second)
 
-    # Forward pass with PyTorch reference model
-    ref_model_output = ref_model(
-        query=bev_queries,
-        reference_points_cam=reference_points_cam,
-        bev_mask=bev_mask,
-        key=camera_features,
-        value=camera_features,
-        spatial_shapes=spatial_shapes,
-        level_start_index=level_start_index,
+    torch_output = torch_model(query, inputs["value"], *second, torch.tensor(SPATIAL_SHAPES))
+    tt_output = tt_model(
+        to_device(query, device), to_device(camera_rows(inputs["value"]), device), tt_model.layer_inputs(plan)
     )
-
-    # Forward pass with ttnn model
-    tt_model_output = tt_model(
-        query=tt_bev_queries,
-        reference_points_cam=tt_reference_points_cam,
-        bev_mask=tt_bev_mask,
-        value=tt_camera_features,
-    )
-
-    tt_model_output = ttnn.to_torch(tt_model_output, dtype=torch.float32)
-
-    # --------------------------------------------------------------------------- #
-    # Output Comparison                                                           #
-    # --------------------------------------------------------------------------- #
-
-    if not bev_mask.any():
-        # max_len == 0: both models return the residual, which on TT is the bfloat16 query.
-        expected_residual = bev_queries.to(torch.bfloat16).to(torch.float32)
-        assert torch.equal(tt_model_output, expected_residual), (
-            "Residual-only branch did not return the query unchanged; max abs diff "
-            f"{(tt_model_output - expected_residual).abs().max():.6f}."
-        )
-        return
-
-    # Comprehensive comparison using enhanced test utilities
-    if ENABLE_LOGGING:
-        logger.info(f"Reference model output type: {type(ref_model_output)}, shape: {ref_model_output.shape}")
-    if ENABLE_LOGGING:
-        logger.info(f"TT model output type: {type(tt_model_output)}")
-
-    if PRINT_DETAILED_COMPARISON_FLAG:
-        # Print detailed statistical comparison
-        print_detailed_comparison(
-            ref_model_output,
-            tt_model_output,
-            tensor_name="spatial_cross_attention_output",
-            show_histograms=False,  # Set to True for even more detailed analysis
-        )
-
-        # Individual sparsity analysis for each tensor
-        print_sparsity_analysis(
-            ref_model_output,
-            tensor_name="spatial_cross_attention_output_torch",
-            # block_size=16,  # Analyze sparsity in 16x16 blocks
-        )
-
-        print_sparsity_analysis(
-            tt_model_output,
-            tensor_name="spatial_cross_attention_output_ttnn",
-            # block_size=16,  # Analyze sparsity in 16x16 blocks
-        )
-
-    # Comprehensive tolerance checking with expected metrics from test parameters
-    check_with_tolerances(
-        ref_model_output,
-        tt_model_output,
-        pcc_threshold=expected_pcc,
-        abs_error_threshold=expected_abs_error,
-        rel_error_threshold=expected_rel_error,
-        max_error_ratio=expected_high_error_ratio,
-        tensor_name="spatial_cross_attention_output",
-    )
-
-    passed, message = check_with_pcc(
-        tt_model_output,
-        ref_model_output,
-        pcc=expected_pcc,
-    )
-
-    assert passed, f"PCC check failed: {message}"
-
-    # Per-row error relative to the row's own magnitude, so one bound fits every config.
-    row_error = (tt_model_output - ref_model_output).flatten(0, -2).norm(dim=-1)
-    row_norm = ref_model_output.flatten(0, -2).norm(dim=-1)
-    row_rel_error = row_error / row_norm.clamp(min=1e-6)
-    worst_row = int(row_rel_error.argmax())
-    assert row_rel_error[worst_row] <= MAX_REBATCH_ROW_REL_ERROR, (
-        f"Query row {worst_row % num_queries} of batch item {worst_row // num_queries} has relative "
-        f"error {row_rel_error[worst_row]:.4f} > {MAX_REBATCH_ROW_REL_ERROR} "
-        f"(row norm {row_norm[worst_row]:.4f}); mean over rows is {row_rel_error.mean():.4f}."
-    )
-
-    if ENABLE_LOGGING:
-        logger.info("✅ All SCA tolerance checks passed successfully!")
+    tt_output = ttnn.to_torch(tt_output).float().reshape(torch_output.shape)
+    assert_pcc(torch_output - query, tt_output - query, 0.999)
