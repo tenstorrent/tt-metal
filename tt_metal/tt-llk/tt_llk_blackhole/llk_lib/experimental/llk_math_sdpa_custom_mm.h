@@ -136,8 +136,9 @@ inline void _llk_math_sdpa_custom_mm_mask_dest_(const std::uint32_t dst_index, c
         // Zero Dest
         // ZEROACC auto-detects the DEST bank, so its tile index must be bank-relative (dst_index, not
         // dst_offset which already includes the bank base -> would double-count the bank on bank 1).
-        std::uint32_t dst_face = dst_index / 16;
-        // A tile is 2 faces of 8x16, so clearing 16 rows per tile is equivalent to clearing the tile
+        // A result tile is 2 faces of 8x16 = FACE_R_DIM DEST rows, the block ZEROACC's 16-row mode clears.
+        constexpr std::uint32_t DEST_ROWS_PER_TILE = FACE_R_DIM;
+        std::uint32_t dst_face                     = dst_index / DEST_ROWS_PER_TILE;
         for (std::uint32_t i = 0; i < ct_dim; i++)
         {
             // ZEROACC's 16-row mode takes an absolute 16-row block index within the DEST bank, but Blackhole
@@ -152,14 +153,14 @@ inline void _llk_math_sdpa_custom_mm_mask_dest_(const std::uint32_t dst_index, c
             const bool crosses_bank = (dst_index + dst_face) >= DEST_REGISTER_HALF_SIZE;
             if (crosses_bank)
             {
-                for (std::uint32_t row = 0; row < 16; row++)
+                for (std::uint32_t row = 0; row < DEST_ROWS_PER_TILE; row++)
                 {
-                    TT_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_7, i * 16 + row);
+                    TT_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0 /*use_32_bit_mode*/, 0 /*clear_zero_flags*/, ADDR_MOD_7, i * DEST_ROWS_PER_TILE + row);
                 }
             }
             else
             {
-                TT_ZEROACC(p_zeroacc::CLR_16, 0, 0, ADDR_MOD_7, dst_face);
+                TT_ZEROACC(p_zeroacc::CLR_16, 0 /*use_32_bit_mode*/, 0 /*clear_zero_flags*/, ADDR_MOD_7, dst_face);
             }
             dst_face++;
         }

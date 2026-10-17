@@ -397,17 +397,16 @@ def test_sdpa_custom_mm_signal_granularity(request, shape_sg):
 
 @dataclass
 class SDPA_MASK_REENTRY(TemplateParameter):
-    """Masked pass followed by an unmasked pass without re-initialising the unpacker.
+    """Masked passes followed by an unmasked pass without re-initialising the unpacker.
 
-    configure_mask_extent : the unpack LLK's template knob. True programs the SrcB extent
-                            for the mask explicitly; False is the default every model caller
-                            uses.
-    mask_passes           : number of leading masked passes before the unmasked one.
-    pack_clear_dest       : clear DEST on pack release. False keeps the previous section's
-                            contents, as the fused SDPA kernel does between chunks.
+    The mask unpack always spans the ct_dim*2 SrcB rows the math side broadcasts and
+    restores the Q face height afterwards; there is no knob for it.
+
+    mask_passes     : number of leading masked passes before the unmasked one.
+    pack_clear_dest : clear DEST on pack release. False keeps the previous section's
+                      contents, as the fused SDPA kernel does between chunks.
     """
 
-    configure_mask_extent: bool = True
     mask_passes: int = 1
     pack_clear_dest: bool = True
 
@@ -415,7 +414,6 @@ class SDPA_MASK_REENTRY(TemplateParameter):
         return "\n".join(
             [
                 "#define SDPA_MASK_REENTRY true",
-                f"#define SDPA_CONFIGURE_MASK_EXTENT {str(self.configure_mask_extent).lower()}",
                 f"#define SDPA_MASK_PASSES {self.mask_passes}",
                 f"#define SDPA_PACK_CLEAR_DEST {str(self.pack_clear_dest).lower()}",
             ]
@@ -432,7 +430,6 @@ def _run_masked_then_unmasked(
     read_transposed=False,
     row_stride=None,
     input_tile_offset=0,
-    configure_mask_extent=True,
     mask_passes=1,
     dst_index=0,
     pack_clear_dest=True,
@@ -453,7 +450,6 @@ def _run_masked_then_unmasked(
                 sdpa_dst_index=dst_index,
             ),
             SDPA_MASK_REENTRY(
-                configure_mask_extent=configure_mask_extent,
                 mask_passes=mask_passes,
                 pack_clear_dest=pack_clear_dest,
             ),
@@ -572,12 +568,13 @@ def test_sdpa_custom_mm_mask_extent_restore(
     ct=lambda M: [3, 8] if M == 1 else [8],
 )
 def test_sdpa_custom_mm_mask_extent_default(request, M, ct):
-    """The default unpack path must supply all ct_dim*2 mask rows the math side broadcasts.
+    """The mask unpack must supply all ct_dim*2 mask rows the math side broadcasts.
 
-    Every model caller leaves configure_mask_extent at false, so the mask unpack runs with the
-    Q face height (M rows) programmed by the init while the math side broadcasts ct_dim*2 SrcB
-    rows into DEST, one per output face. Output faces >= M must still be seeded from the mask,
-    not from whatever SrcB held there.
+    The math side broadcasts ct_dim*2 SrcB rows into DEST, one per output face. The mask
+    unpack used to program that SrcB extent only behind an opt-in knob and otherwise ran with
+    the Q face height (M rows) set by the init, so output faces >= M were seeded from whatever
+    SrcB held there. It now always programs the extent; this cell keeps ct_dim*2 > M so a
+    regression shows up as unmasked faces.
     """
     _skip_on_simulator(request)
     kt, K, N = 2, 64, ct * 32
@@ -586,34 +583,34 @@ def test_sdpa_custom_mm_mask_extent_default(request, M, ct):
     # test's mask, so a stale SrcB row left behind by an earlier cell cannot pass by luck.
     cols = torch.arange(N)
     mask = ((cols % 4 - 1) * 2 + (cols // FACE_C_DIM) / 8).to(torch.bfloat16)
-    result = _run_masked_then_unmasked(
-        M, ct, kt, lhs, rhs, mask, configure_mask_extent=False
-    )
+    result = _run_masked_then_unmasked(M, ct, kt, lhs, rhs, mask)
     product = lhs.float() @ rhs.float()
     golden = torch.stack([product + mask.float(), product]).to(torch.bfloat16)
     assert torch.equal(
         result, golden
-    ), "Mask rows beyond the Q face height were not applied with the default mask extent"
+    ), "Mask rows beyond the Q face height were not applied"
 
 
 @parametrize(
     # 480 is the slot just below the boundary (control); 496 is the last slot of a 16-bit
     # DEST bank, where (row offset + 16-row block index) reaches the bank size.
     dst_index=[480, 496],
+    # SyncHalf alternates DEST halves per pass, so the unmasked pass (the only one that issues
+    # the ZEROACC) lands in bank 0 after 2 masked passes and in bank 1 after 3.
+    mask_passes=lambda dst_index: [2, 3] if dst_index == 496 else [2],
 )
-def test_sdpa_custom_mm_clear_last_dest_slot(request, dst_index):
+def test_sdpa_custom_mm_clear_last_dest_slot(request, dst_index, mask_passes):
     """A single-tile result at the last 16-bit DEST slot must be cleared before accumulating.
 
-    Two masked passes seed that slot in both DEST halves; the pack release leaves DEST alone,
-    as the fused SDPA kernel does between chunks, so the third, unmasked pass finds the first
-    pass's scores in its slot and has to clear them itself. Blackhole derives the 16-row
-    ZEROACC's bank select from (dest row offset + block index), which flips to the other half
-    at 496 + 31; a clear that lands there leaves the stale scores in place and the result
-    comes back as mask + 2 * product.
+    The masked passes seed that slot in alternating DEST halves; the pack release leaves DEST
+    alone, as the fused SDPA kernel does between chunks, so the final, unmasked pass finds an
+    earlier pass's scores in its slot and has to clear them itself. Blackhole derives the
+    16-row ZEROACC's bank select from (dest row offset + block index), which flips to the other
+    half at 496 + 31; a clear that lands there leaves the stale scores in place and the result
+    comes back as mask + 2 * product. mask_passes=2 puts the unmasked pass in bank 0 (MATH_Offset
+    496), mask_passes=3 in bank 1 (MATH_Offset 1008), so the clear is checked in both halves.
     """
     _skip_on_simulator(request)
-    # A single-name parametrize axis binds the value as a 1-tuple; unwrap it.
-    dst_index = dst_index[0] if isinstance(dst_index, tuple) else dst_index
     M, kt, ct = 8, 2, 1
     K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
     lhs, rhs = _dyadic_operands(M, K, N, seed=57)
@@ -625,14 +622,14 @@ def test_sdpa_custom_mm_clear_last_dest_slot(request, dst_index):
         lhs,
         rhs,
         mask,
-        mask_passes=2,
+        mask_passes=mask_passes,
         dst_index=dst_index,
         pack_clear_dest=False,
     )
     product = lhs.float() @ rhs.float()
     seeded = product + mask.float()
-    golden = torch.stack([seeded, seeded, product]).to(torch.bfloat16)
-    # Per-pass deviation: a stale slot shows up in pass 2 as (result - golden) == seeded.
+    golden = torch.stack([seeded] * mask_passes + [product]).to(torch.bfloat16)
+    # Per-pass deviation: a stale slot shows up in the last pass as (result - golden) == seeded.
     deviation = (result.float() - golden.float()).abs().amax(dim=(1, 2)).tolist()
     assert torch.equal(result, golden), (
         f"result slot at DEST row {dst_index} was not cleared before accumulation; "

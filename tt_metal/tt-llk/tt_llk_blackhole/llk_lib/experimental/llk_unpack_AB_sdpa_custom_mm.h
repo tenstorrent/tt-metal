@@ -19,13 +19,30 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 /**
- * @brief Unpack one kt_dim x ct_dim SDPA block: in0 into SrcB, in1 into SrcA, preceded by the mask row when mask_chunk.
+ * @brief Unpack a kt_dim x ct_dim block of in1 tiles into SrcA and the matching in0 tiles into SrcB, preceded by
+ *        the mask row when mask_chunk is set.
  *
- * @tparam read_transposed: Walk the in1 tiles column by column, values = <true/false>
- * @tparam configure_mask_extent: Retained for source compatibility; the mask unpack always spans the
- *         ct_dim * 2 SrcB rows the math side broadcasts and restores operandB_face_r_dim afterwards.
+ * @tparam read_transposed: Walk the in1 tiles column by column (ct_dim tiles with a stride of row_stride, then the
+ *                          next tile) instead of row by row, values = <true/false>
+ * @param base_address_a: L1 address of in1 (SrcA), in the 16-byte-word encoding of L1_ADDRESS().
+ * @param base_address_b: L1 address of in0 (SrcB), in the same encoding.
+ * @param base_address_mask: L1 address of the mask row, in the same encoding; read only when mask_chunk is set. The
+ *                           read spans ct_dim * 2 SrcB rows of FACE_C_DIM datums, one row per output face.
+ * @param tile_index_a: First in1 tile to read.
+ * @param tile_index_b: First in0 tile to read.
+ * @param tile_size_a: in1 tile size, in 16-byte words.
+ * @param tile_size_b: in0 tile size, in 16-byte words.
+ * @param kt_dim: Inner dimension in tiles.
+ * @param ct_dim: Output width in tiles, 1 to 16.
+ * @param mask_chunk: Unpack the mask row into SrcB ahead of the block so the math side can seed DEST from it.
+ * @param operandB_face_r_dim: in0 face height, 1, 2, 4 or 8. Must equal the unpB_face_r_dim given to
+ *                             @ref _llk_unpack_AB_custom_mm_init_: every masked call restores it as unpacker 1's X
+ *                             end after the mask read.
+ * @param row_stride: in1 tiles per stored row when read_transposed; zero uses kt_dim.
+ * @note Call @ref _llk_unpack_AB_custom_mm_init_ first.
+ * @note On the math thread, pair with @ref _llk_math_sdpa_custom_mm_ (same ct_dim and mask_chunk).
  */
-template <bool read_transposed = false, bool configure_mask_extent = false>
+template <bool read_transposed = false>
 inline void _llk_unpack_AB_sdpa_custom_mm_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,

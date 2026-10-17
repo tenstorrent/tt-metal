@@ -79,11 +79,6 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #ifndef SDPA_MASK_REENTRY
 #define SDPA_MASK_REENTRY false
 #endif
-// configure_mask_extent template argument of the unpack LLK. The re-entry cells program it
-// explicitly; the default-extent cell leaves it at the false every model caller uses.
-#ifndef SDPA_CONFIGURE_MASK_EXTENT
-#define SDPA_CONFIGURE_MASK_EXTENT SDPA_MASK_REENTRY
-#endif
 #ifndef SDPA_INPUT_TILE_OFFSET
 #define SDPA_INPUT_TILE_OFFSET 0
 #endif
@@ -91,11 +86,13 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #define SDPA_PRESERVE_SRC_ZERO_FLAG false
 #endif
 // DEST row the result tiles start at (dst_index of the math LLK); the pack reads the matching
-// 16-row [M,32] slots.
+// result slots. One [M,32] result occupies two 8-row faces = FACE_R_DIM DEST rows (the Z/W
+// strides the pack programs below).
 #ifndef SDPA_DST_INDEX
 #define SDPA_DST_INDEX 0
 #endif
-static_assert(SDPA_DST_INDEX % 16 == 0, "SDPA_DST_INDEX must start a 16-row result slot");
+constexpr std::uint32_t SDPA_RESULT_SLOT_ROWS = ckernel::FACE_R_DIM;
+static_assert(SDPA_DST_INDEX % SDPA_RESULT_SLOT_ROWS == 0, "SDPA_DST_INDEX must start a result slot");
 // Leading passes that seed DEST from the mask; one unmasked pass follows them.
 #ifndef SDPA_MASK_PASSES
 #define SDPA_MASK_PASSES (SDPA_MASK_REENTRY ? 1 : 0)
@@ -145,11 +142,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE, false /* clear_src */>(params.in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
 
     // Run: base_address_a = in1 (SrcA), base_address_b = in0 (SrcB).
-    // The re-entry variant appends a mask to in1 and uses it only on the first pass.
+    // The re-entry variants append a mask to in1 and unpack it on the leading SDPA_MASK_PASSES passes.
     // The whole kt walk is issued by a single call (internal MOP covers kt_dim/2 iterations).
     for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
     {
-        _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED, SDPA_CONFIGURE_MASK_EXTENT>(
+        _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED>(
             L1_ADDRESS(params.buffer_A[0]),                                            // base_address_a : in1 (SrcA, rhs)
             L1_ADDRESS(params.buffer_B[0]),                                            // base_address_b : in0 (SrcB, lhs)
             SDPA_MASK_REENTRY ? L1_ADDRESS(params.buffer_A[SDPA_MASK_TILE_INDEX]) : 0, // base_address_mask
@@ -208,7 +205,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
     {
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-        // Seed DEST from the mask on the first re-entry pass, otherwise zero it,
+        // Seed DEST from the mask on the leading SDPA_MASK_PASSES passes, otherwise zero it,
         // then accumulate the whole kt walk into ct_dim tiles.
         _llk_math_sdpa_custom_mm_<SIGNAL_GRANULARITY>(params.in0_face_r_dim, SDPA_DST_INDEX, KT_DIM, CT_DIM, pass < SDPA_MASK_PASSES /* mask_chunk */);
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -257,10 +254,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         for (std::uint32_t i = 0; i < CT_DIM; ++i)
         {
-            // One [M,32] result occupies a 16-row DEST slot (the Z/W strides above), so the pack tile index
-            // is the slot number.
+            // The pack tile index is the result slot number (SDPA_RESULT_SLOT_ROWS rows per slot).
             _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-                SDPA_DST_INDEX / 16 + i, L1_ADDRESS(params.buffer_Res[pass * CT_DIM + i]));
+                SDPA_DST_INDEX / SDPA_RESULT_SLOT_ROWS + i, L1_ADDRESS(params.buffer_Res[pass * CT_DIM + i]));
         }
         _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en, SDPA_PACK_CLEAR_DEST>();
     }
