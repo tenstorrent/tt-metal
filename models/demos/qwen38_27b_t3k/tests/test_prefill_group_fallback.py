@@ -113,3 +113,34 @@ def test_a_compiled_group_keeps_grouping_without_the_warmup_flag(harness):
     assert _wave(gen, cache, table, prompt, 3) == 1, "a compiled group stopped grouping"
     # A different occupancy is a different stack, so it has to fall back rather than compile.
     assert _wave(gen, cache, table, prompt, 2) == 0
+
+
+def test_a_split_pass_leaves_what_one_pass_leaves(harness):
+    """Capping the rows per pass must not change what the 48 recurrent layers summarise.
+
+    The cap exists because one pass's projection outputs are rows * tokens * hidden * bf16 and
+    the heap cannot hand over a block that large. Rows are independent -- GDN state is per slot,
+    KV per page -- and this is the assertion that keeps them so.
+    """
+    gen, mesh, cache, table = harness
+    prompt = torch.randint(1000, 5000, (BATCH, BUCKET), dtype=torch.int64)
+
+    gen.batched_prefill_shapes.clear()
+    gen._batched_prefill_compiling = True
+    held = gen.prefill_pass_tokens
+    try:
+        gen.prefill_pass_tokens = 0
+        assert _wave(gen, cache, table, prompt, BATCH) == 1
+        whole = _state(gen, mesh, cache)
+        # Half the wave's tokens, so it runs as two passes rather than one.
+        gen.prefill_pass_tokens = BATCH // 2 * BUCKET
+        assert _wave(gen, cache, table, prompt, BATCH) == 1, "a split wave stopped counting as one grouped call"
+        split = _state(gen, mesh, cache)
+    finally:
+        gen.prefill_pass_tokens = held
+        gen._batched_prefill_compiling = False
+
+    # Exact, not approximate: a pass computes whole rows, so narrowing it reorders nothing a
+    # row can see. Measured 0 against a scale of 45.5. Any drift at all means rows interact.
+    drift = max(float((a - b).abs().max()) for a, b in zip(whole, split))
+    assert drift == 0, f"the split pass drifted {drift} from the whole one"
