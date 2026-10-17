@@ -6,6 +6,7 @@
 #include "flat_drisc.hpp"
 
 #include <algorithm>
+#include <set>
 #include <cstdlib>
 #include <map>
 #include <sstream>
@@ -439,60 +440,92 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         return d;
     };
+    TT_FATAL(!p.uneven || !p.drisc, "flat_routed_expert: the uneven split runs Tensix readers only");
+    TT_FATAL(!p.uneven || !p.rdown || p.r_ <= 5, "flat_routed_expert: reader tails take <= 5 receivers (semaphores)");
+    const auto rg_at = [&](uint32_t r) { return p.rgs.empty() ? p.rg : p.rgs[r]; };
     if (p.rdown) {
         // (dual: the DRISC slots' reader tails skip their gate/up reads on DRISC calls: their own kernel)
-        for (const bool dual_set : {false, true}) {
-            const auto in_set = [&](uint32_t r) { return (p.dual && p.drisc_slot(r)) == dual_set; };
-            std::vector<CoreCoord> cores;
-            for (const auto& [r, tail] : p.rdn) {
-                if (in_set(r)) {
-                    cores.push_back(p.readers[r]);
+        std::set<uint32_t> rdn_rgs;
+        for (const auto& [r, tail] : p.rdn) {
+            rdn_rgs.insert(rg_at(r));
+        }
+        for (const uint32_t rg_k : rdn_rgs) {  // (uneven split: one kernel per pair-set count)
+            for (const bool dual_set : {false, true}) {
+                const auto in_set = [&](uint32_t r) {
+                    return (p.dual && p.drisc_slot(r)) == dual_set && rg_at(r) == rg_k;
+                };
+                std::vector<CoreCoord> cores;
+                for (const auto& [r, tail] : p.rdn) {
+                    if (in_set(r)) {
+                        cores.push_back(p.readers[r]);
+                    }
                 }
-            }
-            if (cores.empty()) {
-                continue;
-            }
-            Defines rdn_def =
-                yrm_def(with(dual_set ? drisc_dual_def : dyn_def, {{"SE9_TRID", "1"}, {"SE_E2E", "1"}}), p.pcd_r);
-            rdn_def.insert(cmb_def.begin(), cmb_def.end());
-            const auto k =
-                dm("se9_rdown.cpp",
-                   cores,
-                   DataMovementProcessor::RISCV_0,
-                   NOC::NOC_0,
-                   {0,        w_tile, p.rg * p.slot, E * p.nk_gu, 1,    p.slot_dr, E * p.nblk_r, 2,  p.h_tiles, p.h_tile,
-                    H_PIECES, 16,     p.out_tiles_r, V,           HARR, HSFREE,    p.hbuf,       MT, p.pcd_r,   Ht,
-                    S,        E,      p.rd_slots,    p.ring_dr},
-                   rdn_def);
-            const auto kc =
-                cp("se6_dcompute.cpp",
-                   cores,
-                   {MTG, G, It, p.kd_r, p.pcd_r, E, S, p.slot_dr, p.ring_dr},
-                   dn_def(yrm_def(with(dyn_def, {{"SE_EARLY_POP", "1"}}))),
-                   cfg.down_fp32,
-                   cfg.down_fp32);
-            for (uint32_t i = 0; i < p.rdn.size(); ++i) {
-                const auto [r, t_] = p.rdn[i];
-                if (!in_set(r)) {
+                if (cores.empty()) {
                     continue;
                 }
-                Args a;
-                a.a(AddrSrc::GateUp)
-                    .lit(r % banks)
-                    .lit((r / banks) * p.region_bytes)
-                    .a(AddrSrc::ReaderDown)
-                    .lit(i % banks)
-                    .lit((i / banks) * p.wr_region)
-                    .lit(pk(p.down[t_]))
-                    .lit(coord_sg[p.sg_rd(r)])
-                    .a(AddrSrc::Done)
-                    .lit(p.nd_sg + i % p.n_rdn)
-                    .a(AddrSrc::Y)
-                    .lit(p.rem_cols + (i % p.n_rdn) * p.pcd_r)
-                    .cat(dyn)
-                    .lits(sgx(p.sg_rd(r)));
-                add_rt(k, p.readers[r], add_writer_rt(k, p.readers[r], a));
-                SetRuntimeArgs(program, kc, p.readers[r], std::vector<uint32_t>{0});
+                Defines rdn_def =
+                    yrm_def(with(dual_set ? drisc_dual_def : dyn_def, {{"SE9_TRID", "1"}, {"SE_E2E", "1"}}), p.pcd_r);
+                rdn_def.insert(cmb_def.begin(), cmb_def.end());
+                const auto k =
+                    dm("se9_rdown.cpp",
+                       cores,
+                       DataMovementProcessor::RISCV_0,
+                       NOC::NOC_0,
+                       {0,
+                        w_tile,
+                        rg_k * p.slot,
+                        E * p.nk_gu,
+                        1,
+                        p.slot_dr,
+                        E * p.nblk_r,
+                        2,
+                        p.h_tiles,
+                        p.h_tile,
+                        H_PIECES,
+                        16,
+                        p.out_tiles_r,
+                        V,
+                        HARR,
+                        HSFREE,
+                        p.hbuf,
+                        MT,
+                        p.pcd_r,
+                        Ht,
+                        S,
+                        E,
+                        p.rd_slots,
+                        p.ring_dr},
+                       rdn_def);
+                const auto kc =
+                    cp("se6_dcompute.cpp",
+                       cores,
+                       {MTG, G, It, p.kd_r, p.pcd_r, E, S, p.slot_dr, p.ring_dr},
+                       dn_def(yrm_def(with(dyn_def, {{"SE_EARLY_POP", "1"}}))),
+                       cfg.down_fp32,
+                       cfg.down_fp32);
+                for (uint32_t i = 0; i < p.rdn.size(); ++i) {
+                    const auto [r, t_] = p.rdn[i];
+                    if (!in_set(r)) {
+                        continue;
+                    }
+                    Args a;
+                    a.a(AddrSrc::GateUp)
+                        .lit(r % banks)
+                        .lit((r / banks) * p.region_bytes)
+                        .a(AddrSrc::ReaderDown)
+                        .lit(i % banks)
+                        .lit((i / banks) * p.wr_region)
+                        .lit(pk(p.down[t_]))
+                        .lit(coord_sg[p.sg_rd(r)])
+                        .a(AddrSrc::Done)
+                        .lit(p.nd_sg + i % p.n_rdn)
+                        .a(AddrSrc::Y)
+                        .lit(p.rem_cols + (i % p.n_rdn) * p.pcd_r)
+                        .cat(dyn)
+                        .lits(sgx(p.sg_rd(r)));
+                    add_rt(k, p.readers[r], add_writer_rt(k, p.readers[r], a));
+                    SetRuntimeArgs(program, kc, p.readers[r], std::vector<uint32_t>{0});
+                }
             }
         }
     }
@@ -570,56 +603,76 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         const Defines def = dual_set ? drisc_dual_def : dyn_def;
         // dual: slot 0's reader also posts the DRISC jobs (its own kernel: SE_DRISC_LAUNCH = the post args' index)
         const uint32_t post0 = 4 + static_cast<uint32_t>(dyn.v.size()) + static_cast<uint32_t>(sgx(0).size());
-        for (const bool launch : {false, true}) {
-            std::vector<CoreCoord> cores;
-            for (const auto& c : rd_cores) {
-                if ((dual_set && c == p.launcher) == launch) {
-                    cores.push_back(c);
+        // (uneven split: one kernel per pair-set count, rg_k = the readers' own)
+        std::set<uint32_t> rg_vals;
+        for (uint32_t r = 0; r < n_rd; ++r) {
+            rg_vals.insert(p.rgs.empty() ? p.rg : p.rgs[r]);
+        }
+        const auto rg_of = [&](const CoreCoord& c) {
+            const auto it = std::find(p.readers.begin(), p.readers.end(), c);
+            return p.rgs.empty() ? p.rg : p.rgs[it - p.readers.begin()];
+        };
+        for (const uint32_t rg_k : rg_vals) {
+            for (const bool launch : {false, true}) {
+                std::vector<CoreCoord> cores;
+                for (const auto& c : rd_cores) {
+                    if ((dual_set && c == p.launcher) == launch && rg_of(c) == rg_k) {
+                        cores.push_back(c);
+                    }
+                }
+                if (cores.empty()) {
+                    continue;
+                }
+                const auto k =
+                    dm("se_reader.cpp",
+                       cores,
+                       DataMovementProcessor::RISCV_0,
+                       NOC::NOC_0,
+                       {0, w_tile, rg_k * p.slot, 1, p.nk_gu, 0, 1, E, rg_k * p.slot, 0},
+                       launch ? with(def, {{"SE_DRISC_LAUNCH", std::to_string(post0)}}) : def);
+                for (uint32_t r = 0; r < n_rd; ++r) {
+                    if (!in_set(r) || std::find(cores.begin(), cores.end(), p.readers[r]) == cores.end()) {
+                        continue;
+                    }
+                    Args a;
+                    a.a(AddrSrc::GateUp)
+                        .lit(r % banks)
+                        .lit((r / banks) * p.region_bytes)
+                        .lit(0)
+                        .cat(dyn)
+                        .lits(sgx(p.sg_rd(r)));
+                    if (launch) {
+                        a.cat(drisc_post);
+                    }
+                    add_rt(k, p.readers[r], a);
                 }
             }
-            if (cores.empty()) {
+        }
+        for (const uint32_t rg_k : rg_vals) {
+            std::vector<CoreCoord> fc;
+            for (const auto& c : fwd_cores) {
+                if (rg_of(c) == rg_k) {
+                    fc.push_back(c);
+                }
+            }
+            if (fc.empty()) {
                 continue;
             }
             const auto k =
-                dm("se_reader.cpp",
-                   cores,
-                   DataMovementProcessor::RISCV_0,
-                   NOC::NOC_0,
-                   {0, w_tile, p.rg * p.slot, 1, p.nk_gu, 0, 1, E, p.rg * p.slot, 0},
-                   launch ? with(def, {{"SE_DRISC_LAUNCH", std::to_string(post0)}}) : def);
-            for (uint32_t r = 0; r < n_rd; ++r) {
-                if (!in_set(r) || std::find(cores.begin(), cores.end(), p.readers[r]) == cores.end()) {
-                    continue;
-                }
-                Args a;
-                a.a(AddrSrc::GateUp)
-                    .lit(r % banks)
-                    .lit((r / banks) * p.region_bytes)
-                    .lit(0)
-                    .cat(dyn)
-                    .lits(sgx(p.sg_rd(r)));
-                if (launch) {
-                    a.cat(drisc_post);
-                }
-                add_rt(k, p.readers[r], a);
-            }
-        }
-        if (!fwd_cores.empty()) {
-            const auto k =
                 dm("se10_fwd.cpp",
-                   fwd_cores,
+                   fc,
                    DataMovementProcessor::RISCV_1,
                    NOC::NOC_1,
-                   {0, p.r_, w_tile, p.rg * p.slot, p.slot, p.ring_g, 0, DATA, p.nk_gu, p.rd_slots, FWD, E, G},
+                   {0, rg_k * G, w_tile, rg_k * p.slot, p.slot, p.ring_g, 0, DATA, p.nk_gu, p.rd_slots, FWD, E, G},
                    def);
             for (uint32_t r = 0; r < n_rd; ++r) {
-                if (!in_set(r)) {
+                if (!in_set(r) || rg_of(p.readers[r]) != rg_k) {
                     continue;
                 }
                 Args a;
                 a.a(AddrSrc::Arena);  // land_addr: the gate/up cores' in1 ring (arena offset 0)
-                for (uint32_t j = 0; j < p.r_; ++j) {
-                    a.lit(pk(p.gu[r * p.r_ + j]));
+                for (uint32_t j = 0; j < p.r_of(r); ++j) {
+                    a.lit(pk(p.gu[p.gu_at(r, j)]));
                 }
                 a.cat(dyn).lits(sgx(p.sg_rd(r)));
                 add_rt(k, p.readers[r], a);
@@ -855,7 +908,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         std::vector<CoreCoord> gu_t, gu_d;
         for (uint32_t ci = 0; ci < ngu; ++ci) {
-            (p.drisc_slot(ci / p.r_) ? gu_d : gu_t).push_back(p.gu[ci]);
+            (!p.uneven && p.drisc_slot(ci / p.r_) ? gu_d : gu_t).push_back(p.gu[ci]);
         }
         const std::vector<uint32_t> recv_ct = {
             0,         x_blk,   1,    p.slot, E * p.nk_gu, V,        p.ring_g, 16,    1,     3,      2,    MTG,
@@ -904,15 +957,15 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                gu_full_sync);
         for (uint32_t r = 0; r < n_rd; ++r) {
             const uint32_t sg = p.sg_rd(r);
-            for (uint32_t j = 0; j < p.r_; ++j) {
-                const uint32_t ci = r * p.r_ + j;
+            for (uint32_t j = 0; j < p.r_of(r); ++j) {
+                const uint32_t ci = p.gu_at(r, j);
                 const CoreCoord gc = p.gu[ci];
                 Args a;
                 // the forwarder and its credit word: the reader's semaphore j, or the DRISC's L1 word j
                 const bool dr = p.drisc_slot(r);  // (dual: RT 0 / 1 are the reader's, the grant counter is SE_GRANT_SEM)
                 a.lit(dr && !p.dual ? drisc_xy(r) : pk(p.readers[r]))
                     .lit(dr && !p.dual ? GRANT : j)
-                    .lit((r % p.n_rd_sg) * p.rg + j / G)
+                    .lit((p.ps0.empty() ? (r % p.n_rd_sg) * p.rg : p.ps0[r]) + j / G)
                     .lit(head_xy_sg[sg].size())
                     .lit(0)
                     .lit(coord_sg[sg])
@@ -1078,8 +1131,15 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         TT_FATAL(yrm_rows(pw) >= 1, "flat_routed_expert: row-major y: no room for one row tile");
         arena_cb(16, p.o_off, yrm_rows(pw) * pw * 2048, cores, tt::DataFormat::Float16_b, 2048);
     };
-    if (!trd.empty()) {
-        arena_cb(0, 0, p.rd_slots * p.rg * p.slot * w_tile, trd, wf, w_tile);
+    if (!trd.empty()) {  // (uneven split: each reader's CB holds rd_slots of its own blocks)
+        std::map<uint32_t, std::vector<CoreCoord>> by_rg;
+        for (const auto& c : trd) {
+            const auto it = std::find(p.readers.begin(), p.readers.end(), c);
+            by_rg[p.rgs.empty() || it == p.readers.end() ? p.rg : p.rgs[it - p.readers.begin()]].push_back(c);
+        }
+        for (const auto& [rg_k, cs] : by_rg) {
+            arena_cb(0, 0, p.rd_slots * rg_k * p.slot * w_tile, cs, wf, w_tile);
+        }
     }
     arena_cb(0, 0, p.rm_chunks * 32 * p.seg, p.relays, tt::DataFormat::Float16_b, p.seg);
     arena_cb(1, p.sb_off, p.sb_slots * MT * p.sbt * p.x_tile, p.relays, x_fmt, p.x_tile);

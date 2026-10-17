@@ -847,3 +847,23 @@ Both run at ~385-390 GB/s effective at M 80, so I 2304 (19.9 MB / expert) would 
 same efficiency: ~2.45 / 1.22 / 0.62 ms a call at 48 / 24 / 12 experts. Padding to I 3072 (the K3 split) runs today
 at ~70 us / expert (+37%). Natural fix: np 3 -> 24 pair-sets over the 16 readers, 3 per bank (2 + 1 per reader, banks
 balanced), g 2 -> 48 gate/up cores as K3 - needs per-reader pair-set counts in the plan and readers.
+
+### Uneven gate/up split: DeepSeek V4.1-Flash I 2304 runs (2026-10-17)
+When no It / np is a multiple of the 16 readers, the plan now takes an uneven split (MIMO_FL_UNEVEN=0: off): the
+pair-sets spread over the 8 banks (shares 1 apart), each bank's over its 2 readers (rgs per reader, ps0 first pair-set,
+gu_off; reader kernels se_reader / se10_fwd / se9_rdown and the reader CB built per pair-set count; gate/up cores take
+pair-set ps0[r] + j / G; flat_weight_regions packs per reader, zero-padded to the largest region; the weight cache
+key gains rgs only for uneven plans). Receivers per reader up to 8 (credit semaphores 0..7 are free on reader cells;
+5 with reader down columns: se9 uses 5 / 12). More than 64 gate/up cores: the auto-shaped rectangles (12 x 10: 74
+cells), the smallest pair covering the split, extra cells idle. DRISC mode not ported yet (uneven plans use the Tensix
+readers). test_flat_uneven_split.py (H 5120 I 2304 E 12 / 24, clamped SwiGLU, counts incl. full capacity, two
+launches): min PCC 0.998 vs the bfp4 reference.
+V4.1 shape, us per expert (DRAM %), balanced sweep, one chip, bfp4, LoFi; E 24 (E 48 / 12 within ~3%):
+| plan | M 32 | M 80 | M 128 | M 256 | M 1024 |
+| np 3, 24 gate/up (rgs 2 / 1) | 52.5 | 59.8 (70%) | 71.9 | 140.9 | 555.2 |
+| np 2, 36 gate/up (rgs 3 / 2) | 48.1 | 51.7 (81%) | 55.1 | 70.5 | 271.6 |
+| np 1, 72 gate/up, reader down cols (rgs 5 / 4), 15 down | 45.9 (88%) | 51.0 (83%) | 55.4 | 68.9 | 245.4 |
+| same, all 26 down candidates (probe MIMO_FL_ND=64) | - | 51.4 (82%) | - | 67.4 | 217.1 |
+Bounds: M <= 128 DRAM / latency (~80-88%, DRISC off); large M down-bound: 72 gate/up (as if 108 cores) but 15 down
+cores at 8 columns (as if ~60) - the plan's trim drops down cores east of column 8 (slow for K3); keeping them gives
+-12% at M 1024. Even I 2048 at M 1024: 169.5 (ideal for I 2304 at its efficiency ~190).

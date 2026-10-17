@@ -399,7 +399,8 @@ def flat_weight_regions(W_l, lay):
     builder share it). W_l: per local expert (Wg [H, I], Wu [H, I], Wd [I, H]). Returns (gate/up regions per reader,
     down regions per down core, reader-tail down regions or None), each a list of equal-size [tiles, 32, 32]:
     * reader r: per expert, per K-block of KBLK tiles, its RG pair-sets' [KBLK x (gate, up) x NP] blocks
-      (pair-set column (r % n_rd_sg) * RG + pl);
+      (pair-set column (r % n_rd_sg) * RG + pl; an uneven split: rgs[r] pair-sets from ps0[r], the region zero-padded
+      to the largest reader's);
     * down core d: per expert, per K-block of kd_of(pcds[d]) tiles, its [kd x pcds[d]] columns from col0s[d]
       (zero-padded to the widest core's region);
     * reader tail i: per expert, per K-block of kd_r tiles, [kd_r x pcd_r] columns from rem_cols + (i % n_rdn) pcd_r."""
@@ -408,18 +409,24 @@ def flat_weight_regions(W_l, lay):
     T_l = [(tiles(a), tiles(b), tiles(c)) for a, b, c in W_l]
     it = W_l[0][0].shape[1] // 32
     RG, NP = lay["rg"], lay["np"]
+    rgs, ps0 = lay.get("rgs") or [], lay.get("ps0") or []
     regions = []
     for r in range(lay["n_rd"]):
+        rg_r, p0 = (rgs[r], ps0[r]) if rgs else (RG, (r % lay["n_rd_sg"]) * RG)
         blocks = []
         for Wg_t, Wu_t, _ in T_l:
             for c in range(lay["nk_gu"]):
                 ks = slice(c * kblk, (c + 1) * kblk)
-                for pl in range(RG):
-                    cols = [((r % lay["n_rd_sg"]) * RG + pl) * NP + p_ for p_ in range(NP)]
+                for pl in range(rg_r):
+                    cols = [(p0 + pl) * NP + p_ for p_ in range(NP)]
                     blocks.append(
                         torch.stack([w_[ks, c_] for c_ in cols for w_ in (Wg_t, Wu_t)], dim=1).reshape(-1, 32, 32)
                     )
-        regions.append(torch.cat(blocks))
+        reg = torch.cat(blocks)
+        if rg_r < RG:  # (the same region size for every reader: _bank_sharded)
+            pad = reg.shape[0] // rg_r * (RG - rg_r)
+            reg = torch.cat([reg, torch.zeros(pad, 32, 32, dtype=reg.dtype, device=reg.device)])
+        regions.append(reg)
     pcds, col0s = lay["pcds"], lay["col0s"]
 
     def dreg(d):
@@ -449,7 +456,9 @@ def flat_weight_regions(W_l, lay):
                 rot.append(torch.cat([mine, pad]))
         dregs = rot
     n_max = max(r_.shape[0] for r_ in dregs)
-    dregs = [torch.cat([r_, torch.zeros(n_max - r_.shape[0], 32, 32, dtype=r_.dtype, device=r_.device)]) for r_ in dregs]
+    dregs = [
+        torch.cat([r_, torch.zeros(n_max - r_.shape[0], 32, 32, dtype=r_.dtype, device=r_.device)]) for r_ in dregs
+    ]
     rregs = None
     if lay["rdown"]:
         kd_r, n_rdn, pcd_r, rem = lay["kd_r"], lay["n_rdn"], lay["pcd_r"], lay["rem_cols"]
@@ -1878,6 +1887,8 @@ class FlatRoutedExpert:
             # size, h buffers or x / h formats' L1 choices change the plan, not where a weight tile goes
             # (dw_rot only when on: existing caches keep their keys)
             layout = {k: lay[k] for k in WEIGHT_LAYOUT_KEYS if k in lay and (k != "dw_rot" or lay[k])}
+            if lay.get("rgs"):  # (uneven split only: even plans keep their keys)
+                layout["rgs"] = tuple(lay["rgs"])
             key = hashlib.sha1(repr((sorted(layout.items()), gids, n_dev)).encode()).hexdigest()[:12]
             files = {n: f"{cache_prefix}.flat.{wdtype}.lay{key}.{n}.tensorbin" for n in names}
             _adopt_legacy(cache_prefix, wdtype, files)

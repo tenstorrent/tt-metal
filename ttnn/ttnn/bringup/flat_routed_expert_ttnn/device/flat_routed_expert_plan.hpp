@@ -108,6 +108,14 @@ struct FlatRoutedExpertPlan {
     uint32_t np = 1, g = 1, mt = 1, mtg = 1, x_slots = 24, dst_tiles = 8;
     bool gu_rp = false, gu_fp32 = true, gu_l1acc = false;
     uint32_t s = 1, v = 1, nk_gu = 1, slot = 1, rg = 1, r_ = 1, ring_g = 1;
+    // uneven split (It / np pair-sets a multiple of the banks, not of the readers: e.g. DeepSeek V4.1 I 2304, 72
+    // columns = 24 pair-sets of 3 pairs over 16 readers): reader r forwards rgs[r] pair-sets (rg = their max, r_ = rg *
+    // g), pair-sets ps0[r] .., to gate/up cores gu[gu_off[r] ..]; each bank's readers together hold the bank's even
+    // share. Even plans: rgs = rg, ps0 = (r % n_rd_sg) * rg, gu_off = r * r_
+    bool uneven = false;
+    std::vector<uint32_t> rgs, ps0, gu_off;
+    uint32_t r_of(uint32_t r) const { return rgs.empty() ? r_ : rgs[r] * g; }
+    uint32_t gu_at(uint32_t r, uint32_t j) const { return gu_off.empty() ? r * r_ + j : gu_off[r] + j; }
     // relays
     uint32_t nh = 1, land_slots = 3, vstride = 2, sbt = 32, seg = 2048, nsb = 1;
     // x / h tile bytes and formats (bfp8 1088; config x_bf16 / h_bf16: bf16 2048), and the
