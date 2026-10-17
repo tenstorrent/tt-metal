@@ -14,6 +14,7 @@
  * Features:
  * 1. DEST register capacity detection (get_dest_limit(), DEST_AUTO_LIMIT)
  * 2. FP32 accumulation mode detection (get_fp32_dest_acc_enabled())
+ * 3. SFPU data format for a bf16 input under the current DEST width (get_where_data_format_for_bf16_input())
  *
  * DEST register capacity depends on:
  * 1. Sync mode (Half vs Full) - determined by DST_SYNC_MODE
@@ -58,6 +59,21 @@ constexpr bool get_fp32_dest_acc_enabled() {
     return false;  // Unreachable; suppresses 'no return statement' diagnostic on some toolchains.
 #endif
 }
+
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_ISOLATE_SFPU)
+/**
+ * @brief DataFormat to instantiate Where with when the input is bf16 (or a BFP format unpacked to bf16)
+ *
+ * @return DataFormat::Float32 under a 32-bit DEST, DataFormat::Float16_b otherwise
+ *
+ * The DEST width follows the output, not the input: a float32 output enables the 32-bit DEST even for a
+ * bf16 input. Where<Float16_b> loads and stores 16-bit halves of each DEST word, so under a 32-bit DEST it
+ * must be instantiated as Where<Float32>. Compute kernels only (DST_ACCUM_MODE comes from the JIT header).
+ */
+constexpr DataFormat get_where_data_format_for_bf16_input() {
+    return get_fp32_dest_acc_enabled() ? DataFormat::Float32 : DataFormat::Float16_b;
+}
+#endif
 
 /**
  * @brief Detect if full destination sync mode is enabled

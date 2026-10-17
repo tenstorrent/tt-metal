@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"  // get_where_data_format_for_bf16_input
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"  // FillScalar
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
@@ -16,6 +17,9 @@
 #include "experimental/kernel_args.h"
 
 namespace ckl = compute_kernel_lib;
+
+// The input is bf16 but the Dest width follows the output (a float32 output enables the 32-bit Dest).
+constexpr auto kWhereDF = ckl::get_where_data_format_for_bf16_input();
 
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
@@ -53,7 +57,7 @@ void kernel_main() {
         ckl::EqBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
         // D3 = 0 ; D1 = where(cond=D2, a=0, b=sin) -> 0 at integers else sin
         ckl::FillScalar<ckl::Dst::D3>{0.0f},
-        ckl::Where<DataFormat::Float16_b, ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D1, ckl::Dst::D1>{},
+        ckl::Where<kWhereDF, ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D1, ckl::Dst::D1>{},
         // D1 = log|D1|
         ckl::Abs<ckl::Dst::D1>{},
         ckl::Log<ckl::Approx::Exact, ckl::Dst::D1>{},

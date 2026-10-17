@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"  // get_where_data_format_for_bf16_input
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/special.hpp"    // Where
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"  // FillBitcast / FillInt
@@ -19,8 +20,8 @@ constexpr auto kWhereDF = DataFormat::UInt32;
 #elif defined(INP_FLOAT32)
 constexpr auto kWhereDF = DataFormat::Float32;
 #else
-// The legacy kernel used Float16_b for BF16 and both BFP input dtypes.
-constexpr auto kWhereDF = DataFormat::Float16_b;
+// BF16 and both BFP input dtypes; the Dest width follows the output (a float32 output enables the 32-bit Dest).
+constexpr auto kWhereDF = ckl::get_where_data_format_for_bf16_input();
 #endif
 
 constexpr bool kIsInt = kWhereDF == DataFormat::Int32 || kWhereDF == DataFormat::UInt32;
