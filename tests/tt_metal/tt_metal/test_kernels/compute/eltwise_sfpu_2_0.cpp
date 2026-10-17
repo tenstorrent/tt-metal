@@ -10,6 +10,12 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
+// Which Dest tile the unary / binary chains pack. A chain that must observe a Dest tile other
+// than the one it computed into (e.g. a neighbour it must leave untouched) overrides this.
+#ifndef SFPU_PACK_DST_INDEX
+#define SFPU_PACK_DST_INDEX 0
+#endif
+
 void kernel_main() {
     const uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
     const uint32_t per_core_block_size = get_arg(args::per_core_block_size);
@@ -69,7 +75,7 @@ void kernel_main() {
 #if defined(SFPU_TERNARY_OP)
             pack_tile(/*dst_index=*/3, out_id);
 #else
-            pack_tile(/*dst_index=*/0, out_id);
+            pack_tile(/*dst_index=*/SFPU_PACK_DST_INDEX, out_id);
 #endif
             tile_regs_release();
 
