@@ -7,9 +7,11 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
+#include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "core/device.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -84,6 +86,59 @@ TEST_F(AutogradTest, TestMul) {
     }
     EXPECT_EQ(t2_back, test_data1);
     EXPECT_EQ(t1_back, test_data2);
+}
+
+TEST_F(AutogradTest, RetainedGraphDoesNotReuseIntermediateGradients) {
+    using namespace ttml::ops;
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto shape = ttnn::Shape({1, 1, 1, 4});
+    auto value = ttml::core::from_vector(std::vector<float>{1.F, 2.F, 3.F, 4.F}, shape, device);
+    auto constant = ttml::core::from_vector(std::vector<float>(4, 1.F), shape, device);
+
+    auto input = ttml::autograd::create_tensor(value, /* requires_grad */ true);
+    auto constant_tensor = ttml::autograd::create_tensor(constant);
+    auto intermediate = input + constant_tensor;
+    auto output = intermediate + constant_tensor;
+
+    output->backward(/* retain_graph */ true);
+    output->backward(/* retain_graph */ true);
+
+    EXPECT_EQ(ttml::core::to_vector(output->get_grad()), std::vector<float>(4, 1.F));
+    EXPECT_EQ(ttml::core::to_vector(intermediate->get_grad()), std::vector<float>(4, 1.F));
+    EXPECT_EQ(ttml::core::to_vector(input->get_grad()), std::vector<float>(4, 2.F));
+}
+
+TEST_F(AutogradTest, RetainedMultiOutputGraphClearsUnreachableSiblingGradient) {
+    using namespace ttml::ops;
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto shape = ttnn::Shape({1, 1, 1, 4});
+    auto value = ttml::core::from_vector(std::vector<float>{1.F, 2.F, 3.F, 4.F}, shape, device);
+
+    auto input = ttml::autograd::create_tensor(value, /* requires_grad */ true);
+    auto out1 = ttml::autograd::create_tensor(value);
+    auto out2 = ttml::autograd::create_tensor(value);
+    auto out3 = ttml::autograd::create_tensor(value);
+
+    ttml::autograd::GradFunction grad = [input, outputs = std::array{out1, out2, out3}]() {
+        for (const auto& output : outputs) {
+            if (output->is_grad_initialized()) {
+                input->add_grad(output->get_grad());
+            }
+        }
+    };
+
+    auto primary = ttml::autograd::add_backward_node_for_outputs(std::move(grad), {out1, out2, out3}, input);
+    out1->set_node(primary);
+    out2->set_node(ttml::autograd::add_backward_node_always([]() {}, out2, input, out1));
+    out3->set_node(ttml::autograd::add_backward_node_always([]() {}, out3, input, out1));
+
+    // out2's traversal reaches the primary closure but not out3's dummy node.
+    // The primary output group must still clear out3's stale root gradient.
+    out3->backward(/* retain_graph */ true);
+    out2->backward(/* retain_graph */ true);
+
+    EXPECT_FALSE(out3->is_grad_initialized());
+    EXPECT_EQ(ttml::core::to_vector(input->get_grad()), std::vector<float>(4, 2.F));
 }
 
 TEST_F(AutogradTest, BroadCastBatchTest) {

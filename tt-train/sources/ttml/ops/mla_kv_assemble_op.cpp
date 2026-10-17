@@ -36,7 +36,7 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr> mla_kv_assemble(
         k_pe->add_grad(dk_pe);
     };
 
-    auto k_node = autograd::add_backward_node(std::move(grad), out_k, kv_up, k_pe);
+    auto k_node = autograd::add_backward_node_for_outputs(std::move(grad), {out_k, out_v}, kv_up, k_pe);
     if (k_node.has_value()) {
         out_k->set_node(k_node);
         // Sync node on out_v ensures dV is populated before grad lambda runs.

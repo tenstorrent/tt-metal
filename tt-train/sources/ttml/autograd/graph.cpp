@@ -27,7 +27,8 @@ std::vector<GraphNode>& Graph::get_graph_nodes() {
     return m_graph_nodes;
 }
 
-NodeId Graph::add_node(GradFunction&& grad_function, std::span<NodeId> links) {
+NodeId Graph::add_node(
+    GradFunction&& grad_function, std::span<NodeId> links, std::span<const std::shared_ptr<Tensor>> outputs) {
     size_t curr_id = m_graph_nodes.size();
     if (core::debug::Debug::enable_backward_performance_measurement()) {
         //  we are using this wrapper to measure the time taken by each node.
@@ -47,6 +48,10 @@ NodeId Graph::add_node(GradFunction&& grad_function, std::span<NodeId> links) {
         m_graph_nodes.emplace_back(std::move(grad_function));
     }
 
+    for (const auto& output : outputs) {
+        set_node_output(curr_id, output);
+    }
+
     auto& node_links = m_links.emplace_back();
     node_links.reserve(links.size());
     for (const auto& link : links) {
@@ -54,6 +59,16 @@ NodeId Graph::add_node(GradFunction&& grad_function, std::span<NodeId> links) {
     }
 
     return {curr_id, this};
+}
+
+void Graph::set_node_output(size_t node_id, const std::shared_ptr<Tensor>& output) {
+    auto& outputs = m_graph_nodes.at(node_id).outputs;
+    for (const auto& weak_output : outputs) {
+        if (weak_output.lock() == output) {
+            return;
+        }
+    }
+    outputs.emplace_back(output);
 }
 
 NodeId::NodeId(size_t node_id, Graph* graph) : m_node_id(node_id), m_graph(graph) {
