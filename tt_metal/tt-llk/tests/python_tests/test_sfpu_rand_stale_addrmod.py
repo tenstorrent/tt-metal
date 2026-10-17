@@ -139,10 +139,11 @@ def test_sfpu_rand_stale_addrmod(formats, dest_acc):
         f"{sentinel_count} of {draws.numel()} draw elements still hold the sentinel after rand: rand "
         f"stored under the address mode the topk init left (first survivors at elements {survivors})"
     )
-    out_of_range = draws[(draws < DRAW_LOW) | (draws > DRAW_HIGH)]
-    assert (
-        out_of_range.numel() == 0
-    ), f"draws outside [{DRAW_LOW}, {DRAW_HIGH}]: {out_of_range[:SURVIVORS_SHOWN].tolist()}"
+    in_range = (draws >= DRAW_LOW) & (draws <= DRAW_HIGH)  # False for NaN as well
+    out_of_range = draws[~in_range]
+    assert bool(
+        in_range.all()
+    ), f"draws outside [{DRAW_LOW}, {DRAW_HIGH}] or non-finite: {out_of_range[:SURVIVORS_SHOWN].tolist()}"
     distinct = int(torch.unique(draws).numel())
     assert (
         distinct >= MIN_DISTINCT

@@ -56,7 +56,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_sfpu/ckernel_sfpu_rand.h"
-#include "sfpi.h"
 
 using namespace ckernel;
 
