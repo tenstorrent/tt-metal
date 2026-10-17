@@ -398,14 +398,18 @@ inline void _llk_unpack_bcastA_B_init_(const std::uint32_t unpack_dst_format)
 /**
  * @brief Restore unpacker state after an SDPA sub_bcast_row operation.
  *
- * Drains the unpacker, then restores the canonical srcA Y-stride established by
- * configure_unpack_AB (_llk_unpack_bcastA_B_init_ programs the same one-face-row value for the dst
- * format). The restore is order-independent because the canonical value is derivable from the dst
- * format, so no register snapshot is needed. The per-unpacker x-end datum counts are also reset to the canonical
- * face layout; x-start/x-end is transient and reprogrammed by the next operation's init (see
- * tt-llk#1036), so this is a deterministic safety reset rather than a required restore.
+ * Drains the unpacker, then leaves it in the configure_unpack_AB state for unpack_dst_format:
+ * the per-unpacker x-end datum counts go back to the canonical face layout (init set A to one
+ * row and B to a whole tile), and the srcA Y-stride is written to its canonical value. The
+ * Y-stride write is a defensive reset, not a restore: _llk_unpack_bcastA_B_init_ programs the
+ * same canonical_unpA_y_stride(unpack_dst_format), so with the dst format init was given (what
+ * every caller passes) it rewrites the value already in the register. It is kept so this
+ * function does not depend on what ran between init and uninit, and it needs no register
+ * snapshot because the canonical value is derivable from the dst format. x-start/x-end is
+ * transient and reprogrammed by the next operation's init (see tt-llk#1036), so that reset is
+ * deterministic safety rather than a required restore too.
  *
- * @param unpack_dst_format: Destination data format used to recompute the canonical srcA Y-stride.
+ * @param unpack_dst_format: SrcA register data format; sizes the canonical srcA Y-stride.
  * @param tensor_shape: Tile geometry; face_r_dim sizes the canonical x-end datum count.
  * @note Call @ref _llk_unpack_bcastA_B_init_ before this function.
  */
@@ -415,10 +419,9 @@ inline void _llk_unpack_bcastA_B_uninit_(const std::uint32_t unpack_dst_format, 
     // half-updated Y-stride, mirroring the other unpack uninit paths.
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
 
-    // Restore canonical srcA Y-stride established by configure_unpack_AB.
-    // _llk_unpack_bcastA_B_init_ programs the same format-derived one-row value; the
-    // restore here is order-independent because the canonical value is derivable from
-    // the dst format, so we do not need to snapshot the previous register value.
+    // Defensive reset of the srcA Y-stride to the configure_unpack_AB value. A no-op when
+    // unpack_dst_format is the one _llk_unpack_bcastA_B_init_ was given (it programs the same
+    // canonical value); kept so uninit leaves the canonical state whatever ran in between.
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(canonical_unpA_y_stride(unpack_dst_format));
     TT_SETADCXX(p_setadc::UNP_AB, tensor_shape.face_r_dim * FACE_C_DIM - 1, 0x0);
 }
