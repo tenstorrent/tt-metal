@@ -71,7 +71,7 @@ inline void abs_denominator_wh_core()
     else
     {
         TTI_SFPIADD((-BoundExponent) & 0xfff, 6, 6, SFPIADD_MOD1_ARG_IMM | SFPIADD_MOD1_CC_NONE);
-        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 4, 4, 4, SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, 4, 4, SFPSTOCHRND_MOD1_FP32_TO_FP16B);
         TTI_SFPSETCC(0, 6, 0, SFPSETCC_MOD1_LREG_GTE0);
     }
 }
@@ -90,7 +90,7 @@ inline void abs_denominator_wh_suffix()
     TTI_SFPENCC(0, 0, 0, 0);
     if constexpr (LateRound)
     {
-        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 4, 4, 4, SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, 4, 4, SFPSTOCHRND_MOD1_FP32_TO_FP16B);
     }
     TTI_SFPSTORE(4, 0, Advance, 0);
 }
