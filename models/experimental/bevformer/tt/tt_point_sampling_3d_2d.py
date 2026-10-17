@@ -86,7 +86,7 @@ def point_sampling_3d_to_2d_ttnn(
             Can be ttnn.Tensor or torch.Tensor.
         img_metas (Optional[List[dict]]): Image metadata containing image shapes.
         img_shape (Optional[Tuple[int, int]]): Image shape (height, width). Used if img_metas is None.
-        eps (float): Small epsilon to avoid division by zero.
+        eps (float): Depth a point must exceed to count as in front of the camera, and the divide's floor.
         device: TTNN device for computation.
 
     Returns:

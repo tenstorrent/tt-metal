@@ -17,7 +17,8 @@ Per frame:
    levels are concatenated: the encoder's ``(num_cams, num_keys, bs, C)`` value.
 3. The previous frame's BEV, if any, is rotated per sample by the heading change about
    ``rotate_center`` (torchvision's ``rotate``, nearest), and the encoder shifts its reference
-   points by the ego translation (:func:`ego_shift`), in cells of :func:`bev_grid_length`.
+   points by the ego translation (:func:`ego_shift`), in BEV-grid fractions: metres over
+   :func:`bev_grid_length`, over the grid size.
 4. The encoder builds the BEV map.
 
 ``img_metas[b]["can_bus"]`` is the 18-value CAN-bus vector with its translation ``[:3]`` and heading

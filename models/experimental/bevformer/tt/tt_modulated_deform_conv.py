@@ -6,7 +6,7 @@
 
 The ResNet101 backbone has 26 modulated deformable convs per inference (layer3 and
 layer4, `stage_with_dcn=(False, False, True, True)`). This module decomposes modulated
-deformable conv (Dai et al. 2018) into K*K (= 9 for K=3) sample positions per output
+deformable conv (DCNv2, Zhu et al. 2019) into K*K (= 9 for K=3) sample positions per output
 pixel, one `ttnn.grid_sample` over all of them and a matmul over K*K*C_in, so the
 whole op stays on device.
 
