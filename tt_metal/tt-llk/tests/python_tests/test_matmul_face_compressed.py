@@ -16,7 +16,8 @@ from helpers.compressed_utils import (
 )
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.tile_constants import FACE_C_DIM
+from helpers.test_variant_parameters import CUSTOM_MM_CALLS
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
 
 
 def promote_assignment(assignment, ct):
@@ -131,32 +132,51 @@ def meta_math_header(m, ct):
         return {0: 1, 1: 1, 2: 1, 3: 2}[rows[3] % 4]  # 0/1/2 incB, 3 clrB
 
 
-def encode_meta(assignment, ct, kt, chunk_info):
-    # Build the face-compressed meta buffer, laid out as:
-    #   math_words | iters | address_words | index_words
-    # ct/kt are face columns/rows (N//16, K//16); chunk_info is pack_b's per-chunk
-    # (bfp2, bfp4) exp-section offset + Y_OFF.
-
+def buffer_b_words(kt):
     # buffer_B base in L1_ADDRESS units (= byte/16 - 1): B follows A, which
-    # is kt//2 (= K//32) 32x32 Float16_b tiles of 2048 B each.
+    # is kt//2 (= K//32) 32x32 Float16_b tiles of 2048 B each. kt is the full K in faces.
     buf_a_addr = (
         StimuliConfig.STIMULI_L1_ADDRESS_DEBUG
         if StimuliConfig.WITH_COVERAGE
         else StimuliConfig.STIMULI_L1_ADDRESS_PERF
     )
-    buf_b_words = (buf_a_addr + 2048 * (kt // 2)) // 16 - 1
+    return (buf_a_addr + 2048 * (kt // 2)) // 16 - 1
+
+
+# Meta buffer layout counts, shared by encode_meta and the multi-call stride: the kernel reads
+# five 6-bit math metas per word, six unpack metas per index word (at a 5-bit stride, since
+# neighbours share a bit) and one bfp2/bfp4 address pair per eight index words.
+MATH_METAS_PER_WORD = 5
+MATH_META_BITS = 6
+INDEX_METAS_PER_WORD = 6
+INDEX_META_STRIDE_BITS = 5
+INDEX_WORDS_PER_ADDRESS_PAIR = 8
+
+
+def ceil_div(n, d):
+    return (n + d - 1) // d
+
+
+def encode_meta(assignment, ct, kt, chunk_info, b_base_words=None):
+    # Build the face-compressed meta buffer, laid out as:
+    #   math_words | iters | address_words | index_words
+    # ct/kt are face columns/rows (N//16, K//16); chunk_info is pack_b's per-chunk
+    # (bfp2, bfp4) exp-section offset + Y_OFF. b_base_words overrides the buffer_B
+    # base the chunk offsets are relative to, for a meta that covers only part of K.
+
+    buf_b_words = buffer_b_words(kt) if b_base_words is None else b_base_words
 
     # Math region: one 6-bit meta per 4-face block, 5 metas per 32-bit word. A meta is
     # (face_bits << 2) | header — face_bits marks its non-zero faces, header is the
     # regime-specific value from meta_math_header.
     num_metas = len(assignment) // 4
-    math_words = [0] * ((num_metas + 4) // 5)
+    math_words = [0] * ceil_div(num_metas, MATH_METAS_PER_WORD)
     for m in range(num_metas):
-        u, slot = divmod(m, 5)
+        u, slot = divmod(m, MATH_METAS_PER_WORD)
         faces = assignment[4 * m : 4 * m + 4]
         face_bits = sum((1 << j) for j, code in enumerate(faces) if code != 0)
         meta6 = (face_bits << 2) | (meta_math_header(m, ct) & 0b11)
-        math_words[u] |= meta6 << (6 * slot)
+        math_words[u] |= meta6 << (MATH_META_BITS * slot)
 
     # Non-zero faces in assignment order as (fmt, first_in_block): fmt 0=bfp2 / 1=bfp4
     # (bfp0 skipped, bfp8 disallowed). first_in_block marks the first non-zero face of each
@@ -179,21 +199,22 @@ def encode_meta(assignment, ct, kt, chunk_info):
         nonzero_faces % 4 == 0
     ), f"non-zero face count {nonzero_faces} must be a multiple of 4"
     iters = nonzero_faces // 4  # unpack steps: 4 non-zero faces per index meta
-    full_iters = iters // 6
+    full_iters = iters // INDEX_METAS_PER_WORD
 
     # Address section: one (bfp2, bfp4) base-address pair per 192-face chunk, which the
-    # double-buffered unpacker reloads as it streams. The kernel reads full_iters//8 + 1
-    # pairs — the last is a never-used lookahead when full_iters is a multiple of 8 (the
-    # (0,0,0,0) pad covers it). Each word = (Y_OFF << 24) | ((base - Y_OFF) & 0xFFFFFF),
-    # base = buf_b_words + chunk offset; the kernel re-adds Y_OFF via SETADC SET_Y so the
-    # read starts at the exp-section base (absent format -> (0,0) = base, no stride).
+    # double-buffered unpacker reloads as it streams. The kernel reads one pair per eight
+    # full index words plus one — the last is a never-used lookahead when full_iters is a
+    # multiple of 8 (the (0,0,0,0) pad covers it). Each word =
+    # (Y_OFF << 24) | ((base - Y_OFF) & 0xFFFFFF), base = buf_b_words + chunk offset; the
+    # kernel re-adds Y_OFF via SETADC SET_Y so the read starts at the exp-section base
+    # (absent format -> (0,0) = base, no stride).
     def addr_word(off, y_off):
         base = buf_b_words + off  # absolute 16B-word base
         return (y_off << 24) | ((base - y_off) & 0x00FFFFFF)
 
     address_words = []
     chunk_info = chunk_info + [(0, 0, 0, 0)]  # pad for the lookahead pair
-    for k in range(full_iters // 8 + 1):
+    for k in range(full_iters // INDEX_WORDS_PER_ADDRESS_PAIR + 1):
         b2_off, b2_y, b4_off, b4_y = chunk_info[k]
         address_words.append(addr_word(b2_off, b2_y))
         address_words.append(addr_word(b4_off, b4_y))
@@ -202,13 +223,12 @@ def encode_meta(assignment, ct, kt, chunk_info):
     # j occupies bits [5j+1 .. 5j+5] = [hasB, face0..3]. Bit 0 replicates the previous
     # word's last face as prev_fmt (word 0: its own first face), so each 6-bit lookup
     # (prev_fmt | hasB | face0..3) overlaps. hasB = 1 iff a face in the meta is first_in_block.
-    index_words = [0] * ((iters + 5) // 6)
+    index_words = [0] * ceil_div(iters, INDEX_METAS_PER_WORD)
     prev_fmt = nz_faces[0][0]  # word 0's bit 0 replicates its own first face
     for k in range(iters):  # k = unpack meta index
-        w, j = divmod(k, 6)
-        base = (
-            5 * j + 1
-        )  # meta j's fields start at bit `base`; bit 0 of the word is prev_fmt
+        w, j = divmod(k, INDEX_METAS_PER_WORD)
+        # meta j's fields start at bit `base`; bit 0 of the word is prev_fmt
+        base = INDEX_META_STRIDE_BITS * j + 1
         if j == 0:
             index_words[w] |= prev_fmt
         first_in_blocks = 0
@@ -439,3 +459,140 @@ def test_matmul_face_compressed_deepseek(shape, switch_mult, seed):
         K, N, DEEPSEEK_T420, switch_mult=switch_mult, seed=seed
     )
     run_face_compressed(M, K, N, assignment)
+
+
+# ---------------------------------------------------------------------------
+# Multi-call: K splits over back-to-back calls that accumulate into one DEST, each call with
+# its own meta stream, as a kernel running one call per expert does. The kernel holds math
+# back before each call, so the unpacker reaches the next call while math still holds the
+# previous one's banks (see the kernel source). Every call after the first depends on the
+# clean state the unpack LLK establishes on entry, before its first face:
+#   same        one format throughout, so the boundary is only the counter reset: the
+#               activation unpacks walk the unpacker's own Y counter, which has to be back at
+#               zero when the next call sets its activation base, or the call reads the wrong
+#               rows (every output face wrong, PCC near zero)
+#   alternate   call c is all bfp2 or all bfp4 by parity: every bfp2 <-> bfp4 switch is a
+#               boundary switch, in alternating directions. Inside a call a switch is preceded
+#               by the CLR_SRC stall the index words encode; a call's first face never carries
+#               one, because its previous-format bit replicates the face itself, so only the
+#               call-entry stall separates the two formats. Without it the ct_dim == 1 rows
+#               hang; the ct_dim >= 2 rows have not been seen to fail without it and guard
+#               the counter reset and the stall's placement against regressions
+#   end-bfp4    every call is bfp2 then bfp4, so every boundary switches bfp4 -> bfp2
+#   end-bfp2    the reverse, every boundary switches bfp2 -> bfp4
+# K tiles per call sets how much of the execute each call runs: 2 is the shortest call
+# (no address reload; one index word at ct_dim <= 2, three at ct_dim 8), 32 at ct_dim 2
+# runs the odd eight-word block, which reloads the alternate context pair and leaves the
+# call on it, 48 at ct_dim 2 and 16 at ct_dim 8 run a full sixteen-word block, which
+# reloads both context pairs, and 48 at ct_dim 1 runs the odd block at the single-tile
+# width.
+MULTI_CALL_CASES = [
+    # (id, M, K, N, K tiles per call, per-call format runs, cycled over the calls)
+    ("same-bfp4", 1, 2048, 64, 2, [("bfp4",)]),
+    ("same-bfp2-m8", 8, 2048, 64, 2, [("bfp2",)]),
+    ("alternate", 1, 2048, 64, 2, [("bfp2",), ("bfp4",)]),
+    ("alternate-m8", 8, 2048, 64, 2, [("bfp2",), ("bfp4",)]),
+    ("end-bfp4", 1, 2048, 64, 2, [("bfp2", "bfp4")]),
+    ("end-bfp2", 1, 2048, 64, 2, [("bfp4", "bfp2")]),
+    ("end-bfp4-m8", 8, 2048, 64, 2, [("bfp2", "bfp4")]),
+    ("same-bfp4-ct1", 1, 2048, 32, 2, [("bfp4",)]),
+    ("alternate-ct1", 1, 2048, 32, 2, [("bfp2",), ("bfp4",)]),
+    ("end-bfp4-ct1-m8", 8, 2048, 32, 2, [("bfp2", "bfp4")]),
+    ("alternate-ct8-m8", 8, 1024, 256, 2, [("bfp2",), ("bfp4",)]),
+    ("end-bfp2-ct8", 1, 1024, 256, 2, [("bfp4", "bfp2")]),
+    ("alternate-k32", 1, 3072, 64, 32, [("bfp2",), ("bfp4",)]),
+    ("end-bfp4-k48-m8", 8, 3072, 64, 48, [("bfp2", "bfp4")]),
+    ("same-bfp2-ct8-k16", 1, 1024, 256, 16, [("bfp2",)]),
+    ("alternate-ct1-k48", 1, 3072, 32, 48, [("bfp2",), ("bfp4",)]),
+]
+# With the entry stall and the counter reset every row lands at PCC >= 0.9996; the missing
+# counter reset puts them near 0. The default 0.99 would also let a single corrupt face per
+# boundary through, as the custom_compressed multi-call test found, so pin the gate tighter.
+MULTI_CALL_PCC = 0.9995
+
+
+def meta_words_per_call(kt_tiles, ct_tiles):
+    # The kernel's meta stride between calls: one call's meta words with every face present,
+    # which is the most it can take -- the math metas, the iters word, the address words (a
+    # bfp2/bfp4 pair per eight full index words plus the lookahead pair) and the index words,
+    # in the layout counts encode_meta packs with. Emitted to the kernel as
+    # CUSTOM_MM_META_WORDS_PER_CALL.
+    max_iters = kt_tiles * ct_tiles
+    math_words = ceil_div(max_iters, MATH_METAS_PER_WORD)
+    address_words = 2 * (
+        max_iters // INDEX_METAS_PER_WORD // INDEX_WORDS_PER_ADDRESS_PAIR + 1
+    )
+    index_words = ceil_div(max_iters, INDEX_METAS_PER_WORD)
+    return math_words + 1 + address_words + index_words
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "M,K,N,kt_per_call,call_formats",
+    [pytest.param(*case[1:], id=case[0]) for case in MULTI_CALL_CASES],
+)
+def test_matmul_face_compressed_multi_call(M, K, N, kt_per_call, call_formats):
+    """Back-to-back calls into one DEST, checked against the full-K golden."""
+    kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM
+    ku, cu = K // COMPRESSION_GRANULARITY, N // COMPRESSION_GRANULARITY
+    num_calls = kt // kt_per_call
+    rows_per_call = ku // num_calls  # face rows per call
+    faces_per_call = rows_per_call * cu
+    stride = meta_words_per_call(kt_per_call, ct)
+    stride_bytes = 4 * stride
+
+    # Each call lays its formats as contiguous runs over its own faces.
+    assignment = []
+    for c in range(num_calls):
+        formats = call_formats[c % len(call_formats)]
+        assignment += assign_clustered(
+            rows_per_call * COMPRESSION_GRANULARITY, N, formats, COMPRESSION_GRANULARITY
+        )
+
+    def pack_b_per_call(faces):
+        # Each call's faces packed on their own, back to back; the chunk offsets move up by
+        # the call's start so the address words stay relative to buffer_B.
+        out = b""
+        infos = []
+        for c in range(num_calls):
+            packed, info = pack_b(faces[c * faces_per_call : (c + 1) * faces_per_call])
+            base = len(out) // 16
+            infos.append(
+                [(b2 + base, b2_y, b4 + base, b4_y) for b2, b2_y, b4, b4_y in info]
+            )
+            out += packed
+        return out, infos
+
+    def encode_meta_per_call(assignment, cu, ku, infos):
+        # One meta stream per call, each padded to the kernel's stride. cu/ku are the face
+        # counts run_compressed passes, the same grid encode_meta takes.
+        out = b""
+        for c in range(num_calls):
+            meta = encode_meta(
+                assignment[c * faces_per_call : (c + 1) * faces_per_call],
+                cu,
+                rows_per_call,
+                infos[c],
+                b_base_words=buffer_b_words(ku),
+            )
+            assert (
+                len(meta) <= stride_bytes
+            ), f"call {c}: meta exceeds the kernel's stride"
+            out += meta.ljust(stride_bytes, b"\0")
+        return out
+
+    run_compressed(
+        M,
+        K,
+        N,
+        assignment,
+        "sources/matmul_face_compressed_test.cpp",
+        COMPRESSION_GRANULARITY,
+        SUPPORTED_M,
+        SUPPORTED_FORMATS,
+        promote_assignment,
+        pack_b_per_call,
+        encode_meta_per_call,
+        pcc_threshold=MULTI_CALL_PCC,
+        calls=CUSTOM_MM_CALLS(num_calls=num_calls, meta_words_per_call=stride),
+    )

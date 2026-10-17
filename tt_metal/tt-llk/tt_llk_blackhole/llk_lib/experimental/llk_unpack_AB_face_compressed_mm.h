@@ -253,8 +253,12 @@ inline void _llk_unpack_AB_face_compressed_mm_uninit_(const std::uint32_t unpA_n
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xFF0000>(unpA_num_faces);
 
     t6_mutex_acquire(mutex::THREAD2_ADC);
-    // reset CH0 XY counters for both unpackers to leave them in a clean state
+    // reset the CH0/CH1 XY counters of both unpackers, which also drops init's CH1 X ends, and the borrowed Y and
+    // shared ZW counters the last call's unpacks moved, as init zeroed them
     TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::XY));
+    TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_MATH, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
+    TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_PACK, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
+    TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
     t6_mutex_release(mutex::THREAD2_ADC);
 }
 
@@ -273,6 +277,13 @@ inline void _llk_unpack_AB_face_compressed_mm_uninit_(const std::uint32_t unpA_n
  *                           the index words that follow the math metas.
  * @param kt_dim: Inner dimension in tiles, an even number in [2, 256].
  * @note Call @ref _llk_unpack_AB_face_compressed_mm_init_ first.
+ * @note Run split-K calls back to back after one init: every call starts on the CLR_SRC format stall and zeroes
+ *       the Y and ZW counters before its first face, so its index words open on the first face's own format and
+ *       its activation base carries nothing over from the previous call. Pass finalize only on the last call, on
+ *       this thread and the math thread: the ct_dim == 1 merge adds the partial rows into the accumulation rows
+ *       without clearing them, so a later call keeps accumulating onto the merged partials and a second merge adds
+ *       them again. Pass clear_src only on the first call: the activation fills the same SrcB rows every call, and
+ *       a later clear of both SrcB banks would meet math still holding one of them.
  * @note On the math thread, pair with @ref _llk_math_face_compressed_mm_.
  */
 template <std::uint32_t ct_dim = 1, bool clear_src = true, bool finalize = true>
@@ -349,6 +360,11 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     wait_for_next_context(1);
     reset_config_context();
 
+    // Start the call from a clean unpacker. The format-switch stall is encoded per face only within a call: index
+    // word 0 bit 0 replicates the first face's own format, never the format of whatever unpacked before -- the
+    // previous call's last face, or a previous op's. So issue the stall here, the same S an in-call switch gets,
+    // ahead of the first face.
+    TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::CLR_SRC);
     if constexpr (clear_src)
     {
         TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
@@ -356,6 +372,13 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     cfg[THCON_SEC0_REG3_Base_address_ADDR32]       = pre_meta_ptr[1] & meta_addr_base_mask;
     cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = pre_meta_ptr[2] & meta_addr_base_mask;
     t6_mutex_acquire(mutex::THREAD2_ADC);
+    // Counters as init left them, before this call's own Y offsets: zero this thread's own Y counters, which the
+    // activation unpacks walk, and the shared ZW pair, but not X, so init's CH1 X ends survive.
+    TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
+    TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
+    // The borrowed sets need no zero of their own: this first of the per-chunk SET_Y pairs is their entry reset. It
+    // writes the only borrowed counters the weight unpacks read and walk, unpacker 0's CH0 Y in each set; their CH1 Y
+    // never moves, and the activation unpack counts in this thread's set.
     set_y_off(pre_meta_ptr + 1);
     t6_mutex_release(mutex::THREAD2_ADC);
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = base_address_b;
@@ -423,7 +446,7 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     std::uint32_t meta = meta_ptr[full_iters];
     for (std::uint32_t j = 0; j < rem_iters; ++j)
     {
-        std::uint32_t idx0        = meta & meta_index_mask;
+        std::uint32_t idx0 = meta & meta_index_mask;
         TT_INSN(_llk_unpack_AB_face_compressed_mm_header_table_[idx0]);
         TT_INSN(_llk_unpack_AB_face_compressed_mm_pairs_table_[idx0]);
         meta >>= meta_stride_bits;
@@ -440,12 +463,4 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
 
     wait_for_next_context(1);
     reset_config_context();
-
-    // Put the counters back the way init left them, ready for the next call: zero the Y counters the
-    // per-face SET_Y writes moved and the shared ZW pair, but not X, so init's CH1 X ends survive.
-    t6_mutex_acquire(mutex::THREAD2_ADC);
-    TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_MATH, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
-    TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_PACK, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
-    TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
-    t6_mutex_release(mutex::THREAD2_ADC);
 }
