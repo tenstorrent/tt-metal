@@ -548,21 +548,33 @@ inline void _llk_unpack_AB_matmul_(
         TTI_MULDMAREG(0, p_gpr_unpack::TMP_LO, p_gpr_unpack::TILE_SIZE_B, p_gpr_unpack::KT_DIM);
     }
 
+    // The poll path computes its row invariants once: on short rows the unpack thread waits on its RISC's instruction count
+    constexpr bool hoisted     = !auto_ttsync && kernel_broadcast_a == 0 && kernel_broadcast_b == 0;
+    std::uint32_t address_a    = base_address_a + tile_size_a * tile_index_a;
+    std::uint32_t address_b    = base_address_b + tile_size_b * tile_index_b;
+    const std::uint32_t step_a = reuse_a ? tile_size_a * kt_dim : 0;
+    const std::uint32_t step_b = reuse_a ? 0 : tile_size_b;
+    const std::uint32_t mop_0  = TT_OP_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, 0);
+    const std::uint32_t mop_1  = TT_OP_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, context_1_zmask);
+
     for (std::uint32_t t = 0; t < t_dim; t++)
     {
-        std::uint32_t offset_address_a = tile_size_a * (tile_index_a + (reuse_a ? (t * kt_dim) : (0)));
-        std::uint32_t offset_address_b = tile_size_b * (tile_index_b + (reuse_a ? (0) : (t)));
-        if constexpr (kernel_broadcast_a > 0)
+        if constexpr (!hoisted)
         {
-            offset_address_a = tile_size_a * ((tile_index_a + (reuse_a ? ((t * kt_dim)) : (0))) % kernel_broadcast_a);
-        }
-        if constexpr (kernel_broadcast_b > 0)
-        {
-            offset_address_b = tile_size_b * ((tile_index_b + (reuse_a ? (0) : (t))) % kernel_broadcast_b);
-        }
+            std::uint32_t offset_address_a = tile_size_a * (tile_index_a + (reuse_a ? (t * kt_dim) : (0)));
+            std::uint32_t offset_address_b = tile_size_b * (tile_index_b + (reuse_a ? (0) : (t)));
+            if constexpr (kernel_broadcast_a > 0)
+            {
+                offset_address_a = tile_size_a * ((tile_index_a + (reuse_a ? ((t * kt_dim)) : (0))) % kernel_broadcast_a);
+            }
+            if constexpr (kernel_broadcast_b > 0)
+            {
+                offset_address_b = tile_size_b * ((tile_index_b + (reuse_a ? (0) : (t))) % kernel_broadcast_b);
+            }
 
-        std::uint32_t address_a = base_address_a + offset_address_a;
-        std::uint32_t address_b = base_address_b + offset_address_b;
+            address_a = base_address_a + offset_address_a;
+            address_b = base_address_b + offset_address_b;
+        }
 
         if constexpr (auto_ttsync)
         {
@@ -634,12 +646,25 @@ inline void _llk_unpack_AB_matmul_(
             }
         }
 
-        TT_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, unp_cfg_context == 0 ? 0 : context_1_zmask);
+        if constexpr (hoisted)
+        {
+            TT_INSN(unp_cfg_context == 0 ? mop_0 : mop_1);
+        }
+        else
+        {
+            TT_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, unp_cfg_context == 0 ? 0 : context_1_zmask);
+        }
 
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);
 
         // Switch unpacker config context
         switch_config_context(unp_cfg_context);
+
+        if constexpr (hoisted)
+        {
+            address_a += step_a;
+            address_b += step_b;
+        }
     }
 }
