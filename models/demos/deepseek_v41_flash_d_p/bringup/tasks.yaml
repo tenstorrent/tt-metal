@@ -4124,6 +4124,13 @@ tasks:
     - compressor
     - indexer
     layer: 14
+  frozen:
+    at: '2026-10-17T01:59:33'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_10_indexer.py: 3463ffe99e8bda9f0e830d434062aa3f66296412a252b9a24b587270490c7494
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.enc_source_engram.attention
   title: enc_source_engram attention (attention) on device, layer 14
   step: implement
