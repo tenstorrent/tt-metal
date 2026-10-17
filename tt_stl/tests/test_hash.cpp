@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <tt_stl/reflection.hpp>
+#include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 
 #include <array>
@@ -92,6 +93,21 @@ TEST(HashCollisionTest, CPU_SignedZerosDoNotCollide) {
     EXPECT_NE(
         hash_objects_with_default_seed(std::vector<float>{0.0f, 1.0f}),
         hash_objects_with_default_seed(std::vector<float>{-0.0f, 1.0f}));
+}
+
+TEST(HashCollisionTest, CPU_SmallVectorStdHashAgreesWithEquality) {
+    // std::hash must give equal values equal hashes; SmallVector compares floats by value.
+    const ttsl::SmallVector<float> positive{0.0f, 1.0f};
+    const ttsl::SmallVector<float> negative{-0.0f, 1.0f};
+    ASSERT_EQ(positive, negative);
+    EXPECT_EQ(std::hash<ttsl::SmallVector<float>>{}(positive), std::hash<ttsl::SmallVector<float>>{}(negative));
+    EXPECT_NE(
+        std::hash<ttsl::SmallVector<float>>{}(positive),
+        std::hash<ttsl::SmallVector<float>>{}(ttsl::SmallVector<float>{0.0f, 2.0f}));
+
+    // As a program-cache key the sign of zero still selects its own entry.
+    EXPECT_NE(hash_objects_with_default_seed(positive), hash_objects_with_default_seed(negative));
+    EXPECT_NE(canonical_key(positive), canonical_key(negative));
 }
 
 TEST(HashCollisionTest, CPU_LongDoubleStillHashes) {
