@@ -13,18 +13,19 @@ namespace ckernel::sfpu {
 template <int ITERATIONS = 32>
 inline void calculate_relu_bw_bf16() {
     using namespace sfpi;
+    const vInt magnitude = 0x7fffffff;
+    const vInt infinity = 0x7f800000;
 #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat x = dst_reg[d];
         vFloat grad = dst_reg[32 + d];
-        v_if(sfpi::is_nan(grad)) { grad = std::numeric_limits<float>::quiet_NaN(); }
+        v_if((as<vInt>(grad) & magnitude) > infinity) { grad = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
         vFloat result = grad;
-        v_if(x <= 0.0f) { result = 0.0f; }
-        v_endif;
-        // A NaN compares by its sign; select it by its BF16 encoding: exponent all ones, mantissa nonzero.
-        vUInt raw = dst_reg[d].mode<::sfpi::DataLayout::U16>();
-        v_if((raw & 0x00ff) == 0x00ff && (raw & 0x7f00) != 0) { result = grad; }
+        v_if((as<vInt>(x) & magnitude) <= infinity) {
+            v_if(x <= 0.0f) { result = 0.0f; }
+            v_endif;
+        }
         v_endif;
         dst_reg[d] = result;
     }

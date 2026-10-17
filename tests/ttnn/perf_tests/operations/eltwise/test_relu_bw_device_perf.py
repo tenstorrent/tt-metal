@@ -10,9 +10,8 @@ DRAM: without an output placement that call keeps the composite, and with a DRAM
 the fused program. A call's time is the device kernel duration summed over the programs it
 launches, the median of REPEATS calls. The fused program must be faster by more than MARGIN.
 
-The fused program serves L1 and DRAM-sharded layouts too, where no call of this build runs the
+The fused program serves the other memory layouts too, where no call of this build runs the
 composite; the layout test times each one, and the same file at the merge-base times the composite.
-A tensor sharded in L1 keeps the composite, which measured faster there.
 """
 
 import pandas as pd
@@ -123,38 +122,57 @@ def test_relu_bw_device_perf():
 
 
 def _layouts(shape, device):
-    """Per layout the fused program serves beyond interleaved DRAM, the memory config of both operands: L1
-    interleaved, or shards over a power of two of the DRAM banks."""
+    """Per layout the fused program serves beyond interleaved DRAM, the memory config of both operands: shards
+    of whole tile rows or columns over up to 64 cores, or over a power of two of the DRAM banks."""
     height, width = shape[-2], shape[-1]
-    DRAM = ttnn.BufferType.DRAM
+    L1, DRAM = ttnn.BufferType.L1, ttnn.BufferType.DRAM
     layout = ttnn.TensorMemoryLayout
     banks = 1 << (device.dram_grid_size().x.bit_length() - 1)
-    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
 
-    def sharded(strategy, shard):
-        return ttnn.MemoryConfig(strategy, DRAM, ttnn.ShardSpec(grid, shard, ttnn.ShardOrientation.ROW_MAJOR))
+    def cores(x, y):
+        return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(x - 1, y - 1))})
 
-    nd = ttnn.NdShardSpec(
-        ttnn.Shape([1, 1, 128, 128]),
-        grid,
-        ttnn.ShardOrientation.ROW_MAJOR,
-        ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-    )
+    def sharded(strategy, buffer, grid, shard):
+        return ttnn.MemoryConfig(strategy, buffer, ttnn.ShardSpec(grid, shard, ttnn.ShardOrientation.ROW_MAJOR))
+
+    def nd(buffer, grid):
+        spec = ttnn.NdShardSpec(
+            ttnn.Shape([1, 1, 128, 128]),
+            grid,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        )
+        return ttnn.MemoryConfig(buffer, spec)
+
+    rows, columns = min(height // 32, 64), min(width // 32, 64)
     return {
         "interleaved_l1": ttnn.L1_MEMORY_CONFIG,
-        "height_sharded_dram": sharded(layout.HEIGHT_SHARDED, (height // banks, width)),
-        "width_sharded_dram": sharded(layout.WIDTH_SHARDED, (height, width // banks)),
-        "nd_sharded_dram": ttnn.MemoryConfig(DRAM, nd),
+        "height_sharded": sharded(layout.HEIGHT_SHARDED, L1, cores(8, rows // 8), (height // rows, width)),
+        "width_sharded": sharded(layout.WIDTH_SHARDED, L1, cores(8, columns // 8), (height, width // columns)),
+        "block_sharded": sharded(layout.BLOCK_SHARDED, L1, cores(8, 8), (height // 8, width // 8)),
+        "height_sharded_dram": sharded(layout.HEIGHT_SHARDED, DRAM, cores(banks, 1), (height // banks, width)),
+        "width_sharded_dram": sharded(layout.WIDTH_SHARDED, DRAM, cores(banks, 1), (height, width // banks)),
+        "nd_sharded": nd(L1, cores(8, 8)),
+        "nd_sharded_dram": nd(DRAM, cores(banks, 1)),
     }
 
 
-LAYOUTS = ("interleaved_l1", "height_sharded_dram", "width_sharded_dram", "nd_sharded_dram")
+LAYOUTS = (
+    "interleaved_l1",
+    "height_sharded",
+    "width_sharded",
+    "block_sharded",
+    "height_sharded_dram",
+    "width_sharded_dram",
+    "nd_sharded",
+    "nd_sharded_dram",
+)
 
 
 @pytest.mark.parametrize("name", LAYOUTS)
 def test_relu_bw_layout_profiled_calls(name, device):
-    """A layout's call, both operands in it, between signposts that name it. This build runs each on the fused
-    program; the same file at the merge-base times the composite on the same operands."""
+    """A layout's call, both operands in it, between signposts that name it. This build runs every layout on
+    the fused program; the same file at the merge-base times the composite on the same operands."""
     from tracy import signpost
 
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
