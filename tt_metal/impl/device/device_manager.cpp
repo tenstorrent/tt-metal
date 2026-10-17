@@ -4,6 +4,7 @@
 
 #include "device_manager.hpp"
 
+#include <mutex>
 #include <numa.h>
 #include <pthread.h>
 #include <tracy/Tracy.hpp>
@@ -258,10 +259,16 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
         skip &= (device_id == mmio_device_id);
     }
     if (target_mmio_ids.size() != ctx_.get_cluster().number_of_pci_devices()) {
-        log_warning(
-            tt::LogMetal,
-            "Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, "
-            "consider using distributed::MeshDevice::create_unit_meshes().");
+        // Every DeviceManager opened in the process (e.g. one per gtest case) re-triggers this identical warning;
+        // the condition is a static property of the cluster topology and does not change across opens, so log it
+        // once per process instead of once per DeviceManager.
+        static std::once_flag mmio_subset_warned;
+        std::call_once(mmio_subset_warned, [] {
+            log_warning(
+                tt::LogMetal,
+                "Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more "
+                "devices, consider using distributed::MeshDevice::create_unit_meshes().");
+        });
     }
 
     // Need to reserve eth cores for fabric before we initialize individual devices to maintain consistent state
