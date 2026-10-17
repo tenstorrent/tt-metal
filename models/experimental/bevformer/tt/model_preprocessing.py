@@ -30,11 +30,9 @@ from models.experimental.bevformer.model_config import (
     tt_fpn_kwargs,
     tt_resnet_kwargs,
 )
-from models.experimental.bevformer.reference.fpn import FPN
-from models.experimental.bevformer.reference.resnet import ModulatedDeformConv2dPack, ResNet
 from models.experimental.bevformer.tt.tt_common import is_pointwise
 from models.experimental.bevformer.tt.tt_modulated_deform_conv import GRID_SAMPLE_C_CAP, grid_offset_order
-from models.experimental.bevformer.tt.tt_resnet import TtResNet
+from models.experimental.bevformer.tt.tt_resnet import TTResNet
 
 
 # --- Shared helpers ---------------------------------------------------------------------------
@@ -170,7 +168,7 @@ def create_bevformer_encoder_parameters(encoder, device, dtype=WEIGHT_DTYPE):
 
 
 def create_perception_transformer_parameters(transformer, device, dtype=WEIGHT_DTYPE):
-    """``reference.perception_transformer.PerceptionTransformer`` as TtPerceptionTransformer takes
+    """``reference.perception_transformer.PerceptionTransformer`` as TTPerceptionTransformer takes
     it: the encoder's parameters, the CAN-bus MLP, and per FPN level the camera embeddings plus the
     level's embedding, ``(1, num_cams, 1, C)``."""
     mlp = transformer.can_bus_mlp
@@ -235,7 +233,7 @@ def _conv_parameters(weight, bias, linear_dtype, staging_dtype):
 
 
 def _dcn_parameters(conv, bn, offset_args):
-    """A DCNv2 conv and its offset conv as TtModulatedDeformConv2dPack takes them, ``bn`` folded in.
+    """A DCNv2 conv and its offset conv as TTModulatedDeformConv2dPack takes them, ``bn`` folded in.
 
     The weight becomes the device DCN's matmul weight, one ``(K*K*c_chunk, C_out)`` block per
     chunk of ``GRID_SAMPLE_C_CAP`` input channels, rows kk-major as grid_sample emits its samples.
@@ -274,10 +272,10 @@ def _dcn_parameters(conv, bn, offset_args):
     }
 
 
-def _resnet_preprocessor(model, conv_args, tt_kwargs):
-    """``preprocess_model_parameters``' hook for the ResNet, given its recorded ``conv_args`` and
-    TtResNet's ``tt_kwargs``."""
-    if not isinstance(model, ResNet):
+def _resnet_preprocessor(model, resnet, conv_args, tt_kwargs):
+    """``preprocess_model_parameters``' hook for ``resnet``, given its recorded ``conv_args`` and
+    TTResNet's ``tt_kwargs``; the hook sees every submodule and answers for ``resnet`` only."""
+    if model is not resnet:
         return {}
     dram_activation_stages = tt_kwargs["dram_activation_stages"]
 
@@ -291,12 +289,13 @@ def _resnet_preprocessor(model, conv_args, tt_kwargs):
         prefix = f"layer{layer_idx}"
         parameters[prefix] = {}
         for block_idx, block in enumerate(getattr(model, prefix)):
-            dram_convs = TtResNet.block_dram_convs(layer_idx - 1, block_idx, dram_activation_stages)
+            dram_convs = TTResNet.block_dram_convs(layer_idx - 1, block_idx, dram_activation_stages)
             block_parameters = parameters[prefix][block_idx] = {}
             for conv_name in ["conv1", "conv2", "conv3"]:
                 conv = getattr(block, conv_name)
                 bn = getattr(block, f"bn{conv_name[-1]}")
-                if isinstance(conv, ModulatedDeformConv2dPack):
+                # A DCNv2 conv carries the conv that predicts its offsets and mask.
+                if hasattr(conv, "conv_offset"):
                     offset_args = conv_args[prefix][block_idx][conv_name].conv_offset
                     block_parameters[conv_name] = _dcn_parameters(conv, bn, offset_args)
                 else:
@@ -311,9 +310,9 @@ def _resnet_preprocessor(model, conv_args, tt_kwargs):
     return {"res_model": parameters}
 
 
-def create_resnet_parameters(model: ResNet, input_tensor, tt_kwargs=None):
+def create_resnet_parameters(model, input_tensor, tt_kwargs=None):
     """Preprocess backbone weights and record per-conv shapes from one reference forward, for
-    ``TtResNet`` with ``tt_kwargs``, ``model_config.tt_resnet_kwargs()`` by default, which the
+    ``TTResNet`` with ``tt_kwargs``, ``model_config.tt_resnet_kwargs()`` by default, which the
     result carries: which 1x1 convs run as matmuls decides their weights' layout.
 
     ``conv_args`` pins every conv's input height, width and batch to ``input_tensor``'s
@@ -323,15 +322,15 @@ def create_resnet_parameters(model: ResNet, input_tensor, tt_kwargs=None):
     conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=lambda module, name: _resnet_preprocessor(module, conv_args, tt_kwargs),
+        custom_preprocessor=lambda module, name: _resnet_preprocessor(module, model, conv_args, tt_kwargs),
     )
     parameters.conv_args = conv_args
     parameters.tt_kwargs = tt_kwargs
     return parameters
 
 
-def create_fpn_parameters(model: FPN, input_tensors, tt_kwargs=None):
-    """Preprocess FPN weights and record every conv's geometry and input shape, for ``TtFPN``
+def create_fpn_parameters(model, input_tensors, tt_kwargs=None):
+    """Preprocess FPN weights and record every conv's geometry and input shape, for ``TTFPN``
     with ``tt_kwargs``, ``model_config.tt_fpn_kwargs()`` by default, which the result carries.
 
     ``input_tensors`` are the NCHW backbone outputs the FPN will run on. A conv reads the
@@ -377,7 +376,7 @@ def create_fpn_parameters(model: FPN, input_tensors, tt_kwargs=None):
         return {"conv": _conv_parameters(conv.weight.detach(), conv.bias.detach(), linear_dtype, ttnn.bfloat16)}
 
     def preprocessor(module, name):
-        if not isinstance(module, FPN):
+        if module is not model:
             return {}
         return {
             "fpn": {
@@ -433,7 +432,7 @@ def _cross_attn_parameters(msda, device, dtype):
 
 
 def _decoder_layer_parameters(layer, device, dtype):
-    """``reference.decoder.DetrTransformerDecoderLayer`` as TtDetectionTransformerDecoder's layer
+    """``reference.decoder.DetrTransformerDecoderLayer`` as TTDetectionTransformerDecoder's layer
     takes it."""
     return SimpleNamespace(
         self_attn=_self_attn_parameters(layer.attentions[0].attn, device, dtype),
@@ -444,7 +443,7 @@ def _decoder_layer_parameters(layer, device, dtype):
 
 
 def create_decoder_parameters(torch_model, device, dtype=WEIGHT_DTYPE):
-    """Parameters for ``TtDetectionTransformerDecoder``."""
+    """Parameters for ``TTDetectionTransformerDecoder``."""
     return SimpleNamespace(layers=[_decoder_layer_parameters(layer, device, dtype) for layer in torch_model.layers])
 
 
@@ -457,7 +456,7 @@ def create_reg_branch_parameters(reg_branches, device, dtype=WEIGHT_DTYPE):
     """
     branches = []
     for branch in reg_branches:
-        # Unpacking checks the three Linears TtDetectionTransformerDecoder._reg_branch runs.
+        # Unpacking checks the three Linears TTDetectionTransformerDecoder._reg_branch runs.
         first, second, last = (m for m in branch if isinstance(m, torch.nn.Linear))
         branches.append(
             [linear_params(m.weight, m.bias, device, dtype) for m in (first, second)]
@@ -485,7 +484,7 @@ def _cls_branch_parameters(branch, device, dtype):
 
 @torch.no_grad()
 def create_head_parameters(torch_model, device, dtype=WEIGHT_DTYPE):
-    """Parameters for ``TtBEVFormerHead``. They carry the reference head's BEV shape and its
+    """Parameters for ``TTBEVFormerHead``. They carry the reference head's BEV shape and its
     ``pc_range`` as the corner ``pc_min`` and size ``pc_size`` the refined points scale to.
 
     The object queries, their positional embeddings and the initial reference points depend

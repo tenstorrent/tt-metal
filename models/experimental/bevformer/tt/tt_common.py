@@ -34,7 +34,7 @@ def layer_norm(x, params, residual=None):
     )
 
 
-class TtFFN:
+class TTFFN:
     """The encoder's and decoder's FFN, Linear-ReLU-Linear, without the residual: the layer adds it
     inside the LayerNorm that follows. ``params`` from ``model_preprocessing.preprocess_ffn_parameters``."""
 

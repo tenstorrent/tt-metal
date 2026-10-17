@@ -15,8 +15,8 @@ from models.experimental.bevformer.tests.common import (
     to_device,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_head_parameters
-from models.experimental.bevformer.tt.tt_head import TtBEVFormerHead
-from models.experimental.bevformer.tt.tt_nms_free_coder import TtNMSFreeCoder
+from models.experimental.bevformer.tt.tt_head import TTBEVFormerHead
+from models.experimental.bevformer.tt.tt_nms_free_coder import TTNMSFreeCoder
 
 CASES = [
     # (name, bev_shape, batch_size, traced)
@@ -39,11 +39,7 @@ def _bev_embed(bev_shape, batch_size, seed):
 
 def _models(bev_shape, device):
     torch_model = build_reference_head(bev_shape)
-    return torch_model, TtBEVFormerHead(create_head_parameters(torch_model, device), device)
-
-
-def _check(torch_outputs, tt_outputs):
-    check_head_outputs(torch_outputs, tuple(ttnn.to_torch(t).float() for t in tt_outputs))
+    return torch_model, TTBEVFormerHead(create_head_parameters(torch_model, device), device)
 
 
 @torch.no_grad()
@@ -61,7 +57,7 @@ def test_head(device, reset_seeds, name, bev_shape, batch_size, traced):
     if not traced:
         tt_outputs = tt_model(tt_bev_embed)
         assert device.num_program_cache_entries() == num_programs
-        _check(torch_model(bev_embed), tt_outputs)
+        check_head_outputs(torch_model(bev_embed), tt_outputs)
         return
 
     # Capture fails on any host read or write in forward. Replaying on fresh features shows
@@ -75,7 +71,7 @@ def test_head(device, reset_seeds, name, bev_shape, batch_size, traced):
     ttnn.copy_host_to_device_tensor(host, tt_bev_embed)
     ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
     try:
-        _check(torch_model(replay_bev_embed), tt_outputs)
+        check_head_outputs(torch_model(replay_bev_embed), tt_outputs)
     finally:
         ttnn.release_trace(device, trace_id)
 
@@ -89,7 +85,7 @@ def test_head_detections(device, reset_seeds):
     bev_embed = _bev_embed(bev_shape, batch_size, seed=0)
     cls_scores, bbox_preds = torch_model(bev_embed)
     tt_cls_scores, tt_bbox_preds = tt_model(to_device(bev_embed, device))
-    tt_topk = tuple(ttnn.to_torch(t) for t in TtNMSFreeCoder(device).topk(tt_cls_scores[-1], tt_bbox_preds[-1]))
+    tt_topk = tuple(ttnn.to_torch(t) for t in TTNMSFreeCoder(device).topk(tt_cls_scores[-1], tt_bbox_preds[-1]))
     assert_topk_close(
         cls_scores[-1], bbox_preds[-1], ttnn.to_torch(tt_cls_scores[-1]), ttnn.to_torch(tt_bbox_preds[-1]), tt_topk
     )

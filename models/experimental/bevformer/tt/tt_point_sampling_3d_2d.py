@@ -4,7 +4,7 @@
 """TTNN port of the pillar-point projection (``reference/point_sampling_3d_2d.py``).
 
 Not on the encoder's path: ``TTBEVFormerEncoder.prepare_frame`` projects once per frame in
-float32 on the host (``point_sampling_3d_2d.camera_geometry``), as upstream does, because in
+float32 on the host (``model_preprocessing.camera_geometry``), as upstream does, because in
 bfloat16 the projection's homogeneous divide loses the points' precision. This bfloat16 port
 (tested by ``tests/pcc/test_point_sampling_3d_2d.py``) is for on-device projection; the encoder
 does not use it.
@@ -48,7 +48,6 @@ def generate_reference_points_ttnn(
     """
     signpost(header="TTNN Generate Reference Points Start")
 
-    # TODO: Calculate during initialization, and pass as parameters
     torch_ref_points = torch_generate_reference_points(
         bev_h=bev_h,
         bev_w=bev_w,
@@ -58,7 +57,6 @@ def generate_reference_points_ttnn(
         dtype=torch.float32,
     )
 
-    # Convert to TTNN tensor
     ttnn_ref_points = ttnn.from_torch(torch_ref_points, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
     signpost(header="TTNN Generate Reference Points End")
@@ -101,7 +99,6 @@ def point_sampling_3d_to_2d_ttnn(
     """
     signpost(header="TTNN Point Sampling 3D to 2D Start")
 
-    # Convert inputs to TTNN tensors if needed
     if isinstance(reference_points, torch.Tensor):
         reference_points = ttnn.from_torch(
             reference_points, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
@@ -112,11 +109,9 @@ def point_sampling_3d_to_2d_ttnn(
 
     signpost(header="Point Sampling Tensor Setup Complete")
 
-    # Get tensor shapes
     batch_size, num_queries, num_points, _ = reference_points.shape
     num_cams = lidar2img.shape[1]
 
-    # Extract point cloud range values
     x_min, y_min, z_min = pc_range[0], pc_range[1], pc_range[2]
     x_max, y_max, z_max = pc_range[3], pc_range[4], pc_range[5]
 
@@ -145,7 +140,7 @@ def point_sampling_3d_to_2d_ttnn(
         ref_points_flat = ttnn.reshape(reference_points, (batch_size, num_points * num_queries, 4))  # [B, D*Q, 4]
 
         # [B, D*Q, 4] @ [B, 4, 4]
-        cam_lidar2img_T = ttnn.transpose(cam_lidar2img, -2, -1)  # Last two dims transpose
+        cam_lidar2img_T = ttnn.transpose(cam_lidar2img, -2, -1)
         points_cam_flat = ttnn.matmul(ref_points_flat, cam_lidar2img_T)  # [B, D*Q, 4]
 
         points_cam = ttnn.reshape(points_cam_flat, (batch_size, num_points, 1, num_queries, 4))  # [B, D, 1, Q, 4]
@@ -164,7 +159,6 @@ def point_sampling_3d_to_2d_ttnn(
     )
     reference_points_cam_xy = ttnn.div(reference_points_cam[..., 0:2], depth_safe)
 
-    # Determine image shape
     if img_metas is not None and len(img_metas) > 0:
         if "img_shape" in img_metas[0]:
             img_h, img_w = img_metas[0]["img_shape"][0][:2]  # Assume all cameras have same shape

@@ -19,17 +19,17 @@ the center channels, scaled to metres.
 import ttnn
 from models.experimental.bevformer.model_config import BOX_PRED_PIECES, SCORE_DTYPE
 from models.experimental.bevformer.tt.tt_common import layer_norm, signpost
-from models.experimental.bevformer.tt.tt_decoder import TtDetectionTransformerDecoder
+from models.experimental.bevformer.tt.tt_decoder import TTDetectionTransformerDecoder
 
 
-class TtBEVFormerHead:
+class TTBEVFormerHead:
     """BEVFormer's detection head, batch-first on device."""
 
     def __init__(self, params, device):
         """``params`` comes from ``create_head_parameters``, with the reference head's BEV shape
         and the ``pc_range`` corner and size its [0, 1] reference points map to in metres."""
         self.params = params
-        self.decoder = TtDetectionTransformerDecoder(params.decoder, device, params.bev_shape, batch_first=True)
+        self.decoder = TTDetectionTransformerDecoder(params.decoder, device, params.bev_shape, batch_first=True)
 
     @staticmethod
     def _cls_branch(x, branch):

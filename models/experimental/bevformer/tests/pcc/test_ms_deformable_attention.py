@@ -47,7 +47,6 @@ def test_ms_deformable_attention_forward(
 
     preset = PRESETS[config_name]
 
-    # Extract parameters from configs
     embed_dims = preset.embed_dims
     num_heads = preset.num_heads
     num_levels = preset.num_levels
@@ -60,20 +59,17 @@ def test_ms_deformable_attention_forward(
     # Generate Inputs                                                             #
     # --------------------------------------------------------------------------- #
 
-    # Create input tensors
     query = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
     value = torch.randn(batch_size, sum(total_key_length), embed_dims, dtype=torch.float32)
 
     reference_points = torch.rand(batch_size, num_queries, num_levels, 2, dtype=torch.float32)
 
-    # Convert tensors to ttnn format for ttnn model
     tt_query = ttnn.from_torch(query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_value = ttnn.from_torch(value, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_reference_points = ttnn.from_torch(
         reference_points, device=device, dtype=reference_points_dtype, layout=ttnn.TILE_LAYOUT
     )
 
-    # Create DeformableAttentionConfig from extracted parameters
     config = DeformableAttentionConfig(
         embed_dims=embed_dims,
         num_heads=num_heads,
@@ -85,14 +81,11 @@ def test_ms_deformable_attention_forward(
     # Models Init                                                                 #
     # --------------------------------------------------------------------------- #
 
-    # Create PyTorch reference model
     ref_model = MSDeformableAttention(config)
     ref_model.eval()
 
-    # Create preprocessed parameters from PyTorch model
     tt_parameters = create_ms_deformable_attention_parameters(ref_model, device=device, dtype=ttnn.float32)
 
-    # Create ttnn model with preprocessed parameters
     tt_model = TTMSDeformableAttention(
         config=config,
         device=device,

@@ -29,7 +29,6 @@ from models.experimental.bevformer.tests.common import (
 pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
 
 
-# Test functions
 @pytest.mark.parametrize(
     "config_name, bev_h, bev_w, batch_size",
     [
@@ -58,20 +57,17 @@ def test_generate_reference_points(
     # Function Execution                                                          #
     # --------------------------------------------------------------------------- #
 
-    # Test torch implementation
     torch_ref_points = generate_reference_points(bev_h, bev_w, z_cfg, batch_size=batch_size, device=torch.device("cpu"))
 
-    # Test TTNN implementation
     ttnn_ref_points = generate_reference_points_ttnn(bev_h, bev_w, z_cfg, device, batch_size=batch_size)
 
-    # Convert TTNN result to torch for comparison
     ttnn_ref_points_torch = ttnn.to_torch(ttnn_ref_points, dtype=torch.float32)
 
     # --------------------------------------------------------------------------- #
     # Output Comparison                                                           #
     # --------------------------------------------------------------------------- #
 
-    # Check shapes - now includes batch dimension
+    # Check shapes
     expected_shape = (batch_size, bev_h * bev_w, z_cfg["num_points"], 3)
     assert (
         torch_ref_points.shape == expected_shape
@@ -113,7 +109,6 @@ def test_point_sampling_3d_to_2d(
 
     preset = PRESETS[config_name]
 
-    # Extract parameters from configs
     pc_range = preset.pc_range
     z_cfg = preset.z_cfg
     num_cams = preset.num_cams
@@ -128,14 +123,12 @@ def test_point_sampling_3d_to_2d(
     lidar2img = lidar2img_for_dataset(preset).unsqueeze(0).repeat(batch_size, 1, 1, 1)
     img_metas = img_metas_for_dataset(preset, batch_size)
 
-    # Generate reference points with batch dimension
     torch_ref_points = generate_reference_points(bev_h, bev_w, z_cfg, batch_size=batch_size, device=torch.device("cpu"))
 
     # --------------------------------------------------------------------------- #
     # Function Execution                                                          #
     # --------------------------------------------------------------------------- #
 
-    # Test torch implementation
     torch_ref_points_cam, torch_bev_mask = point_sampling_3d_to_2d(
         torch_ref_points,
         pc_range,
@@ -144,9 +137,8 @@ def test_point_sampling_3d_to_2d(
         eps=eps,
     )
 
-    # Test TTNN implementation
     ttnn_ref_points_cam, ttnn_bev_mask = point_sampling_3d_to_2d_ttnn(
-        torch_ref_points,  # Use same input
+        torch_ref_points,
         pc_range,
         lidar2img,
         img_metas=img_metas,
@@ -154,7 +146,6 @@ def test_point_sampling_3d_to_2d(
         device=device,
     )
 
-    # Convert TTNN results to torch for comparison
     ttnn_ref_points_cam_torch = ttnn.to_torch(ttnn_ref_points_cam, dtype=torch.float32)
     ttnn_bev_mask_torch = ttnn.to_torch(ttnn_bev_mask, dtype=torch.bool)
 
@@ -162,7 +153,7 @@ def test_point_sampling_3d_to_2d(
     # Output Comparison                                                           #
     # --------------------------------------------------------------------------- #
 
-    # Check shapes - now includes batch dimension in the expected shape
+    # Check shapes
     expected_points_shape = (num_cams, batch_size, bev_h * bev_w, z_cfg["num_points"], 2)
     expected_mask_shape = (num_cams, batch_size, bev_h * bev_w, z_cfg["num_points"])
 
@@ -178,15 +169,13 @@ def test_point_sampling_3d_to_2d(
     # Check projected coordinates are in valid range [0, 1] only for valid points
     # Invalid points (where mask is False) can have any coordinate values
 
-    # For torch implementation, check only valid points
-    valid_torch_points = torch_ref_points_cam[torch_bev_mask]  # Use mask to filter valid points
+    valid_torch_points = torch_ref_points_cam[torch_bev_mask]
     if valid_torch_points.numel() > 0:
         assert torch.all(valid_torch_points >= 0.0), "Torch valid projected points should be >= 0"
         assert torch.all(valid_torch_points <= 1.0), "Torch valid projected points should be <= 1"
     else:
         logger.warning("No valid points found in torch implementation - this might indicate camera matrix issues")
 
-    # For TTNN, check only valid points (where mask is True)
     valid_ttnn_points = ttnn_ref_points_cam_torch[ttnn_bev_mask_torch]
     if valid_ttnn_points.numel() > 0:
         assert torch.all(valid_ttnn_points >= 0.0), "TTNN valid projected points should be >= 0"

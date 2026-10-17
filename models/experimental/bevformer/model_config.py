@@ -229,7 +229,7 @@ _TTNN_DTYPES = {
 # The head's box predictions: their centers are the decoder's refined reference points.
 _TTNN_DTYPES["BOX_DTYPE"] = _TTNN_DTYPES["GRID_DTYPE"]
 
-# Bisection steps of the coder's exact top-k (TtNMSFreeCoder.topk), which narrow the k-th logit's
+# Bisection steps of the coder's exact top-k (TTNMSFreeCoder.topk), which narrow the k-th logit's
 # bracket around the bfloat16 pivot, 2^-5 of the pivot wide, down to one float32 value; 19
 # suffice, the rest is margin.
 CODER_BISECTION_STEPS = 22
@@ -277,8 +277,8 @@ FPN_BLOCK_SHARDED_ACT_BLOCK_H = 128
 
 
 def tt_resnet_kwargs():
-    """TtResNet's memory and precision arguments for this configuration, which
-    ``create_resnet_parameters`` records in the backbone's parameters. TtResNet's ``out_indices``
+    """TTResNet's memory and precision arguments for this configuration, which
+    ``create_resnet_parameters`` records in the backbone's parameters. TTResNet's ``out_indices``
     defaults to all four layers; pass ``RESNET_KWARGS["out_indices"]`` for BEVFormer-base's C3-C5."""
     return dict(
         dram_activation_stages=DRAM_ACTIVATION_STAGES,
@@ -292,7 +292,7 @@ def tt_resnet_kwargs():
 
 
 def tt_fpn_kwargs():
-    """TtFPN's memory and precision arguments for this configuration, which
+    """TTFPN's memory and precision arguments for this configuration, which
     ``create_fpn_parameters`` records in the FPN's parameters."""
     return dict(
         dram_activation_levels=DRAM_ACTIVATION_LEVELS,

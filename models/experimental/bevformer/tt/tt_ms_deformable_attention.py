@@ -93,7 +93,8 @@ class TTMSDeformableAttention:
                 - batch_first (bool): Whether batch dimension comes first
             device: TTNN device for tensor operations
             params: Pre-computed TTNN parameters containing linear layer weights and biases.
-                Should include: value_proj, sampling_offsets, attention_weights, output_proj
+                Should include: value_proj, sampling_offsets, attention_weights, and output_proj
+                unless the caller projects the output itself (the spatial cross-attention does).
             spatial_shapes: Feature-map (H, W) per level. Fixed for the lifetime of the
                 module: forward takes no shapes of its own, and they are handed to the
                 fused op as a static attribute. Features at a different resolution
@@ -104,7 +105,6 @@ class TTMSDeformableAttention:
         Raises:
             ValueError: If the configuration or spatial shapes are invalid.
         """
-        # Validate configuration
         if config.embed_dims % config.num_heads != 0:
             raise ValueError(f"embed_dims ({config.embed_dims}) must be divisible by num_heads ({config.num_heads})")
 
@@ -123,7 +123,6 @@ class TTMSDeformableAttention:
         if torch.any(spatial_shapes <= 0):
             raise ValueError(f"spatial_shapes dimensions must be positive, got {spatial_shapes.tolist()}")
 
-        # Set attributes
         self.embed_dims = config.embed_dims
         self.num_heads = config.num_heads
         self.num_levels = config.num_levels
@@ -149,8 +148,6 @@ class TTMSDeformableAttention:
         **kwargs,
     ):
         """
-        Forward pass using ttnn operations.
-
         Args:
             query: [bs, num_queries, embed_dims] Query features
             value: [bs, num_keys, embed_dims] Value features (optional, defaults to query)
@@ -163,19 +160,16 @@ class TTMSDeformableAttention:
             output: [bs, num_queries, embed_dims]
         """
 
-        # Handle input defaults
         if value is None:
             value = query
         if identity is None:
             identity = query
 
-        # Add query positional encoding
         if query_pos is not None:
             query = ttnn.add(query, query_pos)
 
         signpost(header=f"TT MS Deformable Attn Module Start, {query.shape[1]} - {self.total_keys}")
 
-        # Handle batch_first format
         if not self.batch_first:
             query = ttnn.permute(query, (1, 0, 2))
             value = ttnn.permute(value, (1, 0, 2))
@@ -193,14 +187,12 @@ class TTMSDeformableAttention:
         if reference_points.shape[-1] != 2:
             raise ValueError(f"Reference points must have 2 dimensions, got {reference_points.shape[-1]}")
 
-        # Verify spatial shapes consistency
         assert self.total_keys == num_keys, f"Inconsistent keys: {self.total_keys} != {num_keys}"
 
         # The fused op takes packed (B, S, H*D), which is what this Linear emits.
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
         value = ttnn.linear(value, self.params.value_proj.weight, bias=self.params.value_proj.bias)
 
-        # Apply key padding mask if provided
         if key_padding_mask is not None:
             mask = ttnn.unsqueeze(key_padding_mask, -1)  # [bs, num_keys, 1]
             zeros_like_value = ttnn.zeros_like(value)
@@ -238,16 +230,13 @@ class TTMSDeformableAttention:
             spatial_shapes=self.spatial_shapes,
         )
 
-        # Apply output projection
         if hasattr(self.params, "output_proj"):
             output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
             output = ttnn.linear(output, self.params.output_proj.weight, bias=self.params.output_proj.bias)
 
-        # Add residual connection
         if self.residual:
             output = ttnn.add(output, identity)
 
-        # Handle batch_first format for output
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))
 
@@ -256,11 +245,9 @@ class TTMSDeformableAttention:
         return output
 
     def __call__(self, *args, **kwargs):
-        """Make the class callable"""
         return self.forward(*args, **kwargs)
 
     def extra_repr(self) -> str:
-        """String representation for debugging"""
         return (
             f"embed_dims={self.embed_dims}, num_heads={self.num_heads}, "
             f"num_levels={self.num_levels}, num_points={self.num_points}, "
