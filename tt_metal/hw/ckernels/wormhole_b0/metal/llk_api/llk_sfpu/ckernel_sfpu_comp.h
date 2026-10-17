@@ -260,7 +260,7 @@ inline void calculate_comp_unary_int(int scalar) {
     // SM32 (SFPLOAD mod0 INT32_SM), whose sign-magnitude -> two's complement conversion has no
     // encoding for the word 0x80000000 (INT32_MIN, or the uint32 2^31) and turns it into 0; a
     // software re-conversion of that word cannot bring it back, so eq/ne misclassified it.
-    vInt converted_scalar = scalar;
+    vInt scalar_vec = scalar;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -268,10 +268,10 @@ inline void calculate_comp_unary_int(int scalar) {
         vInt val = 0;
 
         if constexpr (COMP_MODE == SfpuType::unary_ne) {
-            v_if(v != converted_scalar) { val = 1; }
+            v_if(v != scalar_vec) { val = 1; }
             v_endif;
         } else if constexpr (COMP_MODE == SfpuType::unary_eq) {
-            v_if(v == converted_scalar) { val = 1; }
+            v_if(v == scalar_vec) { val = 1; }
             v_endif;
         }
 
