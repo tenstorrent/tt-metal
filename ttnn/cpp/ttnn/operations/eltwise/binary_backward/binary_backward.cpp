@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
+#include <array>
 #include <numbers>
 #include <cstdint>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -363,18 +364,37 @@ std::vector<Tensor> hypot_bw(
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad;
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
-    Tensor result_recip = ttnn::reciprocal(ttnn::hypot(input_a, other, output_memory_config), output_memory_config);
-    Tensor grad_a = ttnn::multiply(
-        grad_tensor,
-        ttnn::multiply(input_a, result_recip, std::nullopt, output_memory_config),
-        std::nullopt,
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    const std::array abs_it = {EltwiseUnaryWithParam{UnaryOpType::ABS}};
+    const std::array sign_it = {EltwiseUnaryWithParam{UnaryOpType::SIGN}};
+    const std::array rsqrt_1_plus_r2 = {
+        EltwiseUnaryWithParam{UnaryOpType::SQUARE},
+        EltwiseUnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
+        EltwiseUnaryWithParam{UnaryOpType::RSQRT}};
+
+    Tensor a_ge_b = ttnn::ge(input_a, other, std::nullopt, output_memory_config, std::nullopt, abs_it, abs_it);
+    Tensor big = ttnn::where(a_ge_b, input_a, other, output_memory_config);
+    Tensor small = ttnn::where(a_ge_b, other, input_a, output_memory_config);
+    Tensor ratio = ttnn::where(
+        ttnn::eqz(big, output_memory_config),
+        0.0f,
+        ttnn::divide(small, big, std::nullopt, output_memory_config),
         output_memory_config);
+    small.deallocate();
+    Tensor unit_big =
+        ttnn::multiply(ratio, big, std::nullopt, output_memory_config, std::nullopt, {}, rsqrt_1_plus_r2, sign_it);
+    big.deallocate();
+    Tensor grad_big = ttnn::multiply(grad_tensor, unit_big, std::nullopt, output_memory_config);
+    unit_big.deallocate();
+    Tensor grad_small = ttnn::multiply(grad_big, ratio, std::nullopt, output_memory_config);
+    ratio.deallocate();
+    Tensor grad_a = ttnn::where(a_ge_b, grad_big, grad_small, output_memory_config);
+    Tensor grad_b = ttnn::where(a_ge_b, grad_small, grad_big, output_memory_config);
+    a_ge_b.deallocate();
+    grad_big.deallocate();
+    grad_small.deallocate();
     grad.emplace_back(grad_a);
-    Tensor grad_b = ttnn::multiply(
-        grad_tensor,
-        ttnn::multiply(other, result_recip, std::nullopt, output_memory_config),
-        std::nullopt,
-        output_memory_config);
     grad.emplace_back(grad_b);
     return grad;
 }
@@ -630,8 +650,8 @@ std::vector<std::optional<Tensor>> concat_bw(
 
 std::vector<std::optional<Tensor>> rsub_bw(
     const Tensor& grad_tensor,
-    const Tensor& /*input_a*/,
-    const Tensor& /*other*/,
+    const Tensor& input_a,
+    const Tensor& other,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
@@ -641,8 +661,8 @@ std::vector<std::optional<Tensor>> rsub_bw(
     operations::binary_backward::detail::preallocated_tensors_check(
         input_grad,
         other_grad,
-        grad_tensor,
-        grad_tensor,
+        input_a,
+        other,
         {are_required_outputs[0], are_required_outputs[1]},
         output_mem_config);
     if (are_required_outputs.at(0)) {
@@ -784,29 +804,32 @@ std::vector<std::optional<Tensor>> div_bw(
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
     if (rounding_mode == std::nullopt) {
+        std::optional<Tensor> shared_recip = std::nullopt;
+        auto get_recip = [&]() -> const Tensor& {
+            if (!shared_recip.has_value()) {
+                shared_recip = ttnn::reciprocal(other, output_mem_config);
+            }
+            return shared_recip.value();
+        };
+
         if (are_required_outputs.at(0)) {
-            ttnn::multiply(
-                grad_tensor, ttnn::reciprocal(other, output_mem_config), std::nullopt, output_mem_config, input_grad);
+            ttnn::multiply(grad_tensor, get_recip(), std::nullopt, output_mem_config, input_grad);
             result[0] = input_grad;
         }
         if (are_required_outputs.at(1)) {
-            // -grad * input_a / other^2, evaluated as -grad * ((input_a / other) / other).
-            // Squaring first loses the answer at both ends -- infinity below
-            // |other| = 1.0842e-19, zero above 2^63; see the note in rdiv_bw. The op count is
-            // unchanged: one reciprocal and two multiplies either way.
-            Tensor recip_other = ttnn::reciprocal(other, output_mem_config);
-            ttnn::multiply(
-                ttnn::neg(grad_tensor, output_mem_config),
-                (ttnn::multiply(
-                    ttnn::multiply(input_a, recip_other, std::nullopt, output_mem_config),
-                    recip_other,
-                    std::nullopt,
-                    output_mem_config)),
-                std::nullopt,
-                output_mem_config,
-                other_grad);
-            recip_other.deallocate();
+            // Factor as (-grad * recip_other) * (input_a * recip_other) to balance exponent range
+            // and prevent premature overflow/underflow before touching grad_tensor.
+            const Tensor& recip = get_recip();
+            Tensor neg_grad_scaled =
+                ttnn::multiply(ttnn::neg(grad_tensor, output_mem_config), recip, std::nullopt, output_mem_config);
+            Tensor input_scaled = ttnn::multiply(input_a, recip, std::nullopt, output_mem_config);
+            ttnn::multiply(neg_grad_scaled, input_scaled, std::nullopt, output_mem_config, other_grad);
+            neg_grad_scaled.deallocate();
+            input_scaled.deallocate();
             result[1] = other_grad;
+        }
+        if (shared_recip.has_value()) {
+            shared_recip->deallocate();
         }
     } else {
         if (are_required_outputs.at(0)) {
@@ -847,18 +870,19 @@ std::vector<ComplexTensor> div_bw(
     grad_a_r.deallocate();
     grad_a_i.deallocate();
     grad_tensor_res.emplace_back(grad_a);
+    ComplexTensor conj_recip = ttnn::conj(recip_other, output_mem_config);
     ComplexTensor neg_grad = ComplexTensor(
         {ttnn::neg(grad_tensor.real(), output_mem_config), ttnn::neg(grad_tensor.imag(), output_mem_config)});
-    ComplexTensor grad_b = ttnn::operations::complex_binary::multiply(
-        neg_grad,
-        ttnn::conj(
-            ttnn::operations::complex_binary::multiply(
-                ttnn::operations::complex_binary::multiply(input_a, recip_other, output_mem_config),
-                recip_other,
-                output_mem_config),
-            output_mem_config),
-        output_mem_config);
+    ComplexTensor neg_grad_scaled =
+        ttnn::operations::complex_binary::multiply(neg_grad, conj_recip, output_mem_config);
     neg_grad.deallocate();
+    ComplexTensor input_scaled =
+        ttnn::operations::complex_binary::multiply(input_a, conj_recip, output_mem_config);
+    conj_recip.deallocate();
+    ComplexTensor grad_b =
+        ttnn::operations::complex_binary::multiply(neg_grad_scaled, input_scaled, output_mem_config);
+    neg_grad_scaled.deallocate();
+    input_scaled.deallocate();
     Tensor grad_b_r = where(condition_nan, std::nanf(""), ttnn::real(grad_b, output_mem_config), output_mem_config);
     Tensor grad_b_i = where(condition_nan, std::nanf(""), ttnn::imag(grad_b, output_mem_config), output_mem_config);
     grad_b = ComplexTensor({grad_b_r, grad_b_i});
