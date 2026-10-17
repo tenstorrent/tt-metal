@@ -87,7 +87,8 @@ PrefetchKernel::PrefetchKernel(
     this->send_to_brisc_ = true;
     // Log prefetcher core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
-    tt::tt_metal::Inspector::set_prefetcher_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);
+    tt::tt_metal::Inspector::set_prefetcher_core_info(
+        descriptor_.metal_context(), virtual_core, type, cq_id, device_id, servicing_device_id);
 }
 
 void PrefetchKernel::GenerateStaticConfigs() {
