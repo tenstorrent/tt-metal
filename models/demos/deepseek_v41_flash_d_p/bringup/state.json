@@ -1022,6 +1022,27 @@
   "started": "2026-10-17T14:12:22",
   "status": "PASS"
  },
+ "C.dec_reuse.attn_hc": {
+  "attempts": 0,
+  "duration_s": 47.9,
+  "history": [
+   {
+    "s": 47.9,
+    "status": "PASS",
+    "t": "2026-10-17T14:49:47"
+   }
+  ],
+  "last_run": "2026-10-17T14:49:47",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.dec_reuse.attn_hc.log",
+  "metrics": {
+   "err_attn_hc_L21": 0.0012165360385552049,
+   "err_attn_hc_L21_limit": 0.051231250166893005
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T14:48:59",
+  "status": "PASS"
+ },
  "C.enc_reuse.attention": {
   "agent": {
    "defs": {
