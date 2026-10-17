@@ -1,0 +1,149 @@
+{
+ "metrics": {
+  "chunk_len": {
+   "t": "2026-10-17T21:32:48",
+   "value": 2048
+  },
+  "chunk_start": {
+   "t": "2026-10-17T21:32:48",
+   "value": 53248
+  },
+  "chunk_wall_ms": {
+   "t": "2026-10-17T21:32:48",
+   "value": 3248.3
+  },
+  "deferred_cpu_ms": {
+   "t": "2026-10-17T21:29:59",
+   "value": 0.0
+  },
+  "deferred_cpu_steps": {
+   "t": "2026-10-17T21:29:59",
+   "value": 0
+  },
+  "device_model_hybrid": {
+   "t": "2026-10-17T21:32:48",
+   "value": 0
+  },
+  "device_ms_attention": {
+   "t": "2026-10-17T21:32:48",
+   "value": 238.66
+  },
+  "device_ms_attn_collapse": {
+   "t": "2026-10-17T21:32:48",
+   "value": 5.02
+  },
+  "device_ms_attn_hc": {
+   "t": "2026-10-17T21:32:48",
+   "value": 3.19
+  },
+  "device_ms_attn_norm": {
+   "t": "2026-10-17T21:32:48",
+   "value": 1.84
+  },
+  "device_ms_attn_residual": {
+   "t": "2026-10-17T21:32:48",
+   "value": 2.42
+  },
+  "device_ms_chip0": {
+   "t": "2026-10-17T21:32:48",
+   "value": 3022.72
+  },
+  "device_ms_chip1": {
+   "t": "2026-10-17T21:32:48",
+   "value": 3018.54
+  },
+  "device_ms_chip2": {
+   "t": "2026-10-17T21:32:48",
+   "value": 3022.81
+  },
+  "device_ms_chip3": {
+   "t": "2026-10-17T21:32:48",
+   "value": 3018.59
+  },
+  "device_ms_compressor": {
+   "t": "2026-10-17T21:32:48",
+   "value": 9.43
+  },
+  "device_ms_engram_add": {
+   "t": "2026-10-17T21:32:48",
+   "value": 7.02
+  },
+  "device_ms_engram_kv": {
+   "t": "2026-10-17T21:32:48",
+   "value": 25.17
+  },
+  "device_ms_engram_rows": {
+   "t": "2026-10-17T21:32:48",
+   "value": 0.0
+  },
+  "device_ms_experts": {
+   "t": "2026-10-17T21:32:48",
+   "value": 2522.18
+  },
+  "device_ms_ffn_collapse": {
+   "t": "2026-10-17T21:32:48",
+   "value": 5.02
+  },
+  "device_ms_ffn_hc": {
+   "t": "2026-10-17T21:32:48",
+   "value": 3.19
+  },
+  "device_ms_ffn_norm": {
+   "t": "2026-10-17T21:32:48",
+   "value": 2.94
+  },
+  "device_ms_ffn_residual": {
+   "t": "2026-10-17T21:32:48",
+   "value": 3.1
+  },
+  "device_ms_indexer": {
+   "t": "2026-10-17T21:32:48",
+   "value": 56.6
+  },
+  "device_ms_kv": {
+   "t": "2026-10-17T21:32:48",
+   "value": 7.46
+  },
+  "device_ms_moe_add": {
+   "t": "2026-10-17T21:32:48",
+   "value": 6.45
+  },
+  "device_ms_q_a": {
+   "t": "2026-10-17T21:32:48",
+   "value": 38.46
+  },
+  "device_ms_router": {
+   "t": "2026-10-17T21:32:48",
+   "value": 2.22
+  },
+  "device_ms_shared_expert": {
+   "t": "2026-10-17T21:32:48",
+   "value": 84.62
+  },
+  "device_ms_total": {
+   "t": "2026-10-17T21:32:48",
+   "value": 3024.99
+  },
+  "host_overhead_ms": {
+   "t": "2026-10-17T21:32:48",
+   "value": 223.3
+  },
+  "host_transfers_per_layer": {
+   "t": "2026-10-17T21:30:04",
+   "value": 0
+  },
+  "pcc_chunk_out": {
+   "t": "2026-10-17T21:30:04",
+   "value": 0.9998086321082386
+  },
+  "profiled_programs": {
+   "t": "2026-10-17T21:32:48",
+   "value": 66088
+  },
+  "scaled_run": {
+   "t": "2026-10-17T21:21:26",
+   "value": 1
+  }
+ },
+ "task": "X.1"
+}
