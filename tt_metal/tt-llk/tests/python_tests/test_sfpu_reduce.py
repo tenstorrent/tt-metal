@@ -96,12 +96,11 @@ def use_int32_twos_complement(
 
     This matches how ttnn feeds the device: Int32 reduce operands sit in DEST as two's-complement.
 
-    Both the column and the row MAX/MIN paths expect two's-complement operands. On Wormhole they now
-    load with plain ``INT32`` (bits preserved) and correct the ordering in software via a signed
-    compare-and-swap, so INT32_MIN is handled over the full range (see ckernel_sfpu_reduce.h). On
-    Blackhole they still cast two's-complement -> sign-magnitude explicitly around the sign-magnitude
-    ``SFPSWAP(VEC_MIN_MAX)`` comparator (tt-isa ``SFPSWAP.md``). Either way they expect two's-complement
-    operands. Row MAX must agree with the column path because a multi-axis reduce chains
+    Both the column and the row MAX/MIN paths expect two's-complement operands. On both architectures
+    they load with plain ``INT32`` (bits preserved) and correct the ordering of the sign-magnitude
+    ``SFPSWAP(VEC_MIN_MAX)`` comparator (tt-isa ``SFPSWAP.md``) in software via a signed
+    compare-and-swap, so INT32_MIN is handled over the full range (see ckernel_sfpu_reduce.h).
+    Row MAX must agree with the column path because a multi-axis reduce chains
     column-then-row over the same DEST (the column path leaves two's-complement there), so the row
     path consumes and produces two's-complement just like the column path.
 

@@ -908,12 +908,12 @@ inline void configure_addrmod_max_min(std::uint32_t num_cols) {
 // ============================================================================
 
 /**
- * @brief Initialization for SFPU reduce MAX/MIN kernel on 32x32 tile for Int32 format. Due to RTL bug INT32_2S_COMP
- * LOAD/STORE has no effect. Must cast to INT_SIGN_MAGN_TO_INT32_2S_COMP before swapping. Since CAST and SWAP are both
- * SIMPLE instructions, cannot be integrated together in LOADMACRO sequence. Therefore, we need to initialize the kernel
- * with manual loads and stores in order to perform the CAST and SWAP operations.
- * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, LO16, DEFAULT
- * (FP32, FP16B)
+ * @brief Initialization for the manual (non-LOADMACRO) SFPU reduce MAX/MIN compare-and-swap path.
+ *        Records the 3-instruction replay buffer that reduces LREG4-7 down to LREG4 via vertical
+ *        compare-and-swaps. Used by the UInt16-in-32-bit-dest column path (calculate_reduce_max_min_uint16),
+ *        where the load and the swap cannot be fused into a LOADMACRO because the garbage high bits must
+ *        be masked in between. Int32/UInt32 MAX/MIN use init_reduce_max_min_int32_signed instead.
+ * @tparam INSTRUCTION_MODE The instruction mode (INT32 for UInt16 in a 32-bit dest); unused here.
  * @tparam pool_type MAX or MIN; unused here. The direction is set on entry by the calculates
  *         (calculate_reduce_max_min_uint16, the row paths) and read by the recorded swaps at replay time.
  */
@@ -1063,12 +1063,10 @@ inline void init_reduce_sum_avg() {
  * a single macro, leaving no place to clear the high bits in between; the garbage then dominates the
  * integer comparison and produces wrong minima/maxima for any non-constant input.
  *
- * Instead we use the same manual load/mask/swap structure as the Int32 path (which exists for the
- * analogous reason that CAST and SWAP cannot share a LOADMACRO). The sign-magnitude casts of the
- * Int32 path are unnecessary here: masked UInt16 values are always non-negative, so a plain integer
- * SFPSWAP orders them correctly and the cast would be the identity. We therefore replace the casts
- * with plain moves (LREG0-3 -> LREG4-7) that feed the recorded swap buffer. Final, packer-visible
- * results are written with SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16) so the packer reads the low bits.
+ * Instead we use the same manual load/mask/swap structure as the Int32 path. Masked UInt16 values are
+ * always non-negative, so a plain integer SFPSWAP orders them correctly (no sign-magnitude cast needed);
+ * we move LREG0-3 -> LREG4-7 to feed the recorded swap buffer. Final, packer-visible results are written
+ * with SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16) so the packer reads the low bits.
  *
  * The reduction reuses init_reduce_max_min_int32()'s 3-swap replay buffer and swap-direction config.
  * Only a single 32x32 tile is processed per call (block height 1), matching the column-reduce driver
@@ -1731,9 +1729,9 @@ inline void calculate_reduce(
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
     // Int32 DEST representation and load/store mode per reduction. On Blackhole INT32_2S_COMP is a no-op
-    // (tt-isa SFPLOAD.md: MOD0_FMT_INT32_SM is deprecated and performs no conversion), so any
-    // sign-magnitude<->two's-complement change is done explicitly via SFPCAST. DEST holds two's-complement
-    // Int32 for every reduction:
+    // (tt-isa SFPLOAD.md: MOD0_FMT_INT32_SM is deprecated and performs no conversion), so every path loads
+    // the raw word with plain INT32 and nothing in this file converts between sign-magnitude and
+    // two's-complement. DEST holds two's-complement Int32 for every reduction:
     //   SUM (two's-complement): plain INT32 so SFPIADD (a two's-complement adder) gets the word unchanged.
     //   MAX/MIN (two's-complement): plain INT32 (bits preserved), feeding the software signed
     //        compare-and-swap path (calculate_reduce_max_min_int32_col / perform_reduce_row_max_min_int32),
