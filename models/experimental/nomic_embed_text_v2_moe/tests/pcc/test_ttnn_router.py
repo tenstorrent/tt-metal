@@ -24,7 +24,7 @@ from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import 
     to_block_layout,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.common import flatten_tokens, to_device
-from models.experimental.nomic_embed_text_v2_moe.tt.experts import MAX_TOKENS_PER_PASS
+from models.experimental.nomic_embed_text_v2_moe.tt.experts import routed_windows
 from models.experimental.nomic_embed_text_v2_moe.tt.router import TtNomicRouter
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -187,8 +187,7 @@ def test_routing_metadata_from_the_router(device, config, tt_router, batch, seql
     indices = ttnn.to_torch(routing.indices).reshape(tokens, config.moe_top_k)
     values = ttnn.to_torch(routing.values).reshape(tokens, config.moe_top_k)
 
-    for token_start in range(0, tokens, MAX_TOKENS_PER_PASS):
-        num_tokens = min(MAX_TOKENS_PER_PASS, tokens - token_start)
+    for token_start, num_tokens in routed_windows(tokens):
         outputs = ttnn.experimental.nomic_embed_text_v2_moe.routing_metadata(
             routing.indices,
             routing.values,

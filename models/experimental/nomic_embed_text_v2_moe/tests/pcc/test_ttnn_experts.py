@@ -26,8 +26,10 @@ from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import 
     assert_bias_added_once,
     dense_routing,
     device_routing,
+    device_selection,
     hidden_states,
     load_reference,
+    routing_selection,
     to_block_layout,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.common import flatten_tokens, to_device
@@ -37,9 +39,11 @@ from models.experimental.nomic_embed_text_v2_moe.tt.experts import (
     STACKED_MAX_TOKENS,
     StackedBuffers,
     TtNomicExperts,
+    routed_windows,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import expert_w1_transposed_config
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
+from models.experimental.nomic_embed_text_v2_moe.tt.router import Routing
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
@@ -62,6 +66,17 @@ LAYOUT_SWITCH_TOKEN_ERROR = 0.15
 # TOKEN_SHAPES plus a pass off the tile grid on each side of STACKED_MAX_TOKENS: 300 tokens, 10 tile
 # rows, stacked, and 330 transposed.
 EXPERT_SHAPES = [*TOKEN_SHAPES, (3, 100), (3, 110)]
+
+# The routed pass's steps: one pass off the tile grid, one on it, and 5000 tokens, which run as two
+# windows over one dispatch table.
+ROUTED_SHAPES = [(3, 110), (2, 512), (10, 500)]
+
+# The routed pass against the reference's loop with the experts in torch, so only the bfloat16
+# expert rows and sum differ from it. Measured over seeds 0..7 at ROUTED_SHAPES: PCC 0.9999976 at
+# worst, and a token's error norm relative to its norm 4.97e-03. A token summed from a wrong row
+# scores about 1.
+ROUTED_PCC = 0.9999
+ROUTED_TOKEN_ERROR = 0.015
 
 PREFIX = f"encoder.layers.{MOE_LAYER}.mlp.experts."
 
@@ -292,3 +307,136 @@ def test_misoriented_w2_decorrelates(device, config, tt_config, state_dict, refe
     ref, got, _ = run_both(device, config, reference, experts, batch, seqlen)
 
     assert compute_pcc(ref, got) < DECORRELATED_PCC
+
+
+def window_metadata(routing: Routing, num_experts: int, token_start: int, num_tokens: int):
+    """routing_metadata's four outputs for one routed pass, on the device and on the host."""
+    # Imported here, so a moved op test tree fails the routed tests alone rather than the module.
+    from tests.ttnn.nightly.unit_tests.operations.experimental.nomic_embed_text_v2_moe.routing_metadata_reference import (
+        to_host,
+    )
+
+    outputs = ttnn.experimental.nomic_embed_text_v2_moe.routing_metadata(
+        routing.indices, routing.values, num_experts=num_experts, token_start=token_start, num_tokens=num_tokens
+    )
+    return outputs, to_host(outputs)
+
+
+def torch_experts(reference, dispatched: torch.Tensor, expert_counts: torch.Tensor) -> torch.Tensor:
+    """The routed experts on the host: each block of dispatched rows through its expert, in bfloat16.
+
+    The expert of each block follows from the counts alone, as the device's grouped matmul derives it.
+    """
+    from tests.ttnn.nightly.unit_tests.operations.experimental.nomic_embed_text_v2_moe.routing_metadata_reference import (
+        BLOCK_ROWS,
+        block_experts,
+    )
+
+    experts, blocks = torch.unique_consecutive(
+        block_experts(expert_counts, dispatched.shape[0] // BLOCK_ROWS), return_counts=True
+    )
+    with torch.no_grad():
+        outputs = [
+            reference.mlp(rows, int(expert))
+            for rows, expert in zip(dispatched.split((blocks * BLOCK_ROWS).tolist()), experts)
+        ]
+    return torch.cat(outputs).bfloat16()
+
+
+@pytest.mark.parametrize("batch, seqlen", ROUTED_SHAPES)
+def test_dispatch_copies_each_slot_row(device, config, tt_experts, batch, seqlen):
+    """Every row the routed experts read is a row of x, bit for bit.
+
+    Rows that hold no slot copy the pass's first token, so they are finite too. The ids are global:
+    every pass of a split batch gathers from the one table.
+    """
+    tokens = batch * seqlen
+    x = flatten_tokens(to_device(to_block_layout(hidden_states(batch, seqlen, config.hidden_size)), device))
+    routing = device_selection(*routing_selection(tokens, config.num_experts, config.moe_top_k), device)
+    x_host = ttnn.to_torch(x).reshape(tokens, config.hidden_size)
+
+    x_rows = tt_experts.dispatch_table(x)
+    for token_start, num_tokens in routed_windows(tokens):
+        (gather_index, *_), metadata = window_metadata(routing, config.num_experts, token_start, num_tokens)
+        dispatched = ttnn.to_torch(tt_experts.dispatch(x_rows, gather_index))
+        ids = metadata.gather_index
+
+        assert dispatched.shape == (1, 1, ids.numel(), config.hidden_size)
+        assert torch.equal(dispatched.reshape(ids.numel(), -1).view(torch.int16), x_host[ids].view(torch.int16))
+
+
+@pytest.mark.parametrize("batch, seqlen", ROUTED_SHAPES)
+def test_combine_returns_each_slot_row(device, config, tt_experts, batch, seqlen):
+    """At weights (1, 0) each token's sum is its first slot's row, at (0, 1) its second's, bit for bit.
+
+    Every expert output row that holds no slot is NaN, so a token reading one would show it. Padding
+    tokens read row 0, a real slot's row, at weight 0, so the tile padding of the sum is exact zeros.
+    """
+    tokens, hidden, top_k = batch * seqlen, config.hidden_size, config.moe_top_k
+    _, indices = routing_selection(tokens, config.num_experts, top_k)
+
+    for k in range(top_k):
+        values = torch.zeros(tokens, top_k)
+        values[:, k] = 1.0
+        routing = device_selection(values, indices, device)
+        for token_start, num_tokens in routed_windows(tokens):
+            (_, combine_index, combine_weights, _), metadata = window_metadata(
+                routing, config.num_experts, token_start, num_tokens
+            )
+            rows = metadata.combine_index
+            padded_tokens = rows.shape[-1]
+            expert_outputs = torch.randn(metadata.gather_index.numel(), hidden).bfloat16()
+            used = torch.zeros(expert_outputs.shape[0], dtype=torch.bool)
+            used[rows[:, :num_tokens].reshape(-1)] = True
+            expert_outputs[~used] = float("nan")
+
+            out = tt_experts.combine(
+                to_device(expert_outputs.reshape(1, 1, -1, hidden), device), combine_index, combine_weights, num_tokens
+            )
+            padded = ttnn.to_torch(ttnn.reshape(out, (1, 1, padded_tokens, hidden), (1, 1, padded_tokens, hidden)))
+            padded = padded.reshape(padded_tokens, hidden)
+
+            assert list(out.shape) == [1, 1, num_tokens, hidden]
+            assert torch.equal(
+                padded[:num_tokens].view(torch.int16), expert_outputs[rows[k, :num_tokens]].view(torch.int16)
+            ), f"window at {token_start}: a token's sum at k={k} is not its slot's row"
+            assert (padded[num_tokens:] == 0).all(), f"window at {token_start}: the padding of the sum is not zero"
+
+
+@pytest.mark.parametrize("batch, seqlen", ROUTED_SHAPES)
+def test_routed_pass_with_torch_experts(device, config, reference, tt_experts, batch, seqlen):
+    """Dispatch, the experts in torch and combine reproduce the reference's own per-expert loop.
+
+    reference.forward gathers each expert's tokens by value and scatter-adds the weighted results;
+    the routed pass does the same with routing_metadata's indices on the device. The torch experts
+    write bfloat16 rows, as a device pass does, so this measures the data movement and the weighted
+    sum: each token's two rows, from the right experts, at the right weights, back in its place.
+    """
+    tokens, hidden = batch * seqlen, config.hidden_size
+    x = flatten_tokens(to_device(to_block_layout(hidden_states(batch, seqlen, hidden)), device))
+    values, indices = routing_selection(tokens, config.num_experts, config.moe_top_k)
+    routing = device_selection(values, indices, device)
+
+    x_rows = tt_experts.dispatch_table(x)
+    sums = []
+    for token_start, num_tokens in routed_windows(tokens):
+        (gather_index, combine_index, combine_weights, _), metadata = window_metadata(
+            routing, config.num_experts, token_start, num_tokens
+        )
+        dispatched = ttnn.to_torch(tt_experts.dispatch(x_rows, gather_index)).float().reshape(-1, hidden)
+        expert_outputs = torch_experts(reference, dispatched, metadata.expert_counts)
+        out = tt_experts.combine(
+            to_device(expert_outputs.reshape(1, 1, -1, hidden), device), combine_index, combine_weights, num_tokens
+        )
+        sums.append(ttnn.to_torch(out).float().reshape(num_tokens, hidden))
+    got = torch.cat(sums)
+
+    with torch.no_grad():
+        x_host = ttnn.to_torch(x).float().reshape(1, tokens, hidden)
+        ref = (reference(x_host, values, indices) - reference.bias).reshape(tokens, hidden)
+    token_error = (got - ref).norm(dim=-1) / ref.norm(dim=-1)
+
+    assert_with_pcc(ref, got, ROUTED_PCC)
+    assert (
+        token_error.max() < ROUTED_TOKEN_ERROR
+    ), f"token {int(token_error.argmax())} is off by {float(token_error.max()):.3e} of its norm"
