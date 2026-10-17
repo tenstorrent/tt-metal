@@ -6094,6 +6094,13 @@ tasks:
     - q_a
     - kv
     layer: 20
+  frozen:
+    at: '2026-10-17T08:29:35'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_05_kv.py: 20194d81aada89d8b5728afbbc6a4ade16c19679265df613c5651891b6d45964
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_candidate.compressor
   title: dec_candidate compressor (op) on device, layer 20
   step: implement
