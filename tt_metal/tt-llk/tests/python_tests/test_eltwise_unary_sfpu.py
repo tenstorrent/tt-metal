@@ -593,17 +593,19 @@ def test_sqrt_custom_infinity_regression(request):
     )
 
 
-# tanh_derivative_lut(+/-inf): exact 0 on a 16-bit cell. The edge sweep asserts the two
-# infinities only on Float32 -> Float32 at dest_acc=Yes. The op is in GENERATED_NAN_SIGN_OPS,
-# and on Wormhole specials_after_nan_sign_gate switches cat B off wholesale on the five cells
-# where the NaN narrows, which takes the +/-inf probes out with the NaN probe; with no cat-A or
-# cat-D edge of its own the op then skips those cells outright. The infinities do not depend on
-# the NaN sign, so this pins them on one of the cells the gate takes away: Float16_b -> Float16_b
-# at dest_acc=No, where the tt-llk kernel's +/-inf guard is what makes the result 0 rather than
-# the NaN of 0 * inf + 1, which this cell's pack would narrow to a signed infinity.
+# tanh_derivative_lut(+/-inf): exact 0 on a 16-bit cell. On Wormhole the edge sweep asserts
+# the two infinities only on Float32 -> Float32 at dest_acc=Yes: the op is in
+# GENERATED_NAN_SIGN_OPS, and specials_after_nan_sign_gate switches cat B off wholesale on the
+# five cells where the NaN narrows, which takes the +/-inf probes out with the NaN probe; with
+# no cat-A or cat-D edge of its own the op then skips those cells outright. The infinities do
+# not depend on the NaN sign, so this pins them on one of the cells the gate takes away:
+# Float16_b -> Float16_b at dest_acc=No, where the tt-llk kernel's +/-inf guard is what makes
+# the result 0 rather than the NaN of 0 * inf + 1, which this cell's pack would narrow to a
+# signed infinity.
 #
-# Blackhole runs the gate-free edge sweep on Float32 -> Float32 only (_skip_bh_unless_fp32)
-# and takes the same skip here.
+# Blackhole skips every dest_acc=No pair except Float32 -> Float32 (_skip_bh_unless_fp32), so
+# this cell is skipped there; its gate-free edge sweep already asserts +/-inf on the
+# specials-safe cells it runs.
 @pytest.mark.nightly
 def test_tanh_derivative_lut_infinity_regression():
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
