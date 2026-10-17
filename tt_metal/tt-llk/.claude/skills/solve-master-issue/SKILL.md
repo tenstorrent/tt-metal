@@ -324,6 +324,12 @@ Each item moves through: `triage → repro → fix → verify → PR → bot-rev
    kills its background shells, so anything local that must outlive it — a build, a long test sweep,
    a `findings.py sync` — is started with `nohup setsid … > <ledger dir>/<what>.log 2>&1 &`, its pid
    and log recorded in the pending table, and its log read on the next turn instead of re-running it.
+   **Idle turns cost tokens.** When every pending event is a CI run, a remote leg or a build whose
+   earliest possible finish is more than 15 min away, write that time as a unix epoch to
+   `<state dir>/NEXT_WAKE` (the worker's dir, or the run dir for a single worker) before ending the turn:
+   the driver sleeps until then (at most 2 h) instead of resuming every 15 min. A Nightly run takes
+   4–6 h, Sanity 1–3 h, an LLK e2e ~25 min — use the dispatch time plus the lower bound. Do not write
+   it when anything could finish sooner (a bot review, a leg, an agent).
 
 **Surviving a disconnect.** Never run the skill in a foreground terminal you might lose. Launch it
 detached — from the repo root, with `$MASTER_ISSUE_DIR` on shared storage:
