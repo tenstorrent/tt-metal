@@ -33,6 +33,12 @@ class CCLManager:
         # every layer/chunk (key -> tensor). See get_ring_gather_buffer.
         self._ring_gather_buffers = {}
 
+        # Caller-owned MM<->RS counter arrays for the fused o_proj matmul + reduce-scatter's windowed L1
+        # hand-off (minimal_matmul_strided_reduce_scatter_async). Allocated once, on first use, and kept: the
+        # op's own per-program fallback would stay pinned in L1 for the program's cached life.
+        self._mm_progress_counters = None
+        self._mm_credit_counters = None
+
         # Persistent worst-case outputs for high_bw_all_gather (MSA K/V/index_k SP gathers), one per
         # (key, shape, dtype), shared across layers/chunks. See get_high_bw_gather_buffer.
         self._high_bw_gather_buffers = {}
@@ -136,6 +142,35 @@ class CCLManager:
             for t in cache.values():
                 ttnn.deallocate(t)
             cache.clear()
+
+    def _mm_counters(self):
+        """A [slots, slots] uint32 L1 array, one row of ``slots`` = grid area per core (HEIGHT_SHARDED over
+        the full compute grid). Wide enough for both the progress counters (one slot per matmul core) and
+        the credit counters (one per RS reader). Same layout as tt_dit's CCLManager."""
+        slots = self.compute_grid_size.x * self.compute_grid_size.y
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape([slots, slots]),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(self.ccl_cores, [1, slots], ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+        )
+
+    def get_mm_progress_counters_buffer(self):
+        """MM->RS per-core progress counters for minimal_matmul_strided_reduce_scatter_async."""
+        if self._mm_progress_counters is None:
+            self._mm_progress_counters = self._mm_counters()
+        return self._mm_progress_counters
+
+    def get_mm_credit_counters_buffer(self):
+        """RS->MM window credits for minimal_matmul_strided_reduce_scatter_async (mm_window_blocks)."""
+        if self._mm_credit_counters is None:
+            self._mm_credit_counters = self._mm_counters()
+        return self._mm_credit_counters
 
     def get_ring_gather_buffer(self, key, n_kv, seq, head_dim, dtype):
         """Persistent ring-gather scratch for ``ring_joint`` SDPA — allocated ONCE and reused across every
