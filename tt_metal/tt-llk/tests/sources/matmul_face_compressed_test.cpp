@@ -19,17 +19,17 @@ std::uint32_t math_sync_tile_dst_index = 0;
 // More than one call is for test_matmul_face_compressed_multi_call, which exercises the call boundary: math is held
 // back before each call so the unpacker enters call c + 1 while call c's last faces are still in flight, and the
 // per-call face formats put the bfp2 <-> bfp4 switch on that boundary. The result must not depend on that timing.
-// Call c's activation tiles follow the last call's, its meta stream starts meta_words_per_call words after the
-// previous one (the test pads every call's meta to that), and its weight faces are addressed absolutely by the
-// address words inside its own meta.
-constexpr std::uint32_t num_calls   = CUSTOM_MM_NUM_CALLS;
-constexpr std::uint32_t kt_per_call = KT_DIM / num_calls;
+// Call c's activation tiles follow the previous call's, its meta stream starts CUSTOM_MM_META_WORDS_PER_CALL words
+// after the previous one (the test computes that stride and pads every call's meta to it), and its weight faces
+// are addressed absolutely by the address words inside its own meta.
+constexpr std::uint32_t num_calls           = CUSTOM_MM_NUM_CALLS;
+constexpr std::uint32_t kt_per_call         = KT_DIM / num_calls;
+constexpr std::uint32_t meta_words_per_call = CUSTOM_MM_META_WORDS_PER_CALL;
 static_assert(kt_per_call * num_calls == KT_DIM && kt_per_call % 2 == 0, "each call needs an even share of the K tiles");
-// One call's meta words when no face is bfp0, which is the most it can take: the math metas (five per word), the
-// iters word, the address words (a bfp2/bfp4 pair per eight index words plus the lookahead pair) and the index
-// words (six metas per word). meta_words_per_call in the test is the same formula.
-constexpr std::uint32_t max_iters           = kt_per_call * CT_DIM;
-constexpr std::uint32_t meta_words_per_call = (max_iters + 4) / 5 + 1 + 2 * (max_iters / 6 / 8 + 1) + (max_iters + 5) / 6;
+static_assert(num_calls == 1 || meta_words_per_call > 0, "a multi-call kernel needs the per-call meta stride");
+// Cycles math waits before each call so the unpacker runs ahead and reaches the next call's first face while math
+// still holds the previous call's last banks.
+constexpr std::uint32_t math_hold_back_cycles = 2000;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -62,7 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (num_calls == 1)
     {
-        _llk_unpack_AB_face_compressed_mm_<CT_DIM, true, true>(address_b(0), address_meta(0), KT_DIM);
+        _llk_unpack_AB_face_compressed_mm_<CT_DIM, true /*clear_src*/, true /*finalize*/>(address_b(0), address_meta(0), KT_DIM);
     }
     else
     {
@@ -70,12 +70,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // fills the same rows in every call. Issued here rather than through clear_src so the loop needs only two
         // instantiations of the execute, which is what fits the unpack code region. Only the last call finalizes, so
         // a ct_dim == 1 split accumulation is merged once, after all of K.
-        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
+        TTI_UNPACR_NOP(
+            SrcB,
+            0 /*Stream_Id*/,
+            0 /*Msg_Clr_Cnt*/,
+            0 /*Set_Dvalid*/,
+            0 /*Clr_to1_fmt_Ctrl*/,
+            0 /*Stall_Clr_Cntrl*/,
+            1 /*Bank_Clr_Ctrl*/,
+            0 /*Src_ClrVal_Ctrl*/,
+            p_unpacr_nop::CLR_SRC);
         for (std::uint32_t call = 0; call + 1 < num_calls; call++)
         {
-            _llk_unpack_AB_face_compressed_mm_<CT_DIM, false, false>(address_b(call), address_meta(call), kt_per_call);
+            _llk_unpack_AB_face_compressed_mm_<CT_DIM, false /*clear_src*/, false /*finalize*/>(address_b(call), address_meta(call), kt_per_call);
         }
-        _llk_unpack_AB_face_compressed_mm_<CT_DIM, false, true>(address_b(num_calls - 1), address_meta(num_calls - 1), kt_per_call);
+        _llk_unpack_AB_face_compressed_mm_<CT_DIM, false /*clear_src*/, true /*finalize*/>(address_b(num_calls - 1), address_meta(num_calls - 1), kt_per_call);
     }
 
     _llk_unpack_AB_face_compressed_mm_uninit_(params.num_faces_B);
@@ -103,7 +112,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (num_calls == 1)
     {
-        _llk_math_face_compressed_mm_<CT_DIM, true>(params.buffer_C[0], params.in0_face_r_dim, 0, KT_DIM);
+        _llk_math_face_compressed_mm_<CT_DIM, true /*finalize*/>(params.buffer_C[0], params.in0_face_r_dim, 0 /*dst_index*/, KT_DIM);
     }
     else
     {
@@ -112,15 +121,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // Hold math back before each call so the unpacker runs ahead and reaches call c + 1 while math still holds
             // call c's last banks: call c's last face is then still waiting for its bank when call c + 1's first face
             // arrives in the other format. Without the delay math keeps up and the boundary is not contended.
-            ckernel::wait(2000);
+            ckernel::wait(math_hold_back_cycles);
             const std::uint32_t address_meta = params.buffer_C[0] + call * meta_words_per_call * sizeof(std::uint32_t);
             if (call + 1 < num_calls)
             {
-                _llk_math_face_compressed_mm_<CT_DIM, false>(address_meta, params.in0_face_r_dim, 0, kt_per_call);
+                _llk_math_face_compressed_mm_<CT_DIM, false /*finalize*/>(address_meta, params.in0_face_r_dim, 0 /*dst_index*/, kt_per_call);
             }
             else
             {
-                _llk_math_face_compressed_mm_<CT_DIM, true>(address_meta, params.in0_face_r_dim, 0, kt_per_call);
+                _llk_math_face_compressed_mm_<CT_DIM, true /*finalize*/>(address_meta, params.in0_face_r_dim, 0 /*dst_index*/, kt_per_call);
             }
         }
     }

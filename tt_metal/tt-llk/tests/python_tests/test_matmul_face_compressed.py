@@ -452,7 +452,7 @@ def test_matmul_face_compressed_deepseek(shape, switch_mult, seed):
 # its own meta stream, as a kernel running one call per expert does. The kernel holds math
 # back before each call, so the unpacker reaches the next call while math still holds the
 # previous one's banks (see the kernel source). Every call after the first depends on the
-# end-of-call state the unpack LLK leaves behind:
+# clean state the unpack LLK establishes on entry, before its first face:
 #   same        one format throughout, so the boundary is only the counter reset: the
 #               activation unpacks walk the unpacker's own Y counter, which has to be back at
 #               zero when the next call sets its activation base, or the call reads the wrong
@@ -461,9 +461,16 @@ def test_matmul_face_compressed_deepseek(shape, switch_mult, seed):
 #               boundary switch, in alternating directions. Inside a call a switch is preceded
 #               by the CLR_SRC stall the index words encode; a call's first face never carries
 #               one, because its previous-format bit replicates the face itself, so only the
-#               end-of-call stall separates the two formats
+#               call-entry stall separates the two formats. Without it the ct_dim == 1 rows
+#               hang; the ct_dim >= 2 rows have not been seen to fail without it and guard
+#               the counter reset and the stall's placement against regressions
 #   end-bfp4    every call is bfp2 then bfp4, so every boundary switches bfp4 -> bfp2
 #   end-bfp2    the reverse, every boundary switches bfp2 -> bfp4
+# K tiles per call sets how much of the execute each call runs: 2 is the shortest call
+# (one index word, no address reload), 32 at ct_dim 2 runs the odd eight-word block, which
+# reloads the alternate context pair and leaves the call on it, 48 at ct_dim 2 and 16 at
+# ct_dim 8 run a full sixteen-word block, which reloads both context pairs, and 48 at
+# ct_dim 1 runs the odd block at the single-tile width.
 MULTI_CALL_CASES = [
     # (id, M, K, N, K tiles per call, per-call format runs, cycled over the calls)
     ("same-bfp4", 1, 2048, 64, 2, [("bfp4",)]),
@@ -478,12 +485,22 @@ MULTI_CALL_CASES = [
     ("end-bfp4-ct1-m8", 8, 2048, 32, 2, [("bfp2", "bfp4")]),
     ("alternate-ct8-m8", 8, 1024, 256, 2, [("bfp2",), ("bfp4",)]),
     ("end-bfp2-ct8", 1, 1024, 256, 2, [("bfp4", "bfp2")]),
+    ("alternate-k32", 1, 3072, 64, 32, [("bfp2",), ("bfp4",)]),
+    ("end-bfp4-k48-m8", 8, 3072, 64, 48, [("bfp2", "bfp4")]),
+    ("same-bfp2-ct8-k16", 1, 1024, 256, 16, [("bfp2",)]),
+    ("alternate-ct1-k48", 1, 3072, 32, 48, [("bfp2",), ("bfp4",)]),
 ]
+# With the entry stall and the counter reset every row lands at PCC >= 0.9996; the missing
+# counter reset puts them near 0. The default 0.99 would also let a single corrupt face per
+# boundary through, as the custom_compressed multi-call test found, so pin the gate tighter.
+MULTI_CALL_PCC = 0.9995
 
 
 def meta_words_per_call(kt_tiles, ct_tiles):
     # The kernel's meta stride between calls: one call's meta words with every face present,
-    # which is the most it can take. Same formula as meta_words_per_call in the kernel source.
+    # which is the most it can take -- the math metas (five per word), the iters word, the
+    # address words (a bfp2/bfp4 pair per eight index words plus the lookahead pair) and the
+    # index words (six metas per word). Emitted to the kernel as CUSTOM_MM_META_WORDS_PER_CALL.
     max_iters = kt_tiles * ct_tiles
     return (
         (max_iters + 4) // 5 + 1 + 2 * (max_iters // 6 // 8 + 1) + (max_iters + 5) // 6
@@ -503,6 +520,7 @@ def test_matmul_face_compressed_multi_call(M, K, N, kt_per_call, call_formats):
     rows_per_call = ku // num_calls  # face rows per call
     faces_per_call = rows_per_call * cu
     stride = meta_words_per_call(kt_per_call, ct)
+    stride_bytes = 4 * stride
 
     # Each call lays its formats as contiguous runs over its own faces.
     assignment = []
@@ -526,21 +544,22 @@ def test_matmul_face_compressed_multi_call(M, K, N, kt_per_call, call_formats):
             out += packed
         return out, infos
 
-    def encode_meta_per_call(assignment, ct, kt, infos):
-        # One meta stream per call, each padded to the kernel's stride.
+    def encode_meta_per_call(assignment, cu, ku, infos):
+        # One meta stream per call, each padded to the kernel's stride. cu/ku are the face
+        # counts run_compressed passes, the same grid encode_meta takes.
         out = b""
         for c in range(num_calls):
             meta = encode_meta(
                 assignment[c * faces_per_call : (c + 1) * faces_per_call],
-                ct,
+                cu,
                 rows_per_call,
                 infos[c],
-                b_base_words=buffer_b_words(kt),
+                b_base_words=buffer_b_words(ku),
             )
             assert (
-                len(meta) <= 4 * stride
+                len(meta) <= stride_bytes
             ), f"call {c}: meta exceeds the kernel's stride"
-            out += meta.ljust(4 * stride, b"\0")
+            out += meta.ljust(stride_bytes, b"\0")
         return out
 
     run_compressed(
@@ -555,5 +574,6 @@ def test_matmul_face_compressed_multi_call(M, K, N, kt_per_call, call_formats):
         promote_assignment,
         pack_b_per_call,
         encode_meta_per_call,
-        calls=CUSTOM_MM_CALLS(num_calls=num_calls),
+        pcc_threshold=MULTI_CALL_PCC,
+        calls=CUSTOM_MM_CALLS(num_calls=num_calls, meta_words_per_call=stride),
     )

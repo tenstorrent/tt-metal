@@ -253,8 +253,12 @@ inline void _llk_unpack_AB_face_compressed_mm_uninit_(const std::uint32_t unpA_n
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xFF0000>(unpA_num_faces);
 
     t6_mutex_acquire(mutex::THREAD2_ADC);
-    // reset CH0 XY counters for both unpackers to leave them in a clean state
+    // reset CH0 XY counters for both unpackers to leave them in a clean state, and the borrowed Y and shared ZW
+    // counters the last call's unpacks moved, as init zeroed them
     TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::XY));
+    TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_MATH, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
+    TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_PACK, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
+    TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
     t6_mutex_release(mutex::THREAD2_ADC);
 }
 
@@ -273,6 +277,9 @@ inline void _llk_unpack_AB_face_compressed_mm_uninit_(const std::uint32_t unpA_n
  *                           the index words that follow the math metas.
  * @param kt_dim: Inner dimension in tiles, an even number in [2, 256].
  * @note Call @ref _llk_unpack_AB_face_compressed_mm_init_ first.
+ * @note Run split-K calls back to back after one init: every call starts on the CLR_SRC format stall and zeroes
+ *       the Y and ZW counters before its first face, so its index words open on the first face's own format and
+ *       its activation base carries nothing over from the previous call.
  * @note On the math thread, pair with @ref _llk_math_face_compressed_mm_.
  */
 template <std::uint32_t ct_dim = 1, bool clear_src = true, bool finalize = true>
@@ -349,6 +356,11 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     wait_for_next_context(1);
     reset_config_context();
 
+    // Start the call from a clean unpacker. The format-switch stall is encoded per face only within a call: index
+    // word 0 bit 0 replicates the first face's own format, never the format of whatever unpacked before -- the
+    // previous call's last face, or a previous op's. So issue the stall here, the same S an in-call switch gets,
+    // ahead of the first face.
+    TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::CLR_SRC);
     if constexpr (clear_src)
     {
         TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
@@ -356,6 +368,13 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     cfg[THCON_SEC0_REG3_Base_address_ADDR32]       = pre_meta_ptr[1] & meta_addr_base_mask;
     cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = pre_meta_ptr[2] & meta_addr_base_mask;
     t6_mutex_acquire(mutex::THREAD2_ADC);
+    // Counters as init left them, before this call's own Y offsets: zero the Y counters the previous call moved,
+    // the borrowed pair its per-face SET_Y writes and weight unpacks walked and this thread's own, which the
+    // activation unpacks walk, and the shared ZW pair, but not X, so init's CH1 X ends survive.
+    TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_MATH, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
+    TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_PACK, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
+    TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
+    TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
     set_y_off(pre_meta_ptr + 1);
     t6_mutex_release(mutex::THREAD2_ADC);
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = base_address_b;
@@ -438,21 +457,6 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
 
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
-    // The format-switch stall is encoded per face only within a call; the first face's prev format is a metadata
-    // sentinel (its own format), not the last format of the previous call, so always end on the stall. It only
-    // has to precede the next call's unpacks, so it goes after the SEMGET to keep it out of the context handshake.
-    TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1 /* Stall_Clr_Cntrl */, 0, 0, p_unpacr_nop::CLR_SRC);
-
     wait_for_next_context(1);
     reset_config_context();
-
-    // Put the counters back the way init left them, ready for the next call: zero the Y counters the
-    // per-face SET_Y writes moved, the own-set Y the activation unpacks moved, and the shared ZW pair,
-    // but not X, so init's CH1 X ends survive.
-    t6_mutex_acquire(mutex::THREAD2_ADC);
-    TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_MATH, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
-    TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_PACK, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
-    TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y)); // unp1's own set, which B walks
-    TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
-    t6_mutex_release(mutex::THREAD2_ADC);
 }
