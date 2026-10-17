@@ -133,9 +133,11 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
  * Explicit-mode APIs (the id-free experimental pack_reconfig_data_format,
  * 2.0 pack_untilize, fast_tilize_uninit, copy_tile<is_fp32_dest_acc_en>, ...)
  * take the mode from their template argument and must be passed the
- * overridden mode. A compute_kernel_hw_startup (CB-id or id-free) or a
- * compute_kernel_hw_cleanup inside the override ends it and returns the
- * whole pipeline to the kernel-wide mode.
+ * overridden mode. The matching disable / restore is the normal way out of
+ * the override. A full re-init also ends it and returns the whole pipeline to
+ * the kernel-wide mode: the CB-id compute_kernel_hw_startup (meant for kernel
+ * start) and, on Blackhole only, compute_kernel_hw_cleanup and the id-free
+ * 2.0 compute_kernel_hw_startup.
  *
  * All three TRISC threads must call this together. TRISC mailboxes must not
  * be in use.
@@ -182,10 +184,12 @@ ALWI void enable_fp32_dest_acc(uint32_t ocb) {
  * the packer in the mode this call set. Explicit-mode APIs (the id-free
  * experimental pack_reconfig_data_format, 2.0 pack_untilize,
  * fast_tilize_uninit, copy_tile<is_fp32_dest_acc_en>, ...) take the mode
- * from their template argument and must be passed the overridden mode. A
- * compute_kernel_hw_startup (CB-id or id-free) or a compute_kernel_hw_cleanup
- * inside the override ends it and returns the whole pipeline to the
- * kernel-wide mode.
+ * from their template argument and must be passed the overridden mode. The
+ * matching enable / restore is the normal way out of the override. A full
+ * re-init also ends it and returns the whole pipeline to the kernel-wide mode:
+ * the CB-id compute_kernel_hw_startup (meant for kernel start) and, on
+ * Blackhole only, compute_kernel_hw_cleanup and the id-free 2.0
+ * compute_kernel_hw_startup.
  *
  * All three TRISC threads must call this together. TRISC mailboxes must not
  * be in use.

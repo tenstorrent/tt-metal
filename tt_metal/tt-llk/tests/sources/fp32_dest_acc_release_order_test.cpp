@@ -50,12 +50,15 @@ inline bool expected_read_int8(bool enable, DataFormat format)
     return !expected_read_32b(enable, format) && (format == DataFormat::Int8 || format == DataFormat::UInt8);
 }
 
+// ALU_ACC_CTRL_Fp32_enabled flips on every handshake whatever the format, so every call can catch an early
+// release; the Dest-read bits check the derivation for PACK's reported format.
 inline bool dest_rd_ctrl_matches(volatile std::uint32_t tt_reg_ptr* cfg, bool enable, DataFormat format)
 {
+    const bool fp32_enabled  = (cfg[ALU_ACC_CTRL_Fp32_enabled_ADDR32] & ALU_ACC_CTRL_Fp32_enabled_MASK) != 0;
     const std::uint32_t word = cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32];
     const bool read_32b      = (word & PCK_DEST_RD_CTRL_Read_32b_data_MASK) != 0;
     const bool read_int8     = (word & PCK_DEST_RD_CTRL_Read_int8_MASK) != 0;
-    return read_32b == expected_read_32b(enable, format) && read_int8 == expected_read_int8(enable, format);
+    return fp32_enabled == enable && read_32b == expected_read_32b(enable, format) && read_int8 == expected_read_int8(enable, format);
 }
 
 template <ThreadId thread_id>
@@ -114,8 +117,8 @@ void run_kernel(RUNTIME_PARAMETERS)
         _llk_set_fp32_dest_acc_<ThreadId::MathThreadId>(false /*enable*/);
     }
 
-    // Wait until both released threads have taken their last readback, then leave the dest-acc fields as
-    // the variant was built.
+    // Wait until both released threads have taken their last readback, then leave every field the toggle
+    // writes as the variant was built (no 8-bit integer read).
     const std::uint32_t unpack_done = mailbox_read(ThreadId::UnpackThreadId);
     const std::uint32_t pack_done   = mailbox_read(ThreadId::PackThreadId);
     static_cast<void>(unpack_done);
@@ -123,6 +126,7 @@ void run_kernel(RUNTIME_PARAMETERS)
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(is_fp32_dest_acc_en);
+    cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_int8_RMW>(0);
     tensix_sync();
 }
 

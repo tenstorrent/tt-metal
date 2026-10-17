@@ -30,6 +30,8 @@
 // the mode-dependent packer fields back after the restore and the test checks them. The fields are
 // checked rather than packed data because packed data cannot tell the threshold apart on Blackhole: a
 // plain fp32_dest_acc_en Float32 -> Bfp8 datacopy with no toggle at all returns an all-zero tile there.
+// A second case (Blackhole) uses an Fp8_e4m3 output, whose 8-bit-exponent pack source takes the 10-bit
+// mantissa rounding in either mode, so the restore must leave Round_10b_mant at 1 and the threshold off.
 
 #include <gtest/gtest.h>
 #include <bit>
@@ -201,31 +203,52 @@ TEST_F(LLKMeshDeviceFixture, TensixPackCfgAfterFp32DestAccRestore) {
         GTEST_SKIP() << "set_fp32_dest_acc is not supported on Quasar";
     }
 
+    // Each case: the startup / output formats and the fields the restore must leave for that output.
+    //   Bfp8 output (Float16 startup, so the 5-bit-exponent family): threshold on at 113, no 10-bit rounding.
+    //   Fp8_e4m3 output (Float16_b startup, so an 8-bit-exponent pack source; Blackhole only): no threshold,
+    //   10-bit mantissa rounding on in either mode.
+    struct CfgCase {
+        const char* name;
+        tt::DataFormat startup_fmt;
+        tt::DataFormat out_fmt;
+        std::uint32_t threshold_en;
+        std::uint32_t threshold;
+        std::uint32_t round_10b_mant;
+    };
+    vector<CfgCase> cases = {{"Bfp8", tt::DataFormat::Float16, tt::DataFormat::Bfp8, 1u, kBfpAExpThreshold, 0u}};
+    if (this->arch_ == ARCH::BLACKHOLE) {
+        cases.push_back({"Fp8_e4m3", tt::DataFormat::Float16_b, tt::DataFormat::Fp8_e4m3, 0u, 0u, 1u});
+    }
+
     // One Float32 input tile the kernel never consumes; the output page receives the dumped fields.
     const vector<std::uint32_t> src_vec(kNumTiles * kDatumsPerTile, 0u);
-    for (auto& device : this->devices_) {
-        const vector<std::uint32_t> words = run_fp32_dest_acc_kernel(
-            *device,
-            kCfgDumpKernel,
-            /*fp32_dest_acc_en=*/true,
-            tt::DataFormat::Float32,
-            tt::DataFormat::Float16,
-            tt::DataFormat::Bfp8,
-            src_vec);
-        ASSERT_GE(words.size(), 4u);
-        log_info(
-            tt::LogTest,
-            "after restore_fp32_dest_acc<false>(): Exp_threshold_en={} Exp_threshold={} Read_32b_data={} "
-            "Round_10b_mant={}",
-            words[0],
-            words[1],
-            words[2],
-            words[3]);
-        EXPECT_EQ(words[0], 1u)
-            << "exponent threshold not re-enabled for the Bfp8 output after the 32-bit Dest was restored";
-        EXPECT_EQ(words[1], kBfpAExpThreshold) << "exponent threshold value after the 32-bit Dest was restored";
-        EXPECT_EQ(words[2], 1u) << "Read_32b_data after the 32-bit Dest was restored";
-        EXPECT_EQ(words[3], 0u) << "Round_10b_mant for a Bfp8 pack source";
+    for (const CfgCase& c : cases) {
+        for (auto& device : this->devices_) {
+            const vector<std::uint32_t> words = run_fp32_dest_acc_kernel(
+                *device,
+                kCfgDumpKernel,
+                /*fp32_dest_acc_en=*/true,
+                tt::DataFormat::Float32,
+                c.startup_fmt,
+                c.out_fmt,
+                src_vec);
+            ASSERT_GE(words.size(), 4u);
+            log_info(
+                tt::LogTest,
+                "{} output, after restore_fp32_dest_acc<false>(): Exp_threshold_en={} Exp_threshold={} "
+                "Read_32b_data={} "
+                "Round_10b_mant={}",
+                c.name,
+                words[0],
+                words[1],
+                words[2],
+                words[3]);
+            EXPECT_EQ(words[0], c.threshold_en) << c.name << ": Exp_threshold_en after the 32-bit Dest was restored";
+            EXPECT_EQ(words[1], c.threshold)
+                << c.name << ": exponent threshold value after the 32-bit Dest was restored";
+            EXPECT_EQ(words[2], 1u) << c.name << ": Read_32b_data after the 32-bit Dest was restored";
+            EXPECT_EQ(words[3], c.round_10b_mant) << c.name << ": Round_10b_mant after the 32-bit Dest was restored";
+        }
     }
 }
 

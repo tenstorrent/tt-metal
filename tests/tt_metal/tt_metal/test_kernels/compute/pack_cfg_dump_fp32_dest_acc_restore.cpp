@@ -5,14 +5,14 @@
 // Packer configuration after a dest-acc override is restored.
 //
 // Built with fp32_dest_acc_en = true. The kernel switches Dest to 16-bit mode with
-// set_fp32_dest_acc<false>(), reconfigures the packer from the Float16 output configured at startup to
-// the Bfp8 (5-bit exponent) output while in that mode -- which rightly programs no exponent threshold
-// for a 16-bit Dest -- and restores the 32-bit Dest with restore_fp32_dest_acc<false>(). The pack thread
-// then writes the packer fields the mode decides into the output page, in place of a tile:
-//   word 0: THCON_SEC0_REG1 Exp_threshold_en  (fp32 Dest -> BFP-A underflow workaround; must be 1)
-//   word 1: THCON_SEC0_REG1 Exp_threshold     (the 8-bit exponent floor of a 5-bit exponent; must be 113)
-//   word 2: PCK_DEST_RD_CTRL Read_32b_data    (must be 1 again)
-//   word 3: PCK_DEST_RD_CTRL Round_10b_mant   (Bfp8 source: must be 0)
+// set_fp32_dest_acc<false>(), reconfigures the packer from the output configured at startup (c_17) to the
+// output under test (c_16) while in that mode, and restores the 32-bit Dest with
+// restore_fp32_dest_acc<false>(). The pack thread then writes the packer fields the mode decides into the
+// output page, in place of a tile; the host checks them for the output format:
+//   word 0: THCON_SEC0_REG1 Exp_threshold_en  (fp32 Dest -> BFP-A underflow workaround)
+//   word 1: THCON_SEC0_REG1 Exp_threshold     (113, the 8-bit exponent floor of a 5-bit exponent, when on)
+//   word 2: PCK_DEST_RD_CTRL Read_32b_data    (1 again)
+//   word 3: PCK_DEST_RD_CTRL Round_10b_mant
 
 #include <cstdint>
 
@@ -24,18 +24,18 @@
 
 void kernel_main() {
     constexpr auto cb_in = tt::CBIndex::c_0;        // Float32, never consumed
-    constexpr auto cb_out = tt::CBIndex::c_16;      // Bfp8, receives the dumped fields
-    constexpr auto cb_startup = tt::CBIndex::c_17;  // Float16, only configures the packer at startup
+    constexpr auto cb_out = tt::CBIndex::c_16;      // output under test, receives the dumped fields
+    constexpr auto cb_startup = tt::CBIndex::c_17;  // only configures the packer at startup
 
     CircularBuffer out(cb_out);
 
     compute_kernel_hw_startup(cb_in, cb_startup);
     copy_init(cb_in);
 
-    // A 16-bit Dest section that leaves the packer configured for the Bfp8 output.
+    // A 16-bit Dest section that leaves the packer configured for the output under test.
     set_fp32_dest_acc<false>(cb_startup);
     pack_reconfig_data_format(cb_startup, cb_out);
-    // Back to the 32-bit Dest the kernel was built for; the Bfp8 output now needs its threshold again.
+    // Back to the 32-bit Dest the kernel was built for: the mode-dependent fields must follow.
     restore_fp32_dest_acc<false>(cb_out);
 
     out.reserve_back(1);

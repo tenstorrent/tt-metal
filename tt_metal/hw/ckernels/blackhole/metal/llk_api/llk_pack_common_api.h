@@ -43,7 +43,10 @@ inline void llk_pack_clear_fp32_dest_acc_override() { pack_fp32_dest_acc_overrid
  * @param enable    The dest-acc mode in effect: true for a 32-bit Dest, false for a 16-bit one.
  * @param output_id Output operand index the packer is configured for.
  */
-inline void llk_pack_apply_fp32_dest_acc_override(const bool enable, const std::uint32_t output_id) {
+// Cold path (toggles and reconfigs inside an override only): out of line, so the reconfig call sites share
+// one copy, like reconfig_packer_data_format.
+__attribute__((noinline)) inline void llk_pack_apply_fp32_dest_acc_override(
+    const bool enable, const std::uint32_t output_id) {
     const std::uint32_t pack_src = pack_src_format[output_id];
     const std::uint32_t pack_dst = pack_dst_format[output_id];
     fp32_dest_acc::write_dest_rd_ctrl(enable, pack_src);

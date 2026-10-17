@@ -30,8 +30,8 @@ inline bool pack_fp32_dest_acc_live = false;
 
 /**
  * End a mid-kernel dest-acc override on the pack thread: later llk_pack_reconfig_data_format calls program
- * the kernel-wide mode again. Every path that reprograms the packer and ALU_ACC_CTRL for the kernel-wide
- * mode calls it (llk_pack_hw_configure, the id-free llk_pack_hw_configure, compute_kernel_hw_cleanup).
+ * the kernel-wide mode again. On Wormhole the only path that reprograms the packer and ALU_ACC_CTRL for the
+ * kernel-wide mode is llk_pack_hw_configure, which calls it.
  */
 inline void llk_pack_clear_fp32_dest_acc_override() { pack_fp32_dest_acc_overridden = false; }
 
@@ -43,7 +43,10 @@ inline void llk_pack_clear_fp32_dest_acc_override() { pack_fp32_dest_acc_overrid
  * @param enable    The dest-acc mode in effect: true for a 32-bit Dest, false for a 16-bit one.
  * @param output_id Output operand index the packer is configured for.
  */
-inline void llk_pack_apply_fp32_dest_acc_override(const bool enable, const std::uint32_t output_id) {
+// Cold path (toggles and reconfigs inside an override only): out of line, so the reconfig call sites share
+// one copy, like reconfig_packer_data_format.
+__attribute__((noinline)) inline void llk_pack_apply_fp32_dest_acc_override(
+    const bool enable, const std::uint32_t output_id) {
     const std::uint32_t pack_src = pack_src_format[output_id];
     const std::uint32_t pack_dst = pack_dst_format[output_id];
     fp32_dest_acc::write_dest_rd_ctrl(enable, pack_src);

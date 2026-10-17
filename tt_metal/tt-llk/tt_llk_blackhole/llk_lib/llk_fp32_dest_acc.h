@@ -104,7 +104,9 @@ inline void _llk_set_fp32_dest_acc_(bool enable)
  * @brief PACK arm of the mid-kernel FP32 dest-acc reconfiguration above.
  *
  * Drains the packer, hands MATH the pack source format it is configured for, and returns once MATH has
- * programmed the new mode.
+ * programmed the new mode. MATH writes only ALU_ACC_CTRL and PCK_DEST_RD_CTRL Read_32b_data / Read_int8:
+ * the caller must then reprogram the exponent threshold and Round_10b_mant for the new mode (as tt-metal's
+ * llk_pack_wait_fp32_dest_acc does).
  *
  * @tparam thread_id: TRISC thread compiling this specialization, values = <PackThreadId>
  * @param pack_src_format: Pack source (Dest-side) data format of the output the packer is configured for.
