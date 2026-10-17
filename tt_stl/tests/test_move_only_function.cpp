@@ -329,13 +329,14 @@ TEST(MoveOnlyFunctionTest, CPU_SwapExchangesHeapTargets) {
     EXPECT_EQ(other_heap(), 8u);
 }
 
-// Fits the buffer but not its alignment, so it goes to the heap: the allocation honours the alignment,
-// and a move keeps the target where it is.
+// Too aligned for the buffer, so it goes to the heap: the allocation honours the alignment, and a move
+// keeps the target where it is.
 TEST(MoveOnlyFunctionTest, CPU_OverAlignedTargetGoesToHeap) {
     struct alignas(16) OverAligned {
         std::uintptr_t operator()() const { return reinterpret_cast<std::uintptr_t>(this); }
     };
-    static_assert(sizeof(OverAligned) <= detail::kMoveOnlyFunctionInlineSize);
+    // On 64-bit it fits the buffer, so its alignment alone sends it to the heap.
+    static_assert(sizeof(void*) < 8 || sizeof(OverAligned) <= detail::kMoveOnlyFunctionInlineSize);
     static_assert(alignof(OverAligned) > detail::kMoveOnlyFunctionInlineAlign);
     move_only_function<std::uintptr_t()> constructed{OverAligned{}};
     const std::uintptr_t address = constructed();
