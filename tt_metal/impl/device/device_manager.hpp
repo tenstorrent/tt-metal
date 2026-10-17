@@ -13,7 +13,7 @@
 #include <unordered_set>
 #include <vector>
 #include <hostdevcommon/common_values.hpp>
-#include "umd/device/types/cluster_descriptor_types.hpp"
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "device_impl.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/context/metal_env_impl.hpp"

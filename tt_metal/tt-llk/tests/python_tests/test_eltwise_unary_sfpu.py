@@ -1705,7 +1705,9 @@ _BF16_SETUP_OPS = [
 _BF16_REPLACED_INSTANCES = {
     MathOperation.LogWithBase: (
         (ApproximationMode.No, FastMode.No),
+        (ApproximationMode.No, FastMode.Yes),
         (ApproximationMode.Yes, FastMode.No),
+        (ApproximationMode.Yes, FastMode.Yes),
     ),
 }
 _BF16_SETUP_PARAMS = [

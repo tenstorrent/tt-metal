@@ -69,6 +69,7 @@
 - name: "ttnn eltwise generated bf16 log2"
   cmd: >-
     pytest --timeout 120 -s -v
+    tests/ttnn/unit_tests/operations/eltwise/test_log2_bf16_fast_and_approximate_exhaustive.py
     tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_log2_bf16_unflushed_zero_and_subnormal_inputs
   skus:
     wh_n300_civ2:

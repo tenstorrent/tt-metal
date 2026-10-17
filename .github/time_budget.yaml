@@ -280,7 +280,7 @@ runtime:
     bh_p150b_civ2: 360
     bh_loudbox: 25
     wh_galaxy: 15
-    bh_galaxy: 15
+    bh_galaxy: 17
   profiler:
     wh_llmbox: 60
     wh_galaxy: 50
@@ -382,7 +382,7 @@ models:
     bh_p300: 13
     bh_quietbox_2: 62
   unit_tier1:
-    wh_llmbox: 155
+    wh_llmbox: 335
     wh_n150: 133
     wh_galaxy: 260
     wh_galaxy_perf: 65
