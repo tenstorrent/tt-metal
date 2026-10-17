@@ -6,7 +6,8 @@
 # Run from inside the repository (or set REPO_ROOT).
 set -euo pipefail
 main=${REPO_ROOT:-$(git rev-parse --show-toplevel)}
-wt=${WORKTREE_ROOT:-$(dirname "$main")}/wt-$1
+name=${1#wt-}   # "wt-foo" and "foo" both mean wt-foo (a run once created wt-wt-foo)
+wt=${WORKTREE_ROOT:-$(dirname "$main")}/wt-$name
 [ -e "$wt" ] && { echo "$wt already exists" >&2; exit 1; }
 mkdir -p "$(dirname "$wt")"
 free_gb=$(df -BG --output=avail "$(dirname "$wt")" | tail -1 | tr -dc 0-9)

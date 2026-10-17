@@ -77,7 +77,10 @@ retry after the poll interval. Never treat an empty failed read as done.
 ## 0. Setup (once)
 
 1. **Verify the box** — notes from an earlier session may describe another machine. `hostname`; device
-   (`tt-smi -s` / `ls /dev/tenstorrent`); arch; existing builds; sfpi; `gh auth status`; free disk.
+   (`tt-smi -s` / `ls /dev/tenstorrent`); arch; existing builds; sfpi; `gh auth status`; free disk; and,
+   because `$HOME` is usually one shared filesystem for a whole cluster: `readlink -f ~/.claude/skills/solve-master-issue`
+   and `readlink -f "$(command -v claude)"` must resolve **on this box** — a symlink into another box's
+   local disk dangles here. Never relocate anything under a shared home onto local disk; use shared storage.
 2. **Who else is on this device?** `ListAgents` — other Claude sessions on this box share the card.
    If one is active, message it: agree that device runs go through
    `flock /tmp/tt-device-$(hostname).lock <cmd>`. Hangs and corrupt results from two sessions on one
@@ -279,7 +282,10 @@ Each item moves through: `triage → repro → fix → verify → PR → bot-rev
 
 **Resources:**
 - **Device** — serial, shared with other sessions. Every device run goes through
-  `flock /tmp/tt-device-$(hostname).lock <cmd>`. Never hold it while reading code or building.
+  `flock /tmp/tt-device-$(hostname).lock <cmd>`. Never hold it while reading code or building. **Cap the
+  queue:** at most 4 device legs waiting on the lock at once (`pgrep -fc "tt-device-$(hostname)"`); beyond
+  that, batch an item's legs into one run and hold the rest — tonight 18–20 queued legs meant a 30-min wait
+  per leg and a box at load 200, which is slower than running them in turn.
 - **Builds** — a Release build of tt-metal is ~3 GB and 30–60 min (a built worktree ~8 GB in all; the tt-llk harness, sfpi + .venv, another ~2 GB; tt-llk pytest needs no build); do **not** build per worktree. Keep one
   built worktree and A/B an item there by applying / reverse-applying its patch (`git apply`,
   `git apply -R`) — never `git stash` (the stash is shared across worktrees). tt-llk pytest items need
@@ -324,12 +330,16 @@ touch $MASTER_ISSUE_DIR/<run-name>/STOP                # stop after the current 
 Each attempt is one `claude -p` turn in auto mode that resumes the same session (so context carries);
 if the session is lost, the next turn starts fresh and rebuilds state from the ledger and the file
 marks (§0b reconcile). The skill writes `$MASTER_ISSUE_DIR/<run-name>/DONE` only with the final report.
+**After the skill text changes, restart the run with a fresh session** (move `session.id` aside): a resumed
+session keeps the old text in its context and follows it.
 
 **Parallelism:** fan out independent items to subagents for triage, root-causing, and writing fix+test.
 **You create the worktree** (`mkwt.sh`) and pass the path — don't use `isolation: "worktree"`, its
 branch names and cleanup don't fit the PR flow. Give each agent: the item text, the worktree path, the
-repro gate, the device-lock rule, and "do not push, do not open PRs, do not touch GitHub — report diff,
-test, and fail/pass output." You (the coordinator) own pushing, PRs, bot handling, CI, and the ledger.
+repro gate, the device-lock rule, "search only inside the worktree or a named path — never `find`/`bfs`
+from `/` (such searches crawl the network mounts for days and load the box for everyone), and
+"do not push, do not open PRs, do not touch GitHub — report diff, test, and fail/pass output." You (the
+coordinator) own pushing, PRs, bot handling, CI, and the ledger.
 
 **Retry caps** (one table; counts live in the ledger):
 
@@ -457,6 +467,10 @@ In order:
    A group's body: a table (item · file:line · defect · test · fail-without/pass-with), then one short
    section per item; `Fixes` each issue; the `audit-key:` lines at the end. Comment on the issue with
    the PR link. Then `findings.py mark … --state pr --pr <url> --sha <sha>` and `findings.py sync`.
+   **Body edits right after a push get lost:** `.github/workflows/pr-description-inject-branch-name.yaml`
+   re-renders the body on every `synchronize`, and a `gh pr edit` in its read/write window is overwritten.
+   Edit the body only once `bots_pending.sh` shows no run of that workflow in flight, and re-read the body
+   afterwards to confirm the edit took.
 3. **Public-repo rule:** no RTL signal names, `.sv` paths, waveform decodes, or internal tracker ids
    in code comments, commits, PR bodies, or replies.
 4. Ledger (and resume note): item → sub-issue, PR, branch, worktree, head SHA.

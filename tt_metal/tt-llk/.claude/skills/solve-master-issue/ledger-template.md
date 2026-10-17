@@ -49,6 +49,6 @@ Status values: triage · repro · fix · verify · pr · bot-review(rN) · ci-qu
 | PR | workflow | run | job | verdict | evidence |
 |---|---|---|---|---|---|
 
-## Log (append-only, timestamped)
+## Log (append-only; every line's time from `date -u +%H:%M`, never estimated)
 
 - <HH:MM> ...
