@@ -193,6 +193,15 @@ pre-agent-steps:
         printf 'false\n' > "$FACTS_DIR/nightly-optout.txt"
       fi
 
+      # Head commit and the `/test force` flag, recorded as host-owned facts for the
+      # l2-nightly dedup in the post-step (see *Avoiding duplicate l2 nightly runs*).
+      jq -r '.headRefOid' /tmp/gh-aw/agent/pr-meta.json > "$FACTS_DIR/pr-head-sha.txt"
+      if printf '%s' "${COMMENT_BODY:-}" | grep -qiE '(^|[[:space:]])force($|[[:space:]])'; then
+        printf 'true\n' > "$FACTS_DIR/force.txt"
+      else
+        printf 'false\n' > "$FACTS_DIR/force.txt"
+      fi
+
       echo "PR #${PR_NUMBER}: head=${HEAD_REF} fork=${IS_FORK} files=$(wc -l < /tmp/gh-aw/agent/pr-files.txt) diff_lines=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)"
 
 # Deterministic enforcement of *The ref rule* (see the prompt below). The rule is
@@ -220,6 +229,12 @@ pre-agent-steps:
 post-steps:
   - name: Enforce dispatch ref and mandatory nightly categories
     if: always()
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPR_GITHUB_REPOSITORY: ${{ github.repository }}
+      # Same source as the pre-agent step; used to read this PR's earlier `/test`
+      # comments for the l2-nightly duplicate check.
+      PR_NUMBER: ${{ github.event.issue.number }}
     run: |
       set -euo pipefail
       OUT=/tmp/gh-aw/agent_output.json
@@ -300,6 +315,7 @@ post-steps:
       # required set here from the host-owned changed-file list and merge it in, so the
       # prompt table is a description of what happens rather than a request.
       FILES_FILE="$FACTS_DIR/pr-files.txt"
+      SANITY_FILTERED=false
       OPTOUT="$(cat "$FACTS_DIR/nightly-optout.txt" 2>/dev/null || echo unknown)"
 
       if [ "$OPTOUT" = "true" ]; then
@@ -349,8 +365,27 @@ post-steps:
             print out
           }' "$FILES_FILE")"
 
+        # l2 nightly is a last resort, not a default. `sanity-tests`' ttnn leg
+        # (tests/pipeline_reorg/ttnn_sanity_tests.yaml) already runs the
+        # tests/ttnn/unit_tests/operations/<family> suites for these families, so when the
+        # agent has dispatched it with the ttnn leg on, forcing the much heavier nightly
+        # suite on top is duplicate coverage. Still force it if the PR edits the nightly
+        # tests themselves (`tests/ttnn/nightly/**`): sanity-tests does not run those.
+        # Families with no sanity-tests equivalent (ccl, moreh, experimental, misc) are
+        # never filtered. Any l2 item the agent chose itself is left alone.
+        SANITY_TTNN="$(jq -r '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "sanity-tests")
+                               | ((.inputs["run-ttnn-sanity-tests"] // true) | tostring)] | any(. != "false")' "$OUT")"
+        if [ -n "$REQ" ] && [ "$SANITY_TTNN" = "true" ] && ! grep -q '^tests/ttnn/nightly/' "$FILES_FILE"; then
+          SANITY_FILTERED=true
+          REQ_BEFORE_FILTER="$REQ"
+          REQ="$(printf '%s' "$REQ" | tr ',' '\n' \
+                 | { grep -vxE 'eltwise|data_movement|conv|matmul|pool|reduction|fused|transformers|sdpa|kernel_lib' || true; } \
+                 | paste -sd, -)"
+          echo "sanity-tests ttnn leg covers the ttnn unit-test families; l2 categories ${REQ_BEFORE_FILTER} -> ${REQ:-none}."
+        fi
+
         if [ -z "$REQ" ]; then
-          echo "No changed path maps to an l2-nightly op category; nothing to enforce."
+          echo "No changed path maps to an l2-nightly op category that needs enforcing; nothing to enforce."
         else
           BEFORE_CATS="$(jq -r '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly") | (.inputs.additional_test_categories // "MISSING")] | @json' "$OUT")"
           # Merge rather than overwrite: the agent may legitimately have added a
@@ -371,24 +406,120 @@ post-steps:
             end' "$OUT" > "$OUT.tmp"
           mv "$OUT.tmp" "$OUT"
 
-          # The cap is applied at ingestion, which has already run — an injected item
-          # can therefore push the count to 9. Trim the agent's own selection rather
-          # than the mandatory one, keeping its order, and say which ones went.
-          DISPATCHES="$(jq '[.items[]? | select(.type == "dispatch_workflow")] | length' "$OUT")"
-          if [ "$DISPATCHES" -gt 8 ]; then
-            DROPPED="$(jq -c '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name != "tt-metal-l2-nightly") | .workflow_name][7:]' "$OUT")"
-            echo "::warning::Mandatory tt-metal-l2-nightly dispatch pushed the selection to ${DISPATCHES}; dropped ${DROPPED} to stay within the cap of 8."
-            jq '
-              ([.items[]? | select(.type == "dispatch_workflow" and .workflow_name != "tt-metal-l2-nightly")][:7]) as $others
-              | ([.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly")]) as $required
-              | .items = ([.items[]? | select(.type != "dispatch_workflow")] + $others + $required)' "$OUT" > "$OUT.tmp"
-            mv "$OUT.tmp" "$OUT"
-          fi
-
           echo "Required nightly categories from changed paths: $REQ"
           echo "additional_test_categories as emitted by the agent: $BEFORE_CATS"
           echo "additional_test_categories after enforcement: $(jq -r '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly") | .inputs.additional_test_categories] | @json' "$OUT")"
         fi
+      fi
+
+      # Avoid duplicate l2 nightly runs. `/test` is cheap to type, so the same PR head
+      # is often re-tested (several people, a re-run "to be sure", a comment on every
+      # parallel PR at once) and each tt-metal-l2-nightly dispatch is a full build plus
+      # every SKU of the selected categories. Drop the dispatch when an earlier `/test`
+      # already dispatched one for the same head commit with inputs that cover this
+      # one, and that run is queued, in progress or green.
+      #
+      # Same SHA alone is not enough: the enforced categories also depend on the base
+      # (the changed-file list) and on whether sanity-tests is selected (filter above),
+      # and the agent may add categories or suite toggles (`run_llk_unit_tests`, ...).
+      # The run list API does not expose dispatch inputs, so every `/test` comment
+      # carries a host-written record of what it actually dispatched, as its last line
+      # (see L2_RECORD_PREFIX below), and a later `/test` reuses a run only when:
+      #   - the record sits in a comment carrying gh-aw's own add_comment footer for
+      #     this workflow (`workflow_id: test-command`). The handler appends that after
+      #     sanitizing, and the sanitizer strips every HTML comment from the body, so
+      #     neither the agent nor a user can forge it;
+      #   - it is the LAST record line of that comment. This step always appends one
+      #     after the agent's text, so anything the agent wrote is never last;
+      #   - it names this head SHA and dispatched inputs that cover the current item:
+      #     a superset of its categories and identical other inputs; and
+      #   - a queued, in-progress or green run on this SHA was created within 10
+      #     minutes of that comment (pairs the record with the run it launched).
+      # Unknown coverage dispatches: a manual or pre-record run never suppresses one.
+      # A failed or cancelled run does NOT count, so a genuine retry still goes
+      # through, and `/test force` bypasses the check. Fail open: if a lookup errors,
+      # dispatch as before rather than silently skipping coverage.
+      L2_SEL='.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly"'
+      L2_RECORD_PREFIX='<sub>l2 dedup record: `'
+      L2_RECORD_SUFFIX='`</sub>'
+      L2_ITEMS="$(jq "[.items[]? | select($L2_SEL)] | length" "$OUT")"
+      FORCE="$(cat "$FACTS_DIR/force.txt" 2>/dev/null || echo false)"
+      HEAD_SHA="$(cat "$FACTS_DIR/pr-head-sha.txt" 2>/dev/null || true)"
+      case "$HEAD_SHA" in null) HEAD_SHA="" ;; esac
+      NOTE=""
+      if [ "$L2_ITEMS" -gt 0 ] && [ "$FORCE" != "true" ] && [ -n "$HEAD_SHA" ]; then
+        RUNS_FILE="${RUNNER_TEMP}/l2-runs.json"
+        COMMENTS_FILE="${RUNNER_TEMP}/l2-comments.jsonl"
+        if gh run list --repo "$EXPR_GITHUB_REPOSITORY" --workflow tt-metal-l2-nightly.yaml \
+              --branch "$HEAD_REF" --event workflow_dispatch --limit 50 \
+              --json headSha,status,conclusion,url,createdAt > "$RUNS_FILE" 2>/dev/null \
+           && gh api --paginate "repos/$EXPR_GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+              --jq '.[] | select(.user.login == "github-actions[bot]") | {created_at, body}' \
+              > "$COMMENTS_FILE" 2>/dev/null; then
+          EXISTING="$(jq -rn --slurpfile runs "$RUNS_FILE" --slurpfile comments "$COMMENTS_FILE" \
+              --arg sha "$HEAD_SHA" --arg pfx "$L2_RECORD_PREFIX" --arg sfx "$L2_RECORD_SUFFIX" --slurpfile out "$OUT" '
+            def cats: ((.additional_test_categories // "") | tostring | split(",") | map(select(length > 0)) | unique);
+            def rest: del(.additional_test_categories) | with_entries(.value |= tostring);
+            def covers($c): (($c | cats) - cats) == [] and rest == ($c | rest);
+            def ts: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
+            [ $comments[]
+              | select(.body | contains("<!-- gh-aw-agentic-workflow:")
+                         and (contains("workflow_id: test-command,") or contains("workflow_id: test-command -->")))
+              | { t: (.created_at | ts),
+                  rec: ([.body | split("\n")[] | rtrimstr("\r") | select(startswith($pfx) and endswith($sfx))] | last
+                        | if . == null then null else (.[($pfx | length):(length - ($sfx | length))] | try fromjson catch null) end) }
+              | select(.rec != null and .rec.sha == $sha and ((.rec.dispatched // []) | length) > 0) ] as $recs
+            | [ $runs[0][] | select(.headSha == $sha and (.status != "completed" or .conclusion == "success"))
+                | (.createdAt | ts) as $rt
+                | ([ $recs[] | {d: ((.t - $rt) | if . < 0 then -. else . end), rec} | select(.d <= 600) ] | sort_by(.d) | first) as $m
+                | select($m != null) | {url, dispatched: $m.rec.dispatched} ] as $paired
+            | [ $out[0].items[]? | select('"$L2_SEL"') | (.inputs // {}) as $c
+                | ([ $paired[] | select(any(.dispatched[]; covers($c))) | .url ] | first) ]
+            | if length > 0 and all(. != null) then unique | join(", ") else "" end')"
+          if [ -n "$EXISTING" ]; then
+            echo "tt-metal-l2-nightly already queued/running/green for ${HEAD_SHA} with covering inputs: ${EXISTING}; dropping the dispatch."
+            NOTE="tt-metal-l2-nightly was **not** dispatched again: a run for this exact commit with the same coverage is already queued, running or green ($EXISTING). Comment \`/test force\` to re-run it anyway."
+            jq ".items = [ .items[]? | select(($L2_SEL) | not) ]" "$OUT" > "$OUT.tmp"
+            mv "$OUT.tmp" "$OUT"
+          else
+            echo "No queued/running/green tt-metal-l2-nightly run on ${HEAD_SHA} is known to cover this dispatch; keeping it."
+          fi
+        else
+          echo "::warning::Could not list tt-metal-l2-nightly runs or PR comments; skipping the duplicate check."
+        fi
+      fi
+
+      # The cap is applied at ingestion, which has already run — the mandatory item
+      # injected above can therefore push the count to 9. Applied only now, after the
+      # duplicate check, so a reused l2 run does not cost an unrelated selection its
+      # slot. Trim the agent's own selection rather than the mandatory one, keeping its
+      # order, and say which ones went. When the sanity-tests filter above narrowed the
+      # l2 categories, sanity-tests is what covers the removed families, so it is kept
+      # too rather than trimmed out from under them.
+      DISPATCHES="$(jq '[.items[]? | select(.type == "dispatch_workflow")] | length' "$OUT")"
+      if [ "$DISPATCHES" -gt 8 ]; then
+        KEEP_SEL="($L2_SEL) or (\$sanity and .type == \"dispatch_workflow\" and .workflow_name == \"sanity-tests\")"
+        DROPPED="$(jq -c --argjson sanity "$SANITY_FILTERED" "
+          ([.items[]? | select($KEEP_SEL)] | length) as \$n
+          | [.items[]? | select(.type == \"dispatch_workflow\" and (($KEEP_SEL) | not)) | .workflow_name][(8 - \$n):]" "$OUT")"
+        echo "::warning::Mandatory tt-metal-l2-nightly dispatch pushed the selection to ${DISPATCHES}; dropped ${DROPPED} to stay within the cap of 8."
+        jq --argjson sanity "$SANITY_FILTERED" "
+          ([.items[]? | select($KEEP_SEL)]) as \$required
+          | ([.items[]? | select(.type == \"dispatch_workflow\" and (($KEEP_SEL) | not))][:(8 - (\$required | length))]) as \$others
+          | .items = ([.items[]? | select(.type != \"dispatch_workflow\")] + \$others + \$required)" "$OUT" > "$OUT.tmp"
+        mv "$OUT.tmp" "$OUT"
+      fi
+
+      # Append the dedup note (if any) and this run's record as the comment's last line.
+      # The record is written even under `/test force` or when nothing was dispatched,
+      # so the last record line of every test-command comment is always host-written.
+      if [ -n "$HEAD_SHA" ]; then
+        RECORD="$(jq -c --arg sha "$HEAD_SHA" "{sha: \$sha, dispatched: [.items[]? | select($L2_SEL) | (.inputs // {})]}" "$OUT")"
+        jq --arg note "$NOTE" --arg record "${L2_RECORD_PREFIX}${RECORD}${L2_RECORD_SUFFIX}" '
+          .items = [ .items[]? | if .type == "add_comment"
+            then .body = ((.body // "") + (if $note == "" then "" else "\n\n> " + $note end) + "\n\n" + $record)
+            else . end ]' "$OUT" > "$OUT.tmp"
+        mv "$OUT.tmp" "$OUT"
       fi
 
       finish_ok=1
@@ -554,8 +685,15 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
    matches, the pipeline it names is always dispatched with the inputs it specifies, on
    top of whatever else you select. Count it toward the cap of 8.
 
-   `tt-metal-l2-nightly` is mandatory whenever the diff reaches an op family that has an
-   `additional_test_categories` selector. Match **every** row of the table below against the
+   `tt-metal-l2-nightly` is a nightly suite on scarce silicon, so treat it as a **last
+   resort**: dispatch it only for what no cheaper pipeline you are already selecting would
+   validate. `sanity-tests` with `run-ttnn-sanity-tests` on already runs the
+   `tests/ttnn/unit_tests/operations/` suites for `eltwise`, `data_movement`, `conv`,
+   `matmul`, `pool`, `reduction`, `fused`, `transformers`, `sdpa` and `kernel_lib`, so for
+   those families alone you do not need l2 on top, unless the PR edits `tests/ttnn/nightly/**`
+   (sanity-tests does not run those). It stays mandatory for `ccl`, `moreh`, `experimental`
+   and `misc`, which nothing else covers, and for any family when `sanity-tests` is not in
+   your selection. When l2 is needed, match **every** row of the table below against the
    changed paths, collect the categories of all rows that match, and dispatch the pipeline
    **once** with them comma-joined. A PR touching both
    `ttnn/cpp/ttnn/operations/eltwise/**` and `ttnn/cpp/ttnn/operations/data_movement/**`
@@ -586,11 +724,24 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
    categories (`docs_examples`, `cpp_accessor`, `cpp_lab_examples`) map to no
    `operations/` path — pass those only when the diff touches what they test.
 
-   None of these suites are covered by a pr-gate or post-commit job, so a change under
-   those paths that skips this rule is not tested where it is most likely to break. A hint
+   The nightly suites are not covered by a pr-gate or post-commit job. The ttnn leg of
+   `sanity-tests` is the only cheaper cover, and only for the families listed above; a
+   change to any other family that skips this rule is not tested where it is most likely
+   to break. A hint
    in the comment that names other hardware (e.g. `/test blackhole`) narrows the *rest* of
    your selection, not this rule; only an explicit `/test skip nightly` (or equivalent)
    opts out, and say so in the comment.
+
+   **Avoiding duplicate l2 nightly runs.** The same head commit is often `/test`ed
+   repeatedly, and each `tt-metal-l2-nightly` dispatch is a full build plus every SKU of
+   the selected categories. After you run, a post-step drops your l2 dispatch when an
+   earlier `/test` already dispatched one for this exact commit with inputs that cover
+   yours (at least the same categories, the same other inputs) and that run is queued, in
+   progress or green, and appends a note to your comment saying so. A failed or cancelled
+   run does not count, and `/test force` bypasses the check. It also appends an
+   `l2 dedup record` line to your comment recording what was dispatched; do not write
+   one yourself. Keep selecting l2 as usual; do not try to second-guess this, and do not
+   claim in your summary that l2 was dispatched if the note says otherwise.
 
    This rule is enforced deterministically after you run, for the same reason as *The ref
    rule*: a post-step recomputes the required categories from the changed-file list and
@@ -628,7 +779,7 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 | `models-t1-*` | Selectable SKU | Tier-1 (highest-priority) model changes under `models/` |
 | `models-t2-*`, `models-t3-*` | Selectable SKU | Tier-2/3 model changes |
 | `perf-device-models` | Single card | Device-perf regressions from op or kernel changes |
-| `tt-metal-l2-nightly` | WH + BH | Broad L2 coverage for wide-reaching `tt_metal/` changes. **Mandatory** for any change under a `ttnn/cpp/ttnn/operations/` family or its tests, with `additional_test_categories` naming every category the change reaches (see *Mandatory selections*) |
+| `tt-metal-l2-nightly` | WH + BH | Broad L2 coverage for wide-reaching `tt_metal/` changes. Last resort for `ttnn/cpp/ttnn/operations/` changes: mandatory for `ccl`/`moreh`/`experimental`/`misc`, and for the families `sanity-tests`' ttnn leg already covers only when it is not selected or `tests/ttnn/nightly/**` changed. Use `additional_test_categories` naming every category the change reaches (see *Mandatory selections*) |
 | `ttnn-run-sweeps` | Selectable | `ttnn/` op changes where sweep coverage is the real signal |
 | `vllm-model-tests` | Selectable SKU | vLLM serving integration |
 | `runtime-sanity-tests`, `runtime-unit-tests`, `runtime-integration-tests`, `runtime-perf-tests` | WH / BH / multichip | `tt_metal/impl/**`, `llrt/**`, `api/**`, `jit_build/**`, dispatch and runtime layers |
@@ -683,7 +834,7 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
 
   | Pipeline | Toggles (default `true` unless noted) |
   |---|---|
-  | `sanity-tests` | `run-ttnn-sanity-tests`, `run-ops-sanity-tests`, `run-fabric-sanity-tests`, `run-t3000-sanity-tests`, `run-umd-sanity-tests`, `run-ttsim-sanity-tests`, `run-blackhole-multi-card-sanity-tests`, `run-models-sanity-tests`, `run-llk-sanity-tests` (default `false`) |
+  | `sanity-tests` | `run-ttnn-sanity-tests`, `run-fabric-sanity-tests`, `run-t3000-sanity-tests`, `run-umd-sanity-tests`, `run-ttsim-sanity-tests`, `run-blackhole-multi-card-sanity-tests`, `run-models-sanity-tests`, `run-llk-sanity-tests` (default `false`) |
   | `single-card-profiler-tests` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler` |
   | `pipeline-select-profiler` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler`, `run-t3k-profiler` |
   | `t3000-tests` | `run-unit-tests`, `run-integration-tests`, and `run-e2e-tests` which defaults to **`false`** — the e2e suite costs about 195 of the 279 machine-minutes of a full run, so pass `run-e2e-tests: true` only when the change touches CCL, fabric or dispatch |
@@ -691,7 +842,7 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   | `galaxy-tests` | `run-unit-tests`, `run-integration-tests`, and `run-e2e-tests` and `run-multi-user-isolation-tests` which default to **`false`** — those 2 suites are about 266 of the 306 machine-minutes of a full run, so pass them only when the change touches Galaxy fabric, CCL or multi-tenant isolation; `e2e-test-selection` narrows e2e to one id from `galaxy_e2e_tests.yaml` |
 
   The names say what each covers, so map them the same way you mapped paths to pipelines:
-  a single-device `ttnn` op change reaches `run-ttnn-sanity-tests` and `run-ops-sanity-tests`
+  a single-device `ttnn` op change reaches `run-ttnn-sanity-tests`
   and does **not** reach fabric, T3000, UMD, or multi-card. Set the ones it cannot reach to
   `false`. Leaving all seven on is the same mistake as dispatching seven pipelines when one
   would do — it is just hidden inside a single dispatch.

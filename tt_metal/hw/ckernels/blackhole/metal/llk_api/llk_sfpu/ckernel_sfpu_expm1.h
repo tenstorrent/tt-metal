@@ -184,7 +184,7 @@ inline constexpr bool expm1_bf16_whole_tile = true;
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_expm1() {
-    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
         if (bf16_dest_expm1()) {
             calculate_expm1_bf16<ITERATIONS>();
             return;
@@ -214,7 +214,7 @@ void expm1_init() {
         sfpi::vConstFloatPrgm1 = -0.6931471805599453f;  // -ln(2)
         sfpi::vConstFloatPrgm2 = 1.666259766e-01f;      // c1
     }
-    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+    if constexpr (!is_fp32_dest_acc_en) {
         init_expm1_bf16();
     }
 }
