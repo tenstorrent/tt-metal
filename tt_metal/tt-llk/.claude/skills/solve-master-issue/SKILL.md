@@ -316,8 +316,12 @@ Each item moves through: `triage → repro → fix → verify → PR → bot-rev
 
 **Resources:**
 - **Device** — serial, shared with other sessions. Every device run goes through
-  `flock /tmp/tt-device-$(hostname).lock <cmd>`. Never hold it while reading code or building. **Cap the
-  queue:** at most 4 device legs waiting on the lock at once (`$SKILL/scripts/device_queue.sh`, which counts
+  `flock /tmp/tt-device-$(hostname).lock <cmd>`. Never hold it while reading code or building. **The
+  tt-llk agent runner (`tt_metal/tt-llk/.claude/scripts/run_test.sh`) goes *inside* that flock, with its
+  own `--lock` left at the default** — never hand it the device lock to queue on: it starts its 300 s
+  silicon stall watchdog before its lock wait returns, and a trip kills every consumer pytest on the box
+  and runs `tt-smi -r` under whoever holds the card (a harness defect; wrapping makes its wait zero).
+  **Cap the queue:** at most 4 device legs waiting on the lock at once (`$SKILL/scripts/device_queue.sh`, which counts
   every holder and waiter whatever form took the lock); beyond
   that, batch an item's legs into one run and hold the rest — tonight 18–20 queued legs meant a 30-min wait
   per leg and a box at load 200, which is slower than running them in turn.
