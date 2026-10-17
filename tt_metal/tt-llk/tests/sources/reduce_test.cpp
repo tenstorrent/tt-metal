@@ -99,6 +99,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             remaining_tiles -= tiles_to_dest;
         }
     }
+    _llk_math_reduce_uninit_();
 }
 
 #endif
