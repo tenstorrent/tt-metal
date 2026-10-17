@@ -10,12 +10,20 @@ so those rows must come back as zero; the rows the tile does have must hold the
 op result. The dest-reuse variants seed DEST with the first tile and fold the
 remaining tiles through DEST_TO_SRCA / DEST_TO_SRCB, exercising the dest-reuse
 MOP the same way.
+
+The same partial-face MOP is built for every SrcB broadcast, so the standard
+and DEST_TO_SRCA variants also run with ROW / COL / SCALAR broadcast of the
+unpacked SrcB. Those cells hold SrcB constant within each tile, so the golden
+does not depend on which SrcB row or column the FPU samples (that is
+test_eltwise_binary_broadcast's job); they only check that rows 8..15 stay
+untouched. DEST_TO_SRCB takes SrcB from DEST, so it runs without broadcast.
 """
 
 import torch
 from conftest import skip_for_quasar
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
+    BroadcastType,
     DestSync,
     EltwiseBinaryReuseDestType,
     MathOperation,
@@ -26,6 +34,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    BROADCAST_TYPE,
     DEST_SYNC,
     MATH_OP,
     REUSE_DEST_TYPE,
@@ -45,6 +54,18 @@ def _apply(math_op, src_a, src_b):
     return (src_a + src_b) if math_op == MathOperation.Elwadd else (src_a - src_b)
 
 
+def _broadcast_types(reuse_dest_type):
+    """SrcB broadcast only applies where SrcB comes from the unpacker."""
+    if reuse_dest_type == EltwiseBinaryReuseDestType.DEST_TO_SRCB:
+        return [BroadcastType.None_]
+    return [
+        BroadcastType.None_,
+        BroadcastType.Row,
+        BroadcastType.Column,
+        BroadcastType.Scalar,
+    ]
+
+
 @parametrize(
     math_op=[MathOperation.Elwadd, MathOperation.Elwsub],
     reuse_dest_type=[
@@ -52,9 +73,10 @@ def _apply(math_op, src_a, src_b):
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
+    broadcast_type=lambda reuse_dest_type: _broadcast_types(reuse_dest_type),
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float16], same=True),
 )
-def test_partial_face_rows_untouched(math_op, reuse_dest_type, formats):
+def test_partial_face_rows_untouched(math_op, reuse_dest_type, broadcast_type, formats):
     input_dimensions = [64, 32]
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(TILE_DIMENSIONS)
     num_faces = num_faces_r_dim * num_faces_c_dim
@@ -82,6 +104,11 @@ def test_partial_face_rows_untouched(math_op, reuse_dest_type, formats):
 
     src_A_tilized = tilize(src_A)
     src_B_tilized = tilize(src_B)
+    if broadcast_type != BroadcastType.None_:
+        # Every element of a tile equals its first one, so ROW / COL / SCALAR broadcast of the
+        # tile is the tile itself whichever SrcB row or column the FPU samples.
+        src_B_tiles = src_B_tilized.view(tile_cnt, tile_elements)
+        src_B_tiles[:] = src_B_tiles[:, :1]
 
     torch_format = format_dict[formats.output_format]
     a = src_A_tilized.to(torch_format).view(tile_cnt, tile_elements)
@@ -111,6 +138,7 @@ def test_partial_face_rows_untouched(math_op, reuse_dest_type, formats):
         formats,
         templates=[
             MATH_OP(mathop=math_op),
+            BROADCAST_TYPE(broadcast_type),
             DEST_SYNC(DestSync.Half),
             REUSE_DEST_TYPE(reuse_dest_type=reuse_dest_type),
         ],

@@ -17,6 +17,8 @@
 // REUSE_DEST_TYPE selects the MOP under test: NONE runs the standard op once per tile (one
 // output tile per input tile); DEST_TO_SRCA / DEST_TO_SRCB seed DEST with tile 0 through the
 // standard op and fold the remaining tiles through the dest-reuse op (one output tile).
+// BROADCAST_TYPE selects the SrcB broadcast the MOP is built for; the same partial-face MOP
+// serves NONE/ROW/COL/SCALAR, so rows 8..15 must stay untouched under every one of them.
 
 #include <cstdint>
 
@@ -64,11 +66,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         TILE_SIZE_UNPACK_A,
         TILE_SIZE_UNPACK_B);
     _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
-    _llk_unpack_AB_init_<ckernel::BroadcastType::NONE>(FULL_SHAPE, ckernel::Transpose::None);
+    _llk_unpack_AB_init_<BROADCAST_TYPE>(FULL_SHAPE, ckernel::Transpose::None);
 
     for (std::uint32_t i = 0; i < TILE_CNT; ++i)
     {
-        _llk_unpack_AB_<ckernel::BroadcastType::NONE>(L1_ADDRESS(buffer_A[i]), L1_ADDRESS(buffer_B[i]));
+        _llk_unpack_AB_<BROADCAST_TYPE>(L1_ADDRESS(buffer_A[i]), L1_ADDRESS(buffer_B[i]));
     }
 }
 
@@ -93,8 +95,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
-        PARTIAL_SHAPE, 0 /*acc_to_dest*/);
+    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(PARTIAL_SHAPE, 0 /*acc_to_dest*/);
 
     if constexpr (REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::NONE)
     {
@@ -102,13 +103,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t i = 0; i < TILE_CNT; ++i)
         {
             _llk_math_wait_for_dest_available_<dest_sync>();
-            _llk_math_eltwise_binary_<
-                ELTWISE_BINARY_OP,
-                BroadcastType::NONE,
-                dest_sync,
-                is_fp32_dest_acc_en,
-                MathFidelity::LoFi,
-                EltwiseBinaryReuseDestType::NONE>(PARTIAL_SHAPE, 0 /*dst_index*/, false /*clear_fp32_dst_acc*/);
+            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
+                PARTIAL_SHAPE, 0 /*dst_index*/, false /*clear_fp32_dst_acc*/);
             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
     }
@@ -116,12 +112,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         // Seed dest index 0 with tile 0, then fold tiles 1..TILE_CNT-1 into it through the reuse op.
         _llk_math_wait_for_dest_available_<dest_sync>();
-        _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, dest_sync, is_fp32_dest_acc_en, MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
+        _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
             PARTIAL_SHAPE, 0 /*dst_index*/, false /*clear_fp32_dst_acc*/);
-        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, MathFidelity::LoFi, REUSE_DEST_TYPE>(PARTIAL_SHAPE, 0 /*acc_to_dest*/);
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MathFidelity::LoFi, REUSE_DEST_TYPE>(PARTIAL_SHAPE, 0 /*acc_to_dest*/);
         for (std::uint32_t i = 1; i < TILE_CNT; ++i)
         {
-            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, dest_sync, is_fp32_dest_acc_en, MathFidelity::LoFi, REUSE_DEST_TYPE>(
+            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MathFidelity::LoFi, REUSE_DEST_TYPE>(
                 PARTIAL_SHAPE, 0 /*dst_index*/, false /*clear_fp32_dst_acc*/);
         }
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
