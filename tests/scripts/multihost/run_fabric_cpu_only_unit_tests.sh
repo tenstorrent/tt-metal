@@ -879,19 +879,19 @@ if run_group "bh-ring-stress"; then
 # so a stuck solve is caught/reported here rather than cancelled mid-shard by GitHub Actions.
 # The 96+ stage rings get the longer SC24-style budget (their solves are much bigger).
 RING_STRESS_TIMEOUT=300
-LONG_RING_STRESS_TIMEOUT=600
-# TODO(https://github.com/tenstorrent/tt-metal/issues/51629): the LONG (96/112/128/144-stage) 4x2
-# multimesh rings are DISABLED in this sweep for mapper performance: on these lengths the pipeline
-# builder / general-SAT host-minimization solve does not finish in a CI-compatible budget. Measured:
-# the 112-stage exact-fit solve was still running after ~5.5 min locally on a 64-core host, and the
-# 128-stage ring on the SC36 mock was still solving ~40 min into the cpu_medium CI shard (run
-# 33221850239), blowing the 45-min step timeout -- the 600 s TT_METAL_OPERATION_TIMEOUT does not
-# cover the phase-1 solve. Re-add "96"/"112"/"128"/"144" to the stage lists below once #51629
-# lands. (The standalone SC24 96-stage exact-fit entry further down stays: its solve is ~27 s.)
-# ALSO disabled per #51629: 64-stage on the SC24 110-aisleC mock -- the 64-ring-into-96-slots
-# embedding hung the mapper >40 min on CI (run 33224879320; solver went silent right after phase-1
-# setup) even though 64-into-144 (SC36, ~3 min) and 64-into-80 (SC20 aisleC, ~42 s) solve fine;
-# the general-SAT host-minimization cost is erratic in the embedded case.
+LONG_RING_STRESS_TIMEOUT=1800
+# RE-ENABLED (#51629): the LONG 96/112/128-stage 4x2 multimesh rings are back in this sweep now that
+# the PSD-tightness conflict cap (topology_sat_scaled_conflict_cap) scales the phase-1 host-minimization
+# budget to the physical tightness of the embedding, so these solves finish deterministically instead
+# of spiralling. Measured on kissat (SC36 aisleD host, ~4000 conflicts/s): 96-exact ~27 s, 112-exact
+# ~49 s, 128-into-144 embed ~895 s -- hence the 1800 s LONG_RING_STRESS_TIMEOUT above (the old 600 s
+# did not cover the 128 phase-1 solve). Each stage rides its matching board: 96->SC24 (96 slots,
+# exact), 112->SC28 (112 slots, exact), 128->SC36 (144 slots, k=32 binding host-cap embed).
+# STILL EXCLUDED: 144-stage (SC36 full-board exact fit) -- the heaviest solve, kept off this CI sweep
+# for now. ALSO still disabled per #51629: 64-stage on the SC24 110-aisleC mock -- the 64-ring-into-96-
+# slots embedding hung the mapper >40 min on CI (run 33224879320; solver went silent right after
+# phase-1 setup) even though 64-into-144 (SC36, ~3 min) and 64-into-80 (SC20 aisleC, ~42 s) solve
+# fine; that erratic embedded-case cost is a separate z-link issue, not the conflict-cap budget.
 for entry in \
     "SC36_revC_subtorus_120_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64" \
     "SC36_revAB_subtorus_120_aisleC_sc20:${SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
@@ -910,6 +910,31 @@ for entry in \
     run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${stage_timeout} tt-run --mesh-graph-descriptor "${!mgd_var}" --mock-cluster-rank-binding "${cluster_map}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
   done
 done
+
+# ================== THROWAWAY: kissat-vs-cadical wall-time A/B (DO NOT MERGE) ==================
+# Runs each big-ring phase-1 min-host solve under BOTH engines back-to-back on the SAME runner, so the
+# wall times are directly comparable under one machine's load. Deterministic engine = kissat (default);
+# TT_TOPO_SAT_ENGINE=cadical selects the former engine. Grep CI log for 'ABENCH' to read the table.
+# 96->SC24(exact), 112->SC28(exact), 128->SC36(144-slot embed). 144 excluded (heaviest).
+for abench in \
+    "96:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" \
+    "112:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" \
+    "128:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" ; do
+  abstage="${abench%%:*}"; abmap="${abench#*:}"; abmgd_var="MGD_BLITZ_${abstage}"
+  for abengine in kissat cadical; do
+    ab_t0=$(date +%s)
+    echo "ABENCH START engine=${abengine} stage=${abstage} t0=${ab_t0}"
+    run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_TOPO_SAT_ENGINE="${abengine}" TT_TOPO_SAT_LOG_SOLVES=1 \
+        TT_METAL_OPERATION_TIMEOUT_SECONDS=2700 TT_FABRIC_TEST_TIMEOUT=2800 \
+        tt-run --mesh-graph-descriptor "${!abmgd_var}" --mock-cluster-rank-binding "${abmap}" \
+        --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" \
+        ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder" \
+      || echo "ABENCH NOTE engine=${abengine} stage=${abstage} returned nonzero (timeout/UNSAT)"
+    ab_t1=$(date +%s)
+    echo "ABENCH RESULT engine=${abengine} stage=${abstage} wall_s=$(( ab_t1 - ab_t0 ))"
+  done
+done
+# ============================================================================================
 
 # Multi-solution host-cap sweep on the same SC36 mock: enumerate --all-solutions for the 32-stage ring, then run
 # the host-count gtest (SweepConsumer_SolutionSpansExpectedHosts, asserts 8 galaxies) per solution. #49629 blocks
