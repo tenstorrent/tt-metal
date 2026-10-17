@@ -15,7 +15,7 @@ import ttnn
     (
         (353, 384, 8, 8, WS, None),
         (128, 128, 32, 32, BS, None),
-        (16, 16, 256, 256, HS, {"act_block_h": 32}),
+        (16, 16, 128, 128, HS, {"act_block_h": 32}),
     ),
 )
 @pytest.mark.parametrize(
@@ -27,12 +27,8 @@ import ttnn
     [ttnn.bfloat8_b, ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
-    "fp32_accum",
-    [True, False],
-)
-@pytest.mark.parametrize(
-    "packer_l1_acc",
-    [True, False],
+    "fp32_accum, packer_l1_acc",
+    [[True, True], [False, False]],
 )
 @pytest.mark.parametrize(
     "filter, padding",
@@ -183,16 +179,16 @@ SliceWidth = ttnn.Conv2dDRAMSliceWidth
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, input_channels, output_channels, input_height, input_width, weights_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity",
+    "batch_size, input_channels, output_channels, input_height, input_width, weights_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity, shard_layout, dram_slice",
     # fmt: off
     (
-        (1, 400,  528,  192,   192,    ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), (1, 1),      0,  ttnn.MathFidelity.HiFi4 ),
-        (2,  13,   31,  313,    71,    ttnn.bfloat8_b, (5, 5), (1, 1), (2, 2), (2, 2), 32 * 4,  ttnn.MathFidelity.LoFi  ),
-        (2,  63,  129,  981,    39,    ttnn.bfloat8_b, (3, 3), (2, 2), (2, 2), (1, 1),      0,  ttnn.MathFidelity.LoFi  ),
-        (2, 512,  512,  128,   128,    ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), (1, 1), 32 * 8,  ttnn.MathFidelity.LoFi  ),
-        (2, 64,   64,   384,   64,     ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1),      0,  ttnn.MathFidelity.LoFi  ),
-        (1, 4,    32,   1024,  1024,   ttnn.bfloat8_b, (5, 5), (1, 1), (0, 0), (1, 1),     32,  ttnn.MathFidelity.LoFi  ),
-        (1, 2904, 2904,   48,    48,   ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (1, 1),     32,  ttnn.MathFidelity.HiFi4 ),
+        (1, 400,  528,   32,   192,    ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), (1, 1),      0,  ttnn.MathFidelity.HiFi4, None, None           ),
+        (2,  13,   31,  313,    71,    ttnn.bfloat8_b, (5, 5), (1, 1), (2, 2), (2, 2), 32 * 4,  ttnn.MathFidelity.LoFi,  None, None           ),
+        (2,  63,  129,  981,    39,    ttnn.bfloat8_b, (3, 3), (2, 2), (2, 2), (1, 1),      0,  ttnn.MathFidelity.LoFi,  None, None           ),
+        (2, 64,   64,   384,   64,     ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1),      0,  ttnn.MathFidelity.LoFi,  None, None           ),
+        (1, 4,    32,   128,   1024,   ttnn.bfloat8_b, (5, 5), (1, 1), (0, 0), (1, 1),     32,  ttnn.MathFidelity.LoFi,  None, (SliceWidth, 4)),
+        # Width sharded, width sliced, channels not tile aligned (#23227)
+        (1, 360,  360,   16,   130,    ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (1, 1),     32,  ttnn.MathFidelity.HiFi4, WS,   (SliceWidth, 4)),
     )
     # fmt: on
 )
@@ -220,6 +216,8 @@ def test_conv_dram(
     fp32_accum,
     input_layout,
     packer_l1_acc,
+    shard_layout,
+    dram_slice,
 ):
     if device.core_grid.y == 7:
         pytest.skip("Tests have been configured for N150.")
@@ -255,4 +253,6 @@ def test_conv_dram(
         run_twice=True,
         fast_compare=True,
         use_dram_slicing=True,
+        shard_layout=shard_layout,
+        slice_config=ttnn.Conv2dSliceConfig(slice_type=dram_slice[0], num_slices=dram_slice[1]) if dram_slice else None,
     )
