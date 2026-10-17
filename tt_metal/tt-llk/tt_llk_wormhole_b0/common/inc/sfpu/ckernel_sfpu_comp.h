@@ -109,7 +109,9 @@ sfpi_inline void apply_zero_comp<SfpuType::equal_zero>(sfpi::vFloat& v, std::uin
 {
     sfpi::vFloat r = 0.0f;
     v_if (_sfpu_is_fp16_zero_(v))
+    {
         r = 1.0f;
+    }
     v_endif;
     v = r;
 }
@@ -119,7 +121,9 @@ sfpi_inline void apply_zero_comp<SfpuType::not_equal_zero>(sfpi::vFloat& v, std:
 {
     sfpi::vFloat r = 1.0f;
     v_if (_sfpu_is_fp16_zero_(v))
+    {
         r = 0.0f;
+    }
     v_endif;
     v = r;
 }
@@ -129,7 +133,9 @@ sfpi_inline void apply_zero_comp<SfpuType::less_than_zero>(sfpi::vFloat& v, std:
 {
     sfpi::vFloat r = 1.0f;
     v_if (v >= 0.0f)
+    {
         r = 0.0f;
+    }
     v_endif;
     v = r;
 }
@@ -139,7 +145,9 @@ sfpi_inline void apply_zero_comp<SfpuType::greater_than_equal_zero>(sfpi::vFloat
 {
     sfpi::vFloat r = 0.0f;
     v_if (v >= 0.0f)
+    {
         r = 1.0f;
+    }
     v_endif;
     v = r;
 }
@@ -149,7 +157,9 @@ sfpi_inline void apply_zero_comp<SfpuType::greater_than_zero>(sfpi::vFloat& v, s
 {
     sfpi::vFloat r = 0.0f;
     v_if (v > 0.0f)
+    {
         r = 1.0f;
+    }
     v_endif;
     v = r;
 }
@@ -159,7 +169,9 @@ sfpi_inline void apply_zero_comp<SfpuType::less_than_equal_zero>(sfpi::vFloat& v
 {
     sfpi::vFloat r = 1.0f;
     v_if (v > 0.0f)
+    {
         r = 0.0f;
+    }
     v_endif;
     v = r;
 }
@@ -184,7 +196,9 @@ sfpi_inline void apply_zero_comp_int<SfpuType::equal_zero>(sfpi::vInt& v)
 {
     sfpi::vInt r = 0;
     v_if (v == 0)
+    {
         r = 1;
+    }
     v_endif;
     v = r;
 }
@@ -194,7 +208,9 @@ sfpi_inline void apply_zero_comp_int<SfpuType::not_equal_zero>(sfpi::vInt& v)
 {
     sfpi::vInt r = 1;
     v_if (v == 0)
+    {
         r = 0;
+    }
     v_endif;
     v = r;
 }
@@ -204,7 +220,9 @@ sfpi_inline void apply_zero_comp_int<SfpuType::less_than_zero>(sfpi::vInt& v)
 {
     sfpi::vInt r = 0;
     v_if (v < 0)
+    {
         r = 1;
+    }
     v_endif;
     v = r;
 }
@@ -214,7 +232,9 @@ sfpi_inline void apply_zero_comp_int<SfpuType::greater_than_zero>(sfpi::vInt& v)
 {
     sfpi::vInt r = 0;
     v_if (v > 0)
+    {
         r = 1;
+    }
     v_endif;
     v = r;
 }
@@ -224,7 +244,9 @@ sfpi_inline void apply_zero_comp_int<SfpuType::less_than_equal_zero>(sfpi::vInt&
 {
     sfpi::vInt r = 0;
     v_if (v <= 0)
+    {
         r = 1;
+    }
     v_endif;
     v = r;
 }
@@ -234,7 +256,9 @@ sfpi_inline void apply_zero_comp_int<SfpuType::greater_than_equal_zero>(sfpi::vI
 {
     sfpi::vInt r = 0;
     v_if (v >= 0)
+    {
         r = 1;
+    }
     v_endif;
     v = r;
 }
@@ -385,25 +409,11 @@ sfpi_inline void _calculate_comp_unary_int_(int scalar)
 template <SfpuType COMP_MODE>
 sfpi_inline void apply_unary_comp_float(sfpi::vFloat& val, const sfpi::vFloat& v, const sfpi::vFloat& s);
 
-// The vector == is a bit-pattern test, under which -0.0 != +0.0. Fold the datum's signed zero so
-// that a zero threshold, already folded by _calculate_comp_unary_, matches it; NaN thresholds
-// never reach here, and a NaN datum differs from every non-NaN threshold.
-sfpi_inline sfpi::vFloat fold_signed_zero(sfpi::vFloat v)
-{
-    v_if (sfpi::abs(v) == 0.0f)
-    {
-        v = 0.0f;
-    }
-    v_endif;
-    return v;
-}
-
 template <>
 sfpi_inline void apply_unary_comp_float<SfpuType::unary_eq>(sfpi::vFloat& val, const sfpi::vFloat& v, const sfpi::vFloat& s)
 {
-    val                            = 0.0f;
-    const sfpi::vFloat zero_folded = fold_signed_zero(v); // its own predication region: must not sit inside the v_if condition
-    v_if (zero_folded == s)
+    val = 0.0f;
+    v_if (v == s)
     {
         val = 1.0f;
     }
@@ -413,9 +423,8 @@ sfpi_inline void apply_unary_comp_float<SfpuType::unary_eq>(sfpi::vFloat& val, c
 template <>
 sfpi_inline void apply_unary_comp_float<SfpuType::unary_ne>(sfpi::vFloat& val, const sfpi::vFloat& v, const sfpi::vFloat& s)
 {
-    val                            = 1.0f;
-    const sfpi::vFloat zero_folded = fold_signed_zero(v); // its own predication region: must not sit inside the v_if condition
-    v_if (zero_folded == s)
+    val = 1.0f;
+    v_if (v == s)
     {
         val = 0.0f;
     }
@@ -466,41 +475,75 @@ sfpi_inline void apply_unary_comp_float<SfpuType::unary_le>(sfpi::vFloat& val, c
     v_endif;
 }
 
-// IEEE equality for the eq/ne threshold: NaN equals nothing (not even an identical NaN) and
-// -0.0 equals +0.0. The vector compare is a bit-pattern test, so a NaN threshold is settled
-// here, once, and a negative-zero threshold is folded to +0.0 (the datum side is folded in
-// apply_unary_comp_float). Returns true when the result was already written for every lane.
+// The vector == is a bit-pattern (sign-magnitude) compare, so for unary_eq / unary_ne the two IEEE
+// cases it gets wrong are decided here, once per call, from the threshold's bits: a NaN threshold
+// equals nothing (not even a datum with the same NaN bits), so every row gets the mismatch result;
+// a zero threshold equals both +0.0 and -0.0, so the datum's magnitude is compared against +0.0.
+// Any other threshold is left to the plain compare, under which a NaN or signed-zero datum is
+// already right. Returns true when every row has been written.
 template <SfpuType COMP_MODE, int ITERATIONS>
-sfpi_inline bool settle_ieee_eq_ne_threshold(std::uint32_t& value)
+sfpi_inline bool apply_unary_eq_ne_nan_or_zero_threshold(std::uint32_t value)
 {
-    if constexpr (COMP_MODE == SfpuType::unary_eq || COMP_MODE == SfpuType::unary_ne)
+    static_assert(COMP_MODE == SfpuType::unary_eq || COMP_MODE == SfpuType::unary_ne, "IEEE equality special cases apply to unary_eq / unary_ne only");
+    constexpr std::uint32_t FP32_SIGN_BIT      = 0x80000000u;
+    constexpr std::uint32_t FP32_EXPONENT_MASK = 0x7F800000u;
+    constexpr std::uint32_t FP32_MANTISSA_MASK = 0x007FFFFFu;
+    constexpr float on_match                   = (COMP_MODE == SfpuType::unary_eq) ? 1.0f : 0.0f;
+    constexpr float on_mismatch                = (COMP_MODE == SfpuType::unary_eq) ? 0.0f : 1.0f;
+
+    const bool threshold_is_nan = ((value & FP32_EXPONENT_MASK) == FP32_EXPONENT_MASK) && ((value & FP32_MANTISSA_MASK) != 0u);
+    if (threshold_is_nan)
     {
-        const bool threshold_is_nan = ((value & 0x7F800000u) == 0x7F800000u) && ((value & 0x007FFFFFu) != 0u);
-        if (threshold_is_nan)
+#pragma GCC unroll 1
+        for (int d = 0; d < ITERATIONS; d++)
         {
-            const sfpi::vFloat val = (COMP_MODE == SfpuType::unary_eq) ? 0.0f : 1.0f;
+            sfpi::dst_reg[0] = on_mismatch;
+            sfpi::dst_reg++;
+        }
+        return true;
+    }
+
+    const bool threshold_is_zero = (value & ~FP32_SIGN_BIT) == 0u;
+    if (threshold_is_zero)
+    {
 #pragma GCC unroll 8
-            for (int d = 0; d < ITERATIONS; d++)
-            {
-                sfpi::dst_reg[0] = val;
-                sfpi::dst_reg++;
-            }
-            return true;
-        }
-        if (value == 0x80000000u)
+        for (int d = 0; d < ITERATIONS; d++)
         {
-            value = 0u;
+            const sfpi::vFloat v = sfpi::dst_reg[0];
+            sfpi::vFloat val     = on_mismatch;
+            v_if (sfpi::abs(v) == 0.0f)
+            {
+                val = on_match;
+            }
+            v_endif;
+            sfpi::dst_reg[0] = val;
+            sfpi::dst_reg++;
         }
+        return true;
     }
     return false;
 }
 
+/**
+ * @brief Compare every datum of ITERATIONS DEST rows with a scalar threshold, writing 1.0f where the compare holds and 0.0f elsewhere.
+ *
+ * @tparam APPROXIMATION_MODE: Unused, kept for the common SFPU kernel signature.
+ * @tparam COMP_MODE: Compare, values = <unary_eq/unary_ne/unary_gt/unary_lt/unary_ge/unary_le>
+ * @tparam ITERATIONS: Number of DEST rows processed.
+ * @param value: The threshold's fp32 bit pattern (0x3F000000 for 0.5f), not a numeric value.
+ * @note unary_eq / unary_ne follow IEEE equality: -0.0 equals +0.0, and a NaN threshold equals nothing, not even a datum with the
+ *       same NaN bits (eq -> 0.0f, ne -> 1.0f in every lane). The vector == is a bit-pattern compare, so those two thresholds are
+ *       handled by @ref apply_unary_eq_ne_nan_or_zero_threshold before it.
+ */
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_comp_unary_(std::uint32_t value)
 {
-    if (settle_ieee_eq_ne_threshold<COMP_MODE, ITERATIONS>(value))
+    if constexpr (COMP_MODE == SfpuType::unary_eq || COMP_MODE == SfpuType::unary_ne)
     {
-        return;
+        if (apply_unary_eq_ne_nan_or_zero_threshold<COMP_MODE, ITERATIONS>(value))
+        {
+            return;
+        }
     }
     const sfpi::vFloat s = Converter::as_float(value); // value is the threshold's fp32 bit pattern
 

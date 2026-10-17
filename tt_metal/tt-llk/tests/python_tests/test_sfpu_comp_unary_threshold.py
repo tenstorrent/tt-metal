@@ -14,15 +14,19 @@ only how the threshold is decoded. The golden is torch's compare and the check i
 is 0.0 or 1.0.
 
 The decode test is Blackhole only: the Wormhole copy of this header decodes the threshold the same
-way now, but its ordered compares are not covered by that fix. ``test_sfpu_comp_unary_eq_ne_ieee``
-runs on both architectures: eq/ne must follow IEEE equality, so -0.0 equals +0.0 and a NaN
-threshold equals nothing, including a datum with the same NaN bits.
+way now, but Wormhole's ordered compares (gt/lt/ge/le) get an infinite threshold against an infinite
+datum wrong, so 4 of its cells fail there for a reason outside this test (measured on n150).
+``test_sfpu_comp_unary_eq_ne_ieee`` runs on both architectures: eq/ne must follow IEEE equality,
+so -0.0 equals +0.0 and a NaN threshold equals nothing, including a datum with the same NaN bits.
+It also drives the nonzero thresholds of the decode test, with the NaN datums added, so a
+threshold-decode regression on either architecture shows up there too.
 """
 
 import struct
 
+import numpy as np
 import torch
-from conftest import blackhole_only
+from conftest import blackhole_only, skip_for_quasar
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -97,10 +101,31 @@ def _bits(value: float) -> int:
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
-def _run_threshold_compare(formats, mathop, threshold, dest_sync, inputs):
-    reps = ELEMENTS_PER_TILE // len(inputs) + 1
-    src_A = torch.tensor((list(inputs) * reps)[:ELEMENTS_PER_TILE], dtype=torch.float32)
+INPUT_BITS = tuple(_bits(x) for x in INPUTS)
+
+
+class _Threshold:
+    """A threshold given by its exact fp32 bits. A Python float cannot carry every pattern: the
+    double round trip quiets a signalling NaN (0x7F800001 becomes 0x7FC00001)."""
+
+    def __init__(self, bits: int, name: str):
+        self.bits = bits
+        self.name = name  # the pytest id
+
+    def __repr__(self) -> str:
+        return self.name
+
+
+def _tensor_from_bits(bits) -> torch.Tensor:
+    return torch.from_numpy(np.array(bits, dtype=np.uint32).view(np.float32))
+
+
+def _run_threshold_compare(formats, mathop, threshold_bits, dest_sync, input_bits):
+    reps = ELEMENTS_PER_TILE // len(input_bits) + 1
+    lane_bits = (list(input_bits) * reps)[:ELEMENTS_PER_TILE]
+    src_A = _tensor_from_bits(lane_bits)
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.float32)
+    threshold = _from_bits(threshold_bits)
 
     configuration = TestConfig(
         "sources/sfpu_comp_unary_threshold_test.cpp",
@@ -109,7 +134,7 @@ def _run_threshold_compare(formats, mathop, threshold, dest_sync, inputs):
             generate_input_dim([32, 32], [32, 32]),
             APPROX_MODE(ApproximationMode.No),
             MATH_OP(mathop=mathop),
-            SFPU_UNARY_SCALAR(_bits(threshold)),
+            SFPU_UNARY_SCALAR(threshold_bits),
             VECTOR_MODE(VectorMode.RC),
             DEST_SYNC(dest_sync),
         ],
@@ -138,23 +163,27 @@ def _run_threshold_compare(formats, mathop, threshold, dest_sync, inputs):
         src_A, torch.tensor(threshold, dtype=torch.float32)
     ).to(torch.float32)
 
+    # Keyed on the lane's bits: NaN lanes dedupe (nan != nan as a float) and +0.0 / -0.0 stay apart.
     wrong = sorted(
         {
-            (src_A[i].item(), res[i].item(), golden[i].item())
+            (lane_bits[i], res[i].item(), golden[i].item())
             for i in range(ELEMENTS_PER_TILE)
             if res[i].item() != golden[i].item()
         }
     )
     assert not wrong, (
-        f"{mathop.name}(x, {threshold:g}) with value=0x{_bits(threshold):08X} disagrees with torch on "
+        f"{mathop.name}(x, {threshold:g}) with value=0x{threshold_bits:08X} disagrees with torch on "
         f"{len(wrong)} inputs:\n"
         + "\n".join(
-            f"  x = {x:.9g}: got {got}, expected {want}" for x, got, want in wrong
+            f"  x = {_from_bits(b):.9g} (0x{b:08X}): got {got}, expected {want}"
+            for b, got, want in wrong
         )
     )
 
 
-# https://github.com/tenstorrent/tt-llk/issues/1701 item 16: only the Blackhole _calculate_comp_unary_ is fixed.
+# Blackhole only: Wormhole's ordered compares (gt/lt/ge/le) fail the threshold:inf cells against the
+# infinite datums (4 cells), a defect of those compares rather than of the decode this test checks.
+# The eq/ne nonzero thresholds run on both architectures in test_sfpu_comp_unary_eq_ne_ieee.
 @blackhole_only
 @parametrize(
     formats=input_output_formats([DataFormat.Float32], same=True),
@@ -163,15 +192,23 @@ def _run_threshold_compare(formats, mathop, threshold, dest_sync, inputs):
     dest_sync=[DestSync.Half],
 )
 def test_sfpu_comp_unary_threshold(formats, mathop, threshold, dest_sync):
-    _run_threshold_compare(formats, mathop, threshold, dest_sync, INPUTS)
+    _run_threshold_compare(formats, mathop, _bits(threshold), dest_sync, INPUT_BITS)
 
 
-# IEEE equality: -0.0 == +0.0, and NaN != NaN even for identical bits. The inputs add a NaN
-# datum so a NaN threshold meets a lane with the same bit pattern (torch.eq -> 0, ne -> 1).
-IEEE_EQ_NE_INPUTS = INPUTS + (float("nan"),)
-IEEE_EQ_NE_THRESHOLDS = [0.0, -0.0, float("nan")]
+# IEEE equality: -0.0 == +0.0, and NaN != NaN even for identical bits. Every NaN threshold below
+# has a datum with the same bit pattern (torch.eq -> 0, ne -> 1); the nonzero thresholds are the
+# decode test's, so a NaN datum also meets each of them.
+IEEE_EQ_NE_INPUT_BITS = INPUT_BITS + (0x7FC00000, 0xFFC00000, 0x7F800001)
+IEEE_EQ_NE_THRESHOLDS = [_Threshold(_bits(t), str(t)) for t in THRESHOLDS] + [
+    _Threshold(0x00000000, "0.0"),
+    _Threshold(0x80000000, "-0.0"),
+    _Threshold(0x7FC00000, "nan"),
+    _Threshold(0xFFC00000, "-nan"),
+    _Threshold(0x7F800001, "snan"),  # signalling: not representable as a Python float
+]
 
 
+@skip_for_quasar
 @parametrize(
     formats=input_output_formats([DataFormat.Float32], same=True),
     mathop=[MathOperation.UnaryEq, MathOperation.UnaryNe],
@@ -179,4 +216,6 @@ IEEE_EQ_NE_THRESHOLDS = [0.0, -0.0, float("nan")]
     dest_sync=[DestSync.Half],
 )
 def test_sfpu_comp_unary_eq_ne_ieee(formats, mathop, threshold, dest_sync):
-    _run_threshold_compare(formats, mathop, threshold, dest_sync, IEEE_EQ_NE_INPUTS)
+    _run_threshold_compare(
+        formats, mathop, threshold.bits, dest_sync, IEEE_EQ_NE_INPUT_BITS
+    )
