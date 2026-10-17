@@ -1456,12 +1456,20 @@ TEST_F(LLKMeshDeviceFixture, TensixMatmulPackOutOfOrderPacksEachDestTileToItsOwn
     constexpr std::uint32_t ntiles = 4;
     constexpr std::uint32_t half = ntiles / 2;
     constexpr std::uint32_t tile_elems = constants::TILE_HW;
-    // Tile t holds the integers 1 + 60 t .. 50 + 60 t (exact in Float16_b, <= 256), so no two tiles share a
-    // value and every tile differs from every other at every element.
+    // Tile t holds the integers 1 + tile_value_stride * t .. values_per_tile + tile_value_stride * t, so no two
+    // tiles share a value and every tile differs from every other at every element. Integers up to 256 are
+    // exact in Float16_b (8-bit significand), which bounds the largest value.
+    constexpr std::uint32_t values_per_tile = 50;
+    constexpr std::uint32_t tile_value_stride = 60;
+    constexpr std::uint32_t max_exact_bf16_integer = 256;
+    static_assert(tile_value_stride > values_per_tile, "tile value ranges must not overlap");
+    static_assert(
+        values_per_tile + tile_value_stride * (ntiles - 1) <= max_exact_bf16_integer,
+        "stimulus values must stay exactly representable in Float16_b");
     std::vector<bfloat16> src(ntiles * tile_elems);
     for (std::uint32_t t = 0; t < ntiles; ++t) {
         for (std::uint32_t i = 0; i < tile_elems; ++i) {
-            src[t * tile_elems + i] = bfloat16(static_cast<float>(1 + 60 * t + (i % 50)));
+            src[t * tile_elems + i] = bfloat16(static_cast<float>(1 + tile_value_stride * t + (i % values_per_tile)));
         }
     }
     const auto src_u32 = pack_bfloat16_vec_into_uint32_vec(src);

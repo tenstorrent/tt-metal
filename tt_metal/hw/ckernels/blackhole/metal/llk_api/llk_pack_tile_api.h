@@ -138,7 +138,8 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
  *
  * @tparam is_fp32_dest_acc_en  DST is in 32-bit accumulate mode.
  * @tparam out_of_order_output  Address pages by output_tile_index (true) or by the running pointer (false).
- * @tparam pack_mode            Packer mode; PackMode::Untilize is not supported out of order.
+ * @tparam pack_mode            Packer mode; only PackMode::Default is supported (use the llk_pack_untilize APIs for
+ *                              untilize).
  * @param  start_tile_index     First DST tile to pack.
  * @param  output               Output operand (circular buffer) id.
  * @param  ntiles               Number of consecutive DST tiles to pack.

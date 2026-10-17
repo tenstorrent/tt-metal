@@ -7,7 +7,6 @@
 #include "api/compute/common.h"
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/dataflow/circular_buffer.h"
 
 // Guards the out-of-order branch of llk_matmul_pack: DST tile (start_tile_index + i) must land on output
