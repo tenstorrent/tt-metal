@@ -850,6 +850,18 @@ class CLAMP_NEGATIVE(TemplateParameter):
 
 
 @dataclass
+class SFPU_CUMSUM_CHAIN(TemplateParameter):
+    """Chain the tiles of a DEST block into one column scan, each tile continuing the carry of the one before.
+
+    Emitted as a macro, like :class:`SFPU_SHIFT_AMOUNT`, because sfpu_operations.h selects on
+    ``#ifdef SFPU_CUMSUM_CHAIN``; unset, every cumsum tile starts its own scan.
+    """
+
+    def convert_to_cpp(self) -> str:
+        return "#define SFPU_CUMSUM_CHAIN"
+
+
+@dataclass
 class STABLE_SORT(TemplateParameter):
     stable_sort: StableSort = StableSort.No
 

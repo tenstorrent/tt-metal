@@ -44,6 +44,7 @@
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
 #include "llk_sfpu/ckernel_sfpu_celu.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
+#include "llk_sfpu/ckernel_sfpu_cumsum.h"
 #include "llk_sfpu/ckernel_sfpu_digamma.h"
 #include "llk_sfpu/ckernel_sfpu_div_int32.h"
 #include "llk_sfpu/ckernel_sfpu_div_int32_floor.h"
@@ -678,6 +679,10 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
         // Accurate sech^2: tanh_derivative_sech2_init programs vConstFloatPrgm0..2 with the
         // exp polynomial's C2..C4, which calculate_tanh_derivative_sech2 reads.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(tanh_derivative_sech2_init<APPROX_MODE>);
+    }
+    else if constexpr (OPERATION == SfpuType::cumsum)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(cumsum_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
@@ -1652,6 +1657,15 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     else if constexpr (OPERATION == SfpuType::expm1_cw)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_expm1_cw, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::cumsum)
+    {
+#ifdef SFPU_CUMSUM_CHAIN
+        // The carry runs across the tiles of a DEST block, so only its first tile starts a scan.
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cumsum, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC_custom, dst_index == 0);
+#else
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cumsum, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC_custom, true);
+#endif
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
