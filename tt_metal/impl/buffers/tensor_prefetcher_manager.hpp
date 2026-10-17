@@ -114,14 +114,22 @@ public:
 
     // Make the prefetcher wait until all work currently enqueued on command queue
     // `cq` has landed before it reads DRAM. Bumps a host-side per-CQ counter,
-    // has the dispatcher write the new value into every DRAM core's signal slot
-    // (ordered after prior CQ work), and queues a WAIT_CQ request so each kernel
+    // has the dispatcher write the new value into every DRAM core's CQ fence slot
+    // (ordered after prior CQ work), and queues a WAIT_SIGNAL request so each kernel
     // blocks until that value is observed. Must be called synchronously on the
     // host thread that enqueues the data writes (after them, before the dependent
     // prefetch request). `cq` must belong to this manager's mesh device, and its id
     // must be within [0, kNumCqSignalSlots).
     void enqueue_cq_signal_and_wait(
         MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset);
+
+    // DRISC L1 address of op signal `signal_id`'s slot, uniform across every sender core of every device.
+    uint32_t signal_address(uint32_t signal_id);
+
+    // Queue a WAIT_SIGNAL on op signal `signal_id`'s slot to every sender of every device. The count it
+    // waits for is assigned when the request is handed to the worker (stamp_op_signal_wait), so a wait
+    // captured into a trace waits for a new count on each replay. Capture-vs-send contract as queue().
+    void queue_wait_for_signal(uint32_t signal_id, MeshCommandQueue* trace_capture_cq);
 
     void stop();
 
@@ -145,12 +153,15 @@ private:
     struct Request {
         // One logical socket page. PREFETCH carries one page per entry in target_sender_indices:
         // the header names that sender's target state, and its layout slots that sender's slab
-        // base. STOP / WAIT_CQ carry one
+        // base. STOP / WAIT_SIGNAL carry one
         // shared page and leave target_sender_indices empty to broadcast to every provisioned
         // sender.
         std::vector<std::vector<uint8_t>> sender_pages;
         std::vector<MeshCoordinate> target_devices;
         std::vector<uint32_t> target_sender_indices;
+        // Set on a wait on op signal s: its one page is a WAIT_SIGNAL whose wait_value is left for
+        // stamp_op_signal_wait to fill in each time the request is handed to the worker.
+        std::optional<uint32_t> op_signal;
     };
 
     struct MpfeWeights {
@@ -193,6 +204,12 @@ private:
     };
 
     void worker_loop();
+    // Give a wait on an op signal the next count it must wait for: one more than the waits on that
+    // signal handed to the worker before it, which is the count the device reaches with the signal that
+    // pairs with it. Caller holds queue_mu_, so counts follow the order requests enter pending_.
+    void stamp_op_signal_wait(Request& req);
+    // One WAIT_SIGNAL page on signal slot `slot_index` for `wait_value`, broadcast to every sender.
+    std::vector<uint8_t> wait_signal_page(uint32_t slot_index, uint32_t wait_value) const;
     // Add `word` to sender slot `sender`'s drain targets, dropping the ones whose memory is gone.
     void record_drain_target(uint32_t sender, uint32_t word, const std::weak_ptr<DriscL1Allocation>& state);
     // One DRAIN request per page's worth of every sender's live drain targets, for stop to send ahead
@@ -236,18 +253,19 @@ private:
     // over NOC.
     uint32_t socket_config_l1_addr_ = 0;
     uint32_t socket_data_l1_addr_ = 0;
-    // Base (local DRISC L1) of this prefetcher's per-CQ signal slots; uniform
-    // across all sender cores. Carved at the front of the kernel working region.
-    uint32_t cq_signal_l1_addr_ = 0;
+    // Base (local DRISC L1) of this prefetcher's signal slot table: kNumCqSignalSlots CQ fence slots,
+    // then kTensorPrefetcherNumSignals op signal slots. Uniform across all sender cores of every device,
+    // carved at the front of the kernel working region.
+    uint32_t signal_slots_l1_addr_ = 0;
     // Base (local DRISC L1) of the kTensorPrefetcherSelectorScratchBytes a selector page is read into;
     // uniform across all sender cores.
     uint32_t selector_scratch_l1_addr_ = 0;
     // Distance between consecutive signal slots. The slots hold one uint32 each but are
-    // spaced a full L1 alignment apart: each is the destination of its own dispatcher
+    // spaced a full L1 alignment apart: each CQ fence slot is the destination of its own dispatcher
     // write, and a dispatch write only lands on an L1-aligned address. Packed 4 bytes
     // apart, every slot but the first would be misaligned and its write would go nowhere,
-    // leaving the kernel spinning on a WAIT_CQ that is never satisfied.
-    uint32_t cq_signal_slot_stride_ = 0;
+    // leaving the kernel spinning on a WAIT_SIGNAL that is never satisfied.
+    uint32_t signal_slot_stride_ = 0;
     // A target stop must drain on one sender: its DRAIN word (state address | kDrainTargetPipeBit for a
     // pipe) and the DRISC L1 range that address lies in. The range expiring means the target is gone
     // and its memory may already hold something else, so stop skips it rather than read that memory
@@ -263,8 +281,11 @@ private:
     std::vector<std::shared_ptr<DriscL1Allocation>> drain_holds_;
     // Host-side monotonic signal counter per command queue. enqueue_cq_signal_and_wait
     // pre-increments cq_signal_counter_[cq.id()] and uses it for both the dispatcher
-    // write and the WAIT_CQ request value.
+    // write and the WAIT_SIGNAL request value.
     std::array<uint32_t, kNumCqSignalSlots> cq_signal_counter_{};
+    // Waits on each op signal handed to the worker since start, i.e. the count the latest of them waits
+    // for. Zeroed by start, as the slots are. Guarded by queue_mu_.
+    std::array<uint32_t, experimental::kTensorPrefetcherNumSignals> op_signal_waits_{};
 
     // sender_logical_cores_[s] is the logical DRAM core for sender slot s, a (bank,
     // primary/secondary role) pair. Both sender cores per bank are provisioned at start; each
@@ -295,7 +316,8 @@ private:
 
     // Requests captured during trace capture, keyed by the recording trace's id. Populated by
     // queue() when its command queue is mid-capture; drained back onto pending_ by
-    // replay_trace() on each trace execution; erased by release_trace(). Guarded by queue_mu_.
+    // replay_trace() on each trace execution; erased by release_trace(). A captured wait on an op signal
+    // keeps no count: replay_trace stamps each copy it re-queues. Guarded by queue_mu_.
     std::unordered_map<MeshTraceId, std::vector<Request>> trace_requests_;
 
     // In benchmark mode, created only after kernels and the worker are live and
