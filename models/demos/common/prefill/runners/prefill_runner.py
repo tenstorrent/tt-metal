@@ -31,6 +31,7 @@ from models.demos.common.prefill.runners.runner_utils import d2d_activation_rows
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_width as d2d_width
 from models.demos.common.prefill.runners.runner_utils import make_h2d_spec, num_mtp_tokens, open_mesh_device
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
+from models.demos.deepseek_v3_d_p.utils.sub_device_trace import CapturedCall
 
 
 def _apply_manifest_env():
@@ -191,11 +192,14 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers, ack_idx_of
 
 def _decode_metadata(metadata_msg: ttnn.Tensor) -> dict:
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
-    return {
+    meta = {
         "slot_id": int(m[0]),
         "actual_start": int(m[1]),
         "actual_end": int(m[2]),
     }
+    if m.numel() > 3:
+        meta["provided_levels"] = max(0, int(m[3]))
+    return meta
 
 
 def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
@@ -236,17 +240,36 @@ def _is_warmup_sentinel(meta: dict) -> bool:
     )
 
 
-def _socket_next(h2d_service, n_mtp: int = 0) -> tuple:
-    outs = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        h2d_service, metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES, overhang_size_bytes=n_mtp * TOKEN_ID_BYTES
+def _make_socket_metadata_buffer(mesh_device, metadata_size_bytes: int) -> ttnn.Tensor:
+    return ttnn.from_torch(
+        torch.zeros(1, 1, 1, metadata_size_bytes // 4, dtype=torch.int32),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
-    if n_mtp:
-        tt_ids, tt_mtp_tokens, tt_metadata = outs
-    else:
-        tt_mtp_tokens = None
-        tt_ids, tt_metadata = outs
-    meta = _decode_metadata(tt_metadata)
-    return tt_ids, tt_mtp_tokens, meta, tt_metadata
+
+
+def _h2d_drain_op(h2d_service, sockets, n_mtp: int):
+    return ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+        h2d_service,
+        metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES,
+        overhang_size_bytes=n_mtp * TOKEN_ID_BYTES,
+        metadata_out=sockets.metadata,
+        tokens_out=sockets.tokens,
+        overhang_out=sockets.overhang,
+    )
+
+
+def _socket_next(h2d_service, sockets, n_mtp: int = 0) -> tuple:
+    if sockets.drain_trace is not None:
+        sockets.drain_trace.replay()
+        return sockets.tokens, sockets.overhang, _decode_metadata(sockets.metadata)
+    outs = _h2d_drain_op(h2d_service, sockets, n_mtp)
+    tokens, overhang = (outs[0], outs[1]) if n_mtp else (outs[0], None)
+    sockets.metadata = outs[-1]
+    return tokens, overhang, _decode_metadata(sockets.metadata)
 
 
 def build_d2d_pipeline_endpoints(
@@ -295,44 +318,77 @@ def build_d2d_pipeline_endpoints(
     return inbound, outbound
 
 
-def _d2d_recv(inbound) -> tuple:
-    t0 = time.perf_counter()
-    act, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        inbound, metadata_size_bytes=D2D_METADATA_SIZE_BYTES
+def _d2d_drain_op(inbound, sockets):
+    return ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+        inbound,
+        metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
+        metadata_out=sockets.metadata,
+        tokens_out=sockets.tokens,
     )
-    meta = _decode_metadata(metadata_msg)
-    if MTP_LEVELS:
-        words = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
-        meta["provided_levels"] = max(0, int(words[3]))
+
+
+def _d2d_recv(inbound, sockets) -> tuple:
+    t0 = time.perf_counter()
+    if sockets.drain_trace is not None:
+        sockets.drain_trace.replay()
+        act = sockets.tokens
+    else:
+        act, sockets.metadata = _d2d_drain_op(inbound, sockets)
+    meta = _decode_metadata(sockets.metadata)
     where = f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}"
     logger.info(f"[pp] RECV-d2d {where} [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
-    return act, meta, metadata_msg
+    return act, meta
+
+
+def _metadata_record_words(meta: dict) -> torch.Tensor:
+    words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
+    if MTP_LEVELS:
+        words.append(int(meta["provided_levels"]))
+    return torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1)
+
+
+def _send_metadata_record(outbound, meta: dict) -> ttnn.Tensor:
+    backing = outbound.get_backing_tensor()
+    return ttnn.from_torch(
+        _metadata_record_words(meta),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=backing.device(),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            backing.device(),
+            ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
+        ),
+    )
+
+
+def _fill_send_record(record: ttnn.Tensor, meta: dict) -> None:
+    src = ttnn.from_torch(
+        _metadata_record_words(meta),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(record.device()),
+    )
+    ttnn.copy_host_to_device_tensor(src, record)
 
 
 def _d2d_send(
-    outbound, activation: ttnn.Tensor, rank: int, meta: Optional[dict], *, deallocate: bool = True, metadata_msg=None
+    outbound,
+    activation: ttnn.Tensor,
+    rank: int,
+    meta: Optional[dict],
+    *,
+    deallocate: bool = True,
+    metadata_msg=None,
+    trace=None,
 ) -> None:
     t0 = time.perf_counter()
 
-    if metadata_msg is not None:
-        md_tensor = metadata_msg
+    if trace is not None:
+        trace.replay()
     else:
-        backing = outbound.get_backing_tensor()
-        words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
-        if MTP_LEVELS:
-            words.append(int(meta["provided_levels"]))
-        md_tensor = ttnn.from_torch(
-            torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=backing.device(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.create_mesh_mapper(
-                backing.device(),
-                ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
-            ),
-        )
-    ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, activation, metadata=md_tensor)
+        md_tensor = metadata_msg if metadata_msg is not None else _send_metadata_record(outbound, meta)
+        ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, activation, metadata=md_tensor)
     if deallocate:
         ttnn.deallocate(activation)
     where = f"[{meta['actual_start']},{meta['actual_end']})" if meta is not None else "(on-device)"
@@ -386,6 +442,75 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
         d2d_in.release_fabric_links()
 
 
+class SocketBuffers:
+    def __init__(self, metadata, tokens=None, overhang=None, send_record=None):
+        self.metadata = metadata
+        self.tokens = tokens
+        self.overhang = overhang
+        self.send_record = send_record
+        self.drain_trace = None
+        self.send_trace = None
+
+    def release_traces(self) -> None:
+        for trace in (self.drain_trace, self.send_trace):
+            if trace is not None:
+                trace.release()
+        self.drain_trace = self.send_trace = None
+
+
+def _capture_socket_ops(
+    sockets: SocketBuffers, mesh_device, runtime, rank: int, *, h2d_service, d2d_in, d2d_out
+) -> None:
+    is_first = runtime.config.is_first_rank
+    inbound = h2d_service if is_first else d2d_in
+    n_mtp = NUM_MTP_TOKENS if is_first else 0
+
+    if inbound is None:
+        drain_skip = "no inbound socket"
+    elif sockets.tokens is None or sockets.metadata is None:
+        drain_skip = "the drain has no persistent destinations"
+    elif n_mtp and sockets.overhang is None:
+        drain_skip = "the MTP lookahead overhang has no persistent destination"
+    else:
+        drain_skip = None
+    if drain_skip is None:
+        call = CapturedCall(mesh_device)
+        if is_first:
+            call.capture(lambda: _h2d_drain_op(inbound, sockets, n_mtp))
+        else:
+            call.capture(lambda: _d2d_drain_op(inbound, sockets))
+        sockets.drain_trace = call
+
+    activation = getattr(runtime, "trace_output", None)
+    forward_md = (
+        sockets.send_record if sockets.send_record is not None else getattr(runtime, "trace_metadata_msg", None)
+    )
+    if d2d_out is None:
+        send_skip = "last rank, nothing to forward"
+    elif activation is None or forward_md is None:
+        send_skip = "the forward keeps no persistent output/metadata pair"
+    elif MTP_LEVELS and is_first and sockets.send_record is None:
+        send_skip = "MTP's first rank has no persistent outgoing record"
+    else:
+        send_skip = None
+    if send_skip is None:
+        call = CapturedCall(mesh_device)
+        call.capture(
+            lambda: ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(
+                d2d_out, activation, metadata=forward_md
+            )
+        )
+        sockets.send_trace = call
+
+    def _how(trace, skip):
+        return "traced" if trace is not None else f"eager ({skip})"
+
+    logger.info(
+        f"[pp rank {rank}] socket ops: drain={_how(sockets.drain_trace, drain_skip)} "
+        f"send={_how(sockets.send_trace, send_skip)}"
+    )
+
+
 def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: float) -> None:
     if not TIMING_DIR:
         return
@@ -411,8 +536,8 @@ def _compute_and_send(
     inp,
     meta: Optional[dict],
     d2d_out,
+    sockets: SocketBuffers,
     d2h_service=None,
-    metadata_msg=None,
     mtp_tokens=None,
 ) -> float:
     if SYNC_PER_CHUNK:
@@ -434,7 +559,7 @@ def _compute_and_send(
         actual_end=meta["actual_end"],
         request_id=c,
         d2h_service=d2h_service,
-        metadata_msg=metadata_msg,
+        metadata_msg=sockets.metadata,
         **mtp_kwargs,
     )
     if SYNC_PER_CHUNK:
@@ -444,9 +569,12 @@ def _compute_and_send(
         _record_chunk_timing(rank, c, t_start, compute_ms)
     if not runtime.config.is_last_rank:
         forward_md = None
-        if runtime.config.use_trace and not (MTP_LEVELS and runtime.config.is_first_rank):
-            persistent_md = getattr(runtime, "trace_metadata_msg", None)
-            forward_md = persistent_md if persistent_md is not None else metadata_msg
+        if sockets.send_trace is None:
+            if runtime.config.use_trace and not (MTP_LEVELS and runtime.config.is_first_rank):
+                persistent_md = getattr(runtime, "trace_metadata_msg", None)
+                forward_md = persistent_md if persistent_md is not None else sockets.metadata
+        elif sockets.send_record is not None:
+            _fill_send_record(sockets.send_record, meta)
         _d2d_send(
             d2d_out,
             out,
@@ -454,6 +582,7 @@ def _compute_and_send(
             meta,
             deallocate=not runtime.config.use_trace,
             metadata_msg=forward_md,
+            trace=sockets.send_trace,
         )
     if d2d_out is not None:
         d2d_out.release_fabric_links()
@@ -483,10 +612,13 @@ def run_request_loop(
     d2d_out=None,
     d2h_service=None,
     before_first_chunk=None,
+    sockets=None,
 ) -> None:
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
+    if sockets is None:
+        raise ValueError("request mode requires the SocketBuffers holding this rank's socket destinations")
     logger.info(
         f"[pp rank {rank}/{num_ranks}] request (unbounded) loop start "
         f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
@@ -497,24 +629,23 @@ def run_request_loop(
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
-            inp, mtp_tokens, meta, metadata_msg = _socket_next(h2d_service, NUM_MTP_TOKENS)
+            inp, mtp_tokens, meta = _socket_next(h2d_service, sockets, NUM_MTP_TOKENS)
             meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
         else:
-            inp, meta, metadata_msg = _d2d_recv(d2d_in)
+            inp, meta = _d2d_recv(d2d_in, sockets)
             mtp_tokens = None
         if _is_shutdown_sentinel(meta):
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
-            ttnn.deallocate(inp)
-            ttnn.deallocate(metadata_msg)
-            if mtp_tokens is not None:
+            if sockets.tokens is None:
+                ttnn.deallocate(inp)
+            if mtp_tokens is not None and sockets.overhang is None:
                 ttnn.deallocate(mtp_tokens)
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, d2d_rows, d2d_width, outbound_planes)
             break
         warmup = _is_warmup_sentinel(meta)
-        if warmup:
+        if warmup and sockets.tokens is None:
             ttnn.deallocate(inp)
-            ttnn.deallocate(metadata_msg)
         if before_first_chunk is not None:
             before_first_chunk()
             before_first_chunk = None
@@ -528,8 +659,8 @@ def run_request_loop(
             inp,
             meta,
             d2d_out,
+            sockets,
             d2h_service=d2h_service,
-            metadata_msg=metadata_msg,
             mtp_tokens=mtp_tokens,
         )
         if first is None:
@@ -875,10 +1006,39 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         num_my_layers=num_my_layers,
     )
 
+    traced = bool(getattr(runtime, "capture_trace", None)) and runtime.config.use_trace
+
+    _claim_input = getattr(runtime, "claim_persistent_input", None) if traced else None
+    _claim_overhang = getattr(runtime, "claim_persistent_overhang", None) if traced and NUM_MTP_TOKENS else None
+    tokens = _claim_input() if _claim_input is not None else None
+    sockets = SocketBuffers(
+        metadata=(
+            _make_socket_metadata_buffer(
+                mesh_device, CHUNK_METADATA_SIZE_BYTES if is_first_rank else D2D_METADATA_SIZE_BYTES
+            )
+            if tokens is not None
+            else None
+        ),
+        tokens=tokens,
+        overhang=_claim_overhang() if _claim_overhang is not None else None,
+        send_record=(
+            _make_socket_metadata_buffer(mesh_device, D2D_METADATA_SIZE_BYTES)
+            if traced and MTP_LEVELS and is_first_rank and d2d_out is not None
+            else None
+        ),
+    )
+    logger.info(
+        f"[pp rank {rank}] input destination = "
+        + ("runtime traced input (persistent, no per-chunk copy)" if sockets.tokens is not None else "per-chunk alloc")
+    )
+
     def _capture_trace() -> None:
         if d2d_out is not None:
             _forward_send_warmup(runtime, d2d_out, rank)
         runtime.capture_trace(kv_caches)
+        _capture_socket_ops(
+            sockets, mesh_device, runtime, rank, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out
+        )
         if use_d2h and layer_ack_service is not None:
             n_warm = getattr(runtime, "warmup_ack_count", lambda: 0)()
             for _ in range(n_warm):
@@ -886,10 +1046,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             if n_warm:
                 logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
             layer_ack_service.start()
-
-    # Capture after the first record so the socket programs are compiled first; on non-first ranks
-    # that record is the upstream warm-up.
-    traced = bool(getattr(runtime, "capture_trace", None)) and runtime.config.use_trace
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
@@ -907,10 +1063,12 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2d_out=d2d_out,
             d2h_service=d2h_service,
             before_first_chunk=_capture_trace if traced else None,
+            sockets=sockets,
         )
     finally:
         import gc
 
+        sockets.release_traces()
         if layer_ack_service is not None:
             layer_ack_service.stop()
             layer_ack_service = None
