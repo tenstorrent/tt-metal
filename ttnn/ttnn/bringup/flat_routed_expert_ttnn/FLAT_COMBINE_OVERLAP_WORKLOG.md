@@ -1147,3 +1147,9 @@ Flat alone: base 2324 / 2586 / 5750; 64 gate/up both tiles 2265 / 2488 / 5601. T
 switch-mode policy: a call whose largest expert passes 224 tokens ran every bank on one tile (~28 GB/s), starving the
 call's DRAM-bound small experts. Default now: both tiles on every call when no Tensix readers back the DRISC slots
 (non-dual); dual plans keep 224 / 384. The harness accepts FC_NACC <= 16 (asserting the combine found that many).
+DRAM utilization of these fused calls (busiest chip, the harness's routing; bytes = active experts x 18.6 MB bfp4
+weights + x rows x 7168 B x 2 rectangles + 2.3 MB combine output; y stays in L1; /512 GB/s):
+| routing (busiest chip) | bytes | base 48 gate/up Tensix | 64 gate/up DRISC-only |
+| uniform (5246 rows, max 123 / expert) | 1118 MB | 458 GB/s = 89.4% | 488 GB/s = 95.4% |
+| Zipf spread (6369 rows, one expert 2552) | 1134 MB | 81.2% | 85.5% |
+| Zipf packed (28854 rows) | 1456 MB | 48.0% | 49.9% (compute: 1906 GFLOP at 334 TFLOP/s) |
