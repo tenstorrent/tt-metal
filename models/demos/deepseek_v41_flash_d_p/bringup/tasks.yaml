@@ -7937,6 +7937,13 @@ tasks:
     - moe_add
     - ffn_residual
     layer: 24
+  frozen:
+    at: '2026-10-17T14:38:19'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_16_ffn_residual.py: 48f89774cd6fe29b8130899c2de7fe735207fcbd55857008e135b892792df69d
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_reuse.attn_hc
   title: dec_reuse attn_hc (op) on device, layer 21
   step: implement
