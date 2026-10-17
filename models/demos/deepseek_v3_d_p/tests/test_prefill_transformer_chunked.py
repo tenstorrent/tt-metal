@@ -96,6 +96,12 @@ GLM_L1_SMALL_SIZE = 1536
 GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
 
 
+def _fabric_payload_override(model_cfg) -> int:
+    """The fabric payload the perf mesh opens with: PREFILL_FABRIC_PAYLOAD when set, for payload sweeps, else the
+    model's moe_fabric_payload."""
+    return int(os.environ.get("PREFILL_FABRIC_PAYLOAD") or moe_fabric_payload(model_cfg))
+
+
 def _moe_transport_kwargs(transformer_cls) -> dict:
     """MoE transport overrides for perf comparisons, from the same env vars as prefill_runner plus the
     wire formats: PREFILL_MOE_DISPATCH / PREFILL_MOE_COMBINE ("direct" | "fabric2d"),
@@ -2689,7 +2695,7 @@ def glm_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_is
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(KimiK27Config),
+                fabric_payload_size=_fabric_payload_override(KimiK27Config),
                 l1_small_size=768,
                 trace_region_size=256 * 1024 * 1024,
             ),
