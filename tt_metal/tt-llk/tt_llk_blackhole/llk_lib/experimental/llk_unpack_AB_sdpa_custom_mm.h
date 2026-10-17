@@ -18,6 +18,13 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
+/**
+ * @brief Unpack one kt_dim x ct_dim SDPA block: in0 into SrcB, in1 into SrcA, preceded by the mask row when mask_chunk.
+ *
+ * @tparam read_transposed: Walk the in1 tiles column by column, values = <true/false>
+ * @tparam configure_mask_extent: Retained for source compatibility; the mask unpack always spans the
+ *         ct_dim * 2 SrcB rows the math side broadcasts and restores operandB_face_r_dim afterwards.
+ */
 template <bool read_transposed = false, bool configure_mask_extent = false>
 inline void _llk_unpack_AB_sdpa_custom_mm_(
     const std::uint32_t base_address_a,
@@ -52,17 +59,15 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
     if (mask_chunk)
     {
         cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = base_address_mask;
-        if constexpr (configure_mask_extent)
-        {
-            LLK_ASSERT(ct_dim * 2 <= 64, "mask_chunk requires ct_dim*2 <= 64 SrcB rows");
-            TT_SETADCXX(p_setadc::UNP_B, ct_dim * 2 * FACE_C_DIM - 1, 0x0);
-        }
+        // The math side broadcasts ct_dim * 2 SrcB rows into DEST, one per output face, so the mask unpack
+        // must write that many rows. The init programmed unpacker 1's X end for operandB_face_r_dim rows;
+        // left there, every output face >= operandB_face_r_dim would be seeded from stale SrcB rows instead
+        // of the mask. Program the extent for the mask, then restore it for the matmul unpacks that follow.
+        LLK_ASSERT(ct_dim * 2 <= 64, "mask_chunk requires ct_dim*2 <= 64 SrcB rows");
+        TT_SETADCXX(p_setadc::UNP_B, ct_dim * 2 * FACE_C_DIM - 1, 0x0);
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
         TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcB, 0b00000000, 1, 1);
-        if constexpr (configure_mask_extent)
-        {
-            TT_SETADCXX(p_setadc::UNP_B, operandB_face_r_dim * FACE_C_DIM - 1, 0x0);
-        }
+        TT_SETADCXX(p_setadc::UNP_B, operandB_face_r_dim * FACE_C_DIM - 1, 0x0);
     }
 
     _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);

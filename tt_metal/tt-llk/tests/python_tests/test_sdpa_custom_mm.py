@@ -395,8 +395,83 @@ def test_sdpa_custom_mm_signal_granularity(request, shape_sg):
 
 @dataclass
 class SDPA_MASK_REENTRY(TemplateParameter):
+    """Masked pass followed by an unmasked pass without re-initialising the unpacker.
+
+    configure_mask_extent : the unpack LLK's template knob. True programs the SrcB extent
+                            for the mask explicitly; False is the default every model caller
+                            uses.
+    """
+
+    configure_mask_extent: bool = True
+
     def convert_to_cpp(self):
-        return "#define SDPA_MASK_REENTRY true"
+        return "\n".join(
+            [
+                "#define SDPA_MASK_REENTRY true",
+                f"#define SDPA_CONFIGURE_MASK_EXTENT {str(self.configure_mask_extent).lower()}",
+            ]
+        )
+
+
+def _run_masked_then_unmasked(
+    M,
+    ct,
+    kt,
+    lhs,
+    rhs,
+    mask,
+    read_transposed=False,
+    row_stride=None,
+    input_tile_offset=0,
+    configure_mask_extent=True,
+):
+    """Run a masked pass then an unmasked pass; return the (2, M, N) result."""
+    N = ct * DEFAULT_TILE_C_DIM
+    config = TestConfig(
+        "sources/sdpa_custom_mm_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        templates=[
+            CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
+            SDPA_CUSTOM_MM_FLAGS(
+                signal_granularity=ct,
+                read_transposed=read_transposed,
+                sdpa_row_stride=row_stride,
+                sdpa_input_tile_offset=input_tile_offset,
+            ),
+            SDPA_MASK_REENTRY(configure_mask_extent=configure_mask_extent),
+        ],
+        runtimes=[
+            NUM_FACES(num_faces=2, num_faces_A=4, num_faces_B=2),
+            IN_FACE_DIMS(in0_face_r_dim=M),
+        ],
+        variant_stimuli=_SdpaCustomMMStimuli(
+            kt,
+            ct,
+            _pack_in1(rhs, kt, ct, read_transposed, row_stride, input_tile_offset),
+            _pack_in0(lhs, kt),
+            mask=mask,
+        ),
+        dest_acc=DestAccumulation.No,
+    )
+    packed = torch.as_tensor(config.run().result).reshape(2, ct, -1)
+    return (
+        packed[:, :, : M * 32]
+        .reshape(2, ct, 2, M, 16)
+        .permute(0, 3, 1, 2, 4)
+        .reshape(2, M, N)
+    )
+
+
+def _dyadic_operands(M, K, N, seed):
+    """Small dyadic operands keep every mask-seeded and zero-seeded sum exactly representable."""
+    generator = torch.Generator().manual_seed(seed)
+    lhs = (torch.randint(-2, 3, (M, K), generator=generator).float() / 4).to(
+        torch.bfloat16
+    )
+    rhs = (torch.randint(-2, 3, (K, N), generator=generator).float() / 4).to(
+        torch.bfloat16
+    )
+    return lhs, rhs
 
 
 @parametrize(
@@ -451,54 +526,55 @@ def test_sdpa_custom_mm_mask_extent_restore(
     kt, K, N = 2, 64, ct * 32
     row_stride = kt + 2 if padded_stride else None
     input_tile_offset = 1 if padded_stride else 0
-    generator = torch.Generator().manual_seed(73)
-    lhs = (torch.randint(-2, 3, (M, K), generator=generator).float() / 4).to(
-        torch.bfloat16
-    )
-    rhs = (torch.randint(-2, 3, (K, N), generator=generator).float() / 4).to(
-        torch.bfloat16
-    )
-    # Distinct nonzero face patterns reveal a truncated mask extent. Dyadic
-    # inputs keep both the mask-seeded and zero-seeded sums exactly representable.
+    lhs, rhs = _dyadic_operands(M, K, N, seed=73)
+    # Distinct nonzero face patterns reveal a truncated mask extent.
     mask = ((torch.arange(N) % 4 - 1) * 2).to(torch.bfloat16)
-    config = TestConfig(
-        "sources/sdpa_custom_mm_test.cpp",
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-        templates=[
-            CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            SDPA_CUSTOM_MM_FLAGS(
-                signal_granularity=ct,
-                read_transposed=read_transposed,
-                sdpa_row_stride=row_stride,
-                sdpa_input_tile_offset=input_tile_offset,
-            ),
-            SDPA_MASK_REENTRY(),
-        ],
-        runtimes=[
-            NUM_FACES(num_faces=2, num_faces_A=4, num_faces_B=2),
-            IN_FACE_DIMS(in0_face_r_dim=M),
-        ],
-        variant_stimuli=_SdpaCustomMMStimuli(
-            kt,
-            ct,
-            _pack_in1(rhs, kt, ct, read_transposed, row_stride, input_tile_offset),
-            _pack_in0(lhs, kt),
-            mask=mask,
-        ),
-        dest_acc=DestAccumulation.No,
-    )
-    packed = torch.as_tensor(config.run().result).reshape(2, ct, -1)
-    result = (
-        packed[:, :, : M * 32]
-        .reshape(2, ct, 2, M, 16)
-        .permute(0, 3, 1, 2, 4)
-        .reshape(2, M, N)
+    result = _run_masked_then_unmasked(
+        M,
+        ct,
+        kt,
+        lhs,
+        rhs,
+        mask,
+        read_transposed=read_transposed,
+        row_stride=row_stride,
+        input_tile_offset=input_tile_offset,
     )
     product = lhs.float() @ rhs.float()
     golden = torch.stack([product + mask.float(), product]).to(torch.bfloat16)
     assert torch.equal(
         result, golden
     ), "Mask extent or SrcB geometry restoration changed the matmul"
+
+
+@parametrize(
+    M=[1, 8],
+    # Only ct_dim*2 > M leaves mask rows beyond the Q face height.
+    ct=lambda M: [3, 8] if M == 1 else [8],
+)
+def test_sdpa_custom_mm_mask_extent_default(request, M, ct):
+    """The default unpack path must supply all ct_dim*2 mask rows the math side broadcasts.
+
+    Every model caller leaves configure_mask_extent at false, so the mask unpack runs with the
+    Q face height (M rows) programmed by the init while the math side broadcasts ct_dim*2 SrcB
+    rows into DEST, one per output face. Output faces >= M must still be seeded from the mask,
+    not from whatever SrcB held there.
+    """
+    _skip_on_simulator(request)
+    kt, K, N = 2, 64, ct * 32
+    lhs, rhs = _dyadic_operands(M, K, N, seed=91)
+    # A per-row offset makes every mask row distinct from the others and from the restore
+    # test's mask, so a stale SrcB row left behind by an earlier cell cannot pass by luck.
+    cols = torch.arange(N)
+    mask = ((cols % 4 - 1) * 2 + (cols // FACE_C_DIM) / 8).to(torch.bfloat16)
+    result = _run_masked_then_unmasked(
+        M, ct, kt, lhs, rhs, mask, configure_mask_extent=False
+    )
+    product = lhs.float() @ rhs.float()
+    golden = torch.stack([product + mask.float(), product]).to(torch.bfloat16)
+    assert torch.equal(
+        result, golden
+    ), "Mask rows beyond the Q face height were not applied with the default mask extent"
 
 
 # Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).

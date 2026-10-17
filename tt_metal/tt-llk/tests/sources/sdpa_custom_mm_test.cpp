@@ -79,6 +79,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #ifndef SDPA_MASK_REENTRY
 #define SDPA_MASK_REENTRY false
 #endif
+// configure_mask_extent template argument of the unpack LLK. The re-entry cells program it
+// explicitly; the default-extent cell leaves it at the false every model caller uses.
+#ifndef SDPA_CONFIGURE_MASK_EXTENT
+#define SDPA_CONFIGURE_MASK_EXTENT SDPA_MASK_REENTRY
+#endif
 #ifndef SDPA_INPUT_TILE_OFFSET
 #define SDPA_INPUT_TILE_OFFSET 0
 #endif
@@ -129,7 +134,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // The whole kt walk is issued by a single call (internal MOP covers kt_dim/2 iterations).
     for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
     {
-        _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED, SDPA_MASK_REENTRY>(
+        _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED, SDPA_CONFIGURE_MASK_EXTENT>(
             L1_ADDRESS(params.buffer_A[0]),                                            // base_address_a : in1 (SrcA, rhs)
             L1_ADDRESS(params.buffer_B[0]),                                            // base_address_b : in0 (SrcB, lhs)
             SDPA_MASK_REENTRY ? L1_ADDRESS(params.buffer_A[SDPA_MASK_TILE_INDEX]) : 0, // base_address_mask

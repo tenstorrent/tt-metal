@@ -54,8 +54,9 @@ ALWI void sdpa_custom_mm_block_init_short(
     }
 }
 
-// configure_mask_extent supports masks spanning ct_dim*2 SrcB rows and restores
-// the Q operand's face height before the subsequent matmul unpack.
+// The mask unpack always spans the ct_dim*2 SrcB rows the math side broadcasts and
+// restores the Q operand's face height before the subsequent matmul unpack;
+// configure_mask_extent is retained for source compatibility.
 // row_stride is the number of in1 tiles per stored row when read_transposed;
 // zero uses kt_dim, keeping the contraction width and stored row width equal.
 template <
