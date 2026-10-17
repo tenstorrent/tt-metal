@@ -26,6 +26,7 @@ using namespace ckernel::packer;
  *
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param narrow_tile: True for a 16-wide tile (one face column).
+ * @return Face columns per tile row (1 or 2).
  */
 inline std::uint32_t _llk_pack_untilize_num_faces_c_dim_(const std::uint32_t num_faces, const bool narrow_tile)
 {
@@ -104,14 +105,19 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     /*
     When using DST_STRIDED_MODE, each packer interface has a stride of 16*block_size,
     where block_size is set to be the size of a row within face.
-    Each PACR instruction packs 2x16 datums if (num_faces>1), meaning that it would
-    pack out one row for each tile in the block.
+    Each PACR instruction packs one row of each face column of a tile, meaning that it
+    would pack out one row for each tile in the block.
     In the inner loop, for each tile, the rows that get packed from dest register
-    in the first outer loop iteration are:
+    in the first outer loop iteration are, with two face columns (2x16 datums per PACR):
     tile 0: row 0, row 16
     tile 1: row 64, row 80
     tile block_ct_dim-1: row 64*(block_ct_dim-1), row 64*(block_ct_dim-1)+16
-    This processes is repeated for each row of the block in dest.
+    and with one face column (single-face or narrow tile, 1x16 datums per PACR):
+    tile 0: row 0
+    tile 1: row 64
+    tile block_ct_dim-1: row 64*(block_ct_dim-1)
+    This processes is repeated for each row of the block in dest. A narrow 32x16 tile packs
+    its second face in a second MOP run of _llk_pack_untilize_, one face-row Z step further.
     */
     ckernel::ckernel_template tmp(
         MOP_OUTER_LOOP,
@@ -224,7 +230,12 @@ inline void _llk_pack_untilize_init_(
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!dense || (num_faces == 2), "num_faces must be 2 when dense");
-    LLK_ASSERT(!narrow_tile || num_faces <= 2, "a narrow (16-wide) tile has one face column, so at most two faces");
+    // A narrow (16-wide) tile is one face column: a single face, or two full-height faces stacked. Two short faces
+    // (face_r_dim < FACE_R_DIM) are rejected: the one-face Z stride below would step face_r_dim rows, but Dest holds
+    // each face in a FACE_R_DIM-row slot, so the second face group would read the padding of face 0.
+    LLK_ASSERT(
+        !narrow_tile || num_faces == 1 || (num_faces == 2 && face_r_dim == FACE_R_DIM),
+        "a narrow (16-wide) tile is a single face or two full-height faces stacked");
 
     if constexpr (narrow_row)
     {

@@ -73,7 +73,8 @@ inline void llk_pack_untilize_impl(
     const bool narrow_tile,
     const std::uint32_t block_c_index,
     const std::uint32_t tile_dst_rt_offset) {
-    // A block starts block_ct_dim tile rows of face columns into the output row (one face column for a narrow tile).
+    // Block start: block_c_index * block_ct_dim tiles into the output row, each tile one face column of datums if
+    // narrow or single-face, else two.
     std::uint32_t pack_tile_addr =
         base_addr +
         SCALE_DATUM_SIZE(

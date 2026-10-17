@@ -48,10 +48,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
     // A narrow (16-wide) tile stacks its faces vertically (num_faces x 1 face grid); the legacy helper would
     // read two faces as one face row.
-    const ckernel::TensorShape tensor_shape = params.NARROW_TILE ? ckernel::make_tensor_shape(FACE_R_DIM, FACE_C_DIM, params.num_faces, 1 /* num_faces_c_dim */)
+    const ckernel::TensorShape tensor_shape = params.NARROW_TILE ? ckernel::make_tensor_shape(FACE_R_DIM, FACE_C_DIM, params.num_faces, 1 /*num_faces_c_dim*/)
                                                                  : ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces);
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
+        0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
 
     const std::uint32_t num_blocks_per_col = FULL_CT_DIM / BLOCK_CT_DIM;
 
@@ -84,7 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const bool is_int_fpu_en = false;
 
-// copy srca to dest
+    // copy srca to dest
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
         params.num_faces, formats.math);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
@@ -139,14 +139,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t base_addr_16B = L1_ADDRESS(params.buffer_Res[0]);
 
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(
-        formats.pack_src,
-        formats.pack_dst,
-        NUM_DATUMS_IN_TILE /* tile_size */,
-        FACE_R_DIM,
-        tile_c_dim,
-        params.num_faces,
-        false /* partial_face */,
-        narrow_tile);
+        formats.pack_src, formats.pack_dst, NUM_DATUMS_IN_TILE /*tile_size*/, FACE_R_DIM, tile_c_dim, params.num_faces, false /*partial_face*/, narrow_tile);
     _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(FACE_R_DIM, narrow_tile);
     _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst, FACE_R_DIM, params.num_faces, narrow_tile);
     const std::uint32_t num_blocks_per_col = FULL_CT_DIM / BLOCK_CT_DIM;
@@ -158,8 +151,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             std::uint32_t pack_addr_16B = base_addr_16B + rt * row_stride_16B + block_num * block_stride_16B;
 
             _llk_packer_wait_for_math_done_();
-            _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, false /* narrow_row */, TILE_C_DIM, TILE_DST_CT_OFFSET>(
-                pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /* tile_dst_rt_offset */, narrow_tile);
+            _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /*diagonal*/, false /*narrow_row*/, TILE_C_DIM, TILE_DST_CT_OFFSET>(
+                pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /*tile_dst_rt_offset*/, narrow_tile);
             _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
     }

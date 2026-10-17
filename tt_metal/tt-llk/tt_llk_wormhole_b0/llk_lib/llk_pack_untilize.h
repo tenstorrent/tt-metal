@@ -28,6 +28,7 @@ using namespace ckernel::packer;
  *
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param narrow_tile: True for a 16-wide tile (one face column).
+ * @return Face columns per tile row (1 or 2).
  */
 inline std::uint32_t _llk_pack_untilize_num_faces_c_dim_(const std::uint32_t num_faces, const bool narrow_tile)
 {
@@ -202,7 +203,12 @@ inline void _llk_pack_untilize_init_(
 {
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    LLK_ASSERT(!narrow_tile || num_faces <= 2, "a narrow (16-wide) tile has one face column, so at most two faces");
+    // A narrow (16-wide) tile is one face column: a single face, or two full-height faces stacked. Two short faces
+    // (face_r_dim < FACE_R_DIM) are rejected: the face_r_dim < FACE_R_DIM MOP enables one packer for face_r_dim rows,
+    // so face 1 would never be packed.
+    LLK_ASSERT(
+        !narrow_tile || num_faces == 1 || (num_faces == 2 && face_r_dim == FACE_R_DIM),
+        "a narrow (16-wide) tile is a single face or two full-height faces stacked");
 
     _llk_pack_untilize_configure_addrmod_<diagonal, narrow_row>();
 
@@ -210,8 +216,8 @@ inline void _llk_pack_untilize_init_(
 
     if (block_ct_dim != full_ct_dim)
     {
-        // Match BH: 2 face-cols per tile-row for num_faces>=2; old WH `num_faces/2` gave 1 only at num_faces==2 (#52175).
-        // A narrow (16-wide) tile contributes one face row of datums per output row.
+        // Per-row L1 advance (matches BH): 2 face columns of datums per tile for a 32-wide tile, 1 for a single-face
+        // or narrow tile.
         const std::uint32_t output_addr_offset =
             SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * _llk_pack_untilize_num_faces_c_dim_(num_faces, narrow_tile) * FACE_C_DIM);
         TT_SETDMAREG(0, LOWER_HALFWORD(output_addr_offset / 16), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET)); // store 16B aligned row offset address
@@ -292,7 +298,9 @@ inline void _llk_pack_untilize_(
         // Full-height faces: packers 0..3 read Dest rows Y + {0, 8, 32, 40} of a 32-wide tile, so each walks half
         // the rows of its face column (TILE_R_DIM / 4 runs); for a narrow tile they sit on rows Y + {0, 16} and each
         // walks its whole face (FACE_R_DIM runs). The diagonal layout keeps its row count (narrow tiles are not
-        // laid out for it).
+        // laid out for it). program_packer_untilized_destination starts packer p at p * (TILE_R_DIM / 4) rows of
+        // full_ct_dim * TILE_C_DIM datums; for a narrow tile that is p * FACE_R_DIM rows of full_ct_dim * FACE_C_DIM
+        // datums, the same byte count, so packer 1 starts at the first output row of face 1 without a narrow case there.
         const std::uint32_t num_rows = (face_r_dim < FACE_R_DIM) ? face_r_dim : ((!diagonal && narrow_tile) ? FACE_R_DIM : TILE_R_DIM / 4);
 
         for (std::uint32_t row = 0; row < num_rows; row++)

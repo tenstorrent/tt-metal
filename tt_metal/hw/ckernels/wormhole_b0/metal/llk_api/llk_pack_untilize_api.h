@@ -56,7 +56,7 @@ inline void llk_pack_untilize_init(std::uint32_t output) {
         StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
         StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
         StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
-        StateDiscard<bool>(narrow_tile),
+        StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
         StateDiscard<bool>(narrow_row),
         StateDiscard<std::uint32_t>(row_num_datums)));
 
@@ -101,7 +101,8 @@ inline void llk_pack_untilize(
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
-    // A block starts block_ct_dim tile rows of face columns into the output row (one face column for a narrow tile).
+    // Block start: block_c_index * block_ct_dim tiles into the output row, each tile one face column of datums if
+    // narrow or single-face, else two.
     std::uint32_t pack_tile_addr =
         get_local_cb_interface(output_id).fifo_wr_ptr - 1 +
         SCALE_DATUM_SIZE(
@@ -124,7 +125,7 @@ inline void llk_pack_untilize(
         StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
         StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
         StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
-        StateDiscard<bool>(narrow_tile),
+        StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
         StateDiscard<bool>(narrow_row),
         StateDiscard<std::uint32_t>(row_num_datums),
         StateDiscard<std::uint32_t>(block_rt_dim),
