@@ -203,6 +203,12 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const std::uint32_t 
     return result;
 }
 
+// Whether BF16 DEST runs the generated log2 kernel as one call over the whole tile.
+inline constexpr bool log2_bf16_whole_tile = false;
+// The stock log2 kernel needs no BF16 setup.
+template <bool bf16_kernel>
+inline void log2_bf16_tile_init() {}
+
 template <
     bool APPROXIMATION_MODE,
     bool FAST_APPROX,
