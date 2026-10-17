@@ -778,6 +778,27 @@
   "started": "2026-10-17T13:27:02",
   "status": "PASS"
  },
+ "C.dec_reindex.ffn_residual": {
+  "attempts": 0,
+  "duration_s": 96.4,
+  "history": [
+   {
+    "s": 96.4,
+    "status": "PASS",
+    "t": "2026-10-17T14:38:11"
+   }
+  ],
+  "last_run": "2026-10-17T14:38:11",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.dec_reindex.ffn_residual.log",
+  "metrics": {
+   "err_ffn_residual_L24": 0.002596297999843955,
+   "err_ffn_residual_L24_limit": 0.5835802555084229
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T14:36:35",
+  "status": "PASS"
+ },
  "C.dec_reindex.indexer": {
   "agent": {
    "defs": {
