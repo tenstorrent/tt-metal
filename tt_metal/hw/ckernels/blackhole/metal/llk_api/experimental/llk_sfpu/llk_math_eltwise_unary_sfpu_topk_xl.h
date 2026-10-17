@@ -51,6 +51,14 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_rebuild(
         ckernel::sfpu::_topk_xl_rebuild_<K, fused>, dst_index, vector_mode, dst_index, ascending);
 }
 
+template <std::uint32_t K>
+inline void llk_math_eltwise_unary_sfpu_topk_xl_rebuild_columns(
+    std::uint32_t dst_index, bool ascending, VectorMode vector_mode = VectorMode::RC_custom) {
+    SAN_HOOK(unsupported());
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_topk_xl_rebuild_columns_<K>, dst_index, vector_mode, dst_index, ascending);
+}
+
 inline void llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices_init() {
     SAN_HOOK(unsupported());
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_topk_xl_add_lsb_indices_init_);
