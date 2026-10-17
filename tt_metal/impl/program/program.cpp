@@ -1489,6 +1489,7 @@ const detail::ProgramImpl::PrefetcherPipeSlot& detail::ProgramImpl::get_prefetch
 uint8_t detail::ProgramImpl::reserve_prefetcher_pipe_slot(
     const CoreRangeSet& cores,
     const CoreRangeSet& receiver_cores,
+    const CoreRangeSet& extra_cores,
     uint32_t ring_size,
     uint32_t entry_size,
     uint32_t num_credit_lanes) {
@@ -1509,6 +1510,13 @@ uint8_t detail::ProgramImpl::reserve_prefetcher_pipe_slot(
     TT_FATAL(
         cores.intersection(receiver_cores).num_cores() == receiver_cores.num_cores(),
         "PrefetcherPipe slot receiver cores must be a subset of the slot cores");
+    TT_FATAL(
+        cores.contains(extra_cores) && !extra_cores.intersects(receiver_cores),
+        "PrefetcherPipe slot extra cores {} must be a subset of the slot cores {} and disjoint from its receiver cores "
+        "{}",
+        extra_cores.str(),
+        cores.str(),
+        receiver_cores.str());
 
     const uint32_t l1_alignment = MetalContext::instance(this->get_context_id()).hal().get_alignment(HalMemType::L1);
     TT_FATAL(entry_size > 0, "PrefetcherPipe entry_size must be > 0");
@@ -1564,6 +1572,7 @@ uint8_t detail::ProgramImpl::reserve_prefetcher_pipe_slot(
     prefetcher_pipe_slots_.push_back(
         {.cores = cores,
          .receiver_cores = receiver_cores,
+         .extra_cores = extra_cores,
          .ring_size = ring_size,
          .entry_size = entry_size,
          .num_credit_lanes = num_credit_lanes,
@@ -1705,7 +1714,10 @@ void detail::ProgramImpl::check_prefetcher_pipe_slot_bind(
 }
 
 void detail::ProgramImpl::commit_prefetcher_pipe_slot_bind(
-    uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, experimental::PrefetcherPipeImpl& prefetcher_pipe) {
+    uint8_t prefetcher_pipe_id,
+    const CoreRangeSet& cores,
+    const CoreRangeSet& extra_cores,
+    experimental::PrefetcherPipeImpl& prefetcher_pipe) {
     const PrefetcherPipeSlot& slot = get_prefetcher_pipe_slot(prefetcher_pipe_id);
     const bool binds_receivers = prefetcher_pipe.receiver_cores().intersects(cores);
 
@@ -1722,7 +1734,7 @@ void detail::ProgramImpl::commit_prefetcher_pipe_slot_bind(
         }
     }
 
-    for (const CoreCoord& core : corerange_to_cores(cores)) {
+    for (const CoreCoord& core : corerange_to_cores(cores.merge(extra_cores))) {
         auto& participants = per_core_prefetcher_pipes_.at(core);
         auto participant = std::find_if(participants.begin(), participants.end(), [prefetcher_pipe_id](const auto& a) {
             return a.prefetcher_pipe_id == prefetcher_pipe_id;
@@ -1831,14 +1843,16 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(uint8_t prefetcher_
         usable_ring_size,
         slot.ring_size,
         slot.entry_size);
+    // The relay covers the slot's receivers and may extend over its extra nodes, like the receiver kernel.
     const CoreRangeSet& relay_cores = relay_dfb->core_ranges;
     TT_FATAL(
-        relay_cores.num_cores() > 0 &&
-            slot.receiver_cores.intersection(relay_cores).num_cores() == relay_cores.num_cores(),
-        "Relay DFB core ranges {} must be receiver cores of PrefetcherPipe slot {} ({})",
+        relay_cores.contains(slot.receiver_cores) && slot.cores.contains(relay_cores),
+        "Relay DFB core ranges {} must include every receiver core of PrefetcherPipe slot {} ({}) and lie within "
+        "the slot's cores ({})",
         relay_cores.str(),
         prefetcher_pipe_id,
-        slot.receiver_cores.str());
+        slot.receiver_cores.str(),
+        slot.cores.str());
     TT_FATAL(
         relay_dfb->device_slot < std::numeric_limits<uint8_t>::max(),
         "Relay DFB device slot {} cannot be represented in PrefetcherPipe receiver metadata",
@@ -1972,6 +1986,17 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
             prefetcher_pipe.ring_size());
 
         for (const auto& slot_cores : binding.slots) {
+            // An extra node takes no part in the slot's pipes. Checked before the sender kernel's
+            // placement, which an extra sender node would fail with a less direct message.
+            const CoreRangeSet& extra_cores = get_prefetcher_pipe_slot(slot_cores.prefetcher_pipe_id).extra_cores;
+            TT_FATAL(
+                !extra_cores.intersects(prefetcher_pipe.sender_cores()),
+                "PrefetcherPipeParameter '{}': the supplied pipe's sender {} is one of the extra_nodes {} of a kernel "
+                "binding the pipe. Extra nodes take no part in the pipe: the sender kernel must not list its sender "
+                "node, and the receiver kernel cannot also run on the sender.",
+                bind.name,
+                prefetcher_pipe.sender_cores().str(),
+                extra_cores.str());
             check_prefetcher_pipe_slot_bind(
                 slot_cores.prefetcher_pipe_id,
                 prefetcher_pipe_slot_bind_cores(bind.name, slot_cores, prefetcher_pipe),
@@ -1987,6 +2012,7 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
             commit_prefetcher_pipe_slot_bind(
                 slot_cores.prefetcher_pipe_id,
                 prefetcher_pipe_slot_bind_cores(*checked.name, slot_cores, *checked.pipe),
+                slot_cores.extra_cores,
                 *checked.pipe);
         }
         checked.binding->bound_pipe = checked.pipe;

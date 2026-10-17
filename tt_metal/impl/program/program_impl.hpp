@@ -370,8 +370,9 @@ public:
 
     // Per-core PrefetcherPipe slot record. A slot is reserved (geometry only) before the program
     // compiles and bound to a live pipe object afterwards: `pipe` / `config_page_addr` stay
-    // null / 0 until commit_prefetcher_pipe_slot_bind runs for this core. Dispatch reads the record only when a
-    // program is enqueued, by which point every participant must be bound.
+    // null / 0 until commit_prefetcher_pipe_slot_bind runs for this core, with the core's own pipe or,
+    // on one of the slot's extra cores, the accessor group's first pipe. Dispatch reads the record only
+    // when a program is enqueued, by which point every participant must be bound.
     struct PrefetcherPipeParticipant {
         uint8_t prefetcher_pipe_id;
         uint32_t config_page_addr;
@@ -389,6 +390,9 @@ public:
     struct PrefetcherPipeSlot {
         CoreRangeSet cores;           // every core the slot is present on in this program
         CoreRangeSet receiver_cores;  // subset of `cores` where this slot's kernel is a pipe receiver
+        // Subset of `cores` where this slot's kernel runs but none of its pipes has a sender or receiver (the
+        // binding's extra_nodes); they take the record of the accessor group's first pipe.
+        CoreRangeSet extra_cores;
         uint32_t ring_size = 0;
         uint32_t entry_size = 0;
         // Receiver-side credit lanes P this program declares for the slot (the receiver kernel's
@@ -429,12 +433,14 @@ public:
     const PrefetcherPipeSlot& get_prefetcher_pipe_slot(uint8_t prefetcher_pipe_id) const;
 
     // Reserve a PrefetcherPipe slot from geometry alone (before compile). `receiver_cores` is the
-    // subset of `cores` on which this slot's kernel consumes; `num_credit_lanes` is the P those
+    // subset of `cores` on which this slot's kernel consumes, and `extra_cores` the subset, disjoint
+    // from it, on which no pipe of the slot has an endpoint; `num_credit_lanes` is the P those
     // receivers run with (1 when `receiver_cores` is empty). Returns the dense slot id the kernel
     // constructs its PrefetcherPipe with.
     uint8_t reserve_prefetcher_pipe_slot(
         const CoreRangeSet& cores,
         const CoreRangeSet& receiver_cores,
+        const CoreRangeSet& extra_cores,
         uint32_t ring_size,
         uint32_t entry_size,
         uint32_t num_credit_lanes);
@@ -448,8 +454,9 @@ public:
     //     per pipe, ring address per relay slot) so two bindings in one batch are checked against
     //     each other as well as against committed state.
     //   commit_prefetcher_pipe_slot_bind arms the pipe's credit lanes when receivers are bound,
-    //     points the slot's relay DFB (if any) at the pipe ring, and fills the per-core records.
-    //     Only valid right after a successful check of the same batch.
+    //     points the slot's relay DFB (if any) at the pipe ring, and fills the per-core records on
+    //     `cores` and on `extra_cores` (the slot's extra cores when the pipe is its accessor group's
+    //     first, else empty). Only valid right after a successful check of the same batch.
     // Rebinding the same pipe is a no-op; a different pipe on an already-bound core is rejected.
     // Legal after compile.
     struct PrefetcherPipeBindPreflight {
@@ -465,7 +472,10 @@ public:
         const experimental::PrefetcherPipeImpl& prefetcher_pipe,
         PrefetcherPipeBindPreflight& preflight) const;
     void commit_prefetcher_pipe_slot_bind(
-        uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, experimental::PrefetcherPipeImpl& prefetcher_pipe);
+        uint8_t prefetcher_pipe_id,
+        const CoreRangeSet& cores,
+        const CoreRangeSet& extra_cores,
+        experimental::PrefetcherPipeImpl& prefetcher_pipe);
 
     // The slot whose relay DFB is `relay_dfb_host_id`, if that DFB relays a pipe.
     std::optional<uint8_t> get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const;
@@ -486,8 +496,8 @@ public:
     // Metal 2.0: a PrefetcherPipeParameter's placement in this program. One parameter may feed
     // several slots (one per accessor group that names it), on the cores where that group's
     // kernel runs and the parameter's pipe is present. The spec names no sender: on a sender-role
-    // slot `cores` is every node the sender kernel runs on (one per pipe in the accessor group),
-    // and the bind claims the one that is the supplied pipe's sender.
+    // slot `cores` is every node the sender kernel runs on other than its extra nodes (one per pipe
+    // in the accessor group), and the bind claims the one that is the supplied pipe's sender.
     struct PrefetcherPipeParameterBinding {
         // Mesh the program was built for; a bound pipe must live on it (its config pages and ring
         // are L1 on that mesh).
@@ -497,6 +507,9 @@ public:
         struct SlotCores {
             uint8_t prefetcher_pipe_id;
             CoreRangeSet cores;
+            // The slot's extra cores if this parameter is its accessor group's first pipe (they take
+            // this pipe's record), else empty.
+            CoreRangeSet extra_cores;
             bool sender_role = false;
         };
         std::vector<SlotCores> slots;

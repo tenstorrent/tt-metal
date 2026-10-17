@@ -136,19 +136,26 @@ inline bool same_node_set(const NodeRangeSet& a, const NodeRangeSet& b) {
 // Prefetcher specific helpers
 // ============================================================================
 
-// Role of a kernel binding a PrefetcherPipe accessor group, from its nodes and the group's receiver
-// sets alone (the spec does not name senders; a pipe's sender is the pipe object's). The kernel is
-// the group's receiver when its nodes are exactly the union of the receiver sets, and its sender
-// when its nodes avoid every receiver and number one per pipe (which node hosts which pipe is
+// The nodes of a kernel binding a PrefetcherPipe accessor group that its role is derived from: all
+// of them but the binding's extra nodes, which take no part in the group's pipes.
+inline NodeRangeSet prefetcher_pipe_role_nodes(
+    const NodeRangeSet& kernel_nodes, const KernelAdvancedOptions::PrefetcherPipeBinding& binding) {
+    return kernel_nodes.subtract(binding.extra_nodes);
+}
+
+// Role of a kernel binding a PrefetcherPipe accessor group, from its role nodes and the group's
+// receiver sets alone (the spec does not name senders; a pipe's sender is the pipe object's). The
+// kernel is the group's receiver when its role nodes are exactly the union of the receiver sets, and
+// its sender when they avoid every receiver and number one per pipe (which node hosts which pipe is
 // settled when the pipes are supplied). ValidateProgramSpec and ReservePrefetcherPipeSlots both
 // derive the role through these two definitions.
-inline bool is_prefetcher_pipe_receiver_role(const NodeRangeSet& kernel_nodes, const NodeRangeSet& group_receivers) {
-    return same_node_set(kernel_nodes, group_receivers);
+inline bool is_prefetcher_pipe_receiver_role(const NodeRangeSet& role_nodes, const NodeRangeSet& group_receivers) {
+    return same_node_set(role_nodes, group_receivers);
 }
 
 inline bool is_prefetcher_pipe_sender_role(
-    const NodeRangeSet& kernel_nodes, const NodeRangeSet& group_receivers, size_t num_pipes) {
-    return !kernel_nodes.intersects(group_receivers) && kernel_nodes.num_cores() == num_pipes;
+    const NodeRangeSet& role_nodes, const NodeRangeSet& group_receivers, size_t num_pipes) {
+    return !role_nodes.intersects(group_receivers) && role_nodes.num_cores() == num_pipes;
 }
 
 // Helper: return a DFB's alias-with list.
