@@ -29,7 +29,8 @@ template <
     PackMode pack_mode = PackMode::Default,
     bool zero_output = false,
     bool skip_addrmod_config = false,
-    bool skip_packer_strides = false>
+    bool skip_packer_strides = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 inline void llk_pack_init_impl(
     const std::uint32_t pack_src_reg_format,
     const std::uint32_t face_r_dim,
@@ -37,6 +38,15 @@ inline void llk_pack_init_impl(
     const std::uint32_t num_faces,
     const std::uint32_t num_tiles,
     const bool is_input_8bit_format) {
+    // The pack MOP walks the whole num_tiles block from the start tile, so the block has to fit the DEST
+    // region this kernel synchronizes on, at the width the packer reads DEST with. The LLK init cannot
+    // check that: it has no sync-mode input and keys its own bound on the pack source's datum width, which
+    // stays 16-bit for a bf16/fp16 output on a 32-bit DEST. Both are known here. The per-tile check at
+    // llk_pack bounds only the start tile.
+    LLK_ASSERT(
+        (num_tiles <= get_pack_init_dest_max_tiles<is_fp32_dest_acc_en>(pack_src_reg_format)),
+        "Pack block exceeds the DEST tiles available in this sync mode and DEST width.");
+
     // Blackhole's MOP does not take the format at all; set_packer_strides is its only consumer here and
     // reconfig_packer_data_format re-derives that, so a format reconfig between init and execute is legal
     // and must not read as drift.
@@ -57,11 +67,14 @@ inline void llk_pack_impl(std::uint32_t tile_index, std::uint32_t pack_tile_addr
     _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
 }
 
+// is_fp32_dest_acc_en defaults to the kernel's DEST width like pack_tile's; a kernel that switches the width
+// mid-kernel passes the active one.
 template <
     PackMode pack_mode = PackMode::Default,
     bool zero_output = false,
     bool skip_addrmod_config = false,
-    bool skip_packer_strides = false>
+    bool skip_packer_strides = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 inline void llk_pack_init(
     const std::uint32_t pack_output, const std::uint32_t num_tiles, const std::uint32_t input_operand) {
     // TODO (https://github.com/tenstorrent/tt-metal/issues/18948): Revisit for narrow_tile
@@ -77,7 +90,7 @@ inline void llk_pack_init(
     if constexpr (pack_mode == PackMode::Tilize) {
         is_input_8bit_format = IS_8BIT_FORMAT(static_cast<std::uint32_t>(unpack_src_format[input_operand]));
     }
-    llk_pack_init_impl<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
+    llk_pack_init_impl<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, is_fp32_dest_acc_en>(
         pack_src_format[output_id],
         get_output_face_r_dim(output_id),
         get_output_tile_c_dim(output_id),
@@ -92,10 +105,11 @@ template <
     PackMode pack_mode = PackMode::Default,
     bool zero_output = false,
     bool skip_addrmod_config = false,
-    bool skip_packer_strides = false>
+    bool skip_packer_strides = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 inline void llk_pack_init(const std::uint32_t pack_output, const std::uint32_t num_tiles = 1) {
     static_assert(pack_mode != PackMode::Tilize, "PackMode::Tilize requires an explicit input_operand");
-    llk_pack_init<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
+    llk_pack_init<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, is_fp32_dest_acc_en>(
         pack_output, num_tiles, 0 /* input_operand unused outside PackMode::Tilize */);
 }
 

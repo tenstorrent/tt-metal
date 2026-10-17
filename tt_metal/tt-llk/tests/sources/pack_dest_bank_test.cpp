@@ -99,7 +99,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         BroadcastType::NONE,
         is_int_fpu_en,
         llk_test_pack_mode_v<false, tilize_en>>(params.num_faces, formats.math);
-    _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
     const int num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
@@ -107,13 +107,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     for (int block = 0; block < num_blocks; block++)
     {
-        _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+        _llk_math_wait_for_dest_available_<dest_sync>();
         for (int tile = 0; tile < num_tiles_in_block; tile++)
         {
-            _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+            _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                 params.DST_INDEX + tile, formats.math, formats.math, params.num_faces);
         }
-        _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
 }
 
@@ -144,16 +144,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         false /* partial_face */,
         false /* narrow_tile */,
         num_tiles_in_block /* num_tiles */);
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
     reconfigure_packer_l1_acc(params.L1_ACC);
 
     for (int block = 0; block < num_blocks; block++)
     {
         _llk_packer_wait_for_math_done_();
-        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-            params.DST_INDEX, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]));
+        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(params.DST_INDEX, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]));
 
-        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
 }
 #endif
