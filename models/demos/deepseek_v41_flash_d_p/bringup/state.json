@@ -5213,6 +5213,27 @@
   "started": "2026-10-17T01:12:01",
   "status": "PASS"
  },
+ "S.enc_source_engram.06": {
+  "attempts": 0,
+  "duration_s": 170.6,
+  "history": [
+   {
+    "s": 170.6,
+    "status": "PASS",
+    "t": "2026-10-17T01:25:25"
+   }
+  ],
+  "last_run": "2026-10-17T01:25:25",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/S.enc_source_engram.06.log",
+  "metrics": {
+   "err_swap_out": 0.05495307594537735,
+   "err_swap_out_limit": 0.11641239374876022
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T01:22:34",
+  "status": "PASS"
+ },
  "S.swa.01": {
   "attempts": 0,
   "duration_s": 46.3,
