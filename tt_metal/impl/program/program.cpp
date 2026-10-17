@@ -3201,13 +3201,12 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         context_id_.get(),
         device_context_id.get());
 
-    const MetalContext& metal_context = MetalContext::instance(device_context_id);
-    const auto& cluster = metal_context.get_cluster();
+    const auto& cluster = MetalContext::instance(device_context_id).get_cluster();
 
     const auto& build_env = BuildEnvManager::get_instance(device_context_id).get_device_build_env(device->build_id());
 
     if (compiled_.contains(build_env.build_key())) {
-        Inspector::program_compile_already_exists(metal_context, this, device, build_env.build_key());
+        Inspector::program_compile_already_exists(this, device, build_env.build_key());
         return;
     }
     ScopedBusyClock compile_busy(kProgramCompileBusy);
@@ -3217,12 +3216,12 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         this->sub_device_ids_[device->id()].erase(device->get_active_sub_device_manager_id());
     }
 
-    Inspector::program_compile_started(metal_context, this, device, build_env.build_key());
+    Inspector::program_compile_started(this, device, build_env.build_key());
 
     // Currently JIT compile on Quasar mock devices is non functional
     if (cluster.get_target_device_type() == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR) {
         compiled_.insert(build_env.build_key());
-        Inspector::program_compile_finished(metal_context, this, device, build_env.build_key());
+        Inspector::program_compile_finished(this, device, build_env.build_key());
         return;
     }
 
@@ -3231,7 +3230,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // (MakeProgramFromSpec/MakeMeshWorkloadFromSpecs) reach compile() directly, so skip here too.
     if (cluster.get_target_device_type() == tt::TargetDevice::Emule) {
         compiled_.insert(build_env.build_key());
-        Inspector::program_compile_finished(metal_context, this, device, build_env.build_key());
+        Inspector::program_compile_finished(this, device, build_env.build_key());
         return;
     }
 
@@ -3287,7 +3286,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                                     const std::string& binary_root) {
         kernel->read_binaries(device, binary_root);
         kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-        Inspector::program_kernel_compile_finished(metal_context, this, device, kernel, build_options, binary_root);
+        Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
     };
 
     // Validate every kernel before starting any build: a throw after a local task launches would unwind
@@ -3390,7 +3389,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     compiled_.insert(build_env.build_key());
 
-    Inspector::program_compile_finished(metal_context, this, device, build_env.build_key());
+    Inspector::program_compile_finished(this, device, build_env.build_key());
 }
 
 void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_dispatch) {
