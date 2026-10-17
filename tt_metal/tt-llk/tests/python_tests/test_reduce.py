@@ -4,7 +4,7 @@
 import math
 
 import torch
-from helpers.format_config import DataFormat, is_dest_acc_needed
+from helpers.format_config import DataFormat, InputOutputFormat, is_dest_acc_needed
 from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
@@ -423,3 +423,139 @@ def test_reduce_bfp4_b(
             formats.output_format,
             tile_shape=tile_shape,
         ), "Assert against golden failed"
+
+
+# ---------------------------------------------------------------------------
+# REDUCE_SCALAR SUM/AVG with fp32 DEST accumulation must keep fp32 precision.
+#
+# The face pooling leaves 16 per-column partial sums in DEST as fp32 datums. The
+# kernel then moves that row through SrcB (MOVD2B, TRNSPSRCB) and SrcA (MOVB2A)
+# for the final GAPOOL; the Src registers hold 19-bit datums, so every partial
+# is truncated to TF32 mid-reduction and the final total is low by the sum of
+# those truncations. The default harness tolerance (5%) is far too loose to see
+# a 2^-10 relative error, so this case builds inputs whose per-column sums need
+# more mantissa bits than a Src datum carries, computes the exact total, and
+# gates on a couple of fp32 ulps.
+#
+# Inputs are 1.0 + k * 2^-7 (k in [0, 127]): exact in every Src format and in
+# every fidelity phase (SrcA contributes 4 + 5 mantissa bits over two phases),
+# so the face pooling into fp32 DEST is exact and the only inexact step on
+# shipped code is the Src round trip of the partial sums. The scaler is 1.0
+# (SUM) or an exact power of two (AVG, square tiles), so the final GAPOOL is
+# exact too and the device total must equal the fp64 total bit for bit.
+# ---------------------------------------------------------------------------
+
+FP32_EXACT_TILES = [[32, 32], [16, 32], [16, 16]]
+
+
+def _fp32_exact_tiles_for_pool(pool_type):
+    """AVG's scaler is 1/sqrt(rows*cols); keep it an exact power of two."""
+    if pool_type == ReducePool.Average:
+        return [t for t in FP32_EXACT_TILES if t[0] == t[1]]
+    return FP32_EXACT_TILES
+
+
+def _truncate_significand(value: float, explicit_mantissa_bits: int) -> float:
+    """Truncate a float toward zero to 1 + explicit_mantissa_bits significant bits."""
+    if value == 0.0:
+        return 0.0
+    mantissa, exponent = math.frexp(
+        abs(value)
+    )  # abs(value) = mantissa * 2**exponent, mantissa in [0.5, 1)
+    scale = 2.0 ** (explicit_mantissa_bits + 1)
+    truncated = math.floor(mantissa * scale) / scale
+    return math.copysign(math.ldexp(truncated, exponent), value)
+
+
+@parametrize(
+    formats=[InputOutputFormat(DataFormat.Float32, DataFormat.Float32)],
+    pool_type=[ReducePool.Sum, ReducePool.Average],
+    math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
+    tile_dimensions=_fp32_exact_tiles_for_pool,
+)
+def test_reduce_scalar_fp32_exact(formats, pool_type, math_fidelity, tile_dimensions):
+    tile_shape = construct_tile_shape(tile_dimensions)
+    num_elements = tile_shape.total_tile_size()
+
+    # Deterministic, unstructured k so the per-column sums carry non-zero low
+    # mantissa bits (a structured pattern can make every column sum TF32-exact).
+    generator = torch.Generator().manual_seed(0x5EED)
+    k = torch.randint(0, 128, (num_elements,), generator=generator)
+    src_A = (1.0 + k.to(torch.float64) * 2.0**-7).to(torch.float32)
+
+    if pool_type == ReducePool.Average:
+        scaler = 1.0 / math.sqrt(tile_dimensions[0] * tile_dimensions[1])
+    else:
+        scaler = 1.0
+    assert (
+        math.ldexp(math.frexp(scaler)[0], 0) == 0.5
+    ), "scaler must be an exact power of two"
+    src_B = torch.full((num_elements,), scaler, dtype=torch.float32)
+
+    # Exact reference: the kernel applies the scaler in both GAPOOL stages.
+    values = src_A.to(torch.float64)
+    golden = float(values.sum().item()) * scaler * scaler
+
+    # What the Src round trip does to the per-column partial sums on shipped
+    # code, for the assertion message only: each in-face column (L1 index mod
+    # 16) is pooled across all faces into one fp32 partial, every partial is
+    # then truncated to a Src datum (TF32 keeps 10 explicit mantissa bits; the
+    # multiplier ignores the last of them, so 9 are effective) before the final
+    # GAPOOL adds the 16 partials.
+    partials = [float(values[c::16].sum().item()) * scaler for c in range(16)]
+    modelled = {
+        bits: sum(_truncate_significand(p, bits) for p in partials) * scaler
+        for bits in (10, 9, 7)
+    }
+
+    configuration = TestConfig(
+        "sources/reduce_test.cpp",
+        formats,
+        templates=[
+            MATH_OP(mathop=MathOperation.ReduceScalar, pool_type=pool_type),
+            MATH_FIDELITY(math_fidelity),
+        ],
+        runtimes=[
+            IN_FACE_DIMS(
+                tile_shape.face_r_dim,
+                tile_shape.face_c_dim,
+                tile_shape.face_r_dim,
+                tile_shape.face_c_dim,
+            ),
+            INPUT_TILE_CNT(1),
+            OUTPUT_TILE_CNT(1),
+            NUM_TILES_IN_BLOCK(1),
+            REDUCE_TO_ONE(False),
+            NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
+            NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=1,
+            tile_count_B=1,
+            tile_count_res=1,
+            num_faces=tile_shape.total_num_faces(),
+            face_r_dim=tile_shape.face_r_dim,
+            tile_dimensions=tile_dimensions,
+            use_dense_tile_dimensions=True,
+        ),
+        dest_acc=DestAccumulation.Yes,
+    )
+
+    res_from_L1 = configuration.run().result
+    assert len(res_from_L1) == num_elements, "Result tensor has the wrong length"
+
+    device = float(res_from_L1[0])
+    error = device - golden
+    tolerance = 2 * abs(golden) * 2.0**-23  # two fp32 ulps
+    assert abs(error) <= tolerance, (
+        f"REDUCE_SCALAR {pool_type.name} fp32 result lost precision: device={device!r} "
+        f"golden={golden!r} error={error:+.6g} (allowed +-{tolerance:.3g}); "
+        f"Src round-trip model of the shipped tail (partials truncated to 9/10/7 "
+        f"explicit mantissa bits): {modelled[9]!r} / {modelled[10]!r} / {modelled[7]!r} "
+        f"(tile={tile_dimensions}, fidelity={math_fidelity.name})"
+    )
