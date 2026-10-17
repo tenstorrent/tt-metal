@@ -185,6 +185,28 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
+    // MULTIGAMMALN exists only as a generated kernel, which the unary program selects for a lone op on
+    // BFLOAT16 input and output with FP32 DEST off; it has no kernel of its own for any other call.
+    for (const auto& op : args.op_chain) {
+        if (op.type() == operations::unary::UnaryOpType::MULTIGAMMALN) {
+            const DataType effective_out = output_tensor.has_value() ? output_tensor->dtype() : args.output_dtype;
+            TT_FATAL(
+                utils::get_bf16_kernel_defines(
+                    args.op_chain,
+                    input_tensor.dtype(),
+                    effective_out,
+                    args.fp32_dest_acc_en,
+                    input_tensor.device()->arch())
+                    .has_value(),
+                "Unary: MULTIGAMMALN runs only as the only op of its chain, on BFLOAT16 input and output with FP32 "
+                "DEST off, on Blackhole and Wormhole (chain has {} ops, "
+                "input dtype {}, output dtype {})",
+                args.op_chain.size(),
+                input_tensor.dtype(),
+                effective_out);
+        }
+    }
+
     // No early exit: beta is per-op, so every SOFTCAP entry in the chain has to be checked.
     for (const auto& op : args.op_chain) {
         if (op.type() == operations::unary::UnaryOpType::SOFTCAP) {
