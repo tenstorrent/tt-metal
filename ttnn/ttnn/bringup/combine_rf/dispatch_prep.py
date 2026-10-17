@@ -16,7 +16,7 @@ import os
 
 import ttnn
 
-from .sparse_all_gather_2d import _COMMON, mesh_plan, route_words, span_table
+from .sparse_all_gather_2d import _COMMON, mesh_plan, route_words, span_subs
 
 _ROUTE = (
     _COMMON
@@ -174,14 +174,15 @@ def dispatch_prep_prepare(
         per = -(-S // n_copy)
         for me in range(N):
             r, c = me // C, me % C
+            src = _ROUTE
+            for k_, v_ in span_subs(R, C, wrap_x, wrap_y).items():
+                src = src.replace(k_, v_)
             src = (
-                _ROUTE.replace("__R__", str(R))
+                src.replace("__R__", str(R))
                 .replace("__C__", str(C))
                 .replace("__S__", str(S))
                 .replace("__GMAX__", str(max(1, R + C - 3)))
                 .replace("__RW__", str(RW))
-                .replace("__XSPAN__", ", ".join(map(str, span_table(C, wrap_x))))
-                .replace("__YSPAN__", ", ".join(map(str, span_table(R, wrap_y))))
                 .replace("__K__", str(K))
                 .replace("__ME__", str(me))
                 .replace("__E__", str(E))

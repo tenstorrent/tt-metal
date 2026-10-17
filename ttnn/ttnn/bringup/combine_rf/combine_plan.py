@@ -369,6 +369,9 @@ void kernel_main() {
         noc_async_write(B + O_NINJ, get_noc_addr(p, dg), 64);
         noc_async_write_barrier();
     }
+    // (an atomic still unacknowledged when the kernel returns can land after the next program's launch resets its
+    // NoC counters: that program's atomic barrier then never completes - seen as hangs under back-to-back traces)
+    noc_async_atomic_barrier();
 }
 """
 
@@ -767,6 +770,9 @@ void kernel_main() {
         noc_async_write(B + O_DBG, get_noc_addr(p, dg), 64);
         noc_async_write_barrier();
     }
+    // (an atomic still unacknowledged when the kernel returns can land after the next program's launch resets its
+    // NoC counters: that program's atomic barrier then never completes - seen as hangs under back-to-back traces)
+    noc_async_atomic_barrier();
 }
 """
 
