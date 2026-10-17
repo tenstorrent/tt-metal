@@ -12,6 +12,9 @@ description: >
 
 # Perf compare (one test, two commits)
 
+If the `llk-tools` MCP server is connected (`tools/mcp/README.md`), call its
+`perf_compare` tool; it runs this same script. Otherwise run the script yourself:
+
 `perf_compare_commits.sh` does the whole job: resolve both refs, sweep each, compare
 median-vs-median, write the report. Do not hand-roll the checkout/sweep loop — the script
 already handles worktrees, caching, interleaving and cleanup.
