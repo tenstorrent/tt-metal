@@ -63,8 +63,9 @@ Not covered here, deliberately
 * The 8-datum ``bitonic_top32_load8``/``store8`` helpers, which the header itself records
   as referenced by no kernel today.
 * ``llk_math_top32_rm_init`` / ``llk_math_top32_rm``, the Metal math-side wrappers: the
-  ``via_wrappers`` tests route the SFPU calls and the unpack through the Metal layer (see
-  "the Metal wrapper layer" below), but the Dest-move half still drives the primitives.
+  ``via_wrappers`` tests route the SFPU calls, and in the plain mode the unpack, through the
+  Metal layer (see "the Metal wrapper layer" below), but the Dest-move half still drives the
+  primitives.
 """
 
 import pytest
@@ -87,14 +88,18 @@ ELEMENTS_PER_CHUNK = 64
 
 TOP_K = 32
 
-# Both widths. They are not the same test: the format decides which branch of the family's
-# unpack/copy pair runs, exactly as it does in llk_unpack_A_top32_rm_api.h.
+# Both widths. They are not the same test: driving the primitives (test_top32_rm), the format
+# decides which branch of the family's unpack/copy pair runs.
 #
 #   Float16_b  the unpacker does the within-face transpose and clears SrcA to -infinity
 #              first. This is the branch the consumer uses for its VALUE tile.
 #   Float32    too wide for SrcA, so the tile goes to Dest via unpack-to-dest and the
 #              transpose moves to the math thread. This is the branch the consumer uses for
 #              its uint32 INDEX tile.
+#
+# Through the Metal wrappers (test_top32_rm_via_metal_wrappers) the branch is the wrapper's
+# choice, which is unpack-to-dest for Int32 only: there Float32 takes the SrcA branch and is
+# narrowed on the way in -- see "the Metal wrapper layer" below.
 #
 # bf16's 8 mantissa bits are what bound the row at 256, since indices ride in the same format
 # as the values; Float32 would not bind, but keeping one sweep makes the two branches
@@ -104,8 +109,9 @@ FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=
 # 64   one chunk, no merge across tiles at all -- phases_steps + merge + rebuild only
 # 128  two full chunks, so the across-tiles merge runs once
 # 160  the Metal dev test's tail case: two full chunks plus a 32-element num_faces=2 chunk.
-#      **16-bit only** -- see test_top32_rm_32bit_partial_chunk below for why the 32-bit
-#      branch cannot do this and what it returns instead.
+#      On the primitives' 32-bit branch this is skipped -- see test_top32_rm_32bit_partial_chunk
+#      below for why that branch cannot do it and what it returns instead; through the Metal
+#      wrappers Float32 takes the SrcA branch and runs it.
 # 256  four full chunks, and the largest row whose indices stay exact in bf16
 ROW_ELEMENTS = [64, 128, 160, 256]
 
@@ -166,15 +172,6 @@ def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
     values, indices = _stimuli(row_elements)
 
     torch_format = format_dict[formats.output_format]
-    # Round the stimuli to the input format before generating the golden, so the golden is
-    # a statement about what the device was actually given. Exact here by construction --
-    # every value and index is a small integer -- and asserted below rather than assumed.
-    values_in = values.to(torch_format).to(torch.float32)
-    indices_in = indices.to(torch_format).to(torch.float32)
-    assert torch.equal(values_in, values) and torch.equal(indices_in, indices), (
-        f"row_elements={row_elements} is outside the exactly-representable range of "
-        f"{formats.input_format.name}; the index encoding this test relies on has broken"
-    )
 
     tiles_per_operand = max(1, -(-row_elements // ELEMENTS_PER_TILE))
 
@@ -207,6 +204,32 @@ def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
         include_dirs=METAL_WRAPPER_INCLUDE_DIRS if via_wrappers else None,
     )
 
+    # Round the stimuli to the format the unpacker hands on before generating the golden, so
+    # the golden is a statement about what the device actually sorts. That is the input format
+    # on the primitives path, but through the Metal wrappers a Float32 row is narrowed to
+    # Float16_b (dest_acc=No) or Tf32 (dest_acc=Yes) on its way into SrcA. Exact here by
+    # construction -- every value and index is a small integer -- and asserted rather than
+    # assumed.
+    unpack_out_format = configuration.formats_config[0].unpack_A_dst
+    values_in = values.to(format_dict[unpack_out_format]).to(torch.float32)
+    indices_in = indices.to(format_dict[unpack_out_format]).to(torch.float32)
+    assert torch.equal(values_in, values) and torch.equal(indices_in, indices), (
+        f"row_elements={row_elements} is outside the exactly-representable range of "
+        f"{unpack_out_format.name}; the index encoding this test relies on has broken"
+    )
+
+    golden_values, golden_indices = _golden(values_in, indices_in)
+
+    # Every chunk after the first is reached through a computed L1 offset, and the last chunk
+    # is the one furthest from where a wrong offset would land. Make sure the answer depends
+    # on it: a winner must come from the last chunk, or an offset that re-reads earlier
+    # elements could pass because the whole top-32 happened to sit in the chunks it did reach.
+    last_chunk_first = ((row_elements - 1) // ELEMENTS_PER_CHUNK) * ELEMENTS_PER_CHUNK
+    assert bool((golden_indices >= last_chunk_first).any()), (
+        f"row_elements={row_elements}: no element of the top-32 lies in the last chunk "
+        f"(index >= {last_chunk_first}), so this case does not exercise the chunk offset"
+    )
+
     result = configuration.run().result
 
     # Each result tile carries its 32 datums at the front: the sort leaves the survivors in
@@ -216,18 +239,6 @@ def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
     device_indices = torch.tensor(
         result[ELEMENTS_PER_TILE : ELEMENTS_PER_TILE + TOP_K], dtype=torch_format
     ).to(torch.float32)
-
-    golden_values, golden_indices = _golden(values_in, indices_in)
-
-    if row_elements > ELEMENTS_PER_CHUNK:
-        # Every chunk after the first is reached through a computed L1 offset. Make sure the
-        # answer depends on it: a wrong offset that re-reads earlier elements must not be able
-        # to pass because the whole top-32 happened to sit in chunk 0.
-        assert bool((golden_indices >= ELEMENTS_PER_CHUNK).any()), (
-            f"row_elements={row_elements}: no element of the top-32 lies beyond the first "
-            f"chunk (index >= {ELEMENTS_PER_CHUNK}), so this case does not exercise the chunk "
-            f"offset"
-        )
 
     assert passed_test(
         golden_values, device_values, formats.output_format, print_errors=False
@@ -485,8 +496,9 @@ def test_top32_rm_32bit_partial_chunk(formats, row_elements, request):
 # here are a different test from their `test_top32_rm` namesakes: there Float32 is driven down
 # the unpack-to-dest branch, here it takes the SrcA branch the wrapper chooses for it, with the
 # unpacker narrowing to Float16_b (dest_acc=No) or Tf32 (dest_acc=Yes) -- the configurations
-# the consumer's build produces for Float32 scores, and the dest_acc=No one the only place a
-# wrapper that sizes the chunk offset by the Dest format rather than the L1 format can be seen.
+# the consumer's build produces for Float32 scores. The dest_acc=No, 160-element cell is the
+# only place where a wrapper that sizes the chunk offset by the Dest format rather than the L1
+# format shows: the two widths differ there, and the row has chunks past the first.
 
 
 @parametrize(

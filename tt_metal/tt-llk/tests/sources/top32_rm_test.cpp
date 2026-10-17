@@ -127,6 +127,14 @@ static constexpr bool PRE_SORTED_MODE = (TOP32_MODE == 1);
 
 static_assert(!PRE_SORTED_MODE || TOP32_ROW_ELEMENTS >= ELEMENTS_PER_TILE, "the pre-sorted mode needs at least one whole 1024-element chunk");
 
+// In the plain mode through the Metal wrappers the unpack branch is the wrapper's choice -- Int32 src
+// to Dest, every other format through SrcA -- while the math thread still branches on the harness's
+// unpack_to_dest. The two agree only when unpack_to_dest is false (no Int32 cell exists); make that a
+// build error rather than a hang. bind_operand checks the src format side of the same contract.
+static_assert(
+    !(TOP32_VIA_WRAPPERS && !PRE_SORTED_MODE && unpack_to_dest),
+    "via_wrappers mode 0 sends non-Int32 formats through SrcA; build it with unpack_to_dest=false");
+
 #ifdef LLK_TRISC_UNPACK
 
 // The experimental top32_rm LLK headers carry unused parameters that predate this test:
@@ -176,10 +184,15 @@ static constexpr std::uint32_t INDICES_OPERAND = 1;
 
 inline void bind_operand(std::uint32_t operand, std::uint32_t buffer_address, std::uint32_t src_format, std::uint32_t dst_format)
 {
+    // The wrapper takes the unpack-to-dest branch exactly for an Int32 src; the math thread was built
+    // for unpack_to_dest. They have to be the same answer, or unpack and math wait on different events.
+    LLK_ASSERT(
+        ((src_format & 0xf) == to_underlying(DataFormat::Int32)) == unpack_to_dest,
+        "src format picks a different unpack branch than the math thread was built for");
     unpack_src_format[operand] = src_format;
     unpack_dst_format[operand] = dst_format;
     // Metal keeps CB pointers in 16-byte words; the wrapper applies the same -1 that L1_ADDRESS does.
-    get_local_cb_interface(operand).fifo_rd_ptr = buffer_address >> 4;
+    get_local_cb_interface(operand).fifo_rd_ptr = buffer_address >> CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT;
 }
 
 // One operand of one chunk through the Metal wrapper: branch, L1 offset and dummy valid are its.
@@ -258,8 +271,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t indices_base = L1_ADDRESS(params.buffer_B[0]);
 
 #if TOP32_VIA_WRAPPERS
-    bind_operand(VALUES_OPERAND, params.buffer_A[0], src_format, dst_format);
-    bind_operand(INDICES_OPERAND, params.buffer_B[0], src_format, dst_format);
+    if constexpr (!PRE_SORTED_MODE)
+    {
+        bind_operand(VALUES_OPERAND, params.buffer_A[0], src_format, dst_format);
+        bind_operand(INDICES_OPERAND, params.buffer_B[0], src_format, dst_format);
+    }
 #endif
 
     // Mode 0 walks the whole row; mode 1 only the remainder after its whole tiles, which is
@@ -273,9 +289,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const std::uint32_t num_faces = chunk_num_faces(first);
 
 #if TOP32_VIA_WRAPPERS
-        // Mode 0 only. Mode 1 is Float32 and holds its operands in Dest (unpack_to_dest), while
-        // the Metal wrapper would send Float32 through SrcA -- a different configuration from
-        // the one the math thread above was built for.
+        // Mode 0 only. Mode 1 is Float32 and holds its operands in Dest: its unpack-to-dest
+        // transposes above and its math thread are both built for that, while the Metal wrapper
+        // would send Float32 through SrcA -- a different configuration.
         if constexpr (!PRE_SORTED_MODE)
         {
             unpack_chunk(VALUES_OPERAND, chunk, num_faces);
