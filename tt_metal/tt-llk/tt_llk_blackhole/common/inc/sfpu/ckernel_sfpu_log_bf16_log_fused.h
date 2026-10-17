@@ -73,7 +73,8 @@ inline void calculate_log_fused()
     TTI_SFPNOP;
     TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG3, 0); // y = h*u + e*scale
     TTI_SFPENCC(0, 0, 0, 0);
-    TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG3, p_sfpu::LREG3, p_sfpu::LREG3,
+    // FP32 -> BF16 reads no VB; ttsim rejects a nonzero one, so VB is L0.
+    TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG3,
                       sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B); // fp32 -> bf16 RNE
     TTI_SFPSTORE(p_sfpu::LREG3, 0, kLogFusedAdvance, 0);     // dest += 2
 #pragma GCC unroll 8
