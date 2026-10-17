@@ -354,19 +354,21 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     "remainder_tile_uint32_init();",
                     fmt::format("remainder_tile_uint32({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
             }
+            // The reciprocal of an infinite divisor is 0; the kernel instantiation for that case
+            // applies the infinite-divisor rule, so a finite divisor pays nothing for it.
             return {
                 fmt::format(
                     "remainder_tile_init({:#x}u, {:#x}u);",
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(1.0f / param0)),
-                fmt::format("remainder_tile({});", idst)};
+                fmt::format("remainder_tile<{}>({});", std::isinf(param0) ? "true" : "false", idst)};
         case UnaryOpType::FMOD:
             return {
                 fmt::format(
                     "fmod_tile_init({:#x}u, {:#x}u);",
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(1.0f / param0)),
-                fmt::format("fmod_tile({});", idst)};
+                fmt::format("fmod_tile<{}>({});", std::isinf(param0) ? "true" : "false", idst)};
         case UnaryOpType::EXP:
             return {
                 fmt::format("exp_tile_init<{}u>();", (uint32_t)param0),

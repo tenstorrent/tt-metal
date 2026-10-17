@@ -21,7 +21,9 @@ inline void init_fmod(const uint value, const uint recip) {
     sfpi::vConstFloatPrgm1 = Converter::as_float(recip);
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+// INFINITE_DIVISOR: the divisor is a compile-time scalar, so the host selects this instantiation
+// for a +-inf divisor and a finite divisor pays nothing for its handling.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool INFINITE_DIVISOR = false>
 inline void calculate_fmod() {
     // SFPU microcode
     sfpi::vFloat s = sfpi::abs(sfpi::vConstFloatPrgm0);
@@ -64,17 +66,19 @@ inline void calculate_fmod() {
         v_if(sfpi::abs(v) - s == 0.0f) { v = 0.0f; }
         v_endif;
 
-        // Infinite divisor: the host reciprocal of +-inf is 0, so v - quotient * s above is 0 * inf
-        // = NaN. fmod(val, +-inf) is val for finite val and NaN for an infinite val. Same rule as
-        // the tensor-tensor kernel in ckernel_sfpu_binary_fmod.h.
-        v_if(sfpi::as<sfpi::vInt>(s) == kInfBits) {
-            v = val;
-            v_if(sfpi::as<sfpi::vInt>(sfpi::setsgn(val, 0)) >= kInfBits) {
-                v = std::numeric_limits<float>::quiet_NaN();
+        if constexpr (INFINITE_DIVISOR) {
+            // The host reciprocal of +-inf is 0, so v - quotient * s above is 0 * inf = NaN.
+            // fmod(val, +-inf) is val for finite val and NaN for an infinite val. Same rule as the
+            // tensor-tensor kernel in ckernel_sfpu_binary_fmod.h.
+            v_if(sfpi::as<sfpi::vInt>(s) == kInfBits) {
+                v = val;
+                v_if(sfpi::as<sfpi::vInt>(sfpi::setsgn(val, 0)) >= kInfBits) {
+                    v = std::numeric_limits<float>::quiet_NaN();
+                }
+                v_endif;
             }
             v_endif;
         }
-        v_endif;
         sfpi::dst_reg[0] = v;
         sfpi::dst_reg++;
     }
