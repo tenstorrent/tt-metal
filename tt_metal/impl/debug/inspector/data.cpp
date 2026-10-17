@@ -81,7 +81,7 @@ Data::Data(MetalContext& context, std::optional<int> rank, uint64_t fw_hash) :
             get_rpc_server().setGetConfigurationCallback([this](auto result) { this->rpc_get_configuration(result); });
             get_rpc_server().setGetSystemMeshCallback([this](auto result) { this->rpc_get_system_mesh(result); });
         } catch (const std::exception& e) {
-            TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
+            TT_INSPECTOR_THROW(rtoptions, "Failed to start Inspector RPC server: {}", e.what());
         }
     }
 }
@@ -90,7 +90,9 @@ Data::~Data() {
     rpc_server_controller.stop();
 }
 
-bool Data::capture_tensor_specs() const { return env_.get_rtoptions().get_inspector_capture_tensor_specs(); }
+const llrt::RunTimeOptions& Data::rtoptions() const { return env_.get_rtoptions(); }
+
+bool Data::capture_tensor_specs() const { return rtoptions().get_inspector_capture_tensor_specs(); }
 
 RpcServer& Data::get_rpc_server() {
     return rpc_server_controller.get_rpc_server();

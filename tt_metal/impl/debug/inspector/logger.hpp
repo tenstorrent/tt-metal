@@ -14,32 +14,29 @@ namespace tt::llrt {
 class RunTimeOptions;
 }  // namespace tt::llrt
 
-namespace tt::tt_metal::inspector {
+// Error reporting of the inspector. `rtoptions` are those of the session's MetalEnv, which select the policy.
+// TT_INSPECTOR_THROW returns from the enclosing function when the failure is only warned about.
+#define TT_INSPECTOR_THROW(rtoptions, ...)                             \
+    do {                                                               \
+        if ((rtoptions).get_inspector_initialization_is_important()) { \
+            TT_THROW(__VA_ARGS__);                                     \
+        }                                                              \
+        log_warning(tt::LogInspector, __VA_ARGS__);                    \
+        return;                                                        \
+    } while (0)
 
-// Error reporting policy of the inspector, used by the macros below. Set from the rtoptions of the MetalContext that
-// creates a session (see Inspector::initialize); defaults apply while no session was ever created.
-bool initialization_is_important();
-bool warn_on_write_exceptions();
-
-}  // namespace tt::tt_metal::inspector
-
-#define TT_INSPECTOR_THROW(...)                                   \
-    if (tt::tt_metal::inspector::initialization_is_important()) { \
-        TT_THROW(__VA_ARGS__);                                    \
-    } else {                                                      \
-        log_warning(tt::LogInspector, __VA_ARGS__);               \
-        return;                                                   \
-    }
-
-#define TT_INSPECTOR_LOG(...)                                  \
-    if (tt::tt_metal::inspector::warn_on_write_exceptions()) { \
-        log_warning(tt::LogInspector, __VA_ARGS__);            \
-    }
+#define TT_INSPECTOR_LOG(rtoptions, ...)                            \
+    do {                                                            \
+        if ((rtoptions).get_inspector_warn_on_write_exceptions()) { \
+            log_warning(tt::LogInspector, __VA_ARGS__);             \
+        }                                                           \
+    } while (0)
 
 namespace tt::tt_metal::inspector {
 
 class Logger {
 private:
+    const llrt::RunTimeOptions& rtoptions;
     time_point start_time;
     std::ofstream programs_ostream;
     std::ofstream kernels_ostream;
@@ -55,7 +52,8 @@ private:
     }
 
 public:
-    // `rtoptions` selects which optional log files are written.
+    // `rtoptions` selects which optional log files are written and how failures are reported; it must outlive this
+    // object.
     Logger(const std::filesystem::path& logging_path, std::optional<int> rank, const llrt::RunTimeOptions& rtoptions);
 
     std::filesystem::path get_logging_path() const noexcept {
