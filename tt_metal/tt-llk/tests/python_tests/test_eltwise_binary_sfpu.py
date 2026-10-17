@@ -2100,7 +2100,7 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs
 # Both operands of the across-zero pair cycle through the same small signed range.
 _ACROSS_ZERO_SPAN = 16  # distinct values per operand
 _ACROSS_ZERO_OFFSET = _ACROSS_ZERO_SPAN // 2  # shifts 0..15 to -8..7
-# Tile 1 advances once per four lanes, so pairs do not repeat within a face.
+# Tile 1 advances once per four lanes, so the 64 written lanes of each face hold distinct pairs.
 _ACROSS_ZERO_STRIDE = 4
 
 
