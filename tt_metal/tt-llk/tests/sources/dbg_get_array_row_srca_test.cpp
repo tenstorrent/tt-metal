@@ -21,7 +21,9 @@
 //
 //   * The dump must be the SrcA row (SRCA_ROW_CHECK true; both architectures): clear DEST, unpack
 //     a tile into SrcA and datacopy it into dest tile DUMP_DST_INDEX only, in the upper dest half
-//     when DUMP_UPPER_HALF, so the math thread's dest offset sits where a real kernel leaves it,
+//     when DUMP_UPPER_HALF, so the math thread's dest offset sits where a real kernel leaves it
+//     (moved DUMP_ROW_OFFSET rows into that tile when nonzero, with the Blackhole DEST remap on
+//     when DUMP_REMAP, so the remap and 32-bit swizzle terms of the read-back row are exercised),
 //     then dump SrcA row 0 and hand the raw debug-bus words to the host, which knows the tile and
 //     the dest bit layout. The datacopy consumed the faces in order, so the bank the dump reads
 //     holds the last face. The helper stages and restores through the thread's dest offset but
@@ -31,7 +33,8 @@
 //     the debug bus, the dest offset is handed back untouched, and the packer packs tile 0 of the
 //     lower half afterwards -- rows the datacopy never wrote must still pack as zero, which they
 //     do not if the helper borrowed rows the caller never populated (an SFPLOAD of a row left
-//     undefined by ZEROACC is undefined behaviour, and its restore then defines the row with junk).
+//     undefined by ZEROACC is undefined behaviour, and its restore then defines the row with
+//     junk).
 //
 // The dump is bracketed by dbg_thread_halt / dbg_thread_unhalt, as every in-tree caller does
 // (dbg_halt / dbg_unhalt, the DPRINT dest dump). The debug array read leaves the packer needing
@@ -42,7 +45,9 @@
 // Result layout (constants shared with the host through DBG_SRCA_DUMP): tile 0 of the result buffer carries the
 // raw debug-bus words of the SrcA dump, the thread's dest offset read before the dump, after it, and the value the
 // datacopy left it at, then the rows the dump borrows (rows 0-3 of the tile at the offset, and the rows 8 further
-// on that hold the low halves with a 32-bit DEST) read over the debug bus before and after the dump. Tile 1 is the
+// on that hold the low halves with a 32-bit DEST) read over the debug bus before and after the dump, then the SrcA
+// format selection (SrcA_val and SrcA_override) read on the RISC before and after the dump; with PRESET_SRCA_OVERRIDE
+// the test sets it to a non-default value first, as a caller inside a format-switching sequence would. Tile 1 is the
 // DEST tile handed back: the planted tile read through the RISC-V window (restore check, Blackhole), or tile 0 of
 // the lower dest half packed by the packer (SrcA check).
 
@@ -101,14 +106,34 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-// Physical row of a logical dest row within the current half, as the debug bus addresses it: a 32-bit DEST spreads
-// each logical row over two physical rows (the read returns the high halves); a 16-bit DEST maps rows one to one.
-// Mirrors get_dest_row_id in the DPRINT dest dump; the rows used here keep bits 2-5 clear, so the Blackhole
-// remap/swizzle terms are identity for them.
+// Physical row of a logical dest row within the current half, as the debug bus addresses it (Dst.md): on Blackhole
+// with DUMP_REMAP the untilize remap permutes bits 3-5 and, with a 32-bit DEST, the swizzle_32b permutation
+// (which _llk_math_reconfig_remap_ enables with it) permutes bits 2-4; a 32-bit DEST then spreads each logical row
+// over two physical rows (the read returns the high halves). Built from the test's compile-time knobs, not from
+// the config the helper reads, so a helper that misreads the config shows up here.
 constexpr std::uint32_t physical_dest_row(std::uint32_t row)
 {
-    return is_fp32_dest_acc_en ? (((row & 0x1f8) << 1) | (row & 0x207)) : row;
+    if constexpr (DUMP_REMAP)
+    {
+        row = (row & 0x3c7) ^ ((row & 0x030) >> 1) ^ ((row & 0x008) << 2);
+    }
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        if constexpr (DUMP_REMAP)
+        {
+            row = (row & 0x3f3) ^ ((row & 0x018) >> 1) ^ ((row & 0x004) << 1);
+        }
+        row = ((row & 0x1f8) << 1) | (row & 0x207);
+    }
+    return row;
 }
+
+// The dest row the dump stages at: tile DUMP_DST_INDEX of the current half, DUMP_ROW_OFFSET rows in.
+constexpr std::uint32_t DUMP_FIRST_ROW = DUMP_DST_INDEX * DEST_ROWS_PER_TILE + DUMP_ROW_OFFSET;
+static_assert(DUMP_ROW_OFFSET + 4 <= DEST_ROWS_PER_TILE, "the borrowed rows must stay inside the datacopied tile");
+
+// The SrcA format selection the test leaves active across the dump (PRESET_SRCA_OVERRIDE): override on, BF16.
+constexpr std::uint32_t SRCA_FMT_SELECT_MASK = ALU_FORMAT_SPEC_REG_SrcA_val_MASK | ALU_FORMAT_SPEC_REG_SrcA_override_MASK;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -124,6 +149,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             TILE_NUM_FACES, formats.math);
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+#ifdef ARCH_BLACKHOLE
+        // Set the DEST remap explicitly either way: earlier tests on the core may have left it on.
+        _llk_math_reconfig_remap_(DUMP_REMAP);
+#else
+        static_assert(!DUMP_REMAP, "the DEST remap is Blackhole-only");
+#endif
         // Every row not written below is undefined and packs as zero; the helper must not define any of them.
         zeroacc();
         if constexpr (DUMP_UPPER_HALF)
@@ -134,6 +165,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Leaves the thread's dest offset at tile DUMP_DST_INDEX of the current half, as any op targeting it does.
         _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, false /*unpack_to_dest*/>(
             DUMP_DST_INDEX, formats.math, formats.math, TILE_NUM_FACES);
+        if constexpr (DUMP_ROW_OFFSET != 0)
+        {
+            // A sub-tile dest offset, set the way the custom matmul and SDPA paths set theirs.
+            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
+            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base() + DUMP_FIRST_ROW);
+        }
+        if constexpr (PRESET_SRCA_OVERRIDE)
+        {
+            // A caller mid-way through a format-switching sequence: the dump must hand this selection back.
+            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, SRCA_FMT_SELECT_MASK>(
+                ALU_FORMAT_SPEC_REG_SrcA_override_MASK | (to_underlying(DataFormat::Float16_b) << ALU_FORMAT_SPEC_REG_SrcA_val_SHAMT));
+        }
     }
     else
     {
@@ -155,7 +198,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         // The offset the datacopy left (the halt drained its SETC16), and where the datacopy should have left it.
         words[DEST_OFFSET_BEFORE_WORD] = dbg_read_dest_offset();
-        words[DEST_OFFSET_SET_WORD]    = DUMP_DST_INDEX * DEST_ROWS_PER_TILE + (DUMP_UPPER_HALF ? DEST_REGISTER_HALF_SIZE : 0);
+        words[DEST_OFFSET_SET_WORD]    = DUMP_FIRST_ROW + (DUMP_UPPER_HALF ? DEST_REGISTER_HALF_SIZE : 0);
+        words[SRCA_FMT_BEFORE_WORD]    = cfg_read(ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32) & SRCA_FMT_SELECT_MASK;
     }
 
     if constexpr (!SRCA_ROW_CHECK)
@@ -166,15 +210,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     }
 
-    // The rows the dump borrows, as the debug bus sees them: the first four rows of the tile the dest offset points
-    // at (the SFPU save/restore footprint) and the rows 8 further on (the low halves with a 32-bit DEST).
+    // The rows the dump borrows, as the debug bus sees them: the four rows from the dest offset (the SFPU
+    // save/restore footprint) and the rows 8 further on (the low halves with a 32-bit DEST).
     // dbg_get_array_row adds the current half's base to a DEST row itself.
     auto read_borrowed_rows = [&](std::uint32_t first_word)
     {
         for (std::uint32_t r = 0; r < BORROWED_ROW_COUNT; ++r)
         {
             constexpr std::uint32_t half           = BORROWED_ROW_COUNT / 2;
-            const std::uint32_t row                = physical_dest_row(DUMP_DST_INDEX * DEST_ROWS_PER_TILE + (r % half)) + ((r < half) ? 0 : 8);
+            const std::uint32_t row                = physical_dest_row(DUMP_FIRST_ROW + (r % half)) + ((r < half) ? 0 : 8);
             std::uint32_t row_words[WORDS_PER_ROW] = {0};
             dbg_get_array_row(dbg_array_id::DEST, row, row_words);
             for (std::uint32_t i = 0; i < WORDS_PER_ROW; ++i)
@@ -214,8 +258,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         // The offset the dump left behind (the unhalt drained the dump); it must be what the datacopy set.
         words[DEST_OFFSET_AFTER_WORD] = dbg_read_dest_offset();
+        words[SRCA_FMT_AFTER_WORD]    = cfg_read(ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32) & SRCA_FMT_SELECT_MASK;
+        if constexpr (PRESET_SRCA_OVERRIDE)
+        {
+            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, SRCA_FMT_SELECT_MASK>(0);
+        }
         // Release the packer: it packs tile 0 of the lower half, which only the tile_0 case wrote.
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+#ifdef ARCH_BLACKHOLE
+        if constexpr (DUMP_REMAP)
+        {
+            // Leave linear addressing for the next test; waits for the pack above to finish.
+            _llk_math_reconfig_remap_(false);
+        }
+#endif
     }
 }
 

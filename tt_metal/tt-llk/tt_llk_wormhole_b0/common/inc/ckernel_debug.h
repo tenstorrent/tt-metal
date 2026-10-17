@@ -274,8 +274,12 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
         // undefined behaviour). Blackhole forces TF32 under fp32 accumulation, Wormhole does not, so force it here
         // the way the 32-bit datacopy moves do: through the format override, lifted once the move has completed.
         // Without it the row would land in 16-bit addressing while the save, restore and read-back use the
-        // 32-bit rows.
-        const bool dest_32b = (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK) != 0;
+        // 32-bit rows. The caller may be inside a sequence that set the override itself (transpose_dest_32b), so
+        // both fields are handed back exactly as they were found, not cleared.
+        constexpr std::uint32_t srca_fmt_select_mask = ALU_FORMAT_SPEC_REG_SrcA_val_MASK | ALU_FORMAT_SPEC_REG_SrcA_override_MASK;
+        static_assert(ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32 == ALU_FORMAT_SPEC_REG_SrcA_override_ADDR32, "SrcA_val and SrcA_override must share a word");
+        const bool dest_32b                 = (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK) != 0;
+        const std::uint32_t caller_srca_fmt = cfg_read(ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32) & srca_fmt_select_mask; // read after the entry drain
         if (dest_32b)
         {
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
@@ -290,7 +294,8 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
 
         if (dest_32b)
         {
-            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
+            // The caller's SrcA format selection, both fields in one write; the final drain lands it before return.
+            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, srca_fmt_select_mask>(caller_srca_fmt);
         }
     }
     else if (array_id == dbg_array_id::SRCB)

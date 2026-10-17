@@ -3,7 +3,7 @@
 
 """
 ``dbg_get_array_row(dbg_array_id::SRCA, ...)`` borrows a dest row to stage the SrcA row it
-cannot read directly, and must put that row back before returning. Two tests, one per contract:
+cannot read directly, and must put that row back before returning. The tests:
 
 * ``test_srca_row_dump_restores_dest_row_0`` (Blackhole, which has the RISC-V window into DEST):
   the row is 32 datums wide and the SFPU saves it in two halves, so it needs two registers;
@@ -29,6 +29,14 @@ cannot read directly, and must put that row back before returning. Two tests, on
   datacopy did not write it. That last check is what fails when the helper borrows rows the
   caller never populated: a row left undefined by ZEROACC packs as zero, an SFPLOAD of it is
   undefined behaviour, and the restore then defines it with whatever the load returned.
+  Besides the tile-aligned offsets, the dump runs 16 rows into a tile, and on Blackhole with
+  the DEST remap and 32-bit swizzle on, where the read-back row is no longer the logical row.
+
+* ``test_srca_row_dump_restores_fp32_low_halves``: the same checks with FP32 data and a 32-bit
+  DEST, so the low halves of the borrowed rows hold data the restore must keep.
+
+* ``test_srca_row_dump_keeps_srca_format_override``: the same checks with a non-default SrcA
+  format selection active across the dump, which must hand it back as it found it.
 
 Every in-tree caller passes ``dbg_array_id::DEST``, which never enters this path, so without
 these tests the SrcA path can regress undetected.
@@ -86,6 +94,7 @@ DEST_OFFSET_BEFORE_WORD = DBG_SRCA_DUMP.DEST_OFFSET_BEFORE_WORD
 BORROWED_ROW_COUNT = DBG_SRCA_DUMP.BORROWED_ROW_COUNT
 BORROWED_ROWS_BEFORE_WORD = DBG_SRCA_DUMP.BORROWED_ROWS_BEFORE_WORD
 BORROWED_ROWS_AFTER_WORD = DBG_SRCA_DUMP.BORROWED_ROWS_AFTER_WORD
+SRCA_FMT_BEFORE_WORD = DBG_SRCA_DUMP.SRCA_FMT_BEFORE_WORD
 RESULT_TILE_DEST = DBG_SRCA_DUMP.RESULT_TILE_DEST
 RESULT_TILE_COUNT = DBG_SRCA_DUMP.RESULT_TILE_COUNT
 
@@ -97,14 +106,22 @@ _BF16_MANT_MASK = 0x007F
 _BF16_EXP_SHIFT = 7
 _BF16_EXP_BITS = 8
 
-# Where the datacopy leaves the math thread's dest offset before the dump: (dest tile, upper half).
-# Only the tile_0 case writes the tile the packer reads back; every other case must pack zeros.
+# Where the math thread's dest offset sits at the dump: (dest tile the datacopy writes, upper half, rows into
+# that tile, Blackhole DEST remap on). The tile-aligned offsets leave the remap and 32-bit swizzle terms of the
+# read-back row as identity; 16 rows in, with the remap on, both terms move it. Only the cases that datacopy into
+# tile 0 of the lower half write the tile the packer reads back; every other case must pack zeros.
 DEST_OFFSETS = {
-    "tile_0": (0, False),
-    "tile_2": (2, False),
-    "upper_half": (0, True),
-    "upper_half_tile_2": (2, True),
+    "tile_0": (0, False, 0, False),
+    "tile_2": (2, False, 0, False),
+    "upper_half": (0, True, 0, False),
+    "upper_half_tile_2": (2, True, 0, False),
+    "tile_0_row_16": (0, False, 16, False),
+    "remap_tile_0_row_16": (0, False, 16, True),
 }
+# The selection PRESET_SRCA_OVERRIDE leaves active across the dump: override on, BF16 (ALU format code 5).
+SRCA_FMT_PRESET = (1 << 4) | 5
+# TF32 keeps 10 of FP32's 23 mantissa bits; the SrcA path carries no more.
+TF32_DROPPED_MANTISSA_MASK = (1 << 13) - 1
 
 
 def as_float_bits(bits, width):
@@ -134,9 +151,16 @@ def dest_bf16_bits(ieee_bits):
     )
 
 
-def dest_row_words(bf16_row):
-    """The 8 debug-bus words of a 16-datum BF16 row: datum 2i in the low half of word i."""
-    bits = [dest_bf16_bits(int(b) & 0xFFFF) for b in bit_view(bf16_row).tolist()]
+def dest_row_words(row):
+    """The 8 debug-bus words of a 16-datum BF16 or FP32 row: datum 2i in the low half of word i.
+
+    An FP32 datum goes through SrcA as TF32 and the read returns its high half, which is the
+    BF16 truncation of the datum.
+    """
+    if row.dtype == torch.float32:
+        bits = [dest_bf16_bits((int(b) >> 16) & 0xFFFF) for b in bit_view(row).tolist()]
+    else:
+        bits = [dest_bf16_bits(int(b) & 0xFFFF) for b in bit_view(row).tolist()]
     return tuple(bits[2 * i] | (bits[2 * i + 1] << 16) for i in range(WORDS_PER_ROW))
 
 
@@ -147,7 +171,7 @@ def face_row(tile, face, row):
 
 
 def tile_pair(formats):
-    """One tile of random stimuli per operand: A is unpacked into SrcA, B is planted into DEST."""
+    """One tile of random stimuli per operand: A is unpacked into SrcA; the restore test plants B into DEST."""
     src_A, tile_cnt, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=INPUT_DIMENSIONS,
@@ -234,17 +258,16 @@ def test_srca_row_dump_restores_dest_row_0(formats, dest_acc):
     assert_dest_tile_restored(expected, res_tensor)
 
 
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b], same=True),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    dest_offset=list(DEST_OFFSETS),
-)
-def test_srca_row_dump_reads_srca_row(formats, dest_acc, dest_offset):
-
-    if get_chip_architecture() == ChipArchitecture.QUASAR:
+def check_srca_row_dump(formats, dest_acc, dest_offset, preset_srca_override=False):
+    """Run the SrcA-row kernel and check the dump, the dest offset, the borrowed rows, the SrcA format
+    selection and the packed tile 0 of the lower half."""
+    arch = get_chip_architecture()
+    if arch == ChipArchitecture.QUASAR:
         pytest.skip("Quasar has no dbg_get_array_row.")
 
-    dst_index, upper_half = DEST_OFFSETS[dest_offset]
+    dst_index, upper_half, row_offset, remap = DEST_OFFSETS[dest_offset]
+    if remap and arch != ChipArchitecture.BLACKHOLE:
+        pytest.skip("The DEST remap is Blackhole-only.")
     src_A, src_B, tile_cnt = tile_pair(formats)
 
     configuration = make_config(
@@ -254,7 +277,12 @@ def test_srca_row_dump_reads_srca_row(formats, dest_acc, dest_offset):
         src_B,
         tile_cnt,
         DBG_SRCA_DUMP(
-            srca_row_check=True, dump_dst_index=dst_index, dump_upper_half=upper_half
+            srca_row_check=True,
+            dump_dst_index=dst_index,
+            dump_upper_half=upper_half,
+            dump_row_offset=row_offset,
+            dump_remap=remap,
+            preset_srca_override=preset_srca_override,
         ),
     )
 
@@ -274,10 +302,14 @@ def test_srca_row_dump_reads_srca_row(formats, dest_acc, dest_offset):
     borrowed_after = struct.unpack_from(
         f"<{borrowed_words}I", raw, 4 * BORROWED_ROWS_AFTER_WORD
     )
+    srca_fmt_before, srca_fmt_after = struct.unpack_from(
+        "<2I", raw, 4 * SRCA_FMT_BEFORE_WORD
+    )
 
     # The datacopy consumed the tile face by face, alternating SrcA banks, and the dump reads the
     # bank used last: the last face. The expectation comes from the host tile rather than from a
-    # DEST read-back, so it does not depend on how DEST happens to be addressed on the card.
+    # DEST read-back, so it does not depend on how DEST happens to be addressed on the card. Only A
+    # is in DEST here, so a stale row is either another face's row 0 or a row never written.
     expected = dest_row_words(face_row(src_A, MAX_NUM_FACES - 1, 0))
     face_hits = [
         face
@@ -286,12 +318,10 @@ def test_srca_row_dump_reads_srca_row(formats, dest_acc, dest_offset):
     ]
     if face_hits:
         got = f"it is row 0 of face {face_hits[0]} instead"
-    elif srca_row == dest_row_words(face_row(src_B, 0, 0)):
-        got = "it is row 0 of the tile planted in dest: a stale physical row was read back"
     elif not any(srca_row):
         got = "it is all zero: a stale, never-written physical row was read back"
     else:
-        got = "it matches no row the test wrote"
+        got = "it matches no row 0 of the tile: another physical row was read back"
     assert srca_row == expected, (
         f"dbg_get_array_row(SRCA) with the math dest offset at {dest_offset} returned "
         f"{[hex(w) for w in srca_row]}, expected SrcA row 0 of the last face "
@@ -302,15 +332,27 @@ def test_srca_row_dump_reads_srca_row(formats, dest_acc, dest_offset):
     # helper saves with), and the dump must hand it back unchanged.
     assert offset_before == offset_set, (
         f"the math thread's dest offset read before the dump is {offset_before}, "
-        f"but the datacopy set it to {offset_set}"
+        f"but the test set it to {offset_set}"
     )
     assert offset_after == offset_before, (
         f"dbg_get_array_row(SRCA) left the math thread's dest offset at {offset_after}; "
         f"it was {offset_before} before the dump and must be handed back unchanged"
     )
 
-    # The rows the dump borrows (the first rows of the tile at the offset, plus the rows 8 further on that
-    # hold the low halves with a 32-bit DEST) must read back over the debug bus exactly as before the dump.
+    # The SrcA format selection (SrcA_val, SrcA_override) the caller had active must survive the dump:
+    # later FPU moves of a format-switching sequence run on it.
+    if preset_srca_override:
+        assert srca_fmt_before == SRCA_FMT_PRESET, (
+            f"the SrcA format selection read before the dump is {hex(srca_fmt_before)}, "
+            f"but the test set it to {hex(SRCA_FMT_PRESET)}"
+        )
+    assert srca_fmt_after == srca_fmt_before, (
+        f"dbg_get_array_row(SRCA) left the SrcA format selection at {hex(srca_fmt_after)}; "
+        f"it was {hex(srca_fmt_before)} before the dump and must be handed back unchanged"
+    )
+
+    # The rows the dump borrows (the four rows from the offset, plus the rows 8 further on that hold the low
+    # halves with a 32-bit DEST) must read back over the debug bus exactly as before the dump.
     changed = [
         i for i in range(borrowed_words) if borrowed_before[i] != borrowed_after[i]
     ]
@@ -320,13 +362,20 @@ def test_srca_row_dump_reads_srca_row(formats, dest_acc, dest_offset):
         f"before {hex(borrowed_before[changed[0]])}, after {hex(borrowed_after[changed[0]])}"
     )
 
-    # Tile 0 of the lower half, packed after the dump. The datacopy wrote it only in the tile_0 case; in
+    # Tile 0 of the lower half, packed after the dump. The datacopy wrote it only when it targeted that tile; in
     # every other case its rows were left undefined by the ZEROACC and must still pack as zero, which they
     # do not if the dump borrowed rows there.
     packed = dest_tile_from(res_from_L1, formats.output_format)
     torch_format = format_dict[formats.output_format]
     if dst_index == 0 and not upper_half:
         expected_tile = src_A.to(torch_format)
+        if torch_format == torch.float32:
+            # The datacopy goes through SrcA, which holds TF32.
+            expected_tile = (
+                (bit_view(expected_tile) & ~TF32_DROPPED_MANTISSA_MASK)
+                .to(torch.int32)
+                .view(torch.float32)
+            )
         what = "the datacopy's output"
     else:
         expected_tile = torch.zeros(MAX_TILE_ELEMENTS, dtype=torch_format)
@@ -340,3 +389,36 @@ def test_srca_row_dump_reads_srca_row(formats, dest_acc, dest_offset):
         f"{differing[0]}: expected {expected_tile[differing[0]]}, got {packed[differing[0]]}. "
         "The helper must borrow only rows the caller populated."
     )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_offset=list(DEST_OFFSETS),
+)
+def test_srca_row_dump_reads_srca_row(formats, dest_acc, dest_offset):
+    check_srca_row_dump(formats, dest_acc, dest_offset)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.Yes],
+    dest_offset=list(DEST_OFFSETS),
+)
+def test_srca_row_dump_restores_fp32_low_halves(formats, dest_acc, dest_offset):
+    """With BF16 data the low halves of a 32-bit DEST (rows 8 further on) are zero both in the tile and
+    in the staged SrcA row, so a restore that drops or zeroes them still passes; FP32 data fills them.
+    """
+    check_srca_row_dump(formats, dest_acc, dest_offset)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_offset=["tile_2"],
+)
+def test_srca_row_dump_keeps_srca_format_override(formats, dest_acc, dest_offset):
+    """A dump inside a format-switching sequence must hand the caller's SrcA format selection back. The
+    Wormhole dump forces TF32 through the override for a 32-bit DEST; Blackhole does not touch it.
+    """
+    check_srca_row_dump(formats, dest_acc, dest_offset, preset_srca_override=True)
