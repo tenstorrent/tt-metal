@@ -52,6 +52,7 @@ struct BandwidthTelemetry {
 
 struct EriscDynamicEntry {
     RouterState router_state;
+    uint32_t padding0;  // CODEGEN:skip — align tx_heartbeat
     // TX heartbeat: incremented when all sender queues are empty, or a packet was sent over Ethernet.
     RiscTimestampV2 tx_heartbeat;
     // RX heartbeat: incremented when receiver queues are empty, or a packet was forwarded from receiver to NoC/local.
