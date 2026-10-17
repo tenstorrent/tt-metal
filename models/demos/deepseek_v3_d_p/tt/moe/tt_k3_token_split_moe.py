@@ -40,6 +40,7 @@ from ttnn.bringup.combine_rf.sparse_all_gather_2d import (
     ensure_semaphores,
     manifest_spec,
     port_cores_all,
+    route_words,
     sparse_all_gather_2d,
 )
 from ttnn.bringup.combine_rf.sparse_combine_rf import sparse_combine_rf_prepare
@@ -132,10 +133,22 @@ def reference_k3_moe(x, w: K3MoEWeights, d: K3Dims, ids=None, wts=None):
 
 
 class TtK3TokenSplitMoE:
-    """The block on a mesh (R x C, FABRIC_2D). S own tokens per chip."""
+    """The block on a mesh (R x C, FABRIC_2D or a torus fabric). S own tokens per chip. torus = (wrap X, wrap Y): the
+    rings the mesh fully spans (a submesh only has the wrap links of the axes it covers end to end)."""
 
-    def __init__(self, mesh_device, w: K3MoEWeights, d: K3Dims, S, *, cap=8192, rows_cap=16384, planner_cores=32):
-        self.mesh, self.d, self.S = mesh_device, d, S
+    def __init__(
+        self,
+        mesh_device,
+        w: K3MoEWeights,
+        d: K3Dims,
+        S,
+        *,
+        cap=8192,
+        rows_cap=16384,
+        planner_cores=32,
+        torus=(False, False),
+    ):
+        self.mesh, self.d, self.S, self.torus = mesh_device, d, S, tuple(torus)
         R, C = tuple(mesh_device.shape)
         self.R, self.C, self.N = R, C, R * C
         assert d.E % self.N == 0
@@ -324,7 +337,13 @@ class TtK3TokenSplitMoE:
         self.lat_direct = self.sparse_dispatch and os.environ.get("K3_LAT_DIRECT", "1") == "1"
         self.dprep = (
             dispatch_prep_prepare(
-                mesh_device, S=S, K=d.K, EPC=self.EPC, tokens_per_page=self.rows_pt, copy=not self.lat_direct
+                mesh_device,
+                S=S,
+                K=d.K,
+                EPC=self.EPC,
+                tokens_per_page=self.rows_pt,
+                copy=not self.lat_direct,
+                torus=self.torus,
             )
             if self.sparse_dispatch
             else None
@@ -341,7 +360,7 @@ class TtK3TokenSplitMoE:
         self.rgather = os.environ.get("K3_RGATHER", "fag")
         self.rgather_fabric = self.rgather == "sparse"
         if self.sparse_dispatch or self.rgather_fabric:
-            ensure_semaphores(mesh_device, num_links=2)  # (persistent: before anything per call)
+            ensure_semaphores(mesh_device, num_links=2, torus=self.torus)  # (persistent: before anything per call)
         if self.rgather_fabric:
             self.rcopy = own_rows_copy_prepare(mesh_device, S=S)
             self.route_all = all_chips_route_words(mesh_device, S)
@@ -362,7 +381,7 @@ class TtK3TokenSplitMoE:
         self.arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
         self.arena_addr = int(self.arena.buffer_address())
         # the planner's outputs (allocated once) then the combine (its accumulator count sets the planner's A)
-        luts, nps = port_luts(mesh_device, 2)
+        luts, nps = port_luts(mesh_device, 2, self.torus)
         self.rows_cap = rows_cap
         chips = [(r, c) for r in range(R) for c in range(C)]
         self._planner_args = dict(
@@ -377,6 +396,7 @@ class TtK3TokenSplitMoE:
             row_pages=True,
             joint=True,
             tokens_per_page=32 if os.environ.get("K3_TOPK", "custom") == "custom" else 1,
+            torus=self.torus,
         )
         probe = combine_planner_prepare(mesh_device, A=15, **self._planner_args)  # (outputs only: their addresses)
         self.combine = sparse_combine_rf_prepare(
@@ -385,6 +405,7 @@ class TtK3TokenSplitMoE:
             d.latent,
             {ch: [] for ch in chips},
             num_links=2,
+            torus=self.torus,
             n_acc=16,
             depth=int(os.environ.get("K3_D", "4")),
             cells=self.cells,
@@ -409,7 +430,7 @@ class TtK3TokenSplitMoE:
             ex = [r_.start for r_ in worker_cores(chips_).ranges()]
             self.untilize_gather = layout_op_prepare(mesh_device, "untilize", exclude=ex)
         if self.se_x_where == "dispatch" and self.sparse_dispatch:
-            ex = [ttnn.CoreCoord(*c) for c in port_cores_all(mesh_device, num_links=2)]
+            ex = [ttnn.CoreCoord(*c) for c in port_cores_all(mesh_device, num_links=2, torus=self.torus)]
             self.untilize_disp = layout_op_prepare(mesh_device, "untilize", exclude=ex)
         # per-call buffers (allocated once)
         sh = ttnn.ShardTensorToMesh(mesh_device, dim=0)
@@ -539,8 +560,8 @@ class TtK3TokenSplitMoE:
             )
             self.rcopy(both, buf)
             ttnn.deallocate(both)
-            man = ttnn.allocate_tensor_on_device(*manifest_spec(self.mesh, S, num_links=2))
-            sparse_all_gather_2d(buf, self.route_all, num_links=2, manifest=man)
+            man = ttnn.allocate_tensor_on_device(*manifest_spec(self.mesh, S, num_links=2, torus=self.torus))
+            sparse_all_gather_2d(buf, self.route_all, num_links=2, manifest=man, torus=self.torus)
             ttnn.deallocate(man)
             g = ttnn.reshape(buf, [N * S, 2 * K])
             return g, g
@@ -605,7 +626,7 @@ class TtK3TokenSplitMoE:
             ttnn.Shape([1, 1, N * S, W]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, dram
         )
         route = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, 1, S]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh, dram
+            ttnn.Shape([1, 1, 1, route_words(N) * S]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh, dram
         )
         if self.lat_direct:  # (lat_rm is the tiled latent: own rows straight into the buffer; one program, both ops)
             k = tuple(int(t.buffer_address()) for t in (lat_rm, gi, xbuf, route))
@@ -634,7 +655,7 @@ class TtK3TokenSplitMoE:
             return b
         xbuf, route = prep
         # (the port cores' manifest rings per call: a persistent one would hold ~123 KB of every core's L1)
-        man = ttnn.allocate_tensor_on_device(*manifest_spec(self.mesh, self.S, num_links=2))
+        man = ttnn.allocate_tensor_on_device(*manifest_spec(self.mesh, self.S, num_links=2, torus=self.torus))
         extra, x_rm = None, None
         if x_se is not None:  # (the shared expert's row-major x, untilized under the dispatch)
             x_rm = ttnn.allocate_tensor_on_device(
@@ -642,7 +663,7 @@ class TtK3TokenSplitMoE:
             )
             ua = self.untilize_disp.programs(x_se, x_rm)
             extra = ([x_se, x_rm], lambda coord: (list(ua[coord].cbs), list(ua[coord].kernels)))
-        sparse_all_gather_2d(xbuf, route, num_links=2, manifest=man, extra=extra)
+        sparse_all_gather_2d(xbuf, route, num_links=2, manifest=man, extra=extra, torus=self.torus)
         ttnn.deallocate(man)
         ttnn.deallocate(route)
         g = ttnn.reshape(xbuf, [self.N * self.S, self.d.latent])

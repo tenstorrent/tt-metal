@@ -639,21 +639,24 @@ void kernel_main() {
 
 
 def route(src, home, R, C, wrap_x, wrap_y, link):
-    """[(chip, direction)] hops from src to home: Y first, then X (lines: forced; rings: shorter way, ties +)."""
+    """[(chip, direction)] hops from src to home: Y first, then X (lines: forced; rings: shorter way). Ties as the
+    fabric's routing tables (routing_table_generator.cpp: the first of (N, S) / (E, W)): Y- (North, row - 1) and X+
+    (East, column + 1) - a multi-hop unicast must leave through its route's first hop."""
     hops = []
     r, c = src
 
-    def step(n, a, b, wrap):
+    def step(n, a, b, wrap, tie_plus):
         if wrap:
             f = (b - a) % n
-            return (1 if f * 2 <= n else -1), (f if f * 2 <= n else n - f)
+            plus = f * 2 < n or (f * 2 == n and tie_plus)
+            return (1 if plus else -1), (f if plus else n - f)
         return (1 if b > a else -1), abs(b - a)
 
-    s, k = step(R, r, home[0], wrap_y)
+    s, k = step(R, r, home[0], wrap_y, False)
     for _ in range(k):
         hops.append(((r, c), "Y+" if s > 0 else "Y-"))
         r = (r + s) % R
-    s, k = step(C, c, home[1], wrap_x)
+    s, k = step(C, c, home[1], wrap_x, True)
     for _ in range(k):
         hops.append(((r, c), "X+" if s > 0 else "X-"))
         c = (c + s) % C

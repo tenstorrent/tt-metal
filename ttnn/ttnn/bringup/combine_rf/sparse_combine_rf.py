@@ -9,8 +9,11 @@ route tables are dimension-ordered, Y then X, the same paths), and it lands stra
 
 Cores per chip: a port core per (direction, link) (one fabric connection each) and A accumulator cores (the same
 logical cores on every chip).
-  accumulator o:  a ring of D slots per (source chip, link). Rows from source s to home h always leave s through the
-                  same port (its first hop), so each ring has exactly one producer: port (s, first hop(s -> h), l).
+  accumulator o:  a ring of D slots per source chip (N - 1 rings). A row of home token t goes to accumulator
+                  o = t % A over link (o + s + h) % L: fixed per (accumulator, source, home), so each ring has exactly
+                  one producer, port (s, first hop(s -> h), that link). D comes from the L1 budget (the arena left
+                  after the accumulator's CBs), capped at `depth`: the rings' L1 is (N - 1) D slots whatever the link
+                  count (it was N L D, which a 16- or 32-chip Galaxy cannot hold at any useful depth).
   port (s, d, l): injects its rows; holds a credit counter per (home, accumulator) ring it feeds; returns the credits
                   of rows its own chip's accumulators consumed from sources whose first hop back is d (atomic incs,
                   multi-hop through the fabric as well).
@@ -27,6 +30,7 @@ import ttnn
 
 from .fabric_all_gather_py import NOC0, NOC1, _SEM_CACHE
 from .sparse_all_gather_2d import DIRS, OPP, mesh_plan, place_ports
+from .combine_plan import link_of
 from .sparse_combine_l1 import _ACC_COMPUTE, _ACC_WRITER, _PORT_READER, TILE, route
 
 CB_INJ, CB_ROW, CB_META, CB_TAB, CB_ACC, CB_OUT, CB_W = 0, 1, 2, 3, 4, 5, 6
@@ -255,10 +259,27 @@ _ACC_COMPUTE_W = (
 assert _ACC_COMPUTE_W.count("cb_pop_front(cb_w, 1)") == 2 and "mul_tiles_bcast_scalar" in _ACC_COMPUTE_W
 assert "end marker" in _ACC_COMPUTE_W and "__DEVPLAN__ || r < n_rows" in _ACC_COMPUTE_W
 
-# per-core L1 area: counters (cumulative), headers, then the accumulators' rings
-CRED, USED, RET, MISC, HDRS, RINGS = 0, 1024, 2048, 4096, 5120, 22528
-# MISC words: 1 returned so far; 16.. rows consumed per source chip (accumulators increment), 32.. rows covered by the
-# credit snapshots sent; 64.. acc taken[] (per ring); 192.. profile. HDRS: N x NH routed headers, then snapshots
+# per-core L1 area (state_layout): credits / used / returned per (home, accumulator) (N x AP words each), the collector
+# counts (512 B), MISC (2 KB), HDRS (N x NH routed headers, then NH credit snapshots), then the rings
+NH_, HSZ_ = 8, 128
+MISC_BYTES = 2048
+# MISC words: 1 returned so far; 100 calls; 101 base; 112.. scratch; 128.. landed (writers); 192.. profile; 208..
+# devplan scratch; 256.. rows consumed per source chip (accumulators increment); 288.. rows covered by the credit
+# snapshots sent; 320.. acc taken[] (per ring = source chip)
+M_RTOT, M_RDONE, M_TAKEN = 256, 288, 320
+
+
+def state_layout(N, A):
+    """Byte offsets of the state block: CRED, USED, RET, CNT (collector counts), MISC, HDRS, RINGS (its end)."""
+    al = lambda v: (v + 63) // 64 * 64  # noqa: E731
+    AP = (A + 3) // 4 * 4
+    rw = al(4 * N * AP)
+    CRED, USED, RET, CNT = 0, rw, 2 * rw, 3 * rw
+    MISC = CNT + 512
+    HDRS = MISC + MISC_BYTES
+    RINGS = al(HDRS + N * NH_ * HSZ_ + NH_ * 4 * AP)
+    return CRED, USED, RET, CNT, MISC, HDRS, RINGS
+
 
 _RF_SENDER = r"""
 #include <cstdint>
@@ -270,7 +291,7 @@ using namespace tt::tt_fabric;
 constexpr uint32_t cb_inj = get_compile_time_arg_val(0);
 constexpr uint32_t row_bytes = get_compile_time_arg_val(1);
 constexpr uint32_t SLOT = get_compile_time_arg_val(2);
-constexpr uint32_t D = get_compile_time_arg_val(3);  // ring slots per (source chip, link) at each accumulator
+constexpr uint32_t D = get_compile_time_arg_val(3);  // ring slots per source chip at each accumulator
 constexpr uint32_t A = get_compile_time_arg_val(4);
 constexpr uint32_t AP = (A + 3) / 4 * 4;  // credit words per home (16-byte aligned arrays: they travel as NoC writes)
 constexpr uint32_t N = get_compile_time_arg_val(5);
@@ -283,8 +304,8 @@ constexpr uint32_t CRED_THR = __CREDTHR__;  // rows consumed from a source befor
 constexpr uint32_t PACE = __PACE__;
 constexpr uint32_t P = __P__, PD = __PD__, PS = __PS__;  // pieces per row, bytes per piece, piece stride
 constexpr uint32_t LASTPB = (P - 1) * PS + (row_bytes - (P - 1) * PD);  // the last piece's trailer
-constexpr uint32_t NH = 8;  // rotating row headers: flush (and pop the sent pages) every NH sends
-constexpr uint32_t HSZ = 128;
+constexpr uint32_t NH = __NH__;  // rotating row headers: flush (and pop the sent pages) every NH sends
+constexpr uint32_t HSZ = __HSZ__;
 static_assert(sizeof(PACKET_HEADER_TYPE) <= HSZ, "header stride");
 constexpr uint32_t HW = sizeof(PACKET_HEADER_TYPE) / 4;
 
@@ -335,11 +356,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* used = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + USED);
     volatile tt_l1_ptr uint32_t* ret = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + RET);
     volatile tt_l1_ptr uint32_t* misc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + MISC);
-    volatile tt_l1_ptr uint32_t* rtot = misc + 16;   // rows consumed per source chip (accumulators increment)
-    volatile tt_l1_ptr uint32_t* rdone = misc + 32;  // rows covered by the last snapshot sent per source chip
+    volatile tt_l1_ptr uint32_t* rtot = misc + __MRTOT__;    // rows consumed per source chip (accumulators increment)
+    volatile tt_l1_ptr uint32_t* rdone = misc + __MRDONE__;  // rows covered by the last snapshot sent per source chip
     const uint32_t ret0 = misc[1];
     uint32_t returned = ret0;
-    const uint32_t ring_base = RINGS + (me * L + lnk) * D * SLOT;  // my ring at every accumulator
     uint32_t inj_done = 0, sent = 0, pend_inj = 0, unflushed = 0;
     uint32_t p_idle = 0, p_cred = 0, p_slot = 0, p_flush = 0, n_credpk = 0, n_blocked = 0, n_empty = 0, p_send = 0;
     const uint32_t p0 = get_timestamp_32b();
@@ -407,7 +427,7 @@ void kernel_main() {
                 break;
             }
             const uint32_t ts0 = get_timestamp_32b();
-            const uint32_t dst = area + ring_base + (u % D) * SLOT;
+            const uint32_t dst = area + RINGS + ((me - (me > home)) * D + u % D) * SLOT;  // (my ring at home's acc)
             for (uint32_t pc = 0; pc < P; ++pc) {
                 const uint32_t pb = (pc + 1 == P ? row_bytes - pc * PD : PD) + 32;
                 auto* h = hdr_at(home, sent % NH);
@@ -491,8 +511,9 @@ constexpr uint32_t P = __P__, PD = __PD__, PS = __PS__;
 constexpr uint32_t LASTPB = (P - 1) * PS + (row_bytes - (P - 1) * PD);
 constexpr auto y_args = TensorAccessorArgs<10>();
 constexpr auto t_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
-// Accumulator reader: local rows from DRAM, then its N * L rings (each up to this call's expected count); a consumed
-// slot is one credit, counted on the port that faces the row's source (it sends the credits back).
+// Accumulator reader: local rows from DRAM, then its N - 1 rings (one per source chip, each up to this call's expected
+// count); a consumed slot is one credit, counted on the port that faces the row's source on this accumulator's link to
+// it (that port sends the credits back).
 void kernel_main() {
     size_t a = 0;
     const uint32_t area = get_arg_val<uint32_t>(a++);
@@ -502,8 +523,9 @@ void kernel_main() {
     const uint32_t me = get_arg_val<uint32_t>(a++);
     const uint32_t cx = get_arg_val<uint32_t>(a++), cy = get_arg_val<uint32_t>(a++);
     const uint32_t counts_addr = get_arg_val<uint32_t>(a++), W = get_arg_val<uint32_t>(a++);
-    uint32_t want[N * L], px[N * L], py[N * L];
-    for (uint32_t k = 0; k < N * L; ++k) {
+    const uint32_t hc = get_arg_val<uint32_t>(a++);  // this chip's index (its own ring is not there)
+    uint32_t want[N], px[N], py[N];
+    for (uint32_t k = 0; k < N; ++k) {
         want[k] = get_arg_val<uint32_t>(a++);
         px[k] = get_arg_val<uint32_t>(a++);
         py[k] = get_arg_val<uint32_t>(a++);
@@ -519,13 +541,13 @@ void kernel_main() {
         noc_async_read(get_noc_addr(0, pg) + (32 + me * 32) * 4, sc + 64, 128);  // want[me][32]
         noc_async_read_barrier();
         n_local = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc)[me];
-        for (uint32_t k = 0; k < N * L; ++k) want[k] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc + 64)[k];
+        for (uint32_t k = 0; k < N; ++k) want[k] = k == hc ? 0 : reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc + 64)[k];
     }
     uint32_t n_rows = n_local;
-    for (uint32_t k = 0; k < N * L; ++k) n_rows += want[k];
+    for (uint32_t k = 0; k < N; ++k) n_rows += want[k];
     constexpr uint32_t TCH = 256;
     volatile tt_l1_ptr uint32_t* misc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + MISC);
-    volatile tt_l1_ptr uint32_t* taken = misc + 64;  // per ring, cumulative
+    volatile tt_l1_ptr uint32_t* taken = misc + __MTAKEN__;  // per ring (source chip), cumulative
     constexpr uint32_t WGT = __L1__;  // (gate weights: with the L1 hand-off, from each row's trailer)
     auto push_w = [&](uint32_t wb) {
         if constexpr (WGT) {
@@ -633,10 +655,10 @@ void kernel_main() {
             ++li;
             ++done;
         }
-        for (uint32_t k = 0; k < N * L; ++k) {
+        for (uint32_t k = 0; k < N; ++k) {
             if (!want[k]) continue;
             const uint32_t tk = taken[k];
-            const uint32_t s = area + RINGS + (k * D + tk % D) * SLOT;
+            const uint32_t s = area + RINGS + ((k - (k > hc)) * D + tk % D) * SLOT;
             bool all = true;
             for (uint32_t pc = 0; pc < P && all; ++pc) {
                 volatile tt_l1_ptr uint32_t* tp =
@@ -655,8 +677,8 @@ void kernel_main() {
                 taken[k] = tk + 1;
                 --want[k];
                 ++done;
-                noc_semaphore_inc(get_noc_addr(px[k], py[k], area + RET + 4 * ((k / L) * AP + me)), 1);
-                noc_semaphore_inc(get_noc_addr(px[k], py[k], area + MISC + 4 * (16 + k / L)), 1);
+                noc_semaphore_inc(get_noc_addr(px[k], py[k], area + RET + 4 * (k * AP + me)), 1);
+                noc_semaphore_inc(get_noc_addr(px[k], py[k], area + MISC + 4 * (__MRTOT__ + k)), 1);
             }
         }
     }
@@ -730,7 +752,6 @@ def sparse_combine_rf_prepare(
     PD = ((row_bytes + NP - 1) // NP + 63) // 64 * 64
     PS = ((PD + 32 + 63) // 64) * 64
     SLOT = ISLOT = NP * PS
-    D = depth
     chips, nb, (wrap_x, wrap_y) = mesh_plan(mesh_device, num_links, torus)
     port_core = place_ports(mesh_device, chips, cells)
     used_cores = {(c.x, c.y) for c in port_core.values()}
@@ -738,7 +759,9 @@ def sparse_combine_rf_prepare(
     pool = cells if cells is not None else [(x, y) for y in range(grid.y) for x in range(grid.x)]
     acc_cores = [ttnn.CoreCoord(x, y) for x, y in pool if (x, y) not in used_cores][:A0]
     A = len(acc_cores)
-    assert N * ((A + 3) // 4 * 4) <= 256 and N <= 16
+    assert N <= 32 and A <= 16, (N, A)
+    AP = (A + 3) // 4 * 4
+    CRED, USED, RET, CNT, MISC, HDRS, RINGS = state_layout(N, A)
     run_cells = dict(ports={k: (c.x, c.y) for k, c in port_core.items()}, accs=[(c.x, c.y) for c in acc_cores])
     virt = lambda c: mesh_device.worker_core_from_logical_core(c)
     node = lambda coord: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
@@ -748,20 +771,39 @@ def sparse_combine_rf_prepare(
     inj = {k: [] for k in port_core}
     n_ret = {k: 0 for k in port_core}
     loc = {(ch, i): [] for ch in chips for i in range(A)}
-    want = {(ch, i): [0] * (N * L) for ch in chips for i in range(A)}
+    want = {(ch, i): [0] * N for ch in chips for i in range(A)}
     for ch, rows in rows_by_chip.items():
         for row in rows:
-            yrow, home, t, l = row[:4]
+            yrow, home, t = row[:3]
             assert t < (1 << 16)
             hdr = idx(home) | (t << 8) | ((row[4] if len(row) > 4 else 0) << 24)
             o = t % A
             if home == ch:
                 loc[(home, o)].append((yrow, hdr))
                 continue
+            l = link_of(o, idx(ch), idx(home), L)  # (the row's link is fixed by (accumulator, source, home))
             inj[(ch, fh(ch, home), l)].append((yrow, hdr))
-            want[(home, o)][idx(ch) * L + l] += 1
+            want[(home, o)][idx(ch)] += 1
             n_ret[(home, fh(home, ch), l)] += 1
-    area_bytes = RINGS + N * L * D * SLOT
+    al = lambda v: (v + 63) // 64 * 64  # noqa: E731
+    MAXT = (S + A - 1) // A
+    tab_cb = 256 * 8 + 128
+    acc_cbs = sum(
+        al(v) for v in [tab_cb, 2 * NT * TILE, 2 * 32, MAXT * NT * 4096, 2 * NT * TILE] + ([2 * TILE] if l1 else [])
+    )
+    if arena is not None:  # (the rings' depth from what the arena leaves: the accumulators' CBs and 2 local slots)
+        sh_ = arena.memory_config().shard_spec
+        arena_bytes = int(sh_.shape[0]) * int(sh_.shape[1]) * (4 if arena.dtype == ttnn.uint32 else 2)
+        fit = (arena_bytes - RINGS - acc_cbs - (2 * ISLOT if l1 else 0)) // ((N - 1) * SLOT)
+        D = min(depth, fit)
+    else:
+        D = depth
+    D = int(os.environ.get("SPC_D", D))
+    assert D >= 1, f"combine: no room for one ring slot per source chip ({N - 1} x {SLOT} B)"
+    QP = int(os.environ.get("SPC_QP", "64"))  # a port's L1 hand-off injection ring (its own region, no rings there)
+    acc_area = RINGS + (N - 1) * D * SLOT
+    port_area = RINGS + (QP * ISLOT if l1 is not None else 0)
+    area_bytes = max(acc_area, port_area)
     all_cores = sorted(used_cores | {(c.x, c.y) for c in acc_cores})
     core_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in all_cores])
     if arena is None:
@@ -783,11 +825,9 @@ def sparse_combine_rf_prepare(
         arena_bytes = None
     else:
         area_t = arena
-        sh = arena.memory_config().shard_spec
-        arena_bytes = int(sh.shape[0]) * int(sh.shape[1]) * (4 if arena.dtype == ttnn.uint32 else 2)
     area = int(area_t.buffer_address())
-    cnt_off = RET + 1024 if counts_off is None else counts_off
-    assert cnt_off % 16 == 0 and RET + 4 * N * ((A + 3) // 4 * 4) <= cnt_off and cnt_off + 512 <= MISC
+    cnt_off = CNT if counts_off is None else counts_off
+    assert cnt_off % 16 == 0 and RET + 4 * N * AP <= cnt_off and cnt_off + 512 <= MISC
     coll = acc_cores[0]
     coll_v = virt(coll)
 
@@ -816,7 +856,6 @@ def sparse_combine_rf_prepare(
         mesh_mapper=shard,
     )
     tab_bytes = 8 * n_tab
-    MAXT = (S + A - 1) // A
     if l1 is not None:  # destination ids per chip: its ports (sorted), then its accumulators
         port_ids = {ch: {k: j for j, k in enumerate(sorted(k for k in port_core if k[0] == ch))} for ch in chips}
         n_y = max((max((r[0] for r in rows), default=-1) for rows in rows_by_chip.values()), default=-1) + 1
@@ -824,7 +863,8 @@ def sparse_combine_rf_prepare(
         lt = torch.full((R, C, n_tiles, 64), 0, dtype=torch.int64)
         for ch, rows in rows_by_chip.items():
             for row in rows:
-                yrow, home, t, l = row[:4]
+                yrow, home, t = row[:3]
+                l = link_of(t % A, idx(ch), idx(home), L)
                 hdr = idx(home) | (t << 8) | ((row[4] if len(row) > 4 else 0) << 24)
                 dd = len(port_ids[ch]) + t % A if home == ch else port_ids[ch][(ch, fh(ch, home), l)]
                 wb = row[5] if len(row) > 5 else 0x3F80  # (gate weight, bf16 bits; 1.0 without)
@@ -841,7 +881,6 @@ def sparse_combine_rf_prepare(
         wv = [virt(ttnn.CoreCoord(*c)) for c in l1["writers"]]
         wxy = [v for c in wv for v in (c.x, c.y)]
         assert len(wv) <= 32
-        QP = min(64, (N * L * D * SLOT) // ISLOT)  # a port's injection ring: in its (unused) ring region
     l1_args = []
     prof = os.environ.get("SPC_PROF") == "1"
     pace_us = float(os.environ.get("SPC_PACE", "0"))  # pace every port's injections to finish at this time
@@ -867,7 +906,14 @@ def sparse_combine_rf_prepare(
         "__NOYREAD__": os.environ.get("SPC_NOYREAD", "0"),  # (probe: rows not read from y: garbage)
         "__PD__": str(PD),
         "__PS__": str(PS),
-        "__DRAIN__": "false" if os.environ.get("SPC_NODRAIN") == "1" else "true",  # (probe: no end-of-call credit drain)
+        "__DRAIN__": "false"
+        if os.environ.get("SPC_NODRAIN") == "1"
+        else "true",  # (probe: no end-of-call credit drain)
+        "__MRTOT__": str(M_RTOT),
+        "__MRDONE__": str(M_RDONE),
+        "__MTAKEN__": str(M_TAKEN),
+        "__NH__": str(NH_),
+        "__HSZ__": str(HSZ_),
     }
     dbg_t = ttnn.from_torch(
         torch.zeros(R, C, 128, 16, dtype=torch.int32),
@@ -912,7 +958,9 @@ def sparse_combine_rf_prepare(
     def arena_cbs(placed, arena_t):
         cbs = []
         for cb, crs, off, total, fmt, page in placed:
-            d_ = ttnn.cb_descriptor_from_sharded_tensor(cb, arena_t, address_offset=off, total_size=total, core_ranges=crs)
+            d_ = ttnn.cb_descriptor_from_sharded_tensor(
+                cb, arena_t, address_offset=off, total_size=total, core_ranges=crs
+            )
             d_.format_descriptors = [ttnn.CBFormatDescriptor(cb, fmt, page)]
             cbs.append(d_)
         return cbs
@@ -944,7 +992,6 @@ def sparse_combine_rf_prepare(
             my = [(d, li, port_core[(ch, d, li)]) for d, p in ports.items() for li in range(len(p["links"]))]
             pset = ttnn.CoreRangeSet([ttnn.CoreRange(k, k) for _, _, k in my])
             aset = ttnn.CoreRangeSet([ttnn.CoreRange(k, k) for k in acc_cores])
-            tab_cb = 256 * 8 + 128
             specs = [  # (cb, cores, total, format, page): CB_TAB first (both kinds), then each kind's own
                 (CB_TAB, pset.merge(aset), tab_cb, ttnn.uint32, tab_cb),
                 (CB_INJ, pset, 2 * inj_b * ISLOT, ttnn.uint32, ISLOT),
@@ -964,18 +1011,19 @@ def sparse_combine_rf_prepare(
                         )
                     )
             else:
-                al = lambda v: (v + 63) // 64 * 64
-                base = al(area_bytes)
-                ends = {"p": base, "a": base}
+                ends = {"p": al(port_area), "a": al(acc_area)}
                 for cb, crs, total, fmt, page in specs:
-                    kinds = ("p", "a") if cb == CB_TAB else (("p",) if cb == CB_INJ else ("a",))
                     if l1 is not None and cb == CB_INJ:  # (the hand-off ring: the writers address it directly)
                         placed.append((cb, crs, RINGS, QP * ISLOT, fmt, page))
                         continue
-                    off = max(ends[k] for k in kinds)
-                    for k in kinds:
-                        ends[k] = al(off + total)
-                    placed.append((cb, crs, off, total, fmt, page))
+                    if cb == CB_TAB:  # (both kinds, each in its own region)
+                        for k, crs_k in (("p", pset), ("a", aset)):
+                            placed.append((cb, crs_k, ends[k], total, fmt, page))
+                            ends[k] = al(ends[k] + total)
+                        continue
+                    k = "p" if cb == CB_INJ else "a"
+                    placed.append((cb, crs, ends[k], total, fmt, page))
+                    ends[k] = al(ends[k] + total)
                 cbs = arena_cbs(placed, area_t)
                 assert (
                     max(ends.values()) <= arena_bytes
@@ -1059,16 +1107,14 @@ def sparse_combine_rf_prepare(
                     coll_v.y,
                     area + cnt_off,
                     writers,
+                    idx(ch),
                 ]
-                for kk in range(N * L):
-                    s, li = (kk // L // C, kk // L % C), kk % L
+                for kk in range(N):  # per source chip: its ring's count and the port returning its credits
+                    s = (kk // C, kk % C)
                     w = want[(ch, i)][kk]
-                    if devplan is not None and s != ch:  # (the plan decides the counts: every ring's producer port)
-                        v = virt(port_core[(ch, fh(ch, s), li)])
-                        args += [0, v.x, v.y]
-                    elif w:
-                        v = virt(port_core[(ch, fh(ch, s), li)])
-                        args += [w, v.x, v.y]
+                    if s != ch and (devplan is not None or w):  # (device plan: the plan decides the counts)
+                        v = virt(port_core[(ch, fh(ch, s), link_of(i, kk, idx(ch), L))])
+                        args += [0 if devplan is not None else w, v.x, v.y]
                     else:
                         args += [0, 0, 0]
                 args += [int(dbg_t.buffer_address()), 8 + i, int(tdbg_t.buffer_address()), 16 + i]
@@ -1142,7 +1188,7 @@ def sparse_combine_rf_prepare(
     trl = [pc * PS + (row_bytes - pc * PD if pc + 1 == NP else PD) for pc in range(NP)]
     zero_runs = {c: [(0, RINGS, 0, 1)] for c in used_cores}
     for c in acc_cores:
-        zero_runs[(c.x, c.y)] = [(0, RINGS, 0, 1)] + [(RINGS + t, 32, SLOT, N * L * D) for t in trl]
+        zero_runs[(c.x, c.y)] = [(0, RINGS, 0, 1)] + [(RINGS + t, 32, SLOT, (N - 1) * D) for t in trl]
 
     run.build = build
     run.build_l1 = build_l1
@@ -1152,6 +1198,8 @@ def sparse_combine_rf_prepare(
     run.collector = dict(core=coll, counts_addr=area + cnt_off, writers=writers)
     run.counts = dict(n_inj={k: len(v) for k, v in inj.items()}, n_ret=n_ret)
     run.cells = run_cells
+    run.depth = D
+    run.l1 = dict(acc_area=acc_area, port_area=port_area, rings=(N - 1) * D * SLOT, state=RINGS, slot=SLOT)
     run.zero_runs = zero_runs
     run.dbg = dbg_t
     return run

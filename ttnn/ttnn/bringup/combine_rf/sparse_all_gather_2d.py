@@ -6,7 +6,8 @@
 Every chip (r, c) of an R x C mesh (each axis a ring or a line) owns S rows, already in place in its output at slots
 idx * S + t (idx = r * C + c; the producer, e.g. the latent projection, writes them there). Each own row t comes with a
 32-bit route word: bits 0-15 the destination chips (bit idx), bit 16 the order (0: X first, i.e. along the row; 1: Y
-first), bit 17 the link. The word can come from a planner (order / link chosen by link load) or from the stateless
+first), bit 17 the link (route_words(N) = 1); on more than 16 chips two words per row (route_words(N) = 2): the
+destination mask, then order | link << 1. The word can come from a planner (order / link chosen by link load) or from the stateless
 rule; either way the trees are dimension-order trees with stateless spans (ring: minimal span, ties by bit 30 of
 t * 2654435761; line: forced), the same as the CPU model in models/demos/deepseek_v3_d_p/tests/perf/
 scratch_sparse_ag_2d_protocol.py, which verified the protocol below.
@@ -83,6 +84,9 @@ constexpr uint32_t END = 1u << 31;
 constexpr uint32_t SKIP = 1u << 30;
 constexpr uint32_t META_WORDS = 4;
 
+constexpr uint32_t RW = __RW__;  // route words per own row (1: mask | order << 16 | link << 17; 2: mask, order | link << 1)
+FORCE_INLINE uint32_t route_mask(const uint32_t* w, uint32_t t) { return RW == 2 ? w[2 * t] : w[t] & 0xFFFF; }
+FORCE_INLINE uint32_t route_flags(const uint32_t* w, uint32_t t) { return RW == 2 ? w[2 * t + 1] : w[t] >> 16; }
 FORCE_INLINE uint32_t tie_of(uint32_t t) { return ((t * 2654435761u) >> 30) & 1; }
 FORCE_INLINE uint32_t xspan(uint32_t pos, uint32_t cm, uint32_t t) { return XSPAN[(pos * (1u << C) + cm) * 2 + tie_of(t)]; }
 FORCE_INLINE uint32_t yspan(uint32_t pos, uint32_t rm, uint32_t t) { return YSPAN[(pos * (1u << R) + rm) * 2 + tie_of(t)]; }
@@ -164,11 +168,11 @@ void kernel_main() {
 
     // hops this port gives own row t (0: not this port's)
     auto own_hops = [&](uint32_t t, uint32_t& m, uint32_t& order) -> uint32_t {
-        const uint32_t w = words[t];
-        if (((w >> 17) & 1) != lnk) return 0;
-        m = w & 0xFFFF & ~(1u << me);
+        const uint32_t f = route_flags(words, t);
+        if (((f >> 1) & 1) != lnk) return 0;
+        m = route_mask(words, t) & ~(1u << me);
         if (m == 0) return 0;
-        order = (w >> 16) & 1;  // 0: X first
+        order = f & 1;  // 0: X first
         const bool first_x = order == 0;
         uint32_t ab;
         if (axis_x == first_x) {  // my axis is the first leg
@@ -448,6 +452,11 @@ void kernel_main() {
 )
 
 
+def route_words(N):
+    """Route words per own row: 1 up to 16 chips, 2 beyond (the 32-bit mask, then order | link << 1)."""
+    return 1 if N <= 16 else 2
+
+
 def mesh_plan(mesh_device, num_links, torus=(False, False)):
     """Ports of every chip: {coord: {dir: dict(peer, links)}}; torus = (wrap X, wrap Y) where cabled."""
     R, C = tuple(mesh_device.shape)
@@ -513,7 +522,11 @@ def ensure_semaphores(mesh_device, *, num_links=2, torus=(False, False)):
     key = (id(mesh_device), tuple(cores), "sparse_2d_sems")
     if key not in _SEM_CACHE:
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in cores])
-        _SEM_CACHE[key] = (mesh_device, tuple(ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(4)), None)
+        _SEM_CACHE[key] = (
+            mesh_device,
+            tuple(ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(4)),
+            None,
+        )
     return _SEM_CACHE[key][1]
 
 
@@ -557,9 +570,10 @@ def sparse_all_gather_2d(
     mesh_device = output.device()
     R, C = tuple(mesh_device.shape)
     N = R * C
-    S = int(plan_tensor.shape[-1])
+    RW = route_words(N)
+    S = int(plan_tensor.shape[-1]) // RW
     W = int(output.shape[-1])
-    assert int(output.shape[-2]) == N * S and N * S < (1 << 16) and N <= 16
+    assert int(output.shape[-2]) == N * S and N * S < (1 << 16) and N <= 32
     row_bytes = int(output.buffer_aligned_page_size())
     plan_bytes = int(plan_tensor.buffer_aligned_page_size())
     if pack is None:
@@ -615,6 +629,7 @@ def sparse_all_gather_2d(
         "__C__": str(C),
         "__S__": str(S),
         "__GMAX__": str(GMAX),
+        "__RW__": str(RW),
         "__XSPAN__": ", ".join(map(str, span_table(C, wrap_x))),
         "__YSPAN__": ", ".join(map(str, span_table(R, wrap_y))),
     }

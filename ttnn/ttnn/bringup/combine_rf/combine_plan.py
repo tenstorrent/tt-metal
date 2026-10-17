@@ -11,10 +11,12 @@ tokens:
   hand-off table [rows_cap / 32, 64]    per flat row (destination | gate weight bf16 << 16, header word): the y writers'
                                         L1 hand-off (se_yrm.hpp SE_Y_L1); header = home | t << 8 | local expert << 24
   plan [1, 1024] uint32                 the combine's per-call counts: n_inj[8], n_ret[8] per port id, n_local[16] per
-                                        accumulator, want[16][32] per accumulator and (source chip, link)
-Rows of a local expert are in (home, token, k) scan order. A row goes to home over link (t + k) % L, through this
-chip's first-hop port toward home (Y first, then X; port_lut[direction * 2 + link] = port id); a local row (home is
-this chip) goes to accumulator t % A (destination id P + t % A). The same rules as sparse_combine_rf_prepare's host
+                                        accumulator, want[16][32] per accumulator and source chip (N <= 32)
+Rows of a local expert are in (home, token, k) scan order. A row of home token t goes to accumulator a = t % A over
+link (a + source + home) % L - fixed per (accumulator, source, home), so each accumulator ring has one producer port
+per source chip - through this chip's first-hop port toward home (Y first, then X; rings the shorter way, ties Y- /
+X+ as the fabric's tables; port_lut[direction * 2 + link] = port id); a local row (home is this chip) goes to
+accumulator t % A (destination id P + t % A). The same rules as sparse_combine_rf_prepare's host
 tables (plan_reference below is the host model)."""
 
 import os
@@ -37,9 +39,14 @@ constexpr uint32_t P = get_compile_time_arg_val(9), ROWS_CAP = get_compile_time_
 constexpr uint32_t N = R * C, T = N * S * K;
 constexpr uint32_t cb_in = 0, cb_out = 1;
 // direction index (sparse_all_gather_2d DIRS): 0 X+, 1 X-, 2 Y+, 3 Y-; Y first, then X (lines)
+constexpr uint32_t WX = __WX__, WY = __WY__;  // torus axes (rings: the shorter way, ties Y- / X+ as the fabric)
 FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {
     const uint32_t sr = src / C, sc = src % C, dr = dst / C, dc = dst % C;
-    if (sr != dr) return dr > sr ? 2 : 3;
+    if (sr != dr) {
+        if constexpr (WY) return 2 * ((dr + R - sr) % R) < R ? 2 : 3;
+        return dr > sr ? 2 : 3;
+    }
+    if constexpr (WX) return 2 * ((dc + C - sc) % C) <= C ? 0 : 1;
     return dc > sc ? 0 : 1;
 }
 void kernel_main() {
@@ -98,7 +105,7 @@ void kernel_main() {
         for (uint32_t t = 0; t < S; ++t) {
             const uint32_t base = (o * S + t) * K;
             for (uint32_t k = 0; k < K; ++k) {
-                const uint32_t g = ids[base + k], src = g / EPC, l = (t + k) % L;
+                const uint32_t g = ids[base + k], src = g / EPC, l = (t % A + src + o) % L;
                 if (src == ME) {
                     const uint32_t e = g - E0, r = fill[e]++;
                     if (r < ROWS_CAP) {
@@ -118,7 +125,7 @@ void kernel_main() {
                     if (src == ME) {
                         ++plan[16 + t % A];  // n_local
                     } else {
-                        ++plan[32 + (t % A) * 32 + src * L + l];  // want
+                        ++plan[32 + (t % A) * 32 + src];  // want (per source chip: its link is fixed)
                         ++plan[8 + lut[first_hop(ME, src) * 2 + l]];  // n_ret: the port facing the source
                     }
                 }
@@ -174,9 +181,14 @@ constexpr uint32_t O_NINJ = O_NIN + M * 64;                       // this core's
 constexpr uint32_t O_TIDX = O_NINJ + 64, O_TAB = O_TIDX + al64(ROWS_CAP * 4);
 constexpr uint32_t O_PLAN = O_TAB + al64(ROWS_CAP * 8), O_CNT = O_PLAN + 4096, O_REG = O_CNT + al64(NG * 4);
 constexpr uint32_t O_END = O_REG + al64(NG * 4);
+constexpr uint32_t WX = __WX__, WY = __WY__;  // torus axes (rings: the shorter way, ties Y- / X+ as the fabric)
 FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {
     const uint32_t sr = src / C, sc = src % C, dr = dst / C, dc = dst % C;
-    if (sr != dr) return dr > sr ? 2 : 3;
+    if (sr != dr) {
+        if constexpr (WY) return 2 * ((dr + R - sr) % R) < R ? 2 : 3;
+        return dr > sr ? 2 : 3;
+    }
+    if constexpr (WX) return 2 * ((dc + C - sc) % C) <= C ? 0 : 1;
     return dc > sc ? 0 : 1;
 }
 void kernel_main() {
@@ -234,11 +246,11 @@ void kernel_main() {
     uint32_t* part = reinterpret_cast<uint32_t*>(B + O_PART);
     for (uint32_t i = 0; i < 544; ++i) part[i] = 0;
     for (uint32_t hi = 0; hi < HS; ++hi) {
-        const uint32_t idx = p * HS + hi, t = idx / K, k = idx % K, src = hid[hi] / EPC, l = (t + k) % L;
+        const uint32_t idx = p * HS + hi, t = idx / K, src = hid[hi] / EPC, l = (t % A + src + ME) % L;
         if (src == ME) {
             ++part[16 + t % A];
         } else {
-            ++part[32 + (t % A) * 32 + src * L + l];
+            ++part[32 + (t % A) * 32 + src];
             ++part[8 + lut[first_hop(ME, src) * 2 + l]];
         }
     }
@@ -298,7 +310,7 @@ void kernel_main() {
                 if (o == ME) {
                     dest = P + t % A;
                 } else {
-                    dest = lut[first_hop(ME, o) * 2 + (t + k) % L];
+                    dest = lut[first_hop(ME, o) * 2 + (t % A + ME + o) % L];
                     ++ninj[dest];
                 }
                 tab[2 * r] = dest | (w << 16);
@@ -414,9 +426,14 @@ constexpr uint32_t O_PART = O_STG + al64(STG);              // home partial (pla
 constexpr uint32_t O_TIDX = O_PART + al64(544 * 4), O_TAB = O_TIDX + al64(ROWS_CAP * 4);
 constexpr uint32_t O_PLAN = O_TAB + al64(ROWS_CAP * 8), O_CNT = O_PLAN + 4096, O_REG = O_CNT + al64(NG * 4);
 constexpr uint32_t O_DBG = O_REG + al64(NG * 4);  // 64 bytes of timestamps, then 512 slice records
+constexpr uint32_t WX = __WX__, WY = __WY__;  // torus axes (rings: the shorter way, ties Y- / X+ as the fabric)
 FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {
     const uint32_t sr = src / C, sc = src % C, dr = dst / C, dc = dst % C;
-    if (sr != dr) return dr > sr ? 2 : 3;
+    if (sr != dr) {
+        if constexpr (WY) return 2 * ((dr + R - sr) % R) < R ? 2 : 3;
+        return dr > sr ? 2 : 3;
+    }
+    if constexpr (WX) return 2 * ((dc + C - sc) % C) <= C ? 0 : 1;
     return dc > sc ? 0 : 1;
 }
 void kernel_main() {
@@ -556,7 +573,7 @@ void kernel_main() {
         if (o == ME) {
             dest = P + t % A;
         } else {
-            const uint32_t l = L == 2 ? ((t + kk) & 1) : (t + kk) % L;
+            const uint32_t l = (t % A + ME + o) % L;  // (fixed per (accumulator, source, home): one ring each)
             dest = hop[o * L + l];
             ++ninj[dest];
         }
@@ -681,24 +698,24 @@ void kernel_main() {
             uint32_t wl[32], nlo = 0;
             for (uint32_t i = 0; i < 32; ++i) wl[i] = 0;
             const uint32_t* hw = reinterpret_cast<const uint32_t*>(hid);
-            auto one = [&](uint32_t g, uint32_t l) __attribute__((always_inline)) {
+            const uint32_t la = aa + ME;  // (a row's link: (accumulator + source + home) % L)
+            auto one = [&](uint32_t g) __attribute__((always_inline)) {
                 const uint32_t src = g / EPC;
                 if (src == ME) {
                     ++nlo;
                 } else {
-                    ++wl[src * L + l];
-                    ++nret[hop[src * L + l]];
+                    ++wl[src];
+                    ++nret[hop[src * L + (la + src) % L]];
                 }
             };
             for (uint32_t t = aa; t < S; t += A) {
-                static_assert(K % 4 == 0 && L == 2, "pairs of ids per word, two links");
+                static_assert(K % 4 == 0 && L == 2 && N <= 32, "pairs of ids per word, two links, want[32]");
                 for (uint32_t kk = 0; kk < K; kk += 4) {  // (two words, four ids, in flight)
                     const uint32_t w0 = hw[(t * K + kk) / 2], w1 = hw[(t * K + kk) / 2 + 1];
-                    const uint32_t l0 = (t + kk) & 1;
-                    one(w0 & 0xFFFF, l0);
-                    one(w0 >> 16, l0 ^ 1);
-                    one(w1 & 0xFFFF, l0);
-                    one(w1 >> 16, l0 ^ 1);
+                    one(w0 & 0xFFFF);
+                    one(w0 >> 16);
+                    one(w1 & 0xFFFF);
+                    one(w1 >> 16);
                 }
             }
             pw[0] = nlo;
@@ -783,14 +800,25 @@ def _mc2_l1_bytes(M, CH, HS, EPC, NG, rows_cap, home_rows=0):
     )
 
 
-def first_hop_idx(src, dst, C):
+def first_hop_idx(src, dst, C, R=None, wrap=(False, False)):
+    """DIRS index (0 X+, 1 X-, 2 Y+, 3 Y-) of the first hop src -> dst: Y first, then X; wrap = (X, Y) rings, the
+    shorter way, ties Y- / X+ (the fabric's routing tables)."""
     sr, sc, dr, dc = src // C, src % C, dst // C, dst % C
     if sr != dr:
+        if wrap[1]:
+            return 2 if 2 * ((dr - sr) % R) < R else 3
         return 2 if dr > sr else 3
+    if wrap[0]:
+        return 0 if 2 * ((dc - sc) % C) <= C else 1
     return 0 if dc > sc else 1
 
 
-def plan_reference(ids, wbits, me, R, C, S, K, EPC, NG, A, L, P, lut, rows_cap):
+def link_of(acc, src, home, L):
+    """The link of every row from chip src to accumulator acc of chip home (one ring per source at each accumulator)."""
+    return (acc + src + home) % L
+
+
+def plan_reference(ids, wbits, me, R, C, S, K, EPC, NG, A, L, P, lut, rows_cap, wrap=(False, False)):
     """Host model of the planner for chip `me`: ids / wbits [N, S, K] (global expert ids, bf16 bits)."""
     N = R * C
     E0 = me * EPC
@@ -810,11 +838,12 @@ def plan_reference(ids, wbits, me, R, C, S, K, EPC, NG, A, L, P, lut, rows_cap):
     plan[P_ROWS], plan[P_OVER] = off, int(off > rows_cap)
     idsl, wl = ids.tolist(), wbits.tolist()
     for o in range(N):
-        dh = 0 if o == me else first_hop_idx(me, o, C)
+        dh = 0 if o == me else first_hop_idx(me, o, C, R, wrap)
         for t in range(S):
             for k in range(K):
                 g, wb = idsl[o][t][k], wl[o][t][k]
-                src, l = g // EPC, (t + k) % L
+                src = g // EPC
+                l = link_of(t % A, src, o, L)
                 if src == me:
                     e = g - E0
                     r = fill[e]
@@ -832,17 +861,17 @@ def plan_reference(ids, wbits, me, R, C, S, K, EPC, NG, A, L, P, lut, rows_cap):
                     if src == me:
                         plan[P_NLOC + t % A] += 1
                     else:
-                        plan[P_WANT + (t % A) * 32 + src * L + l] += 1
-                        plan[P_NRET + lut[first_hop_idx(me, src, C) * 2 + l]] += 1
+                        plan[P_WANT + (t % A) * 32 + src] += 1
+                        plan[P_NRET + lut[first_hop_idx(me, src, C, R, wrap) * 2 + l]] += 1
     return dict(counts=cnt, regions=reg, token_index=tidx, table=tab, plan=plan)
 
 
-def port_luts(mesh_device, num_links):
+def port_luts(mesh_device, num_links, torus=(False, False)):
     """Per chip coord: lut[direction * 2 + link] = port id (the chip's ports in DIRS / link order, as
     sparse_combine_rf_prepare numbers them), and the port count."""
     from .sparse_all_gather_2d import DIRS, mesh_plan
 
-    chips, _, _ = mesh_plan(mesh_device, num_links)
+    chips, _, _ = mesh_plan(mesh_device, num_links, torus)
     luts, n = {}, {}
     for ch, ports in chips.items():
         lut, j = [0xFF] * 8, 0
@@ -856,18 +885,36 @@ def port_luts(mesh_device, num_links):
 
 
 def combine_planner_prepare(
-    mesh_device, *, S, K, EPC, A, L, port_luts, n_ports, rows_cap, core=(0, 0), cores=None, row_pages=False, joint=False,
-    tokens_per_page=1
+    mesh_device,
+    *,
+    S,
+    K,
+    EPC,
+    A,
+    L,
+    port_luts,
+    n_ports,
+    rows_cap,
+    core=(0, 0),
+    cores=None,
+    row_pages=False,
+    joint=False,
+    tokens_per_page=1,
+    torus=(False, False),
 ):
     """port_luts[coord] = 8 port ids (direction * 2 + link; 0xFF none), n_ports[coord] = P. Returns run(ids, wts) ->
     dict of the per-chip output tensors (counts, regions, token_index, table, plan), allocated once. ids / wts: one
     row-major page [1, N S K] each, or with row_pages (the multi-core planner) [N S, K] row-major (a page per token),
     or with joint (and row_pages) one [N S, 2 K] uint16 row-major tensor, each token's ids then its weights' bits
     (run(t, t))."""
+    from .sparse_all_gather_2d import mesh_plan
+
     R, C = tuple(mesh_device.shape)
     N = R * C
     NG = N * EPC
-    assert rows_cap % 32 == 0 and N * S * K < (1 << 16) * 64
+    assert rows_cap % 32 == 0 and N * S * K < (1 << 16) * 64 and N <= 32 and A <= 16
+    _, _, (wrap_x, wrap_y) = mesh_plan(mesh_device, L, torus)
+    wsub = lambda src: src.replace("__WX__", str(int(wrap_x))).replace("__WY__", str(int(wrap_y)))  # noqa: E731
     shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(0, 1))
     zeros = lambda w: ttnn.from_torch(  # noqa: E731
         torch.zeros(R, C, 1, w, dtype=torch.int32),
@@ -951,7 +998,8 @@ def combine_planner_prepare(
                     rt[x[0]][x[1]] = head + [pi] + pxy + [int(tdbg_t.buffer_address())] + rect
                 pd.kernels = [
                     ttnn.KernelDescriptor(
-                        kernel_source=(_PLANNER_MC2 if V2 else _PLANNER_MC).replace("__RPAGE__", str((4 if joint else 2) * K if row_pages else 0))
+                        kernel_source=wsub(_PLANNER_MC2 if V2 else _PLANNER_MC)
+                        .replace("__RPAGE__", str((4 if joint else 2) * K if row_pages else 0))
                         .replace("__RJOINT__", str(int(joint)))
                         .replace("__RPT__", str(tokens_per_page)),
                         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
@@ -1000,7 +1048,7 @@ def combine_planner_prepare(
                 ] + list(port_luts[(r, cc)])
                 pd.kernels = [
                     ttnn.KernelDescriptor(
-                        kernel_source=_PLANNER,
+                        kernel_source=wsub(_PLANNER),
                         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
                         core_ranges=cs,
                         compile_time_args=[me, R, C, S, K, EPC, NG, A, L, n_ports[(r, cc)], rows_cap],

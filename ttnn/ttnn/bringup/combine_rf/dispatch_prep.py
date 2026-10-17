@@ -16,7 +16,7 @@ import os
 
 import ttnn
 
-from .sparse_all_gather_2d import _COMMON, mesh_plan, span_table
+from .sparse_all_gather_2d import _COMMON, mesh_plan, route_words, span_table
 
 _ROUTE = (
     _COMMON
@@ -37,9 +37,18 @@ void kernel_main() {
     const uint32_t t0 = get_arg_val<uint32_t>(2), t1 = get_arg_val<uint32_t>(3);  // (this core's tokens)
     const uint32_t scratch = get_write_ptr(0);
     const auto ids = TensorAccessor(ids_args, ids_addr, ROW * PT);
-    const auto route = TensorAccessor(route_args, route_addr, S * 4);
+    const auto route = TensorAccessor(route_args, route_addr, S * 4 * RW);
     constexpr uint32_t RS = (ROW + 63) / 64 * 64;  // (64-byte landing: a DRAM read keeps its source alignment)
     const uint32_t rows_l1 = (scratch + 63) & ~63u, words_l1 = rows_l1 + (t1 - t0) * RS;
+    auto put = [&](uint32_t t, uint32_t m, uint32_t flags) {  // (flags: order | link << 1)
+        volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words_l1);
+        if constexpr (RW == 2) {
+            w[2 * (t - t0)] = m;
+            w[2 * (t - t0) + 1] = flags;
+        } else {
+            w[t - t0] = m | (flags << 16);
+        }
+    };
     if constexpr (__NOROUTE__) {  // (probe: no route words)
         return;
     }
@@ -50,7 +59,6 @@ void kernel_main() {
     noc_async_read_barrier();
     invalidate_l1_cache();
     const uint32_t r0 = ME / C, c0 = ME % C;
-    volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words_l1);
     for (uint32_t t = t0; t < t1; ++t) {
         const uint32_t* id2 = reinterpret_cast<const uint32_t*>(rows_l1 + (t - t0) * RS);  // two ids a word
         uint32_t m = 0;
@@ -60,7 +68,7 @@ void kernel_main() {
         }
         m &= ~(1u << ME);
         if (m == 0) {
-            words[t - t0] = 0;
+            put(t, 0, 0);
             continue;
         }
         // links of the two dimension-order trees (X first: along my row to every column with a destination, then
@@ -75,9 +83,9 @@ void kernel_main() {
         }
         const uint32_t hsh = t * 2654435761u;
         const uint32_t order = hx < hy ? 0 : (hy < hx ? 1 : (hsh >> 31) & 1);
-        words[t - t0] = m | (order << 16) | (((hsh >> 29) & 1) << 17);
+        put(t, m, order | (((hsh >> 29) & 1) << 1));
     }
-    if (t1 > t0) noc_async_write(words_l1, route.get_noc_addr(0) + t0 * 4, (t1 - t0) * 4);
+    if (t1 > t0) noc_async_write(words_l1, route.get_noc_addr(0) + t0 * 4 * RW, (t1 - t0) * 4 * RW);
     noc_async_write_barrier();
 }
 """
@@ -115,23 +123,39 @@ void kernel_main() {
 
 
 def dispatch_prep_prepare(
-    mesh_device, *, S, K, EPC, n_route=8, n_copy=16, batch=4, torus=(False, False), rows=(8, 9), tokens_per_page=1,
+    mesh_device,
+    *,
+    S,
+    K,
+    EPC,
+    n_route=8,
+    n_copy=16,
+    batch=4,
+    torus=(False, False),
+    rows=(8, 9),
+    tokens_per_page=1,
     copy=True,
 ):
     """Returns run(joint_routing, own_rows, xbuf, route) (one generic_op: route words + own-row copy).
     joint_routing [N S, 2 K] uint16 row-major (replicated), own_rows [S, W] bf16 row-major, xbuf [1, 1, N S, W]
-    row-major, route [1, 1, 1, S] uint32 (outputs written in place). Cores (logical): n_route route cores on row
+    row-major, route [1, 1, 1, RW S] uint32 (RW = route_words(N); outputs written in place). Cores (logical): n_route route cores on row
     rows[0] (each a token range: 8-word multiples, 32-byte aligned route writes), n_copy copy cores on row rows[1].
-    copy=False: route words only (the own rows already in xbuf, e.g. layout_ops' untilize with a row offset; own None)."""
+    copy=False: route words only (the own rows already in xbuf, e.g. layout_ops' untilize with a row offset; own None).
+    """
     R, C = tuple(mesh_device.shape)
     N = R * C
     E = N * EPC
     _, _, (wrap_x, wrap_y) = mesh_plan(mesh_device, 2, torus)
+    RW = route_words(N)
+    assert N <= 32
     chips_of = ", ".join(str(e // EPC) for e in range(E))
     grid = mesh_device.compute_with_storage_grid_size()
     assert n_route <= grid.x and n_copy <= 2 * grid.x and max(rows) < grid.y and n_route + n_copy <= 2 * grid.x
     rcs = [ttnn.CoreCoord(i, rows[0]) for i in range(n_route)]
-    cps = [ttnn.CoreCoord(i % grid.x, rows[1]) if i < grid.x else ttnn.CoreCoord(n_route + i - grid.x, rows[0]) for i in range(n_copy)]
+    cps = [
+        ttnn.CoreCoord(i % grid.x, rows[1]) if i < grid.x else ttnn.CoreCoord(n_route + i - grid.x, rows[0])
+        for i in range(n_copy)
+    ]
     rper = (-(-S // n_route) + 7) // 8 * 8  # (tokens per route core: 8-word multiples, 32-byte aligned writes)
     st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
     dm = ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default)
@@ -141,7 +165,7 @@ def dispatch_prep_prepare(
         W = int(xbuf.shape[-1])
         progs = {}
         row = W * 2
-        route_l1 = rper * (((4 * K) + 63) // 64 * 64) + rper * 4 + 128
+        route_l1 = rper * (((4 * K) + 63) // 64 * 64) + rper * 4 * RW + 128
         mesh_desc = ttnn.MeshProgramDescriptor()
         jr_ct = list(ttnn.TensorAccessorArgs(jr).get_compile_time_args())
         rt_ct = list(ttnn.TensorAccessorArgs(route).get_compile_time_args())
@@ -151,11 +175,16 @@ def dispatch_prep_prepare(
         for me in range(N):
             r, c = me // C, me % C
             src = (
-                _ROUTE.replace("__R__", str(R)).replace("__C__", str(C)).replace("__S__", str(S))
+                _ROUTE.replace("__R__", str(R))
+                .replace("__C__", str(C))
+                .replace("__S__", str(S))
                 .replace("__GMAX__", str(max(1, R + C - 3)))
+                .replace("__RW__", str(RW))
                 .replace("__XSPAN__", ", ".join(map(str, span_table(C, wrap_x))))
                 .replace("__YSPAN__", ", ".join(map(str, span_table(R, wrap_y))))
-                .replace("__K__", str(K)).replace("__ME__", str(me)).replace("__E__", str(E))
+                .replace("__K__", str(K))
+                .replace("__ME__", str(me))
+                .replace("__E__", str(E))
                 .replace("__CHIPS__", chips_of)
                 .replace("__PT__", str(tokens_per_page))
                 .replace("__NOROUTE__", "1" if os.environ.get("DPREP_PROBE") == "noroute" else "0")
@@ -165,22 +194,56 @@ def dispatch_prep_prepare(
             rset = ttnn.CoreRangeSet([ttnn.CoreRange(rcs[0], rcs[-1])])
             cset = ttnn.CoreRangeSet([ttnn.CoreRange(c_, c_) for c_ in cps])
             program.cbs = [
-                ttnn.CBDescriptor(total_size=route_l1, core_ranges=rset,
-                                  format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint32, route_l1)]),
-            ] + ([ttnn.CBDescriptor(total_size=2 * batch * row, core_ranges=cset,
-                                    format_descriptors=[ttnn.CBFormatDescriptor(1, ttnn.uint32, row)])] if copy else [])
+                ttnn.CBDescriptor(
+                    total_size=route_l1,
+                    core_ranges=rset,
+                    format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint32, route_l1)],
+                ),
+            ] + (
+                [
+                    ttnn.CBDescriptor(
+                        total_size=2 * batch * row,
+                        core_ranges=cset,
+                        format_descriptors=[ttnn.CBFormatDescriptor(1, ttnn.uint32, row)],
+                    )
+                ]
+                if copy
+                else []
+            )
             rrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for i, rc in enumerate(rcs):
-                rrt[rc.x][rc.y] = [int(jr.buffer_address()), int(route.buffer_address()), min(S, i * rper), min(S, (i + 1) * rper)]
+                rrt[rc.x][rc.y] = [
+                    int(jr.buffer_address()),
+                    int(route.buffer_address()),
+                    min(S, i * rper),
+                    min(S, (i + 1) * rper),
+                ]
             for i, cc in enumerate(cps if copy else []):
                 t0, t1 = min(S, i * per), min(S, (i + 1) * per)
                 crt[cc.x][cc.y] = [int(own.buffer_address()), int(xbuf.buffer_address()), t0, t1, me * S, 0]
             program.kernels = [
-                ttnn.KernelDescriptor(kernel_source=src, source_type=st, core_ranges=rset,
-                                      compile_time_args=jr_ct + rt_ct, runtime_args=rrt, config=dm),
-            ] + ([ttnn.KernelDescriptor(kernel_source=copy_src, source_type=st, core_ranges=cset,
-                                        compile_time_args=[row, batch] + own_ct + xb_ct, runtime_args=crt, config=dm)]
-                 if copy else [])
+                ttnn.KernelDescriptor(
+                    kernel_source=src,
+                    source_type=st,
+                    core_ranges=rset,
+                    compile_time_args=jr_ct + rt_ct,
+                    runtime_args=rrt,
+                    config=dm,
+                ),
+            ] + (
+                [
+                    ttnn.KernelDescriptor(
+                        kernel_source=copy_src,
+                        source_type=st,
+                        core_ranges=cset,
+                        compile_time_args=[row, batch] + own_ct + xb_ct,
+                        runtime_args=crt,
+                        config=dm,
+                    )
+                ]
+                if copy
+                else []
+            )
             mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
             progs[(r, c)] = program
         return progs if per_chip else mesh_desc
@@ -218,17 +281,35 @@ def own_rows_copy_prepare(mesh_device, *, S, n_copy=4, batch=8, row0=8):
         for me in range(N):
             program = ttnn.ProgramDescriptor()
             program.cbs = [
-                ttnn.CBDescriptor(total_size=2 * batch * row, core_ranges=cset,
-                                  format_descriptors=[ttnn.CBFormatDescriptor(1, ttnn.uint32, row)])
+                ttnn.CBDescriptor(
+                    total_size=2 * batch * row,
+                    core_ranges=cset,
+                    format_descriptors=[ttnn.CBFormatDescriptor(1, ttnn.uint32, row)],
+                )
             ]
             rt = ttnn.RuntimeArgs()
             for i, cc in enumerate(cps):
-                rt[cc.x][cc.y] = [int(own.buffer_address()), int(buf.buffer_address()), min(S, i * per), min(S, (i + 1) * per), me * S, 0]
+                rt[cc.x][cc.y] = [
+                    int(own.buffer_address()),
+                    int(buf.buffer_address()),
+                    min(S, i * per),
+                    min(S, (i + 1) * per),
+                    me * S,
+                    0,
+                ]
             program.kernels = [
-                ttnn.KernelDescriptor(kernel_source=src, source_type=st, core_ranges=cset,
-                                      compile_time_args=[row, batch] + own_ct + b_ct, runtime_args=rt, config=dm)
+                ttnn.KernelDescriptor(
+                    kernel_source=src,
+                    source_type=st,
+                    core_ranges=cset,
+                    compile_time_args=[row, batch] + own_ct + b_ct,
+                    runtime_args=rt,
+                    config=dm,
+                )
             ]
-            mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(me // C, me % C), ttnn.MeshCoordinate(me // C, me % C))] = program
+            mesh_desc[
+                ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(me // C, me % C), ttnn.MeshCoordinate(me // C, me % C))
+            ] = program
         return mesh_desc
 
     def run(own, buf):
@@ -246,12 +327,21 @@ def all_chips_route_words(mesh_device, S):
 
     R, C = tuple(mesh_device.shape)
     N = R * C
-    w = torch.zeros(N, 1, 1, S, dtype=torch.int64)
+    RW = route_words(N)
+    w = torch.zeros(N, 1, 1, RW * S, dtype=torch.int64)
     for me in range(N):
         for t in range(S):
             h = (t * 2654435761) & 0xFFFFFFFF
-            w[me, 0, 0, t] = (((1 << N) - 1) & ~(1 << me)) | (((h >> 31) & 1) << 16) | (((h >> 29) & 1) << 17)
+            m, f = ((1 << N) - 1) & ~(1 << me), ((h >> 31) & 1) | (((h >> 29) & 1) << 1)
+            if RW == 2:
+                w[me, 0, 0, 2 * t], w[me, 0, 0, 2 * t + 1] = m - (1 << 32 if m >= 1 << 31 else 0), f
+            else:
+                w[me, 0, 0, t] = m | (f << 16)
     return ttnn.from_torch(
-        w.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        w.to(torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
