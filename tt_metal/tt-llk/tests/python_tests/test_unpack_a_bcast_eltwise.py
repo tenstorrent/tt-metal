@@ -55,11 +55,17 @@ INPUT_DIMENSIONS = [
 # 64 bytes apart instead of 32: the row-broadcast unpacker must take its
 # SrcA Y-stride from the dst format. The merge-gate test pairs each dest_acc with
 # the format that exercises it (16-bit SrcA rows without fp32 dest, Tf32 SrcA rows
-# with it) == 72 cases; the full format x dest_acc grid (144 cases) runs nightly.
-# The two are the same body.
+# with it), 72 cases. The other two (format, dest_acc) pairs of the grid, where
+# SrcA rows stay 16-bit but one side is 32-bit (Float16_b into an fp32 Dest,
+# Float32 in L1 narrowed to Float16_b in SrcA), run nightly as the other 72, so
+# the two tests together cover the grid once. Both call the same body.
 REGULAR_FORMATS = {
     DestAccumulation.No: input_output_formats([DataFormat.Float16_b], same=True),
     DestAccumulation.Yes: input_output_formats([DataFormat.Float32], same=True),
+}
+NIGHTLY_FORMATS = {
+    DestAccumulation.No: input_output_formats([DataFormat.Float32], same=True),
+    DestAccumulation.Yes: input_output_formats([DataFormat.Float16_b], same=True),
 }
 
 
@@ -86,16 +92,13 @@ def test_unp_bcast_sub_sdpa(
 @skip_for_blackhole
 @pytest.mark.nightly
 @parametrize(
-    formats=input_output_formats(
-        [DataFormat.Float16_b, DataFormat.Float32],
-        same=True,
-    ),
-    mathop=MATHOPS,
     dest_acc=DEST_ACC_MODES,
+    formats=lambda dest_acc: NIGHTLY_FORMATS[dest_acc],
+    mathop=MATHOPS,
     srca_reuse_count=SRCA_REUSE_COUNTS,
     input_dimensions=INPUT_DIMENSIONS,
 )
-def test_unp_bcast_sub_sdpa_full_grid(
+def test_unp_bcast_sub_sdpa_mixed_width(
     formats,
     mathop,
     dest_acc,
