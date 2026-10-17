@@ -413,6 +413,14 @@ def test_fmod_nan(testing_dtype, device):
     assert torch.equal(torch.isnan(golden), torch.isnan(output_tensor))
 
 
+_QUASAR_MODULO_SKIP = "The Quasar remainder and fmod kernels have not received these float fixes yet"
+
+
+def _skip_on_quasar(device):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip(_QUASAR_MODULO_SKIP)
+
+
 def _opposite_sign_exact_multiples(torch_dtype, count, seed=0):
     """Pairs (a, b) with a = n * |b| exactly representable in torch_dtype and
     sign(a) != sign(b), so remainder(a, b) is exactly 0. Deterministic (seeded).
@@ -467,6 +475,7 @@ def _opposite_sign_exact_multiples(torch_dtype, count, seed=0):
     ],
 )
 def test_remainder_opposite_sign_exact_multiple(testing_dtype, pairs, device):
+    _skip_on_quasar(device)
     torch_dtype = getattr(torch, testing_dtype)
     ttnn_dtype = getattr(ttnn, testing_dtype)
 
@@ -492,14 +501,6 @@ def test_remainder_opposite_sign_exact_multiple(testing_dtype, pairs, device):
         f"remainder({torch_input_a[mismatch][0].item()}, {torch_input_b[mismatch][0].item()}) = "
         f"{output_tensor[mismatch][0].item()}"
     )
-
-
-_QUASAR_MODULO_SKIP = "The Quasar remainder and fmod kernels have not received these float fixes yet"
-
-
-def _skip_on_quasar(device):
-    if device.arch() == ttnn.device.Arch.QUASAR:
-        pytest.skip(_QUASAR_MODULO_SKIP)
 
 
 # Quotients of 2^24 and above: floor(a / b) can no longer be stepped by one in float, so the
