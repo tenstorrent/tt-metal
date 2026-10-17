@@ -64,6 +64,19 @@ class DeepSeekV41FlashAdapter(PrefillModelAdapter):
         sp, tp = mesh_shape
         path = Path(env_cache) / f"{sp}x{tp}"
         path.mkdir(parents=True, exist_ok=True)
+        # 10-17 (V4.1-Flash-1017): the cache's file names carry no checkpoint identity, and 1017 has V4.1's exact tensor names /
+        # shapes -- a cache built from one checkpoint would load silently for the other. Record the checkpoint's id (its
+        # .tt_model_id file, else its path) and refuse a cache built from another one.
+        model_dir = Path(os.environ.get("PREFILL_HF_MODEL", self.hf_model_default))
+        mid_file = model_dir / ".tt_model_id"
+        mid = mid_file.read_text().strip() if mid_file.exists() else str(model_dir.resolve())
+        marker = Path(env_cache) / ".tt_model_id"
+        if marker.exists() and marker.read_text().strip() != mid:
+            raise RuntimeError(
+                f"[dsv4.1-flash] prefill weight cache {env_cache} was built from {marker.read_text().strip()!r}, not {mid!r}: "
+                "use another PREFILL_TTNN_CACHE (stale-cache guard)"
+            )
+        marker.write_text(mid)
         return path
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams):
