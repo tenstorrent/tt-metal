@@ -253,29 +253,94 @@ inline InstrModLoadStore dbg_dest_row_save_mode()
     return (cfg_read(ALU_ACC_CTRL_SFPU_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK) ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
 }
 
+// RISC view of the backend configuration, in 32-bit words (BackendConfiguration.md): Config[2][CFG_STATE_SIZE * 4],
+// then ConfigDualWrite[CFG_STATE_SIZE * 4], then ThreadConfig[3][THD_STATE_SIZE] of {uint16_t Value, Padding}.
+struct dbg_cfg_layout
+{
+    constexpr static std::uint32_t STATE_BANKS            = 2;
+    constexpr static std::uint32_t DUAL_WRITE_BANKS       = 1;
+    constexpr static std::uint32_t WORDS_PER_STATE_ENTRY  = 4; // CFG_STATE_SIZE counts 16-byte entries
+    constexpr static std::uint32_t WORDS_PER_THREAD_ENTRY = 1; // {uint16_t Value, Padding}
+    constexpr static std::uint32_t THREAD_CFG_BASE        = (STATE_BANKS + DUAL_WRITE_BANKS) * CFG_STATE_SIZE * WORDS_PER_STATE_ENTRY;
+};
+
+// The TRISC this code executes on: the thread whose ThreadConfig bank the SETC16s below write, and so the only bank
+// whose dest offset the SrcA dump may save and restore. Every compute build defines it (0 unpack, 1 math, 2 pack).
+#if defined(COMPILE_FOR_TRISC)
+constexpr std::uint32_t DBG_EXECUTING_TRISC = COMPILE_FOR_TRISC;
+static_assert(DBG_EXECUTING_TRISC <= 2, "COMPILE_FOR_TRISC must select TRISC0, TRISC1 or TRISC2");
+#else
+#error "ckernel_debug.h: COMPILE_FOR_TRISC must name the executing TRISC"
+#endif
+
+// Index of one of the executing TRISC's thread-CFG words in the RISC view of the backend configuration.
+constexpr std::uint32_t dbg_thread_cfg_word(const std::uint32_t cfg_addr32)
+{
+    return dbg_cfg_layout::THREAD_CFG_BASE + (DBG_EXECUTING_TRISC * THD_STATE_SIZE + cfg_addr32) * dbg_cfg_layout::WORDS_PER_THREAD_ENTRY;
+}
+
+// The executing thread's dest offset (DEST_TARGET_REG_CFG_MATH_Offset) as its next MOVA2D, SFPLOAD or SFPSTORE would
+// add it. Read from the RISC, so queued SETC16 writes must have landed first (tensix_sync).
+inline std::uint32_t dbg_read_dest_offset()
+{
+    volatile std::uint32_t *cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_CFG_BASE);
+    return (cfg[dbg_thread_cfg_word(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32)] & DEST_TARGET_REG_CFG_MATH_Offset_MASK) >> DEST_TARGET_REG_CFG_MATH_Offset_SHAMT;
+}
+
+// Physical dest row of a logical row as the debug bus addresses it (Dst.md): the untilize remap permutes bits 3-5
+// when DEST_ACCESS_CFG_remap_addrs is set; a 32-bit DEST spreads each logical row over two physical rows (the
+// swizzle_32b bit permutes bits 2-4 first), with the high halves in the row returned here and the low halves 8 rows
+// further on. Reads the config from the RISC, so queued config writes must have landed first.
+inline std::uint32_t dbg_dest_physical_row(std::uint32_t row)
+{
+    if (cfg_read(DEST_ACCESS_CFG_remap_addrs_ADDR32) & DEST_ACCESS_CFG_remap_addrs_MASK)
+    {
+        row = (row & 0x3c7) ^ ((row & 0x030) >> 1) ^ ((row & 0x008) << 2);
+    }
+    if (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK)
+    {
+        if (cfg_read(DEST_ACCESS_CFG_swizzle_32b_ADDR32) & DEST_ACCESS_CFG_swizzle_32b_MASK)
+        {
+            row = (row & 0x3f3) ^ ((row & 0x018) >> 1) ^ ((row & 0x004) << 1);
+        }
+        row = ((row & 0x1f8) << 1) | (row & 0x207);
+    }
+    return row;
+}
+
+// Dump one row of SrcA, SrcB or DEST over the debug bus into rd_data[8], from inside a dbg_thread_halt /
+// dbg_thread_unhalt bracket (the math thread for every in-tree caller). With a 32-bit DEST each word holds the high
+// 16 bits of two datums; the low halves live in the physical row 8 further on. The SrcA dump stages the row in dest
+// at the executing thread's dest offset -- the row the caller's last op wrote, so a defined one -- restores it
+// before returning, and leaves the thread's dest offset untouched.
 inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t row_addr, std::uint32_t *rd_data)
 {
     // Dest offset is added to row_addr to dump currently used half of the dest accumulator (SyncHalf dest mode)
     std::uint32_t dest_offset = 0;
     if (array_id == dbg_array_id::DEST)
     {
-        dest_offset = (dest_offset_id == 1) ? DEST_REGISTER_HALF_SIZE : 0;
+        dest_offset = get_dest_buffer_base();
     }
 
     // The same mode must save and restore the borrowed row; read it once, after queued config writes land.
     InstrModLoadStore save_mode = InstrModLoadStore::LO16;
+    // Physical row the SrcA row is staged in: the row at the thread's dest offset, which SFPLOAD, MOVDBGA2D and
+    // SFPSTORE all address relative to (SFPLOAD.md, the MOVA2D model). It is left where the caller put it: the
+    // caller's last op wrote that row, so it is defined, whereas rows untouched since a ZEROACC are undefined and
+    // an SFPLOAD of one is undefined behaviour (ZEROACC.md) -- the restore would then define them with junk.
+    std::uint32_t staged_row = 0;
     if (array_id == dbg_array_id::SRCA)
     {
         tensix_sync();
-        save_mode = dbg_dest_row_save_mode();
+        save_mode  = dbg_dest_row_save_mode();
+        staged_row = dbg_dest_physical_row(dbg_read_dest_offset());
 
-        // Save dest row
         // When SrcA array is selected we need to copy row from src register into dest to be able to dump data
         // Dump from SrcA array is not supported
-        // Save dest row to SFPU register
-        // Move SrcA into dest row
-        // Dump dest row
-        // Restore dest row
+        // Save the dest row at the thread's dest offset to SFPU registers
+        // Move SrcA into that row
+        // Dump that row
+        // Restore it
         addr_mod_t {
             .srca = {.incr = 0, .clr = 0, .cr = 0},
             .srcb = {.incr = 0, .clr = 0, .cr = 0},
@@ -285,8 +350,8 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
 
         // Clear counters
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
-        TT_SFPLOAD(p_sfpu::LREG3, save_mode, 0 /*sfpu_addr_mode*/, 0 /*dest_reg_addr*/); // Save dest addr 0 (even cols) to LREG_3
-        TT_SFPLOAD(p_sfpu::LREG4, save_mode, 0 /*sfpu_addr_mode*/, 2 /*dest_reg_addr*/); // Save dest addr 0 (odd cols)  to LREG_4
+        TT_SFPLOAD(p_sfpu::LREG3, save_mode, 0 /*sfpu_addr_mode*/, 0 /*dest_reg_addr*/); // Save the row at the dest offset (even cols) to LREG_3
+        TT_SFPLOAD(p_sfpu::LREG4, save_mode, 0 /*sfpu_addr_mode*/, 2 /*dest_reg_addr*/); // Save the row at the dest offset (odd cols)  to LREG_4
 
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SFPU1);
 
@@ -298,7 +363,7 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
         // documented as unsupported on Blackhole.
         TTI_CLEARDVALID(0b01, 0);
 
-        // Copy single row from SrcA[row_addr] to dest location 0
+        // Copy single row from SrcA[row_addr] to the row at the dest offset
         TT_MOVDBGA2D(0, row_addr, 0, p_mova2d::MOV_1_ROW, 0);
 
         // Wait for TT instructions to complete
@@ -346,8 +411,8 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
         */
     }
 
-    // Get actual row address and array id used in hw
-    std::uint32_t hw_row_addr = (array_id == dbg_array_id::SRCA) ? 0 : ((array_id == dbg_array_id::DEST) ? dest_offset + row_addr : row_addr & 0x1);
+    // Get actual row address and array id used in hw. The SrcA row sits where MOVDBGA2D staged it.
+    std::uint32_t hw_row_addr = (array_id == dbg_array_id::SRCA) ? staged_row : ((array_id == dbg_array_id::DEST) ? dest_offset + row_addr : row_addr & 0x1);
 
     std::uint32_t hw_array_id = (array_id == dbg_array_id::SRCA) ? dbg_array_id::DEST : array_id;
 
@@ -378,13 +443,16 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
     dbg_array_rd_en.val = 0;
     reg_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_EN, dbg_array_rd_en.val);
 
-    // Restore dest row
+    // Restore the borrowed row
     if (array_id == dbg_array_id::SRCA)
     {
-        TT_SFPSTORE(p_sfpu::LREG3, save_mode, 0 /*sfpu_addr_mode*/, 0 /*dest_reg_addr*/); // Restore dest addr 0 (even cols) from LREG_3
-        TT_SFPSTORE(p_sfpu::LREG4, save_mode, 0 /*sfpu_addr_mode*/, 2 /*dest_reg_addr*/); // Restore dest addr 0 (odd cols) from LREG_4
+        TT_SFPSTORE(p_sfpu::LREG3, save_mode, 0 /*sfpu_addr_mode*/, 0 /*dest_reg_addr*/); // Restore the row at the dest offset (even cols) from LREG_3
+        TT_SFPSTORE(p_sfpu::LREG4, save_mode, 0 /*sfpu_addr_mode*/, 2 /*dest_reg_addr*/); // Restore the row at the dest offset (odd cols) from LREG_4
         // Move to the current bank
         TTI_CLEARDVALID(1, 0);
+        // The restore is only queued at this point; a RISC reader of dest right after the call (a debug-bus read
+        // of the same row, say) would otherwise see the staged SrcA row. Drain so the restore holds on return.
+        tensix_sync();
     }
 }
 
