@@ -1278,3 +1278,6 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F98: the after-step (tail) floor of a float step also runs the tail from the CPU step output rounded to bf16 (a
   correct device's output is at least that): a top-k downstream flips near-ties on it. DeepSeek-V4.1 S.enc_source_
   engram.02: engram_kv 8e-5 vs the CPU, block-out tail 0.041 vs a 0.0033 limit (the nudge moved nothing: floor 1e-6).
+- F99: ladder states: integer states (top-k index lists) are checked by the mean per-row selection overlap with the
+  golden (thresholds.state_overlap 0.9; a wrong selector gives ~k/n), not by the PCC of the ids; pcc_state_min covers
+  float states only. DeepSeek-V4.1 M.1 precheck: topk_idx PCC 0.52-0.78 while every float state was >= 0.9959.
