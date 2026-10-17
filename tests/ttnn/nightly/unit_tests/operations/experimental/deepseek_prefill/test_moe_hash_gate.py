@@ -134,19 +134,13 @@ def test_moe_hash_gate(
     )
 
 
-def _hash_gate_case(device, seed, seq_len, total_experts, n_activated_experts, route_scale, vocab_size, score_func):
-    torch.manual_seed(seed)
-    epsilon = 1e-20
-    logits = distinct_logits((1, 1, seq_len, total_experts))
-    input_ids = torch.randint(0, vocab_size, (seq_len,), dtype=torch.int64)
-    tid2eid = torch.stack([torch.randperm(total_experts)[:n_activated_experts] for _ in range(vocab_size)]).to(
-        torch.int64
-    )
-    ref_indices, ref_weights = hash_gate_golden_act(
-        logits, input_ids, tid2eid, route_scale, epsilon, n_activated_experts, score_func
-    )
-
+def _run_hash_gate(device, logits, input_ids, tid2eid, n_activated_experts, route_scale, epsilon, score_func):
+    """Uploads logits (1, 1, seq_len, total_experts), input_ids (seq_len,) and tid2eid (vocab_size, >= n_activated),
+    runs the op without padding and returns the device tensors to retain plus the (indices, weights) sliced to
+    the real tokens and activated experts."""
+    seq_len = logits.shape[-2]
     ttnn_logits = ttnn.from_torch(logits, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    # input_ids: one ROW_MAJOR page per score height tile (32 uint32 ids), zero-padded to tile boundary.
     height_tiles = (seq_len + TILE_H - 1) // TILE_H
     ids_padded = torch.zeros(height_tiles * TILE_H, dtype=torch.int64)
     ids_padded[:seq_len] = input_ids
@@ -156,8 +150,9 @@ def _hash_gate_case(device, seed, seq_len, total_experts, n_activated_experts, r
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
     )
-    tid2eid_padded = torch.zeros(vocab_size, 16, dtype=torch.int16)
-    tid2eid_padded[:, :n_activated_experts] = tid2eid.to(torch.int16)
+    # tid2eid: ROW_MAJOR uint16, rows padded to 16 cols (32-byte NoC pages); see test_moe_hash_gate.
+    tid2eid_padded = torch.zeros(tid2eid.shape[0], 16, dtype=torch.int16)
+    tid2eid_padded[:, :n_activated_experts] = tid2eid[:, :n_activated_experts].to(torch.int16)
     ttnn_tid2eid = ttnn.from_torch(tid2eid_padded, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     ttnn_weights_out, ttnn_indices_out = ttnn.experimental.deepseek_prefill.moe_hash_gate(
         ttnn_logits,
@@ -170,13 +165,24 @@ def _hash_gate_case(device, seed, seq_len, total_experts, n_activated_experts, r
     )
     tt_weights = ttnn.to_torch(ttnn_weights_out)[:1, :1, :seq_len, :n_activated_experts]
     tt_indices = ttnn.to_torch(ttnn_indices_out)[:1, :1, :seq_len, :n_activated_experts]
-    return (
-        [ttnn_logits, ttnn_input_ids, ttnn_tid2eid, ttnn_weights_out, ttnn_indices_out],
-        tt_indices,
-        tt_weights,
-        ref_indices,
-        ref_weights,
+    return [ttnn_logits, ttnn_input_ids, ttnn_tid2eid, ttnn_weights_out, ttnn_indices_out], tt_indices, tt_weights
+
+
+def _hash_gate_case(device, seed, seq_len, total_experts, n_activated_experts, route_scale, vocab_size, score_func):
+    torch.manual_seed(seed)
+    epsilon = 1e-20
+    logits = distinct_logits((1, 1, seq_len, total_experts))
+    input_ids = torch.randint(0, vocab_size, (seq_len,), dtype=torch.int64)
+    tid2eid = torch.stack([torch.randperm(total_experts)[:n_activated_experts] for _ in range(vocab_size)]).to(
+        torch.int64
     )
+    ref_indices, ref_weights = hash_gate_golden_act(
+        logits, input_ids, tid2eid, route_scale, epsilon, n_activated_experts, score_func
+    )
+    buffers, tt_indices, tt_weights = _run_hash_gate(
+        device, logits, input_ids, tid2eid, n_activated_experts, route_scale, epsilon, score_func
+    )
+    return buffers, tt_indices, tt_weights, ref_indices, ref_weights
 
 
 def test_moe_hash_gate_program_cache_hit_patches_addresses(device):
@@ -218,11 +224,12 @@ def test_moe_hash_gate_program_cache_hit_patches_addresses(device):
 
 def test_sqrtsoftplus_weights_across_poly_boundary(device):
     """Every token routes to experts 0..5, whose logits straddle the softplus residual's polynomial
-    boundary at |logit| = 5. The residual ln(1 + exp(-|t|)) is the whole score for a negative logit
-    (0.0025 at -6, 0.0041 at -5.5), so an activation that drops it past the boundary gives experts
-    0..2 weight 0 instead of 0.022..0.032 and inflates the others to match. Checked to an absolute
-    tolerance well below that, above the bf16 output rounding."""
-    seq_len, total_experts, n_activated_experts, route_scale, vocab_size = 32, 256, 6, 1.0, 64
+    boundary at |logit| = 5. The residual ln(1 + exp(-|t|)) is the whole softplus value for a negative
+    logit (0.0025 at -6, 0.0041 at -5.5) and the score is its square root (0.050, 0.064), so an
+    activation that drops the residual past the boundary gives experts 0..2 weight 0 instead of
+    0.022..0.032 and inflates the others to match. Checked to an absolute tolerance well below that,
+    above the bf16 output rounding."""
+    seq_len, total_experts, n_activated_experts, route_scale, vocab_size = TILE_H, 256, 6, 1.0, 64
     epsilon = 1e-20
     selected_logits = torch.tensor([-6.0, -5.5, -5.25, -4.5, 0.0, 1.0])
     logits = torch.full((1, 1, seq_len, total_experts), -20.0)
@@ -233,26 +240,10 @@ def test_sqrtsoftplus_weights_across_poly_boundary(device):
     ref_indices, ref_weights = hash_gate_golden_act(
         logits, input_ids, tid2eid, route_scale, epsilon, n_activated_experts, "sqrtsoftplus"
     )
-
-    ttnn_logits = ttnn.from_torch(logits, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_input_ids = ttnn.from_torch(
-        input_ids.reshape(1, TILE_H).to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    _, tt_indices, tt_weights = _run_hash_gate(
+        device, logits, input_ids, tid2eid, n_activated_experts, route_scale, epsilon, "sqrtsoftplus"
     )
-    tid2eid_padded = torch.zeros(vocab_size, 16, dtype=torch.int16)
-    tid2eid_padded[:, :n_activated_experts] = tid2eid.to(torch.int16)
-    ttnn_tid2eid = ttnn.from_torch(tid2eid_padded, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-    ttnn_weights_out, ttnn_indices_out = ttnn.experimental.deepseek_prefill.moe_hash_gate(
-        ttnn_logits,
-        ttnn_input_ids,
-        ttnn_tid2eid,
-        n_activated_experts=n_activated_experts,
-        route_scale=route_scale,
-        epsilon=epsilon,
-        score_func="sqrtsoftplus",
-    )
-    tt_weights = ttnn.to_torch(ttnn_weights_out)[:1, :1, :seq_len, :n_activated_experts].float()
-    tt_indices = ttnn.to_torch(ttnn_indices_out)[:1, :1, :seq_len, :n_activated_experts].long()
+    tt_weights, tt_indices = tt_weights.float(), tt_indices.long()
 
     assert torch.equal(tt_indices, ref_indices.long())
     torch.testing.assert_close(

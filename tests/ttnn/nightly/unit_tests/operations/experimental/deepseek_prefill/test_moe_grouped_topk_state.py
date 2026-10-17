@@ -313,9 +313,10 @@ def test_activation_matches_torch(device, score_func):
 
 
 # Two experts around the softplus residual's polynomial boundary at |logit| = 5, as (logits, biases,
-# expert torch ranks first). The residual ln(1 + exp(-|t|)) is 0.0067 at 5 and is the whole score for
-# a negative logit, so an activation that drops it past the boundary scores every logit below -5 as
-# 0 and the gate can no longer order those experts. Both gaps are far above SORT_RESOLUTION.
+# expert torch ranks first). The residual ln(1 + exp(-|t|)) is 0.0067 at 5 and is the whole softplus
+# value for a negative logit (the score is its square root), so an activation that drops it past the
+# boundary scores every logit below -5 as 0 and the gate can no longer order those experts. Both gaps
+# are far above SORT_RESOLUTION.
 POLY_BOUNDARY_CASES = {
     # Equal bias: sqrt(softplus(-5.5)) = 0.0638 < sqrt(softplus(-5.25)) = 0.0723, a 12% gap.
     "below_boundary": ((-5.5, -5.25), (0.0, 0.0), 1),
