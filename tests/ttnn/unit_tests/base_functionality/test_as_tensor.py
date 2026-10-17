@@ -111,3 +111,36 @@ def test_as_tensor_local_dump_cleans_up_on_failure(tmp_path, monkeypatch, expect
             cache_dump_mode=ttnn.DumpTensorMode.LOCAL,
         )
     assert list(tmp_path.iterdir()) == [], "a failed dump must not leave a temp or partial cache file behind"
+
+
+@pytest.fixture
+def cache_with_failing_load(tmp_path, monkeypatch):
+    # Restores the process-wide repair switch after the test, whatever the test sets it to.
+    monkeypatch.setattr(ttnn.operations.core, "_as_tensor_cache_repair", True)
+    kwargs = dict(dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, cache_file_name=tmp_path / "cache_file")
+    ttnn.as_tensor(torch.rand((7, 3), dtype=torch.float32), **kwargs)
+    (cache_path,) = tmp_path.iterdir()
+
+    def failing_load(*args, **kwargs):
+        raise RuntimeError("read error")
+
+    monkeypatch.setattr(ttnn._ttnn.tensor, "load_tensor_flatbuffer", failing_load)
+    return kwargs, cache_path
+
+
+def test_as_tensor_cache_load_failure_raises_and_keeps_file_without_repair(cache_with_failing_load, expect_error):
+    kwargs, cache_path = cache_with_failing_load
+    good_bytes = cache_path.read_bytes()
+    ttnn.set_as_tensor_cache_repair(False)
+    with expect_error(RuntimeError, "read error"):
+        ttnn.as_tensor(torch.zeros((7, 3), dtype=torch.float32), **kwargs)
+    assert cache_path.read_bytes() == good_bytes
+
+
+def test_as_tensor_cache_load_failure_regenerates_file_with_repair(cache_with_failing_load, monkeypatch):
+    kwargs, cache_path = cache_with_failing_load
+    replacement = torch.rand((7, 3), dtype=torch.float32)
+    tensor = ttnn.as_tensor(replacement, **kwargs)
+    assert torch.equal(ttnn.to_torch(tensor), replacement)
+    monkeypatch.undo()  # read the file back with the real loader
+    assert torch.equal(ttnn.to_torch(ttnn.load_tensor(cache_path)), replacement)
