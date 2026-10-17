@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.device import LLKAssertException
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -36,6 +37,8 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_FACES,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -214,6 +217,8 @@ def test_eltwise_bcast_col_custom(
         runtimes=[
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces, num_faces, num_faces),
+            NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
+            NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim),
             TEST_FACE_DIMS(face_r_dim),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
@@ -377,6 +382,8 @@ def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag(mathop):
         runtimes=[
             TILE_COUNT(ct_dim),
             NUM_FACES(num_faces, num_faces, num_faces),
+            NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
+            NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim),
             TEST_FACE_DIMS(face_r_dim),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
@@ -414,3 +421,93 @@ def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag(mathop):
     assert passed_test(
         golden.flatten(), res.flatten(), formats.output_format
     ), "Assert against golden failed"
+
+
+@pytest.mark.parametrize("mathop", [MathOperation.Elwsub, MathOperation.Elwmul])
+def test_eltwise_bcast_col_custom_rejects_narrow_tile(mathop):
+    """A narrow 32x16 (2x1-face) operand must be refused by the LLK asserts, not computed.
+
+    The blocked bcast-col walk covers a face-row with two full 16-row faces and re-reads the
+    face-row's first SrcB face for the second one, so it is only right for a two-face-column
+    grid: 32x32 or 16x32. A 32x16 tile has one face column; its second face is the next
+    face-row, so the walk would pair SrcA face 1 with SrcB face 0 and then run a second face-row
+    over rows that were never unpacked. The op-specific shape predicate rejects it at init.
+    """
+    if (
+        mathop == MathOperation.Elwmul
+        and get_chip_architecture() != ChipArchitecture.BLACKHOLE
+    ):
+        pytest.skip("MUL bcast-col reuse scaffold is Blackhole-only")
+
+    formats = input_output_formats([DataFormat.Float16_b])[0]
+    math_fidelity = MathFidelity.LoFi
+    dest_acc = DestAccumulation.No
+    rt_dim = 1
+    ct_dim = 2
+    tile_dims = [DEFAULT_TILE_R_DIM, 16]
+    input_dimensions_A = [tile_dims[0], ct_dim * tile_dims[1]]
+    input_dimensions_B = tile_dims
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)
+    num_faces = num_faces_r_dim * num_faces_c_dim
+    assert (num_faces_r_dim, num_faces_c_dim) == (2, 1)
+
+    torch.manual_seed(0)
+    src_A = torch.randn(input_dimensions_A).to(torch.bfloat16).flatten()
+    src_B = torch.randn(input_dimensions_B).to(torch.bfloat16).flatten()
+
+    def _tilize(t, dims):
+        return tilize_block(
+            t,
+            dims,
+            formats.input_format,
+            num_faces=num_faces,
+            tile_dimensions=tile_dims,
+            face_r_dim=face_r_dim,
+        ).flatten()
+
+    configuration = TestConfig(
+        "sources/multiple_tiles_eltwise_custom_test.cpp",
+        formats,
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            INPUT_DIMENSIONS(
+                full_rt_dim=rt_dim,
+                full_ct_dim=ct_dim,
+                block_ct_dim=ct_dim,
+                block_rt_dim=rt_dim,
+            ),
+            MATH_OP(mathop=mathop),
+            BROADCAST_TYPE(BroadcastType.Column),
+            CT_DIM(ct_dim),
+            PRESERVE_SRC_ZERO_FLAG(False),
+        ],
+        runtimes=[
+            TILE_COUNT(ct_dim),
+            NUM_FACES(num_faces, num_faces, num_faces),
+            NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
+            NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim),
+            TEST_FACE_DIMS(face_r_dim),
+            NUM_BLOCKS(1),
+            NUM_TILES_IN_BLOCK(ct_dim),
+        ],
+        variant_stimuli=StimuliConfig(
+            _tilize(src_A, input_dimensions_A),
+            formats.input_format,
+            _tilize(src_B, input_dimensions_B),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=ct_dim,
+            tile_count_B=1,
+            tile_count_res=ct_dim,
+            num_faces=num_faces,
+            face_r_dim=face_r_dim,
+            tile_dimensions=tile_dims,
+            use_dense_tile_dimensions=True,
+        ),
+        dest_acc=dest_acc,
+    )
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        LLKAssertException
+    ):
+        configuration.run()

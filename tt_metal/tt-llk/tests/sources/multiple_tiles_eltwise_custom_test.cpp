@@ -25,7 +25,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces);
+    // Explicit face grid: the legacy (face_r_dim, num_faces) helper always maps two faces to a wide
+    // 16x32 tile, so a narrow 32x16 (2x1) operand can only be expressed this way.
+    const ckernel::TensorShape tensor_shape =
+        ckernel::make_tensor_shape(params.TEST_FACE_R_DIM, ckernel::MAX_FACE_C_DIM, params.num_faces_r_dim_A, params.num_faces_c_dim_A);
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src,
         formats.unpack_B_src,
@@ -57,7 +60,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces);
+    // Explicit face grid: the legacy (face_r_dim, num_faces) helper always maps two faces to a wide
+    // 16x32 tile, so a narrow 32x16 (2x1) operand can only be expressed this way.
+    const ckernel::TensorShape tensor_shape =
+        ckernel::make_tensor_shape(params.TEST_FACE_R_DIM, ckernel::MAX_FACE_C_DIM, params.num_faces_r_dim_A, params.num_faces_c_dim_A);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     if constexpr (PRESERVE_SRC_ZERO_FLAG)

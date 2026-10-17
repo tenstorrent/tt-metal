@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
+#include <algorithm>
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
@@ -779,6 +780,285 @@ void run_sub_bcast_col_custom(distributed::MeshDevice& mesh_device, const SubBca
         });
     ASSERT_TRUE(result);
 }
+// --------------------------------------------------------------------------
+// indexer_score blocked bcast-col MUL with SrcB reuse (mul_tiles_bcast_cols_custom), Blackhole only
+// --------------------------------------------------------------------------
+// Same block/data flow as the SUB runner above, with two differences that are the point of this
+// runner: the op MACs onto acquire-zeroed dest slots instead of overwriting them, and the OUTPUT
+// buffer always carries full 32x32 tiles. For 16x32 inputs the packer therefore reads the whole
+// 64-row dest slot, so dest rows 32-63 (which a one-face-row tile must never write) come back to the
+// host as the lower half of every output tile and must be exactly zero.
+
+struct MulBcastColCustomConfig {
+    std::uint32_t ct_dim = 1;
+    std::uint32_t rt_dim = 1;
+    std::uint32_t num_blocks = 1;
+    TileShape tile_shape = TileShape::FULL_TILE;
+    MathFidelity math_fidelity = MathFidelity::HiFi4;
+};
+
+void run_mul_bcast_col_custom(distributed::MeshDevice& mesh_device, const MulBcastColCustomConfig& test_config) {
+    auto& cq = mesh_device.mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
+
+    const experimental::NodeCoord node{0, 0};
+
+    const tt_metal::Tile in_tile_dims = tile_shape_to_tile.at(test_config.tile_shape);
+    const tt_metal::Tile out_tile_dims = tile_shape_to_tile.at(TileShape::FULL_TILE);
+    const std::uint32_t tile_width = in_tile_dims.get_tile_shape()[1];
+    const std::uint32_t in_tile_height = in_tile_dims.get_tile_shape()[0];
+    const std::uint32_t out_tile_height = out_tile_dims.get_tile_shape()[0];
+    const std::uint32_t in_tile_size = tile_width * in_tile_height * sizeof(bfloat16);
+    const std::uint32_t out_tile_size = tile_width * out_tile_height * sizeof(bfloat16);
+    const std::uint32_t tiles_per_block = test_config.rt_dim * test_config.ct_dim;
+    const std::uint32_t total_tiles = tiles_per_block * test_config.num_blocks;
+    const std::uint32_t total_tile_rows = test_config.rt_dim * test_config.num_blocks;
+
+    log_info(
+        tt::LogTest,
+        "Testing mul_bcast_cols_custom ct_dim={} rt_dim={} num_blocks={} in_tile={{{}, {}}} out_tile={{{}, {}}}",
+        test_config.ct_dim,
+        test_config.rt_dim,
+        test_config.num_blocks,
+        in_tile_height,
+        tile_width,
+        out_tile_height,
+        tile_width);
+
+    // One page per buffer: the reader/writer walk one DRAM bank linearly (see the SUB runner).
+    auto src_a_dram_buffer = CreateDramBufferForPageSize(mesh_device, in_tile_size * total_tiles, 1);
+    auto src_b_dram_buffer = CreateDramBufferForPageSize(mesh_device, in_tile_size * test_config.rt_dim, 1);
+    auto dst_dram_buffer = CreateDramBufferForPageSize(mesh_device, out_tile_size * total_tiles, 1);
+
+    experimental::KernelSpec::CompilerOptions::Defines defines_vec;
+    defines_vec.emplace("CT_DIM", std::to_string(test_config.ct_dim));
+    defines_vec.emplace("RT_DIM", std::to_string(test_config.rt_dim));
+    defines_vec.emplace("NUM_BLOCKS", std::to_string(test_config.num_blocks));
+
+    const experimental::DFBSpecName INP0_DFB{"inp0_dfb"};
+    const experimental::DFBSpecName INP1_DFB{"inp1_dfb"};
+    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+
+    auto make_dfb = [&](const experimental::DFBSpecName& name,
+                        std::uint32_t num_entries,
+                        std::uint32_t entry_size,
+                        const tt_metal::Tile& tile) {
+        return experimental::DataflowBufferSpec{
+            .unique_id = name,
+            .entry_size = entry_size,
+            .num_entries = num_entries,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+            .tile_format_metadata = tile,
+        };
+    };
+
+    experimental::DataflowBufferSpec inp0_dfb_spec = make_dfb(INP0_DFB, tiles_per_block, in_tile_size, in_tile_dims);
+    experimental::DataflowBufferSpec inp1_dfb_spec = make_dfb(INP1_DFB, test_config.rt_dim, in_tile_size, in_tile_dims);
+    experimental::DataflowBufferSpec out_dfb_spec = make_dfb(OUT_DFB, tiles_per_block, out_tile_size, out_tile_dims);
+
+    experimental::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_bcast_col_reuse.cpp",
+        .num_threads = 1,
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = INP0_DFB,
+                 .accessor_name = "in0",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = INP1_DFB,
+                 .accessor_name = "in1",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             }},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles", "num_bcast_tiles"}},
+        .hw_config = make_reader_hw_config(mesh_device),
+    };
+
+    experimental::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
+        .hw_config = make_writer_hw_config(mesh_device),
+    };
+
+    experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/mul_bcast_col_custom.cpp",
+        .num_threads = 1,
+        .compiler_options = {.defines = defines_vec},
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = INP0_DFB,
+                 .accessor_name = "in0",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = INP1_DFB,
+                 .accessor_name = "in1",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = OUT_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             }},
+        .hw_config = make_compute_hw_config(mesh_device, test_config.math_fidelity),
+    };
+
+    experimental::WorkUnitSpec wu{
+        .name = "main",
+        .kernels = {READER, WRITER, COMPUTE},
+        .target_nodes = node,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "single_core_mul_bcast_col_custom",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {inp0_dfb_spec, inp1_dfb_spec, out_dfb_spec},
+        .work_units = {wu},
+    };
+
+    Program built_program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    workload.add_program(device_range, std::move(built_program));
+    auto& program_run = workload.get_programs().at(device_range);
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", static_cast<std::uint32_t>(src_a_dram_buffer->address())},
+                 {"src0_bank_id", 0u},
+                 {"src1_addr", static_cast<std::uint32_t>(src_b_dram_buffer->address())},
+                 {"src1_bank_id", 0u},
+                 {"num_tiles", static_cast<std::uint32_t>(total_tiles)},
+                 {"num_bcast_tiles", static_cast<std::uint32_t>(test_config.rt_dim)}}),
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", static_cast<std::uint32_t>(dst_dram_buffer->address())},
+                 {"bank_id", 0u},
+                 {"num_tiles", static_cast<std::uint32_t>(total_tiles)}}),
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    experimental::SetProgramRunArgs(program_run, params);
+
+    // Row-major host geometry: srcA grid, srcB tile column, and the (full-tile) output grid.
+    const std::uint32_t in_tile_elems = in_tile_height * tile_width;
+    const std::uint32_t grid_width = tile_width * test_config.ct_dim;
+    const std::uint32_t in_grid_height = in_tile_height * total_tile_rows;
+    const std::uint32_t out_grid_height = out_tile_height * total_tile_rows;
+    const std::uint32_t bcast_height = in_tile_height * test_config.rt_dim;
+
+    std::vector<bfloat16> input0 = generate_uniform_random_vector<bfloat16>(
+        -1.0f, 1.0f, in_tile_elems * total_tiles, std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<bfloat16> input1 = generate_uniform_random_vector<bfloat16>(
+        -1.0f, 1.0f, in_tile_elems * test_config.rt_dim, std::chrono::system_clock::now().time_since_epoch().count());
+
+    // Replicate srcB across the srcA grid so gold_broadcast's COL case reads column 0 of the right
+    // srcB row; (r % bcast_height) makes every block reuse the same rt_dim srcB tiles.
+    std::vector<bfloat16> input1_grid(in_tile_elems * total_tiles);
+    for (std::uint32_t r = 0; r < in_grid_height; r++) {
+        for (std::uint32_t c = 0; c < grid_width; c++) {
+            input1_grid[(r * grid_width) + c] = input1[((r % bcast_height) * tile_width) + (c % tile_width)];
+        }
+    }
+    std::vector<bfloat16> golden_in_grid = gold_broadcast(
+        input0,
+        input1_grid,
+        {in_grid_height, grid_width},
+        EltwiseOp::MUL,
+        BroadcastDim::COL,
+        0,
+        test_config.math_fidelity);
+
+    // Output tile t holds the product in its first in_tile_height rows; the rest of the 32-row tile
+    // maps to dest rows the input tile does not own and must stay at the acquire-zeroed value.
+    std::vector<bfloat16> golden(out_grid_height * grid_width, bfloat16(0.0f));
+    for (std::uint32_t t = 0; t < total_tile_rows; t++) {
+        for (std::uint32_t r = 0; r < in_tile_height; r++) {
+            std::copy_n(
+                golden_in_grid.begin() + (((t * in_tile_height) + r) * grid_width),
+                grid_width,
+                golden.begin() + (((t * out_tile_height) + r) * grid_width));
+        }
+    }
+
+    const int in_num_faces = static_cast<int>(tile_width / 16 * in_tile_height / 16);
+    const bool tiny_tile = test_config.tile_shape != TileShape::FULL_TILE;
+    ::unit_tests::compute::GoldenConfig in_grid_config = {
+        .num_tiles_r_dim = static_cast<int>(total_tile_rows),
+        .num_tiles_c_dim = static_cast<int>(test_config.ct_dim),
+        .num_faces = in_num_faces,
+        .tiny_tile = tiny_tile};
+    ::unit_tests::compute::GoldenConfig bcast_config = {
+        .num_tiles_r_dim = static_cast<int>(test_config.rt_dim),
+        .num_tiles_c_dim = 1,
+        .num_faces = in_num_faces,
+        .tiny_tile = tiny_tile};
+    ::unit_tests::compute::GoldenConfig out_grid_config = {
+        .num_tiles_r_dim = static_cast<int>(total_tile_rows),
+        .num_tiles_c_dim = static_cast<int>(test_config.ct_dim),
+        .num_faces = 4,
+        .tiny_tile = false};
+
+    auto tilized_input0 =
+        ::unit_tests::compute::gold_standard_tilize(pack_vector<std::uint32_t, bfloat16>(input0), in_grid_config);
+    auto tilized_input1 =
+        ::unit_tests::compute::gold_standard_tilize(pack_vector<std::uint32_t, bfloat16>(input1), bcast_config);
+
+    distributed::WriteShard(cq, src_a_dram_buffer, tilized_input0, zero_coord);
+    distributed::WriteShard(cq, src_b_dram_buffer, tilized_input1, zero_coord);
+
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+
+    std::vector<std::uint32_t> dest_buffer_data;
+    distributed::ReadShard(cq, dest_buffer_data, dst_dram_buffer, zero_coord);
+    auto result_untilized = ::unit_tests::compute::gold_standard_untilize(dest_buffer_data, out_grid_config);
+    auto result = unpack_vector<bfloat16, std::uint32_t>(result_untilized);
+    ASSERT_EQ(result.size(), golden.size());
+
+    // Exact check of the rows the input tile does not own: any nonzero there means the FPU walked a
+    // face-row that was never unpacked for this tile shape (stale SrcA/SrcB MAC'd into dest).
+    std::uint32_t stray_datums = 0;
+    for (std::uint32_t t = 0; t < total_tile_rows; t++) {
+        for (std::uint32_t r = in_tile_height; r < out_tile_height; r++) {
+            for (std::uint32_t c = 0; c < grid_width; c++) {
+                if (static_cast<float>(result[(((t * out_tile_height) + r) * grid_width) + c]) != 0.0f) {
+                    stray_datums++;
+                }
+            }
+        }
+    }
+    EXPECT_EQ(stray_datums, 0u) << "nonzero datums in dest rows the " << in_tile_height << "x" << tile_width
+                                << " input tile does not own";
+
+    bool close = is_close_packed_vectors<bfloat16, std::uint32_t>(
+        result_untilized, pack_vector<std::uint32_t, bfloat16>(golden), [&](const bfloat16& a, const bfloat16& b) {
+            return is_close(a, b, k_broadcast_rtol);
+        });
+    ASSERT_TRUE(close);
+}
 }  // namespace unit_tests::compute::broadcast
 
 class BroadcastParameterizedDeviceFixture
@@ -1031,6 +1311,36 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixBcastMulColsIdFreeGolden) {
 
 TEST_F(LLKBlackholeSingleCardFixture, TensixBcastMulScalarIdFreeGolden) {
     expect_bcast_mul_matches_golden(this->device(), BroadcastDim::SCALAR);
+}
+
+// Blocked bcast-col MUL with SrcB reuse through the Compute API, Blackhole only (the MUL scaffold and
+// its wrapper exist only there). The full-tile case runs first: besides checking the 32x32 path it
+// fills all 64 rows of both SrcA and both SrcB banks with nonzero data, so a tiny-tile case that
+// walks a second face-row MACs visibly nonzero stale operands into dest rows 32-63 instead of
+// whatever the previous program happened to leave there.
+TEST_F(LLKBlackholeSingleCardFixture, ComputeMulBcastColCustom) {
+    using unit_tests::compute::broadcast::MulBcastColCustomConfig;
+    using unit_tests::compute::broadcast::TileShape;
+
+    const std::vector<MulBcastColCustomConfig> cases = {
+        {.ct_dim = 4, .num_blocks = 2},
+        {.ct_dim = 4, .rt_dim = 2, .num_blocks = 1},
+        // 16x32 inputs, 32x32 outputs: the lower half of every output tile must be exactly zero.
+        {.ct_dim = 4, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 1, .num_blocks = 2, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 4, .rt_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32, .math_fidelity = MathFidelity::LoFi},
+    };
+
+    for (const auto& cfg : cases) {
+        SCOPED_TRACE(
+            "ct_dim=" + std::to_string(cfg.ct_dim) + " rt_dim=" + std::to_string(cfg.rt_dim) + " num_blocks=" +
+            std::to_string(cfg.num_blocks) + " tiny_tile=" + std::to_string(cfg.tile_shape != TileShape::FULL_TILE));
+        unit_tests::compute::broadcast::run_mul_bcast_col_custom(this->device(), cfg);
+        if (HasFatalFailure()) {
+            break;
+        }
+    }
 }
 
 }  // namespace tt::tt_metal
