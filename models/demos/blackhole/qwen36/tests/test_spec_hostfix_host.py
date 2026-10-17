@@ -247,3 +247,68 @@ def test_propose_draft_tokens_row_checks_match_old(B, monkeypatch):
                 torch.equal(x, y) if isinstance(x, torch.Tensor) else x == y for x, y in zip(res["1"][1], res["0"][1])
             )
     assert n_err > 0
+
+
+# ---- R6: one read of the drafter ids (fake ttnn) -----------------------------------------------------------
+import ttnn  # noqa: E402
+
+
+class _FakeDev:
+    def __init__(self, data):
+        self.data = data
+
+
+class _FakeHost:
+    def __init__(self, dev):
+        self.dev, self.synced = dev, False
+
+
+def _fake_ttnn(monkeypatch, log):
+    def from_device(t, blocking=True, **kw):
+        log.append(("from_device", blocking))
+        h = _FakeHost(t)
+        hosts_seen.append(h)
+        return h
+
+    def to_torch(t):
+        if isinstance(t, _FakeHost):
+            assert t.synced, "host copy read before the synchronize"
+            return t.dev.data
+        log.append(("blocking_read",))
+        return t.data
+
+    def synchronize_device(mesh):
+        log.append(("sync",))
+        for h in hosts_seen:
+            h.synced = True
+
+    hosts_seen = []
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda t: [t, _FakeDev(torch.full((1,), -1))])
+    monkeypatch.setattr(ttnn, "from_device", from_device)
+    monkeypatch.setattr(ttnn, "to_torch", to_torch)
+    monkeypatch.setattr(ttnn, "synchronize_device", synchronize_device)
+
+
+@pytest.mark.parametrize("B", [1, 8])
+def test_ids_to_host_matches_per_tensor_reads(B, monkeypatch):
+    g = torch.Generator().manual_seed(B)
+    K = 3
+    outs = [_FakeDev(torch.randint(0, 248320, (1, 1, B + 2), generator=g).to(torch.int64)) for _ in range(K)]
+    # the engine reads the first B ids of a flattened [1,1,B]-like tensor; extra tail ids must be ignored
+    e = _propose_engine(B, K, None)
+    e.mesh = None
+    res = {}
+    for flag in ("1", "0"):
+        monkeypatch.setenv("QWEN36_SPEC_HOSTFIX", flag)
+        log = []
+        _fake_ttnn(monkeypatch, log)
+        res[flag] = (MTPSpecEngine._ids_to_host(e, outs) if flag == "1" else [e._id_to_host(t) for t in outs], log)
+    # old path in this test = per-tensor _id_to_host; _ids_to_host with flag 0 must delegate to it
+    assert res["1"][0] == res["0"][0]
+    assert [x for x in res["1"][1] if x[0] == "sync"] == [("sync",)] and ("blocking_read",) not in res["1"][1]
+    assert all(x == ("from_device", False) for x in res["1"][1] if x[0] == "from_device")
+    monkeypatch.setenv("QWEN36_SPEC_HOSTFIX", "0")
+    log = []
+    _fake_ttnn(monkeypatch, log)
+    assert MTPSpecEngine._ids_to_host(e, outs) == res["0"][0]
+    assert log.count(("blocking_read",)) == K and ("sync",) not in log

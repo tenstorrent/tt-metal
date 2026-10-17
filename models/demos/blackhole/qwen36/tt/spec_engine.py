@@ -1467,7 +1467,7 @@ class MTPSpecEngine:
         ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
         if any(m):
             self.mtp_extra_steps += 1
-        steps = [self._id_to_host(t) for t in self._dr_outs]  # steps[k][u]
+        steps = self._ids_to_host(self._dr_outs)  # steps[k][u]
         return torch.tensor([[steps[k][u] for k in range(K)] for u in range(B)], dtype=torch.int32)
 
     def _draft_warmup(self, pending, Hp, p):
@@ -1482,6 +1482,15 @@ class MTPSpecEngine:
         """[*, B] uint32 device ids -> B ints, read from the device-0 replica."""
         t = ttnn.to_torch(ttnn.get_device_tensors(id_tt)[0])
         return [int(v) for v in t.reshape(-1)[: self.B]]
+
+    def _ids_to_host(self, id_tts):
+        """_id_to_host for several tensors. QWEN36_SPEC_HOSTFIX (default 1): all device-0 copies are enqueued
+        without blocking, then one synchronize, instead of one blocking read round trip per tensor."""
+        if not spec_hostfix_enabled():
+            return [self._id_to_host(t) for t in id_tts]
+        hosts = [ttnn.from_device(ttnn.get_device_tensors(t)[0], blocking=False) for t in id_tts]
+        ttnn.synchronize_device(self.mesh)
+        return [[int(v) for v in ttnn.to_torch(h).reshape(-1)[: self.B]] for h in hosts]
 
     # --------------------------------------------------------------------- #
     # MTP KV maintenance

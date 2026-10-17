@@ -788,6 +788,7 @@ def test_propose_writes_anchor_kv_of_kept_rows(recorded, monkeypatch):
     e._reseed_mtp_batched = lambda ctok, cpos, m, pt: reseeds.append(list(m))
     e._draft = lambda *a: torch.zeros(B, K, dtype=torch.int32)
     e._id_to_host = lambda t: [0] * B
+    e._ids_to_host = lambda ts: [[0] * B for _ in ts]
     monkeypatch.setattr(ttnn, "execute_trace", lambda *a, **k: None)
     ctok = torch.tensor([[11, -1, -1], [21, -1, -1], [31, -1, -1]])
     cpos = torch.tensor([[10, -1, -1], [20, -1, -1], [30, -1, -1]])
