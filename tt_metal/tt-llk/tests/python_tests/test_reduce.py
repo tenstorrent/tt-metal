@@ -474,10 +474,15 @@ def _fp32_exact_scaler_rows_for_pool(pool_type):
     return ["uniform", "per_column"]
 
 
-def _fp32_exact_patterns(pool_type, scaler_row):
-    """The sparse and overflow patterns are SUM-only with a uniform scaler."""
+def _fp32_exact_patterns(formats, pool_type, scaler_row):
+    """The sparse, overflow and tiny patterns are SUM-only with a uniform scaler row; the
+    subnormal-residual case (its partial needs 9 significant bits) is Float32 input only.
+    """
     if pool_type == ReducePool.Sum and scaler_row == "uniform":
-        return ["random", "sparse", "overflow"]
+        patterns = ["random", "sparse", "overflow", "tiny_random"]
+        if formats.input_format == DataFormat.Float32:
+            patterns.append("subnormal_residual")
+        return patterns
     return ["random"]
 
 
@@ -503,6 +508,7 @@ def _truncate_significand(value: float, explicit_mantissa_bits: int) -> float:
 
 FP32_MANTISSA_BITS = 23
 FP32_EXACT_GATE_ULPS = 2
+TINY_INPUT_EXPONENT = -110
 
 
 @parametrize(
@@ -532,7 +538,18 @@ def test_reduce_scalar_fp32_exact(
     generator = torch.Generator().manual_seed(0x5EED)
     k = torch.randint(0, 2**INPUT_MANTISSA_BITS, (num_elements,), generator=generator)
     src_A = (1.0 + k.to(torch.float64) * 2.0**-INPUT_MANTISSA_BITS).to(torch.float32)
-    if pattern != "random":
+    if pattern == "tiny_random":
+        # Same values near the bottom of the fp32 range: the partials sit far below
+        # 2^-63, where a split would produce subnormal pieces.
+        src_A = (src_A.to(torch.float64) * 2.0**TINY_INPUT_EXPONENT).to(torch.float32)
+    elif pattern == "subnormal_residual":
+        # One value (17/16) * 2^-126 in row 0, column 3 of face 0; with w[0] = 17/16 the
+        # partial is (289/256) * 2^-126, normal, but its bits below the bf16 piece sit
+        # under 2^-126 (the reviewer case).
+        src_A = torch.zeros(num_elements, dtype=torch.float32)
+        for tile in range(num_tiles):
+            src_A[tile * elements_per_tile + 3] = (17.0 / 16.0) * 2.0**-126
+    elif pattern != "random":
         # In-face column 3 carries the pattern, everything else is 0: "sparse" puts one value in row 0 of
         # faces 0, 1 and 2 (they pool into the same partial), "overflow" two values in rows 0 and 1 of face 0.
         src_A = torch.zeros(num_elements, dtype=torch.float32)
@@ -554,7 +571,11 @@ def test_reduce_scalar_fp32_exact(
     # the face pooling weights face row r by w[r] and the final pool weights the
     # per-column partial sums by w[c]. The scaler tile holds w[c] in every row of
     # every face (c = L1 index mod 16), so each face sees the same row.
-    if scaler_row == "per_column":
+    if pattern == "subnormal_residual":
+        weights = [1.0] * FACE_C_DIM
+        weights[0] = 17.0 / 16.0
+        weights[3] = 256.0
+    elif scaler_row == "per_column":
         weights = [1.0 + (c % 2) * 0.5 for c in range(FACE_C_DIM)]
     elif pool_type == ReducePool.Average:
         scaler = 1.0 / math.sqrt(tile_dimensions[0] * tile_dimensions[1])
@@ -647,6 +668,21 @@ def test_reduce_scalar_fp32_exact(
         )
         return
     error = device - golden
+    if pattern == "tiny_random":
+        # Below 2^-63 the fp32 tail keeps the partials whole, i.e. the pre-fix precision
+        # (TF32 for Float32 input, BF16 for Float16_b input): no worse than that model.
+        pre_fix_bits = 9 if formats.input_format == DataFormat.Float32 else 7
+        allowed = abs(
+            modelled[pre_fix_bits] - golden
+        ) + FP32_EXACT_GATE_ULPS * math.ldexp(
+            1.0, math.frexp(abs(golden))[1] - 1 - FP32_MANTISSA_BITS
+        )
+        assert abs(error) <= allowed, (
+            f"REDUCE_SCALAR {pool_type.name} tiny partials worse than the pre-fix tail: "
+            f"device={device!r} golden={golden!r} pre-fix model={modelled[pre_fix_bits]!r} "
+            f"(tile={tile_dimensions}, num_tiles={num_tiles}, fidelity={math_fidelity.name})"
+        )
+        return
     # fp32 ulp of the golden: golden = m * 2**e with m in [0.5, 1), so its ulp is 2**(e - 1 - 23).
     tolerance = FP32_EXACT_GATE_ULPS * math.ldexp(
         1.0, math.frexp(abs(golden))[1] - 1 - FP32_MANTISSA_BITS

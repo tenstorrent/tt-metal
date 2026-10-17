@@ -30,6 +30,10 @@ constexpr std::uint32_t SFPU_ODD_COLS = 2;
 constexpr std::uint32_t REDUCE_SCALAR_PIECE_SUM_ROW = 8;
 // SFPSHFT Mod1: the shift amount is the immediate (ISA SFPSHFT_MOD1_ARG_IMM).
 constexpr std::uint32_t SFPSHFT_MOD1_ARG_IMM = 1;
+// Position of the fp32 exponent field.
+constexpr std::uint32_t FP32_EXPONENT_SHIFT = 23;
+// The fp32 SUM/AVG tail splits only partials with at least this biased exponent (2^-63 and up).
+constexpr std::uint32_t REDUCE_SCALAR_SPLIT_MIN_BIASED_EXPONENT = 64;
 
 // local function declarations
 template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
@@ -107,7 +111,8 @@ inline void reduce_row_perform_transpose()
  * and lands the sums in columns 0 (hi, on top of the running accumulation of the result row), 14 (mid) and
  * 15 (lo); a second copy of that pool into the piece-sum rows, cleared right before it, provides the mid and lo
  * sums free of whatever the result row held, and @ref reduce_scalar_fp32_sum_pieces adds the three in fp32.
- * A non-finite partial stays whole in hi with mid = lo = 0.
+ * A non-finite partial stays whole in hi with mid = lo = 0, and so does a partial below 2^-63, whose pieces could
+ * fall below 2^-126 (it keeps the pre-fix precision: TF32 or BF16 in Src).
  *
  * Runs after the last face pool and before the MOVD2B of the scratch block. Overwrites SFPU LREG0-LREG7 and leaves
  * the lane flags enabled with all lanes on (callers
@@ -171,6 +176,28 @@ inline __attribute__((noinline)) void reduce_scalar_fp32_split_partials()
     TTI_SFPAND(0 /*imm12_math*/, p_sfpu::LREG3, p_sfpu::LREG7, 0 /*instr_mod1*/);
     TTI_SFPIADD(0 /*imm12_math*/, p_sfpu::LREG3, p_sfpu::LREG7, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPSETCC(0 /*imm12_math*/, p_sfpu::LREG7, 0 /*lreg_dest*/, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+    TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG5, 0 /*instr_mod1*/);
+    TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG6, 0 /*instr_mod1*/);
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0 /*lreg_c*/, 0 /*lreg_dest*/, sfpi::SFPENCC_MOD1_EI_RI);
+
+    // Partials below 2^-63 (biased exponent < REDUCE_SCALAR_SPLIT_MIN_BIASED_EXPONENT) are not split: their pieces
+    // can reach below 2^-126, where the SFPU flushes the residual and the FPU the Src datum to zero, so a split
+    // would lose bits the whole partial keeps. They go through whole (reloaded from DEST, mid = lo = 0), which is
+    // the pre-fix precision; above the threshold every piece times any scaler down to 2^-40 stays normal.
+    TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG7, 0 /*instr_mod1*/);
+    TTI_SFPAND(0 /*imm12_math*/, p_sfpu::LREG3, p_sfpu::LREG7, 0 /*instr_mod1*/);
+    TTI_SFPSHFT((-FP32_EXPONENT_SHIFT) & 0xFFF, 0 /*lreg_c*/, p_sfpu::LREG7, SFPSHFT_MOD1_ARG_IMM);
+    TTI_SFPIADD((-REDUCE_SCALAR_SPLIT_MIN_BIASED_EXPONENT) & 0xFFF, p_sfpu::LREG7, p_sfpu::LREG7, sfpi::SFPIADD_MOD1_ARG_IMM);
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_SCALAR_SCRATCH_ROW);
+    TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG1, 0 /*instr_mod1*/);
+    TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG2, 0 /*instr_mod1*/);
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0 /*lreg_c*/, 0 /*lreg_dest*/, sfpi::SFPENCC_MOD1_EI_RI);
+    // odd columns
+    TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LREG4, p_sfpu::LREG7, 0 /*instr_mod1*/);
+    TTI_SFPAND(0 /*imm12_math*/, p_sfpu::LREG3, p_sfpu::LREG7, 0 /*instr_mod1*/);
+    TTI_SFPSHFT((-FP32_EXPONENT_SHIFT) & 0xFFF, 0 /*lreg_c*/, p_sfpu::LREG7, SFPSHFT_MOD1_ARG_IMM);
+    TTI_SFPIADD((-REDUCE_SCALAR_SPLIT_MIN_BIASED_EXPONENT) & 0xFFF, p_sfpu::LREG7, p_sfpu::LREG7, sfpi::SFPIADD_MOD1_ARG_IMM);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_SCALAR_SCRATCH_ROW + SFPU_ODD_COLS);
     TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG5, 0 /*instr_mod1*/);
     TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG6, 0 /*instr_mod1*/);
     TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0 /*lreg_c*/, 0 /*lreg_dest*/, sfpi::SFPENCC_MOD1_EI_RI);
