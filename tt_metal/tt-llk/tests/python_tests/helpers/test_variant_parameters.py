@@ -906,6 +906,19 @@ class REDUCE_REINIT_OPERAND_SHAPE(TemplateParameter):
 
 
 @dataclass
+class REDUCE_EXECUTE_OPERAND_SHAPE(TemplateParameter):
+    """Operand ``TileShape`` handed to the reduce_block_max_row math execute call (the driver
+    defaults it to the init shape; the execute-guard test hands it one the op rejects after a
+    valid init).
+    """
+
+    tile_shape: TileShape = field(default_factory=lambda: TileShape(16, 16, 2, 2))
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr ckernel::TensorShape REDUCE_EXECUTE_OPERAND_SHAPE = {self.tile_shape.cpp_value};"
+
+
+@dataclass
 class ITERATIONS(TemplateParameter):
     iterations: int = 8
 

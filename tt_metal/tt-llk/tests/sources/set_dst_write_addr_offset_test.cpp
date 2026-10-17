@@ -52,7 +52,10 @@
 //
 // Not covered: the LLK_ASSERT on addr >= DEST_REGISTER_HALF_SIZE. A test that expects an
 // LLK assert catches LLKAssertException around run() (see test_reduce_block_max.py); the
-// per-test TRISC soft reset recovers the halted cores. This test has no reason to trip one.
+// per-test TRISC soft reset restarts the halted cores but does not clear Tensix state they leave
+// behind (a packer waiting on MATH_PACK, a math MOP waiting on SrcA, tiles left in the source
+// banks), so such a test must also keep the other threads from waiting on the asserting one (the
+// REDUCE_*_SKIP_EXECUTE flags there). This test has no reason to trip one.
 
 #include <cstdint>
 

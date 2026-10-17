@@ -73,7 +73,9 @@ static constexpr std::uint32_t NUM_FACES = 4;
 // REDUCE_OPERAND_SHAPE (params.h) is the operand tile geometry handed to the unpack and
 // math inits. The driver's default is the full 32x32 tile; the shape-guard test passes
 // face grids the op does not implement (one face column, short faces) to check that
-// the inits reject them. REDUCE_REINIT_BLOCK_CT_DIM / REDUCE_REINIT_OPERAND_SHAPE are
+// the inits reject them. REDUCE_EXECUTE_OPERAND_SHAPE is the geometry the math execute call is
+// told (the driver defaults it to the init shape; the execute-guard test hands it one the op
+// rejects after a valid init). REDUCE_REINIT_BLOCK_CT_DIM / REDUCE_REINIT_OPERAND_SHAPE are
 // what the reinit_short re-arm is told (the driver defaults them to the init values); the
 // reinit-guard tests hand the re-arm a width or shape the op rejects; they also set
 // REDUCE_UNPACK_SKIP_EXECUTE so the unpack delivers no tiles (their math stops on the
@@ -227,7 +229,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_wait_for_dest_available_<DST_SYNC>();
         if constexpr (!REDUCE_MATH_SKIP_EXECUTE)
         {
-            _llk_math_reduce_block_max_row_runtime_<is_fp32_dest_acc_en>(0 /* dst_index */, tensor_shape);
+            _llk_math_reduce_block_max_row_runtime_<is_fp32_dest_acc_en>(0 /* dst_index */, REDUCE_EXECUTE_OPERAND_SHAPE);
         }
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 
@@ -258,7 +260,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_wait_for_dest_available_<DST_SYNC>();
         if constexpr (!REDUCE_MATH_SKIP_EXECUTE)
         {
-            _llk_math_reduce_block_max_row_<REDUCE_BLOCK_CT_DIM, is_fp32_dest_acc_en>(0 /* dst_index */, tensor_shape);
+            _llk_math_reduce_block_max_row_<REDUCE_BLOCK_CT_DIM, is_fp32_dest_acc_en>(0 /* dst_index */, REDUCE_EXECUTE_OPERAND_SHAPE);
         }
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 

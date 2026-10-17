@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include "api/compute/common.h"
+#include "llk_assert.h"
 #include "tensor_shape.h"
 #ifdef TRISC_MATH
 #include "llk_math_reduce_api.h"

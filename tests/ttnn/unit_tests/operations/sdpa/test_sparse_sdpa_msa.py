@@ -321,6 +321,24 @@ def test_msa_bad_n_kv_rejected_on_hit(device, expect_error):
         _msa_op(device, q_bad, _tile(k_bad, device), _tile(v_bad, device), indices)
 
 
+@run_for_blackhole()
+def test_msa_block_size_above_block_reduce_limit_rejected(device, expect_error):
+    # One chunk is one block of block_size key rows, reduced with the block row-max LLK whose loop count
+    # caps it at 127 tiles; a 128-tile block must be rejected on the host before any program is built.
+    # topk = 16 keeps the indices row DRAM-aligned so no other check rejects the call first.
+    H, n_kv, S, T, topk, blk = 32, 1, 8, 16 * 4096, 16, 4096
+    q, k_full, v_full, indices = make_msa_inputs(H, n_kv, S, T, topk, _D, blk_kv=blk, causal=False, seed=7)
+    with expect_error(RuntimeError, "block_size must be at most"):
+        ttnn.transformer.sparse_sdpa_msa(
+            _rm(q.to(torch.bfloat16), device, ttnn.bfloat16),
+            _tile(k_full, device),
+            _tile(v_full, device),
+            _rm(indices.to(torch.int32), device, ttnn.uint32),
+            scale=_D**-0.5,
+            block_size=blk,
+        )
+
+
 # ---- Causal (diagonal-block token-level mask) coverage ----
 # Block selection alone is causal only at block granularity; a query's own (diagonal) block holds future
 # tokens that must be masked. These exercise the chunk_start_idx path that enables the token-level mask.

@@ -33,7 +33,7 @@ Coverage (Blackhole + Wormhole B0):
     reinit_short re-arm with 128 asserts in the MOP reprogram; a trigger split with an odd
     width asserts at init.
   * operand-shape guard: 16x16, 32x16 and 8x32 operands are rejected at init (compile-time
-    and runtime families) and by the reinit_short re-arm.
+    and runtime families), by the reinit_short re-arm and by the math execute call.
 """
 
 import os
@@ -52,6 +52,7 @@ from helpers.test_variant_parameters import (
     CLOBBER_OP,
     OVERLAP_FIRST_HALF,
     REDUCE_BLOCK_CT_DIM,
+    REDUCE_EXECUTE_OPERAND_SHAPE,
     REDUCE_MATH_SKIP_EXECUTE,
     REDUCE_OPERAND_SHAPE,
     REDUCE_PACK_SKIP_EXECUTE,
@@ -129,6 +130,7 @@ def _make_reduce_block_max_config(
     staged_ct_dim=None,
     reinit_block_ct_dim=None,
     reinit_operand_shape=None,
+    execute_operand_shape=None,
     unpack_skip_execute=False,
     math_skip_execute=False,
     pack_skip_execute=False,
@@ -204,6 +206,11 @@ def _make_reduce_block_max_config(
             REDUCE_OPERAND_SHAPE(operand_shape),
             REDUCE_REINIT_BLOCK_CT_DIM(
                 block_ct_dim if reinit_block_ct_dim is None else reinit_block_ct_dim
+            ),
+            REDUCE_EXECUTE_OPERAND_SHAPE(
+                operand_shape
+                if execute_operand_shape is None
+                else execute_operand_shape
             ),
             REDUCE_REINIT_OPERAND_SHAPE(
                 operand_shape if reinit_operand_shape is None else reinit_operand_shape
@@ -578,6 +585,29 @@ def test_reduce_block_max_reinit_short_rejects_shape(use_runtime):
         configuration,
         golden_rowmajor,
         "reinit_short with a 16x16 operand shape",
+        triscs=("TRISC1",),
+    )
+
+
+@parametrize(use_runtime=[False, True])
+def test_reduce_block_max_execute_rejects_shape(use_runtime):
+    """A valid init followed by a math execute call told the operand is a single 16x16 face:
+    the execute (TRISC1 only; the inits accepted the full tile) must assert instead of pooling
+    SrcA rows the unpacker never wrote. The unpack delivers no tiles and the packer does not
+    wait for math, so nothing is left waiting on the asserting thread."""
+    (use_runtime,) = use_runtime
+    configuration, golden_rowmajor = _make_reduce_block_max_config(
+        FORMATS[0],
+        block_ct_dim=2,
+        use_runtime=use_runtime,
+        execute_operand_shape=TileShape(16, 16, 1, 1),
+        unpack_skip_execute=True,
+        pack_skip_execute=True,
+    )
+    _expect_llk_assert_on(
+        configuration,
+        golden_rowmajor,
+        "execute with a 16x16 operand shape",
         triscs=("TRISC1",),
     )
 
