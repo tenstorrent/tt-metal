@@ -32,6 +32,13 @@ TABLE = {
     # plan.md step 5: the router weight is bf16 (0.74 MB per chip), a small price for exact top-4 selection
     "ROUTER_WEIGHT_DTYPE": Setting("bfloat16", ("bfloat16", "bfloat8_b"), "router weight and bias dtype"),
     "CCL_NUM_LINKS": Setting(2, (1, 2), "fabric links per CCL on Blackhole (gpt_oss_d_p get_default_num_links)"),
+    "EXPERTS_FIDELITY": Setting("HiFi4", FIDELITIES, "rule 7 default: expert gate / up / down linears at HiFi4"),
+    "EXPERTS_FP32_ACC": Setting(True, (True, False), "rule 7 default: expert linears with fp32 dest accumulation"),
+    # gate / up / SwiGLU hidden kept in fp32 before the down projection (bf16 widens the per-token norm ratio)
+    "EXPERTS_MID_DTYPE": Setting("float32", ("float32", "bfloat16"), "dtype of the expert gate / up / hidden"),
+    # dispatch buffer rows per chip = this x 8 x S/8; top-k (4) holds the worst case (no token is ever dropped)
+    "EXPERTS_CAPACITY_FACTOR": Setting(4, (1, 2, 4), "dispatch buffer capacity factor (4 = no token dropped)"),
+    "EXPERTS_REDUCE_FP32": Setting(True, (True, False), "the 4 dispatch groups' outputs summed over TP in fp32"),
 }
 
 MAX_PRECISION = {
@@ -46,6 +53,10 @@ MAX_PRECISION = {
     "ROUTER_FIDELITY": "HiFi4",
     "ROUTER_FP32_ACC": True,
     "ROUTER_WEIGHT_DTYPE": "bfloat16",
+    "EXPERTS_FIDELITY": "HiFi4",
+    "EXPERTS_FP32_ACC": True,
+    "EXPERTS_MID_DTYPE": "float32",
+    "EXPERTS_REDUCE_FP32": True,
 }
 
 settings = Settings("GPT_OSS_120B_", TABLE, max_precision=MAX_PRECISION)

@@ -56,3 +56,23 @@
 - Gate: pcc 0.999866; selection overlap vs golden 0.99917 (matched rows 0.99668, rel 0.0019, rowsum 0.0038),
   auto_margin_min 2.60, deterministic. Worked first time.
 - Re-run: `bfw job check --task C.sliding_moe.router`.
+
+## C.sliding_moe.experts (layer 0)
+
+- `tt/experts.py:TtExperts` (plan.md step 6): EP over all 32 chips, 4 experts per chip, column-major mapping (column c
+  = dispatch group of 8 chips, experts 32c..32c+31). `ttnn.topk` k 4 on the dense fp32 routing input -> uint16 indices
+  -> `masked_bincount` + `offset_cumsum` (axis 0, global [1, 128] counts) -> `dispatch` (axis 0, bf16 ROW_MAJOR, Linear
+  topology) -> tilize bf16 -> per local expert `extract` -> `ttnn.linear` gate_up ([out, in] bfp8 + transpose_b, fp32
+  bias, fp32 out) -> clamp / sigmoid(1.702 g) / (up + 1) * glu in fp32 -> `ttnn.linear` down (bf16 out) -> `insert`
+  -> `combine` (axis 0, init_zeros) -> `post_combine_reduce` (bf16 weights, dispatch table masks other groups) ->
+  fp32 `all_reduce` over TP (axis 1) -> bf16. Stock TTNN only, no fused unified_routed_expert_moe (LoFi, bfp8 acts).
+- Capacity factor 4 (= top-k): dispatch buffer 4 x 5120 + 3 x 32 rows per chip, no token can be dropped; extract cap
+  = 8 x 640 = 5120 rows (a whole column's tokens to one expert).
+- Weights from `reference.gpt_oss_ref.LayerWeights` (mxfp4 dequantized exactly, gate/up de-interleaved), uploaded per
+  local expert with ShardTensor2dMesh dims (0, 1).
+- Settings: EXPERTS_FIDELITY HiFi4, EXPERTS_FP32_ACC True, EXPERTS_MID_DTYPE float32, EXPERTS_REDUCE_FP32 True (all in
+  MAX_PRECISION), EXPERTS_CAPACITY_FACTOR 4.
+- `hooks._ExpertsBoundary` sends routing [S, 128] as fp32 TILE (the router's output dtype), x as bf16 rows.
+- Gate (first try): pcc 0.999992, vs_cpu rel 0.0032 (limit 0.0119), vs_golden rel 0.0040, ratio [0.9945, 1.0049],
+  auto_margin_min 2.71, 79 device ops, host FLOPs 0, deterministic. Regressions of the 5 earlier C tasks PASS.
+- Re-run: `bfw job check --task C.sliding_moe.experts`.

@@ -117,6 +117,58 @@ class _AttentionBoundary:
         return out
 
 
+def _experts(mesh, spec, layer):
+    import torch
+
+    from models.demos.gpt_oss_120b.reference.gpt_oss_ref import LayerWeights
+    from models.demos.gpt_oss_120b.tt.ccl import TtCcl
+    from models.demos.gpt_oss_120b.tt.experts import TtExperts
+
+    cfg = _config(spec)
+    ck = _checkpoint(spec)
+    lw = LayerWeights(ck, layer, cfg, torch.float32, torch.bfloat16)  # mxfp4 dequantized (exact in bf16)
+    ck.close()
+    seq_local = int(spec.get("target.chunk")) // tuple(mesh.shape)[0]
+    return TtExperts(
+        mesh,
+        TtCcl(mesh),
+        lw.w_gu,
+        lw.b_gu,
+        lw.w_d,
+        lw.b_d,
+        cfg["num_experts_per_tok"],
+        float(cfg.get("swiglu_limit", 7.0)),
+        seq_local,
+    )
+
+
+class _ExpertsBoundary:
+    """Component harness boundary of the experts step: x [S, H] (bf16 rows) and the dense routing weights [S, E]
+    (fp32: the router's output dtype) to the residual-stream layout, the device module, [S, H] host out."""
+
+    def __init__(self, mesh, module):
+        self.mesh, self.module = mesh, module
+
+    def __call__(self, ctx, x, routing):
+        import ttnn
+        from models.demos.gpt_oss_120b.tt.layout import rows_to_device, rows_to_host
+
+        tt_x = rows_to_device(self.mesh, x)
+        tt_r = ttnn.from_torch(
+            routing.float().reshape(1, 1, *routing.shape[-2:]),
+            device=self.mesh,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(2, None)),
+        )
+        tt_y = self.module(tt_x, tt_r)
+        out = rows_to_host(self.mesh, tt_y)
+        for t in (tt_x, tt_r, tt_y):
+            t.deallocate(True)
+        return out
+
+
 def device_component(mesh, spec, layer, step):
     _observable_ops()
     if step in NORM_WEIGHTS:
@@ -141,6 +193,8 @@ def device_component(mesh, spec, layer, step):
         router = TtRouter(mesh, w, b, _config(spec)["num_experts_per_tok"])
         router.prepare(int(spec.get("target.chunk")) // tuple(mesh.shape)[0])
         return _HostBoundary(mesh, router)
+    if step == "experts":
+        return _ExpertsBoundary(mesh, _experts(mesh, spec, layer))
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 
