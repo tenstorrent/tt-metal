@@ -39,7 +39,8 @@ inline void calculate_add_top_row(const uint tile_idx_0 = 0, const uint tile_idx
     // Int32 and UInt32 tiles hold raw two's-complement / unsigned words in Dest (a native 32-bit tile
     // is moved L1 -> Dest unchanged), which is what SFPIADD consumes, so SFPLOAD/SFPSTORE use INT32 and
     // leave the bits alone. INT32_2S_COMP would apply the sign-magnitude <-> two's-complement conversion
-    // on both the load and the store and corrupt every negative value of a native Int32 tile.
+    // on both the load and the store and corrupt the sum whenever an operand is negative and neither
+    // is zero (the two conversions are inverses, so a negative paired with a zero round-trips intact).
     // This assumes native Int32 via unpack-to-dest. A sign-magnitude Dest (an Int8 tile promoted
     // through the FPU by copy_tile with a 32-bit Dest) is only correct here for non-negative values;
     // supporting its negatives would need a SIGN_MAGNITUDE_FORMAT flag like _add_int_ has.
