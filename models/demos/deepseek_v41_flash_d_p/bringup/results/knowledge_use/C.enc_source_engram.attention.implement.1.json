@@ -1,0 +1,43 @@
+{
+ "overseer": [],
+ "used": [
+  {
+   "id": "DS41-28",
+   "how": "the component gate passed on the reused TtSparseAttention with no code change, so the fix was adding every passed step of enc_source_engram to hooks.py DEVICE_STEPS (the contract test's NotImplementedError)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-26",
+   "how": "identified the contract's IndexError 4294967295 as the CPU engram hash on PAD_ID; putting engram_rows on the device (TtEngramRows.host_rows hashes only [start, actual_end)) removes it",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-36",
+   "how": "ran the contract test with BRINGUP_TASK=C.enc_source_engram.attention so it runs layer 14 only",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the components entry for C.enc_source_engram.attention still says ttnn.bringup.sparse_sdpa(high_precision=True) refuses attention_sink (sparse_sdpa_device_operation.cpp:132); out of date since C.enc_source.attention (the fork takes the sink, K-31 now says so)"
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.enc_source_engram.attention",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-17T02:24:24",
+  "head": "2de2fb7bf22",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.enc_source_engram.attention.implement.1.json"
+  ]
+ }
+}
