@@ -10,8 +10,8 @@
 // that build a fused matmul + reduce-scatter program (minimal_matmul_strided_reduce_scatter_async).
 // That helper binds the *legacy* kernels; this factory binds the _metal2 forks beside them.
 //
-// There is deliberately no override_runtime_arguments: on the base spec concept the framework
-// refreshes every tensor binding on a program-cache hit.
+// override_runtime_arguments re-applies the tensor bindings and the one per-call scalar left out of
+// compute_program_hash (kv_layer_idx), so every layer of a model shares one program.
 //
 
 #include "minimal_matmul_device_operation.hpp"
@@ -29,6 +29,7 @@
 #include <utility>
 #include <vector>
 
+#include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
@@ -144,6 +145,8 @@ const TensorParamName TP_IN2{"in2"};
 const TensorParamName TP_IN3{"in3"};
 const TensorParamName TP_TERNARY_A{"ternary_a"};
 const TensorParamName TP_TERNARY_B{"ternary_b"};
+const TensorParamName TP_VALID_ROWS{"valid_rows"};
+const TensorParamName TP_SLOT{"slot"};
 
 // Kernel spec names.
 const KernelSpecName K_IN0_SENDER{"in0_sender"};
@@ -153,6 +156,69 @@ const KernelSpecName K_IN1_RECEIVER{"in1_receiver"};
 const KernelSpecName K_COMPUTE{"compute"};
 
 std::string output_param_name(uint32_t chunk) { return "out" + std::to_string(chunk); }
+
+// Core grid, matmul extents and grid orientation. Shared by create_program_artifacts and
+// override_runtime_arguments, which must address exactly the in0 kernels the spec declared.
+struct GridLayout {
+    CoreCoord grid_size;
+    uint32_t K_in;  // input_tensor's own K width (only the prefix half for fused concat / in0_k_prefix)
+    uint32_t M;     // rows: the per-batch cap with dynamic rows, else all upper dims folded in
+    uint32_t N;
+    bool transpose_core_grid;          // M along x, N along y
+    uint32_t in0_parallel_axis_cores;  // cores splitting M
+    uint32_t in1_parallel_axis_cores;  // cores splitting N
+
+    // Which receiver kernels exist on this grid (see create_program_artifacts).
+    bool has_in0_receivers() const { return in1_parallel_axis_cores > 1; }
+    bool has_in1_receivers() const { return in0_parallel_axis_cores > 1; }
+};
+
+GridLayout resolve_grid_layout(
+    const MinimalMatmulParams& operation_attributes, const MinimalMatmulInputs& tensor_args) {
+    const Tensor& input_tensor = tensor_args.input_tensor;
+    const auto& config = operation_attributes.config;
+    GridLayout layout;
+    layout.grid_size = config.has_value() ? config->compute_with_storage_grid_size
+                                          : input_tensor.device()->compute_with_storage_grid_size();
+    // Fold activation (LHS) upper dimensions into rows: M_total = prod(upper dims) * M.
+    layout.K_in = input_tensor.padded_shape()[-1];
+    layout.M = tensor_args.valid_rows_tensor.has_value() ? static_cast<uint32_t>(input_tensor.padded_shape()[-2])
+                                                         : input_tensor.physical_volume() / layout.K_in;
+    layout.N = tensor_args.weight_tensor.padded_shape()[-1];
+    // Transpose the core grid (M along x) for a tall output unless the config pins the orientation.
+    layout.transpose_core_grid = config.has_value() && config->transpose_core_grid.has_value()
+                                     ? *config->transpose_core_grid
+                                     : layout.M > layout.N;
+    layout.in0_parallel_axis_cores = layout.transpose_core_grid ? layout.grid_size.x : layout.grid_size.y;
+    layout.in1_parallel_axis_cores = layout.transpose_core_grid ? layout.grid_size.y : layout.grid_size.x;
+    return layout;
+}
+
+// Tensor bindings, re-applied on every program-cache hit.
+void insert_tensor_run_args(
+    ProgramRunArgs& run_args, const MinimalMatmulInputs& tensor_args, const std::vector<Tensor>& output_tensors) {
+    run_args.tensor_args.insert({TP_IN0, tensor_args.input_tensor.mesh_tensor()});
+    run_args.tensor_args.insert({TP_IN1, tensor_args.weight_tensor.mesh_tensor()});
+    if (tensor_args.bias_tensor.has_value()) {
+        run_args.tensor_args.insert({TP_IN2, tensor_args.bias_tensor->mesh_tensor()});
+    }
+    if (tensor_args.optional_input_tensor.has_value()) {
+        run_args.tensor_args.insert({TP_IN3, tensor_args.optional_input_tensor->mesh_tensor()});
+    }
+    if (tensor_args.valid_rows_tensor.has_value()) {
+        run_args.tensor_args.insert({TP_VALID_ROWS, tensor_args.valid_rows_tensor->mesh_tensor()});
+    }
+    if (tensor_args.slot_tensor.has_value()) {
+        run_args.tensor_args.insert({TP_SLOT, tensor_args.slot_tensor->mesh_tensor()});
+    }
+    if (tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value()) {
+        run_args.tensor_args.insert({TP_TERNARY_A, tensor_args.fused_ternary_input_a->mesh_tensor()});
+        run_args.tensor_args.insert({TP_TERNARY_B, tensor_args.fused_ternary_input_b->mesh_tensor()});
+    }
+    for (uint32_t chunk = 0; chunk < output_tensors.size(); ++chunk) {
+        run_args.tensor_args.insert({TensorParamName{output_param_name(chunk)}, output_tensors[chunk].mesh_tensor()});
+    }
+}
 
 DFBBinding producer_of(const DFBSpecName& dfb) {
     return DFBBinding{
@@ -199,13 +265,15 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     // optional_input_tensor (suffix), via the in0 second-source (in3) read path, instead of a
     // materialized concat. The split point is input_tensor's own K width.
     const bool two_input_split = optional_input_tensor.has_value();
+    const bool dynamic_m = tensor_args.valid_rows_tensor.has_value();
+    const bool use_slot = tensor_args.slot_tensor.has_value();
 
     if (!config.has_value()) {
         log_debug(tt::LogOp, "No config provided, using default block sizes and core grid");
     }
 
-    auto grid_size =
-        config.has_value() ? config.value().compute_with_storage_grid_size : device->compute_with_storage_grid_size();
+    const GridLayout layout = resolve_grid_layout(operation_attributes, tensor_args);
+    const CoreCoord grid_size = layout.grid_size;
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     auto num_cores = core_grid.size();
 
@@ -247,15 +315,14 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
      * subblocks. The in0 and in1 blocks are accordingly subdivided on M and N.
      */
 
-    auto in0_tensor_shape = input_tensor.padded_shape();
     auto in1_tensor_shape = weight_tensor.padded_shape();
-    // Fold activation (LHS) upper dimensions into rows: M_total = prod(upper dims) * M.
     // M is derived from input_tensor's OWN K width (K_in); for fused concat that's only the prefix
     // half, so the matmul contraction K must instead span the full weight K (both concat halves).
-    uint32_t K_in = in0_tensor_shape[-1];
-    uint32_t M = input_tensor.physical_volume() / K_in;
-    uint32_t K = two_input_split ? static_cast<uint32_t>(in1_tensor_shape[-2]) : K_in;
-    uint32_t N = in1_tensor_shape[-1];
+    const uint32_t K_in = layout.K_in;
+    const uint32_t M = layout.M;
+    const bool in0_k_prefix = operation_attributes.in0_k_prefix;
+    uint32_t K = (two_input_split || in0_k_prefix) ? static_cast<uint32_t>(in1_tensor_shape[-2]) : K_in;
+    const uint32_t N = layout.N;
 
     uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
     uint32_t K_tiles = K / tt::constants::TILE_WIDTH;
@@ -301,15 +368,15 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
 
     // Transpose core grid if the output is wide (M > N)
     // If transpose core grid, we parallelize M on cores_x and N on cores_y and swap the NOCs and RISCVs
-    bool transpose_core_grid = M > N;
+    const bool transpose_core_grid = layout.transpose_core_grid;
 
     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
     auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;
-    uint32_t in0_parallel_axis_cores = transpose_core_grid ? grid_size.x : grid_size.y;
+    const uint32_t in0_parallel_axis_cores = layout.in0_parallel_axis_cores;
 
     auto in1_noc = transpose_core_grid ? small_input_noc : large_input_noc;
     auto in1_risc = transpose_core_grid ? small_input_risc : large_input_risc;
-    uint32_t in1_parallel_axis_cores = transpose_core_grid ? grid_size.y : grid_size.x;
+    const uint32_t in1_parallel_axis_cores = layout.in1_parallel_axis_cores;
 
     /**
      * We pad the input dimensions to the nearest multiple of the parallelization factor.
@@ -388,8 +455,13 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     // exist and the spec is unchanged; on a 1-wide / 1-tall grid (single-core Quasar emulator) the
     // absent receiver kernels and their empty work-unit regions must not be declared -- the spec
     // validator rejects a kernel that no WorkUnitSpec references, and CoreRange rejects start > end.
-    const bool has_in0_receivers = in1_parallel_axis_cores > 1;
-    const bool has_in1_receivers = in0_parallel_axis_cores > 1;
+    const bool has_in0_receivers = layout.has_in0_receivers();
+    const bool has_in1_receivers = layout.has_in1_receivers();
+
+    // Block transport along each line: hardware multicast from the line's injector (hw_mcast), or a relay where each
+    // core forwards the block to the next. The kernels select it at compile time; both transports are bound either way
+    // (the relay's semaphores and routes, and the mcast pipes, absent on the relay), so neither needs a define.
+    const bool use_hw_mcast = config.has_value() && config->hw_mcast;
 
     ProgramSpec spec;
     spec.name = "minimal_matmul";
@@ -397,6 +469,7 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     /**
      * Semaphores. Names replace the sequential ids the legacy factory handed out; the kernels bind
      * them by name. The non-zero initial values are carried over from the legacy factory.
+     * The multicast pipes allocate their own (Mcast::attach below).
      *
      * Quasar: the Gen2 runtime only supports zero-initialized semaphores (ValidateProgramSpec rejects
      * any other initial_value). The `*_valid` semaphores do not depend on their initial value: both DM
@@ -481,6 +554,14 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         spec.tensor_parameters.push_back(
             TensorParameter{.unique_id = TP_IN3, .spec = optional_input_tensor.value().tensor_spec()});
     }
+    if (dynamic_m) {
+        spec.tensor_parameters.push_back(
+            TensorParameter{.unique_id = TP_VALID_ROWS, .spec = tensor_args.valid_rows_tensor.value().tensor_spec()});
+    }
+    if (use_slot) {
+        spec.tensor_parameters.push_back(
+            TensorParameter{.unique_id = TP_SLOT, .spec = tensor_args.slot_tensor.value().tensor_spec()});
+    }
     if (use_fused_ternary) {
         spec.tensor_parameters.push_back(
             TensorParameter{.unique_id = TP_TERNARY_A, .spec = fused_ternary_input_a.value().tensor_spec()});
@@ -552,11 +633,11 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         return to_defines(d);
     };
 
-    // Shared CTA set for the in0/in1 kernels; only the input tile size (named for its own input)
-    // and the injector flag differ.
+    // Shared CTA set for the in0/in1 kernels; only the input tile size (named for its own input),
+    // the injector flag and in0's slot metadata differ.
     auto dm_compile_time_args =
-        [&](const std::string& input_tile_size_name, uint32_t input_tile_size, bool is_injector_core) {
-            return KernelSpec::CompileTimeArgs{
+        [&](bool is_in0, const std::string& input_tile_size_name, uint32_t input_tile_size, bool is_injector_core) {
+            auto cta = KernelSpec::CompileTimeArgs{
                 {"M_tiles", M_tiles},
                 {"padded_M_tiles", padded_M_tiles},
                 {"K_tiles", K_tiles},
@@ -575,6 +656,24 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
                 {"N_tiles_per_chunk", N_tiles_per_chunk},
                 {input_tile_size_name, input_tile_size},
             };
+            // in0 wider than the K it reads (a K prefix): its rows stride by its own width. 0: by K.
+            cta.insert({"in0_row_tiles", in0_k_prefix ? K_in / tt::constants::TILE_WIDTH : 0u});
+            // dynamic_m: M bounded at runtime from the valid-rows tensor; its arguments are declared either way.
+            cta.insert({"dynamic_m", dynamic_m ? 1u : 0u});
+            cta.insert({"M_parallel_cores", in0_parallel_axis_cores});
+            cta.insert({"valid_rows_divisor", operation_attributes.valid_rows_divisor});
+            cta.insert({"valid_rows_multiplier", operation_attributes.valid_rows_multiplier});
+            cta.insert({"valid_rows_addend", operation_attributes.valid_rows_addend});
+            cta.insert({"valid_rows_align", operation_attributes.valid_rows_align});
+            if (is_in0) {
+                // Only in0 reads batched rows, so only it picks the batch: from the slot tensor (dynamic_m_slot), else
+                // from the layer argument.
+                const bool dynamic_m_slot = dynamic_m && use_slot;
+                cta.insert({"dynamic_m_slot", dynamic_m_slot ? 1u : 0u});
+                cta.insert({"kv_num_layers", dynamic_m_slot ? operation_attributes.kv_num_layers : 1u});
+                cta.insert({"in0_batch_extent", dynamic_m_slot ? input_tensor.physical_volume() / (M * K_in) : 1u});
+            }
+            return cta;
         };
 
     // Runtime-arg names, in the order the legacy kernels read them (order is immaterial to the
@@ -597,6 +696,11 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         if (use_fused_ternary) {
             schema.runtime_arg_names.push_back("broadcast_ternary_b");
         }
+        schema.runtime_arg_names.push_back("M_core_idx");
+        if (prefix == "in0") {
+            // Not in the program hash: re-applied on every cache hit (override_runtime_arguments).
+            schema.common_runtime_arg_names.push_back("kv_layer_idx");
+        }
         return schema;
     };
 
@@ -614,6 +718,15 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         if (use_fused_ternary) {
             bindings.push_back(TensorBinding{.tensor_parameter_name = TP_TERNARY_A, .accessor_name = *TP_TERNARY_A});
             bindings.push_back(TensorBinding{.tensor_parameter_name = TP_TERNARY_B, .accessor_name = *TP_TERNARY_B});
+        }
+        // The valid-rows and slot accessors exist in every variant so the kernels branch on dynamic_m / dynamic_m_slot
+        // with if constexpr; without the tensor they are bound to the kernel's own input, which is never read through
+        // them.
+        bindings.push_back(TensorBinding{
+            .tensor_parameter_name = dynamic_m ? TP_VALID_ROWS : own_input, .accessor_name = *TP_VALID_ROWS});
+        if (own_input == TP_IN0) {
+            bindings.push_back(
+                TensorBinding{.tensor_parameter_name = use_slot ? TP_SLOT : own_input, .accessor_name = *TP_SLOT});
         }
         for (const auto& name : output_accessor_names) {
             bindings.push_back(TensorBinding{.tensor_parameter_name = TensorParamName{name}, .accessor_name = name});
@@ -670,7 +783,17 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
                               const SemaphoreSpecName& sem_sender,
                               const SemaphoreSpecName& sem_receiver,
                               const SemaphoreSpecName& sem_valid) {
-        auto cta = dm_compile_time_args(*own_input + "_tile_size", input_tile_size, is_injector_core);
+        const bool is_in0 = own_input == DFB_IN0;
+        auto cta = dm_compile_time_args(is_in0, *own_input + "_tile_size", input_tile_size, is_injector_core);
+        // dynamic_m: the RISCV_0 instance (one per core) hands the per-core M tile count to the compute threads.
+        cta.insert(
+            {"dynamic_m_mailbox", dynamic_m && processor == tt::tt_metal::DataMovementProcessor::RISCV_0 ? 1u : 0u});
+        // Head-major output (out_head_dim): the writer places column j in head j / head_tiles's [M, head_tiles] block.
+        const uint32_t out_head_tiles = dynamic_m && is_output_writer && operation_attributes.out_head_dim.has_value()
+                                            ? operation_attributes.out_head_dim.value() / tt::constants::TILE_WIDTH
+                                            : 0u;
+        cta.insert({"out_head_tiles", out_head_tiles});
+        cta.insert({"out_head_stride_tiles", M_tiles * out_head_tiles});
 
         KernelSpec kernel{
             .unique_id = name,
@@ -851,6 +974,7 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
                 {"subblock_w", subblock_w},
                 {"swiglu_in_k_loop", swiglu_in_k_loop ? 1u : 0u},
                 {"swiglu_block_float_output", swiglu_block_float_output ? 1u : 0u},
+                {"dynamic_m", dynamic_m ? 1u : 0u},
             },
         .runtime_arg_schema = compute_schema,
         .hw_config = compute_hw,
@@ -1004,7 +1128,8 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
              {"N_start_tile", N_start_tile},
              {"N_end_tile", N_end_tile},
              {"defer_write_k_block", defer_write_k_block},
-             {"max_defer_write_k_block", max_defer_write_k_block}});
+             {"max_defer_write_k_block", max_defer_write_k_block},
+             {"M_core_idx", in0_idx}});
 
         auto& in1_rt = (in0_idx == 0 ? in1_sender_args : in1_receiver_args).runtime_arg_values;
         AddRuntimeArgsForNode(
@@ -1020,7 +1145,8 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
              {"N_start_tile", N_start_tile},
              {"N_end_tile", N_end_tile},
              {"defer_write_k_block", defer_write_k_block},
-             {"max_defer_write_k_block", max_defer_write_k_block}});
+             {"max_defer_write_k_block", max_defer_write_k_block},
+             {"M_core_idx", in0_idx}});
 
         AddRuntimeArgsForNode(
             compute_args.runtime_arg_values,
@@ -1043,6 +1169,8 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         }
     }
 
+    in0_sender_args.common_runtime_arg_values = {{"kv_layer_idx", operation_attributes.kv_layer_idx}};
+    in0_receiver_args.common_runtime_arg_values = {{"kv_layer_idx", operation_attributes.kv_layer_idx}};
     run_args.kernel_run_args.push_back(std::move(in0_sender_args));
     if (has_in0_receivers) {
         run_args.kernel_run_args.push_back(std::move(in0_receiver_args));
@@ -1053,25 +1181,65 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     }
     run_args.kernel_run_args.push_back(std::move(compute_args));
 
-    // Tensor arguments. The framework re-applies these on every program-cache hit, which is what
-    // the legacy override_runtime_arguments did by hand.
-    run_args.tensor_args.insert({TP_IN0, input_tensor.mesh_tensor()});
-    run_args.tensor_args.insert({TP_IN1, weight_tensor.mesh_tensor()});
-    if (use_bias) {
-        run_args.tensor_args.insert({TP_IN2, bias_tensor.value().mesh_tensor()});
+    std::vector<KernelSpecName> in0_kernels{K_IN0_SENDER};
+    if (has_in0_receivers) {
+        in0_kernels.push_back(K_IN0_RECEIVER);
     }
-    if (two_input_split) {
-        run_args.tensor_args.insert({TP_IN3, optional_input_tensor.value().mesh_tensor()});
+    std::vector<KernelSpecName> in1_kernels{K_IN1_SENDER};
+    if (has_in1_receivers) {
+        in1_kernels.push_back(K_IN1_RECEIVER);
     }
-    if (use_fused_ternary) {
-        run_args.tensor_args.insert({TP_TERNARY_A, fused_ternary_input_a.value().mesh_tensor()});
-        run_args.tensor_args.insert({TP_TERNARY_B, fused_ternary_input_b.value().mesh_tensor()});
-    }
-    for (uint32_t chunk = 0; chunk < output_tensors.size(); ++chunk) {
-        run_args.tensor_args.insert({TensorParamName{output_param_name(chunk)}, output_tensors[chunk].mesh_tensor()});
+    if (!use_hw_mcast) {
+        // The relay leaves the pipes absent: no resources, but the kernels' mcast arguments still exist.
+        ttnn::kernel_lib::host::attach_absent_mcast(spec, "in0_mcast", in0_kernels);
+        ttnn::kernel_lib::host::attach_absent_mcast(spec, "in1_mcast", in1_kernels);
+    } else {
+        // in0 is shared by the cores with the same in0 index, a line along the in1 axis whose injector sits at in1
+        // index 0 (and vice versa). Transposed, the in1 axis runs along y.
+        using ttnn::kernel_lib::host::Mcast;
+        using ttnn::kernel_lib::host::McastConfig;
+        using ttnn::kernel_lib::host::McastCoreOrder;
+        using ttnn::kernel_lib::host::McastFixedSenderConfig;
+        const CoreRangeSet grid_set(core_grid);
+        const Mcast in0_mcast(
+            *device,
+            McastConfig{.noc = in0_noc},
+            grid_set,
+            in1_parallel_axis_cores,
+            McastFixedSenderConfig{},
+            transpose_core_grid ? McastCoreOrder::ColumnMajor : McastCoreOrder::RowMajor);
+        const Mcast in1_mcast(
+            *device,
+            McastConfig{.noc = in1_noc},
+            grid_set,
+            in0_parallel_axis_cores,
+            McastFixedSenderConfig{},
+            transpose_core_grid ? McastCoreOrder::RowMajor : McastCoreOrder::ColumnMajor);
+        in0_mcast.attach(spec, run_args, "in0_mcast", in0_kernels);
+        in1_mcast.attach(spec, run_args, "in1_mcast", in1_kernels);
     }
 
+    insert_tensor_run_args(run_args, tensor_args, output_tensors);
+
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+ProgramRunArgs MinimalMatmulDeviceOperation::ProgramFactory::override_runtime_arguments(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    ProgramRunArgs run_args;
+    if (tensor_args.valid_rows_tensor.has_value()) {
+        const ProgramRunArgs::KernelRunArgs::CommonRuntimeArgValues layer = {
+            {"kv_layer_idx", operation_attributes.kv_layer_idx}};
+        run_args.kernel_run_args.push_back({.kernel = K_IN0_SENDER, .common_runtime_arg_values = layer});
+        if (resolve_grid_layout(operation_attributes, tensor_args).has_in0_receivers()) {
+            run_args.kernel_run_args.push_back({.kernel = K_IN0_RECEIVER, .common_runtime_arg_values = layer});
+        }
+    }
+    insert_tensor_run_args(run_args, tensor_args, tensor_return_value);
+    return run_args;
 }
 
 }  // namespace ttnn::experimental::prim

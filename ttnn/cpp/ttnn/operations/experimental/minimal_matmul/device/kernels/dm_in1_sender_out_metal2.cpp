@@ -22,6 +22,7 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "matmul_dataflow_common_metal2.hpp"
+#include "ttnn/kernel_lib/mcast/kernel/mcast_args_metal2.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
 void kernel_main() {
@@ -42,6 +43,9 @@ void kernel_main() {
     // TensorAccessor page-size 3rd argument, which the binding model now supplies itself.)
     constexpr auto out_tile_size = get_arg(args::out_tile_size);
     constexpr auto in2_tile_size = get_arg(args::in2_tile_size);
+    // Block transport along the line: hardware multicast from the line's injector (kernel_lib mcast pipe), or a relay
+    // where each core forwards the block to the next. Both are bound; the unused one is idle (an absent pipe, or
+    // relay semaphores and routes nobody reads).
     Semaphore in1_sender_semaphore(sem::in1_sender);
     Semaphore in1_receiver_semaphore(sem::in1_receiver);
     Semaphore in1_valid_semaphore(sem::in1_valid);
@@ -49,17 +53,22 @@ void kernel_main() {
     // DataflowBuffers this kernel instance binds (dfb::out on the writer, dfb::in2 / dfb::ternary_*
     // on the non-writer) and `if constexpr` still name-looks-up the discarded branch.
     constexpr auto is_injector_core = get_arg(args::is_injector_core);
+    constexpr auto in1_mcast = MCAST_ARGS(in1_mcast);
+    // hw_mcast: the factory attached a live pipe; the relay leaves it absent.
+    constexpr bool hw_mcast = in1_mcast.active;
+    auto in1_pipe = make_mcast_pipe<hw_mcast, is_injector_core>(in1_mcast, noc);
     constexpr auto N_chunks = get_arg(args::N_chunks);
     constexpr auto N_tiles_per_chunk = get_arg(args::N_tiles_per_chunk);
 
     // Range parameters. The buffer addresses that used to lead this list are TensorBindings now.
-    const auto is_sink_core = get_arg(args::is_sink_core);
-    const auto in1_dest_noc_x = get_arg(args::in1_dest_noc_x);
-    const auto in1_dest_noc_y = get_arg(args::in1_dest_noc_y);
-    const auto in1_sender_noc_x = get_arg(args::in1_sender_noc_x);
-    const auto in1_sender_noc_y = get_arg(args::in1_sender_noc_y);
-    const auto M_start_tile = get_arg(args::M_start_tile);
-    const auto M_end_tile = get_arg(args::M_end_tile);
+    // Relay route: the previous and next core on this core's line, and whether it ends the line.
+    [[maybe_unused]] const auto is_sink_core = get_arg(args::is_sink_core);
+    [[maybe_unused]] const auto in1_dest_noc_x = get_arg(args::in1_dest_noc_x);
+    [[maybe_unused]] const auto in1_dest_noc_y = get_arg(args::in1_dest_noc_y);
+    [[maybe_unused]] const auto in1_sender_noc_x = get_arg(args::in1_sender_noc_x);
+    [[maybe_unused]] const auto in1_sender_noc_y = get_arg(args::in1_sender_noc_y);
+    uint32_t M_start_tile = get_arg(args::M_start_tile);
+    uint32_t M_end_tile = get_arg(args::M_end_tile);
     const auto N_start_tile = get_arg(args::N_start_tile);
     const auto N_end_tile = get_arg(args::N_end_tile);
     const auto defer_write_k_block = get_arg(args::defer_write_k_block);
@@ -85,13 +94,16 @@ void kernel_main() {
 #endif  // FUSE_TERNARY
 
     const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
+    uint32_t M_blocks = M_blocks_per_core;
+    // dynamic_m: M is bounded at runtime from the valid-rows tensor (below).
+    constexpr bool dynamic_m = get_arg(args::dynamic_m) == 1;
 #ifdef MM_WINDOW_BLOCKS
     // The output tensor holds only the window, so its height is the host-computed
     // grid.y * MM_WINDOW_BLOCKS * M_block_tiles rather than the full M. Both the row bound and the
     // row stride come from it. Width is untouched — windowing is purely along M.
-    const TensorShape2D out_shape(MM_WINDOW_TOTAL_M_TILES, N_tiles, MM_WINDOW_TOTAL_M_TILES, padded_N_tiles);
+    TensorShape2D out_shape(MM_WINDOW_TOTAL_M_TILES, N_tiles, MM_WINDOW_TOTAL_M_TILES, padded_N_tiles);
 #else
-    const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
+    TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
 #endif
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
@@ -187,19 +199,37 @@ void kernel_main() {
     }
 #endif
 
-    in1_valid_semaphore.set(VALID);
+    if constexpr (dynamic_m) {
+        const DynamicMRows dynamic_rows = dynamic_m_rows<M_tiles, get_arg(args::M_parallel_cores), M_block_tiles>(
+            TensorAccessor(tensor::valid_rows),
+            dfb_in1.get_write_ptr(),
+            get_arg(args::valid_rows_divisor),
+            get_arg(args::valid_rows_multiplier),
+            get_arg(args::valid_rows_addend),
+            get_arg(args::valid_rows_align),
+            get_arg(args::M_core_idx));
+        M_start_tile = dynamic_rows.start_tile;
+        M_end_tile = dynamic_rows.end_tile;
+        M_blocks = dynamic_rows.num_blocks;
+        out_shape =
+            TensorShape2D(std::max<uint32_t>(dynamic_rows.valid_tiles, 1), N_tiles, padded_M_tiles, padded_N_tiles);
+    }
+    if constexpr (!hw_mcast) {
+        in1_valid_semaphore.set(VALID);
+    }
 
     constexpr uint32_t full_N_tiles_bytes = N_block_tiles * in1_tile_size;
 
     bool k_forward = true;
 
+    // Read only by output-writer cores.
     [[maybe_unused]] uint32_t defer_write_m_tile = 0;
     [[maybe_unused]] uint32_t defer_write_m_tile_end = 0;
     [[maybe_unused]] uint32_t defer_write_n_tile = 0;
     [[maybe_unused]] uint32_t defer_write_n_tile_end = 0;
     bool defer_write = false;
 
-    for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+    for (uint32_t m_block_iter = 0; m_block_iter < M_blocks; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
 #ifdef MM_WINDOW_BLOCKS
@@ -239,66 +269,74 @@ void kernel_main() {
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
             uint32_t current_N_block_tiles = n_tile_end - n_tile;
             uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
-            bool is_last_block = (m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1));
+            bool is_last_block = (m_block_iter == M_blocks - 1) && (n_block_iter == (N_blocks_per_core - 1));
             bool not_first_block = (n_block_iter > 0 || m_block_iter > 0);
-            for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
-                if (defer_write && k_block_iter == defer_write_k_block) {
+            // Writes the previous output block. With several K blocks it goes between this block's input reads (at
+            // defer_write_k_block); with one K block it goes after the read and forward, so the next block's inputs are
+            // in flight before this RISC blocks on compute finishing the previous block.
+            auto write_deferred_block = [&]() {
 #ifdef IS_OUTPUT_WRITER
 #ifdef FUSE_SWIGLU
-                    dfb_out.wait_front(out_block_num_tiles_swiglu);
-                    uint32_t out_read_ptr = dfb_out.get_read_ptr();
-                    if constexpr (N_chunks == 1) {
-                        write_block_sync<M_block_tiles, out_N_block_tiles>(
-                            std::get<0>(outputs_tuple),
-                            out_shape_swiglu,
-                            out_read_ptr,
-                            out_tile_size,
-                            defer_write_m_tile,
-                            defer_write_m_tile_end,
-                            defer_write_n_tile / 2,
-                            defer_write_n_tile_end / 2);
-                    } else {
-                        write_block_sync_split<M_block_tiles, out_N_block_tiles, N_chunks, out_N_tiles_per_chunk>(
-                            outputs_tuple,
-                            out0_shape_swiglu,
-                            out_read_ptr,
-                            out_tile_size,
-                            defer_write_m_tile,
-                            defer_write_m_tile_end,
-                            defer_write_n_tile / 2,
-                            defer_write_n_tile_end / 2);
-                    }
-                    dfb_out.pop_front(out_block_num_tiles_swiglu);
+                dfb_out.wait_front(out_block_num_tiles_swiglu);
+                uint32_t out_read_ptr = dfb_out.get_read_ptr();
+                if constexpr (N_chunks == 1) {
+                    write_block_sync<M_block_tiles, out_N_block_tiles>(
+                        std::get<0>(outputs_tuple),
+                        out_shape_swiglu,
+                        out_read_ptr,
+                        out_tile_size,
+                        defer_write_m_tile,
+                        defer_write_m_tile_end,
+                        defer_write_n_tile / 2,
+                        defer_write_n_tile_end / 2);
+                } else {
+                    write_block_sync_split<M_block_tiles, out_N_block_tiles, N_chunks, out_N_tiles_per_chunk>(
+                        outputs_tuple,
+                        out0_shape_swiglu,
+                        out_read_ptr,
+                        out_tile_size,
+                        defer_write_m_tile,
+                        defer_write_m_tile_end,
+                        defer_write_n_tile / 2,
+                        defer_write_n_tile_end / 2);
+                }
+                dfb_out.pop_front(out_block_num_tiles_swiglu);
 #else
-                    dfb_out.wait_front(out_block_num_tiles);
-                    uint32_t out_read_ptr = dfb_out.get_read_ptr();
+                dfb_out.wait_front(out_block_num_tiles);
+                uint32_t out_read_ptr = dfb_out.get_read_ptr();
 
-                    // write_block_sync_split is more generic (support multiple output tensors)
-                    // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
-                    if constexpr (N_chunks == 1) {
-                        write_block_sync<M_block_tiles, N_block_tiles>(
-                            std::get<0>(outputs_tuple),
-                            out_shape,
-                            out_read_ptr,
-                            out_tile_size,
-                            defer_write_m_tile,
-                            defer_write_m_tile_end,
-                            defer_write_n_tile,
-                            defer_write_n_tile_end);
-                    } else {
-                        write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
-                            outputs_tuple,
-                            out0_shape,
-                            out_read_ptr,
-                            out_tile_size,
-                            defer_write_m_tile,
-                            defer_write_m_tile_end,
-                            defer_write_n_tile,
-                            defer_write_n_tile_end);
-                    }
-                    dfb_out.pop_front(out_block_num_tiles);
+                // write_block_sync_split is more generic (support multiple output tensors)
+                // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
+                if constexpr (N_chunks == 1) {
+                    write_block_sync<M_block_tiles, N_block_tiles>(
+                        std::get<0>(outputs_tuple),
+                        out_shape,
+                        out_read_ptr,
+                        out_tile_size,
+                        defer_write_m_tile,
+                        defer_write_m_tile_end,
+                        defer_write_n_tile,
+                        defer_write_n_tile_end);
+                } else {
+                    write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                        outputs_tuple,
+                        out0_shape,
+                        out_read_ptr,
+                        out_tile_size,
+                        defer_write_m_tile,
+                        defer_write_m_tile_end,
+                        defer_write_n_tile,
+                        defer_write_n_tile_end);
+                }
+                dfb_out.pop_front(out_block_num_tiles);
 #endif  // FUSE_SWIGLU
 #endif  // IS_OUTPUT_WRITER
+            };
+            for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+                if constexpr (K_num_blocks > 1) {
+                    if (defer_write && k_block_iter == defer_write_k_block) {
+                        write_deferred_block();
+                    }
                 }
 
                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
@@ -322,16 +360,23 @@ void kernel_main() {
                         n_tile,
                         n_tile_end);
                 } else {
-                    in1_receiver_semaphore.set(INVALID);
-                    in1_sender_semaphore.up(noc, in1_sender_noc_x, in1_sender_noc_y, 1);
-                    in1_receiver_semaphore.wait(VALID);
+                    if constexpr (hw_mcast) {
+                        mcast_pipe_receive<hw_mcast, is_injector_core>(in1_pipe);
+                    } else {
+                        in1_receiver_semaphore.set(INVALID);
+                        in1_sender_semaphore.up(noc, in1_sender_noc_x, in1_sender_noc_y, 1);
+                        in1_receiver_semaphore.wait(VALID);
+                    }
                 }
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 dfb_in1.push_back(in1_block_num_tiles);
 
-                if (!is_sink_core) {
+                if constexpr (hw_mcast) {
+                    mcast_pipe_send<hw_mcast, is_injector_core>(
+                        in1_pipe, in1_start_address, in1_block_num_tiles * in1_tile_size);
+                } else if (!is_sink_core) {
                     in1_sender_semaphore.wait(1);
                     in1_sender_semaphore.set(0);
 
@@ -355,6 +400,11 @@ void kernel_main() {
 #endif
 
                     in1_valid_semaphore.relay_unicast(noc, in1_receiver_semaphore, in1_dest_noc_x, in1_dest_noc_y);
+                }
+                if constexpr (K_num_blocks == 1) {
+                    if (defer_write) {
+                        write_deferred_block();
+                    }
                 }
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {
