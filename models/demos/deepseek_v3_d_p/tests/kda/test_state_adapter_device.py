@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     assemble_recurrent,
     convolution_segment_to_torch,
     recurrent_segment_to_torch,
+    slot_index,
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     KDA_VERSIONS,
@@ -154,7 +155,9 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
     }
     natives = {key: _native_from_global(mesh_device, geometry, *value) for key, value in patterns.items()}
     for (slot, layer), state in natives.items():
-        slabs.export_layer(state, slot, layer)
+        index = slot_index(mesh_device, slot)
+        slabs.export_layer(state, index, layer)
+        ttnn.deallocate(index)
     ttnn.synchronize_device(mesh_device)
 
     # 1. Every slab batch holds its layer's per-chip state, on every SP replica, bit for bit.
@@ -199,19 +202,26 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
         ttnn.deallocate(back.recurrent)
         ttnn.deallocate(back.convolution)
 
-    # 3. A captured export follows the carry's contents on replay and touches nothing else.
+    # 3. A captured export follows the carry's contents and the device slot on replay, and touches
+    #    nothing else: captured on slot 0, replayed with the last slot written into the slot tensor.
     victim = natives[(0, layer_ids[0])]
+    slot_tt = slot_index(mesh_device, 0)
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    slabs.export_layer(victim, 0, layer_ids[0])
+    slabs.export_layer(victim, slot_tt, layer_ids[0])
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     new_rec, new_conv = _global_patterns(geometry, 5, 9)
     staged = _native_from_global(mesh_device, geometry, new_rec, new_conv)
     ttnn.copy(staged.recurrent, victim.recurrent)
     ttnn.copy(staged.convolution, victim.convolution)
+    replay_slot = num_slots - 1
+    staged_slot = slot_index(mesh_device, replay_slot)
+    ttnn.copy(staged_slot, slot_tt)
     ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
     ttnn.synchronize_device(mesh_device)
     ttnn.release_trace(mesh_device, trace_id)
-    patterns[(0, layer_ids[0])] = (new_rec, new_conv)
+    for tensor in (slot_tt, staged_slot):
+        ttnn.deallocate(tensor)
+    patterns[(replay_slot, layer_ids[0])] = (new_rec, new_conv)
     rec_shards = _shards(slabs.recurrent, mesh_device)
     conv_shards = _shards(slabs.convolution, mesh_device)
     for (slot, layer), (recurrent, convolution) in patterns.items():
