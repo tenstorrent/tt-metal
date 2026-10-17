@@ -127,3 +127,13 @@
   - `ATTN_QKV_WEIGHT_DTYPE` bfloat16. This costs 3.5 MB more per chip per layer.
 - Probe after the fixes: module vs the CPU step rel 0.0088, row 0.029, ratio [0.989, 1.017], bias +0.0029.
 - Re-run: `bfw job check --task S.sliding_moe.02`.
+
+## S.sliding_moe.03 (layer 0: attn_norm + attention + attn_residual on device)
+
+- No code change: the C.sliding_moe.attn_residual module (one local `ttnn.add` on the residual-stream layout) and the
+  S.sliding_moe.02 attention passed together on the first run.
+- Gate: PASS. pcc_swap_out 0.99998, swap_margin_min 1.25 (attention's step check is still the closest).
+  attn_residual vs CPU step: rel 0.0017 (limit 0.005), row 0.0024, ratio [0.9995, 1.0015], bias +0.0005;
+  block out vs CPU attn_residual rel 0.0027 (0.01). Device ops: attn_norm 1, attention 58, attn_residual 1; host
+  FLOPs 0.
+- Re-run: `bfw job check --task S.sliding_moe.03`.
