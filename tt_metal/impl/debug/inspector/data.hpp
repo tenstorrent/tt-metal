@@ -30,6 +30,8 @@ private:
     // `context` must outlive this object.
     Data(MetalContext& context, std::optional<int> rank, uint64_t fw_hash);
 
+    const llrt::RunTimeOptions& rtoptions() const;
+
     // Whether tensor specs should be captured on op dispatch.
     bool capture_tensor_specs() const;
 
@@ -68,8 +70,7 @@ private:
     MetalContext& context_;
     // The MetalEnv used by the owning context, for low level queries (HAL, cluster, rtoptions, control plane,
     // system mesh). Do not cache the control plane or system mesh: the env rebuilds them when fabric is
-    // reconfigured. Inspector settings are read through the env's rtoptions on demand (except the error reporting
-    // policy used by the TT_INSPECTOR_* macros, see logger.hpp).
+    // reconfigured. Inspector settings are read through the env's rtoptions on demand.
     MetalEnvImpl& env_;
 
     inspector::Logger logger;
