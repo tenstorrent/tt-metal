@@ -32,6 +32,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
+    DEST_SYNC,
     DISABLE_SRC_ZERO_FLAG,
     INPUT_DIMENSIONS,
     NUM_BLOCKS,
@@ -60,28 +61,75 @@ supported_formats = [
     DataFormat.Bfp8_b,
 ]
 
+# Eight 32-bit tiles fill DEST under DestSync.Full, so the multi-tile axis reaches DEST tiles 4-7.
+NUM_TILES_32BIT_FULL_DEST = 8
+
+all_broadcast_types = [
+    BroadcastType.None_,
+    BroadcastType.Column,
+    BroadcastType.Row,
+    BroadcastType.Scalar,
+]
+
 # Sweep tile dimensions from tiny ([1,32]..[16,32]) through full ([32,32]).
 # Tiny tiles have fewer faces (num_faces=2) and variable face_r_dim;
 # full 32x32 tiles have 4 faces with face_r_dim=16.
 # BroadcastType.None_ is a datacopy (unpack A -> DEST -> pack to L1).
+# num_tiles_in_input=NUM_TILES_32BIT_FULL_DEST (32x32 tiles only) stacks tiles along rows so math writes DEST tile slots past 0;
+# for 32-bit / dest-accumulation variants under DestSync.Half it also spans two blocks, using both DEST halves.
 
 
 @parametrize(
     tile_dimensions=[[1, 32], [2, 32], [4, 32], [8, 32], [16, 32], [32, 32]],
+    num_tiles_in_input=lambda tile_dimensions: (
+        [1, NUM_TILES_32BIT_FULL_DEST] if tile_dimensions == [32, 32] else [1]
+    ),
     formats=input_output_formats(supported_formats, same=True),
-    broadcast_type=[
-        BroadcastType.None_,
-        BroadcastType.Column,
-        BroadcastType.Row,
-        BroadcastType.Scalar,
-    ],
+    broadcast_type=all_broadcast_types,
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
 )
 def test_unpack_bcast(
     tile_dimensions,
+    num_tiles_in_input,
     formats,
     broadcast_type,
     dest_acc,
+):
+    run_unpack_bcast(
+        tile_dimensions,
+        num_tiles_in_input,
+        formats,
+        broadcast_type,
+        dest_acc,
+        DestSync.Half,
+    )
+
+
+# DestSync.Full puts all eight 32-bit unpack-to-dest tiles in one block, so math reaches DEST tiles 4-7.
+@parametrize(
+    formats=input_output_formats(
+        [DataFormat.Int32, DataFormat.UInt32, DataFormat.Float32], same=True
+    ),
+    broadcast_type=all_broadcast_types,
+)
+def test_unpack_bcast_dest_sync_full(formats, broadcast_type):
+    run_unpack_bcast(
+        [32, 32],
+        NUM_TILES_32BIT_FULL_DEST,
+        formats,
+        broadcast_type,
+        DestAccumulation.Yes,
+        DestSync.Full,
+    )
+
+
+def run_unpack_bcast(
+    tile_dimensions,
+    num_tiles_in_input,
+    formats,
+    broadcast_type,
+    dest_acc,
+    dest_sync,
 ):
     # --- Skips -----------------------------------------------------------
 
@@ -128,7 +176,7 @@ def test_unpack_bcast(
     # For full tiles ([32,32]):     face_r_dim=16, num_faces=4.
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
     num_faces = num_faces_r_dim * num_faces_c_dim
-    input_dimensions = list(tile_dimensions)
+    input_dimensions = [tile_dimensions[0] * num_tiles_in_input, tile_dimensions[1]]
 
     # --- Stimuli generation ----------------------------------------------
     # generate_stimuli(..., tile_dimensions=...) produces dense data for any tile size.
@@ -158,8 +206,8 @@ def test_unpack_bcast(
         golden_tensor = src_A.to(format_dict[formats.output_format])
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        DestAccumulation.No,
+        dest_sync,
+        dest_acc,
         formats,
         input_dimensions,
         tile_dimensions,
@@ -182,6 +230,7 @@ def test_unpack_bcast(
                 partial_face_math=False,
             ),
             DISABLE_SRC_ZERO_FLAG(False),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[
             UNPACK_TRANS_FACES(Transpose.No),
