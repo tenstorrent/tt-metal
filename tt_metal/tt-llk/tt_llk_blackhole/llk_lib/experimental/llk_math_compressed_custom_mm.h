@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -142,9 +143,24 @@ inline void _llk_math_compressed_custom_mm_mop_config_(const std::uint32_t opera
         });
 }
 
+/**
+ * @brief Configure the math thread for compressed_custom_mm: programs address mods and records the
+ *        MVMUL/MOVD2B/finalize sequence into the replay buffer. No MOP is programmed; @ref
+ *        _llk_math_compressed_custom_mm_ replays the recorded sequence per k-tile.
+ *
+ * @tparam transpose: Transpose in1 faces during the multiply.
+ * @tparam split_acc: Accumulate into split DEST halves that the finalize pass merges.
+ * @tparam dense_packing: Lay output tiles 32 DEST rows apart instead of 64.
+ * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
+ * @note On the unpack thread, pair with @ref _llk_unpack_AB_compressed_custom_mm_init_.
+ */
 template <bool transpose = false, bool split_acc = false, bool dense_packing = false>
 inline void _llk_math_compressed_custom_mm_init_(const std::uint32_t operandB_face_r_dim)
 {
+    LLK_ASSERT(
+        operandB_face_r_dim == 1 || operandB_face_r_dim == 2 || operandB_face_r_dim == 4 || operandB_face_r_dim == 8,
+        "compressed_custom_mm: in0 tile height must be 1, 2, 4 or 8");
+
     _llk_math_compressed_custom_mm_addrmod_config_<transpose, split_acc, dense_packing>();
     _llk_math_compressed_custom_mm_mop_config_(operandB_face_r_dim);
 
@@ -159,6 +175,11 @@ inline void _llk_math_compressed_custom_mm_(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1)
 {
+    // The height is checked in the init only. Here it selects the replay length, so it must still match the
+    // height the init recorded: 0 (a caller that read the height on the unpack thread only) is safe for a
+    // 1/2/4-row in0 or with finalize=false, but with an 8-row init and 0 here the shorter replay would drop
+    // both finalize adds on every column tile but the last, and the SrcA clear and the first finalize add on
+    // the last one.
     const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 

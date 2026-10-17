@@ -178,6 +178,10 @@ inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, con
 template <bool transpose = false, bool split_acc = false, bool dense_packing = false>
 inline void _llk_math_custom_mm_init_(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim = 1)
 {
+    LLK_ASSERT(
+        operandB_face_r_dim == 1 || operandB_face_r_dim == 2 || operandB_face_r_dim == 4 || operandB_face_r_dim == 8,
+        "custom_mm: in0 tile height must be 1, 2, 4 or 8");
+
     custom_mm_configure_addrmod<transpose, split_acc, dense_packing>();
     custom_mm_configure_mop<split_acc>(operandB_face_r_dim, ct_dim);
 
@@ -208,6 +212,11 @@ inline void _llk_math_custom_mm_(
         "custom_mm: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
         "this call left it at keep, so denormal Src operands would not be flushed");
 
+    // The height is checked in the init only. Here it selects the replay length, so it must still match the
+    // height the init recorded: 0 (a caller that read the height on the unpack thread only) is safe for a
+    // 1/2/4-row in0 or with finalize=false, but with an 8-row init and 0 here the shorter replay would drop
+    // both finalize adds on every column tile but the last, and the SrcA clear and the first finalize add on
+    // the last one.
     const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 

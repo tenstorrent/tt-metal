@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "llk_assert.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -84,6 +85,10 @@ inline void _llk_unpack_AB_compressed_custom_mm_mop_config_()
 template <bool transpose = false, bool clear_src = true>
 inline void _llk_unpack_AB_compressed_custom_mm_init_(const std::uint32_t unpB_face_r_dim)
 {
+    LLK_ASSERT(
+        unpB_face_r_dim == 1 || unpB_face_r_dim == 2 || unpB_face_r_dim == 4 || unpB_face_r_dim == 8,
+        "compressed_custom_mm: in0 tile height must be 1, 2, 4 or 8");
+
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose ? 1 : 0);
