@@ -677,28 +677,36 @@ class DST_WRITE_ADDR_OFFSET(TemplateParameter):
 
 
 @dataclass
-class HASH_CB_PRECEDING_SFPU(TemplateParameter):
+class HASH_CB_SFPU_OP(TemplateParameter):
     """Compile-time knobs for ``hash_cb_test.cpp``.
 
-    ``HASH_CB_PRECEDING_SFPU_ENABLED``    run a whole-tile SFPU op on another DEST slot,
-                                          inside the same DEST window, before the tiles are
-                                          datacopied into slot 0 and folded. False is the
-                                          documented dedicated-window usage.
-    ``HASH_CB_PRECEDING_SFPU_DST_INDEX``  the ``dst_index`` handed to that SFPU op. Its
-                                          ``_llk_math_eltwise_sfpu_start_`` leaves the
-                                          math DEST offset at ``base + 64 * dst_index`` and
-                                          ``_done_`` only resets the RWC, which is the state
-                                          the hash must be immune to.
+    ``position``   where to run a whole-tile SFPU op on another DEST slot inside the
+                   same DEST window: ``None`` (the documented dedicated-window usage),
+                   ``"before_init"`` (before the hash init -- the production order of
+                   hash_cb_sfpu, where a user op precedes the hash) or
+                   ``"before_store"`` (between the fold loop and the store-back -- a
+                   standalone caller).
+    ``dst_index``  the ``dst_index`` handed to that SFPU op. Its
+                   ``_llk_math_eltwise_sfpu_start_`` leaves the math DEST offset at
+                   ``base + 64 * dst_index`` and ``_done_`` only resets the RWC, which
+                   is the state the hash must be immune to.
     """
 
-    enabled: bool = False
+    position: str | None = None
     dst_index: int = 0
 
+    def __post_init__(self):
+        if self.position not in (None, "before_init", "before_store"):
+            raise ValueError(f"unknown HASH_CB_SFPU_OP position {self.position!r}")
+
     def convert_to_cpp(self) -> str:
+        before_init = str(self.position == "before_init").lower()
+        before_store = str(self.position == "before_store").lower()
         return "\n".join(
             [
-                f"constexpr bool HASH_CB_PRECEDING_SFPU_ENABLED = {str(self.enabled).lower()};",
-                f"constexpr std::uint32_t HASH_CB_PRECEDING_SFPU_DST_INDEX = {self.dst_index}u;",
+                f"constexpr bool HASH_CB_SFPU_OP_BEFORE_INIT = {before_init};",
+                f"constexpr bool HASH_CB_SFPU_OP_BEFORE_STORE = {before_store};",
+                f"constexpr std::uint32_t HASH_CB_SFPU_OP_DST_INDEX = {self.dst_index}u;",
             ]
         )
 

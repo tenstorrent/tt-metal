@@ -15,12 +15,14 @@
 // The host XOR-folds the whole result tile; the zeroed rows cancel, leaving
 // XOR(32 accumulators). Uses only the proven INT32 DEST -> PACK -> L1 path.
 //
-// HASH_CB_PRECEDING_SFPU_ENABLED additionally runs a whole-tile SFPU op on DEST
-// slot HASH_CB_PRECEDING_SFPU_DST_INDEX inside the same DEST window, before the
-// tiles are datacopied into slot 0 and folded. That op leaves the math DEST
-// offset at base + 64 * dst_index (its _done_ only resets the RWC), which is the
-// state the hash must be immune to: the unpack-to-dest datacopy writes slot 0 at
-// an absolute address, so the fold and the store-back must still target slot 0.
+// HASH_CB_SFPU_OP_BEFORE_INIT / HASH_CB_SFPU_OP_BEFORE_STORE additionally run a
+// whole-tile SFPU op on DEST slot HASH_CB_SFPU_OP_DST_INDEX inside the same DEST
+// window: before the hash init (the production order of hash_cb_sfpu, where a
+// user op precedes the hash) or between the fold loop and the store-back (a
+// standalone caller). Either op leaves the math DEST offset at
+// base + 64 * dst_index (its _done_ only resets the RWC), which is the state the
+// hash must be immune to: the unpack-to-dest datacopy writes slot 0 at an
+// absolute address, so the fold and the store-back must still target slot 0.
 
 #include <cstdint>
 
@@ -74,6 +76,29 @@ using namespace ckernel::sfpu;
 // dst_reg step, so one face is 8 steps.
 constexpr int FACE_SFPU_STEPS = (FACE_R_DIM * FACE_C_DIM) / 32;
 
+constexpr bool HASH_CB_SFPU_OP_ENABLED = HASH_CB_SFPU_OP_BEFORE_INIT || HASH_CB_SFPU_OP_BEFORE_STORE;
+
+// A whole-tile SFPU op on another slot in the same DEST window (what an eltwise
+// SFPU op at that dst_index does): start_ points the math DEST offset at
+// base + 64 * dst_index and done_ leaves it there. Slot 0 is not touched. The
+// body keeps one live vFloat so it stays off the hash's live LRegs (checked in
+// the ELF disassembly: only LReg0, which the hash reloads on every step).
+inline void sfpu_op_on_slot(std::uint32_t dst_index)
+{
+    _llk_math_eltwise_unary_sfpu_params_(
+        []
+        {
+            for (int d = 0; d < FACE_SFPU_STEPS; ++d)
+            {
+                const sfpi::vFloat v = sfpi::dst_reg[0];
+                sfpi::dst_reg[0]     = -v;
+                sfpi::dst_reg++;
+            }
+        },
+        dst_index,
+        VectorMode::RC);
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -84,34 +109,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en>(4, formats.math);
-    if constexpr (HASH_CB_PRECEDING_SFPU_ENABLED)
+    if constexpr (HASH_CB_SFPU_OP_ENABLED)
     {
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
     }
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
-    _llk_math_hash_cb_init_();
-
-    if constexpr (HASH_CB_PRECEDING_SFPU_ENABLED)
+    if constexpr (HASH_CB_SFPU_OP_BEFORE_INIT)
     {
-        // A whole-tile SFPU op on another slot in the same DEST window (what an
-        // eltwise SFPU op at that dst_index does): start_ points the math DEST
-        // offset at base + 64 * dst_index and done_ leaves it there. Slot 0 is
-        // not touched; its contents are produced by the datacopies below.
-        _llk_math_eltwise_unary_sfpu_params_(
-            []
-            {
-                for (int d = 0; d < FACE_SFPU_STEPS; ++d)
-                {
-                    const sfpi::vFloat v = sfpi::dst_reg[0];
-                    sfpi::dst_reg[0]     = -v;
-                    sfpi::dst_reg++;
-                }
-            },
-            HASH_CB_PRECEDING_SFPU_DST_INDEX,
-            VectorMode::RC);
+        // Production order: a user SFPU op runs before hash_cb_sfpu's init.
+        sfpu_op_on_slot(HASH_CB_SFPU_OP_DST_INDEX);
     }
+
+    _llk_math_hash_cb_init_();
 
     for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
     {
@@ -119,6 +130,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
             0, formats.math, formats.math);
         _llk_math_hash_cb_tile_(/*dst_tile_idx=*/0);
+    }
+
+    if constexpr (HASH_CB_SFPU_OP_BEFORE_STORE)
+    {
+        // Standalone-caller order: an SFPU op between the fold and the store-back,
+        // after the last _llk_math_hash_cb_tile_ has already pinned the offset.
+        sfpu_op_on_slot(HASH_CB_SFPU_OP_DST_INDEX);
     }
 
     // Write the per-lane accumulators back into DEST for the packer.
