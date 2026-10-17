@@ -5,13 +5,17 @@
 every bank.
 
 The selector it writes to the debug read register is a word index into the memory-mapped
-configuration window: two thread-agnostic banks of ``CFG_STATE_SIZE * 4`` words, then three
-thread banks of ``THD_STATE_SIZE`` 16-byte entries. Only ``HW_CFG_0`` starts at word 0, so only
-``HW_CFG_0`` reads are independent of the bank sizes the helper assumes.
+configuration window. On Wormhole that window is two thread-agnostic banks of
+``CFG_STATE_SIZE * 4`` words, then three thread banks of ``THD_STATE_SIZE`` 16-byte entries. Only
+``HW_CFG_0`` starts at word 0, so only ``HW_CFG_0`` reads are independent of the bank sizes and
+entry stride the helper assumes. Blackhole lays the window out differently (a dual-write bank
+after the two thread-agnostic banks, 4-byte thread entries; see
+``tt_llk_blackhole/llk_lib/hal/cfg/detail/register_layout.h``); its helper is fixed separately.
 
 The kernel plants a known value in every bank (a sentinel in the inactive thread-agnostic bank,
-one ``SETC16`` per TRISC into its own thread bank) and reads each back through the helper. Thread
-entries are compared on their 16-bit value, thread-agnostic words on the whole word.
+one ``SETC16`` per TRISC into entry 1 and into the last entry of its own thread bank) and reads
+each back through the helper. Every read is compared as the whole 32-bit word: a thread entry's
+16-bit value sits in bits 15:0 and its padding half reads back as 0.
 """
 
 import pytest
@@ -23,7 +27,7 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 
 # Must match sources/dbg_read_cfgreg_test.cpp
-NUM_CHECKS = 5
+NUM_CHECKS = 8
 BANK_NAMES = {
     0: "THREAD_0_CFG",
     1: "THREAD_1_CFG",
@@ -31,7 +35,6 @@ BANK_NAMES = {
     3: "HW_CFG_0",
     4: "HW_CFG_1",
 }
-THREAD_BANKS = (0, 1, 2)
 
 
 @pytest.mark.skipif(
@@ -42,6 +45,7 @@ THREAD_BANKS = (0, 1, 2)
 @pytest.mark.xfail(
     get_chip_architecture() == ChipArchitecture.BLACKHOLE,
     strict=True,
+    raises=AssertionError,
     reason=(
         "The Blackhole dbg_read_cfgreg still uses the Wormhole bank arithmetic and is "
         "fixed separately; this flips to a failure when that fix lands."
@@ -81,12 +85,11 @@ def test_dbg_read_cfgreg_every_bank():
 
     mismatches = []
     for i in range(num_checks):
-        bank, addr, expected, raw = vals[1 + 4 * i : 1 + 4 * i + 4]
-        got = raw & 0xFFFF if bank in THREAD_BANKS else raw
+        bank, addr, expected, got = vals[1 + 4 * i : 1 + 4 * i + 4]
         if got != expected:
             mismatches.append(
-                f"{BANK_NAMES.get(bank, bank)} addr {addr}: expected 0x{expected:x}, "
-                f"read 0x{got:x} (raw word 0x{raw:08x})"
+                f"{BANK_NAMES.get(bank, bank)} addr {addr}: expected 0x{expected:08x}, "
+                f"read 0x{got:08x}"
             )
 
     assert not mismatches, (

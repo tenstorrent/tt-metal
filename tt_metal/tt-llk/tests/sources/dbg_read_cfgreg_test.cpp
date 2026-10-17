@@ -4,22 +4,29 @@
 
 // dbg_read_cfgreg(bank, addr) reads one backend configuration word through the debug read
 // registers. The selector it writes is a 32-bit word index into the memory-mapped configuration
-// window, which holds the two thread-agnostic banks (CFG_STATE_SIZE * 4 words each) followed by
-// the three thread banks (THD_STATE_SIZE entries each, one 16-byte entry per field with the
-// 16-bit value in the low half of the entry's first word). Every bank except HW_CFG_0 therefore
-// depends on those sizes being right, and no in-tree caller reads any bank but HW_CFG_0.
+// window. On Wormhole that window holds the two thread-agnostic banks (CFG_STATE_SIZE * 4 words
+// each) followed by the three thread banks (THD_STATE_SIZE entries each, one 16-byte entry per
+// field with the 16-bit value in the low half of the entry's first word). Every bank except
+// HW_CFG_0 therefore depends on those sizes being right, and no in-tree caller reads any bank
+// but HW_CFG_0. The Blackhole window is laid out differently (a dual-write bank follows the two
+// thread-agnostic banks and a thread entry is 4 bytes; see
+// tt_llk_blackhole/llk_lib/hal/cfg/detail/register_layout.h), so the layout described here is
+// Wormhole's; the kernel itself only names fields both architectures define.
 //
 // This driver plants known values in every bank and reads each back through the helper:
 //
 //   HW_CFG_0   control: the active bank, compared against the RISC's own read of the word
 //   HW_CFG_1   a sentinel stored through the cfg pointer with cfg_state_id = 1; the word before
 //              it holds a second sentinel so an off-by-one selector returns a recognisable value
-//   THREAD_n   each TRISC writes its own thread bank with SETC16 (which can only target the
-//              issuing thread's bank), and MATH reads all three
+//   THREAD_n   each TRISC writes two entries of its own thread bank with SETC16 (which can only
+//              target the issuing thread's bank): entry 1 with a per-thread value, and the bank's
+//              last entry, so a selector with the right bank base but the wrong per-entry stride
+//              is caught as well; MATH reads all six
 //
 // Everything written is put back before the kernel ends: the two bank-1 words are restored to
-// the values read before the test, and the thread field is returned to 0, the value every math
-// LLK programs before consuming it and the value its software mirror starts each kernel at.
+// the values read before the test, and both thread fields are returned to 0, the value every
+// math LLK that uses them programs before consuming them (and, for the first, the value its
+// software mirror starts each kernel at).
 
 #include <cstdint>
 
@@ -37,12 +44,19 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 namespace
 {
-// The thread field under test. Its sentinels stay inside the field's mask so a consumer that
+// The thread fields under test. Their sentinels stay inside the field's mask so a consumer that
 // narrows the stored value could not change what is read back.
 constexpr std::uint32_t THREAD_FIELD = DEST_TARGET_REG_CFG_MATH_Offset_ADDR32;
 constexpr std::uint16_t T0_VALUE     = 0x0A5;
 constexpr std::uint16_t T1_VALUE     = 0x123;
 constexpr std::uint16_t T2_VALUE     = 0x5C3;
+
+// The highest thread entry (the last one on Wormhole: THD_STATE_SIZE - 1). Its field is one bit
+// wide, so the sentinel is 1 for every thread; telling the threads apart is entry 1's job. The
+// only in-tree writer (the reduce LLK) sets it and puts it back to 0.
+constexpr std::uint32_t THREAD_FIELD_LAST = FP16A_FORCE_Enable_ADDR32;
+constexpr std::uint16_t LAST_VALUE        = 0x1;
+static_assert(THREAD_FIELD < THREAD_FIELD_LAST && THREAD_FIELD_LAST < THD_STATE_SIZE, "the second thread probe must be a later entry of the same bank");
 
 // The thread-agnostic word under test, in the inactive bank, and the word before it.
 constexpr std::uint32_t BANK1_WORD        = ALU_FORMAT_SPEC_REG2_Dstacc_ADDR32;
@@ -55,17 +69,19 @@ constexpr std::uint32_t READY = 0x1;
 constexpr std::uint32_t DONE  = 0x2;
 
 // Result layout: res[0] = NUM_CHECKS, then NUM_CHECKS quads of {bank, addr, expected, read}.
-constexpr std::uint32_t NUM_CHECKS = 5;
+constexpr std::uint32_t NUM_CHECKS = 8;
 
-// Plants this thread's sentinel, holds it while MATH reads, then clears it.
+// Plants this thread's sentinels, holds them while MATH reads, then clears them.
 template <ThreadId thread_id>
-inline void hold_thread_field(const std::uint16_t value)
+inline void hold_thread_fields(const std::uint16_t value)
 {
     TT_SETC16(THREAD_FIELD, value);
+    TTI_SETC16(THREAD_FIELD_LAST, LAST_VALUE);
     tensix_sync();
     mailbox_write(ThreadId::MathThreadId, READY);
     (void)mailbox_read(ThreadId::MathThreadId);
     TTI_SETC16(THREAD_FIELD, 0); // the firmware drains the thread after run_kernel returns
+    TTI_SETC16(THREAD_FIELD_LAST, 0);
 }
 } // namespace
 
@@ -73,7 +89,7 @@ inline void hold_thread_field(const std::uint16_t value)
 
 void run_kernel(RUNTIME_PARAMETERS)
 {
-    hold_thread_field<ThreadId::UnpackThreadId>(T0_VALUE);
+    hold_thread_fields<ThreadId::UnpackThreadId>(T0_VALUE);
 }
 
 #endif
@@ -101,21 +117,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
     (void)mailbox_read(ThreadId::PackThreadId);
 
     TT_SETC16(THREAD_FIELD, T1_VALUE);
+    TTI_SETC16(THREAD_FIELD_LAST, LAST_VALUE);
     tensix_sync();
 
     // Bank 1 through the LLK's own accessor for it. The RISC may reorder stores to different
-    // memory regions, so each store is followed by a blocking load of the same word before the
-    // debug read register (another region) is written.
+    // memory regions, so each store blocks until it has landed, before the debug read register
+    // (another region) is written.
     cfg_state_id                                 = 1;
     volatile std::uint32_t tt_reg_ptr* bank1_cfg = get_cfg_pointer();
     reset_cfg_state_id();
 
     const std::uint32_t saved_word   = bank1_cfg[BANK1_WORD];
     const std::uint32_t saved_before = bank1_cfg[BANK1_WORD_BEFORE];
-    bank1_cfg[BANK1_WORD]            = BANK1_VALUE;
-    bank1_cfg[BANK1_WORD_BEFORE]     = BANK1_BEFORE;
-    (void)load_blocking(&bank1_cfg[BANK1_WORD]);
-    (void)load_blocking(&bank1_cfg[BANK1_WORD_BEFORE]);
+    store_blocking(&bank1_cfg[BANK1_WORD], BANK1_VALUE);
+    store_blocking(&bank1_cfg[BANK1_WORD_BEFORE], BANK1_BEFORE);
 
     std::uint32_t n = 0;
     record(res, n, dbg_cfgreg::HW_CFG_0, BANK1_WORD, cfg_read(BANK1_WORD));
@@ -123,14 +138,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     record(res, n, dbg_cfgreg::THREAD_0_CFG, THREAD_FIELD, T0_VALUE);
     record(res, n, dbg_cfgreg::THREAD_1_CFG, THREAD_FIELD, T1_VALUE);
     record(res, n, dbg_cfgreg::THREAD_2_CFG, THREAD_FIELD, T2_VALUE);
+    record(res, n, dbg_cfgreg::THREAD_0_CFG, THREAD_FIELD_LAST, LAST_VALUE);
+    record(res, n, dbg_cfgreg::THREAD_1_CFG, THREAD_FIELD_LAST, LAST_VALUE);
+    record(res, n, dbg_cfgreg::THREAD_2_CFG, THREAD_FIELD_LAST, LAST_VALUE);
     res[0] = n;
 
     // Put everything back.
-    bank1_cfg[BANK1_WORD]        = saved_word;
-    bank1_cfg[BANK1_WORD_BEFORE] = saved_before;
-    (void)load_blocking(&bank1_cfg[BANK1_WORD]);
-    (void)load_blocking(&bank1_cfg[BANK1_WORD_BEFORE]);
+    store_blocking(&bank1_cfg[BANK1_WORD], saved_word);
+    store_blocking(&bank1_cfg[BANK1_WORD_BEFORE], saved_before);
     TTI_SETC16(THREAD_FIELD, 0); // the firmware drains the thread after run_kernel returns
+    TTI_SETC16(THREAD_FIELD_LAST, 0);
 
     mailbox_write(ThreadId::UnpackThreadId, DONE);
     mailbox_write(ThreadId::PackThreadId, DONE);
@@ -142,7 +159,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS)
 {
-    hold_thread_field<ThreadId::PackThreadId>(T2_VALUE);
+    hold_thread_fields<ThreadId::PackThreadId>(T2_VALUE);
 }
 
 #endif

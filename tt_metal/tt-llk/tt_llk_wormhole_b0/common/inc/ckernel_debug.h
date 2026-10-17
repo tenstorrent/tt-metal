@@ -25,6 +25,8 @@ struct dbg_cfgreg
     // (the 16-bit value in the low half of its first word).
     constexpr static std::uint32_t HW_CFG_SIZE     = CFG_STATE_SIZE * 4;
     constexpr static std::uint32_t THREAD_CFG_SIZE = THD_STATE_SIZE * 4;
+    // The debug read selector is 11 bits wide: the hardware returns window word (selector & 0x7ff).
+    constexpr static std::uint32_t RD_SELECTOR_MASK = 0x7ff;
 };
 
 struct dbg_array_id
@@ -303,6 +305,8 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
 
 // Reads one configuration word: addr is the field's _ADDR32 index within the bank, as in cfg_defines.h.
 // The selector written to the debug read register is a word index into the configuration window.
+// For a thread bank the word returned is the first word of the 16-byte entry: the 16-bit value in
+// bits 15:0 and the entry's padding in bits 31:16, which reads back as 0.
 inline std::uint32_t dbg_read_cfgreg(const std::uint32_t cfgreg_id, const std::uint32_t addr)
 {
     std::uint32_t hw_base_addr = 0;
@@ -323,7 +327,7 @@ inline std::uint32_t dbg_read_cfgreg(const std::uint32_t cfgreg_id, const std::u
             break;
     }
 
-    std::uint32_t hw_addr = (hw_base_addr + field_words) & 0x7ff;
+    std::uint32_t hw_addr = (hw_base_addr + field_words) & dbg_cfgreg::RD_SELECTOR_MASK;
     reg_write(RISCV_DEBUG_REG_CFGREG_RD_CNTL, hw_addr);
 
     wait(1);
