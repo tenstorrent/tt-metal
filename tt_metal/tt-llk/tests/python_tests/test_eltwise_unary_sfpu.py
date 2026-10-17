@@ -520,8 +520,8 @@ def _run_single_tile_sfpu(
     """Run *src_A*, one tile in *formats.input_format*, through the unary SFPU driver.
 
     Returns the result tile in the output format's torch dtype, lanes in the input's order.
-    FastMode.No and CLAMP_NEGATIVE(True) are what the float sweeps run with; the second
-    operand the driver takes is an all-zero tile of the same dtype.
+    Pins the default mode, FastMode.No and CLAMP_NEGATIVE(True); the second operand the
+    driver takes is an all-zero tile of the same dtype.
     """
     assert src_A.numel() == _SINGLE_TILE_ELEMENTS, src_A.shape
     src_B = torch.zeros_like(src_A)
@@ -657,6 +657,7 @@ def test_tanh_derivative_lut_infinity_regression():
     # A finite tail input, exactly 0 from the (0, 1.0) tail pair with no guard involved: a 0 on
     # the probes is then the value the guard moves them onto, not a coincidence.
     src_A[2] = 4.0
+    num_probes = 3
 
     res = _run_single_tile_sfpu(
         MathOperation.TanhDerivativeLut,
@@ -679,10 +680,10 @@ def test_tanh_derivative_lut_infinity_regression():
         "table's (0, 1.0) tail pair; the pair the guard relies on has moved."
     )
     # Exactly 1.0, not a tolerance: segment 0 is 0.93701171875 * |x| + 0 and 1 - 0^2 is exact.
-    assert torch.equal(res[3:], torch.ones(_SINGLE_TILE_ELEMENTS - 3)), (
+    assert torch.equal(res[num_probes:], torch.ones_like(res[num_probes:])), (
         "tanh_derivative_lut(0.0) is no longer exactly 1.0 on the lanes around the probes "
-        f"(values seen: {sorted(set(res[3:].tolist()))}); the guard's predicate has been "
-        "widened to divert finite lanes."
+        f"(values seen: {sorted(set(res[num_probes:].tolist()))}); the guard's predicate "
+        "has been widened to divert finite lanes."
     )
 
 
