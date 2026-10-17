@@ -8231,6 +8231,13 @@ tasks:
     - q_a
     - kv
     layer: 21
+  frozen:
+    at: '2026-10-17T15:22:13'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_05_kv.py: bec52e589e603f16b317dd7a4a271419dac294f43933651a1965c0187400f581
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_reuse.attention
   title: dec_reuse attention (attention) on device, layer 21
   step: implement
