@@ -34,6 +34,7 @@ set(UNIT_TESTS_API_SOURCES
     test_kernel_thread_sync.cpp
     test_banked.cpp
     test_bit_utils.cpp
+    test_equal_within_n_sig_figs.cpp
     test_math.cpp
     test_filesystem_utils.cpp
     test_simulator_target_devices.cpp
