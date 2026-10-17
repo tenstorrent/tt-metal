@@ -179,6 +179,7 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
         "block_size must be a multiple of {} (got {})",
         tile_w,
         attrs.block_size);
+    // Every configuration reaches the block row-max reduce (the compute kernel has no legacy path).
     detail::validate_chunk_fits_block_reduce(attrs.block_size, "block_size");
     TT_FATAL(attrs.scale > 0.0f, "scale must be > 0");
 

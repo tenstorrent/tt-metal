@@ -880,6 +880,20 @@ class REDUCE_MATH_SKIP_EXECUTE(TemplateParameter):
 
 
 @dataclass
+class REDUCE_PACK_SKIP_EXECUTE(TemplateParameter):
+    """When true the PACK thread runs the reduce_block_max_row pack init and uninit but
+    neither waits for the math result nor packs it. The guard tests whose math thread stops
+    on an LLK_ASSERT at init set it: that math never signals math-done, and a packer left
+    waiting on the MATH_PACK semaphore is a stalled Tensix instruction the per-test TRISC
+    soft reset does not recover from (the next kernel on the core then packs zeros)."""
+
+    reduce_pack_skip_execute: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool REDUCE_PACK_SKIP_EXECUTE = {str(self.reduce_pack_skip_execute).lower()};"
+
+
+@dataclass
 class REDUCE_REINIT_OPERAND_SHAPE(TemplateParameter):
     """Operand ``TileShape`` handed to the reduce_block_max_row reinit_short re-arm (the
     driver defaults it to the init shape; the reinit-guard test hands it one the op rejects).

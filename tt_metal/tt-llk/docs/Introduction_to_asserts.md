@@ -82,11 +82,11 @@ Embedding assertions directly into the code provides **clear, enforceable guidan
 ### Example 1: Compile-Time Assert (Preferred when possible)
 
 ```cpp
-template <uint32_t block_ct_dim>
+template <std::uint32_t block_ct_dim, bool respect_trigger = false>
 inline void _llk_unpack_AB_reduce_block_max_row_mop_config_()
 {
-    // Constraint on the outerloop and innerloop dim
-    static_assert(block_ct_dim < 128, "block_ct_dim must be less than 128");
+    // Constraint on the MOP outer-loop count
+    static_assert(is_valid_reduce_block_max_row_block_ct_dim(block_ct_dim), "block_ct_dim must be between 1 and 127");
     // ... rest of implementation ...
 }
 ```

@@ -410,7 +410,12 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
         args.get_k_chunk_size(),
         tt::constants::TILE_WIDTH);
-    detail::validate_chunk_fits_block_reduce(args.get_k_chunk_size(), "k_chunk_size");
+    // Only the streaming compute kernel (selected when fp32_dest_acc_en is false) reduces the K chunk with
+    // the block row-max LLK; the legacy kernel loops reduce_tile and has no width cap.
+    if (!get_fp32_dest_acc_en(args.compute_kernel_config)) {
+        detail::validate_chunk_fits_block_reduce(
+            args.get_k_chunk_size(), "k_chunk_size", detail::kStreamingComputeCondition);
+    }
 
     TT_FATAL(
         !args.sliding_window_size.has_value() || args.has_sliding_window(),

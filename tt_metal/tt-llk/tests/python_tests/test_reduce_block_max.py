@@ -29,7 +29,7 @@ Coverage (Blackhole + Wormhole B0):
     the unpack splits the block reduce into two half-width MOP runs gated by HW
     semaphores; the PACK thread plays the producer. Both arches. Validates split-MOP
     correctness + semaphore balance (not the SDPA live-data overlap; see the C++ note).
-  * runtime ``block_ct_dim`` limit: 127 reduces, 128 asserts at init on both arches, and a
+  * runtime ``block_ct_dim`` limit: 127 reduces, 0 and 128 assert at init on both arches, and a
     reinit_short re-arm with 128 asserts in the MOP reprogram; a trigger split with an odd
     width asserts at init.
   * operand-shape guard: 16x16, 32x16 and 8x32 operands are rejected at init (compile-time
@@ -54,6 +54,7 @@ from helpers.test_variant_parameters import (
     REDUCE_BLOCK_CT_DIM,
     REDUCE_MATH_SKIP_EXECUTE,
     REDUCE_OPERAND_SHAPE,
+    REDUCE_PACK_SKIP_EXECUTE,
     REDUCE_REINIT_BLOCK_CT_DIM,
     REDUCE_REINIT_OPERAND_SHAPE,
     REDUCE_UNPACK_SKIP_EXECUTE,
@@ -72,7 +73,7 @@ ELEMENTS_PER_TILE = TILE_DIM * TILE_DIM
 FULL_TILE_SHAPE = construct_tile_shape((32, 32))
 
 # Widest block the runtime reduce accepts on every arch (its compile-time sibling static_asserts
-# block_ct_dim < 128). block_ct_dim goes straight into the MOP outer-loop count, which keeps 7 bits
+# 1 <= block_ct_dim <= 127). block_ct_dim goes straight into the MOP outer-loop count, which keeps 7 bits
 # on Wormhole, and the block is walked by the unpacker's tile counter, whose input address keeps 8
 # bits on both arches: 128 silently reduces nothing on Wormhole, 257 aliases tile 0 on Blackhole.
 MAX_BLOCK_CT_DIM = 127
@@ -130,6 +131,7 @@ def _make_reduce_block_max_config(
     reinit_operand_shape=None,
     unpack_skip_execute=False,
     math_skip_execute=False,
+    pack_skip_execute=False,
 ):
     """Build one reduce_block_max_row variant plus its golden (row-major, per-row max in
     column [0]).
@@ -150,6 +152,9 @@ def _make_reduce_block_max_config(
     per-test TRISC soft reset and stall the next kernel. ``math_skip_execute`` is the
     mirror image for the trigger odd-width guard: its unpack stops at init, and a math MOP
     left waiting for SrcA is a stalled Tensix instruction the soft reset does not recover.
+    ``pack_skip_execute`` is set by every guard test whose math stops at init: that math
+    never signals math-done, and a packer left on the MATH_PACK wait is a stalled Tensix
+    instruction that makes the next kernel on the core pack zeros.
     """
     dest_acc = _dest_acc(formats.output_format)
     staged_ct_dim = block_ct_dim if staged_ct_dim is None else staged_ct_dim
@@ -205,6 +210,7 @@ def _make_reduce_block_max_config(
             ),
             REDUCE_UNPACK_SKIP_EXECUTE(unpack_skip_execute),
             REDUCE_MATH_SKIP_EXECUTE(math_skip_execute),
+            REDUCE_PACK_SKIP_EXECUTE(pack_skip_execute),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -470,26 +476,31 @@ def _expect_llk_assert_on(
     )
 
 
-@parametrize(block_ct_dim=[MAX_BLOCK_CT_DIM, MAX_BLOCK_CT_DIM + 1])
+@parametrize(block_ct_dim=[0, MAX_BLOCK_CT_DIM, MAX_BLOCK_CT_DIM + 1])
 def test_reduce_block_max_runtime_block_ct_dim_limit(block_ct_dim):
     """The runtime reduce programs block_ct_dim straight into the MOP outer-loop count
     (7 bits on Wormhole, so 128 unpacks and pools nothing and the packed row max is stale
-    DEST) and walks the block with the unpacker's 8-bit tile counter (so 257 aliases
-    tile 0 on Blackhole); the runtime inits must hold the same block_ct_dim < 128
-    contract their compile-time siblings static_assert, on both arches. The widest legal
-    block must reduce correctly; one past it must LLK_ASSERT at init instead of
-    wrapping. The rejected block never reads its operand, so a single tile is staged."""
+    DEST; 0 programs no loop at all, with the same stale result) and walks the block with
+    the unpacker's 8-bit tile counter (so 257 aliases tile 0 on Blackhole); the runtime
+    inits must hold the same 1 <= block_ct_dim <= 127 contract their compile-time siblings
+    static_assert, on both arches. The widest legal block must reduce correctly; 0 and one
+    past the limit must LLK_ASSERT at init instead of programming the count. A rejected
+    block never reads its operand, so a single tile is staged."""
     (block_ct_dim,) = block_ct_dim
-    if block_ct_dim <= MAX_BLOCK_CT_DIM:
+    if 1 <= block_ct_dim <= MAX_BLOCK_CT_DIM:
         _run_reduce_block_max(FORMATS[0], block_ct_dim, use_runtime=True)
         return
     configuration, golden_rowmajor = _make_reduce_block_max_config(
-        FORMATS[0], block_ct_dim, use_runtime=True, staged_ct_dim=1
+        FORMATS[0],
+        block_ct_dim,
+        use_runtime=True,
+        staged_ct_dim=1,
+        pack_skip_execute=True,
     )
     _expect_llk_assert_on(
         configuration,
         golden_rowmajor,
-        f"block_ct_dim={block_ct_dim} above the {MAX_BLOCK_CT_DIM} limit",
+        f"block_ct_dim={block_ct_dim} outside the 1..{MAX_BLOCK_CT_DIM} range",
     )
 
 
@@ -510,7 +521,11 @@ def test_reduce_block_max_shape_guard(use_runtime, operand_shape):
     runtime family alike. A guard that admits the shape lets the op pool SrcA rows the
     unpacker never delivered and pack a wrong row max with no diagnostic."""
     configuration, golden_rowmajor = _make_reduce_block_max_config(
-        FORMATS[0], block_ct_dim=1, use_runtime=use_runtime, operand_shape=operand_shape
+        FORMATS[0],
+        block_ct_dim=1,
+        use_runtime=use_runtime,
+        operand_shape=operand_shape,
+        pack_skip_execute=True,
     )
     _expect_llk_assert_on(
         configuration, golden_rowmajor, f"operand shape {operand_shape}"
@@ -529,6 +544,7 @@ def test_reduce_block_max_reinit_short_runtime_rejects_width():
         clobber=_CLOBBER_FOR_REINIT["short"],
         reinit_block_ct_dim=MAX_BLOCK_CT_DIM + 1,
         unpack_skip_execute=True,
+        pack_skip_execute=True,
     )
     _expect_llk_assert_on(
         configuration,
@@ -556,6 +572,7 @@ def test_reduce_block_max_reinit_short_rejects_shape(use_runtime):
         clobber=_CLOBBER_FOR_REINIT["short"],
         reinit_operand_shape=TileShape(16, 16, 1, 1),
         unpack_skip_execute=True,
+        pack_skip_execute=True,
     )
     _expect_llk_assert_on(
         configuration,

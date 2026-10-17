@@ -124,7 +124,12 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
                 k_chunk_size,
                 tt::constants::TILE_WIDTH);
-            detail::validate_chunk_fits_block_reduce(k_chunk_size, "k_chunk_size");
+            // Only the streaming compute kernel (selected when fp32_dest_acc_en is false) reduces the K
+            // chunk with the block row-max LLK; the legacy kernel loops reduce_tile and has no width cap.
+            if (!get_fp32_dest_acc_en(attrs.compute_kernel_config)) {
+                detail::validate_chunk_fits_block_reduce(
+                    k_chunk_size, "k_chunk_size", detail::kStreamingComputeCondition);
+            }
         }
     };
 
@@ -354,7 +359,12 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
                 k_chunk_size,
                 tt::constants::TILE_WIDTH);
-            detail::validate_chunk_fits_block_reduce(k_chunk_size, "k_chunk_size");
+            // Only the streaming compute kernel (selected when fp32_dest_acc_en is false) reduces the K
+            // chunk with the block row-max LLK; the legacy kernel loops reduce_tile and has no width cap.
+            if (!get_fp32_dest_acc_en(attrs.compute_kernel_config)) {
+                detail::validate_chunk_fits_block_reduce(
+                    k_chunk_size, "k_chunk_size", detail::kStreamingComputeCondition);
+            }
 
             if (legacy_chunked) {
                 // Validate that chunk_start_idx is a multiple of q_chunk_size

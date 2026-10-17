@@ -38,6 +38,9 @@ template <std::uint32_t block_ct_dim, bool respect_trigger = false>
 inline void _llk_unpack_AB_reduce_block_max_row_mop_config_()
 {
     static_assert(is_valid_reduce_block_max_row_block_ct_dim(block_ct_dim), "block_ct_dim must be between 1 and 127");
+    // A split run delivers 2 * (block_ct_dim / 2) tiles while the math MOP waits for block_ct_dim, so the trigger
+    // needs an even width (an odd one hangs the math MOP; 1 would program an outer-loop count of 0).
+    static_assert(!respect_trigger || block_ct_dim % 2 == 0, "respect_trigger needs an even block_ct_dim");
     // Single UNPACR because TTI_SETADCXX for UNP_A is 1023, increment Z counter to point to the next tile, set dvalid each time
     static constexpr std::uint32_t unpack_srca_op =
         TT_OP_UNPACR(SrcA, 0b00000001 /* Z_ch0_inc and Z_ch1_inc */, 0, 0, 0, 1, 1 /* Set Dvalid */, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);

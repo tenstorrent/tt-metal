@@ -81,8 +81,11 @@ static constexpr std::uint32_t NUM_FACES = 4;
 // per-test TRISC soft reset does not clear and which stall the next kernel). The trigger
 // odd-width guard test sets REDUCE_MATH_SKIP_EXECUTE for the mirror-image reason: its
 // unpack stops at init, and a math MOP left waiting for SrcA is a stalled Tensix
-// instruction the soft reset does not recover from. The PACK thread always packs the
-// 32x32 DEST slot the op writes the row max into.
+// instruction the soft reset does not recover from. The guard tests whose math stops at
+// init set REDUCE_PACK_SKIP_EXECUTE for the same reason one thread further down: that math
+// never signals math-done, and a packer left on the MATH_PACK wait is a stalled Tensix
+// instruction that makes the next kernel on the core pack zeros. Otherwise the PACK thread
+// packs the 32x32 DEST slot the op writes the row max into.
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -314,9 +317,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     // Single output tile: the per-row maxima live in column [0] of DEST[0].
-    _llk_packer_wait_for_math_done_();
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* dst_index */, L1_ADDRESS(params.buffer_Res[0]));
-    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    if constexpr (!REDUCE_PACK_SKIP_EXECUTE)
+    {
+        _llk_packer_wait_for_math_done_();
+        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* dst_index */, L1_ADDRESS(params.buffer_Res[0]));
+        _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    }
 
     // reduce_block_max_row_uninit
     _llk_pack_reduce_mask_clear_();
