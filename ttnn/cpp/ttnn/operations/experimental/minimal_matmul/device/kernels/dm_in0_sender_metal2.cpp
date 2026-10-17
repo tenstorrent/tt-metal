@@ -22,6 +22,13 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "matmul_dataflow_common_metal2.hpp"
+#ifdef MM_HW_MCAST
+#include "ttnn/kernel_lib/mcast/kernel/mcast_args_metal2.hpp"
+#endif
+#ifdef DYNAMIC_M_MAILBOX
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#endif
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
 void kernel_main() {
@@ -49,6 +56,17 @@ void kernel_main() {
     // DataflowBuffers this kernel instance binds (dfb::out on the writer, dfb::in2 / dfb::ternary_*
     // on the non-writer) and `if constexpr` still name-looks-up the discarded branch.
     constexpr auto is_injector_core = get_arg(args::is_injector_core);
+#ifdef MM_HW_MCAST
+    // Hardware multicast of each in0 block from the line's injector to the rest of the line (kernel_lib mcast pipe).
+    constexpr auto in0_mcast = MCAST_ARGS(in0_mcast);
+    auto in0_pipe = [&]() {
+        if constexpr (is_injector_core) {
+            return in0_mcast.sender(noc);
+        } else {
+            return in0_mcast.receiver(noc);
+        }
+    }();
+#endif
     constexpr auto N_chunks = get_arg(args::N_chunks);
     constexpr auto N_tiles_per_chunk = get_arg(args::N_tiles_per_chunk);
 
@@ -58,8 +76,8 @@ void kernel_main() {
     const auto in0_dest_noc_y = get_arg(args::in0_dest_noc_y);
     const auto in0_sender_noc_x = get_arg(args::in0_sender_noc_x);
     const auto in0_sender_noc_y = get_arg(args::in0_sender_noc_y);
-    const auto M_start_tile = get_arg(args::M_start_tile);
-    const auto M_end_tile = get_arg(args::M_end_tile);
+    uint32_t M_start_tile = get_arg(args::M_start_tile);
+    uint32_t M_end_tile = get_arg(args::M_end_tile);
     const auto N_start_tile = get_arg(args::N_start_tile);
     const auto N_end_tile = get_arg(args::N_end_tile);
     const auto defer_write_k_block = get_arg(args::defer_write_k_block);
@@ -73,7 +91,7 @@ void kernel_main() {
 
     // Tuple of output accessors, one per chunk. tensor::outputs is a TensorBindingSequence, which
     // is how a compile-time-variadic binding count is expressed: its size is N_chunks.
-    auto outputs_tuple = make_tensor_accessors(tensor::outputs);
+    [[maybe_unused]] auto outputs_tuple = make_tensor_accessors(tensor::outputs);
 
 #ifdef FUSE_BIAS
     const auto in2_reader = TensorAccessor(tensor::in2);
@@ -84,13 +102,20 @@ void kernel_main() {
     const auto ternary_b_reader = TensorAccessor(tensor::ternary_b);
 #endif  // FUSE_TERNARY
 
+    uint32_t M_blocks = M_blocks_per_core;
+#ifdef DYNAMIC_M
+    uint32_t M_valid_tiles = M_tiles;
+    uint32_t in0_row_base = 0;
+#else
+    constexpr uint32_t in0_row_base = 0;
     const TensorShape2D in0_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
+#endif
 #ifdef MM_WINDOW_BLOCKS
     // The output tensor holds only the window, so its height is the host-computed
     // grid.y * MM_WINDOW_BLOCKS * M_block_tiles rather than the full M. Both the row bound and the
     // row stride come from it. Width is untouched — windowing is purely along M.
     const TensorShape2D out_shape(MM_WINDOW_TOTAL_M_TILES, N_tiles, MM_WINDOW_TOTAL_M_TILES, padded_N_tiles);
-#else
+#elif !defined(DYNAMIC_M)
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
 #endif
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
@@ -190,6 +215,47 @@ void kernel_main() {
     }
 #endif
 
+#ifdef DYNAMIC_M
+    {
+        constexpr auto M_parallel_cores = get_arg(args::M_parallel_cores);
+        const uint32_t scratch_addr = dfb_in0.get_write_ptr();
+        const uint32_t valid_rows = bounded_valid_rows(
+            read_scalar_u32(TensorAccessor(tensor::valid_rows), scratch_addr),
+            get_arg(args::valid_rows_divisor),
+            get_arg(args::valid_rows_multiplier),
+            get_arg(args::valid_rows_addend),
+            get_arg(args::valid_rows_align),
+            M_tiles * 32);
+        M_valid_tiles = (valid_rows + 31) / 32;
+#ifdef DYNAMIC_M_SLOT
+        constexpr auto kv_num_layers = get_arg(args::kv_num_layers);
+        const uint32_t kv_layer_idx = get_arg(args::kv_layer_idx);
+        constexpr auto in0_batch_extent = get_arg(args::in0_batch_extent);
+        const uint32_t batch =
+            read_scalar_u32(TensorAccessor(tensor::slot), scratch_addr) * kv_num_layers + kv_layer_idx;
+        ASSERT(batch < in0_batch_extent);
+        in0_row_base = (batch < in0_batch_extent ? batch : 0) * M_tiles;
+#else
+        in0_row_base = get_arg(args::kv_layer_idx) * M_tiles;
+#endif
+        const uint32_t M_tiles_rt = (M_valid_tiles + M_parallel_cores - 1) / M_parallel_cores;
+        const uint32_t M_core_idx = get_arg(args::M_core_idx);
+        M_start_tile = M_tiles_rt * M_core_idx;
+        M_end_tile = M_start_tile + M_tiles_rt;
+        M_blocks = (M_tiles_rt + M_block_tiles - 1) / M_block_tiles;
+#ifdef DYNAMIC_M_MAILBOX
+        ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, M_tiles_rt);
+        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, M_tiles_rt);
+        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, M_tiles_rt);
+#endif
+    }
+#endif
+
+#ifdef DYNAMIC_M
+    const TensorShape2D out_shape(std::max<uint32_t>(M_valid_tiles, 1), N_tiles, padded_M_tiles, padded_N_tiles);
+    const uint32_t in0_rows_end = in0_row_base + std::max<uint32_t>(M_valid_tiles, 1);
+    const TensorShape2D in0_shape(in0_rows_end, K_tiles, in0_rows_end, padded_K_tiles);
+#endif
     in0_valid_semaphore.set(VALID);
 
     /**
@@ -200,13 +266,14 @@ void kernel_main() {
     bool k_forward = true;
     bool reuse_block = false;
 
-    uint32_t defer_write_m_tile = 0;
-    uint32_t defer_write_m_tile_end = 0;
-    uint32_t defer_write_n_tile = 0;
-    uint32_t defer_write_n_tile_end = 0;
+    // Read only by output-writer cores.
+    [[maybe_unused]] uint32_t defer_write_m_tile = 0;
+    [[maybe_unused]] uint32_t defer_write_m_tile_end = 0;
+    [[maybe_unused]] uint32_t defer_write_n_tile = 0;
+    [[maybe_unused]] uint32_t defer_write_n_tile_end = 0;
     bool defer_write = false;
 
-    for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+    for (uint32_t m_block_iter = 0; m_block_iter < M_blocks; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
         // Rows this block writes to. Only the OUTPUT is windowed — this kernel also reads the
@@ -248,72 +315,81 @@ void kernel_main() {
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
             uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
-            bool is_last_block = (m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1));
+            bool is_last_block = (m_block_iter == M_blocks - 1) && (n_block_iter == (N_blocks_per_core - 1));
             bool not_first_block = (n_block_iter > 0 || m_block_iter > 0);
 
-            for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
-                if (defer_write && k_block_iter == defer_write_k_block) {
+            // Writes the previous output block. With several K blocks it goes between this block's input reads (at
+            // defer_write_k_block); with one K block it goes after the read and forward, so the next block's inputs are
+            // in flight before this RISC blocks on compute finishing the previous block.
+            auto write_deferred_block = [&]() {
 #ifdef IS_OUTPUT_WRITER
 #ifdef FUSE_SWIGLU
-                    dfb_out.wait_front(out_block_num_tiles_swiglu);
-                    uint32_t out_read_ptr_swiglu = dfb_out.get_read_ptr();
-                    if constexpr (N_chunks == 1) {
-                        write_block_sync<M_block_tiles, out_N_block_tiles>(
-                            std::get<0>(outputs_tuple),
-                            out_shape_swiglu,
-                            out_read_ptr_swiglu,
-                            out_tile_size,
-                            defer_write_m_tile,
-                            defer_write_m_tile_end,
-                            defer_write_n_tile / 2,
-                            defer_write_n_tile_end / 2);
-                    } else {
-                        write_block_sync_split<M_block_tiles, out_N_block_tiles, N_chunks, out_N_tiles_per_chunk>(
-                            outputs_tuple,
-                            out0_shape_swiglu,
-                            out_read_ptr_swiglu,
-                            out_tile_size,
-                            defer_write_m_tile,
-                            defer_write_m_tile_end,
-                            defer_write_n_tile / 2,
-                            defer_write_n_tile_end / 2);
-                    }
-                    dfb_out.pop_front(out_block_num_tiles_swiglu);
+                dfb_out.wait_front(out_block_num_tiles_swiglu);
+                uint32_t out_read_ptr_swiglu = dfb_out.get_read_ptr();
+                if constexpr (N_chunks == 1) {
+                    write_block_sync<M_block_tiles, out_N_block_tiles>(
+                        std::get<0>(outputs_tuple),
+                        out_shape_swiglu,
+                        out_read_ptr_swiglu,
+                        out_tile_size,
+                        defer_write_m_tile,
+                        defer_write_m_tile_end,
+                        defer_write_n_tile / 2,
+                        defer_write_n_tile_end / 2);
+                } else {
+                    write_block_sync_split<M_block_tiles, out_N_block_tiles, N_chunks, out_N_tiles_per_chunk>(
+                        outputs_tuple,
+                        out0_shape_swiglu,
+                        out_read_ptr_swiglu,
+                        out_tile_size,
+                        defer_write_m_tile,
+                        defer_write_m_tile_end,
+                        defer_write_n_tile / 2,
+                        defer_write_n_tile_end / 2);
+                }
+                dfb_out.pop_front(out_block_num_tiles_swiglu);
 #else
-                    dfb_out.wait_front(out_block_num_tiles);
-                    uint32_t out_read_ptr = dfb_out.get_read_ptr();
+                dfb_out.wait_front(out_block_num_tiles);
+                uint32_t out_read_ptr = dfb_out.get_read_ptr();
 
-                    // write_block_sync_split is more generic (support multiple output tensors)
-                    // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
-                    if constexpr (N_chunks == 1) {
-                        write_block_sync<M_block_tiles, N_block_tiles>(
-                            std::get<0>(outputs_tuple),
-                            out_shape,
-                            out_read_ptr,
-                            out_tile_size,
-                            defer_write_m_tile,
-                            defer_write_m_tile_end,
-                            defer_write_n_tile,
-                            defer_write_n_tile_end);
-                    } else {
-                        write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
-                            outputs_tuple,
-                            out0_shape,
-                            out_read_ptr,
-                            out_tile_size,
-                            defer_write_m_tile,
-                            defer_write_m_tile_end,
-                            defer_write_n_tile,
-                            defer_write_n_tile_end);
-                    }
-                    dfb_out.pop_front(out_block_num_tiles);
+                // write_block_sync_split is more generic (support multiple output tensors)
+                // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
+                if constexpr (N_chunks == 1) {
+                    write_block_sync<M_block_tiles, N_block_tiles>(
+                        std::get<0>(outputs_tuple),
+                        out_shape,
+                        out_read_ptr,
+                        out_tile_size,
+                        defer_write_m_tile,
+                        defer_write_m_tile_end,
+                        defer_write_n_tile,
+                        defer_write_n_tile_end);
+                } else {
+                    write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                        outputs_tuple,
+                        out0_shape,
+                        out_read_ptr,
+                        out_tile_size,
+                        defer_write_m_tile,
+                        defer_write_m_tile_end,
+                        defer_write_n_tile,
+                        defer_write_n_tile_end);
+                }
+                dfb_out.pop_front(out_block_num_tiles);
 #endif  // FUSE_SWIGLU
 #endif  // IS_OUTPUT_WRITER
+            };
+            for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+                if (K_num_blocks > 1 && defer_write && k_block_iter == defer_write_k_block) {
+                    write_deferred_block();
                 }
 
                 if (reuse_block && k_block_iter == 0) {
                     // We strided an N block and this is the first k block, so we get reuse and do not need to read in0
                     reuse_block = false;
+                    if (K_num_blocks == 1 && defer_write) {
+                        write_deferred_block();
+                    }
                     continue;
                 }
                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
@@ -350,21 +426,28 @@ void kernel_main() {
                         /*main_Wt=*/K_tiles,
 #endif
 #endif
-                        m_tile,
-                        m_tile_end,
+                        in0_row_base + m_tile,
+                        in0_row_base + m_tile_end,
                         k_block * K_block_tiles,
                         (k_block + 1) * K_block_tiles);
                 } else {
                     // Get from previous device
+#ifdef MM_HW_MCAST
+                    mcast_pipe_receive<is_injector_core>(in0_pipe);
+#else
                     in0_receiver_semaphore.set(INVALID);
                     in0_sender_semaphore.up(noc, in0_sender_noc_x, in0_sender_noc_y, 1);
                     in0_receiver_semaphore.wait(VALID);
+#endif
                 }
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 dfb_in0.push_back(in0_block_num_tiles);
 
+#ifdef MM_HW_MCAST
+                mcast_pipe_send<is_injector_core>(in0_pipe, in0_start_address, current_block_bytes);
+#else
                 if (!is_sink_core) {
                     in0_sender_semaphore.wait(1);
                     in0_sender_semaphore.set(0);
@@ -385,6 +468,10 @@ void kernel_main() {
 #endif
 
                     in0_valid_semaphore.relay_unicast(noc, in0_receiver_semaphore, in0_dest_noc_x, in0_dest_noc_y);
+                }
+#endif
+                if (K_num_blocks == 1 && defer_write) {
+                    write_deferred_block();
                 }
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {

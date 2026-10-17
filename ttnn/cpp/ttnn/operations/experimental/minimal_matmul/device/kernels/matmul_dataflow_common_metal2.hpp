@@ -21,6 +21,50 @@
 #define IN0_HAS_SECOND_SOURCE 1
 #endif
 
+FORCE_INLINE uint32_t out_tile_index(uint32_t i, uint32_t j, uint32_t row_tiles) {
+#ifdef OUT_HEAD_SPLIT
+    return (j / OUT_HEAD_TILES) * OUT_HEAD_STRIDE_TILES + i * OUT_HEAD_TILES + (j % OUT_HEAD_TILES);
+#else
+    return i * row_tiles + j;
+#endif
+}
+
+#ifdef DYNAMIC_M
+template <typename AccessorT>
+FORCE_INLINE uint32_t read_scalar_u32(const AccessorT& accessor, uint32_t l1_addr) {
+    Noc noc;
+    noc.async_read(accessor, CoreLocalMem<uint8_t>(l1_addr), sizeof(uint32_t), {.page_id = 0}, {});
+    noc.async_read_barrier();
+    invalidate_l1_cache();
+    return CoreLocalMem<volatile uint32_t>(l1_addr)[0];
+}
+
+// min(round_up(ceil(valid_rows / divisor) * multiplier + addend, align), cap_rows), saturating instead of
+// wrapping.
+FORCE_INLINE uint32_t bounded_valid_rows(
+    uint32_t valid_rows, uint32_t divisor, uint32_t multiplier, uint32_t addend, uint32_t align, uint32_t cap_rows) {
+    const uint64_t units = valid_rows / divisor + (valid_rows % divisor != 0 ? 1 : 0);
+    const uint64_t rows = (units * multiplier + addend + align - 1) / align * align;
+    return rows < cap_rows ? static_cast<uint32_t>(rows) : cap_rows;
+}
+#endif
+
+// Role-agnostic calls on a kernel_lib mcast pipe: kernel_main is not a template, so a discarded if-constexpr branch
+// would still be checked against the other role's pipe type.
+template <bool IS_SENDER, typename Pipe>
+FORCE_INLINE void mcast_pipe_receive(Pipe& pipe) {
+    if constexpr (!IS_SENDER) {
+        pipe.receive();
+    }
+}
+
+template <bool IS_SENDER, typename Pipe>
+FORCE_INLINE void mcast_pipe_send(Pipe& pipe, uint32_t l1_addr, uint32_t size_bytes) {
+    if constexpr (IS_SENDER) {
+        pipe.send(l1_addr, l1_addr, size_bytes);
+    }
+}
+
 inline void fill_zeros_async(const Noc& noc, const DataflowBuffer& dfb, uint32_t bytes, uint32_t offset_bytes = 0) {
     noc.async_write_zeros(dfb, bytes, {.offset_bytes = offset_bytes});
 }
@@ -102,7 +146,11 @@ void read_in0_block_sync(
                 }
 #else
                 {
+#ifdef IN0_ROW_TILES
+                    uint32_t tile_id = i * IN0_ROW_TILES + j;
+#else
                     uint32_t tile_id = i * shape.logical_d1 + j;
+#endif
                     noc.async_read(
                         tensor_accessor, CoreLocalMem<uint32_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
                 }
@@ -188,7 +236,7 @@ void write_block_sync(
                 read_ptr += tile_size_bytes;
                 continue;
             }
-            uint32_t tile_id = i * shape.logical_d1 + j;
+            uint32_t tile_id = out_tile_index(i, j, shape.logical_d1);
             noc.async_write(
                 CoreLocalMem<uint32_t>(read_ptr), tensor_accessor, tile_size_bytes, {}, {.page_id = tile_id});
             read_ptr += tile_size_bytes;
@@ -339,7 +387,7 @@ void write_block_sync_granular(
                 if (n_tile_id >= shape.logical_d1) {
                     break;
                 }
-                uint32_t tile_id = m_tile * shape.logical_d1 + n_tile_id;
+                uint32_t tile_id = out_tile_index(m_tile, n_tile_id, shape.logical_d1);
                 noc.async_write(
                     CoreLocalMem<uint32_t>(out_read_ptr), tensor_accessor, tile_size_bytes, {}, {.page_id = tile_id});
                 out_read_ptr += tile_size_bytes;

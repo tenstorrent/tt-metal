@@ -545,10 +545,21 @@ void kernel_main() {
     constexpr bool swiglu_in_k_loop = get_arg(args::swiglu_in_k_loop) == 1;
     constexpr bool swiglu_block_float_output = get_arg(args::swiglu_block_float_output) == 1;
 
-    const auto M_start_tile = get_arg(args::M_start_tile);
-    const auto M_end_tile = get_arg(args::M_end_tile);
     const auto N_start_tile = get_arg(args::N_start_tile);
     const auto N_end_tile = get_arg(args::N_end_tile);
+#ifdef DYNAMIC_M
+    uint32_t M_tiles_rt = 0;
+    UNPACK(M_tiles_rt = mailbox_read(ckernel::ThreadId::BriscThreadId);)
+    MATH(M_tiles_rt = mailbox_read(ckernel::ThreadId::BriscThreadId);)
+    PACK(M_tiles_rt = mailbox_read(ckernel::ThreadId::BriscThreadId);)
+    constexpr uint32_t M_start_tile = 0;
+    const uint32_t M_end_tile = M_tiles_rt;
+    const uint32_t M_blocks = (M_tiles_rt + M_block_tiles - 1) / M_block_tiles;
+#else
+    const auto M_start_tile = get_arg(args::M_start_tile);
+    const auto M_end_tile = get_arg(args::M_end_tile);
+    constexpr uint32_t M_blocks = M_blocks_per_core;
+#endif
 
 #ifdef FUSE_TERNARY
     const auto fused_ternary_scalar_uint = get_arg(args::fused_ternary_scalar);
@@ -584,6 +595,13 @@ void kernel_main() {
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
+    // With the whole K in one block and a plain epilogue, the matmul packs straight into the output: no
+    // intermediate accumulator and no copy_and_pack_block re-read of every output tile.
+#if !defined(FUSE_BIAS) && !defined(FUSE_TERNARY) && !defined(FUSE_SWIGLU) && !defined(SFPU_OP_INIT_ACTIVATION)
+    constexpr bool pack_direct_to_out = K_num_blocks == 1 && !swiglu_in_k_loop;
+#else
+    constexpr bool pack_direct_to_out = false;
+#endif
 
     constexpr uint32_t M_num_subblocks = M_block_tiles / subblock_h;
     constexpr uint32_t N_num_subblocks = N_block_tiles / subblock_w;
@@ -595,7 +613,7 @@ void kernel_main() {
     uint32_t current_subblock_h = subblock_h;
     uint32_t current_subblock_w = subblock_w;
 
-    for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+    for (uint32_t m_block_iter = 0; m_block_iter < M_blocks; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
         current_M_block_tiles = m_tile_end - m_tile;
@@ -610,8 +628,13 @@ void kernel_main() {
             // Reconfig before init: on all but the first block the unpackers are still
             // configured for the previous output stage's operands (see #55052).
             reconfig_data_format(dfb::in1, dfb::in0);
-            pack_reconfig_data_format(dfb::intermediate);
-            retarget_packer(dfb::intermediate);
+            if constexpr (pack_direct_to_out) {
+                pack_reconfig_data_format(dfb::out);
+                retarget_packer(dfb::out);
+            } else {
+                pack_reconfig_data_format(dfb::intermediate);
+                retarget_packer(dfb::intermediate);
+            }
             matmul_block_init(
                 dfb::in0,
                 dfb::in1,
@@ -620,7 +643,11 @@ void kernel_main() {
                 current_subblock_h /*rt_dim*/,
                 K_block_tiles /*kt_dim*/);
             // Accumulation buffer
-            dfb_intermediate.reserve_back(out_block_num_tiles);
+            if constexpr (pack_direct_to_out) {
+                dfb_out.reserve_back(out_block_num_tiles);
+            } else {
+                dfb_intermediate.reserve_back(out_block_num_tiles);
+            }
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
                 dfb_in0.wait_front(in0_block_num_tiles);
                 dfb_in1.wait_front(in1_block_num_tiles);
@@ -651,16 +678,29 @@ void kernel_main() {
                         dfb_intermediate.pop_front(out_block_num_tiles);
                     }
                 } else {
-                    matmul_blocks(
-                        dfb::in0,
-                        dfb::in1,
-                        dfb::intermediate,
-                        current_M_block_tiles,
-                        current_N_block_tiles,
-                        N_block_tiles,
-                        K_block_tiles,
-                        current_subblock_h,
-                        current_subblock_w);
+                    if constexpr (pack_direct_to_out) {
+                        matmul_blocks(
+                            dfb::in0,
+                            dfb::in1,
+                            dfb::out,
+                            current_M_block_tiles,
+                            current_N_block_tiles,
+                            N_block_tiles,
+                            K_block_tiles,
+                            current_subblock_h,
+                            current_subblock_w);
+                    } else {
+                        matmul_blocks(
+                            dfb::in0,
+                            dfb::in1,
+                            dfb::intermediate,
+                            current_M_block_tiles,
+                            current_N_block_tiles,
+                            N_block_tiles,
+                            K_block_tiles,
+                            current_subblock_h,
+                            current_subblock_w);
+                    }
                 }
 
                 if (k_block == K_num_blocks - 1) {
@@ -678,9 +718,14 @@ void kernel_main() {
                 }
                 dfb_in1.pop_front(in1_block_num_tiles);
                 reuse_in0_block = false;
-                if (k_block == 0) {
+                if (k_block == 0 && !pack_direct_to_out) {
                     pack_reconfig_l1_acc(1);
                 }
+            }
+
+            if constexpr (pack_direct_to_out) {
+                dfb_out.push_back(out_block_num_tiles);
+                continue;
             }
 
             if constexpr (!swiglu_in_k_loop) {
