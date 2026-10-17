@@ -5,7 +5,6 @@
 #include <bit>
 #include <cstdint>
 #include <random>
-#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -29,8 +28,8 @@
 // goldens: with a straddling dequant body the reduce MOP replays SFPU instructions in place of MVMULs and
 // the row sums come out wrong. The kernel also supports the reverse init order (compile arg 1), where the
 // reduce recording overwrites the tail of a straddling dequant body and the dequant then replays MVMULs
-// that wait forever for Src valid: that order is deliberately NOT registered as a test case, because a
-// regression there manifests as a device hang rather than a data failure.
+// that wait forever for Src valid: that order is registered only as a DISABLED_ case for manual repro,
+// because a regression there manifests as a device hang rather than a data failure.
 
 namespace tt::tt_metal {
 
@@ -39,6 +38,14 @@ namespace unit_tests::compute::quant_replay_slots {
 constexpr std::uint32_t kTileDim = 32;
 constexpr std::uint32_t kFaceDim = 16;
 constexpr std::uint32_t kTileElems = kTileDim * kTileDim;
+constexpr std::uint32_t kNumOutTiles = 2;  // tile 0 = reduce row sums, tile 1 = dequant
+constexpr std::uint32_t kDramBankId = 0;
+
+// Reduce data: integers in [-kReduceDataBound, kReduceDataBound] are exact in bf16 under any fidelity and
+// their 32-term row sums are exact in fp32. Dequant input: |q - zero_point| * scale stays exact in fp32.
+constexpr int kReduceDataBound = 15;
+constexpr std::int32_t kQuantInputBound = 120;
+constexpr std::uint32_t kMaxReportedMismatches = 8;
 
 // Index of (row, col) in a 32x32 tile laid out as four 16x16 faces (f0 top-left, f1 top-right, f2, f3).
 std::uint32_t tile_index(std::uint32_t row, std::uint32_t col) {
@@ -67,8 +74,8 @@ struct Stimulus {
 
 Stimulus make_stimulus(std::uint32_t seed) {
     std::mt19937 gen(seed);
-    std::uniform_int_distribution<int> data_dist(-15, 15);
-    std::uniform_int_distribution<std::int32_t> q_dist(-120, 120);
+    std::uniform_int_distribution<int> data_dist(-kReduceDataBound, kReduceDataBound);
+    std::uniform_int_distribution<std::int32_t> q_dist(-kQuantInputBound, kQuantInputBound);
     Stimulus s;
     s.reduce_data.resize(kTileElems);
     s.q_in.resize(kTileElems);
@@ -139,18 +146,18 @@ Outputs run(distributed::MeshDevice& mesh_device, std::uint32_t init_order, cons
     auto src_scaler = make_dram(bf16_tile_bytes);
     auto src_q = make_dram(int32_tile_bytes);
     auto src_scale = make_dram(fp32_tile_bytes);
-    auto dst = make_dram(2 * fp32_tile_bytes);
+    auto dst = make_dram(kNumOutTiles * fp32_tile_bytes);
 
     auto make_cb = [&](tt::CBIndex idx, tt::DataFormat fmt, std::uint32_t tiles) {
         const std::uint32_t tile_bytes = tt::tile_size(fmt);
         CreateCircularBuffer(
             program, core, CircularBufferConfig(tiles * tile_bytes, {{idx, fmt}}).set_page_size(idx, tile_bytes));
     };
-    make_cb(tt::CBIndex::c_0, tt::DataFormat::Float16_b, 1);
-    make_cb(tt::CBIndex::c_1, tt::DataFormat::Float16_b, 1);
-    make_cb(tt::CBIndex::c_2, tt::DataFormat::Int32, 1);
-    make_cb(tt::CBIndex::c_3, tt::DataFormat::Float32, 1);
-    make_cb(tt::CBIndex::c_16, tt::DataFormat::Float32, 2);
+    make_cb(tt::CBIndex::c_0, tt::DataFormat::Float16_b, 1 /*tiles*/);
+    make_cb(tt::CBIndex::c_1, tt::DataFormat::Float16_b, 1 /*tiles*/);
+    make_cb(tt::CBIndex::c_2, tt::DataFormat::Int32, 1 /*tiles*/);
+    make_cb(tt::CBIndex::c_3, tt::DataFormat::Float32, 1 /*tiles*/);
+    make_cb(tt::CBIndex::c_16, tt::DataFormat::Float32, kNumOutTiles);
 
     auto reader = CreateKernel(
         program,
@@ -186,15 +193,22 @@ Outputs run(distributed::MeshDevice& mesh_device, std::uint32_t init_order, cons
         program,
         reader,
         core,
-        {src_data->address(), 0, src_scaler->address(), 0, src_q->address(), 0, src_scale->address(), 0});
-    SetRuntimeArgs(program, writer, core, {dst->address(), 0, 2});
+        {src_data->address(),
+         kDramBankId,
+         src_scaler->address(),
+         kDramBankId,
+         src_q->address(),
+         kDramBankId,
+         src_scale->address(),
+         kDramBankId});
+    SetRuntimeArgs(program, writer, core, {dst->address(), kDramBankId, kNumOutTiles});
     SetRuntimeArgs(program, compute, core, {std::bit_cast<std::uint32_t>(neg_zero_point)});
 
     LaunchProgram(mesh_device, std::move(program));
 
     std::vector<std::uint32_t> result;
     distributed::EnqueueReadMeshBuffer(cq, result, dst, /*blocking=*/true);
-    EXPECT_EQ(result.size(), 2 * kTileElems);
+    EXPECT_EQ(result.size(), kNumOutTiles * kTileElems);
 
     Outputs out;
     out.row_sums.resize(kTileElems);
@@ -212,7 +226,7 @@ void check_tile(const std::vector<float>& got, const std::vector<float>& want, c
         for (std::uint32_t c = 0; c < kTileDim; ++c) {
             const std::uint32_t i = tile_index(r, c);
             if (got[i] != want[i]) {
-                if (mismatches < 8) {
+                if (mismatches < kMaxReportedMismatches) {
                     ADD_FAILURE() << what << " mismatch at row " << r << " col " << c << ": got " << got[i] << ", want "
                                   << want[i];
                 }
@@ -241,6 +255,17 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeDequantRecordsAfterReduce) {
         GTEST_SKIP() << "FPU/SFPU replay split is a Wormhole/Blackhole math-thread convention";
     }
     run_and_check(this->device(), /*init_order=*/0);
+}
+
+// dequant_tile_init records first, reduce_init last: the reduce recording overwrites the tail of a dequant
+// body that reaches past the SFPU half, so the dequant replays MVMULs in place of its SFPU instructions and
+// those MVMULs wait forever for Src valid. Passes with the fix; on a regression it HANGS the device, so it is
+// disabled and kept only for manual repro (--gtest_also_run_disabled_tests).
+TEST_F(LLKMeshDeviceSingleCardFixture, DISABLED_TensixComputeReduceRecordsAfterDequant) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "FPU/SFPU replay split is a Wormhole/Blackhole math-thread convention";
+    }
+    run_and_check(this->device(), /*init_order=*/1);
 }
 
 }  // namespace tt::tt_metal

@@ -19,7 +19,8 @@
 // the two recordings do not overlap. The init order is a compile-time arg so both "who records last" cases
 // are covered:
 //   get_compile_time_arg_val(0) == 0 : reduce_init, then dequant_tile_init  (dequant records last)
-//   get_compile_time_arg_val(0) == 1 : dequant_tile_init, then reduce_init  (reduce records last)
+//   get_compile_time_arg_val(0) == 1 : dequant_tile_init, then reduce_init  (reduce records last; only
+//                                       driven by the DISABLED_ manual-repro case, see the host test)
 // CBs: c_0 reduce data (bf16), c_1 reduce scaler (bf16, row 0 of each face = 1.0), c_2 dequant input
 // (Int32), c_3 dequant scale (fp32), c_16 output (fp32): tile 0 = row sums in column 0, tile 1 = dequant.
 // Runtime arg 0: fp32 bit pattern of the negated zero point (the dequant body adds it, which is the
@@ -37,6 +38,9 @@ constexpr auto cb_out = tt::CBIndex::c_16;
 constexpr std::uint32_t kDstReduce = 0;
 constexpr std::uint32_t kDstQ = 0;
 constexpr std::uint32_t kDstScale = 1;
+
+constexpr std::uint32_t kOneTile = 1;
+constexpr std::uint32_t kNumOutTiles = 2;  // tile 0 = reduce, tile 1 = dequant
 }  // namespace
 
 void kernel_main() {
@@ -60,15 +64,15 @@ void kernel_main() {
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_data, cb_scaler, cb_out);
     }
 
-    data.wait_front(1);
-    scaler.wait_front(1);
-    q.wait_front(1);
-    scale.wait_front(1);
-    out.reserve_back(2);
+    data.wait_front(kOneTile);
+    scaler.wait_front(kOneTile);
+    q.wait_front(kOneTile);
+    scale.wait_front(kOneTile);
+    out.reserve_back(kNumOutTiles);
 
     // Tile 0: the reduce. Its MOP replays the FPU-half body.
     tile_regs_acquire();
-    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_data, cb_scaler, 0, 0, kDstReduce);
+    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_data, cb_scaler, 0 /*itile*/, 0 /*itile_scaler*/, kDstReduce);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(kDstReduce, cb_out);
@@ -80,19 +84,19 @@ void kernel_main() {
     reconfig_data_format_srca(cb_scaler, cb_q);
     copy_init(cb_q);
     tile_regs_acquire();
-    copy_tile(cb_q, 0, kDstQ);
+    copy_tile(cb_q, 0 /*in_tile_index*/, kDstQ);
     reconfig_data_format_srca(cb_q, cb_scale);
     copy_init(cb_scale);
-    copy_tile(cb_scale, 0, kDstScale);
+    copy_tile(cb_scale, 0 /*in_tile_index*/, kDstScale);
     dequant_tile(kDstQ, kDstScale, kDstQ);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(kDstQ, cb_out);
     tile_regs_release();
 
-    data.pop_front(1);
-    scaler.pop_front(1);
-    q.pop_front(1);
-    scale.pop_front(1);
-    out.push_back(2);
+    data.pop_front(kOneTile);
+    scaler.pop_front(kOneTile);
+    q.pop_front(kOneTile);
+    scale.pop_front(kOneTile);
+    out.push_back(kNumOutTiles);
 }
