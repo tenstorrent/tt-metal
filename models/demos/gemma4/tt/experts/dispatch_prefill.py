@@ -63,6 +63,10 @@ class Gemma4DispatchExperts:
         dgs, ndg = mesh_device.shape[self.dispatch_axis], mesh_device.shape[self.rep_axis]
         self.dgs, self.ndg = dgs, ndg
         assert dgs > 1, "the dispatch stack needs a dispatch group of more than one chip"
+        # The stack's routing/dispatch tables are sharded with the groups over the mesh columns; on a single-row
+        # mesh that leaves one chunk for N columns ("ND sharding requires the number of chunks 1 to match ...").
+        # The 4-chip and 8-chip entries keep the sparse expert path until that is generalized upstream.
+        assert rows > 1, "token-dispatch prefill needs a mesh with at least two rows (single-row meshes: sparse path)"
         assert (
             CHUNK_TOKENS % (dgs * ttnn.TILE_SIZE) == 0
         ), f"chunk {CHUNK_TOKENS} must split into {dgs} tile-aligned rows"
