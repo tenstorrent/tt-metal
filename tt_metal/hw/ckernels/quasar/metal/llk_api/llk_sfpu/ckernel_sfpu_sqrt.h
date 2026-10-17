@@ -11,6 +11,12 @@
 namespace ckernel {
 namespace sfpu {
 
+// Whether BF16 DEST runs the generated sqrt kernel as one call over the whole tile.
+inline constexpr bool sqrt_bf16_whole_tile = false;
+// The stock sqrt kernel needs no BF16 setup.
+template <bool bf16_kernel>
+inline void sqrt_bf16_tile_init() {}
+
 template <
     bool APPROXIMATION_MODE,
     int ITERATIONS = SFPU_ITERATIONS,
