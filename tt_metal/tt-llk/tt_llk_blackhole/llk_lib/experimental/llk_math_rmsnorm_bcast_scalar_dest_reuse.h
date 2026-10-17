@@ -230,4 +230,9 @@ inline void _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_(const std::uint32_t 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // ELWADD/ELWMUL/ELWSUB read the Src zero-substitution flag but this init never sets it, so re-establish
+    // the operand-driven DEFAULT here -- otherwise a preceding copy_init/datacopy op that left PRESERVE leaks
+    // into the MOP (denormal Src results differ). Mirrors _llk_math_eltwise_binary_init_.
+    math::_configure_default_zero_flag_state_();
 }

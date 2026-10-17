@@ -123,6 +123,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
+    if constexpr (RMSNORM_PRESERVE_SRC_ZERO_FLAG)
+    {
+        // Leave the Src zero flag at keep, as copy_init does before its datacopy, so a denormal seed survives
+        // into DEST. The rmsnorm init must restore the operand-driven value, or the FPU keeps the denormal
+        // scalar MOVD2B broadcasts into SrcB instead of flushing it.
+        math::_configure_preserve_zero_flag_state_();
+    }
+
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
 

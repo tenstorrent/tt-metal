@@ -716,6 +716,9 @@ class RMSNORM_DEST_REUSE(TemplateParameter):
         Before the rmsnorm unpack init, the unpack thread leaves unpacker A's X span at one
         row (as ``_llk_unpack_A_top32_rm_init_`` does). The init must re-program it: its
         MOP issues every real UNPACR on SrcA.
+    ``rmsnorm_preserve_zero_flag``
+        Math sets the Src zero flag to keep before the seed datacopy, as ``copy_init``
+        does. The rmsnorm math init must restore the operand-driven value.
 
     The ``rmsnorm_`` prefixed fields match the constants they emit and stay globally
     unique: ``test_perf_header_gate.py`` requires that no two parameter classes declare the
@@ -729,6 +732,7 @@ class RMSNORM_DEST_REUSE(TemplateParameter):
     clear_dest: bool = False
     unpack_full_transpose: bool = False
     rmsnorm_clobber_unpa_x_end: bool = False
+    rmsnorm_preserve_zero_flag: bool = False
 
     def convert_to_cpp(self) -> str:
         return "\n".join(
@@ -740,6 +744,8 @@ class RMSNORM_DEST_REUSE(TemplateParameter):
                 f"{str(self.unpack_full_transpose).lower()};",
                 "constexpr bool RMSNORM_CLOBBER_UNPA_X_END = "
                 f"{str(self.rmsnorm_clobber_unpa_x_end).lower()};",
+                "constexpr bool RMSNORM_PRESERVE_SRC_ZERO_FLAG = "
+                f"{str(self.rmsnorm_preserve_zero_flag).lower()};",
             ]
         )
 

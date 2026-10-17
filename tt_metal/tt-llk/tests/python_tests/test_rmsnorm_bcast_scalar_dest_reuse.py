@@ -158,25 +158,34 @@ def _run(
     clear_dest=False,
     unpack_full_transpose=False,
     clobber_unpa_x_end=False,
+    preserve_zero_flag=False,
+    operands=None,
 ):
     """Compile+run one variant.
 
     Returns ``(device, seen_A, seed, scalar)``, all as fp32 tensors/scalars quantised the
     way the device saw them. ``seed`` is the tile the datacopy left in DEST[0] and is what
     the accumulating ELWMUL path adds onto.
+
+    ``operands`` replaces the generated ``(src_A, src_B)`` -- shaped ``[num_tiles * 32, 32]``
+    and ``[32, 32]``, already in the input format -- for tests that need specific values.
     """
     torch.manual_seed(0)
 
-    # src_B carries the broadcast scalar at element [0]. Spread over a wide range so a
-    # MOVD2B that fetched the wrong row cannot land on a numerically similar value.
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=[num_tiles * 32, 32],
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=[32, 32],
-        spec_A=StimuliSpec.uniform(low=-4.0, high=4.0),
-        spec_B=StimuliSpec.uniform(low=-4.0, high=4.0),
-    )
+    if operands is None:
+        # src_B carries the broadcast scalar at element [0]. Spread over a wide range so a
+        # MOVD2B that fetched the wrong row cannot land on a numerically similar value.
+        src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+            stimuli_format_A=formats.input_format,
+            input_dimensions_A=[num_tiles * 32, 32],
+            stimuli_format_B=formats.input_format,
+            input_dimensions_B=[32, 32],
+            spec_A=StimuliSpec.uniform(low=-4.0, high=4.0),
+            spec_B=StimuliSpec.uniform(low=-4.0, high=4.0),
+        )
+    else:
+        src_A, src_B = operands
+        tile_cnt_A, tile_cnt_B = num_tiles, 1
 
     configuration = TestConfig(
         "sources/rmsnorm_bcast_scalar_dest_reuse_test.cpp",
@@ -190,6 +199,7 @@ def _run(
                 clear_dest=clear_dest,
                 unpack_full_transpose=unpack_full_transpose,
                 rmsnorm_clobber_unpa_x_end=clobber_unpa_x_end,
+                rmsnorm_preserve_zero_flag=preserve_zero_flag,
             ),
         ],
         runtimes=[],
@@ -539,4 +549,59 @@ def test_rmsnorm_bcast_scalar_dest_reuse_reprograms_srca_x_span(
         f"rmsnorm result is wrong after unpacker A was left at a one-row X span "
         f"(op={mathop.name}, num_tiles={num_tiles}, scalar={scalar:.6f}) -- the unpack init "
         "did not re-program x_end on unpacker A, the unpacker its MOP reads L1 with"
+    )
+
+
+# Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
+BF16_DENORMAL_MIN = 2.0**-133
+BF16_DENORMAL_MANTISSAS = 1 << 7
+# SrcA is scaled up so a kept denormal scalar gives a visibly nonzero product.
+DENORMAL_SRCA_SCALE = 2.0**100
+
+
+@pytest.mark.parametrize("math_fidelity", _fidelities(MathOperation.Elwmul))
+def test_rmsnorm_bcast_scalar_dest_reuse_flushes_denormal_scalar_after_keep_flag(
+    math_fidelity,
+):
+    """The math init must restore the Src zero flag a preceding copy_init left at keep.
+
+    The broadcast scalar is a bf16 denormal, which a bf16 ELWMUL flushes to zero under the
+    operand-driven flag; multiplied by 2^100 it gives a nonzero product if kept, so every
+    output must come out exactly 0. The seed datacopy runs with the flag at keep (as
+    ``copy_init`` sets it) so the denormal reaches DEST intact and the flag is still at keep
+    when the rmsnorm init runs -- the production sequence in which copy_init precedes the
+    rmsnorm ELWMUL init.
+    """
+    formats = FORMATS[0]
+    assert formats.input_format == DataFormat.Float16_b
+    dest_acc = DestAccumulation.No
+    num_tiles = 1
+
+    torch.manual_seed(0)
+    src_A = (torch.rand(num_tiles * 32, 32) * 3.0 + 1.0) * DENORMAL_SRCA_SCALE
+    src_B = torch.rand(32, 32) * 8.0 - 4.0
+    src_B[0, 0] = (
+        BF16_DENORMAL_MIN * torch.randint(1, BF16_DENORMAL_MANTISSAS, (1,)).item()
+    )
+    src_A = src_A.to(torch.bfloat16)
+    src_B = src_B.to(torch.bfloat16)
+    assert src_B[0, 0].item() != 0.0, "denormal scalar did not survive the bf16 cast"
+
+    device, _seen_A, _seed, scalar = _run(
+        formats,
+        dest_acc,
+        MathOperation.Elwmul,
+        math_fidelity,
+        num_tiles,
+        clear_dest=True,
+        preserve_zero_flag=True,
+        operands=(src_A, src_B),
+    )
+    assert scalar != 0.0
+
+    kept = torch.count_nonzero(device).item()
+    assert kept == 0, (
+        f"denormal broadcast scalar was not flushed (fidelity={math_fidelity.name}): "
+        f"{kept} nonzero outputs, max |value| {device.abs().max().item():.3e} -- the math "
+        "init left the Src zero flag at keep"
     )
