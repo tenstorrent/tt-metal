@@ -19,8 +19,9 @@
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>; REDUCE_ROW is MAX only
  *         (SUM/AVG must use llk_unpack_AB_reduce_init / llk_unpack_AB_reduce).
  * @param scaler_operand: Circular buffer holding the scaler tile; its formats configure the SrcB unpacker.
- * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose (no default: both
- *        arguments are required).
+ * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose for REDUCE_COL / REDUCE_SCALAR;
+ *        for REDUCE_ROW, which already transposes, nonzero cancels that transpose (no default: both arguments are
+ *        required).
  * @note scaler_operand must also be the SrcB operand passed to hw_startup / reconfig_data_format_srcb (as reduce_init
  *       does via state_configure(icb, icb_scaler, ocb)): this init programs only the SrcB unpacker formats, while the
  *       FPU reads SrcB through the ALU SrcB format that only the math thread's hw_configure / reconfig_data_format_srcb

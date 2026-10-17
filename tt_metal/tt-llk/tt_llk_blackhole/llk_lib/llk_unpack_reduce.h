@@ -58,7 +58,8 @@ inline void _llk_unpack_reduce_mop_config_()
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param unpB_src_format: Source data format of the scaler operand (SrcB) in L1.
  * @param unpB_dst_format: Destination data format the scaler operand is converted to.
- * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose.
+ * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose for REDUCE_COL /
+ *        REDUCE_SCALAR; for REDUCE_ROW, which already transposes, nonzero cancels that transpose.
  * @note REDUCE_ROW is supported for MAX only; REDUCE_ROW SUM/AVG must use the AB reduce path (static_assert).
  * @note The scaler is a single row: the first FACE_C_DIM datums of face 0 of the scaler tile, reused for every face.
  * @ref _llk_unpack_reduce_ is the matching execute call.
