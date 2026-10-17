@@ -19,6 +19,7 @@
 
 void kernel_main() {
     const uint32_t num_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t tiles_per_iter = 1;
 
     constexpr uint32_t in0_id = tt::CBIndex::c_0;
     constexpr uint32_t in1_id = tt::CBIndex::c_1;
@@ -31,9 +32,9 @@ void kernel_main() {
     SFPU_OP_INIT_0
 
     for (uint32_t t = 0; t < num_tiles; ++t) {
-        cb_in0.wait_front(1);
-        cb_in1.wait_front(1);
-        cb_out.reserve_back(1);
+        cb_in0.wait_front(tiles_per_iter);
+        cb_in1.wait_front(tiles_per_iter);
+        cb_out.reserve_back(tiles_per_iter);
 
         tile_regs_acquire();
         copy_init(in0_id);
@@ -51,8 +52,8 @@ void kernel_main() {
         pack_tile(/*dst_index=*/2, out_id);
         tile_regs_release();
 
-        cb_out.push_back(1);
-        cb_in0.pop_front(1);
-        cb_in1.pop_front(1);
+        cb_out.push_back(tiles_per_iter);
+        cb_in0.pop_front(tiles_per_iter);
+        cb_in1.pop_front(tiles_per_iter);
     }
 }

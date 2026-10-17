@@ -54,7 +54,9 @@ struct DropoutConfig {
     uint32_t seed_0;
     uint32_t seed_1;
     // Produce the tile dropout works on with an FPU add (c_0 + c_0) instead of a datacopy, so that an FPU
-    // binary init is the last ADDR_MOD programmer before dropout_tile. The kept elements are then 2x scaled.
+    // binary init is the last ADDR_MOD_3 programmer before dropout_tile (dropout_kernel_init still runs after
+    // it and programs ADDR_MOD_7). The input is doubled, so kept = 2 * fill * scale.
+    // Defaulted: TensixComputeDropout leaves it unset.
     bool fpu_add_input = false;
 };
 
@@ -63,7 +65,7 @@ bool check_dropout(
     std::vector<bfloat16>& result_vec,
     float probability,
     float scale_factor,
-    float input_gain = 1.0f) {
+    float input_gain) {
     bool pass = true;
     int vec_size = src_vec.size();
     int zero_count = 0;
@@ -101,7 +103,7 @@ bool test_dropout_standalone(
     uint32_t seed,
     float const_bias,
     std::vector<bfloat16>& res_vec,
-    bool fpu_add_input = false) {
+    bool fpu_add_input) {
     bool pass = true;
     uint32_t int_probability = probability * (double)INT_MAX;
     float scale_factor_f = 1.0f / (1.0f - probability);
@@ -232,7 +234,9 @@ bool test_dropout_standalone(
         std::vector<bfloat16> src0_vec_bfloat16 = unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_identity);
         std::vector<bfloat16> result_vec_bfloat16 = unpack_uint32_vec_into_bfloat16_vec(result_vec, transform_identity);
         res_vec = result_vec_bfloat16;
-        const float input_gain = fpu_add_input ? 2.0f : 1.0f;
+        // The kernel's add_tiles(c_0, c_0) feeds dropout twice the source value.
+        constexpr float fpu_add_input_gain = 2.0f;
+        const float input_gain = fpu_add_input ? fpu_add_input_gain : 1.0f;
         pass &= check_dropout(src0_vec_bfloat16, result_vec_bfloat16, probability, scale_factor_f, input_gain);
     } catch (const std::exception& e) {
         log_error(tt::LogTest, "Test failed with exception!");
