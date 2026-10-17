@@ -206,6 +206,27 @@
   "started": "2026-10-17T08:36:42",
   "status": "PASS"
  },
+ "C.dec_candidate.experts": {
+  "attempts": 0,
+  "duration_s": 367.0,
+  "history": [
+   {
+    "s": 367.0,
+    "status": "PASS",
+    "t": "2026-10-17T10:40:50"
+   }
+  ],
+  "last_run": "2026-10-17T10:40:50",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.dec_candidate.experts.log",
+  "metrics": {
+   "err_experts_L20": 0.034191910177469254,
+   "err_experts_L20_limit": 1.6312297582626343
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T10:34:43",
+  "status": "PASS"
+ },
  "C.dec_candidate.ffn_collapse": {
   "attempts": 0,
   "duration_s": 55.2,
