@@ -39,6 +39,8 @@ class Gemma4Experts:
         program_config,
         weight_dtype=ttnn.bfloat8_b,
         tensor_cache_path=None,
+        layer_idx=0,
+        num_layers=1,
     ):
         self.mesh_device = mesh_device
         self.config = config
@@ -91,7 +93,14 @@ class Gemma4Experts:
             from models.demos.gemma4.tt.experts.moe_decode import Gemma4MoEDecode
 
             assert not getattr(state_dict, "is_placeholder", False), "the decode MoE kernel needs real expert weights"
-            self.moe_decode = Gemma4MoEDecode(mesh_device, config, state_dict["gate_up_proj"], state_dict["down_proj"])
+            self.moe_decode = Gemma4MoEDecode(
+                mesh_device,
+                config,
+                state_dict["gate_up_proj"],
+                state_dict["down_proj"],
+                layer_idx=layer_idx,
+                num_layers=num_layers,
+            )
 
     def __call__(self, hidden_states, dense_routing):
         lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))

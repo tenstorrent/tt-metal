@@ -26,6 +26,7 @@ class MoEBlock:
         dtype=ttnn.bfloat8_b,
         router_dtype=ttnn.bfloat16,
         tensor_cache_path=None,
+        layer_idx=0,
     ):
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
@@ -49,6 +50,8 @@ class MoEBlock:
             program_config=None,
             weight_dtype=dtype,
             tensor_cache_path=f"{tensor_cache_path}/experts" if tensor_cache_path else None,
+            layer_idx=layer_idx,
+            num_layers=getattr(hf_config, "num_hidden_layers", 1),
         )
 
     def __call__(self, router_input, expert_input):

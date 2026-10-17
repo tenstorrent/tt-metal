@@ -28,43 +28,67 @@ def moe_decode_kernel_enabled():
     return os.environ.get("GEMMA4_MOE_DECODE_KERNEL", "0") == "1"
 
 
-class Gemma4MoEDecode:
-    def __init__(self, mesh_device, config, gate_up_proj, down_proj, frame_rows=None):
-        """gate_up_proj [E, 2I, H] (gate rows first), down_proj [E, H, I]: HF tensors of this layer."""
-        import yaml
+# One TTMoEDecode per mesh, shared by every layer: the module keeps per-instance L1 scratch and semaphores (a
+# per-layer instance x 30 left ~200 KB of resident L1 and its static circular buffers then clashed), and its weights
+# are layered ([L, E, ...], forward(layer_id)). Layers register their HF tensors as they are built; the module is
+# built when the last one arrives.
+_SHARED = {}
 
+
+class Gemma4MoEDecode:
+    def __init__(self, mesh_device, config, gate_up_proj, down_proj, layer_idx=0, num_layers=1, frame_rows=None):
+        """gate_up_proj [E, 2I, H] (gate rows first), down_proj [E, H, I]: HF tensors of this layer."""
         self.mesh_device = mesh_device
         rows, cols = mesh_device.shape
         self.rows, self.cols = rows, cols
         self.hidden = config.hidden_size
         self.top_k = config.top_k
         self.num_experts = config.num_experts
-        # the proven module shape is 32 tokens per device along the dispatch axis (post-combine tilize path);
-        # a 128-row lane frame on 8 rows is padded to 256 rows
+        self.inter = config.moe_intermediate_size
+        self.layer_idx = int(layer_idx)
+        self.num_layers = int(num_layers)
         self.frame_rows = int(frame_rows or os.environ.get("GEMMA4_MOE_DECODE_FRAME", str(rows * ttnn.TILE_SIZE)))
         assert self.frame_rows % rows == 0, f"frame {self.frame_rows} must split over {rows} mesh rows"
         self.batch_per_device = self.frame_rows // rows
+        key = id(mesh_device)
+        reg = _SHARED.setdefault(key, {"layers": {}, "module": None, "config": None})
+        reg["layers"][self.layer_idx] = (gate_up_proj, down_proj)
+        self._reg = reg
+        if reg["module"] is None and len(reg["layers"]) >= self.num_layers:
+            self._build(config)
+
+    def _build(self, config):
+        import yaml
+
+        reg = self._reg
         data = yaml.safe_load(CONFIG_YAML.read_text())
-        data["mesh_shape"] = [rows, cols]
+        data["mesh_shape"] = [self.rows, self.cols]
         data["batch_per_device"] = self.batch_per_device
         data["hidden_size"] = self.hidden
         data["select_experts_k"] = self.top_k
         data["num_routed_experts"] = self.num_experts
-        data["compute"]["intermediate_size"] = config.moe_intermediate_size
-        self.tt_config = TTMoEDecodeConfig.from_yaml(
-            yaml.safe_dump(data, sort_keys=False),
-            topology=ttnn.Topology.Ring,  # the module requires the ring fabric + Ring topology
-        )
-        I = config.moe_intermediate_size
+        data["compute"]["intermediate_size"] = self.inter
+        # the module's dispatch/compute ops require the ring fabric and Ring topology
+        tt_config = TTMoEDecodeConfig.from_yaml(yaml.safe_dump(data, sort_keys=False), topology=ttnn.Topology.Ring)
+        I = self.inter
+        layers = [reg["layers"][l] for l in range(self.num_layers)]
         # kernel layout: w0 = gate [L, E, H, N], w1 = up [L, E, H, N], w2 = down [L, E, N, H]
-        gate = gate_up_proj[:, :I, :].to(torch.bfloat16).transpose(1, 2).contiguous().unsqueeze(0)
-        up = gate_up_proj[:, I:, :].to(torch.bfloat16).transpose(1, 2).contiguous().unsqueeze(0)
-        down = down_proj.to(torch.bfloat16).transpose(1, 2).contiguous().unsqueeze(0)
-        self.module = TTMoEDecode(mesh_device, self.tt_config, gate, up, down)
+        gate = torch.stack([gu[:, :I, :].to(torch.bfloat16).transpose(1, 2).contiguous() for gu, _ in layers], dim=0)
+        up = torch.stack([gu[:, I:, :].to(torch.bfloat16).transpose(1, 2).contiguous() for gu, _ in layers], dim=0)
+        down = torch.stack([d.to(torch.bfloat16).transpose(1, 2).contiguous() for _, d in layers], dim=0)
+        reg["module"] = TTMoEDecode(self.mesh_device, tt_config, gate, up, down)
+        reg["config"] = tt_config
+        reg["layers"].clear()
         logger.info(
-            f"Gemma4MoEDecode: mesh {rows}x{cols}, frame {self.frame_rows} rows ({self.batch_per_device}/chip), "
-            f"post_combine_tilize={getattr(self.tt_config, 'use_post_combine_tilize', None)}"
+            f"Gemma4MoEDecode: shared module for {self.num_layers} layers on mesh {self.rows}x{self.cols}, frame "
+            f"{self.frame_rows} rows ({self.batch_per_device}/chip), post_combine_tilize="
+            f"{getattr(tt_config, 'use_post_combine_tilize', None)}"
         )
+
+    @property
+    def module(self):
+        assert self._reg["module"] is not None, "decode MoE module not built: not every layer registered"
+        return self._reg["module"]
 
     def forward(self, hidden, routing):
         """hidden [1,1,R,H] and routing [1,1,R,E] replicated on every chip, R <= frame_rows (padded here).
@@ -99,7 +123,7 @@ class Gemma4MoEDecode:
             os.makedirs(os.path.dirname(prefix), exist_ok=True)
             ttnn.dump_device_memory_state(self.mesh_device, prefix)
             logger.info(f"Gemma4MoEDecode: device memory state dumped to {prefix}*")
-        out = self.module.forward(x, scores, indices)  # [1,1,B,H/cols] per chip
+        out = self.module.forward(x, scores, indices, layer_id=self.layer_idx)  # [1,1,B,H/cols] per chip
         ttnn.deallocate(x)
         ttnn.deallocate(scores)
         ttnn.deallocate(indices)

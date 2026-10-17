@@ -163,6 +163,7 @@ class Gemma4DecoderLayer:
                 dtype=experts_dtype,
                 router_dtype=router_dtype,
                 tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/moe" if tensor_cache_path else None,
+                layer_idx=layer_idx,
             )
 
         # Per-layer input embeddings (E2B/E4B feature)
