@@ -524,14 +524,18 @@ class TtK3TokenSplitMoE:
     def experts_combine(self, xg, pl, arena):
         # x read from DRAM once (MIMO_FL_X1, read when the program is built): routed experts 2433 -> 2372 us traced;
         # the shared expert's flat op keeps reading it twice (X1 there: 523 -> 702 us). K3_EXP_X1=0: off
-        x1 = os.environ.get("K3_EXP_X1", "1") == "1" and "MIMO_FL_X1" not in os.environ
-        if x1:
-            os.environ["MIMO_FL_X1"] = "1"
+        # K3_EXP_DW_BATCH=n: down-weight blocks per read barrier (MIMO_FL_DW_BATCH, 2 by default; 4: block-level noise)
+        scoped = {"MIMO_FL_X1": os.environ.get("K3_EXP_X1", "1") == "1", "MIMO_FL_DW_BATCH": os.environ.get("K3_EXP_DW_BATCH", "")}
+        scoped = {k: ("1" if v is True else v) for k, v in scoped.items() if v and v != "0" and k not in os.environ}
+        for kv in filter(None, os.environ.get("K3_EXP_ENV", "").split(",")):  # (more flat knobs, this program only)
+            k, v = kv.split("=", 1)
+            scoped[k] = v
+        os.environ.update(scoped)
         try:
             return self._experts_combine(xg, pl, arena)
         finally:
-            if x1:
-                os.environ.pop("MIMO_FL_X1", None)
+            for k in scoped:
+                os.environ.pop(k, None)
 
     def _experts_combine(self, xg, pl, arena):
         return ttnn.bringup.flat_routed_expert_with_program(

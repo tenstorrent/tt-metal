@@ -820,3 +820,12 @@ experts at ~2230-2256 us of DRAM alone; the real program (2372) adds ~120-140 (x
 tail). The down stream is the weak part (~65% alone, whatever the block size, depth or bank pinning); bigger or
 pinned blocks do not help the mix; only down reads issued next to the DRAM columns with deeper queues lift it (+3%,
 ~70-80 us) - i.e. down weights read by near-DRAM cores and forwarded to the down cores.
+
+### K3 routed experts: three more ideas (2026-10-17, traced; base experts ~2372, block 3640-3650)
+1. Down-weight blocks per read barrier (MIMO_FL_DW_BATCH, now an env knob, default DW_BATCH 2): 4 / 6 / 8 -> experts
+   2354 / 2410 / 2448; batch 4 for the routed program only (K3_EXP_DW_BATCH): block 3651 / 3651 - noise. Off.
+2. Combine slot order (MIMO_FL_CMB_SLOT_ORDER): experts 2374, block 3650 - no change.
+3. Reader down columns (MIMO_FL_RDOWN=1, the near-DRAM readers take down columns - the direction the DRAM-mix
+   benchmark favours): crashes with the env on both flat ops (core_coord TT_THROW); scoped to the routed program
+   (K3_EXP_ENV=..., new: comma-separated flat knobs for that program only) it overflows the fused program's arena
+   (factory.cpp:1051 off + size <= arena.aligned_size_per_bank()) - needs the arena / combine L1 layout resized.
