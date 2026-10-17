@@ -127,6 +127,17 @@ TINY_TILE_HIGH_THROTTLE = 5
 # need the 16-tile dest (SyncFull with a 16-bit dest). Wormhole walks the reused operand two tiles
 # at a time, so the unpaired last tile is a code path of its own; Blackhole walks it one at a time.
 ODD_REUSE_RT_CT = ((3, 3), (3, 4), (4, 3), (3, 5), (5, 3))
+# kt 1 runs the block once; kt 2 runs it twice on the same dest, so the bank the step ends on
+# carries into the next block.
+ODD_REUSE_KT_DIMS = (1, 2)
+# One run per tile at LoFi and HiFi4 (throttle 0, the production shape); HiFi4 at throttle 5 runs
+# the MOP once per fidelity phase, the other shape of the per-tile step. LoFi at throttle 5 has the
+# same step shape as LoFi at throttle 0 and is left out.
+ODD_REUSE_FIDELITY_THROTTLE = (
+    (MathFidelity.LoFi, 0),
+    (MathFidelity.HiFi4, 0),
+    (MathFidelity.HiFi4, TINY_TILE_HIGH_THROTTLE),
+)
 
 
 def odd_reuse_matmul_params():
@@ -139,7 +150,7 @@ def odd_reuse_matmul_params():
     face_layout = generate_face_layout_config_sweep(math_matmul=True)[0]
     params = []
     for rt_dim, ct_dim in ODD_REUSE_RT_CT:
-        for kt_dim in (1, 2):
+        for kt_dim in ODD_REUSE_KT_DIMS:
             config = MatmulConfig(
                 tile_dimensions=generate_tile_dims(
                     (
@@ -154,11 +165,7 @@ def odd_reuse_matmul_params():
                 dest_sync=DestSync.Full,
                 dest_acc=DestAccumulation.No,
             )
-            # Throttle 0 runs the MOP once per tile; throttle 5 at HiFi4 runs it once per
-            # fidelity phase, the other shape of the per-tile step.
-            for fidelity, throttle in product(
-                (MathFidelity.LoFi, MathFidelity.HiFi4), (0, 5)
-            ):
+            for fidelity, throttle in ODD_REUSE_FIDELITY_THROTTLE:
                 params.append(
                     pytest.param(
                         fidelity,
