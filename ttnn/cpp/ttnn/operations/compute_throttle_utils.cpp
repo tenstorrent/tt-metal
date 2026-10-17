@@ -4,9 +4,27 @@
 
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
+#include <charconv>
+#include <cstdint>
+#include <cstdlib>
+#include <limits>
+#include <string_view>
+
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::compute_throttle_utils {
+
+namespace {
+
+// Parses the whole of `text` as an unsigned decimal integer; anything else (empty, sign, trailing characters) fails.
+bool parse_env_uint(std::string_view text, uint32_t& value) {
+    const char* end = text.data() + text.size();
+    auto [ptr, ec] = std::from_chars(text.data(), end, value);
+    return !text.empty() && ec == std::errc() && ptr == end;
+}
+
+}  // namespace
 
 void add_stagger_defines_if_needed(
     const tt::ARCH arch, const int num_cores, std::map<std::string, std::string>& mm_kernel_defines) {
@@ -24,13 +42,28 @@ void add_stagger_defines_if_needed(
     const char* stagger_value = std::getenv("TT_MM_STAGGER_VALUE");
     if (stagger_type && ((arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) ||
                          (arch == tt::ARCH::BLACKHOLE && num_cores > BH_MM_MAX_CORES_NO_STAGGER))) {
-        // TODO check range for stagger_type
+        // The defines are pasted into the compute kernel verbatim, where apply_mm_stagger (llk_io_unpack.h) selects
+        // its arm with `#if MM_STAGGER_TYPE == 1/2/3`: an unknown or non-numeric type would otherwise compile to an
+        // empty hook while this function reports the stagger as enabled.
+        uint32_t stagger_type_number = 0;
+        TT_FATAL(
+            parse_env_uint(stagger_type, stagger_type_number) && stagger_type_number >= 1 && stagger_type_number <= 3,
+            "TT_MM_STAGGER_TYPE must be 1 (first block), 2 (every block) or 3 (periodic), got '{}'",
+            stagger_type);
         mm_kernel_defines["MM_STAGGER_TYPE"] = stagger_type;
 
         if (stagger_value == nullptr) {
             log_warning(tt::LogOp, "Using default stagger value: {}.", 0);
             mm_kernel_defines["MM_STAGGER_VALUE"] = "0";
         } else {
+            // The kernel stores the value in a constexpr int and spins that many cycles.
+            constexpr uint32_t max_stagger_cycles = std::numeric_limits<int32_t>::max();
+            uint32_t stagger_cycles = 0;
+            TT_FATAL(
+                parse_env_uint(stagger_value, stagger_cycles) && stagger_cycles <= max_stagger_cycles,
+                "TT_MM_STAGGER_VALUE must be a number of cycles between 0 and {}, got '{}'",
+                max_stagger_cycles,
+                stagger_value);
             log_warning(tt::LogOp, "Using stagger value: {}.", stagger_value);
             mm_kernel_defines["MM_STAGGER_VALUE"] = stagger_value;
         }

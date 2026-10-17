@@ -13,13 +13,18 @@ from tests.device_perf_tests.matmul_stagger.test_run_8x7_matmul import (
     MULTI_BLOCK_MATMUL_VARIANT,
 )
 
-# The stagger delays the odd-row cores by TT_MM_STAGGER_VALUE cycles before an in1 block
-# (tt_metal/hw/ckernels/<arch>/metal/llk_io/llk_io_unpack.h): type 1 before the first block only,
-# type 2 before every block, type 3 before the first block and every STAGGER_PERIOD_IN_BLOCKS-th after it.
+# The stagger delays the odd-row cores by TT_MM_STAGGER_VALUE cycles after each compute-kernel wait on in1
+# (tt_metal/hw/ckernels/<arch>/metal/llk_io/llk_io_unpack.h); the matmul kernels profiled here wait once per in1
+# block. Type 1 delays the first block only, type 2 every block, type 3 the first block and every
+# STAGGER_PERIOD_IN_BLOCKS-th after it.
 STAGGER_TYPE_ENV = "TT_MM_STAGGER_TYPE"
 STAGGER_VALUE_ENV = "TT_MM_STAGGER_VALUE"
 STAGGER_ENV_VARS = (STAGGER_TYPE_ENV, STAGGER_VALUE_ENV)
-STAGGER_TYPES = ["1", "2", "3"]
+# TT_MM_STAGGER_TYPE codes, as the host passes them to the kernel.
+FIRST_BLOCK_ONLY = "1"
+EVERY_BLOCK = "2"
+PERIODIC = "3"
+STAGGER_TYPES = [FIRST_BLOCK_ONLY, EVERY_BLOCK, PERIODIC]
 # Mirrors stagger_period_in_blocks in llk_io_unpack.h.
 STAGGER_PERIOD_IN_BLOCKS = 20
 DURATION_COLUMN = "DEVICE KERNEL DURATION [ns]"
@@ -34,9 +39,9 @@ MULTI_BLOCK_STAGGER_CYCLES = 250_000
 # Blocks each type delays on an odd-row core of the multi-block variant: type 2 all of them, type 3 blocks
 # 0, 20, 40, ..., type 1 block 0 only.
 EXPECTED_STAGGERED_BLOCKS = {
-    "1": 1,
-    "2": MULTI_BLOCK_INNER_BLOCKS,
-    "3": -(-MULTI_BLOCK_INNER_BLOCKS // STAGGER_PERIOD_IN_BLOCKS),
+    FIRST_BLOCK_ONLY: 1,
+    EVERY_BLOCK: MULTI_BLOCK_INNER_BLOCKS,
+    PERIODIC: -(-MULTI_BLOCK_INNER_BLOCKS // STAGGER_PERIOD_IN_BLOCKS),
 }
 # Relative tolerance on the per-type delta against (staggered blocks x per-block delay). Tight enough that a
 # wrong type-3 period (2 or 5 delays instead of 3) or a type 1 that fires on every block fails.
@@ -68,6 +73,19 @@ def profile_kernel_duration_ns(matmul_variant, output_logs_subdir, stagger_type=
     return post_process_ops_log(output_logs_subdir, [DURATION_COLUMN])[DURATION_COLUMN]
 
 
+# No-stagger duration per matmul variant, profiled once per session: it does not depend on the stagger type, so
+# every type is compared against the same baseline.
+_baseline_duration_ns = {}
+
+
+def baseline_kernel_duration_ns(matmul_variant):
+    if matmul_variant not in _baseline_duration_ns:
+        _baseline_duration_ns[matmul_variant] = profile_kernel_duration_ns(
+            matmul_variant, f"test_matmul_stagger_{matmul_variant}"
+        )
+    return _baseline_duration_ns[matmul_variant]
+
+
 # Hook-is-consumed smoke test: every variant here has one in1 block per core, so types 1, 2 and 3 all delay
 # that one block and these cases only show that each MM_STAGGER_TYPE arm is compiled in and slows the op.
 # The per-type firing pattern is checked by test_matmul_stagger_block_count below.
@@ -79,13 +97,12 @@ def profile_kernel_duration_ns(matmul_variant, output_logs_subdir, stagger_type=
     MATMUL_VARIANTS,
 )
 def test_matmul_stagger(matmul_variant, stagger_type):
-    output_logs_subdir = f"test_matmul_stagger_{matmul_variant}"
-    output_logs_subdir_with_stagger = f"{output_logs_subdir}_with_stagger_type{stagger_type}"
+    output_logs_subdir_with_stagger = f"test_matmul_stagger_{matmul_variant}_with_stagger_type{stagger_type}"
 
     duration_with = profile_kernel_duration_ns(
         matmul_variant, output_logs_subdir_with_stagger, stagger_type, STAGGER_CYCLES
     )
-    duration_without = profile_kernel_duration_ns(matmul_variant, output_logs_subdir)
+    duration_without = baseline_kernel_duration_ns(matmul_variant)
     logger.info(
         f"{matmul_variant} stagger type {stagger_type}: {DURATION_COLUMN} with stagger = {duration_with:.0f}, "
         f"without = {duration_without:.0f}"
@@ -102,14 +119,12 @@ def test_matmul_stagger(matmul_variant, stagger_type):
 @run_for_wormhole_b0_or_blackhole()
 @pytest.mark.models_device_performance_bare_metal
 def test_matmul_stagger_block_count():
-    output_logs_subdir = f"test_matmul_stagger_{MULTI_BLOCK_MATMUL_VARIANT}"
-
-    duration_without = profile_kernel_duration_ns(MULTI_BLOCK_MATMUL_VARIANT, output_logs_subdir)
+    duration_without = baseline_kernel_duration_ns(MULTI_BLOCK_MATMUL_VARIANT)
     deltas = {}
     for stagger_type in STAGGER_TYPES:
         duration_with = profile_kernel_duration_ns(
             MULTI_BLOCK_MATMUL_VARIANT,
-            f"{output_logs_subdir}_with_stagger_type{stagger_type}",
+            f"test_matmul_stagger_{MULTI_BLOCK_MATMUL_VARIANT}_with_stagger_type{stagger_type}",
             stagger_type,
             MULTI_BLOCK_STAGGER_CYCLES,
         )
@@ -119,12 +134,13 @@ def test_matmul_stagger_block_count():
             f"{duration_with:.0f}, without = {duration_without:.0f}, delta = {deltas[stagger_type]:.0f}"
         )
 
-    assert deltas["2"] > deltas["3"] > deltas["1"] > 0, (
-        f"Stagger deltas should order type 2 (every block) > type 3 (every {STAGGER_PERIOD_IN_BLOCKS}th block) "
-        f"> type 1 (first block) > 0 on {MULTI_BLOCK_INNER_BLOCKS} inner blocks: {deltas}"
+    assert deltas[EVERY_BLOCK] > deltas[PERIODIC] > deltas[FIRST_BLOCK_ONLY] > 0, (
+        f"Stagger deltas should order type {EVERY_BLOCK} (every block) > type {PERIODIC} "
+        f"(every {STAGGER_PERIOD_IN_BLOCKS}th block) > type {FIRST_BLOCK_ONLY} (first block) > 0 on "
+        f"{MULTI_BLOCK_INNER_BLOCKS} inner blocks: {deltas}"
     )
-    delay_per_block_ns = deltas["2"] / EXPECTED_STAGGERED_BLOCKS["2"]
-    for stagger_type in ("1", "3"):
+    delay_per_block_ns = deltas[EVERY_BLOCK] / EXPECTED_STAGGERED_BLOCKS[EVERY_BLOCK]
+    for stagger_type in (FIRST_BLOCK_ONLY, PERIODIC):
         expected_delta = EXPECTED_STAGGERED_BLOCKS[stagger_type] * delay_per_block_ns
         assert abs(deltas[stagger_type] - expected_delta) <= BLOCK_COUNT_TOLERANCE * expected_delta, (
             f"Stagger type {stagger_type} should delay {EXPECTED_STAGGERED_BLOCKS[stagger_type]} of "
