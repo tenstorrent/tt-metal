@@ -89,6 +89,48 @@ def test_binary_atan2_special_values(input_shapes, device):
 
 @pytest.mark.parametrize(
     "input_shapes",
+    ((torch.Size([1, 1, 32, 32])),),
+)
+def test_binary_atan2_denormal_inputs(input_shapes, device):
+    """Regression test: atan2 with float32 subnormal operands must not return NaN.
+
+    The kernel forms min(|x|, |y|) / max(|x|, |y|) through the SFPU reciprocal,
+    whose power-of-two scale is the complemented exponent of the divisor, so a
+    subnormal (zero-exponent) max yields +inf and the SFPU multiply gives
+    min * inf = NaN. The both-zero rescue is a bit-pattern compare against +0,
+    so a subnormal max was not rescued and NaN was returned for finite inputs.
+
+    SFPU arithmetic treats subnormals as zero, so the expected result is the
+    flush-to-zero one: torch.atan2 with subnormal operands replaced by a zero
+    of the same sign. NaN operands must still propagate.
+    """
+    sub = 1e-39  # float32 subnormal (smallest normal is about 1.18e-38)
+    y_vals = [0.0, sub, sub, -sub, 2 * sub, 1.0, sub, float("nan"), 1.0]
+    x_vals = [sub, 0.0, -sub, sub, sub, sub, 1.0, sub, float("nan")]
+
+    torch_input_y = torch.tensor([y_vals] * 32, dtype=torch.float32)
+    torch_input_x = torch.tensor([x_vals] * 32, dtype=torch.float32)
+
+    def flush_subnormals(t):
+        is_sub = t.abs() < torch.finfo(torch.float32).tiny
+        return torch.where(is_sub, torch.copysign(torch.zeros_like(t), t), t)
+
+    golden_tensor = torch.atan2(flush_subnormals(torch_input_y), flush_subnormals(torch_input_x))
+
+    tt_input_y = ttnn.from_torch(torch_input_y, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_input_x = ttnn.from_torch(torch_input_x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.atan2(tt_input_y, tt_input_x)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    finite_golden = torch.isfinite(golden_tensor)
+    assert not torch.isnan(
+        output_tensor[finite_golden]
+    ).any(), f"atan2 returned NaN for finite subnormal operands: {output_tensor[0].tolist()}"
+    torch.testing.assert_close(output_tensor, golden_tensor, equal_nan=True)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 1, 320, 384])),
