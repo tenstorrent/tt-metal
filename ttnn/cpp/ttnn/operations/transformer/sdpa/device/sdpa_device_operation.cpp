@@ -32,7 +32,6 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 !tensors.chunk_start_idx_tensor.has_value(),
             "output_concat_heads is supported for the plain (non-chunked, non-paged) SDPA only");
     }
-
     const Tensor& q = tensors.q;
     const Tensor& k = tensors.k;
     const Tensor& v = use_mla ? tensors.k : tensors.v.value();
