@@ -110,15 +110,37 @@ def stream_down_layout(down, down_bias, banks):
     return _bank_columns(cols, banks)
 
 
-def stream_linear_layout(w, bias, banks):
+def stream_linear_layout(w, bias, banks, order=None):
     """[K, N] weights and [N] bias -> [rows, banks * 32]: bank b holds output columns [b * C, (b + 1) * C)
-    (C = ceil(N / 32 / banks), zero padded), ordered column -> K tile (K / 32 weight tiles + 1 bias tile)."""
+    (C = ceil(N / 32 / banks), zero padded), ordered column -> K tile (K / 32 weight tiles + 1 bias tile). order:
+    the output column of each slot (bank b's slots are [b * C, (b + 1) * C)), default the identity."""
     K, N = w.shape
     pad = columns_per_bank(N, banks) * banks * TILE - N
     cols = _columns_with_bias(
         torch.nn.functional.pad(w, (0, pad)).unsqueeze(0), torch.nn.functional.pad(bias, (0, pad)).unsqueeze(0)
     )
+    if order is not None:
+        cols = cols[:, order]
     return _bank_columns(cols, banks)
+
+
+def qkv_column_order(n_tiles, q_cols, banks):
+    """Slot order of the QKV stream with fused RoPE + KV-cache write (QKVRopeCache): the K / V columns (>= q_cols) go
+    first on each bank, round-robin, then the Q columns, then the bank padding. A K / V column's cache update (BFP8
+    conversion + DRAM write by the writer core) then overlaps the bank's later Q columns, and no bank ends the op on
+    several of them (in column order one bank held all of V)."""
+    C = -(-n_tiles // banks)
+    slots = [[] for _ in range(banks)]
+    for i, n in enumerate(range(q_cols, n_tiles)):
+        slots[i % banks].append(n)
+    q = iter(range(q_cols))
+    pad = iter(range(n_tiles, C * banks))
+    for sl in slots:
+        while len(sl) < C:
+            n = next(q, None)
+            sl.append(n if n is not None else next(pad))
+    assert all(len(sl) == C for sl in slots) and next(q, None) is None
+    return [n for sl in slots for n in sl]
 
 
 def linear_stream_rows(mesh_device, k, n):
@@ -207,7 +229,19 @@ class _BankStreamOp:
             total_size=page * pages, core_ranges=self.cores, format_descriptors=[ttnn.CBFormatDescriptor(**kwargs)]
         )
 
-    def _program(self, name, cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct, compute="matmul"):
+    def _program(
+        self,
+        name,
+        cbs,
+        reader_ct,
+        reader_rt,
+        writer_ct,
+        writer_rt,
+        compute_ct,
+        compute="matmul",
+        compute_rt=None,
+        defines=None,
+    ):
         dm = ttnn.DataMovementConfigDescriptor
         kernels = [
             ttnn.KernelDescriptor(
@@ -223,12 +257,14 @@ class _BankStreamOp:
                 compile_time_args=writer_ct,
                 runtime_args=writer_rt,
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
+                defines=defines or [],
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / f"stream_{compute}_compute.cpp"),
                 core_ranges=self.cores,
                 compile_time_args=compute_ct,
-                runtime_args=[],
+                runtime_args=compute_rt if compute_rt is not None else [],
+                defines=defines or [],
                 config=ttnn.ComputeConfigDescriptor(
                     math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, math_approx_mode=False
                 ),
@@ -421,12 +457,20 @@ class LinearStream(_BankStreamOp):
     def weight_rows(self):
         return self.C * self.kt * TILE
 
-    def __call__(self, x, weights, out, send=None, exchange=None):
+    def _slot_columns(self, bank, r, order):
+        """Output column of each of a worker's weight slots (the weights' slot order, stream_linear_layout)."""
+        first = bank * self.C + r * self.cols
+        return [order[first + c] for c in range(self.cols)]
+
+    def __call__(self, x, weights, out, send=None, exchange=None, rope_kv=None):
         """send = (boundary, site), out_mode 5: fuse the boundary all-reduce's fabric send (fused_decode/boundary.py
         sending_program). x may be a fused_decode.boundary.PendingBoundary: the boundary producing x then runs inside
         this op (DecodeBoundary.consumer_parts) while the weight readers stream ahead. exchange (out_mode 3): an object
         whose writer_args() / program() add the fused decode LM head's top-k candidate merge and exchange
-        (fused_decode/terminal.py TerminalExchange)."""
+        (fused_decode/terminal.py TerminalExchange). rope_kv (out_mode 3, one user): a QKVRopeCache; Q and K are rotated
+        in this op (kernels/stream_qkv_rope_compute.cpp) and K / V are written straight into the paged KV cache at the
+        current position instead of the K / V head tensors (replacing rotary_embedding_llama_fused_qk and
+        paged_fused_update_cache)."""
         pending = None
         if not isinstance(x, ttnn.Tensor):
             pending = x
@@ -454,6 +498,17 @@ class LinearStream(_BankStreamOp):
         if stage:
             cbs.append(self._cb(cb_stage, ttnn.bfloat16, 2048, stage))
         cbs.append(self._cb(cb_out, ttnn.bfloat16, TINY_BYTES, 4, tiny=True))
+        cb_y, cb_rot, cb_cs, cb_kv = 5, 6, 7, 12
+        order = None
+        if rope_kv is not None:
+            assert self.out_mode == 3 and exchange is None
+            order = qkv_column_order(self.n_tiles, self.heads[0], self.banks)
+            cbs += [
+                self._cb(cb_y, ttnn.bfloat16, TINY_BYTES, 2, tiny=True),
+                self._cb(cb_rot, ttnn.bfloat8_b, BFP8_TILE_BYTES, 2),
+                self._cb(cb_cs, ttnn.bfloat16, TINY_BYTES, 2 * self.head_tiles, tiny=True),
+                self._cb(cb_kv, ttnn.bfloat8_b, BFP8_TILE_BYTES, 1 + self.cols),  # scratch + this core's cache tiles
+            ]
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for i, (core, bank, r, vc) in enumerate(self.assignments):
             reader_rt[core.x][core.y] = [weights.buffer_address(), bank, vc, r * self.cols * self.col_bytes]
@@ -464,6 +519,10 @@ class LinearStream(_BankStreamOp):
                 outs[1].buffer_address(),
                 outs[2].buffer_address(),
             ] + (exchange.writer_runtime_args(i) if exchange is not None else [])
+            if rope_kv is not None:
+                writer_rt[core.x][core.y] = (
+                    list(writer_rt[core.x][core.y]) + rope_kv.writer_runtime_args() + self._slot_columns(bank, r, order)
+                )
         reader_ct = [cb_w, self.kt, self.cols, self.tile_bytes, self.page_bytes, w_cols]
         writer_ct = [cb_x, cb_out, cb_scr, self.kx, self.x_pages, NBIAS, self.cols, self.n_tiles, self.out_mode]
         writer_ct += [self.out_page_bytes, stage, cb_stage, self.heads[0], self.heads[1], self.head_tiles]
@@ -473,9 +532,29 @@ class LinearStream(_BankStreamOp):
         writer_ct += [1 if pending is not None else 0]
         writer_ct += exchange.writer_compile_args() if exchange is not None else [0, 0, 0, 0]
         compute_ct = [cb_x, cb_w, cb_out, self.kt, self.cols]
+        compute, compute_rt, defines = "matmul", None, None
+        if rope_kv is not None:
+            writer_ct += [cb_rot, cb_cs, cb_kv] + rope_kv.writer_compile_args()
+            compute = "qkv_rope"
+            compute_ct += [cb_y, cb_rot, cb_cs, self.heads[0] + self.heads[1], self.heads[0], self.head_tiles]
+            compute_rt = ttnn.RuntimeArgs()
+            for core, bank, r, vc in self.assignments:
+                compute_rt[core.x][core.y] = self._slot_columns(bank, r, order)
+            defines = [("QKV_ROPE_KV", "1")]
 
         def build():
-            program = self._program("linear", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct)
+            program = self._program(
+                "linear",
+                cbs,
+                reader_ct,
+                reader_rt,
+                writer_ct,
+                writer_rt,
+                compute_ct,
+                compute=compute,
+                compute_rt=compute_rt,
+                defines=defines,
+            )
             if pending is not None:
                 program.kernels = list(program.kernels) + fused_kernels
                 program.cbs = list(program.cbs) + fused_cbs
@@ -493,5 +572,58 @@ class LinearStream(_BankStreamOp):
         extra = [t for t in fused_io if all(t is not u for u in (x, *unique))] if pending is not None else []
         if exchange is not None:
             extra += [t for t in exchange.io if all(t is not u for u in (x, *unique, *extra))]
+        if rope_kv is not None:
+            for t in rope_kv.io:
+                if all(t is not u for u in (x, *unique, *extra)):
+                    extra.append(t)
         ttnn.generic_op([weights, x, *unique, *extra], program)
         return out
+
+
+class QKVRopeCache:
+    """The fused QKV op's RoPE + KV-cache inputs (LinearStream rope_kv, one user): rot = [I, T] (BF8 32x32: identity and
+    the rotary pair-rotation matrix of rotary_embedding_llama), the position's cos / sin rows (the fused-QK RoPE inputs,
+    row 0 of the first user's [32, head_dim] shard), the position tensor, the page table and the paged K / V caches
+    ([blocks, kv_heads, block_size, head_dim] BF8 tiles). page_table None: unpaged caches ([users, kv_heads, positions,
+    head_dim]; the one user's rows are block 0 with block_size = positions)."""
+
+    def __init__(self, rot, cos, sin, pos, page_table, k_cache, v_cache):
+        self.paged = page_table is not None
+        self.num_kv_heads, self.block_size = k_cache.shape[1], k_cache.shape[2]
+        # Unpaged: the page-table accessor slot holds the position tensor (never read).
+        self.io = [rot, cos, sin, pos, page_table if self.paged else pos, k_cache, v_cache]
+
+    def writer_compile_args(self):
+        ct = [self.num_kv_heads, self.block_size, BFP8_TILE_BYTES, int(self.paged)]
+        for t in self.io:
+            ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        return ct
+
+    def writer_runtime_args(self):
+        return [t.buffer_address() for t in self.io]
+
+
+_ROPE_ROTATION_TILES = {}
+
+
+def rope_rotation_tiles(mesh_device):
+    """[I, T] as one BF8 [1, 1, 64, 32] DRAM tensor (two tiles), replicated: exact (entries 0 / +-1). One per mesh."""
+    cached = _ROPE_ROTATION_TILES.get(id(mesh_device))
+    if cached is None or cached[0] is not mesh_device:  # the entry holds the mesh, so its id is not reused meanwhile
+        cached = _ROPE_ROTATION_TILES[id(mesh_device)] = (mesh_device, _rope_rotation_tiles(mesh_device))
+    return cached[1]
+
+
+def _rope_rotation_tiles(mesh_device):
+    from models.tt_transformers.tt.common import get_rot_transformation_mat
+
+    t = get_rot_transformation_mat(dhead=TILE).reshape(TILE, TILE).float()
+    rot = torch.cat([torch.eye(TILE), t]).reshape(1, 1, 2 * TILE, TILE)
+    return ttnn.from_torch(
+        rot,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )

@@ -11,7 +11,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
-from models.common.utility_functions import is_slow_dispatch
+from tt_py_test_utils_common.utility_functions import is_slow_dispatch
 
 
 def fa_rand(*shape):
