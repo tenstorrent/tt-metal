@@ -342,7 +342,11 @@ Each item moves through: `triage → repro → fix → verify → PR → bot-rev
 1. Anything finished? (bot review, CI run, build, background test, remote leg) → handle it now. A
    finished CI run also frees a budget slot: check `ci_budget.sh` and dispatch the head of the `ci-queue`.
 2. Otherwise pick the next **unblocked** action across all items, preferring: device work if the
-   device is free → items earliest in the pipeline → reading/analysis for parked items.
+   device is free → items earliest in the pipeline → reading/analysis for parked items. **Claiming is
+   an action too** (workers, §0c): whenever fewer than 3 of your groups are before `PR` (triage, repro,
+   fix, verify) and `findings.py next` prints a group, claim it and spawn its agent *before* the next
+   review round — rounds on open PRs never starve the plan. A worker whose only
+   remaining work is bot rounds and CI while planned groups of its architecture sit unclaimed is idling.
 3. Before any wait, **arm it in the background** — a background Bash `gh run watch -i 120
    --exit-status <id>` (re-invokes you when it exits), or `Monitor` with an until-loop — then go
    straight to step 2.
