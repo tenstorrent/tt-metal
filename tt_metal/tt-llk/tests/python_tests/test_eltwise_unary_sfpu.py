@@ -632,15 +632,13 @@ def test_sqrt_custom_infinity_regression(request):
 # the result 0 rather than the NaN of 0 * inf + 1, which this cell's pack would narrow to a
 # signed infinity.
 #
-# Blackhole skips every dest_acc=No pair except Float32 -> Float32 (_skip_bh_unless_fp32), so
-# this cell is skipped there; its gate-free edge sweep already asserts +/-inf on the
-# specials-safe cells it runs.
+# Blackhole runs this cell too: the standard-profile sweep's Float32-only limit at dest_acc=No
+# is the sweep's accuracy budget, not a pipeline limit (test_exponential_clamp_negative runs the
+# same cell there), and the guard's 16-bit +/-inf path is otherwise never exercised on Blackhole.
 @pytest.mark.nightly
 def test_tanh_derivative_lut_infinity_regression():
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     dest_acc = DestAccumulation.No
-
-    _skip_bh_unless_fp32(formats, dest_acc)
 
     # If this ever goes False the pipeline stopped delivering +/-inf and the assertions below
     # would pass vacuously -- fail loudly instead of quietly testing nothing.
