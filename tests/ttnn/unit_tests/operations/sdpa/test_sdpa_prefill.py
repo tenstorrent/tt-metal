@@ -592,6 +592,25 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, me
     )
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b], ids=["bfp8"])
+@pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
+@pytest.mark.parametrize("k_chunk_size", [4096], ids=["k4096"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d",
+    ([1, 1, 1, 4096, 32],),
+)
+def test_sdpa_k_chunk_size_above_block_reduce_limit(
+    device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, expect_error
+):
+    """The compute kernel reduces each Q row over a k-chunk with the block reduce_max_row LLK, whose
+    runtime MOP loop count is a 7-bit field on Wormhole: a 128-tile chunk wraps to 0 tiles and the row
+    max is silently stale. The LLK assert is compiled out in production, so the op has to reject
+    k_chunk_size / 32 > 127 on the host. The shape is small enough that the chunk fits L1, so the
+    only thing standing between the call and a wrong result is the host check."""
+    with expect_error(RuntimeError, "k_chunk_size must be at most"):
+        run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("q_chunk_size", [128], ids=["q128"])
 @pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])

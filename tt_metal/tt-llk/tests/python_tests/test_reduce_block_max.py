@@ -31,9 +31,12 @@ Coverage (Blackhole + Wormhole B0):
     correctness + semaphore balance (not the SDPA live-data overlap; see the C++ note).
 """
 
+import os
+
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.device import LLKAssertException
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ReduceBlockMaxRowGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation
@@ -54,6 +57,11 @@ from helpers.utils import tolerances
 # 32x32 bf16 tile.
 TILE_DIM = 32
 ELEMENTS_PER_TILE = TILE_DIM * TILE_DIM
+
+# Mirror of ckernel_template::MAX_LOOP_LEN (tt_llk_<arch>/common/inc/ckernel_template.h): the
+# template-1 MOP loop-count fields keep 7 bits on Wormhole and 10 on Blackhole, so the runtime
+# reduce (which programs block_ct_dim straight into the outer count) must reject anything wider.
+_MOP_MAX_LOOP_LEN = {ChipArchitecture.WORMHOLE: 127, ChipArchitecture.BLACKHOLE: 1023}
 
 # Inputs are always bf16 (the op's contract); only the DEST/output precision varies.
 FORMATS = [
@@ -93,6 +101,90 @@ def _dest_acc(output_format):
     )
 
 
+def _make_reduce_block_max_config(
+    formats,
+    block_ct_dim,
+    use_runtime=False,
+    reinit="none",
+    clobber="none",
+    respect_trigger=False,
+    overlap_first_half=False,
+    expected_nondeterministic=False,
+    staged_ct_dim=None,
+):
+    """Build one reduce_block_max_row variant plus its golden (row-major, per-row max in
+    column [0]).
+
+    ``staged_ct_dim`` is how many tiles are staged (and the golden's width) when it
+    differs from the ``block_ct_dim`` the kernel is built with. Only the guard tests use
+    it: a block the inits must reject never reads its operand, so staging it in full
+    would only exhaust L1.
+    """
+    dest_acc = _dest_acc(formats.output_format)
+    staged_ct_dim = block_ct_dim if staged_ct_dim is None else staged_ct_dim
+
+    # Build operand A row-major (32 rows x staged_ct_dim*32 cols), so the canonical
+    # ReduceBlockMaxRowGolden (which reshapes its operand to `dimensions` row-major)
+    # is unambiguous. A ~ U[0, 1] keeps every row-max well inside bf16's range.
+    dimensions = [TILE_DIM, staged_ct_dim * TILE_DIM]
+    src_A_rowmajor = (
+        torch.empty(TILE_DIM * staged_ct_dim * TILE_DIM)
+        .uniform_(0.0, 1.0)
+        .to(torch.bfloat16)
+    )
+
+    # Canonical golden: the established fuser oracle for this op. Returns a row-major
+    # tensor with the per-row max in column [0], every other column 0.
+    generate_golden = get_golden_generator(ReduceBlockMaxRowGolden)
+    golden_flat = generate_golden(
+        src_A_rowmajor.clone(), staged_ct_dim, formats.output_format, dimensions
+    )
+
+    # Device operand is tilized per 32x32 tile (the layout the C++ reads from L1).
+    src_A = torch.cat(
+        [
+            tilize(
+                src_A_rowmajor.reshape(TILE_DIM, staged_ct_dim * TILE_DIM)[
+                    :, t * TILE_DIM : (t + 1) * TILE_DIM
+                ].reshape(-1),
+                formats.input_format,
+            )
+            for t in range(staged_ct_dim)
+        ]
+    )
+    # Scaler B: a single tile of 1.0 (F0 holds the scaler; the op multiplies by it).
+    src_B = torch.ones(ELEMENTS_PER_TILE, dtype=torch.bfloat16)
+
+    configuration = TestConfig(
+        "sources/reduce_block_max_test.cpp",
+        formats,
+        templates=[
+            REDUCE_BLOCK_CT_DIM(block_ct_dim),
+            USE_RUNTIME(use_runtime),
+            REINIT_MODE(_REINIT_DEFINE[reinit]),
+            CLOBBER_OP(_CLOBBER_DEFINE[clobber]),
+            RESPECT_TRIGGER(respect_trigger),
+            OVERLAP_FIRST_HALF(overlap_first_half),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=staged_ct_dim,
+            tile_count_B=1,
+            tile_count_res=1,
+            sfpu=False,
+        ),
+        dest_acc=dest_acc,
+        expected_nondeterministic=expected_nondeterministic,
+    )
+
+    golden_rowmajor = golden_flat.reshape(TILE_DIM, staged_ct_dim * TILE_DIM)
+    return configuration, golden_rowmajor
+
+
 def _run_reduce_block_max(
     formats,
     block_ct_dim,
@@ -116,63 +208,14 @@ def _run_reduce_block_max(
     arch-dependent: stable on Wormhole, a coin-flip on Blackhole). The single-run
     functional check above still applies.
     """
-    dest_acc = _dest_acc(formats.output_format)
-
-    # Build operand A row-major (32 rows x block_ct_dim*32 cols), so the canonical
-    # ReduceBlockMaxRowGolden (which reshapes its operand to `dimensions` row-major)
-    # is unambiguous. A ~ U[0, 1] keeps every row-max well inside bf16's range.
-    dimensions = [TILE_DIM, block_ct_dim * TILE_DIM]
-    src_A_rowmajor = (
-        torch.empty(TILE_DIM * block_ct_dim * TILE_DIM)
-        .uniform_(0.0, 1.0)
-        .to(torch.bfloat16)
-    )
-
-    # Canonical golden: the established fuser oracle for this op. Returns a row-major
-    # tensor with the per-row max in column [0], every other column 0.
-    generate_golden = get_golden_generator(ReduceBlockMaxRowGolden)
-    golden_flat = generate_golden(
-        src_A_rowmajor.clone(), block_ct_dim, formats.output_format, dimensions
-    )
-
-    # Device operand is tilized per 32x32 tile (the layout the C++ reads from L1).
-    src_A = torch.cat(
-        [
-            tilize(
-                src_A_rowmajor.reshape(TILE_DIM, block_ct_dim * TILE_DIM)[
-                    :, t * TILE_DIM : (t + 1) * TILE_DIM
-                ].reshape(-1),
-                formats.input_format,
-            )
-            for t in range(block_ct_dim)
-        ]
-    )
-    # Scaler B: a single tile of 1.0 (F0 holds the scaler; the op multiplies by it).
-    src_B = torch.ones(ELEMENTS_PER_TILE, dtype=torch.bfloat16)
-
-    configuration = TestConfig(
-        "sources/reduce_block_max_test.cpp",
+    configuration, golden_rowmajor = _make_reduce_block_max_config(
         formats,
-        templates=[
-            REDUCE_BLOCK_CT_DIM(block_ct_dim),
-            USE_RUNTIME(use_runtime),
-            REINIT_MODE(_REINIT_DEFINE[reinit]),
-            CLOBBER_OP(_CLOBBER_DEFINE[clobber]),
-            RESPECT_TRIGGER(respect_trigger),
-            OVERLAP_FIRST_HALF(overlap_first_half),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=block_ct_dim,
-            tile_count_B=1,
-            tile_count_res=1,
-            sfpu=False,
-        ),
-        dest_acc=dest_acc,
+        block_ct_dim,
+        use_runtime=use_runtime,
+        reinit=reinit,
+        clobber=clobber,
+        respect_trigger=respect_trigger,
+        overlap_first_half=overlap_first_half,
         expected_nondeterministic=expected_nondeterministic,
     )
 
@@ -181,8 +224,6 @@ def _run_reduce_block_max(
     assert (
         len(res_from_L1) == ELEMENTS_PER_TILE
     ), f"Expected one {ELEMENTS_PER_TILE}-element output tile, got {len(res_from_L1)}"
-
-    golden_rowmajor = golden_flat.reshape(TILE_DIM, block_ct_dim * TILE_DIM)
 
     # Untilize the device output tile to row-major so both sides share layout.
     res = untilize(
@@ -353,4 +394,61 @@ def test_reduce_block_max_trigger_runtime(formats, block_ct_dim, overlap_first_h
         use_runtime=True,
         respect_trigger=True,
         overlap_first_half=overlap_first_half,
+    )
+
+
+def _expect_init_rejects(configuration, golden_rowmajor, what):
+    """The reduce inits must LLK_ASSERT on ``what``; the harness surfaces the ebreak as
+    LLKAssertException. If the guard is silent the kernel runs anyway, so report what it
+    packed into column [0] against the staged operand's row maxima: that is the wrong
+    result the guard exists to prevent."""
+    if os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1":
+        pytest.skip("LLK_ASSERT is compiled out (TT_LLK_DISABLE_ASSERTS=1)")
+    try:
+        res_from_L1 = configuration.run().result
+    except LLKAssertException as hit:
+        # Both threads that program the geometry / loop count carry the guard: the unpack init
+        # (TRISC0) and the math MOP config (TRISC1) must each have stopped on it.
+        stacks = str(hit)
+        missing = [t for t in ("TRISC0", "TRISC1") if f"{t} STACK TRACE" not in stacks]
+        assert (
+            not missing
+        ), f"{what}: the LLK assert fired, but not on {missing}:{stacks}"
+        return
+    res = untilize(
+        torch.tensor(res_from_L1, dtype=torch.float32), DataFormat.Float16_b
+    ).reshape(TILE_DIM, TILE_DIM)
+    col0 = [float(res[pr, 0]) for pr in range(TILE_DIM)]
+    golden_col0 = [float(golden_rowmajor[pr, 0]) for pr in range(TILE_DIM)]
+    rows_off = sum(1 for d, g in zip(col0, golden_col0) if d != g)
+    pytest.fail(
+        f"reduce_block_max_row init accepted {what}: no LLK assert fired and the kernel ran; "
+        f"column [0] differs from the staged operand's row max in {rows_off}/{TILE_DIM} rows "
+        f"(device rows 0-7 = {col0[:8]}, staged row max = {golden_col0[:8]})"
+    )
+
+
+@parametrize(block_ct_dim=[127, 128, 1024])
+def test_reduce_block_max_runtime_mop_loop_limit(block_ct_dim):
+    """The runtime reduce programs block_ct_dim straight into the MOP outer-loop count,
+    whose field keeps 7 bits on Wormhole and 10 on Blackhole: a wider block silently
+    runs (block_ct_dim & mask) tiles, so 128 on Wormhole (or 1024 on Blackhole) unpacks
+    and pools nothing and the packed row max is stale DEST. Up to the arch's field width
+    the block must reduce correctly (128 on Blackhole shows its wider field is real);
+    above it the init must LLK_ASSERT instead of wrapping. The rejected block never reads
+    its operand, so a single tile is staged for it."""
+    (block_ct_dim,) = block_ct_dim
+    arch = get_chip_architecture()
+    if arch not in _MOP_MAX_LOOP_LEN:
+        pytest.skip("MOP loop-count width only recorded for Wormhole and Blackhole")
+    if block_ct_dim <= _MOP_MAX_LOOP_LEN[arch]:
+        _run_reduce_block_max(FORMATS[0], block_ct_dim, use_runtime=True)
+        return
+    configuration, golden_rowmajor = _make_reduce_block_max_config(
+        FORMATS[0], block_ct_dim, use_runtime=True, staged_ct_dim=1
+    )
+    _expect_init_rejects(
+        configuration,
+        golden_rowmajor,
+        f"block_ct_dim={block_ct_dim} above the {_MOP_MAX_LOOP_LEN[arch]} MOP loop-count limit",
     )

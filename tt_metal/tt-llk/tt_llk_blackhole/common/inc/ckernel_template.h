@@ -65,6 +65,10 @@ public:
     void set_last_inner_loop_instr(std::uint32_t op);
     void set_last_outer_loop_instr(std::uint32_t op);
 
+    // Template-1 MOP loop counts are 10-bit fields: the expander keeps only the low 10 bits of the outer and
+    // inner loop lengths program() writes, so a longer loop silently runs (len & 1023) iterations.
+    static constexpr std::uint32_t MAX_LOOP_LEN = 1023;
+
     void program();         // just programs the registers
     static void run();      // runs - assumes that registers were already programmed
     void program_and_run(); // calls program, then run

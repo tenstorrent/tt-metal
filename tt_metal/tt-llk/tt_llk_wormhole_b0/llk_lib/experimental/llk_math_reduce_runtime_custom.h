@@ -69,6 +69,9 @@ inline void reduce_max_row_configure_addrmod_reinit_runtime()
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t block_ct_dim, const ckernel::TensorShape tensor_shape)
 {
+    // block_ct_dim goes straight into the MOP outer-loop count, which keeps only its low bits: a wider block
+    // silently reduces (block_ct_dim & MAX_LOOP_LEN) tiles. The compile-time sibling static_asserts the same bound.
+    LLK_ASSERT(block_ct_dim <= ckernel_template::MAX_LOOP_LEN, "block_ct_dim exceeds the MOP loop-count field");
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 1 && is_fp32_dest_acc_en), "16x32 reduce_block_max_row not supported in FP32 dest mode yet");
 
@@ -185,6 +188,8 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t blo
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_mop_reprogram_only_runtime_(std::uint32_t block_ct_dim, const ckernel::TensorShape& tensor_shape)
 {
+    LLK_ASSERT(block_ct_dim <= ckernel_template::MAX_LOOP_LEN, "block_ct_dim exceeds the MOP loop-count field");
+
     if (tensor_shape.num_faces_r_dim == 1)
     {
         // Single face-row: reduce F0&F1 only, no F2 jump, no second reduce.
