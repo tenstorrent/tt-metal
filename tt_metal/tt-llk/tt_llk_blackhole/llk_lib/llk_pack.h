@@ -371,7 +371,12 @@ namespace llk_pack_internal_bh
  * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
  * @tparam zero_output: When true, the packer emits zeros instead of dest data.
  * @tparam skip_addrmod_config: When true, leave the ADDR_MOD slots untouched.
- * @tparam skip_packer_strides: When true, do not re-program the packer strides.
+ * @tparam skip_packer_strides: When true, do not re-program the packer strides. The strides already
+ *         programmed must then be the layout this pack mode packs with (asserted against
+ *         armed_packer_strides; raw stride writers are not tracked): a prior hw-configure, reconfig or
+ *         init in the same pack mode established them, or the caller programmed them itself. An init
+ *         that changes the pack mode, or follows an op-specific init (pack-untilize, fast
+ *         tilize/untilize), must program the strides.
  * @tparam mutex_ADC: When true, serialize the SETADCXX issue against mutex::THREAD2_ADC. Needed only
  *         when another thread borrows the pack thread's ADCs.
  * @param pack_src_format: Source (dest register) data format; only used when programming strides.
@@ -440,11 +445,15 @@ inline void pack_init_apply(
  * @param partial_face: True if packing a partial (sub-face-row) face.
  * @note Re-derives the packer strides for the new format in the layout armed by the last
  *       @ref _llk_pack_hw_configure_ or @ref _llk_pack_init_ : one-face Z for PackMode::Default, two-face Z
- *       for PackMode::Tilize / PackMode::Untilize. Call it between such an init and its execute freely.
+ *       for a full-width PackMode::Tilize / PackMode::Untilize init (a Tilize init with
+ *       skip_bh_tilize_workaround, 8-bit source datums, arms the one-face Default layout; a narrow tile
+ *       keeps the one-face Z in every mode). Call it between such an init and its execute freely.
  * @note While an op-specific init is armed (@ref _llk_pack_untilize_init_, @ref _llk_pack_fast_tilize_init_,
  *       @ref _llk_pack_fast_untilize_init_) the strides are left exactly as that init programmed them, and
  *       that init also derived its L1 offsets from the formats it was given: call this reconfig before such
  *       an init, not between it and its execute, when the formats change.
+ * @note With fp32 destination accumulation, do not call this reconfig between @ref _llk_pack_fast_tilize_init_
+ *       and its execute even for unchanged formats: it re-enables the 32-bit DEST reads that init disables.
  */
 template <bool is_fp32_dest_acc_en>
 inline void _llk_pack_reconfig_data_format_(
@@ -510,9 +519,10 @@ inline void _llk_pack_hw_configure_(
  * @tparam zero_output: When true, packer emits zeros instead of dest data.
  * @tparam skip_addrmod_config: When true, leave ADDR_MOD slots untouched (assume already programmed).
  * @tparam skip_packer_strides: When true, do not re-program the packer strides. The strides already
- *         programmed must then be the layout this pack mode packs with (asserted): a prior hw-configure,
- *         reconfig or init in the same pack mode established them, or the caller programmed them itself.
- *         An init that changes the pack mode, or follows an op-specific init (pack-untilize, fast
+ *         programmed must then be the layout this pack mode packs with (asserted against
+ *         armed_packer_strides; raw stride writers are not tracked): a prior hw-configure, reconfig or
+ *         init in the same pack mode established them, or the caller programmed them itself. An init
+ *         that changes the pack mode, or follows an op-specific init (pack-untilize, fast
  *         tilize/untilize), must program the strides.
  * @tparam mutex_ADC: When true, serialize the SETADCXX issue against mutex::THREAD2_ADC. Needed only
  *         when another thread borrows the pack thread's ADCs. Exposed upstream as

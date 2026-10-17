@@ -191,6 +191,8 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
     // These strides are the op's own; a data-format reconfig must leave them (uninit restores Default).
+    // The two full-word writes above program every channel-0 stride (X/Y/Z/W) and the fast-tilize PACRs
+    // step channel-0 counters only, so this init depends on no stride left by an earlier init.
     armed_packer_strides = PackerStrides::OpInit;
 
     _llk_pack_fast_tilize_configure_addrmod_();

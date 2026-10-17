@@ -27,7 +27,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb::in, dfb::out);
 #if TILIZE_INIT_FIRST
     // Arm the tilize pack layout and leave it armed: only the unpacker is restored for the copies below.
-    tilize_init(dfb::in, 1, dfb::out);
+    tilize_init(dfb::in, 1 /*block*/, dfb::out);
     UNPACK((llk_unpack_tilize_uninit(dfb::in)));
 #endif
     copy_init(dfb::in);
@@ -43,7 +43,7 @@ void kernel_main() {
         }
         tile_regs_commit();
         tile_regs_wait();
-        pack_untilize_dest<width, width>(dfb::out, 1, 0);
+        pack_untilize_dest<width, width>(dfb::out, 1 /*block_rt_dim*/, 0 /*block_c_index*/);
         tile_regs_release();
         input.pop_front(width);
         output.push_back(width);

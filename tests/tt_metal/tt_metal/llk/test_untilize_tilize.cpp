@@ -962,6 +962,55 @@ std::string describe_tilize_face_slots(
     return msg;
 }
 
+// Number of result words that mismatch the golden, with the first mismatching word, for the failure message.
+std::string describe_word_mismatch(const std::vector<std::uint32_t>& result, const std::vector<std::uint32_t>& golden) {
+    std::size_t mismatches = 0;
+    std::optional<std::size_t> first;
+    for (std::size_t i = 0; i < std::min(result.size(), golden.size()); i++) {
+        if (result[i] != golden[i]) {
+            mismatches++;
+            if (!first.has_value()) {
+                first = i;
+            }
+        }
+    }
+    std::string msg = fmt::format("{} of {} words mismatch", mismatches, golden.size());
+    if (first.has_value()) {
+        msg += fmt::format(" (first at word {}: {:#x} vs golden {:#x})", *first, result[*first], golden[*first]);
+    }
+    return msg;
+}
+
+// Words per block row of full 32x32 tiles for the golden config's datum size.
+std::size_t block_row_words(const ::unit_tests::compute::GoldenConfig& config) {
+    return static_cast<std::size_t>(config.num_tiles_c_dim) * constants::TILE_HW * config.datum_bytes /
+           sizeof(std::uint32_t);
+}
+
+// Golden for fast_tilize_reconfig_then_pack.cpp: every block row but the last tilized, the last one passed
+// through the Default pack unchanged.
+std::vector<std::uint32_t> gold_tilize_rows_then_identity(
+    const std::vector<std::uint32_t>& src, const ::unit_tests::compute::GoldenConfig& config) {
+    auto head = config;
+    head.num_tiles_r_dim = config.num_tiles_r_dim - 1;
+    const auto split = src.begin() + static_cast<std::ptrdiff_t>(head.num_tiles_r_dim * block_row_words(config));
+    auto golden = ::unit_tests::compute::gold_standard_tilize(std::vector<std::uint32_t>(src.begin(), split), head);
+    golden.insert(golden.end(), split, src.end());
+    return golden;
+}
+
+// Golden for fast_untilize_reconfig_then_pack.cpp: every block row but the last untilized, the last one passed
+// through the Default pack unchanged.
+std::vector<std::uint32_t> gold_untilize_rows_then_identity(
+    const std::vector<std::uint32_t>& src, const ::unit_tests::compute::GoldenConfig& config) {
+    auto head = config;
+    head.num_tiles_r_dim = config.num_tiles_r_dim - 1;
+    const auto split = src.begin() + static_cast<std::ptrdiff_t>(head.num_tiles_r_dim * block_row_words(config));
+    auto golden = ::unit_tests::compute::gold_standard_untilize(std::vector<std::uint32_t>(src.begin(), split), head);
+    golden.insert(golden.end(), split, src.end());
+    return golden;
+}
+
 }  // namespace
 
 // Blackhole: tilize with pack_reconfig_data_format between tilize_init and tilize_block, the order the reconfig
@@ -1095,6 +1144,29 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilize) {
                 unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
             }
         }
+    }
+}
+
+// Blackhole fast tilize with a same-format pack_reconfig_data_format between fast_tilize_init and the blocks, then
+// fast_tilize_uninit and a Default pack of the last block row (fast_tilize_reconfig_then_pack.cpp). The fast-tilize
+// init programs its own packer strides; a reconfig that re-derives the strides from the pack mode instead of
+// leaving them scrambles every fast-tilized tile. fp32 dest accumulation off (with it on, a reconfig between the
+// fast-tilize init and its execute is not supported: it re-enables the 32-bit DEST reads the init disables).
+// Exact golden.
+TEST_F(LLKBlackholeSingleCardFixture, TensixFastTilizeReconfigBetweenInitAndExecuteThenPack) {
+    for (const auto& [num_tiles_r, num_tiles_c] : {std::pair<std::uint32_t, std::uint32_t>{2, 2}, {2, 4}, {3, 3}}) {
+        SCOPED_TRACE(fmt::format("{}x{} tiles", num_tiles_r, num_tiles_c));
+        unit_tests::compute::tilize::TestConfig config{
+            .dst_full_sync_en = false,
+            .fp32_dest_acc_en = false,
+            .input_single_tile_size = 2 * 1024,
+            .output_single_tile_size = 2 * 1024,
+            .num_tiles_r = num_tiles_r,
+            .num_tiles_c = num_tiles_c,
+            .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+            .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/fast_tilize_reconfig_then_pack.cpp",
+            .golden_function = gold_tilize_rows_then_identity};
+        unit_tests::compute::tilize::run_single_core_tilize_program(*devices_.at(0), config);
     }
 }
 
@@ -1833,6 +1905,28 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastUntilize) {
     }
 }
 
+// Blackhole fast untilize with a same-format pack_reconfig_data_format between fast_untilize_init and the blocks,
+// then fast_untilize_uninit and a Default pack of the last block row (fast_untilize_reconfig_then_pack.cpp). The
+// fast-untilize init programs its own packer strides, including the channel-1 row stride of the strided path
+// (width above one 4-tile chunk); a reconfig that re-derives the strides from the pack mode instead of leaving
+// them scrambles the output. Widths 4 (contiguous), 6 and 8 (strided). Exact golden.
+TEST_F(LLKBlackholeSingleCardFixture, TensixFastUntilizeReconfigBetweenInitAndExecuteThenPack) {
+    for (const std::uint32_t num_tiles_c : {4u, 6u, 8u}) {
+        SCOPED_TRACE(fmt::format("2x{} tiles", num_tiles_c));
+        unit_tests::compute::tilize::TestConfig config{
+            .dst_full_sync_en = false,
+            .fp32_dest_acc_en = false,
+            .input_single_tile_size = 2 * 1024,
+            .output_single_tile_size = 2 * 1024,
+            .num_tiles_r = 2,
+            .num_tiles_c = num_tiles_c,
+            .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
+            .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/fast_untilize_reconfig_then_pack.cpp",
+            .golden_function = gold_untilize_rows_then_identity};
+        unit_tests::compute::tilize::run_single_core_tilize_program(*devices_.at(0), config);
+    }
+}
+
 TEST_F(LLKBlackholeSingleCardFixture, TensixComputePackUntilizeFp8e4m3) {
     vector<vector<std::uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
@@ -2009,6 +2103,99 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeReconfigBetweenInitAndEx
                 .compute_defines = {{"TILIZE_INIT_FIRST", tilize_init_first ? "1" : "0"}},
                 .golden_function = ::unit_tests::compute::gold_standard_untilize};
             unit_tests::compute::tilize::run_single_core_tilize_program(*devices_.at(0), config);
+        }
+    }
+}
+
+// Blackhole: pack-untilize init hand-off without an uninit (pack_untilize_init_handoff.cpp). pack_untilize_init on a
+// Float16_b scratch output (c_17, never written), then pack_untilize_dest_init on the real Float32 output, under
+// fp32 dest accumulation, so the pack source datum size goes from 2 to 4 bytes between the two inits. The second
+// init must program its own Y/W strides for the 4-byte source: an init that programs only Z and leaves Y/W to the
+// data-format reconfig in front of it keeps the 2-byte strides (the reconfig leaves the strides alone while a
+// pack-untilize init is armed) and untilizes the wrong dest rows. Exact golden: the untilized bf16 input widened
+// to fp32.
+TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeInitHandOffDifferentDatumSize) {
+    constexpr std::uint32_t dram_bank_id = 0;
+    const std::uint32_t in_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    const std::uint32_t out_tile_bytes = tt::tile_size(tt::DataFormat::Float32);
+
+    for (const auto& [num_tiles_r, num_tiles_c] : {std::pair<std::uint32_t, std::uint32_t>{1, 1}, {2, 4}}) {
+        for (const bool dst_full_sync_en : {false, true}) {
+            SCOPED_TRACE(fmt::format("{}x{} tiles, dst_full_sync_en={}", num_tiles_r, num_tiles_c, dst_full_sync_en));
+            auto& mesh_device = this->device();
+            auto& cq = mesh_device.mesh_command_queue();
+            Program program = CreateProgram();
+            const CoreCoord core = {0, 0};
+            const std::uint32_t num_tiles = num_tiles_r * num_tiles_c;
+
+            auto src = distributed::MeshBuffer::create(
+                distributed::ReplicatedBufferConfig{.size = num_tiles * in_tile_bytes},
+                {.page_size = num_tiles * in_tile_bytes, .buffer_type = BufferType::DRAM},
+                &mesh_device);
+            auto dst = distributed::MeshBuffer::create(
+                distributed::ReplicatedBufferConfig{.size = num_tiles * out_tile_bytes},
+                {.page_size = num_tiles * out_tile_bytes, .buffer_type = BufferType::DRAM},
+                &mesh_device);
+
+            CreateCircularBuffer(
+                program,
+                core,
+                CircularBufferConfig(num_tiles * in_tile_bytes, {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}})
+                    .set_page_size(tt::CBIndex::c_0, in_tile_bytes));
+            CreateCircularBuffer(
+                program,
+                core,
+                CircularBufferConfig(num_tiles * out_tile_bytes, {{tt::CBIndex::c_16, tt::DataFormat::Float32}})
+                    .set_page_size(tt::CBIndex::c_16, out_tile_bytes));
+            // Scratch output the first untilize init targets: 2-byte pack source under fp32 dest accumulation.
+            CreateCircularBuffer(
+                program,
+                core,
+                CircularBufferConfig(in_tile_bytes, {{tt::CBIndex::c_17, tt::DataFormat::Float16_b}})
+                    .set_page_size(tt::CBIndex::c_17, in_tile_bytes));
+
+            auto reader = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
+                core,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+            auto writer = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+                core,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize_init_handoff.cpp",
+                core,
+                ComputeConfig{
+                    .fp32_dest_acc_en = true,
+                    .dst_full_sync_en = dst_full_sync_en,
+                    .compile_args = {num_tiles_r, num_tiles_c}});
+
+            const auto src_vec = create_arange_vector_of_bfloat16(num_tiles * in_tile_bytes, false);
+            distributed::EnqueueWriteMeshBuffer(cq, src, src_vec, /*blocking=*/true);
+            SetRuntimeArgs(program, reader, core, {src->address(), dram_bank_id, num_tiles});
+            SetRuntimeArgs(program, writer, core, {dst->address(), dram_bank_id, num_tiles});
+            LaunchProgram(mesh_device, std::move(program));
+
+            std::vector<std::uint32_t> result;
+            distributed::EnqueueReadMeshBuffer(cq, result, dst, /*blocking=*/true);
+
+            const ::unit_tests::compute::GoldenConfig config{
+                .num_tiles_r_dim = static_cast<int>(num_tiles_r),
+                .num_tiles_c_dim = static_cast<int>(num_tiles_c),
+                .face_r_dim = 16,
+                .face_c_dim = 16,
+                .num_faces = 4};
+            const auto golden_bf16 =
+                unpack_vector<bfloat16, std::uint32_t>(::unit_tests::compute::gold_standard_untilize(src_vec, config));
+            std::vector<std::uint32_t> golden(golden_bf16.size());
+            std::transform(golden_bf16.begin(), golden_bf16.end(), golden.begin(), [](const bfloat16& value) {
+                return std::bit_cast<std::uint32_t>(static_cast<float>(value));
+            });
+            ASSERT_EQ(result.size(), golden.size());
+            EXPECT_TRUE(result == golden) << describe_word_mismatch(result, golden);
         }
     }
 }

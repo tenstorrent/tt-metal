@@ -297,15 +297,20 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
     return is_packer_to_L1_early_conversion_supported(in_reg, out_l1) || is_packer_to_L1_late_conversion_supported(in_reg, out_l1);
 }
 
-// Which packer stride layout is programmed. Written wherever the layout changes (set_packer_strides<mode>,
-// the op-specific inits below) and read by reconfig_packer_data_format, so that a data-format reconfig
+// Which packer stride layout is programmed. Recorded by the writers that go through it: the templated
+// set_packer_strides<pack_mode> (hw-configure, _llk_pack_init_, the fast tilize/untilize uninits), the
+// op-specific inits _llk_pack_untilize_init_ / _llk_pack_fast_tilize_init_ / _llk_pack_fast_untilize_init_
+// (OpInit) and their uninits (Default). Read by reconfig_packer_data_format, so that a data-format reconfig
 // re-derives the strides for the new format in the layout that is armed instead of resetting them to
-// Default: the Tilize/Untilize pack MOPs step Z by two faces per increment (see set_packer_strides) and
-// would otherwise pack faces 1,2 instead of 2,3 after `init<Tilize>; reconfig; pack`. The op-specific
-// inits (_llk_pack_untilize_init_, _llk_pack_fast_tilize_init_, _llk_pack_fast_untilize_init_) derive
-// their Z (and Y / channel-1) strides from their own geometry, which a reconfig cannot reproduce: while
-// one of them is armed the reconfig leaves every stride as that init left it, and their uninits restore
-// the Default layout. pack_init_apply asserts this layout when it is asked to skip the strides.
+// Default: the full-width Tilize/Untilize pack MOPs step Z by two faces per increment (see
+// set_packer_strides) and would otherwise pack faces 1,2 instead of 2,3 after `init<Tilize>; reconfig;
+// pack`. The op-specific inits program every stride they read (Y/W/Z, and the channel-1 Y stride of the
+// strided fast untilize) from their own geometry, which a reconfig cannot reproduce: while one of them is
+// armed the reconfig leaves every stride as that init left it, and their uninits restore the Default
+// layout. pack_init_apply asserts this layout when it is asked to skip the strides. Raw stride writers
+// bypass the tracker and that assert: _llk_pack_hw_cleanup_poison_pack_ambient_ zeroes Y/Z/W after
+// hw-configure recorded Default, and the custom-mm pack inits (_llk_pack_custom_mm_init_, the sdpa and
+// reuse-dest-srcb custom-mm compute APIs) RMW Z/W; a skip-strides init after one of them is not caught.
 enum class PackerStrides : std::uint8_t
 {
     Default,  // one-face Z: set_packer_strides for PackMode::Default
@@ -354,7 +359,7 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
 template <PackMode pack_mode = PackMode::Default>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
-    set_packer_strides(pack_src_format, tile_c_dim, pack_mode != PackMode::Default);
+    set_packer_strides(pack_src_format, tile_c_dim, pack_mode != PackMode::Default /*two_face_z*/);
     armed_packer_strides = packer_strides_for(pack_mode);
 }
 
@@ -595,7 +600,7 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     // (pack-untilize, fast tilize/untilize) owns its strides: leave them as it programmed them.
     if (armed_packer_strides != PackerStrides::OpInit)
     {
-        set_packer_strides(pack_output_src_format, tile_c_dim, armed_packer_strides == PackerStrides::TwoFaceZ);
+        set_packer_strides(pack_output_src_format, tile_c_dim, armed_packer_strides == PackerStrides::TwoFaceZ /*two_face_z*/);
     }
 
     // Program the packer X (datum) counter. _llk_pack_init_ owns this counter ("inits own SETADCXX"),
