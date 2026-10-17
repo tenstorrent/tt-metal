@@ -1145,11 +1145,14 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixReduceBlockMaxRowCompileLimits) {
         }
     }
 
-    // block_ct_dim range and the trigger's even-width rule: the overloads that program the MOPs (init;
-    // on Blackhole also reinit_short, whose math MOP reprogram carries its own range assert).
+    // block_ct_dim range and the trigger's even-width rule: the overloads that program the unpack MOP
+    // (init; on Blackhole also reinit_short and reinit_minimal, which re-run the unpack init, and
+    // reinit_short's math MOP reprogram carries its own range assert). The execute overload takes
+    // block_ct_dim but programs no MOP, so it has nothing to assert.
     const std::string width_error = "block_ct_dim must be between 1 and 127";
     const std::string trigger_error = "respect_trigger needs an even block_ct_dim";
-    const std::vector<uint32_t> mop_overloads = is_blackhole ? std::vector<uint32_t>{0, 2} : std::vector<uint32_t>{0};
+    const std::vector<uint32_t> mop_overloads =
+        is_blackhole ? std::vector<uint32_t>{0, 2, 3} : std::vector<uint32_t>{0};
     for (const uint32_t overload : mop_overloads) {
         probe(/*num_faces=*/4, overload, /*block_ct_dim=*/0, /*respect_trigger=*/false, width_error);
         probe(/*num_faces=*/4, overload, /*block_ct_dim=*/1, /*respect_trigger=*/false, "");

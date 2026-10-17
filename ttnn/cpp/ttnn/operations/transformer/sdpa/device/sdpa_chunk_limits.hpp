@@ -19,8 +19,10 @@ namespace ttnn::prim::detail {
 // (width & 127) tiles). The LLK's assert is compiled out in production, so every in-tree ttnn SDPA op
 // enforces the limit here on exactly the configurations whose compute kernel takes the block reduce:
 // the legacy (non-streaming) kernel path loops reduce_tile over the chunk and has no such bound.
-// Not covered: the Quasar SDPA (its runtime reduce LLK has no bound) and the bge_m3 encoder_sdpa
-// KernelDescriptor path onto compute/sdpa.cpp; both stay far below 127 tiles.
+// The experimental Quasar SDPA fork takes the same streaming kernel when it runs on Wormhole or
+// Blackhole (on Quasar itself its factory forces the standard kernel), so it enforces the limit on that
+// path too. Not covered: the bge_m3 encoder_sdpa KernelDescriptor path onto compute/sdpa.cpp, which
+// stays far below 127 tiles.
 constexpr uint32_t kMaxKChunkTiles = 127;
 
 // Names the configuration that selects the streaming compute kernel in the ops where the legacy
