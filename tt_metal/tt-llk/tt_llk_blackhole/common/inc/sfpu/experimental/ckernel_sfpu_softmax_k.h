@@ -108,7 +108,6 @@ inline void _softmax_k_()
     _build_lane_mask_col0_();
     TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG0, 0);
     _zero_lanes_outside_col0_<p_sfpu::LREG0>();
-    TTI_SFPNOP;
 
     TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG2, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPNOP;
