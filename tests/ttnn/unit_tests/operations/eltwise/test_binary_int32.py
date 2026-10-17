@@ -852,7 +852,8 @@ def test_div_int32_optional_output(device):
         (-2147483647, 2147483647, -2147483647, 2147483647),  # full range
         (-10, 10, -2147483647, 2147483647),  # small numerator, large denominator
         (-2147483647, 2147483647, -10, 10),  # large numerator, small denominator
-        # a=-2147483648 and b=-1 is not supported
+        # b=-1 is kept out of the INT32_MIN rows: -2147483648 / -1 = 2^31 overflows the int32 result of
+        # trunc/floor only (rounding_mode=None asserts that pair in test_div_edge_cases)
         (-2147483648, 2147483647, -2147483648, -2),
         (-2147483648, 2147483647, 1, 2147483647),
         (2021531526, 2147483647, 9, 123),
