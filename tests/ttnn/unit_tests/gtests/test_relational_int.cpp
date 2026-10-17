@@ -510,6 +510,12 @@ TEST(RelationalUnaryScalarWord, OpsAfterTypecastUseTheCastDtype) {
             static_cast<std::uint32_t>(DataType::FLOAT32)),
         EltwiseUnaryWithParam(UnaryOpType::UNARY_GT, 2.0f)};
     EXPECT_EQ(func_1(uint_params_gt, DataType::INT32), "unary_gt_tile(0, 0x40000000u);");
+    // The same reader serves the chain's output dtype (unary_impl), for every parameter type.
+    using ttnn::operations::unary::utils::typecast_target_dtype;
+    EXPECT_EQ(typecast_target_dtype(typecast(DataType::FLOAT32, DataType::INT32)), DataType::INT32);
+    EXPECT_EQ(typecast_target_dtype(int_params_gt_half.front()), DataType::FLOAT32);
+    EXPECT_EQ(typecast_target_dtype(uint_params_gt.front()), DataType::FLOAT32);
+    EXPECT_EQ(typecast_target_dtype(EltwiseUnaryWithParam(UnaryOpType::TYPECAST, 1.0f)), std::nullopt);
 }
 
 // A float scalar the integer dtype cannot hold exactly (fractional, non-finite, out of range) is

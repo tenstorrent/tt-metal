@@ -4,6 +4,7 @@
 
 #include "unary.hpp"
 #include "device/unary_device_operation.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -34,7 +35,14 @@ Tensor unary_impl(
     DataType output_dtype = input_dtype;
     if (op_chain.back().type() == unary::UnaryOpType::TYPECAST ||
         op_chain.back().type() == unary::UnaryOpType::BITCAST) {
-        output_dtype = static_cast<DataType>(*op_chain.back().get_param_if<float>(1));
+        // The cast's parameters may be float, int32_t or uint32_t backed; a float-only read would
+        // dereference an empty optional for an integer-backed cast.
+        const auto target_dtype = unary::utils::typecast_target_dtype(op_chain.back());
+        TT_FATAL(
+            target_dtype.has_value(),
+            "Unary: {} needs two parameters (input and target dtype).",
+            op_chain.back().type());
+        output_dtype = *target_dtype;
         if (optional_output_tensor.has_value()) {
             TT_FATAL(
                 output_dtype == optional_output_tensor->dtype(),
