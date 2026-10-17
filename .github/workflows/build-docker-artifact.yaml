@@ -111,6 +111,7 @@ on:
         default: "amd64"
         options:
           - "amd64"
+          - "aarch64"
       harbor-prefix:
         required: false
         type: string
