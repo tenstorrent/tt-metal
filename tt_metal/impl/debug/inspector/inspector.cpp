@@ -4,7 +4,6 @@
 
 #include <tt_stl/fmt.hpp>
 #include "inspector.hpp"
-#include "context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/inspector/data.hpp"
 #include "impl/debug/inspector/rpc_server_generated.hpp"
@@ -39,11 +38,9 @@ inspector::Data* session_of(const distributed::MeshDevice* mesh_device) {
     return mesh_device != nullptr ? session_of(mesh_device->impl()) : nullptr;
 }
 
-// A program can outlive its context, so this must not create one (MetalContext::instance() would).
+// A program must not outlive its context.
 inspector::Data* session_of(const detail::ProgramImpl& program) {
-    const ContextId context_id = program.get_context_id();
-    return MetalContext::instance_exists(context_id) ? MetalContext::instance(context_id).get_inspector_data()
-                                                     : nullptr;
+    return MetalContext::instance(program.get_context_id()).get_inspector_data();
 }
 
 // Error reporting policy for the TT_INSPECTOR_* macros. Set from the context's rtoptions before its session is
@@ -99,8 +96,8 @@ void Inspector::serialize_rpc(const MetalContext& context) {
     }
 }
 
-void Inspector::program_created(const MetalContext& context, const detail::ProgramImpl* program) noexcept {
-    auto* data = context.get_inspector_data();
+void Inspector::program_created(const detail::ProgramImpl* program) noexcept {
+    auto* data = session_of(*program);
     if (!data) {
         return;
     }

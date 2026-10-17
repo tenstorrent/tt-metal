@@ -42,7 +42,7 @@ public:
     static bool capture_tensor_specs(const MetalContext& context);
     static void serialize_rpc(const MetalContext& context);
 
-    static void program_created(const MetalContext& context, const detail::ProgramImpl* program) noexcept;
+    static void program_created(const detail::ProgramImpl* program) noexcept;
     static void program_destroyed(const detail::ProgramImpl* program) noexcept;
     static void program_compile_started(
         const MetalContext& context,
