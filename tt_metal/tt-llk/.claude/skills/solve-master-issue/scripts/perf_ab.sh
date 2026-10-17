@@ -3,7 +3,7 @@
 #                   [-k <pytest expr>] [--op <mathop substring>] [--primary-metric <m>] [--speed-of-light]
 # Same-board perf A/B of one tt-llk perf module: the fix tree ("current") against <base-sha> ("baseline",
 # a detached worktree created next to the fix worktree and reused on re-runs), judged by perf_eval.py.
-#   arch         wormhole | blackhole  (must be the board in this box)
+#   arch         the harness's CHIP_ARCH name (wormhole | blackhole | quasar | …) — must be the board in this box
 #   perf-module  tests/python_tests/<perf-module>.py, e.g. perf_eltwise_unary_sfpu
 #   out-dir      where the evidence lands: current.post.csv, baseline.post.csv, verdict.json, *.log
 # Each tree runs the CI two-phase flow (compile-producer then compile-consumer, both under one device-lock hold),
@@ -19,7 +19,7 @@ while [ $# -gt 0 ]; do case $1 in
     --goal) goal=$2; shift 2;; -k) kexpr=$2; shift 2;; --op) op=$2; shift 2;;
     --primary-metric) metric=$2; shift 2;; --speed-of-light) sol=(--speed-of-light); shift;;
     *) echo "unknown arg $1" >&2; exit 3;; esac; done
-case $arch in wormhole|blackhole) ;; *) echo "arch must be wormhole|blackhole" >&2; exit 3;; esac
+[[ $arch =~ ^[a-z][a-z0-9_]*$ ]] || { echo "arch must be an architecture name the harness takes (CHIP_ARCH: wormhole, blackhole, quasar, …)" >&2; exit 3; }
 here=$(dirname "$(readlink -f "$0")")
 mkdir -p "$out"
 fix=$(readlink -f "$fix")

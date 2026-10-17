@@ -21,8 +21,10 @@ Subcommands
                                   [--group G] [--arch A] [--owner O] [--note TEXT]
                                   write state (+ dups), atomically
   groups <file> [--claims DIR]    one JSON line per group: items, states, arch, owner, who holds the claim
-  next  <file> --owner O --arch wormhole|blackhole --claims DIR [-n N] [--take-other]
+  next  <file> --owner O --arch <arch>[,<arch>] --claims DIR [-n N] [--take-other]
                                   the next unclaimed planned groups this worker should take, in order
+                                  (--arch = the architectures this box can run; any names the harness
+                                  takes: wormhole, blackhole, quasar, …; several boxes per arch are fine)
   claim <file> <group> --owner O --claims DIR
                                   atomic claim of a group (mkdir on the shared dir): marks its planned
                                   items in-progress with --owner; exit 1 and TAKEN if another worker has it
@@ -73,7 +75,9 @@ WORK_STATES = {
 }
 FILED_STATES = {"already_filed", "filed_closed"}
 WORKABLE = {None, "planned"}
-ARCHES = ("wormhole", "blackhole")
+ARCH_RE = re.compile(
+    r"^[a-z][a-z0-9_]*$"
+)  # architecture names are whatever the harness takes
 LOCK_STALE_S = int(os.environ.get("FINDINGS_LOCK_STALE_S", "900"))
 LOCK_WAIT_S = int(os.environ.get("FINDINGS_LOCK_WAIT_S", "600"))
 
@@ -108,20 +112,45 @@ def strip_keys(recs):
         r.pop("_key", None)
 
 
+ARCH_DIR_RE = re.compile(
+    r"(?:^|/)tt_llk_([a-z0-9]+?)(?:_b\d)?(?:/|$)"
+)  # tt_llk_wormhole_b0 -> wormhole
+
+
+def arch_set(text):
+    """Parse an arch spec: 'wormhole', 'blackhole,wormhole', 'neutral' -> a set (empty = neutral)."""
+    if not text or text == "neutral":
+        return set()
+    out = set()
+    for t in text.split(","):
+        t = t.strip()
+        if t == "neutral" or not t:
+            continue
+        if not ARCH_RE.match(t):
+            sys.exit(f"bad architecture name {t!r} (lowercase letters, digits, _)")
+        out.add(t)
+    return out
+
+
+def arch_str(archs):
+    return ",".join(sorted(archs)) if archs else "neutral"
+
+
 def arch_guess(rec):
-    """From the paths alone: wormhole | blackhole | both | neutral (host/ttnn code)."""
+    """From the paths alone: the tt_llk_<arch> trees the sites live in (comma-joined), or neutral."""
     paths = [rec.get("file", "")]
     for x in rec.get("also_at") or []:
         paths.append(x if isinstance(x, str) else x.get("file", ""))
     a = set()
     for p in paths:
-        if "wormhole" in p:
-            a.add("wormhole")
-        if "blackhole" in p:
-            a.add("blackhole")
-    if a == {"wormhole", "blackhole"}:
-        return "both"
-    return next(iter(a)) if a else "neutral"
+        m = ARCH_DIR_RE.search(p)
+        if m:
+            a.add(m.group(1))
+        else:
+            for name in ("wormhole", "blackhole", "quasar"):
+                if name in p:
+                    a.add(name)
+    return arch_str(a)
 
 
 # ---------------------------------------------------------------- JSON files
@@ -335,8 +364,10 @@ def apply_mark(recs, keys, state, fields):
 def cmd_mark(a):
     if a.state not in WORK_STATES:
         sys.exit(f"state must be one of {sorted(WORK_STATES)}")
-    if a.arch and a.arch not in ARCHES + ("both", "neutral"):
-        sys.exit("--arch must be wormhole | blackhole | both | neutral")
+    if a.arch:
+        a.arch = arch_str(
+            arch_set(a.arch)
+        )  # canonical: sorted, comma-joined, or neutral
     keys = parse_keys(a.keys)
     fields = {
         k: v
@@ -402,16 +433,10 @@ def group_table(recs):
         k = key_of(r)
         e["items"].append(k)
         e["states"][k] = d.get("state")
-        e["arch"].add(d.get("arch") or arch_guess(r))
+        e["arch"] |= arch_set(d.get("arch") or arch_guess(r))
         e["owner"] = e["owner"] or d.get("owner")
     for e in g.values():
-        a = e["arch"] - {None}
-        if "both" in a or ({"wormhole", "blackhole"} <= a):
-            e["arch"] = "both"
-        elif a - {"neutral"}:
-            e["arch"] = next(iter(a - {"neutral"}))
-        else:
-            e["arch"] = "neutral"
+        e["arch"] = arch_str(e["arch"])  # the union over the group's items
     return g
 
 
@@ -433,14 +458,31 @@ def cmd_groups(a):
         print(json.dumps(e))
 
 
-def rank_for(group_arch, my_arch):
-    other = "blackhole" if my_arch == "wormhole" else "wormhole"
-    return {my_arch: 0, "neutral": 1, "both": 2, other: 3}.get(group_arch, 1)
+def rank_for(group_arch, mine):
+    """0 = every arch the group needs is on this box · 1 = neutral (any box) · 2 = some legs here, the
+    rest remote · 3 = nothing here (every leg remote; left to a box that has it unless --take-other).
+    """
+    need = arch_set(group_arch)
+    if not need:
+        return 1
+    if need <= mine:
+        return 0
+    return 2 if need & mine else 3
+
+
+def spread_key(owner, group):
+    """Per-worker order inside a rank: a stable hash of worker+group, so n workers on the same
+    architecture walk the same rank in different orders and seldom try one group at the same time.
+    """
+    import hashlib
+
+    return hashlib.sha1(f"{owner}\0{group}".encode()).hexdigest()
 
 
 def cmd_next(a):
-    if a.arch not in ARCHES:
-        sys.exit("--arch must be wormhole | blackhole")
+    mine = arch_set(a.arch)
+    if not mine:
+        sys.exit("--arch must name at least one architecture this box can run")
     _, recs = load_json(a.file)
     cands = []
     for e in group_table(recs).values():
@@ -448,20 +490,12 @@ def cmd_next(a):
             continue  # already started by someone (or finished)
         if claim_owner(a.claims, e["group"]):
             continue
-        r = rank_for(e["arch"], a.arch)
+        r = rank_for(e["arch"], mine)
         if r == 3 and not a.take_other:
             continue
         cands.append((r, e))
-    # own-arch-only first, then neutral, then both; the two workers walk the shared ranks from
-    # opposite ends so they rarely even attempt the same group (the claim decides when they do)
-    rev = a.arch == "blackhole"
-    out = []
-    for r in (0, 1, 2, 3):
-        bucket = sorted([t for t in cands if t[0] == r], key=lambda t: t[1]["group"])
-        if r in (1, 2) and rev:
-            bucket.reverse()
-        out += bucket
-    for r, e in out[: a.n]:
+    cands.sort(key=lambda t: (t[0], spread_key(a.owner, t[1]["group"])))
+    for r, e in cands[: a.n]:
         e["rank"] = r
         print(json.dumps(e))
 

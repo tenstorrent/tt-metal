@@ -1,7 +1,7 @@
 ---
 name: solve-master-issue
 description: Work a master/umbrella GitHub issue (many sub-problems in one issue or as sub-issues) OR a local findings file (a bug-audit CONFIRMED.json / OPEN.md, or any list of file:line problems) to completion UNATTENDED — split it into items, group items that touch the same function/op into one PR (capped so the PR body still fits), find a fail-without/pass-with test per item, open a DRAFT PR per group, handle bot reviews, dispatch sanity + nightly CI only once bots are quiet and only within a CI budget (default 5 Sanity + 5 Nightly runs in flight) so other developers are not crowded off the runners, fix PR-caused failures, rebase past unrelated main breakage, until each PR is green or fails only in proven-unrelated tests AND every bot comment (on every push) is addressed. Writes progress back into the findings file (and commits/pushes or syncs it) so a re-run or another box never repeats work. Never idles; while anything waits on bots/CI/device/budget, it advances another item. Headless driver (run_unattended.sh) survives disconnects. Use when the user hands over an issue or a findings file with N problems and says to work through it without them.
-argument-hint: <issue URL | owner/repo#N | /path/to/findings.json|.md> [--sync-cmd '<cmd>'] [--ci-budget sanity=5,nightly=5] [--group-max 8] [--only-open] [--plan-only] [--worker <name> --arch wormhole|blackhole] [--unattended --run-name <name>] [extra constraints]
+argument-hint: <issue URL | owner/repo#N | /path/to/findings.json|.md> [--sync-cmd '<cmd>'] [--ci-budget sanity=5,nightly=5] [--group-max 8] [--only-open] [--plan-only] [--worker <name> --arch <arch>[,<arch>]] [--unattended --run-name <name>] [extra constraints]
 user_invocable: true
 ---
 
@@ -41,8 +41,9 @@ when it is not in a git repo — e.g. a mirror's pack-and-push script), `--ci-bu
 at all or `planned` by this skill — skip ones already filed upstream), `--unattended --run-name <name>` (set by
 `run_unattended.sh`: end the turn instead of sleeping when everything waits; write `DONE` at the end),
 `--plan-only` (triage + group every workable item, write the plan into the file, sync, stop — no fixes),
-`--worker <name> --arch wormhole|blackhole` (this session is one of several workers sharing the file, each
-on its own box: take groups by claim, serve the other worker's test legs — §0c).
+`--worker <name> --arch <arch>[,<arch>]` (this session is one of several workers sharing the file, each
+on its own box; `--arch` = the architectures this box can run, named as the harness names them —
+`wormhole`, `blackhole`, `quasar`, …: take groups by claim, serve the other workers' test legs — §0c).
 
 Conventions used below: `<me>` = `gh api user -q .login`; `$SKILL` =
 `tt_metal/tt-llk/.claude/skills/solve-master-issue` (scripts in `$SKILL/scripts/`) — if that path
@@ -147,8 +148,10 @@ step; the ledger holds the operational detail (run ids, counters) that the file 
 
 ## 0c. Several workers, one per box (optional)
 
-One run can be worked by several sessions on several machines — typically one Wormhole box and one
-Blackhole box — **without splitting PRs and without exceeding the CI budget**. Prerequisites, all
+One run can be worked by several sessions on several machines — one box per architecture, several
+boxes per architecture, a box with two kinds of card, any architecture the harness names (`wormhole`,
+`blackhole`, `quasar`, a future one) — **without splitting PRs and without exceeding the CI budget**.
+Nothing below is specific to two boxes or to those two names. Prerequisites, all
 verified in §0 step 1 on every box: `$MASTER_ISSUE_DIR` and the findings file on storage every box mounts
 (the run dir holds the claims and the leg requests; `mkdir` on it is the arbiter); a tt-metal checkout
 (built, if ttnn tests are expected) and the tt-llk harness (`sfpi`, `.venv`); `gh auth status` under the
@@ -157,19 +160,21 @@ that box (`~/.claude/skills/solve-master-issue` resolves there — a symlink int
 does not). The findings file's own sync (git or `--sync-cmd`) runs from whichever box marks; with one
 shared checkout that is just serialized; with per-box clones `sync` pulls with rebase first.
 
-**The unit of ownership is the group, never the arch.** A WH+BH defect stays one PR (§1b). The owner of a
-group does everything for it — worktree, fixes for every arch copy, issue, PR, reviews, CI — and borrows
-the other box's card for the legs it cannot run (below). Nothing about §4–§6 changes for a worker.
+**The unit of ownership is the group, never the arch.** A defect with copies on several architectures
+stays one PR (§1b). The owner of a group does everything for it — worktree, fixes for every arch copy,
+issue, PR, reviews, CI — and borrows another box's card for the legs it cannot run (below). Nothing about
+§4–§6 changes for a worker.
 
 **Phase 1 — plan once** (`--plan-only`, run by one session, before any worker starts; cheap, reading only):
 triage every workable item (§1), group them (§1b), then write the plan into the file and stop:
 ```bash
-$SKILL/scripts/findings.py mark <file> <key>... --state planned --group <g> --arch wormhole|blackhole|both|neutral
+$SKILL/scripts/findings.py mark <file> <key>... --state planned --group <g> --arch <arch>[,<arch>]|neutral
 $SKILL/scripts/findings.py sync <file> [--sync-cmd …]
 ```
-`--arch` is what the fix touches (`list` prints an `arch_guess` from the paths; `both` when the WH and BH
-copies are one group; `neutral` for host/ttnn code). Items already `in-progress`/`pr` keep their owner and
-are not re-planned. Write the plan summary (groups, arch counts) into `ledger-plan.md` in the run dir.
+`--arch` is what the fix touches — every architecture whose copy is in the group, comma-separated
+(`list` prints an `arch_guess` from the `tt_llk_<arch>` trees the sites live in); `neutral` for host/ttnn
+code. Items already `in-progress`/`pr` keep their owner and are not re-planned. Write the plan summary
+(groups, arch counts) into `ledger-plan.md` in the run dir.
 
 **Phase 2 — workers** (one driver per box, same `<run-name>`, different `--worker` names):
 ```bash
@@ -182,24 +187,27 @@ cross-worker state. A worker **takes groups by claim**, never by list order:
 $SKILL/scripts/findings.py next  <file> --owner <name> --arch <arch> --claims $MASTER_ISSUE_DIR/<run>/claims -n 3
 $SKILL/scripts/findings.py claim <file> <group> --owner <name> --claims $MASTER_ISSUE_DIR/<run>/claims   # exit 1 = TAKEN → next
 ```
-`next` orders the unclaimed planned groups: this box's arch first, then neutral, then WH+BH — and the two
-workers walk the neutral and WH+BH lists from opposite ends, so they rarely attempt the same group; when
-they do, the `mkdir` claim decides and the loser moves on. Groups needing only the *other* arch are left to
-that worker (`--take-other` overrides when it has nothing left). `claim` marks the group's items
+`next` orders the unclaimed planned groups: first those whose every architecture is on this box, then
+neutral ones, then groups where only some legs can run here (the rest go out as remote legs) — and inside
+each rank every worker walks a different, stable order (a hash of worker name and group), so n workers on
+one architecture rarely attempt the same group; when they do, the `mkdir` claim decides and the loser
+moves on. Groups needing none of this box's architectures are left to a box that has them
+(`--take-other` overrides when it has nothing left). `claim` marks the group's items
 `in-progress` with `--owner`; a claim you cannot start after all is `release`d. On resume, `reconcile`
 lists `in-progress` items with their owner: **a worker resumes only its own; the rest belong to the other
 box even if that box is silent** (it will resume them; if it is gone for good, the user reassigns by
 `release`).
 
-**Remote legs — the other box as the missing board.** When a group needs a fail-without / pass-with /
-perf leg on the arch this box lacks, do not go to CI silicon first:
+**Remote legs — another worker's box as the missing board.** When a group needs a fail-without /
+pass-with / perf leg on an arch this box lacks, do not go to CI silicon first:
 ```bash
 git push -u origin <branch>                                   # the serving box fetches it
 id=$($SKILL/scripts/legs.sh request --run-dir $MASTER_ISSUE_DIR/<run> --arch blackhole --label item42-without \
       --branch <branch> --sha <sha> --cmd '.venv/bin/python -m pytest -q python_tests/test_x.py -k case' [--cwd tt_metal/tt-llk/tests] [--timeout 1800])
 $SKILL/scripts/legs.sh wait --run-dir $MASTER_ISSUE_DIR/<run> $id        # exit = the leg's exit; prints the log path
 ```
-Branch mode runs in a detached worktree on the serving box (tt-llk pytest, gtest already built there);
+Any box whose serve loop runs for that arch may take the request (several boxes per arch share one
+queue). Branch mode runs in a detached worktree on the serving box (tt-llk pytest, gtest already built there);
 `--patch <diff>` mode applies a patch to that box's **built** checkout under its device lock and reverts it
 after — for ttnn tests that need a build. Probe arm = the same request on a `<me>/probe-<item>-shipped`
 branch, exactly as in §3. A leg is a wait like any other: file it, record the id in the pending table, arm
@@ -208,9 +216,9 @@ serving host and board and links the log in the run dir. **CI silicon (§3) rema
 worker serves that arch (`legs.sh status` shows the serve loop's last heartbeat) or the leg needs a SKU
 neither box has.
 
-**CI budget across boxes.** `ci_budget.sh` counts runs on GitHub per login, so both workers share one
-5 + 5 pool with no coordination. The gate is check-then-dispatch, so right after every dispatch run
-`ci_budget.sh --verify`: exit 1 means the other box dispatched in the same window and a lane is now over
+**CI budget across boxes.** `ci_budget.sh` counts runs on GitHub per login, so every worker shares one
+5 + 5 pool with no coordination, however many boxes there are. The gate is check-then-dispatch, so right
+after every dispatch run `ci_budget.sh --verify`: exit 1 means another box dispatched in the same window and a lane is now over
 its cap — cancel the run(s) you just dispatched (`gh run cancel <id>`) and put the PR back at the head of
 your ci-queue. The cap holds exactly; a few seconds of overshoot is the worst case.
 
@@ -285,7 +293,7 @@ Each item moves through: `triage → repro → fix → verify → PR → bot-rev
   on to the next item — triage, repro, fix, test, next PR. Queued PRs get their CI, in order and
   nearest-to-done first, as slots free up (§6). Probe/fix pairs, re-dispatches after a rebase, and
   rerun-failed-jobs calls all draw on the same budget.
-- **Remote board** (workers, §0c) — the other box's card, through `legs.sh`; one request per leg,
+- **Remote board** (workers, §0c) — another worker's card, through `legs.sh`; one request per leg,
   served in order under that box's device lock. Minutes, not the hour a CI probe pair costs.
 - **Thinking/reading** — unlimited; parallelize with subagents.
 
@@ -409,7 +417,7 @@ the ledger. A perf-motivated item uses `--goal improve`; everything else `--goal
 at the PR's merge-base, runs current then baseline back to back under the device lock, and judges):
 ```bash
 base=$(git -C <fix-wt> merge-base HEAD origin/main)
-$SKILL/scripts/perf_ab.sh <fix-wt> $base <wormhole|blackhole> <perf-module> $LEDGER_DIR/perf/<item>-<arch> \
+$SKILL/scripts/perf_ab.sh <fix-wt> $base <arch> <perf-module> $LEDGER_DIR/perf/<item>-<arch> \
     [-k '<pytest expr narrowing to the op>'] [--op <mathop substring>] [--primary-metric 'mean(MATH_ISOLATE)']
 ```
 `-k` narrows what runs (a full module is 10–40 min); `--op` narrows what is compared. Modules that

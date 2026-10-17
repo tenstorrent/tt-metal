@@ -1,7 +1,7 @@
 #!/bin/bash
-# usage: legs.sh request --run-dir D --arch wormhole|blackhole --label <short-name> (--branch <name> --sha <sha> | --patch <file>)
+# usage: legs.sh request --run-dir D --arch <arch> --label <short-name> (--branch <name> --sha <sha> | --patch <file>)
 #                        --cmd '<shell command>' [--cwd <dir in the repo, default tt_metal/tt-llk/tests>] [--timeout <s, 1800>] [--env K=V ...]
-#        legs.sh serve   --run-dir D --arch wormhole|blackhole --repo <tt-metal checkout on this box>
+#        legs.sh serve   --run-dir D --arch <arch> --repo <tt-metal checkout on this box>
 #                        [--worktree-root <dir, default parent of --repo>] [--once] [--interval <s, 30>]
 #        legs.sh wait    --run-dir D <request-id> [--timeout <s, 7200>]
 #        legs.sh status  --run-dir D [--interval <s, 30>]
@@ -15,9 +15,11 @@
 #     claimed.d/  claimed         a server took it: mkdir claimed.d is the atomic claim, `claimed` says host+pid
 #     leg.log                     stdout+stderr of the command (plus any refusal message)
 #     result.json                 written atomically when the leg is done: exit, head, log, revert_ok
-#   D/legs/serve-<arch>.log       one line per server event
-#   D/legs/serve-<arch>.alive     heartbeat, rewritten on every scan and every --interval during a leg:
-#                                 `<hostname> pid=<pid> <UTC time> busy=<request-id or ->`
+#   D/legs/serve-<arch>.log       one line per server event (all servers of that arch append)
+#   D/legs/serve-<arch>@<host>.alive  one heartbeat per server, rewritten on every scan and every --interval
+#                                 during a leg: `<arch> <hostname> pid=<pid> <UTC time> busy=<request-id or ->`
+# <arch> is any architecture name the harness takes (CHIP_ARCH: wormhole, blackhole, quasar, …). Several
+# servers for one arch (several boxes with that card) share the queue: the per-request mkdir claim picks one.
 #   D/STOP or D/legs/STOP-<arch>  asks the serve loop to exit after the current leg
 # The requester first pushes its branch to origin (branch mode: the server fetches origin/<branch> and
 # checks out <sha> in a disposable worktree <worktree-root>/wt-legs-<arch>, created from origin/main on
@@ -31,9 +33,9 @@
 # ${TT_DEVICE_LOCK:-/tmp/tt-device-<host>.lock}, after a `tt-smi -r 0` in the same lock hold (the reset
 # is skipped when TT_DEVICE_LOCK is set — that is the test harness). A request whose server died stays
 # "claimed" with no result: `rm -r claimed.d claimed` re-opens it. `legs.sh status` prints one line per
-# arch that has a heartbeat (`serve <arch>: <host> pid=<pid> last seen <N>s ago (busy=<id|->)`, marked
+# server that has a heartbeat (`serve <arch>: <host> pid=<pid> last seen <N>s ago (busy=<id|->)`, marked
 # STALE when older than 3 x --interval, default 90 s) and then one line per request.
-# One serve loop per arch per box is expected; start it detached and leave it running:
+# One serve loop per arch per box (a box with two kinds of card runs two); start it detached and leave it running:
 #   nohup setsid $SKILL/scripts/legs.sh serve --run-dir <D> --arch blackhole --repo /localdev/<user>/tt-metal > /dev/null 2>&1 &
 # Exit codes: request 0 (prints the id) · 2 bad args.   serve --once 0 served one · 3 nothing open · 2 bad args.
 #   wait exits with the leg's code: 0 pass · N fail · 124 command timed out (137 if it ignored TERM) ·
@@ -43,7 +45,7 @@ set -uo pipefail
 die() { echo "legs.sh: $*" >&2; exit 2; }
 now() { date -u +%FT%TZ; }
 log() { echo "$(now) $*" >> "$slog"; }
-beat() { echo "$(hostname) pid=$$ $(now) busy=${1:--}" > "$legs/serve-$arch.alive"; }
+beat() { echo "$arch $(hostname) pid=$$ $(now) busy=${1:--}" > "$legs/serve-$arch@$(hostname).alive"; }
 json_write() {  # json_write <path> k=<string> k:=<json> env+K=V ...   (temp file in the same dir, then rename)
     python3 -I - "$@" <<'PY'
 import json, os, sys, tempfile
@@ -82,7 +84,7 @@ cmd_request() {
         *) die "unknown arg $1";; esac; shift 2
     done
     [ -n "$D" ] && [ -n "$label" ] && [ -n "$cmd" ] || die "--run-dir, --label and --cmd are required"
-    case $arch in wormhole|blackhole) ;; *) die "--arch must be wormhole|blackhole";; esac
+    [[ $arch =~ ^[a-z][a-z0-9_]*$ ]] || die "--arch must be an architecture name (wormhole, blackhole, quasar, …)"
     [[ $label =~ ^[A-Za-z0-9._-]+$ ]] || die "--label: letters, digits, . _ - only"
     [[ $timeout =~ ^[0-9]+$ ]] || die "--timeout must be an integer (seconds)"
     for e in "${envs[@]}"; do [[ ${e#env+} =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "--env wants K=V, got '${e#env+}'"; done
@@ -190,7 +192,7 @@ cmd_serve() {
         *) die "unknown arg $1";; esac; shift 2
     done
     [ -n "$D" ] && [ -n "$repo" ] || die "--run-dir and --repo are required"
-    case $arch in wormhole|blackhole) ;; *) die "--arch must be wormhole|blackhole";; esac
+    [[ $arch =~ ^[a-z][a-z0-9_]*$ ]] || die "--arch must be an architecture name (wormhole, blackhole, quasar, …)"
     repo=$(readlink -f "$repo")
     git -C "$repo" rev-parse --show-toplevel > /dev/null 2>&1 || die "$repo is not a git checkout"
     wroot=${wroot:-$(dirname "$repo")}
@@ -248,13 +250,12 @@ from datetime import datetime, timezone
 def secs(iso):
     return int(time.time() - datetime.strptime(iso, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc).timestamp())
 for f in sorted(glob.glob(os.path.join(sys.argv[1], 'serve-*.alive'))):
-    arch = os.path.basename(f)[6:-6]
-    m = re.match(r'(\S+) pid=(\d+) (\S+) busy=(\S+)', open(f).read())
-    if not m: print(f'serve {arch}: unreadable heartbeat {f}'); continue
-    try: ago = secs(m[3])
-    except Exception: print(f'serve {arch}: unreadable heartbeat {f}'); continue
+    m = re.match(r'(\S+) (\S+) pid=(\d+) (\S+) busy=(\S+)', open(f).read())
+    if not m: print(f'serve ?: unreadable heartbeat {f}'); continue
+    try: ago = secs(m[4])
+    except Exception: print(f'serve {m[1]}: unreadable heartbeat {f}'); continue
     stale = ' STALE' if ago > 3 * int(sys.argv[2]) else ''
-    print(f'serve {arch}: {m[1]} pid={m[2]} last seen {ago}s ago{stale} (busy={m[4]})')
+    print(f'serve {m[1]}: {m[2]} pid={m[3]} last seen {ago}s ago{stale} (busy={m[5]})')
 def load(p):
     try: return json.load(open(p))
     except Exception: return None

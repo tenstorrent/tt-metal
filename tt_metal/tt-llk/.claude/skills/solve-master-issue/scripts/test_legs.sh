@@ -47,14 +47,14 @@ out=$("$legs" wait --run-dir "$D" "$id"); rc=$?
 [ "$rc" = 124 ]; check $? "timeout leg reports 124" "wait=$rc $out"
 
 # 4. heartbeat + status
-alive=$D/legs/serve-wormhole.alive
-grep -qE "^$(hostname) pid=[0-9]+ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z busy=-$" "$alive" 2>/dev/null; check $? "serve left a heartbeat" "$(cat "$alive" 2>/dev/null)"
+alive=$D/legs/serve-wormhole@$(hostname).alive
+grep -qE "^wormhole $(hostname) pid=[0-9]+ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z busy=-$" "$alive" 2>/dev/null; check $? "serve left a heartbeat" "$(cat "$alive" 2>/dev/null)"
 out=$("$legs" status --run-dir "$D")
 head -1 <<< "$out" | grep -qE "^serve wormhole: $(hostname) pid=[0-9]+ last seen [0-9]+s ago \(busy=-\)$"; check $? "status shows the wormhole server" "$(head -1 <<< "$out")"
 [ "$(grep -c ' done exit=' <<< "$out")" = 3 ] && [ "$(grep -vc '^serve ' <<< "$out")" = 3 ]; check $? "status lists 3 done requests" "$out"
-echo "otherbox pid=1 $(date -u -d '-10 minutes' +%FT%TZ) busy=-" > "$D/legs/serve-blackhole.alive"
+echo "blackhole otherbox pid=1 $(date -u -d '-10 minutes' +%FT%TZ) busy=-" > "$D/legs/serve-blackhole@otherbox.alive"
 "$legs" status --run-dir "$D" | grep -qE '^serve blackhole: otherbox pid=1 last seen [0-9]+s ago STALE \(busy=-\)$'; check $? "status marks a 10-minute-old heartbeat STALE"
-rm -f "$D/legs/serve-blackhole.alive"
+rm -f "$D/legs/serve-blackhole@otherbox.alive"
 
 # 5. refusals
 "${serve[@]}" > /dev/null 2>&1; [ $? = 3 ]; check $? "serve --once with nothing open exits 3"
@@ -66,7 +66,7 @@ id=$("$legs" request --run-dir "$D" --arch wormhole --label dirty --patch "$tmp/
 git -C "$repo" checkout -q README
 [ "$rc" = 96 ] && grep -q dirty "$D/legs/$id/leg.log"; check $? "dirty repo refuses a patch leg with 96" "wait=$rc $out"
 "$legs" request --run-dir "$D" --arch wormhole --label bad --cmd true > /dev/null 2>&1; [ $? = 2 ]; check $? "request without --branch/--sha or --patch exits 2"
-"$legs" request --run-dir "$D" --arch grayskull --label bad --branch b --sha s --cmd true > /dev/null 2>&1; [ $? = 2 ]; check $? "request with a bad arch exits 2"
+"$legs" request --run-dir "$D" --arch 'Not-An-Arch' --label bad --branch b --sha s --cmd true > /dev/null 2>&1; [ $? = 2 ]; check $? "request with a bad arch exits 2"
 "$legs" > /dev/null 2>&1; [ $? = 2 ]; check $? "no subcommand prints usage and exits 2"
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "SOME FAILED (artefacts in $tmp, kept)"; [ "$fail" = 0 ] || trap - EXIT

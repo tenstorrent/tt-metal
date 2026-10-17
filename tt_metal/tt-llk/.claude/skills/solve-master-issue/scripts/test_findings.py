@@ -1,5 +1,5 @@
 """Tests for findings.py's multi-worker pieces: planned state, groups, next ordering, atomic claims,
-the mkdir lock, and sync's pull-before-push. Run with:
+the mkdir lock, arbitrary architecture names, and sync's pull-before-push. Run with:
     pytest -c /dev/null --noconftest -p no:cacheprovider test_findings.py
 No device, no GitHub (reconcile is not exercised)."""
 
@@ -13,6 +13,13 @@ import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FP = os.path.join(HERE, "findings.py")
+A10 = "tt_metal/tt-llk/tt_llk_wormhole/common/inc/a.h:10"
+A12 = "tt_metal/tt-llk/tt_llk_blackhole/common/inc/a.h:12"
+B20 = "tt_metal/tt-llk/tt_llk_wormhole/llk_lib/b.h:20"
+C30 = "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/c.h:30"
+D40 = "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/d.h:40"
+E50 = "ttnn/cpp/ttnn/operations/e.cpp:50"
+F60 = "ttnn/cpp/ttnn/operations/f.cpp:60"
 
 
 def run(*args, check=True, env=None):
@@ -42,18 +49,14 @@ def rec(path, line, **kw):
 @pytest.fixture
 def ffile(tmp_path):
     recs = [
-        rec("/x/wt/tt_metal/tt-llk/tt_llk_wormhole/common/inc/a.h", 10),
+        rec("/x/wt/" + A10.rsplit(":", 1)[0], 10),
+        rec("/x/wt/" + A12.rsplit(":", 1)[0], 12, duplicate_of=A10),
+        rec("/x/wt/" + B20.rsplit(":", 1)[0], 20),
+        rec("/x/wt/" + C30.rsplit(":", 1)[0], 30),
+        rec("/x/wt/" + D40.rsplit(":", 1)[0], 40),
+        rec("/x/wt/" + E50.rsplit(":", 1)[0], 50),
         rec(
-            "/x/wt/tt_metal/tt-llk/tt_llk_blackhole/common/inc/a.h",
-            12,
-            duplicate_of="tt_metal/tt-llk/tt_llk_wormhole/common/inc/a.h:10",
-        ),
-        rec("/x/wt/tt_metal/tt-llk/tt_llk_wormhole/llk_lib/b.h", 20),
-        rec("/x/wt/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/c.h", 30),
-        rec("/x/wt/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/d.h", 40),
-        rec("/x/wt/ttnn/cpp/ttnn/operations/e.cpp", 50),
-        rec(
-            "/x/wt/ttnn/cpp/ttnn/operations/f.cpp",
+            "/x/wt/" + F60.rsplit(":", 1)[0],
             60,
             disposition={"state": "already_filed", "issue": "https://g/1"},
         ),
@@ -68,53 +71,55 @@ def listed(f, all_=False):
     return [json.loads(l) for l in out.splitlines() if l.strip()]
 
 
+def nxt(f, owner, arch, claims, *extra):
+    out = run(
+        "next",
+        f,
+        "--owner",
+        owner,
+        "--arch",
+        arch,
+        "--claims",
+        claims,
+        "-n",
+        "9",
+        *extra,
+    ).stdout
+    return [json.loads(l) for l in out.splitlines()]
+
+
 def test_list_arch_guess_and_workable(ffile):
     items = listed(ffile)
     keys = {i["key"]: i for i in items}
-    assert (
-        "ttnn/cpp/ttnn/operations/f.cpp:60" not in keys
-    )  # already_filed is not workable
+    assert F60 not in keys  # already_filed is not workable
     assert len(items) == 5  # the BH dup rides along, not listed on its own
-    a = keys["tt_metal/tt-llk/tt_llk_wormhole/common/inc/a.h:10"]
+    a = keys[A10]
     assert (
         a["arch_guess"] == "wormhole"
-    )  # dup paths are not in also_at; the plan sets --arch both
-    assert (
-        keys["tt_metal/tt-llk/tt_llk_blackhole/llk_lib/c.h:30"]["arch_guess"]
-        == "blackhole"
-    )
-    assert keys["ttnn/cpp/ttnn/operations/e.cpp:50"]["arch_guess"] == "neutral"
-    assert a["duplicates"] == ["tt_metal/tt-llk/tt_llk_blackhole/common/inc/a.h:12"]
+    )  # dup paths are not in also_at; the plan names both
+    assert keys[C30]["arch_guess"] == "blackhole"
+    assert keys[E50]["arch_guess"] == "neutral"
+    assert a["duplicates"] == [A12]
 
 
 def plan(f):
     run(
         "mark",
         f,
-        "tt_metal/tt-llk/tt_llk_wormhole/common/inc/a.h:10",
+        A10,
         "--state",
         "planned",
         "--group",
         "g-a",
         "--arch",
-        "both",
+        "wormhole,blackhole",
     )
+    run("mark", f, B20, "--state", "planned", "--group", "g-b", "--arch", "wormhole")
     run(
         "mark",
         f,
-        "tt_metal/tt-llk/tt_llk_wormhole/llk_lib/b.h:20",
-        "--state",
-        "planned",
-        "--group",
-        "g-b",
-        "--arch",
-        "wormhole",
-    )
-    run(
-        "mark",
-        f,
-        "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/c.h:30",
-        "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/d.h:40",
+        C30,
+        D40,
         "--state",
         "planned",
         "--group",
@@ -122,26 +127,18 @@ def plan(f):
         "--arch",
         "blackhole",
     )
-    run(
-        "mark",
-        f,
-        "ttnn/cpp/ttnn/operations/e.cpp:50",
-        "--state",
-        "planned",
-        "--group",
-        "g-e",
-        "--arch",
-        "neutral",
-    )
+    run("mark", f, E50, "--state", "planned", "--group", "g-e", "--arch", "neutral")
 
 
 def test_planned_items_stay_workable_and_dup_follows(ffile):
     plan(ffile)
     items = listed(ffile)
     assert len(items) == 5 and all(i["state"] == "planned" for i in items)
+    assert {i["key"]: i["arch"] for i in items}[
+        A10
+    ] == "blackhole,wormhole"  # canonical form
     # duplicates are never listed on their own (they ride along); check the file itself
-    recs = json.load(open(ffile))
-    dup = [r for r in recs if r.get("duplicate_of")][0]
+    dup = [r for r in json.load(open(ffile)) if r.get("duplicate_of")][0]
     assert (
         dup["disposition"]["state"] == "planned"
         and dup["disposition"]["group"] == "g-a"
@@ -156,64 +153,92 @@ def test_groups_and_next_order(ffile, tmp_path):
         for l in run("groups", ffile, "--claims", claims).stdout.splitlines()
     }
     assert set(groups) == {"g-a", "g-b", "g-cd", "g-e"}
-    assert groups["g-a"]["arch"] == "both" and groups["g-cd"]["arch"] == "blackhole"
-    assert sorted(groups["g-cd"]["items"]) == [
-        "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/c.h:30",
-        "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/d.h:40",
-    ]
-    wh = [
-        json.loads(l)["group"]
-        for l in run(
-            "next",
-            ffile,
-            "--owner",
-            "wh",
-            "--arch",
-            "wormhole",
-            "--claims",
-            claims,
-            "-n",
-            "9",
-        ).stdout.splitlines()
-    ]
-    bh = [
-        json.loads(l)["group"]
-        for l in run(
-            "next",
-            ffile,
-            "--owner",
-            "bh",
-            "--arch",
-            "blackhole",
-            "--claims",
-            claims,
-            "-n",
-            "9",
-        ).stdout.splitlines()
-    ]
+    assert (
+        groups["g-a"]["arch"] == "blackhole,wormhole"
+        and groups["g-cd"]["arch"] == "blackhole"
+    )
+    assert sorted(groups["g-cd"]["items"]) == [C30, D40]
+    wh = [g["group"] for g in nxt(ffile, "wh", "wormhole", claims)]
+    bh = [g["group"] for g in nxt(ffile, "bh", "blackhole", claims)]
     assert wh == [
         "g-b",
         "g-e",
         "g-a",
-    ]  # own arch, neutral, both; other-arch-only excluded
+    ]  # all-local, neutral, partly-local; nothing-local excluded
     assert bh == ["g-cd", "g-e", "g-a"]
-    both = [
-        json.loads(l)["group"]
-        for l in run(
-            "next",
-            ffile,
-            "--owner",
-            "bh",
-            "--arch",
-            "blackhole",
-            "--claims",
-            claims,
-            "-n",
-            "9",
-            "--take-other",
-        ).stdout.splitlines()
-    ]
+    both = [g["group"] for g in nxt(ffile, "bh", "blackhole", claims, "--take-other")]
     assert both[-1] == "g-b"
+    # a box with both cards sees the mixed group as fully local (rank 0)
+    dual = {
+        g["group"]: g["rank"] for g in nxt(ffile, "x", "wormhole,blackhole", claims)
+    }
+    assert dual == {"g-a": 0, "g-b": 0, "g-cd": 0, "g-e": 1}
+
+
+def test_any_architecture_and_many_workers(tmp_path):
+    # a third architecture is just another name; n workers on one arch spread over the same rank
+    recs = [
+        rec(f"/x/tt_metal/tt-llk/tt_llk_quasar/llk_lib/q{i}.h", i) for i in range(1, 7)
+    ]
+    recs += [rec("/x/tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/w.h", 9)]
+    p = tmp_path / "F.json"
+    p.write_text(json.dumps(recs, indent=1))
+    f = str(p)
+    items = {i["key"]: i for i in listed(f)}
+    assert (
+        items["tt_metal/tt-llk/tt_llk_quasar/llk_lib/q1.h:1"]["arch_guess"] == "quasar"
+    )
+    assert (
+        items["tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/w.h:9"]["arch_guess"]
+        == "wormhole"
+    )  # _b0 stripped
+    for i in range(1, 7):
+        run(
+            "mark",
+            f,
+            f"tt_metal/tt-llk/tt_llk_quasar/llk_lib/q{i}.h:{i}",
+            "--state",
+            "planned",
+            "--group",
+            f"q{i}",
+            "--arch",
+            "quasar",
+        )
+    run(
+        "mark",
+        f,
+        "tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/w.h:9",
+        "--state",
+        "planned",
+        "--group",
+        "w",
+        "--arch",
+        "wormhole",
+    )
+    claims = str(tmp_path / "claims")
+    orders = {}
+    for w in ("qsr-1", "qsr-2", "qsr-3"):
+        orders[w] = [g["group"] for g in nxt(f, w, "quasar", claims)]
+        assert sorted(orders[w]) == [
+            f"q{i}" for i in range(1, 7)
+        ]  # the wormhole group is not offered
+    assert (
+        len({tuple(o) for o in orders.values()}) == 3
+    )  # three workers, three different walk orders
+    assert orders["qsr-1"] == [
+        g["group"] for g in nxt(f, "qsr-1", "quasar", claims)
+    ]  # and stable
+    bad = run(
+        "mark",
+        f,
+        "tt_metal/tt-llk/tt_llk_quasar/llk_lib/q1.h:1",
+        "--state",
+        "planned",
+        "--arch",
+        "Quasar!",
+        check=False,
+    )
+    assert bad.returncode != 0
 
 
 def test_claim_is_exclusive_and_release_returns(ffile, tmp_path):
@@ -226,22 +251,12 @@ def test_claim_is_exclusive_and_release_returns(ffile, tmp_path):
     r2 = run("claim", ffile, "g-a", "--owner", "bh", "--claims", claims, check=False)
     assert r2.returncode == 1 and r2.stdout.startswith("TAKEN g-a by wh")
     allv = {i["key"]: i for i in listed(ffile, all_=True)}
-    a = allv["tt_metal/tt-llk/tt_llk_wormhole/common/inc/a.h:10"]
-    assert a["state"] == "in-progress" and a["owner"] == "wh"
+    assert allv[A10]["state"] == "in-progress" and allv[A10]["owner"] == "wh"
     # a claimed/started group is no longer offered
-    nxt = [
-        json.loads(l)["group"]
-        for l in run(
-            "next", ffile, "--owner", "bh", "--arch", "blackhole", "--claims", claims
-        ).stdout.splitlines()
-    ]
-    assert "g-a" not in nxt
+    assert "g-a" not in [g["group"] for g in nxt(ffile, "bh", "blackhole", claims)]
     run("release", ffile, "g-a", "--claims", claims)
     allv = {i["key"]: i for i in listed(ffile, all_=True)}
-    assert (
-        allv["tt_metal/tt-llk/tt_llk_wormhole/common/inc/a.h:10"]["state"] == "planned"
-    )
-    assert allv["tt_metal/tt-llk/tt_llk_wormhole/common/inc/a.h:10"]["owner"] is None
+    assert allv[A10]["state"] == "planned" and allv[A10]["owner"] is None
     assert not os.path.exists(os.path.join(claims, "g-a"))
     # and can be claimed again
     assert run(
@@ -293,16 +308,8 @@ def test_stale_lock_is_broken(ffile):
     lockd = ffile + ".lock.d"
     os.mkdir(lockd)
     open(os.path.join(lockd, "owner"), "w").write("dead-host pid=1\n")
-    old = 1  # epoch: ancient
-    os.utime(lockd, (old, old))
-    r = run(
-        "mark",
-        ffile,
-        "ttnn/cpp/ttnn/operations/e.cpp:50",
-        "--state",
-        "skipped",
-        env={"FINDINGS_LOCK_WAIT_S": "5"},
-    )
+    os.utime(lockd, (1, 1))  # epoch: ancient
+    r = run("mark", ffile, E50, "--state", "skipped", env={"FINDINGS_LOCK_WAIT_S": "5"})
     assert "breaking stale lock" in r.stderr
     assert not os.path.exists(lockd)
 
@@ -313,7 +320,7 @@ def test_live_lock_is_waited_for(ffile):
     r = run(
         "mark",
         ffile,
-        "ttnn/cpp/ttnn/operations/e.cpp:50",
+        E50,
         "--state",
         "skipped",
         check=False,
@@ -335,7 +342,9 @@ def test_sync_pulls_before_push(tmp_path):
 
     def clone(name):
         d = tmp_path / name
-        subprocess.run(["git", "clone", "-q", str(bare), str(d)], check=True)
+        subprocess.run(
+            ["git", "clone", "-q", str(bare), str(d)], check=True, capture_output=True
+        )
         git(str(d), "config", "user.email", "t@t")
         git(str(d), "config", "user.name", "t")
         return str(d)
@@ -355,14 +364,14 @@ def test_sync_pulls_before_push(tmp_path):
     assert "PUSH_OK" in run("sync", fb).stdout
     # box A marks record 8 on its stale copy; a plain push would be rejected — sync must rebase then push
     run("mark", f, "tt_metal/h.h:8", "--state", "planned", "--group", "g8")
-    out = run("sync", f).stdout
-    assert "PUSH_OK" in out
+    assert "PUSH_OK" in run("sync", f).stdout
     merged = {
         r["file"]: r.get("disposition", {}).get("group") for r in json.load(open(f))
     }
     assert (
         merged["tt_metal/a.h"] == "g1" and merged["tt_metal/h.h"] == "g8"
     )  # both marks survive
-    log = git(a, "log", "--oneline", "origin/main")
-    assert len(log.splitlines()) == 3  # init + B's + A's, linear
+    assert (
+        len(git(a, "log", "--oneline", "origin/main").splitlines()) == 3
+    )  # linear history
     assert "no changes" in run("sync", f).stdout
