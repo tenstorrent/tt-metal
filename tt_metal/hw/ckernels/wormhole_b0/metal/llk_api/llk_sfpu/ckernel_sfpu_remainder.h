@@ -210,21 +210,7 @@ inline void calculate_remainder() {
 
         if constexpr (INFINITE_DIVISOR) {
             // The host reciprocal of +-inf is 0, so v - quotient * s above is 0 * inf = NaN.
-            // remainder(val, +-inf) for finite val is val when val is zero or has the divisor's
-            // sign, else the divisor; an infinite or NaN val keeps the NaN. Same rule as the
-            // tensor-tensor kernel in ckernel_sfpu_binary_remainder.h.
-            v_if(sfpi::as<sfpi::vInt>(s) == kInfBits) {
-                sfpi::vInt val_magnitude_bits = sfpi::as<sfpi::vInt>(sfpi::setsgn(val, 0));
-                v_if(val_magnitude_bits < kInfBits) {
-                    v = val;
-                    v_if(val_magnitude_bits != 0 && (sfpi::as<sfpi::vInt>(val) ^ sfpi::as<sfpi::vInt>(value_tmp)) < 0) {
-                        v = value_tmp;
-                    }
-                    v_endif;
-                }
-                v_endif;
-            }
-            v_endif;
+            apply_remainder_inf_divisor(v, val, value_tmp, s);
         }
         sfpi::dst_reg[0] = v;
         sfpi::dst_reg++;
