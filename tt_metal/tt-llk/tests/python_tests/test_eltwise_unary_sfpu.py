@@ -13,6 +13,8 @@ from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
+    FACE_DIM,
+    FACES_PER_TILE,
     TILE_DIMENSIONS,
     UnarySFPUGolden,
     get_golden_generator,
@@ -501,6 +503,18 @@ def test_eltwise_unary_sfpu_edges(
     )
 
 
+def _assert_specials_reach_the_kernel(formats, dest_acc):
+    """The regression tests below feed non-finite probes through a format combination
+    specials_safe() says carries them. If that ever goes False the pipeline stopped
+    delivering the probe and the test's assertions would pass or fail for the wrong
+    reason -- fail loudly here instead."""
+    assert specials_safe(formats.input_format, formats.output_format, dest_acc), (
+        f"{formats.input_format.name} -> {formats.output_format.name} at "
+        f"dest_acc={dest_acc.name} no longer carries specials; re-derive the combination "
+        "this regression test runs on before editing it."
+    )
+
+
 # sqrt_custom(+/-inf): strict assertions on two named values, outside the edge sweep because
 # the sweep cannot distinguish the two NaNs it would have to. Float32 -> Float32 at dest_acc=Yes,
 # because a 16-bit output narrows NaN to inf and could not show a regression.
@@ -519,12 +533,7 @@ def test_sqrt_custom_infinity_regression(request):
     dest_acc = DestAccumulation.Yes
     input_dimensions = [32, 32]
 
-    # If this ever goes False the pipeline stopped delivering +inf and the assertion below
-    # would pass vacuously -- fail loudly instead of quietly testing nothing.
-    assert specials_safe(formats.input_format, formats.output_format, dest_acc), (
-        "Float32 -> Float32 at dest_acc=Yes no longer carries specials; re-derive the "
-        "combination this regression test runs on before editing it."
-    )
+    _assert_specials_reach_the_kernel(formats, dest_acc)
 
     num_elements = input_dimensions[0] * input_dimensions[1]
     # A finite control alongside the probe: if the guard is ever widened to pass everything
@@ -590,6 +599,114 @@ def test_sqrt_custom_infinity_regression(request):
         f"sqrt_custom(4.0) is no longer ~2.0 on the lanes around the probes "
         f"(max deviation {(res[2:] - 2.0).abs().max().item():.6g}); the non-finite guard's "
         "predicate has been widened to divert finite lanes."
+    )
+
+
+# expm1_cw_clamped's underflow clamp, sfpi::max(x, -87.0f), is an SFPSWAP total-order max:
+# it ranks a sign-set NaN (0xFFC00000, the default quiet NaN x86 produces for 0/0 and
+# inf-inf) below -87.0 and replaces it, so without a NaN guard a -NaN input came back
+# finite -- -alpha from ELU, -scale*alpha (about -1.758) from SELU, -1 from the Expm1Cw
+# wrapper -- while a +NaN input survived.
+# Outside the edge sweep because FLOAT_SPECIALS carries only the positive NaN. Float32 ->
+# Float32 at dest_acc=Yes, where the unpack-to-dest path hands the kernel the signed NaN and
+# a NaN result reaches L1 as a NaN; the sign of the NaN out is not asserted (SFPMAD leaves
+# it unspecified on Wormhole).
+#
+# Expm1Cw is the test-only wrapper that passes dst_reg[0] straight into the helper, so it
+# probes the clamp directly on both architectures; ELU and SELU also pass x through
+# untouched, and the three demonstrate the defect. CELU only shares the helper: it scales
+# its input first, so what reaches the clamp is an SFPMAD output -- on Wormhole it failed
+# the same way, but on Blackhole SFPMAD's canonical (positive) NaN survives the max unaided.
+# It is kept as a regression check on the shared helper, not as a demonstrating probe.
+#
+# The driver's own golden gate is what fails a regression: passed_test accepts a Float32
+# lane only if it is within tolerance or both sides are NaN, so a finite result on a lane
+# whose golden is NaN fails there (with its generic message) before this test's asserts run.
+# What they add is the check that the NaN probes reached the golden (so the gate above had
+# NaN lanes to judge), and a tighter band on the finite lanes than the op's tolerance.
+_NEGATIVE_NAN = struct.unpack("<f", struct.pack("<I", 0xFFC00000))[0]
+
+_EXPM1_CW_NAN_OPS = [
+    MathOperation.Elu,
+    MathOperation.Celu,
+    MathOperation.Selu,
+    MathOperation.Expm1Cw,
+]
+
+# Controls alongside the two NaN probes: -inf and -100.0 both land below the clamp and must
+# still be clamped (expm1 -> -1), so a guard widened to catch every non-finite shows up;
+# -2.0 and -0.5 are the ordinary negative arm; 1.5 is the positive arm. Every control but
+# 1.5 is negative on purpose: a lane with x >= 0 takes the pass-through in ELU/CELU/SELU, so
+# its result would not come from the helper and the allclose below would check nothing
+# there -- the 0.0 that StimuliSpec.custom would otherwise fill with is not equivalent.
+#
+# The list repeats through each face with an ODD period. One SFPLOAD reads one column
+# parity of four Dst rows, and sfpi's dst_reg++ steps the address by 2, so successive
+# iterations alternate even and odd columns; with the `#pragma GCC unroll 2` in
+# ELU/CELU/SELU every even-column pass runs in one copy of the inlined helper and every
+# odd-column pass in the other. An even period would pin each probe to one column parity,
+# hence to one copy, and a guard missing from the other copy would go unnoticed. An odd
+# period lands every probe on both parities, so both copies see all of them.
+_EXPM1_CW_NAN_PROBES = [
+    _NEGATIVE_NAN,
+    float("nan"),
+    float("-inf"),
+    -100.0,
+    -2.0,
+    -0.5,
+    1.5,
+]
+
+
+@pytest.mark.nightly
+@pytest.mark.parametrize("mathop", _EXPM1_CW_NAN_OPS, ids=lambda op: op.name)
+def test_expm1_cw_negative_nan_regression(mathop):
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 32]
+
+    _assert_specials_reach_the_kernel(formats, dest_acc)
+
+    # StimuliSpec.custom writes the same values at the head of every face, so one face's
+    # worth of the repeating probe list covers the tile; the period has to stay odd for
+    # both unrolled copies of the helper to see every probe (see _EXPM1_CW_NAN_PROBES).
+    assert len(_EXPM1_CW_NAN_PROBES) % 2 == 1, (
+        "the probe period must stay odd so both unrolled copies of the helper see every "
+        "probe; add or drop a control to keep it odd"
+    )
+    face_elements = FACE_DIM * FACE_DIM
+    values = [
+        _EXPM1_CW_NAN_PROBES[i % len(_EXPM1_CW_NAN_PROBES)]
+        for i in range(face_elements)
+    ]
+    res, golden = eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        input_dimensions,
+        spec_A=StimuliSpec.custom(values=values, seed=0),
+    )
+    golden = torch.as_tensor(golden, dtype=torch.float32)
+
+    # The NaN probes reached the golden (so the gate above had NaN lanes to judge): the
+    # count follows from the values written to each face, so a drift means the driver
+    # judged fewer NaN lanes than the stimulus promises.
+    nan_lanes = torch.isnan(golden)
+    expected_nan_lanes = sum(math.isnan(v) for v in values) * FACES_PER_TILE
+    assert nan_lanes.sum().item() == expected_nan_lanes, (
+        f"the golden returned NaN on {nan_lanes.sum().item()} lanes, expected "
+        f"{expected_nan_lanes} (the NaN lanes of the stimulus, every face)"
+    )
+    # Tolerance, not equality: the Cody-Waite expm1 is an approximation, so the band only has
+    # to separate the right arm from the wrong one (and -1 from a passed-through -inf).
+    assert torch.allclose(res[~nan_lanes], golden[~nan_lanes], rtol=1e-3, atol=1e-6), (
+        f"{mathop.name} finite/-inf lanes no longer match the golden "
+        f"(max deviation {(res[~nan_lanes] - golden[~nan_lanes]).abs().max().item():.6g}); "
+        "either the clamp stopped applying to -inf / below -87, or the NaN guard diverts "
+        "finite lanes."
     )
 
 
@@ -854,7 +971,6 @@ _RELU_MAX_THRESHOLDS = [6.0, 0.0, -1.0, -0.0]
 
 _FP32_MIN_SUBNORMAL = struct.unpack("<f", struct.pack("<I", 0x00000001))[0]
 _FP32_MAX_SUBNORMAL = struct.unpack("<f", struct.pack("<I", 0x007FFFFF))[0]
-_NEGATIVE_NAN = struct.unpack("<f", struct.pack("<I", 0xFFC00000))[0]
 
 
 def _relu_max_probe_spec(threshold, formats, dest_acc):
