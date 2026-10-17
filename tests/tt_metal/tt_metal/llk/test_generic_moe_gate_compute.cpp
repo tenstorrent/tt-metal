@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -29,7 +30,45 @@ float selection_score(std::uint32_t expert) {
                : first_top_score + static_cast<float>(expert - first_top_expert) * top_score_step;
 }
 
+// Compile-only program for the gate kernel; never launched. Mirrors the layout run_binary builds
+// (c_0 scores, c_1 bias, c_16 out) so only the Dest accumulation mode differs between cases.
+Program make_generic_moe_gate_compile_program(bool fp32_dest_acc_en) {
+    Program program = CreateProgram();
+    const CoreCoord core{0, 0};
+    const std::uint32_t tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16}) {
+        CreateCircularBuffer(
+            program,
+            core,
+            CircularBufferConfig(tile_bytes, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, tile_bytes));
+    }
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/generic_moe_gate_compute.cpp",
+        core,
+        ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            // num_tiles, selected, normalize, scores_include_bias
+            .compile_args = {1, 8, 0, 0}});
+    return program;
+}
+
 }  // namespace
+
+TEST_F(LLKBlackholeSingleCardFixture, GenericMoeGateRejectsFp32DestAcc) {
+    // Compile-time contract test; these programs are never launched. The SFPU top-k
+    // packs the expert id and score into the two 16-bit halves of one Dest word, so
+    // the gate only works with 16-bit Dest; fp32 Dest accumulation must not compile.
+    for (const bool fp32_dest_acc_en : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << "fp32_dest_acc_en=" << fp32_dest_acc_en);
+        auto program = make_generic_moe_gate_compile_program(fp32_dest_acc_en);
+        if (fp32_dest_acc_en) {
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+        } else {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+        }
+    }
+}
 
 TEST_F(LLKBlackholeSingleCardFixture, GenericMoeGateBiasedScorePayload) {
     constexpr float raw_score = 1.0f / 16;

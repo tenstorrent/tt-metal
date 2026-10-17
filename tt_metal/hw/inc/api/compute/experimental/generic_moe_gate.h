@@ -48,6 +48,14 @@ template <
     bool scores_include_bias = false>
 ALWI void generic_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale, uint32_t extra_scale = 0) {
     static_assert(num_selected_experts >= 1 && num_selected_experts <= 16);
+    // The SFPU top-k keeps the expert id in the LO16 and the score in the HI16 of one 16-bit Dst
+    // word (SFPLOAD/SFPSTORE LO16_ONLY/HI16_ONLY) and addresses tiles at the 16-bit row stride, so it
+    // only reads what the FPU copy-add wrote when Dst is in 16-bit mode. is_fp32_dest_acc_en is kept
+    // for source compatibility and is not forwarded to the top-k; reject it rather than compute garbage.
+    static_assert(
+        !is_fp32_dest_acc_en && !DST_ACCUM_MODE,
+        "generic_moe_gate: the SFPU top-k packs indices/scores into 16-bit Dst halves (LO16_ONLY/HI16_ONLY) and is "
+        "only correct with fp32_dest_acc_en=false");
 
     // Copy add (FPU)
     UNPACK((llk_unpack_AB(icb0, icb1, 0, 0)));
