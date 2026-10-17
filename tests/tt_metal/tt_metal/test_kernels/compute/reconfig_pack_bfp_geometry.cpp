@@ -14,22 +14,26 @@
 // payload (Float16_b, same tile shape as c_16) and is copied c_0 -> DST -> c_16 (Bfp8_b); the host decodes
 // c_16, so the packer's exponent-section geometry must match the CB's tile.
 //   default:               the packer starts configured for c_16 itself and pack_reconfig_data_format(c_16)
-//                          runs before the first pack: the unconditional reconfig must keep the geometry
-//                          hw_configure programmed for the same CB.
+//                          runs before the first pack: the unconditional reconfig must program the
+//                          exponent-section geometry of the CB's tile.
 //   PACK_RECONFIG_TWO_ARG: the packer starts configured for c_2 (never written; the same Bfp8_b format as
 //                          c_16 but a different face count) and pack_reconfig_data_format<true>(c_2, c_16)
 //                          switches it: the conditional reconfig must act on the geometry change even
 //                          though the formats match.
+//   PACK_NO_RECONFIG:      the packer is configured for c_16 by the hw startup only (control).
 void kernel_main() {
     constexpr std::uint32_t onetile = 1;
     const std::uint32_t num_tiles = get_compile_time_arg_val(0);
 
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb16(tt::CBIndex::c_16);
-#ifdef PACK_RECONFIG_TWO_ARG
+#if defined(PACK_RECONFIG_TWO_ARG)
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2);
     copy_init(tt::CBIndex::c_0);
-    pack_reconfig_data_format<true>(tt::CBIndex::c_2, tt::CBIndex::c_16);
+    pack_reconfig_data_format<true /*is_tile_dim_reconfig_en*/>(tt::CBIndex::c_2, tt::CBIndex::c_16);
+#elif defined(PACK_NO_RECONFIG)
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    copy_init(tt::CBIndex::c_0);
 #else
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     copy_init(tt::CBIndex::c_0);

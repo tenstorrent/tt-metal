@@ -157,8 +157,11 @@ inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output)
 /**
  * Reconfigure the packer for a new output operand's data format.
  *
- * Face count, tile column dimension, partial-face flag and tile size are derived from the new
- * output's CB metadata, as in llk_pack_hw_configure.
+ * Face count, tile column dimension and tile size are derived from the new output's CB metadata.
+ * The packer's partial-face flag follows the face height: faces shorter than FACE_R_DIM rows make a
+ * block-float tile carry one exponent chunk in total, full-height faces one chunk per face. The CB's
+ * own partial_face flag (tile height below the full tile) is not used here, since it is also set for
+ * a 16x32 tile whose two full-height faces need a chunk each.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  new_output          New output circular buffer / operand index to configure for.
@@ -168,7 +171,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const bool partial_face = get_output_partial_face(output_id);
+    const bool partial_face = get_output_face_r_dim(output_id) < FACE_R_DIM;
 
     SAN_HOOK(reconfigure(
         StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
@@ -189,9 +192,9 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
 
 /**
  * Conditionally reconfigure the packer when switching output operands: reprograms the packer when the
- * new output's data formats or tile geometry (face count, tile column dimension, partial-face flag)
- * differ from the old one's and neither destination format is Invalid. The geometry is compared
- * because the reconfig also programs the block-float exponent section size from it.
+ * new output's data formats or tile geometry (face height, face count, tile column dimension) differ
+ * from the old one's and neither destination format is Invalid. The geometry is compared because the
+ * reconfig also programs the block-float exponent section size from it.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  old_output          Currently configured output operand index.
@@ -205,9 +208,9 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
 
     const bool format_changed = (pack_dst_format[old_output_id] != pack_dst_format[new_output_id]) ||
                                 (pack_src_format[old_output_id] != pack_src_format[new_output_id]);
-    const bool geometry_changed = (get_output_num_faces(old_output_id) != get_output_num_faces(new_output_id)) ||
-                                  (get_output_tile_c_dim(old_output_id) != get_output_tile_c_dim(new_output_id)) ||
-                                  (get_output_partial_face(old_output_id) != get_output_partial_face(new_output_id));
+    const bool geometry_changed = (get_output_face_r_dim(old_output_id) != get_output_face_r_dim(new_output_id)) ||
+                                  (get_output_num_faces(old_output_id) != get_output_num_faces(new_output_id)) ||
+                                  (get_output_tile_c_dim(old_output_id) != get_output_tile_c_dim(new_output_id));
 
     if ((format_changed || geometry_changed) && (pack_dst_format[old_output_id] != (uint)DataFormat::Invalid) &&
         (pack_dst_format[new_output_id] != (uint)DataFormat::Invalid)) {
