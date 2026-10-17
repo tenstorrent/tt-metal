@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import torch
 
-from models.common.modules.lazy_weight import LazyWeight
+from models.common.lazy_weight import LazyWeight
 
 
 def substate(state: dict[str, torch.Tensor], key: str) -> dict[str, torch.Tensor]:

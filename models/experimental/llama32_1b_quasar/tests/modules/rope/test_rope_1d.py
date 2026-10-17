@@ -213,7 +213,7 @@ def _list_init_test_cases() -> list[pytest.param]:
         # Mistral (1x1) and Qwen2.5-72B (1x8) "none"/hd128 rows above; theta is the only differing
         # value and it does not change the code path, so no dedicated row is added here. Phi-4's RoPE
         # is exercised end-to-end (real rope, not this reference harness) by the attention-1d module
-        # test (models/common/tests/modules/attention/test_attention_1d.py, the "*-Phi-4" cases).
+        # test (tt-transformers tests/modules/attention/test_attention_1d.py, the "*-Phi-4" cases).
 
         # === Slow tests (remaining from CSV) ===
         # (1,1) batch=32
