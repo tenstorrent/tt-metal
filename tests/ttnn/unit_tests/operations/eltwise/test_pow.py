@@ -607,17 +607,22 @@ def test_binary_pow_fp32_overflow_to_inf(exponent, device):
 # The bf16-Dest pow kernel scales z = y*log2(x) by 2**23 with an exponent-field add
 # (SFPDIVP2), which wraps modulo 256 instead of saturating. For z >= 2**106 the biased
 # exponent (>= 233) wraps to a tiny value, the int32 overflow guard never fires, and the
-# result comes back as ~1.0 instead of +inf. 1e30 sits below the wrap point and is the
-# control; 1e32 and 1e38 wrap. Covers the unary (scalar y) and binary (tensor y) kernels,
-# which each carry their own copy of the scale.
-@pytest.mark.parametrize("exponent", [1e30, 1e32, 1e38])
+# result comes back as ~1.0 instead of +inf. |y| = 1e30 sits below the wrap point and is
+# the control; 1e32 and 1e38 wrap. z is huge and positive both for a base above 1 with a
+# positive y and for a base below 1 with a negative y; the unary kernel compiles those as
+# separate positive- and negative-exponent bodies, so both are covered. Covers the unary
+# (scalar y) and binary (tensor y) kernels, which each carry their own copy of the scale.
+@pytest.mark.parametrize(
+    "base, exponent",
+    [(2.0, 1e30), (2.0, 1e32), (2.0, 1e38), (0.5, -1e30), (0.5, -1e32), (0.5, -1e38)],
+)
 @pytest.mark.parametrize("binary", [True, False], ids=["binary", "unary"])
-def test_pow_bf16_huge_exponent_saturates_to_inf(exponent, binary, device):
-    base = torch.full((32, 32), 2.0, dtype=torch.bfloat16)
-    golden = torch.pow(base, exponent)
+def test_pow_bf16_huge_exponent_saturates_to_inf(base, exponent, binary, device):
+    base_t = torch.full((32, 32), base, dtype=torch.bfloat16)
+    golden = torch.pow(base_t, exponent)
     assert torch.isinf(golden).all()  # sanity: this exponent really overflows
 
-    tt_base = ttnn.from_torch(base, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_base = ttnn.from_torch(base_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     if binary:
         exp = torch.full((32, 32), exponent, dtype=torch.bfloat16)
         tt_exp = ttnn.from_torch(exp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -625,7 +630,7 @@ def test_pow_bf16_huge_exponent_saturates_to_inf(exponent, binary, device):
     else:
         result = ttnn.to_torch(ttnn.pow(tt_base, exponent))
 
-    assert torch.isinf(result).all(), f"pow(2, {exponent:g}) gave {result.unique().tolist()} instead of +inf"
+    assert torch.isinf(result).all(), f"pow({base:g}, {exponent:g}) gave {result.unique().tolist()} instead of +inf"
     assert (result > 0).all(), "overflow produced -inf/NaN instead of +inf"
 
 

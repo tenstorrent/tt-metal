@@ -366,9 +366,10 @@ def test_softcap_op(device, beta):
 
 # rpow evaluates exponent ** x as exp2(x * log2(exponent)) on the bf16 pow kernel, which
 # scales that argument by 2**23 with an exponent-field add. That add used to wrap modulo
-# 256 for |x * log2(exponent)| >= 2**106 and returned 1.0 instead of +inf, so those lanes
-# were masked out of the assertions below. The kernel now clamps the argument before the
-# scale, and every lane of the exhaustive sweep is asserted; the lanes above 2**106 are
+# 256 for x * log2(exponent) >= 2**106 and returned 1.0 instead of +inf (a large negative
+# argument is clamped to -127 before the scale and always came out as 0), so those lanes
+# were masked out of the assertions below. The kernel now clamps the argument from above
+# as well, and every lane of the exhaustive sweep is asserted; the lanes above 2**106 are
 # the regression coverage for that clamp.
 
 
