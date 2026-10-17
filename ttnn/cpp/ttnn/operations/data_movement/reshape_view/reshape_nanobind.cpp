@@ -50,7 +50,7 @@ void bind_reshape_view_operation(nb::module_& mod) {
                 * :attr:`sub_core_grids` (CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
                 * :attr:`skip_padding_fill` (bool): If False, ``pad_value`` is applied to tile padding lanes. If True, ``pad_value`` is ignored and tile padding is left as-is. Default is False. Note: this option is silently ignored for ``BFLOAT8_B`` outputs because the BF8 typecast computes a shared exponent across each 16-element sub-block, and unfilled padding would corrupt logical values in straddling sub-blocks; the fill always runs in that case.
 
-            Note: ``UINT16`` TILE input is supported only when the codegen tile-rows path applies: both the input and output last dims are multiples of 32 and input and output are interleaved. ``reshape_tile_mode`` is ignored on that path.
+            Note: ``UINT16`` TILE input is supported only on the codegen path: input and output interleaved in DRAM or L1, with tiles padded only in the last two dims, and only when one of its TILE programs fits L1; otherwise the call fails. ``reshape_tile_mode`` is ignored on that path.
 
 
             Returns:

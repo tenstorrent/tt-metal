@@ -5,10 +5,12 @@
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_plan.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <limits>
 #include <numeric>
 
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_align.hpp>
@@ -26,6 +28,8 @@ constexpr uint32_t kMaxSlabBytes = 4096;
 constexpr uint32_t kMaxSlabBatch = 8;
 // A CB's received and acked page counters are 16 bits, so program creation rejects a CB of more pages.
 constexpr uint64_t kMaxCbPages = std::numeric_limits<uint16_t>::max();
+// Write batches the LCM writer tries, largest first; it drains one batch per barrier.
+constexpr std::array<uint32_t, 4> kLcmWriteBatches = {8, 4, 2, 1};
 
 // Program creation starts every CB at a DRAM-aligned address, so a CB takes its size rounded up to that alignment.
 uint64_t cb_footprint(uint64_t bytes) { return tt::round_up(bytes, tt::tt_metal::hal::get_dram_alignment()); }
@@ -40,6 +44,15 @@ uint64_t volume_before_last(const ttnn::Shape& shape) {
         volume *= shape[i];
     }
     return volume;
+}
+
+uint64_t live_free_l1(const Tensor& input, uint64_t reserved_l1_bytes) {
+    const uint64_t max_l1 = get_max_l1_space(input);
+    return max_l1 > reserved_l1_bytes ? max_l1 - reserved_l1_bytes : 0;
+}
+
+uint32_t tile_bytes_of(const Tensor& input) {
+    return input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
 }
 
 }  // namespace
@@ -127,15 +140,124 @@ std::optional<TileRowsChoice> live_tile_rows_choice(
     const ttnn::Shape& logical_output_shape,
     const TileRowsChoice& planned,
     uint64_t reserved_l1_bytes) {
-    const uint32_t tile_bytes =
-        input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
-    const uint64_t max_l1 = get_max_l1_space(input);
-    const uint64_t free_l1 = max_l1 > reserved_l1_bytes ? max_l1 - reserved_l1_bytes : 0;
+    const uint32_t tile_bytes = tile_bytes_of(input);
+    const uint64_t free_l1 = live_free_l1(input, reserved_l1_bytes);
     const auto fits = [&](const TileRowsChoice& choice) { return tile_rows_l1_bytes(choice, tile_bytes) <= free_l1; };
     if (fits(planned)) {
         return planned;
     }
     return plan_tile_rows_fitting(input.logical_shape(), logical_output_shape, fits);
+}
+
+bool lcm_bit_exact(tt::tt_metal::DataType dtype) {
+    using tt::tt_metal::DataType;
+    return dtype == DataType::FLOAT32 || dtype == DataType::INT32 || dtype == DataType::UINT32;
+}
+
+std::optional<TilePlan> tile_geometry(
+    const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t out_aligned_page, uint32_t grid_cores) {
+    const auto& in_shape = input.logical_shape();
+    if (in_shape.rank() < 2 || logical_output_shape.rank() < 2) {
+        return std::nullopt;
+    }
+    constexpr uint32_t tile_h = tt::constants::TILE_HEIGHT;
+    constexpr uint32_t tile_w = tt::constants::TILE_WIDTH;
+    const uint32_t w_in = in_shape[-1];
+    const uint32_t w_out = logical_output_shape[-1];
+    // The compute engine re-tilizes the input's tile stream as it is, padding included, so only unpadded tensors keep
+    // the output's padding zero. With no padding the two streams hold the same datums in the same order.
+    if (w_in == w_out || w_in % tile_w != 0 || w_out % tile_w != 0 || in_shape[-2] % tile_h != 0 ||
+        logical_output_shape[-2] % tile_h != 0) {
+        return std::nullopt;
+    }
+
+    TilePlan plan;
+    plan.wt_in = w_in / tile_w;
+    plan.wt_out = w_out / tile_w;
+    const uint32_t lcm_w = std::lcm(w_in, w_out);
+    const uint64_t ht_in = volume_before_last(in_shape) / tile_h;
+    plan.in_rows = lcm_w / w_in;
+    plan.out_rows = lcm_w / w_out;
+    if (ht_in == 0 || ht_in % plan.in_rows != 0) {
+        return std::nullopt;
+    }
+    plan.total_chunks = static_cast<uint32_t>(ht_in / plan.in_rows);
+    plan.in_tiles = plan.in_rows * plan.wt_in;
+    plan.out_tiles = plan.out_rows * plan.wt_out;
+    plan.tile_bytes = tile_bytes_of(input);
+    plan.out_page_bytes = out_aligned_page;
+    plan.split = count_units(grid_cores, plan.total_chunks);
+    return plan;
+}
+
+std::optional<TilePlan> fit_tile(TilePlan plan, uint64_t l1_budget) {
+    // The in and mid CBs hold a whole chunk. The out CB must take what the two kernels move without wrapping: compute
+    // tilizes Wt_out tiles in one write and the writer reads a batch from one offset, so its depth is a multiple of
+    // both. The batched writer holds one batch while it waits for the next, so compute still needs Wt_out free slots
+    // while fewer than two batches are pushed: depth >= 2 * batch + Wt_out - 1. The unbatched writer waits only on an
+    // empty CB. Each batch offers two depths, a whole chunk's output and its minimum, so small moves of the L1
+    // frontier keep the same program and its cache key.
+    const uint64_t chunk_bytes = 2 * cb_footprint(static_cast<uint64_t>(plan.in_tiles) * plan.tile_bytes);
+    for (const uint32_t batch : kLcmWriteBatches) {
+        const uint64_t unit = std::lcm(plan.wt_out, batch);
+        const uint64_t needed = batch == 1 ? plan.wt_out : 2ull * batch + plan.wt_out - 1;
+        for (const uint64_t depth :
+             {tt::round_up(std::max<uint64_t>(plan.out_tiles, needed), unit), tt::round_up(needed, unit)}) {
+            const uint64_t bytes = chunk_bytes + cb_footprint(depth * plan.tile_bytes);
+            if (bytes <= l1_budget) {
+                plan.out_cb_depth = static_cast<uint32_t>(depth);
+                plan.write_batch = batch;
+                plan.l1_bytes = bytes;
+                return plan;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<TileMappedChoice> fit_tile_mapped(
+    const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t grid_cores, uint64_t l1_budget) {
+    const uint32_t tile_bytes = tile_bytes_of(input);
+    const auto layout = tile_mapped_layout(
+        input.logical_shape(),
+        logical_output_shape,
+        static_cast<uint32_t>(input.element_size()),
+        tile_bytes,
+        grid_cores,
+        l1_budget);
+    if (!layout.has_value()) {
+        return std::nullopt;
+    }
+    return TileMappedChoice{.layout = *layout, .input_depth = tile_mapped_input_depth(*layout, tile_bytes, l1_budget)};
+}
+
+std::optional<TileChoice> live_tile_choice(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    uint32_t grid_cores,
+    const LaunchPlan& planned,
+    uint64_t reserved_l1_bytes) {
+    switch (planned.tile_route) {
+        case TileRoute::TileRows:
+            if (auto rows = live_tile_rows_choice(input, logical_output_shape, planned.tile_rows, reserved_l1_bytes)) {
+                return TileChoice{std::move(*rows)};
+            }
+            return std::nullopt;
+        case TileRoute::Lcm:
+            if (planned.lcm.has_value()) {
+                if (auto lcm = fit_tile(*planned.lcm, live_free_l1(input, reserved_l1_bytes))) {
+                    return TileChoice{std::move(*lcm)};
+                }
+            }
+            return std::nullopt;
+        case TileRoute::TileMapped:
+            if (auto mapped =
+                    fit_tile_mapped(input, logical_output_shape, grid_cores, live_free_l1(input, reserved_l1_bytes))) {
+                return TileChoice{std::move(*mapped)};
+            }
+            return std::nullopt;
+    }
+    return std::nullopt;
 }
 
 std::optional<RmPlan> rm_geometry(
@@ -308,8 +430,7 @@ std::optional<RmChoice> live_rm_choice(
     uint32_t grid_cores,
     const LaunchPlan& planned,
     uint64_t reserved_l1_bytes) {
-    const uint64_t max_l1 = get_max_l1_space(input);
-    const uint64_t free_l1 = max_l1 > reserved_l1_bytes ? max_l1 - reserved_l1_bytes : 0;
+    const uint64_t free_l1 = live_free_l1(input, reserved_l1_bytes);
     if (planned.rm.has_value()) {
         if (auto stick = fit_rm(*planned.rm, free_l1)) {
             return RmChoice{std::move(*stick)};
