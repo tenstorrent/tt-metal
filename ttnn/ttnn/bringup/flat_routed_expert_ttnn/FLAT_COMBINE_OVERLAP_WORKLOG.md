@@ -1005,3 +1005,8 @@ Tensix-reader gate/up path (the "push" there is the readers' forwarding, not the
 nothing. Moving the down weights onto the DRISCs is out regardless: the gate/up forwarding alone (no DRAM reads)
 already needs ~1990 us for 694 MB (~350 GB/s), the down weights' 347 MB more would make it ~2980. What is left is the
 DRAM efficiency of the full read mix: 1059 MB at ~446 GB/s (87%) vs the gate/up reads alone at 93%.
+
+### K3 experts + combine: the combine tail (2026-10-17; details in FLAT_EXPERT_WORKLOG.md)
+Inside the block trace the fused program's flat cores end at ~2305-2340 us and the program at ~2440 (profiled): the
+combine runs ~110-120 us alone after the experts every call. tt-npe on a K3-like trace: no NoC congestion (impact 0%,
+links avg 8%), DRAM ~87% in steady state.

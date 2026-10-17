@@ -774,3 +774,24 @@ The defaults are right for K3: bank rotation of the down weights is worth ~190 u
 comment in the plan: 55% -> 65% alone); ring depth and pinning ratio change nothing or hurt. With the knobs exhausted
 the remaining ~13% (2375 vs ~2070 at 512 GB/s) needs a DRAM / NoC trace of the mix (tt-npe or the device NoC tracer)
 or a fixed MIMO_FL_NO_MATH for a clean traffic-only time.
+
+### K3 routed experts + combine under tt-npe and the per-core profiler (2026-10-17)
+NoC trace (python -m tracy -r -p --collect-noc-traces on scratch_flat_combine_rf.py, FC_EPC 12 FC_S 64 (~85 tokens /
+expert, K3-like), X1, TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT 4000; tt-npe kept off PYTHONPATH during collection - its
+automatic all-trace analysis exhausted host memory on the first try - then run by hand on one program / chip):
+complete (238 MB of DRAM reads vs ~230 expected; max 3963 events / RISC; se9_rdown's reads are present now).
+- tt-npe (P150 model, the run's soc descriptor): estimate 1.06 M cycles = 786 us vs 788 traced; congestion impact 0%,
+  link util avg 8% / max 35% (demand bursts to 170% cost nothing), DRAM util 70% over the whole span. Not NoC bound.
+- DRAM read rate in 20 us bins: ~400-500 GB/s (avg ~445, 87%) in steady state, then a drain: last gate/up read at 553
+  us, down 587, x 615, kernels p50 595 / p90 782, end 788. Traffic: gate/up 54 KB reads (BRISC), down 9 KB (NCRISC),
+  x 1 KB; each bank serves ~29 MB through one NoC endpoint and ~1 MB through the other. Down reads moved to the other
+  endpoint (MIMO_FL_DN_NOC0=1): worse (experts 2452 vs 2372, block 3792 vs 3649 - NOC1 DRAM reads are slower here).
+Full size, per-core kernel end times (device profiler), chip 0:
+| program | cores | bulk end (p50-p75) | last core |
+| flat alone (standalone, per-call sync) | 94 | 2386-2400 | 2407-2411 |
+| combine alone | 21 | 921-929 | 935-943 |
+| fused (standalone, per-call sync) | 115 | 2480-2500 | 2628-2685 |
+| fused, inside the K3 block trace (profiled) | 115 | 2305-2340 | ~2440 |
+So the fused program = the flat cores (slowed ~4% by the combine's traffic) + ~110-120 us of combine running alone
+after the experts (the last experts' rows: fabric hops, home accumulate, final writes). The drain is ~1/3 of the gap to
+the DRAM floor; the rest is the steady-state DRAM efficiency (87%).
