@@ -184,6 +184,17 @@ DEVICE_STEPS = {
         "indexer",
         "attention",
     },
+    # attn_hc .. kv passed C.dec_reuse.* (and S.dec_reuse.01-05) on the swa modules (DS41-28); the attention is
+    # tt/sparse_attention.py as a reader at ratio 1: layer 20's served 3_compress_kv_r1 and its device top-k (the
+    # index source's, kept by its indexer in _HybridState.topk); writes its own 0_window_kv
+    "dec_reuse": {
+        "attn_hc",
+        "attn_collapse",
+        "attn_norm",
+        "q_a",
+        "kv",
+        "attention",
+    },
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcMixes): packed boundary [S, 4H + 4] (or streams [S, 4H]) in -> [S, 24].
