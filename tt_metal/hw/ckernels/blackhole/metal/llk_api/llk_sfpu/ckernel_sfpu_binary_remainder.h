@@ -230,7 +230,7 @@ sfpi_inline void correct_sign_to_divisor(sfpi::vFloat& result, const sfpi::vFloa
 // kInfBits. b_abs is |b|, passed in so a loop-invariant divisor magnitude stays hoisted.
 sfpi_inline void apply_remainder_inf_divisor(
     sfpi::vFloat& result, const sfpi::vFloat& a, const sfpi::vFloat& b, const sfpi::vFloat& b_abs) {
-    sfpi::vInt a_magnitude_bits = sfpi::as<sfpi::vInt>(sfpi::setsgn(a, 0));
+    sfpi::vInt a_magnitude_bits = sfpi::as<sfpi::vInt>(sfpi::setsgn(a, 0 /* sgn */));
     v_if(sfpi::as<sfpi::vInt>(b_abs) == kInfBits && a_magnitude_bits < kInfBits) {
         result = a;
         // Last statement of the block: narrow the lanes instead of nesting another v_if.
@@ -246,7 +246,7 @@ sfpi_inline void apply_remainder_inf_divisor(
 sfpi_inline void apply_fmod_inf_divisor(sfpi::vFloat& result, const sfpi::vFloat& a, const sfpi::vFloat& b_abs) {
     v_if(sfpi::as<sfpi::vInt>(b_abs) == kInfBits) {
         result = a;
-        v_and(sfpi::as<sfpi::vInt>(sfpi::setsgn(a, 0)) >= kInfBits);
+        v_and(sfpi::as<sfpi::vInt>(sfpi::setsgn(a, 0 /* sgn */)) >= kInfBits);
         result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN());
     }
     v_endif;
