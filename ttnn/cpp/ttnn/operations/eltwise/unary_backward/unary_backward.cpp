@@ -1721,57 +1721,19 @@ std::vector<Tensor> prod_bw(
     }
 
     // all_dimensions = False
-    Tensor updated_grad = prod_result;
-    auto step = ttsl::SmallVector<std::uint32_t>({1, 1, 1, 1});
-    if (prod_result.logical_shape() != grad.padded_shape()) {
-        if (*dim == 3 || *dim == -1) {
-            ttsl::SmallVector<std::int64_t> after_permute_dims = {0, 3, 1, 2};
-            Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
-            ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
-            ttsl::SmallVector<std::uint32_t> end_index = {
-                grad.padded_shape()[0], 1, grad.padded_shape()[1], grad.padded_shape()[2]};
-            Tensor new_slice_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
-            after_permute_dims = {0, 2, 3, 1};
-            updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
-            if (updated_grad.storage_type() != StorageType::DEVICE) {
-                Tensor pad_updated_grad = updated_grad.pad_to_tile(1.0f);
-                pad_updated_grad = pad_updated_grad.to_layout(Layout::TILE);
-                updated_grad = pad_updated_grad.to_device(input.device());
-            }
-        } else if (*dim == 2 || *dim == -2) {
-            ttsl::SmallVector<std::int64_t> after_permute_dims = {0, 2, 1, 3};
-            Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
-            ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
-            ttsl::SmallVector<std::uint32_t> end_index = {
-                grad.padded_shape()[0], 1, grad.padded_shape()[1], grad.padded_shape()[3]};
-            Tensor new_slice_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
-            updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
-            if (updated_grad.layout() == Layout::ROW_MAJOR) {
-                updated_grad =
-                    ttnn::operations::unary_backward::change_layout_to_tile(updated_grad, output_memory_config);
-            }
-        }
-    }
     Tensor reciprocal_input = ttnn::reciprocal(input, output_memory_config);
-    Tensor temp = ttnn::multiply(
-        prod_result,
-        (*dim == 1 || *dim == 0 || *dim == -4 || *dim == -3) ? grad : updated_grad,
-        std::nullopt,
-        output_memory_config);
+    if (*dim == 3 || *dim == -1 || *dim == 2 || *dim == -2) {
+        // grad_input = prod(x) * grad / x, with prod(x) and grad (both keepdim) broadcast along the reduced dim.
+        // binary_ng broadcasts by logical shape, so this also holds when the shape is not tile aligned; the
+        // previous permute / slice / bcast path used padded bounds and mixed padding into the result (#53284).
+        Tensor temp = ttnn::multiply(prod_result, grad, std::nullopt, output_memory_config);
+        grad_tensor.emplace_back(ttnn::multiply(reciprocal_input, temp, std::nullopt, output_memory_config));
+        return grad_tensor;
+    }
+    auto step = ttsl::SmallVector<std::uint32_t>({1, 1, 1, 1});
+    Tensor temp = ttnn::multiply(prod_result, grad, std::nullopt, output_memory_config);
     if (temp.layout() == Layout::ROW_MAJOR) {
         temp = ttnn::operations::unary_backward::change_layout_to_tile(temp, output_memory_config);
-    }
-    if (*dim == 3 || *dim == -1) {
-        Tensor grad_result =
-            ttnn::bcast(reciprocal_input, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config);
-        grad_tensor.emplace_back(grad_result);
-        return grad_tensor;
-    }
-    if (*dim == 2 || *dim == -2) {
-        Tensor grad_result =
-            ttnn::bcast(reciprocal_input, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H, output_memory_config);
-        grad_tensor.emplace_back(grad_result);
-        return grad_tensor;
     }
     if (*dim == 1 || *dim == -3) {
         Tensor tensor_1_temp = reciprocal_input;
