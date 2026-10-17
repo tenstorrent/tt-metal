@@ -402,21 +402,20 @@ void generate_sliding_window_mask(uint32_t Sk_chunk_t, uint32_t window_start) {
                     q_write_ptr_base,
                     window_start_in_chunk_t + 1,
                     i);  // copy from cb_mask_in[cur_pos_in_chunk_t+1] to cb_mask_in[i]
-                if (i == Sk_chunk_t - 1) {
-                    noc.async_read_barrier();
-                }
             }
         }
 
-        // Copy to all heads
-        for (uint32_t j = 1; j < PNHt; ++j) {
-            copy_tile<tile_bytes>(noc, q_write_ptr_base, q_write_ptr_base, i, j * Sk_chunk_t + i);
-            if (j == PNHt - 1) {
-                noc.async_read_barrier();
+        // Copy tile i to the other heads, once its own copy above has landed.
+        if constexpr (PNHt > 1) {
+            noc.async_read_barrier();
+            for (uint32_t j = 1; j < PNHt; ++j) {
+                copy_tile<tile_bytes>(noc, q_write_ptr_base, q_write_ptr_base, i, j * Sk_chunk_t + i);
             }
         }
     }
 
+    // copy_tile is an async NoC read: wait for all of them before compute reads the mask.
+    noc.async_read_barrier();
     cb_mask.push_back(total_read_tiles);
 }
 
