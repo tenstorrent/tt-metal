@@ -128,7 +128,9 @@ class _SdpaCustomMMStimuli(StimuliConfig):
                M x FACE_C_DIM, contiguous (identical layout to compressed_utils' packed_a).
     """
 
-    def __init__(self, kt, ct, packed_in1, packed_in0, mask=None):
+    def __init__(self, kt, ct, packed_in1, packed_in0, mask=None, passes=None):
+        if passes is None:
+            passes = 2 if mask is not None else 1
         super().__init__(
             buffer_A=torch.zeros(
                 1, dtype=torch.float32
@@ -139,7 +141,7 @@ class _SdpaCustomMMStimuli(StimuliConfig):
             stimuli_B_format=DataFormat.Float16_b,
             tile_count_B=kt,
             stimuli_res_format=DataFormat.Float16_b,
-            tile_count_res=ct * (2 if mask is not None else 1),
+            tile_count_res=ct * passes,
         )
         if mask is not None:
             # One linear mask row: SrcB row i supplies the i-th 16-column face.
@@ -400,15 +402,22 @@ class SDPA_MASK_REENTRY(TemplateParameter):
     configure_mask_extent : the unpack LLK's template knob. True programs the SrcB extent
                             for the mask explicitly; False is the default every model caller
                             uses.
+    mask_passes           : number of leading masked passes before the unmasked one.
+    pack_clear_dest       : clear DEST on pack release. False keeps the previous section's
+                            contents, as the fused SDPA kernel does between chunks.
     """
 
     configure_mask_extent: bool = True
+    mask_passes: int = 1
+    pack_clear_dest: bool = True
 
     def convert_to_cpp(self):
         return "\n".join(
             [
                 "#define SDPA_MASK_REENTRY true",
                 f"#define SDPA_CONFIGURE_MASK_EXTENT {str(self.configure_mask_extent).lower()}",
+                f"#define SDPA_MASK_PASSES {self.mask_passes}",
+                f"#define SDPA_PACK_CLEAR_DEST {str(self.pack_clear_dest).lower()}",
             ]
         )
 
@@ -424,9 +433,13 @@ def _run_masked_then_unmasked(
     row_stride=None,
     input_tile_offset=0,
     configure_mask_extent=True,
+    mask_passes=1,
+    dst_index=0,
+    pack_clear_dest=True,
 ):
-    """Run a masked pass then an unmasked pass; return the (2, M, N) result."""
+    """Run mask_passes masked passes then an unmasked one; return the (passes, M, N) result."""
     N = ct * DEFAULT_TILE_C_DIM
+    passes = mask_passes + 1
     config = TestConfig(
         "sources/sdpa_custom_mm_test.cpp",
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
@@ -437,8 +450,13 @@ def _run_masked_then_unmasked(
                 read_transposed=read_transposed,
                 sdpa_row_stride=row_stride,
                 sdpa_input_tile_offset=input_tile_offset,
+                sdpa_dst_index=dst_index,
             ),
-            SDPA_MASK_REENTRY(configure_mask_extent=configure_mask_extent),
+            SDPA_MASK_REENTRY(
+                configure_mask_extent=configure_mask_extent,
+                mask_passes=mask_passes,
+                pack_clear_dest=pack_clear_dest,
+            ),
         ],
         runtimes=[
             NUM_FACES(num_faces=2, num_faces_A=4, num_faces_B=2),
@@ -450,15 +468,16 @@ def _run_masked_then_unmasked(
             _pack_in1(rhs, kt, ct, read_transposed, row_stride, input_tile_offset),
             _pack_in0(lhs, kt),
             mask=mask,
+            passes=passes,
         ),
         dest_acc=DestAccumulation.No,
     )
-    packed = torch.as_tensor(config.run().result).reshape(2, ct, -1)
+    packed = torch.as_tensor(config.run().result).reshape(passes, ct, -1)
     return (
         packed[:, :, : M * 32]
-        .reshape(2, ct, 2, M, 16)
+        .reshape(passes, ct, 2, M, 16)
         .permute(0, 3, 1, 2, 4)
-        .reshape(2, M, N)
+        .reshape(passes, M, N)
     )
 
 
@@ -575,6 +594,50 @@ def test_sdpa_custom_mm_mask_extent_default(request, M, ct):
     assert torch.equal(
         result, golden
     ), "Mask rows beyond the Q face height were not applied with the default mask extent"
+
+
+@parametrize(
+    # 480 is the slot just below the boundary (control); 496 is the last slot of a 16-bit
+    # DEST bank, where (row offset + 16-row block index) reaches the bank size.
+    dst_index=[480, 496],
+)
+def test_sdpa_custom_mm_clear_last_dest_slot(request, dst_index):
+    """A single-tile result at the last 16-bit DEST slot must be cleared before accumulating.
+
+    Two masked passes seed that slot in both DEST halves; the pack release leaves DEST alone,
+    as the fused SDPA kernel does between chunks, so the third, unmasked pass finds the first
+    pass's scores in its slot and has to clear them itself. Blackhole derives the 16-row
+    ZEROACC's bank select from (dest row offset + block index), which flips to the other half
+    at 496 + 31; a clear that lands there leaves the stale scores in place and the result
+    comes back as mask + 2 * product.
+    """
+    _skip_on_simulator(request)
+    # A single-name parametrize axis binds the value as a 1-tuple; unwrap it.
+    dst_index = dst_index[0] if isinstance(dst_index, tuple) else dst_index
+    M, kt, ct = 8, 2, 1
+    K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
+    lhs, rhs = _dyadic_operands(M, K, N, seed=57)
+    mask = ((torch.arange(N) % 4 - 1) * 2).to(torch.bfloat16)
+    result = _run_masked_then_unmasked(
+        M,
+        ct,
+        kt,
+        lhs,
+        rhs,
+        mask,
+        mask_passes=2,
+        dst_index=dst_index,
+        pack_clear_dest=False,
+    )
+    product = lhs.float() @ rhs.float()
+    seeded = product + mask.float()
+    golden = torch.stack([seeded, seeded, product]).to(torch.bfloat16)
+    # Per-pass deviation: a stale slot shows up in pass 2 as (result - golden) == seeded.
+    deviation = (result.float() - golden.float()).abs().amax(dim=(1, 2)).tolist()
+    assert torch.equal(result, golden), (
+        f"result slot at DEST row {dst_index} was not cleared before accumulation; "
+        f"max |result - golden| per pass = {deviation}"
+    )
 
 
 # Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).

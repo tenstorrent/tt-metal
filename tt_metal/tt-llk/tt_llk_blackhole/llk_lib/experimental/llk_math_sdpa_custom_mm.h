@@ -140,7 +140,27 @@ inline void _llk_math_sdpa_custom_mm_mask_dest_(const std::uint32_t dst_index, c
         // A tile is 2 faces of 8x16, so clearing 16 rows per tile is equivalent to clearing the tile
         for (std::uint32_t i = 0; i < ct_dim; i++)
         {
-            TT_ZEROACC(p_zeroacc::CLR_16, 0, 0, ADDR_MOD_7, dst_face);
+            // ZEROACC's 16-row mode takes an absolute 16-row block index within the DEST bank, but Blackhole
+            // derives that instruction's bank-select from (dest row offset + block index). Once the sum
+            // reaches the bank size the select flips and the clear lands 512 rows away in the other DEST
+            // half: this tile keeps the previous accumulation and 16 rows the packer may be reading are
+            // zeroed instead (measured on p150, see llk_math_eltwise_binary.h). Here the row offset is
+            // dst_index and the block index dst_index / 16 + i, so only the last slot of a 16-bit bank
+            // reaches it (496 + 31). The one-row mode addresses purely in rows (MATH_Offset + dest RWC +
+            // where; the dest RWC is 0 on entry, as the MVMULs below also require, and ADDR_MOD_7 leaves
+            // it there), so clear that tile row by row. This LLK clears a 16-bit DEST only.
+            const bool crosses_bank = (dst_index + dst_face) >= DEST_REGISTER_HALF_SIZE;
+            if (crosses_bank)
+            {
+                for (std::uint32_t row = 0; row < 16; row++)
+                {
+                    TT_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_7, i * 16 + row);
+                }
+            }
+            else
+            {
+                TT_ZEROACC(p_zeroacc::CLR_16, 0, 0, ADDR_MOD_7, dst_face);
+            }
             dst_face++;
         }
     }
