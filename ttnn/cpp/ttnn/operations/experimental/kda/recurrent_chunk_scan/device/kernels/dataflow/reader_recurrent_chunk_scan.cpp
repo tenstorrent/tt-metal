@@ -18,14 +18,9 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/dataflow/value_block_multicast.hpp"
 
-template <uint32_t Vt, uint32_t VtFull, typename Accessor>
+template <uint32_t Vt, uint32_t VtFull, typename Accessor, typename DFB>
 FORCE_INLINE void read_and_publish_value_slice(
-    const Accessor& accessor,
-    DataflowBuffer& buffer,
-    Noc& noc,
-    uint32_t row_base,
-    uint32_t rows,
-    uint32_t value_block) {
+    const Accessor& accessor, DFB& buffer, Noc& noc, uint32_t row_base, uint32_t rows, uint32_t value_block) {
     buffer.reserve_back(rows * Vt);
     const uint32_t entry_size = buffer.get_entry_size();
     for (uint32_t row = 0; row < rows; ++row) {
@@ -48,8 +43,8 @@ FORCE_INLINE void read_and_publish_value_slice(
 
 // The summary's paired state [B | A + B] starts at [0 | I]: each tile row holds Vt zero-state tiles, then this value
 // block's Vt identity columns. Summaries require K == V, so every global column has its diagonal tile.
-template <uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void seed_summary_pair(DataflowBuffer& buffer, Noc& noc, uint32_t value_block) {
+template <uint32_t Kt, uint32_t Vt, typename DFB>
+FORCE_INLINE void seed_summary_pair(DFB& buffer, Noc& noc, uint32_t value_block) {
     constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
     constexpr uint32_t face_elements = tt::constants::FACE_HW;
     constexpr uint32_t tile_elements = tt::constants::TILE_HW;
@@ -60,7 +55,7 @@ FORCE_INLINE void seed_summary_pair(DataflowBuffer& buffer, Noc& noc, uint32_t v
     noc.write_zeros_l1_barrier();
     {
         auto lock = buffer.scoped_write_lock(tile_count);
-        auto state_ptr = lock.get_ptr<volatile uint32_t>();
+        auto state_ptr = lock.template get_ptr<volatile uint32_t>();
         for (uint32_t local_col = 0; local_col < Vt; ++local_col) {
             const uint32_t global_col = value_block * Vt + local_col;
             auto tile = state_ptr + (global_col * 2 * Vt + Vt + local_col) * tile_elements;
@@ -161,7 +156,7 @@ TT_KERNEL void reader(
     }
 
     // With late_on_writer the writer multicasts the state update's inputs (k_dec_t and dl) and these stay null.
-    const auto stream_chunks = [&](DataflowBuffer* k_decay_transposed, DataflowBuffer* final_decay) {
+    const auto stream_chunks = [&](auto k_decay_transposed, auto final_decay) {
         for (uint32_t chunk = 0; chunk < valid_chunks; ++chunk) {
             const uint32_t head_chunk = head * num_chunks + chunk;
             // Publish the restart seed just in time, never before the loop. The state
@@ -206,7 +201,7 @@ TT_KERNEL void reader(
             };
             if constexpr (!mcast_shared) {
                 // Publish each buffer once its reads land so compute overlaps the next buffer's reads.
-                for_each_shared_input([&](const auto& accessor, DataflowBuffer& buffer, uint32_t base, uint32_t tiles) {
+                for_each_shared_input([&](const auto& accessor, auto& buffer, uint32_t base, uint32_t tiles) {
                     kda::stage_contiguous_tiles(accessor, buffer, noc, base, tiles);
                     noc.async_read_barrier();
                     buffer.push_back(tiles);
@@ -217,9 +212,10 @@ TT_KERNEL void reader(
                 static_assert(
                     !(summary && late_on_writer), "the summary keeps the state update's inputs on the reader");
                 constexpr uint32_t shared_inputs = 2 + (summary ? 0 : 2) + (late_on_writer ? 0 : 2);
-                kda::SharedInput inputs[shared_inputs];
+                // Every shared input is a default-pattern DFB, so kd's specialization holds all of them.
+                kda::SharedInput<decltype(kd)> inputs[shared_inputs];
                 uint32_t count = 0;
-                for_each_shared_input([&](const auto& accessor, DataflowBuffer& buffer, uint32_t base, uint32_t tiles) {
+                for_each_shared_input([&](const auto& accessor, auto& buffer, uint32_t base, uint32_t tiles) {
                     const uint32_t slot =
                         value_block == 0 ? kda::stage_contiguous_tiles(accessor, buffer, noc, base, tiles) : 0;
                     inputs[count++] = {&buffer, tiles, slot};

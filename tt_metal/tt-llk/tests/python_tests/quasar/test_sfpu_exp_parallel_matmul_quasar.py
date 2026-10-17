@@ -23,7 +23,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -47,7 +46,6 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     ENABLE_2X_FORMAT,
     ENABLE_DIRECT_INDEXING,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
@@ -99,39 +97,32 @@ def generate_parallel_matmul_exp_combinations(
         formats_list
     ):
         dest_sync_modes = (DestSync.Half, DestSync.Full)
-        implied_math_modes = (
-            (ImpliedMathFormat.Yes,)
-            if is_perf
-            else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
-        )
         dimension_profiles = (DIMENSION_PROFILES[1],) if is_perf else DIMENSION_PROFILES
         for dest_sync in dest_sync_modes:
-            for implied_math_format in implied_math_modes:
-                for (
-                    exp_input_dimensions,
+            for (
+                exp_input_dimensions,
+                input_A_dimensions,
+                input_B_dimensions,
+            ) in dimension_profiles:
+                if not _matmul_output_fits_dest(
                     input_A_dimensions,
                     input_B_dimensions,
-                ) in dimension_profiles:
-                    if not _matmul_output_fits_dest(
-                        input_A_dimensions,
-                        input_B_dimensions,
-                        dest_acc,
-                        dest_sync,
-                    ):
-                        continue
-                    for sfpu_srcs_impl in impls:
-                        combinations.append(
-                            (
-                                fmt,
-                                dest_acc,
-                                dest_sync,
-                                implied_math_format,
-                                sfpu_srcs_impl,
-                                runtime(exp_input_dimensions),
-                                runtime(input_A_dimensions),
-                                runtime(input_B_dimensions),
-                            )
+                    dest_acc,
+                    dest_sync,
+                ):
+                    continue
+                for sfpu_srcs_impl in impls:
+                    combinations.append(
+                        (
+                            fmt,
+                            dest_acc,
+                            dest_sync,
+                            sfpu_srcs_impl,
+                            runtime(exp_input_dimensions),
+                            runtime(input_A_dimensions),
+                            runtime(input_B_dimensions),
                         )
+                    )
     return combinations
 
 
@@ -147,10 +138,10 @@ PARALLEL_MATMUL_EXP_LOADMACRO_COMBINATIONS = generate_parallel_matmul_exp_combin
 
 @pytest.mark.quasar
 @parametrize(
-    format_dest_acc_sync_implied_math=PARALLEL_MATMUL_EXP_COMBINATIONS,
+    format_dest_acc_sync=PARALLEL_MATMUL_EXP_COMBINATIONS,
 )
 def test_sfpu_exp_parallel_matmul_quasar(
-    format_dest_acc_sync_implied_math,
+    format_dest_acc_sync,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
     is_perf=False,
@@ -160,12 +151,11 @@ def test_sfpu_exp_parallel_matmul_quasar(
         formats,
         dest_acc,
         dest_sync,
-        implied_math_format,
         sfpu_srcs_impl,
         exp_input_dimensions,
         input_A_dimensions,
         input_B_dimensions,
-    ) = format_dest_acc_sync_implied_math[0]
+    ) = format_dest_acc_sync[0]
 
     matmul_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -270,7 +260,6 @@ def test_sfpu_exp_parallel_matmul_quasar(
         "formats": formats,
         "templates": [
             MATH_FIDELITY(MathFidelity.LoFi),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             ENABLE_2X_FORMAT(False),
             ENABLE_DIRECT_INDEXING(False),
             DEST_SYNC(dest_sync),
@@ -318,7 +307,7 @@ def test_sfpu_exp_parallel_matmul_quasar(
     reason="ttsim has no SFPLOADMACRO; only the SFPI implementation is built",
 )
 @parametrize(
-    format_dest_acc_sync_implied_math=PARALLEL_MATMUL_EXP_LOADMACRO_COMBINATIONS,
+    format_dest_acc_sync=PARALLEL_MATMUL_EXP_LOADMACRO_COMBINATIONS,
 )
-def test_sfpu_exp_parallel_matmul_loadmacro_quasar(format_dest_acc_sync_implied_math):
-    test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math)
+def test_sfpu_exp_parallel_matmul_loadmacro_quasar(format_dest_acc_sync):
+    test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync)
