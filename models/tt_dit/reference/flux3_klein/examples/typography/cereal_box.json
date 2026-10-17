@@ -1,0 +1,12 @@
+{
+  "model": "distilled",
+  "prompt": "Studio product photograph, shot straight-on with flat, even lighting and a deep depth of field, showing a single 1960s cereal box centered against a plain warm cream background. The rectangular cardboard box fills most of the frame, its front panel facing the camera squarely with crisp edges and no perspective distortion. The package uses flat screen-printed colors in mustard yellow, burnt orange, sky blue, cream, and dark brown, with minor ink texture along the printed shapes. Across the top, large bold rounded letters read \"MORNING OATS\" in dark brown on a pale yellow header band. Directly below, a curved red banner carries the white lowercase text \"with real honey\". In the center, a friendly cartoon bear with round ears, a tan muzzle, black oval eyes, and a simple smiling mouth stands behind a small breakfast bowl, holding a long silver spoon upright in one paw. The spoon rises above the bowl beside the bear’s head. Curving script across the lower middle reads \"A good start to the day\" in dark blue cursive lettering. Small illustrated oat stalks and three golden honey droplets decorate the sides without covering the main wording. At the bottom right corner, compact uppercase sans-serif text reads \"NET WT 16 OZ\". A narrow cream border encloses the entire front design, with worn corners and a few tiny scuffs on the cardboard surface.",
+  "input_prompt": "a 1960s cereal box, 'MORNING OATS' in bold rounded letters, 'with real honey' in a banner, a cartoon bear holding a spoon, 'NET WT 16 OZ' at the bottom corner and 'A good start to the day' in script, flat colours, photographed straight on",
+  "boxes": null,
+  "width": 832,
+  "height": 1248,
+  "steps": 16,
+  "guidance": null,
+  "seed": 1,
+  "upsampled": true
+}

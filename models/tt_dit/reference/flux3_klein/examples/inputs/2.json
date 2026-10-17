@@ -1,0 +1,14 @@
+{
+  "model": "base",
+  "prompt": "Full-color indoor photograph, close-up eye-level view of a white ceramic mug resting on a wooden table beside a window in the morning. The mug sits just left of center, its rounded handle facing frame-right, with a thin highlight tracing the rim and a small patch of steam rising from the dark coffee inside. A pale blue-grey shadow falls beneath the cup toward the lower right. The tabletop is made of broad honey-brown planks with visible grain, shallow scratches, and a narrow seam running behind the mug; one worn mark crosses the wood near the foreground. On the right, the window’s white-painted sill rises behind the cup, with a few chipped areas along the edge. Clear morning light enters through the glass from the upper left, casting a bright rectangular band across the table and illuminating the mug’s left side. Beyond the sill, the window reveals a quiet outdoor view of green foliage and a washed-out blue sky, with the distant forms softened by the bright exposure. Thin off-white curtains hang at the far left, one folded back unevenly beside the window. The glass carries a few tiny condensation droplets near the bottom corner, while the sunlit room beyond remains plain and uncluttered.",
+  "input_prompt": "a white ceramic mug on a wooden table by a window, morning light",
+  "boxes": null,
+  "width": 1024,
+  "height": 1024,
+  "steps": 50,
+  "guidance": 3.5,
+  "seed": 11,
+  "upsampled": true,
+  "references": [],
+  "dit": "weights/flux-3-image-klein-base"
+}

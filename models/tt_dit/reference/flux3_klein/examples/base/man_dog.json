@@ -1,0 +1,14 @@
+{
+  "model": "base",
+  "prompt": "Full-color outdoor photograph, eye-level medium-wide shot in late afternoon sunlight, showing a man walking his dog along a neighborhood sidewalk. The low sun shines from the upper right, casting long shadows across the pavement and lighting the man’s face and clothing with warm side light. Slightly left of center, a white man in his thirties with fair skin, short brown hair, and light stubble walks toward frame-left at an easy pace. He wears a faded olive overshirt over a plain grey T-shirt, dark blue jeans, and worn brown leather shoes. A canvas backpack hangs from one shoulder, and he looks down at the dog while holding a loose black leash in his right hand. Beside him on the right, a medium-sized golden retriever walks close to his leg, its cream-gold coat catching the sunlight. The dog wears a red fabric collar attached to the leash, with its head lowered toward the grass and its tail raised behind it. In the foreground, the concrete sidewalk is scattered with dry leaves and narrow cracks, bordered by a strip of uneven green lawn. Behind them, a row of modest houses, wooden fences, and leafy trees recedes into the background; parked cars form muted shapes beneath the trees. Sunlit foliage glows yellow-green along the right side, while shaded areas remain dull green and brown.",
+  "input_prompt": "A man walking with his dog, afternoon sun",
+  "boxes": null,
+  "width": 1024,
+  "height": 1024,
+  "steps": 50,
+  "guidance": 3.5,
+  "seed": 7,
+  "upsampled": true,
+  "references": [],
+  "dit": "weights/flux-3-image-klein-base"
+}

@@ -1,0 +1,14 @@
+{
+  "model": "base",
+  "prompt": "Full-color outdoor photograph taken at eye level under flat, diffused daylight, showing a golden retriever sitting on a sandy beach beneath an overcast sky. The dog sits just left of center in the foreground, facing the camera with its front paws planted close together and its hind legs tucked beneath its body. Its thick golden coat forms a broad ruff around the neck and chest, with darker honey-colored fur along the ears and damp strands clinging to the lower legs. The retriever has dark brown eyes, a black nose, and a closed mouth, its head held upright and turned a few degrees toward frame-right. A few grains of sand cling to the fur around its paws. The pale tan beach stretches across the lower half of the scene, marked by shallow paw prints, scattered shell fragments, and a narrow trail of wind-drawn ripples leading toward the water. Behind the dog, a thin band of grey-blue ocean runs horizontally across the midground, with low waves breaking into short lines of white foam near shore. In the background, the horizon is partly obscured by dense layers of grey clouds filling most of the upper frame. The cloud cover varies from cool silver-grey near the horizon to darker slate tones overhead, with no direct sunlight or hard shadows.",
+  "input_prompt": "a golden retriever sitting on a sandy beach, overcast sky",
+  "boxes": null,
+  "width": 1024,
+  "height": 1024,
+  "steps": 50,
+  "guidance": 3.5,
+  "seed": 12,
+  "upsampled": true,
+  "references": [],
+  "dit": "weights/flux-3-image-klein-base"
+}

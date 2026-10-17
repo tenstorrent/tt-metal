@@ -1,0 +1,12 @@
+{
+  "model": "base",
+  "prompt": "Large-format still-life photograph in the register of a Dutch painting, composed vertically on a dark oak table against a deep black background. A single hard window light enters from the left, illuminating the objects with warm highlights and leaving their right sides in dense brown-black shadow. In the upper center, a torn rustic loaf rests off-center on the tabletop, its rough golden-brown crust split open to reveal an irregular pale crumb; several crumbs lie scattered below it. On the left stands a heavy pewter jug with a rounded body, narrow neck, curved handle, and dull silver surface marked by tarnish and small dents. The jug catches a bright vertical reflection along its left rim while its base disappears into shadow. Across the lower center sit exactly three lemons: two whole yellow lemons near the front and one peeled lemon beside them, its exposed flesh curling outward in a broad spiral peel. The remaining whole lemons have dimpled rinds and short shadows cast toward the right. A long old iron knife lies diagonally across the foreground, its blade pointing toward the peeled lemon and its worn wooden handle extending toward the lower right. The dark oak planks show pronounced grain, shallow scratches, and a narrow seam beneath the arrangement. The composition has restrained earth tones, concentrated chiaroscuro, crisp detail on the illuminated food and metal, and broad areas of unbroken darkness above and around the still life.",
+  "input_prompt": "a still life photographed in the register of a Dutch painting: a torn loaf, a pewter jug, three lemons with one peeled in a spiral, a knife, on a dark oak table, one window light from the left, black background, 4x5 large format",
+  "boxes": null,
+  "width": 1248,
+  "height": 832,
+  "steps": 50,
+  "guidance": 3.5,
+  "seed": 1,
+  "upsampled": true
+}

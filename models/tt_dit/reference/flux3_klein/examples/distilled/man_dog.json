@@ -1,0 +1,14 @@
+{
+  "model": "distilled",
+  "prompt": "Full-color outdoor photograph taken at eye level in the afternoon, with low sunlight coming from frame-right and casting long shadows across a neighborhood park. In the center, a white man in his thirties with fair skin, short brown hair, and light stubble walks along a paved path while holding a medium-sized golden retriever on a dark green leash. He wears a faded blue overshirt over a grey T-shirt, tan trousers, and worn brown walking shoes. His body faces left as he takes a step forward, looking down toward the dog with a neutral expression. The leash hangs in a loose curve between his right hand and the dog’s red collar. The golden retriever walks beside him on the left, its cream-gold coat lit along the back and ears, head lowered toward the grass and tail raised behind it. Dry leaves and small twigs lie near the edge of the path in the foreground. On the right, the sun sits just above the line of trees, producing a bright patch of glare and warm highlights on the man’s sleeve and the dog’s fur. Behind them, an open lawn extends toward scattered shrubs and mature tree trunks, with a wooden bench resting near the path. In the background, muted brick houses and parked cars form simple shapes beyond the foliage, while the pale blue sky occupies a narrow band above the treetops.",
+  "input_prompt": "A man walking with his dog, afternoon sun",
+  "boxes": null,
+  "width": 1024,
+  "height": 1024,
+  "steps": 16,
+  "guidance": null,
+  "seed": 7,
+  "upsampled": true,
+  "references": [],
+  "dit": "weights/flux-3-image-klein"
+}

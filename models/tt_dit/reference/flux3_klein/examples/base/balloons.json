@@ -1,0 +1,35 @@
+{
+  "model": "base",
+  "prompt": "Full-color outdoor photograph at sunrise, with a broad dawn sky <sky_1> above a green valley <valley_1>. On the left, a large hot-air balloon <obj_1> floats over the valley, while a smaller blue hot-air balloon <obj_2> hangs farther back on the right. Along the horizon, the rising sun <sun_1> appears between distant mountain ridges <mountain_1>, casting low orange light across the slopes and leaving the foreground meadow in cooler shadow. [{\"id\": \"obj_1\", \"bbox\": [80, 60, 480, 380], \"desc\": \"A large hot-air balloon with a rounded red envelope patterned by broad yellow vertical stripes, a dark suspension basket, and fine black cables descending beneath it; the lower edge of the envelope is partly shaded by the sunrise angle.\"}, {\"id\": \"obj_2\", \"bbox\": [200, 620, 420, 800], \"desc\": \"A small blue hot-air balloon with a compact rounded envelope, darker blue shading along one side, a tiny suspended basket, and short suspension cables.\"}, {\"id\": \"sky_1\", \"bbox\": [0, 0, 650, 1000], \"desc\": \"A clear sunrise sky grading from pale orange near the horizon through peach to muted blue overhead, with several thin horizontal clouds catching warm light.\"}, {\"id\": \"sun_1\", \"bbox\": [470, 455, 535, 525], \"desc\": \"A low circular sunrise disk in bright yellow-orange, partially veiled by the distant ridge and surrounded by a narrow band of warm haze.\"}, {\"id\": \"mountain_1\", \"bbox\": [430, 0, 690, 1000], \"desc\": \"Layered distant mountain ridges forming an uneven horizon, with dark forested silhouettes in front and hazy blue-gray peaks behind them.\"}, {\"id\": \"valley_1\", \"bbox\": [560, 0, 1000, 1000], \"desc\": \"A broad green valley with rolling grassy slopes, scattered darker tree masses, and a winding river reflecting a narrow strip of orange morning light; the nearest meadow contains patches of deep green shadow and brighter sunlit grass.\"}]",
+  "input_prompt": "hot-air balloons over a green valley at sunrise",
+  "boxes": [
+    {
+      "id": "obj_1",
+      "desc": "a red and yellow striped hot-air balloon",
+      "bbox": [
+        0.08,
+        0.06,
+        0.48,
+        0.38
+      ]
+    },
+    {
+      "id": "obj_2",
+      "desc": "a small blue hot-air balloon",
+      "bbox": [
+        0.2,
+        0.62,
+        0.42,
+        0.8
+      ]
+    }
+  ],
+  "width": 1024,
+  "height": 1024,
+  "steps": 50,
+  "guidance": 3.5,
+  "seed": 1,
+  "upsampled": true,
+  "references": [],
+  "dit": "weights/flux-3-image-klein-base"
+}

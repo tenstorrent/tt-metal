@@ -1,0 +1,12 @@
+{
+  "model": "base",
+  "prompt": "Studio fashion photograph captured on a Hasselblad medium-format camera, full-length portrait against an unmarked mustard seamless paper backdrop. A Black female model in her twenties with dark skin and a tall, slender build stands just left of center, facing the camera with her body turned a few degrees toward frame-left. Her short natural hair is cropped close to the head, leaving the oversized grey wool coat as the dominant form. The heavy coat falls below her knees in broad, boxy folds, with dropped shoulders, wide sleeves, a high folded collar, concealed front closure, and two deep patch pockets. Both hands are tucked into the pockets, pulling the lower front into angular pleats. Her face has a neutral expression, closed lips, and a direct gaze. One hard key light from the upper left strikes her forehead, cheek, shoulder, and the raised ridges of the wool, producing bright highlights along the left side while the right side falls into dense charcoal-grey shade. A crisp-edged shadow extends behind her across the mustard paper toward the lower right, following the silhouette of the coat and legs. Dark straight trousers and black leather ankle boots emerge beneath the hem. The seamless paper curves into the floor without a horizon line, its matte surface showing fine tonal falloff around the sharp cast shadow. The composition contains only the model, coat, footwear, mustard background, and shadow, with clean negative space above and to the right.",
+  "input_prompt": "fashion editorial, a model in an oversized grey wool coat against a mustard seamless, one hard key light from the left, crisp shadow on the paper, hands in pockets, Hasselblad, no text",
+  "boxes": null,
+  "width": 832,
+  "height": 1248,
+  "steps": 50,
+  "guidance": 3.5,
+  "seed": 1,
+  "upsampled": true
+}

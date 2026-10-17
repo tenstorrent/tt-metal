@@ -1,0 +1,12 @@
+{
+  "model": "distilled",
+  "prompt": "Studio product photograph of a cylindrical tea tin against a seamless warm grey background, shot from a slightly elevated three-quarter angle with hard side light entering from the left. The tin stands upright in the center, its front facing the viewer and its right side receding into shadow. Its body is coated in dark green enamel with a narrow gold rim around the top and bottom edges. A fitted dark green lid sits flush above the body, edged by a thin gold band; the raised metal lid knob catches a bright highlight while the right half falls into deep shade. Across the upper front, large embossed gold serif capitals read \"HIGHLAND BREAKFAST\". Directly beneath, smaller gold lettering reads \"Assam and Ceylon leaf\". Below it, a circular gold roundel contains the text \"est. 1884\" in compact dark green type. On the visible right side of the tin, small white sans-serif lettering follows the curve of the cylinder and reads \"Brew for four minutes. One spoon per cup and one for the pot.\" The hard light creates a sharp vertical highlight along the left edge, reveals the enamel’s smooth reflective surface, and casts a dense shadow behind and to the right of the tin. A few tiny scuffs interrupt the green finish near the lower rim, and the tin rests on a matte tabletop with a short, crisp cast shadow extending toward the lower right.",
+  "input_prompt": "a tea tin, dark green enamel: 'HIGHLAND BREAKFAST' in gold caps on the front, 'Assam and Ceylon leaf' beneath, 'est. 1884' in a roundel, and on the side in small white type 'Brew for four minutes. One spoon per cup and one for the pot.', hard side light, product photograph",
+  "boxes": null,
+  "width": 1024,
+  "height": 1024,
+  "steps": 16,
+  "guidance": null,
+  "seed": 1,
+  "upsampled": true
+}

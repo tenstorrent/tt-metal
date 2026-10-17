@@ -1,0 +1,12 @@
+{
+  "model": "distilled",
+  "prompt": "Full-color indoor large-format photograph in a vertical 4-by-5 composition, showing the interior of a brutalist concrete church from a low, wide-angle viewpoint. Massive raw concrete walls rise around a cavernous nave, their surfaces marked by formwork seams, pinholes, chipped corners, and broad geometric planes. In the upper center, a narrow rectangular opening cuts through the thick wall as one slot of hard daylight falls diagonally into the otherwise dark sanctuary. The bright beam forms a single pale shaft across the center, revealing suspended dust particles against deep grey-brown shadow. One empty wooden pew stands alone within the light, placed off-center in the lower middle of the frame and facing the unseen altar beyond it. Its long plank seat has a dull brown finish, worn edges, visible grain, and two heavy supports; the backrest is bare, with no person or object resting on it. Behind the pew, the concrete architecture expands into angular buttresses and an overhanging ceiling slab that disappears into darkness. On the left, a recessed wall remains nearly black, while the right side contains a massive cantilevered concrete volume with a rough aggregate texture. At the far end, the daylight slot ends at a small altar-like projection of unadorned concrete, but its details remain lost in shadow. The floor consists of broad poured-concrete slabs with hairline joints and scattered grit. The concentrated beam illuminates only the pew and a thin patch of floor beneath it, leaving the surrounding nave in dense shadow.",
+  "input_prompt": "the interior of a brutalist concrete church, one slot of daylight falling on raw concrete, an empty wooden pew, dust in the light, 4x5 large format photograph",
+  "boxes": null,
+  "width": 832,
+  "height": 1248,
+  "steps": 16,
+  "guidance": null,
+  "seed": 1,
+  "upsampled": true
+}

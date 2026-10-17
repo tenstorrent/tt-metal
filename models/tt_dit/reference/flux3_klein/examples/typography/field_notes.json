@@ -1,0 +1,12 @@
+{
+  "model": "distilled",
+  "prompt": "Close-up photograph of an open field notebook resting on a worn wooden table, viewed from a high three-quarter angle under diffused daylight. The cream paper pages fill most of the frame, with the notebook’s stitched binding running vertically through the center and one page corner curling upward. At the top of the right-hand page, handwritten in graphite pencil, the heading reads \"Lake Vyrnwy, 14 October\". Beneath it, four short lines of neat but uneven cursive handwriting read \"wind NW, light\", \"two herons on the far shore\", \"water 9 degrees\", and \"the fog lifted at ten\". Below the notes sits a small pencil sketch of a single standing heron in profile, drawn with a long neck, pointed beak, narrow body, and thin legs. A flattened pressed leaf rests beside the sketch near the lower left of the writing area, its muted green-brown surface held flat by the paper fibers. These are the only marks on the page. The left-hand page is blank apart from the paper grain and shallow creases. The tabletop consists of broad brown planks with dark seams, scratches, and visible wood grain, while the notebook casts a short shadow along its lower edge.",
+  "input_prompt": "an open field notebook on a wooden table, handwritten in pencil: the heading 'Lake Vyrnwy, 14 October', then the lines 'wind NW, light', 'two herons on the far shore', 'water 9 degrees', 'the fog lifted at ten', a small pencil sketch of a heron, a pressed leaf, nothing else written",
+  "boxes": null,
+  "width": 1248,
+  "height": 832,
+  "steps": 16,
+  "guidance": null,
+  "seed": 2,
+  "upsampled": true
+}
