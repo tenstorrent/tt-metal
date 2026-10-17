@@ -26,8 +26,9 @@ enum class InputClamping : uint8_t {
 /**
  * Please refer to documentation for any_init.
  *
- * Template scale parameter is used when approx is true and exp_tile is called with scale_en set to
- * true.
+ * Template scale parameter is applied in approximate mode (always, regardless of exp_tile's
+ * scale_en, which approximate mode rejects at compile time); in non-approximate mode it is
+ * ignored and exp_tile's runtime scale is used instead.
  *
  */
 template <
@@ -53,7 +54,7 @@ ALWI void exp_tile_init() {
  * | Template Parameter      | Description                                                    | Type     | Valid Range      | Default |
  * |-------------------------|----------------------------------------------------------------|----------|------------------|---------|
  * | approx                  | Enable approximate mode.                                       | bool     | true, false      | false   |
- * | scale_en                | Enable input scaling by a constant factor in approximate or non-approximate mode | bool     | true, false      | false   |
+ * | scale_en                | Enable input scaling by the runtime scale factor; non-approximate mode only (a compile-time error when approx is true: approximate mode scales by exp_tile_init's template scale) | bool     | true, false      | false   |
  * | input_clamping          | If approx, controls whether very negative inputs are clamped to prevent incorrect outputs | InputClamping | ClampToNegative, None | ClampToNegative |
  * | iterations              | Number of iterations over 32-SFPU lanes to run                 | int      | Positive integer | 8       |
  *
@@ -61,7 +62,7 @@ ALWI void exp_tile_init() {
  * |-------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst        | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | vector_mode | Specifies the vector mode for computation (default: VectorMode::RC)        | VectorMode | Subject to specific hardware/kernel limits            | False    |
- * | scale       | Scale factor to apply in approximate or non-approximate mode if scale_en is true (default: 0x3F80, 1.0f in FP16b) | uint16_t | Valid FP16b representation                            | False    |
+ * | scale       | Scale factor to apply in non-approximate mode if scale_en is true (default: 0x3F80, 1.0f in FP16b); never read in approximate mode | uint16_t | Valid FP16b representation                            | False    |
  */
 // clang-format on
 template <

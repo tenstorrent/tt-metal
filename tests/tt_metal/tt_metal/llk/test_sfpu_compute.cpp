@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <random>
+#include <stdexcept>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/program/program_impl.hpp"
@@ -2670,6 +2671,61 @@ TEST_F(LLKBlackholeSingleCardFixture, SfpuExp21fRetainedCoefficients) {
                     EXPECT_NEAR(output[i], expected, expected * 1e-2f) << "element " << i;
                 }
             }
+        }
+    }
+}
+
+namespace {
+
+// Single-core program whose compute kernel runs `chain` on one tile. Compile-contract
+// probes only: the program is compiled, never launched.
+Program make_sfpu_chain_compile_program(const std::string& chain) {
+    Program program = CreateProgram();
+    const CoreCoord core{0, 0};
+    for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_16}) {
+        CreateCircularBuffer(
+            program, core, CircularBufferConfig(2048, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, 2048));
+    }
+    // 32-bit Dest so the non-approximate control runs the sfpi exp, which takes the runtime
+    // scale as a value; the bf16 TTI exp lowers it to an SFPMULI immediate, which the Wormhole
+    // build does not constant-fold through exp_tile's argument.
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp",
+        core,
+        ComputeConfig{
+            .fp32_dest_acc_en = true,
+            .compile_args = {1u, 1u},
+            .defines = {{"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", chain}}});
+    return program;
+}
+
+}  // namespace
+
+TEST_F(LLKMeshDeviceSingleCardFixture, SfpuExpApproxRejectsRuntimeScale) {
+    // Compile-time contract test; these programs are never launched. The approximate exp
+    // kernel scales by exp_tile_init's template scale and never reads exp_tile's runtime
+    // scale, so exp_tile<approx = true, scale_en = true> must fail to compile rather than
+    // silently compute exp(x) for a caller that asked for exp(scale * x).
+    if (this->device().arch() == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar exp rejects scale_en in every mode; this test pins the Wormhole/Blackhole contract";
+    }
+    struct Case {
+        const char* chain;
+        bool compiles;
+    };
+    const Case cases[] = {
+        {"exp_tile_init<true>(); exp_tile<true, true>(0, VectorMode::RC, 0xBF80);", false},
+        {"exp_tile_init<true>(); exp_tile<true, false>(0);", true},
+        {"exp_tile_init<false>(); exp_tile<false, true>(0, VectorMode::RC, 0xBF80);", true},
+    };
+    for (const auto& c : cases) {
+        SCOPED_TRACE(::testing::Message() << c.chain);
+        auto program = make_sfpu_chain_compile_program(c.chain);
+        if (c.compiles) {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+        } else {
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
         }
     }
 }

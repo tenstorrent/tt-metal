@@ -482,6 +482,10 @@ template <
     int ITERATIONS = 8,
     bool CLAMP_NEGATIVE = true>
 void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
+    static_assert(
+        !(APPROXIMATION_MODE && SCALE_EN),
+        "approximate exp scales by exp_init's template scale and never reads the runtime scale: pass the scale to "
+        "exp_init and SCALE_EN=false");
     if constexpr (!APPROXIMATION_MODE) {
         if constexpr (!is_fp32_dest_acc_en) {
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
