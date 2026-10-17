@@ -2374,3 +2374,23 @@
   owner_id: U09B1UE301K # Abror Shopulatov
   team: models
   budget_type: unit
+
+# MOSS-Image Base/SFT: pinned CUDA component replay plus native text-to-image smoke.
+# Existing bh_p150 is a current cloud-MLPerf functional lane; civ2's unit_tier3
+# budget is already consumed. Two discrete P150s are NOT equivalent to a P300.
+- name: MOSS-Image Base and SFT component tests (P150)
+  cmd: |
+    set -e
+    uv pip install -r models/experimental/moss_image/requirements.txt
+    export MOSS_IMAGE_ASSET_ROOT=/mnt/MLPerf/tt_dnn-models/OpenMOSS-Team/MOSS-Image
+    unset MOSS_IMAGE_ALLOW_MISSING_ASSETS
+    pytest models/experimental/moss_image/tests --timeout=600 -k "not 2-cards"
+  model: moss-image
+  model_family: MOSS-Image
+  skus:
+    bh_p150:
+      timeout: 20
+      tier: 3
+  owner_id: "" # Maintainer action: assign a notification owner before enabling upstream.
+  team: models
+  budget_type: unit
