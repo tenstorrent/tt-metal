@@ -330,11 +330,11 @@ struct p_zeroacc
     constexpr static std::uint32_t CLR_ALL      = 0b011;
     constexpr static std::uint32_t CLR_HALF_32B = 0b110;
     constexpr static std::uint32_t CLR_ALL_32B  = 0b111;
-    // No `where` value is known to make the 16-row mode a no-op on Blackhole. Measured: the Wormhole tree's
-    // WHERE_NOP (0xff) with the dest counter past 256 rows zeroes the last face of that dest half; whether the
-    // other half is reachable was not observed (llk_math_eltwise_binary.h records the 16-row mode's bank
-    // select crossing into the other half). To apply an addrmod without touching dest, step the counters with
-    // INCRWC / SETRWC instead.
+    // No `where` value is known to make the 16-row mode a no-op on Blackhole. Measured: a `where` of 0xff
+    // (the value the Wormhole tree once carried as a no-op) with the dest counter past 256 rows zeroes the
+    // last face of that dest half; whether the other half is reachable was not observed
+    // (llk_math_eltwise_binary.h records the 16-row mode's bank select crossing into the other half). To
+    // apply an addrmod without touching dest, step the counters with INCRWC / SETRWC instead.
 };
 
 struct p_zerosrc

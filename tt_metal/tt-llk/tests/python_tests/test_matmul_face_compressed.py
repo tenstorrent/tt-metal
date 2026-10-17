@@ -3,6 +3,7 @@
 
 import numpy as np
 import pytest
+import torch
 from conftest import blackhole_only
 from helpers.compressed_utils import (
     DEEPSEEK_T420,
@@ -11,13 +12,14 @@ from helpers.compressed_utils import (
     assign_interleaved,
     assign_random,
     assign_tile_matched,
+    face_max_err,
     generate_refined_face_assignment,
     run_compressed,
 )
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.tile_constants import FACE_C_DIM
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, FACE_C_DIM
 
 
 def promote_assignment(assignment, ct):
@@ -233,9 +235,9 @@ SUPPORTED_FORMATS = {FMT_CODE[f] for f in ("bfp0", "bfp2", "bfp4")}
 
 
 def run_face_compressed(
-    M, K, N, assignment, pcc_threshold=None, dest_acc=DestAccumulation.No
+    M, K, N, assignment, pcc_threshold=None, dest_acc=DestAccumulation.No, stimuli=None
 ):
-    run_compressed(
+    return run_compressed(
         M,
         K,
         N,
@@ -249,6 +251,7 @@ def run_face_compressed(
         encode_meta,
         pcc_threshold=pcc_threshold,
         dest_acc=dest_acc,
+        stimuli=stimuli,
     )
 
 
@@ -522,7 +525,7 @@ ZERO_FACE_CASES = [
     ),
     # Odd regime, midIncB: an even K-face-row ends on the second face of a meta, so the meta's
     # first two faces take the two-face fragment -- both zero `hhi`, the row's last face zero
-    # `hhI`, the one before it zero `Ni`.
+    # `Ni`, the one before it zero `hhI`.
     pytest.param(
         8,
         256,
@@ -567,9 +570,38 @@ ZERO_FACE_CASES = [
 ]
 
 # The ct_dim == 1 cases again with a 32-bit DEST: the split accumulation's finalize must keep each face's
-# even partial in DEST and only pass the odd one through SrcB, so neither face loses more width than the
-# other (the per-face error log in run_compressed shows it).
-CT1_ZERO_FACE_CASES = [case for case in ZERO_FACE_CASES if case.values[2] == 32]
+# even partial in DEST and only pass the odd one through SrcB, so neither face loses width it would have
+# kept unsplit. test_matmul_face_compressed_zero_faces_fp32_dest runs them on split_width_stimuli.
+CT1_ZERO_FACE_CASES = [
+    case for case in ZERO_FACE_CASES if case.values[2] // DEFAULT_TILE_C_DIM == 1
+]
+
+# Every even K-face-row of B sums to SPLIT_WIDTH_BIG + SPLIT_WIDTH_FINE per column and every odd one to
+# -SPLIT_WIDTH_BIG, so a face's even partial, 1025 x (its even rows present), carries bits 2^10 and 2^0
+# together -- more than the 16-bit source registers hold -- while its odd partial, -1024 x (odd rows
+# present), is exact at any width.
+SPLIT_WIDTH_BIG = 1024.0
+SPLIT_WIDTH_FINE = 1.0
+
+
+def split_width_stimuli(M, K, N):
+    # A is all ones, so each product is its B value and the LoFi operand masks change nothing; B is constant
+    # along every row, so each 16-wide block packs exactly in bfp2 and bfp4 alike; and every partial sum is an
+    # integer below 2^13, exact in a 32-bit DEST. With as many even as odd K-face-rows present, a column's
+    # exact result is its count of even rows, 2 to 4, so an even partial that passed through a source
+    # register comes out short by one per even row; a face the zero faces leave unbalanced sums to about
+    # +-2048, where the bf16 output rounding hides the dropped bits and only exactness against the rounded
+    # golden is checked.
+    a = torch.ones((M, K), dtype=torch.bfloat16)
+    b = torch.zeros((K, N), dtype=torch.bfloat16)
+    for k in range(K // FACE_C_DIM):
+        row = k * FACE_C_DIM
+        if k % 2 == 0:
+            b[row] = SPLIT_WIDTH_BIG
+            b[row + 1] = SPLIT_WIDTH_FINE
+        else:
+            b[row] = -SPLIT_WIDTH_BIG
+    return a, b
 
 
 def assign_zero_faces(K, N, fmt, zero_faces):
@@ -595,9 +627,29 @@ def test_matmul_face_compressed_zero_faces(M, K, N, fmt, zero_faces):
 @blackhole_only
 @pytest.mark.parametrize("M, K, N, fmt, zero_faces", CT1_ZERO_FACE_CASES)
 def test_matmul_face_compressed_zero_faces_fp32_dest(M, K, N, fmt, zero_faces):
-    """The ct_dim == 1 split accumulation with a 32-bit DEST."""
+    """The ct_dim == 1 split accumulation with a 32-bit DEST keeps each face's even partial at full width."""
     assignment = assign_zero_faces(K, N, fmt, zero_faces)
-    run_face_compressed(M, K, N, assignment, dest_acc=DestAccumulation.Yes)
+    res, golden = run_face_compressed(
+        M,
+        K,
+        N,
+        assignment,
+        dest_acc=DestAccumulation.Yes,
+        stimuli=split_width_stimuli(M, K, N),
+    )
+    # Every product and partial is exact (see split_width_stimuli), so the output must match the golden bit
+    # for bit -- a stricter verdict than the bf16-calibrated tolerance gate run_compressed applied.
+    faces = N // FACE_C_DIM
+    res_faces = res.reshape(M, faces, FACE_C_DIM)
+    golden_faces = golden.to(torch.bfloat16).reshape(M, faces, FACE_C_DIM)
+    inexact_faces = {
+        f"face{c}": face_max_err(res_faces, golden_faces, c)
+        for c in range(faces)
+        if not torch.equal(res_faces[:, c], golden_faces[:, c])
+    }
+    assert (
+        not inexact_faces
+    ), f"faces whose split accumulation lost width (max abs error): {inexact_faces}"
 
 
 # ---------------------------------------------------------------------------

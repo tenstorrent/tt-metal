@@ -45,14 +45,14 @@ constexpr std::uint32_t _llk_math_face_compressed_mm_replay_slot_ = ckernel::REP
 // face is handled; lower case skips a face with no data, stepping the same counters with SETRWC or INCRWC:
 //
 //   h       skip: dest advances 8 rows, both sources hold -- half of noB's step, or all of it at ct_dim == 1
-//   N   noB    dest advances one face, both sources hold
+//   N   noB    dest advances one face (half a face at ct_dim == 1), both sources hold
 //   i / I   incB   SrcB advances one activation row block, dest restarts
 //   c / C   clrB   end of a K block: the SrcB and dest counters reset
 //   r / R   revB   SrcB advances one activation row block, dest holds (ct_dim == 1, see the split layout)
 //
 // Skips are plain counter instructions, never ZEROACC: no row select is known to make Blackhole's 16-row
-// ZEROACC a no-op, and the one the Wormhole tree uses as a no-op was measured to zero the last face of the
-// current dest half once the dest counter is past 256 rows, which at ct_dim == 16 is a live output face.
+// ZEROACC a no-op, and the 0xff the Wormhole tree once carried as one was measured to zero the last face of
+// the current dest half once the dest counter is past 256 rows, which at ct_dim == 16 is a live output face.
 // Each string is an overlap-packing of exactly the fragments its tables ask for, sized to the instructions
 // this thread owns:
 //
@@ -200,11 +200,12 @@ static constexpr auto _llk_math_face_compressed_mm_one_l2_table_ = ckernel::code
  * @brief Program the address modifiers the code sequence moves the sources and dest with.
  *
  * Every MVMUL in the sequence names one of these, and it decides what moves afterwards: ADDR_MOD_0 holds
- * both sources and advances dest one face, ADDR_MOD_1 and ADDR_MOD_3 step SrcB to the next activation row
- * block, ADDR_MOD_2 clears the SrcB and dest counters, ADDR_MOD_4 steps SrcB onto the partial finalize
- * merges and ADDR_MOD_5 holds everything for finalize's moves. The SrcB steps go through its CR, so the CR
- * always equals the counter and the skip instructions, which have no addrmod of their own, can step SrcB
- * relative to it (SETRWC and INCRWC with SrcBCr).
+ * both sources and advances dest one face (half a face at ct_dim == 1), ADDR_MOD_1 and ADDR_MOD_3 step SrcB
+ * to the next activation row block, ADDR_MOD_2 clears the SrcB and dest counters, ADDR_MOD_4 steps SrcB onto
+ * the partial finalize merges and ADDR_MOD_5 holds everything for finalize's moves. Only the ct_dim == 1
+ * sequence and its finalize name ADDR_MOD_3, 4 and 5, so only that width programs them. The SrcB steps go
+ * through its CR, so the CR always equals the counter and the skip instructions, which have no addrmod of
+ * their own, can step SrcB relative to it (SETRWC and INCRWC with SrcBCr).
  *
  * @tparam ct_dim: Output width in tiles. Only whether it is 1 matters: that regime walks dest in 8-row
  *                 steps and holds it on revB (see the split layout at the top of the file), every other
@@ -223,7 +224,7 @@ inline void _llk_math_face_compressed_mm_addrmod_config_(const std::uint32_t fac
         .srcb = {.incr = 0, .clr = 0, .cr = 0},
         .dest = {.incr = face_rows, .clr = 0, .cr = 0},
     }
-        .set(ADDR_MOD_0); // noB: hold both sources, advance dest by one face (one split step at ct_dim == 1)
+        .set(ADDR_MOD_0); // noB: hold both sources, advance dest by one face (half a face, one split step, at ct_dim == 1)
 
     addr_mod_t {
         .srca = {.incr = 0, .clr = 0, .cr = 0},
@@ -242,12 +243,15 @@ inline void _llk_math_face_compressed_mm_addrmod_config_(const std::uint32_t fac
         }
             .set(ADDR_MOD_1); // incB: advance SrcB one activation row block, reset dest to the beginning
 
-        addr_mod_t {
-            .srca = {.incr = 0, .clr = 0, .cr = 0},
-            .srcb = {.incr = 1, .clr = 0, .cr = 1},
-            .dest = {.incr = 0, .clr = 0, .cr = 0},
+        if constexpr (ct_dim == 1)
+        {
+            addr_mod_t {
+                .srca = {.incr = 0, .clr = 0, .cr = 0},
+                .srcb = {.incr = 1, .clr = 0, .cr = 1},
+                .dest = {.incr = 0, .clr = 0, .cr = 0},
+            }
+                .set(ADDR_MOD_3); // revB: advance SrcB one activation row block, hold dest (the face-1 MVMUL offsets its own rows)
         }
-            .set(ADDR_MOD_3); // revB: advance SrcB one activation row block, hold dest (the face-1 MVMUL offsets its own rows)
     }
     else
     {
@@ -258,27 +262,33 @@ inline void _llk_math_face_compressed_mm_addrmod_config_(const std::uint32_t fac
         }
             .set(ADDR_MOD_1); // incB: advance SrcB one activation row block, reset dest to the beginning
 
+        if constexpr (ct_dim == 1)
+        {
+            addr_mod_t {
+                .srca = {.incr = 0, .clr = 0, .cr = 0},
+                .srcb = {.incr = 8, .clr = 0, .cr = 1},
+                .dest = {.incr = 0, .clr = 0, .cr = 0},
+            }
+                .set(ADDR_MOD_3); // revB: advance SrcB one activation row block, hold dest (the face-1 MVMUL offsets its own rows)
+        }
+    }
+
+    if constexpr (ct_dim == 1)
+    {
         addr_mod_t {
             .srca = {.incr = 0, .clr = 0, .cr = 0},
-            .srcb = {.incr = 8, .clr = 0, .cr = 1},
+            .srcb = {.incr = _llk_math_face_compressed_mm_finalize_face1_srcb_row_, .clr = 0, .cr = 1},
             .dest = {.incr = 0, .clr = 0, .cr = 0},
         }
-            .set(ADDR_MOD_3); // revB: advance SrcB one activation row block, hold dest (the face-1 MVMUL offsets its own rows)
-    }
+            .set(ADDR_MOD_4); // finalize: advance SrcB from face 0's parked partial to face 1's, hold dest
 
-    addr_mod_t {
-        .srca = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb = {.incr = _llk_math_face_compressed_mm_finalize_face1_srcb_row_, .clr = 0, .cr = 1},
-        .dest = {.incr = 0, .clr = 0, .cr = 0},
+        addr_mod_t {
+            .srca = {.incr = 0, .clr = 0, .cr = 0},
+            .srcb = {.incr = 0, .clr = 0, .cr = 0},
+            .dest = {.incr = 0, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_5); // finalize: hold everything, the moves address their rows directly
     }
-        .set(ADDR_MOD_4); // finalize: advance SrcB from face 0's parked partial to face 1's, hold dest
-
-    addr_mod_t {
-        .srca = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb = {.incr = 0, .clr = 0, .cr = 0},
-        .dest = {.incr = 0, .clr = 0, .cr = 0},
-    }
-        .set(ADDR_MOD_5); // finalize: hold everything, the moves address their rows directly
 }
 
 /**
@@ -421,8 +431,8 @@ inline std::array<const std::uint32_t*, 2> _llk_math_face_compressed_mm_tables_(
 {
     if constexpr (ct_dim == 1)
     {
-        const std::uint32_t* l2_table =
-            face_r_dim == 1 ? _llk_math_face_compressed_mm_one_l2_table_<1>.data() : _llk_math_face_compressed_mm_one_l2_table_<8>.data();
+        const std::uint32_t* l2_table = face_r_dim == 1 ? _llk_math_face_compressed_mm_one_l2_table_<1 /*srcb_incr*/>.data()
+                                                        : _llk_math_face_compressed_mm_one_l2_table_<8 /*srcb_incr*/>.data();
         return {{_llk_math_face_compressed_mm_one_l1_table_.data(), l2_table}};
     }
     else if constexpr (ct_dim % 2 == 0)

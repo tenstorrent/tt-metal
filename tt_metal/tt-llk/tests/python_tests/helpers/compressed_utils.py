@@ -358,6 +358,13 @@ def unpack_bfp_tile(tile, code, tile_dim, face_dim=FACE_C_DIM):
     )  # face-major -> row-major
 
 
+def face_max_err(res_faces, ref_faces, c):
+    # Max abs error of 16-column output face c against a reference of any float dtype, rounded for a log line.
+    return round(
+        (res_faces[:, c].float() - ref_faces[:, c].float()).abs().max().item(), 4
+    )
+
+
 def run_compressed(
     M,
     K,
@@ -373,6 +380,7 @@ def run_compressed(
     pcc_threshold=None,
     calls=CUSTOM_MM_CALLS(),
     dest_acc=DestAccumulation.No,
+    stimuli=None,
 ):
     # Shared driver for both compressed-matmul tests. Kernel-specific parts are passed
     # flat: kernel (C++ source), granularity (assignment unit — 32 tile / 16 face),
@@ -384,6 +392,8 @@ def run_compressed(
     # differ from the 32-tile grid kt/ct (K//32, N//32) on the face kernel.
     # calls (CUSTOM_MM_CALLS) splits K over back-to-back calls; pack_b / make_meta then lay B and its meta
     # out per call. dest_acc selects the DEST width the kernel accumulates in; the output stays Float16_b.
+    # stimuli, when given, is the (A, B) bf16 pair, shaped (M, K) and (K, N), to run instead of the seeded
+    # randn one. Returns the (M, N) bf16 result and the golden it passed, for a caller with a stricter check.
     kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM  # 32-tile kernel grid
     ku, cu = (
         K // granularity,
@@ -426,9 +436,16 @@ def run_compressed(
     # b_dequant = dequant(quant(B)), so BFP rounding is folded into the golden rather
     # than charged against PCC. The per-kernel pack_b / make_meta turn the packed
     # tiles into the device B buffer and its meta.
-    torch.manual_seed(0)
-    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_b = torch.randn((K, N), dtype=torch.bfloat16)
+    if stimuli is None:
+        torch.manual_seed(0)
+        torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+        torch_b = torch.randn((K, N), dtype=torch.bfloat16)
+    else:
+        torch_a, torch_b = stimuli
+        assert torch_a.shape == (M, K) and torch_b.shape == (
+            K,
+            N,
+        ), f"stimuli must be A ({M}, {K}) and B ({K}, {N})"
     b_dequant = torch.zeros((K, N), dtype=torch.bfloat16)
     tiles = []  # (code, packed_bytes) per assignment unit, in row-major order
     for i, code in enumerate(assignment):
@@ -523,10 +540,7 @@ def run_compressed(
     logger.info(
         "max abs error per output face vs the fp32 golden (dest_acc={}): {}",
         dest_acc.name,
-        [
-            round((res_faces[:, c].float() - golden32[:, c]).abs().max().item(), 4)
-            for c in range(N // FACE_C_DIM)
-        ],
+        [face_max_err(res_faces, golden32, c) for c in range(N // FACE_C_DIM)],
     )
 
     # Name the 16-column output faces outside the tolerance half of passed_test's gate (the same isclose on
@@ -535,9 +549,7 @@ def run_compressed(
     rtol = tolerances[DataFormat.Float16_b].rtol
     golden_faces = golden.to(torch.bfloat16).reshape(M, N // FACE_C_DIM, FACE_C_DIM)
     bad_faces = {
-        f"face{c}": round(
-            (res_faces[:, c].float() - golden_faces[:, c].float()).abs().max().item(), 4
-        )
+        f"face{c}": face_max_err(res_faces, golden_faces, c)
         for c in range(N // FACE_C_DIM)
         if not (
             torch.isclose(golden_faces[:, c], res_faces[:, c], atol=acc_atol, rtol=rtol)
@@ -556,3 +568,4 @@ def run_compressed(
         f"compressed matmul failed for shape=(M={M}, K={K}, N={N}); output faces outside "
         f"atol={acc_atol:.4g}/rtol={rtol} (max abs err): {bad_faces}"
     )
+    return res_tensor, golden
