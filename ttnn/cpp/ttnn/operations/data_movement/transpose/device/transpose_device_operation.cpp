@@ -408,6 +408,30 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
             input_tensor.physical_volume(),
             TILE_HW);
     }
+
+    // The sharded row-major WH factory packs an H % TILE_HEIGHT != 0 output through the Blackhole narrow-row
+    // untilize, whose per-row L1 advance is in 16-byte units: an output row of ht * (H % TILE_HEIGHT) datums whose
+    // byte width is not a multiple of 16 is packed at the wrong pitch and the rows overlap. Wormhole streams the
+    // rows without a per-row restart and has no such limit. Mirrors the device-side LLK assert so the shape is
+    // rejected here instead of producing a silently wrong tensor.
+    if (row_major && input_tensor.device()->arch() == tt::ARCH::BLACKHOLE &&
+        std::holds_alternative<TransposeWHShardedRMProgramFactory>(
+            select_program_factory(operation_attributes, tensor_args))) {
+        const uint32_t logical_h = input_tensor.logical_shape()[2];
+        const uint32_t last_row_num_datums = logical_h % TILE_HEIGHT;
+        if (last_row_num_datums != 0) {
+            const uint32_t ht = (logical_h + TILE_HEIGHT - 1) / TILE_HEIGHT;
+            const uint32_t row_bytes = ht * last_row_num_datums * input_tensor.element_size();
+            TT_FATAL(
+                row_bytes % 16 == 0,
+                "Sharded row-major transpose on Blackhole packs output rows of {} datums ({} bytes, from H {} % {}); "
+                "the row byte width must be a multiple of 16 bytes. Pad H or use an interleaved input.",
+                ht * last_row_num_datums,
+                row_bytes,
+                logical_h,
+                TILE_HEIGHT);
+        }
+    }
 }
 
 tt::tt_metal::TensorSpec TransposeDeviceOperation::compute_output_specs(

@@ -220,6 +220,14 @@ inline void _llk_pack_untilize_init_(
     if constexpr (narrow_row)
     {
         output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * row_num_datums);
+        // Every row of the untilize MOP is closed by a Last=1 PACR and the next row restarts at the L1 destination
+        // address, which the replay buffer below advances by output_addr_offset / 16 (the address and the packer's
+        // L1 writes are in 16-byte units). A row byte width that is not a multiple of 16 cannot be expressed as a
+        // per-row pitch: rows are packed at the floored pitch and overlap (an 8-byte row never advances at all).
+        LLK_ASSERT(
+            (output_addr_offset % 16) == 0,
+            "narrow_row: full_ct_dim * row_num_datums must span a multiple of 16 bytes in pack_dst_format (per-row "
+            "L1 advance is in 16-byte units)");
     }
     else
     {

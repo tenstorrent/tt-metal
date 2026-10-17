@@ -10,16 +10,20 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/program/program_impl.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/debug/watcher_server.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <cctype>
+#include <chrono>
 #include <functional>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -90,6 +94,8 @@ struct TestConfig {
     // Exercise explicit geometry while the output metadata describes a full tile.
     bool explicit_untilize_geometry = false;
     bool explicit_untilize_narrow_row = false;
+    // Narrow-row width in datums (0 = one face, the kernel default). Only read when explicit_untilize_narrow_row.
+    std::uint32_t explicit_untilize_row_num_datums = 0;
     // UNPACK_A tilize only: tilize the whole block with a nonzero input_tile_index per tile-row
     // (via tilize_across_tile_rows.cpp) so the cross-tile-row stride in llk_unpack_tilize_block is
     // exercised, instead of the default tilize.cpp which uses input_tile_index=0 + pop_front.
@@ -362,6 +368,10 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
         compute_defines.emplace("EXPLICIT_FACE_R_DIM", std::to_string(test_config.face_r_dim));
         compute_defines.emplace("EXPLICIT_NUM_FACES", std::to_string(num_faces));
         compute_defines.emplace("EXPLICIT_NARROW_ROW", test_config.explicit_untilize_narrow_row ? "1" : "0");
+        if (test_config.explicit_untilize_narrow_row && test_config.explicit_untilize_row_num_datums != 0) {
+            compute_defines.emplace(
+                "EXPLICIT_ROW_NUM_DATUMS", std::to_string(test_config.explicit_untilize_row_num_datums));
+        }
     }
     if (test_config.fp32_dest_acc_en) {
         compute_defines.emplace("DST_ACCUM_MODE", "1");
@@ -1815,6 +1825,198 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeExplicitGeometry) 
             }
         }
     }
+}
+
+namespace {
+
+// Golden for a narrow-row untilize of full 32x32 tiles: the first row_num_datums datums of every untilized
+// row (bf16: two datums per word, so row_num_datums must be even).
+std::function<std::vector<std::uint32_t>(const std::vector<std::uint32_t>&, const ::unit_tests::compute::GoldenConfig&)>
+narrow_row_untilize_golden(std::uint32_t row_num_datums) {
+    return [row_num_datums](const std::vector<std::uint32_t>& src, const ::unit_tests::compute::GoldenConfig& config) {
+        const auto full = ::unit_tests::compute::gold_standard_untilize(src, config);
+        const std::size_t full_row_words = static_cast<std::size_t>(config.num_tiles_c_dim) * constants::TILE_WIDTH *
+                                           config.datum_bytes / sizeof(std::uint32_t);
+        const std::size_t narrow_row_words = row_num_datums * config.datum_bytes / sizeof(std::uint32_t);
+        std::vector<std::uint32_t> narrow;
+        for (std::size_t row_start = 0; row_start < full.size(); row_start += full_row_words) {
+            narrow.insert(narrow.end(), full.begin() + row_start, full.begin() + row_start + narrow_row_words);
+        }
+        return narrow;
+    };
+}
+
+// Watcher poll period for the narrow-row assert fixture below; a clean run is given one more poll before
+// its watcher state is read.
+constexpr int kNarrowRowWatcherIntervalMs = 250;
+
+// Runs pack_untilize_narrow_row_guard.cpp, the init-only kernel, for row_num_datums on one core with a
+// full-tile bf16 CB pair. Returns true when the program completed; false when the wait aborted because the
+// watcher reported an error (the only exception tolerated), leaving the watcher state for the caller to read.
+bool run_pack_untilize_narrow_row_guard_kernel(distributed::MeshDevice& mesh, std::uint32_t row_num_datums) {
+    const CoreCoord core{0, 0};
+    Program program = CreateProgram();
+    const std::uint32_t tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    for (const auto index : {tt::CBIndex::c_0, tt::CBIndex::c_16}) {
+        CreateCircularBuffer(
+            program,
+            core,
+            CircularBufferConfig(tile_bytes, {{index, tt::DataFormat::Float16_b}}).set_page_size(index, tile_bytes));
+    }
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize_narrow_row_guard.cpp",
+        core,
+        ComputeConfig{.compile_args = {row_num_datums}});
+    distributed::MeshWorkload workload;
+    const distributed::MeshCoordinate zero(0, 0);
+    workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
+    auto& cq = mesh.mesh_command_queue();
+    try {
+        distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("Aborting wait due to watcher error"), std::string::npos) << e.what();
+        return false;
+    }
+    return true;
+}
+
+std::string wait_for_narrow_row_watcher_exception() {
+    constexpr auto timeout = std::chrono::milliseconds(5000);
+    constexpr auto poll_interval = std::chrono::milliseconds(100);
+    const auto start = std::chrono::steady_clock::now();
+    std::string exception;
+    while (std::chrono::steady_clock::now() - start < timeout) {
+        exception = MetalContext::instance().watcher_server()->exception_message();
+        if (!exception.empty()) {
+            break;
+        }
+        std::this_thread::sleep_for(poll_interval);
+    }
+    return exception;
+}
+
+// A narrow row whose bf16 byte width is not a multiple of 16 must trip the pack untilize init's row-width
+// assert on TRISC2. Without it the init accepts the width and the rows are packed at a 16-byte-floored pitch:
+// 8-byte rows all land on the same 16 bytes, 40-byte rows overwrite the tail of the previous row.
+void run_pack_untilize_narrow_row_rejects(distributed::MeshDevice& mesh, std::uint32_t row_num_datums) {
+    // The program may complete (no guard), so completion is not checked here; the watcher state is.
+    run_pack_untilize_narrow_row_guard_kernel(mesh, row_num_datums);
+    const std::string exception = wait_for_narrow_row_watcher_exception();
+    ASSERT_FALSE(exception.empty()) << "a narrow row of " << row_num_datums << " bf16 datums (" << 2 * row_num_datums
+                                    << " bytes) was accepted by the pack untilize init; the packer advances its "
+                                       "L1 destination in 16-byte units per row, so these rows overlap";
+    EXPECT_NE(exception.find("tripped an assert"), std::string::npos) << exception;
+    EXPECT_NE(exception.find("pack_untilize_narrow_row_guard"), std::string::npos) << exception;
+    EXPECT_NE(exception.find("TRISC2"), std::string::npos) << exception;
+}
+
+}  // namespace
+
+// Narrow-row untilize of full 32x32 bf16 tiles at the row widths ttnn's sharded row-major transpose uses
+// (H % 32 datums per row, one tile per block): every width whose byte width is a multiple of 16 matches the
+// golden. Three tile rows exercise half-sync bank reuse.
+TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeNarrowRowWidths) {
+    for (const std::uint32_t row_num_datums : {8u, 16u}) {
+        for (const bool full_sync : {false, true}) {
+            SCOPED_TRACE(fmt::format("row_num_datums={}, full_sync={}", row_num_datums, full_sync));
+            unit_tests::compute::tilize::TestConfig config{
+                .dst_full_sync_en = full_sync,
+                .explicit_untilize_geometry = true,
+                .explicit_untilize_narrow_row = true,
+                .explicit_untilize_row_num_datums = row_num_datums,
+                .input_single_tile_size = 2048,
+                .output_single_tile_size = 2 * constants::TILE_HEIGHT * row_num_datums,
+                .num_tiles_r = 3,
+                .num_tiles_c = 1,
+                .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
+                .golden_function = narrow_row_untilize_golden(row_num_datums)};
+            unit_tests::compute::tilize::run_single_core_tilize_program(*devices_.at(0), config);
+        }
+    }
+}
+
+// Opens one Blackhole device per test with the watcher and LLK asserts enabled, so a device-side LLK_ASSERT
+// surfaces as a watcher exception instead of a silent hang. Mirrors MeshWatcherFixture
+// (tests/tt_metal/tt_metal/debug_tools/debug_tools_fixture.hpp); the options must be set before the device
+// opens, and a tripped assert parks a TRISC, so the device is reopened for every test.
+class LLKBlackholePackUntilizeAssertFixture : public MeshDispatchFixture {
+public:
+    // No suite-shared device: the options below change the firmware build, so the device must open after
+    // they are set, once per test.
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
+protected:
+    void SetUp() override {
+        // Capture before any early exit: TearDown still runs after a skip or a failed assertion here, and
+        // must restore the real previous values, not the zero-initialised members.
+        auto& rtoptions = MetalContext::instance().rtoptions();
+        watcher_previous_enabled_ = rtoptions.get_watcher_enabled();
+        watcher_previous_interval_ = rtoptions.get_watcher_interval();
+        test_mode_previous_ = rtoptions.get_test_mode_enabled();
+        llk_asserts_previous_ = rtoptions.get_llk_asserts();
+
+        if (detail::detect_arch() != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP() << "This test can only be run on Blackhole cards";
+        }
+        rtoptions.set_watcher_enabled(true);
+        rtoptions.set_watcher_interval(kNarrowRowWatcherIntervalMs);
+        // In test mode a watcher error stops the server and fails the wait instead of ending the process.
+        rtoptions.set_test_mode_enabled(true);
+        rtoptions.set_llk_asserts(true);
+
+        const ChipId mmio_device_id = *MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        auto id_to_device = distributed::MeshDevice::create_unit_meshes(
+            {mmio_device_id},
+            l1_small_size_,
+            trace_region_size_,
+            1,
+            MetalContext::instance().resolve_dispatch_core_config());
+        devices_ = {id_to_device.at(mmio_device_id)};
+        arch_ = tt::ARCH::BLACKHOLE;
+        MetalContext::instance().watcher_server()->clear_log();
+    }
+
+    void TearDown() override {
+        for (auto& device : devices_) {
+            device->close();
+        }
+        devices_.clear();
+        auto& rtoptions = MetalContext::instance().rtoptions();
+        rtoptions.set_llk_asserts(llk_asserts_previous_);
+        rtoptions.set_test_mode_enabled(test_mode_previous_);
+        rtoptions.set_watcher_interval(watcher_previous_interval_);
+        rtoptions.set_watcher_enabled(watcher_previous_enabled_);
+    }
+
+private:
+    bool watcher_previous_enabled_{};
+    int watcher_previous_interval_{};
+    bool test_mode_previous_{};
+    bool llk_asserts_previous_{};
+};
+
+// Positive control: a 16-byte row (8 bf16 datums) passes the init with a clean watcher.
+TEST_F(LLKBlackholePackUntilizeAssertFixture, PackUntilizeNarrowRowAcceptsSixteenByteRows) {
+    ASSERT_TRUE(run_pack_untilize_narrow_row_guard_kernel(*devices_.at(0), 8))
+        << "the narrow-row init on 8 bf16 datums did not complete: "
+        << MetalContext::instance().watcher_server()->exception_message();
+    // One more watcher poll after completion, so a late report is not missed.
+    std::this_thread::sleep_for(std::chrono::milliseconds(2 * kNarrowRowWatcherIntervalMs));
+    EXPECT_TRUE(MetalContext::instance().watcher_server()->exception_message().empty())
+        << MetalContext::instance().watcher_server()->exception_message();
+}
+
+// 4 bf16 datums = 8 bytes: the per-row advance floors to 0 and every row lands on the same 16 bytes.
+TEST_F(LLKBlackholePackUntilizeAssertFixture, PackUntilizeNarrowRowRejectsEightByteRows) {
+    run_pack_untilize_narrow_row_rejects(*devices_.at(0), 4);
+}
+
+// 20 bf16 datums = 40 bytes: the per-row advance floors to 32 and each row overwrites the previous row's tail.
+TEST_F(LLKBlackholePackUntilizeAssertFixture, PackUntilizeNarrowRowRejectsFortyByteRows) {
+    run_pack_untilize_narrow_row_rejects(*devices_.at(0), 20);
 }
 
 // ============================================================================
