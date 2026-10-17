@@ -16,6 +16,7 @@
 #include <memory>
 #include <ostream>
 #include <random>
+#include <stdexcept>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -1438,6 +1439,45 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulBlockIdFreeGolden) {
     EXPECT_TRUE(is_close_vectors<float>(
         result_floats, golden, [](float a, float b) { return is_close(a, b, /*rtol=*/0.05f, /*atol=*/0.2f); }));
     EXPECT_TRUE(check_pcc(result_floats, golden, /*min_pcc=*/0.99));
+}
+
+// Compile-time contract of the id-free matmul operand geometry; these programs are never launched. The LLK has
+// no math program for a single-face in0 by a single-face in1 (16x16 by 16x16): its only guard is a runtime
+// LLK_ASSERT that production builds compile out, after which the 32x32 program runs over one-face operands and
+// produces a wrong product with no diagnostic. The API must reject that pair at compile time (both the
+// single-tile and the block init), while a single-face operand paired with a multi-face one stays accepted.
+TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulIdFreeCompileLimits) {
+    // in0 faces (r, c), in1 faces (r, c), block init, accepted.
+    const std::array<std::array<std::uint32_t, 6>, 8> cases{{
+        {2, 2, 2, 2, 0, 1},
+        {1, 1, 2, 2, 0, 1},
+        {2, 2, 1, 1, 0, 1},
+        {1, 1, 1, 1, 0, 0},
+        {2, 2, 2, 2, 1, 1},
+        {1, 2, 1, 1, 1, 1},
+        {1, 1, 2, 1, 1, 1},
+        {1, 1, 1, 1, 1, 0},
+    }};
+    const CoreCoord core{0, 0};
+    for (const auto& test : cases) {
+        SCOPED_TRACE(
+            ::testing::Message() << "in0_faces=" << test[0] << "x" << test[1] << ", in1_faces=" << test[2] << "x"
+                                 << test[3] << ", block=" << test[4]);
+        Program program = CreateProgram();
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/compute/matmul_idfree_compile_limits.cpp",
+            core,
+            ComputeConfig{
+                .math_fidelity = MathFidelity::LoFi,
+                .fp32_dest_acc_en = false,
+                .compile_args = {test[0], test[1], test[2], test[3], test[4]}});
+        if (test[5]) {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+        } else {
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+        }
+    }
 }
 
 }  // namespace tt::tt_metal

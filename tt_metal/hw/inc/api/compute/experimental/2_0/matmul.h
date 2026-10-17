@@ -42,6 +42,10 @@ template <DataFormat F0, TensorShape S0, DataFormat F1, TensorShape S1>
 ALWI void matmul_init(LLKOperand<F0, S0> /*in0*/, LLKOperand<F1, S1> /*in1*/, std::uint32_t transpose = 0) {
     static_assert(is_legal_tile_shape(S0), "matmul_init: illegal tile shape for in0.");
     static_assert(is_legal_tile_shape(S1), "matmul_init: illegal tile shape for in1.");
+    static_assert(
+        !(S0.total_num_faces() == 1 && S1.total_num_faces() == 1),
+        "matmul_init: a single-face in0 by a single-face in1 (16x16 by 16x16) is not supported: there is no "
+        "dedicated math path, the 32x32 program would run over one-face operands.");
     MATH((llk_math_matmul_init<
           LLKOperand<F0, S0>::descriptor,
           LLKOperand<F1, S1>::descriptor,
@@ -99,6 +103,10 @@ ALWI void matmul_block_init(
     std::uint32_t kt_dim = 1) {
     static_assert(is_legal_tile_shape(S0), "matmul_block_init: illegal tile shape for in0.");
     static_assert(is_legal_tile_shape(S1), "matmul_block_init: illegal tile shape for in1.");
+    static_assert(
+        !(S0.total_num_faces() == 1 && S1.total_num_faces() == 1),
+        "matmul_block_init: a single-face in0 by a single-face in1 (16x16 by 16x16) is not supported: there is no "
+        "dedicated math path, the 32x32 program would run over one-face operands.");
     MATH((llk_math_matmul_init<
           LLKOperand<F0, S0>::descriptor,
           LLKOperand<F1, S1>::descriptor,

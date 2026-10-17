@@ -29,6 +29,11 @@ template <
     int THROTTLE_LEVEL = 0>
 inline void llk_math_matmul_init(
     const std::uint32_t transpose = 0, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
+    // Compile-time form of the unified init's runtime LLK_ASSERT (compiled out in production builds): there is
+    // no math program for a one-face in0 by a one-face in1; the 32x32 default would run over them silently.
+    static_assert(
+        !(IN0_DESC.shape.total_num_faces() == 1 && IN1_DESC.shape.total_num_faces() == 1),
+        "llk_math_matmul_init: 16x16 by 16x16 matmul is not supported");
     SAN_HOOK(unsupported());
     constexpr std::uint32_t in0_tile_r_dim = IN0_DESC.shape.total_row_dim();
     constexpr std::uint32_t in0_tile_c_dim = IN0_DESC.shape.total_col_dim();

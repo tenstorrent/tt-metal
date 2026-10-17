@@ -40,6 +40,11 @@ inline void llk_unpack_AB_matmul_init(
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1,
     const std::uint32_t kt_dim = 1) {
+    // Compile-time form of the unified init's runtime LLK_ASSERT (compiled out in production builds): there is
+    // no math program for a one-face SrcA by a one-face SrcB; the 32x32 default would run over them silently.
+    static_assert(
+        !(IN0_DESC.shape.total_num_faces() == 1 && IN1_DESC.shape.total_num_faces() == 1),
+        "llk_unpack_AB_matmul_init: 16x16 by 16x16 matmul is not supported");
     SAN_HOOK(unsupported());
     // unpA(SrcA) <- IN1, unpB(SrcB) <- IN0.
     llk_unpack_AB_matmul_init_impl(
