@@ -160,11 +160,24 @@ ALWI void softshrink_tile_init() { MATH(SFPU_UNARY_INIT(softshrink)); }
 */
 // clang-format on
 ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
+    MATH(if constexpr (ckernel::sfpu::hardshrink_bf16_whole_tile && !DST_ACCUM_MODE) {
+        if (param0 == 0x3f000000u) {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_hardshrink,
+                (APPROX, 32, DST_ACCUM_MODE),
+                idst,
+                VectorMode::None,
+                param0);
+            return;
+        }
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_hardshrink,
-        (APPROX, 8 /* ITERATIONS */),
+        (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE),
         idst,
         VectorMode::RC,
         param0));
@@ -173,6 +186,9 @@ ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void hardshrink_tile_init() { MATH(SFPU_UNARY_INIT(hardshrink)); }
+ALWI void hardshrink_tile_init() {
+    MATH(SFPU_UNARY_INIT(hardshrink));
+    MATH(ckernel::sfpu::hardshrink_bf16_tile_init<!DST_ACCUM_MODE>());
+}
 
 }  // namespace ckernel
