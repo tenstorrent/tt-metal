@@ -297,16 +297,51 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
     return is_packer_to_L1_early_conversion_supported(in_reg, out_l1) || is_packer_to_L1_late_conversion_supported(in_reg, out_l1);
 }
 
-template <PackMode pack_mode = PackMode::Default>
-inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
+// Which packer stride layout is programmed. Recorded by the writers that go through it: the templated
+// set_packer_strides<pack_mode> (hw-configure, _llk_pack_init_, the fast tilize/untilize uninits), the
+// op-specific inits _llk_pack_untilize_init_ / _llk_pack_fast_tilize_init_ / _llk_pack_fast_untilize_init_
+// (OpInit) and their uninits (Default). Read by reconfig_packer_data_format, so that a data-format reconfig
+// re-derives the strides for the new format in the layout that is armed instead of resetting them to
+// Default: the full-width Tilize/Untilize pack MOPs step Z by two faces per increment (see
+// set_packer_strides) and would otherwise pack faces 1,2 instead of 2,3 after `init<Tilize>; reconfig;
+// pack`. The op-specific inits program every stride they read (Y/W/Z, and the channel-1 Y stride of the
+// strided fast untilize) from their own geometry, which a reconfig cannot reproduce (the pack-untilize init
+// takes the Default Y/W of the hw-configure / reconfig before it and programs them itself only after another
+// op-specific init, which it decides by reading this state), and each programs its own X (datum) counter
+// end: while one of them is armed the reconfig leaves the strides and the X counter as that init left them,
+// and their uninits restore the Default layout (the fast uninits through set_packer_strides<Default>, the
+// pack-untilize uninit by restoring the one-face Z, Y/W/channel-1 being Default already). pack_init_apply
+// asserts this layout when it is asked to skip the strides. Raw stride writers
+// bypass the tracker and that assert: _llk_pack_hw_cleanup_poison_pack_ambient_ zeroes Y/Z/W after
+// hw-configure recorded Default, and the custom-mm pack inits (_llk_pack_custom_mm_init_, the sdpa and
+// reuse-dest-srcb custom-mm compute APIs) RMW Z/W; a skip-strides init after one of them is not caught.
+enum class PackerStrides : std::uint8_t
+{
+    Default,  // one-face Z: set_packer_strides for PackMode::Default
+    TwoFaceZ, // two-face Z: set_packer_strides for PackMode::Tilize / PackMode::Untilize
+    OpInit,   // programmed by an op-specific init; left alone by reconfig_packer_data_format
+};
+
+static PackerStrides armed_packer_strides = PackerStrides::Default;
+
+// The stride layout a pack in `pack_mode` needs (set_packer_strides<pack_mode> programs it).
+constexpr PackerStrides packer_strides_for(const PackMode pack_mode)
+{
+    return pack_mode == PackMode::Default ? PackerStrides::Default : PackerStrides::TwoFaceZ;
+}
+
+// Program the packer strides for `pack_src_format`. two_face_z selects the layout of the Tilize/Untilize
+// pack MOPs, which have 2 packer interfaces active and step the Z counter by two faces per increment
+// (the counter is only 1 bit, so it cannot be programmed to count by 2); full-width tiles only, a narrow
+// tile keeps the one-face Z. Runtime so that reconfig_packer_data_format carries one body for both layouts;
+// it does not record the layout (the reconfig re-derives the one that is armed), the template below does.
+inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim, const bool two_face_z)
 {
     std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
     std::uint32_t y_stride = FACE_C_DIM * x_stride;
     std::uint32_t w_stride = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * x_stride;
 
-    // Untilize mode has 2 packer interfaces active, so z counter needs to jump by 2
-    // faces, since z counter is only 1 bit (can't be programmed to inc by 2)
-    const std::uint32_t z_stride = ((pack_mode != PackMode::Default) && (tile_c_dim == TILE_C_DIM)) ? 2 * FACE_R_DIM * y_stride : FACE_R_DIM * y_stride;
+    const std::uint32_t z_stride = (two_face_z && (tile_c_dim == TILE_C_DIM)) ? 2 * FACE_R_DIM * y_stride : FACE_R_DIM * y_stride;
 
     TT_SETDMAREG(0, LOWER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, LO_16(p_gpr_pack::TMP0)); // x-stride not used!
     TT_SETDMAREG(0, UPPER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, HI_16(p_gpr_pack::TMP0));
@@ -322,6 +357,14 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
     TTI_NOP;
     TTI_NOP;
+}
+
+// Program the packer strides for a pack in `pack_mode` and record that layout.
+template <PackMode pack_mode = PackMode::Default>
+inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
+{
+    set_packer_strides(pack_src_format, tile_c_dim, pack_mode != PackMode::Default /*two_face_z*/);
+    armed_packer_strides = packer_strides_for(pack_mode);
 }
 
 inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
@@ -557,13 +600,17 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(is_fp8_e4m3 ? to_underlying(DataFormat::Float16) : pack_output_src_format);
 
-    // Set packer strides
-    set_packer_strides<PackMode::Default>(pack_output_src_format, tile_c_dim);
-
-    // Program the packer X (datum) counter. _llk_pack_init_ owns this counter ("inits own SETADCXX"),
-    // but reconfig also programs it here: a reconfig is not always followed by an init, and on Blackhole
-    // the value is a mode-independent constant (single row, FACE_C_DIM - 1), so it is safe to set here.
-    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    // Re-derive the packer strides for the new format in the layout that is armed, and program the packer X
+    // (datum) counter end: _llk_pack_init_ owns that counter ("inits own SETADCXX"), but a reconfig is not
+    // always followed by an init and for the Default/Tilize/Untilize pack modes the value is a constant
+    // (single row, FACE_C_DIM - 1), so it is set here too. An op-specific init (pack-untilize, fast
+    // tilize/untilize) owns both: it programs its own strides and its own X end (a narrow-row pack-untilize
+    // packs row_num_datums per row) and its execute never re-programs them, so leave them as it left them.
+    if (armed_packer_strides != PackerStrides::OpInit)
+    {
+        set_packer_strides(pack_output_src_format, tile_c_dim, armed_packer_strides == PackerStrides::TwoFaceZ /*two_face_z*/);
+        TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    }
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
