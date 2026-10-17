@@ -79,6 +79,31 @@ def test_softplus_threshold_boundary(device, beta, threshold):
     run_softplus_boundary_test(device, beta, threshold)
 
 
+@pytest.mark.parametrize("beta, threshold, x", [(2, 1, 0.75), (2, 1, 1.0), (4, 1, 0.5)])
+def test_softplus_linear_region_is_on_beta_times_x(device, beta, threshold, x):
+    """The linear fallback is selected by ``beta * x > threshold``, not by ``x > threshold``.
+
+    Every case has ``threshold / beta < x <= threshold``, where the two readings disagree: on
+    ``beta * x`` the element is in the linear region and comes back unchanged (what torch does);
+    on ``x`` it would take the softplus path and come back strictly larger (0.75 -> 0.851 for
+    beta=2, threshold=1). ``x`` is exact in bfloat16, so the check is bit-for-bit.
+    """
+    assert threshold / beta < x <= threshold
+    torch_input_tensor = torch.full((64, 64), x, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.softplus(torch_input_tensor, beta=beta, threshold=threshold)
+    assert torch.equal(torch_output_tensor, torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    output_tensor = ttnn.softplus(input_tensor, beta=beta, threshold=threshold)
+    output_tensor = ttnn.to_torch(ttnn.from_device(ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)))
+
+    assert torch.equal(
+        output_tensor, torch_input_tensor
+    ), f"softplus did not return x unchanged for beta*x > threshold (beta={beta}, threshold={threshold}, x={x})"
+
+
 def test_tanhshrink_ulp(device):
     """ULP regression guard for the dedicated tanhshrink SFPU op (issue #45520).
 
