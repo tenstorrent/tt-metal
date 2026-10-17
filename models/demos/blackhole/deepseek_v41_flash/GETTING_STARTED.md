@@ -315,7 +315,7 @@ Limits:
 
 ## Performance
 
-The tables below were measured on the previous image (`0.24.0-799a223-ffd1a57`); the benchmark workflow was not re-run on this image. The prefix-caching and chunked-prefill numbers are in their own section.
+The tables below were measured on the previous image (`0.24.0-799a223-ffd1a57`); the benchmark workflow was re-run on this image only for the default 16-user, 262,144-token spec (first table). The prefix-caching and chunked-prefill numbers are in their own section.
 
 Method for all tables:
 - GSM8K 8-shot prompts, about 700 tokens, 256 output tokens.
@@ -323,6 +323,18 @@ Method for all tables:
 - A constant number of requests in flight.
 - Greedy is temperature 0. Sampled is temperature 0.6, top-k 20, top-p 0.95.
 - TTFT and TPOT are report means.
+
+### 16 users, 262,144 tokens (default spec, image `0.24.0-c9cfb00-ffd1a57`)
+
+| Concurrent requests | Greedy TTFT | Greedy TPOT | Greedy tok/s/user | Sampled TTFT | Sampled TPOT | Sampled tok/s/user |
+|---|---|---|---|---|---|---|
+| 1 | 1.08 s | 29.0 ms | 34.5 | 1.11 s | 30.9 ms | 32.3 |
+| 2 | 1.28 s | 33.8 ms | 29.6 | 1.31 s | 32.4 ms | 30.9 |
+| 4 | 1.49 s | 36.6 ms | 27.3 | 1.41 s | 40.5 ms | 24.7 |
+| 8 | 1.85 s | 51.5 ms | 19.4 | 1.89 s | 52.5 ms | 19.0 |
+| 16 | 2.52 s | 74.1 ms | 13.5 | 2.59 s | 74.9 ms | 13.4 |
+
+Total output throughput (greedy): 30.2 / 51.1 / 89.1 / 131.6 / 183.6 tok/s at 1 / 2 / 4 / 8 / 16 requests.
 
 ### 16 users, 131,072 tokens (default spec, this release)
 
