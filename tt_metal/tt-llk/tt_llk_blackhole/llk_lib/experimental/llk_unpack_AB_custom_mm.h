@@ -44,9 +44,9 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
     // Each unpack instruction we move to next face in L1, but this is split among Y and Z counters
     // The L1 face index is the sum of the low 8 bits of each counter, (Y & 0xff) + (Z & 0xff)
     // (UNPACR_Regular.md), so a single counter would overflow after 256 faces. Per k-tile the first
-    // face is read at (Y=k, Z=k) and the second at (Y=k, Z=k+1), so the walk reaches face 510 at
-    // most, which caps kt_dim at 255: for k = 255 the second read would see Z = 256, whose low
-    // byte is 0, and fetch face 255 instead of face 511
+    // face is read at (Y=k, Z=k) and the second at (Y=k, Z=k+1): kt_dim = 255 reads faces 0..509 and
+    // the walk cannot address face 511, which caps kt_dim at 255. For k = 255 the second read would
+    // see Z = 256, whose low byte is 0, and fetch face 255 instead of face 511
     // For SrcB first unpack has to land at index 0 and second one at index 16,
     // increment from first to second is straightforward, but moving back to 0 after second requires us to exploit
     // counter overflow as CH1 counters only use low 6 bits and wrap at the number of rows in a Src reg (64)
@@ -241,6 +241,8 @@ inline void _llk_unpack_AB_custom_mm_run_(
     const std::uint32_t inner_increment,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim) {
+    LLK_ASSERT(kt_dim <= 255, "custom_mm: the SrcB face walk addresses at most 510 faces (kt_dim <= 255)");
+
     // Program SrcB address once, its updated using counters for up to 255 kt_dim
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
     // Program SrcA address once, its updated using CFGSHIFTMASK
@@ -317,8 +319,6 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim)
 {
-    LLK_ASSERT(kt_dim <= 255, "custom_mm: the SrcB face walk addresses at most 510 faces (kt_dim <= 255)");
-
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
     const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;

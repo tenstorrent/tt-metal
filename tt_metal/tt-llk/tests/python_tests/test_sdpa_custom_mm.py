@@ -21,7 +21,7 @@ sdpa_custom_mm is the SDPA QK^T / PV matmul. operand0 (in0) -> SrcB (lhs), opera
 with the custom_mm layout limits:
     in0 (SrcB) tile shape [M, 32], M in {1,2,4,8}
     in1 (SrcA) tile shape [32, 32]
-    ct_dim = N/32 in [1,16], kt_dim = K/32 even in [2,256]
+    ct_dim = N/32 in [1,16], kt_dim = K/32 even in [2,254]
 
 The math LLK zeroes DEST (mask_chunk=false path) then accumulates the full kt walk, so the
 result is a plain LoFi tiled matmul. The FPU->SFPU semaphore posts (signal_granularity
@@ -40,11 +40,13 @@ The mask re-entry cases preload the mask from the host, then run masked and unma
 matmuls without reinitializing the unpacker. PACK consumes the FPU_SFPU notifications.
 """
 
+import os
 from dataclasses import dataclass
 
 import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.device import LLKAssertException
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import DestAccumulation, MathFidelity
@@ -499,6 +501,54 @@ def test_sdpa_custom_mm_mask_extent_restore(
     assert torch.equal(
         result, golden
     ), "Mask extent or SrcB geometry restoration changed the matmul"
+
+
+@pytest.mark.skipif(
+    os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1",
+    reason="LLK_ASSERT is compiled out (TT_LLK_DISABLE_ASSERTS=1); kt_dim = 256 then runs to a golden mismatch",
+)
+def test_sdpa_custom_mm_kt_past_max_asserts(request):
+    """kt_dim = 256 needs SrcB face 511, which the shared custom_mm walk cannot address; both LLKs reject it.
+
+    sdpa_custom_mm runs the same unpack worker and init MOP as custom_mm (llk_unpack_AB_custom_mm.h), so
+    its ceiling is the same: kt_dim = 255 reads faces 0..509, and with the even-only contract here that is
+    kt_dim <= 254. Without the asserts the kernel runs to completion and multiplies k-tile 255's second
+    half of B with A's face 255 instead of face 511; the operands make that one swap decide the sign of
+    the result (A is 0 except face 511 = +1 and face 255 = -1, B is 0 except the rows face 511 pairs
+    with). The test kernel's pack thread gives up waiting for math (sdpa_custom_mm_test.cpp), so no
+    Tensix instruction is left pending for the next test.
+    """
+    _skip_on_simulator(request)
+    M, kt, ct = 8, 256, 1
+    K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
+    last_face = slice(K - FACE_C_DIM, K)
+    aliased_face = slice(K // 2 - FACE_C_DIM, K // 2)
+
+    torch_a = torch.zeros((M, K), dtype=torch.bfloat16)
+    torch_a[:, last_face] = 1.0
+    torch_a[:, aliased_face] = -1.0
+    torch_b = torch.zeros((K, N), dtype=torch.bfloat16)
+    torch_b[last_face, :] = (1.0 + (torch.arange(N, dtype=torch.float32) % 8)).to(
+        torch.bfloat16
+    )
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        LLKAssertException
+    ) as assert_hit:
+        _run(
+            M,
+            K,
+            N,
+            signal_granularity=1,
+            read_transposed=False,
+            mm_transpose=False,
+            operands=(torch_a, torch_b),
+        )
+    stack_traces = str(assert_hit.value)
+    for thread in ("TRISC0", "TRISC1"):
+        assert (
+            thread in stack_traces
+        ), f"expected {thread} to reject kt_dim={kt}:\n{stack_traces}"
 
 
 # Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).

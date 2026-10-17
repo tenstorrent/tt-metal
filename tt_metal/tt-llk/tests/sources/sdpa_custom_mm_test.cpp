@@ -30,7 +30,7 @@
 // with the custom_mm layout limits (llk_unpack_AB_custom_mm.h):
 //     in0 (SrcB) tile shape [M, 32], M in {1,2,4,8}   -> operandB_face_r_dim
 //     in1 (SrcA) tile shape [32, 32]
-//     rt_dim = 1, ct_dim = N/32 in [1,16], kt_dim = K/32 even in [2,256]
+//     rt_dim = 1, ct_dim = N/32 in [1,16], kt_dim = K/32 even in [2,254]
 //
 // _llk_math_sdpa_custom_mm_ does exactly one accumulating MVMUL walk:
 //   - _llk_math_sdpa_custom_mm_mask_dest_ first ZEROes the ct_dim result tiles in DEST
@@ -92,6 +92,11 @@ constexpr std::uint32_t SDPA_INPUT_ROW_STRIDE = READ_TRANSPOSED && SDPA_ROW_STRI
 constexpr std::uint32_t SDPA_INPUT_ROW_STRIDE = KT_DIM;
 #endif
 constexpr std::uint32_t SDPA_MASK_TILE_INDEX = SDPA_INPUT_TILE_OFFSET + SDPA_INPUT_ROW_STRIDE * CT_DIM;
+
+// The kt_dim ceiling of the shared unpack worker (llk_unpack_AB_custom_mm.h): kt_dim = 255 reads SrcB faces 0..509 and
+// the walk cannot address face 511. A call past it is rejected by the unpack and math LLK_ASSERTs before either issues
+// an instruction; test_sdpa_custom_mm_kt_past_max_asserts expects that.
+constexpr std::uint32_t custom_mm_kt_max = 255;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -227,7 +232,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * 8 * 2);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2);
 
-    for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
+    bool math_done = true;
+    if constexpr (KT_DIM > custom_mm_kt_max)
+    {
+        // Expected-assert case: math rejects the block and never posts MATH_PACK. Poll the semaphore from the RISC with
+        // a bound instead of SEMWAITing on it, because a SEMWAIT left in the Tensix pack FIFO outlives the RISC soft
+        // reset and hangs the next kernel on this core. On a build without the asserts math finishes the block (on
+        // silicon this takes on the order of 1e8 wall-clock cycles at kt_dim = 256) and pack runs normally, so the
+        // result can be checked against the golden. The bound stays inside the harness's 2 s completion window.
+        constexpr std::uint64_t math_done_bound_cycles = 1'500'000'000;
+        const std::uint64_t start                      = ckernel::read_wall_clock();
+        while (semaphore_read(semaphore::MATH_PACK) == 0 && ckernel::read_wall_clock() - start < math_done_bound_cycles)
+        {
+        }
+        math_done = semaphore_read(semaphore::MATH_PACK) != 0;
+    }
+
+    for (std::uint32_t pass = 0; math_done && pass < SDPA_PASSES; ++pass)
     {
         _llk_packer_wait_for_math_done_();
         // Consume the FPU->SFPU notifications so subsequent passes cannot

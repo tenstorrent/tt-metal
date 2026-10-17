@@ -70,9 +70,9 @@ constexpr std::uint32_t num_calls   = CUSTOM_MM_NUM_CALLS;
 constexpr std::uint32_t kt_per_call = KT_DIM / num_calls;
 static_assert(kt_per_call * num_calls == KT_DIM, "K tiles must split evenly across the calls");
 
-// The LLKs' kt_dim ceiling: the SrcB face walk reaches face 510 at most (llk_unpack_AB_custom_mm.h). A call past it is
-// rejected by the unpack and math LLK_ASSERTs before either issues an instruction; test_custom_mm_kt_past_max_asserts
-// expects that.
+// The LLKs' kt_dim ceiling (llk_unpack_AB_custom_mm.h): kt_dim = 255 reads SrcB faces 0..509 and the walk cannot address
+// face 511. A call past it is rejected by the unpack and math LLK_ASSERTs before either issues an instruction;
+// test_custom_mm_kt_past_max_asserts expects that.
 constexpr std::uint32_t custom_mm_kt_max = 255;
 
 #ifdef LLK_TRISC_UNPACK
@@ -214,9 +214,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         // Expected-assert case: math rejects the block and never posts MATH_PACK. Poll the semaphore from the RISC with
         // a bound instead of SEMWAITing on it, because a SEMWAIT left in the Tensix pack FIFO outlives the RISC soft
-        // reset and hangs the next kernel on this core. On a build without the asserts math finishes the block in a
-        // small fraction of the bound and pack runs normally, so the result can be checked against the golden.
-        constexpr std::uint64_t math_done_bound_cycles = 200'000'000; // ~0.15 s, the harness waits 2 s
+        // reset and hangs the next kernel on this core. On a build without the asserts math finishes the block (on
+        // silicon this takes on the order of 1e8 wall-clock cycles at kt_dim = 256) and pack runs normally, so the
+        // result can be checked against the golden. The bound stays inside the harness's 2 s completion window.
+        constexpr std::uint64_t math_done_bound_cycles = 1'500'000'000;
         const std::uint64_t start                      = ckernel::read_wall_clock();
         while (semaphore_read(semaphore::MATH_PACK) == 0 && ckernel::read_wall_clock() - start < math_done_bound_cycles)
         {
