@@ -28,6 +28,8 @@ namespace ckernel {
  * collapsing the nt_dim loop into a single MOP call per kt_dim iteration.
  *
  * NOTE: This API only supports ct_dim=1 and rt_dim=1 (single output tile).
+ * Operand B is used as stored: a transpose of operand B is not implemented, and
+ * compute_sdpa_chunk rejects transpose_v at compile time.
  *
  * Return value: None
  *
@@ -36,7 +38,6 @@ namespace ckernel {
  * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                          | False    |
  * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                          | False    |
  * | out_cb_id      | The identifier of the output circular buffer (CB)             | uint32_t | 0 to 31                                          | False    |
- * | transpose      | Transpose of operand B; not implemented by this matmul        | uint32_t | Must be 0                                        | False    |
  * | kt_dim         | The inner dim of the input matrices in tiles                  | uint32_t | even number from 2 to 256                        | False    |
  * | nt_dim         | The number of SrcA tiles per K iteration                      | uint32_t | 1 to 16                                          | False    |
  */
@@ -45,14 +46,13 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
     std::uint32_t out_cb_id,
-    const std::uint32_t transpose = 0,
     std::uint32_t kt_dim = 1,
     std::uint32_t nt_dim = 1) {
     // Intentionally swap in0 and in1 as operation specific hw_configures are deprecated
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
-    UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(in0_cb_id, in1_cb_id, transpose, nt_dim)));
+    UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(in0_cb_id, in1_cb_id, nt_dim)));
 
-    MATH((llk_math_sdpa_custom_mm_reuse_dest_srcb_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, kt_dim)));
+    MATH((llk_math_sdpa_custom_mm_reuse_dest_srcb_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, kt_dim)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
 
@@ -65,11 +65,10 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
     std::uint32_t out_cb_id,
-    const std::uint32_t transpose = 0,
     std::uint32_t kt_dim = 1,
     std::uint32_t nt_dim = 1) {
-    UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(in0_cb_id, in1_cb_id, transpose, nt_dim)));
-    MATH((llk_math_sdpa_custom_mm_reuse_dest_srcb_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, kt_dim)));
+    UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(in0_cb_id, in1_cb_id, nt_dim)));
+    MATH((llk_math_sdpa_custom_mm_reuse_dest_srcb_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, kt_dim)));
 }
 
 // clang-format off
@@ -82,6 +81,7 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
  * NOTE: This API only supports ct_dim=1 and rt_dim=1 (single output tile).
  * For K-dimension optimization (ct_dim=1, rt_dim=1, kt_dim>1), this will use
  * a single MOP replay that handles up to 128 K tiles, eliminating software loop overhead.
+ * Operand B is used as stored: a transpose of operand B is not implemented.
  *
  * Runtime parameter signal_output:
  *   false (default): Normal operation without signaling
@@ -102,7 +102,6 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
  * | in0_tile_index | The index of the tile in block A from the first input CB                | uint32_t | Must be less than the size of the CB           | True     |
  * | in1_tile_index | The index of the tile in block B from the second input CB               | uint32_t | Must be less than the size of the CB           | True     |
  * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
- * | transpose      | Transpose of operand B tiles; not implemented by this matmul.           | bool     | Must be false                                  | True     |
  * | kt_dim         | The inner dimension (K reduction dimension).                            | uint32_t | Must be equal to block A column dimension      | True     |
  * | in1_k_stride   | Stride between K tiles in in1 CB (default 1 for contiguous K tiles).    | uint32_t | >= 1                                           | False    |
  * | signal_output  | Signal SFPU semaphore for pipelining (default false).                   | bool     | true or false                                  | False    |
@@ -116,7 +115,6 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block(
     std::uint32_t in1_tile_index,
     std::uint32_t isrc,
     std::uint32_t idst,
-    const std::uint32_t transpose,
     std::uint32_t kt_dim,
     std::uint32_t nt_dim,
     std::uint32_t in1_k_stride = 1,
@@ -125,7 +123,7 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block(
     UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, nt_dim, in1_k_stride)));
     MATH((llk_math_sdpa_custom_mm_reuse_dest_srcb<MATH_FIDELITY, output_granularity, input_granularity>(
-        isrc, idst, transpose, kt_dim, nt_dim, signal_output)));
+        isrc, idst, kt_dim, nt_dim, signal_output)));
 }
 
 }  // namespace ckernel

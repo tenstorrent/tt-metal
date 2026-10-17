@@ -468,7 +468,7 @@ void compute_sdpa_chunk(
     MATH(LLK_ASSERT(
         ov_kt_dim == chunk_size || exp_signal_granularity == chunk_size,
         "OV-trim (ov_kt_dim != chunk_size) requires exp_signal_granularity == chunk_size"));
-    sdpa_custom_mm_reuse_dest_srcb_block_init_short(cb_q, ov_cb, cb_out, transpose_v, chunk_size, num_tiles_v);
+    sdpa_custom_mm_reuse_dest_srcb_block_init_short(cb_q, ov_cb, cb_out, chunk_size, num_tiles_v);
     sdpa_custom_mm_reuse_dest_srcb_block<output_granularity, exp_signal_granularity>(
         cb_q,
         ov_cb,
@@ -476,7 +476,6 @@ void compute_sdpa_chunk(
         v_tile_offset,
         mm1_dst_offset,
         mm2_dst_offset,
-        transpose_v,
         ov_kt_dim,
         num_tiles_v,
         in1_k_stride,

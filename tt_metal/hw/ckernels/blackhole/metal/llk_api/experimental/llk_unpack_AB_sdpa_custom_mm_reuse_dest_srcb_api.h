@@ -21,12 +21,7 @@
  *************************************************************************/
 
 __attribute__((always_inline)) inline void llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(
-    const std::uint32_t operand0,
-    const std::uint32_t operand1,
-    const std::uint32_t transpose = 0,
-    const std::uint32_t nt_dim = 1) {
-    // The LLK init below has no transpose parameter: operand B (SrcA here) is always unpacked as stored.
-    LLK_ASSERT(transpose == 0, "sdpa_custom_mm_reuse_dest_srcb: transpose of operand B is not implemented");
+    const std::uint32_t operand0, const std::uint32_t operand1, const std::uint32_t nt_dim = 1) {
     const std::uint32_t operandA_id = get_operand_id(operand1);
 
     const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);

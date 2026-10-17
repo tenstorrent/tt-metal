@@ -87,7 +87,7 @@ ALWI void custom_mm_reuse_dest_srcb_replay_init() { MATH((llk_math_custom_mm_reu
 template <bool load_replay = true>
 ALWI void custom_mm_reuse_dest_srcb_block_init_short(
     const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id, const std::uint32_t nt_dim) {
-    UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(in0_cb_id, in1_cb_id, /*transpose=*/0, nt_dim)));
+    UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(in0_cb_id, in1_cb_id, nt_dim)));
     MATH((llk_math_custom_mm_reuse_dest_srcb_init<load_replay>()));
 }
 

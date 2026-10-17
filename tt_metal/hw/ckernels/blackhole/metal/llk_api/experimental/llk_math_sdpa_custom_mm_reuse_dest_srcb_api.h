@@ -20,13 +20,8 @@
 
 template <MathFidelity math_fidelity>
 inline void llk_math_sdpa_custom_mm_reuse_dest_srcb_init(
-    const std::uint32_t operandA,
-    const std::uint32_t operandB,
-    const std::uint32_t transpose = 0,
-    const std::uint32_t kt_dim = 1) {
+    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t kt_dim = 1) {
     SAN_HOOK(unsupported());
-    // The LLK ignores transpose (no transposed SrcA face stride): operand B is always used as stored.
-    LLK_ASSERT(transpose == 0, "sdpa_custom_mm_reuse_dest_srcb: transpose of operand B is not implemented");
     const std::uint32_t in0_id = get_operand_id(operandA);
     const std::uint32_t in1_id = get_operand_id(operandB);
 
@@ -39,8 +34,9 @@ inline void llk_math_sdpa_custom_mm_reuse_dest_srcb_init(
     const std::uint32_t in1_tile_r_dim = get_operand_tile_r_dim(in1_id);
     const std::uint32_t in1_tile_c_dim = get_operand_tile_c_dim(in1_id);
 
+    // The LLK's transpose argument is unused: operand B is always used as stored.
     _llk_math_sdpa_custom_mm_reuse_dest_srcb_init_<math_fidelity>(
-        in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, kt_dim);
+        in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, /*transpose=*/0, kt_dim);
 }
 
 // Runtime parameter signal_output:
@@ -54,12 +50,10 @@ template <MathFidelity math_fidelity, std::uint32_t output_granularity, std::uin
 inline void llk_math_sdpa_custom_mm_reuse_dest_srcb(
     const std::uint32_t src_index,
     const std::uint32_t dst_index,
-    const bool transpose = false,
     const std::uint32_t kt_dim = 1,
     const std::uint32_t nt_dim = 1,
     bool signal_output = false) {
     SAN_HOOK(unsupported());
-    LLK_ASSERT(!transpose, "sdpa_custom_mm_reuse_dest_srcb: transpose of operand B is not implemented");
     _llk_math_sdpa_custom_mm_reuse_dest_srcb_<output_granularity, input_granularity>(
-        src_index, dst_index, transpose, kt_dim, nt_dim, signal_output);
+        src_index, dst_index, /*transpose=*/false, kt_dim, nt_dim, signal_output);
 }
