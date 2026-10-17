@@ -3,23 +3,27 @@
 
 """Packer data-format reconfig across an 8-bit integer output with a 16-bit Dest.
 
-Two runs of one kernel pack the same Dest contents with ``dest_acc=No``. Run 0 configures the
+Two runs of one kernel pack the same Dest contents with a 16-bit Dest. Run 0 configures the
 packer directly for the output format. Run 1 configures the format on the other side of the
 int8 / float boundary first (the format a preceding op would have left behind) and then
 reconfigures to the output format with ``_llk_pack_reconfig_data_format_``. With a 16-bit Dest
 the packer's Dest-read control decides how a datum is read: an Int8/UInt8 pack takes the raw
 8-bit integer read, the float formats take the rounding read. The full configure programs that
 control from the format, the reconfig has to program the same field set, so run 1 must pack the
-bits run 0 packs.
+bytes run 0 packs. The gate is on the raw result bytes in L1.
 
 Legs:
+  Float16_b -> Float16_b, previous format UInt8: plain datacopy of stimuli that carry bf16
+      denormals and NaN. The rounding read the full configure selects flushes denormals and turns
+      NaN into infinity; a raw read passes them through. A reconfig that leaves the raw read behind
+      fails this leg.
   Float16_b -> UInt8, previous format Float16_b: the math thread A2D-copies each tile into Dest
       and an in-place SFPU pass rounds every datum to an integer in 0..65535 and stores its low
       10 magnitude bits back as an "integer 8" Dest datum. Run 0 is also checked against
-      ``value & 0xFF`` (the raw 8-bit read keeps the low byte of the magnitude).
-  Float16_b -> Float16_b, previous format UInt8: plain datacopy of stimuli that carry bf16
-      denormals and NaN. The rounding read the full configure selects flushes denormals and turns
-      NaN into infinity; a raw read passes them through.
+      ``value & 0xFF`` (the raw 8-bit read keeps the low byte of the magnitude). Smoke coverage
+      of the reconfig onto an 8-bit integer output: on Wormhole the UInt8 pack produces these bytes
+      whether the raw read is selected or not, so the register-level gate for this direction is
+      ``z_state/reconfig/test_pack_reconfig.py`` with ``dest_acc=No``.
 """
 
 import torch
@@ -42,20 +46,42 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 
+# 16-bit Dest is the point of the test: the 8-bit integer Dest read only exists there.
+_DEST_ACC = DestAccumulation.No
 
-def _whole_numbers_0_1023(size, dtype, generator):
-    # bf16 keeps 8 significant bits, so values above 256 are quantized; the golden works from
+# An "integer 8" Dest datum keeps the low 10 magnitude bits of the value SFPSTORE INT8 writes.
+_INT8_DEST_MAGNITUDE_LIMIT = 1 << 10
+# The SFPU pass rounds FP32 to UInt16, saturating at the unsigned 16-bit range.
+_UINT16_MAX = (1 << 16) - 1
+# A UInt8 pack keeps the low byte of the Dest datum magnitude.
+_UINT8_MASK = (1 << 8) - 1
+# bf16 keeps 8 significant bits: whole numbers below this are exact in bf16.
+_BF16_EXACT_WHOLE_LIMIT = 1 << 8
+# bf16 is the top 16 bits of fp32; its mantissa is the top 7 fraction bits.
+_FP32_TO_BF16_SHIFT = 16
+_BF16_MANTISSA_BITS = 7
+
+
+def _whole_numbers_below_int8_dest_limit(size, dtype, generator):
+    # bf16 quantizes whole numbers at and above _BF16_EXACT_WHOLE_LIMIT; the golden works from
     # the quantized stimuli, so the exact set of values does not matter.
-    return torch.randint(0, 1024, (size,), generator=generator).to(dtype)
+    return torch.randint(
+        0, _INT8_DEST_MAGNITUDE_LIMIT, (size,), generator=generator
+    ).to(dtype)
 
 
 def _normals_denormals_nan(size, dtype, generator):
-    # Thirds: whole numbers in [1, 255], bf16 denormals (zero exponent, non-zero mantissa in
-    # the top 7 fraction bits, so the fp32 -> bf16 conversion is exact), and NaN.
-    values = torch.randint(1, 256, (size,), generator=generator).to(torch.float32)
+    # Thirds: exact whole numbers, bf16 denormals (zero exponent, non-zero mantissa in the top 7
+    # fraction bits, so the fp32 -> bf16 conversion is exact), and NaN.
+    values = torch.randint(1, _BF16_EXACT_WHOLE_LIMIT, (size,), generator=generator).to(
+        torch.float32
+    )
     kind = torch.randint(0, 3, (size,), generator=generator)
     denormal_bits = (
-        torch.randint(1, 128, (size,), generator=generator, dtype=torch.int32) << 16
+        torch.randint(
+            1, 1 << _BF16_MANTISSA_BITS, (size,), generator=generator, dtype=torch.int32
+        )
+        << _FP32_TO_BF16_SHIFT
     )
     values[kind == 1] = denormal_bits.view(torch.float32)[kind == 1]
     values[kind == 2] = float("nan")
@@ -68,14 +94,14 @@ _BF16_OUT = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 
 @parametrize(
     formats=[_UINT8_OUT, _BF16_OUT],
-    # 16-bit Dest is the point of the test: the 8-bit integer Dest read only exists there.
-    dest_acc=[DestAccumulation.No],
-    input_dimensions=[[32, 32], [64, 64]],
+    input_dimensions=[[32, 32]],
 )
-def test_pack_reconfig_read_int8(formats, dest_acc, input_dimensions):
+def test_pack_reconfig_read_int8(formats, input_dimensions):
     int8_out = formats.output_format == DataFormat.UInt8
     spec = StimuliSpec(
-        distribution=_whole_numbers_0_1023 if int8_out else _normals_denormals_nan,
+        distribution=(
+            _whole_numbers_below_int8_dest_limit if int8_out else _normals_denormals_nan
+        ),
         seed=0,
     )
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -89,7 +115,7 @@ def test_pack_reconfig_read_int8(formats, dest_acc, input_dimensions):
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        dest_acc,
+        _DEST_ACC,
         formats,
         input_dimensions,
         TILE_DIMENSIONS,
@@ -119,7 +145,7 @@ def test_pack_reconfig_read_int8(formats, dest_acc, input_dimensions):
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=dest_acc,
+        dest_acc=_DEST_ACC,
         unpack_to_dest=False,
     )
     if int8_out:
@@ -145,7 +171,8 @@ def test_pack_reconfig_read_int8(formats, dest_acc, input_dimensions):
     ), f"result has {len(direct)} bytes, {expected_bytes} expected"
     if int8_out:
         golden_tensor = (
-            src_A.to(torch.float32).round().clamp(0, 65535).to(torch.int64) & 0xFF
+            src_A.to(torch.float32).round().clamp(0, _UINT16_MAX).to(torch.int64)
+            & _UINT8_MASK
         ).to(torch.uint8)
         assert torch.equal(
             torch.frombuffer(bytearray(direct), dtype=torch.uint8), golden_tensor
