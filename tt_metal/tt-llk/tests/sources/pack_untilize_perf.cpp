@@ -186,6 +186,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces   = params.num_faces;
 #endif
     constexpr bool UNTILIZE = true;
+    constexpr bool DIAGONAL = false;
 
     {
         START_PERF_MEASURE("INIT")
@@ -193,7 +194,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(
             formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces /* tile_size */, FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
-        _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, PACK_UNTILIZE_NARROW_ROW, PACK_UNTILIZE_ROW_NUM_DATUMS>(
+        _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, DIAGONAL, PACK_UNTILIZE_NARROW_ROW, PACK_UNTILIZE_ROW_NUM_DATUMS>(
             formats.pack_src, formats.pack_dst, FACE_R_DIM, num_faces);
         PROFILER_SYNC();
     }
@@ -207,7 +208,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile += BLOCK_CT_DIM)
                 {
-                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, PACK_UNTILIZE_NARROW_ROW, PACK_UNTILIZE_ROW_NUM_DATUMS>(
+                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, DIAGONAL, PACK_UNTILIZE_NARROW_ROW, PACK_UNTILIZE_ROW_NUM_DATUMS>(
                         PERF_ADDRESS(PERF_OUTPUT, tile), formats.pack_dst, FACE_R_DIM, num_faces, 0 /* tile_dst_rt_offset */);
                 }
             }
@@ -219,7 +220,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t i = 0; i < TILE_CNT; i += BLOCK_CT_DIM)
                 {
                     _llk_packer_wait_for_math_done_();
-                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, PACK_UNTILIZE_NARROW_ROW, PACK_UNTILIZE_ROW_NUM_DATUMS>(
+                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, DIAGONAL, PACK_UNTILIZE_NARROW_ROW, PACK_UNTILIZE_ROW_NUM_DATUMS>(
                         PERF_ADDRESS(PERF_OUTPUT, i), formats.pack_dst, FACE_R_DIM, num_faces, 0 /* tile_dst_rt_offset */);
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
