@@ -14,6 +14,7 @@ Verify row j of user u processes tokens[u, j] at start_pos[u] + j. After m accep
 committed_tokens[u, :m+1] = accepted drafts + bonus token, at committed_positions[u, :m+1] =
 start_pos + 1 .. start_pos + m + 1. The bonus is the next ``pending``; the anchor hidden is verify row m.
 The drafter pairs (hidden at slot s, token at s+1) -> slot s."""
+
 import math
 import os
 import time
@@ -25,6 +26,7 @@ from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
+from models.demos.blackhole.qwen36.tt.tp_common import spec_hostfix_enabled
 
 # Prompt length above which the reseed goes back to the per-slot loop (B == 1 only).
 EAGER_RESEED_PROMPT_LEN = 131072
@@ -146,6 +148,41 @@ def _int_vec(x, B, name):
 def sanitize_verify_block(tokens, start_pos, num_valid_drafts, K):
     """Validate a runner verify block [B, 1+K] -> (clean_tokens [B,T] int64, start0 [B] int64, active [B] bool).
     Active row (start_pos[u,0] >= 0): columns 0..n are real (tokens >= 0, consecutive positions); the padding
+    tail gets tokens[u,0]. Inactive row: start_pos[u,0] < 0, n == 0.
+    QWEN36_SPEC_HOSTFIX (default 1): checks and padding on plain lists (no tensor op per row); a block with any error
+    is re-run through the per-row code so the raised error is the same."""
+    if not spec_hostfix_enabled():
+        return _sanitize_verify_block_old(tokens, start_pos, num_valid_drafts, K)
+    T = K + 1
+    tokens = torch.as_tensor(tokens)
+    if tokens.ndim != 2 or tokens.shape[1] != T:
+        raise ValueError(f"tokens must have shape [B, {T}], got {tuple(tokens.shape)}")
+    B = tokens.shape[0]
+    tokens = tokens.to(torch.int64)
+    pos = _int_block(start_pos, B, T, "start_pos")
+    nv = _int_vec(num_valid_drafts, B, "num_valid_drafts")
+    tl, pl, nl = tokens.tolist(), pos.tolist(), nv.tolist()
+    clean, start0, active = [], [], []
+    for u in range(B):
+        n, s0 = nl[u], pl[u][0]
+        if s0 < 0:
+            ok, row = n == 0, [0] * T
+        else:
+            ok = 0 <= n <= K and min(tl[u][: n + 1]) >= 0 and pl[u][: n + 1] == list(range(s0, s0 + n + 1))
+            row = tl[u][: n + 1] + [tl[u][0]] * (T - n - 1)
+        if not ok:
+            return _sanitize_verify_block_old(tokens, start_pos, num_valid_drafts, K)  # raises the row's error
+        clean.append(row)
+        start0.append(max(s0, 0))
+        active.append(s0 >= 0)
+    if B == 0:
+        return _sanitize_verify_block_old(tokens, start_pos, num_valid_drafts, K)
+    return torch.tensor(clean, dtype=torch.int64), torch.tensor(start0, dtype=torch.int64), torch.tensor(active)
+
+
+def _sanitize_verify_block_old(tokens, start_pos, num_valid_drafts, K):
+    """Validate a runner verify block [B, 1+K] -> (clean_tokens [B,T] int64, start0 [B] int64, active [B] bool).
+    Active row (start_pos[u,0] >= 0): columns 0..n are real (tokens >= 0, consecutive positions); the padding
     tail gets tokens[u,0]. Inactive row: start_pos[u,0] < 0, n == 0."""
     T = K + 1
     tokens = torch.as_tensor(tokens)
@@ -197,7 +234,9 @@ def note_withheld_drafts(offered, marked, speculated, streak, num_valid_drafts, 
     Mutates ``offered``/``speculated``/``streak`` (offered is consumed); returns the new ``marked`` set."""
     nv = torch.as_tensor(num_valid_drafts).reshape(-1)
     marked = set(marked)
-    for u in range(nv.numel()):
+    if spec_hostfix_enabled():  # QWEN36_SPEC_HOSTFIX: one tolist() instead of a tensor index per row
+        nv = nv.tolist()
+    for u in range(len(nv)):
         if int(nv[u]) > 0:
             speculated.add(u)
             streak[u] = 0
@@ -1273,7 +1312,20 @@ class MTPSpecEngine:
         pad = [False] * B if self._row_active is None else [not bool(a) for a in self._row_active]
         acc = acc.clone()
         acc[torch.tensor(pad)] = 1  # a padding row's count is 1
-        for u in range(B):
+        check_rows = range(B)
+        if spec_hostfix_enabled():  # QWEN36_SPEC_HOSTFIX: validate on plain lists; the per-row loop only names an error
+            ctl, cpl, al = ctok.tolist(), cpos.tolist(), acc.tolist()
+            ok = all(
+                pad[u]
+                or (
+                    min(ctl[u][: al[u]]) >= 0
+                    and cpl[u][0] >= 1
+                    and cpl[u][: al[u]] == list(range(cpl[u][0], cpl[u][0] + al[u]))
+                )
+                for u in range(B)
+            )
+            check_rows = () if ok else range(B)
+        for u in check_rows:
             if pad[u]:
                 continue
             c = int(acc[u])
