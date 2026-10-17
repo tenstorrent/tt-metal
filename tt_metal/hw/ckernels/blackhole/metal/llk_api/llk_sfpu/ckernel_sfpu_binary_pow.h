@@ -40,7 +40,6 @@ namespace sfpu {
  * @note This function assumes that the programmable constants are set to the following values:
  * - vConstFloatPrgm0 = 1.4426950408889634f;
  * - vConstFloatPrgm1 = -127.0f;
- * - vConstFloatPrgm2 = 2.0f; (read by _sfpu_binary_power_f32_)
  *
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
@@ -120,7 +119,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
 
     // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
     // Check valid base range
-    // Integer-ness and parity of pow from its mantissa.
     sfpi::vFloat abs_pow = sfpi::abs(pow);
     sfpi::vFloat pow_x = sfpi::min(sfpi::max(sfpi::vFloat(0.5f), abs_pow), 16777216.0f);
     sfpi::vInt pow_bits = sfpi::exman(pow_x, sfpi::MantissaMode::ImplicitOne);
@@ -220,17 +218,11 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
 
     // Transform to z = (m - 1) / (m + 1)
     sfpi::vFloat m_plus_1 = m + 1.0f;  // t in [1.707, 2.414] since m in [sqrt(2)/2, sqrt(2)]
-    // 1/t: initial guess 1.0f - 0.2426406871192851f*t (linear interp on [1.7,2.4]), then Newton-Raphson y = y*(2 -
-    // t*y).
-    sfpi::vFloat recip = 1.0f - 0.2426406871192851f * m_plus_1;
-    // sfpu_binary_pow_init sets vConstFloatPrgm2 to 2.0f.
-    const sfpi::vFloat two = sfpi::vConstFloatPrgm2;
-    recip = recip * (two - m_plus_1 * recip);  // 1st NR
-    recip = recip * (two - m_plus_1 * recip);  // 2nd NR
-    // 3rd NR: two NR iterations leave a ~2 ULP reciprocal residual that, after the
-    // atanh(z) log series and pow*log2 multiply, is the floor keeping 2.5 at 4 ULP.
-    // One more quadratically-convergent step drives 1/(m+1) to full fp32 precision.
-    recip = recip * (two - m_plus_1 * recip);  // 3rd NR for float32
+    // 1/t: SFPARECIP, then three residual corrections y += y * (1 - t * y).
+    sfpi::vFloat recip = sfpi::approx_recip(m_plus_1);
+    recip = recip * (1.0f - m_plus_1 * recip) + recip;
+    recip = recip * (1.0f - m_plus_1 * recip) + recip;
+    recip = recip * (1.0f - m_plus_1 * recip) + recip;
     // z = (m-1)*recip. The subtract is kept separate rather than folded into a multiply-add:
     // the range reduction above leaves m in [sqrt(2)/2, sqrt(2)], which is inside [0.5, 2], so
     // Sterbenz's lemma makes m - 1 exact for every representable m and the only rounding left is
@@ -245,7 +237,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     sfpi::vFloat z2 = z * z;
     // Polynomial approximation using odd powers
     sfpi::vFloat p = PolynomialEvaluator::eval(
-        z2, 1.0f, 0.3333333333333333f, 0.2f, 0.14285714285714285f, 0.1111111111111111f, 0.09090909090909091f);
+        z2, 1.0f, 0.3333333333333333f, 0.2f, 0.14285714285714285f, 0.1111111111111111f);
     sfpi::vFloat ln_m = 2.0f * (z * p);
 
     sfpi::vFloat exp_f32 = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(exp), sfpi::RoundMode::Nearest);
@@ -312,7 +304,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
 
     // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
     // Check valid base range
-    // Parity and sign: as in _sfpu_binary_power_21f_.
     sfpi::vFloat pow_x = sfpi::min(sfpi::max(sfpi::vFloat(0.5f), abs_pow), 16777216.0f);
     sfpi::vInt pow_bits = sfpi::exman(pow_x, sfpi::MantissaMode::ImplicitOne);
     pow_bits = sfpi::shft(pow_bits, sfpi::exexp(pow_x) + 7, sfpi::ShiftMode::Logical);
@@ -398,7 +389,6 @@ inline void sfpu_binary_pow_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 1.442695f;
     sfpi::vConstFloatPrgm1 = -127.0f;
-    sfpi::vConstFloatPrgm2 = 2.0f;
 }
 
 }  // namespace sfpu

@@ -79,9 +79,7 @@ def test_pow_negative_one_follows_the_exponent_parity(request, device, exponent,
     )
 
 
-# Bases whose magnitude is not 1, so the result saturates. Which way it saturates depends on
-# the base's magnitude and the exponent's sign, while the parity still sets the sign bit:
-# |base| > 1 with y > 0 overflows, with y < 0 underflows, and the other way round for |base| < 1.
+# |base| != 1, so the result overflows or underflows; the parity still sets the sign bit.
 _SATURATING_CASES = [
     (-2.0, 32768.0),
     (-2.0, 65536.0),
