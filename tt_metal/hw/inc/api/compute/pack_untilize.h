@@ -123,10 +123,13 @@ ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
  * full_ct_dim must be divisible by block_ct_dim. Remainder blocks are unsupported because the L1 column offset
  * is computed as block_c_index * block_ct_dim.
  *
- * NOTE: narrow_row limits (enforced in the LLK init): row_num_datums is at most FACE_C_DIM on every architecture.
- * Blackhole advances the L1 row address in 16-byte units, so full_ct_dim * row_num_datums must span a multiple of
- * 16 bytes in the output format, and several blocks are only supported for row_num_datums == FACE_C_DIM with
- * num_faces == 1. Wormhole packs one full-height four-face tile per call: block_ct_dim == full_ct_dim == 1.
+ * NOTE: narrow_row limits. Checked at compile time (static_assert in the LLK init): row_num_datums is at most
+ * FACE_C_DIM on every architecture; on Blackhole several blocks (block_ct_dim < full_ct_dim) require
+ * row_num_datums == FACE_C_DIM; Wormhole packs one full-height four-face tile per call, so
+ * block_ct_dim == full_ct_dim == 1. Checked only with LLK asserts enabled (LLK_ASSERT, compiled out otherwise):
+ * on Blackhole full_ct_dim * row_num_datums must span a multiple of 16 bytes in the output format (the L1 row
+ * address advances in 16-byte units) and several blocks also require num_faces == 1; on Wormhole the output tile
+ * must have four full-height faces.
  */
 // clang-format on
 template <

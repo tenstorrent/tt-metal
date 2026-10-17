@@ -1960,16 +1960,17 @@ void run_pack_untilize_narrow_row_rejects(
 // (H % 32 datums per row, the row's tiles in one block), data-checked against the per-tile-column golden: every
 // width up to one face whose row byte width (tile columns x datums x 2) is a multiple of 16 matches it. One tile
 // column: 8 and 16 datums (the only such even bf16 widths; wider rows are rejected by the init's static_assert).
-// Two tile columns in one block: 4, 8 and 16 datums, so that two 8-byte PACRs are shown to land back to back in
-// one 16-byte row (4 datums alone are rejected, see the assert fixture below). Three tile rows exercise half-sync
-// bank reuse.
+// Two tile columns in one block: 4, 8, 12 and 16 datums, so that two 8-byte PACRs are shown to land back to back
+// in one 16-byte row and two 24-byte PACRs in one 48-byte row (4 or 12 datums alone are rejected, see the assert
+// fixture below); four tile columns of 6 datums (12-byte PACRs, a 48-byte row) likewise. Three tile rows exercise
+// half-sync bank reuse.
 TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeNarrowRowWidths) {
     struct Case {
         std::uint32_t row_num_datums;
         std::uint32_t num_tiles_c;
     };
     for (const auto [row_num_datums, num_tiles_c] :
-         std::initializer_list<Case>{{8, 1}, {16, 1}, {4, 2}, {8, 2}, {16, 2}}) {
+         std::initializer_list<Case>{{8, 1}, {16, 1}, {4, 2}, {8, 2}, {12, 2}, {16, 2}, {6, 4}}) {
         for (const bool full_sync : {false, true}) {
             SCOPED_TRACE(
                 fmt::format("row_num_datums={}, num_tiles_c={}, full_sync={}", row_num_datums, num_tiles_c, full_sync));
@@ -1994,7 +1995,9 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeNarrowRowWidths) {
 // would pass it and is still packed wrong on both architectures because the per-row PACR reads row_num_datums
 // consecutive datums of one face. Blocks: Blackhole packs a row split over several blocks only at a full face
 // width (the wrapper's block column offset is in face-column widths), Wormhole packs exactly one tile per call.
-// Quasar's compute API rejects narrow_row itself, for every width.
+// Each rejected case is pinned to its guard: the JIT build failure carries the compiler log, so the static_assert
+// message of the width or the block limit must be in the exception text. Quasar's compute API rejects narrow_row
+// itself, for every width.
 TEST_F(LLKMeshDeviceSingleCardFixture, PackUntilizeNarrowRowRejectsRowsWiderThanAFaceAtCompileTime) {
     const auto arch = detail::detect_arch();
     if (arch == tt::ARCH::QUASAR) {
@@ -2013,11 +2016,23 @@ TEST_F(LLKMeshDeviceSingleCardFixture, PackUntilizeNarrowRowRejectsRowsWiderThan
         const bool blocks_accepted = arch == tt::ARCH::BLACKHOLE
                                          ? (block_ct_dim == full_ct_dim || row_num_datums == constants::FACE_WIDTH)
                                          : (block_ct_dim == 1 && full_ct_dim == 1);
+        // The width limit is checked first in both inits, so a wide row names it even when the blocks are wrong too.
+        const std::string expected_guard =
+            !one_face_wide ? "row_num_datums must be at most FACE_C_DIM for narrow_row packing"
+            : arch == tt::ARCH::BLACKHOLE
+                ? "narrow_row packing with several blocks requires row_num_datums == FACE_C_DIM"
+                : "narrow_row packing requires block_ct_dim == full_ct_dim == 1";
         Program program = make_pack_untilize_narrow_row_guard_program(row_num_datums, full_ct_dim, block_ct_dim);
         if (one_face_wide && blocks_accepted) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
-        } else {
-            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+            continue;
+        }
+        try {
+            program.impl().compile(&this->device());
+            ADD_FAILURE() << "compiled although the narrow-row init should reject it (" << expected_guard << ")";
+        } catch (const std::runtime_error& e) {
+            EXPECT_NE(std::string(e.what()).find(expected_guard), std::string::npos)
+                << "the build failed for another reason than the expected guard: " << e.what();
         }
     }
 }
@@ -2106,7 +2121,7 @@ void run_pack_untilize_narrow_row_accepts(distributed::MeshDevice& mesh, const N
 
 namespace {
 
-// Rows narrower than 16 bytes overlap on Blackhole: the per-row L1 advance is in 16-byte units.
+// A row byte width that is not a multiple of 16 overlaps on Blackhole: the per-row L1 advance is in 16-byte units.
 const std::string kSixteenByteRowConsequence =
     "the packer advances its L1 destination in 16-byte units per row, so these rows overlap";
 // Face geometries for the guard kernel's output CB.
