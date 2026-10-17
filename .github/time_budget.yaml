@@ -262,8 +262,8 @@ runtime:
     bh_p150: 10
     sim_wh_n150: 30
     sim_bh_p150: 30
-    sim_wh_galaxy: 10
-    sim_bh_galaxy: 10
+    sim_wh_galaxy: 15
+    sim_bh_galaxy: 20
   unit:
     wh_n150_civ2: 232
     wh_n300_civ2: 139
