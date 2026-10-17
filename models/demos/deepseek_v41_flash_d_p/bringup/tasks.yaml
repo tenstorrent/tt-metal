@@ -4154,6 +4154,14 @@ tasks:
     kind: attention
     layer: 14
     stateful: true
+  frozen:
+    at: '2026-10-17T02:07:25'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attention.py: b00f5ca82c3c68b815a17a2825759b079bddd9cc3a59adb8fca7840b0edb4260
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.enc_source_engram.11
   title: 'enc_source_engram block with steps 1-11 on device (last: attention)'
   step: implement
