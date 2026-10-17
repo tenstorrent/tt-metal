@@ -115,6 +115,8 @@ DEST_OFFSETS = {
     "tile_2": (2, False, 0, False),
     "upper_half": (0, True, 0, False),
     "upper_half_tile_2": (2, True, 0, False),
+    "tile_0_row_2": (0, False, 2, False),
+    "tile_2_row_2": (2, False, 2, False),
     "tile_0_row_16": (0, False, 16, False),
     "remap_tile_0_row_16": (0, False, 16, True),
 }
@@ -351,7 +353,7 @@ def check_srca_row_dump(formats, dest_acc, dest_offset, preset_srca_override=Fal
         f"it was {hex(srca_fmt_before)} before the dump and must be handed back unchanged"
     )
 
-    # The rows the dump borrows (the four rows from the offset, plus the rows 8 further on that hold the low
+    # The rows the dump borrows (the aligned group of four rows holding the offset's row, plus the rows 8 further on that hold the low
     # halves with a 32-bit DEST) must read back over the debug bus exactly as before the dump.
     changed = [
         i for i in range(borrowed_words) if borrowed_before[i] != borrowed_after[i]

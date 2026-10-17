@@ -699,7 +699,7 @@ class DBG_SRCA_DUMP(TemplateParameter):
     tile 0; the thread's dest offset before the dump, after it, and the value the datacopy
     set it to at ``DEST_OFFSET_BEFORE_WORD`` / ``DEST_OFFSET_AFTER_WORD`` /
     ``DEST_OFFSET_SET_WORD``; the ``BORROWED_ROW_COUNT`` DEST rows the dump borrows (the
-    first four rows of tile ``DUMP_DST_INDEX`` in the current half plus the rows 8 further on)
+    aligned group of four rows holding the staged row, plus the rows 8 further on)
     read before and after it at ``BORROWED_ROWS_BEFORE_WORD`` / ``BORROWED_ROWS_AFTER_WORD``;
     the SrcA format selection read before and after it at ``SRCA_FMT_BEFORE_WORD`` /
     ``SRCA_FMT_AFTER_WORD``; and the DEST tile handed

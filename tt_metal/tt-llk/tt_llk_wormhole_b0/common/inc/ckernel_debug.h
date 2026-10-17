@@ -216,9 +216,10 @@ inline std::uint32_t dbg_dest_physical_row(std::uint32_t row)
 // The SrcA dump stages the row in dest at the executing thread's dest offset and restores what it overwrote
 // before returning; the thread's dest offset is left untouched. Call it only while that offset points at a tile
 // written in the current section -- after an op, before the section is handed to the packer -- because the save
-// and restore footprint is that tile's first rows (and, with a 32-bit DEST, the rows holding their low halves):
-// rows left undefined by a ZEROACC must not be borrowed, as an SFPLOAD of one is undefined behaviour and the
-// restore would define the row with whatever it returned.
+// and restore footprint is the aligned group of four rows holding the row at the dest offset (and, with a 32-bit
+// DEST, the rows 8 further on that hold their low halves), and those rows must have been written: rows left
+// undefined by a ZEROACC must not be borrowed, as an SFPLOAD of one is undefined behaviour and the restore would
+// define the row with whatever it returned.
 inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t row_addr, std::uint32_t *rd_data)
 {
     // Dest offset is added to row_addr to dump currently used half of the dest accumulator (SyncHalf dest mode)
@@ -234,11 +235,22 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
     // SFPSTORE all address relative to (SFPLOAD.md, the MOVA2D model). The offset is left where the caller put it,
     // so the footprint stays on the tile the caller is working on (see the contract above).
     std::uint32_t staged_row = 0;
+    // SFPLOAD and SFPSTORE add the dest offset to their immediate, then take an aligned group of four rows from
+    // Addr & ~3 and the even or odd columns from Addr & 2 (SFPLOAD.md, SFPSTORE.md; the sum wraps at 10 bits). An
+    // offset with bit 1 set would turn immediates 0 / 2 into the odd columns of its group and the even columns of
+    // the next one, leaving the even columns of the staged row unsaved. Cancel that bit in the immediates so they
+    // select the even and odd columns of the group that holds the staged row.
+    constexpr std::uint32_t sfpu_dest_addr_mask = 0x3ff;
+    std::uint32_t even_cols_imm                 = 0;
+    std::uint32_t odd_cols_imm                  = 2;
     if (array_id == dbg_array_id::SRCA)
     {
         tensix_sync();
         save_mode  = dbg_dest_row_save_mode();
-        staged_row = dbg_dest_physical_row(dbg_read_dest_offset());
+        const std::uint32_t dest_offset_row = dbg_read_dest_offset();
+        staged_row                          = dbg_dest_physical_row(dest_offset_row);
+        even_cols_imm                       = (0u - (dest_offset_row & 2)) & sfpu_dest_addr_mask;
+        odd_cols_imm                        = (even_cols_imm + 2) & sfpu_dest_addr_mask;
 
         // When SrcA array is selected we need to copy row from src register into dest to be able to dump data
         // Dump from SrcA array is not supported
@@ -255,8 +267,8 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
 
         // Clear counters
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
-        TT_SFPLOAD(p_sfpu::LREG3, save_mode, 0 /*sfpu_addr_mode*/, 0 /*dest_reg_addr*/); // Save the row at the dest offset (even cols) to LREG_3
-        TT_SFPLOAD(p_sfpu::LREG4, save_mode, 0 /*sfpu_addr_mode*/, 2 /*dest_reg_addr*/); // Save the row at the dest offset (odd cols)  to LREG_4
+        TT_SFPLOAD(p_sfpu::LREG3, save_mode, 0 /*sfpu_addr_mode*/, even_cols_imm); // Save the staged row's group (even cols) to LREG_3
+        TT_SFPLOAD(p_sfpu::LREG4, save_mode, 0 /*sfpu_addr_mode*/, odd_cols_imm);  // Save the staged row's group (odd cols)  to LREG_4
 
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SFPU1);
 
@@ -375,8 +387,8 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
     // Restore the borrowed row
     if (array_id == dbg_array_id::SRCA)
     {
-        TT_SFPSTORE(p_sfpu::LREG3, save_mode, 0 /*sfpu_addr_mode*/, 0 /*dest_reg_addr*/); // Restore the row at the dest offset (even cols) from LREG_3
-        TT_SFPSTORE(p_sfpu::LREG4, save_mode, 0 /*sfpu_addr_mode*/, 2 /*dest_reg_addr*/); // Restore the row at the dest offset (odd cols) from LREG_4
+        TT_SFPSTORE(p_sfpu::LREG3, save_mode, 0 /*sfpu_addr_mode*/, even_cols_imm); // Restore the staged row's group (even cols) from LREG_3
+        TT_SFPSTORE(p_sfpu::LREG4, save_mode, 0 /*sfpu_addr_mode*/, odd_cols_imm);  // Restore the staged row's group (odd cols) from LREG_4
         // Move to the current bank
         TTI_CLEARDVALID(1, 0);
         // The restore is only queued at this point; a RISC reader of dest right after the call (a debug-bus read

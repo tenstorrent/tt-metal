@@ -29,7 +29,7 @@
 //     holds the last face. The helper stages and restores through the thread's dest offset but
 //     reads back a physical row, so a dump taken with the offset off zero returns a stale row
 //     unless the read-back follows the offset. The same run checks the helper's footprint: the
-//     rows it borrows (the first rows of the tile the offset points at) read back unchanged over
+//     rows it borrows (the aligned group of four rows holding the offset's row) read back unchanged over
 //     the debug bus, the dest offset is handed back untouched, and the packer packs tile 0 of the
 //     lower half afterwards -- rows the datacopy never wrote must still pack as zero, which they
 //     do not if the helper borrowed rows the caller never populated (an SFPLOAD of a row left
@@ -44,8 +44,8 @@
 //
 // Result layout (constants shared with the host through DBG_SRCA_DUMP): tile 0 of the result buffer carries the
 // raw debug-bus words of the SrcA dump, the thread's dest offset read before the dump, after it, and the value the
-// datacopy left it at, then the rows the dump borrows (rows 0-3 of the tile at the offset, and the rows 8 further
-// on that hold the low halves with a 32-bit DEST) read over the debug bus before and after the dump, then the SrcA
+// datacopy left it at, then the rows the dump borrows (the aligned group of four rows holding the row at the offset,
+// and the rows 8 further on that hold the low halves with a 32-bit DEST) read over the debug bus before and after the dump, then the SrcA
 // format selection (SrcA_val and SrcA_override) read on the RISC before and after the dump; with PRESET_SRCA_OVERRIDE
 // the test sets it to a non-default value first, as a caller inside a format-switching sequence would. Tile 1 is the
 // DEST tile handed back: the planted tile read through the RISC-V window (restore check, Blackhole), or tile 0 of
@@ -130,7 +130,10 @@ constexpr std::uint32_t physical_dest_row(std::uint32_t row)
 
 // The dest row the dump stages at: tile DUMP_DST_INDEX of the current half, DUMP_ROW_OFFSET rows in.
 constexpr std::uint32_t DUMP_FIRST_ROW = DUMP_DST_INDEX * DEST_ROWS_PER_TILE + DUMP_ROW_OFFSET;
-static_assert(DUMP_ROW_OFFSET + 4 <= DEST_ROWS_PER_TILE, "the borrowed rows must stay inside the datacopied tile");
+// The SFPU save/restore moves aligned groups of four rows (SFPLOAD.md), so the rows the dump borrows are the group
+// holding the staged row.
+constexpr std::uint32_t BORROWED_FIRST_ROW = DUMP_FIRST_ROW & ~3u;
+static_assert((DUMP_ROW_OFFSET & ~3u) + 4 <= DEST_ROWS_PER_TILE, "the borrowed rows must stay inside the datacopied tile");
 
 // The SrcA format selection the test leaves active across the dump (PRESET_SRCA_OVERRIDE): override on, BF16.
 constexpr std::uint32_t SRCA_FMT_SELECT_MASK = ALU_FORMAT_SPEC_REG_SrcA_val_MASK | ALU_FORMAT_SPEC_REG_SrcA_override_MASK;
@@ -210,15 +213,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     }
 
-    // The rows the dump borrows, as the debug bus sees them: the four rows from the dest offset (the SFPU
-    // save/restore footprint) and the rows 8 further on (the low halves with a 32-bit DEST).
+    // The rows the dump borrows, as the debug bus sees them: the aligned group of four rows holding the dest
+    // offset's row (the SFPU save/restore footprint) and the rows 8 further on (the low halves with a 32-bit DEST).
     // dbg_get_array_row adds the current half's base to a DEST row itself.
     auto read_borrowed_rows = [&](std::uint32_t first_word)
     {
         for (std::uint32_t r = 0; r < BORROWED_ROW_COUNT; ++r)
         {
             constexpr std::uint32_t half           = BORROWED_ROW_COUNT / 2;
-            const std::uint32_t row                = physical_dest_row(DUMP_FIRST_ROW + (r % half)) + ((r < half) ? 0 : 8);
+            const std::uint32_t row                = physical_dest_row(BORROWED_FIRST_ROW + (r % half)) + ((r < half) ? 0 : 8);
             std::uint32_t row_words[WORDS_PER_ROW] = {0};
             dbg_get_array_row(dbg_array_id::DEST, row, row_words);
             for (std::uint32_t i = 0; i < WORDS_PER_ROW; ++i)
