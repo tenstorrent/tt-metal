@@ -65,6 +65,7 @@ def test_dram_mix(mesh_device):
     )
     plan_rd = [ttnn.CoreCoord(x, y) for x, y in plan["readers"]]
     plan_dn = [ttnn.CoreCoord(x, y) for x, y in plan["down"]]
+    logger.info(f"DMIX plan readers {[(c.x, c.y) for c in plan_rd]}")
     use_plan = os.environ.get("DM_PLAN_CORES", "1") == "1"
     n_gu_rd, n_dn = 16, (len(plan_dn) if use_plan else 38)
     gu_pages = int(gu_mb * 1e6 / GU_PAGE) // n_gu_rd * n_gu_rd
@@ -273,14 +274,20 @@ def test_bank_readers(mesh_device):
         per_bank = pages // 8
         for n in [int(v) for v in os.environ.get("BR_N", "1,2,3,4").split(",")]:
             cores, used = [], set()
-            for b, c in enumerate(opt):  # (the bank's worker, then the nearest free cores in its column)
+            horiz = os.environ.get("BR_HORIZ") == "1"  # (neighbours in the bank worker's row instead of its column)
+            for b, c in enumerate(opt):  # (the bank's worker, then the nearest free cores in its column / row)
                 mine = [c]
-                for dy in (1, -1, 2, -2, 3, -3):
+                for d_ in (1, -1, 2, -2, 3, -3):
                     if len(mine) == n:
                         break
-                    y = c.y + dy
-                    if 0 <= y < grid.y and (c.x, y) not in used and all((c.x, y) != (o.x, o.y) for o in opt):
-                        mine.append(ttnn.CoreCoord(c.x, y))
+                    xx, y = (c.x + d_, c.y) if horiz else (c.x, c.y + d_)
+                    if (
+                        0 <= y < grid.y
+                        and 0 <= xx < grid.x
+                        and (xx, y) not in used
+                        and all((xx, y) != (o.x, o.y) for o in opt)
+                    ):
+                        mine.append(ttnn.CoreCoord(xx, y))
                 for m in mine:
                     used.add((m.x, m.y))
                 cores.append(mine)

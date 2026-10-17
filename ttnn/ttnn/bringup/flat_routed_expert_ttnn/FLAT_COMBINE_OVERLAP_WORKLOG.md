@@ -1061,3 +1061,7 @@ the optimal worker per bank (get_optimal_dram_bank_to_logical_worker_assignment,
 Feeding lin2d's 12 columns (24 sender roles) from 8 single-bank readers needs either uneven bank loads or a
 forwarding layer (reader -> column-end sender, remote slot credits); estimated <= ~180 us over the block's four lin2d
 calls (309 + 158 + 103 + 95 us at ~330 GB/s -> ~500). Not started.
+Correction (same day): the 2-a-bank drop was the neighbour's position, not the count. With the neighbour in the bank
+worker's row (BR_HORIZ=1, x + 1: exactly the flat plan's 16 readers (0|1, y) / (7|8, y)): 1 a bank 507 GB/s, 2 a bank
+502 (98%), 3 a bank 450 (88%); vertical neighbours 398. The flat plan's readers on the gate/up stream alone: 511 (99.9%).
+So 16 bank-local readers (2 a bank, row neighbours) are the fast set for a lin2d W feed.
