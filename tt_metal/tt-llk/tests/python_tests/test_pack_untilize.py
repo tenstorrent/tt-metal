@@ -31,6 +31,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     NUM_FACES,
+    PACK_UNTILIZE_DST_RT_OFFSET,
     PACK_UNTILIZE_NARROW_ROW,
     TILE_COUNT,
     TILE_DST_CT_OFFSET,
@@ -93,6 +94,7 @@ def _run_pack_untilize(
     tile_dimensions=list(TILE_DIMENSIONS),
     narrow_row=False,
     row_num_datums=DEFAULT_TILE_C_DIM,
+    tile_dst_rt_offset=0,
 ):
     """Untilize-pack ``input_dimensions`` worth of ``tile_dimensions`` tiles and check the
     row-major result against the golden.
@@ -195,7 +197,11 @@ def _run_pack_untilize(
             TILE_DST_CT_OFFSET(tile_dst_ct_offset),
             PACK_UNTILIZE_NARROW_ROW(narrow_row, row_num_datums),
         ],
-        runtimes=[TILE_COUNT(tile_cnt_A), NUM_FACES(num_faces)],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_FACES(num_faces),
+            PACK_UNTILIZE_DST_RT_OFFSET(tile_dst_rt_offset),
+        ],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
@@ -344,4 +350,28 @@ def test_pack_untilize_narrow_row_small_tile(
         tile_dimensions=tile_dimensions,
         narrow_row=True,
         row_num_datums=row_num_datums,
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No],
+    # One- and two-tile blocks placed at Dest tiles 2.. (16-bit Dest holds 8 tiles).
+    input_dimensions=[[32, 32], [64, 64]],
+    tile_dst_rt_offset=[2],
+)
+def test_pack_untilize_narrow_row_dest_offset(
+    formats,
+    dest_acc,
+    input_dimensions,
+    tile_dst_rt_offset,
+):
+    """Narrow rows packed from a non-zero Dest row-tile offset (tile_dst_rt_offset)."""
+    _run_pack_untilize(
+        formats,
+        dest_acc,
+        input_dimensions,
+        narrow_row=True,
+        row_num_datums=8,
+        tile_dst_rt_offset=tile_dst_rt_offset,
     )

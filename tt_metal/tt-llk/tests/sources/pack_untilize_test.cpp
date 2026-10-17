@@ -100,11 +100,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_wait_for_dest_available_<dest_sync>();
             for (std::uint32_t tile_index_within_block = 0; tile_index_within_block < BLOCK_CT_DIM; ++tile_index_within_block) // Loop over tiles in the block
             {
+                const std::uint32_t dst_tile = tile_index_within_block + TILE_DST_CT_OFFSET + params.PACK_UNTILIZE_DST_RT_OFFSET;
                 LLK_ASSERT(
-                    (tile_index_within_block + TILE_DST_CT_OFFSET < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                    "Block tile index + TILE_DST_CT_OFFSET exceeds maximum destination tiles");
+                    (dst_tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                    "Block tile index + Dest tile offsets exceeds maximum destination tiles");
                 _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                    tile_index_within_block + TILE_DST_CT_OFFSET, formats.math, formats.math);
+                    dst_tile, formats.math, formats.math);
             }
             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
@@ -160,7 +161,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 false /* diagonal */,
                 PACK_UNTILIZE_NARROW_ROW,
                 PACK_UNTILIZE_ROW_NUM_DATUMS,
-                TILE_DST_CT_OFFSET>(pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /* tile_dst_rt_offset */);
+                TILE_DST_CT_OFFSET>(pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, params.PACK_UNTILIZE_DST_RT_OFFSET);
             _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
     }
