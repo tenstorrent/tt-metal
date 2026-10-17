@@ -441,6 +441,10 @@ def test_zero_padded_kv_cache_tensor_matches_scalar(mesh_device, slot_idx, valid
     cache_scalar = _make_seeded_cache()
     cache_tensor = _make_seeded_cache()
     ttnn.synchronize_device(mesh_device)
+    # In-place contract: the op returns the caller's cache handle and must leave the caller's declared
+    # distribution on it (snapshotted as repr so a mismatch prints both labels).
+    scalar_topology_before = repr(cache_scalar.tensor_topology())
+    tensor_topology_before = repr(cache_tensor.tensor_topology())
 
     # 1-element uint32 tensors: slot_idx and valid_global, each read element 0 on-device.
     tt_slot_idx = _make_scalar_tensor(mesh_device, slot_idx)
@@ -454,6 +458,9 @@ def test_zero_padded_kv_cache_tensor_matches_scalar(mesh_device, slot_idx, valid
         cache_tensor, tt_slot_idx, tt_valid_global, 0, num_layers, chunk_size_global, sp_axis, 128
     )
     ttnn.synchronize_device(mesh_device)
+
+    assert repr(cache_scalar.tensor_topology()) == scalar_topology_before, cache_scalar.tensor_topology()
+    assert repr(cache_tensor.tensor_topology()) == tensor_topology_before, cache_tensor.tensor_topology()
 
     scalar_devs = [ttnn.to_torch(d).float() for d in ttnn.get_device_tensors(cache_scalar)]
     tensor_devs = [ttnn.to_torch(d).float() for d in ttnn.get_device_tensors(cache_tensor)]

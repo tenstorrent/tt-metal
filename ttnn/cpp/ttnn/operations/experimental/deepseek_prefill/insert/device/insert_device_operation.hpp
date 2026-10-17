@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <variant>
+#include <vector>
 
 #include "insert_types.hpp"
 #include "insert_program_factory.hpp"
@@ -20,12 +21,14 @@ struct InsertDeviceOperation {
     using tensor_args_t = InsertInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
+    using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using program_factory_t = std::variant<InsertProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::insert
