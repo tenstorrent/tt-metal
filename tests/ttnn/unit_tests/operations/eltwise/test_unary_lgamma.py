@@ -2,16 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Boundary coverage for lgamma's two Taylor bridges.
+"""lgamma regression tests that the category tests do not cover.
 
-The fp32 arm evaluates a series around z = 1 while |z-1| is inside 0.25, and one around z = 2
-while |z-2| is inside 0.25. Both series are fitted on the closed interval, so the four inputs
-that sit exactly on |d| = 0.25 belong to a bridge; a strict guard sends them to the Stirling
-arm instead, which is an asymptotic expansion for large z.
-
-The assertion is scale-free on purpose: a boundary input must be no worse than the input one
-step inside the bridge it belongs to. Absolute bounds would have to be re-tuned every time the
-bridge coefficients move, and the property being tested is the branch selection, not the fit.
+1. Boundary coverage for the fp32 arm's two Taylor bridges (test_lgamma_bridge_boundary_is_no_worse_than_the_bridge).
+2. The bf16 arm under a 32-bit Dest, i.e. a bf16 input with a preallocated float32 output
+   (test_lgamma_bf16_input_fp32_output), checked against absolute/relative bf16-grade bounds.
 """
 
 import pytest
@@ -30,6 +25,14 @@ _BOUNDARIES = [
 
 @pytest.mark.parametrize("z, inside", _BOUNDARIES)
 def test_lgamma_bridge_boundary_is_no_worse_than_the_bridge(device, z, inside):
+    """The fp32 arm evaluates a series around z = 1 while |z-1| is inside 0.25, and one around z = 2
+    while |z-2| is inside 0.25. Both series are fitted on the closed interval, so the four inputs
+    that sit exactly on |d| = 0.25 belong to a bridge; a strict guard sends them to the Stirling
+    arm instead, which is an asymptotic expansion for large z.
+
+    The assertion is scale-free on purpose: a boundary input must be no worse than the input one
+    step inside the bridge it belongs to. Absolute bounds would have to be re-tuned every time the
+    bridge coefficients move, and the property being tested is the branch selection, not the fit."""
     values = torch.tensor([z, inside], dtype=torch.float32)
     padded = torch.zeros((1, 1, 32, 32), dtype=torch.float32)
     padded.view(-1)[: values.numel()] = values
