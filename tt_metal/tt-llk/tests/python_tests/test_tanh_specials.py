@@ -44,6 +44,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block
+from helpers.sfpu_dispatch_constants import SOFTCAP_BETA
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -58,6 +59,12 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
+from helpers.tile_constants import (
+    FACE_C_DIM,
+    MAX_FACE_ELEMENTS,
+    MAX_NUM_FACES,
+    MAX_TILE_ELEMENTS,
+)
 from helpers.utils import classify_special
 
 # exp field all ones -> 2 infinities + 254 NaNs, both signs
@@ -65,9 +72,10 @@ POS_SPECIALS = list(range(0x7F80, 0x8000))  # 128 bfloat16 bit patterns
 NEG_SPECIALS = list(range(0xFF80, 0x10000))  # 128
 ZEROS = [0x0000, 0x8000]  # +0.0, -0.0
 
-FACE_SIZE = 256
-TILE_SIZE = 4 * FACE_SIZE
+FACE_SIZE = MAX_FACE_ELEMENTS  # 256 datums
+TILE_SIZE = MAX_TILE_ELEMENTS  # 1024
 VECTOR = 32  # lanes per SFPU vector; 32 vectors walk a 32x32 tile
+VECTOR_PAIR_DATUMS = 4 * FACE_C_DIM  # the 4-row x 16-column block one x2 pair covers
 
 
 # Which tile datums SFPU vector v holds on a 16-bit Dest, measured on Blackhole (a tile
@@ -76,8 +84,8 @@ VECTOR = 32  # lanes per SFPU vector; 32 vectors walk a 32x32 tile
 # rows, the even vector holding the even columns and the odd vector the odd columns.
 # So an x2 pair (2k, 2k+1) is one 4-row block split by column parity.
 def _vector_datums(v):
-    base = 64 * (v // 2)
-    return np.arange(base + v % 2, base + 64, 2)
+    base = VECTOR_PAIR_DATUMS * (v // 2)
+    return np.arange(base + v % 2, base + VECTOR_PAIR_DATUMS, 2)
 
 
 def _lanes(first_vector, count=1):
@@ -133,8 +141,6 @@ FP32 = {
     "-0.0": 0x80000000,
 }
 
-SOFTCAP_BETA = 5.0  # sfpu_operations.h passes beta = 5 and 1 / 5 to calculate_softcap
-
 
 def _write_bits(src, bits_by_face):
     """Write raw bit patterns into `src`, one face at a time.
@@ -178,7 +184,7 @@ def _by_vector(patterns, base=None):
         assert len(bits) == VECTOR, "vector %d has %d patterns" % (v, len(bits))
         for d, b in zip(_vector_datums(v), bits):
             tile[d] = b
-    return {f: tile[f * FACE_SIZE : (f + 1) * FACE_SIZE] for f in range(4)}
+    return {f: tile[f * FACE_SIZE : (f + 1) * FACE_SIZE] for f in range(MAX_NUM_FACES)}
 
 
 def _run(
@@ -338,8 +344,10 @@ def _assert_finite_lanes(x, hw, lanes, reference, what, tol=1e-2):
     finite = np.isfinite(xs)
     assert finite.any(), "no finite lanes in %s" % what
     ref = reference(xs[finite].astype(np.float64))
-    err = np.abs(hs[finite].astype(np.float64) - ref)
-    bad = err > tol * (1.0 + np.abs(ref))
+    got = hs[finite].astype(np.float64)
+    err = np.abs(got - ref)
+    # A NaN or infinite result compares False against any tolerance; count it as a miss.
+    bad = ~np.isfinite(got) | (err > tol * (1.0 + np.abs(ref)))
     assert (
         not bad.any()
     ), "%s: %d finite lanes departed from the reference next to non-finite ones:\n  " % (
@@ -447,10 +455,13 @@ def test_tanh_polynomial_specials():
     bfloat16 tanh -- walks the tile two vectors at a time through
     `_sfpu_tanh_polynomial_x2_` (the single-vector kernel that softcap and situ_glu call
     is `test_tanh_polynomial_single_vector_specials`). Each datum ends in a saturation
-    guard: without one, SFPSWAP's min ranks a positive NaN above +inf (SFPSWAP.md) and
-    SFPMAD emits a positive NaN (SFPMAD.md), so the Horner chain's NaN is clamped to 1.0
-    and copysign returns +-1.0, a legal activation standing in for a NaN an upstream op
-    produced. tanh(+-inf) = +-1 must survive the guard.
+    step that must keep a NaN: SFPSWAP's min ranks a positive NaN above +inf (SFPSWAP.md),
+    and the Horner chain's NaN is positive on Blackhole (SFPMAD emits the canonical +NaN,
+    SFPMAD.md) and may be on Wormhole, so a plain min(result, 1.0f) clamped it to 1.0 and
+    copysign returned +-1.0, a legal activation standing in for a NaN an upstream op
+    produced. Blackhole now runs the polynomial with negated coefficients and saturates
+    with max(-P, -1.0f); Wormhole guards the lanes with a non-negative unbiased exponent.
+    tanh(+-inf) = +-1 must survive either.
 
     Faces 0 and 1 are the 128 positive and 128 negative patterns, so there the two
     vectors of an x2 pair are both non-finite. Face 3 mixes, on the vector layout
@@ -521,7 +532,7 @@ def test_tanh_polynomial_single_vector_specials():
 
 
 @skip_for_wormhole  # softcap_tile exists on Blackhole (and Quasar) only
-@skip_for_quasar  # Quasar's polynomial still clamps a NaN to +-beta; its record is separate
+@skip_for_quasar  # Quasar's polynomial still has the min clamp; its NaN results are unmeasured
 @pytest.mark.parametrize(
     "in_fmt,out_fmt,dest_acc",
     [
@@ -590,7 +601,7 @@ def test_softcap_polynomial_specials(in_fmt, out_fmt, dest_acc):
 def test_tanh_fp32_bound():
     """|tanh| <= 1 for fp32 inputs between the last two bfloat16 values below 3.
 
-    The LUT has no `min(result, 1.0f)` -- the polynomial path in the same header
+    The LUT has no saturation step -- the polynomial path in the same header
     carries one -- so the bound is a property of the coefficients alone: every
     segment must stay at or below 1.0 across its whole range, not merely at the
     breakpoints a bfloat16 input can land on. With segment 4's slope at the

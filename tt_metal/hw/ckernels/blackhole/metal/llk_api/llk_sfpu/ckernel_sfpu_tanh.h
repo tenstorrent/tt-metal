@@ -85,57 +85,49 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     return sfpi::copysgn(y, x);
 }
 
-// Sollya coefficients. tanh_init has programmable CRegs for the top three only, so these three
-// cost an SFPLOADI pair per use unless the caller keeps them in an LReg.
-// val * (0.999004364013671875 + val * (3.0897438526153564453125e-2 + val * (-0.4890659749507904052734375 + val *
-// (0.281917631626129150390625 + val * (-6.6649019718170166015625e-2 + val *
-// (5.876733921468257904052734375e-3))))));
-constexpr float TANH_POLY_C1 = 0.999004364013671875f;
-constexpr float TANH_POLY_C2 = 3.0897438526153564453125e-2f;
-constexpr float TANH_POLY_C3 = -0.4890659749507904052734375f;
-
-// Saturate the Sollya polynomial at 1.0 without laundering a NaN. result is |x| * Q(|x|) with
-// Q > 0, so it is +0.0, a positive finite value, +Inf or a NaN (SFPMAD emits a positive one,
-// SFPMAD.md). min(result, 1.0f) is SFPSWAP, whose order ranks that NaN above +Inf (SFPSWAP.md),
-// so the clamp returned 1.0 for a NaN input and copysign made it a legal +-1.0 activation. Here
-// the lanes at or above 1.0 -- the ones the clamp would change, plus +Inf and NaN -- are instead
-// rewritten as (result - 1 ulp) * 0 + 1: a finite result gives exactly 1.0, +Inf becomes the
-// largest finite value and also gives 1.0, and a NaN stays a NaN through the multiply-add
-// whether or not the compare fires. Lanes below 1.0 are untouched, as under the clamp.
-// Blackhole lowers the float compare to one SFPLE; the guard is 4 SFPU instructions per datum
-// and the x2 body below is 34 per pair (28 before the guard, 38 with min plus an is_finite test).
-sfpi_inline sfpi::vFloat _sfpu_tanh_poly_saturate_(sfpi::vFloat result) {
-    v_if(result >= 1.0f) { result = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(result) - 1) * 0.0f + 1.0f; }
-    v_endif;
-    return result;
-}
+// Sollya coefficients of P(val), stored NEGATED (the three here and the three tanh_init puts in
+// programmable CRegs): Horner then yields -P(val) bit for bit, since rounding is sign-symmetric,
+// and _sfpu_tanh_polynomial_ saturates -P at -1.0 with max, which keeps a NaN where
+// min(P, 1.0f) laundered it. tanh_init has programmable CRegs for the top three only, so these
+// three cost an SFPLOADI pair per use unless the caller keeps them in an LReg.
+// P(val) = val * (0.999004364013671875 + val * (3.0897438526153564453125e-2 + val * (-0.4890659749507904052734375 + val
+// * (0.281917631626129150390625 + val * (-6.6649019718170166015625e-2 + val * (5.876733921468257904052734375e-3))))));
+constexpr float TANH_POLY_NEG_C1 = -0.999004364013671875f;
+constexpr float TANH_POLY_NEG_C2 = -3.0897438526153564453125e-2f;
+constexpr float TANH_POLY_NEG_C3 = 0.4890659749507904052734375f;
 
 sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     // For negative numbers, we compute tanh(-x) = -tanh(x)
     sfpi::vFloat val = sfpi::abs(x);  // set positive
 
-    sfpi::vFloat result = PolynomialEvaluator::eval(
+    // The negated coefficients make this -P(val): -tanh(val) before the sign is restored.
+    sfpi::vFloat neg_result = PolynomialEvaluator::eval(
         val,
         0.0f,
-        TANH_POLY_C1,
-        TANH_POLY_C2,
-        TANH_POLY_C3,
+        TANH_POLY_NEG_C1,
+        TANH_POLY_NEG_C2,
+        TANH_POLY_NEG_C3,
         sfpi::vConstFloatPrgm2,
         sfpi::vConstFloatPrgm1,
         sfpi::vConstFloatPrgm0);
 
-    // For larger x, the polynomial approximation may exceed 1.0; tanh(x) is bounded by [-1, 1].
-    result = _sfpu_tanh_poly_saturate_(result);
-
-    result = sfpi::copysgn(result, x);  // restore sign (i.e. tanh(-x) = -tanh(x))
+    // For larger x the polynomial exceeds 1 in magnitude; tanh(x) is bounded by [-1, 1], so saturate.
+    // max(-P, -1.0f) is one SFPSWAP and keeps a NaN: SFPSWAP orders by sign-magnitude with +NaN
+    // above everything (SFPSWAP.md), and Blackhole's SFPMAD only ever emits the canonical +NaN
+    // (SFPMAD.md), so the result is -min(P, 1.0) for every finite P, -1.0 for P = +Inf, and the
+    // NaN itself for a NaN -- where min(P, 1.0f) returned 1.0 for the same +NaN and copysign made
+    // it a legal +-1.0 activation. copysign then restores x's sign, so finite results are
+    // bit-identical to clamping the positive polynomial. Wormhole's SFPMAD may emit a NaN of
+    // either sign, so its copy keeps the positive coefficients and a predicated exponent test.
+    sfpi::vFloat result = sfpi::copysgn(sfpi::max(neg_result, -1.0f), x);  // tanh(-x) = -tanh(x)
 
     return result;
 }
 
 // Two datums through the polynomial in lockstep, so each fills the other's SFPMAD stall slots.
 // Only WH stalls; BH comes out even either way, so both arches run this shape. Only c1 can be
-// hoisted on top of it: six vectors are already live for the data, and an eighth spills. a0/a1
-// die at the last multiply, so the saturation guard runs with two LRegs to spare.
+// hoisted on top of it: six vectors are already live for the data, and an eighth spills.
+// Negated coefficients and the max saturation as in _sfpu_tanh_polynomial_.
 sfpi_inline void _sfpu_tanh_polynomial_x2_(
     sfpi::vFloat& y0, sfpi::vFloat& y1, sfpi::vFloat x0, sfpi::vFloat x1, sfpi::vFloat c1) {
     sfpi::vFloat a0 = sfpi::abs(x0);
@@ -148,10 +140,10 @@ sfpi_inline void _sfpu_tanh_polynomial_x2_(
     r0 = r0 * a0 + sfpi::vConstFloatPrgm2;
     r1 = r1 * a1 + sfpi::vConstFloatPrgm2;
     // One local each, else sfpi emits the SFPLOADI pair per MAD. Both die after their second use.
-    sfpi::vFloat c3 = TANH_POLY_C3;
+    sfpi::vFloat c3 = TANH_POLY_NEG_C3;
     r0 = r0 * a0 + c3;
     r1 = r1 * a1 + c3;
-    sfpi::vFloat c2 = TANH_POLY_C2;
+    sfpi::vFloat c2 = TANH_POLY_NEG_C2;
     r0 = r0 * a0 + c2;
     r1 = r1 * a1 + c2;
     r0 = r0 * a0 + c1;
@@ -159,10 +151,8 @@ sfpi_inline void _sfpu_tanh_polynomial_x2_(
     r0 = r0 * a0;
     r1 = r1 * a1;
 
-    r0 = _sfpu_tanh_poly_saturate_(r0);
-    r1 = _sfpu_tanh_poly_saturate_(r1);
-    y0 = sfpi::copysgn(r0, x0);
-    y1 = sfpi::copysgn(r1, x1);
+    y0 = sfpi::copysgn(sfpi::max(r0, -1.0f), x0);
+    y1 = sfpi::copysgn(sfpi::max(r1, -1.0f), x1);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
@@ -200,13 +190,11 @@ inline void calculate_tanh() {
             sfpi::dst_reg++;
         }
     } else {
-        sfpi::vFloat c1 = TANH_POLY_C1;  // inline it and every datum pays an SFPLOADI pair
+        sfpi::vFloat c1 = TANH_POLY_NEG_C1;  // inline it and every datum pays an SFPLOADI pair
 
         // Walk dst_reg rather than index by d: a uniform body is what sfpi records into the
-        // 32-entry replay buffer once, and a runtime index makes it build each SFPLOAD/SFPSTORE
-        // in scalar registers. The 28-instruction pair body replayed whole before the NaN
-        // guard; with it the body is over 32, so the first 32 replay and the rounding and
-        // stores issue inline after each replay.
+        // 32-entry replay buffer once (the 28 SFPU instructions of a pair plus the increment fit
+        // whole), and a runtime index makes it build each SFPLOAD/SFPSTORE in scalar registers.
 #pragma GCC unroll 4
         for (int d = 0; d < ITERATIONS / 2; d++) {
             sfpi::vFloat r0, r1;
@@ -245,7 +233,7 @@ inline void tanh_init() {
         //    nothing about the infinities: the hardware evaluates A*|x| + B, so 0 * inf + 1 is
         //    NaN rather than 1.0. That predates this table; test_tanh_specials records it;
         //  - every segment <= 1.0 over its own range -- unlike the polynomial path below, this
-        //    one has no min(result, 1.0f) to fall back on;
+        //    one has no saturation (max(-P, -1.0f) there) to fall back on;
         //  - no step down where two segments meet. A bfloat16 sweep tolerates a step under the
         //    ~2e-3 ulp there, but this kernel has no convert<vFloat16b> and also serves the
         //    fp32-dest path, where a 1.2e-4 dip is ~2048 fp32 ulp of non-monotonicity. So the
@@ -273,11 +261,13 @@ inline void tanh_init() {
             sfpi::vConstFloatPrgm1 = -0.6931471805599453f;  // ln(2)
             sfpi::vConstFloatPrgm2 = 1.666667163e-1f;       // c1
         } else {
-            // Polynomial approximation
-            // Store some polynomial coefficients in programmable registers
-            sfpi::vConstFloatPrgm0 = 5.876733921468257904052734375e-3;
-            sfpi::vConstFloatPrgm1 = -6.6649019718170166015625e-2;
-            sfpi::vConstFloatPrgm2 = 0.281917631626129150390625;
+            // Polynomial approximation: the three highest Sollya coefficients, NEGATED like
+            // TANH_POLY_NEG_C1..3 so that Horner yields -P(val) (see _sfpu_tanh_polynomial_).
+            // Read only by _sfpu_tanh_polynomial_ and _sfpu_tanh_polynomial_x2_, which softcap,
+            // situ_glu and the polynomial logit_softcap reach through this same init.
+            sfpi::vConstFloatPrgm0 = -5.876733921468257904052734375e-3;
+            sfpi::vConstFloatPrgm1 = 6.6649019718170166015625e-2;
+            sfpi::vConstFloatPrgm2 = -0.281917631626129150390625;
         }
     }
 }

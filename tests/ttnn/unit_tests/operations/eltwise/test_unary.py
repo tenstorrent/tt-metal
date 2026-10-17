@@ -2541,7 +2541,7 @@ def test_unary_softcap(input_shapes, ttnn_dtype, device):
         in_data = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-100.0, 100.0)
     else:
         # No range limiting: x/beta may overflow the polynomial's Horner chain to inf,
-        # but the min(., 1.0) clamp that bounds tanh turns that back into exactly beta.
+        # but the saturation that bounds tanh at 1 turns that back into exactly beta.
         in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)

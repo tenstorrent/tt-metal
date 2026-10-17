@@ -98,18 +98,19 @@ constexpr float TANH_POLY_C2 = 3.0897438526153564453125e-2f;
 constexpr float TANH_POLY_C3 = -0.4890659749507904052734375f;
 
 // Saturate the Sollya polynomial at 1.0 without laundering a NaN. result is |x| * Q(|x|) with
-// Q > 0, so it is +0.0, a positive finite value, +Inf or a NaN (SFPMAD emits a positive one,
-// SFPMAD.md). min(result, 1.0f) is SFPSWAP, whose order ranks that NaN above +Inf (SFPSWAP.md),
-// so the clamp returned 1.0 for a NaN input and copysign made it a legal +-1.0 activation. Here
-// the lanes at or above 1.0 -- the ones the clamp would change, plus +Inf and NaN -- are instead
-// rewritten as (result - 1 ulp) * 0 + 1: a finite result gives exactly 1.0, +Inf becomes the
-// largest finite value and also gives 1.0, and a NaN stays a NaN through the multiply-add
-// whether or not the compare fires. Lanes below 1.0 are untouched, as under the clamp.
-// Wormhole has no float-compare instruction: result >= 1.0f lowers to SFPMAD, a latency NOP
-// and SFPSETCC (40 SFPU instructions per x2 pair). The unbiased exponent being >= 0 is the same
-// test for a non-negative result (+Inf and NaN have the all-ones exponent, so they are in the
-// set too), and sfpi fuses it into a single SFPEXEXP that sets the condition code: 4 instructions
-// per datum, 36 per x2 pair (28 before the guard, 38 with min plus an is_finite test).
+// Q > 0, so it is +0.0, a positive finite value, +Inf or a NaN; on Wormhole a NaN emitted by
+// SFPMAD may carry either sign (SFPMAD.md). min(result, 1.0f) is SFPSWAP, whose order ranks a
+// positive NaN above +Inf (SFPSWAP.md), so the clamp returned 1.0 for a positive NaN and
+// copysign made it a legal +-1.0 activation. Here the lanes whose unbiased exponent is >= 0 --
+// every result at or above 1.0, the ones the clamp would change, plus +Inf and a NaN of either
+// sign, which have the all-ones exponent -- are instead rewritten as (result - 1 ulp) * 0 + 1:
+// a finite result gives exactly 1.0, +Inf becomes the largest finite value and also gives 1.0,
+// and a NaN stays a NaN through the multiply-add. Lanes below 1.0 are untouched, as under the
+// clamp. sfpi fuses the exponent test into one SFPEXEXP that sets the condition code; a float
+// compare has no single instruction here (SFPMAD, a latency NOP and SFPSETCC). Guard: 4 SFPU
+// instructions per datum; the x2 pair body is 36 (28 on main): the first 32 replay, the
+// rounding and stores issue inline. Blackhole instead negates the coefficients and saturates
+// with max, which its canonical-NaN SFPMAD allows and this one does not.
 sfpi_inline sfpi::vFloat _sfpu_tanh_poly_saturate_(sfpi::vFloat result) {
     v_if(sfpi::exexp(result, sfpi::ExponentMode::Unbiased) >= 0) {
         result = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(result) - 1) * 0.0f + 1.0f;
@@ -213,8 +214,8 @@ inline void calculate_tanh() {
         // Walk dst_reg rather than index by d: a uniform body is what sfpi records into the
         // 32-entry replay buffer once, and a runtime index makes it build each SFPLOAD/SFPSTORE
         // in scalar registers. The 28-instruction pair body replayed whole before the NaN
-        // guard; with it the body is over 32, so the first 32 replay and the rounding and
-        // stores issue inline after each replay.
+        // guard; with it the body is 36, so the first 32 replay and the rounding and stores
+        // issue inline after each replay.
 #pragma GCC unroll 4
         for (int d = 0; d < ITERATIONS / 2; d++) {
             sfpi::vFloat r0, r1;
@@ -253,7 +254,7 @@ inline void tanh_init() {
         //    nothing about the infinities: the hardware evaluates A*|x| + B, so 0 * inf + 1 is
         //    NaN rather than 1.0. That predates this table; test_tanh_specials records it;
         //  - every segment <= 1.0 over its own range -- unlike the polynomial path below, this
-        //    one has no min(result, 1.0f) to fall back on;
+        //    one has no saturation (_sfpu_tanh_poly_saturate_ there) to fall back on;
         //  - no step down where two segments meet. A bfloat16 sweep tolerates a step under the
         //    ~2e-3 ulp there, but this kernel has no convert<vFloat16b> and also serves the
         //    fp32-dest path, where a 1.2e-4 dip is ~2048 fp32 ulp of non-monotonicity. So the

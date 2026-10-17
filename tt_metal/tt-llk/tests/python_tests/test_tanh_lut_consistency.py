@@ -285,7 +285,7 @@ def test_lut_never_exceeds_one(table: LutTable):
     """No segment may reach lut > 1 anywhere in its own range.
 
     tanh is bounded by 1 and `1 - lut^2` goes negative above it, and neither kernel
-    has a `min(result, 1.0f)` to fall back on -- the polynomial tanh path has one
+    has a saturation step to fall back on -- the polynomial tanh path has one
     precisely because it needs it. With a non-negative slope the supremum over a
     half-open segment is at its upper breakpoint, so that is the only point to check.
 
