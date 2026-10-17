@@ -93,6 +93,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #endif
 constexpr std::uint32_t SDPA_RESULT_SLOT_ROWS = ckernel::FACE_R_DIM;
 static_assert(SDPA_DST_INDEX % SDPA_RESULT_SLOT_ROWS == 0, "SDPA_DST_INDEX must start a result slot");
+static_assert(SDPA_DST_INDEX + CT_DIM * SDPA_RESULT_SLOT_ROWS <= DEST_REGISTER_HALF_SIZE, "the result slots must fit the 16-bit DEST half");
 // Leading passes that seed DEST from the mask; one unmasked pass follows them.
 #ifndef SDPA_MASK_PASSES
 #define SDPA_MASK_PASSES (SDPA_MASK_REENTRY ? 1 : 0)
@@ -256,7 +257,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             // The pack tile index is the result slot number (SDPA_RESULT_SLOT_ROWS rows per slot).
             _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-                SDPA_DST_INDEX / SDPA_RESULT_SLOT_ROWS + i, L1_ADDRESS(params.buffer_Res[pass * CT_DIM + i]));
+                SDPA_DST_INDEX / SDPA_RESULT_SLOT_ROWS + i /*tile_index*/, L1_ADDRESS(params.buffer_Res[pass * CT_DIM + i]));
         }
         _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en, SDPA_PACK_CLEAR_DEST>();
     }

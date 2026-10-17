@@ -489,6 +489,21 @@ def _dyadic_operands(M, K, N, seed):
     return lhs, rhs
 
 
+# Per-face offset of the re-entry masks. The (col % 4 - 1) * 2 column pattern alone repeats in
+# every 16-column face and contains zeros, so a face seeded from a stale SrcB row could match
+# the golden by luck; adding face_index * MASK_FACE_OFFSET_STEP makes every mask row distinct.
+# 1/8 is dyadic, so every seeded sum stays exactly representable.
+MASK_FACE_OFFSET_STEP = 1 / 8
+
+
+def _face_offset_mask(N):
+    """One mask value per column: a (-2, 0, 2, 4) pattern plus a distinct per-face offset."""
+    cols = torch.arange(N)
+    return ((cols % 4 - 1) * 2 + (cols // FACE_C_DIM) * MASK_FACE_OFFSET_STEP).to(
+        torch.bfloat16
+    )
+
+
 @parametrize(
     shape=[(1, 64, 96), (8, 128, 128)],
     stride_mode=["implicit", "zero", "tight", "padded"],
@@ -536,14 +551,21 @@ def test_sdpa_custom_mm_row_stride(
 def test_sdpa_custom_mm_mask_extent_restore(
     request, M, ct, read_transposed, padded_stride
 ):
-    """Mask every output face, then reuse the restored SrcB geometry on the next matmul."""
+    """Mask every output face, then reuse the restored SrcB geometry on the next matmul.
+
+    The math side broadcasts ct_dim*2 SrcB rows into DEST, one per output face, so the mask
+    unpack must span that many rows whatever the Q face height M; the cells with ct*2 > M
+    catch an extent left at the init's M rows (every face >= M then comes back unmasked).
+    The unmasked second pass checks that the extent was restored to M for the matmul.
+    """
     _skip_on_simulator(request)
-    kt, K, N = 2, 64, ct * 32
+    kt = 2
+    K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
     row_stride = kt + 2 if padded_stride else None
     input_tile_offset = 1 if padded_stride else 0
     lhs, rhs = _dyadic_operands(M, K, N, seed=73)
-    # Distinct nonzero face patterns reveal a truncated mask extent.
-    mask = ((torch.arange(N) % 4 - 1) * 2).to(torch.bfloat16)
+    # Every face gets its own mask row, so a face seeded from a stale SrcB row cannot match.
+    mask = _face_offset_mask(N)
     result = _run_masked_then_unmasked(
         M,
         ct,
@@ -563,58 +585,33 @@ def test_sdpa_custom_mm_mask_extent_restore(
 
 
 @parametrize(
-    M=[1, 8],
-    # Only ct_dim*2 > M leaves mask rows beyond the Q face height.
-    ct=lambda M: [3, 8] if M == 1 else [8],
-)
-def test_sdpa_custom_mm_mask_extent_default(request, M, ct):
-    """The mask unpack must supply all ct_dim*2 mask rows the math side broadcasts.
-
-    The math side broadcasts ct_dim*2 SrcB rows into DEST, one per output face. The mask
-    unpack used to program that SrcB extent only behind an opt-in knob and otherwise ran with
-    the Q face height (M rows) set by the init, so output faces >= M were seeded from whatever
-    SrcB held there. It now always programs the extent; this cell keeps ct_dim*2 > M so a
-    regression shows up as unmasked faces.
-    """
-    _skip_on_simulator(request)
-    kt, K, N = 2, 64, ct * 32
-    lhs, rhs = _dyadic_operands(M, K, N, seed=91)
-    # A per-row offset makes every mask row distinct from the others and from the restore
-    # test's mask, so a stale SrcB row left behind by an earlier cell cannot pass by luck.
-    cols = torch.arange(N)
-    mask = ((cols % 4 - 1) * 2 + (cols // FACE_C_DIM) / 8).to(torch.bfloat16)
-    result = _run_masked_then_unmasked(M, ct, kt, lhs, rhs, mask)
-    product = lhs.float() @ rhs.float()
-    golden = torch.stack([product + mask.float(), product]).to(torch.bfloat16)
-    assert torch.equal(
-        result, golden
-    ), "Mask rows beyond the Q face height were not applied"
-
-
-@parametrize(
     # 480 is the slot just below the boundary (control); 496 is the last slot of a 16-bit
-    # DEST bank, where (row offset + 16-row block index) reaches the bank size.
+    # DEST bank, where (MATH_Offset + 16-row block index) reaches the bank size.
     dst_index=[480, 496],
+    # ct=2 at 480 puts tile 1 at rows 496..511 while MATH_Offset stays 480: 480 + 31 = 511
+    # keeps the 16-row clear, which is right only because the bank select adds the block index
+    # to MATH_Offset, not to the row the tile starts at.
+    ct=lambda dst_index: [1, 2] if dst_index == 480 else [1],
     # SyncHalf alternates DEST halves per pass, so the unmasked pass (the only one that issues
     # the ZEROACC) lands in bank 0 after 2 masked passes and in bank 1 after 3.
     mask_passes=lambda dst_index: [2, 3] if dst_index == 496 else [2],
 )
-def test_sdpa_custom_mm_clear_last_dest_slot(request, dst_index, mask_passes):
-    """A single-tile result at the last 16-bit DEST slot must be cleared before accumulating.
+def test_sdpa_custom_mm_clear_last_dest_slot(request, dst_index, ct, mask_passes):
+    """A result tile at the last 16-bit DEST slot must be cleared before accumulating.
 
-    The masked passes seed that slot in alternating DEST halves; the pack release leaves DEST
+    The masked passes seed the slots in alternating DEST halves; the pack release leaves DEST
     alone, as the fused SDPA kernel does between chunks, so the final, unmasked pass finds an
-    earlier pass's scores in its slot and has to clear them itself. Blackhole derives the
-    16-row ZEROACC's bank select from (dest row offset + block index), which flips to the other
+    earlier pass's scores in its slots and has to clear them itself. Blackhole derives the
+    16-row ZEROACC's bank select from (MATH_Offset + block index), which flips to the other
     half at 496 + 31; a clear that lands there leaves the stale scores in place and the result
     comes back as mask + 2 * product. mask_passes=2 puts the unmasked pass in bank 0 (MATH_Offset
     496), mask_passes=3 in bank 1 (MATH_Offset 1008), so the clear is checked in both halves.
     """
     _skip_on_simulator(request)
-    M, kt, ct = 8, 2, 1
+    M, kt = 8, 2
     K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
     lhs, rhs = _dyadic_operands(M, K, N, seed=57)
-    mask = ((torch.arange(N) % 4 - 1) * 2).to(torch.bfloat16)
+    mask = _face_offset_mask(N)
     result = _run_masked_then_unmasked(
         M,
         ct,
@@ -632,7 +629,7 @@ def test_sdpa_custom_mm_clear_last_dest_slot(request, dst_index, mask_passes):
     # Per-pass deviation: a stale slot shows up in the last pass as (result - golden) == seeded.
     deviation = (result.float() - golden.float()).abs().amax(dim=(1, 2)).tolist()
     assert torch.equal(result, golden), (
-        f"result slot at DEST row {dst_index} was not cleared before accumulation; "
+        f"result slots at DEST row {dst_index} (ct={ct}) were not cleared before accumulation; "
         f"max |result - golden| per pass = {deviation}"
     )
 
