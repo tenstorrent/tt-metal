@@ -35,7 +35,8 @@ The router builders are destroyed once the fabric program is compiled, so the ma
    other routers know: router keys, peers, cores, cross-host and wrap links, and sibling producers.
 3. **Write** (`fabric_manifest.cpp`). The writer is the one place that decides the JSON's key names and shape.
 
-The types at L1 addresses come from the struct layouts in `fabric_struct_layouts.hpp` and from the HAL.
+The types at L1 addresses come from the struct layouts in `fabric_struct_layouts.hpp` and from the HAL. The run's
+packet header layout comes from `fabric_packet_header_layouts.cpp`.
 
 ## Shape
 
@@ -43,11 +44,12 @@ The types at L1 addresses come from the struct layouts in `fabric_struct_layouts
 | --- | --- |
 | `manifest_version`, `kind` | `1` and `"fabric_manifest"` |
 | `run` | Architecture, fabric, reliability, tensix and UDM configs, host rank, MPI rank and world size, `written_at` |
-| `fabric_context` | Topology, packet header, payload and channel buffer sizes, the route buffer size, `multi_txq` |
+| `fabric_context` | Topology, the packet header type (`packet_header`, as `{size, schema}`), payload and channel buffer sizes, the route buffer size, `multi_txq` |
 | `vocabulary` | Every field `category` and `kind` |
 | `archs.<arch>.areas` | L1 areas the architecture fixes: heartbeat, telemetry, routing table, go and launch messages, Ethernet firmware mailbox |
-| `archs.<arch>.types` | Every struct a schema names, with its size and members in order |
+| `archs.<arch>.types` | Every struct and tagged union a schema names, including the run's packet header and the routing table as the run's routing mode lays it out. A struct has its size and members in order, and a union its size, its tag's enum and its members |
 | `enums` | Every enum a schema names, with its values |
+| `routing_encodings` | The values routes are encoded with: 1D hop values, 2D action bits and the codes that widen to them, the multicast tree edge layout, and the scatter chunk encoding's width |
 | `meshes` | Each mesh, its chips, and each local chip's routers |
 
 ### Paths
@@ -81,9 +83,42 @@ path:
   it before launch.
 - A **stream register** is `{stream_id, register, schema}`. `register` is `buf_space_available` (the
   increment-on-write count) or `remote_src` (a plain read-write register).
-- A **schema** is an integer (`u8` to `u32`, `i8` to `i32`), `struct:<Name>` (in `archs.<arch>.types`),
-  `enum:<Name>` (in `enums`), `packed:<name>`, `bytes` or `pad`. Every `struct:` and `enum:` schema resolves: the
-  writer throws otherwise.
+- A **schema** is an integer (`u8` to `u32`, `i8` to `i32`), `struct:<Name>` or `union:<Name>` (in
+  `archs.<arch>.types`), `enum:<Name>` (in `enums`), `bytes` or `pad`. Every `struct:`, `union:` and `enum:` schema
+  resolves to a type of that kind: the writer throws otherwise. A class template's name includes its arguments, with
+  no space after a comma, for example `struct:HybridMeshPacketHeaderT<36>`.
+- A **packed table** is a schema of `enum:<Name>` with `bits_per_entry`: `num_elements` entries of that many bits,
+  entry 0 at the lowest bits, each holding a value of the enum. The routing table's first-hop direction tables are
+  packed `compressed_routing_values`, and a scatter write's `chunk_encoding` is packed `NocScatterWriteChunkEncoding`,
+  one per chunk; entries from `chunk_count` on are unused.
+- A **tagged union** is a struct member whose bytes hold one of several types, picked by another member of the same
+  struct, its `tag`. The packet header's `command_fields` and `udm_control` are tagged by `noc_send_type`. The
+  union's entry in `types` has `"kind": "union"`, `tag_schema` (the `enum:` the tag holds), its members, each at
+  offset 0 with the `tag_value` that picks it, and `default_member`, the member every other tag value picks, when it
+  has one. To decode one, read the tag, then the member it picks; when it picks none, the bytes are raw.
+- The **routing table** (`routing_l1_info_t`) is laid out for the run's routing mode, since one slot of it holds the
+  1D routing-path table or the 2D route table. In 1D the slot is `routing_path_table_1d`, and the rest of the slot and
+  `exit_node_table`, which only 2D fills, are padding. In 2D the slot is `route_table_2d`. `types` holds only the
+  mode's table struct, whose regions are `bytes`, read by rule: entry `i` of the 1D table, the route to the chip `i`
+  hops away, starts at word `i * (1 + routing_1d_extension_words)`, and the 2D regions are sized by the mesh shape
+  (`mesh_y_size`, `mesh_x_size`), as `route_table_2d_t`'s comment in `fabric_common.h` lays out.
+
+### Routing encodings
+
+`routing_encodings` holds the values the fabric encodes routes with, read from the constants the fabric encodes them
+with, so a decoder does not copy them. They are the same in every run; the run's route buffer sizes are in
+`fabric_context`. Every packed field below starts at the lowest bits.
+
+- `1d`: a 1D route word holds `hops_per_word` hop fields of `bits_per_hop` bits each, hop 0 first. `hop` names each
+  value a field holds.
+- `2d`: `action_bits` is the bit each direction, and `local_deliver`, sets in a 2D action byte. The routing table's
+  action vectors hold codes of `table_entry_bits` bits, `table_entries_per_byte` to a byte. `y_code_action[code]` and
+  `x_code_action[code]` are the action byte a Y or X code widens to: 0 for stop, and for X's reserved code 3.
+  `mcast_tree_edge` is one multicast tree edge: `bytes` long, with `child`, `parent` and `output` fields, each
+  `{shift, bits}`. `output` is a code of the edge's axis.
+- `scatter`: a scatter write's `chunk_encoding` holds one `NocScatterWriteChunkEncoding` per chunk, of
+  `chunk_encoding_bits` bits each, for at most `max_chunks` chunks. The header's layout says the same, as a packed
+  table.
 
 ### Fields
 
@@ -159,8 +194,15 @@ names what to update. By kind of change:
 | Removed argument | The collector: "missing fabric router named compile-time argument ..." | Delete its table entry. An unrecorded entry for it is not detected; delete it by hand |
 | Collector code reads a new argument | `get_named_arg`: "the collector reads ..., which no field table reads" | Add it to `k_collector_args` |
 | New struct in L1 | The build, when a field's content names a struct with no `StructLayout`; the writer, when its schema does not resolve | A `StructLayout<T>` and an entry in `DescribedStructs` (`fabric_struct_layouts.hpp`) |
+| New packet header size | Nothing: every header `PACKET_HEADER_CONFIGS` lists has its layout checked at compile time | Nothing |
+| New packet header type, or a member added to one | The build, for a type with no `StructLayout` or a layout that misses bytes | Its `StructLayout` in `fabric_packet_header_layouts.cpp`, and a `PacketHeaderStructs` entry if it holds a struct `DescribedStructs` leaves out |
+| New tagged union | The build, when a layout lists it with no `UnionLayout`; the writer, when its schema does not resolve | A `UnionLayout<U>` and an entry in `DescribedUnions` (`fabric_struct_layouts.hpp`), and `LAYOUT_TAGGED_UNION` in the enclosing layout |
+| A member added to `routing_l1_info_t` | The build, for a member that changes an offset or the size, in either routing mode | `routing_l1_info_head` or `routing_l1_info_tail`, or the mode's list (`routing_l1_info_members_1d` or `_2d`), in `fabric_struct_layouts.hpp` |
+| A member added to a packet header command struct | The build, for a member that changes an offset or the size | Its `StructLayout` in `fabric_struct_layouts.hpp`. A member added in the tail padding of a struct that lists `LAYOUT_TAIL_PAD` is not detected: it reads as padding |
 | New enum | The writer, when a schema names it | An entry in `DescribedEnums` (`fabric_struct_layouts.hpp`) |
-| New enum value | Nothing for enums enchantum reads; the build for `EDMStatus` | `FABRIC_MANIFEST_EDM_STATUSES` for `EDMStatus` |
+| New enum value | Nothing for enums enchantum reads; the build for `EDMStatus`, and for `NocSendType` when no `NocCommandFields` member is picked by it | `FABRIC_MANIFEST_EDM_STATUSES` for `EDMStatus`; for `NocSendType`, the member it picks in `UnionLayout<NocCommandFields>`, and in `UnionLayout<UDMControlFields>` unless the default `write` is right |
+| A routing encoding value changes, or a direction is added | Nothing: `routing_encodings` reads the constants, and lists every direction | Nothing |
+| A wider 1D hop field | The build, until `RoutingFieldsConstants::LowLatency::HopAction` names every value the field holds; then the schema check | `HopAction` (`fabric_common.h`), and the schema's `hop` names |
 | New computed fact | Nothing | The model, the collector or chip pass, the writer, the tests, a paragraph above, and the schema |
 | A change to the JSON's shape | The schema check | `fabric_manifest_schema.json` |
 | A field table or unrecorded list change | `ManifestDocs.UpToDate` | Regenerate `FIELDS.md` (below) |

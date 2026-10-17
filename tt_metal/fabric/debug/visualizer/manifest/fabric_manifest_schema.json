@@ -19,6 +19,7 @@
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/enum" }
     },
+    "routing_encodings": { "$ref": "#/$defs/routing_encodings" },
     "meshes": {
       "type": "object",
       "minProperties": 1,
@@ -26,7 +27,9 @@
       "additionalProperties": { "$ref": "#/$defs/mesh" }
     }
   },
-  "required": ["manifest_version", "kind", "run", "fabric_context", "vocabulary", "archs", "enums", "meshes"],
+  "required": [
+    "manifest_version", "kind", "run", "fabric_context", "vocabulary", "archs", "enums", "routing_encodings", "meshes"
+  ],
   "additionalProperties": false,
 
   "$defs": {
@@ -45,7 +48,7 @@
     "channel_status": { "enum": ["active", "vc_not_serviced", "mux", "trimmed"] },
     "schema": {
       "type": "string",
-      "pattern": "^([ui](8|16|32|64)|bytes|pad|struct:[A-Za-z_][A-Za-z0-9_]*|enum:[A-Za-z_][A-Za-z0-9_]*|packed:[a-z0-9_]+)$"
+      "pattern": "^([ui](8|16|32|64)|bytes|pad|struct:[A-Za-z_][A-Za-z0-9_]*(<([0-9]+|true|false)(,([0-9]+|true|false))*>)?|union:[A-Za-z_][A-Za-z0-9_]*|enum:[A-Za-z_][A-Za-z0-9_]*)$"
     },
 
     "run": {
@@ -73,7 +76,16 @@
       "properties": {
         "topology": { "$ref": "#/$defs/name" },
         "is_2d_routing": { "type": "boolean" },
-        "packet_header_size_bytes": { "$ref": "#/$defs/count" },
+        "packet_header": {
+          "description": "The run's packet header type, whose layout is in archs.<arch>.types.",
+          "type": "object",
+          "properties": {
+            "size": { "$ref": "#/$defs/count" },
+            "schema": { "$ref": "#/$defs/schema", "pattern": "^struct:" }
+          },
+          "required": ["size", "schema"],
+          "additionalProperties": false
+        },
         "max_payload_size_bytes": { "$ref": "#/$defs/count" },
         "channel_buffer_size_bytes": { "$ref": "#/$defs/count" },
         "routing_2d_route_buffer_size": { "$ref": "#/$defs/count" },
@@ -81,7 +93,7 @@
         "multi_txq": { "type": "boolean" }
       },
       "required": [
-        "topology", "is_2d_routing", "packet_header_size_bytes", "max_payload_size_bytes",
+        "topology", "is_2d_routing", "packet_header", "max_payload_size_bytes",
         "channel_buffer_size_bytes", "multi_txq"
       ],
       "if": { "properties": { "is_2d_routing": { "const": true } } },
@@ -101,7 +113,7 @@
     },
 
     "type_keys": {
-      "description": "A type's size and schema. An array also has num_elements and size_per_element, and a packed table num_elements and bits_per_entry.",
+      "description": "A type's size and schema. An array also has num_elements and size_per_element, and a packed table num_elements and bits_per_entry, with the enum its entries hold as its schema.",
       "type": "object",
       "properties": {
         "size": { "$ref": "#/$defs/count" },
@@ -114,7 +126,9 @@
       "dependentRequired": {
         "size_per_element": ["num_elements"],
         "bits_per_entry": ["num_elements"]
-      }
+      },
+      "if": { "required": ["bits_per_entry"] },
+      "then": { "properties": { "schema": { "pattern": "^enum:" } } }
     },
     "region_keys": {
       "$ref": "#/$defs/type_keys",
@@ -136,6 +150,55 @@
       "required": ["stream_id", "register", "schema"]
     },
     "stream": { "$ref": "#/$defs/stream_keys", "unevaluatedProperties": false },
+    "member_keys": {
+      "description": "A struct or union member: its name, its offset in the type, and its type. A tagged union also names its tag, the sibling member whose value picks the union's member.",
+      "$ref": "#/$defs/type_keys",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "offset": { "$ref": "#/$defs/count" },
+        "tag": { "type": "string", "minLength": 1 }
+      },
+      "required": ["name", "offset"],
+      "if": { "properties": { "schema": { "pattern": "^union:" } } },
+      "then": { "required": ["tag"] },
+      "else": { "not": { "required": ["tag"] } }
+    },
+    "struct_type": {
+      "type": "object",
+      "properties": {
+        "size": { "$ref": "#/$defs/count" },
+        "members": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/member_keys", "unevaluatedProperties": false }
+        }
+      },
+      "required": ["size", "members"],
+      "additionalProperties": false
+    },
+    "union_type": {
+      "description": "A tagged union. Every member starts at offset 0. The tag's value picks the member whose tag_value it is, or default_member when no member has it.",
+      "type": "object",
+      "properties": {
+        "kind": { "const": "union" },
+        "size": { "$ref": "#/$defs/count" },
+        "tag_schema": { "$ref": "#/$defs/schema", "pattern": "^enum:" },
+        "default_member": { "type": "string", "minLength": 1 },
+        "members": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/member_keys",
+            "properties": {
+              "offset": { "const": 0 },
+              "tag_value": { "$ref": "#/$defs/name" }
+            },
+            "unevaluatedProperties": false
+          }
+        }
+      },
+      "required": ["kind", "size", "tag_schema", "members"],
+      "additionalProperties": false
+    },
 
     "arch": {
       "type": "object",
@@ -168,26 +231,7 @@
         },
         "types": {
           "type": "object",
-          "additionalProperties": {
-            "type": "object",
-            "properties": {
-              "size": { "$ref": "#/$defs/count" },
-              "members": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/type_keys",
-                  "properties": {
-                    "name": { "type": "string", "minLength": 1 },
-                    "offset": { "$ref": "#/$defs/count" }
-                  },
-                  "required": ["name", "offset"],
-                  "unevaluatedProperties": false
-                }
-              }
-            },
-            "required": ["size", "members"],
-            "additionalProperties": false
-          }
+          "additionalProperties": { "oneOf": [{ "$ref": "#/$defs/struct_type" }, { "$ref": "#/$defs/union_type" }] }
         }
       },
       "required": ["areas", "types"],
@@ -204,6 +248,90 @@
         }
       },
       "required": ["values"],
+      "additionalProperties": false
+    },
+
+    "routing_encodings": {
+      "description": "The values the fabric encodes routes with. The same in every run.",
+      "type": "object",
+      "properties": {
+        "1d": {
+          "type": "object",
+          "properties": {
+            "bits_per_hop": { "$ref": "#/$defs/count" },
+            "hops_per_word": { "$ref": "#/$defs/count" },
+            "hop": {
+              "type": "object",
+              "properties": {
+                "noop": { "$ref": "#/$defs/count" },
+                "write_only": { "$ref": "#/$defs/count" },
+                "forward_only": { "$ref": "#/$defs/count" },
+                "write_and_forward": { "$ref": "#/$defs/count" }
+              },
+              "required": ["noop", "write_only", "forward_only", "write_and_forward"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["bits_per_hop", "hops_per_word", "hop"],
+          "additionalProperties": false
+        },
+        "2d": {
+          "type": "object",
+          "properties": {
+            "action_bits": {
+              "type": "object",
+              "propertyNames": { "$ref": "#/$defs/name" },
+              "additionalProperties": { "$ref": "#/$defs/count" },
+              "required": ["east", "west", "north", "south", "z", "local_deliver"]
+            },
+            "table_entry_bits": { "$ref": "#/$defs/count" },
+            "table_entries_per_byte": { "$ref": "#/$defs/count" },
+            "y_code_action": { "$ref": "#/$defs/code_actions" },
+            "x_code_action": { "$ref": "#/$defs/code_actions" },
+            "mcast_tree_edge": {
+              "type": "object",
+              "properties": {
+                "bytes": { "$ref": "#/$defs/count" },
+                "child": { "$ref": "#/$defs/bit_field" },
+                "parent": { "$ref": "#/$defs/bit_field" },
+                "output": { "$ref": "#/$defs/bit_field" }
+              },
+              "required": ["bytes", "child", "parent", "output"],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "action_bits", "table_entry_bits", "table_entries_per_byte", "y_code_action", "x_code_action",
+            "mcast_tree_edge"
+          ],
+          "additionalProperties": false
+        },
+        "scatter": {
+          "type": "object",
+          "properties": {
+            "chunk_encoding_bits": { "$ref": "#/$defs/count" },
+            "max_chunks": { "$ref": "#/$defs/count" }
+          },
+          "required": ["chunk_encoding_bits", "max_chunks"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["1d", "2d", "scatter"],
+      "additionalProperties": false
+    },
+    "code_actions": {
+      "description": "The action byte each 2-bit table code widens to, indexed by code. 0 moves nowhere.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/count" },
+      "minItems": 1
+    },
+    "bit_field": {
+      "type": "object",
+      "properties": {
+        "shift": { "$ref": "#/$defs/count" },
+        "bits": { "type": "integer", "minimum": 1 }
+      },
+      "required": ["shift", "bits"],
       "additionalProperties": false
     },
 

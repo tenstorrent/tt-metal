@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <hostdevcommon/fabric_common.h>
 #include <tt_stl/overloaded.hpp>
 
 #include <algorithm>
@@ -40,6 +41,7 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 namespace {
@@ -179,8 +181,17 @@ void check_top_level(
     EXPECT_EQ(
         keys_of(manifest),
         (std::set<std::string>{
-            "manifest_version", "kind", "run", "fabric_context", "vocabulary", "archs", "enums", "meshes"}));
+            "manifest_version",
+            "kind",
+            "run",
+            "fabric_context",
+            "vocabulary",
+            "archs",
+            "enums",
+            "routing_encodings",
+            "meshes"}));
     EXPECT_EQ(keys_of(manifest.at("vocabulary")), (std::set<std::string>{"categories", "kinds"}));
+    EXPECT_EQ(manifest.at("routing_encodings"), json(make_routing_encodings_json()));
     EXPECT_EQ(manifest.at("manifest_version"), FABRIC_MANIFEST_VERSION);
     EXPECT_EQ(manifest.at("kind"), "fabric_manifest");
     EXPECT_GE(std::filesystem::last_write_time(manifest_path), suite_start);
@@ -209,13 +220,41 @@ void check_top_level(
         (std::set<std::string>{
             "topology",
             "is_2d_routing",
-            "packet_header_size_bytes",
+            "packet_header",
             "max_payload_size_bytes",
             "channel_buffer_size_bytes",
             is_2d ? "routing_2d_route_buffer_size" : "routing_1d_extension_words",
             "multi_txq"}));
     EXPECT_EQ(block.at("is_2d_routing"), is_2d);
     EXPECT_TRUE(block.at("multi_txq").is_boolean());
+
+    // The header is the mode's type, described in the arch's types, and is the header a channel buffer holds.
+    const auto& header = block.at("packet_header");
+    EXPECT_EQ(keys_of(header), (std::set<std::string>{"size", "schema"}));
+    const auto schema = header.at("schema").get<std::string>();
+    EXPECT_TRUE(schema.starts_with(is_2d ? "struct:HybridMeshPacketHeaderT<" : "struct:LowLatencyPacketHeaderT<"))
+        << schema;
+    const auto& types = manifest.at("archs").at(lower_enum_name(BaseFabricFixture::arch_)).at("types");
+    const auto header_name = schema.substr(manifest::k_struct_schema.size());
+    ASSERT_TRUE(types.contains(header_name)) << header_name;
+    EXPECT_EQ(types.at(header_name).at("size"), header.at("size"));
+
+    // The header's command is a tagged union: noc_send_type picks its member, and its type lists every send type.
+    const auto& header_members = types.at(header_name).at("members");
+    const auto command = std::find_if(
+        header_members.begin(), header_members.end(), [](const json& m) { return m.at("name") == "command_fields"; });
+    ASSERT_TRUE(command != header_members.end());
+    EXPECT_EQ(command->at("schema"), "union:NocCommandFields");
+    EXPECT_EQ(command->at("tag"), "noc_send_type");
+    ASSERT_TRUE(types.contains("NocCommandFields"));
+    const auto& command_type = types.at("NocCommandFields");
+    EXPECT_EQ(command_type.at("kind"), "union");
+    EXPECT_EQ(command_type.at("tag_schema"), "enum:NocSendType");
+    EXPECT_FALSE(command_type.contains("default_member"));
+    EXPECT_EQ(command_type.at("members").size(), manifest.at("enums").at("NocSendType").at("values").size());
+    EXPECT_EQ(
+        header.at("size").get<uint32_t>() + block.at("max_payload_size_bytes").get<uint32_t>(),
+        block.at("channel_buffer_size_bytes").get<uint32_t>());
 
     // Other ranks write their manifests into the same directory, and may still be writing.
     const auto temp_prefix = manifest_path.filename().string() + ".tmp.";
@@ -1257,6 +1296,23 @@ void check_archs(const json& manifest) {
         keys_of(heartbeat),
         (std::set<std::string>{"address", "size", "schema", "cleared_by_host", "magic", "magic_mask", "period_iters"}));
     EXPECT_EQ(heartbeat.at("size"), sizeof(uint32_t));
+
+    // The routing table is laid out for the run's routing mode: its union holds that mode's table, only that table's
+    // struct is described, and only 2D reads exit_node_table.
+    const bool is_2d = manifest.at("fabric_context").at("is_2d_routing").get<bool>();
+    const auto& types = manifest.at("archs").at(lower_enum_name(BaseFabricFixture::arch_)).at("types");
+    EXPECT_EQ(areas.at("routing_table").at("schema"), "struct:routing_l1_info_t");
+    const auto& routing_members = types.at("routing_l1_info_t").at("members");
+    const auto schema_of = [&](const char* name) {
+        const auto it = std::find_if(
+            routing_members.begin(), routing_members.end(), [&](const json& m) { return m.at("name") == name; });
+        return it == routing_members.end() ? std::string("absent") : it->at("schema").get<std::string>();
+    };
+    EXPECT_EQ(schema_of("routing_path_table_1d"), is_2d ? "absent" : "struct:intra_mesh_routing_path_t<1,false>");
+    EXPECT_EQ(schema_of("route_table_2d"), is_2d ? "struct:route_table_2d_t" : "absent");
+    EXPECT_EQ(schema_of("exit_node_table"), is_2d ? "u8" : "pad");
+    EXPECT_EQ(types.contains("intra_mesh_routing_path_t<1,false>"), !is_2d);
+    EXPECT_EQ(types.contains("route_table_2d_t"), is_2d);
 }
 
 // Enum values are written by name, with the values the enums define.
@@ -1272,6 +1328,12 @@ void check_enums(const json& manifest) {
         static_cast<uint32_t>(TerminationSignal::IMMEDIATELY_TERMINATE));
     EXPECT_EQ(value_of("RouterState", "running"), static_cast<uint32_t>(RouterState::RUNNING));
     EXPECT_EQ(value_of("NocCmdBuf", "at_cmd_buf"), static_cast<uint32_t>(manifest::NocCmdBuf::AT_CMD_BUF));
+    EXPECT_EQ(
+        value_of("compressed_routing_values", "compressed_invalid_routing_table_entry"),
+        static_cast<uint32_t>(compressed_routing_values::COMPRESSED_INVALID_ROUTING_TABLE_ENTRY));
+    EXPECT_EQ(
+        value_of("NocScatterWriteChunkEncoding", "chunk_encoding_seminc_flush"),
+        static_cast<uint32_t>(CHUNK_ENCODING_SEMINC_FLUSH));
 }
 
 }  // namespace
@@ -1326,6 +1388,16 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::WR_REG_CMD_BUF), "wr_reg_cmd_buf");
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::AT_CMD_BUF), "at_cmd_buf");
 
+    EXPECT_EQ(lower_enum_name(NocSendType::NOC_UNICAST_READ), "noc_unicast_read");
+    // NOC_SEND_TYPE_LAST names the same value; the manifest writes the name declared first.
+    EXPECT_EQ(lower_enum_name(NocSendType::NOC_SPARSE_MCAST_WRITE), "noc_sparse_mcast_write");
+
+    EXPECT_EQ(
+        lower_enum_name(compressed_routing_values::COMPRESSED_INVALID_ROUTING_TABLE_ENTRY),
+        "compressed_invalid_routing_table_entry");
+    // CHUNK_ENCODING_LAST names the same value; the manifest writes the name declared first.
+    EXPECT_EQ(lower_enum_name(CHUNK_ENCODING_SEMINC_FLUSH), "chunk_encoding_seminc_flush");
+
     EXPECT_EQ(lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_0), "riscv_0");
     EXPECT_EQ(lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_1), "riscv_1");
 
@@ -1349,7 +1421,12 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(schema_name({element::Uint{}, 8, 2}), "u32");
     EXPECT_EQ(schema_name({element::Enum{"RouterState"}, 4, 0}), "enum:RouterState");
     EXPECT_EQ(schema_name({element::Struct{"WorkerXY"}, 4, 0}), "struct:WorkerXY");
-    EXPECT_EQ(schema_name({element::Packed{"direction_table", 2}, 16, 64}), "packed:direction_table");
+    EXPECT_EQ(schema_name({element::Union{"NocCommandFields", "noc_send_type"}, 40, 0}), "union:NocCommandFields");
+    EXPECT_EQ((layout::template_name<"HybridMeshPacketHeaderT", 36>), "HybridMeshPacketHeaderT<36>");
+    EXPECT_EQ((layout::template_name<"T", 1, false>), "T<1,false>");
+    // A packed table's schema is the enum its entries hold; its bits_per_entry marks it as packed.
+    EXPECT_EQ(
+        schema_name({element::Packed{"compressed_routing_values", 3}, 96, 256}), "enum:compressed_routing_values");
     EXPECT_EQ(schema_name({element::Bytes{}, 1, 0}), "bytes");
     EXPECT_EQ(schema_name({element::Pad{}, 1, 0}), "pad");
     EXPECT_EQ(schema_name(layout::type_of<uint32_t>()), "u32");
@@ -1386,6 +1463,103 @@ TEST(ManifestArgs, KernelInputsAccounted) {
     auto new_define = kernel;
     new_define.defines["SOME_NEW_DEFINE"] = "";
     EXPECT_THROW(check_kernel_inputs_accounted(new_define), std::exception);
+}
+
+// routing_encodings holds the fabric's constants, and a reader that uses only its values reads back what the fabric's
+// encoders write.
+TEST(RoutingEncodings, Values) {
+    using LowLatency = RoutingFieldsConstants::LowLatency;
+    using Codec = Routing2DCodec;
+    const json encodings = make_routing_encodings_json();
+    EXPECT_EQ(keys_of(encodings), (std::set<std::string>{"1d", "2d", "scatter"}));
+    const auto field = [](uint64_t word, uint32_t shift, uint32_t bits) {
+        return static_cast<uint32_t>((word >> shift) & ((uint64_t{1} << bits) - 1));
+    };
+
+    // 1D: a multicast that starts 3 hops away and writes 2 chips forwards twice, writes and forwards, then writes.
+    const auto& one_d = encodings.at("1d");
+    EXPECT_EQ(one_d.at("bits_per_hop"), LowLatency::FIELD_WIDTH);
+    EXPECT_EQ(one_d.at("hops_per_word"), LowLatency::BASE_HOPS);
+    const auto& hop = one_d.at("hop");
+    EXPECT_EQ(
+        hop,
+        (json{
+            {"noop", LowLatency::NOOP},
+            {"write_only", LowLatency::WRITE_ONLY},
+            {"forward_only", LowLatency::FORWARD_ONLY},
+            {"write_and_forward", LowLatency::WRITE_AND_FORWARD}}));
+    uint32_t word = 0;
+    routing_encoding::encode_1d_multicast(3, 2, &word, 1);
+    const auto hop_at = [&](uint32_t index) {
+        const auto bits = one_d.at("bits_per_hop").get<uint32_t>();
+        return field(word, index * bits, bits);
+    };
+    EXPECT_EQ(hop_at(0), hop.at("forward_only"));
+    EXPECT_EQ(hop_at(1), hop.at("forward_only"));
+    EXPECT_EQ(hop_at(2), hop.at("write_and_forward"));
+    EXPECT_EQ(hop_at(3), hop.at("write_only"));
+    EXPECT_EQ(hop_at(4), hop.at("noop"));
+
+    // 2D: each direction's action bit, and each table code widens to the bit of the direction it names.
+    const auto& two_d = encodings.at("2d");
+    const auto& action_bits = two_d.at("action_bits");
+    EXPECT_EQ(keys_of(action_bits), (std::set<std::string>{"east", "west", "north", "south", "z", "local_deliver"}));
+    for (const auto direction :
+         {eth_chan_directions::EAST,
+          eth_chan_directions::WEST,
+          eth_chan_directions::NORTH,
+          eth_chan_directions::SOUTH,
+          eth_chan_directions::Z}) {
+        const auto name = lower_enum_name(direction);
+        EXPECT_EQ(action_bits.at(name), Codec::action_bit(direction)) << name;
+    }
+    EXPECT_EQ(action_bits.at("local_deliver"), Codec::ACTION_LOCAL_DELIVER);
+    const auto bit = [&](const char* name) { return action_bits.at(name).get<uint32_t>(); };
+
+    EXPECT_EQ(two_d.at("table_entry_bits"), Codec::BITS_PER_ACTION);
+    EXPECT_EQ(two_d.at("table_entries_per_byte"), Codec::ACTIONS_PER_BYTE);
+    const auto y_codes = two_d.at("y_code_action").get<std::vector<uint32_t>>();
+    ASSERT_EQ(y_codes.size(), 1u << Codec::BITS_PER_ACTION);
+    EXPECT_EQ(y_codes[Codec::Y2_STOP], 0u);
+    EXPECT_EQ(y_codes[Codec::Y2_NORTH], bit("north"));
+    EXPECT_EQ(y_codes[Codec::Y2_SOUTH], bit("south"));
+    EXPECT_EQ(y_codes[Codec::Y2_Z], bit("z"));
+    const auto x_codes = two_d.at("x_code_action").get<std::vector<uint32_t>>();
+    ASSERT_EQ(x_codes.size(), 1u << Codec::BITS_PER_ACTION);
+    EXPECT_EQ(x_codes[Codec::X2_STOP], 0u);
+    EXPECT_EQ(x_codes[Codec::X2_EAST], bit("east"));
+    EXPECT_EQ(x_codes[Codec::X2_WEST], bit("west"));
+    EXPECT_EQ(x_codes[Codec::X2_INVALID], 0u);
+
+    // A multicast tree edge's fields read back what mcast_edge_pack packs. Each value sets every bit of its field.
+    const auto& edge = two_d.at("mcast_tree_edge");
+    EXPECT_EQ(edge.at("bytes"), Codec::MCAST_TREE_EDGE_BYTES);
+    const uint16_t packed = Codec::mcast_edge_pack(63, 42, Codec::Y2_Z);
+    const auto edge_field = [&](const char* name) {
+        const auto& bit_field = edge.at(name);
+        return field(packed, bit_field.at("shift").get<uint32_t>(), bit_field.at("bits").get<uint32_t>());
+    };
+    EXPECT_EQ(edge_field("child"), 63u);
+    EXPECT_EQ(edge_field("parent"), 42u);
+    EXPECT_EQ(edge_field("output"), Codec::Y2_Z);
+    const auto& output = edge.at("output");
+    EXPECT_LE(
+        output.at("shift").get<uint32_t>() + output.at("bits").get<uint32_t>(), 8 * edge.at("bytes").get<uint32_t>());
+
+    // Scatter: chunk_encoding_bits reads back each chunk's encoding as set_chunk_encoding writes it.
+    const auto& scatter = encodings.at("scatter");
+    EXPECT_EQ(scatter.at("max_chunks"), NOC_SCATTER_WRITE_MAX_CHUNKS);
+    const auto chunk_bits = scatter.at("chunk_encoding_bits").get<uint32_t>();
+    const std::array<NocScatterWriteChunkEncoding, NOC_SCATTER_WRITE_MAX_CHUNKS> chunks = {
+        CHUNK_ENCODING_SEMINC_FLUSH, CHUNK_ENCODING_UNICAST_WRITE, CHUNK_ENCODING_SEMINC_NO_FLUSH, CHUNK_ENCODING_NOP};
+    uint8_t chunk_encoding = 0;
+    for (uint32_t chunk = 0; chunk < chunks.size(); ++chunk) {
+        set_chunk_encoding(chunk_encoding, chunks[chunk], chunk);
+    }
+    for (uint32_t chunk = 0; chunk < chunks.size(); ++chunk) {
+        EXPECT_EQ(field(chunk_encoding, chunk * chunk_bits, chunk_bits), static_cast<uint32_t>(chunks[chunk]))
+            << "chunk " << chunk;
+    }
 }
 
 TEST_F(Fabric1DManifestFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config, suite_start_); }

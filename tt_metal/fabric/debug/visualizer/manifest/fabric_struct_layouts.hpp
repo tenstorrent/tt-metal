@@ -26,6 +26,10 @@ namespace tt::tt_metal {
 class Hal;
 }  // namespace tt::tt_metal
 
+namespace tt::tt_fabric {
+struct PacketHeaderConfig;
+}  // namespace tt::tt_fabric
+
 namespace tt::tt_fabric::layout {
 
 // ============ Sender channels ============
@@ -104,25 +108,74 @@ struct StructLayout<RouterStateManager> {
 };
 static_assert(validate_struct_members<RouterStateManager>(StructLayout<RouterStateManager>::members));
 
+// The live part of each region is sized by the mesh shape (routing_l1_info_t's mesh_y_size and mesh_x_size), so
+// decode reads the regions by rule, not by layout.
 template <>
-struct StructLayout<routing_l1_info_t> {
+struct StructLayout<route_table_2d_t> {
     static constexpr std::array members = {
-        LAYOUT_MEMBER(routing_l1_info_t, state_manager),
-        LAYOUT_MEMBER(routing_l1_info_t, my_mesh_id),
-        LAYOUT_MEMBER(routing_l1_info_t, my_device_id),
-        LAYOUT_PACKED(routing_l1_info_t, intra_mesh_direction_table, "direction_table"),
-        LAYOUT_PACKED(routing_l1_info_t, inter_mesh_direction_table, "direction_table"),
-        // The union of the 1D and 2D routing tables, listed by its widest member so the size and offset checks hold.
-        // Decode picks the appropriate union member based on the routing mode, which it gets from is_2d_routing.
-        LAYOUT_BYTES(routing_l1_info_t, route_table_2d),
-        LAYOUT_BYTES(routing_l1_info_t, exit_node_table),
-        LAYOUT_MEMBER(routing_l1_info_t, my_mesh_coord_y),
-        LAYOUT_MEMBER(routing_l1_info_t, my_mesh_coord_x),
-        LAYOUT_MEMBER(routing_l1_info_t, mesh_y_size),
-        LAYOUT_MEMBER(routing_l1_info_t, mesh_x_size),
+        LAYOUT_BYTES(route_table_2d_t, action_vectors),
+        LAYOUT_BYTES(route_table_2d_t, mcast_trees),
     };
 };
-static_assert(validate_struct_members<routing_l1_info_t>(StructLayout<routing_l1_info_t>::members));
+static_assert(validate_struct_members<route_table_2d_t>(StructLayout<route_table_2d_t>::members));
+
+// Entry i, the route to the chip i hops away, starts at word i * (1 + the run's 1D extension words).
+template <>
+struct StructLayout<intra_mesh_routing_path_t<1, false>> {
+    using T = intra_mesh_routing_path_t<1, false>;
+    static constexpr std::string_view name = template_name<"intra_mesh_routing_path_t", 1, false>;
+    static constexpr std::array members = {
+        LAYOUT_BYTES(T, paths),
+    };
+};
+static_assert(validate_struct_members<intra_mesh_routing_path_t<1, false>>(
+    StructLayout<intra_mesh_routing_path_t<1, false>>::members));
+
+// routing_l1_info_t's union holds the 1D routing-path table or the 2D route table, picked by the run's routing mode,
+// and only 2D fills exit_node_table. So it has one member list per mode, routing_table_struct_types describes the
+// run's, and it is not in DescribedStructs.
+namespace detail {
+
+inline constexpr std::array routing_l1_info_head = {
+    LAYOUT_MEMBER(routing_l1_info_t, state_manager),
+    LAYOUT_MEMBER(routing_l1_info_t, my_mesh_id),
+    LAYOUT_MEMBER(routing_l1_info_t, my_device_id),
+    LAYOUT_PACKED(routing_l1_info_t, intra_mesh_direction_table, compressed_routing_values),
+    LAYOUT_PACKED(routing_l1_info_t, inter_mesh_direction_table, compressed_routing_values),
+};
+
+inline constexpr std::array routing_l1_info_tail = {
+    LAYOUT_MEMBER(routing_l1_info_t, my_mesh_coord_y),
+    LAYOUT_MEMBER(routing_l1_info_t, my_mesh_coord_x),
+    LAYOUT_MEMBER(routing_l1_info_t, mesh_y_size),
+    LAYOUT_MEMBER(routing_l1_info_t, mesh_x_size),
+};
+
+}  // namespace detail
+
+inline constexpr auto routing_l1_info_members_1d = concat_members(
+    detail::routing_l1_info_head,
+    std::array{
+        LAYOUT_MEMBER(routing_l1_info_t, routing_path_table_1d),
+        // The rest of the union, which the 1D table is too small to fill
+        [] {
+            using T = routing_l1_info_t;
+            constexpr uint32_t end = offsetof(T, routing_path_table_1d) + sizeof(T::routing_path_table_1d);
+            return Member{"union_padding", end, {element::Pad{}, offsetof(T, exit_node_table) - end, 0}};
+        }(),
+        LAYOUT_PAD(routing_l1_info_t, exit_node_table),
+    },
+    detail::routing_l1_info_tail);
+static_assert(validate_struct_members<routing_l1_info_t>(routing_l1_info_members_1d));
+
+inline constexpr auto routing_l1_info_members_2d = concat_members(
+    detail::routing_l1_info_head,
+    std::array{
+        LAYOUT_MEMBER(routing_l1_info_t, route_table_2d),
+        LAYOUT_MEMBER(routing_l1_info_t, exit_node_table),
+    },
+    detail::routing_l1_info_tail);
+static_assert(validate_struct_members<routing_l1_info_t>(routing_l1_info_members_2d));
 
 // ============ Fabric telemetry ============
 
@@ -220,6 +273,175 @@ struct StructLayout<ChannelTrimmingOverrides> {
 };
 static_assert(validate_struct_members<ChannelTrimmingOverrides>(StructLayout<ChannelTrimmingOverrides>::members));
 
+// ============ Packet header commands ============
+
+template <>
+struct StructLayout<NocUnicastCommandHeader> {
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(NocUnicastCommandHeader, noc_address),
+    };
+};
+static_assert(validate_struct_members<NocUnicastCommandHeader>(StructLayout<NocUnicastCommandHeader>::members));
+
+template <>
+struct StructLayout<NocUnicastInlineWriteCommandHeader> {
+    using T = NocUnicastInlineWriteCommandHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, noc_address),
+        LAYOUT_MEMBER(T, value),
+        LAYOUT_TAIL_PAD(T, value),
+    };
+};
+static_assert(validate_struct_members<NocUnicastInlineWriteCommandHeader>(
+    StructLayout<NocUnicastInlineWriteCommandHeader>::members));
+
+template <>
+struct StructLayout<NocUnicastAtomicIncCommandHeader> {
+    using T = NocUnicastAtomicIncCommandHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, noc_address),
+        LAYOUT_MEMBER(T, val),
+        LAYOUT_MEMBER(T, flush),
+        LAYOUT_TAIL_PAD(T, flush),
+    };
+};
+static_assert(
+    validate_struct_members<NocUnicastAtomicIncCommandHeader>(StructLayout<NocUnicastAtomicIncCommandHeader>::members));
+
+template <>
+struct StructLayout<NocUnicastAtomicIncFusedCommandHeader> {
+    using T = NocUnicastAtomicIncFusedCommandHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, noc_address),
+        LAYOUT_MEMBER(T, semaphore_noc_address),
+        LAYOUT_MEMBER(T, val),
+        LAYOUT_MEMBER(T, flush),
+        LAYOUT_TAIL_PAD(T, flush),
+    };
+};
+static_assert(validate_struct_members<NocUnicastAtomicIncFusedCommandHeader>(
+    StructLayout<NocUnicastAtomicIncFusedCommandHeader>::members));
+
+template <>
+struct StructLayout<NocUnicastScatterCommandHeader> {
+    using T = NocUnicastScatterCommandHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, noc_address),
+        LAYOUT_MEMBER(T, chunk_size),
+        LAYOUT_MEMBER(T, chunk_count),
+        // One encoding per chunk; entries from chunk_count on are unused.
+        LAYOUT_PACKED_BITS(T, chunk_encoding, NocScatterWriteChunkEncoding, NOC_SCATTER_CHUNK_ENCODING_BITS),
+    };
+};
+static_assert(
+    validate_struct_members<NocUnicastScatterCommandHeader>(StructLayout<NocUnicastScatterCommandHeader>::members));
+
+template <>
+struct StructLayout<NocMulticastCommandHeader> {
+    using T = NocMulticastCommandHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, address),
+        LAYOUT_MEMBER(T, noc_x_start),
+        LAYOUT_MEMBER(T, noc_y_start),
+        LAYOUT_MEMBER(T, mcast_rect_size_x),
+        LAYOUT_MEMBER(T, mcast_rect_size_y),
+    };
+};
+static_assert(validate_struct_members<NocMulticastCommandHeader>(StructLayout<NocMulticastCommandHeader>::members));
+
+template <>
+struct StructLayout<NocMulticastAtomicIncCommandHeader> {
+    using T = NocMulticastAtomicIncCommandHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, address),
+        LAYOUT_MEMBER(T, val),
+        LAYOUT_MEMBER(T, noc_x_start),
+        LAYOUT_MEMBER(T, noc_y_start),
+        LAYOUT_MEMBER(T, size_x),
+        LAYOUT_MEMBER(T, size_y),
+    };
+};
+static_assert(validate_struct_members<NocMulticastAtomicIncCommandHeader>(
+    StructLayout<NocMulticastAtomicIncCommandHeader>::members));
+
+template <>
+struct StructLayout<NocSparseMulticastWriteCommandHeader> {
+    using T = NocSparseMulticastWriteCommandHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, noc_address),
+        LAYOUT_MEMBER(T, counts),
+        LAYOUT_MEMBER(T, num_dests),
+        LAYOUT_MEMBER(T, num_chips),
+        LAYOUT_MEMBER(T, write_idx),
+        LAYOUT_MEMBER(T, chip_idx),
+    };
+};
+static_assert(validate_struct_members<NocSparseMulticastWriteCommandHeader>(
+    StructLayout<NocSparseMulticastWriteCommandHeader>::members));
+
+// Each send type's member, as the header's to_noc_* setters write them.
+template <>
+struct UnionLayout<NocCommandFields> {
+    using Tag = NocSendType;
+    static constexpr std::array members = {
+        LAYOUT_UNION_MEMBER(NocCommandFields, unicast_write, NOC_UNICAST_WRITE),
+        LAYOUT_UNION_MEMBER(NocCommandFields, unicast_read, NOC_UNICAST_READ),
+        LAYOUT_UNION_MEMBER(NocCommandFields, unicast_inline_write, NOC_UNICAST_INLINE_WRITE),
+        LAYOUT_UNION_MEMBER(NocCommandFields, mcast_write, NOC_MULTICAST_WRITE),
+        LAYOUT_UNION_MEMBER(NocCommandFields, unicast_seminc, NOC_UNICAST_ATOMIC_INC),
+        LAYOUT_UNION_MEMBER(NocCommandFields, unicast_seminc_fused, NOC_FUSED_UNICAST_ATOMIC_INC),
+        LAYOUT_UNION_MEMBER(NocCommandFields, mcast_seminc, NOC_MULTICAST_ATOMIC_INC),
+        LAYOUT_UNION_MEMBER(NocCommandFields, unicast_scatter_write, NOC_UNICAST_SCATTER_WRITE),
+        LAYOUT_UNION_MEMBER(NocCommandFields, sparse_mcast_write, NOC_SPARSE_MCAST_WRITE),
+    };
+};
+static_assert(validate_union_members<NocCommandFields>(UnionLayout<NocCommandFields>::members));
+
+// ============ UDM control fields ============
+
+template <>
+struct StructLayout<UDMWriteControlHeader> {
+    using T = UDMWriteControlHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, src_chip_id),
+        LAYOUT_MEMBER(T, src_mesh_id),
+        LAYOUT_MEMBER(T, src_noc_x),
+        LAYOUT_MEMBER(T, src_noc_y),
+        LAYOUT_MEMBER(T, risc_id),
+        LAYOUT_MEMBER(T, transaction_id),
+        LAYOUT_MEMBER(T, posted),
+        LAYOUT_MEMBER(T, initial_direction),
+    };
+};
+static_assert(validate_struct_members<UDMWriteControlHeader>(StructLayout<UDMWriteControlHeader>::members));
+
+template <>
+struct StructLayout<UDMReadControlHeader> {
+    using T = UDMReadControlHeader;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, src_chip_id),
+        LAYOUT_MEMBER(T, src_mesh_id),
+        LAYOUT_MEMBER(T, src_noc_x),
+        LAYOUT_MEMBER(T, src_noc_y),
+        LAYOUT_MEMBER(T, src_l1_address),
+        LAYOUT_MEMBER(T, size_bytes),
+        LAYOUT_MEMBER(T, risc_id),
+        LAYOUT_MEMBER(T, transaction_id),
+        LAYOUT_MEMBER(T, initial_direction),
+    };
+};
+static_assert(validate_struct_members<UDMReadControlHeader>(StructLayout<UDMReadControlHeader>::members));
+
+template <>
+struct UnionLayout<UDMControlFields> {
+    using Tag = NocSendType;
+    static constexpr std::array members = {
+        LAYOUT_UNION_DEFAULT(UDMControlFields, write),
+        LAYOUT_UNION_MEMBER(UDMControlFields, read, NOC_UNICAST_READ),
+    };
+};
+static_assert(validate_union_members<UDMControlFields>(UnionLayout<UDMControlFields>::members));
+
 // ============ All described structs ============
 
 // Every struct described at compile time. The manifest writes one type entry per element, which describes the
@@ -230,7 +452,6 @@ using DescribedStructs = std::tuple<
     SenderChannelProducerCursor,
     erisc::datamover::handshake::handshake_info_t,
     RouterStateManager,
-    routing_l1_info_t,
     RiscTimestampV2,
     BandwidthTelemetry,
     EriscDynamicEntry,
@@ -238,7 +459,17 @@ using DescribedStructs = std::tuple<
     StaticInfo,
     FabricTelemetry,
     CodeProfilingTimerResult,
-    ChannelTrimmingOverrides>;
+    ChannelTrimmingOverrides,
+    NocUnicastCommandHeader,
+    NocUnicastInlineWriteCommandHeader,
+    NocUnicastAtomicIncCommandHeader,
+    NocUnicastAtomicIncFusedCommandHeader,
+    NocUnicastScatterCommandHeader,
+    NocMulticastCommandHeader,
+    NocMulticastAtomicIncCommandHeader,
+    NocSparseMulticastWriteCommandHeader,
+    UDMWriteControlHeader,
+    UDMReadControlHeader>;
 
 template <Described T>
 StructType struct_type() {
@@ -250,6 +481,42 @@ inline std::vector<StructType> described_struct_types() {
     return []<typename... Ts>(std::type_identity<std::tuple<Ts...>>) {
         return std::vector<StructType>{struct_type<Ts>()...};
     }(std::type_identity<DescribedStructs>{});
+}
+
+// The struct name routing_table_struct_types describes.
+inline constexpr std::string_view routing_l1_info_name = enchantum::type_name<routing_l1_info_t>;
+
+// The layouts of routing_l1_info_t in one routing mode and of the table its union holds in that mode:
+// intra_mesh_routing_path_t<1,false> in 1D, route_table_2d_t in 2D.
+inline std::vector<StructType> routing_table_struct_types(bool is_2d) {
+    const auto routing_l1_info = [](const auto& members) {
+        return StructType{routing_l1_info_name, sizeof(routing_l1_info_t), {members.begin(), members.end()}};
+    };
+    if (is_2d) {
+        return {routing_l1_info(routing_l1_info_members_2d), struct_type<route_table_2d_t>()};
+    }
+    return {routing_l1_info(routing_l1_info_members_1d), struct_type<intra_mesh_routing_path_t<1, false>>()};
+}
+
+// ============ All described unions ============
+
+// Every tagged union described at compile time. The manifest writes one type entry per element, beside the structs.
+using DescribedUnions = std::tuple<NocCommandFields, UDMControlFields>;
+
+template <DescribedUnion U>
+UnionType union_type() {
+    const auto& members = UnionLayout<U>::members;
+    return {
+        detail::union_name<U>(),
+        sizeof(U),
+        enchantum::type_name<typename UnionLayout<U>::Tag>,
+        {members.begin(), members.end()}};
+}
+
+inline std::vector<UnionType> described_union_types() {
+    return []<typename... Us>(std::type_identity<std::tuple<Us...>>) {
+        return std::vector<UnionType>{union_type<Us>()...};
+    }(std::type_identity<DescribedUnions>{});
 }
 
 // ============ HAL messages ============
@@ -265,6 +532,16 @@ inline constexpr std::string_view go_msg_name = "go_msg_t";
 // The HAL messages the manifest describes on the active Ethernet core: go_msg_t, and launch_msg_t with every struct
 // it holds, each member named by the HAL's generated field. Sizes, offsets and array lengths are the arch's.
 std::vector<StructType> hal_struct_types(const tt::tt_metal::Hal& hal);
+
+// ============ Packet headers ============
+
+// The header type a configuration picks, e.g. struct:HybridMeshPacketHeaderT<36> and its size. Every header
+// FabricContext can choose has a layout, checked at compile time in fabric_packet_header_layouts.cpp.
+Type packet_header_type(const PacketHeaderConfig& config);
+
+// The layouts of the header a configuration picks and of the structs only it holds (a 1D header's routing
+// fields). Not in DescribedStructs, since a run describes only its own header.
+std::vector<StructType> packet_header_struct_types(const PacketHeaderConfig& config);
 
 // ============ Enums ============
 
@@ -338,6 +615,9 @@ using DescribedEnums = std::tuple<
     manifest::NocCmdBuf,
     RouterState,
     RouterCommand,
-    DynamicStatistics>;
+    DynamicStatistics,
+    NocSendType,
+    compressed_routing_values,
+    NocScatterWriteChunkEncoding>;
 
 }  // namespace tt::tt_fabric::layout

@@ -19,6 +19,7 @@ class Hal;
 namespace tt::tt_fabric {
 
 class ControlPlane;
+struct PacketHeaderConfig;
 
 // Fills in what only ControlPlane, the cluster, and the chip's other routers know.
 manifest::Chip join_chip(
@@ -29,7 +30,8 @@ manifest::Chip join_chip(
     FabricNodeId node,
     ChipId physical_chip_id);
 
-// The L1 areas the HAL fixes on every router core, and the layout of every struct a schema names.
-manifest::Arch describe_arch(const tt::tt_metal::Hal& hal);
+// The L1 areas the HAL fixes on every router core, and the layout of every struct and union a schema names. The run's
+// packet header config picks the header's layout and, by is_2d, the routing table's.
+manifest::Arch describe_arch(const tt::tt_metal::Hal& hal, const PacketHeaderConfig& packet_header);
 
 }  // namespace tt::tt_fabric

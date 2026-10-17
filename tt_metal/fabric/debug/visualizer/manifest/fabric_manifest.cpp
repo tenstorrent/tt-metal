@@ -6,12 +6,14 @@
 
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <enchantum/enchantum.hpp>
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <hostdevcommon/fabric_common.h>
 
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
@@ -22,6 +24,7 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 
 #include <algorithm>
@@ -80,12 +83,28 @@ json make_run_json(const ControlPlane& control_plane, const tt::Cluster& cluster
     return run;
 }
 
+// A type's size and schema.
+void add_type_json(json& out, const layout::Type& type) {
+    out["size"] = type.size;
+    if (const auto* packed = std::get_if<layout::element::Packed>(&type.element)) {
+        out["num_elements"] = type.count;
+        out["bits_per_entry"] = packed->bits_per_entry;
+    } else if (type.count > 0) {
+        out["num_elements"] = type.count;
+        out["size_per_element"] = manifest::element_size(type);
+    }
+    out["schema"] = manifest::schema_name(type);
+    if (const auto* tagged = std::get_if<layout::element::Union>(&type.element)) {
+        out["tag"] = std::string(tagged->tag);
+    }
+}
+
 // Returns a JSON object with the fabric context block information.
 json make_fabric_context_json(const FabricContext& fabric_context) {
     json block;
     block["topology"] = lower_enum_name(fabric_context.get_fabric_topology());
     block["is_2d_routing"] = fabric_context.is_2D_routing_enabled();
-    block["packet_header_size_bytes"] = fabric_context.get_fabric_packet_header_size_bytes();
+    add_type_json(block["packet_header"], layout::packet_header_type(fabric_context.get_packet_header_config()));
     block["max_payload_size_bytes"] = fabric_context.get_fabric_max_payload_size_bytes();
     block["channel_buffer_size_bytes"] = fabric_context.get_fabric_channel_buffer_size_bytes();
     if (fabric_context.is_2D_routing_enabled()) {
@@ -121,20 +140,6 @@ json make_credit_transport_json(const FabricBuilderContext& builder_context, Mes
 
 // ============ Contents ============
 
-// A type's size and schema. An array also gets its element count and the size of one element, and a packed table
-// its entry count and the bits in one entry.
-void add_type_json(json& out, const layout::Type& type) {
-    out["size"] = type.size;
-    if (const auto* packed = std::get_if<layout::element::Packed>(&type.element)) {
-        out["num_elements"] = type.count;
-        out["bits_per_entry"] = packed->bits_per_entry;
-    } else if (type.count > 0) {
-        out["num_elements"] = type.count;
-        out["size_per_element"] = manifest::element_size(type);
-    }
-    out["schema"] = manifest::schema_name(type);
-}
-
 json l1_json(const manifest::content::L1& l1) {
     json out;
     out["address"] = l1.address;
@@ -165,22 +170,48 @@ json heartbeat_json(const manifest::Heartbeat& heartbeat) {
     return out;
 }
 
-// Each struct by name, with its members in order.
-json types_json(const std::vector<layout::StructType>& types) {
+// A struct or union member's name, offset and type.
+json member_json(const layout::Member& member) {
+    json out;
+    out["name"] = std::string(member.name);
+    out["offset"] = member.offset;
+    add_type_json(out, member.type);
+    return out;
+}
+
+// Each struct and union by name. A struct has its members in order. A union has its members, the enum its tag
+// holds, each member's tag value by its lower_name, and the member every other tag value picks, if it has one.
+json types_json(const std::vector<layout::StructType>& structs, const std::vector<layout::UnionType>& unions) {
     json out = json::object();
-    for (const auto& type : types) {
-        const std::string name(type.name);
-        TT_FATAL(!out.contains(name), "Fabric manifest: two structs are named {}, so its schema is ambiguous", name);
+    const auto add = [&](std::string_view type_name, json type) {
+        const std::string name(type_name);
+        TT_FATAL(!out.contains(name), "Fabric manifest: two types are named {}, so its schema is ambiguous", name);
+        out[name] = std::move(type);
+    };
+    for (const auto& type : structs) {
         json members = json::array();
         for (const auto& member : type.members) {
-            json entry;
-            entry["name"] = std::string(member.name);
-            entry["offset"] = member.offset;
-            add_type_json(entry, member.type);
-            members.push_back(std::move(entry));
+            members.push_back(member_json(member));
         }
-        out[name]["size"] = type.size;
-        out[name]["members"] = std::move(members);
+        add(type.name, json{{"size", type.size}, {"members", std::move(members)}});
+    }
+    for (const auto& type : unions) {
+        json entry{
+            {"kind", "union"},
+            {"size", type.size},
+            {"tag_schema", fmt::format("{}{}", manifest::k_enum_schema, type.tag_enum)}};
+        json members = json::array();
+        for (const auto& [member, tag_value] : type.members) {
+            json member_entry = member_json(member);
+            if (tag_value.has_value()) {
+                member_entry["tag_value"] = manifest::lower_name(*tag_value);
+            } else {
+                entry["default_member"] = std::string(member.name);
+            }
+            members.push_back(std::move(member_entry));
+        }
+        entry["members"] = std::move(members);
+        add(type.name, std::move(entry));
     }
     return out;
 }
@@ -198,7 +229,7 @@ json make_archs_json(const manifest::Arch& arch) {
     areas_json["eth_fw_mailbox"] = optional_l1_json(areas.eth_fw_mailbox);
     json archs;
     archs[lower_enum_name(arch.arch)]["areas"] = std::move(areas_json);
-    archs[lower_enum_name(arch.arch)]["types"] = types_json(arch.types);
+    archs[lower_enum_name(arch.arch)]["types"] = types_json(arch.types, arch.unions);
     return archs;
 }
 
@@ -222,8 +253,8 @@ json make_enums_json() {
     return out;
 }
 
-// Every struct and enum schema in `node` names a type in `types` or `enums`, so decode can read everything the
-// manifest hands it.
+// Every struct, union and enum schema in `node`, including a union's tag_schema, names a type of that kind in `types`
+// or `enums`, so decode can read everything the manifest hands it.
 void check_schemas_resolve(const json& node, const json& types, const json& enums) {
     if (node.is_array()) {
         for (const auto& element : node) {
@@ -235,20 +266,26 @@ void check_schemas_resolve(const json& node, const json& types, const json& enum
         return;
     }
     for (const auto& [key, value] : node.items()) {
-        if (key != "schema" || !value.is_string()) {
+        if ((key != "schema" && key != "tag_schema") || !value.is_string()) {
             check_schemas_resolve(value, types, enums);
             continue;
         }
         const auto& schema = value.get_ref<const std::string&>();
-        const auto names_missing = [&](std::string_view prefix, const json& described) {
-            return schema.starts_with(prefix) && !described.contains(schema.substr(prefix.size()));
+        // False when the schema has the prefix and names no type of that kind.
+        const auto resolves_as = [&](std::string_view prefix, const json& described, std::string_view kind) {
+            if (!schema.starts_with(prefix)) {
+                return true;
+            }
+            const auto it = described.find(schema.substr(prefix.size()));
+            return it != described.end() && it->value("kind", "") == kind;
         };
-        const bool unresolved =
-            names_missing(manifest::k_struct_schema, types) || names_missing(manifest::k_enum_schema, enums);
+        const bool resolved = resolves_as(manifest::k_struct_schema, types, "") &&
+                              resolves_as(manifest::k_union_schema, types, "union") &&
+                              resolves_as(manifest::k_enum_schema, enums, "");
         TT_FATAL(
-            !unresolved,
-            "Fabric manifest: the schema {} names a type the manifest does not describe; add it to "
-            "layout::DescribedStructs or layout::DescribedEnums (fabric_struct_layouts.hpp)",
+            resolved,
+            "Fabric manifest: the schema {} names no type of its kind that the manifest describes; add it to "
+            "layout::DescribedStructs, layout::DescribedUnions or layout::DescribedEnums (fabric_struct_layouts.hpp)",
             schema);
     }
 }
@@ -634,9 +671,11 @@ void serialize_fabric_manifest_to_file(
     manifest["run"] = make_run_json(control_plane, cluster);
     manifest["fabric_context"] = make_fabric_context_json(fabric_context);
     manifest["vocabulary"] = make_vocabulary_json();
-    const manifest::Arch arch = describe_arch(tt::tt_metal::MetalContext::instance().hal());
+    const manifest::Arch arch =
+        describe_arch(tt::tt_metal::MetalContext::instance().hal(), fabric_context.get_packet_header_config());
     manifest["archs"] = make_archs_json(arch);
     manifest["enums"] = make_enums_json();
+    manifest["routing_encodings"] = make_routing_encodings_json();
 
     auto mesh_ids = control_plane.get_mesh_graph().get_all_mesh_ids();
     std::ranges::sort(mesh_ids, {}, [](const MeshId& mesh_id) { return *mesh_id; });
@@ -698,6 +737,67 @@ void write_fabric_manifest(const ControlPlane& control_plane, const tt::llrt::Ru
             manifest_path.string(),
             e.what());
     }
+}
+
+// ============ Routing encodings ============
+
+json make_routing_encodings_json() {
+    using LowLatency = RoutingFieldsConstants::LowLatency;
+    using Codec = Routing2DCodec;
+
+    static_assert(
+        enchantum::count<LowLatency::HopAction> == (1u << LowLatency::FIELD_WIDTH),
+        "every value a 1D hop field holds must be a HopAction");
+    json hop = json::object();
+    for (const auto action : enchantum::values<LowLatency::HopAction>) {
+        hop[lower_enum_name(action)] = static_cast<uint32_t>(action);
+    }
+    json one_d;
+    one_d["bits_per_hop"] = LowLatency::FIELD_WIDTH;
+    one_d["hops_per_word"] = LowLatency::BASE_HOPS;
+    one_d["hop"] = std::move(hop);
+
+    // COUNT is not a direction: its bit is local delivery's.
+    json action_bits = json::object();
+    for (const auto direction : enchantum::values<eth_chan_directions>) {
+        if (direction < eth_chan_directions::COUNT) {
+            action_bits[lower_enum_name(direction)] = Codec::action_bit(direction);
+        }
+    }
+    action_bits["local_deliver"] = Codec::ACTION_LOCAL_DELIVER;
+
+    // The action each table code widens to, indexed by code.
+    json y_code_action = json::array();
+    json x_code_action = json::array();
+    for (uint8_t code = 0; code < (1u << Codec::BITS_PER_ACTION); ++code) {
+        y_code_action.push_back(Codec::widen_y(code));
+        x_code_action.push_back(Codec::widen_x(code));
+    }
+
+    const auto bit_field = [](uint32_t shift, uint32_t bits) { return json{{"shift", shift}, {"bits", bits}}; };
+    json mcast_tree_edge;
+    mcast_tree_edge["bytes"] = Codec::MCAST_TREE_EDGE_BYTES;
+    mcast_tree_edge["child"] = bit_field(0, Codec::MCAST_EDGE_COORD_BITS);
+    mcast_tree_edge["parent"] = bit_field(Codec::MCAST_EDGE_PARENT_SHIFT, Codec::MCAST_EDGE_COORD_BITS);
+    mcast_tree_edge["output"] = bit_field(Codec::MCAST_EDGE_OUTPUT_SHIFT, Codec::BITS_PER_ACTION);
+
+    json two_d;
+    two_d["action_bits"] = std::move(action_bits);
+    two_d["table_entry_bits"] = Codec::BITS_PER_ACTION;
+    two_d["table_entries_per_byte"] = Codec::ACTIONS_PER_BYTE;
+    two_d["y_code_action"] = std::move(y_code_action);
+    two_d["x_code_action"] = std::move(x_code_action);
+    two_d["mcast_tree_edge"] = std::move(mcast_tree_edge);
+
+    json scatter;
+    scatter["chunk_encoding_bits"] = NOC_SCATTER_CHUNK_ENCODING_BITS;
+    scatter["max_chunks"] = NOC_SCATTER_WRITE_MAX_CHUNKS;
+
+    json out;
+    out["1d"] = std::move(one_d);
+    out["2d"] = std::move(two_d);
+    out["scatter"] = std::move(scatter);
+    return out;
 }
 
 }  // namespace tt::tt_fabric

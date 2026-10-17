@@ -147,12 +147,15 @@ struct FabricHeaderConfig {
 // Centralized 1D low-latency routing field constants.
 struct RoutingFieldsConstants {
     struct LowLatency {
+        // What the router does at a hop (the value of the hop's FIELD_WIDTH-bit field).
+        enum HopAction : uint32_t {
+            NOOP = 0b00,
+            WRITE_ONLY = 0b01,
+            FORWARD_ONLY = 0b10,
+            WRITE_AND_FORWARD = 0b11,
+        };
         static constexpr uint32_t FIELD_WIDTH = 2;
         static constexpr uint32_t FIELD_MASK = 0b11;
-        static constexpr uint32_t NOOP = 0b00;
-        static constexpr uint32_t WRITE_ONLY = 0b01;
-        static constexpr uint32_t FORWARD_ONLY = 0b10;
-        static constexpr uint32_t WRITE_AND_FORWARD = 0b11;
         static constexpr uint32_t BASE_HOPS = 16;               // Hops per 32-bit word
         static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;  // 32-bit pattern (all FORWARD_ONLY)
         static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;   // 32-bit pattern (all WRITE_ONLY)
