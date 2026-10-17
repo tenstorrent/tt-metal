@@ -14,7 +14,7 @@
 
 namespace ckernel {
 
-inline void _llk_math_sinkhorn_4x4_init_() { llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(); }
+inline void _llk_math_sinkhorn_4x4_init_() { llk_math_eltwise_unary_sfpu_init<SfpuType::unused, DST_ACCUM_MODE>(); }
 
 inline void _llk_math_sinkhorn_row_max_sub_(std::uint32_t input_index) {
     _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_sinkhorn_row_max_sub_4x4_, input_index, VectorMode::RC_custom);
