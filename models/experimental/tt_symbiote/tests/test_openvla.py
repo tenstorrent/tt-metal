@@ -8,11 +8,7 @@ import torch
 from PIL import Image
 from torch import nn
 
-# NOTE(transformers-5.x): `AutoModelForVision2Seq` was removed in transformers 5.x.
-# Rename to `AutoModelForImageTextToText` (the merged replacement, available since 4.46)
-# when bumping transformers here. Left as-is for now: this tt_symbiote OpenVLA test is
-# experimental and not run on CI, so it hasn't been validated under 5.x.
-from transformers import AutoModelForVision2Seq, AutoProcessor
+from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu
 from models.experimental.tt_symbiote.modules.linear import TTNNLinearLLama
@@ -28,7 +24,7 @@ def test_openvla(device):
     }
 
     processor = AutoProcessor.from_pretrained("openvla/openvla-7b", trust_remote_code=True)
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoModelForImageTextToText.from_pretrained(
         "openvla/openvla-7b", torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=True
     )
 
