@@ -287,20 +287,20 @@ def test_binary_golden_requires_dest_acc_and_output_format_together():
 
 
 def test_binary_comparison_family_splits_on_the_kernel_nan_guard():
-    """max/min follow the SFPU total order; the six comparisons do not. Pinned both ways.
+    """max/min propagate NaN; the six comparisons answer IEEE's unordered result. Pinned both ways.
 
     This split is not derivable from the ISA, which is why it is pinned rather than commented.
     All eight ops route through SFPSWAP, whose page specifies SignMagIsSmaller() and the total
     order -- but the six comparison kernels wrap the swap in an explicit NaN rejection
     ("rejects NaN", `SFPIADD(inf, |a|+|b|, CC_GTE0)`), so a NaN operand never reaches the compare
-    and the IEEE unordered answer stands. binary_max_min is a bare TTI_SFPSWAP with no such
-    guard, so for those two the order does reach the result.
+    and the IEEE unordered answer stands. binary_max_min swaps and then keeps the discarded
+    operand where that one is NaN, so a NaN in either operand reaches the result.
 
     Measured on a Wormhole n150: modelling all eight on the total order failed the six
-    comparisons on 4 cells each and passed max/min everywhere.
+    comparisons on 4 cells each.
 
-    Both NaN signs are probed for max/min, because torch.maximum agrees with the total order on
-    +NaN by coincidence and disagrees on -NaN -- a one-sided probe certifies a wrong golden.
+    Both NaN signs are probed for max/min, because the bare swap loses a -NaN in max and a +NaN
+    in min -- a one-sided probe certifies a wrong golden.
     """
     import torch
     from helpers.golden_generators import BinarySFPUGolden, sfpu_max, sfpu_min
@@ -327,18 +327,32 @@ def test_binary_comparison_family_splits_on_the_kernel_nan_guard():
                 "in calculate_binary_comp_fp32_* first."
             )
 
-    # max/min: the total order, both NaN signs.
+    # max/min: NaN in, NaN out, both NaN signs and both operand positions.
+    for op in (MathOperation.SfpuBinaryMax, MathOperation.SfpuBinaryMin):
+        for a, b in [
+            (nan, 1.0),
+            (-nan, 1.0),
+            (1.0, -nan),
+            (nan, inf),
+            (-inf, nan),
+            (-nan, -inf),
+        ]:
+            got = float(golden.ops[op](torch.tensor(a), torch.tensor(b)))
+            assert got != got, (
+                f"{op.name}({a}, {b}) = {got}, expected NaN. binary_max_min keeps the "
+                "discarded operand where that one is NaN."
+            )
+    # And the total order everywhere else, zeros included.
     for op, reference in (
         (MathOperation.SfpuBinaryMax, sfpu_max),
         (MathOperation.SfpuBinaryMin, sfpu_min),
     ):
-        for a, b in [(nan, 1.0), (-nan, 1.0), (nan, inf), (-inf, nan), (nan, nan)]:
+        for a, b in [(-0.0, 0.0), (0.0, -0.0), (-inf, 1.0), (2.0, inf)]:
             got = float(golden.ops[op](torch.tensor(a), torch.tensor(b)))
             want = float(reference(a, b))
-            assert got == want or (got != got and want != want), (
-                f"{op.name}({a}, {b}) = {got}, but the total order gives {want}. "
-                "binary_max_min is a bare SFPSWAP(VEC_MIN_MAX) with no NaN guard."
-            )
+            assert got == want and math.copysign(1.0, got) == math.copysign(
+                1.0, want
+            ), f"{op.name}({a}, {b}) = {got}, but the total order gives {want}"
 
     # The integer axis, which shares the same six entries plus max/min, must be unaffected.
     for op, (a, b, want) in {
