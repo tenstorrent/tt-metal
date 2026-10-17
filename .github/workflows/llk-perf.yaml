@@ -92,7 +92,8 @@ jobs:
       # Scheduled runs have no inputs: they keep today's defaults below.
       tests-yaml: ${{ inputs.tests-yaml || './tests/pipeline_reorg/llk_perf_tests.yaml' }}
       compile-runner: ${{ inputs.compile-runner || '' }}
-      compile-workers: ${{ inputs.compile-workers || 10 }}
+      # A dispatch passes a number input as a string; the impl input is a number.
+      compile-workers: ${{ fromJSON(inputs.compile-workers || '10') }}
       debug-symbols: ${{ github.event_name == 'schedule' || inputs.debug-symbols }}
       exit-first: ${{ github.event_name == 'schedule' || inputs.exit-first }}
       elf-check: ${{ github.event_name != 'schedule' && inputs.elf-check }}
