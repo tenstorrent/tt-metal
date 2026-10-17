@@ -104,6 +104,8 @@ inline void llk_pack_rows(std::uint32_t dst_index, std::uint32_t base_ptr) {
 // the packer formats are correct regardless of the prior op (the CB-id path calls reconfig for the same
 // reason). tile_size is the one-tile L1 size derived from the descriptor via tile_stride_words (the id-free
 // stand-in for fifo_page_size): geometry-exact for linear formats, exp section included for block floats.
+// Sub-32-row (partial-height) block-float tiles are not supported (compile-time rejected), as in the 2.0
+// pack_init / pack_tile / pack_block.
 template <ckernel::experimental::LLKMemDescriptor DESC, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_reconfig_data_format() {
     SAN_HOOK(unsupported());

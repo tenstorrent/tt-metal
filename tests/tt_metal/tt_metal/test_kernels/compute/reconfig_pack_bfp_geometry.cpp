@@ -20,9 +20,9 @@
 //                          c_16 but a different tile geometry) and pack_reconfig_data_format<true>(c_2, c_16)
 //                          switches it: the conditional reconfig must act on the geometry change even
 //                          though the formats match.
-//   PACK_RECONFIG_TWO_ARG_FORMAT_ONLY: as PACK_RECONFIG_TWO_ARG but with the default (format-only)
-//                          pack_reconfig_data_format(c_2, c_16) followed by an explicit pack_init(c_16), the
-//                          caller's contract when the tile geometry changes without is_tile_dim_reconfig_en.
+//   PACK_RECONFIG_TWO_ARG_PACK_INIT: as PACK_RECONFIG_TWO_ARG but with the default <false>
+//                          pack_reconfig_data_format(c_2, c_16) followed by an explicit pack_init(c_16) in place
+//                          of is_tile_dim_reconfig_en.
 //   PACK_HW_STARTUP_ONLY:  the packer is configured for c_16 by the hw startup only (control).
 void kernel_main() {
     constexpr std::uint32_t onetile = 1;
@@ -34,7 +34,7 @@ void kernel_main() {
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2);
     copy_init(tt::CBIndex::c_0);
     pack_reconfig_data_format<true /*is_tile_dim_reconfig_en*/>(tt::CBIndex::c_2, tt::CBIndex::c_16);
-#elif defined(PACK_RECONFIG_TWO_ARG_FORMAT_ONLY)
+#elif defined(PACK_RECONFIG_TWO_ARG_PACK_INIT)
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2);
     copy_init(tt::CBIndex::c_0);
     pack_reconfig_data_format(tt::CBIndex::c_2, tt::CBIndex::c_16);
