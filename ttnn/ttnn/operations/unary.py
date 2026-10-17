@@ -516,9 +516,9 @@ ttnn.attach_golden_function(ttnn.reciprocal, golden_function=_golden_function_re
 def _golden_function_i1(input_tensor, *args, **kwargs):
     import torch
 
-    # The SFPU implementation saturates its input at +/-88.5 before evaluating the approximation.
-    # Clamp the host reference at the same boundary instead of allowing unbounded i1 growth.
-    return torch.special.i1(torch.clamp(input_tensor, min=-88.5, max=88.5))
+    # torch's float32 i1 overflows at |x| >= 89 although i1 stays finite in float32 up to |x| ~= 91.9,
+    # where the SFPU implementation overflows to +/-inf; evaluate in float64 and round once.
+    return torch.special.i1(input_tensor.to(torch.float64)).to(input_tensor.dtype)
 
 
 ttnn.attach_golden_function(ttnn.i1, golden_function=_golden_function_i1)
