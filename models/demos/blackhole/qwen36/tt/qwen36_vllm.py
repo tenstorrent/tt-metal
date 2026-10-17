@@ -937,8 +937,6 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         "output_tokens_per_step": 1,
         "supports_sample_on_device": False,
     }
-    model_capabilities.pop("max_device_top_k", None)  # device sampling is off
-    model_capabilities.pop("supports_device_penalties", None)
 
     @staticmethod
     def _serving_conflict(vc):
