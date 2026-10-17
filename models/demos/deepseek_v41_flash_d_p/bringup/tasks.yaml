@@ -8110,6 +8110,13 @@ tasks:
     - attn_collapse
     - attn_norm
     layer: 21
+  frozen:
+    at: '2026-10-17T15:07:15'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_03_attn_norm.py: a7803e5ea02afde78718445036f811a84e82bb93efca883fa007019d1caaac21
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_reuse.q_a
   title: dec_reuse q_a (op) on device, layer 21
   step: implement
