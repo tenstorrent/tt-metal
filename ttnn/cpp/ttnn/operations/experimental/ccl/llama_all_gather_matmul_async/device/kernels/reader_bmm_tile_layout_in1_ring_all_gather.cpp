@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include "ttnn/operations/ccl/kernel_common/llama_matmul_signaling.hpp"
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -42,37 +43,6 @@ void read_block_from_dram(
     noc.async_read_barrier();
 }
 
-void do_signaling(Noc& noc, uint32_t& rt_args_idx) {
-    const uint32_t pv_core_x = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t pv_core_y = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t pv_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
-    Semaphore<> pv_sem(pv_semaphore_id);
-    const bool is_privilaged = get_arg_val<uint32_t>(rt_args_idx++) == 1;
-    if (is_privilaged) {
-        const uint32_t target_sem_value = get_arg_val<uint32_t>(rt_args_idx++);
-        const uint32_t multicast_start_x = get_arg_val<uint32_t>(rt_args_idx++);
-        const uint32_t multicast_start_y = get_arg_val<uint32_t>(rt_args_idx++);
-        const uint32_t multicast_end_x = get_arg_val<uint32_t>(rt_args_idx++);
-        const uint32_t multicast_end_y = get_arg_val<uint32_t>(rt_args_idx++);
-        const uint32_t num_signalling_semaphores = get_arg_val<uint32_t>(rt_args_idx++);
-        Semaphore<> rs_sem(get_arg_val<uint32_t>(rt_args_idx++));
-        pv_sem.wait(target_sem_value);
-        pv_sem.set(1);
-        // Relay pv_sem's value into the (different) rs_sem over the reduce-scatter core range.
-        // noc is the reader's NoC (NOC_0)
-        pv_sem.relay_multicast(
-            noc,
-            rs_sem,
-            multicast_start_x,
-            multicast_start_y,
-            multicast_end_x,
-            multicast_end_y,
-            num_signalling_semaphores);
-    } else {
-        pv_sem.up(noc, pv_core_x, pv_core_y, 1);
-    }
-}
-
 void kernel_main() {
     // Compile time args
     constexpr const bool in1_is_dram_interleaved = get_compile_time_arg_val(0);
@@ -94,7 +64,7 @@ void kernel_main() {
     uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
     if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
         if constexpr (needs_signaler) {
-            do_signaling(noc_obj, rt_args_idx);
+            llama_matmul_signal_reduce_scatter(noc_obj, rt_args_idx);
             noc_obj.async_write_barrier();
         }
         return;
@@ -204,7 +174,7 @@ void kernel_main() {
         // Signal Here
         if constexpr (needs_signaler) {
             if (b == 0) {
-                do_signaling(noc_obj, rt_args_idx);
+                llama_matmul_signal_reduce_scatter(noc_obj, rt_args_idx);
             }
         }
     }
