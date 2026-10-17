@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_msa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_chunk_limits.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_msa_common.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
@@ -178,6 +179,7 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
         "block_size must be a multiple of {} (got {})",
         tile_w,
         attrs.block_size);
+    detail::validate_chunk_fits_block_reduce(attrs.block_size, "block_size");
     TT_FATAL(attrs.scale > 0.0f, "scale must be > 0");
 
     // Row-byte alignment for the ROW-MAJOR DMAs (q rows, index rows, output rows). K/V are TILE tensors (the

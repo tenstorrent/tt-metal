@@ -45,9 +45,9 @@ a no-op even when broken, so those variants cannot detect a discarded offset -- 
 there to pin that offset 0 does NOT move the write, which is a separate claim. Read a
 ``tile=0``-only pass as no evidence about the helper.
 
-Not covered: the ``LLK_ASSERT(addr < DEST_REGISTER_HALF_SIZE)``. Nothing in this suite
-expects an LLK assert -- conftest reports ``LLKAssertException`` as a failure -- and
-tripping one mid-kernel risks leaving the device wedged for whatever runs next.
+Not covered: the ``LLK_ASSERT(addr < DEST_REGISTER_HALF_SIZE)``. A test that expects an
+LLK assert catches ``LLKAssertException`` around ``run()`` (see ``test_reduce_block_max.py``);
+the per-test TRISC soft reset recovers the halted cores. This test has no reason to trip one.
 """
 
 import pytest
