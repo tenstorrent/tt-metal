@@ -40,7 +40,8 @@ from models.demos.common.bringup.reference.golden import Golden, load_spec
 from models.demos.common.bringup.reference.interface import Ctx
 
 DEFAULT_THRESHOLDS = {
-    k: defaults.get(f"thresholds.{k}") for k in ("component", "block", "layer", "state", "final_hidden", "top5")
+    k: defaults.get(f"thresholds.{k}")
+    for k in ("component", "block", "layer", "state", "state_overlap", "final_hidden", "top5")
 }
 
 
