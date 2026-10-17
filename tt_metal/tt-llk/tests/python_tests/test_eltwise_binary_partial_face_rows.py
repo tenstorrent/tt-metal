@@ -13,6 +13,7 @@ MOP the same way.
 """
 
 import torch
+from conftest import skip_for_quasar
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestSync,
@@ -33,6 +34,9 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
+
+# The probe drives the Wormhole/Blackhole llk_unpack_AB.h / llk_math_eltwise_binary.h MOPs.
+pytestmark = skip_for_quasar
 
 TILE_DIMENSIONS = [16, 32]
 
