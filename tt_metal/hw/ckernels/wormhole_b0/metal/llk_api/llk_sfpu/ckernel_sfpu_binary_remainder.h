@@ -291,6 +291,18 @@ sfpi_inline void calculate_remainder_uint32_body(
     sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>() = r;
 }
 
+// Adds b to a non-zero result whose sign differs from b's: a remainder is zero or carries the
+// divisor's sign. XOR of the float bit patterns detects the sign mismatch via the MSB, avoiding a
+// compound conditional with four comparisons and an OR.
+sfpi_inline void correct_sign_to_divisor(sfpi::vFloat& result, const sfpi::vFloat& b) {
+    v_if(result != sfpi::vFloat(0.0f)) {
+        sfpi::vInt signs = sfpi::as<sfpi::vInt>(result) ^ sfpi::as<sfpi::vInt>(b);
+        v_and(signs < 0);
+        result += b;
+    }
+    v_endif;
+}
+
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat in1) {
     // remainder(a, b) = a - floor(a/b) * b
@@ -308,14 +320,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     sfpi::vFloat result = a - floor_div * b;
 
     // Sign correction: remainder must match the sign of b (or be zero).
-    // XOR of the float bit-patterns detects sign mismatch via the MSB,
-    // avoiding a compound conditional with four comparisons and an OR.
-    v_if(result != sfpi::vFloat(0.0f)) {
-        sfpi::vInt signs = sfpi::as<sfpi::vInt>(result) ^ sfpi::as<sfpi::vInt>(b);
-        v_and(signs < 0);
-        result += b;
-    }
-    v_endif;
+    correct_sign_to_divisor(result, b);
 
     // Magnitude correction: reciprocal imprecision can leave floor() one below the true floor, so
     // |result| >= |b|. After the sign correction result carries b's sign (or is zero), so the check
@@ -337,12 +342,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     // A floor two above the true quotient leaves result opposite-signed after the single sign
     // correction above (or equal to -b for an exact multiple): step once more towards b's sign. A
     // correct remainder is zero or already carries b's sign, so this never fires on one.
-    v_if(result != sfpi::vFloat(0.0f)) {
-        sfpi::vInt signs = sfpi::as<sfpi::vInt>(result) ^ sfpi::as<sfpi::vInt>(b);
-        v_and(signs < 0);
-        result += b;
-    }
-    v_endif;
+    correct_sign_to_divisor(result, b);
 
     // Quotients of 2^24 and above: floor_div + 1 ties or vanishes in float, so diff above is just
     // the raw result and a floor one below the true quotient still leaves |result| >= |b|.
