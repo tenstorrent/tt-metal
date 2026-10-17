@@ -235,6 +235,9 @@ constexpr float GELU_ERF_DEN[17] = {  // even powers only (c1=0, c3=0, ..., c15=
  * @tparam ITERATIONS: Number of SFPU loop iterations over the Dest face.
  * @note Call @ref gelu_init with matching template args first.
  */
+// Whether BF16 DEST runs the generated gelu kernel as one call over the whole tile.
+inline constexpr bool gelu_bf16_whole_tile = false;
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_gelu() {
     if constexpr (APPROXIMATION_MODE) {
