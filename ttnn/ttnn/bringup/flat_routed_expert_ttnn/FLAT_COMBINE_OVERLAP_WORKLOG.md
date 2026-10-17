@@ -1047,3 +1047,17 @@ down + residual 153 (0.99989), both 456 (0.99987) vs the flat SE's ~525 + the su
 In the block (K3_SE=lin2d, now default): latent up first (yr in L1), then gate / up + SiTU (a in L1), then down + yr
 -> the block's y; the SE untilize (24 us) and the sum (45 us) are gone. Trace: gate / up 309, down + residual 158;
 traced 3613 -> 3483 us. PCC 0.99622 (flat SE 0.99619), shared expert stage 0.99981 (0.99976).
+
+### lin2d: what bounds it now, and the bank-reader numbers (2026-10-17)
+Probes (standalone, us; full / reads only / compute only / multicasts only / skeleton): SE gate+up (N 12288) 286 / 272 /
+196 / 118 / 41; SE down 156 / 146 / 108 / 72 / 35; latent down 103 / 95 / 67 / 47 / 23. All DRAM-read bound: the SE's
+reads run at ~375 GB/s, near the ~390 ceiling of readers away from the DRAM. Sender variants on the current code
+(lat_down / se_gu2): both ends + x first (default) 102.5 / 286.5; one end each, no barrier 116 / 314; one end each +
+barrier 129 / 326; x one end, W both 116 / 303.
+Readers next to the DRAM (zz_scratch_dram_mix.py::test_bank_readers, each streaming only its own bank, 44.5 KB reads):
+the optimal worker per bank (get_optimal_dram_bank_to_logical_worker_assignment, NOC0: (0,9) (0,0) (0,7) (0,3) (7,9)
+(7,1) (7,6) (7,4) on the 12 x 10 grid) alone 507 GB/s (99%); plus its vertical neighbour (2 a bank) 398; 3-4 a bank
+~300-325 (more readers per bank is worse). So the 99% path is exactly 8 readers, one per bank, ~63 GB/s each.
+Feeding lin2d's 12 columns (24 sender roles) from 8 single-bank readers needs either uneven bank loads or a
+forwarding layer (reader -> column-end sender, remote slot credits); estimated <= ~180 us over the block's four lin2d
+calls (309 + 158 + 103 + 95 us at ~330 GB/s -> ~500). Not started.

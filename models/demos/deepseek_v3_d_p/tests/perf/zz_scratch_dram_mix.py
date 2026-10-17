@@ -255,3 +255,76 @@ def test_edge_readers(mesh_device):
                         f" = {b / best / 1e3:6.1f} GB/s total, {b / best / 1e3 / len(cores):5.1f} per core"
                     )
             ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_bank_readers(mesh_device):
+    """Readers next to the DRAM, each streaming only its own bank (contiguous pages b + 8 k): the optimal worker per
+    bank (NOC0) and its column neighbours, n per bank (BR_N: 1, 2, 3, 4); BR_PAGE bytes a read, BR_DEPTH deep."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    opt = list(mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0))
+    logger.info(f"BANKR optimal workers per bank: {[(c.x, c.y) for c in opt]}; grid {grid.x} x {grid.y}")
+    total_mb = float(os.environ.get("BR_MB", "27.3"))
+    for page in [int(v) for v in os.environ.get("BR_PAGE", "44544").split(",")]:
+        pages = int(total_mb * 1e6 / page) // 8 * 8
+        t = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([pages, page // 4]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+        )
+        per_bank = pages // 8
+        for n in [int(v) for v in os.environ.get("BR_N", "1,2,3,4").split(",")]:
+            cores, used = [], set()
+            for b, c in enumerate(opt):  # (the bank's worker, then the nearest free cores in its column)
+                mine = [c]
+                for dy in (1, -1, 2, -2, 3, -3):
+                    if len(mine) == n:
+                        break
+                    y = c.y + dy
+                    if 0 <= y < grid.y and (c.x, y) not in used and all((c.x, y) != (o.x, o.y) for o in opt):
+                        mine.append(ttnn.CoreCoord(c.x, y))
+                for m in mine:
+                    used.add((m.x, m.y))
+                cores.append(mine)
+            for depth in [int(v) for v in os.environ.get("BR_DEPTH", "3,6").split(",")]:
+                rt = ttnn.RuntimeArgs()
+                allc = []
+                for b, mine in enumerate(cores):
+                    per = per_bank // len(mine)
+                    for s_, c in enumerate(mine):  # (core s of bank b: its pages b + 8 (s per + k), k < per)
+                        rt[c.x][c.y] = [int(t.buffer_address()), b + 8 * s_ * per, per, 8]
+                        allc.append(c)
+                crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in allc])
+                pd = ttnn.ProgramDescriptor()
+                pd.cbs = [
+                    ttnn.CBDescriptor(
+                        total_size=depth * page,
+                        core_ranges=crs,
+                        format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint32, depth * page)],
+                    )
+                ]
+                pd.kernels = [
+                    ttnn.KernelDescriptor(
+                        kernel_source=_K,
+                        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                        core_ranges=crs,
+                        compile_time_args=[page, depth] + list(ttnn.TensorAccessorArgs(t).get_compile_time_args()),
+                        runtime_args=rt,
+                        config=ttnn.DataMovementConfigDescriptor(
+                            processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0
+                        ),
+                    )
+                ]
+                md = ttnn.MeshProgramDescriptor()
+                md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 0))] = pd
+                best = None
+                for _ in range(3):
+                    _dur(mesh_device)
+                    ttnn.generic_op([t], md)
+                    ttnn.synchronize_device(mesh_device)
+                    d = _dur(mesh_device)
+                    best = d if best is None or d < best else best
+                b_ = sum(len(m) for m in cores) and (per_bank // n) * n * 8 * page
+                logger.info(
+                    f"BANKR page {page:6d} {n} per bank ({len(allc)} cores) depth {depth}: {b_ / 1e6:6.1f} MB in {best:7.1f} us"
+                    f" = {b_ / best / 1e3:6.1f} GB/s ({b_ / best / 1e3 / 512 * 100:4.1f}%)  cores {[(c.x, c.y) for c in allc][:24]}"
+                )
+        ttnn.deallocate(t)
