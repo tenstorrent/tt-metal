@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstdint>
+#include <type_traits>
 #include "experimental/llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h"
 #include "llk_unpack_common_api.h"
 #include "sanitizer/api.h"
@@ -22,6 +23,8 @@
 
 __attribute__((always_inline)) inline void llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(
     const std::uint32_t operand0, const std::uint32_t operand1, const std::uint32_t nt_dim) {
+    // An integer at the former transpose position binds here as nt_dim = 0 or 1.
+    LLK_ASSERT(nt_dim >= 1, "llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init: nt_dim must be at least 1");
     const std::uint32_t operandA_id = get_operand_id(operand1);
 
     const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
@@ -31,11 +34,13 @@ __attribute__((always_inline)) inline void llk_unpack_AB_sdpa_custom_mm_reuse_de
 }
 
 // Legacy (operand0, operand1, transpose) argument lists have the same arity as the current
-// (operand0, operand1, nt_dim) list. A bool transpose selects this deleted overload and an int
-// literal makes the call ambiguous, so neither re-binds as nt_dim. A transpose of operand B
-// is not implemented: see the transpose_v static_assert in compute_sdpa_chunk.
+// (operand0, operand1, nt_dim) list. This overload is viable only for an exact bool at the old
+// transpose position and is deleted, so a bool transpose does not re-bind as nt_dim; integers
+// resolve to the live overload and its nt_dim assert. A transpose of operand B is not
+// implemented: see the transpose_v static_assert in compute_sdpa_chunk.
+template <typename T, std::enable_if_t<std::is_same_v<T, bool>, int> = 0>
 inline void llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(
-    const std::uint32_t operand0, const std::uint32_t operand1, bool transpose) = delete;
+    const std::uint32_t operand0, const std::uint32_t operand1, T transpose) = delete;
 
 inline void llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb(
     const std::uint32_t operand0,
@@ -46,6 +51,12 @@ inline void llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb(
     const std::uint32_t nt_dim = 1,
     const std::uint32_t in1_k_stride = 1) {
     SAN_HOOK(unsupported());
+    // The K loop issues a MOP for every pair of K tiles, kt_dim / 2 - 1 times after the first:
+    // kt_dim below 2 underflows that count. An integer at the former transpose position of the
+    // compute API binds as kt_dim = 0 or 1 and is caught here.
+    LLK_ASSERT(
+        kt_dim >= 2 && nt_dim >= 1,
+        "llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb: kt_dim must be at least 2 and nt_dim at least 1");
     const std::uint32_t operandA_id = get_operand_id(operand1);
 
     const std::uint32_t base_address_A = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;

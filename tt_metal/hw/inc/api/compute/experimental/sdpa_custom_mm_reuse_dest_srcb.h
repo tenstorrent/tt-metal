@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 #include "api/compute/common.h"
 #ifdef TRISC_MATH
 #include "experimental/llk_math_sdpa_custom_mm_reuse_dest_srcb_api.h"
@@ -41,9 +42,10 @@ namespace ckernel {
  * | kt_dim         | The inner dim of the input matrices in tiles                  | uint32_t | even number from 2 to 256                        | True     |
  * | nt_dim         | The number of SrcA tiles per K iteration                      | uint32_t | 1 to 16                                          | True     |
  *
- * All arguments are required and kt_dim/nt_dim take std::uint32_t: the former
- * transpose argument sat between out_cb_id and kt_dim, so a legacy argument list
- * must not compile instead of re-binding transpose as kt_dim.
+ * All arguments are required: the former transpose argument sat between out_cb_id and
+ * kt_dim, so a legacy argument list must not re-bind transpose as kt_dim. A bool at
+ * the old transpose position is rejected at compile time; an integer there binds as
+ * kt_dim and is caught at run time only, by the kt_dim/nt_dim range asserts.
  */
 // clang-format on
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init(
@@ -66,12 +68,13 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init(
 }
 
 // Legacy (in0, in1, out, transpose, kt_dim) argument lists have the same arity as the
-// current (in0, in1, out, kt_dim, nt_dim) list. A bool transpose selects this deleted
-// overload and an int literal makes the call ambiguous, so neither re-binds as kt_dim.
-// A transpose of operand B is not implemented: see the transpose_v static_assert in
-// compute_sdpa_chunk.
+// current (in0, in1, out, kt_dim, nt_dim) list. This overload is viable only for an exact
+// bool at the old transpose position and is deleted, so a bool transpose does not re-bind
+// as kt_dim; integers resolve to the live overload. A transpose of operand B is not
+// implemented: see the transpose_v static_assert in compute_sdpa_chunk.
+template <typename T, std::enable_if_t<std::is_same_v<T, bool>, int> = 0>
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init(
-    std::uint32_t in0_cb_id, std::uint32_t in1_cb_id, std::uint32_t out_cb_id, bool transpose, std::uint32_t kt_dim) =
+    std::uint32_t in0_cb_id, std::uint32_t in1_cb_id, std::uint32_t out_cb_id, T transpose, std::uint32_t kt_dim) =
     delete;
 
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
@@ -85,8 +88,9 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
 }
 
 // Deleted for the same reason as the sdpa_custom_mm_reuse_dest_srcb_block_init overload above.
+template <typename T, std::enable_if_t<std::is_same_v<T, bool>, int> = 0>
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
-    std::uint32_t in0_cb_id, std::uint32_t in1_cb_id, std::uint32_t out_cb_id, bool transpose, std::uint32_t kt_dim) =
+    std::uint32_t in0_cb_id, std::uint32_t in1_cb_id, std::uint32_t out_cb_id, T transpose, std::uint32_t kt_dim) =
     delete;
 
 // clang-format off
@@ -125,9 +129,10 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
  * | in1_k_stride   | Stride between K tiles in in1 CB (1 for contiguous K tiles).            | uint32_t | >= 1                                           | True     |
  * | signal_output  | Signal SFPU semaphore for pipelining.                                   | bool     | true or false                                  | True     |
  *
- * All arguments are required and kt_dim/nt_dim/in1_k_stride take std::uint32_t: the
- * former transpose argument sat between idst and kt_dim, so a legacy argument list
- * must not compile instead of re-binding transpose as kt_dim.
+ * All arguments are required: the former transpose argument sat between idst and kt_dim,
+ * so a legacy argument list must not re-bind transpose as kt_dim. A bool at the old
+ * transpose position is rejected at compile time; an integer there binds as kt_dim and
+ * is caught at run time only, by the kt_dim/nt_dim range asserts.
  */
 // clang-format on
 template <std::uint32_t output_granularity, std::uint32_t input_granularity = 1>
@@ -150,11 +155,16 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block(
 }
 
 // Legacy (..., idst, transpose, kt_dim, nt_dim, in1_k_stride) argument lists have the same
-// arity as the current (..., idst, kt_dim, nt_dim, in1_k_stride, signal_output) list. A
-// bool transpose selects this deleted overload and any other transpose makes the call
-// ambiguous, so none re-binds as kt_dim. A transpose of operand B is not implemented: see
-// the transpose_v static_assert in compute_sdpa_chunk.
-template <std::uint32_t output_granularity, std::uint32_t input_granularity = 1>
+// arity as the current (..., idst, kt_dim, nt_dim, in1_k_stride, signal_output) list. This
+// overload is viable only for an exact bool at the old transpose position and is deleted,
+// so a bool transpose does not re-bind as kt_dim; integers resolve to the live overload.
+// A transpose of operand B is not implemented: see the transpose_v static_assert in
+// compute_sdpa_chunk.
+template <
+    std::uint32_t output_granularity,
+    std::uint32_t input_granularity = 1,
+    typename T,
+    std::enable_if_t<std::is_same_v<T, bool>, int> = 0>
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -162,7 +172,7 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block(
     std::uint32_t in1_tile_index,
     std::uint32_t isrc,
     std::uint32_t idst,
-    bool transpose,
+    T transpose,
     std::uint32_t kt_dim,
     std::uint32_t nt_dim,
     std::uint32_t in1_k_stride) = delete;

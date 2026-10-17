@@ -619,13 +619,14 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkMergedKvCompileLimits) {
         }
     }
     // Direct reuse-dest-SrcB calls (SDPA_DIRECT_CALL in the kernel): the current argument
-    // lists compile; the legacy lists that carried a transpose argument must not compile
-    // instead of re-binding transpose as kt_dim.
-    for (const std::uint32_t mode : {1u, 2u, 3u, 4u}) {
+    // lists compile, with std::uint32_t values and with integer literals (1); a legacy list
+    // with an integer transpose also compiles and is left to the run-time range assert (2);
+    // legacy lists with a bool transpose must not compile (3-5).
+    for (const std::uint32_t mode : {1u, 2u, 3u, 4u, 5u}) {
         SCOPED_TRACE(::testing::Message() << "direct_call=" << mode);
         auto program =
             make_sdpa_chunk_compile_program({2, 1, 1, 6, 2, 3, 2, 0, 0}, {{"SDPA_DIRECT_CALL", std::to_string(mode)}});
-        if (mode == 1) {
+        if (mode <= 2) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
         } else {
             EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
