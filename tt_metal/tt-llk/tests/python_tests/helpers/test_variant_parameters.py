@@ -2317,6 +2317,16 @@ class MUL_REDUCE_SCALAR_CHUNK_SIZE(RuntimeParameter):
 
 
 @dataclass
+class INT_SUM_DST_OFFSET(TemplateParameter):
+    """Tile distance between the two operands of int_sum's add_int (Dest tile 0 += tile offset)."""
+
+    dst_offset: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t INT_SUM_DST_OFFSET = {self.dst_offset}u;"
+
+
+@dataclass
 class ZERO_PAD_ROWS(TemplateParameter):
     """SFPU row bounds for _zero_pad_tile_."""
 
