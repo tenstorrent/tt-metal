@@ -12,12 +12,13 @@ build: runs the closed-loop AgentX simulation (agentx_sim.run, 8k unbatched, inf
 sent inside [start, start + window): arrival (relative), input length and cached prefix. The replay then plays these
 arrivals open loop, the same list for every mode.
 
-predict: the batching demo scheduler's policy (demo/batching_server.py), priced with cost_model:
+predict: the batching demo scheduler's policy (demo/batching_server.py, added with the continuous-batching PR), priced with cost_model:
 - every request is padded to a multiple of 2048 (Scheduler.submit), and resumes at its cached prefix rounded down to
   its chunk width (the replay driver does the same);
 - serial 8k / 4k / 2k: FCFS, one request at a time, one chunk per step, the last chunk padded;
 - batched: FCFS admission into num_slots KV slots; each active request gets one 2k lane per step, the spare lanes go
   to active requests in order (up to their remaining chunks - 1), and the active list rotates by one every step.
+  This is the demo's policy, not agentx_sim's fcfs / pack, so it is priced here rather than through agentx_sim.run.
 Step time = Model.step_s (calibrated on silicon per mode), plus the scheduler's gap between steps, which advances the
 clock but, as in the replay's busy_s, is not busy time.
 """
@@ -53,18 +54,24 @@ def build(a):
         calibrated=False,  # the arrivals of the slices replayed so far
     )
     window = sorted((x.send, x.n_in, x.cached) for x in res["_stats"] if a.start <= x.send < a.start + a.window)
+    if not window:
+        last = max(x.send for x in res["_stats"])
+        raise SystemExit(
+            f"no requests sent in [{a.start:g}, {a.start + a.window:g}) s; the last was sent at {last:.0f} s"
+        )
     reqs = [{"t": round(s - a.start, 4), "in": n_in, "cached": cached} for s, n_in, cached in window]
-    json.dump(
-        {
-            "source": os.path.abspath(a.traces),
-            "concurrency": a.concurrency,
-            "start": a.start,
-            "window": a.window,
-            "requests": reqs,
-        },
-        open(a.out, "w"),
-        indent=1,
-    )
+    with open(a.out, "w") as f:
+        json.dump(
+            {
+                "source": os.path.abspath(a.traces),
+                "concurrency": a.concurrency,
+                "start": a.start,
+                "window": a.window,
+                "requests": reqs,
+            },
+            f,
+            indent=1,
+        )
     new = [r["in"] - r["cached"] for r in reqs]
     print(
         f"{len(reqs)} requests in {a.window:g} s; new tokens total {sum(new):,} (p50 {sorted(new)[len(new) // 2]:,}),"
@@ -156,8 +163,12 @@ def main():
     if a.cmd == "build":
         return build(a)
     model = Model.load(a.data)
-    reqs = json.load(open(a.slice))["requests"]
-    meas = json.load(open(a.measured))["modes"] if a.measured else {}
+    with open(a.slice) as f:
+        reqs = json.load(f)["requests"]
+    meas = {}
+    if a.measured:
+        with open(a.measured) as f:
+            meas = json.load(f)["modes"]
     print(f"{len(reqs)} requests; slots {a.slots}")
     print(
         f"{'mode':>10} | {'pred p50':>8} {'p90':>6} {'p99':>6} {'small50':>7} {'makespan':>8} {'busy':>6} {'steps':>5}"
