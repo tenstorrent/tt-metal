@@ -375,13 +375,17 @@ def test_mish(device, fast):
 
 # Largest fraction of probe-band inputs whose accurate-mode result may be 1 ulp
 # off the correctly rounded value. The fp32 pipeline's own residual (fp32 exp,
-# one Newton step of the reciprocal) flips ~0.2% of bfloat16 roundings on
-# Wormhole; an exp intermediate rounded to bfloat16 (2^-9 relative) flips ~2.7%.
-MISH_MAX_ONE_ULP_FRACTION = 0.01
+# one Newton step of the reciprocal) flips ~1.2% of bfloat16 roundings on
+# Wormhole (36 of 2991); an exp intermediate rounded to bfloat16 (2^-9
+# relative) flips ~17.5% (523 of 2991).
+MISH_MAX_ONE_ULP_FRACTION = 0.03
 # Below this |x|, mish(x) = 0.6x to bfloat16 resolution (tanh(softplus(x)) =
 # 0.6 + 0.4x + O(x^2)), so those inputs only re-test the rounding of one
 # constant across the 128 bfloat16 mantissas and say nothing about exp.
 MISH_PROBE_MIN_ABS_X = 2.0**-7
+# The kernel returns x unchanged for x >= 8 (its saturation bound), so those
+# lanes never go through exp and are kept out of the probe band.
+MISH_SAT_HI = 8.0
 
 
 def test_mish_accurate_keeps_exp_in_fp32(device):
@@ -394,7 +398,8 @@ def test_mish_accurate_keeps_exp_in_fp32(device):
     bfloat16 rounding of a few percent of inputs, so the result is 1 ulp away
     from F.mish evaluated in fp32 and rounded once. Gate: every reliable element
     within 1 ulp, and the fraction that is 1 ulp off within
-    MISH_MAX_ONE_ULP_FRACTION on the probe band |x| >= MISH_PROBE_MIN_ABS_X.
+    MISH_MAX_ONE_ULP_FRACTION on the probe band MISH_PROBE_MIN_ABS_X <= |x|,
+    x < MISH_SAT_HI (the lanes that actually go through exp).
 
     Excluded as unreliable (the SFPU flushes fp32 subnormals to zero, so the
     device returns 0 there in every implementation): x < -87.3, where exp(x) is
@@ -412,7 +417,7 @@ def test_mish_accurate_keeps_exp_in_fp32(device):
     reliable = (golden_fp32.abs() >= SMALLEST_NORMAL_BF16) & (torch.exp(x) >= SMALLEST_NORMAL_BF16)
     assert_with_ulp(expected_result=golden[reliable], actual_result=result[reliable], ulp_threshold=1)
 
-    probe = reliable & (x.abs() >= MISH_PROBE_MIN_ABS_X)
+    probe = reliable & (x.abs() >= MISH_PROBE_MIN_ABS_X) & (x < MISH_SAT_HI)
     one_ulp_off = ulp_distance(golden[probe], result[probe]) == 1
     fraction = one_ulp_off.float().mean().item()
     worst = torch.nonzero(one_ulp_off)[:3].flatten().tolist()
