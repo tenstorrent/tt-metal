@@ -11,6 +11,7 @@
 #include <string_view>
 #include <type_traits>
 #include <variant>
+#include <vector>
 
 #include <enchantum/type_name.hpp>
 
@@ -81,6 +82,16 @@ struct Member {
     Type type;
 };
 
+// A struct's name and size, and its members, which cover every byte of it in order.
+// This is the manifest's representation of a struct type, regardless of whether it
+// could be described at compile time (ie. has a StructLayout specialization), or
+// was defined during runtime (ie. arch-specific structs).
+struct StructType {
+    std::string_view name;
+    uint32_t size = 0;
+    std::vector<Member> members;
+};
+
 // Each described struct specializes StructLayout<T> with its member list. There is no primary definition, so if a
 // member of struct A is itself a struct B with no StructLayout, A's member list fails to compile in type_of().
 // B's StructLayout must come before A's.
@@ -102,6 +113,16 @@ struct StdArray<std::array<T, N>> : std::true_type {
     static constexpr std::size_t count = N;
 };
 
+// A described struct's name
+template <typename T>
+constexpr std::string_view struct_name() {
+    if constexpr (requires { StructLayout<T>::name; }) {
+        return StructLayout<T>::name;
+    } else {
+        return enchantum::type_name<T>;
+    }
+}
+
 // The Element for one element of type T: an integer, an enum or a described struct.
 template <typename T>
 constexpr Element element_of() {
@@ -116,7 +137,7 @@ constexpr Element element_of() {
             return element::Uint{};
         }
     } else if constexpr (Described<T>) { /* defined struct type, via StructLayout<T> */
-        return element::Struct{enchantum::type_name<T>};
+        return element::Struct{struct_name<T>()};
     } else { /* always fails if we get here */
         static_assert(!sizeof(T*), "member type has no StructLayout specialization; describe it or use LAYOUT_BYTES");
     }
