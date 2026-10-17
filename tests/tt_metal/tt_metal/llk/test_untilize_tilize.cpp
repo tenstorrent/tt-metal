@@ -1006,9 +1006,12 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeTinyTile16x32) {
 // tiny tiles as one 32x32 tile, which only the fixed-size Float16_b and Float32 layouts allow, so both
 // compute APIs must route this to tilize_* even at an even width. Integer inputs in [-50, 50] are exact in
 // Bfp8_b (a 16-datum block with that maximum has a step of 0.5), so the output must match the golden.
+// Wormhole-only: Blackhole's packer sizes the exponent section of a 16-row tile as one face
+// (exp_section_size = partial_face ? 1 : num_faces), so its plain tilize writes a different Bfp8_b
+// 16x32 layout than the host's, with or without fast_tilize.
 TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeTinyTile16x32Bfp8Out) {
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        GTEST_SKIP() << "Quasar unpack tilize does not support 16x32 tiles";
+    if (MetalContext::instance().get_cluster().arch() != ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "only the Wormhole tilize path packs a 16x32 tile to Bfp8_b in the host layout";
     }
     constexpr std::uint32_t tile_shape_in_faces_r = 1;  // 16x32 = 1x2 faces of 16x16
     constexpr std::uint32_t tile_shape_in_faces_c = 2;
@@ -1080,10 +1083,12 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeNarrowTile32x16) {
 // fast_tilize_* on a 16x32 tile declared as four 8x16 faces (Tile::from_face_grid(2, 2, {8, 16})). Its tile
 // dims match the two-face 16x32 tiny tile but the fast-tilize sequences are written for 16-row faces and
 // would treat num_faces == 4 as a 32-row tile (reading 16 rows past the input and advancing a full 32x32
-// tile per output page), so both compute APIs must route it to tilize_* at any width.
+// tile per output page), so both compute APIs must route it to tilize_* at any width. Wormhole-only:
+// Blackhole's whole-tile tilize mode is written for 16-row faces and mis-tilizes 8x16 faces with or
+// without fast_tilize; Quasar shortened-face tilize is not covered by this test.
 TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeShortFace16x32) {
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        GTEST_SKIP() << "Quasar shortened-face tilize is not covered by this test";
+    if (MetalContext::instance().get_cluster().arch() != ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "only the Wormhole tilize path handles 8x16 faces";
     }
     constexpr std::uint32_t tile_shape_in_faces_r = 2;  // 16x32 = 2x2 faces of 8x16
     constexpr std::uint32_t tile_shape_in_faces_c = 2;
