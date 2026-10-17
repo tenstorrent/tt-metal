@@ -1737,13 +1737,20 @@ def test_exponential_accurate_unclamped_large_negative():
     src_A = torch.rand(num_elements, dtype=torch.bfloat16) * 10.0 - 5.0
     # exp(x) for every one of these is far below the smallest bf16 subnormal, so the
     # only correct bf16 output is 0.0. The kernel records its body on the first 32-lane
-    # iteration and replays it for the other 31, so the sentinels go on every 8th
-    # element: each 16-wide face row then carries two, in both column halves, and every
-    # iteration -- recorded and replayed -- sees a negative xlog2.
+    # iteration and replays it for the other 31. src_A is written in face layout, so
+    # element i sits in Dest row i // 16, column i % 16, and one SFPLOAD reads four
+    # Dest rows (64 consecutive elements) of a single column parity: even columns at an
+    # even Dest address, odd columns at +2. The kernel steps Dest by 2 per iteration, so
+    # the iterations alternate parities. Sentinels at i % 8 in {0, 1} put eight
+    # even-column and eight odd-column sentinels in every 64-element window, so every
+    # iteration -- the recorded one and each replay, of either parity -- sees a
+    # negative xlog2, and both parities cycle through all eight values.
     large_negative = [-10000.0, -1000.0, -226.0, -200.0, -176.0, -150.0, -120.0, -100.0]
-    sentinel_indices = list(range(0, num_elements, 8))
-    for n, i in enumerate(sentinel_indices):
-        src_A[i] = large_negative[n % len(large_negative)]
+    sentinel_indices = []
+    for n, i in enumerate(range(0, num_elements, 8)):
+        src_A[i] = large_negative[n % len(large_negative)]  # even column
+        src_A[i + 1] = large_negative[(n + 1) % len(large_negative)]  # odd column
+        sentinel_indices += [i, i + 1]
 
     res_tensor, golden_tensor = _run_exp_on_bf16_tile(
         src_A, input_dimensions, ApproximationMode.No, FastMode.No, clamp_negative=False
