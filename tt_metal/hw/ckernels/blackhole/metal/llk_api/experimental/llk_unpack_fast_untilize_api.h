@@ -19,14 +19,16 @@ inline void llk_unpack_fast_untilize_init_with_formats(
     ckernel::_llk_unpack_fast_untilize_init_<is_fp32_dest_acc_en>(unpack_src_format, unpack_dst_format, init_unit_dim);
 }
 
-inline bool llk_unpack_fast_untilize_is_bfp_b_input_format(const std::uint32_t format) {
-    return format == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ||
-           format == static_cast<std::uint32_t>(DataFormat::Bfp4_b);
+// Every compressed block-float input (Bfp8/4/2, A and B exponent variants) carries a
+// per-tile exponent section, so it must take the per-tile unpack path; the dense
+// multi-tile MOP steps every face from tile 0's base and cannot skip those sections.
+inline bool llk_unpack_fast_untilize_is_bfp_input_format(const std::uint32_t format) {
+    return ckernel::IS_BFP_FORMAT(format);
 }
 
-inline bool llk_unpack_fast_untilize_is_bfp_b_input(const std::uint32_t operand) {
+inline bool llk_unpack_fast_untilize_is_bfp_input(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    return llk_unpack_fast_untilize_is_bfp_b_input_format(unpack_src_format[operand_id]);
+    return llk_unpack_fast_untilize_is_bfp_input_format(unpack_src_format[operand_id]);
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -34,7 +36,7 @@ inline void llk_unpack_fast_untilize_init(const std::uint32_t operand, const std
     SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t init_unit_dim =
-        llk_unpack_fast_untilize_is_bfp_b_input_format(unpack_src_format[operand_id]) ? 1 : dense_init_unit_dim;
+        llk_unpack_fast_untilize_is_bfp_input_format(unpack_src_format[operand_id]) ? 1 : dense_init_unit_dim;
     ckernel::_llk_unpack_fast_untilize_init_<is_fp32_dest_acc_en>(
         unpack_src_format[operand_id], unpack_dst_format[operand_id], init_unit_dim);
 }
@@ -67,7 +69,7 @@ inline void llk_unpack_fast_untilize_block(
     SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t address = llk_unpack_fast_untilize_tile_address(operand_id, tile_index);
-    if (llk_unpack_fast_untilize_is_bfp_b_input_format(unpack_src_format[operand_id])) {
+    if (llk_unpack_fast_untilize_is_bfp_input_format(unpack_src_format[operand_id])) {
         llk_unpack_fast_untilize_bfp_block_at_address(
             address, get_local_cb_interface(operand_id).fifo_page_size, unit_dim);
     } else {
@@ -84,7 +86,7 @@ inline void llk_unpack_fast_untilize_block(
     SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t address = llk_unpack_fast_untilize_tile_address(operand_id, tile_index);
-    if (llk_unpack_fast_untilize_is_bfp_b_input_format(unpack_src_format[operand_id])) {
+    if (llk_unpack_fast_untilize_is_bfp_input_format(unpack_src_format[operand_id])) {
         llk_unpack_fast_untilize_bfp_block_at_address(
             address, get_local_cb_interface(operand_id).fifo_page_size, unit_dim);
         return;
@@ -101,7 +103,7 @@ template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_fast_untilize_restore_unit_dim(
     const std::uint32_t operand, const std::uint32_t init_unit_dim, const std::uint32_t prev_unit_dim) {
     SAN_HOOK(unsupported());
-    if (!llk_unpack_fast_untilize_is_bfp_b_input(operand) && prev_unit_dim != init_unit_dim) {
+    if (!llk_unpack_fast_untilize_is_bfp_input(operand) && prev_unit_dim != init_unit_dim) {
         llk_unpack_fast_untilize_reinit_unit_dim<is_fp32_dest_acc_en>(init_unit_dim);
     }
 }
