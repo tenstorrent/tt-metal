@@ -214,3 +214,51 @@ def test_moe_hash_gate_program_cache_hit_patches_addresses(device):
         outputs.append(tt_indices.clone())
 
     assert not torch.equal(outputs[0], outputs[1])
+
+
+def test_sqrtsoftplus_weights_across_poly_boundary(device):
+    """Every token routes to experts 0..5, whose logits straddle the softplus residual's polynomial
+    boundary at |logit| = 5. The residual ln(1 + exp(-|t|)) is the whole score for a negative logit
+    (0.0025 at -6, 0.0041 at -5.5), so an activation that drops it past the boundary gives experts
+    0..2 weight 0 instead of 0.022..0.032 and inflates the others to match. Checked to an absolute
+    tolerance well below that, above the bf16 output rounding."""
+    seq_len, total_experts, n_activated_experts, route_scale, vocab_size = 32, 256, 6, 1.0, 64
+    epsilon = 1e-20
+    selected_logits = torch.tensor([-6.0, -5.5, -5.25, -4.5, 0.0, 1.0])
+    logits = torch.full((1, 1, seq_len, total_experts), -20.0)
+    logits[..., :n_activated_experts] = selected_logits
+    input_ids = torch.zeros(seq_len, dtype=torch.int64)
+    tid2eid = torch.arange(n_activated_experts, dtype=torch.int64).repeat(vocab_size, 1)
+
+    ref_indices, ref_weights = hash_gate_golden_act(
+        logits, input_ids, tid2eid, route_scale, epsilon, n_activated_experts, "sqrtsoftplus"
+    )
+
+    ttnn_logits = ttnn.from_torch(logits, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_input_ids = ttnn.from_torch(
+        input_ids.reshape(1, TILE_H).to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    tid2eid_padded = torch.zeros(vocab_size, 16, dtype=torch.int16)
+    tid2eid_padded[:, :n_activated_experts] = tid2eid.to(torch.int16)
+    ttnn_tid2eid = ttnn.from_torch(tid2eid_padded, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    ttnn_weights_out, ttnn_indices_out = ttnn.experimental.deepseek_prefill.moe_hash_gate(
+        ttnn_logits,
+        ttnn_input_ids,
+        ttnn_tid2eid,
+        n_activated_experts=n_activated_experts,
+        route_scale=route_scale,
+        epsilon=epsilon,
+        score_func="sqrtsoftplus",
+    )
+    tt_weights = ttnn.to_torch(ttnn_weights_out)[:1, :1, :seq_len, :n_activated_experts].float()
+    tt_indices = ttnn.to_torch(ttnn_indices_out)[:1, :1, :seq_len, :n_activated_experts].long()
+
+    assert torch.equal(tt_indices, ref_indices.long())
+    torch.testing.assert_close(
+        tt_weights,
+        ref_weights,
+        atol=5e-3,
+        rtol=0.0,
+        msg=lambda m: f"device weights {tt_weights[0, 0, 0].tolist()} vs torch {ref_weights[0, 0, 0].tolist()}: {m}",
+    )
