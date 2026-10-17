@@ -253,6 +253,8 @@ def test_batched_prefill_migration(migration_environment, max_lanes):
         PREFILL_MANIFEST=str(Path(__file__).parents[1] / "tt/runners/manifest_batched.json"),
         PREFILL_CHUNK_SIZE=str(Gemma4ServiceConfig.BATCHED_CHUNK_SIZE),
         PREFILL_BATCH_MAX_LANES=str(max_lanes),
+        # TODO(#58136): host layer acks until #58136 lands (Gemma4BatchedPrefillRuntime.set_d2h_ack_service).
+        PREFILL_LAYER_ACK_D2H="0",
         PREFILL_NUM_USERS=str(num_users),
         PREFILL_PCC_SUMMARY_DIR=str(output_dir),
     )
