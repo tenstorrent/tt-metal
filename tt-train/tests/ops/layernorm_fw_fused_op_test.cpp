@@ -145,3 +145,25 @@ TEST_F(LayerNormForwardOpTest, NIGHTLY_MetalLayerNormFw_LargeTensor_DoesNotFitIn
 TEST_F(LayerNormForwardOpTest, MetalLayerNormFw_HeadsDimNot1) {
     CompareKernelVsXArray(2, 8, 4, 512);
 }
+
+TEST_F(LayerNormForwardOpTest, MetalLayerNormFw_UsesRoundedReductionScaler) {
+    using namespace ttml;
+
+    constexpr uint32_t B = 1U, C = 1U, H = 32U, W = 384U;
+    xt::xarray<float> input_data = xt::ones<float>({B, C, H, W}) * 0.25F;
+    xt::xarray<float> gamma_data = xt::ones<float>({1U, 1U, 1U, W});
+    xt::xarray<float> beta_data = xt::zeros<float>({1U, 1U, 1U, W});
+
+    auto* device = &autograd::ctx().get_device();
+    auto input = core::from_xtensor(input_data, device);
+    auto gamma = core::from_xtensor(gamma_data, device);
+    auto beta = core::from_xtensor(beta_data, device);
+
+    constexpr float epsilon = 1.0F / 65536.0F;
+    auto outputs = metal::layernorm_fw(input, gamma, beta, epsilon, /*return_mean_rstd=*/true);
+    auto mean = core::to_xtensor(outputs[1].value());
+
+    for (const float value : mean) {
+        EXPECT_EQ(value, 0.25F);
+    }
+}
