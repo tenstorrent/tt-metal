@@ -94,6 +94,22 @@ nb::dict plan_dict(
     d["down"] = cores(p->down);
     d["gu_idle"] = cores(p->gu_idle);
     d["arena_cores"] = cores(p->arena_cores());
+    // DRISC: which reader cells still run Tensix readers (the others are free unless they became down cores) and the
+    // launcher (posts the DRISC jobs when no Tensix reader is left to)
+    d["drisc"] = p->drisc;
+    d["dual"] = p->dual;
+    {
+        std::vector<tt::tt_metal::CoreCoord> trd;
+        for (uint32_t r = 0; r < p->readers.size(); ++r) {
+            if (p->tensix_reader(r)) {
+                trd.push_back(p->readers[r]);
+            }
+        }
+        if (p->drisc && !p->dual) {
+            trd.push_back(p->launcher);
+        }
+        d["tensix_readers"] = cores(trd);
+    }
     {  // the wiring, for NoC models: reader tails (reader, chain tail), down chains (down -> successor)
         nb::list rdn, succ;
         for (const auto& [r, t] : p->rdn) {

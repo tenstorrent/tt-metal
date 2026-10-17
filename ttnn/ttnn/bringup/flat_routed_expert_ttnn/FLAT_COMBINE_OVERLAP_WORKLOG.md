@@ -1113,3 +1113,24 @@ What it took:
 | zipf packed 1.2 | 2618 | 1283 | 3901 | 2927 | 76% | 1.118 | 1108 |
 Worst per-token rel err 2.4e-3 (all 2560 tokens) on every routing. Same with the default DRISC setting (DRISC is
 off inside the overlap): uniform fused 1248 us.
+
+### V4.1 overlap: queued calls, DRISC inside the overlap, the remaining gap (2026-10-17)
+Same setup, calls queued back to back (FC_PIPE=1: the 1.137 above included ~130 us launch skew per call):
+| config | uniform fused / flat | spread fused / flat | packed fused / flat |
+| A no DRISC, 27 down | 1175 / 1088 = 1.080 (86% hidden) | 1335 / 1214 = 1.099 | 2833 / 2618 = 1.082 |
+| B DRISC dual (MIMO_FL_CMB_DRISC=1), 27 down | 1211 / 1195 = 1.014 | 1340 / 1222 = 1.097 | 2833 / 2623 = 1.080 |
+| C DRISC-only (DUAL=0), 32 down, 35 combine cells | 1102 / 1084 = 1.017 | 1588 / 1582 = 1.004 | 2991 / 2817 = 1.062 |
+K3 (L1 hand-off, queued, same harness): 1.048 / 1.031 / 1.024.
+- DRISC inside the overlap (MIMO_FL_CMB_DRISC=1, opt-in): exact on all routings. Dual makes the uniform flat 10%
+  slower here (1195 vs 1088) and the fused call slower (1211 vs 1175). DRISC-only frees 15 cells (combine 35 cells, 32
+  down cores): best uniform (1102, -6% vs A) but the skewed routings lose (spread 1588 vs 1335, packed 2991 vs 2833):
+  their hot experts are past switch mode's 224 tokens (one DRISC tile per bank, ~28 GB/s a tile) and two tiles hit
+  the x-read conflict (FLAT_EXPERT_WORKLOG "DRISC-only ... what hurts it"). With 40 down cores the L1 hand-off's
+  32-writer limit trips (sparse_combine_rf asserts <= 32 writers).
+- The plan now exports drisc / dual / tensix_readers (+ the launcher); the harness gives DRISC-freed reader cells to
+  the combine.
+- Where A's 8% goes (SPC_TPROF, uniform, us from each chip's combine start; flat alone 1088): every chip's port rows
+  have landed by 1114-1132 (the last experts' rows after the flat: release granularity, 24 experts of ~80 rows), the
+  accumulators end within ~20 us of their last local row, but the port senders end 1141 / 1141 / 1162 / 1191 / 1200 /
+  1223 / 1269 / 1257 on chips 0-7 (slot waits 12-45 us): a chip-dependent sender tail of up to ~140 us. Open: the
+  10880 B fabric payload (fewer router slots than K3's 7232) vs the ports' load per chip.

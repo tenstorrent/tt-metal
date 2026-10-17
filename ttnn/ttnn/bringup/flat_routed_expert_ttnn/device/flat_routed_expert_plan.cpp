@@ -511,7 +511,10 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         p.rdown = p.rdown && rg_max * p.g <= 5;
     }
     // DRISC mode: one subgrid, not inside the combine overlap (not validated there)
-    p.drisc = flat_drisc_enabled() && p.nsg == 1 && cfg.cmb_rt == 0 && !p.uneven;
+    // (inside the combine overlap only with MIMO_FL_CMB_DRISC=1, while it is being validated there)
+    const char* cmb_drisc = std::getenv("MIMO_FL_CMB_DRISC");
+    p.drisc = flat_drisc_enabled() && p.nsg == 1 && (cfg.cmb_rt == 0 || (cmb_drisc && std::atoi(cmb_drisc) != 0)) &&
+              !p.uneven;
     if (p.drisc) {
         flat_drisc_set_auto_pure(!p.rdown);  // (flat_drisc.cpp: pure DRISC slots unless the readers compute down columns)
         // default: one DRISC slot per bank (the hybrid: GLM-Flash us / expert vs Tensix readers M 64 34.0 / 35.4, 256

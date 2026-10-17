@@ -168,7 +168,9 @@ def test_flat_combine_rf(mesh_device, device_params, routing):
     plan = op.plan
     writers = len(plan["down"]) + (len(plan["rdn"]) if plan["rdown"] else 0)
     grid0 = mesh_device.compute_with_storage_grid_size()
-    taken = {tuple(c) for k in ("arena_cores", "gu", "down", "readers", "relays", "coords") for c in plan[k]}
+    # (DRISC: only the reader cells that still run Tensix readers / the launcher are taken; the rest go to combine)
+    rd_key = "tensix_readers" if "tensix_readers" in plan else "readers"
+    taken = {tuple(c) for k in ("arena_cores", "gu", "down", rd_key, "relays", "coords") for c in plan[k]}
     cells = CELLS or [(x_, y_) for y_ in range(grid0.y) for x_ in range(grid0.x) if (x_, y_) not in taken]
     shard = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     dram = ttnn.DRAM_MEMORY_CONFIG
@@ -274,6 +276,10 @@ def test_flat_combine_rf(mesh_device, device_params, routing):
     fused = sparse_combine_rf_prepare(mesh_device, S, H, rows, writers=writers, l1=l1, devplan=devplan, **common)
     alone = sparse_combine_rf_prepare(mesh_device, S, H, rows, writers=0, **common)
     coll = fused.collector
+    logger.info(
+        f"{routing}: flat drisc {plan.get('drisc')} dual {plan.get('dual')} down {len(plan['down'])} cells "
+        f"{len(cells)}"
+    )
     logger.info(
         f"{routing}: flat writers {writers}, arena {a_rows * 64 >> 10} KB/core, combine ports "
         f"{sorted(set(fused.cells['ports'].values()))} accs {fused.cells['accs']}"
