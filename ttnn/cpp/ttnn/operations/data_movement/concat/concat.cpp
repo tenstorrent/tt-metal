@@ -10,6 +10,7 @@
 
 #include "ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
@@ -275,7 +276,16 @@ ttnn::Tensor concat(
                                                            // but causes CI errors for now
 
     if (input_tensors.size() == 1) {
-        return ttnn::to_memory_config(input_tensors.at(0), mem_config, std::nullopt);
+        const ttnn::Tensor& input_tensor = input_tensors.front();
+        // ttnn::to_memory_config does not handle a device tensor with no elements.
+        if (input_tensor.logical_volume() == 0 && ttnn::is_device_tensor(input_tensor) && input_tensor.is_allocated())
+            [[unlikely]] {
+            const tt::tt_metal::TensorSpec output_spec(
+                input_tensor.logical_shape(),
+                tt::tt_metal::TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), mem_config));
+            return ttnn::create_device_tensor(output_spec, input_tensor.device());
+        }
+        return ttnn::to_memory_config(input_tensor, mem_config, std::nullopt);
     }
 
     // TODO: Issue #8426: Add validation for ttnn.concat for sharded inputs
@@ -318,17 +328,66 @@ ttnn::Tensor concat(
         shapes_match,
         "All dimensions must be the same size except for the dimension along which the contenation is taking place.");
 
-    auto compute_output_shape = [](const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::Shape {
+    bool has_empty_input = false;
+    auto compute_output_shape = [&has_empty_input](const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::Shape {
         ttnn::Shape shape_out = tensors[0].logical_shape();
         shape_out[dim] = 0;
         for (const Tensor& in_ref : tensors) {
             ttnn::Shape curr_shape = in_ref.logical_shape();
+            has_empty_input |= curr_shape[dim] == 0;
             shape_out[dim] += curr_shape[dim];
         }
         return shape_out;
     };
 
     ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, dim);
+
+    if (has_empty_input || logical_output_shape.volume() == 0) [[unlikely]] {
+        // Zero-sized inputs never reach the device operation: apply the operand rules that every path checks.
+        for (const auto& input_tensor : input_tensors) {
+            TT_FATAL(
+                ttnn::is_device_tensor(input_tensor),
+                "ttnn.concat: expected a tensor with device storage, but got a tensor with storage type {}",
+                input_tensor.storage_type());
+            TT_FATAL(input_tensor.is_allocated(), "Operand to concat needs to be allocated in a buffer on device.");
+            TT_FATAL(
+                input_tensor.device() == first_tensor.device(), "Operands to concat need to be on the same device.");
+            TT_FATAL(input_tensor.dtype() == first_tensor.dtype(), "All Tensors should have same dtypes.");
+        }
+    }
+
+    if (logical_output_shape.volume() == 0) [[unlikely]] {
+        const tt::tt_metal::TensorSpec output_spec(
+            logical_output_shape,
+            tt::tt_metal::TensorLayout(first_tensor.dtype(), first_tensor.tensor_spec().page_config(), mem_config));
+        return ttnn::create_device_tensor(output_spec, first_tensor.device());
+    }
+
+    // As in torch.cat, an input that is empty along dim adds nothing; the program factories do not handle it.
+    if (has_empty_input) [[unlikely]] {
+        std::vector<ttnn::Tensor> non_empty_tensors;
+        non_empty_tensors.reserve(input_tensors.size());
+        for (const auto& t : input_tensors) {
+            if (t.logical_shape()[dim] != 0) {
+                non_empty_tensors.push_back(t);
+            }
+        }
+        if (non_empty_tensors.size() == 1) {
+            // Return a new tensor, as a multi-input concat does (to_memory_config may return its input);
+            // a sharded input is unsharded first, as concat_impl does.
+            const ttnn::Tensor& input_tensor = non_empty_tensors.front();
+            if (input_tensor.is_sharded()) {
+                const ttnn::Tensor interleaved_tensor =
+                    ttnn::to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG, std::nullopt);
+                return ttnn::to_memory_config(interleaved_tensor, mem_config, std::nullopt);
+            }
+            if (input_tensor.memory_config() == mem_config) {
+                return ttnn::clone(input_tensor, std::nullopt, mem_config, std::nullopt);
+            }
+            return ttnn::to_memory_config(input_tensor, mem_config, std::nullopt);
+        }
+        return ttnn::concat(non_empty_tensors, dim, memory_config, optional_output_tensor, groups, sub_core_grids);
+    }
 
     // For interleaved outputs, if sub_core_grids is provided, use direct path to avoid massaged operations
     // which don't currently support sub_core_grids
