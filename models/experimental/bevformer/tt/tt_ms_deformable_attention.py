@@ -7,7 +7,8 @@ TTNN Multi-Scale Deformable Attention implementation for BEVFormer.
 The core attention is a single device op: ``ttnn.experimental.fused_msda_from_offsets``.
 It takes the reference points and the raw sampling offsets and does the whole of
 MSDA -- sampling-location generation, bilinear sampling, the attention multiply
-and the reduction over (levels, points) -- inside one kernel. No intermediate
+and the reduction over (levels, points) -- inside one device op (a reader, a
+compute and a writer kernel). No intermediate
 grid or per-level sampled-value tensor is materialized.
 """
 
@@ -42,8 +43,8 @@ def multi_scale_deformable_attn_fused(value, reference_points, sampling_offsets,
         value: (bs, num_keys, num_heads, head_dim) or packed (bs, num_keys, num_heads*head_dim) ROW_MAJOR
         reference_points: (bs, num_queries, num_points_in_pillar, 2), normalized [0, 1]
         sampling_offsets: (bs, num_queries, num_heads, num_levels*num_points*2) ROW_MAJOR,
-            raw, in feature-map pixel units -- the reader applies the per-level
-            ``/ [W_l, H_l]`` normalization itself.
+            raw, in feature-map pixel units -- the op's compute kernel applies the
+            per-level scale on the SFPU when it forms the sampling location.
         attention_weights: (bs, num_queries, num_heads, num_levels*num_points) ROW_MAJOR
         spatial_shapes: torch (num_levels, 2) of (H, W)
 
