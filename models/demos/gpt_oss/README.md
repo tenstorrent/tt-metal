@@ -27,6 +27,56 @@ pytest text_demo.py -k "4x8 and prefill_128"
 pytest text_demo.py -k "1x4 and prefill_128"
 ```
 
+## DFlash speculative decoding (QuietBox 2, gpt-oss-20b)
+
+Greedy batch-1 decode with the [z-lab/gpt-oss-20b-DFlash](https://huggingface.co/z-lab/gpt-oss-20b-DFlash) drafter
+(downloaded from HuggingFace on first use). Each round, the drafter proposes 7 tokens from the target's hidden states;
+the target verifies the 8-row block [last token, 7 drafts] in one pass and keeps the drafts up to the first mismatch,
+plus its own next token. The output is the target's greedy output (up to BF16 rounding of near-ties).
+
+```bash
+export HF_MODEL=openai/gpt-oss-20b
+pytest models/demos/gpt_oss/demo/dflash_demo.py -k "isl_1k"   # isl_256, isl_512, isl_1k, ... isl_64k, isl_128k
+pytest models/demos/gpt_oss/tests/test_dflash.py               # accuracy vs. the target's own greedy decode
+```
+
+All three passes of a round run as device traces, and the host reads one small result per round:
+- draft pass: [tt/dflash/fused_draft.py](tt/dflash/fused_draft.py);
+- 8-row verify pass: [tt/dflash/verify.py](tt/dflash/verify.py);
+- context pass (adds the accepted tokens' target features to the drafter's K / V cache).
+
+The drafter attends to the last 512 positions.
+
+| Prompt length (tokens) | Tokens per round | Round (ms) | DFlash (tok/s/user) |
+|---|---|---|---|
+| 256 | 4.03 | 4.928 | 799.1 |
+| 512 | 2.90 | 4.833 | 602.0 |
+| 1,024 | 3.36 | 4.980 | 676.4 |
+| 2,048 | 3.39 | 5.042 | 668.1 |
+| 4,096 | 3.34 | 5.021 | 662.2 |
+| 8,192 | 3.28 | 5.093 | 644.4 |
+| 16,384 | 3.27 | 5.243 | 626.0 |
+| 32,768 | 3.59 | 5.549 | 649.8 |
+| 65,536 | 4.20 | 6.186 | 678.4 |
+| 130,752 | 3.41 | 7.259 | 470.2 |
+
+Measured with the demo above (one `-k isl_*` case per row: the chat-template Gutenberg prompt, 256 new tokens). For
+comparison, plain batch-1 decode (`pytest models/demos/gpt_oss/demo/text_demo.py -k "1x4 and prefill_128"`) runs at
+2.37 ms per token (421 tok/s/user) on the same build.
+
+| File | Role |
+|---|---|
+| `tt/dflash/runner.py` | `DFlashRunner`: prefill, trace capture, the round loop |
+| `tt/dflash/draft.py` | the drafter's weights, K / V cache, prompt context and per-round inputs |
+| `tt/dflash/fused_draft.py` | the draft pass and the context pass |
+| `tt/dflash/verify.py` | the 8-row verify pass of the target |
+| `tt/dflash/qk_prep.py`, `kv_write.py` | the drafter's q / k norm + RoPE, its K / V cache write |
+| `tt/dflash/row_attention.py`, `block_attention.py` | verify attention: sliding-window layers, full-attention layers; drafter attention |
+| `tt/dflash/moe_fused.py` | the verify MoE and the drafter MLP as one program per device |
+| `tt/dflash/lm_head.py`, `lm_rescore.py`, `argmax.py` | the two-stage LM head and the on-device acceptance |
+| `tt/dflash/capture.py` | the target's prefill features for the drafter |
+| `reference/dflash.py` | torch reference of the drafter and of DFlash greedy decoding |
+
 ## Configuration
 
 ### Model Selection
@@ -55,6 +105,7 @@ pytest models/demos/gpt_oss/tests/unit/test_model.py -v       # Full model accur
 |------|---------|-------|
 | **`test_modules.py`** | Core MoE components | • Attention component<br>• RMSNorm<br>• TopK router<br>• Experts<br>• Full MLP pipeline<br>• Complete decoder layer |
 | **`test_model.py`** | Full model integration | • End-to-end accuracy<br>• Teacher forcing<br>• Reference model comparison |
+| **`../test_dflash.py`** (`pytest models/demos/gpt_oss/tests/test_dflash.py`) | DFlash speculative decoding (QuietBox 2) | • Teacher-forced top-1 agreement with the target's greedy decode<br>• Mean accepted tokens per round |
 
 ### Host sampling readback
 
