@@ -1,0 +1,12 @@
+prefix="/home/ttuser/ttwork/wt-atan53871/build_Release"
+exec_prefix="${prefix}"
+libdir="${prefix}/lib"
+includedir="${prefix}/include"
+
+Name: libblake3
+Description: BLAKE3 C implementation
+Version: 1.8.4
+
+Requires: 
+Libs: -L"${libdir}" -lblake3 
+Cflags: -I"${includedir}" 
