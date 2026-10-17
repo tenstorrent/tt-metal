@@ -11,8 +11,9 @@
 // (jit_build/data_format.cpp, check_consistent_format_across_buffers / get_data_exp_precision):
 // Float32 and the integer formats the host skips (UInt32, UInt16, UInt8, Int32) carry no
 // exponent family of their own, adopt the other operand's family, and default to the 8-bit "b"
-// family when neither operand has one. Int8 is not on the host's skip list, so it stays a 5-bit
-// "a" family operand here too.
+// family when neither operand has one. Two formats are deliberately NOT wildcards: Int8 (not on
+// the host's skip list) and Fp8_e4m3 (the host skips it, but its source-register datum is Float16,
+// an "a" family operand -- see the header).
 
 #include "data_format_derive.h"
 
@@ -61,7 +62,15 @@ static_assert(
     "Float32 next to an a-family float still unpacks to Float16");
 static_assert(infer_unpack_dst_format_2op<DataFormat::Int32, DataFormat::Float32>(false) == DataFormat::Int32, "an Int32 self operand keeps Int32");
 static_assert(common_exp_is_b<DataFormat::Float16_b, DataFormat::Float16_b>(), "matching b-family operands");
-static_assert(!common_exp_is_b<DataFormat::Int8, DataFormat::Float16>(), "Int8 is not a wildcard: it is an a-family operand, as on the host");
+
+// Deliberately NOT wildcards. Each is paired with Float32 so the check discriminates: a wildcard partner of
+// Float32 makes both operands wild and the family "b", so the assertion would fail.
+static_assert(!common_exp_is_b<DataFormat::Int8, DataFormat::Float32>(), "Int8 is not a wildcard: it is an a-family operand, as on the host");
+static_assert(
+    !common_exp_is_b<DataFormat::Float32, DataFormat::Fp8_e4m3>(), "Fp8_e4m3 is not a wildcard: its source-register datum is Float16, an a-family operand");
+static_assert(
+    infer_unpack_dst_format_2op<DataFormat::Float32, DataFormat::Fp8_e4m3>(false) == DataFormat::Float16,
+    "Float32 next to Fp8_e4m3 unpacks to Float16 so both source registers hold fp16 datums");
 } // namespace
 
 #ifdef LLK_TRISC_UNPACK

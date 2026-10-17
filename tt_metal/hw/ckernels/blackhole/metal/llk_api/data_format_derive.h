@@ -137,25 +137,34 @@ constexpr std::uint8_t infer_pack_reg_fmt(DataFormat l1_format, bool fp32_dest_a
 // =====================================================================================================
 // TWO-OPERAND exponent-width reconciliation (C1). The HW does NOT support mixing exponent widths across the
 // two source registers: both must be the 5-bit "a" family (fp16 / Bfp8 / Bfp4 / ...) or both the 8-bit "b"
-// family (bf16 / Bfp8_b / Tf32 / ...). Float32 is rebiased to whichever family the OTHER operand uses, and the
-// integer formats carry no exponent family at all, so neither constrains the pairing -- the host skips both
-// when it picks the family (check_consistent_format_across_buffers in jit_build/data_format.cpp). Any other
+// family (bf16 / Bfp8_b / Tf32 / ...). Float32 is rebiased to whichever family the OTHER operand uses, and
+// UInt32, UInt16, UInt8 and Int32 carry no exponent family at all, so none of those five constrains the pairing
+// -- they are the formats the host skips when it picks the family (check_consistent_format_across_buffers in
+// jit_build/data_format.cpp). Int8 and Fp8_e4m3 are NOT among them (see df_is_exp_family_wildcard). Any other
 // cross-family pairing is a hardware error, caught here as a hard compile failure. Formats are passed as
 // template args so both the assert and the derivation fold at compile time.
 // =====================================================================================================
 
-// Formats with no exponent family of their own: they adopt the other operand's. Keep in sync with the formats
-// check_consistent_format_across_buffers (jit_build/data_format.cpp) skips -- BH-enum subset. Int8 is absent on
-// purpose: the host does not skip it either, so it stays a 5-bit "a" family operand.
+// Formats with no exponent family of their own in the source register: they adopt the other operand's. This is
+// the skip list of check_consistent_format_across_buffers (jit_build/data_format.cpp) minus three deliberate
+// exclusions, so it is NOT a plain copy of that list:
+//   * RawUInt32 / RawUInt16 / RawUInt8: not in the Blackhole DataFormat enum.
+//   * Int8: the host does not skip it either; it stays a 5-bit "a" family operand.
+//   * Fp8_e4m3: the host skips it, but only so that it never REJECTS a pairing; its source-register datum is
+//     Float16 (jit_build/genfiles.cpp, generate_pack_data_formats: "Fp8_e4m3 is always unpacked to Float16
+//     (A-family)", which is why the host rewrites the pack-src formats of its neighbours to the "a" family). So
+//     here it is a concrete "a" family operand: a Float32 partner rebiases to Float16 and a b-family partner is
+//     rejected (the unpacker has no bf16 -> fp16 conversion). Making it a wildcard would put a Float32 partner in
+//     Float16_b next to an fp16 datum -- exactly the mixed-width pairing this block forbids.
 constexpr bool df_is_exp_family_wildcard(DataFormat f) {
     return f == DataFormat::Float32 || f == DataFormat::UInt32 || f == DataFormat::UInt16 || f == DataFormat::UInt8 ||
            f == DataFormat::Int32;
 }
 
-// The common exponent-width family for two operand formats (true = 8-bit "b" family). A wildcard adopts the
-// other operand's family; two wildcards default to "b" (the host's get_data_exp_precision default, so a Float32
-// operand unpacks to Float16_b and not to the 5-bit-exponent Float16); two concrete formats of different
-// families are rejected.
+// The common exponent-width family for two operand formats (true = 8-bit "b" family). A wildcard
+// (df_is_exp_family_wildcard) adopts the other operand's family; two wildcards default to "b" (the host's
+// get_data_exp_precision default, so a Float32 operand unpacks to Float16_b and not to the 5-bit-exponent
+// Float16); two concrete formats of different families are rejected.
 template <DataFormat A, DataFormat B>
 constexpr bool common_exp_is_b() {
     constexpr bool a_wild = df_is_exp_family_wildcard(A);
@@ -169,8 +178,8 @@ constexpr bool common_exp_is_b() {
     } else {
         static_assert(
             df_is_exp_b_format(A) == df_is_exp_b_format(B),
-            "HW does not support mixed exponent-width operands (only Float32 and integer formats adopt the other's "
-            "width).");
+            "HW does not support mixed exponent-width operands (only Float32, UInt32, UInt16, UInt8 and Int32 adopt "
+            "the other's width).");
         return df_is_exp_b_format(A);
     }
 }

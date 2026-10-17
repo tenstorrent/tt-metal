@@ -9,7 +9,8 @@ exponent-family rule must treat Float32 and the integer formats the host skips (
 UInt16, UInt8, Int32) as wildcards that adopt the other operand's family and default to
 the 8-bit "b" family; otherwise a Float32 operand next to an integer operand unpacks to
 the 5-bit-exponent Float16 (silently saturating |x| > 65504) and an integer next to a
-b-family float is rejected as mixed exponent widths. The checks are static_asserts in
+b-family float is rejected as mixed exponent widths. Int8 and Fp8_e4m3 are deliberately not
+wildcards and are pinned too. The checks are static_asserts in
 ``sources/data_format_derive_test.cpp``, so this test only builds the driver.
 """
 
