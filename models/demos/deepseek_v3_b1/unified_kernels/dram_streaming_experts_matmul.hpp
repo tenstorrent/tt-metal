@@ -390,7 +390,7 @@ struct DRAMStreamingExpertsMatmul {
 
                 cb_push_back(CTArgs::cb_out, CTArgs::subblock_w);
             }
-            custom_mm_block_uninit<dense_packing>();
+            custom_mm_block_uninit<dense_packing>(CTArgs::cb_out);
             // Reset FP32 accum mode if different from DST_ACCUM_MODE
             if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
                 deepseek_compute_kernel_hw_startup<DST_ACCUM_MODE>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);

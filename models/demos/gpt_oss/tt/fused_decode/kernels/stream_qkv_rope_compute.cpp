@@ -111,5 +111,5 @@ void kernel_main() {
         custom_mm_block_init_short<transpose, split_acc, dense_packing>(cb_in0, cb_w, cb_out);
     }
     cb_pop_front(cb_in0, kt);
-    custom_mm_block_uninit<dense_packing>();
+    custom_mm_block_uninit<dense_packing>(cb_out);
 }

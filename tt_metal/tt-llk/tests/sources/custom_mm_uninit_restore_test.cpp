@@ -25,12 +25,21 @@
 //   run 0  Establish the Default pack baseline, apply the dense_packing W-stride if
 //          selected, then swap in the block-contiguous packer MOP -- what a caller's
 //          pack_block_contiguous_init (experimental/pack_block.h) does. Pack once
-//          through it; output deliberately NOT asserted, since with dense_packing the
-//          stride the packer assumes (32 rows) disagrees with where the datacopy put the
-//          tiles (64 rows) on purpose.
+//          through it into result block RUN0_RESULT_BLOCK (tiles [2N, 3N); the python
+//          side emits the constant and reads the same block). This is where the value the init
+//          wrote is observed: the datacopy put the tiles 64 DEST rows apart, so with the
+//          dense 32-row stride output tile i is DEST faces 2i..2i+3 (a deterministic
+//          reshuffle of the input), and any other stride produces a different reshuffle.
+//          The W-stride tests assert run 0 against that layout.
+//          With UNINIT_BLOCK_MOP false the block MOP is not installed and run 0 is a
+//          per-tile _llk_pack_ at W = 0..N-1 through the Default MOP, the path pack_tile
+//          takes. It reads DEST at the same W-stride multiples, so the layout above is the
+//          same; the python side selects it for block-float outputs, which the block MOP
+//          cannot produce (it packs the whole block as one tile, with one exponent section).
 //
-//   uninit Call the raw pack helper used by the compressed custom-mm compute API.
-//          It only restores the W-stride when dense_packing is enabled.
+//   uninit Call the raw pack helper, with the pack-source format, that both compute
+//          APIs' uninits reach through the shared PACK wrapper (which derives the format
+//          from the output CB). It only restores the W-stride when dense_packing is enabled.
 //
 //   run 1  A plain per-tile _llk_pack_<PackMode::Default>, with NO packer re-init, so it
 //          packs through whatever state the uninit left.
@@ -50,6 +59,8 @@
 //            deletes the only coverage that would catch a MOP restore being re-added.
 //
 // Expectation for the W-stride tests (4 faces), owned by the python side:
+//   run 0 is the dense reshuffle (dense_packing) or the plain tiles (not dense): the init
+//                          programmed the stride the pack-source format needs.
 //   run 1 is correct  <=>  dense_packing was not set, OR the uninit ran and restored the
 //                          stride.
 // UNINIT_SKIP is the negative control that drops the uninit entirely, proving the stride
@@ -66,10 +77,6 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
-
-// Scratch L1 for run 0's (unasserted) output. Well above the stimuli/result buffers,
-// which start at 0x21000 -- same convention as unpack_tilize_uninit_restore_test.cpp.
-constexpr std::uint32_t buffer_run0_scratch = 0xA0000;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -150,7 +157,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
 
-    _llk_pack_custom_mm_init_<UNINIT_DENSE_PACKING>();
+    _llk_pack_custom_mm_init_<UNINIT_DENSE_PACKING>(formats.pack_src);
 
     // What a caller's pack_block_contiguous_init does: replace the MOP, keep the
     // ADDR_MODs/strides from the init above.
@@ -162,17 +169,35 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // 16x32 tiny tile) is the situation the uninit's own comment is about -- "installs
     // fixed 32x32 tile geometry, wrong for 1x32 follow-ons" -- and is what makes the
     // restore observable at all.
-    _llk_pack_block_contiguous_mop_config_<false /* zero_output */>(FACE_R_DIM, BLOCK_MOP_NUM_FACES);
+    if constexpr (UNINIT_BLOCK_MOP)
+    {
+        _llk_pack_block_contiguous_mop_config_<false /* zero_output */>(FACE_R_DIM, BLOCK_MOP_NUM_FACES);
+    }
 
     _llk_packer_wait_for_math_done_();
 
-    // run 0: pack through the block MOP. Output intentionally not asserted.
-    _llk_pack_block_contiguous_<DST_SYNC, is_fp32_dest_acc_en>(0 /* tile_index */, L1_ADDRESS(buffer_run0_scratch), PACK_NUM_TILES);
+    // run 0: pack into result block RUN0_RESULT_BLOCK, through the block MOP or, for a
+    // block-float output, tile by tile through the Default MOP (same W-stride multiples,
+    // same layout). The blocks between run 1's (block 0) and it stay free as run 1's
+    // overrun headroom (a stale block MOP packs N tiles per call).
+    if constexpr (UNINIT_BLOCK_MOP)
+    {
+        _llk_pack_block_contiguous_<DST_SYNC, is_fp32_dest_acc_en>(
+            0 /* tile_index */, L1_ADDRESS(params.buffer_Res[RUN0_RESULT_BLOCK * PACK_NUM_TILES]), PACK_NUM_TILES);
+    }
+    else
+    {
+        for (std::uint32_t tile = 0; tile < PACK_NUM_TILES; ++tile)
+        {
+            _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                tile, L1_ADDRESS(params.buffer_Res[RUN0_RESULT_BLOCK * PACK_NUM_TILES + tile]));
+        }
+    }
 
     // ---- the function under test ----
     if constexpr (!UNINIT_SKIP)
     {
-        _llk_pack_custom_mm_uninit_<UNINIT_DENSE_PACKING>();
+        _llk_pack_custom_mm_uninit_<UNINIT_DENSE_PACKING>(formats.pack_src);
     }
 
     // ---- run 1: plain per-tile pack, deliberately with NO packer re-init ----

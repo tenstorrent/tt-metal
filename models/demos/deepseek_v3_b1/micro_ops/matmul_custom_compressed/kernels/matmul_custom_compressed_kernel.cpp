@@ -130,7 +130,7 @@ void kernel_main() {
     }
     tile_regs_release();
 
-    compressed_custom_mm_block_uninit<dense_packing>();
+    compressed_custom_mm_block_uninit<dense_packing>(cb_out);
 
     cb_push_back(cb_out, out_w);
     cb_pop_front(cb_in0, num_tiles_k);
