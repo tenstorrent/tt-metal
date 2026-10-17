@@ -159,6 +159,17 @@ DEVICE_STEPS = {
         "kv",
         "attention",
     },
+    # attn_hc .. compressor passed C.dec_candidate.* (and S.dec_candidate.01-06) on the enc_source modules at ratio 1
+    # (DS41-28); the indexer is tt/indexer.py:TtCandidateIndexer (top-k + the candidate pool kept on the device)
+    "dec_candidate": {
+        "attn_hc",
+        "attn_collapse",
+        "attn_norm",
+        "q_a",
+        "kv",
+        "compressor",
+        "indexer",
+    },
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcMixes): packed boundary [S, 4H + 4] (or streams [S, 4H]) in -> [S, 24].
@@ -560,7 +571,11 @@ def _indexer_host_fn(mesh, module, cfg, layer, tables):
         module.setup(cache)
         xd = hidden_split_to_device(mesh, x)
         qd = row_split_to_device(mesh, qr)
-        od = module(xd, qd, start, cache)
+        cands = None
+        if hasattr(module, "candidates_of"):  # the candidate source (layer 20): top-k + the candidate pool
+            od, cands = module.forward(xd, qd, start, cache)
+        else:
+            od = module(xd, qd, start, cache)
         full = ttnn.to_torch(
             od, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, mesh_shape=tuple(mesh.shape), dims=(2, 3))
         )
@@ -582,10 +597,37 @@ def _indexer_host_fn(mesh, module, cfg, layer, tables):
         st = ctx.state
         if st is not None and layer in getattr(st, "topk", {}):
             st.topk[layer][start : start + s] = out
+        if cands is not None:
+            _keep_candidates(mesh, ctx, st, layer, start, s, cands)
         return out
 
     fn.module = module
     return fn
+
+
+def _keep_candidates(mesh, ctx, st, layer, start, s, cands):
+    """The candidate source's device pool [1, 1, Sq, n] uint32 per chip (the chip's own query rows, device order:
+    chip (r, c) holds rows (r TP + c) Sq): with ctx.extra["cand_store"] (the hybrid model's {layer: (start, tensor)})
+    it stays on the device for this chunk's dec_reindex layers (the previous chunk's freed), else it is freed. With a
+    reference state carrying the layer, its candidates rows [start, start + S) are written in the reference's format
+    (ascending block ids, -1 = none, last): harness boundary, read back per chip."""
+    import ttnn
+
+    if st is not None and layer in getattr(st, "cand", {}):
+        rows = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(cands)], dim=-2)
+        n = rows.shape[-1]
+        ids = rows.reshape(-1, n).to(torch.int64) & 0xFFFFFFFF
+        none = ids >= 0xFFFFFFFF
+        ids = torch.sort(torch.where(none, torch.full_like(ids, 1 << 40), ids), dim=-1).values
+        st.cand[layer][start : start + s] = torch.where(ids >= (1 << 40), -1, ids).to(torch.int32)[:s]
+    store = ctx.extra.get("cand_store")
+    if store is None:
+        ttnn.deallocate(cands)
+        return
+    old = store.pop(layer, None)
+    if old is not None:
+        ttnn.deallocate(old[1])
+    store[layer] = (start, cands)
 
 
 def _router_host_fn(mesh, module):
@@ -810,8 +852,8 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
         from models.demos.deepseek_v41_flash_d_p.tt.indexer import build_indexer
 
         own_keys = cfg.is_kv_source(layer) and cfg.is_index_source(layer)
-        if not own_keys or cfg.uses_candidates(layer) or cfg.is_cand_source(layer):
-            return None  # only the indexer over its own keys without a candidate pool (enc_source) so far
+        if not own_keys or cfg.uses_candidates(layer):
+            return None  # the indexers over their own keys (enc_source; dec_candidate with its pool) so far
         tables = _window_tables(mesh, spec, shared)
         module = build_indexer(mesh, ck, cfg, layer, _max_seq(spec), _chunk(spec))
         return _indexer_host_fn(mesh, module, cfg, layer, tables)
@@ -896,6 +938,7 @@ class _HybridState:
             for i in compress_layers
         }
         self.topk = {}  # {index-source layer: (chunk start, its device indexer's top-k of that chunk)} (readers)
+        self.cands = {}  # {candidate source: (chunk start, its device candidate pool [1, 1, Sq, 2048] per chip)}
         self.tokens = None
 
     def load_prefix(self, layer, tensors, length):
@@ -943,9 +986,9 @@ class _HybridState:
 
         for c in [*self.window.values(), *self.compress.values()]:
             c.free()
-        for _, t in self.topk.values():
+        for _, t in [*self.topk.values(), *self.cands.values()]:
             ttnn.deallocate(t)
-        self.window, self.compress, self.topk = {}, {}, {}
+        self.window, self.compress, self.topk, self.cands = {}, {}, {}, {}
 
 
 class HybridDeviceModel:
@@ -1006,6 +1049,7 @@ class HybridDeviceModel:
             ctx.extra["compress_cache"] = state.compress[i]
         if "indexer" in self.overrides[i]:
             ctx.extra["topk_store"] = state.topk
+            ctx.extra["cand_store"] = state.cands
         if self.cfg.ratio(i):
             # a reader layer (enc_reuse) reads its sources' device state of this chunk: the KV source's served
             # compressed cache and the index source's device top-k (else the reference state's rows)
