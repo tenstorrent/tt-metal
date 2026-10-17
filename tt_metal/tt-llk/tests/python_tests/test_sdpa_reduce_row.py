@@ -27,6 +27,13 @@ that lane in column 0 of face rows 0-7. So, in row-major 32x32 tile coordinates:
 Only those eight output lanes are defined; every other lane of the tile is left as the op found
 it (the A2D datacopy of the input) or holds the epilogue's partial reductions, and is not
 asserted.
+
+MAX stimuli. A max is one of its inputs, so a dropped fold only shows when the row's maximum sat
+in the dropped load group (one in four with random data). The MAX arm therefore plants a unique
+maximum per logical row, rotated through the four load groups of a row -- (r, even columns),
+(r, odd), (r + 8, even), (r + 8, odd), i.e. offsets 0/2/8/10 for rows 0-3 and 4/6/12/14 for rows
+4-7 -- so each of the eight load groups holds exactly one row maximum (see plant_row_maxima). SUM
+touches every datum by construction and keeps the random stimuli.
 """
 
 import torch
@@ -63,6 +70,27 @@ LOGICAL_ROWS = 8
 # [0.1, 1.1) are multiples of 2^-11 and every partial sum of 32 of them stays below 2^6, so the
 # op's fp32 add chain is exact and the row maxima cluster near the top of the range.
 STIMULI_SPEC = StimuliSpec.uniform(low=0.1, high=1.1)
+
+# Planted MAX values: above STIMULI_SPEC's range, distinct per row, exact in bf16.
+PLANTED_MAX_BASE = 1.5
+PLANTED_MAX_STEP = 0.125
+
+
+def plant_row_maxima(src_rowmajor: torch.Tensor) -> torch.Tensor:
+    """Give each logical row a unique maximum in the load group its index selects.
+
+    Logical row r is face rows r and r + 8; load group g = r % 4 picks the half (r for g < 2,
+    r + 8 otherwise) and the column parity (g % 2), so rows 0-3 cover offsets 0, 2, 8, 10 and
+    rows 4-7 cover offsets 4, 6, 12, 14 once each. The column inside the group is spread so the
+    maxima do not share a lane.
+    """
+    src = src_rowmajor.clone()
+    for r in range(LOGICAL_ROWS):
+        group = r % 4
+        face_row = r if group < 2 else r + LOGICAL_ROWS
+        col = 2 * ((3 * r) % (FACE_DIM // 2)) + (group % 2)
+        src[face_row, col] = PLANTED_MAX_BASE + PLANTED_MAX_STEP * r
+    return src
 
 
 def sdpa_reduce_row_golden(
@@ -107,9 +135,12 @@ def test_sdpa_reduce_row(
 
     torch_format = format_dict[formats.input_format]
 
+    src_rowmajor = src_A.to(torch_format).reshape(input_dimensions)
+    if reduce_pool == ReducePool.Max:
+        src_rowmajor = plant_row_maxima(src_rowmajor)
+
     # GOLDEN
     # *******************************************************
-    src_rowmajor = src_A.to(torch_format).reshape(input_dimensions)
     golden = sdpa_reduce_row_golden(src_rowmajor, reduce_pool).to(
         format_dict[formats.output_format]
     )
@@ -117,7 +148,7 @@ def test_sdpa_reduce_row(
 
     # Tilize the tile the way the kernel reads it.
     src_A = tilize_block(
-        src_A, input_dimensions, stimuli_format=formats.input_format
+        src_rowmajor.flatten(), input_dimensions, stimuli_format=formats.input_format
     ).flatten()
 
     configuration = TestConfig(
