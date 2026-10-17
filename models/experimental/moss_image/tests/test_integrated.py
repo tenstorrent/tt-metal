@@ -15,8 +15,8 @@ from models.experimental.moss_image.tests.conftest import verify_weights
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [
-        pytest.param((1, 1), {"l1_small_size": 32768}, id="1-card"),
-        pytest.param((1, 2), {"l1_small_size": 32768, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="2-cards"),
+        pytest.param((1, 1), {"l1_small_size": 131072}, id="1-card"),
+        pytest.param((1, 2), {"l1_small_size": 131072, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="2-cards"),
     ],
     indirect=True,
 )
