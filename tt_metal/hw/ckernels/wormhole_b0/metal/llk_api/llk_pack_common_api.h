@@ -212,8 +212,10 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
 }
 
 /**
- * Conditionally reconfigure the packer when switching output operands: only reprograms the data
- * format when the new output's destination format differs from the old one and neither is Invalid.
+ * Conditionally reconfigure the packer when switching output operands: reprograms the packer when the
+ * new output's data formats or tile geometry (face height, face count, partial-face and narrow-tile
+ * flags) differ from the old one's and neither destination format is Invalid. The geometry is compared
+ * because the reconfig also programs the block-float exponent section sizes from it.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  old_output          Currently configured output operand index.
@@ -225,8 +227,14 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
     std::uint32_t old_output_id = get_output_id(old_output);
     std::uint32_t new_output_id = get_output_id(new_output);
 
-    if ((pack_dst_format[old_output_id] != pack_dst_format[new_output_id]) &&
-        (pack_dst_format[old_output_id] != (uint)DataFormat::Invalid) &&
+    const bool format_changed = (pack_dst_format[old_output_id] != pack_dst_format[new_output_id]) ||
+                                (pack_src_format[old_output_id] != pack_src_format[new_output_id]);
+    const bool geometry_changed = (get_output_face_r_dim(old_output_id) != get_output_face_r_dim(new_output_id)) ||
+                                  (get_output_num_faces(old_output_id) != get_output_num_faces(new_output_id)) ||
+                                  (get_output_partial_face(old_output_id) != get_output_partial_face(new_output_id)) ||
+                                  (get_output_narrow_tile(old_output_id) != get_output_narrow_tile(new_output_id));
+
+    if ((format_changed || geometry_changed) && (pack_dst_format[old_output_id] != (uint)DataFormat::Invalid) &&
         (pack_dst_format[new_output_id] != (uint)DataFormat::Invalid)) {
         llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(new_output);
     }
