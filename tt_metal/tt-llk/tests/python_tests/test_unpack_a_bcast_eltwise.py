@@ -152,7 +152,10 @@ def _run_unp_bcast_sub_sdpa(
             tile_32x32 = combined.repeat(32, 1)
             reconstructed_tiles.append(tile_32x32.flatten())
 
-    tilized_reconstructed_tiles = [tilize(tile) for tile in reconstructed_tiles]
+    tilized_reconstructed_tiles = [
+        tilize(tile, stimuli_format=formats.input_format)
+        for tile in reconstructed_tiles
+    ]
 
     # The kernel reuses each broadcast A tile against the next srca_reuse_count B tiles.
     # EltwiseBinaryGolden is elementwise, so one call on the whole operand pair is the
