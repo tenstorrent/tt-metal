@@ -206,8 +206,14 @@ def test_contract_serves_the_layer_subset(fx, monkeypatch):
     assert contract.served_layers(s) == (0, 2)
     assert contract.engine_env(s)["PREFILL_NUM_LAYERS"] == "2"
     assert contract.served_layers(Spec.load(fx())) == (0, 3)
-    with pytest.raises(ValueError, match="contiguous"):
-        contract.served_layers(Spec.load(fx(layers=[0, 2])))
+    # F100: a non-contiguous subset is served by engine index, the model layers listed in PREFILL_LAYER_IDS
+    gapped = Spec.load(fx(layers=[0, 2]))
+    assert contract.served_layers(gapped) == (0, 2)
+    env = contract.engine_env(gapped)
+    assert env["PREFILL_NUM_LAYERS"] == "2" and env[contract.LAYER_IDS_ENV] == "0,2"
+    assert contract.layer_ids_from_env(0, 2) == [0, 2]
+    contract.os.environ.pop(contract.LAYER_IDS_ENV)
+    assert contract.layer_ids_from_env(3, 2) == [3, 4]
 
 
 def test_full_prefill_times_a_prefix_subset(fx, monkeypatch):

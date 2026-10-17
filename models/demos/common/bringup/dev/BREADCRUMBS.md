@@ -1284,3 +1284,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F99 (adjusted): state_overlap 0.75, not 0.9: the check is structural (a wrong selector gives ~k/n <= 0.5); near-tie
   flips grow with the pool (DeepSeek-V4.1 L.s55296: 0.897 while every layer stayed at PCC 0.9966). The fix agent
   that 0.9 started was stopped.
+- F100: serving contract with a non-contiguous layer subset (a partial run's representative layers): served as
+  count engine layers 0..count-1, the model layer of each in PREFILL_LAYER_IDS (engine_env); adapters map with
+  contract.layer_ids_from_env and expose rt.layer_ids, which the contract checks. Was a ValueError (DeepSeek-V4.1 K.1,
+  layers 0-3,14,20,21,24).
