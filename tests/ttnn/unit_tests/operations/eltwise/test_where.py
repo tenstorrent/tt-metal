@@ -417,34 +417,42 @@ def test_bf8b_exponent_behaviour(device):
 _WH_ROW_BCAST_BF16_FP32_DEST = pytest.mark.xfail(
     condition=is_wormhole_b0(),
     strict=True,
+    raises=AssertionError,
     reason="Wormhole row broadcast of a bf16 operand into a 32-bit Dest",
 )
 
 
 @pytest.mark.parametrize(
-    "c_shape, t_shape",
+    "c_shape, t_shape, scalar_condition",
     [
-        ((2, 64, 128), (2, 64, 128)),
-        ((2, 64, 1), (2, 64, 128)),
-        ((1, 1, 1), (2, 64, 128)),
-        pytest.param((1, 1, 128), (2, 64, 128), marks=_WH_ROW_BCAST_BF16_FP32_DEST),
-        pytest.param((1, 1, 128), (2, 64, 1), marks=_WH_ROW_BCAST_BF16_FP32_DEST),
-        pytest.param((2, 64, 1), (1, 1, 128), marks=_WH_ROW_BCAST_BF16_FP32_DEST),
+        ((2, 64, 128), (2, 64, 128), None),
+        ((2, 64, 1), (2, 64, 128), None),
+        ((1, 1, 1), (2, 64, 128), 0),
+        ((1, 1, 1), (2, 64, 128), 1),
+        pytest.param((1, 1, 128), (2, 64, 128), None, marks=_WH_ROW_BCAST_BF16_FP32_DEST),
+        pytest.param((1, 1, 128), (2, 64, 1), None, marks=_WH_ROW_BCAST_BF16_FP32_DEST),
+        pytest.param((2, 64, 1), (1, 1, 128), None, marks=_WH_ROW_BCAST_BF16_FP32_DEST),
     ],
-    ids=["no_bcast", "col_bcast", "scalar_bcast", "row_bcast", "row_a_col_b_bcast", "row_b_col_a_bcast"],
+    ids=[
+        "no_bcast",
+        "col_bcast",
+        "scalar_bcast_false",
+        "scalar_bcast_true",
+        "row_bcast",
+        "row_a_col_b_bcast",
+        "row_b_col_a_bcast",
+    ],
 )
 @pytest.mark.parametrize("scalar_is_true", [False, True], ids=["tts", "tst"])
 @pytest.mark.parametrize("scalar", [-1.0, 15.5, -float("inf")])
-@pytest.mark.parametrize("scalar_condition", [0, 1])
-def test_where_scalar_bf16_inputs_fp32_output(device, c_shape, t_shape, scalar, scalar_is_true, scalar_condition):
+def test_where_scalar_bf16_inputs_fp32_output(device, c_shape, t_shape, scalar_condition, scalar, scalar_is_true):
     # Regression: with a float32 output, where read DEST as bf16 and packed the scalar as two bf16 halves.
     # The broadcast kernels take their where_tile variant from the condition dtype; with a float32 output
     # the Dest is 32-bit, so a bf16 condition must still select the Float32 variant (as no-bcast does).
-    shape = (2, 64, 128)
-    if c_shape != (1, 1, 1) and scalar_condition == 1:
-        pytest.skip("scalar_condition only varies the single-element condition")
+    # scalar_condition fixes a single-element condition (both values are covered); None draws a random mask.
+    shape = torch.broadcast_shapes(c_shape, t_shape)
     torch.manual_seed(0)
-    if c_shape == (1, 1, 1):
+    if scalar_condition is not None:
         C = torch.full(c_shape, float(scalar_condition)).to(torch.bfloat16)
     else:
         C = (torch.rand(c_shape) > 0.5).to(torch.bfloat16)
