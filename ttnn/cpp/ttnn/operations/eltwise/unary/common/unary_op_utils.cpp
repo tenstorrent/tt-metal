@@ -1226,6 +1226,21 @@ template std::pair<std::string, std::string> get_op_init_and_func<std::uint32_t>
     const std::string& idst,
     std::optional<DataType> input_dtype);
 
+// The target dtype of a TYPECAST or BITCAST is its second parameter, which may be float, int32_t or
+// uint32_t backed (EltwiseUnaryWithParam constructed with integers, also from Python); read the active
+// alternative. nullopt if the op has fewer than two parameters.
+std::optional<DataType> typecast_target_dtype(const EltwiseUnaryWithParam& op) {
+    constexpr std::size_t kTargetDtypeParam = 1;
+    return std::visit(
+        [](auto params) -> std::optional<DataType> {
+            if (params.size() <= kTargetDtypeParam) {
+                return std::nullopt;
+            }
+            return static_cast<DataType>(params[kTargetDtypeParam]);
+        },
+        op.get_params());
+}
+
 std::map<std::string, std::string> get_block_defines(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const std::string& block_id,
@@ -1247,15 +1262,9 @@ std::map<std::string, std::string> get_block_defines(
             },
             op_chain[i].get_params()));
         if (op_chain[i].type() == UnaryOpType::TYPECAST) {
-            // The parameters may be float, int32_t or uint32_t backed; read the active alternative.
-            constexpr std::size_t kTypecastTargetDtypeParam = 1;
-            std::visit(
-                [&](auto params) {
-                    if (params.size() > kTypecastTargetDtypeParam) {
-                        op_dtype = static_cast<DataType>(params[kTypecastTargetDtypeParam]);
-                    }
-                },
-                op_chain[i].get_params());
+            if (const auto target_dtype = typecast_target_dtype(op_chain[i])) {
+                op_dtype = *target_dtype;
+            }
         }
     }
     block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
