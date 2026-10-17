@@ -32,6 +32,7 @@ using namespace ckernel::packer;
  *
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @return Dest rows (MOP runs) per block.
  */
 inline std::uint32_t _llk_pack_untilize_num_rows_(const std::uint32_t face_r_dim, const std::uint32_t num_faces)
 {
@@ -41,6 +42,10 @@ inline std::uint32_t _llk_pack_untilize_num_rows_(const std::uint32_t face_r_dim
 /**
  * @brief True for a one-tile narrow block (block_ct_dim == full_ct_dim == 1 with narrow_row), which is packed
  *        by a single MOP run of @ref _llk_pack_untilize_num_rows_ PACRs instead of one run per row.
+ *
+ * @tparam block_ct_dim: Number of input tiles per block.
+ * @tparam full_ct_dim: Total number of input tiles across all blocks.
+ * @tparam narrow_row: True when packing fewer than TILE_C_DIM datums per row.
  */
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim, bool narrow_row>
 inline constexpr bool _llk_pack_untilize_single_tile_v = narrow_row && block_ct_dim == 1 && full_ct_dim == 1;
