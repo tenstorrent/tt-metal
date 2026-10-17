@@ -467,6 +467,40 @@ bool EriscH2HSocket::publish_credits() {
     return any;
 }
 
+bool EriscH2HSocket::publish_word(uint32_t arena, tt::tt_fabric::BridgeCreditWord w, uint64_t value) {
+    Impl& im = *impl_;
+    if (im.broken || !im.win || arena >= im.cfg.arenas) {
+        return false;
+    }
+    if (const std::string e =
+            im.win->put_word(value, im.cfg.peer_rank, bridge_credit_word_offset(arena, im.g.ring, w));
+        !e.empty()) {
+        im.fail(e);
+        return false;
+    }
+    return true;
+}
+
+bool EriscH2HSocket::flush_words() {
+    Impl& im = *impl_;
+    if (im.broken || !im.win) {
+        return false;
+    }
+    if (const std::string e = im.win->flush(im.cfg.peer_rank); !e.empty()) {
+        im.fail(e);
+        return false;
+    }
+    return true;
+}
+uint64_t EriscH2HSocket::peer_word(uint32_t arena, tt::tt_fabric::BridgeCreditWord w) const {
+    const Impl& im = *impl_;
+    if (arena >= im.cfg.arenas) {
+        return 0;
+    }
+    return *reinterpret_cast<volatile uint64_t*>(
+        im.cfg.region_base + bridge_credit_word_offset(arena, im.g.ring, w));
+}
+
 uint64_t EriscH2HSocket::credit_total(uint32_t arena) const {
     const Impl& im = *impl_;
     return arena < im.cfg.arenas ? static_cast<uint64_t>(*im.credit_word(arena)) : 0;

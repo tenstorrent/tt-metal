@@ -1,0 +1,32 @@
+# The same 4-chip Blackhole box as bh_qb_dual_1x2_intermesh, as ONE mesh spanning two hosts.
+# Every bridged link is then intra-mesh, which is what deadlock avoidance requires: it is switched
+# off on inter-mesh routers regardless of topology (erisc_datamover_builder.cpp, !is_inter_mesh).
+#
+# The box is physically a 4-cycle -- 0-2, 2-1, 1-3, 3-0, four links per edge, and NO 0-1 or 2-3.
+# So the mesh's logical order must follow that cycle, and FABRIC_1D_RING closes it.
+#
+# R0/R1 MUST MATCH THE PLACER. The cycle admits two host partitions and nothing here pins which
+# the solver picks; a rank whose chips straddle them is refused by TopologyMapper::get_local_host_rank.
+# Measured on bh-qbae-12 2026-10-15: R0=0,3 R1=1,2 -- rank 0 gets nodes 0:0 0:1, rank 1 gets 0:2 0:3.
+#
+# The bridged channel must CROSS that boundary, so it belongs on node 0:1. From there channels
+# 4-7 reach 0:2 and 8-11 loop back to 0:0 -- the latter leave rank 1 with no far chip. So
+# CHIP=1 CHANS=4 (or 5/6/7), not the CHANS=9 the dual-mesh descriptor uses.
+
+mesh_descriptors {
+  name: "M1x4"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 4 ] }
+  # Two hosts, two chips each: the link between them is intra-mesh AND crosses the rank boundary,
+  # which is the pair of properties the bridge needs to exercise bubble flow control.
+  host_topology { dims: [ 1, 2 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M1x4" mesh_id: 0 } }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

@@ -929,11 +929,32 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
     const auto& rtopts = fabric_context_.get_rtoptions();
     std::uint32_t e2h_block_addr = 0;  // nonzero iff this router is bridged
     if (rtopts.get_e2h_bridge_enable() && rtopts.get_e2h_bridge_force_chan() == eth_chan &&
-        local_node_ == FabricNodeId(MeshId{0}, 0)) {
+        local_node_ == FabricNodeId(MeshId{0}, rtopts.get_e2h_bridge_force_chip())) {
         // Derived, not configured: the host opens its sockets against this same address.
         e2h_block_addr = erisc_bridge::bridge_block_addr(erisc_builder_->config);
         TT_FATAL(e2h_block_addr != 0, "E2H bridge on eth_chan={}: no room above fabric's channel buffers", eth_chan);
         log_warning(tt::LogFabric, "E2H bridge on eth_chan={} at 0x{:x}. Test only.", eth_chan, e2h_block_addr);
+    }
+    // The RECEIVING end of that same link. Its credits have no cable home either, so it records
+    // them in L1 and the host relays them. Resolved through the control plane, not configured.
+    std::uint32_t e2h_recv_credits_addr = 0;
+    if (rtopts.get_e2h_bridge_enable() && rtopts.get_e2h_bridge_relay_credits() && e2h_block_addr == 0) {
+        const FabricNodeId tx_node{MeshId{0}, rtopts.get_e2h_bridge_force_chip()};
+        const auto peer = control_plane.try_get_connected_mesh_chip_chan_ids(
+            tx_node, static_cast<tt::tt_fabric::chan_id_t>(rtopts.get_e2h_bridge_force_chan()));
+        if (peer && peer->first == local_node_ && peer->second == eth_chan) {
+            e2h_recv_credits_addr =
+                erisc_bridge::bridge_block_addr(erisc_builder_->config, erisc_bridge::kBridgeRecvCreditBytes);
+            TT_FATAL(
+                e2h_recv_credits_addr != 0,
+                "E2H bridge RX on eth_chan={}: no room above fabric's channel buffers",
+                eth_chan);
+            log_warning(
+                tt::LogFabric,
+                "E2H bridge RX on eth_chan={} credits at 0x{:x}. Test only.",
+                eth_chan,
+                e2h_recv_credits_addr);
+        }
     }
     auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
 
@@ -971,6 +992,12 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
                 arg("ENABLE_DEADLOCK_AVOIDANCE"),
                 arg("SENDER_CH_0_IS_INJECTION"),
                 arg("IS_INTERMESH_ROUTER"));
+        }
+        if (e2h_recv_credits_addr != 0) {
+            // Receiver channel 0: the bridge rides VC0, which the speedy-path forcing above pins.
+            named_ct_args["ENABLE_E2H_BRIDGE_RECV"] = 1u;
+            named_ct_args["E2H_BRIDGE_RECV_CHANNEL"] = 0u;
+            named_ct_args["E2H_BRIDGE_RECV_CREDITS_ADDR"] = e2h_recv_credits_addr;
         }
 
         // Determine processor

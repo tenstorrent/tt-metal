@@ -9,6 +9,7 @@
 #include "internal/ethernet/tt_eth_api.h"
 #include "internal/ethernet/tunneling.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
+#include "tt_metal/fabric/hw/inc/host_bridge/erisc_bridge_credit_sender.hpp"
 
 #include <tuple>
 #include <type_traits>
@@ -83,9 +84,12 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
 // receiver channel index selects directly.
 template <size_t RECEIVER_CHANNEL>
 using ReceiverChannelResponseCreditSenderFor = std::conditional_t<
-    receiver_channel_uses_counter_credits(RECEIVER_CHANNEL),
-    ReceiverChannelCounterBasedResponseCreditSender,
-    ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender>;
+    receiver_channel_uses_e2h(RECEIVER_CHANNEL),
+    ReceiverChannelHostBridgeCreditSender,
+    std::conditional_t<
+        receiver_channel_uses_counter_credits(RECEIVER_CHANNEL),
+        ReceiverChannelCounterBasedResponseCreditSender,
+        ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender>>;
 
 // The two implementations do not agree on how they are built: the counter form needs its channel
 // index, the stream-register form reads the stream id table in its default constructor.

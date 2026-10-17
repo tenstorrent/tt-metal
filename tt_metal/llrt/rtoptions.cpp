@@ -119,6 +119,8 @@ enum class EnvVarID {
     TT_METAL_E2H_BRIDGE_ENABLE,                         // ERISC host bridge on
     TT_METAL_E2H_BRIDGE_FORCE_CHAN,                     // TEST ONLY: eth channel whose router is bridged
     TT_METAL_E2H_BRIDGE_NO_FAR_RECEIVER,                // TEST ONLY: nothing downstream completes bridged frames
+    TT_METAL_E2H_BRIDGE_RELAY_CREDITS,                  // TEST ONLY: bridged credits go via the host, not the cable
+    TT_METAL_E2H_BRIDGE_FORCE_CHIP,                     // TEST ONLY: fabric node chip id carrying the bridge
     TT_METAL_USE_MGD_2_0,                               // Use mesh graph descriptor 2.0
     TT_METAL_FORCE_JIT_COMPILE,                         // Force JIT compilation
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
@@ -910,6 +912,26 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // completion can return and the router must retire its own frames. OFF for the pipeline.
         case EnvVarID::TT_METAL_E2H_BRIDGE_NO_FAR_RECEIVER:
             this->e2h_bridge_no_far_receiver = (value == nullptr) || (std::string_view(value) != "0");
+            break;
+
+        // TT_METAL_E2H_BRIDGE_RELAY_CREDITS=1. The receiving end stops using the cable and records
+        // credits for the host to carry. OFF leaves the link exactly as it behaves today.
+        case EnvVarID::TT_METAL_E2H_BRIDGE_RELAY_CREDITS:
+            this->e2h_bridge_relay_credits = (value == nullptr) || (std::string_view(value) != "0");
+            break;
+
+        // TT_METAL_E2H_BRIDGE_FORCE_CHIP=2. Which chip of mesh 0 carries the bridge. Node 0 is not
+        // always the sending rank's once one mesh spans two hosts, so it has to be sayable.
+        case EnvVarID::TT_METAL_E2H_BRIDGE_FORCE_CHIP:
+            if (value != nullptr) {
+                try {
+                    this->e2h_bridge_force_chip = static_cast<std::uint32_t>(std::stoul(value, nullptr, 0));
+                } catch (const std::invalid_argument&) {
+                    TT_THROW("TT_METAL_E2H_BRIDGE_FORCE_CHIP must be a chip id: {}", value);
+                } catch (const std::out_of_range&) {
+                    TT_THROW("TT_METAL_E2H_BRIDGE_FORCE_CHIP value out of range: {}", value);
+                }
+            }
             break;
 
         // TT_METAL_USE_MGD_2_0

@@ -1400,6 +1400,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     uint8_t my_mesh_coord_y,
     uint8_t my_mesh_coord_x,
     LocalTelemetryT& local_fabric_telemetry) {
+    // A bridged receiver records credits in L1 for the host to relay, so the txq every other
+    // transport pushes through is not involved -- and with no cable its busy bit never clears.
+    constexpr bool credits_need_txq = !receiver_channel_uses_e2h(receiver_channel);
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
@@ -1409,7 +1412,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         auto& ack_counter = receiver_channel_pointers.ack_counter;
         bool pkts_received = pkts_received_since_last_check > 0;
         bool can_send_ack = pkts_received;
-        if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
+        if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK && credits_need_txq) {
             can_send_ack = can_send_ack && !internal_::eth_txq_is_busy(receiver_txq_id);
         }
         if (can_send_ack) {
@@ -1430,7 +1433,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
             }
 
-            receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+            receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK && credits_need_txq>(
                 receiver_channel_response_credit_sender, src_ch_id);
             ack_counter.increment();
         }
@@ -1601,13 +1604,13 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 
         auto& completion_counter = receiver_channel_pointers.completion_counter;
         bool unsent_completions = !completion_counter.is_caught_up_to(completion_counter, wr_flush_counter);
-        if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
+        if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK && credits_need_txq) {
             unsent_completions = unsent_completions && !internal_::eth_txq_is_busy(receiver_txq_id);
         }
         if (unsent_completions) {
             // completion ptr incremented in callee
             auto receiver_buffer_index = wr_flush_counter.get_buffer_index();
-            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK && credits_need_txq>(
                 receiver_channel_response_credit_sender,
                 receiver_channel_pointers.get_src_chan_id(receiver_buffer_index));
             completion_counter.increment();
@@ -1621,7 +1624,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         auto receiver_buffer_index = completion_counter.get_buffer_index();
         bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         bool can_send_completion = unflushed_writes && next_trid_flushed;
-        if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
+        if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK && credits_need_txq) {
             can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
         }
         if (can_send_completion) {
@@ -1631,7 +1634,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             } else {
                 src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
             }
-            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK && credits_need_txq>(
                 receiver_channel_response_credit_sender, src_ch_id);
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
             completion_counter.increment();
