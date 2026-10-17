@@ -1739,15 +1739,21 @@ def test_exponential_accurate_unclamped_large_negative():
     # only correct bf16 output is 0.0. The kernel records its body on the first 32-lane
     # iteration and replays it for the other 31. src_A is written in face layout, so
     # element i sits in Dest row i // 16, column i % 16, and one SFPLOAD reads four
-    # Dest rows (64 consecutive elements) of a single column parity: even columns at an
-    # even Dest address, odd columns at +2. The kernel steps Dest by 2 per iteration, so
-    # the iterations alternate parities. Sentinels at i % 8 in {0, 1} put eight
-    # even-column and eight odd-column sentinels in every 64-element window, so every
-    # iteration -- the recorded one and each replay, of either parity -- sees a
-    # negative xlog2, and both parities cycle through all eight values.
+    # Dest rows (SFPLOAD_WINDOW = 64 consecutive elements) of a single column parity:
+    # even columns at an even Dest address, odd columns at +2. The kernel steps Dest by 2
+    # per iteration, so the iterations alternate parities. A sentinel pair (one even
+    # column, one odd) every SFPLOAD_WINDOW // len(large_negative) elements puts
+    # len(large_negative) even-column and as many odd-column sentinels in every window,
+    # so every iteration -- the recorded one and each replay, of either parity -- sees
+    # a negative xlog2, and both parities cycle through all the values.
     large_negative = [-10000.0, -1000.0, -226.0, -200.0, -176.0, -150.0, -120.0, -100.0]
+    SFPLOAD_WINDOW = 64
+    sentinel_stride = SFPLOAD_WINDOW // len(large_negative)
+    assert (
+        SFPLOAD_WINDOW % len(large_negative) == 0 and sentinel_stride >= 2
+    ), "large_negative must divide the SFPLOAD window and leave room for a pair per stride"
     sentinel_indices = []
-    for n, i in enumerate(range(0, num_elements, 8)):
+    for n, i in enumerate(range(0, num_elements, sentinel_stride)):
         src_A[i] = large_negative[n % len(large_negative)]  # even column
         src_A[i + 1] = large_negative[(n + 1) % len(large_negative)]  # odd column
         sentinel_indices += [i, i + 1]
@@ -1761,7 +1767,7 @@ def test_exponential_accurate_unclamped_large_negative():
     assert len(nonzero) == 0, (
         "Accurate exp of inputs below -88 must be 0.0 on a bf16 Dest regardless of "
         f"CLAMP_NEGATIVE; {len(nonzero)} of {len(sentinel_indices)} sentinels are not, e.g. "
-        f"{[(src_A[sentinel_indices[k]].item(), sentinel_results[k].item()) for k in nonzero[:8].tolist()]}"
+        f"{[(src_A[sentinel_indices[k]].item(), sentinel_results[k].item()) for k in nonzero[:MAX_REPORTED_MISMATCHES].tolist()]}"
     )
 
     atol, rtol = 0.02, 0.02

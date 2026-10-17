@@ -303,7 +303,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
             // through the instruction buffer (TT_ form); TTI_ would need a compile-time
             // immediate and fails to build for a runtime scale. The record captures it
             // like any other instruction of the body.
-            TT_SFPMULI(exp_base_scale_factor, p_sfpu::LREG0, 0);
+            TT_SFPMULI(exp_base_scale_factor, p_sfpu::LREG0, 0 /*instr_mod1*/);
         }
 
         // xlog2 = val * (1/ln2) + 127.0f, into LREG3 (preserved past int-part work).
