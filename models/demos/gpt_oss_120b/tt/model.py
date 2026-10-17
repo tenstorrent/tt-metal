@@ -207,7 +207,10 @@ class TtModel:
     def new_state(self, max_seq: int, slots: int | None = None) -> TtKvState:
         k_lo = {i for i in self.layers if self.attention[i].k_lo}
         slots = settings.get("KV_SLOTS") if slots is None else slots
-        return TtKvState(self.mesh, self.layers, k_lo, int(self.cfg["num_key_value_heads"]), max_seq, self.chunk, slots)
+        # at least two chunks of rows: ring SDPA's sliding path is chunked-only (Q shorter than the per-chip K shard),
+        # so a one-chunk cache (Q 640 == K 640 rows per chip) is rejected; the rows past max_seq stay zero, unread
+        rows = max(max_seq, 2 * self.chunk)
+        return TtKvState(self.mesh, self.layers, k_lo, int(self.cfg["num_key_value_heads"]), rows, self.chunk, slots)
 
     # ---------------------------------------------------------------- forward
     def embed(self, tokens: torch.Tensor, start: int = 0) -> ttnn.Tensor:

@@ -185,3 +185,16 @@
 - Gate (first run): s10240 chunk 0 32.4 s (compile), chunk 1 0.27 s; host transfers per layer 0; ttnn ops per layer
   min 140; worst layer pcc 0.99994; worst state pcc 0.99990 (KV by chunk 0.99991 / 0.99989). test_kv_layout PASS.
 - Re-run: `bfw job check --task M.1`.
+
+## L.s5120 (ladder: one chunk of 5120 in 5120)
+
+- First gate failed: `TT_FATAL ring_joint_sdpa_device_operation.cpp:715: is_chunked` ("Ring sliding-window attention
+  requires chunked prefill") on layer 0. Ring SDPA's sliding path only runs chunked, and it infers chunked from Q being
+  shorter than the per-chip K shard. `new_state(5120)` made a cache of 640 rows per chip, which is the same as Q's 640,
+  so the op saw a non-chunked call. M.1 (s10240) never hit this because its cache had 1280 rows per chip.
+- Fix (`tt/model.py:TtModel.new_state`): the cache gets at least two chunks of rows, `max(max_seq, 2 * chunk)`. The
+  extra rows stay zero and nothing reads them: `logical_n` = start + chunk bounds what SDPA reads, and `to_torch` slices
+  `[:length]`. Served sizes are unaffected (serving uses max_seq 56320).
+- Gate: pcc_layer L00 0.99998 / L01 0.99994, rel 0.0067 / 0.0106, bias 0.0009 / 0.0016, pcc_state_min 0.99991,
+  device ops per layer 140, state bits 8 / 8. Regression M.1 PASS (this includes test_kv_layout).
+- Re-run: `bfw job check --task L.s5120`.
