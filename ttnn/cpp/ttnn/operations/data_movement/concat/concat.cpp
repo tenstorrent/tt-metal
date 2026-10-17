@@ -192,6 +192,11 @@ MassagedConcat build_non_aligned_last_dim_concat(
         return std::all_of(tensors.begin(), tensors.end(), [&](const ttnn::Tensor& tensor) {
             auto storage_type = tensor.storage_type();
             if (storage_type == ttnn::StorageType::DEVICE) {
+                // TILE pages are whole tiles, so a tile-padded last dim never needs the transpose fallback
+                // (which re-rounds block-float values, #60650).
+                if (tensor.layout() == ttnn::Layout::TILE) {
+                    return true;
+                }
                 return tensor.padded_shape()[dim] * tensor.element_size() % tensor.buffer()->alignment() == 0;
             }
             TT_THROW(
