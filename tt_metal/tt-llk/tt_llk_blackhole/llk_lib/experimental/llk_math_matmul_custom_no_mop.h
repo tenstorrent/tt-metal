@@ -425,6 +425,23 @@ inline void matmul_configure_mop_throttled_no_mop()
     // MOP template programming removed - will use direct replay calls
 }
 
+// Whether the throttled replay image serves this call. The run_throttled_sequence_no_mop<> images are
+// hand-written for a full 32x32 tile (4 SrcB faces, 16 MVMULs per tile); on any other geometry the
+// init records the unthrottled, geometry-aware image instead (throttling is only a throughput cap),
+// mirroring the fallback in _llk_math_matmul_init_. _llk_math_matmul_init_no_mop_ and
+// _llk_math_matmul_no_mop_ both go through this so the recorded image, its length and the loop that
+// replays it always agree -- a mismatch there replays MVMULs against SrcB faces that were never loaded.
+template <int THROTTLE_LEVEL>
+inline bool matmul_no_mop_use_throttled(
+    const std::uint32_t in0_tile_r_dim,
+    const std::uint32_t in0_tile_c_dim,
+    const std::uint32_t in1_tile_r_dim,
+    const std::uint32_t in1_tile_c_dim,
+    const bool partial_face)
+{
+    return (THROTTLE_LEVEL > 0) && matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+}
+
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_init_no_mop_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
@@ -438,11 +455,15 @@ inline void _llk_math_matmul_init_no_mop_(
 {
     matmul_configure_addrmod_no_mop<math_fidelity, THROTTLE_LEVEL>(
         transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    const bool throttled = matmul_no_mop_use_throttled<THROTTLE_LEVEL>(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     if constexpr (THROTTLE_LEVEL > 0)
     {
-        matmul_configure_mop_throttled_no_mop<THROTTLE_LEVEL>();
+        if (throttled)
+        {
+            matmul_configure_mop_throttled_no_mop<THROTTLE_LEVEL>();
+        }
     }
-    else
+    if (!throttled)
     {
         matmul_configure_mop_custom<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
@@ -471,17 +492,15 @@ inline void _llk_math_matmul_no_mop_(
     constexpr int num_fidelity_phases = get_math_num_fidelity_phases(math_fidelity);
     constexpr bool high_fidelity      = math_fidelity != MathFidelity::LoFi;
 
-    // Compute replay buffer length based on tile dimensions (same logic as in matmul_configure_mop_custom).
-    // For 16x32 tiny tiles this is the shorter face-row-confined length (must match what was recorded at init).
-    std::uint32_t replay_buf_len;
-    if constexpr (THROTTLE_LEVEL > 0)
-    {
-        replay_buf_len = (THROTTLE_LEVEL > 3) ? (1 + THROTTLE_LEVEL * 2) : ((THROTTLE_LEVEL > 1) ? (3 + THROTTLE_LEVEL * 4) : 10);
-    }
-    else
-    {
-        replay_buf_len = matmul_no_mop_replay_len(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-    }
+    // Same dispatch as the init (matmul_no_mop_use_throttled): a throttled image only exists for a full
+    // 32x32 tile; everything else replays the unthrottled, geometry-aware image the init recorded.
+    const bool throttled = matmul_no_mop_use_throttled<THROTTLE_LEVEL>(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+
+    // Replay buffer length must match what was recorded at init: the fixed throttled length, or the
+    // tile-dimension-dependent length of matmul_configure_mop_custom (shorter for 16x32 / 32x16 tiny tiles).
+    constexpr std::uint32_t throttled_replay_buf_len = (THROTTLE_LEVEL > 3) ? (1 + THROTTLE_LEVEL * 2) : ((THROTTLE_LEVEL > 1) ? (3 + THROTTLE_LEVEL * 4) : 10);
+    const std::uint32_t replay_buf_len =
+        throttled ? throttled_replay_buf_len : matmul_no_mop_replay_len(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
 
     for (std::uint32_t t = 0; t < t_dim; t++)
     {
@@ -489,7 +508,7 @@ inline void _llk_math_matmul_no_mop_(
         {
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + (reuse_a ? ct_dim * t + rut : t + rut * ct_dim));
 
-            if constexpr (THROTTLE_LEVEL > 0)
+            if (throttled)
             {
                 // Throttled execution
                 if constexpr (THROTTLE_LEVEL > 3)
