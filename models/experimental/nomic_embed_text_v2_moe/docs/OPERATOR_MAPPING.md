@@ -212,7 +212,7 @@ Ten ways to get an operator wrong that produce finite, plausible output. Each ha
 
 | Control | Measured | Test |
 |---|---|---|
-| `ttnn.softmax` without the full config | max-abs 2.7e-02 to 3.0e-02 stock, 5.4e-03 to 6.8e-03 with HiFi4 alone, 1.4e-03 to 1.9e-03 with both. Budget is 5e-03, so HiFi4 on its own does not reach it, though only just. `numeric_stable=True` measures identically to stock. | `test_softmax_needs_both_hifi4_and_fp32_accumulation` |
+| `ttnn.softmax` without the full config | max-abs 5.4e-03 to 6.8e-03 with HiFi4 alone, 6.8e-03 to 8.0e-03 with fp32 accumulation at HiFi2, 1.4e-03 to 1.9e-03 with both (HiFi3 measures the same). Budget is 5e-03, so HiFi4 on its own does not reach it, though only just. Since a4471ecebf5 a float32 softmax with no config measures like the full one; before it, 2.7e-02 to 3.0e-02. | `test_softmax_needs_both_hifi4_and_fp32_accumulation` |
 | `ttnn.gelu(fast_and_approximate_mode=True)` | max-abs 2.34e-02 in fp32 vs 1.19e-06 accurate. Above the bf16 noise floor of 1.6e-02, so it is not swamped by it. The repo's BERT idiom `fused_activation=(ttnn.UnaryOpType.GELU, True)` selects this LUT. | `test_gelu_fast_mode_is_worse_than_the_bfloat16_noise_floor` |
 | Head-major Wqkv view | PCC 0.082 | `test_head_major_qkv_view_is_decorrelated` |
 | Attention mask left with 0 tile padding | Norm 0.69x at `S=37`, 0.96x at `S=513`. PCC is near-blind to it, moving 0.9998 to 0.9974 at `S=37` and not at all at `S=513`, so this is gated on the norm. | `test_all_ones_mask_matches_no_mask` |

@@ -21,6 +21,8 @@ import ttnn
 
 from models.common.metrics import compute_max_abs_error, compute_pcc
 from models.experimental.nomic_embed_text_v2_moe.common import slice_state_dict
+from models.experimental.nomic_embed_text_v2_moe.tt.common import to_device
+from models.experimental.nomic_embed_text_v2_moe.tt.router import Routing
 
 # (batch, seqlen). 37 is deliberately off-tile: padding bugs only surface when S is not a
 # multiple of 32, and S is the batch's longest tokenized sequence, so that is the common case.
@@ -110,15 +112,35 @@ def keep_mask(batch: int, seqlen: int, keep) -> torch.Tensor:
     return mask
 
 
+def routing_selection(tokens: int, experts: int, top_k: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """A plausible top-k selection: (T, K) float32 weights, descending and not renormalized, and (T, K) experts."""
+    probabilities = torch.randn(tokens, experts).softmax(dim=-1)
+    return torch.topk(probabilities, top_k, dim=-1)
+
+
 def dense_routing(tokens: int, experts: int, top_k: int) -> torch.Tensor:
     """A plausible (T, E) dense routing tensor, zero off the top-k and not renormalized.
 
     Injected rather than routed so the expert tests measure the expert arithmetic alone; a
     routing flip would otherwise show up as an expert error.
     """
-    probabilities = torch.randn(tokens, experts).softmax(dim=-1)
-    values, indices = torch.topk(probabilities, top_k, dim=-1)
-    return torch.zeros_like(probabilities).scatter_(-1, indices, values)
+    values, indices = routing_selection(tokens, experts, top_k)
+    return torch.zeros(tokens, experts).scatter_(-1, indices, values)
+
+
+def device_routing(dense: torch.Tensor, device) -> Routing:
+    """A (T, E) dense routing tensor on the device, as the experts take it from the router."""
+    tokens, experts = dense.shape
+    return Routing(dense=to_device(dense.reshape(1, 1, tokens, experts), device))
+
+
+def device_selection(values: torch.Tensor, indices: torch.Tensor, device) -> Routing:
+    """A (T, K) selection on the device, as TtNomicRouter.forward(x, dense=False) returns it."""
+    shape = (1, 1, *values.shape)
+    return Routing(
+        values=to_device(values.reshape(shape), device, dtype=ttnn.float32),
+        indices=to_device(indices.reshape(shape).to(torch.int32), device, dtype=ttnn.uint32),
+    )
 
 
 def bias_scale(got: torch.Tensor, without_bias: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:

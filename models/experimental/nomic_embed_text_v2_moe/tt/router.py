@@ -12,6 +12,7 @@ rather than after.
 from __future__ import annotations
 
 from functools import cache
+from typing import NamedTuple
 
 import torch
 import ttnn
@@ -37,8 +38,8 @@ PADDING_LOGIT = -1e30
 # writing L1, 44.8 -> 42.9 us a MoE layer at 128 tokens and 49.6 -> 47.1 at 576, bit-identical up
 # to 4096. Above, DRAM: the scores alone take 221 KB of every bank at 94k tokens, and
 # router_program_config plans the matmul's buffers against the whole of L1, so they clashed. The
-# dense weights the experts take follow activation_memory_config instead, and every intermediate is
-# freed before the experts run.
+# dense weights the experts take follow activation_memory_config instead, and every intermediate the
+# returned Routing does not hold is freed before the experts run.
 _L1_MAX_TOKENS = 4096
 
 
@@ -51,8 +52,28 @@ def _leading_cores(count: int, grid: ttnn.CoreCoord) -> ttnn.CoreRangeSet:
     return ttnn.num_cores_to_corerangeset(count, grid, row_wise=True)
 
 
+class Routing(NamedTuple):
+    """The router's decision, in the form an expert pass reads.
+
+    dense is (1, 1, T, E) in the activation dtype, the top-k weights at their experts and zero
+    elsewhere, which the dense passes gate by. values, (1, 1, T, K) float32 and unrenormalized, and
+    indices, (1, 1, T, K) uint32, are the selection itself. The router fills only the form it is
+    asked for: up to 4096 tokens the selection sits in L1, where it would hold space beside the
+    experts' circular buffers through a whole dense pass that never reads it.
+    """
+
+    values: ttnn.Tensor | None = None
+    indices: ttnn.Tensor | None = None
+    dense: ttnn.Tensor | None = None
+
+    def deallocate(self) -> None:
+        for tensor in self:
+            if tensor is not None:
+                ttnn.deallocate(tensor)
+
+
 class TtNomicRouter(LightweightModule):
-    """Softmax over all experts in fp32, top-k, then a dense per-expert row of the top-k weights.
+    """Softmax over all experts in fp32, top-k, then the top-k itself or a dense per-expert row of its weights.
 
     The top-k weights are deliberately NOT renormalized: moe_normalize_expert_weights is false
     in this checkpoint, so they sum to less than 1 and the MoE branch is attenuated relative to
@@ -209,19 +230,23 @@ class TtNomicRouter(LightweightModule):
         ttnn.deallocate(mask)
         return dense
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Produce the dense routing weights the expert gate multiply consumes.
+    def forward(self, x: ttnn.Tensor, dense: bool = True) -> Routing:
+        """Route every token, in one of the two forms of Routing.
 
         Args:
             x: (1, 1, T, H) flat token activations.
+            dense: True for the dense weights the expert gate multiply consumes, False for the
+                top-k values and indices.
 
         Returns:
-            ttnn.Tensor: (1, 1, T, E) in the activation dtype, carrying the routed weight at the
-            top-k positions and zero everywhere else.
+            Routing: dense alone, or values and indices.
         """
         probabilities, values, indices = self.select(x)
+        if not dense:
+            ttnn.deallocate(probabilities)
+            return Routing(values=values, indices=indices)
         ttnn.deallocate(values)
-        dense = self.dense_weights(probabilities, indices)
+        weights = self.dense_weights(probabilities, indices)
         ttnn.deallocate(probabilities)
         ttnn.deallocate(indices)
-        return dense
+        return Routing(dense=weights)

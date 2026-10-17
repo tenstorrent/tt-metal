@@ -79,6 +79,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import (
     stacked_w2_shard_tiles,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
+from models.experimental.nomic_embed_text_v2_moe.tt.router import Routing
 
 # The largest pass that runs stacked. See the module docstring.
 STACKED_MAX_TOKENS = 320
@@ -92,6 +93,19 @@ HELD_MAX_TILES = 4
 # 3520 + 576 split it replaced, which dated from a deadlock of the broadcast-batch ttnn.matmul that
 # no program here runs any more.
 MAX_TOKENS_PER_PASS = 4096
+
+
+def routed_windows(tokens: int, max_tokens: int = MAX_TOKENS_PER_PASS) -> list[tuple[int, int]]:
+    """(token_start, num_tokens) of each routed pass: as few as max_tokens allows, of one size.
+
+    routing_metadata takes windows that start on a tile row. One size, rather than full passes and
+    a remainder, keeps every pass of a split batch above 2000 tokens, far above the stacked pass's
+    sizes, so one form of the routing serves the whole layer: 4224 tokens run as two passes of
+    2112, not 4096 and 128.
+    """
+    passes = ttnn.core.divup(tokens, max_tokens)
+    size = ttnn.core.divup(ttnn.core.divup(tokens, passes), ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    return [(start, min(size, tokens - start)) for start in range(0, tokens, size)]
 
 
 class StackedBuffers:
@@ -331,6 +345,43 @@ class TtNomicExperts(LightweightModule):
             dtype=self.tt_config.expert_output_dtype,
         )
 
+    def dispatch_table(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """(1, 1, T, H) -> the row-major rows every routed pass of the layer gathers from.
+
+        Untilized once a layer: ttnn.embedding untilizes a tile-layout table on every call.
+        """
+        return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
+    def dispatch(self, x_rows: ttnn.Tensor, gather_index: ttnn.Tensor) -> ttnn.Tensor:
+        """routing_metadata's (1, R) gather_index -> (1, 1, R, H), row r a copy of row gather_index[r] of x_rows.
+
+        The ids are global, so every pass of a layer gathers from the one dispatch_table. The copy
+        is exact: ttnn.embedding moves whole rows and tilizes them without arithmetic.
+        """
+        dispatched = ttnn.embedding(gather_index, x_rows, layout=ttnn.TILE_LAYOUT)
+        return ttnn.reshape(dispatched, (1, 1, dispatched.shape[-2], dispatched.shape[-1]))
+
+    def combine(
+        self, expert_outputs: ttnn.Tensor, combine_index: ttnn.Tensor, combine_weights: ttnn.Tensor, tokens: int
+    ) -> ttnn.Tensor:
+        """The routed experts' (1, 1, R, H) rows -> (1, 1, t, H), each token's top-k rows weighted and summed.
+
+        The shared bias is not added. A padding token reads row 0, always a real slot's row, at
+        weight 0, so the tile padding of the sum holds exact zeros: it stays finite into the next
+        attention, which non-finite padded keys corrupt. The reduce writes the tile-padded token
+        count, and the last reshape, a view, gives back t.
+        """
+        gathered = ttnn.embedding(combine_index, expert_outputs, layout=ttnn.TILE_LAYOUT)
+        top_k, padded_tokens, hidden = gathered.shape[0], gathered.shape[1], gathered.shape[2]
+        summed = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(
+            ttnn.reshape(gathered, (1, top_k, padded_tokens, hidden)),
+            combine_weights,
+            dim=1,
+            compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.REDUCE),
+        )
+        ttnn.deallocate(gathered)
+        return ttnn.reshape(summed, (1, 1, tokens, hidden), (1, 1, padded_tokens, hidden))
+
     def _stacked_sum(self, x: ttnn.Tensor, dense_weights: ttnn.Tensor, buffers: StackedBuffers | None) -> ttnn.Tensor:
         """(1, 1, t, H) -> (1, 1, t, H) for a pass of at most STACKED_MAX_TOKENS, the bias included."""
         tokens = x.shape[-2]
@@ -425,7 +476,7 @@ class TtNomicExperts(LightweightModule):
         ttnn.deallocate(summed)
         return out
 
-    def forward(self, x: ttnn.Tensor, dense_weights: ttnn.Tensor, buffers: StackedBuffers | None = None) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, routing: Routing, buffers: StackedBuffers | None = None) -> ttnn.Tensor:
         """Run every expert, weight the outputs by the routing, sum them and add the shared bias.
 
         Tokens are processed in passes of at most max_tokens_per_pass (see MAX_TOKENS_PER_PASS).
@@ -434,13 +485,16 @@ class TtNomicExperts(LightweightModule):
 
         Args:
             x: (1, 1, T, H) flat token activations.
-            dense_weights: (1, 1, T, E) from TtNomicRouter, zero off the top-k.
+            routing: from TtNomicRouter. Both passes gate by its dense form.
             buffers: held across the MoE layers of a forward, by a caller whose whole input is at
                 most HELD_MAX_TILES tile rows (see StackedBuffers); None allocates per pass.
 
         Returns:
             ttnn.Tensor: (1, 1, T, H).
         """
+        dense_weights = routing.dense
+        if dense_weights is None:
+            raise ValueError("the expert passes gate by the dense routing weights; route with dense=True")
         tokens, hidden = x.shape[-2], x.shape[-1]
         if tokens <= self.max_tokens_per_pass:
             return self._weighted_expert_sum(x, dense_weights, buffers)
