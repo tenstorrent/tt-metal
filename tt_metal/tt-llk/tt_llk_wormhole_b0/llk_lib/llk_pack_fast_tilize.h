@@ -220,7 +220,8 @@ inline void _llk_pack_fast_tilize_init_(
  * @param pack_dst_format: Destination (L1) data format used to re-run the default packer init.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param partial_face: True if the faces are shorter than FACE_R_DIM rows (face_r_dim < FACE_R_DIM; false for
+ *        full-height faces such as a 16x32 tile's), so a block-float tile carries one exponent chunk.
  * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
  * @note Call @ref _llk_pack_fast_tilize_init_ before this function.
  */
