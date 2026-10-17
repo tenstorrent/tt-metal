@@ -80,6 +80,11 @@ uint32_t _start() {
 #ifndef DISPATCH_KERNEL
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         WAYPOINT("NKFW");
+        // Wait until every transaction this kernel issued has completed (see brisck.cc): the next kernel's
+        // noc_local_state_init() snapshot of the NIU counters must not be overtaken by a late response.
+        while (
+            !(ncrisc_noc_reads_flushed(NOC_INDEX) & ncrisc_noc_nonposted_writes_flushed(NOC_INDEX) &
+              ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX) & ncrisc_noc_posted_writes_sent(NOC_INDEX)));
         // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the NOC
         // interface is in a known idle state for the next kernel.
         ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX), DebugAssertNCriscNOCReadsFlushedTripped);
