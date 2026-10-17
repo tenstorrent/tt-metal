@@ -34,8 +34,7 @@ namespace tt {
  * @return The smallest multiple of alignment that is equal to or greater than addr.
  *         The return type is std::common_type_t<T1, T2>.
  * @pre alignment must be a positive power of two.
- *      If NDEBUG is not defined, an assert stops the program when alignment is not valid.
- *      If NDEBUG is defined, the function does not do this check, and the behavior is not defined.
+ *      If NDEBUG is defined, this check is omitted; callers must still satisfy the precondition.
  * @pre The result must fit in the return type. The function does not check for overflow.
  * @note You can use this function in constant expressions.
  */
