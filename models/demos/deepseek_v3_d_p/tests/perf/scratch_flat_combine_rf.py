@@ -245,7 +245,9 @@ def test_flat_combine_rf(mesh_device, device_params, routing):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     depth = int(os.environ.get("FC_D", "4"))
-    common = dict(num_links=L, n_acc=16, depth=depth, cells=cells, arena=arena)
+    # (the device planner's accumulator count must be the combine's: FC_NACC accumulators then, else up to 16)
+    n_acc = int(os.environ.get("FC_NACC", "15")) if DEVPLAN else 16
+    common = dict(num_links=L, n_acc=n_acc, depth=depth, cells=cells, arena=arena)
     L1 = os.environ.get("FC_L1") == "1"  # y rows straight from the down cores into the combine's L1 (no y in DRAM)
     l1 = None
     if L1:

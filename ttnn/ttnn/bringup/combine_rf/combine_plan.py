@@ -504,7 +504,8 @@ void kernel_main() {
     noc_async_read_barrier();
     invalidate_l1_cache();
     if constexpr (RP != 0) {
-        static_assert(RP <= 64 && RB % 4 == 0 && RP == (JW ? 2 : 1) * RB, "row pages");
+        // (RP == 0 ||: a static_assert in a discarded if-constexpr branch of a non-template is still checked)
+        static_assert(RP == 0 || (RP <= 64 && RB % 4 == 0 && RP == (JW ? 2 : 1) * RB), "row pages");
         // (unpacked by local NoC copies, one per row and array: scalar L1 copies cost ~50 cycles a word here)
         for (uint32_t q = 0; q < npk; ++q) {
             for (uint32_t r = 0; r < pk_rows[q]; ++r) {
@@ -709,13 +710,19 @@ void kernel_main() {
                 }
             };
             for (uint32_t t = aa; t < S; t += A) {
-                static_assert(K % 4 == 0 && L == 2 && N <= 32, "pairs of ids per word, two links, want[32]");
-                for (uint32_t kk = 0; kk < K; kk += 4) {  // (two words, four ids, in flight)
-                    const uint32_t w0 = hw[(t * K + kk) / 2], w1 = hw[(t * K + kk) / 2 + 1];
-                    one(w0 & 0xFFFF);
-                    one(w0 >> 16);
-                    one(w1 & 0xFFFF);
-                    one(w1 >> 16);
+                static_assert(L == 2 && N <= 32, "two links, want[32]");
+                if constexpr (K % 4 == 0) {
+                    for (uint32_t kk = 0; kk < K; kk += 4) {  // (two words, four ids, in flight)
+                        const uint32_t w0 = hw[(t * K + kk) / 2], w1 = hw[(t * K + kk) / 2 + 1];
+                        one(w0 & 0xFFFF);
+                        one(w0 >> 16);
+                        one(w1 & 0xFFFF);
+                        one(w1 >> 16);
+                    }
+                } else {  // (top-k not a multiple of 4, e.g. DeepSeek V4.1's 6: one id at a time)
+                    for (uint32_t kk = 0; kk < K; ++kk) {
+                        one(hid[t * K + kk]);
+                    }
                 }
             }
             pw[0] = nlo;

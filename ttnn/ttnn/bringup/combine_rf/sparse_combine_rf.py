@@ -752,6 +752,14 @@ def sparse_combine_rf_prepare(
     PD = ((row_bytes + NP - 1) // NP + 63) // 64 * 64
     PS = ((PD + 32 + 63) // 64) * 64
     SLOT = ISLOT = NP * PS
+    # the L1 hand-off's y writers (se_yrm.hpp SE_Y_L1) write a row's columns at slot + column offset and its trailer
+    # at slot + row bytes: one piece a row. Wider rows (DeepSeek V4.1 H 5120: 10240 B) need SPC_PIECE >= the row and a
+    # fabric payload >= row + 32 B (e.g. SPC_PIECE=10240, fabric_payload_size 10880), else the combine waits for piece
+    # trailers that never come (a hang)
+    assert l1 is None or NP == 1, (
+        f"combine L1 hand-off: {row_bytes} B rows need one piece (SPC_PIECE={PIECE_MAX} < row: set SPC_PIECE >= "
+        f"{row_bytes} and a fabric payload >= {row_bytes + 32})"
+    )
     chips, nb, (wrap_x, wrap_y) = mesh_plan(mesh_device, num_links, torus)
     port_core = place_ports(mesh_device, chips, cells)
     used_cores = {(c.x, c.y) for c in port_core.values()}

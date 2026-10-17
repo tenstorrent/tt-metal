@@ -1087,3 +1087,29 @@ bytes (largest first to the least loaded bank; a bank-core column end keeps its 
 exactly even on all four shapes, the six near streams kept. Time unchanged within noise (lat_down 93.4, lat_up
 86.7-88.0, SE gate+up 271-273, SE down 138.5-139.4 us): at ~45-50 GB/s a bank no bank is saturated - the cap is the
 far readers' NoC/DRAM path (~390 GB/s), not the bank split.
+
+### DeepSeek V4.1-Flash: flat + combine overlap (2026-10-17, LoudBox 2 x 4, bh-lb-09 12 x 10 grid)
+On top of mstaletovic/galaxy-unified-k3-l1combine (per-source-ring combine). Stage harness
+scratch_flat_combine_rf.py at V4.1 dims, 4x4 per-chip load on 8 chips: H 5120, I 2304, clamped SwiGLU, top-6,
+24 local experts per chip, 320 home tokens per chip (~80 rows per expert), y handed over in L1 (FC_L1=1), every
+per-call table from the device planner (FC_DEVPLAN=1), real weights for the check.
+Run: `SPC_PIECE=10240 FC_PAYLOAD=10880 MIMO_FL_ND=27 FC_H=5120 FC_I=2304 FC_EPC=24 FC_K=6 FC_ACT=clamped_silu FC_S=320
+FC_L1=1 FC_DEVPLAN=1 FC_WEIGHTS=real TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
+TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --mesh --no-precompile <harness> -s`
+What it took:
+- combine_plan: top-6 (the planner unpacked ids 4 at a time: K % 4) - a one-id-at-a-time path for other K; and its
+  "row pages" static_assert sat in a discarded if-constexpr branch of a non-template (still checked): RP == 0 ||.
+- Cells: the default unit plan (48 gate/up + 40 down + 16 readers + 4 relays = 108 of 120) leaves ~4 accumulators
+  after the 8 port cores; each would own ~80 tokens' fp32 rows (20 KB each): no L1. MIMO_FL_ND=27 (6 columns a down
+  core: down 177 vs gate/up 197 us at M 1024 in the balance model, so still gate/up-bound) frees 13 cells: 15
+  accumulators. (The harness now gives the combine FC_NACC accumulators with the device planner, as the planner's.)
+- **Rows wider than SPC_PIECE (7168 B) hang the L1 hand-off**: the combine splits them into pieces with a trailer each,
+  the y writers write one contiguous row + one trailer (se_yrm.hpp SE_Y_L1). V4.1's 10240 B row: SPC_PIECE=10240 and
+  a 10880 B fabric payload (BH max 15232). sparse_combine_rf now asserts one piece with the L1 hand-off.
+- (The runner's precompile pass "fused first call, rel err 0" is not a check: run with --no-precompile.)
+| routing | flat alone | combine alone | serial | fused | combine hidden | fused / flat | link floor |
+| uniform | 1089 us | 646 | 1735 | 1238 | 77% | 1.137 | 400 |
+| zipf spread 1.2 | 1216 | 671 | 1887 | 1416 | 70% | 1.164 | 466 |
+| zipf packed 1.2 | 2618 | 1283 | 3901 | 2927 | 76% | 1.118 | 1108 |
+Worst per-token rel err 2.4e-3 (all 2560 tokens) on every routing. Same with the default DRISC setting (DRISC is
+off inside the overlap): uniform fused 1248 us.
