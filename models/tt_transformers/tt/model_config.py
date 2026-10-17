@@ -1713,8 +1713,14 @@ class ModelArgs:
                 )
             )
         )
+        # Prefill Q, K and V are interleaved in DRAM, so the op is free to use the whole Blackhole grid.
+        grid_size = (
+            self.mesh_device.compute_with_storage_grid_size()
+            if is_blackhole() and self.mesh_device is not None
+            else (8, 8)
+        )
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=grid_size,
             exp_approx_mode=False,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
@@ -1745,13 +1751,38 @@ class ModelArgs:
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
             )
-        else:
+        grid = self.mesh_device.compute_with_storage_grid_size() if self.mesh_device is not None else None
+        # The full Blackhole grid is faster from batch 8 up to 64 (user, KV head) pairs per device; at 256 pairs (8B at
+        # batch 32) the (8, 8) grid is faster from position 2047.
+        wide_blackhole_grid = (
+            is_blackhole()
+            and grid is not None
+            and grid.x > 8
+            and grid.y > 4
+            and self.max_batch_size >= 8
+            and self.max_batch_size * max(1, self.n_kv_heads // self.cluster_shape[1]) <= 64
+        )
+        if wide_blackhole_grid:
+            # The op reads batch b's Q from the b-th core of sub_core_grids, so the 8x4 Q shard block comes first.
             return ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                compute_with_storage_grid_size=(grid.x, grid.y),
+                sub_core_grids=ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3)),
+                        ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(grid.x - 1, 3)),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(grid.x - 1, grid.y - 1)),
+                    ]
+                ),
                 exp_approx_mode=False,
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
             )
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=False,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+        )
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_program_config(
