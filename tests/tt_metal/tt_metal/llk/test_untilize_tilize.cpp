@@ -19,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <variant>
@@ -1915,5 +1916,50 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeBlock4IdFreeGolden) {
 // input_tile_index-addressed nonzero column tile reads the input as contiguous standalone tiles instead of a
 // wide block and cannot match gold_standard_tilize. The restored params are correct-for-parity but not
 // cleanly device-observable via this path (same resolution as the D0/D1/Copilot#2 unobservable fixes).
+
+// Compile-time contract of the id-free tilize input geometry; these programs are never launched. The unpack
+// tilize LLK accepts only 2- or 4-face input tiles and, for the 8-bit formats (Int8/UInt8/Fp8_e4m3/Lf8), only a
+// two-face-wide tile row: its 8-bit sequence addresses face 1 as the right-hand neighbour, so a narrow (single
+// face column) 8-bit tile reads the wrong face. Both limits are runtime LLK_ASSERTs that production builds
+// compile out, so the API must reject those shapes at compile time; wide 8-bit tiles and narrow 16-bit tiles
+// stay accepted.
+TEST_F(LLKBlackholeSingleCardFixture, TensixTilizeIdFreeCompileLimits) {
+    struct Case {
+        tt::DataFormat format;
+        std::uint32_t faces_r;
+        std::uint32_t faces_c;
+        bool accepted;
+    };
+    const std::array<Case, 9> cases{{
+        {tt::DataFormat::Float16_b, 2, 2, true},
+        {tt::DataFormat::Float16_b, 2, 1, true},
+        {tt::DataFormat::Float16_b, 1, 1, false},
+        {tt::DataFormat::Int8, 2, 2, true},
+        {tt::DataFormat::Int8, 1, 2, true},
+        {tt::DataFormat::Int8, 2, 1, false},
+        {tt::DataFormat::Int8, 1, 1, false},
+        {tt::DataFormat::UInt8, 2, 1, false},
+        {tt::DataFormat::Fp8_e4m3, 2, 1, false},
+    }};
+    const CoreCoord core{0, 0};
+    for (const auto& test : cases) {
+        SCOPED_TRACE(
+            ::testing::Message() << "format=" << enchantum::to_string(test.format) << ", faces=" << test.faces_r << "x"
+                                 << test.faces_c);
+        Program program = CreateProgram();
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/compute/tilize_2_0_compile_limits.cpp",
+            core,
+            ComputeConfig{
+                .fp32_dest_acc_en = false,
+                .compile_args = {static_cast<std::uint32_t>(test.format), test.faces_r, test.faces_c}});
+        if (test.accepted) {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+        } else {
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+        }
+    }
+}
 
 }  // namespace tt::tt_metal

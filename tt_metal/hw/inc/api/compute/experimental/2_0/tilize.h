@@ -46,6 +46,13 @@ ALWI void tilize_init(
     LLKOperand<InFormat, InShape> /*in*/, std::uint32_t block, LLKOperand<OutFormat, OutShape> /*out*/) {
     static_assert(is_legal_tile_shape(InShape), "tilize_init: illegal input tile shape.");
     static_assert(is_legal_tile_shape(OutShape), "tilize_init: illegal output tile shape.");
+    static_assert(
+        InShape.total_num_faces() == 2 || InShape.total_num_faces() == 4,
+        "tilize_init: input tile must have 2 or 4 faces (the unpack tilize datapath has no single-face program).");
+    static_assert(
+        !(is_8bit_format(InFormat) && InShape.num_faces_c_dim == 1),
+        "tilize_init: 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) narrow tiles (a single face column) are not supported by the "
+        "unpack tilize datapath.");
     UNPACK((llk_unpack_tilize_init<LLKOperand<InFormat, InShape>::descriptor, is_fp32_dest_acc_en>(block)));
     MATH((llk_math_eltwise_unary_datacopy_init<
           LLKOperand<InFormat, InShape>::descriptor,
@@ -94,6 +101,13 @@ ALWI void tilize_block(
     std::uint32_t output_tile_index = 0) {
     static_assert(is_legal_tile_shape(InShape), "tilize_block: illegal input tile shape.");
     static_assert(is_legal_tile_shape(OutShape), "tilize_block: illegal output tile shape.");
+    static_assert(
+        InShape.total_num_faces() == 2 || InShape.total_num_faces() == 4,
+        "tilize_block: input tile must have 2 or 4 faces (the unpack tilize datapath has no single-face program).");
+    static_assert(
+        !(is_8bit_format(InFormat) && InShape.num_faces_c_dim == 1),
+        "tilize_block: 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) narrow tiles (a single face column) are not supported by the "
+        "unpack tilize datapath.");
     // Unpack the whole block into srcA first (mirrors llk_unpack_tilize_block), then drain via math+pack.
     for (std::uint32_t t = 0; t < block; t++) {
         UNPACK((llk_unpack_tilize<LLKOperand<InFormat, InShape>::descriptor, is_fp32_dest_acc_en>(
@@ -138,6 +152,13 @@ template <
     DataFormat OutFormat,
     TensorShape OutShape>
 ALWI void tilize_uninit(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<OutFormat, OutShape> /*out*/) {
+    static_assert(
+        InShape.total_num_faces() == 2 || InShape.total_num_faces() == 4,
+        "tilize_uninit: input tile must have 2 or 4 faces (the unpack tilize datapath has no single-face program).");
+    static_assert(
+        !(is_8bit_format(InFormat) && InShape.num_faces_c_dim == 1),
+        "tilize_uninit: 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) narrow tiles (a single face column) are not supported by the "
+        "unpack tilize datapath.");
     UNPACK((llk_unpack_tilize_uninit<LLKOperand<InFormat, InShape>::descriptor, is_fp32_dest_acc_en>()));
     PACK((llk_pack_init<LLKOperand<OutFormat, OutShape>::descriptor, is_fp32_dest_acc_en, PackMode::Default>()));
 }

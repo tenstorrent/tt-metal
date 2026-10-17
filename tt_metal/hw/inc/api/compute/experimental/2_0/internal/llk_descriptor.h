@@ -137,6 +137,14 @@ constexpr bool is_unpack_to_dest() {
 constexpr bool is_block_float_format(DataFormat f) { return IS_BFP_FORMAT(static_cast<std::uint32_t>(f)); }
 
 /**
+ * (internal) True iff `f` is an 8-bit L1 format (Int8/UInt8/Fp8_e4m3/Lf8). The unpack tilize datapath
+ * handles these through a dedicated face-addressing sequence that only supports a two-face-wide tile row (it
+ * addresses face 1 as the right-hand neighbour), so a narrow (single face column) 8-bit tile is rejected at
+ * the tilize surface. Typed wrapper over IS_8BIT_FORMAT.
+ */
+constexpr bool is_8bit_format(DataFormat f) { return IS_8BIT_FORMAT(static_cast<std::uint32_t>(f)); }
+
+/**
  * (internal) True iff the tile has fewer than 32 rows (partial tile height). For block-float formats a
  * partial-height tile does not flow correctly through the BH compute datapath; use with is_block_float_format
  * to reject that combination at compile time.
