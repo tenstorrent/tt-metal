@@ -641,9 +641,10 @@ class Qwen36Model:
         """Generator mode-change hook; no-op (no prefetcher)."""
         return None
 
-    def _lm_head(self, x, out_dtype=None):
+    def _lm_head(self, x, out_dtype=None, gather=True):
         """LM-head matmul. Vocab-sharded mesh: partial logits + all-gather to full replicated.
-        Single device: plain matmul.
+        Single device: plain matmul. ``gather=False`` returns the per-device vocab shard [.., vocab/TP]
+        (the verify's sharded argmax consumes it without the all-gather).
 
         out_dtype: leave None (default) for the base/verify path — losslessness is defined by the
         BASE argmax, so that call must stay byte-identical. The MTP drafter passes float32: its
@@ -668,7 +669,7 @@ class Qwen36Model:
             # drafter's argmax came back with an out-of-range id). Gather at the head's own dtype.
             ccl_kw = dict(dtype=out_dtype)
         logits = ttnn.linear(x, self.lm_head_weight, **kw)
-        if self._lmhead_vocab_sharded:
+        if self._lmhead_vocab_sharded and gather:
             from models.tt_transformers.tt.ccl import tt_all_gather
 
             logits = tt_all_gather(
@@ -1733,9 +1734,11 @@ class Qwen36Model:
         sin = emb.sin().reshape(1, B, 1, rd).to(torch.bfloat16)
         return cos, sin
 
-    def _spec_tail(self, x):
+    def _spec_tail(self, x, sharded=False):
         """Shared tail of the verify and seed bodies: residual ``x`` [1,1,R,dim] (freed here) ->
         (logits [1,1,R,vocab] replicated per device, feed [1,1,R,dim/tp] fractured).
+        ``sharded=True`` (QWEN36_VERIFY_SHARDED_ARGMAX verify trace): returns (logits shard
+        [1,1,R,vocab/TP] with NO all-gather, feed, normed [1,1,R,dim] kept alive for the logits trace).
 
         The bucket is exactly the R real rows, so there is no row-select. ``feed`` is the post-norm
         drafter feed (spec_feed_rows); its programs are the inner norm's, already compiled by the
@@ -1743,11 +1746,14 @@ class Qwen36Model:
         rows = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x)
         normed = self.norm(rows, mode=Mode.PREFILL)  # -> full [1,1,R,dim]
-        logits = self._lm_head(normed)
-        ttnn.deallocate(normed)
+        logits = self._lm_head(normed, gather=not sharded)
+        if not sharded:
+            ttnn.deallocate(normed)
         feed = self.spec_feed_rows(rows)
         if feed is not rows:
             ttnn.deallocate(rows)
+        if sharded:
+            return logits, feed, normed
         return logits, feed
 
     def _forward_verify_bucket_tp(self, n_users):
@@ -1758,6 +1764,12 @@ class Qwen36Model:
         takes its per-user starting state through the two shared selectors. Returns (logits, rows,
         ids, logits_rm): ``rows`` is the drafter feed [1,1,B*T,dim/tp] bf16 (spec_feed_rows).
         ``logits_rm`` is the ROW_MAJOR bf16 copy the in-trace argmax needs, kept for the sampling path.
+
+        With ``self._vfy_sharded`` (QWEN36_VERIFY_SHARDED_ARGMAX) the tail skips the logits all-gather,
+        untilize and full-vocab argmax: ids come from the per-shard argmax + max combined on device
+        (shard_argmax_max_rows + _dl_greedy_token_row_batched, as the batched decode loop does), and the
+        return is (None, rows, ids [1,1,1,32] uint32 lanes 0..R-1, None, normed). The full logits are then
+        produced only by the separate logits trace (_forward_verify_logits_body) when a sampled request asks.
         """
         T = self._vfy_T
         rows = n_users * T
@@ -1804,6 +1816,12 @@ class Qwen36Model:
                 )
             ttnn.deallocate(x)
             x = x_new
+        if self._vfy_sharded:
+            shard_logits, rows_out, normed = self._spec_tail(x, sharded=True)
+            idx, val = self.shard_argmax_max_rows(shard_logits, rows)
+            ttnn.deallocate(shard_logits)
+            ids = self._dl_greedy_token_row_batched(idx, val, self._vfy_dl)  # [1,1,1,32] uint32 RM
+            return None, rows_out, ids, None, normed
         logits, rows_out = self._spec_tail(x)  # [1,1,B*T,vocab] replicated, drafter feed [1,1,B*T,dim/tp]
         # Greedy acceptance compares token ids, so argmax the verify rows inside the trace and read back
         # B*T uint32 instead of B*T x 151936 floats. ttnn.argmax needs ROW_MAJOR input (a TILE tensor
@@ -1814,7 +1832,49 @@ class Qwen36Model:
         ids = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,B*T] uint32 ROW_MAJOR
         # `u` is NOT deallocated: it is handed back as the ROW_MAJOR logits copy. The sampling path
         # reads THAT back instead of the TILE `logits`, which costs an untilize on host.
-        return logits, rows_out, ids, u
+        return logits, rows_out, ids, u, None
+
+    def _forward_verify_logits_body(self):
+        """Second verify trace (sharded-argmax mode only): full replicated logits [1,1,R,vocab] + the ROW_MAJOR
+        copy, recomputed from the first trace's persistent ``_vfy_normed_out`` (same linear program and input
+        as the in-trace shard logits, so the values are the ones the argmax saw). Replayed right after the
+        main trace only when read_logits=True (sampled requests, spec_mode == "logits")."""
+        logits = self._lm_head(self._vfy_normed_out)
+        u = ttnn.untilize(logits, use_multicore=True)
+        return logits, u
+
+    def _vfy_setup_sharded_argmax(self, rows):
+        """Resolve QWEN36_VERIFY_SHARDED_ARGMAX (default ON) for this verify bucket and allocate the one
+        constant it needs (per-device vocab offset), outside any trace. Falls back to the full-gather argmax
+        (flag off or unsupported mesh/vocab) with a log line.
+
+        Tie-break: the combine returns the LOWEST global index among tied maxima (per-shard first-index
+        argmax, then min index over the shards whose max equals the global max), which is torch.argmax on
+        the full logits."""
+        self._vfy_sharded = False
+        old = getattr(self, "_vfy_dl", None)
+        if old is not None:
+            old.release()
+            self._vfy_dl = None
+        if not bool(int(os.environ.get("QWEN36_VERIFY_SHARDED_ARGMAX", "1"))):
+            return
+        why = self.device_decode_loop_unsupported_reason(0, 0, batch=rows)
+        if why is not None and "RoPE" not in why:  # the RoPE range check is about the decode loop, not verify
+            logger.warning(f"QWEN36_VERIFY_SHARDED_ARGMAX ignored: {why}")
+            return
+        mesh = self.mesh_device
+        n = self.num_devices
+        per_shard = self.vocab_size // n
+        shard_base = ttnn.from_torch(
+            (torch.arange(n, dtype=torch.int32) * per_shard).reshape(n, 1, 1, 1).expand(n, 1, 1, self._DL_LANES),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+        )
+        self._vfy_dl = _DeviceDecodeLoop(batch=rows, shard_base=shard_base)
+        self._vfy_sharded = True
 
     def _vfy_row_positions(self, positions):
         """Per-ROW absolute positions for the user-major bucket: row u*T + j is positions[u] + j."""
@@ -1865,6 +1925,9 @@ class Qwen36Model:
         if getattr(self, "_vfy_trace_id", None) is not None:
             ttnn.release_trace(self.mesh_device, self._vfy_trace_id)
             self._vfy_trace_id = None
+        if getattr(self, "_vfy_logits_trace_id", None) is not None:
+            ttnn.release_trace(self.mesh_device, self._vfy_logits_trace_id)
+            self._vfy_logits_trace_id = None
 
     @staticmethod
     def _fit_spec_page_table(pt, nb):
@@ -1942,6 +2005,7 @@ class Qwen36Model:
         self._vfy_prepared_key = None
         self._vfy_T, self._vfy_B = T, B
         self._vfy_nb = nb
+        self._vfy_setup_sharded_argmax(rows)
 
         # Persistent per-replay input buffers (addresses baked into the trace).
         self._vfy_token_buf = ttnn.from_torch(
@@ -2028,8 +2092,17 @@ class Qwen36Model:
         # the capture pass runs in record_verify_trace. Both passes overwrite the ring and the conv window;
         # the spec loop calls dn.seed_spec_state() after capture, which re-initialises token-slot 0 from
         # the live decode state, and the first replay then runs at mi = 0.
-        for t in self._forward_verify_bucket_tp(n_users=B):
-            ttnn.deallocate(t)
+        outs = self._forward_verify_bucket_tp(n_users=B)
+        if self._vfy_sharded:
+            # Compile the logits trace's programs too (cache misses are disallowed during capture).
+            self._vfy_normed_out = outs[4]
+            for t in self._forward_verify_logits_body():
+                ttnn.deallocate(t)
+            ttnn.deallocate(self._vfy_normed_out)
+            self._vfy_normed_out = None
+        for t in outs[:4]:
+            if t is not None:
+                ttnn.deallocate(t)
         ttnn.synchronize_device(dev)
         self._vfy_att0 = _att0
         self._vfy_prepared_key = key
@@ -2053,8 +2126,15 @@ class Qwen36Model:
             self._vfy_rows_out,
             self._vfy_ids_out,
             self._vfy_logits_rm_out,
+            self._vfy_normed_out,
         ) = self._forward_verify_bucket_tp(n_users=B)
         ttnn.end_trace_capture(dev, self._vfy_trace_id, cq_id=0)
+        if self._vfy_sharded:
+            # Sampled requests (read_logits) need the full logits, which the main trace no longer gathers:
+            # a second, small trace (lm_head + all-gather + untilize on the persistent normed rows).
+            self._vfy_logits_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
+            self._vfy_logits_out, self._vfy_logits_rm_out = self._forward_verify_logits_body()
+            ttnn.end_trace_capture(dev, self._vfy_logits_trace_id, cq_id=0)
         self._vfy_capture_count = getattr(self, "_vfy_capture_count", 0) + 1
         # Fused grouped SDPA read (spec_multi_pos_tiles) or the legacy per-row call; a T with no
         # L1-fitting split (7, 11, ...) stays legacy.
@@ -2171,6 +2251,8 @@ class Qwen36Model:
         ttnn.copy_host_to_device_tensor(_h, self._vfy_conv_sel)
 
         ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
+        if read_logits and self._vfy_sharded:
+            ttnn.execute_trace(dev, self._vfy_logits_trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(dev)
 
         # Replicated ids (the trace argmaxed the replicated logits): one replica is the whole answer,
