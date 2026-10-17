@@ -2255,6 +2255,46 @@ Log:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float3
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 2}  # max 1 ULP
 
 
+Log10:  # Wormhole in the craq-sim simulator (30e35f9b, bit-exact SFPU model), not silicon; measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-15, except where a row says otherwise
+  - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 16793 ULP, block-quantized
+  - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 16793 ULP, block-quantized
+  - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 5}  # max 4 ULP
+  - {in: Bfp4_b, out: Float16_b, dest: "No", max_ulp: 3}  # max 2 ULP
+  - {in: Bfp4_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Bfp4_b, out: Float32, dest: "No", max_ulp: 144180}  # max 131072 ULP
+  - {in: Bfp4_b, out: Float32, dest: "Yes", max_ulp: 35926}  # max 32660 ULP
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 16793 ULP, block-quantized
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 16793 ULP, block-quantized
+  - {in: Bfp8_b, out: Float16, dest: "Yes", max_ulp: 5}  # max 4 ULP
+  - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 3}  # max 2 ULP
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Bfp8_b, out: Float32, dest: "No", max_ulp: 144180}  # max 131072 ULP
+  - {in: Bfp8_b, out: Float32, dest: "Yes", max_ulp: 36042}  # max 32765 ULP
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 16392 ULP, block-quantized
+  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 16392 ULP, block-quantized
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 7}  # max 6 ULP
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP
+  - {in: Float16, out: Float32, dest: "No", max_ulp: 54068}  # max 49152 ULP
+  - {in: Float16, out: Float32, dest: "Yes", max_ulp: 4507}  # max 4097 ULP
+  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 16793 ULP, block-quantized
+  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 16793 ULP, block-quantized
+  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 5}  # max 4 ULP
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Float16_b, out: Float32, dest: "No", max_ulp: 72090}  # max 65536 ULP
+  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 36043}  # max 32766 ULP
+  - {in: Float32, out: Bfp8_b, dest: "No", metric: tolerance}  # max 3 ULP, block-quantized
+  - {in: Float32, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 14459 ULP, block-quantized
+  - {in: Float32, out: Float16, dest: "No", max_ulp: 7}  # max 6 ULP
+  - {in: Float32, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP
+  - {in: Float32, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP
+  - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 0 ULP
+  - {in: Float32, out: Float32, dest: "No", max_ulp: 72090}  # max 65536 ULP
+  - {in: Float32, out: Float32, dest: "Yes", max_ulp: 3}  # max 2 ULP
+
+
 Log1p:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
