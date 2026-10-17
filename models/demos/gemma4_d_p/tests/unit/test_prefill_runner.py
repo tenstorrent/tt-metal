@@ -133,3 +133,16 @@ def test_batched_steps_continue_each_slot(expect_error):
     for lanes in ([Lane(0, 6144, 8192)], [Lane(2, 0, 2048), Lane(2, 4096, 6144)], [Lane(4, 0, 2048)]):
         with expect_error(ValueError, "Slot|slot|lane"):
             runtime.validate_step(lanes)
+
+
+# TODO(#58136): remove with Gemma4BatchedPrefillRuntime.set_d2h_ack_service once #58136 lands.
+def test_batched_runtime_takes_host_acks_only(expect_error):
+    from models.demos.gemma4_d_p.tt.runners.batched_runtime import Gemma4BatchedPrefillRuntime
+
+    runtime = Gemma4BatchedPrefillRuntime.__new__(Gemma4BatchedPrefillRuntime)
+    runtime.max_lanes = 4
+    with expect_error(RuntimeError, "PREFILL_LAYER_ACK_D2H=0"):
+        runtime.set_d2h_ack_service(object())
+    runtime.max_lanes = 1
+    runtime.set_d2h_ack_service(service := object())
+    assert runtime.d2h_service is service

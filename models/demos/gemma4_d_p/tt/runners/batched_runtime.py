@@ -9,8 +9,9 @@ lane count, all compiled before any is captured: a compile pass allocates persis
 after another trace's capture they can land on that trace's freed intermediates. Projections run at HiFi2, as an
 unbatched 2k chunk does: stacked rows would otherwise switch them to LoFi, which fails the KV gates.
 
-Layer acks: lane 0's ack per layer as the unbatched runtime emits it, then num_layers more per further lane after
-the last layer, so a step of n lanes acks like n chunks in lane order and no ack precedes its KV.
+Layer acks: a step of n lanes acks like n chunks in lane order, num_layers per lane, and no ack precedes its KV. With
+several lanes they come from the host once the step finishes (set_layer_completion_sink); until #58136 lands, D2H device
+acks serve one-lane steps only (see set_d2h_ack_service).
 """
 
 import torch
@@ -34,6 +35,18 @@ class Gemma4BatchedPrefillRuntime(Gemma4PrefillRuntime):
         self.traces = {}
         self.outputs = {}
         self.saved_fidelity_override = None
+
+    def set_d2h_ack_service(self, service):
+        # TODO(#58136): temporary; remove this override, and set PREFILL_LAYER_ACK_D2H back to 1 in
+        # manifest_batched.json and test_batched_prefill_migration, once #58136 lands. Device acks for a multi-lane
+        # step end in num_layers * (n - 1) ack ops back to back, and the D2H service's reader stops for good when two
+        # of them land between its polls.
+        if service is not None and self.max_lanes > 1:
+            raise RuntimeError(
+                "D2H layer acks drop records under multi-lane steps (#58136); run batched steps with "
+                "PREFILL_LAYER_ACK_D2H=0"
+            )
+        super().set_d2h_ack_service(service)
 
     def _host_rows(self, seqs):
         """Per-lane chunk-long sequences -> the [1, total] host tensor whose CP shard is each rank's stacked slabs,
