@@ -49,10 +49,10 @@ else:
 class MATMUL_NO_MOP_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
     """Math sets the Src zero flag to keep before the no-mop init, as a preceding copy_tile_init does."""
 
-    preserve: bool = False
+    no_mop_preserve_src_zero_flag: bool = False
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool MATMUL_NO_MOP_PRESERVE_SRC_ZERO_FLAG = {str(self.preserve).lower()};"
+        return f"constexpr bool MATMUL_NO_MOP_PRESERVE_SRC_ZERO_FLAG = {str(self.no_mop_preserve_src_zero_flag).lower()};"
 
 
 def _dest_bank_max_tiles(formats, dest_acc):
