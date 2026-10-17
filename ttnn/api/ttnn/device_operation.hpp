@@ -218,7 +218,7 @@ void enqueue_mesh_workload(
 
         // Metal has no implicit queue selection; pass the thread's current TTNN queue explicitly.
         auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(
-            mesh_device, ttnn::core::get_current_command_queue_id_for_thread().get());
+            *mesh_device, ttnn::core::get_current_command_queue_id_for_thread().get());
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
             *mesh_device, workload, runtime_id, operation_name, std::move(spec_copies), trace_id);
     }

@@ -29,7 +29,7 @@ bool ShouldCaptureTensorSpecs(const tt::tt_metal::distributed::MeshDevice& mesh_
 // otherwise nullopt. The queue is only looked up with fast dispatch, so `cq_id` is not validated on slow dispatch.
 // Fetching the trace id is only supported on fast dispatch and would throw on slow dispatch.
 std::optional<tt::tt_metal::distributed::MeshTraceId> GetCurrentMeshTraceId(
-    tt::tt_metal::distributed::MeshDevice* mesh_device, uint8_t cq_id);
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, uint8_t cq_id);
 
 // Emit a debug entry for a mesh workload execution on `mesh_device`, capturing the operation name and tensor specs.
 void EmitMeshWorkloadDebugEntry(
