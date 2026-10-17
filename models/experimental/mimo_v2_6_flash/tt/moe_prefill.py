@@ -9,24 +9,233 @@ The experts are the layer's BFP4 tensors, shared with decode: w_gate_up [1, 256,
 (columns [gate | up] of this chip's slice) and w_down [1, 256, 256, hidden], DRAM interleaved tiles.
 
 Expert-major: the T x 8 (token, k) pairs are sorted by expert on the host (the routing is read back once per
-call) and each expert's pairs are padded to whole 32-row groups, so every group belongs to one expert. The
-token rows are gathered into that order (``embedding``), and an indexed ``sparse_matmul`` runs each group against
-its own expert's weights (gate|up, SwiGLU, x routing weight, down), at most 256 groups per call. The pairs' rows
-are gathered back k-major and summed over k. Each expert's weights are read once per 32-row group of its pairs
-(~1100 groups at T = 4096) instead of once per 32 tokens that touch it.
+call) and each expert's pairs are padded to whole 32-row groups, so every group belongs to one expert. The token
+rows are gathered into that order (``embedding``) and every group runs gate|up -> SwiGLU x routing weight -> down
+against its own expert; the pairs' rows are gathered back k-major and summed over k.
+
+GroupedExperts runs the groups in one ``generic_op`` program: teams of 4 cores in a row, each team a list of
+(expert, groups) jobs balanced on the host. A team core holds its slice of the job's expert in L1 for all of the
+job's groups (weights are read once per job, not per group) and computes two intermediate columns and 32 output
+columns; the team swaps h tiles over the NoC (kernels in tt/kernels/prefill/). Layouts it does not cover fall back to
+an indexed sparse_matmul per group (<= 256 groups per call), which re-reads the expert's weights for every group.
 """
+
+import heapq
+import math
 
 import torch
 
 import ttnn
 
 from .common import TILE
+from .moe_stream import is_dram_interleaved, noc_coords, semaphore_descriptor
+
+KERNEL_DIR = "models/experimental/mimo_v2_6_flash/tt/kernels/prefill"
+
+
+class GroupedExperts:
+    """The groups of every expert in one launch on teams of TEAM cores (see the module docstring).
+
+    Bank b of a w_gate_up per-chip tensor holds gate column b and up column b of every expert, 2 * kt contiguous
+    tiles per expert ([kt][gate, up]); bank b of w_down holds output columns b, b + 8, ..., ikt * cols contiguous
+    tiles per expert. Team core s takes banks s and s + TEAM: intermediate columns s and s + TEAM and their output
+    columns. Per job it reads those four contiguous runs into L1, per group the group's 128 x tiles and its routing
+    weights, computes its two h tiles, sends them to every team core, and once all 8 are in, its 32 down tiles."""
+
+    TEAM = 4
+    X_BLOCK = 16
+    X_BUFFERS = 3
+    PLAN_WORDS = 1024  # one fp32-tile-sized page per team: [jobs, (expert, first group, groups) ...]
+    CB_PLAN, CB_WGU, CB_WD, CB_X, CB_RW, CB_H_OWN, CB_H_ALL, CB_Y = range(8)
+
+    def __init__(self, moe):
+        device = moe.plan.mesh_device
+        self.moe = moe
+        self.banks = device.dram_grid_size().x
+        assert self.banks == 2 * self.TEAM, self.banks
+        self.kt = moe.hidden // TILE
+        self.ikt = moe.inter_local // TILE
+        assert self.ikt == self.banks, "intermediate tile column b comes from bank b"
+        assert self.kt % self.X_BLOCK == 0 and self.kt % self.banks == 0
+        self.cols = self.kt // self.banks  # down output tile columns per bank
+        assert self.cols % 4 == 0
+        grid = device.compute_with_storage_grid_size()
+        per_row = grid.x // self.TEAM
+        assert per_row > 0
+        self.cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(per_row * self.TEAM)]
+        self.num_teams = len(self.cores) // self.TEAM
+        self.noc = noc_coords(device, self.cores)
+        assert self.noc is not None
+        self.ranges = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(per_row * self.TEAM - 1, grid.y - 1))]
+        )
+        self.semaphore = semaphore_descriptor(self.ranges)
+        assert self.semaphore is not None
+        self.w_dtype = moe.w_gate_up.dtype
+        self.w_tile_bytes = ttnn.Tile([TILE, TILE]).get_tile_size(self.w_dtype)
+        self.gu_tiles = 2 * self.kt
+        self.wd_tiles = self.ikt * self.cols
+        self.compute_config = ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            dst_full_sync_en=False,
+        )
+
+    def _cbs(self):
+        def cb(index, dtype, pages):
+            tile = ttnn.Tile([TILE, TILE])
+            page = tile.get_tile_size(dtype)
+            fmt = ttnn.CBFormatDescriptor(
+                buffer_index=index, data_format=dtype, page_size=page, tile=ttnn.TileDescriptor(tile)
+            )
+            return ttnn.CBDescriptor(total_size=pages * page, core_ranges=self.ranges, format_descriptors=[fmt])
+
+        bf = ttnn.bfloat16
+        return [
+            cb(self.CB_PLAN, ttnn.float32, 1),
+            cb(self.CB_WGU, self.w_dtype, 2 * self.gu_tiles),
+            cb(self.CB_WD, self.w_dtype, 2 * self.wd_tiles),
+            cb(self.CB_X, bf, self.X_BUFFERS * self.X_BLOCK),
+            cb(self.CB_RW, bf, 2),
+            cb(self.CB_H_OWN, bf, 4),
+            cb(self.CB_H_ALL, bf, 2 * self.ikt),
+            cb(self.CB_Y, bf, 8),
+        ]
+
+    def plan(self, groups):
+        """groups [E] (32-row groups per expert, expert-major) -> int32 [teams, PLAN_WORDS] team job lists: experts
+        split into chunks of at most ceil(G / teams) groups, longest first onto the least loaded team."""
+        total = int(groups.sum())
+        cap = max(1, math.ceil(total / self.num_teams))
+        first = (torch.cumsum(groups, 0) - groups).tolist()
+        jobs = []
+        for e, n in enumerate(groups.tolist()):
+            for off in range(0, n, cap):
+                jobs.append((min(cap, n - off), e, first[e] + off))
+        jobs.sort(reverse=True)
+        heap = [(0.0, t) for t in range(self.num_teams)]
+        lists = [[0] for _ in range(self.num_teams)]
+        for n, e, g0 in jobs:
+            load, t = heapq.heappop(heap)
+            lists[t] += (e, g0, n)
+            lists[t][0] += 1
+            heapq.heappush(heap, (load + n + 0.5, t))  # + about half a group to load the expert's weights
+        table = [lst + [0] * (self.PLAN_WORDS - len(lst)) for lst in lists]
+        assert all(len(lst) == self.PLAN_WORDS for lst in table)
+        return torch.tensor(table, dtype=torch.int32)
+
+    def __call__(self, packed, row_weights, plan, out):
+        """packed [1, 1, G * 32, H] bf16 tiles (rows in group order), row_weights [1, 1, G * 32, 32] bf16 tiles (row r:
+        its routing weight in every column), plan from ``plan`` (uint32 row-major, DRAM) -> fills ``out`` (bf16 tiles,
+        like packed) with each row's weighted expert output."""
+        moe = self.moe
+        w_gu, w_d = moe.w_gate_up, moe.w_down
+        for t in (packed, row_weights, out, w_gu, w_d):
+            assert is_dram_interleaved(t) and t.layout == ttnn.TILE_LAYOUT
+        assert w_gu.dtype == self.w_dtype and w_d.dtype == self.w_dtype
+
+        reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        for i, core in enumerate(self.cores):
+            team, s = divmod(i, self.TEAM)
+            b0, b1 = s, s + self.TEAM
+            reader_rt[core.x][core.y] = [
+                plan.buffer_address(),
+                team,
+                b0,
+                b1,
+                w_gu.buffer_address(),
+                w_d.buffer_address(),
+                packed.buffer_address(),
+                row_weights.buffer_address(),
+            ]
+            peers = self.noc[team * self.TEAM : (team + 1) * self.TEAM]
+            writer_rt[core.x][core.y] = [b0, b1, out.buffer_address()] + [v for c in peers for v in (c.x, c.y)]
+            compute_rt[core.x][core.y] = []
+
+        def dm(name, ct, rt, processor, noc):
+            return ttnn.KernelDescriptor(
+                kernel_source=f"{KERNEL_DIR}/{name}",
+                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                core_ranges=self.ranges,
+                compile_time_args=ct,
+                runtime_args=rt,
+                config=ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc),
+            )
+
+        reader = dm(
+            "experts_reader.cpp",
+            [
+                self.CB_PLAN,
+                self.CB_WGU,
+                self.CB_WD,
+                self.CB_X,
+                self.CB_RW,
+                self.kt,
+                self.X_BLOCK,
+                self.gu_tiles,
+                self.wd_tiles,
+                self.w_tile_bytes,
+                self.PLAN_WORDS * 4,
+            ],
+            reader_rt,
+            ttnn.DataMovementProcessor.RISCV_1,
+            ttnn.NOC.RISCV_0_default,
+        )
+        writer = dm(
+            "experts_writer.cpp",
+            [
+                self.CB_PLAN,
+                self.CB_H_OWN,
+                self.CB_H_ALL,
+                self.CB_Y,
+                self.TEAM,
+                self.ikt,
+                self.kt,
+                self.cols,
+                self.banks,
+                0,
+            ],
+            writer_rt,
+            ttnn.DataMovementProcessor.RISCV_0,
+            ttnn.NOC.RISCV_1_default,
+        )
+        compute = ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/experts_compute.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=self.ranges,
+            compile_time_args=[
+                self.CB_PLAN,
+                self.CB_WGU,
+                self.CB_WD,
+                self.CB_X,
+                self.CB_RW,
+                self.CB_H_OWN,
+                self.CB_H_ALL,
+                self.CB_Y,
+                self.kt,
+                self.X_BLOCK,
+                self.gu_tiles,
+                self.wd_tiles,
+                self.ikt,
+                self.cols,
+            ],
+            runtime_args=compute_rt,
+            config=self.compute_config,
+        )
+        program = ttnn.ProgramDescriptor(
+            kernels=[reader, writer, compute], cbs=self._cbs(), semaphores=[self.semaphore]
+        )
+        ttnn.generic_op([plan, w_gu, w_d, packed, row_weights, out], program)
+        return out
 
 
 class PrefillExperts:
     def __init__(self, moe):
         self.moe = moe
         self.all_experts = None  # the sparsity operand indexed sparse_matmul takes (not read)
+        self.grouped = None
+        self.grouped_failed = False
 
     def _upload(self, t, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
         moe = self.moe
@@ -34,9 +243,17 @@ class PrefillExperts:
             t, device=moe.plan.mesh_device, dtype=dtype, layout=layout, mesh_mapper=moe.plan.replicate()
         )
 
+    def _grouped(self):
+        if self.grouped is None and not self.grouped_failed:
+            try:
+                self.grouped = GroupedExperts(self.moe)
+            except AssertionError:
+                self.grouped_failed = True
+        return self.grouped
+
     def plan(self, indices, weights, num_tokens):
         """Host plan from chip 0's routing (identical on every chip): per packed row its token and routing weight
-        (padding rows: token 0, weight 0), each group's expert, and each (k, token) pair's packed row."""
+        (padding rows: token 0, weight 0), the 32-row groups per expert, and each (k, token) pair's packed row."""
         E, K = self.moe.num_experts, indices.shape[-1]
         ids = ttnn.to_torch(ttnn.get_device_tensors(indices)[0]).reshape(-1).long()
         wts = ttnn.to_torch(ttnn.get_device_tensors(weights)[0]).reshape(-1).float()
@@ -56,28 +273,66 @@ class PrefillExperts:
         pair_row = torch.empty(n, dtype=torch.int32)
         pair_row[order] = dest.to(torch.int32)
         pair_row = pair_row.reshape(num_tokens, K).T.reshape(1, -1)  # k-major: entry k * T + t
-        group_expert = torch.repeat_interleave(torch.arange(E, dtype=torch.int32), groups)
-        return row_token, row_weight, group_expert, pair_row
+        return row_token, row_weight, groups, pair_row
 
     def __call__(self, x, indices, weights):
         """x [1, 1, T, hidden] (T a multiple of 32), indices [1, 1, T, 8] (uint), weights [1, 1, T, 8] (fp32,
         normalized) -> partial [1, 1, T, hidden] bf16."""
         moe = self.moe
-        T, H, I, E = x.shape[-2], moe.hidden, moe.inter_local, moe.num_experts
+        T, H = x.shape[-2], moe.hidden
         K = indices.shape[-1]
-        if self.all_experts is None:
-            self.all_experts = self._upload(torch.ones(1, 1, 1, E), ttnn.bfloat16)
-        row_token, row_weight, group_expert, pair_row = self.plan(indices, weights, T)
-        G = group_expert.numel()
+        row_token, row_weight, groups, pair_row = self.plan(indices, weights, T)
+        G = int(groups.sum())
+        R = G * TILE
 
-        row_token_tt = self._upload(row_token.reshape(1, -1), ttnn.uint32)
-        row_weight_tt = self._upload(row_weight.reshape(1, G, TILE, 1), ttnn.bfloat16, ttnn.TILE_LAYOUT)
         x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (T, H))
-        packed = ttnn.embedding(row_token_tt, x_rm, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1, G * 32, H]
-        packed = ttnn.reshape(packed, (1, G, TILE, H))
+        row_token_tt = self._upload(row_token.reshape(1, -1), ttnn.uint32)
+        packed = ttnn.embedding(row_token_tt, x_rm, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1, R, H]
         x_rm.deallocate(True)
         row_token_tt.deallocate(True)
 
+        grouped = self._grouped()
+        if grouped is not None:
+            packed = ttnn.reshape(packed, (1, 1, R, H))
+            row_weights_rm = self._upload(
+                row_weight.reshape(1, 1, R, 1).expand(1, 1, R, TILE).to(torch.bfloat16).contiguous(), ttnn.bfloat16
+            )
+            row_weights = ttnn.to_layout(row_weights_rm, ttnn.TILE_LAYOUT)  # tilized on device: much cheaper
+            row_weights_rm.deallocate(True)
+            plan = self._upload(grouped.plan(groups), ttnn.uint32)
+            y = ttnn.empty(
+                [1, 1, R, H],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=moe.plan.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            grouped(packed, row_weights, plan, y)
+            for t in (packed, row_weights, plan):
+                t.deallocate(True)
+        else:
+            y = self._sparse_groups(packed, row_weight, groups)
+        y_rm = ttnn.reshape(ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT), (R, H))
+        y.deallocate(True)
+        pair_row_tt = self._upload(pair_row, ttnn.uint32)
+        pairs = ttnn.embedding(pair_row_tt, y_rm, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1, K * T, H]
+        y_rm.deallocate(True)
+        pair_row_tt.deallocate(True)
+        out = ttnn.sum(ttnn.reshape(pairs, (K, T, H)), dim=0, keepdim=True)
+        pairs.deallocate(True)
+        return ttnn.reshape(out, (1, 1, T, H))
+
+    def _sparse_groups(self, packed, row_weight, groups):
+        """Fallback: an indexed sparse_matmul per group against the group's expert (re-reads its weights per group).
+        packed [1, R, H] -> [1, G, 32, H]."""
+        moe = self.moe
+        H, I, E = moe.hidden, moe.inter_local, moe.num_experts
+        G = int(groups.sum())
+        if self.all_experts is None:
+            self.all_experts = self._upload(torch.ones(1, 1, 1, E), ttnn.bfloat16)
+        group_expert = torch.repeat_interleave(torch.arange(E, dtype=torch.int32), groups)
+        packed = ttnn.reshape(packed, (1, G, TILE, H))
+        row_weight_tt = self._upload(row_weight.reshape(1, G, TILE, 1), ttnn.bfloat16, ttnn.TILE_LAYOUT)
         outs = []
         for g0 in range(0, G, E):  # indexed sparse_matmul takes at most E groups per call
             g1 = min(G, g0 + E)
@@ -100,23 +355,13 @@ class PrefillExperts:
             act_w = ttnn.mul(act, w, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             act.deallocate(True)
             w.deallocate(True)
-            down = ttnn.sparse_matmul(act_w, moe.w_down, program_config=moe.down_program, **mm)  # [1, g, 32, H]
+            outs.append(ttnn.sparse_matmul(act_w, moe.w_down, program_config=moe.down_program, **mm))
             act_w.deallocate(True)
             ids.deallocate(True)
-            outs.append(down)
         packed.deallocate(True)
         row_weight_tt.deallocate(True)
-
         y = ttnn.concat(outs, dim=1) if len(outs) > 1 else outs[0]
         if len(outs) > 1:
             for t in outs:
                 t.deallocate(True)
-        y_rm = ttnn.reshape(ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT), (G * TILE, H))
-        y.deallocate(True)
-        pair_row_tt = self._upload(pair_row, ttnn.uint32)
-        pairs = ttnn.embedding(pair_row_tt, y_rm, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1, K * T, H]
-        y_rm.deallocate(True)
-        pair_row_tt.deallocate(True)
-        out = ttnn.sum(ttnn.reshape(pairs, (K, T, H)), dim=0, keepdim=True)
-        pairs.deallocate(True)
-        return ttnn.reshape(out, (1, 1, T, H))
+        return y
