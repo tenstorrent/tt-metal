@@ -121,12 +121,15 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
  * Enables FP32 accumulation in the destination register.
  *
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
- * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data)
- * for 32-bit destination reads. UNPACK/PACK tensix_sync then notify MATH
- * and wait; MATH writes dest-acc CFG, drains until those writes have retired,
- * and only then releases them -- the release is a RISC store, so the drain is
- * what orders it behind the writes. Safe to call mid-kernel without
- * re-running compute_kernel_hw_startup.
+ * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data and
+ * Read_int8, derived from the new mode and the pack source format of `ocb`
+ * the way the packer's own configure derives them) for 32-bit destination
+ * reads. UNPACK/PACK tensix_sync then notify MATH and wait; MATH writes
+ * dest-acc CFG, drains until those writes have retired, and only then
+ * releases them -- the release is a RISC store, so the drain is what orders
+ * it behind the writes. Safe to call mid-kernel without re-running
+ * compute_kernel_hw_startup; a later pack_reconfig_data_format keeps the
+ * packer in the mode this call set.
  *
  * All three TRISC threads must call this together. TRISC mailboxes must not
  * be in use.
@@ -137,13 +140,17 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
  * Only available on Wormhole and Blackhole. Not supported on Quasar (compile error)
  *
  * Return value: None
+ *
+ * | Param Type | Name | Description                                           | Type     | Valid Range | Required |
+ * |------------|------|-------------------------------------------------------|----------|-------------|----------|
+ * | Function   | ocb  | The output circular buffer the packer is configured for | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-ALWI void enable_fp32_dest_acc() {
+ALWI void enable_fp32_dest_acc(uint32_t ocb) {
     UNPACK((llk_unpack_wait_fp32_dest_acc()));
     MATH((llk_math_set_fp32_dest_acc(true)));
-    PACK((llk_pack_wait_fp32_dest_acc()));
+    PACK((llk_pack_wait_fp32_dest_acc(ocb)));
 }
 #endif
 
@@ -153,12 +160,15 @@ ALWI void enable_fp32_dest_acc() {
  * BF16 accumulation mode.
  *
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
- * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data)
- * to disable 32-bit destination reads. UNPACK/PACK tensix_sync then notify
- * MATH and wait; MATH writes dest-acc CFG, drains until those writes have
- * retired, and only then releases them -- the release is a RISC store, so the
- * drain is what orders it behind the writes. Safe to call mid-kernel without
- * re-running compute_kernel_hw_startup.
+ * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data and
+ * Read_int8, derived from the new mode and the pack source format of `ocb`
+ * the way the packer's own configure derives them: a 32-bit output such as
+ * Int32, UInt32 or Float32 keeps its 32-bit destination read). UNPACK/PACK
+ * tensix_sync then notify MATH and wait; MATH writes dest-acc CFG, drains
+ * until those writes have retired, and only then releases them -- the release
+ * is a RISC store, so the drain is what orders it behind the writes. Safe to
+ * call mid-kernel without re-running compute_kernel_hw_startup; a later
+ * pack_reconfig_data_format keeps the packer in the mode this call set.
  *
  * All three TRISC threads must call this together. TRISC mailboxes must not
  * be in use.
@@ -166,13 +176,17 @@ ALWI void enable_fp32_dest_acc() {
  * Only available on Wormhole and Blackhole. Not supported on Quasar (compile error)
  *
  * Return value: None
+ *
+ * | Param Type | Name | Description                                           | Type     | Valid Range | Required |
+ * |------------|------|-------------------------------------------------------|----------|-------------|----------|
+ * | Function   | ocb  | The output circular buffer the packer is configured for | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-ALWI void disable_fp32_dest_acc() {
+ALWI void disable_fp32_dest_acc(uint32_t ocb) {
     UNPACK((llk_unpack_wait_fp32_dest_acc()));
     MATH((llk_math_set_fp32_dest_acc(false)));
-    PACK((llk_pack_wait_fp32_dest_acc()));
+    PACK((llk_pack_wait_fp32_dest_acc(ocb)));
 }
 #endif
 
@@ -182,7 +196,8 @@ ALWI void disable_fp32_dest_acc() {
  * of the kernel by calling enable_fp32_dest_acc() or disable_fp32_dest_acc().
  *
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
- * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data).
+ * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data and
+ * Read_int8, derived from the mode and the pack source format of `ocb`).
  * This is a lightweight, standalone reconfiguration that is safe to call
  * mid-kernel without re-running compute_kernel_hw_startup.
  *
@@ -194,19 +209,20 @@ ALWI void disable_fp32_dest_acc() {
  *
  * Return value: None
  *
- * | Param Type | Name   | Description                                         | Type | Valid Range | Required |
- * |------------|--------|-----------------------------------------------------|------|-------------|----------|
- * | Template   | enable | Dest-acc mode the enclosed section needs            | bool | true, false | True     |
+ * | Param Type | Name   | Description                                             | Type     | Valid Range | Required |
+ * |------------|--------|---------------------------------------------------------|----------|-------------|----------|
+ * | Template   | enable | Dest-acc mode the enclosed section needs                | bool     | true, false | True     |
+ * | Function   | ocb    | The output circular buffer the packer is configured for | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
 #ifndef ARCH_QUASAR
 template <bool enable>
-ALWI void set_fp32_dest_acc() {
+ALWI void set_fp32_dest_acc(uint32_t ocb) {
     if constexpr (enable != static_cast<bool>(DST_ACCUM_MODE)) {
         if constexpr (enable) {
-            enable_fp32_dest_acc();
+            enable_fp32_dest_acc(ocb);
         } else {
-            disable_fp32_dest_acc();
+            disable_fp32_dest_acc(ocb);
         }
     }
 }
@@ -219,7 +235,8 @@ ALWI void set_fp32_dest_acc() {
  * disable_fp32_dest_acc().
  *
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
- * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data).
+ * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data and
+ * Read_int8, derived from the mode and the pack source format of `ocb`).
  * This is a lightweight, standalone reconfiguration that is safe to call
  * mid-kernel without re-running compute_kernel_hw_startup.
  *
@@ -230,19 +247,20 @@ ALWI void set_fp32_dest_acc() {
  *
  * Return value: None
  *
- * | Param Type | Name   | Description                                         | Type | Valid Range | Required |
- * |------------|--------|-----------------------------------------------------|------|-------------|----------|
- * | Template   | enable | Same flag passed to the matching set_fp32_dest_acc  | bool | true, false | True     |
+ * | Param Type | Name   | Description                                             | Type     | Valid Range | Required |
+ * |------------|--------|---------------------------------------------------------|----------|-------------|----------|
+ * | Template   | enable | Same flag passed to the matching set_fp32_dest_acc      | bool     | true, false | True     |
+ * | Function   | ocb    | The output circular buffer the packer is configured for | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
 #ifndef ARCH_QUASAR
 template <bool enable>
-ALWI void restore_fp32_dest_acc() {
+ALWI void restore_fp32_dest_acc(uint32_t ocb) {
     if constexpr (enable != static_cast<bool>(DST_ACCUM_MODE)) {
         if constexpr (DST_ACCUM_MODE) {
-            enable_fp32_dest_acc();
+            enable_fp32_dest_acc(ocb);
         } else {
-            disable_fp32_dest_acc();
+            disable_fp32_dest_acc(ocb);
         }
     }
 }
