@@ -31,6 +31,36 @@ on:
         required: false
         default: false
         type: boolean
+      tests-yaml:
+        description: "Test list to build the matrix from"
+        required: false
+        default: ./tests/pipeline_reorg/llk_perf_tests.yaml
+        type: string
+      compile-runner:
+        description: "Compile on this CPU-only runner, measure on the board (blank = compile on the board)"
+        required: false
+        default: ""
+        type: string
+      compile-workers:
+        description: "Compile workers (pytest -n) on the compile runner"
+        required: false
+        default: 10
+        type: number
+      debug-symbols:
+        description: "Build the ELFs with -g"
+        required: false
+        default: true
+        type: boolean
+      exit-first:
+        description: "Stop a shard's measuring pass at its first failure (-x)"
+        required: false
+        default: true
+        type: boolean
+      elf-check:
+        description: "With compile-runner: rebuild a sample on the board and compare the ELFs"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -59,6 +89,13 @@ jobs:
       speed-of-light: ${{ github.event_name == 'schedule' || inputs.speed-of-light }}
       # Nightly runs always publish; manual runs use the checkbox.
       upload-to-warehouse: ${{ github.event_name == 'schedule' || inputs.upload-to-warehouse }}
+      # Scheduled runs have no inputs: they keep today's defaults below.
+      tests-yaml: ${{ inputs.tests-yaml || './tests/pipeline_reorg/llk_perf_tests.yaml' }}
+      compile-runner: ${{ inputs.compile-runner || '' }}
+      compile-workers: ${{ inputs.compile-workers || 10 }}
+      debug-symbols: ${{ github.event_name == 'schedule' || inputs.debug-symbols }}
+      exit-first: ${{ github.event_name == 'schedule' || inputs.exit-first }}
+      elf-check: ${{ github.event_name != 'schedule' && inputs.elf-check }}
     secrets: inherit
 
   gate:
