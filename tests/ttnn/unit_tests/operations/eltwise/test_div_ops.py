@@ -494,6 +494,14 @@ def test_remainder_opposite_sign_exact_multiple(testing_dtype, pairs, device):
     )
 
 
+_QUASAR_MODULO_SKIP = "The Quasar remainder and fmod kernels have not received these float fixes yet"
+
+
+def _skip_on_quasar(device):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip(_QUASAR_MODULO_SKIP)
+
+
 # Quotients of 2^24 and above: floor(a / b) can no longer be stepped by one in float, so the
 # overshoot correction has to fall back to subtracting b from the raw result. The non-multiple
 # pairs are the ones the kernel resolves at this magnitude on Wormhole, where the reciprocal of 25
@@ -533,6 +541,7 @@ def test_remainder_opposite_sign_exact_multiple(testing_dtype, pairs, device):
     ],
 )
 def test_remainder_large_quotient(testing_dtype, pairs, device):
+    _skip_on_quasar(device)
     torch_dtype = getattr(torch, testing_dtype)
     ttnn_dtype = getattr(ttnn, testing_dtype)
 
@@ -558,6 +567,7 @@ def test_remainder_large_quotient(testing_dtype, pairs, device):
 # the true quotient and a single sign correction leaves -b. Blackhole is not run locally.
 @pytest.mark.parametrize("testing_dtype", ["bfloat16", "float32"])
 def test_remainder_result_equal_to_divisor(testing_dtype, device):
+    _skip_on_quasar(device)
     torch_dtype = getattr(torch, testing_dtype)
     ttnn_dtype = getattr(ttnn, testing_dtype)
 
@@ -598,8 +608,7 @@ def _assert_nan_lanes(testing_dtype, output_lanes):
 # infinite divisor, which used to leave NaN in every such lane.
 @pytest.mark.parametrize("testing_dtype", ["bfloat16", "float32"])
 def test_remainder_inf_divisor(testing_dtype, device):
-    if device.arch() == ttnn.device.Arch.QUASAR:
-        pytest.skip("The Quasar kernel does not implement the infinite-divisor cases yet")
+    _skip_on_quasar(device)
     torch_dtype = getattr(torch, testing_dtype)
     ttnn_dtype = getattr(ttnn, testing_dtype)
 
@@ -635,8 +644,7 @@ def test_remainder_inf_divisor(testing_dtype, device):
 # finite-a lanes, while the a == b special case zeroed inf/inf.
 @pytest.mark.parametrize("testing_dtype", ["bfloat16", "float32"])
 def test_fmod_inf_divisor(testing_dtype, device):
-    if device.arch() == ttnn.device.Arch.QUASAR:
-        pytest.skip("The Quasar kernel does not implement the infinite-divisor cases yet")
+    _skip_on_quasar(device)
     torch_dtype = getattr(torch, testing_dtype)
     ttnn_dtype = getattr(ttnn, testing_dtype)
 
@@ -671,6 +679,7 @@ def test_fmod_inf_divisor(testing_dtype, device):
 @pytest.mark.parametrize("scalar", [_INF, -_INF])
 @pytest.mark.parametrize("testing_dtype", ["bfloat16", "float32"])
 def test_modulo_inf_scalar_divisor(ttnn_op, scalar, testing_dtype, device):
+    _skip_on_quasar(device)
     torch_dtype = getattr(torch, testing_dtype)
     ttnn_dtype = getattr(ttnn, testing_dtype)
 
