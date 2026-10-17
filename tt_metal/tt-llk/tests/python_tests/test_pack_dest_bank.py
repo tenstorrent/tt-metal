@@ -3,7 +3,6 @@
 
 import pytest
 import torch
-from conftest import blackhole_only
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TILE_DIMENSIONS
@@ -93,7 +92,6 @@ def test_pack_dest_bank(
     )
 
 
-@blackhole_only
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
