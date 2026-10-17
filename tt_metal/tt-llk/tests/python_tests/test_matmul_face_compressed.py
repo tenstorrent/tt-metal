@@ -14,6 +14,7 @@ from helpers.compressed_utils import (
     generate_refined_face_assignment,
     run_compressed,
 )
+from helpers.llk_params import DestAccumulation
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.tile_constants import FACE_C_DIM
@@ -231,7 +232,9 @@ SUPPORTED_M = {1, 8}
 SUPPORTED_FORMATS = {FMT_CODE[f] for f in ("bfp0", "bfp2", "bfp4")}
 
 
-def run_face_compressed(M, K, N, assignment, pcc_threshold=None):
+def run_face_compressed(
+    M, K, N, assignment, pcc_threshold=None, dest_acc=DestAccumulation.No
+):
     run_compressed(
         M,
         K,
@@ -245,6 +248,7 @@ def run_face_compressed(M, K, N, assignment, pcc_threshold=None):
         pack_b,
         encode_meta,
         pcc_threshold=pcc_threshold,
+        dest_acc=dest_acc,
     )
 
 
@@ -425,12 +429,16 @@ def test_matmul_face_compressed_interleaved_matched(shape, formats, interleave_n
 # face of the half lands on a live accumulation. Zero faces sit in K-face-rows >= 1 so the
 # faces already hold partials, and the sets are multiples of four so promote_assignment
 # leaves them alone. The skip used to be a ZEROACC with the row select the Wormhole tree
-# treats as a no-op; on Blackhole it marks the last 16-row block of the DEST half, output
-# face 31 (tile 15, second face), as zero whenever the DEST counter is past 256 rows when it
-# issues, i.e. for a zero face at column 17 or later (measured column by column on p100a:
-# columns 0-16 left every face intact, 17-31 wiped face 31's partial). Every case must pass,
-# and a mis-stepped skip would shift every later face, so the cases at lower columns and
-# narrower widths guard the counter steps of each regime (one / odd / even).
+# treats as a no-op; on Blackhole, with the DEST counter past 256 rows when it issues, it
+# zeroes the last 16-row block of that DEST half, output face 31 (tile 15, second face), i.e.
+# for a zero face at column 17 or later (measured column by column on p100a: columns 0-16
+# left every face intact, 17-31 wiped face 31's partial). Every case must pass, and a
+# mis-stepped skip would shift every later face, so the cases at lower columns and narrower
+# widths guard the counter steps of each regime (one / odd / even). Where a case exists to
+# reach one skip encoding of llk_math_face_compressed_mm.h, its id names the code-sequence
+# fragment: the meta that holds the zero faces decodes to it (face grid = (K//16) x (N//16),
+# a meta is four consecutive faces in row-major order, and a K-face-row ends inside a meta
+# only at an odd width).
 
 ZERO_FACE_CASES = [
     # (M, K, N, format, zero faces as (k_face_row, face_col)), face grid = (K//16) x (N//16)
@@ -453,6 +461,25 @@ ZERO_FACE_CASES = [
         "bfp4",
         ((1, 28), (1, 29), (1, 30), (1, 31)),
         id="ct16-M8-k1-c28..31",
+    ),
+    # Even regime, incB skip `i` with the single-row SrcB step (M=1).
+    pytest.param(
+        1,
+        128,
+        512,
+        "bfp4",
+        ((1, 28), (1, 29), (1, 30), (1, 31)),
+        id="ct16-M1-k1-c28..31-i",
+    ),
+    # Even regime, clrB skip `c` on K-face-row 3 with rows 4-7 still to come: the skip has to
+    # reset the SrcB counter as well as DEST.
+    pytest.param(
+        8,
+        128,
+        512,
+        "bfp4",
+        ((3, 28), (3, 29), (3, 30), (3, 31)),
+        id="ct16-M8-k3-c28..31-c",
     ),
     pytest.param(
         8,
@@ -484,6 +511,42 @@ ZERO_FACE_CASES = [
         ((1, 10), (1, 11), (1, 12), (1, 13)),
         id="ct7-M8-k1-c10..13",
     ),
+    # Odd regime, clrB skip `c` on K-face-row 3 with rows 4-7 still to come.
+    pytest.param(
+        8,
+        128,
+        224,
+        "bfp4",
+        ((3, 10), (3, 11), (3, 12), (3, 13)),
+        id="ct7-M8-k3-c10..13-c",
+    ),
+    # Odd regime, midIncB: an even K-face-row ends on the second face of a meta, so the meta's
+    # first two faces take the two-face fragment -- both zero `hhi`, the row's last face zero
+    # `hhI`, the one before it zero `Ni`.
+    pytest.param(
+        8,
+        256,
+        224,
+        "bfp4",
+        ((2, 12), (2, 13), (4, 12), (4, 13)),
+        id="ct7-M8-midIncB-hhi",
+    ),
+    pytest.param(
+        8,
+        256,
+        224,
+        "bfp4",
+        ((2, 12), (4, 12), (6, 12), (8, 12)),
+        id="ct7-M8-midIncB-hhI",
+    ),
+    pytest.param(
+        8,
+        256,
+        224,
+        "bfp4",
+        ((2, 13), (4, 13), (6, 13), (8, 13)),
+        id="ct7-M8-midIncB-Ni",
+    ),
     pytest.param(
         8, 128, 32, "bfp4", ((1, 0), (2, 1), (3, 0), (3, 1)), id="ct1-M8-mixed"
     ),
@@ -491,9 +554,22 @@ ZERO_FACE_CASES = [
         1, 128, 32, "bfp4", ((1, 1), (2, 0), (4, 1), (5, 0)), id="ct1-M1-mixed"
     ),
     pytest.param(
-        8, 128, 32, "bfp2", ((0, 1), (1, 0), (5, 1), (6, 0)), id="ct1-M8-bfp2-mixed"
+        8, 128, 32, "bfp2", ((2, 1), (1, 0), (5, 1), (6, 0)), id="ct1-M8-bfp2-mixed"
     ),
+    # One regime: a meta is two K-face-rows of the two-face tile, (k,0) (k,1) (k+1,0) (k+1,1)
+    # with k even, and its first three faces pick the midRevB fragment -- here the two the MOP
+    # issues directly (`hrh`, `hrN`) and the two replayed ones the mixed cases above miss
+    # (`hRh`, `NrN`).
+    pytest.param(8, 128, 32, "bfp4", ((2, 0), (2, 1), (3, 0), (3, 1)), id="ct1-M8-hrh"),
+    pytest.param(8, 128, 32, "bfp4", ((2, 0), (2, 1), (4, 0), (4, 1)), id="ct1-M8-hrN"),
+    pytest.param(8, 128, 32, "bfp4", ((2, 0), (3, 0), (4, 0), (5, 0)), id="ct1-M8-hRh"),
+    pytest.param(8, 128, 32, "bfp4", ((2, 1), (3, 1), (4, 1), (5, 1)), id="ct1-M8-NrN"),
 ]
+
+# The ct_dim == 1 cases again with a 32-bit DEST: the split accumulation's finalize must keep each face's
+# even partial in DEST and only pass the odd one through SrcB, so neither face loses more width than the
+# other (the per-face error log in run_compressed shows it).
+CT1_ZERO_FACE_CASES = [case for case in ZERO_FACE_CASES if case.values[2] == 32]
 
 
 def assign_zero_faces(K, N, fmt, zero_faces):
@@ -514,6 +590,14 @@ def test_matmul_face_compressed_zero_faces(M, K, N, fmt, zero_faces):
         "(else promote_assignment would un-zero the faces under test)"
     )
     run_face_compressed(M, K, N, assignment)
+
+
+@blackhole_only
+@pytest.mark.parametrize("M, K, N, fmt, zero_faces", CT1_ZERO_FACE_CASES)
+def test_matmul_face_compressed_zero_faces_fp32_dest(M, K, N, fmt, zero_faces):
+    """The ct_dim == 1 split accumulation with a 32-bit DEST."""
+    assignment = assign_zero_faces(K, N, fmt, zero_faces)
+    run_face_compressed(M, K, N, assignment, dest_acc=DestAccumulation.Yes)
 
 
 # ---------------------------------------------------------------------------

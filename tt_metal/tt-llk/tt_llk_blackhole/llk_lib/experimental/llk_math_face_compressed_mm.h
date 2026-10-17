@@ -20,16 +20,20 @@ using namespace ckernel::math;
 
 // Dest rows one skip instruction steps: INCRWC's row increment is four bits wide, so this is half of a
 // 16-row face slot. The multi-tile sequence issues two per skipped face; the ct_dim == 1 sequence walks
-// dest in steps of this size (see the split layout below), so there one is a whole face.
+// dest in steps of this size (see the split layout below).
 constexpr std::uint32_t _llk_math_face_compressed_mm_dest_step_rows_ = 8;
 
 // ct_dim == 1 split accumulation: consecutive MVMULs land in different 8-row blocks so the FPU does not
-// stall on the read-after-write. A meta covers two K rows of the two-face tile, and dest walks 0, 8, 16, 24
-// across its four faces, so face 0 accumulates the even K row at row 0 and the odd one at row 16, face 1 at
-// rows 8 and 24. Finalize merges each pair into the face's slot, rows 0 and 16.
-constexpr std::uint32_t _llk_math_face_compressed_mm_split_face0_odd_row_  = 16;
-constexpr std::uint32_t _llk_math_face_compressed_mm_split_face1_even_row_ = 8;
-constexpr std::uint32_t _llk_math_face_compressed_mm_split_face1_odd_row_  = 24;
+// stall on the read-after-write. A meta covers two K rows of the two-face tile. Each face accumulates the
+// even K row in its slot, rows 0 and 16, and the odd one _split_partial_rows_ above it, rows 8 and 24;
+// finalize adds the odd partial into the slot, so the accumulation never leaves dest and keeps its full
+// width. The dest counter walks 0, 8, 8, 16 over the meta's four faces (noB +8, revB +0, noB +8), which
+// keeps every skip a single INCRWC, and the face-1 MVMULs (revB and the endings) write
+// _split_face1_dst_ rows past the counter, so face 1's rows sit one face above face 0's.
+constexpr std::uint32_t _llk_math_face_compressed_mm_split_partial_rows_ = _llk_math_face_compressed_mm_dest_step_rows_;
+constexpr std::uint32_t _llk_math_face_compressed_mm_split_face1_dst_    = FACE_R_DIM - _llk_math_face_compressed_mm_dest_step_rows_;
+// SrcB row where finalize parks face 1's odd partial; face 0's goes to row 0 and ADDR_MOD_4 steps between them.
+constexpr std::uint32_t _llk_math_face_compressed_mm_finalize_face1_srcb_row_ = 8;
 
 // The math thread owns the replay buffer from replay_buf_offset up; the SFPU owns everything below it.
 constexpr std::uint32_t _llk_math_face_compressed_mm_replay_base_ = ckernel::math::replay_buf_offset;
@@ -40,17 +44,17 @@ constexpr std::uint32_t _llk_math_face_compressed_mm_replay_slot_ = ckernel::REP
 // face in with MVMUL and the letter names the addrmod that runs with it, so it says what moves after the
 // face is handled; lower case skips a face with no data, stepping the same counters with SETRWC or INCRWC:
 //
-//   h       skip: dest advances 8 rows, both sources hold -- one face at ct_dim == 1, half a face otherwise
+//   h       skip: dest advances 8 rows, both sources hold -- half of noB's step, or all of it at ct_dim == 1
 //   N   noB    dest advances one face, both sources hold
 //   i / I   incB   SrcB advances one activation row block, dest restarts
 //   c / C   clrB   end of a K block: the SrcB and dest counters reset
-//   r / R   revB   like incB but dest advances to the next split-accumulation row (ct_dim == 1)
+//   r / R   revB   SrcB advances one activation row block, dest holds (ct_dim == 1, see the split layout)
 //
-// Skips are plain counter instructions, never ZEROACC: on Blackhole the 16-row ZEROACC is not a no-op for
-// any row select, it marks a face of the current dest half as zero (the row select the Wormhole tree uses
-// as a no-op lands on the half's last face once the dest counter is past 256 rows), which at ct_dim == 16
-// is a live output face. Each string is an overlap-packing of exactly the fragments its tables ask for,
-// sized to the instructions this thread owns:
+// Skips are plain counter instructions, never ZEROACC: no row select is known to make Blackhole's 16-row
+// ZEROACC a no-op, and the one the Wormhole tree uses as a no-op was measured to zero the last face of the
+// current dest half once the dest counter is past 256 rows, which at ct_dim == 16 is a live output face.
+// Each string is an overlap-packing of exactly the fragments its tables ask for, sized to the instructions
+// this thread owns:
 //
 //   multi_seq (ct_dim >= 2) needs hh i c N I C singly, plus hhi Ni hhI NI for the two-face midIncB only an
 //   odd width emits. They pack into twelve characters.
@@ -67,7 +71,7 @@ static constexpr auto _llk_math_face_compressed_mm_even_l1_table_ = ckernel::cod
     [](const std::uint32_t m) -> std::uint32_t
     {
         const std::uint32_t faces123 = (m >> 2) & 0b111;
-        return TT_OP_MOP(p_mop::MASK_LOOP, 2, faces123); // hhh case encoded in the mop
+        return TT_OP_MOP(p_mop::MASK_LOOP, 2, faces123); // all-skip case, hh x3, encoded in the mop
     });
 
 static constexpr auto _llk_math_face_compressed_mm_even_l2_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_multi_seq_, 64>(
@@ -203,7 +207,8 @@ static constexpr auto _llk_math_face_compressed_mm_one_l2_table_ = ckernel::code
  * relative to it (SETRWC and INCRWC with SrcBCr).
  *
  * @tparam ct_dim: Output width in tiles. Only whether it is 1 matters: that regime walks dest in 8-row
- *                 steps (see the split layout at the top of the file), every other width in 16-row faces.
+ *                 steps and holds it on revB (see the split layout at the top of the file), every other
+ *                 width walks it in 16-row faces.
  * @param face_r_dim: Activation rows per face, 1 or 8. This is the SrcB increment, so ADDR_MOD_1 and
  *                    ADDR_MOD_3 are programmed from one of two compile-time arms.
  * @note Called from @ref _llk_math_face_compressed_mm_init_ rather than directly.
@@ -218,7 +223,7 @@ inline void _llk_math_face_compressed_mm_addrmod_config_(const std::uint32_t fac
         .srcb = {.incr = 0, .clr = 0, .cr = 0},
         .dest = {.incr = face_rows, .clr = 0, .cr = 0},
     }
-        .set(ADDR_MOD_0); // noB: hold both sources, advance dest by one face
+        .set(ADDR_MOD_0); // noB: hold both sources, advance dest by one face (one split step at ct_dim == 1)
 
     addr_mod_t {
         .srca = {.incr = 0, .clr = 0, .cr = 0},
@@ -240,9 +245,9 @@ inline void _llk_math_face_compressed_mm_addrmod_config_(const std::uint32_t fac
         addr_mod_t {
             .srca = {.incr = 0, .clr = 0, .cr = 0},
             .srcb = {.incr = 1, .clr = 0, .cr = 1},
-            .dest = {.incr = _llk_math_face_compressed_mm_dest_step_rows_, .clr = 0, .cr = 0},
+            .dest = {.incr = 0, .clr = 0, .cr = 0},
         }
-            .set(ADDR_MOD_3); // revB: advance SrcB one activation row block, dest on to the next split row
+            .set(ADDR_MOD_3); // revB: advance SrcB one activation row block, hold dest (the face-1 MVMUL offsets its own rows)
     }
     else
     {
@@ -256,17 +261,17 @@ inline void _llk_math_face_compressed_mm_addrmod_config_(const std::uint32_t fac
         addr_mod_t {
             .srca = {.incr = 0, .clr = 0, .cr = 0},
             .srcb = {.incr = 8, .clr = 0, .cr = 1},
-            .dest = {.incr = _llk_math_face_compressed_mm_dest_step_rows_, .clr = 0, .cr = 0},
+            .dest = {.incr = 0, .clr = 0, .cr = 0},
         }
-            .set(ADDR_MOD_3); // revB: advance SrcB one activation row block, dest on to the next split row
+            .set(ADDR_MOD_3); // revB: advance SrcB one activation row block, hold dest (the face-1 MVMUL offsets its own rows)
     }
 
     addr_mod_t {
         .srca = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb = {.incr = 8, .clr = 0, .cr = 1},
+        .srcb = {.incr = _llk_math_face_compressed_mm_finalize_face1_srcb_row_, .clr = 0, .cr = 1},
         .dest = {.incr = 0, .clr = 0, .cr = 0},
     }
-        .set(ADDR_MOD_4); // finalize: advance SrcB onto the partial MOVD2B parked there, hold dest
+        .set(ADDR_MOD_4); // finalize: advance SrcB from face 0's parked partial to face 1's, hold dest
 
     addr_mod_t {
         .srca = {.incr = 0, .clr = 0, .cr = 0},
@@ -297,6 +302,9 @@ inline void _llk_math_face_compressed_mm_mop_config_(const std::uint32_t face_r_
     const std::uint32_t mvmul_single_row = (face_r_dim == 1) ? 1 : 0;
     // SrcB rows per activation face: what ADDR_MOD_1 and ADDR_MOD_3 step, and so what the incB / revB skips step.
     const std::uint32_t srcb_incr = face_r_dim;
+    // Dest rows the face-1 MVMULs of the ct_dim == 1 split (revB and both endings) write past the counter, so
+    // their rows land one face above face 0's while the counter itself only steps 8 (see the split layout).
+    constexpr std::uint32_t face1_dst = ct_dim == 1 ? _llk_math_face_compressed_mm_split_face1_dst_ : 0;
 
     // One instruction per code-sequence character. Lower case means no data for this face, so it is
     // skipped: the counters move exactly as the matching MVMUL's addrmod would move them, by INCRWC or
@@ -309,7 +317,7 @@ inline void _llk_math_face_compressed_mm_mop_config_(const std::uint32_t face_r_
         {
             case 'h':
                 TTI_INCRWC(0 /*rwc_cr*/, _llk_math_face_compressed_mm_dest_step_rows_ /*rwc_d*/, 0 /*rwc_b*/, 0 /*rwc_a*/);
-                break; // skip, half of noB's face step (a whole face at ct_dim == 1)
+                break; // skip, half of noB's face step (all of it at ct_dim == 1)
             case 'N':
                 TT_MVMUL(p_setrwc::CLR_A, mvmul_single_row, ADDR_MOD_0, 0);
                 break; // mul, noB
@@ -317,19 +325,19 @@ inline void _llk_math_face_compressed_mm_mop_config_(const std::uint32_t face_r_
                 TT_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0 /*rwc_d*/, srcb_incr /*rwc_b*/, 0 /*rwc_a*/, p_setrwc::SET_BD);
                 break; // skip, incB: SrcB += srcb_incr through its CR, dest and its CR back to 0
             case 'I':
-                TT_MVMUL(p_setrwc::CLR_A, mvmul_single_row, ADDR_MOD_1, 0);
+                TT_MVMUL(p_setrwc::CLR_A, mvmul_single_row, ADDR_MOD_1, face1_dst);
                 break; // mul, incB
             case 'c':
                 TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
                 break; // skip, clrB
             case 'C':
-                TT_MVMUL(p_setrwc::CLR_AB, mvmul_single_row, ADDR_MOD_2, 0);
+                TT_MVMUL(p_setrwc::CLR_AB, mvmul_single_row, ADDR_MOD_2, face1_dst);
                 break; // mul, clrB
             case 'r':
-                TT_INCRWC(p_setrwc::CR_B /*rwc_cr*/, _llk_math_face_compressed_mm_dest_step_rows_ /*rwc_d*/, srcb_incr /*rwc_b*/, 0 /*rwc_a*/);
-                break; // skip, revB: SrcB += srcb_incr through its CR, dest on to the next split row
+                TT_INCRWC(p_setrwc::CR_B /*rwc_cr*/, 0 /*rwc_d*/, srcb_incr /*rwc_b*/, 0 /*rwc_a*/);
+                break; // skip, revB: SrcB += srcb_incr through its CR, dest holds
             case 'R':
-                TT_MVMUL(p_setrwc::CLR_A, mvmul_single_row, ADDR_MOD_3, 0);
+                TT_MVMUL(p_setrwc::CLR_A, mvmul_single_row, ADDR_MOD_3, face1_dst);
                 break; // mul, revB
             default:
                 LLK_ASSERT(false, "Invalid code for math instruction");
@@ -442,7 +450,9 @@ inline std::array<const std::uint32_t*, 2> _llk_math_face_compressed_mm_tables_(
  * @param face_r_dim: Activation rows per face, 1 or 8.
  * @param dst_index: Tile index in DST that the result is written to.
  * @param kt_dim: Inner dimension in tiles, an even number in [2, 256].
- * @note Call @ref _llk_math_face_compressed_mm_init_ first, with the same ct_dim.
+ * @note Call @ref _llk_math_face_compressed_mm_init_ first, with the same ct_dim and the same face_r_dim: init
+ *       programs the addrmods and the replayed skips from face_r_dim, and this call picks the endIncB skip
+ *       table from it, so a mismatch mis-steps SrcB.
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_face_compressed_mm_.
  */
 template <std::uint32_t ct_dim = 1, bool finalize = true>
@@ -505,34 +515,26 @@ inline void _llk_math_face_compressed_mm_(
 
     if constexpr (ct_dim == 1 && finalize)
     {
-        // Merge each face's two split partials into its slot: face 0 is rows 0 (even K rows) + 16 (odd), face 1
-        // is rows 8 (even) + 24 (odd), and the results go to rows 0 and 16. The sequence left both counters at
-        // 0, ADDR_MOD_5 holds them, and the unpack side left SrcA and SrcB zeroed and valid.
-        constexpr std::uint32_t face0_odd  = _llk_math_face_compressed_mm_split_face0_odd_row_;
-        constexpr std::uint32_t face1_even = _llk_math_face_compressed_mm_split_face1_even_row_;
-        constexpr std::uint32_t face1_odd  = _llk_math_face_compressed_mm_split_face1_odd_row_;
+        // Add each face's odd partial, rows 8 and 24, onto its even accumulation, rows 0 and 16: the partial goes
+        // through SrcB, the accumulation stays in dest at its full width. The sequence left both counters at 0,
+        // ADDR_MOD_5 holds them, and the unpack side left SrcA and SrcB zeroed and valid.
+        constexpr std::uint32_t partial    = _llk_math_face_compressed_mm_split_partial_rows_;
         constexpr std::uint32_t face1_slot = FACE_R_DIM;
+        constexpr std::uint32_t face1_srcb = _llk_math_face_compressed_mm_finalize_face1_srcb_row_;
 
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD); // wait for both operands
-        // Park face 0's odd partial at SrcB row 0 and face 1's odd partial at SrcB row 8.
-        TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_5, p_movd2b::MOV_4_ROWS, face0_odd);
-        TTI_MOVD2B(p_mov::DEST_NORM, 8, ADDR_MOD_5, p_movd2b::MOV_4_ROWS, face1_odd);
+        // Park face 0's odd partial at SrcB row 0 and face 1's at SrcB row face1_srcb.
+        TTI_MOVD2B(p_mov::DEST_NORM, 0 /*SrcB row*/, ADDR_MOD_5, p_movd2b::MOV_4_ROWS, partial);
+        TTI_MOVD2B(p_mov::DEST_NORM, face1_srcb /*SrcB row*/, ADDR_MOD_5, p_movd2b::MOV_4_ROWS, face1_slot + partial);
         if (face_r_dim == 8)
         {
             // Rows 4-7 of each partial.
-            TTI_MOVD2B(p_mov::DEST_NORM, 4, ADDR_MOD_5, p_movd2b::MOV_4_ROWS, face0_odd + 4);
-            TTI_MOVD2B(p_mov::DEST_NORM, 12, ADDR_MOD_5, p_movd2b::MOV_4_ROWS, face1_odd + 4);
+            TTI_MOVD2B(p_mov::DEST_NORM, 4 /*SrcB row*/, ADDR_MOD_5, p_movd2b::MOV_4_ROWS, partial + 4);
+            TTI_MOVD2B(p_mov::DEST_NORM, face1_srcb + 4 /*SrcB row*/, ADDR_MOD_5, p_movd2b::MOV_4_ROWS, face1_slot + partial + 4);
         }
-        // Face 0: add its odd partial into row 0, where its even partial already is. SrcA is zero. ADDR_MOD_4
-        // then steps SrcB onto face 1's odd partial.
+        // Accumulate each partial onto its face; SrcA is zero. ADDR_MOD_4 steps SrcB from face 0's partial to
+        // face 1's in between, ADDR_MOD_2 resets the counters afterwards.
         TTI_ELWADD(p_elwise::CLR_NONE, p_elwise::DEST_ACCUM_EN, p_elwise::SRCB_NO_BCAST, ADDR_MOD_4, 0);
-        // Face 1: its even partial sits in face 0's slot (row 8), so bring it into SrcA and let the add write
-        // the sum of the two partials into face 1's slot, row 16, without accumulating onto what is there.
-        TTI_MOVD2A(p_mov::DEST_NORM, 0, ADDR_MOD_5, p_movd2a::MOV_4_ROWS, face1_even);
-        if (face_r_dim == 8)
-        {
-            TTI_MOVD2A(p_mov::DEST_NORM, 4, ADDR_MOD_5, p_movd2a::MOV_4_ROWS, face1_even + 4);
-        }
-        TTI_ELWADD(p_elwise::CLR_AB, p_elwise::DEST_ACCUM_DIS, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, face1_slot);
+        TTI_ELWADD(p_elwise::CLR_AB, p_elwise::DEST_ACCUM_EN, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, face1_slot);
     }
 }

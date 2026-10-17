@@ -59,7 +59,8 @@ inline void llk_math_face_compressed_mm_init(
  * @param base_address_meta: L1 address of the meta buffer, whose first section holds the math metas.
  * @param dst_index: Tile index in DST that the result is written to.
  * @param kt_dim: Inner dimension in tiles, an even number in [2, 256].
- * @note Call @ref llk_math_face_compressed_mm_init first, with the same ct_dim.
+ * @note Call @ref llk_math_face_compressed_mm_init first, with the same ct_dim and an operand0 of the same
+ *       face_r_dim: both the init and this call program from it.
  * @note On the unpack thread, pair with @ref llk_unpack_AB_face_compressed_mm.
  */
 template <std::uint32_t ct_dim = 1, bool finalize = true>

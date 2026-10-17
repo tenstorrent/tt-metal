@@ -372,6 +372,7 @@ def run_compressed(
     make_meta,
     pcc_threshold=None,
     calls=CUSTOM_MM_CALLS(),
+    dest_acc=DestAccumulation.No,
 ):
     # Shared driver for both compressed-matmul tests. Kernel-specific parts are passed
     # flat: kernel (C++ source), granularity (assignment unit — 32 tile / 16 face),
@@ -382,7 +383,7 @@ def run_compressed(
     # ku/cu are the assignment row/col counts (K//granularity, N//granularity), which
     # differ from the 32-tile grid kt/ct (K//32, N//32) on the face kernel.
     # calls (CUSTOM_MM_CALLS) splits K over back-to-back calls; pack_b / make_meta then lay B and its meta
-    # out per call.
+    # out per call. dest_acc selects the DEST width the kernel accumulates in; the output stays Float16_b.
     kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM  # 32-tile kernel grid
     ku, cu = (
         K // granularity,
@@ -483,7 +484,7 @@ def run_compressed(
             IN_FACE_DIMS(in0_face_r_dim=M),
         ],
         variant_stimuli=CompressedStimuliConfig(kt, ct, packed_a, packed_b, meta),
-        dest_acc=DestAccumulation.No,
+        dest_acc=dest_acc,
     )
 
     res = configuration.run().result
@@ -504,16 +505,43 @@ def run_compressed(
     # accumulates the K-deep sum in a bf16 dest, so noise grows ~linearly per K-tile.
     acc_atol = matmul_acc_atol(golden, kt, DataFormat.Float16_b)
 
-    # Name the 16-column output faces outside the tolerance half of passed_test's gate (same
-    # atol/rtol isclose; PCC is whole-tensor), so a failure says which face of DEST it hit.
+    # Per-face distance from the exact LoFi sum (the same golden before its bf16 rounding), logged on every
+    # run: with a 32-bit DEST the two faces of a ct_dim == 1 tile must look alike, since each keeps its even
+    # partial in DEST and adds the odd one through SrcB.
+    golden32 = MatmulGolden()(
+        torch_a,
+        b_dequant,
+        DataFormat.Float32,
+        MathFidelity.LoFi,
+        input_A_dimensions=[M, K],
+        input_B_dimensions=[K, N],
+        tilize=False,
+        input_A_format=DataFormat.Float16_b,
+        input_B_format=DataFormat.Float16_b,
+    ).reshape(M, N // FACE_C_DIM, FACE_C_DIM)
+    res_faces = res_tensor.reshape(M, N // FACE_C_DIM, FACE_C_DIM)
+    logger.info(
+        "max abs error per output face vs the fp32 golden (dest_acc={}): {}",
+        dest_acc.name,
+        [
+            round((res_faces[:, c].float() - golden32[:, c]).abs().max().item(), 4)
+            for c in range(N // FACE_C_DIM)
+        ],
+    )
+
+    # Name the 16-column output faces outside the tolerance half of passed_test's gate (the same isclose on
+    # the same bf16 operands, matching NaNs allowed; PCC is whole-tensor), so a failure says which face of
+    # DEST it hit.
     rtol = tolerances[DataFormat.Float16_b].rtol
-    res_faces = res_tensor.float().reshape(M, N // FACE_C_DIM, FACE_C_DIM)
-    golden_faces = golden.float().reshape(M, N // FACE_C_DIM, FACE_C_DIM)
+    golden_faces = golden.to(torch.bfloat16).reshape(M, N // FACE_C_DIM, FACE_C_DIM)
     bad_faces = {
-        f"face{c}": round((res_faces[:, c] - golden_faces[:, c]).abs().max().item(), 4)
+        f"face{c}": round(
+            (res_faces[:, c].float() - golden_faces[:, c].float()).abs().max().item(), 4
+        )
         for c in range(N // FACE_C_DIM)
-        if not torch.isclose(
-            res_faces[:, c], golden_faces[:, c], atol=acc_atol, rtol=rtol
+        if not (
+            torch.isclose(golden_faces[:, c], res_faces[:, c], atol=acc_atol, rtol=rtol)
+            | (torch.isnan(golden_faces[:, c]) & torch.isnan(res_faces[:, c]))
         ).all()
     }
 
