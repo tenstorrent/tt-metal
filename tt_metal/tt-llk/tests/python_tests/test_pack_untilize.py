@@ -33,11 +33,12 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     PACK_UNTILIZE_DST_RT_OFFSET,
     PACK_UNTILIZE_NARROW_ROW,
+    TEST_FACE_DIMS,
     TILE_COUNT,
     TILE_DST_CT_OFFSET,
     generate_input_dim,
 )
-from helpers.tile_constants import DEFAULT_TILE_C_DIM, get_tile_params
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, FACE_C_DIM, get_tile_params
 from helpers.utils import passed_test
 
 
@@ -209,6 +210,7 @@ def _run_pack_untilize(
         runtimes=[
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
+            TEST_FACE_DIMS(face_r_dim, FACE_C_DIM),
             PACK_UNTILIZE_DST_RT_OFFSET(tile_dst_rt_offset),
         ],
         variant_stimuli=StimuliConfig(
@@ -338,9 +340,10 @@ def test_pack_untilize_small_tile(
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    # 16x16 (one packer) and 16x32 (packers 0/1); full_ct_dim 1 is the one-tile path, 8 with a 32-bit Dest
-    # splits the tile-row into two blocks (narrow partial-block stride).
-    tile_dimensions=[[16, 16], [16, 32]],
+    # 16x16 (one packer) and 16x32 (packers 0/1), plus 8x32 and 4x32 (face_r_dim < 16: one packer walks
+    # face_r_dim rows); full_ct_dim 1 is the one-tile path, 8 with a 32-bit Dest splits the tile-row into
+    # two blocks (narrow partial-block stride).
+    tile_dimensions=[[16, 16], [16, 32], [8, 32], [4, 32]],
     full_ct_dim=[1, 8],
     row_num_datums=[4, 8],
 )
@@ -351,7 +354,7 @@ def test_pack_untilize_narrow_row_small_tile(
     full_ct_dim,
     row_num_datums,
 ):
-    """Narrow rows of 16-row tiles: one or two packers walk all 16 rows of each tile."""
+    """Narrow rows of small tiles: one or two packers walk all face_r_dim (or 16) rows of each tile."""
     _run_pack_untilize(
         formats,
         dest_acc,
