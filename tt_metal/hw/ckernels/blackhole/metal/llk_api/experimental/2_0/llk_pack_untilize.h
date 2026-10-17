@@ -39,7 +39,8 @@ inline void llk_pack_untilize_init() {
         RegFmt,
         static_cast<std::uint32_t>(OUT_DESC.format),
         OUT_DESC.shape.face_r_dim,
-        OUT_DESC.shape.total_num_faces());
+        OUT_DESC.shape.total_num_faces(),
+        OUT_DESC.shape.num_faces_c_dim == 1 /* narrow_tile */);
 }
 
 template <
@@ -69,6 +70,7 @@ inline void llk_pack_untilize(
         page_stride,
         OUT_DESC.shape.face_r_dim,
         OUT_DESC.shape.total_num_faces(),
+        OUT_DESC.shape.num_faces_c_dim == 1 /* narrow_tile */,
         block_c_index,
         tile_dst_rt_offset);
 }

@@ -18,6 +18,21 @@ using namespace ckernel;
 using namespace ckernel::packer;
 
 /**
+ * @brief Face columns of a tile: faces side by side in one tile row.
+ *
+ * 2 for a 32-wide tile (32x32, 16x32), 1 for a single-face tile and for a narrow (16-wide) tile such as
+ * 32x16, whose two faces are stacked vertically. Untilize packs each tile row as the rows of this many
+ * faces concatenated, one Dest read interface per face.
+ *
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param narrow_tile: True for a 16-wide tile (one face column).
+ */
+inline std::uint32_t _llk_pack_untilize_num_faces_c_dim_(const std::uint32_t num_faces, const bool narrow_tile)
+{
+    return (num_faces == 1 || narrow_tile) ? 1 : 2;
+}
+
+/**
  * @brief Configure the ADDR_MOD slots used by the untilize pack MOP.
  *
  * ADDR_MOD_0 keeps y_src on the current Dest face-row (used by every inner-loop PACR); ADDR_MOD_1
@@ -59,15 +74,19 @@ dense is used with num_faces == 2 and even block_ct_dim, where two 16x32 (or sma
  * @tparam dense: True to pack two tiles into one 32x32 dest region using all interfaces; requires num_faces == 2 and even block_ct_dim.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param narrow_tile: True for a 16-wide tile (one face column): a two-face narrow tile (32x16) stacks its faces
+ *        vertically, so one read interface packs one face row per PACR and the second face follows as a second
+ *        face group, instead of two interfaces packing rows of faces 0 and 1 side by side.
  * @note @ref _llk_pack_untilize_configure_addrmod_ must have programmed the ADDR_MOD slots.
  */
 template <std::uint32_t block_ct_dim, bool narrow_row = false, bool dense = false>
-inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
+inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const bool narrow_tile = false)
 {
     static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
     static_assert(!dense || (!narrow_row), "narrow_row must be false when dense");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!dense || (num_faces == 2), "num_faces must be 2 when dense");
+    LLK_ASSERT(!dense || !narrow_tile, "dense packs two 16x32 tiles per Dest region; a narrow tile has no second face column");
     /*
     Outer loop iterates over the rows in the block, while the inner loop iterates
     over each tile in the block.
@@ -78,9 +97,10 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     const std::uint32_t MOP_OUTER_LOOP     = face_r_dim;
 
     // For narrow row, the faces are stored in the first column of the tile, therefore requiring only one packer interface.
-    const std::uint32_t PACK_INTF_SEL = (dense)                          ? p_pacr::ALL_INTF_ACTIVE
-                                        : (narrow_row || num_faces == 1) ? p_pacr::SINGLE_INTF_ACTIVE
-                                                                         : p_pacr::TWO_INTFS_ACTIVE;
+    // One interface per face column: a single-face or narrow (16-wide) tile has one, a 32-wide tile two.
+    const std::uint32_t PACK_INTF_SEL = (dense)                                                                            ? p_pacr::ALL_INTF_ACTIVE
+                                        : (narrow_row || _llk_pack_untilize_num_faces_c_dim_(num_faces, narrow_tile) == 1) ? p_pacr::SINGLE_INTF_ACTIVE
+                                                                                                                           : p_pacr::TWO_INTFS_ACTIVE;
     /*
     When using DST_STRIDED_MODE, each packer interface has a stride of 16*block_size,
     where block_size is set to be the size of a row within face.
@@ -181,6 +201,7 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
  * @param pack_dst_format: Destination (L1) data format.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param narrow_tile: True for a 16-wide tile (one face column); must match the narrow_tile given to @ref _llk_pack_untilize_.
  * @note On the math thread, @ref _llk_math_eltwise_unary_datacopy_ (A2D) populates the dest register this packer reads.
  * @note Pair with @ref _llk_pack_untilize_uninit_ after the matching @ref _llk_pack_untilize_ execute calls.
  */
@@ -191,7 +212,11 @@ template <
     std::uint32_t row_num_datums = TILE_C_DIM,
     bool dense                   = false>
 inline void _llk_pack_untilize_init_(
-    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t face_r_dim = FACE_R_DIM,
+    const std::uint32_t num_faces  = 4,
+    const bool narrow_tile         = false)
 {
     static_assert(block_ct_dim <= (dense ? 16 : 8), "block_ct_dim must be <= 8 when not dense, <= 16 when dense");
     static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
@@ -199,6 +224,7 @@ inline void _llk_pack_untilize_init_(
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!dense || (num_faces == 2), "num_faces must be 2 when dense");
+    LLK_ASSERT(!narrow_tile || num_faces <= 2, "a narrow (16-wide) tile has one face column, so at most two faces");
 
     if constexpr (narrow_row)
     {
@@ -208,12 +234,15 @@ inline void _llk_pack_untilize_init_(
 
     _llk_pack_untilize_configure_addrmod_();
 
-    _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces);
+    _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces, narrow_tile);
 
-    // Set CH0 Zstride = 2x16x16 faces, .z_src = {.incr = 1} jumps 2 faces
+    const std::uint32_t num_faces_c_dim = _llk_pack_untilize_num_faces_c_dim_(num_faces, narrow_tile);
+
+    // Set CH0 Zstride to one face row of the tile: 2x16x16 faces for a 32-wide tile (.z_src = {.incr = 1} jumps
+    // 2 faces, to the next face row), one face for a narrow tile whose faces are stacked vertically.
     std::uint32_t x_stride       = datum_size_in_bytes(pack_src_format);
     std::uint32_t y_stride       = FACE_C_DIM * x_stride;
-    const std::uint32_t z_stride = 2 * face_r_dim * y_stride;
+    const std::uint32_t z_stride = num_faces_c_dim * face_r_dim * y_stride;
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
 
     std::uint32_t output_addr_offset;
@@ -223,7 +252,8 @@ inline void _llk_pack_untilize_init_(
     }
     else
     {
-        output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * ((num_faces == 1) ? 1 : 2) * FACE_C_DIM);
+        // One face row of datums per tile per output row (one face column for a narrow tile).
+        output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * num_faces_c_dim * FACE_C_DIM);
     }
 
     // Store 16B aligned row offset into a scratch cfg slot so the MOP replay buf can use
@@ -263,6 +293,8 @@ inline void _llk_pack_untilize_init_(
  * @param address: L1 destination base address for the block.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param tile_dst_rt_offset: Runtime row-tile offset into the destination register.
+ * @param narrow_tile: True for a 16-wide tile (one face column); must match the init. Its two faces are packed as
+ *        two face groups, one above the other, like the face rows of a 32x32 tile.
  * @note Call @ref _llk_pack_untilize_init_ with matching template/runtime args before this function, and
  *       @ref _llk_pack_untilize_uninit_ once all untilize-pack calls are complete.
  */
@@ -272,7 +304,8 @@ template <
     bool narrow_row                  = false,
     std::uint32_t tile_dst_ct_offset = 0,
     bool dense                       = false>
-inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t num_faces = 4, const std::uint32_t tile_dst_rt_offset = 0)
+inline void _llk_pack_untilize_(
+    const std::uint32_t address, const std::uint32_t num_faces = 4, const std::uint32_t tile_dst_rt_offset = 0, const bool narrow_tile = false)
 {
     static_assert(block_ct_dim <= (dense ? 16 : 8), "block_ct_dim must be <= 8 when not dense, <= 16 when dense");
     static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
@@ -288,7 +321,8 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
     */
     // program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal>(address, pack_dst_format);
     program_packer_destination(address);
-    const std::uint32_t num_faces_per_rdim_tile = (num_faces > 2) ? 2 : 1;
+    // Face rows of the tile, each packed as one MOP run: 2 for 32x32 and for a narrow 32x16 tile, else 1.
+    const std::uint32_t num_faces_per_rdim_tile = num_faces / _llk_pack_untilize_num_faces_c_dim_(num_faces, narrow_tile);
 
     const std::uint32_t tile_dst_offset = tile_dst_ct_offset + tile_dst_rt_offset;
     // Set W = (15 + tile_dst_offset) & 0xF, establishing the W_Cr shadow so that ADDRCRZW in the
@@ -299,12 +333,12 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, (15 + tile_dst_offset) & 0xF); // set ch0 w counter, establishing W_Cr
     TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);                                         // reset ch0 xy counters
 
-    // Iterate over top, then over bottom faces in the block (if num_faces > 2)
+    // Iterate over the top, then over the bottom face row of the block (if the tile has two face rows)
     for (std::uint32_t face = 0; face < num_faces_per_rdim_tile; face++)
     {
         ckernel::ckernel_template::run();
 
-        TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 1);         // z cnt increments by 2xface_r_dimxFACE_C_DIM
+        TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 1);         // z cnt increments by one face row (Zstride set in init)
         TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0010); // reset ch0_y counters
     }
 
