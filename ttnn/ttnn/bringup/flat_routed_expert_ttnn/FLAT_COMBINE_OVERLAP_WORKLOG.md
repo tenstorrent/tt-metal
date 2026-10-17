@@ -964,3 +964,26 @@ beats flat (more rows per weight: 245 TFLOP/s on the gate linear at M 1280); ttn
 89 us at TP shapes (176 local) - one fused op would be ~15-20; the collectives are near the 200G link floor (TP4 edge
 chips: one neighbour) and bf8 payloads cut the AG 30-37% but the RS only 8-10% at +0.7-1.1% error. Serially even TP2
 (~680 with a fused activation) loses to local flat 549: TP pays off only with the collectives overlapped.
+
+### K3 experts + combine program: what bounds it (2026-10-17, traced, experts program, slowest-chip trace line)
+Probe semantics on this path (K3: DRISC gate/up, Tensix down-weight readers se6_dw on NOC0, L1 hand-off combine):
+MIMO_FL_W_NOREAD skips only the DRAM reads - in DRISC mode the DRISCs still push every (garbage) gate/up block over the
+NoC (W_NOFWD stops that); MIMO_FL_NO_MATH hangs here (the gate/up side never publishes h; se6_dcompute waits in
+cb_wait_front(h_all_cb)) - broken, not used.
+| DRAM / NoC traffic left | experts us |
+| everything (base) | 2433 |
+| no gate/up NoC push (W_NOFWD) | 2430 |
+| push only (W_NOREAD) | 1990 |
+| no gate/up DMA (GU_NOREAD) | 2024 |
+| no down reads (DN_NOREAD) | 2112 |
+| no weight traffic (W_NOREAD + W_NOFWD) | 1221 (+ no x reads: 1225) |
+| no push: gate/up DMA only | 1456 (694 MB: 477 GB/s, 93%) |
+| no push: gate/up DMA + x | 1595 |
+| no push: down reads + x | 1462 (compute bound underneath: 1221) |
+| no push, no x | 2326 |
+| Tensix readers (DRISC=0) | 2420 |
+DRAM bound: 1077 MB a chip a call (gate/up 694 + down 347 + x 36) at 443 GB/s (86.5%); floor 2104 us. Compute + h +
+combine 1221, the DRISC push ~1990 - both hidden; the combine's release (CMB_EARLY) and h (H_NODATA) change nothing.
+The gate/up DMA alone streams at 93%; the Tensix down-weight NoC reads into the same banks pull the mix to 86% (~170
+us), x reads ~105 us. GDDR arbitration weights (MIMO_FL_DRISC_MPFE 0,0,3 / 0,3,0 / 3,0,0 / 1,3,3 / 3,1,1 / 1,1,1):
+2418-2439, noise. Next lever: down weights through the DRISCs (one bank-local DMA path), then the x reads.
