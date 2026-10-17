@@ -181,6 +181,10 @@ enum NocScatterWriteChunkEncoding : uint8_t {
     CHUNK_ENCODING_LAST = CHUNK_ENCODING_SEMINC_FLUSH
 };
 
+// Width of one chunk's NocScatterWriteChunkEncoding. Chunk i sits at bit i * width.
+static constexpr uint8_t NOC_SCATTER_CHUNK_ENCODING_BITS = 2;
+static constexpr uint8_t NOC_SCATTER_CHUNK_ENCODING_MASK = (1u << NOC_SCATTER_CHUNK_ENCODING_BITS) - 1;
+
 constexpr uint8_t expand_encoding_to_all_chunks(NocScatterWriteChunkEncoding encoding) {
     const uint8_t e = static_cast<uint8_t>(encoding);
     return e | (e << 2) | (e << 4) | (e << 6);
@@ -188,7 +192,7 @@ constexpr uint8_t expand_encoding_to_all_chunks(NocScatterWriteChunkEncoding enc
 
 inline void set_chunk_encoding(uint8_t& chunk_encoding, NocScatterWriteChunkEncoding encoding, uint32_t chunk_index) {
     const uint8_t e = static_cast<uint8_t>(encoding);
-    chunk_encoding |= (e << (chunk_index * 2));
+    chunk_encoding |= (e << (chunk_index * NOC_SCATTER_CHUNK_ENCODING_BITS));
 }
 
 #define NOC_SCATTER_WRITE_MAX_CHUNKS 4
