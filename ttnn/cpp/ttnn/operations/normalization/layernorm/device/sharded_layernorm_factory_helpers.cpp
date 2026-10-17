@@ -47,6 +47,7 @@ const m2::DFBSpecName EX{"ex"};
 const m2::DFBSpecName EX_EXTERNAL{"ex_external"};
 const m2::DFBSpecName EX_PARTIAL2{"ex_partial2"};
 const m2::DFBSpecName EX2{"ex2"};
+const m2::DFBSpecName EX2_LOCAL{"ex2_local"};
 const m2::DFBSpecName EX_EXTERNAL2{"ex_external2"};
 const m2::DFBSpecName MASK_SCRATCH{"mask_scratch"};
 const m2::DFBSpecName EX_GLOBAL{"ex_global"};
@@ -681,6 +682,7 @@ void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& c) {
         add_dfb(spec, EX2, sizes.ex_dfb_size, c.single_tile_size, c.dfb_data_format);
         if (nd) {
             add_dfb(spec, EX2PE, sizes.ex2pe_dfb_size, c.single_tile_size, c.dfb_data_format);
+            add_dfb(spec, EX2_LOCAL, sizes.ex_dfb_size, c.single_tile_size, c.dfb_data_format);
         }
     }
 
@@ -1031,6 +1033,10 @@ void add_writer_defines(m2::KernelSpec& kernel, const SpecConfig& c) {
     if (!c.writes_back) {
         kernel.compiler_options.defines.emplace("SKIP_WRITE_BACK", "1");
     }
+    // Matches bind_writer_resources: after the all-gather the writer holds both ends of the scaler DFB.
+    if (c.is_post_all_gather && !c.use_welford) {
+        kernel.compiler_options.defines.emplace("SCALER_SELF_LOOP", "1");
+    }
     if (c.do_col_mask) {
         kernel.compiler_options.defines.emplace("DO_COL_MASK", "1");
     }
@@ -1168,6 +1174,9 @@ void bind_compute_resources(m2::KernelSpec& kernel, const SpecConfig& c, bool is
         bind_dfb(kernel, EX2, "ex2", m2::DFBEndpointType::PRODUCER);
         bind_dfb(kernel, EX_EXTERNAL2, "ex_external2", m2::DFBEndpointType::CONSUMER);
         bind_dfb(kernel, EX2PE, "ex2pe", m2::DFBEndpointType::PRODUCER);
+        // On the cores that turn Var[x] into 1/sqrt(Var[x] + eps), the combined Var[x] never leaves
+        // compute, so it goes into this buffer rather than ex2, whose consumer is the reader.
+        bind_self_loop(kernel, EX2_LOCAL, "ex2_local");
         if (c.do_legacy_layernorm_col_mask) {
             bind_self_loop(kernel, MASK_SCRATCH, "mask_scratch");
         }
@@ -1192,6 +1201,10 @@ void add_compute_defines(m2::KernelSpec& kernel, const SpecConfig& c, bool is_al
     // distinction has to be visible to the preprocessor rather than to `if constexpr` alone.
     if (is_all_to_all_worker) {
         kernel.compiler_options.defines.emplace("IS_ALLGATHER_WORKER", "1");
+    }
+    // Without a write-back, compute holds both ends of the output buffer (bind_self_loop) and must pop it.
+    if (!c.writes_back && !c.is_pre_all_gather) {
+        kernel.compiler_options.defines.emplace("OUT_SELF_LOOP", "1");
     }
     for (const auto& [key, value] : c.activation_defines) {
         kernel.compiler_options.defines.emplace(key, value);
@@ -1404,6 +1417,11 @@ void add_kernel_and_work_unit_specs(
             .hw_config = c.compute_hw,
         };
         add_compute_defines(kernel, c, is_all_to_all_worker);
+        // Only the two-stage reduce has cores that hand Var[x] to the reader instead of keeping it, so
+        // only then does the kernel pick its Var[x] buffer per core at run time.
+        if (grid.use_two_stage_reduce) {
+            kernel.compiler_options.defines.emplace("TWO_STAGE_REDUCE", "1");
+        }
         bind_compute_resources(kernel, c, is_all_to_all_worker);
         set_compute_unpack_modes(kernel, spec, c);
         return kernel;

@@ -68,6 +68,7 @@ extern const m2::DFBSpecName EX;             // combined E[x]
 extern const m2::DFBSpecName EX_EXTERNAL;    // partial E[x] gathered from the other cores
 extern const m2::DFBSpecName EX_PARTIAL2;    // this core's partial Var[x] (or E[x^2])
 extern const m2::DFBSpecName EX2;            // combined Var[x] (or E[x^2])
+extern const m2::DFBSpecName EX2_LOCAL;      // combined Var[x] (or E[x^2]) kept on the core that applies it
 extern const m2::DFBSpecName EX_EXTERNAL2;   // partial Var[x] gathered from the other cores
 extern const m2::DFBSpecName MASK_SCRATCH;   // column-masked copy of the input, for the E[x] reduce
 extern const m2::DFBSpecName EX_GLOBAL;      // final statistics, multicast to every core
