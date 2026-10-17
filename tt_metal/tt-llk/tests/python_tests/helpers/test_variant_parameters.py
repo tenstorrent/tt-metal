@@ -694,9 +694,10 @@ class DBG_SRCA_DUMP(TemplateParameter):
     set it to at ``DEST_OFFSET_BEFORE_WORD`` / ``DEST_OFFSET_AFTER_WORD`` /
     ``DEST_OFFSET_SET_WORD``; the ``BORROWED_ROW_COUNT`` DEST rows the dump borrows (rows
     0-3 and 8-11 of the current half) read before and after it at
-    ``BORROWED_ROWS_BEFORE_WORD`` / ``BORROWED_ROWS_AFTER_WORD``; and the DEST tile read
-    back through the RISC-V window in result tile ``RESULT_TILE_DEST`` (Blackhole) of the
-    ``RESULT_TILE_COUNT`` result tiles.
+    ``BORROWED_ROWS_BEFORE_WORD`` / ``BORROWED_ROWS_AFTER_WORD``; and the DEST tile handed
+    back in result tile ``RESULT_TILE_DEST`` of the ``RESULT_TILE_COUNT`` result tiles: the
+    planted tile read through the RISC-V window (restore check, Blackhole) or tile 0 of the
+    lower dest half packed by the packer (SrcA check).
     """
 
     WORDS_PER_ROW = 8

@@ -14,17 +14,21 @@ cannot read directly, and must put that row back before returning. Two tests, on
   zero, which a flush or a half-width save alters.
 
 * ``test_srca_row_dump_reads_srca_row`` (both architectures): the dump must be the SrcA row
-  wherever the math thread's dest offset sits. The kernel unpacks a tile into SrcA, datacopies
-  it into a dest tile (so the offset is where a real op leaves it: tile 0, tile 2, or the upper
-  half), dumps SrcA row 0 and hands back the raw debug-bus words. The datacopy consumed the
-  faces in order, so the bank the dump reads holds the last face: the words must be row 0 of
-  face 3 in the dest BF16 bit layout (the host builds them from the tile it wrote). The helper
-  stages and restores through the thread's offset but reads back a physical row, so without
-  pinning the offset first a nonzero offset returns a stale row. The same variants check that
-  the dump hands the offset back as it found it, since ops that run on the inherited offset
-  would otherwise be retargeted, and that the rows it borrows read back the same over the
-  debug bus before and after the dump -- the restore check that works on Wormhole too, where
-  there is no RISC-V window into DEST.
+  wherever the math thread's dest offset sits. The kernel clears DEST, unpacks a tile into
+  SrcA, datacopies it into one dest tile (so the offset is where a real op leaves it: tile 0,
+  tile 2, or the same in the upper half), dumps SrcA row 0 and hands back the raw debug-bus
+  words. The datacopy consumed the faces in order, so the bank the dump reads holds the last
+  face: the words must be row 0 of face 3 in the dest BF16 bit layout (the host builds them
+  from the tile it wrote). The helper stages and restores through the thread's offset but
+  reads back a physical row, so a nonzero offset returns a stale row unless the read-back
+  follows the offset. The same variants check the helper's footprint: the offset comes back
+  as it was (ops that run on the inherited offset would otherwise be retargeted), the rows it
+  borrows read back the same over the debug bus before and after the dump (the restore check
+  that works on Wormhole too, where there is no RISC-V window into DEST), and tile 0 of the
+  lower half, packed by the packer afterwards, still reads as zero in every case where the
+  datacopy did not write it. That last check is what fails when the helper borrows rows the
+  caller never populated: a row left undefined by ZEROACC packs as zero, an SFPLOAD of it is
+  undefined behaviour, and the restore then defines it with whatever the load returned.
 
 Every in-tree caller passes ``dbg_array_id::DEST``, which never enters this path, so without
 these tests the SrcA path can regress undetected.
@@ -94,8 +98,7 @@ _BF16_EXP_SHIFT = 7
 _BF16_EXP_BITS = 8
 
 # Where the datacopy leaves the math thread's dest offset before the dump: (dest tile, upper half).
-# tile_0 and upper_half sit on the base the dump pins, so only the tile_2 cases exercise the restore
-# (saved 128 against pinned 0, and saved 640 against pinned 512).
+# Only the tile_0 case writes the tile the packer reads back; every other case must pack zeros.
 DEST_OFFSETS = {
     "tile_0": (0, False),
     "tile_2": (2, False),
@@ -306,8 +309,8 @@ def test_srca_row_dump_reads_srca_row(formats, dest_acc, dest_offset):
         f"it was {offset_before} before the dump and must be handed back unchanged"
     )
 
-    # The rows the dump borrows (rows 0-3 of the current half, plus 8-11 holding the low halves with a
-    # 32-bit DEST) must read back over the debug bus exactly as before the dump.
+    # The rows the dump borrows (the first rows of the tile at the offset, plus the rows 8 further on that
+    # hold the low halves with a 32-bit DEST) must read back over the debug bus exactly as before the dump.
     changed = [
         i for i in range(borrowed_words) if borrowed_before[i] != borrowed_after[i]
     ]
@@ -317,8 +320,23 @@ def test_srca_row_dump_reads_srca_row(formats, dest_acc, dest_offset):
         f"before {hex(borrowed_before[changed[0]])}, after {hex(borrowed_after[changed[0]])}"
     )
 
-    if get_chip_architecture() == ChipArchitecture.BLACKHOLE:
-        # The row the helper borrowed, in the first tile of the current half, must have come back intact.
-        res_tensor = dest_tile_from(res_from_L1, formats.output_format)
-        expected_tile = src_B.to(format_dict[formats.output_format])
-        assert_dest_tile_restored(expected_tile, res_tensor)
+    # Tile 0 of the lower half, packed after the dump. The datacopy wrote it only in the tile_0 case; in
+    # every other case its rows were left undefined by the ZEROACC and must still pack as zero, which they
+    # do not if the dump borrowed rows there.
+    packed = dest_tile_from(res_from_L1, formats.output_format)
+    torch_format = format_dict[formats.output_format]
+    if dst_index == 0 and not upper_half:
+        expected_tile = src_A.to(torch_format)
+        what = "the datacopy's output"
+    else:
+        expected_tile = torch.zeros(MAX_TILE_ELEMENTS, dtype=torch_format)
+        what = "zero (the datacopy never wrote it)"
+    differing = (
+        (bit_view(expected_tile) != bit_view(packed)).nonzero().flatten().tolist()
+    )
+    assert not differing, (
+        f"tile 0 of the lower dest half packed after dbg_get_array_row(SRCA) with the math dest offset at "
+        f"{dest_offset} should read as {what}; {len(differing)} datum(s) differ, first at index "
+        f"{differing[0]}: expected {expected_tile[differing[0]]}, got {packed[differing[0]]}. "
+        "The helper must borrow only rows the caller populated."
+    )
