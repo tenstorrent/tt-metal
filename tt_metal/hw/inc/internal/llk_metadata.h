@@ -6,13 +6,18 @@
 
 #include <cstdint>
 
+// Device HW DataFormat from tensix_types.h. Declared here so get_dataformat(token) can return it
+// without including the arch-specific header. LLKMetadata::kNoFormat is DataFormat::Invalid (0xFF).
+enum class DataFormat : uint8_t;
+
 // Constructs within this namespace are reserved for metal 2.0 binding infrastructure and is subject to change without
 // notice.
 namespace binding_details {
 
 // The LLK operand metadata a Metal 2.0 BindingToken carries, as baked on by headergen.
 //
-// This should never be used directly, kernel authors should interact with these metadata via LLKOperandFrom.
+// Kernel authors read this through get_dataformat(token) / get_face_r_dim(token) / ...
+// (api/llk_operand_from_tokens.h), or build an LLKOperand with LLKOperandFrom<token>.
 //
 // This struct is explicitly separated from llk constructs to avoid:
 // 1. Coupling of LLK metadata with the Metal 2.0 binding infrastructure.

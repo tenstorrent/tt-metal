@@ -59,6 +59,12 @@ struct DFBBindingToken {
     constexpr operator uint32_t() const noexcept { return id_; }
 
 private:
+    friend constexpr DataFormat get_dataformat(const DFBBindingToken&);
+    friend constexpr uint8_t get_face_r_dim(const DFBBindingToken&);
+    friend constexpr uint8_t get_face_c_dim(const DFBBindingToken&);
+    friend constexpr uint8_t get_num_faces_r_dim(const DFBBindingToken&);
+    friend constexpr uint8_t get_num_faces_c_dim(const DFBBindingToken&);
+
     template <const auto& Token>
     friend struct binding_details::LLKOperandExtractor;
 

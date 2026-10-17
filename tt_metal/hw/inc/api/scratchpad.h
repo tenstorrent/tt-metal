@@ -12,8 +12,6 @@
 #include "api/scratchpad_binding_token.h"
 #include "experimental/kernel_args.h"
 
-enum class DataFormat : std::uint8_t;
-
 /**
  * @brief Kernel-side typed span over a Program-scope scratchpad.
  *
