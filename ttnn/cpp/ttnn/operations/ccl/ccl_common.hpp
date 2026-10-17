@@ -99,10 +99,6 @@ struct SenderReceiverConfig {
     std::optional<tt::ChipId> receiver_device_id;
 };
 
-// Returns `SenderReceiverConfig` for a given device, given topology.
-SenderReceiverConfig get_device_sender_receiver_config(
-    const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology);
-
 // Returns `SenderReceiverConfig` for a given device in a ring topology with a given cluster axis.
 SenderReceiverConfig get_device_sender_receiver_config_in_ring(
     const MeshCoordinate& mesh_coord, const distributed::MeshDevice* mesh_device, uint32_t cluster_axis, int ring_size);
@@ -134,7 +130,7 @@ struct WorkerCoreSelection {
 WorkerCoreSelection try_choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
-    IDevice* device,
+    distributed::MeshDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     CoreCoord core_grid_offset = CoreCoord(0, 0),
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
@@ -143,7 +139,7 @@ WorkerCoreSelection try_choose_worker_cores(
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
-    IDevice* device,
+    distributed::MeshDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     CoreCoord core_grid_offset = CoreCoord(0, 0),
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
