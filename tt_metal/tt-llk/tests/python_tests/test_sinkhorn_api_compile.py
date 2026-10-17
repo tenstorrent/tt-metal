@@ -10,9 +10,10 @@ so its body is checked at header inclusion whether or not ``sinkhorn_4x4_init()`
 ever called. No in-tree kernel includes the header; of the tests,
 ``sinkhorn_lconst_neg1_regression_test.cpp`` does, but dispatches only a one-face,
 full-rectangle ``sinkhorn_4x4``. This test builds a driver that
-adds the rest: the init call, the four-face forwarder the compute API defaults to, the
-``SINGLE_SUBMAT`` arm and both arms of the padding zeroing (whole-vector store and the
-per-lane masked store). It asserts the math ELF was produced and never runs the kernel.
+adds the rest: the init call, the row-max-sub entry point, the four-face forwarder the
+compute API defaults to, the ``SINGLE_SUBMAT`` arm and both arms of the padding zeroing
+(whole-vector store and the per-lane masked store). It asserts the math ELF was produced
+and never runs the kernel.
 """
 
 from conftest import blackhole_only
@@ -48,6 +49,8 @@ def test_sinkhorn_api_header_compiles():
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
+        # Pinned, not swept: the wrapper static_asserts DST_ACCUM_MODE == false (its
+        # strip-pair store rounds into a 16-bit DEST).
         dest_acc=DestAccumulation.No,
     )
     # Build only: a compile error in the wrapper header fails the build here.
