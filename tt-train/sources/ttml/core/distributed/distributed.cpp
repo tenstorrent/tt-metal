@@ -40,7 +40,9 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVec
 }
 
 bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
-    const auto& mesh_shape = autograd::ctx().get_device().shape();
+    // The tensor's own mesh when it is on a device; the context's device otherwise (a host tensor).
+    const auto* device = value.device();
+    const auto mesh_shape = device != nullptr ? device->shape() : autograd::ctx().get_device().shape();
     TT_FATAL(
         axis < mesh_shape.dims(),
         "is_sharded_on_axis: mesh axis {} is out of range for the {} device mesh",
