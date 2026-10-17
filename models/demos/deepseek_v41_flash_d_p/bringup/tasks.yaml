@@ -5659,6 +5659,13 @@ tasks:
     - experts
     - shared_expert
     layer: 3
+  frozen:
+    at: '2026-10-17T07:21:20'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_13_shared_expert.py: c915d098dd2b370085f0ce55fc7c715478613a86f2622ec3203bb3d6411557f7
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.enc_reuse.moe_add
   title: enc_reuse moe_add (residual) on device, layer 3
   step: implement
