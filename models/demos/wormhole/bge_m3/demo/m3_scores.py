@@ -136,6 +136,9 @@ def _sparse_embedding_scatter_ttnn(
     unused_ids: set,
 ) -> Any:
     token_weights_tt = ttnn.to_memory_config(token_weights_tt, ttnn.DRAM_MEMORY_CONFIG)
+    # ttnn.scatter needs input and src in one dtype; the zeros below are bfloat16 and the sparse head may emit bfloat8_b.
+    if token_weights_tt.dtype != ttnn.bfloat16:
+        token_weights_tt = ttnn.typecast(token_weights_tt, ttnn.bfloat16)
     shape = token_weights_tt.shape
     if len(shape) == 3:
         B, seq_len = int(shape[0]), int(shape[2])
