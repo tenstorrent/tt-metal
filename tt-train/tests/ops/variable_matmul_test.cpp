@@ -259,6 +259,38 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
     EXPECT_EQ(untouched_err, 0.0F) << "variable(InputAndOutputRow) corrupted untouched rows";
 }
 
+TEST_F(VariableMatmulTest, NoCFlushOutputCbRaceRegression_MultipleOutputBlocksPerCore) {
+    constexpr uint32_t M = 384, K = 128, N = 384;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M, K, device, /*seed=*/148U);
+    auto weight = create_random_device_tensor(K, N, device, /*seed=*/149U);
+    auto output = create_random_device_tensor(M, N, device, /*seed=*/150U);
+
+    auto cfg = kConfig;
+    cfg.compute_with_storage_grid_size = {1, 1};
+
+    const std::vector<uint32_t> offsets_host = {0U, M};
+    auto offsets = make_offsets(offsets_host, device);
+
+    ttml::metal::variable_matmul_into_rows(
+        /*input_tensor=*/input,
+        /*weight_tensor=*/weight,
+        /*config=*/cfg,
+        /*offsets_tensor=*/offsets,
+        /*output_tensor=*/output,
+        /*offsets_start_index=*/0U,
+        /*expected_M_tiles=*/M / 32U,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false);
+
+    auto ref = minimal_matmul_hifi4(input, weight, cfg);
+
+    // M=384 and N=384 produce 6 M-blocks x 3 N-blocks on the single core.
+    EXPECT_EQ(max_abs_error(output, ref), 0.0F)
+        << "variable_matmul output differs from minimal_matmul with multiple output blocks per core";
+}
+
 TEST_F(VariableMatmulTest, InputAndOutputRow_DefaultExpectedMTiles_ReadsCorrectRows) {
     const uint32_t M_parent = 320, K = 128, N = 64;
     auto* device = &ttml::autograd::ctx().get_device();
