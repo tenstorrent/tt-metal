@@ -9,6 +9,15 @@ from __future__ import annotations
 from models.demos.common.bringup.core.model_settings import Setting, Settings
 
 TABLE = {
+    # ---- which model bringup/hooks.py:device_model returns
+    "DEVICE_MODEL": Setting(
+        "device",
+        ("device", "hybrid"),
+        "device = the all-device model (tt/model.py: the hidden state stays on the device from the embedding to the "
+        "final norm, every block through run_block with the validated modules; M.1); hybrid = the CPU reference with "
+        "the device steps swapped in, host in / host out around each step (bringup/hooks.py:HybridDeviceModel; "
+        "debugging only)",
+    ),
     # ---- precision (owner rule 7: HiFi4 + fp32 accumulation for every matmul during bring-up)
     "MATMUL_FIDELITY": Setting(
         "HiFi4",
