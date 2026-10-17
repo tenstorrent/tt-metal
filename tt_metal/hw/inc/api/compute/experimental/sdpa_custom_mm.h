@@ -54,15 +54,11 @@ ALWI void sdpa_custom_mm_block_init_short(
     }
 }
 
-// configure_mask_extent supports masks spanning ct_dim*2 SrcB rows and restores
-// the Q operand's face height before the subsequent matmul unpack.
+// With mask_chunk the mask unpack spans the ct_dim*2 SrcB rows the math side broadcasts
+// and restores the Q operand's face height before the subsequent matmul unpack.
 // row_stride is the number of in1 tiles per stored row when read_transposed;
 // zero uses kt_dim, keeping the contraction width and stored row width equal.
-template <
-    bool read_transposed = false,
-    std::uint32_t signal_granularity = 1,
-    bool configure_mask_extent = false,
-    std::uint32_t row_stride = 0>
+template <bool read_transposed = false, std::uint32_t signal_granularity = 1, std::uint32_t row_stride = 0>
 ALWI void sdpa_custom_mm_block(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -73,7 +69,7 @@ ALWI void sdpa_custom_mm_block(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1,
     const bool mask_chunk = false) {
-    UNPACK((llk_unpack_AB_sdpa_custom_mm<read_transposed, configure_mask_extent>(
+    UNPACK((llk_unpack_AB_sdpa_custom_mm<read_transposed>(
         in0_cb_id, in1_cb_id, mask_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim, mask_chunk, row_stride)));
     MATH((llk_math_sdpa_custom_mm<signal_granularity>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim, mask_chunk)));
 }
