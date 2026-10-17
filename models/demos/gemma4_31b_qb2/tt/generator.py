@@ -489,6 +489,9 @@ class Gemma4Generator:
                     histories=histories,
                 )
             )
+            # The job owns this history until it is consumed or republished.
+            # A borrowed loop local must not retain a completed request's tails.
+            del histories
         outputs = [None] * len(jobs)
         maximum = int(os.environ.get("GEMMA_BATCH_PREFILL_MAX_BATCH", "1"))
         for indices in plan_prefill_batches(
