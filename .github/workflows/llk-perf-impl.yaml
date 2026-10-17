@@ -246,11 +246,7 @@ jobs:
     needs: [load-test-matrix, build-images, llk-perf-compile]
     # !cancelled(): llk-perf-compile is skipped unless compile-runner is set, and a
     # skipped need would skip this job too.
-    if: >-
-      ${{ !cancelled() && inputs.architecture != 'quasar'
-          && needs.load-test-matrix.result == 'success'
-          && needs.load-test-matrix.outputs.matrix != '[]'
-          && (needs.llk-perf-compile.result == 'success' || (inputs.compile-runner == '' && needs.llk-perf-compile.result == 'skipped')) }}
+    if: ${{ !cancelled() && inputs.architecture != 'quasar' && needs.load-test-matrix.result == 'success' && needs.load-test-matrix.outputs.matrix != '[]' && (needs.llk-perf-compile.result == 'success' || (inputs.compile-runner == '' && needs.llk-perf-compile.result == 'skipped')) }}
     strategy:
       fail-fast: false
       matrix:
