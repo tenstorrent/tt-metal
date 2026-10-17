@@ -769,10 +769,6 @@ void MeshGraph::initialize_from_mgd(
             }
         }
     }
-
-    // Inter-mesh dimensionality compatibility is validated by ControlPlane::validate_fabric_config_compatibility
-    // (it also covers cross-rank config agreement and channel-geometry env parity), against each mesh's
-    // resolved per-mesh config.
 }
 
 void MeshGraph::load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections) {
