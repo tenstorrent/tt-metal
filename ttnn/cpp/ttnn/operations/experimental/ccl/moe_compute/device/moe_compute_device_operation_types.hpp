@@ -63,6 +63,13 @@ struct MoEComputeParams {
     ttnn::experimental::prim::detail::MoEActivationFunction activation_type =
         ttnn::experimental::prim::detail::MoEActivationFunction::SILU;  // Default to SILU
 
+    // CLAMPED_SILU only: silu(min(gate, limit)) * clamp(up, -limit, limit).
+    std::optional<float> activation_limit;
+
+    // Expert matmuls and activation. math_approx_mode and dst_full_sync_en stay fixed by the kernel.
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::LoFi;
+    bool fp32_dest_acc_en = false;
+
     // Same value as combine_params->axis (single source of truth when combine_params is set).
     // ComputeOnly path returns nullopt; Full-path call-sites must unwrap with .value().
     std::optional<uint32_t> cluster_axis() const {
@@ -72,7 +79,7 @@ struct MoEComputeParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.reserve(11);
+        attrs.reserve(14);
         attrs.emplace_back("layer_id", layer_id);
         attrs.emplace_back("output_height_shard_dim", output_height_shard_dim);
         attrs.emplace_back("intermediate_size", intermediate_size);
@@ -84,9 +91,15 @@ struct MoEComputeParams {
         attrs.emplace_back("bh_ring_size", bh_ring_size);
         attrs.emplace_back("combine_params", combine_params);
         attrs.emplace_back("activation_type", static_cast<uint32_t>(activation_type));
+        attrs.emplace_back("activation_limit", activation_limit);
+        attrs.emplace_back("math_fidelity", static_cast<uint32_t>(math_fidelity));
+        attrs.emplace_back("fp32_dest_acc_en", fp32_dest_acc_en);
         return attrs;
     }
 };
+
+// Both moe_compute programs check it: CLAMPED_SILU needs a finite, positive limit, the other activations take none.
+void validate_activation_limit(detail::MoEActivationFunction activation_type, std::optional<float> activation_limit);
 
 struct MoEComputeInputs {
     const ttnn::Tensor& tilize_input_tensor;
@@ -96,6 +109,9 @@ struct MoEComputeInputs {
     const ttnn::Tensor& matmul_w0_w1_tensor;
     const ttnn::Tensor& matmul_w2_tensor;
     const std::optional<ttnn::Tensor>& optional_output_tensor;
+    // expert rows: the expert-row program's row buffer and routing table (MoEComputePlaceFactory); empty for the ring
+    const std::optional<ttnn::Tensor>& expert_rows_tensor;
+    const std::optional<ttnn::Tensor>& expert_rows_table_tensor;
 };
 
 }  // namespace ttnn::experimental::prim
