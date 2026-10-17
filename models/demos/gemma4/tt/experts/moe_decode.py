@@ -92,6 +92,13 @@ class Gemma4MoEDecode:
         if x.dtype != ttnn.bfloat16:
             x = ttnn.typecast(x, ttnn.bfloat16)
         x = ttnn.reshape(x, (B, 1, 1, self.hidden))
+        if os.environ.get("GEMMA4_MOE_DECODE_L1_DUMP") and not getattr(self, "_dumped", False):
+            # which L1 buffers are resident when the module's static circular buffers are laid out
+            self._dumped = True
+            prefix = os.environ["GEMMA4_MOE_DECODE_L1_DUMP"].rstrip("/") + "/moe_decode_pre_"
+            os.makedirs(os.path.dirname(prefix), exist_ok=True)
+            ttnn.dump_device_memory_state(self.mesh_device, prefix)
+            logger.info(f"Gemma4MoEDecode: device memory state dumped to {prefix}*")
         out = self.module.forward(x, scores, indices)  # [1,1,B,H/cols] per chip
         ttnn.deallocate(x)
         ttnn.deallocate(scores)
