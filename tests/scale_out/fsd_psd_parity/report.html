@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multimesh stage placement — SC16 capacity limit + run recipe</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#e6edf3; --muted:#8b949e;
+          --green:#3fb950; --red:#f85149; --blue:#58a6ff; --yellow:#d29922; --purple:#bc8cff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+  .wrap { max-width:980px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:26px; margin:0 0 4px; }
+  h2 { font-size:20px; margin:34px 0 10px; border-bottom:1px solid var(--border); padding-bottom:6px; }
+  h3 { font-size:16px; margin:22px 0 8px; color:var(--blue); }
+  .sub { color:var(--muted); margin:0 0 20px; }
+  .verdict { display:inline-block; font-weight:600; padding:10px 16px; border-radius:8px; margin:6px 0 4px; }
+  .v-fail { background:rgba(248,81,73,.14); border:1px solid var(--red); color:var(--red); }
+  .v-ok { background:rgba(63,185,80,.14); border:1px solid var(--green); color:var(--green); }
+  code,pre { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  pre { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:14px 16px;
+        overflow:auto; font-size:13px; }
+  table { border-collapse:collapse; width:100%; margin:12px 0; font-size:14px; }
+  th,td { border:1px solid var(--border); padding:8px 11px; text-align:left; vertical-align:top; }
+  th { background:var(--panel); }
+  td.fail { color:var(--red); font-weight:600; }
+  td.ok { color:var(--green); font-weight:600; }
+  a { color:var(--blue); text-decoration:none; } a:hover { text-decoration:underline; }
+  .files a { display:inline-block; margin:2px 10px 2px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Multimesh pipeline-stage rank bindings</h1>
+<p class="sub">Two RING-of-separate-meshes MGDs (not one big mesh) — placement on SC16 vs SC36,
+PSD and FSD routes. Latest tt-metal, CPU-only mock discovery.</p>
+
+<h2>The two files</h2>
+<table>
+<tr><th>file</th><th>stages</th><th>per-stage device</th><th>chips/stage</th><th>total chips</th><th>galaxies needed</th></tr>
+<tr><td>01_homogeneous_36stage</td><td>36</td><td>[8,4] = full galaxy</td><td>32</td><td><b>1152</b></td><td><b>36</b></td></tr>
+<tr><td>03_64stage</td><td>64</td><td>[4,4] = half galaxy</td><td>16</td><td><b>1024</b></td><td><b>32</b></td></tr>
+</table>
+<p class="sub">Each Blackhole galaxy host = 32 chips.</p>
+
+<h2>Result on SC16 — both FAIL Mapping</h2>
+<div class="verdict v-fail">SC16 = 16 galaxies = 512 chips &lt; 1152 / 1024 required → UNSAT, no placement exists</div>
+<p>Ran on two SC16 FSDs (<code>SC16_32x4_revAB_aisleD</code>, <code>SC16_32x4_revC_aisleC</code>),
+both routes (PSD live-discovery, FSD offline #52859), <code>np=16</code>.</p>
+<table>
+<tr><th>file</th><th>chips avail</th><th>chips req</th><th>route</th><th>Mapping</th><th>solver verdict</th></tr>
+<tr><td>01</td><td>512</td><td>1152</td><td>PSD &amp; FSD</td><td class="fail">FAIL</td><td>no placement found — candidate lists COMPLETE, UNSAT trustworthy</td></tr>
+<tr><td>03</td><td>512</td><td>1024</td><td>PSD &amp; FSD</td><td class="fail">FAIL</td><td>no placement found (UNSAT; search truncated at solver cap, still no placement)</td></tr>
+</table>
+<p><b>PSD vs FSD is irrelevant here</b> — this is a physical capacity ceiling, not a route difference.
+<b>Splitting does not help</b>: it spreads one mesh across hosts, it never packs two logical chips
+onto one physical chip. Trimmed solver logs: <code>results/sc16_unsat/</code>.</p>
+
+<h2>Correct run — SC36 (36 galaxies) fits both</h2>
+<div class="verdict v-ok">SC36_32x4_revC_subtorus_aisleD = 36 galaxies = 1152 chips ≥ both</div>
+<table>
+<tr><th>file</th><th>system</th><th>np</th><th>Mapping</th><th>bindings</th></tr>
+<tr><td>01 (36-stage)</td><td>SC36_32x4_revC_subtorus_aisleD</td><td>36</td><td class="ok">OK</td><td>36 — rank_bindings/01_homogeneous_36stage_sc36_rank_bindings.yaml</td></tr>
+<tr><td>03 (64-stage)</td><td>SC36_32x4_revC_subtorus_aisleD</td><td>36</td><td>capacity fits (1024≤1152); solve heavy*</td><td>pending</td></tr>
+</table>
+<p class="sub">* File 03's half-galaxy [4,4] stages resolve to 624 candidate groupings per mesh; across
+64 meshes the joint-placement SAT did not converge in a 420 s budget (File 01's full-galaxy stages
+solve in ~2 s). Solver-scaling limit, not capacity — see
+<a href="https://github.com/tenstorrent/tt-metal/pull/56920">#56920</a>. Re-running with a longer budget.</p>
+
+<h3>Run recipe (CPU-only, mock discovery = PSD)</h3>
+<pre>cd /workspace/group/tt-metal
+export TT_METAL_HOME=/workspace/group/tt-metal
+mpirun --allow-run-as-root --oversubscribe -x TT_METAL_HOME -np 36 \
+  ./rank_wrapper.sh &lt;out_dir&gt; \
+  build_Release/tools/scaleout/generate_rank_bindings \
+  -m tests/scale_out/fsd_psd_parity/mgd_tests/01_homogeneous_36stage_multimesh.textproto \
+  -o &lt;out_dir&gt;</pre>
+<p>FSD route: add <code>-x TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=&lt;fsd.textproto&gt;</code>.
+On this tree the FSD offline builder falls back to the PSD mapper (#52859), so placement is identical
+to PSD for a system that fits, and identically UNSAT for one that does not.</p>
+
+<h2>Files</h2>
+<p class="files">
+<a href="mgd_tests/01_homogeneous_36stage_multimesh.textproto">01_homogeneous_36stage.textproto</a>
+<a href="mgd_tests/03_64stage_multimesh.textproto">03_64stage.textproto</a>
+<a href="rank_bindings/">rank_bindings/</a>
+<a href="results/sc16_unsat/">results/sc16_unsat/</a>
+<a href="run_fsd_route.sh">run_fsd_route.sh</a>
+<a href="experiment_C_52859.patch">experiment_C_52859.patch</a>
+</p>
+
+</div>
+</body>
+</html>

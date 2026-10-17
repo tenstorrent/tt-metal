@@ -1,0 +1,248 @@
+--- /workspace/group/fsd_psd_parity/generate_rank_bindings.cpp.orig	2026-10-16 22:33:27.661177158 +0000
++++ tools/scaleout/src/generate_rank_bindings.cpp	2026-10-16 22:39:08.570383681 +0000
+@@ -32,6 +32,7 @@
+ #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+ #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+ #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
++#include <tt-metalium/experimental/fabric/physical_descriptor_builder.hpp>  // EXPERIMENTAL (#52859): offline FSD->PSD
+ #include "tt_metal/fabric/fabric_host_utils.hpp"
+ #include "tt_metal/impl/context/metal_context.hpp"
+ #include <llrt/tt_cluster.hpp>
+@@ -109,22 +110,33 @@
+     const PhysicalGroupingDescriptor* pgd,
+     const std::vector<MeshGraphDescriptor>& mesh_graph_descriptors,
+     const std::vector<std::filesystem::path>& mgd_paths_in_order,
+-    bool unique_shapes) {
++    bool unique_shapes,
++    std::optional<tt::tt_metal::ClusterType> cluster_type_override = std::nullopt) {
+     if (mesh_graph_descriptors.size() != mgd_paths_in_order.size() || mesh_graph_descriptors.empty()) {
+         throw std::invalid_argument(
+             "make_topology_mapping_enumerator: mesh_graph_descriptors and mgd_paths_in_order size must match and be "
+             "non-empty");
+     }
+ 
+-    auto& metal_context = MetalContext::instance();
+-    const auto& cluster = metal_context.get_cluster();
+-
+     // MeshGraphs are for galaxy-corner pin shapes, inter-mesh policy, and fabric-node host ranks.
+     // Logical adjacency and local->global MeshId remap are owned by the enumerator.
++    // EXPERIMENTAL (#52859): in the offline FSD route there is no live cluster, so the MeshGraph's only
++    // cluster-derived input (cluster_type -> is_ubb_galaxy) is supplied via cluster_type_override.
+     std::vector<MeshGraph> mesh_graphs;
+     mesh_graphs.reserve(mgd_paths_in_order.size());
+-    for (const auto& p : mgd_paths_in_order) {
+-        mesh_graphs.emplace_back(cluster, p.string());
++    bool is_ubb_galaxy = false;
++    if (cluster_type_override.has_value()) {
++        is_ubb_galaxy = tt::Cluster::is_ubb_galaxy(*cluster_type_override);
++        for (const auto& p : mgd_paths_in_order) {
++            mesh_graphs.emplace_back(*cluster_type_override, p.string());
++        }
++    } else {
++        auto& metal_context = MetalContext::instance();
++        const auto& cluster = metal_context.get_cluster();
++        is_ubb_galaxy = cluster.is_ubb_galaxy();
++        for (const auto& p : mgd_paths_in_order) {
++            mesh_graphs.emplace_back(cluster, p.string());
++        }
+     }
+ 
+     TopologyMappingConfig config;
+@@ -142,7 +154,7 @@
+         parts[mgi].mesh_graph_descriptor = &mesh_graph_descriptors[mgi];
+         PinningsByMesh local_pins = mesh_graph_descriptors[mgi].get_pinnings();
+         drop_inactive_revision_pinnings(local_pins, psd);
+-        if (cluster.is_ubb_galaxy()) {
++        if (is_ubb_galaxy) {
+             for (const auto& mesh_id : mesh_graphs[mgi].get_all_mesh_ids()) {
+                 const auto& mesh_shape = mesh_graphs[mgi].get_mesh_shape(mesh_id);
+                 const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
+@@ -218,10 +230,11 @@
+     const PhysicalSystemDescriptor& psd,
+     const PhysicalGroupingDescriptor* pgd,
+     const std::vector<MeshGraphDescriptor>& mesh_graph_descriptors,
+-    const std::vector<std::filesystem::path>& mgd_paths_in_order) {
++    const std::vector<std::filesystem::path>& mgd_paths_in_order,
++    std::optional<tt::tt_metal::ClusterType> cluster_type_override = std::nullopt) {
+     log_info(tt::LogFabric, "Running topology mapping with mesh graph rank bindings...");
+-    MultiMeshSolutionEnumerator enumerator =
+-        make_topology_mapping_enumerator(psd, pgd, mesh_graph_descriptors, mgd_paths_in_order, /*unique_shapes=*/false);
++    MultiMeshSolutionEnumerator enumerator = make_topology_mapping_enumerator(
++        psd, pgd, mesh_graph_descriptors, mgd_paths_in_order, /*unique_shapes=*/false, cluster_type_override);
+     TopologyMappingParts out;
+     out.parts = enumerator.next();
+     return out;
+@@ -246,7 +259,10 @@
+  * `mapping_result` already uses this MeshGraph's local MeshIds.
+  */
+ std::vector<RankBindingConfig> extract_rank_bindings(
+-    const PhysicalSystemDescriptor& psd, const TopologyMappingResult& mapping_result, const MeshGraph& mesh_graph) {
++    const PhysicalSystemDescriptor& psd,
++    const TopologyMappingResult& mapping_result,
++    const MeshGraph& mesh_graph,
++    bool resolve_visible_devices = true) {
+     struct AsicGrouping {
+         std::vector<AsicID> asic_ids;
+         std::vector<tt::ChipId> chip_ids;
+@@ -353,21 +369,26 @@
+ 
+         // Build TT_VISIBLE_DEVICES from ChipIds - only include MMIO devices, not remote devices.
+         // For each chip, get its associated MMIO device; remote chips share an MMIO device.
+-        const auto& cluster = MetalContext::instance().get_cluster();
+-        std::set<tt::ChipId> mmio_device_ids;
+-        for (tt::ChipId chip_id : chip_ids) {
+-            tt::ChipId mmio_id = cluster.get_associated_mmio_device(chip_id);
+-            mmio_device_ids.insert(mmio_id);
+-        }
+-        std::string visible_devices;
+-        for (auto it = mmio_device_ids.begin(); it != mmio_device_ids.end(); ++it) {
+-            if (it != mmio_device_ids.begin()) {
+-                visible_devices += ",";
++        // EXPERIMENTAL (#52859): TT_VISIBLE_DEVICES is a host-local device index that can only be read from
++        // the LIVE cluster (get_associated_mmio_device). The offline FSD route has no live cluster, so it
++        // produces logical placement only (rank <-> mesh <-> host) and skips this resolution.
++        if (resolve_visible_devices) {
++            const auto& cluster = MetalContext::instance().get_cluster();
++            std::set<tt::ChipId> mmio_device_ids;
++            for (tt::ChipId chip_id : chip_ids) {
++                tt::ChipId mmio_id = cluster.get_associated_mmio_device(chip_id);
++                mmio_device_ids.insert(mmio_id);
++            }
++            std::string visible_devices;
++            for (auto it = mmio_device_ids.begin(); it != mmio_device_ids.end(); ++it) {
++                if (it != mmio_device_ids.begin()) {
++                    visible_devices += ",";
++                }
++                visible_devices += std::to_string(*it);
++            }
++            if (!visible_devices.empty()) {
++                binding.env_overrides["TT_VISIBLE_DEVICES"] = visible_devices;
+             }
+-            visible_devices += std::to_string(*it);
+-        }
+-        if (!visible_devices.empty()) {
+-            binding.env_overrides["TT_VISIBLE_DEVICES"] = visible_devices;
+         }
+ 
+         rank_bindings.push_back(binding);
+@@ -590,21 +611,40 @@
+ 
+         // Factory System Descriptor (FSD) path comes from RTOptions, populated from the
+         // TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH environment variable (set by tt-run and propagated to this
+-        // MPI worker). NOTE: FSD-driven mapping is not yet implemented; today we always fall back to live PSD
+-        // discovery below. See issue #52859 for the follow-up that consumes this.
+-        const auto& fsd_path = tt::tt_metal::MetalContext::instance().rtoptions().get_factory_system_descriptor_path();
+-        if (!fsd_path.empty()) {
+-            log_info(
+-                tt::LogFabric,
+-                "Factory System Descriptor provided via TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH ({}); FSD-driven "
+-                "mapping not yet implemented, falling back to live PSD discovery.",
+-                fsd_path);
+-        }
++        // MPI worker). See issue #52859 for the FSD-driven mapping that consumes this.
++        // EXPERIMENTAL (#52859): read the FSD path straight from the environment rather than via
++        // MetalContext::instance().rtoptions(), because instance() eagerly initializes the LIVE device driver
++        // (which has no chips on the offline FSD route, so it would abort before we ever branch). The non-FSD
++        // route still reaches MetalContext later via live PSD discovery. rtoptions sources the same env var.
++        const char* fsd_env = std::getenv("TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH");
++        const std::string fsd_path = fsd_env ? fsd_env : "";
++
++        // EXPERIMENTAL (#52859): when an FSD is provided, build the PhysicalSystemDescriptor OFFLINE from the
++        // factory descriptor (FM's own ported builder) instead of discovering it from a live cluster. The two
++        // routes converge on the same PhysicalSystemDescriptor type and feed the same topology mapper, so this
++        // is the local stand-in for the FM (FSD) route. cluster_type_override supplies the only cluster-derived
++        // input the offline path still needs (ClusterType -> is_ubb_galaxy for MeshGraph).
++        const bool fsd_route = !fsd_path.empty();
++        std::optional<tt::tt_metal::ClusterType> cluster_type_override;
+ 
+-        // Stage: Run PSD discovery
+-        log_info(tt::LogFabric, "Stage: Running Physical System Descriptor discovery...");
+-        PhysicalSystemDescriptor psd = run_psd_discovery();
+-        log_info(tt::LogFabric, "PSD discovery complete");
++        PhysicalSystemDescriptor psd = [&]() {
++            if (fsd_route) {
++                log_info(
++                    tt::LogFabric,
++                    "Stage: Building Physical System Descriptor OFFLINE from Factory System Descriptor ({})...",
++                    fsd_path);
++                // 4x_bh_quietbox is 16x P150 across 4 hosts -> P150_X4. (Offline route: no live cluster to query.)
++                cluster_type_override = tt::tt_metal::ClusterType::P150_X4;
++                auto out = tt::tt_metal::experimental::tt_fabric::build_physical_descriptor_from_file(fsd_path, {});
++                log_info(tt::LogFabric, "Offline FSD->PSD build complete");
++                return out;
++            }
++            // Stage: Run PSD discovery
++            log_info(tt::LogFabric, "Stage: Running Physical System Descriptor discovery...");
++            PhysicalSystemDescriptor discovered = run_psd_discovery();
++            log_info(tt::LogFabric, "PSD discovery complete");
++            return discovered;
++        }();
+ 
+         // Gather mock cluster descriptor paths from all ranks (when TT_METAL_MOCK_CLUSTER_DESC_PATH is set)
+         std::map<int, std::string> mpi_rank_to_cluster_desc_path;
+@@ -626,11 +666,14 @@
+             mgds.emplace_back(MeshGraphDescriptor(mgd_path, /*backwards_compatible=*/true));
+             mgd_paths_in_order.push_back(mgd_path);
+         }
+-        std::optional<PhysicalGroupingDescriptor> pgd = PhysicalGroupingDescriptor::find_and_load(
+-            args.physical_grouping_descriptor_path.has_value()
+-                ? std::optional<std::filesystem::path>(*args.physical_grouping_descriptor_path)
+-                : std::nullopt,
+-            &psd);
++        // EXPERIMENTAL (#52859): skip PGD discovery on the offline FSD route (no live grouping to resolve).
++        std::optional<PhysicalGroupingDescriptor> pgd =
++            fsd_route ? std::nullopt
++                      : PhysicalGroupingDescriptor::find_and_load(
++                            args.physical_grouping_descriptor_path.has_value()
++                                ? std::optional<std::filesystem::path>(*args.physical_grouping_descriptor_path)
++                                : std::nullopt,
++                            &psd);
+         const PhysicalGroupingDescriptor* pgd_ptr = pgd.has_value() ? &*pgd : nullptr;
+ 
+         // Get current rank - only rank 0 performs topology mapping and file generation
+@@ -829,7 +872,8 @@
+                 // Stage: Run topology mapping
+                 log_info(tt::LogFabric, "Stage: Running topology mapping...");
+ 
+-                TopologyMappingParts topology = run_topology_mapping(psd, pgd_ptr, mgds, mgd_paths_in_order);
++                TopologyMappingParts topology =
++                    run_topology_mapping(psd, pgd_ptr, mgds, mgd_paths_in_order, cluster_type_override);
+ 
+                 if (topology.parts.empty() || !topology.parts.front().success) {
+                     log_error(
+@@ -841,12 +885,20 @@
+                 }
+                 log_info(tt::LogFabric, "Topology mapping complete");
+ 
+-                auto& metal_context = tt::tt_metal::MetalContext::instance();
+-                const auto& cluster = metal_context.get_cluster();
++                // EXPERIMENTAL (#52859): offline FSD route has no live cluster; build MeshGraphs from the
++                // ClusterType override instead of get_cluster().
+                 std::vector<MeshGraph> mesh_graphs_for_extract;
+                 mesh_graphs_for_extract.reserve(mgd_paths_in_order.size());
+-                for (const auto& p : mgd_paths_in_order) {
+-                    mesh_graphs_for_extract.emplace_back(cluster, p.string());
++                if (cluster_type_override.has_value()) {
++                    for (const auto& p : mgd_paths_in_order) {
++                        mesh_graphs_for_extract.emplace_back(*cluster_type_override, p.string());
++                    }
++                } else {
++                    auto& metal_context = tt::tt_metal::MetalContext::instance();
++                    const auto& cluster = metal_context.get_cluster();
++                    for (const auto& p : mgd_paths_in_order) {
++                        mesh_graphs_for_extract.emplace_back(cluster, p.string());
++                    }
+                 }
+ 
+                 std::vector<int> subcontext_ids_in_order;
+@@ -882,8 +934,8 @@
+                             tt::LogFabric, "Sub-context {}: no local mapping part from the enumerator", subctx_id);
+                         return 1;
+                     }
+-                    std::vector<RankBindingConfig> rank_bindings =
+-                        extract_rank_bindings(psd, topology.parts[mgi], mesh_graphs_for_extract[mgi]);
++                    std::vector<RankBindingConfig> rank_bindings = extract_rank_bindings(
++                        psd, topology.parts[mgi], mesh_graphs_for_extract[mgi], /*resolve_visible_devices=*/!fsd_route);
+ 
+                     if (rank_bindings.empty()) {
+                         if (multi_mgd) {
