@@ -6,25 +6,25 @@ import pytest
 from loguru import logger
 import torch
 import ttnn
-from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.nightly.unit_tests.operations.experimental.test_rotary_embedding_llama import (
     run_test_rotary_embedding_llama,
 )
 
 
-@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @pytest.mark.parametrize(
     "batch, seq_len",
     (
         (32, 1),
         (16, 1),
         (8, 1),
+        (6, 1),
         (1, 1),
     ),
     ids=(
         "decode_32",
         "decode_16",
         "decode_8",
+        "decode_6",
         "decode_1",
     ),
 )
@@ -70,7 +70,6 @@ def test_rotary_embedding_llama_fused_qk(
     )
 
 
-@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @pytest.mark.parametrize(
     "batch, seq_len",
     (
