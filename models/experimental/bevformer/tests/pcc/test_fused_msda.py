@@ -17,6 +17,8 @@ seeds, because a location-generation bug shows up as a seed-dependent drift
 rather than a uniform offset.
 """
 
+from functools import partial
+
 import pytest
 import torch
 import ttnn
@@ -27,6 +29,7 @@ from models.experimental.bevformer.config.encoder_config import get_preset_confi
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
 from models.experimental.bevformer.tests.test_utils import check_with_pcc
 from models.experimental.bevformer.tt.model_preprocessing import create_ms_deformable_attention_parameters
+from models.experimental.bevformer.tt import tt_ms_deformable_attention
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import (
     TTMSDeformableAttention,
     multi_scale_deformable_attn_fused,
@@ -84,7 +87,16 @@ def _record_value_placement(monkeypatch):
     return placements
 
 
-def _run_tt(device, config, tt_parameters, torch_inputs, value_memory="auto"):
+def _force_value_memory(monkeypatch, value_memory):
+    """Pin the module's placement decision, which it otherwise makes from live L1 state."""
+    monkeypatch.setattr(
+        tt_ms_deformable_attention,
+        "multi_scale_deformable_attn_fused",
+        partial(multi_scale_deformable_attn_fused, value_memory=value_memory),
+    )
+
+
+def _run_tt(device, config, tt_parameters, torch_inputs):
     query, value, reference_points, spatial_shapes = torch_inputs
 
     tt_query = ttnn.from_torch(query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -96,7 +108,6 @@ def _run_tt(device, config, tt_parameters, torch_inputs, value_memory="auto"):
         device=device,
         params=tt_parameters,
         spatial_shapes=spatial_shapes,
-        value_memory=value_memory,
     )
     out = tt_model(query=tt_query, value=tt_value, reference_points=tt_reference_points)
     return ttnn.to_torch(out).to(torch.float32)
@@ -149,7 +160,8 @@ def test_msda_value_memory_modes_match_reference(device, monkeypatch, value_memo
     placements = _record_value_placement(monkeypatch)
 
     expected = ref_model(query, value, reference_points=reference_points, spatial_shapes=spatial_shapes)
-    got = _run_tt(device, config, tt_parameters, torch_inputs, value_memory=value_memory)
+    _force_value_memory(monkeypatch, value_memory)
+    got = _run_tt(device, config, tt_parameters, torch_inputs)
 
     assert placements == [buffer_type]
     passed, message = check_with_pcc(expected, got, pcc=0.999)

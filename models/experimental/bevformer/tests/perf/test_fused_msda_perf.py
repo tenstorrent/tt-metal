@@ -55,6 +55,7 @@ from models.experimental.bevformer.config.encoder_config import get_preset_confi
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
 from models.experimental.bevformer.tests.test_utils import check_with_pcc
 from models.experimental.bevformer.tt.model_preprocessing import create_ms_deformable_attention_parameters
+from models.experimental.bevformer.tt import tt_ms_deformable_attention
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import (
     TTMSDeformableAttention,
     _spatial_shapes_list,
@@ -129,13 +130,12 @@ def _to_device(device, torch_inputs):
     )
 
 
-def _tt_model(device, config, tt_parameters, spatial_shapes, value_memory="auto"):
+def _tt_model(device, config, tt_parameters, spatial_shapes):
     return TTMSDeformableAttention(
         config=config,
         device=device,
         params=tt_parameters,
         spatial_shapes=spatial_shapes,
-        value_memory=value_memory,
     )
 
 
@@ -291,6 +291,7 @@ def test_fused_msda_module_perf(
     num_queries,
     value_memory,
     expected_pcc,
+    monkeypatch,
     reset_seeds,
     ensure_gc,
 ):
@@ -302,7 +303,13 @@ def test_fused_msda_module_perf(
     config, ref_model, tt_parameters, torch_inputs = _build(device, config_name, batch_size, num_queries)
     query, value, reference_points, spatial_shapes = torch_inputs
     tt_query, tt_value, tt_refs = _to_device(device, torch_inputs)
-    model = _tt_model(device, config, tt_parameters, spatial_shapes, value_memory)
+    # Pins the placement the module otherwise decides from live L1 state.
+    monkeypatch.setattr(
+        tt_ms_deformable_attention,
+        "multi_scale_deformable_attn_fused",
+        partial(tt_ms_deformable_attention.multi_scale_deformable_attn_fused, value_memory=value_memory),
+    )
+    model = _tt_model(device, config, tt_parameters, spatial_shapes)
 
     def op_fn():
         return model(query=tt_query, value=tt_value, reference_points=tt_refs)

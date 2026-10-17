@@ -149,15 +149,7 @@ class TTMSDeformableAttention:
     Based on the MMCV/BEVFormer approach.
     """
 
-    def __init__(
-        self,
-        config: DeformableAttentionConfig,
-        device,
-        params=None,
-        *,
-        spatial_shapes,
-        value_memory: ValueMemory = "auto",
-    ):
+    def __init__(self, config: DeformableAttentionConfig, device, params=None, *, spatial_shapes):
         """
         Initialize TTNN Multi-Scale Deformable Attention module.
 
@@ -175,9 +167,6 @@ class TTMSDeformableAttention:
                 module: forward takes no shapes of its own, and they are handed to the
                 fused op as a static attribute. Features at a different resolution
                 require a new instance.
-            value_memory: Test and benchmark override for where ``value`` is staged;
-                see ``multi_scale_deformable_attn_fused``. Production code leaves it
-                at ``"auto"``, which decides from the device's live L1 state.
 
         Raises:
             ValueError: If the configuration or spatial shapes are invalid.
@@ -211,7 +200,6 @@ class TTMSDeformableAttention:
         self.params = params
         self.spatial_shapes = spatial_shapes.to(dtype=torch.long).clone()
         self.total_keys = int(self.spatial_shapes.prod(dim=1).sum().item())
-        self.value_memory = value_memory
 
         self.head_dim = self.embed_dims // self.num_heads
 
@@ -324,7 +312,6 @@ class TTMSDeformableAttention:
             sampling_offsets=sampling_offsets,
             attention_weights=attention_weights,
             spatial_shapes=self.spatial_shapes,
-            value_memory=self.value_memory,
         )
 
         if ENABLE_LOGGING:
