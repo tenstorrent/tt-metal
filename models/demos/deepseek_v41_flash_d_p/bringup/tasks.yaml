@@ -7549,6 +7549,14 @@ tasks:
     kind: norm
     layer: 24
     stateful: false
+  frozen:
+    at: '2026-10-17T13:25:22'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_norm.py: a927b589179adc1f6992d5ced34e9571501131a79a34305c2f79f5e514e6b467
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.dec_reindex.11
   title: 'dec_reindex block with steps 1-11 on device (last: ffn_norm)'
   step: implement
