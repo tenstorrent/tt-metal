@@ -59,7 +59,7 @@ template <
     bool skip_packer_strides = false>
 inline void llk_pack_init(const std::uint32_t num_tiles = 1) {
     constexpr std::uint8_t RegFmt = ckernel::infer_pack_reg_fmt(OUT_DESC.format, is_fp32_dest_acc_en);
-    constexpr bool is_input_8bit_format = IS_8BIT_FORMAT(static_cast<std::uint32_t>(IN_DESC.format));
+    constexpr bool is_input_8bit_format = ckernel::experimental::is_8bit_format(IN_DESC.format);
     llk_pack_init_impl<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
         RegFmt,
         OUT_DESC.shape.face_r_dim,

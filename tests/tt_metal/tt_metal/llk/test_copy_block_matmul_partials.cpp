@@ -534,19 +534,19 @@ std::vector<std::uint32_t> run_pack_block_dest_capacity(
             .compile_args = {copy_tiles, pack_tiles, static_cast<std::uint32_t>(id_free)}});
 
     auto& cq = mesh.mesh_command_queue();
-    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src, /*blocking=*/true);
-    SetRuntimeArgs(program, reader, core, {src_buffer->address(), 0, copy_tiles});
-    SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, pack_tiles});
+    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src, true /*blocking*/);
+    SetRuntimeArgs(program, reader, core, {src_buffer->address(), 0 /*bank_id*/, copy_tiles});
+    SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0 /*bank_id*/, pack_tiles});
     distributed::MeshWorkload workload;
     const distributed::MeshCoordinate zero(0, 0);
     workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
     std::vector<std::uint32_t> result;
     // The wait aborts once the watcher reports an assert; a program that completes (no guard) is read back.
     try {
-        distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::EnqueueMeshWorkload(cq, workload, false /*blocking*/);
         distributed::Finish(cq);
         completed = true;
-        distributed::EnqueueReadMeshBuffer(cq, result, dst_buffer, /*blocking=*/true);
+        distributed::EnqueueReadMeshBuffer(cq, result, dst_buffer, true /*blocking*/);
     } catch (const std::runtime_error& e) {
         completed = false;
         EXPECT_NE(std::string(e.what()).find("Aborting wait due to watcher error"), std::string::npos) << e.what();
@@ -594,6 +594,7 @@ void run_pack_block_dest_overrun(distributed::MeshDevice& mesh, bool id_free) {
     EXPECT_EQ(result, golden) << path << ": in-capacity pack does not reproduce the input";
 
     run_pack_block_dest_capacity(mesh, src, kFp32HalfSyncDestTiles, kOverrunTiles, id_free, completed);
+    EXPECT_FALSE(completed) << path << ": the overrun program completed instead of aborting on the watcher error";
     const std::string exception = wait_for_watcher_exception();
     ASSERT_FALSE(exception.empty()) << path << ": packed " << kOverrunTiles << " tiles from a "
                                     << kFp32HalfSyncDestTiles

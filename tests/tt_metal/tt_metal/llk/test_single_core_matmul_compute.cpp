@@ -1444,46 +1444,56 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulBlockIdFreeGolden) {
 
 // Compile-time contract of the id-free matmul operand geometry; these programs are never launched. The LLK has
 // unpack + math programs only for the pairs of the Blackhole matmul support matrix: in0 columns == in1 rows,
-// in0 not 16x16 (any 1..32-row height with 32 columns, or 32x16), in1 one of 32x32 / 32x16 / 16x32. Its only
-// guard is a runtime LLK_ASSERT on the 16x16-by-16x16 pair that production builds compile out; every other
-// unsupported pair (a single-face operand next to a multi-face one, a mismatched inner dimension) silently runs
-// the default 32x32 program over faces the operand does not have. The API must reject all of them at compile
-// time, in both the single-tile and the block init, and keep accepting every supported pair.
+// in0 not 16x16 (any 1..32-row height with 32 columns, or 32x16), in1 one of 32x32 / 32x16 / 16x32. The
+// programs are selected from the operands' total dimensions and assume the face grid behind them: an operand
+// shorter than 32 rows is unpacked two faces per tile and the math takes a 16-row operand as two 16-row faces, so
+// an in0 with short faces must be a single face row and in1 faces must be 16 rows high. The LLK's only guard is a
+// runtime LLK_ASSERT on the 16x16-by-16x16 pair that production builds compile out; every other unsupported pair
+// (a single-face operand next to a multi-face one, a mismatched inner dimension, four short faces whose total
+// matches a two-face tile) silently runs a program over faces the operand does not have, or leaves faces unread.
+// The API must reject all of them at compile time, in both the single-tile and the block init, and keep
+// accepting every supported pair.
 TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulIdFreeCompileLimits) {
     struct Case {
         std::uint32_t in0_faces_r, in0_faces_c, in1_faces_r, in1_faces_c;
-        std::uint32_t in0_face_r_dim;
+        std::uint32_t in0_face_r_dim, in1_face_r_dim;
         bool accepted;
     };
-    // Face dims are 16x16 unless in0_face_r_dim says otherwise; tile dims = faces x face dims.
-    const std::array<Case, 15> cases{{
+    // Face dims are 16x16 unless in0_face_r_dim / in1_face_r_dim say otherwise; tile dims = faces x face dims.
+    const std::array<Case, 18> cases{{
         // Supported pairs (in0 x in1).
-        {2, 2, 2, 2, 16, true},  // 32x32 x 32x32
-        {2, 2, 2, 1, 16, true},  // 32x32 x 32x16
-        {2, 1, 1, 2, 16, true},  // 32x16 x 16x32
-        {1, 2, 2, 2, 16, true},  // 16x32 x 32x32
-        {1, 2, 2, 1, 16, true},  // 16x32 x 32x16
-        {1, 2, 2, 2, 8, true},   // 8x32 x 32x32 (tiny-tile in0)
+        {2, 2, 2, 2, 16, 16, true},  // 32x32 x 32x32
+        {2, 2, 2, 1, 16, 16, true},  // 32x32 x 32x16
+        {2, 1, 1, 2, 16, 16, true},  // 32x16 x 16x32
+        {1, 2, 2, 2, 16, 16, true},  // 16x32 x 32x32
+        {1, 2, 2, 1, 16, 16, true},  // 16x32 x 32x16
+        {1, 2, 2, 2, 8, 16, true},   // 8x32 x 32x32 (tiny-tile in0: one row of two 8-row faces)
         // 16x16 in0 (no math program), inner dimension matched or not.
-        {1, 1, 1, 1, 16, false},  // 16x16 x 16x16
-        {1, 1, 1, 2, 16, false},  // 16x16 x 16x32
-        {1, 1, 2, 2, 16, false},  // 16x16 x 32x32
-        {1, 1, 2, 1, 16, false},  // 16x16 x 32x16
-        {1, 1, 1, 2, 8, false},   // 8x16 x 16x32 (sub-16-row single face in0)
+        {1, 1, 1, 1, 16, 16, false},  // 16x16 x 16x16
+        {1, 1, 1, 2, 16, 16, false},  // 16x16 x 16x32
+        {1, 1, 2, 2, 16, 16, false},  // 16x16 x 32x32
+        {1, 1, 2, 1, 16, 16, false},  // 16x16 x 32x16
+        {1, 1, 1, 2, 8, 16, false},   // 8x16 x 16x32 (sub-16-row single face in0)
         // Inner dimension mismatch with a multi-face in0.
-        {2, 2, 1, 1, 16, false},  // 32x32 x 16x16
-        {1, 2, 1, 1, 16, false},  // 16x32 x 16x16
-        {2, 1, 2, 2, 16, false},  // 32x16 x 32x32
+        {2, 2, 1, 1, 16, 16, false},  // 32x32 x 16x16
+        {1, 2, 1, 1, 16, 16, false},  // 16x32 x 16x16
+        {2, 1, 2, 2, 16, 16, false},  // 32x16 x 32x32
         // Inner dimension matched but in1 is 16x16 (not a supported in1 tile).
-        {2, 1, 1, 1, 16, false},  // 32x16 x 16x16
+        {2, 1, 1, 1, 16, 16, false},  // 32x16 x 16x16
+        // Totals of a supported pair, face grid of an unsupported one: four short faces where the programs expect
+        // two 16-row faces (in0 16x32 / 8x32 as 2x2 faces of 8 / 4 rows; in1 16x32 as 2x2 faces of 8 rows).
+        {2, 2, 2, 2, 8, 16, false},  // {8,16,2,2} x 32x32
+        {2, 2, 2, 2, 4, 16, false},  // {4,16,2,2} x 32x32
+        {2, 1, 2, 2, 16, 8, false},  // 32x16 x {8,16,2,2}
     }};
     const CoreCoord core{0, 0};
     for (const auto& test : cases) {
-        for (std::uint32_t block = 0; block < 2; ++block) {
+        for (const bool block : {false, true}) {
             SCOPED_TRACE(
                 ::testing::Message() << "in0_faces=" << test.in0_faces_r << "x" << test.in0_faces_c
                                      << ", in0_face_r_dim=" << test.in0_face_r_dim << ", in1_faces=" << test.in1_faces_r
-                                     << "x" << test.in1_faces_c << ", block=" << block);
+                                     << "x" << test.in1_faces_c << ", in1_face_r_dim=" << test.in1_face_r_dim
+                                     << ", block=" << block);
             Program program = CreateProgram();
             CreateKernel(
                 program,
@@ -1497,8 +1507,9 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulIdFreeCompileLimits) {
                         test.in0_faces_c,
                         test.in1_faces_r,
                         test.in1_faces_c,
-                        block,
-                        test.in0_face_r_dim}});
+                        static_cast<std::uint32_t>(block),
+                        test.in0_face_r_dim,
+                        test.in1_face_r_dim}});
             if (test.accepted) {
                 EXPECT_NO_THROW(program.impl().compile(&this->device()));
                 continue;

@@ -35,7 +35,8 @@ namespace experimental {
  * <SrcOrder::Reverse>(in0, in1, out) must already have run. in0 -> SrcB, in1 -> SrcA.
  *
  * Operand pairs outside the Blackhole matmul support matrix -- in0 columns != in1 rows, a 16-column in0 with fewer
- * than 32 rows (16x16), or an in1 other than 32x32 / 32x16 / 16x32 -- are compile-time rejected.
+ * than 32 rows (16x16), an in0 with faces shorter than 16 rows in more than one face row, an in1 with faces
+ * shorter than 16 rows, or an in1 other than 32x32 / 32x16 / 16x32 -- are compile-time rejected.
  *
  * | Function | in0 / in1 | Input operands (in0 -> SrcB, in1 -> SrcA) | LLKOperand | | True |
  * | Function | transpose | Transpose flag for tiles in B             | uint32_t   | | False |
@@ -48,7 +49,8 @@ ALWI void matmul_init(LLKOperand<F0, S0> /*in0*/, LLKOperand<F1, S1> /*in1*/, st
     static_assert(
         is_supported_matmul_operand_pair(S0, S1),
         "matmul_init: unsupported operand pair: in0 columns must equal in1 rows, in0 must not be 16x16 (nor a "
-        "sub-16-row single face), and in1 must be 32x32, 32x16 or 16x32; the LLK has no program for other pairs.");
+        "sub-16-row single face), an in0 with faces shorter than 16 rows must be a single face row, and in1 must be "
+        "32x32, 32x16 or 16x32 with 16-row faces; the LLK has no program for other pairs.");
     MATH((llk_math_matmul_init<
           LLKOperand<F0, S0>::descriptor,
           LLKOperand<F1, S1>::descriptor,
@@ -90,7 +92,8 @@ ALWI void matmul_tiles(
  * formats + tile geometry are FORMAT-FREE and come from the two operand descriptors.
  *
  * Operand pairs outside the Blackhole matmul support matrix -- in0 columns != in1 rows, a 16-column in0 with fewer
- * than 32 rows (16x16), or an in1 other than 32x32 / 32x16 / 16x32 -- are compile-time rejected.
+ * than 32 rows (16x16), an in0 with faces shorter than 16 rows in more than one face row, an in1 with faces
+ * shorter than 16 rows, or an in1 other than 32x32 / 32x16 / 16x32 -- are compile-time rejected.
  *
  * | Function | in0 / in1 | Input operands (in0 -> SrcB, in1 -> SrcA) | LLKOperand | | True |
  * | Function | transpose | Transpose flag for tiles in B             | uint32_t   | | False |
@@ -112,7 +115,8 @@ ALWI void matmul_block_init(
     static_assert(
         is_supported_matmul_operand_pair(S0, S1),
         "matmul_block_init: unsupported operand pair: in0 columns must equal in1 rows, in0 must not be 16x16 (nor a "
-        "sub-16-row single face), and in1 must be 32x32, 32x16 or 16x32; the LLK has no program for other pairs.");
+        "sub-16-row single face), an in0 with faces shorter than 16 rows must be a single face row, and in1 must be "
+        "32x32, 32x16 or 16x32 with 16-row faces; the LLK has no program for other pairs.");
     MATH((llk_math_matmul_init<
           LLKOperand<F0, S0>::descriptor,
           LLKOperand<F1, S1>::descriptor,
