@@ -1186,6 +1186,27 @@
   "started": "2026-10-17T15:59:29",
   "status": "PASS"
  },
+ "C.dec_reuse.ffn_collapse": {
+  "attempts": 0,
+  "duration_s": 57.0,
+  "history": [
+   {
+    "s": 57.0,
+    "status": "PASS",
+    "t": "2026-10-17T16:20:21"
+   }
+  ],
+  "last_run": "2026-10-17T16:20:21",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.dec_reuse.ffn_collapse.log",
+  "metrics": {
+   "err_ffn_collapse_L21": 0.00239358376711607,
+   "err_ffn_collapse_L21_limit": 0.5861021280288696
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T16:19:24",
+  "status": "PASS"
+ },
  "C.dec_reuse.ffn_hc": {
   "attempts": 0,
   "duration_s": 48.0,
