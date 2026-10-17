@@ -222,6 +222,8 @@ constexpr bool validate_tensor_shape_sub_bcast_col_custom_(const TensorShape& te
  * One predicate for the unpack init, the math MOP config, the math execute and their runtime twins on both
  * arches, instead of hand-synced copies. Kept separate from @ref validate_tensor_shape_sub_bcast_col_custom_:
  * the two ops accept the same shapes today, but their limits come from different code and may diverge.
+ *
+ * @param tensor_shape: Tile geometry of the operand.
  **/
 constexpr bool validate_tensor_shape_reduce_block_max_row_(const TensorShape& tensor_shape)
 {

@@ -14,6 +14,7 @@
 #include "llk_assert.h"
 #include "llk_math_common.h"
 #include "lltt.h"
+#include "reduce_block_max_row_limits.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;
@@ -63,15 +64,16 @@ inline void reduce_max_row_configure_addrmod_reinit_runtime()
  * For num_faces=2 the per-tile MOP reduces only F0&F1 (no F2 jump, no second reduce) and the
  * recorded transpose block covers the single face-row.
  *
+ * - block_ct_dim must be between 1 and 127 (asserted; see REDUCE_BLOCK_MAX_ROW_MAX_BLOCK_CT_DIM)
+ *
  * This function should NOT be used as a substitute for native reduce LLK MOP configuration.
  * Use the standard reduce MOP configuration with _llk_math_reduce_init_ for general-purpose reduction.
  */
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t block_ct_dim, const ckernel::TensorShape tensor_shape)
 {
-    // Same bound as the compile-time sibling's static_assert: block_ct_dim goes straight into the MOP
-    // outer-loop count (7 bits on Wormhole, so 128 silently reduces nothing).
-    LLK_ASSERT(block_ct_dim < 128, "block_ct_dim must be less than 128");
+    // Same contract as the compile-time sibling (rationale with REDUCE_BLOCK_MAX_ROW_MAX_BLOCK_CT_DIM).
+    LLK_ASSERT(is_valid_reduce_block_max_row_block_ct_dim(block_ct_dim), "block_ct_dim must be between 1 and 127");
     LLK_ASSERT(validate_tensor_shape_reduce_block_max_row_(tensor_shape), "block reduce_max_row supports 32x32 and 16x32 tiles only");
     LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 1 && is_fp32_dest_acc_en), "16x32 reduce_block_max_row not supported in FP32 dest mode yet");
 
@@ -184,11 +186,13 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t blo
  * The replay buffer at positions 0-14 must still contain the reduce GMPOOL+transpose sequence
  * from the original _llk_math_reduce_block_max_row_mop_config_ call.
  * Use when the MOP was clobbered (e.g., by eltwise binary ops) but the replay buffer is intact.
+ * block_ct_dim must be between 1 and 127 and tensor_shape a 32x32 or 16x32 tile (both asserted).
  */
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_mop_reprogram_only_runtime_(std::uint32_t block_ct_dim, const ckernel::TensorShape& tensor_shape)
 {
-    LLK_ASSERT(block_ct_dim < 128, "block_ct_dim must be less than 128");
+    // The reprogram writes the same MOP as the full config, so it holds the same contract.
+    LLK_ASSERT(is_valid_reduce_block_max_row_block_ct_dim(block_ct_dim), "block_ct_dim must be between 1 and 127");
     LLK_ASSERT(validate_tensor_shape_reduce_block_max_row_(tensor_shape), "block reduce_max_row supports 32x32 and 16x32 tiles only");
 
     if (tensor_shape.num_faces_r_dim == 1)

@@ -325,7 +325,8 @@ ALWI void reduce_block_max_row_uninit(std::uint32_t icb) {
 }
 
 // Runtime variants - block_ct_dim and respect_trigger are runtime parameters. block_ct_dim has the same
-// 1 to 127 range as the template overloads (the LLK asserts it when LLK asserts are enabled). The input CBs
+// 1 to 127 range as the template overloads; the Wormhole and Blackhole LLKs assert 1 <= block_ct_dim <= 127 (and
+// an even block_ct_dim with respect_trigger) when LLK asserts are enabled, Quasar does not check it. The input CBs
 // (icb, icb_scaler) are bound at init: on Quasar this lets the unpack MOP -- which bakes the SrcA buffer
 // descriptor -- be programmed at init, like native Quasar reduce. WH/BH bind the operand at execute and
 // ignore the input CBs here.

@@ -1086,18 +1086,22 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixReduceBlockMaxRowNumFacesCompileLim
     // (32x32) and 2 faces (16x32): a single 16x16 face has to be rejected at compile time instead
     // of pooling SrcA rows the unpacker never wrote. One overload is compiled per build (compile
     // arg 1) so every static_assert is checked on its own, and the JIT error must carry its message.
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "CreateKernel with a ComputeConfig is rejected on Quasar before the probe can compile";
+    }
     const std::uint32_t num_overloads =
-        detail::detect_arch() == tt::ARCH::BLACKHOLE ? 4 : 2;  // reinit_short / reinit_minimal are Blackhole-only
+        this->arch_ == tt::ARCH::BLACKHOLE ? 4 : 2;  // reinit_short / reinit_minimal are Blackhole-only
     for (std::uint32_t overload = 0; overload < num_overloads; ++overload) {
         for (const std::uint32_t num_faces : {4u, 2u, 1u}) {
             SCOPED_TRACE(::testing::Message() << "overload=" << overload << ", num_faces=" << num_faces);
             Program program = CreateProgram();
             const CoreCoord core{0, 0};
+            const uint32_t tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
             for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16}) {
                 CreateCircularBuffer(
                     program,
                     core,
-                    CircularBufferConfig(2048, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, 2048));
+                    CircularBufferConfig(tile_bytes, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, tile_bytes));
             }
             CreateKernel(
                 program,

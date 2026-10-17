@@ -11,13 +11,14 @@
 
 namespace ttnn::prim::detail {
 
-// Widest key chunk, in tiles, that any SDPA compute kernel may hand to the block row-max reduce
+// Widest key chunk, in tiles, that an SDPA compute kernel may hand to the block row-max reduce
 // (reduce_block_max_row_init_runtime via reduce_c_row_group). The reduce programs the chunk width
-// straight into a MOP loop count and walks the chunk with the unpacker's tile counter, so the LLK
-// caps it at 127 on every architecture (its compile-time path static_asserts the same bound; on
-// Wormhole the loop count keeps only 7 bits and a wider chunk silently reduces (width & 127) tiles).
-// The LLK's own assert is compiled out in production, so every op that reaches that kernel path
-// enforces the limit here.
+// straight into a MOP loop count and walks the chunk with the unpacker's tile counter; the Wormhole
+// and Blackhole LLKs cap it at 127 (compile-time static_assert, runtime LLK_ASSERT; on Wormhole the
+// loop count keeps only 7 bits and a wider chunk silently reduces (width & 127) tiles). The LLK's
+// assert is compiled out in production, so every in-tree ttnn SDPA op that validates its chunk size
+// enforces the limit here. Not covered: the Quasar SDPA (its runtime reduce LLK has no bound) and the
+// bge_m3 encoder_sdpa KernelDescriptor path onto compute/sdpa.cpp; both stay far below 127 tiles.
 constexpr uint32_t kMaxKChunkTiles = 127;
 
 // Rejects a key-chunk (or key-block) size the block row-max reduce cannot process. `name` is the

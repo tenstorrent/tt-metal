@@ -14,6 +14,7 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
+#include "reduce_block_max_row_limits.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;
@@ -36,8 +37,7 @@ using namespace ckernel::unpacker;
 template <std::uint32_t block_ct_dim, bool respect_trigger = false>
 inline void _llk_unpack_AB_reduce_block_max_row_mop_config_()
 {
-    // Constraint on the outerloop and innerloop dim
-    static_assert(block_ct_dim < 128, "block_ct_dim must be less than 128");
+    static_assert(is_valid_reduce_block_max_row_block_ct_dim(block_ct_dim), "block_ct_dim must be between 1 and 127");
     // Single UNPACR because TTI_SETADCXX for UNP_A is 1023, increment Z counter to point to the next tile, set dvalid each time
     static constexpr std::uint32_t unpack_srca_op =
         TT_OP_UNPACR(SrcA, 0b00000001 /* Z_ch0_inc and Z_ch1_inc */, 0, 0, 0, 1, 1 /* Set Dvalid */, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);

@@ -73,8 +73,16 @@ static constexpr std::uint32_t NUM_FACES = 4;
 // REDUCE_OPERAND_SHAPE (params.h) is the operand tile geometry handed to the unpack and
 // math inits. The driver's default is the full 32x32 tile; the shape-guard test passes
 // face grids the op does not implement (one face column, short faces) to check that
-// the inits reject them. The PACK thread always packs the 32x32 DEST slot the op
-// writes the row max into.
+// the inits reject them. REDUCE_REINIT_BLOCK_CT_DIM / REDUCE_REINIT_OPERAND_SHAPE are
+// what the reinit_short re-arm is told (the driver defaults them to the init values); the
+// reinit-guard tests hand the re-arm a width or shape the op rejects; they also set
+// REDUCE_UNPACK_SKIP_EXECUTE so the unpack delivers no tiles (their math stops on the
+// re-arm's LLK_ASSERT and would leave the delivered tiles in the source banks, which the
+// per-test TRISC soft reset does not clear and which stall the next kernel). The trigger
+// odd-width guard test sets REDUCE_MATH_SKIP_EXECUTE for the mirror-image reason: its
+// unpack stops at init, and a math MOP left waiting for SrcA is a stalled Tensix
+// instruction the soft reset does not recover from. The PACK thread always packs the
+// 32x32 DEST slot the op writes the row max into.
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -100,7 +108,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_AB_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(REDUCE_BLOCK_CT_DIM, RESPECT_TRIGGER, tensor_shape);
 
         // Operand A is REDUCE_BLOCK_CT_DIM contiguous tiles; scaler B is a single tile of 1.0.
-        _llk_unpack_AB_reduce_block_max_row_runtime_(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), RESPECT_TRIGGER, OVERLAP_FIRST_HALF);
+        if constexpr (!REDUCE_UNPACK_SKIP_EXECUTE)
+        {
+            _llk_unpack_AB_reduce_block_max_row_runtime_(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), RESPECT_TRIGGER, OVERLAP_FIRST_HALF);
+        }
 
         _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(RESPECT_TRIGGER, OVERLAP_FIRST_HALF);
     }
@@ -109,7 +120,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // reduce_block_max_row_init
         _llk_unpack_AB_reduce_block_max_row_init_<REDUCE_BLOCK_CT_DIM, is_fp32_dest_acc_en, RESPECT_TRIGGER>(tensor_shape);
 
-        _llk_unpack_AB_reduce_block_max_row_<RESPECT_TRIGGER>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]));
+        if constexpr (!REDUCE_UNPACK_SKIP_EXECUTE)
+        {
+            _llk_unpack_AB_reduce_block_max_row_<RESPECT_TRIGGER>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]));
+        }
 
         _llk_unpack_AB_reduce_block_max_row_uninit_<RESPECT_TRIGGER>();
     }
@@ -191,7 +205,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (REINIT_MODE == 1)
         {
             // reduce_block_max_row_reinit_short_runtime: reprogram MOP + restore addrmods (both arches).
-            _llk_math_reduce_block_max_row_reinit_short_runtime_<is_fp32_dest_acc_en>(REDUCE_BLOCK_CT_DIM, tensor_shape);
+            _llk_math_reduce_block_max_row_reinit_short_runtime_<is_fp32_dest_acc_en>(REDUCE_REINIT_BLOCK_CT_DIM, REDUCE_REINIT_OPERAND_SHAPE);
         }
 #ifdef ARCH_BLACKHOLE
         else if constexpr (REINIT_MODE == 2)
@@ -208,7 +222,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         _llk_math_wait_for_dest_available_<DST_SYNC>();
-        _llk_math_reduce_block_max_row_runtime_<is_fp32_dest_acc_en>(0 /* dst_index */, tensor_shape);
+        if constexpr (!REDUCE_MATH_SKIP_EXECUTE)
+        {
+            _llk_math_reduce_block_max_row_runtime_<is_fp32_dest_acc_en>(0 /* dst_index */, tensor_shape);
+        }
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 
         _llk_math_reduce_block_max_row_uninit_runtime_<is_fp32_dest_acc_en>();
@@ -226,7 +243,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // reduce_block_max_row_reinit_short == reduce_max_row_configure_addrmod + mop_reprogram_only
             // (matches llk_math_reduce_block_max_row_reinit_with_mop). Blackhole-only lib path.
             reduce_max_row_configure_addrmod();
-            _llk_math_reduce_block_max_row_mop_reprogram_only_<REDUCE_BLOCK_CT_DIM>(tensor_shape);
+            _llk_math_reduce_block_max_row_mop_reprogram_only_<REDUCE_BLOCK_CT_DIM>(REDUCE_REINIT_OPERAND_SHAPE);
         }
         else if constexpr (REINIT_MODE == 2)
         {
@@ -236,7 +253,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
         _llk_math_wait_for_dest_available_<DST_SYNC>();
-        _llk_math_reduce_block_max_row_<REDUCE_BLOCK_CT_DIM, is_fp32_dest_acc_en>(0 /* dst_index */, tensor_shape);
+        if constexpr (!REDUCE_MATH_SKIP_EXECUTE)
+        {
+            _llk_math_reduce_block_max_row_<REDUCE_BLOCK_CT_DIM, is_fp32_dest_acc_en>(0 /* dst_index */, tensor_shape);
+        }
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 
         _llk_math_reduce_block_max_row_uninit_<is_fp32_dest_acc_en>();

@@ -14,6 +14,7 @@
 #include "llk_assert.h"
 #include "llk_math_common.h"
 #include "lltt.h"
+#include "reduce_block_max_row_limits.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;
@@ -106,8 +107,7 @@ inline void reduce_max_row_configure_addrmod()
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_mop_config_(const ckernel::TensorShape tensor_shape)
 {
-    // Constraint on the outerloop and innerloop dim
-    static_assert(block_ct_dim < 128, "block_ct_dim must be less than 128");
+    static_assert(is_valid_reduce_block_max_row_block_ct_dim(block_ct_dim), "block_ct_dim must be between 1 and 127");
     LLK_ASSERT(validate_tensor_shape_reduce_block_max_row_(tensor_shape), "block reduce_max_row supports 32x32 and 16x32 tiles only");
     LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 1 && is_fp32_dest_acc_en), "16x32 reduce_block_max_row not supported in FP32 dest mode yet");
 
