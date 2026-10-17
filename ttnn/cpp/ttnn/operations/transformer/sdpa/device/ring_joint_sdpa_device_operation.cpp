@@ -264,15 +264,19 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             args.kv_cache_layer_idx,
             args.kv_cache_num_layers);
         TT_FATAL(
-            K_cache_batch % args.kv_cache_num_layers == 0 && V_cache_batch % args.kv_cache_num_layers == 0,
+            K_cache_batch % args.kv_cache_num_layers == 0 &&
+                (V_cache_batch == 1 || V_cache_batch % args.kv_cache_num_layers == 0),
             "KV cache batch (K={}, V={}) must be divisible by kv_cache_num_layers={}",
             K_cache_batch,
             V_cache_batch,
             args.kv_cache_num_layers);
+        TT_FATAL(
+            V_cache_batch == K_cache_batch || V_cache_batch != 1 || !args.has_sliding_window(),
+            "A batch-1 V beside a batched K cache is not supported with sliding-window attention");
         if (args.has_indexed_kv_cache()) {
             const auto cache_batch_idx = args.cache_batch_idx().value();
             TT_FATAL(
-                cache_batch_idx < K_cache_batch && cache_batch_idx < V_cache_batch,
+                cache_batch_idx < K_cache_batch && (V_cache_batch == 1 || cache_batch_idx < V_cache_batch),
                 "cache batch {} (kv_cache_batch_idx={} * kv_cache_num_layers={} + kv_cache_layer_idx={}) is outside "
                 "the KV cache batch (K={}, V={})",
                 cache_batch_idx,
@@ -585,8 +589,11 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "SDPA coregrid overlaps with AllGather coregrid (row-major)");
     }
 
-    // Validate joint strategy is 'rear'
-    TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
+    // Only 'rear' is implemented; the strategy is meaningless without joint tensors.
+    TT_FATAL(
+        !has_joint_tensors || args.joint_strategy == "rear",
+        "Joint strategy must be 'rear'. Got: {}",
+        args.joint_strategy);
 
     // Get shapes
     const auto& q_shape = input_tensor_q.logical_shape();
