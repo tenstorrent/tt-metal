@@ -426,6 +426,13 @@ Read each in full (no truncation). Bots are not authorities — they are often w
   call site). **Push first**, then reply with what changed and the commit, then resolve.
 - **Wrong → push back.** Reply with why, citing concrete evidence (`file:line`, spec section, test
   output, the sibling that does the same). Resolve. Don't change code to appease a bot.
+- **Nit → push back, no code change.** A *nit* is anything that would not change behaviour or catch a
+  bug: naming, comment wording, "consider extracting a helper", test-structure taste, "add a docstring",
+  reordering, style the pre-commit hooks already accepted, "please clarify" on a point the body or code
+  already states. Reply in one line that it is a style preference not taken (point at the idiom or the
+  sibling it matches if there is one), **resolve, and do not push**. Applying nits is what creates the
+  reply cycle: every push re-requests both reviewers, who return fresh nits on the new diff. The user's
+  rule: *push back on unnecessary comments; never get into a cycle of replies.*
 - **Partly valid** → fix the valid part, push back on the rest, in one reply.
 - **Design choice / needs hardware not here** → no code change; leave the thread unresolved and put it
   in the report for the user with the options. Use sparingly — most comments are decidable.
@@ -457,6 +464,23 @@ at the earlier answer, resolve, no code change. A bot asking to undo what it (or
 for earlier: keep the verified version, push back, note it. Don't push to a PR while its LLK PR Review
 run is in flight unless you will re-dispatch — batch the fixes instead. These guards limit
 *re-dispatching and churn*, never *answering*: every comment that does arrive is handled.
+
+**Convergence cap — a review cycle ends, it is not re-entered for nits.** Count review rounds per PR
+in the ledger (`bot-review(rN)`), and keep a second counter: rounds since the last push that fixed a
+*verified correctness finding* (wrong result, hang, missing guard, wrong encoding, a test that did not
+test what it claims). Rules:
+- From round 3 on, a push is justified **only** by a verified correctness finding. Everything else in
+  that round is answered as a nit (above) or a push-back, resolved, and the PR is **bots-quiet for
+  dispatch** the moment `bots_pending.sh` is empty — do not re-request reviews for a round that
+  changed no code.
+- Two consecutive rounds with no correctness finding → the PR is converged. Ack the summaries, move it
+  to `ci-queue`/dispatch (§6), and spend no more review rounds on it; later pushes (CI fixes, rebases)
+  re-request reviews as usual, and the counters restart from that push.
+- A round that would be round 6+ on one PR is a red flag for the ledger log: write what each round
+  changed, and whether any of it was behaviour. If none was, the earlier rounds were nits that should
+  have been declined.
+- Review rounds are external waits. While they run, the scheduler (§2) advances other items; a session
+  whose only activity is review rework while items sit in `triage` is idling.
 
 ## 6. CI
 
