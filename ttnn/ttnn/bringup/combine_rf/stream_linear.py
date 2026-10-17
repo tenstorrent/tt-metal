@@ -138,6 +138,7 @@ void kernel_main() {
         cb_pop_front(4, PNP);
     }
     noc_async_write_barrier();
+    noc_async_atomic_barrier();  // (no unacknowledged atomic past the kernel: the next program's barrier)
 }
 """
 
@@ -220,7 +221,11 @@ def stream_linear_prepare(mesh_device, *, M, K, N, kb=16, nb=7, np_=None, fideli
     xoff = [sum(xcnt[:i]) for i in range(GX)]
     xpt = max(xcnt)
     allc = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GX - 1, GY - 1))])
-    vv = {(cx, cy): mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(cx, cy)) for cx in range(GX) for cy in range(GY)}
+    vv = {
+        (cx, cy): mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(cx, cy))
+        for cx in range(GX)
+        for cy in range(GY)
+    }
     n0s = [sum(pns[:i]) for i in range(GX)]
     groups = {}
     for cx, pn in enumerate(pns):
@@ -235,16 +240,22 @@ def stream_linear_prepare(mesh_device, *, M, K, N, kb=16, nb=7, np_=None, fideli
         program.cbs = [  # (the multicast targets first, same sizes everywhere: their addresses match across the grid)
             ttnn.CBDescriptor(total_size=Kt * 2048, core_ranges=allc, format_descriptors=fmt(0, ttnn.bfloat16, 2048)),
             ttnn.CBDescriptor(total_size=nb * wb, core_ranges=allc, format_descriptors=fmt(1, w_dtype, wtb)),
-            ttnn.CBDescriptor(total_size=NP * pnpx * 2048, core_ranges=allc, format_descriptors=fmt(4, ttnn.bfloat16, 2048)),
+            ttnn.CBDescriptor(
+                total_size=NP * pnpx * 2048, core_ranges=allc, format_descriptors=fmt(4, ttnn.bfloat16, 2048)
+            ),
             ttnn.CBDescriptor(total_size=xpt * 2048, core_ranges=allc, format_descriptors=fmt(8, ttnn.bfloat16, 2048)),
             ttnn.CBDescriptor(total_size=3 * wb, core_ranges=allc, format_descriptors=fmt(9, w_dtype, wtb)),
             ttnn.CBDescriptor(total_size=128, core_ranges=allc, format_descriptors=fmt(10, ttnn.uint32, 128)),
         ]
-        program.semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=allc, initial_value=0) for i in range(1 + 2 * nb)]
+        program.semaphores = [
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=allc, initial_value=0) for i in range(1 + 2 * nb)
+        ]
         x_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         w_ct = list(ttnn.TensorAccessorArgs(w).get_compile_time_args())
         y_ct = list(ttnn.TensorAccessorArgs(y).get_compile_time_args())
-        dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc)  # noqa: E731
+        dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
+            processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
+        )  # noqa: E731
         probe = [("PROBE", os.environ.get("SL_PROBE", "0"))]
         kernels = []
         for pn, cols in groups.items():
@@ -254,11 +265,32 @@ def stream_linear_prepare(mesh_device, *, M, K, N, kb=16, nb=7, np_=None, fideli
             for cx in cols:
                 for cy in range(GY):
                     v = vv[(cx, cy)]
-                    sd[cx][cy] = [int(w.buffer_address()), cx, cy, v.x, vv[(cx, 0)].y, vv[(cx, GY - 1)].y,
-                                  int(x.buffer_address()), vv[(0, cy)].x, v.y, vv[(GX - 1, cy)].x, xoff[cx], xcnt[cx]] + \
-                                 [vv[(i, cy)].x for i in range(GX)]
-                    rv[cx][cy] = [int(y.buffer_address()), cy, n0s[cx], v.x, int(x.buffer_address()), cx, 0, 0, 0, 0] + \
-                                 [vv[(cx, i)].y for i in range(GY)]
+                    sd[cx][cy] = [
+                        int(w.buffer_address()),
+                        cx,
+                        cy,
+                        v.x,
+                        vv[(cx, 0)].y,
+                        vv[(cx, GY - 1)].y,
+                        int(x.buffer_address()),
+                        vv[(0, cy)].x,
+                        v.y,
+                        vv[(GX - 1, cy)].x,
+                        xoff[cx],
+                        xcnt[cx],
+                    ] + [vv[(i, cy)].x for i in range(GX)]
+                    rv[cx][cy] = [
+                        int(y.buffer_address()),
+                        cy,
+                        n0s[cx],
+                        v.x,
+                        int(x.buffer_address()),
+                        cx,
+                        0,
+                        0,
+                        0,
+                        0,
+                    ] + [vv[(cx, i)].y for i in range(GY)]
                     cp[cx][cy] = []
             comp = ttnn.ComputeConfigDescriptor()
             comp.math_fidelity = fid
@@ -266,14 +298,33 @@ def stream_linear_prepare(mesh_device, *, M, K, N, kb=16, nb=7, np_=None, fideli
             comp.dst_full_sync_en = full
             comp.math_approx_mode = False
             kernels += [
-                ttnn.KernelDescriptor(kernel_source=_SEND, source_type=st.SOURCE_CODE, core_ranges=crs, defines=probe,
-                                      compile_time_args=[Kt, kb, pnpx, nblk, NP, nb, GY, wtb, 1, GX] + w_ct + x_ct,
-                                      runtime_args=sd, config=dm("RISCV_0", ttnn.NOC.NOC_0)),
-                ttnn.KernelDescriptor(kernel_source=_RECV, source_type=st.SOURCE_CODE, core_ranges=crs, defines=probe,
-                                      compile_time_args=[kb, pnp, pnpx, nblk, NP, nb, GX, GY, Nt, Kt, 1] + y_ct + x_ct,
-                                      runtime_args=rv, config=dm("RISCV_1", ttnn.NOC.NOC_1)),
-                ttnn.KernelDescriptor(kernel_source=_COMPUTE, source_type=st.SOURCE_CODE, core_ranges=crs, defines=probe,
-                                      compile_time_args=[kb, pnp, pnpx, nblk, NP], runtime_args=cp, config=comp),
+                ttnn.KernelDescriptor(
+                    kernel_source=_SEND,
+                    source_type=st.SOURCE_CODE,
+                    core_ranges=crs,
+                    defines=probe,
+                    compile_time_args=[Kt, kb, pnpx, nblk, NP, nb, GY, wtb, 1, GX] + w_ct + x_ct,
+                    runtime_args=sd,
+                    config=dm("RISCV_0", ttnn.NOC.NOC_0),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=_RECV,
+                    source_type=st.SOURCE_CODE,
+                    core_ranges=crs,
+                    defines=probe,
+                    compile_time_args=[kb, pnp, pnpx, nblk, NP, nb, GX, GY, Nt, Kt, 1] + y_ct + x_ct,
+                    runtime_args=rv,
+                    config=dm("RISCV_1", ttnn.NOC.NOC_1),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=_COMPUTE,
+                    source_type=st.SOURCE_CODE,
+                    core_ranges=crs,
+                    defines=probe,
+                    compile_time_args=[kb, pnp, pnpx, nblk, NP],
+                    runtime_args=cp,
+                    config=comp,
+                ),
             ]
         program.kernels = kernels
         R, C = tuple(mesh_device.shape)
@@ -282,8 +333,13 @@ def stream_linear_prepare(mesh_device, *, M, K, N, kb=16, nb=7, np_=None, fideli
         return mesh_desc
 
     def run(x, w, out_memory_config=None):
-        y = ttnn.allocate_tensor_on_device(ttnn.Shape([M, N]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device,
-                                           out_memory_config or ttnn.DRAM_MEMORY_CONFIG)
+        y = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([M, N]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            mesh_device,
+            out_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+        )
         k = tuple(int(t.buffer_address()) for t in (x, w, y))
         if state.get("key") != k:
             state["key"], state["desc"] = k, build(x, w, y)
@@ -295,6 +351,11 @@ def stream_linear_prepare(mesh_device, *, M, K, N, kb=16, nb=7, np_=None, fideli
 
 def upload_stacked(mesh_device, w, layout, dtype=ttnn.bfloat8_b):
     """W [K, N] torch -> the stacked device weight (replicated over the mesh)."""
-    return ttnn.from_torch(stack_weight(w, layout["pns"], layout["NP"]), dtype=dtype, layout=ttnn.TILE_LAYOUT,
-                           device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                           mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device))
+    return ttnn.from_torch(
+        stack_weight(w, layout["pns"], layout["NP"]),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
