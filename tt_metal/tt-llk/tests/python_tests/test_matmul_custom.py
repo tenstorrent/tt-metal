@@ -355,7 +355,9 @@ def test_matmul_custom_throttle(
 
 @skip_for_wormhole
 @skip_for_quasar
-def test_matmul_custom_transpose_in1_32x16_rejected(boot_mode=BootMode.DEFAULT):
+def test_matmul_custom_transpose_in1_32x16_rejected(
+    request, boot_mode=BootMode.DEFAULT
+):
     """transpose with a 32x16 in1 has no address-mod handling in the matmul LLK; the regular
     _llk_math_matmul_init_ rejects the combination under LLK asserts. The no-mop init shares
     the tiny-tile address mods with it and must reject it the same way, rather than run the
@@ -368,6 +370,11 @@ def test_matmul_custom_transpose_in1_32x16_rejected(boot_mode=BootMode.DEFAULT):
     and polls MATH_PACK with a bound on the pack thread instead of waiting on it."""
     if os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1":
         pytest.skip("expects an LLK assert; asserts are disabled in this run")
+    if request.config.getoption("--run-simulator"):
+        pytest.skip(
+            "expects an LLK assert; on ttsim the math thread never reaches KERNEL_COMPLETE "
+            "after the EBREAK, so the assert is only detected at the pytest timeout"
+        )
 
     input_A_dimensions, input_B_dimensions = THROTTLE_DIMS
     with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
@@ -392,8 +399,8 @@ def test_matmul_custom_transpose_in1_32x16_rejected(boot_mode=BootMode.DEFAULT):
 # geometries the no-mop init must record the unthrottled geometry-aware replay and the
 # execute must replay it (the fallback the regular _llk_math_matmul_init_ takes). Because the
 # execute makes the same decision, the fallback holds at every level and fidelity, including
-# HiFi at throttle levels 4/5 -- which the full-tile test above has to skip because there the
-# throttled sequence does run.
+# HiFi at throttle levels 4/5 -- where full tiles also fall back to the unthrottled image,
+# covered by the full-tile test above.
 TINY_IN0_THROTTLE_LEVELS = [level for level in THROTTLE_LEVELS if level > 0]
 TINY_IN0_ROWS = [16, 8]
 
@@ -456,7 +463,7 @@ def test_matmul_custom_throttle_tiny_in0_smoke(
 
 
 # 32x16 in1 tiny tile (two vertical faces, f0/f2) with a full in0: the other non-full
-# geometry the fallback applies to (the 7-MVMUL image). Throttle 0 covers the image itself,
+# geometry the fallback applies to (the 8-MVMUL image). Throttle 0 covers the image itself,
 # 1 and 3 the fallback dispatch on both fidelity paths.
 @skip_for_wormhole
 @skip_for_quasar

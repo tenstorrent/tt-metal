@@ -528,8 +528,9 @@ inline void _llk_math_matmul_uninit_no_mop_()
  * @param in1_tile_r_dim: Row dimension of an in1 tile.
  * @param in1_tile_c_dim: Column dimension of an in1 tile.
  * @param partial_face: True when the tile has fewer than the full set of face rows.
- * @note Call @ref _llk_math_matmul_init_no_mop_ with the same template args and tile dims first; the unpack
- *       thread feeds each block through @ref _llk_unpack_AB_matmul_.
+ * @note Call @ref _llk_math_matmul_init_no_mop_ with the same template args and tile dims first, and
+ *       @ref _llk_math_matmul_uninit_no_mop_ after it; the unpack thread feeds each block through
+ *       @ref _llk_unpack_AB_matmul_.
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_no_mop_(
