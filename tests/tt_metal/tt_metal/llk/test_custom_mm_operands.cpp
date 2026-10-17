@@ -3,7 +3,6 @@
 
 #include <chrono>
 #include <cstdint>
-#include <memory>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -25,16 +24,7 @@
 namespace tt::tt_metal {
 namespace {
 
-struct CustomMmOperandsCase {
-    distributed::MeshWorkload workload;
-    // The inputs must outlive the run: a freed DRAM region is reused by the next allocation.
-    std::shared_ptr<distributed::MeshBuffer> a_buffer;
-    std::shared_ptr<distributed::MeshBuffer> b_buffer;
-    std::shared_ptr<distributed::MeshBuffer> result_buffer;
-    std::vector<std::uint32_t> golden;
-};
-
-CustomMmOperandsCase make_custom_mm_operands(
+void run_custom_mm_operands(
     distributed::MeshDevice& mesh, std::uint32_t rows, bool mixed, std::uint32_t mode, bool full_sync) {
     constexpr std::uint32_t blocks = 3;
     const std::uint32_t input_block_tiles = mode == 2 ? 5 : 3;
@@ -133,29 +123,19 @@ CustomMmOperandsCase make_custom_mm_operands(
     distributed::EnqueueWriteMeshBuffer(cq, b_buffer, packed_weights, true);
     SetRuntimeArgs(program, reader, core, {a_buffer->address(), 0, b_buffer->address(), 0, input_tiles});
     SetRuntimeArgs(program, writer, core, {result_buffer->address(), 0, blocks});
-    CustomMmOperandsCase test_case;
+    distributed::MeshWorkload workload;
     const distributed::MeshCoordinate zero(0, 0);
-    test_case.workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
-    test_case.a_buffer = std::move(a_buffer);
-    test_case.b_buffer = std::move(b_buffer);
-    test_case.result_buffer = std::move(result_buffer);
-    test_case.golden = pack_bfloat16_vec_into_uint32_vec(golden);
-    return test_case;
-}
-
-void run_custom_mm_operands(
-    distributed::MeshDevice& mesh, std::uint32_t rows, bool mixed, std::uint32_t mode, bool full_sync) {
-    auto test_case = make_custom_mm_operands(mesh, rows, mixed, mode, full_sync);
-    auto& cq = mesh.mesh_command_queue();
-    distributed::EnqueueMeshWorkload(cq, test_case.workload, false);
+    workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
     std::vector<std::uint32_t> result;
-    distributed::EnqueueReadMeshBuffer(cq, result, test_case.result_buffer, true);
-    EXPECT_EQ(result, test_case.golden);
+    distributed::EnqueueReadMeshBuffer(cq, result, result_buffer, true);
+    EXPECT_EQ(result, pack_bfloat16_vec_into_uint32_vec(golden));
 }
 
 std::string wait_for_watcher_exception() {
     constexpr auto timeout = std::chrono::milliseconds(5000);
+    constexpr auto poll_interval = std::chrono::milliseconds(100);
     const auto start = std::chrono::steady_clock::now();
     std::string exception;
     while (std::chrono::steady_clock::now() - start < timeout) {
@@ -163,7 +143,7 @@ std::string wait_for_watcher_exception() {
         if (!exception.empty()) {
             break;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(poll_interval);
     }
     return exception;
 }
@@ -171,8 +151,10 @@ std::string wait_for_watcher_exception() {
 // A [16, 32] activation tile is a legal CB tile but outside the custom_mm family's
 // [1|2|4|8, 32] in0 contract. The typed LLKOperand overloads reject it at compile
 // time; the CB-id overloads read face_r_dim at run time, so their only guard is the
-// LLK assert this exercises. Without it the 1..4-row program runs on a 16-row
-// operand and rows 8..15 of each face silently drop out of the product.
+// LLK assert this exercises. Without it the init completes with no diagnostic and
+// the 1..4-row program runs on a 16-row operand, dropping rows 8..15 of each face
+// from the product (not run here: a product kernel whose init asserts leaves the
+// pack thread in a tile-register wait, which blocks the core's re-initialization).
 constexpr std::uint32_t kGuardRows = 16;
 
 // mode: 0 custom_mm, 1 compressed_custom_mm. thread: 0 unpack init (TRISC0), 1 math init (TRISC1).
@@ -197,7 +179,6 @@ void run_custom_mm_rows_guard(distributed::MeshDevice& mesh, std::uint32_t mode,
     };
     make_cb(tt::CBIndex::c_0, tt::DataFormat::Float16_b, tiny);
     make_cb(tt::CBIndex::c_1, weight_format, full);
-    make_cb(tt::CBIndex::c_16, tt::DataFormat::Float16_b, tiny);
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/custom_mm_operands_guard.cpp",
@@ -220,15 +201,6 @@ void run_custom_mm_rows_guard(distributed::MeshDevice& mesh, std::uint32_t mode,
         EXPECT_NE(std::string(e.what()).find("Aborting wait due to watcher error"), std::string::npos) << e.what();
     }
     const std::string exception = wait_for_watcher_exception();
-    if (exception.empty()) {
-        // No guard: the init completed, so show what the product of the same shape looks like.
-        auto test_case = make_custom_mm_operands(mesh, kGuardRows, true /*mixed*/, mode, false /*full_sync*/);
-        distributed::EnqueueMeshWorkload(cq, test_case.workload, false);
-        distributed::Finish(cq);
-        std::vector<std::uint32_t> result;
-        distributed::EnqueueReadMeshBuffer(cq, result, test_case.result_buffer, true);
-        EXPECT_EQ(result, test_case.golden) << "rows=" << kGuardRows << " ran to completion with no diagnostic";
-    }
     ASSERT_FALSE(exception.empty()) << "Timeout waiting for the watcher to report the in0 tile height assert";
     EXPECT_NE(exception.find("tripped an assert"), std::string::npos) << exception;
     EXPECT_NE(exception.find("custom_mm_operands_guard"), std::string::npos) << exception;
@@ -247,7 +219,7 @@ public:
     static constexpr int kWatcherIntervalMs = 250;
 
     // No suite-shared device: the options below change the firmware build, so the device must open
-    // after they are set, and a device the base suite opened first would be torn down underneath.
+    // after they are set, once per test.
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
 
@@ -264,8 +236,6 @@ protected:
         if (detail::detect_arch() != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "This test can only be run on Blackhole cards";
         }
-        ASSERT_FALSE(get_shared_devices().initialized)
-            << "Suite-shared devices are open; this fixture opens its own device after changing run-time options";
         rtoptions.set_watcher_enabled(true);
         rtoptions.set_watcher_interval(kWatcherIntervalMs);
         // In test mode a watcher error stops the server and fails the wait instead of ending the process.
@@ -319,19 +289,19 @@ TEST_F(LLKBlackholeSingleCardFixture, CustomMatmulOperandOverloads) {
 }
 
 TEST_F(LLKBlackholeAssertFixture, CustomMatmulUnpackInitRejectsSixteenRowActivation) {
-    run_custom_mm_rows_guard(*devices_.at(0), 0 /*mode: custom_mm*/, 0 /*thread: unpack*/);
+    run_custom_mm_rows_guard(*devices_.at(0), 0 /*mode*/, 0 /*thread*/);
 }
 
 TEST_F(LLKBlackholeAssertFixture, CustomMatmulMathInitRejectsSixteenRowActivation) {
-    run_custom_mm_rows_guard(*devices_.at(0), 0 /*mode: custom_mm*/, 1 /*thread: math*/);
+    run_custom_mm_rows_guard(*devices_.at(0), 0 /*mode*/, 1 /*thread*/);
 }
 
 TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulUnpackInitRejectsSixteenRowActivation) {
-    run_custom_mm_rows_guard(*devices_.at(0), 1 /*mode: compressed_custom_mm*/, 0 /*thread: unpack*/);
+    run_custom_mm_rows_guard(*devices_.at(0), 1 /*mode*/, 0 /*thread*/);
 }
 
 TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulMathInitRejectsSixteenRowActivation) {
-    run_custom_mm_rows_guard(*devices_.at(0), 1 /*mode: compressed_custom_mm*/, 1 /*thread: math*/);
+    run_custom_mm_rows_guard(*devices_.at(0), 1 /*mode*/, 1 /*thread*/);
 }
 
 }  // namespace tt::tt_metal

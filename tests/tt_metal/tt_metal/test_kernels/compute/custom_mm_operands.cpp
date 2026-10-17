@@ -21,13 +21,7 @@ void kernel_main() {
     constexpr std::uint32_t input_block_tiles = mode == 2 ? 5 : 3;
     constexpr std::uint32_t producer_ct = mode == 2 ? 2 : 1;
     constexpr auto weight_format = mode == 1 ? DataFormat::Bfp8_b : DataFormat::Float16_b;
-    // The typed in0 overloads reject a tile height outside {1, 2, 4, 8} at compile time. The guard
-    // test's fallback (run_custom_mm_rows_guard, taken when the watcher reports no assert) builds
-    // this kernel with rows=16 and mixed=true to show the silent wrong product; clamping the typed
-    // operand, unused on that path, keeps that build compiling. custom_mm_reuse_dest_srcb_block
-    // <typed_rows> below runs in mixed mode 2, where typed_rows == rows.
-    constexpr std::uint32_t typed_rows = rows <= 8 ? rows : 8;
-    using Activation = experimental::LLKOperand<DataFormat::Float16_b, TensorShape{typed_rows, 16, 1, 2}>;
+    using Activation = experimental::LLKOperand<DataFormat::Float16_b, TensorShape{rows, 16, 1, 2}>;
     using Weight = experimental::LLKOperand<weight_format, TensorShape{16, 16, 2, 2}>;
     CircularBuffer activation(tt::CBIndex::c_0);
     CircularBuffer weight(tt::CBIndex::c_1);
@@ -68,7 +62,7 @@ void kernel_main() {
                 compressed_custom_mm_block<false>(tt::CBIndex::c_0, b, metadata_address, 0, 2);
             } else {
                 const Activation a(
-                    a_base + experimental::tile_stride_words(DataFormat::Float16_b, TensorShape{typed_rows, 16, 1, 2}));
+                    a_base + experimental::tile_stride_words(DataFormat::Float16_b, TensorShape{rows, 16, 1, 2}));
                 compressed_custom_mm_block_init_short<false, false, true>(a, b);
                 compressed_custom_mm_block<false>(a, b, metadata_address, 0, 2);
             }
@@ -90,7 +84,7 @@ void kernel_main() {
                     custom_mm_reuse_dest_srcb_replay_init();
                     custom_mm_reuse_dest_srcb_block_init_short<false>(Weight(b_base), 1);
                 }
-                custom_mm_reuse_dest_srcb_block<typed_rows>(Weight(b_base), 2, 0, 64, 2, 1, 2);
+                custom_mm_reuse_dest_srcb_block<rows>(Weight(b_base), 2, 0, 64, 2, 1, 2);
                 custom_mm_reuse_dest_srcb_pack_init();
             }
         }
