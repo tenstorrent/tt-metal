@@ -2680,7 +2680,7 @@ namespace {
 
 constexpr std::string_view kApproxScaleGuard = "never reads the runtime scale";
 constexpr std::string_view kInitScaleGuard = "must be a positive normal number";
-constexpr std::string_view kNoneScaleGuard = "must be a finite normal number";
+constexpr std::string_view kNoneScaleGuard = "must be a finite normal number or zero";
 // bf16 -1.0 as exp_tile's runtime scale, and the same value as exp_tile_init's FP32-bit scale.
 const std::string kBf16MinusOne = "0xBF80";
 const std::string kFp32MinusOne = "0xBF800000";
@@ -2768,16 +2768,20 @@ TEST_F(LLKMeshDeviceSingleCardFixture, SfpuExpApproxRejectsRuntimeScale) {
         device, "exp_tile_init<true, " + kFp32PlusInf + ">(); exp_tile<true, false>(0);", kInitScaleGuard);
 
     // The unclamped (InputClamping::None) init only multiplies by the template scale, so a negative
-    // scale is a supported way to compute exp(-|s| * x) there ...
-    EXPECT_EQ(
-        compile_sfpu_chain(
-            device,
-            "exp_tile_init<true, " + kFp32MinusOne +
-                ", InputClamping::None>(); exp_tile<true, false, InputClamping::None>(0);"),
-        "");
-    // ... but an unshifted bf16 scale (an FP32 denormal), zero, an infinite and a NaN scale all turn
-    // every output into the same constant or a non-finite value, and are rejected.
-    for (const std::string& scale : {kBf16OneUnshifted, kFp32Zero, kFp32PlusInf, kFp32NaN}) {
+    // scale (exp(-|s| * x)) and a zero scale (exp(0) on every lane, which SDPA requests for uniform
+    // attention) are supported there ...
+    for (const std::string& scale : {kFp32MinusOne, kFp32Zero}) {
+        SCOPED_TRACE(scale);
+        EXPECT_EQ(
+            compile_sfpu_chain(
+                device,
+                "exp_tile_init<true, " + scale +
+                    ", InputClamping::None>(); exp_tile<true, false, InputClamping::None>(0);"),
+            "");
+    }
+    // ... but an unshifted bf16 scale (an FP32 denormal) flattens every output by accident, and an
+    // infinite or NaN scale makes it non-finite: those are rejected.
+    for (const std::string& scale : {kBf16OneUnshifted, kFp32PlusInf, kFp32NaN}) {
         expect_build_rejected(
             device,
             "exp_tile_init<true, " + scale + ", InputClamping::None>(); exp_tile<true, false, InputClamping::None>(0);",

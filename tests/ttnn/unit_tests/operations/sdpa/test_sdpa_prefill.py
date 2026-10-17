@@ -331,6 +331,7 @@ def run_sdpa_noncausal(
     rmse_threshold=None,
     bcast_mask_batch_dim=False,
     bcast_mask_head_dim=True,
+    scale=None,
 ):
     torch.manual_seed(1234)
     if sk is None:
@@ -380,6 +381,7 @@ def run_sdpa_noncausal(
         tt_V,
         is_causal=False,
         attn_mask=tt_mask,
+        scale=scale,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
     )
@@ -392,7 +394,7 @@ def run_sdpa_noncausal(
         K = K.reshape(b, nkv, 1, sk, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, sk, d)
         V = V.reshape(b, nkv, 1, sk, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, sk, d)
 
-    gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False, attn_mask=mask)
+    gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False, attn_mask=mask, scale=scale)
 
     out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
     logger.debug(f"python vs pytorch: {out_pcc}")
@@ -606,6 +608,19 @@ def test_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
         pytest.skip("Bad PCC for small chunks")
     rmse_threshold = 0.0069
     run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold)
+
+
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d",
+    ([1, 1, 1, 256, 64],),
+)
+def test_sdpa_noncausal_zero_scale(device, b, nh, nkv, s, d):
+    # An explicit scale of 0.0 asks for uniform attention: every softmax weight is exp(0), so each
+    # output row is the mean of V over the keys. The approximate exp init must accept a zero scale
+    # (unmasked, since a host-side mask is pre-divided by the scale).
+    run_sdpa_noncausal(
+        device, b, nh, nkv, s, d, q_chunk_size=128, k_chunk_size=128, dtype=ttnn.bfloat16, use_mask=False, scale=0.0
+    )
 
 
 def run_sdpa_noncausal_randn_bias(device, b, nh, s, d, torch_dtype, ttnn_dtype):

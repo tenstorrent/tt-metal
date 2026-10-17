@@ -462,18 +462,24 @@ sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std
     return result;
 }
 
-/*
- * Element-wise exp over ITERATIONS rows of Dest, starting at the current Dest address.
+/**
+ * @brief Element-wise exp over the Dest rows selected by ITERATIONS, from the current Dest address.
  *
  * @tparam APPROXIMATION_MODE Fast approximation when true, scaled by the exp_init template scale;
  *         the accurate exp_21f / sfpi kernels when false.
  * @tparam is_fp32_dest_acc_en Dest holds FP32 (true) or bf16 (false) values.
  * @tparam SCALE_EN Multiply the input by exp_base_scale_factor first. Accurate path only: a
  *         compile-time error in approximate mode, which never reads the runtime scale.
- * @tparam ITERATIONS Number of Dest rows to process.
+ * @tparam ITERATIONS 32-lane SFPU iterations, two Dest rows each (8 = one face). Honoured by the
+ *         accurate paths. Approximate ClampToNegative is hand-unrolled for 8 and ignores this value
+ *         unless DISABLE_SFPLOADMACRO is defined; approximate None accepts only 8 or 32.
  * @tparam CLAMP_NEGATIVE Approximate mode: use the ClampToNegative init (inputs floored at -88.5)
  *         when true, the unclamped init when false. Accurate path: forwarded to the bf16 exp_21f kernel.
  * @param exp_base_scale_factor Scale as bf16 bits (0x3F80 = 1.0); read only when SCALE_EN is true.
+ * @note Call @ref exp_init before this function with the same APPROXIMATION_MODE, the same
+ *       CLAMP_NEGATIVE in approximate mode and the same is_fp32_dest_acc_en in accurate mode. The
+ *       two approximate inits program incompatible LREG14 / macro / replay state and the bf16 and
+ *       fp32 accurate inits differ too, so a mismatch builds and silently computes garbage.
  */
 template <
     bool APPROXIMATION_MODE,
@@ -705,17 +711,22 @@ constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uin
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
 constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
-/*
- * One-time SFPU setup for calculate_exponential: the common SFPU config, then the constants (and
- * load macros) of the selected approximate variant, or the accurate kernel's constants.
+/**
+ * @brief One-time SFPU setup for calculate_exponential.
  *
- * @tparam APPROXIMATION_MODE Must match calculate_exponential's.
+ * Runs the common SFPU config, then the constants (and load macros) of the selected approximate
+ * variant, or the accurate kernel's constants.
+ *
+ * @tparam APPROXIMATION_MODE Must match the paired calculate_exponential.
  * @tparam scale FP32 bit pattern of the input scale (0x3F800000 = 1.0; a bf16 scale shifted left
  *         by 16). Applied by both approximate variants, ignored by the accurate path. With
  *         CLAMP_NEGATIVE it must be a positive normal number (the -88.5 clamp is divided by it);
- *         without CLAMP_NEGATIVE a finite normal number of either sign.
- * @tparam CLAMP_NEGATIVE Program the ClampToNegative (true) or the unclamped (false) approximate init.
- * @tparam is_fp32_dest_acc_en Dest holds FP32 (true) or bf16 (false) values.
+ *         without CLAMP_NEGATIVE a finite normal number of either sign, or zero (every output
+ *         becomes exp(0)).
+ * @tparam CLAMP_NEGATIVE Program the ClampToNegative (true) or the unclamped (false) approximate
+ *         init. Must match the paired calculate_exponential: the two program incompatible state.
+ * @tparam is_fp32_dest_acc_en Dest holds FP32 (true) or bf16 (false) values. Must match the paired
+ *         calculate_exponential: the bf16 and fp32 accurate inits differ.
  */
 template <bool APPROXIMATION_MODE, std::uint32_t scale, bool CLAMP_NEGATIVE, bool is_fp32_dest_acc_en>
 void exp_init() {
@@ -934,14 +945,16 @@ void exp_init() {
         constexpr float B_minus_C = 32500.818359375f;
 
         constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
-        // A is multiplied by the scale below: a denormal scale (a bf16 scale pasted in unshifted) or
-        // zero makes A_scaled vanish and every output the same constant; an infinite or NaN scale
-        // makes it non-finite. Nothing divides by the scale here, so either sign is fine.
+        // A is multiplied by the scale below: a denormal scale (a bf16 scale pasted in unshifted)
+        // makes A_scaled vanish by accident, and an infinite or NaN scale makes it non-finite. Zero
+        // is allowed: it is the explicit request for exp(0) on every lane (SDPA passes scale = 0
+        // for uniform attention). Nothing divides by the scale here, so either sign is fine.
         static_assert(
-            (scale_fp32 >= std::numeric_limits<float>::min() && scale_fp32 <= std::numeric_limits<float>::max()) ||
+            scale_fp32 == 0.0f ||
+                (scale_fp32 >= std::numeric_limits<float>::min() && scale_fp32 <= std::numeric_limits<float>::max()) ||
                 (scale_fp32 <= -std::numeric_limits<float>::min() && scale_fp32 >= -std::numeric_limits<float>::max()),
-            "exp_init: scale is FP32 bits (the bf16 scale << 16) and must be a finite normal number, of either "
-            "sign, without CLAMP_NEGATIVE");
+            "exp_init: scale is FP32 bits (the bf16 scale << 16) and must be a finite normal number or zero, of "
+            "either sign, without CLAMP_NEGATIVE");
         constexpr float A_scaled = A * scale_fp32;
 
         // Load constant A into LREG[12]

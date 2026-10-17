@@ -29,9 +29,11 @@ enum class InputClamping : uint8_t {
  * Template scale parameter is the FP32 bit pattern of the scale (0x3F800000 = 1.0; exp_tile's
  * bf16 runtime scale shifted left by 16, so 0x3F00 (0.5) must become 0x3F000000, not 0x3F00). In
  * approximate mode it is always applied, by both the ClampToNegative and the None variants
- * (exp_tile's scale_en is rejected at compile time there); with ClampToNegative it must be
- * a positive normal number, because the -88.5 input clamp is divided by it. In non-approximate
- * mode it is ignored; the exp_tile runtime scale applies when scale_en is true.
+ * (exp_tile's scale_en is rejected at compile time there): with ClampToNegative it must be a
+ * positive normal number, because the -88.5 input clamp is divided by it; with None it must be a
+ * finite normal number of either sign, or zero (every output becomes exp(0)). In non-approximate
+ * mode it is ignored; the exp_tile runtime scale applies when scale_en is true. This describes
+ * Wormhole and Blackhole; Quasar supports only the default scale with ClampToNegative.
  *
  */
 template <
@@ -57,8 +59,8 @@ ALWI void exp_tile_init() {
  * | Template Parameter      | Description                                                    | Type     | Valid Range      | Default |
  * |-------------------------|----------------------------------------------------------------|----------|------------------|---------|
  * | approx                  | Enable approximate mode.                                       | bool     | true, false      | false   |
- * | scale_en                | Enable input scaling by the runtime scale factor; non-approximate mode only (a compile-time error when approx is true: approximate mode scales by exp_tile_init's template scale) | bool     | true, false      | false   |
- * | input_clamping          | If approx, controls whether very negative inputs are clamped to prevent incorrect outputs | InputClamping | ClampToNegative, None | ClampToNegative |
+ * | scale_en                | Enable input scaling by the runtime scale factor; non-approximate mode only (a compile-time error when approx is true: approximate mode scales by exp_tile_init's template scale). Wormhole and Blackhole; on Quasar scale_en must be false in every mode | bool     | true, false      | false   |
+ * | input_clamping          | If approx, controls whether very negative inputs are clamped to prevent incorrect outputs (Quasar: ClampToNegative only) | InputClamping | ClampToNegative, None | ClampToNegative |
  * | iterations              | Number of iterations over 32-SFPU lanes to run                 | int      | Positive integer | 8       |
  *
  * | Argument    | Description                                                                | Type     | Valid Range                                           | Required |
