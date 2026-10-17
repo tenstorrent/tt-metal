@@ -186,6 +186,43 @@ def test_scalarB_celu(device, h, w, alpha, torch_dtype, ttnn_dtype):
         assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
+@pytest.mark.parametrize("alpha", [-1.0, -4.0])
+@pytest.mark.parametrize(
+    "torch_dtype,ttnn_dtype",
+    [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)],
+)
+def test_scalarB_celu_negative_alpha_negative_input(device, alpha, torch_dtype, ttnn_dtype):
+    """celu(x, alpha) = alpha * (exp(x / alpha) - 1) for x < 0. With alpha < 0 the exp
+    argument x / alpha is positive and unbounded; torch overflows to -inf once it passes
+    ln(FLT_MAX) ~ 88.72, and the device must agree (it used to wrap the 2^k exponent of
+    its exp reconstruction and return +|alpha| instead of -inf).
+
+    x / alpha in [0, 80] exercises the finite path, [90, 200] the overflow path. The gap
+    (80, 90) is left out on purpose: there exp(x / alpha) is within a factor of two of
+    FLT_MAX and the device's 2^k reconstruction cannot represent it (a separate accuracy
+    edge, not the sign wrap). Power-of-two alphas keep x / alpha and alpha * (...) exact on
+    both host and device so the ULP bound measures the kernel, not the host reciprocal.
+    """
+    h, w = 64, 128
+    ratio = torch.cat([torch.linspace(0.0, 80.0, h * w // 2), torch.linspace(90.0, 200.0, h * w // 2)])
+    torch_input_tensor_a = (ratio * alpha).reshape(h, w).to(torch_dtype)  # x = alpha * ratio <= 0
+
+    golden_function = ttnn.get_golden_function(ttnn.celu)
+    torch_output_tensor = golden_function(torch_input_tensor_a, alpha=alpha)
+    overflow = torch.isinf(torch_output_tensor)
+    assert overflow.sum() == h * w // 2, "the x / alpha >= 90 half must overflow to -inf in the golden"
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.celu(input_tensor_a, alpha=alpha))
+
+    assert torch.equal(
+        output_tensor[overflow], torch_output_tensor[overflow]
+    ), f"x / alpha past ln(FLT_MAX) must give -inf, device gave {output_tensor[overflow].unique().tolist()}"
+    assert_with_ulp(
+        expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2, allow_nonfinite=True
+    )
+
+
 @pytest.mark.parametrize("weight", [-0.5, 1.0, 0.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])

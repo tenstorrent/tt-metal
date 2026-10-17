@@ -25,7 +25,12 @@ inline void calculate_celu(std::uint32_t param0, std::uint32_t param1) {
 #pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat result = alpha * expm1_cw_clamped(alpha_recip * x);
+        // alpha < 0 makes x / alpha positive and unbounded on the x < 0 branch. The helper
+        // clamps only the negative side, and its 2^k reconstruction writes k + 127 into an
+        // 8-bit exponent field, so past k = 128 it wraps and the result flips sign instead
+        // of overflowing. At 89 the helper is already +inf (k = 128), so alpha * (+inf) is
+        // the -inf the reference gives everywhere beyond the overflow point.
+        sfpi::vFloat result = alpha * expm1_cw_clamped(sfpi::min(alpha_recip * x, 89.0f));
 
         v_if(x >= 0.0f) { result = x; }
         v_endif;
