@@ -443,7 +443,7 @@ def test_all_known_shared_generator_callers_supply_every_decode_update_command()
         "reset_sampling_state",
     }
     expected_calls = {
-        Path("tt-train/sources/examples/grpo_remote_rollout/utils/ttt_generation_worker.py"): 1,
+        Path("tt-train/sources/ttml/ttml/trainers/grpo_trainer/remote_rollout/ttt_rollout_sampler.py"): 1,
         Path("models/experimental/ops/quasar/gpt_oss/demo/text_demo.py"): 2,
         Path("models/experimental/ops/quasar/gpt_oss/tests/accuracy/test_model.py"): 1,
         Path("models/experimental/ops/quasar/qwen3_vl/demo/demo.py"): 1,
