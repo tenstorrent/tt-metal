@@ -38,6 +38,8 @@ count() {  # count <workflow name>...: non-completed workflow_dispatch runs of m
 used_s=$(count "Sanity tests") || exit 2
 used_n=$(count "Nightly tt-metal L2 tests" "LLK e2e Tests") || exit 2
 echo "sanity $used_s/$cap_s  nightly $used_n/$cap_n"
+# one-line notice for running workers (stderr, so stdout parsers are unaffected)
+echo "NOTICE policy 2026-10-17: a ttllk-only PR (scripts/ci_scope.sh --pr <n> exits 0) needs Sanity + LLK e2e only, --need-nightly 1, no Nightly (dispatch.sh exit 4); re-sort your ci-queue accordingly" >&2
 if [ "$verify" -eq 1 ]; then
     [ "$used_s" -le "$cap_s" ] && [ "$used_n" -le "$cap_n" ] || { echo "OVER budget after dispatch: cancel the run(s) you just dispatched and re-queue the PR" >&2; exit 1; }
     exit 0
