@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
+#include "ttnn/operations/eltwise/unary/device/kernels/dram_read_common.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include <algorithm>
 #include <tt-metalium/bfloat16.hpp>
@@ -21,7 +22,6 @@ using namespace ttnn::operations::unary;
 using namespace ttnn::operations::unary::utils;
 using ttnn::operations::unary::EltwiseUnaryWithParam;
 using ttnn::operations::unary::UnaryOpType;
-
 
 bool pack_first_op_scalars(
     const EltwiseUnaryWithParam& op, DataType input_dtype, uint32_t& packed_scalar1, uint32_t& packed_scalar2) {
@@ -80,6 +80,12 @@ const tt::tt_metal::experimental::KernelSpecName COMPUTE{"compute"};
 const tt::tt_metal::experimental::DFBSpecName IN_DFB{"in"};      // legacy index c_0
 const tt::tt_metal::experimental::DFBSpecName TMP0_DFB{"tmp0"};  // legacy index c_1 (LOGIT only)
 const tt::tt_metal::experimental::DFBSpecName OUT_DFB{"out"};    // legacy index c_2
+// DRAM read work queue (see kernels/dataflow/dram_read.hpp).
+const tt::tt_metal::experimental::DFBSpecName CHUNK_COUNT_DFB{"chunk_count"};  // reader to compute
+const tt::tt_metal::experimental::DFBSpecName CHUNK_RANGE_DFB{"chunk_range"};  // reader to writer
+const tt::tt_metal::experimental::DFBSpecName REQUESTS_DFB{"requests"};        // the scheduler's request table
+const tt::tt_metal::experimental::SemaphoreSpecName REPLY_SEM{"reply"};
+const tt::tt_metal::experimental::SemaphoreSpecName CLEARED_SEM{"cleared"};
 const tt::tt_metal::experimental::TensorParamName INPUT{"input"};
 const tt::tt_metal::experimental::TensorParamName OUTPUT{"output"};
 
@@ -114,7 +120,19 @@ struct CoreRtArgs {
     uint32_t out_units = 0;
     uint32_t start_id = 0;
     uint32_t compute_units = 0;
+    uint32_t scheduler_xy = 0;  // DRAM read work queue: the scheduler's NoC coordinates
 };
+
+// NoC coordinates packed as x | (y << 16).
+uint32_t noc_xy(const Tensor& tensor, const tt::tt_metal::CoreCoord& core) {
+    const auto noc = tensor.device()->worker_core_from_logical_core(core);
+    return static_cast<uint32_t>(noc.x) | (static_cast<uint32_t>(noc.y) << 16);
+}
+
+// Reader and writer common runtime args of the DRAM read flows: the same on every core, so set once per dispatch.
+const std::vector<std::string> kPageOrderArgNames = {
+    "shard_stride", "num_shards", "last_shard_pages", "shard_width", "row_pages"};
+const std::vector<std::string> kQueueArgNames = {"chunk_pages", "scheduler_xy", "num_workers"};
 
 // Core-invariant ROW_MAJOR-interleaved chunk constants, passed as the reader/writer args
 // chunks_per_row, chunk_size, last_chunk_size, rows_per_tile and total_rows. All shape-derived.
@@ -139,6 +157,7 @@ void enumerate_core_rt_args(
     const UnaryDeviceOperation::operation_attributes_t& operation_attributes,
     const UnaryDeviceOperation::tensor_args_t& tensor_args,
     const Tensor& output,
+    const DramReadPlan& plan,
     const Fn& fn) {
     using namespace tt;
     using namespace tt::tt_metal;
@@ -304,6 +323,25 @@ void enumerate_core_rt_args(
         return;
     }
 
+    if (plan.flow == DramReadFlow::WorkQueue) {
+        // No split: every core is a worker; the middle one also schedules, to keep request round trips short.
+        cores = corerange_to_cores(all_device_cores, {}, row_major);
+        const auto num_workers = static_cast<uint32_t>(cores.size());
+        const uint32_t scheduler_xy = noc_xy(input, cores[num_workers / 2]);
+        for (uint32_t i = 0; i < num_workers; ++i) {
+            // A worker's num_pages and start_id are the tensor's pages and its index; compute counts chunks instead.
+            fn(
+                CoreRtArgs{
+                    .core = cores[i],
+                    .in_units = out_num_tiles,
+                    .out_units = out_num_tiles,
+                    .start_id = i,
+                    .scheduler_xy = scheduler_xy},
+                k);
+        }
+        return;
+    }
+
     uint32_t num_tiles_per_core_group_1{}, num_tiles_per_core_group_2{};
     CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_cores;
@@ -357,6 +395,8 @@ tt::tt_metal::experimental::ProgramRunArgs make_run_args(
     const auto shard_specs = get_shard_specs(input.tensor_spec(), output.tensor_spec());
     const bool has_sharding = shard_specs.has_value();
     const bool rm_interleaved = input.layout() == Layout::ROW_MAJOR && !has_sharding;
+    const auto plan = get_dram_read_plan(
+        operation_attributes.op_chain, input, output.tensor_spec(), operation_attributes.worker_grid);
 
     uint32_t packed_scalar1 = 0, packed_scalar2 = 0;
     pack_first_op_scalars(operation_attributes.op_chain[0], input.dtype(), packed_scalar1, packed_scalar2);
@@ -386,35 +426,55 @@ tt::tt_metal::experimental::ProgramRunArgs make_run_args(
         }
     };
 
-    enumerate_core_rt_args(operation_attributes, tensor_args, output, [&](const CoreRtArgs& w, const RmChunkConstants& kc) {
-        if (w.noop) {
-            add_dm_args(reader_run_args, w.core, 0, 0, {});
-            add_dm_args(writer_run_args, w.core, 0, 0, {});
+    uint32_t scheduler_xy = 0;
+    enumerate_core_rt_args(
+        operation_attributes, tensor_args, output, plan, [&](const CoreRtArgs& w, const RmChunkConstants& kc) {
+            if (w.noop) {
+                add_dm_args(reader_run_args, w.core, 0, 0, {});
+                add_dm_args(writer_run_args, w.core, 0, 0, {});
+                AddRuntimeArgsForNode(
+                    compute_run_args.runtime_arg_values,
+                    w.core,
+                    {{"num_tiles", 0}, {"packed_scalar1", 0}, {"packed_scalar2", 0}});
+                return;
+            }
+            const std::array<uint32_t, 5> rtail =
+                rm_interleaved
+                    ? std::array<
+                          uint32_t,
+                          5>{kc.chunks_per_row, kc.input_chunk_size, kc.input_last_chunk_size, kc.rows_per_tile, kc.total_rows}
+                    : std::array<uint32_t, 5>{};
+            const std::array<uint32_t, 5> wtail =
+                rm_interleaved
+                    ? std::array<
+                          uint32_t,
+                          5>{kc.chunks_per_row, kc.output_chunk_size, kc.output_last_chunk_size, kc.rows_per_tile, kc.total_rows}
+                    : std::array<uint32_t, 5>{};
+            add_dm_args(reader_run_args, w.core, w.in_units, w.start_id, rtail);
+            add_dm_args(writer_run_args, w.core, w.out_units, w.start_id, wtail);
+            scheduler_xy = std::max(scheduler_xy, w.scheduler_xy);
             AddRuntimeArgsForNode(
                 compute_run_args.runtime_arg_values,
                 w.core,
-                {{"num_tiles", 0}, {"packed_scalar1", 0}, {"packed_scalar2", 0}});
-            return;
+                {{"num_tiles", w.compute_units},
+                 {"packed_scalar1", packed_scalar1},
+                 {"packed_scalar2", packed_scalar2}});
+        });
+
+    if (plan.flow != DramReadFlow::None) {
+        const auto page_order = plan.page_order();
+        for (auto* kra : {&reader_run_args, &writer_run_args}) {
+            auto& common = kra->common_runtime_arg_values;
+            for (size_t i = 0; i < kPageOrderArgNames.size(); ++i) {
+                common[kPageOrderArgNames[i]] = page_order[i];
+            }
+            if (plan.flow == DramReadFlow::WorkQueue) {
+                common["chunk_pages"] = plan.chunk_pages;
+                common["scheduler_xy"] = scheduler_xy;
+                common["num_workers"] = operation_attributes.worker_grid.num_cores();
+            }
         }
-        const std::array<uint32_t, 5> rtail =
-            rm_interleaved
-                ? std::array<
-                      uint32_t,
-                      5>{kc.chunks_per_row, kc.input_chunk_size, kc.input_last_chunk_size, kc.rows_per_tile, kc.total_rows}
-                : std::array<uint32_t, 5>{};
-        const std::array<uint32_t, 5> wtail =
-            rm_interleaved
-                ? std::array<
-                      uint32_t,
-                      5>{kc.chunks_per_row, kc.output_chunk_size, kc.output_last_chunk_size, kc.rows_per_tile, kc.total_rows}
-                : std::array<uint32_t, 5>{};
-        add_dm_args(reader_run_args, w.core, w.in_units, w.start_id, rtail);
-        add_dm_args(writer_run_args, w.core, w.out_units, w.start_id, wtail);
-        AddRuntimeArgsForNode(
-            compute_run_args.runtime_arg_values,
-            w.core,
-            {{"num_tiles", w.compute_units}, {"packed_scalar1", packed_scalar1}, {"packed_scalar2", packed_scalar2}});
-    });
+    }
 
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
@@ -492,6 +552,9 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
 
     const auto& all_device_cores = operation_attributes.worker_grid;
     const bool needs_tmp0 = needs_tmp0_dfb(ops_chain[0].type());
+    const auto plan = get_dram_read_plan(ops_chain, input, output.tensor_spec(), all_device_cores);
+    const bool dram_flow = plan.flow != DramReadFlow::None;
+    const bool work_queue = plan.flow == DramReadFlow::WorkQueue;
 
     const bool math_approx_mode = false;
     std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
@@ -511,7 +574,8 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = IN_DFB,
         .entry_size = input_dfb_page_size,
-        .num_entries = src_num_tiles_per_shard.value_or(2),
+        // Two bursts, so the next burst moves while compute works on the last one.
+        .num_entries = src_num_tiles_per_shard.value_or(2 * plan.read_burst),
         .data_format_metadata = dfb_data_format_for_input,
         .borrowed_from = src_sharded ? std::optional<TensorParamName>(INPUT) : std::nullopt,
     });
@@ -528,10 +592,30 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = OUT_DFB,
         .entry_size = output_dfb_page_size,
-        .num_entries = dst_num_tiles_per_shard.value_or(2),
+        .num_entries = dst_num_tiles_per_shard.value_or(2 * plan.write_burst),
         .data_format_metadata = dfb_data_format_output,
         .borrowed_from = dst_sharded ? std::optional<TensorParamName>(OUTPUT) : std::nullopt,
     });
+
+    Group<SemaphoreSpec> semaphores;
+    if (work_queue) {
+        // Control words: chunk tile counts for compute, chunk ranges for the writer, and the request table.
+        constexpr uint32_t kCtrlEntryBytes = 16;
+        constexpr uint32_t kChunksInFlight = 8;  // chunks the reader may hand on ahead of compute and the writer
+        auto ctrl_dfb = [&](const DFBSpecName& name, uint32_t entries) {
+            dataflow_buffers.push_back(DataflowBufferSpec{
+                .unique_id = name,
+                .entry_size = kCtrlEntryBytes,
+                .num_entries = entries,
+                .data_format_metadata = DataFormat::UInt32,
+            });
+        };
+        ctrl_dfb(CHUNK_COUNT_DFB, kChunksInFlight);
+        ctrl_dfb(CHUNK_RANGE_DFB, kChunksInFlight);
+        ctrl_dfb(REQUESTS_DFB, tt::div_up(all_device_cores.num_cores() * sizeof(uint32_t), kCtrlEntryBytes));
+        semaphores.push_back(SemaphoreSpec{.unique_id = REPLY_SEM, .target_nodes = all_device_cores});
+        semaphores.push_back(SemaphoreSpec{.unique_id = CLEARED_SEM, .target_nodes = all_device_cores});
+    }
 
     // --- Tensor Parameters ---
     // The TILE-layout program hash omits shape and rank: one cached program legitimately serves
@@ -552,10 +636,19 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
             dm_runtime_arg_names.end(),
             {"chunks_per_row", "chunk_size", "last_chunk_size", "rows_per_tile", "total_rows"});
     }
+    Group<std::string> dm_common_runtime_arg_names;
+    if (dram_flow) {
+        dm_common_runtime_arg_names.insert(
+            dm_common_runtime_arg_names.end(), kPageOrderArgNames.begin(), kPageOrderArgNames.end());
+    }
+    if (work_queue) {
+        dm_common_runtime_arg_names.insert(
+            dm_common_runtime_arg_names.end(), kQueueArgNames.begin(), kQueueArgNames.end());
+    }
 
     const auto arch = input.device()->arch();
 
-    const KernelSpec reader{
+    KernelSpec reader{
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary.cpp",
         .compiler_options =
@@ -563,6 +656,9 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
                  {
                      {"SRC_SHARDED", src_sharded ? "1" : "0"},
                      {"RM_INTERLEAVED", rm_interleaved ? "1" : "0"},
+                     {"READ_BURST", std::to_string(plan.read_burst)},
+                     {"DRAM_FLOW", dram_flow ? "1" : "0"},
+                     {"WORK_QUEUE", work_queue ? "1" : "0"},
                  }},
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = IN_DFB,
@@ -573,12 +669,13 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
             .tensor_parameter_name = INPUT,
             .accessor_name = "src",
         }},
-        .runtime_arg_schema = {.runtime_arg_names = dm_runtime_arg_names},
+        .runtime_arg_schema =
+            {.runtime_arg_names = dm_runtime_arg_names, .common_runtime_arg_names = dm_common_runtime_arg_names},
         .hw_config = ttnn::create_reader_datamovement_config(true),
     };
 
     // --- Writer Kernel ---
-    const KernelSpec writer{
+    KernelSpec writer{
         .unique_id = WRITER,
         .source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary.cpp",
         .compiler_options =
@@ -586,6 +683,9 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
                  {
                      {"DST_SHARDED", dst_sharded ? "1" : "0"},
                      {"RM_INTERLEAVED", rm_interleaved ? "1" : "0"},
+                     {"WRITE_BURST", std::to_string(plan.write_burst)},
+                     {"DRAM_FLOW", dram_flow ? "1" : "0"},
+                     {"WORK_QUEUE", work_queue ? "1" : "0"},
                  }},
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = OUT_DFB,
@@ -596,9 +696,28 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
             .tensor_parameter_name = OUTPUT,
             .accessor_name = "dst",
         }},
-        .runtime_arg_schema = {.runtime_arg_names = dm_runtime_arg_names},
+        .runtime_arg_schema =
+            {.runtime_arg_names = dm_runtime_arg_names, .common_runtime_arg_names = dm_common_runtime_arg_names},
         .hw_config = ttnn::create_writer_datamovement_config(true),
     };
+    if (work_queue) {
+        auto bind = [](KernelSpec& kernel, const DFBSpecName& name, const char* accessor, DFBEndpointType end) {
+            kernel.dfb_bindings.push_back(
+                DFBBinding{.dfb_spec_name = name, .accessor_name = accessor, .endpoint_type = end});
+        };
+        bind(reader, CHUNK_COUNT_DFB, "chunk_count", DFBEndpointType::PRODUCER);
+        bind(reader, CHUNK_RANGE_DFB, "chunk_range", DFBEndpointType::PRODUCER);
+        bind(writer, CHUNK_RANGE_DFB, "chunk_range", DFBEndpointType::CONSUMER);
+        // Workers write requests into the scheduler's table over the NoC; the writer there reads them.
+        bind(reader, REQUESTS_DFB, "requests", DFBEndpointType::PRODUCER);
+        bind(writer, REQUESTS_DFB, "requests", DFBEndpointType::CONSUMER);
+        for (auto* kernel : {&reader, &writer}) {
+            kernel->semaphore_bindings = {
+                {.semaphore_spec_name = REPLY_SEM, .accessor_name = "reply"},
+                {.semaphore_spec_name = CLEARED_SEM, .accessor_name = "cleared"}};
+        }
+        unary_defines["WORK_QUEUE"] = "1";
+    }
 
     // --- Compute Kernel ---
     KernelSpec::CompileTimeArgs compute_compile_time_args;
@@ -635,6 +754,13 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         .accessor_name = "out",
         .endpoint_type = DFBEndpointType::PRODUCER,
     });
+    if (work_queue) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = CHUNK_COUNT_DFB,
+            .accessor_name = "chunk_count",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
 
     // Legacy set UnpackToDestFp32 on the input and temporary buffers under preserve_fp32_precision and
     // left them at Default otherwise. Metal 2.0 additionally requires an explicit entry for a consumed
@@ -693,6 +819,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         .name = "eltwise_unary",
         .kernels = {reader, writer, compute},
         .dataflow_buffers = std::move(dataflow_buffers),
+        .semaphores = std::move(semaphores),
         .tensor_parameters = {input_param, output_param},
         .work_units = {WorkUnitSpec{
             .name = "eltwise_unary",
