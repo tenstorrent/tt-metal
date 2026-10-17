@@ -4,10 +4,10 @@
 
 // LLK unpack primitives for the H128 (1x128) Hadamard transform.
 //
-// Tile geometry (matches op.py / hadamard.h):
+// Tile geometry (matches hadamard.h):
 //   h16   ([16, 16], 1 face): H_16 fills face (0, 0). -> srcB face 0.
-//   input ([16, 16], 1 face): 128 input values in top 8 rows of face
-//                              (0, 0), zeros in rows 8..15. -> srcA face 0.
+//   input: 128 contiguous values (single-face or one-row-face tiles, e.g.
+//          4x[1, 32]). -> srcA face 0 rows 0..7; rows 8..15 zeroed.
 //
 // Single-face unpack: each phase issues exactly one UNPACR per src
 // register, reading one 16x16 face per operand.
@@ -51,6 +51,9 @@
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
+
+// Datums the input unpack reads per call: the top 8 rows of srcA face 0.
+constexpr std::uint32_t HADAMARD_H128_INPUT_DATUMS = 8 * FACE_C_DIM;
 
 // One-shot unpack init for the H128 transform. Call once at init, after
 // llk_unpack_hw_configure.
@@ -110,8 +113,8 @@ inline void _llk_unpack_hadamard_h128_(
     const std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a; // h16
     const std::uint32_t address_b = base_address_b + tile_size_b * tile_index_b; // input
 
-    constexpr std::uint32_t kFaceXEnd  = FACE_R_DIM * FACE_C_DIM - 1; // full 16x16 face
-    constexpr std::uint32_t kInputXEnd = 8 * FACE_C_DIM - 1;          // 8 rows = 128 datums
+    constexpr std::uint32_t kFaceXEnd  = FACE_R_DIM * FACE_C_DIM - 1;    // full 16x16 face
+    constexpr std::uint32_t kInputXEnd = HADAMARD_H128_INPUT_DATUMS - 1; // 8 rows = 128 datums
 
     // ── Phase 1 (context 0): h16 -> srcB, input -> srcA bank 0 ──────────
     // Context 1 permanently stores the base address of the 16x16
