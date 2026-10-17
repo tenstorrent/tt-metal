@@ -3,7 +3,8 @@
 Started: <YYYY-MM-DD HH:MM> on <hostname> (<board>, <arch>)
 Source: <parent issue url | findings file path> · sync: <git upstream | --sync-cmd | local-only> · last sync: <HH:MM PUSH_OK>
 Options: --ci-budget sanity=5,nightly=5 · --group-max 8 · --only-open? · --unattended run-name <name>
-Resume: read this file top to bottom, `findings.py reconcile <file>` (file source), then `gh pr list --author <me> --state open`.
+Worker: <name> (--arch <arch>) · other workers: <name (arch, host)> · claims: <run dir>/claims · legs serve loop: <pid, log>   (single-worker runs: "none")
+Resume: read this file top to bottom, `findings.py reconcile <file>` (file source), then `gh pr list --author <me> --state open`; a worker resumes only items whose owner is itself.
 
 ## Items
 
@@ -32,6 +33,11 @@ Status values: triage · repro · fix · verify · pr · bot-review(rN) · ci-qu
 
 | PR | bot re-dispatches (per SHA) | CI reruns (per cause) | rebase+retrigger (≤3) | code-change CI cycles (≤4) | main-wait started |
 |---|---|---|---|---|---|
+
+## Remote legs (§0c — legs filed with the other worker; one row per request)
+
+| request id | item | arch | label (without / with / perf / probe) | branch@sha or patch | filed | result (exit, log) |
+|---|---|---|---|---|---|---|
 
 ## Perf A/B (§3b — one row per item × arch on a measured path)
 

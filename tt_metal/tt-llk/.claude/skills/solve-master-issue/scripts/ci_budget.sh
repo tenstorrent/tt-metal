@@ -1,20 +1,22 @@
 #!/bin/bash
-# usage: ci_budget.sh [--need-nightly N] [sanity=5] [nightly=5]
-# Is there room to dispatch one more PR's CI without crowding other developers off the runners?
-# Counts the current user's workflow_dispatch runs that are not completed (queued, waiting, pending,
-# requested, in progress) — asked of GitHub, not read from the ledger, so runs dispatched by another
-# session of the same account count too:
-#   sanity  bucket = "Sanity tests"
-#   nightly bucket = "Nightly tt-metal L2 tests" + "LLK e2e Tests"   (the long lanes share one budget)
-# Prints  `sanity <used>/<cap>  nightly <used>/<cap>`  and exits
-#   0  room for one more PR: sanity has a free slot AND nightly has --need-nightly free slots (default 1;
-#      pass 2 when the PR also needs LLK e2e) — dispatch both lanes of that PR now
-#   1  no room: put the PR in the ledger's CI queue and advance other work; re-check when a run completes
-#   2  GitHub could not be read: not an answer, retry after the poll interval
-# Caps: arguments, else $CI_BUDGET_SANITY / $CI_BUDGET_NIGHTLY, else 5 and 5. Repo: $GH_REPO.
+# usage: ci_budget.sh [--need-nightly N] [--verify] [sanity=5] [nightly=5]
+# Is there room for one more PR's CI? Counts MY non-completed workflow_dispatch runs on GitHub (never the
+# ledger): "Sanity tests" against the sanity cap; "Nightly tt-metal L2 tests" + "LLK e2e Tests" against the
+# nightly cap (--need-nightly 2 when a PR needs both). Prints `sanity <used>/<cap>  nightly <used>/<cap>`.
+# Exit 0 = dispatch, 1 = queue the PR, 2 = GitHub could not be read (treat as "not now").
+# Caps: args, $CI_BUDGET_SANITY / $CI_BUDGET_NIGHTLY, default 5 each.
+# Counting by GitHub actor makes the cap global: runs dispatched from any box under this login count.
+# --verify: run it right AFTER a dispatch. The gate is check-then-dispatch, so two workers on two boxes can
+#   both see 4/5 and both dispatch; --verify re-counts with the new runs included and exits 1 when either
+#   lane is now OVER its cap — the caller cancels the run(s) it just dispatched (`gh run cancel <id>`) and
+#   puts the PR back at the head of its ci-queue. (used <= cap passes under --verify; used < cap before.)
 set -uo pipefail
-need=1
-[ "${1:-}" = --need-nightly ] && { need=$2; shift 2; }
+need=1; verify=0
+while :; do case "${1:-}" in
+    --need-nightly) need=$2; shift 2;;
+    --verify) verify=1; shift;;
+    *) break;;
+esac; done
 cap_s=${CI_BUDGET_SANITY:-5}; cap_n=${CI_BUDGET_NIGHTLY:-5}
 for kv in "$@"; do case $kv in sanity=*) cap_s=${kv#*=};; nightly=*) cap_n=${kv#*=};; esac; done
 repo=${GH_REPO:-tenstorrent/tt-metal}
@@ -36,4 +38,8 @@ count() {  # count <workflow name>...: non-completed workflow_dispatch runs of m
 used_s=$(count "Sanity tests") || exit 2
 used_n=$(count "Nightly tt-metal L2 tests" "LLK e2e Tests") || exit 2
 echo "sanity $used_s/$cap_s  nightly $used_n/$cap_n"
+if [ "$verify" -eq 1 ]; then
+    [ "$used_s" -le "$cap_s" ] && [ "$used_n" -le "$cap_n" ] || { echo "OVER budget after dispatch: cancel the run(s) you just dispatched and re-queue the PR" >&2; exit 1; }
+    exit 0
+fi
 [ "$used_s" -lt "$cap_s" ] && [ $((used_n + need)) -le "$cap_n" ]

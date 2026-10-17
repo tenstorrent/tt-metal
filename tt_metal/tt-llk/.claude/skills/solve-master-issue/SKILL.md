@@ -1,7 +1,7 @@
 ---
 name: solve-master-issue
 description: Work a master/umbrella GitHub issue (many sub-problems in one issue or as sub-issues) OR a local findings file (a bug-audit CONFIRMED.json / OPEN.md, or any list of file:line problems) to completion UNATTENDED — split it into items, group items that touch the same function/op into one PR (capped so the PR body still fits), find a fail-without/pass-with test per item, open a DRAFT PR per group, handle bot reviews, dispatch sanity + nightly CI only once bots are quiet and only within a CI budget (default 5 Sanity + 5 Nightly runs in flight) so other developers are not crowded off the runners, fix PR-caused failures, rebase past unrelated main breakage, until each PR is green or fails only in proven-unrelated tests AND every bot comment (on every push) is addressed. Writes progress back into the findings file (and commits/pushes or syncs it) so a re-run or another box never repeats work. Never idles; while anything waits on bots/CI/device/budget, it advances another item. Headless driver (run_unattended.sh) survives disconnects. Use when the user hands over an issue or a findings file with N problems and says to work through it without them.
-argument-hint: <issue URL | owner/repo#N | /path/to/findings.json|.md> [--sync-cmd '<cmd>'] [--ci-budget sanity=5,nightly=5] [--group-max 8] [--only-open] [--unattended --run-name <name>] [extra constraints]
+argument-hint: <issue URL | owner/repo#N | /path/to/findings.json|.md> [--sync-cmd '<cmd>'] [--ci-budget sanity=5,nightly=5] [--group-max 8] [--only-open] [--plan-only] [--worker <name> --arch wormhole|blackhole] [--unattended --run-name <name>] [extra constraints]
 user_invocable: true
 ---
 
@@ -38,8 +38,11 @@ done (§0b) — it is marked after every state change and pushed, so a re-run, a
 never repeats work. Options (anywhere in the arguments): `--sync-cmd '<cmd>'` (how to publish the file
 when it is not in a git repo — e.g. a mirror's pack-and-push script), `--ci-budget sanity=N,nightly=M`
 (default 5,5), `--group-max N` (default 8 items per PR), `--only-open` (work only items with no state
-at all — skip ones already filed upstream), `--unattended --run-name <name>` (set by
-`run_unattended.sh`: end the turn instead of sleeping when everything waits; write `DONE` at the end).
+at all or `planned` by this skill — skip ones already filed upstream), `--unattended --run-name <name>` (set by
+`run_unattended.sh`: end the turn instead of sleeping when everything waits; write `DONE` at the end),
+`--plan-only` (triage + group every workable item, write the plan into the file, sync, stop — no fixes),
+`--worker <name> --arch wormhole|blackhole` (this session is one of several workers sharing the file, each
+on its own box: take groups by claim, serve the other worker's test legs — §0c).
 
 Conventions used below: `<me>` = `gh api user -q .login`; `$SKILL` =
 `tt_metal/tt-llk/.claude/skills/solve-master-issue` (scripts in `$SKILL/scripts/`) — if that path
@@ -53,15 +56,16 @@ older `gh` (2.4) lacks.
 |---|---|
 | `mkwt.sh <name> <branch>` | worktree off origin/main (or the existing branch on resume) |
 | `dispatch.sh [--match <regex>] "<workflow>" <ref> [-f k=v]` | dispatch a workflow **and get its run id** (gh prints none); `--match` pins the run's identity when the workflow+ref is shared |
-| `ci_budget.sh [--need-nightly N] [sanity=5] [nightly=5]` | room for one more PR's CI? counts **my** in-flight Sanity / Nightly(+e2e) dispatches on GitHub; exit 0 = dispatch, 1 = queue it (§6) |
+| `ci_budget.sh [--need-nightly N] [--verify] [sanity=5] [nightly=5]` | room for one more PR's CI? counts **my** in-flight Sanity / Nightly(+e2e) dispatches on GitHub (so the cap is global across boxes); exit 0 = dispatch, 1 = queue it; `--verify` right after a dispatch: exit 1 = over the cap, cancel what you just dispatched (§6) |
 | `ci_triage.sh <run_id>` | every non-green job of a run with its failing tests |
 | `main_job_status.sh "<workflow>" "<job>"` | is the same job failing on main — on the same tests? |
 | `bot_threads.sh <pr>` | bot feedback still unanswered; ack handled summaries by URL |
 | `bots_pending.sh <pr>` | what must still finish before the head SHA is "bots quiet"; exit 0 + empty = quiet |
 | `perf_ab.sh <fix-wt> <base-sha> <arch> <perf-module> <out-dir> [-k …] [--op …] [--goal …]` | same-board perf A/B of one tt-llk perf module, fix vs base, judged by `perf_eval.py` (§3b); exit 0 pass · 1 regression · 2 not comparable · 3 run failed |
 | `perf_eval.py --current <csv> --baseline <csv> …` | the judge: variant-matched cycle deltas, ±0.5 % noise band, intent-aware verdict; vendored from the LLK issue solver, `test_perf_eval.py` guards it (run with `pytest -c /dev/null --noconftest`) |
-| `findings.py list\|mark\|reconcile\|sync <file> …` | the findings file as source: open items as JSON; write state + links per item (dups follow); GitHub-vs-file drift on resume; commit+push or `--sync-cmd` |
-| `run_unattended.sh <run-name> <args…>` | detached headless driver: `claude -p` turns, resumed every 15 min until `DONE` (§2) |
+| `findings.py list\|mark\|groups\|next\|claim\|release\|reconcile\|sync <file> …` | the findings file as source: workable items as JSON; write state + links per item (dups follow); the plan's groups; the next groups for a worker and the atomic claim (§0c); GitHub-vs-file drift on resume; commit+push (pull --rebase first) or `--sync-cmd` |
+| `legs.sh request\|wait\|serve\|status --run-dir <dir> …` | a test leg on the *other* worker's board: the requester files a request in the shared run dir, that box's serve loop runs it under its device lock and writes the result back (§0c, §3) |
+| `run_unattended.sh <run-name> [--worker <w>] <args…>` | detached headless driver: `claude -p` turns, resumed every 15 min until `DONE` (§2); one per box with `--worker`, state under `workers/<w>/` |
 
 The two gate scripts print nothing when there is nothing left — and also when GitHub could not be
 read, so their **exit status is part of the gate**: a non-zero exit is "not quiet / not answered",
@@ -141,6 +145,79 @@ step; the ledger holds the operational detail (run ids, counters) that the file 
    already changed that code, re-check the claim there: still present → proceed (note the new line in
    the ledger); gone → `mark --state skipped --note 'fixed on main by <sha>'`, no issue, no PR.
 
+## 0c. Several workers, one per box (optional)
+
+One run can be worked by several sessions on several machines — typically one Wormhole box and one
+Blackhole box — **without splitting PRs and without exceeding the CI budget**. Prerequisites, all
+verified in §0 step 1 on every box: `$MASTER_ISSUE_DIR` and the findings file on storage every box mounts
+(the run dir holds the claims and the leg requests; `mkdir` on it is the arbiter); a tt-metal checkout
+(built, if ttnn tests are expected) and the tt-llk harness (`sfpi`, `.venv`); `gh auth status` under the
+same login (the CI budget is counted per login, so it is shared automatically); this skill reachable on
+that box (`~/.claude/skills/solve-master-issue` resolves there — a symlink into another box's local disk
+does not). The findings file's own sync (git or `--sync-cmd`) runs from whichever box marks; with one
+shared checkout that is just serialized; with per-box clones `sync` pulls with rebase first.
+
+**The unit of ownership is the group, never the arch.** A WH+BH defect stays one PR (§1b). The owner of a
+group does everything for it — worktree, fixes for every arch copy, issue, PR, reviews, CI — and borrows
+the other box's card for the legs it cannot run (below). Nothing about §4–§6 changes for a worker.
+
+**Phase 1 — plan once** (`--plan-only`, run by one session, before any worker starts; cheap, reading only):
+triage every workable item (§1), group them (§1b), then write the plan into the file and stop:
+```bash
+$SKILL/scripts/findings.py mark <file> <key>... --state planned --group <g> --arch wormhole|blackhole|both|neutral
+$SKILL/scripts/findings.py sync <file> [--sync-cmd …]
+```
+`--arch` is what the fix touches (`list` prints an `arch_guess` from the paths; `both` when the WH and BH
+copies are one group; `neutral` for host/ttnn code). Items already `in-progress`/`pr` keep their owner and
+are not re-planned. Write the plan summary (groups, arch counts) into `ledger-plan.md` in the run dir.
+
+**Phase 2 — workers** (one driver per box, same `<run-name>`, different `--worker` names):
+```bash
+nohup setsid $SKILL/scripts/legs.sh serve --run-dir $MASTER_ISSUE_DIR/<run> --arch <this box's arch> --repo <built tt-metal checkout> > /dev/null 2>&1 &
+nohup setsid $SKILL/scripts/run_unattended.sh <run> --worker <name> <file> --arch <this box's arch> [options] > /dev/null 2>&1 &
+```
+A worker's ledger is `$MASTER_ISSUE_DIR/<run>/workers/<name>/ledger.md`; the shared file is the only
+cross-worker state. A worker **takes groups by claim**, never by list order:
+```bash
+$SKILL/scripts/findings.py next  <file> --owner <name> --arch <arch> --claims $MASTER_ISSUE_DIR/<run>/claims -n 3
+$SKILL/scripts/findings.py claim <file> <group> --owner <name> --claims $MASTER_ISSUE_DIR/<run>/claims   # exit 1 = TAKEN → next
+```
+`next` orders the unclaimed planned groups: this box's arch first, then neutral, then WH+BH — and the two
+workers walk the neutral and WH+BH lists from opposite ends, so they rarely attempt the same group; when
+they do, the `mkdir` claim decides and the loser moves on. Groups needing only the *other* arch are left to
+that worker (`--take-other` overrides when it has nothing left). `claim` marks the group's items
+`in-progress` with `--owner`; a claim you cannot start after all is `release`d. On resume, `reconcile`
+lists `in-progress` items with their owner: **a worker resumes only its own; the rest belong to the other
+box even if that box is silent** (it will resume them; if it is gone for good, the user reassigns by
+`release`).
+
+**Remote legs — the other box as the missing board.** When a group needs a fail-without / pass-with /
+perf leg on the arch this box lacks, do not go to CI silicon first:
+```bash
+git push -u origin <branch>                                   # the serving box fetches it
+id=$($SKILL/scripts/legs.sh request --run-dir $MASTER_ISSUE_DIR/<run> --arch blackhole --label item42-without \
+      --branch <branch> --sha <sha> --cmd '.venv/bin/python -m pytest -q python_tests/test_x.py -k case' [--cwd tt_metal/tt-llk/tests] [--timeout 1800])
+$SKILL/scripts/legs.sh wait --run-dir $MASTER_ISSUE_DIR/<run> $id        # exit = the leg's exit; prints the log path
+```
+Branch mode runs in a detached worktree on the serving box (tt-llk pytest, gtest already built there);
+`--patch <diff>` mode applies a patch to that box's **built** checkout under its device lock and reverts it
+after — for ttnn tests that need a build. Probe arm = the same request on a `<me>/probe-<item>-shipped`
+branch, exactly as in §3. A leg is a wait like any other: file it, record the id in the pending table, arm
+nothing that must outlive the turn, and move on; `legs.sh status` shows the queue. The PR body names the
+serving host and board and links the log in the run dir. **CI silicon (§3) remains the fallback** when no
+worker serves that arch (`legs.sh status` shows the serve loop's last heartbeat) or the leg needs a SKU
+neither box has.
+
+**CI budget across boxes.** `ci_budget.sh` counts runs on GitHub per login, so both workers share one
+5 + 5 pool with no coordination. The gate is check-then-dispatch, so right after every dispatch run
+`ci_budget.sh --verify`: exit 1 means the other box dispatched in the same window and a lane is now over
+its cap — cancel the run(s) you just dispatched (`gh run cancel <id>`) and put the PR back at the head of
+your ci-queue. The cap holds exactly; a few seconds of overshoot is the worst case.
+
+**Stopping.** `touch $MASTER_ISSUE_DIR/<run>/STOP` stops every worker after its current turn;
+`workers/<name>/STOP` stops one. Each worker writes its own `workers/<name>/DONE` with its report (§8);
+the run is done when every worker's is.
+
 ## 1. Split into items and triage
 
 Turn the issue into numbered items — one per independently fixable problem (two symptoms of one
@@ -208,11 +285,13 @@ Each item moves through: `triage → repro → fix → verify → PR → bot-rev
   on to the next item — triage, repro, fix, test, next PR. Queued PRs get their CI, in order and
   nearest-to-done first, as slots free up (§6). Probe/fix pairs, re-dispatches after a rebase, and
   rerun-failed-jobs calls all draw on the same budget.
+- **Remote board** (workers, §0c) — the other box's card, through `legs.sh`; one request per leg,
+  served in order under that box's device lock. Minutes, not the hour a CI probe pair costs.
 - **Thinking/reading** — unlimited; parallelize with subagents.
 
 **The loop**, after every action and every notification:
-1. Anything finished? (bot review, CI run, build, background test) → handle it now. A finished CI run
-   also frees a budget slot: check `ci_budget.sh` and dispatch the head of the `ci-queue`.
+1. Anything finished? (bot review, CI run, build, background test, remote leg) → handle it now. A
+   finished CI run also frees a budget slot: check `ci_budget.sh` and dispatch the head of the `ci-queue`.
 2. Otherwise pick the next **unblocked** action across all items, preferring: device work if the
    device is free → items earliest in the pipeline → reading/analysis for parked items.
 3. Before any wait, **arm it in the background** — a background Bash `gh run watch -i 120
@@ -299,12 +378,13 @@ CI runner and the gate still holds — both arms, not just pass-with:
 Another box with the board, if one is reachable, is the same thing with the device lock (§0) on that
 host — but CI is the default because it leaves a link anyone can check.
 
-**Where a board comes from, in order:** (1) this box (`tt-smi -s`); (2) another box of the user's
-that already has the board — `ListAgents` shows their other sessions and the hostnames in the user's
-notes; use it only if `ssh <host> true` works with the keys you have (never add keys or change auth to
-get there), through that host's device lock; (3) **CI silicon**, above. This skill does not reserve
-machines: if the user wants a reservation it is a line in the report, and the item proceeds through CI
-silicon meanwhile — a missing board is never a reason to park.
+**Where a board comes from, in order:** (1) this box (`tt-smi -s`); (2) **another worker of this run**
+that has the board — `legs.sh request` / `wait` (§0c), minutes per leg and no CI budget; (3) another box
+of the user's that already has the board — `ListAgents` shows their other sessions and the hostnames in
+the user's notes; use it only if `ssh <host> true` works with the keys you have (never add keys or change
+auth to get there), through that host's device lock; (4) **CI silicon**, above. This skill does not
+reserve machines: if the user wants a reservation it is a line in the report, and the item proceeds
+through a remote leg or CI silicon meanwhile — a missing board is never a reason to park.
 
 **Fix:** `mkwt.sh <issue>-<item> <me>/<branch>`. Minimal fix derived from the codebase's correct
 sibling usage. **Check the sibling arch** for the same defect — same line is not the same bug, but a
@@ -503,7 +583,9 @@ pair, rerun-failed-jobs alike):
 $SKILL/scripts/ci_budget.sh [--need-nightly 2]   # 2 when LLK e2e is needed too; exit 0 = go, 1 = queue
 ```
 Exit 1 → the PR's status becomes `ci-queue(<since>)` in the ledger and **nothing else about it
-waits**: reviews stay answered, and the scheduler moves to other items. The queue drains in order,
+waits**: reviews stay answered, and the scheduler moves to other items. Exit 0 → dispatch, then
+`ci_budget.sh --verify` at once: exit 1 means a lane is over its cap after all (only another worker of
+yours on another box can cause it, §0c) — cancel what you just dispatched and re-queue. The queue drains in order,
 PRs nearest to done first (a re-run after a one-line CI fix before a first run), one PR per freed
 slot, whenever a run of yours completes — check the budget in step 1 of the loop, not on a timer. Both
 lanes of a PR are dispatched together or not at all, so a PR never holds a Sanity slot while waiting
@@ -609,4 +691,7 @@ Then, separately:
 
 Write it to the ledger, update the resume note, run a final `findings.py sync`, and — unattended —
 `touch $MASTER_ISSUE_DIR/<run-name>/DONE` **only now**: not while any PR is in `ci-queue`, `ci`, or
-`bot-review`, and not while any item is `in-progress`.
+`bot-review`, and not while any item is `in-progress`. A worker (§0c) writes
+`workers/<name>/DONE` instead, and "in-progress" means *its own* items: the other worker's open items
+and claims are listed in the report, not waited for. `--plan-only` ends with the plan summary in
+`ledger-plan.md` and the synced file — no DONE, no worktrees, no PRs.
