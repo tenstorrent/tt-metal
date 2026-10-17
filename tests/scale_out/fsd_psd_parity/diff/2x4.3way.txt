@@ -1,9 +1,0 @@
-=== 2x4: 3-way placement comparison  (PSD = tt-run discovery | FSD = tt-run offline #52859 | FM = Fabric Manager builder) ===
---- PSD vs FSD ---
-  (no differences)
---- FSD vs FM  ---
-  (no differences)
---- PSD vs FM  ---
-  (no differences)
-
-RESULT: IDENTICAL placement across PSD, FSD, FM

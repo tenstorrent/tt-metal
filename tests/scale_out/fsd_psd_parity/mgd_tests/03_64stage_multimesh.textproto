@@ -1,0 +1,79 @@
+# TEST FILE 3: MULTIMESH, 64 stages (half Blackhole galaxy [4x4]=16 chips per mesh)
+# FSD: SC36_32x4_revC_subtorus_aisleD (1152 chips). 64 meshes x 16 = 1024 chips. NOT big mesh.
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 5 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 6 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 7 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 8 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 9 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 10 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 11 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 12 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 13 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 14 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 15 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 16 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 17 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 18 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 19 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 20 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 21 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 22 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 23 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 24 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 25 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 26 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 27 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 28 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 29 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 30 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 31 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 32 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 33 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 34 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 35 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 36 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 37 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 38 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 39 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 40 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 41 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 42 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 43 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 44 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 45 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 46 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 47 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 48 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 49 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 50 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 51 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 52 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 53 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 54 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 55 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 56 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 57 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 58 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 59 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 60 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 61 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 62 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 63 } }
+  graph_topology: { layout_type: RING channels { count: 4 policy: RELAXED } }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

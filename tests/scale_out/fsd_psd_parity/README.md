@@ -1,117 +1,91 @@
-# FSD vs PSD vs FM rank-binding parity (quietbox, latest tt-metal)
+# Multimesh pipeline-stage rank bindings — SC16 capacity limit + the correct run recipe
 
-**Question:** do the three routes that can produce rank bindings for the *same machines* agree?
+Two multimesh "pipeline-stage" MGDs, each a set of **separate meshes joined in a RING**
+(a pipeline of stages) — **not** one big mesh:
 
-| label | route | how the PhysicalSystemDescriptor is built |
-|-------|-------|-------------------------------------------|
-| **PSD** | tt-run, normal path | from **live hardware discovery** (this is what the committed golden placement is) |
-| **FSD** | tt-run, offline path ([#52859](https://github.com/tenstorrent/tt-metal/issues/52859)) | **offline from the Factory System Descriptor** via FM's ported builder `build_physical_descriptor_from_file` |
-| **FM** | Fabric Manager | FM's own `build_physical_descriptor_from_file` (the FSD path *is* FM's ported builder, so FM ≡ FSD by construction here) |
+| file | stages (meshes) | per-stage device topology | chips / stage | total chips | galaxies needed |
+|------|-----------------|---------------------------|---------------|-------------|-----------------|
+| [`mgd_tests/01_homogeneous_36stage_multimesh.textproto`](mgd_tests/01_homogeneous_36stage_multimesh.textproto) | 36 | `[8,4]` = full galaxy | 32 | **1152** | **36** |
+| [`mgd_tests/03_64stage_multimesh.textproto`](mgd_tests/03_64stage_multimesh.textproto) | 64 | `[4,4]` = half galaxy | 16 | **1024** | **32** |
 
-**Answer: IDENTICAL placement across PSD, FSD, and FM — on both MGDs tested (4×4 torus and 2×4).**
-
-Fixture: `tests/scale_out/4x_bh_quietbox/` (4 hosts × 16 P150, `ClusterType::P150_X4`).
+Each Blackhole galaxy host = 32 chips. "Galaxies needed" = ⌈total chips / 32⌉.
 
 ---
 
-## Provenance of each column (so nothing is overclaimed)
+## Result on SC16: both files FAIL Mapping (hard capacity limit)
 
-- **PSD** — the committed golden `tests/scale_out/4x_bh_quietbox/rank_bindings/{4x4,2x4}.yaml`. That golden is the output of tt-run's normal **live-discovery** PSD route.
-- **FSD** — generated here by running `generate_rank_bindings` with `TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH` set, so the PSD is built **offline from the FSD** (no hardware, no discovery) and then fed the **same `map_multi_mesh_to_physical` mapper** tt-run uses. Binary rebuilt with the #52859 wiring; run logs prove the offline path was taken.
-- **FM** — Fabric Manager's placement. The #52859 FSD path is literally FM's builder (`controller/physical_system_descriptor_builder.cpp`) ported into tt-metal, so the **FM column equals the FSD column by construction**. The one thing still pending is a number pulled from the **live ttfm-ui service** (that host does not resolve from this sandbox) — recipe to fetch it is at the bottom.
+**SC16 = 16 galaxies = 512 chips.** Both files ask for more logical chips than SC16 has,
+so no placement exists. Ran on **two** SC16 FSDs (`SC16_32x4_revAB_aisleD`,
+`SC16_32x4_revC_aisleC`), **both routes** (PSD live-discovery and FSD offline, `np=16`):
 
-### Proof the FSD route took the offline path (not live discovery)
+| file | SC16 chips available | chips required | solver verdict |
+|------|----------------------|----------------|----------------|
+| 01 (36-stage) | 512 | 1152 | `SAT joint placement: no placement found … candidate lists COMPLETE — the UNSAT verdict is trustworthy` |
+| 03 (64-stage) | 512 | 1024 | `no placement found` (UNSAT; larger search truncated at the solver cap, still no placement) |
 
-From [`logs/4x4_run.log`](logs/4x4_run.log):
+- **PSD vs FSD make no difference here** — this is capacity, not route. The FSD offline path
+  (#52859) and the PSD live-discovery path hit the identical physical ceiling.
+- **"Splitting" does not help.** Splitting spreads one mesh *across* hosts; it never lets two
+  logical chips share one physical chip. 1152 (or 1024) logical chips cannot occupy 512 physical
+  chips. The solver proves this (UNSAT), it does not merely fail to find a mapping.
 
-```
-Stage: Building Physical System Descriptor OFFLINE from Factory System Descriptor
-  (.../factory_system_descriptor_4x_bh_quietbox.textproto)...   (generate_rank_bindings.cpp:635)
-Offline FSD->PSD build complete                                 (generate_rank_bindings.cpp:639)
-```
-
-No chip/cluster detection — the PSD came entirely from the FSD. Re-running is byte-identical (deterministic).
-
----
-
-## The 3-way diff (the result)
-
-Normalized placement = the `(rank, mesh_id, mesh_host_rank)` triple per rank — the whole logical
-placement the FSD/FM route owns. (The offline route emits **no `TT_VISIBLE_DEVICES`** — a host-local
-device index only the *live* cluster can supply; the goldens carry none either.)
-
-### 4×4 torus (`4x4_bh_torus_xy_mesh_graph_descriptor`) — [full 3-way diff](diff/4x4.3way.txt)
-
-| rank | PSD ([file](../4x_bh_quietbox/rank_bindings/4x4.yaml)) | FSD ([file](rank_bindings/4x4_fsd_rank_bindings.yaml)) | FM (ported builder) |
-|------|-----|-----|-----|
-| 0 | mesh 0 / host-rank 0 | mesh 0 / host-rank 0 | mesh 0 / host-rank 0 |
-| 1 | mesh 0 / host-rank 1 | mesh 0 / host-rank 1 | mesh 0 / host-rank 1 |
-| 2 | mesh 0 / host-rank 2 | mesh 0 / host-rank 2 | mesh 0 / host-rank 2 |
-| 3 | mesh 0 / host-rank 3 | mesh 0 / host-rank 3 | mesh 0 / host-rank 3 |
-
-```
-PSD vs FSD : (no differences)
-FSD vs FM  : (no differences)
-PSD vs FM  : (no differences)
-```
-**RESULT: IDENTICAL across PSD, FSD, FM.**
-
-### 2×4 (`2x4_bh_mesh_graph_descriptor`) — [full 3-way diff](diff/2x4.3way.txt)
-
-| rank | PSD ([file](../4x_bh_quietbox/rank_bindings/2x4.yaml)) | FSD ([file](rank_bindings/2x4_fsd_rank_bindings.yaml)) | FM (ported builder) |
-|------|-----|-----|-----|
-| 0 | mesh 0 / host-rank 0 | mesh 0 / host-rank 0 | mesh 0 / host-rank 0 |
-| 1 | mesh 0 / host-rank 1 | mesh 0 / host-rank 1 | mesh 0 / host-rank 1 |
-
-```
-PSD vs FSD : (no differences)
-FSD vs FM  : (no differences)
-PSD vs FM  : (no differences)
-```
-**RESULT: IDENTICAL across PSD, FSD, FM.**
-
-> The only non-placement differences vs the golden `.yaml` are a hand-authored `global_env:` block +
-> comments (curated into the fixture, never emitted by `generate_rank_bindings`) and an
-> absolute-vs-relative `mesh_graph_desc_path`. The rank↔mesh↔host placement is identical.
+Trimmed solver logs for all runs: [`results/sc16_unsat/`](results/sc16_unsat/). The definitive,
+*complete-candidate* UNSAT is
+[`SC16_32x4_revAB_aisleD__file01_PSD.log`](results/sc16_unsat/SC16_32x4_revAB_aisleD__file01_PSD.log).
 
 ---
 
-## Why they agree
+## How to actually run them (a system with enough galaxies)
 
-All three routes converge on the **same `PhysicalSystemDescriptor` type** and feed the **same
-`map_multi_mesh_to_physical` mapper**. Identical topology ⇒ identical placement. PSD builds that
-descriptor from live discovery; FSD/FM build it offline from the factory descriptor. The offline
-route adds no `TT_VISIBLE_DEVICES` (host-local, live-cluster-only) — the one field it cannot resolve.
+File 01 needs ≥36 galaxies, File 03 needs ≥32. **`SC36_32x4_revC_subtorus_aisleD` (36 galaxies)
+fits both.** On SC36 both pass Mapping and emit one rank binding per stage:
 
----
+| file | system | np | result | bindings |
+|------|--------|----|--------|----------|
+| 01 (36-stage) | SC36_32x4_revC_subtorus_aisleD | 36 | **Mapping OK** | [`rank_bindings/01_homogeneous_36stage_sc36_rank_bindings.yaml`](rank_bindings/01_homogeneous_36stage_sc36_rank_bindings.yaml) (36) |
+| 03 (64-stage) | SC36_32x4_revC_subtorus_aisleD | 36 | capacity fits (1024 ≤ 1152); **placement solve heavy** — see note | _(pending)_ |
 
-## Files in this report
+> **File 03 solver note.** File 03's stages are half-galaxy `[4,4]`, which the physical-grouping
+> matcher resolves to **624 candidate groupings per mesh** (`4x4_Mesh_flat`, `4x4_SplitHost_flat`,
+> TORUSX/Y/XY variants…). Across 64 meshes that is an enormous joint-placement SAT. File 01's
+> full-galaxy `[8,4]` stages match a galaxy cleanly and solve in ~2 s; File 03 did **not** converge
+> within a 420 s budget and is being re-run with a longer budget. This is a **solver-scaling** limit
+> for many ambiguous sub-galaxy stages, not a capacity limit — see the kissat SAT-engine work
+> ([#56920](https://github.com/tenstorrent/tt-metal/pull/56920)) for the convergence angle. Bindings
+> will be added here once the solve lands.
 
-| path | what |
-|------|------|
-| [`rank_bindings/4x4_fsd_rank_bindings.yaml`](rank_bindings/4x4_fsd_rank_bindings.yaml) · [`2x4`](rank_bindings/2x4_fsd_rank_bindings.yaml) | **FSD** column (= FM) outputs |
-| [`../4x_bh_quietbox/rank_bindings/4x4.yaml`](../4x_bh_quietbox/rank_bindings/4x4.yaml) · [`2x4`](../4x_bh_quietbox/rank_bindings/2x4.yaml) | **PSD** column (committed goldens) |
-| [`diff/4x4.3way.txt`](diff/4x4.3way.txt) · [`2x4`](diff/2x4.3way.txt) | the 3-way PSD/FSD/FM diffs (both IDENTICAL) |
-| [`logs/4x4_run.log`](logs/4x4_run.log) · [`2x4`](logs/2x4_run.log) | run logs (prove offline FSD build) |
-| [`experiment_C_52859.patch`](experiment_C_52859.patch) | the #52859 FSD-route wiring (experiment only — **not committed**) |
-| [`run_fsd_route.sh`](run_fsd_route.sh) | reproduce the FSD/FM solve |
-| [`report.html`](report.html) | same report as a standalone web page |
+### Run recipe (CPU-only, mock discovery = PSD route)
 
-## Reproduce
+One MPI rank per host; each rank reads one per-host mock cluster descriptor via
+`TT_METAL_MOCK_CLUSTER_DESC_PATH`. `rank_paths.txt` lists those per-host descriptors in rank
+order (built from the supercluster's `*_cluster_desc/*_rank_N.yaml` files).
 
 ```bash
 cd /workspace/group/tt-metal
-patch -p1 < experiment_C_52859.patch
-ninja -C build_Release generate_rank_bindings
-./run_fsd_route.sh 4x4_bh_torus_xy_mesh_graph_descriptor /tmp/c_4x4
-# FSD vs PSD:
-diff <(grep -E 'rank:|mesh_id:|mesh_host_rank:' /tmp/c_4x4/rank_bindings.yaml) \
-     <(grep -E 'rank:|mesh_id:|mesh_host_rank:' tests/scale_out/4x_bh_quietbox/rank_bindings/4x4.yaml)
+export TT_METAL_HOME=/workspace/group/tt-metal
+
+# rank_wrapper.sh exports TT_METAL_MOCK_CLUSTER_DESC_PATH=$(sed -n "$((RANK+1))p" rank_paths.txt)
+mpirun --allow-run-as-root --oversubscribe -x TT_METAL_HOME -np 36 \
+  ./rank_wrapper.sh <out_dir> \
+  build_Release/tools/scaleout/generate_rank_bindings \
+  -m tests/scale_out/fsd_psd_parity/mgd_tests/01_homogeneous_36stage_multimesh.textproto \
+  -o <out_dir>
 ```
 
-### Getting the *live* FM (ttfm-ui) number for the FM column
+### FSD route (offline-from-FSD, #52859)
 
-The FM column here is FM's ported builder. To diff against the live FM service, in **ttfm-ui**:
-Placement → paste the MGD → `Source = FSD` → select the quietbox hosts → Compute → download
-`rank_bindings.yaml`, then diff its `(rank, mesh_id, mesh_host_rank)` triples against
-[`rank_bindings/4x4_fsd_rank_bindings.yaml`](rank_bindings/4x4_fsd_rank_bindings.yaml).
+Same command, additionally `-x TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=<fsd.textproto>`.
+On this tree the FSD offline builder falls back to the PSD mapper (#52859), so for a system that
+*fits* the placement is identical to the PSD route; for a system that does **not** fit (SC16) both
+routes return the same UNSAT. See [`run_fsd_route.sh`](run_fsd_route.sh) and
+[`experiment_C_52859.patch`](experiment_C_52859.patch) for the offline wiring.
+
+---
+
+## TL;DR
+
+- **On SC16, files 01 and 03 cannot pass Mapping** — they need 1152 / 1024 chips, SC16 has 512.
+  Proven UNSAT, identical on PSD and FSD routes.
+- **Run them on SC36** (`SC36_32x4_revC_subtorus_aisleD`, 36 galaxies). File 01 passes Mapping
+  (36 bindings in [`rank_bindings/`](rank_bindings/)). File 03 is capacity-feasible there but its
+  half-galaxy stages make the placement SAT expensive — solve in progress.

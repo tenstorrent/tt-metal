@@ -1,0 +1,3 @@
+2026-10-17 05:36:07.278 | info     |          Fabric | Preparing topology mapping (1 MGD(s))... (generate_rank_bindings.cpp:183)
+2026-10-17 05:36:07.278 | info     |          Fabric | Inter-mesh validation mode: RELAXED (generate_rank_bindings.cpp:205)
+2026-10-17 05:36:07.773 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1848)

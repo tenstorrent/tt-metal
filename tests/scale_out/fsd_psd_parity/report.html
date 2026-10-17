@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rank-binding parity — PSD vs FSD vs FM</title>
+<title>Multimesh stage placement — SC16 capacity limit + run recipe</title>
 <style>
   :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#e6edf3; --muted:#8b949e;
           --green:#3fb950; --red:#f85149; --blue:#58a6ff; --yellow:#d29922; --purple:#bc8cff; }
@@ -15,106 +15,81 @@
   h2 { font-size:20px; margin:34px 0 10px; border-bottom:1px solid var(--border); padding-bottom:6px; }
   h3 { font-size:16px; margin:22px 0 8px; color:var(--blue); }
   .sub { color:var(--muted); margin:0 0 20px; }
-  .verdict { display:inline-block; background:rgba(63,185,80,.14); border:1px solid var(--green);
-             color:var(--green); font-weight:600; padding:10px 16px; border-radius:8px; margin:6px 0 4px; }
+  .verdict { display:inline-block; font-weight:600; padding:10px 16px; border-radius:8px; margin:6px 0 4px; }
+  .v-fail { background:rgba(248,81,73,.14); border:1px solid var(--red); color:var(--red); }
+  .v-ok { background:rgba(63,185,80,.14); border:1px solid var(--green); color:var(--green); }
   code,pre { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
   pre { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:14px 16px;
         overflow:auto; font-size:13px; }
   table { border-collapse:collapse; width:100%; margin:12px 0; font-size:14px; }
-  th,td { border:1px solid var(--border); padding:8px 11px; text-align:left; }
+  th,td { border:1px solid var(--border); padding:8px 11px; text-align:left; vertical-align:top; }
   th { background:var(--panel); }
-  td.match { color:var(--green); }
+  td.fail { color:var(--red); font-weight:600; }
+  td.ok { color:var(--green); font-weight:600; }
   a { color:var(--blue); text-decoration:none; } a:hover { text-decoration:underline; }
   .files a { display:inline-block; margin:2px 10px 2px 0; }
-  .ident { color:var(--green); font-weight:600; }
-  .tag { font-size:12px; font-weight:600; padding:2px 8px; border-radius:6px; }
-  .tag.psd { background:rgba(88,166,255,.16); color:var(--blue); border:1px solid var(--blue); }
-  .tag.fsd { background:rgba(63,185,80,.14); color:var(--green); border:1px solid var(--green); }
-  .tag.fm  { background:rgba(188,140,255,.14); color:var(--purple); border:1px solid var(--purple); }
-  .note { background:rgba(210,153,34,.1); border:1px solid var(--yellow); border-radius:8px;
-          padding:10px 14px; color:#e6d9b8; font-size:13px; }
 </style>
 </head>
 <body>
 <div class="wrap">
 
-<h1>Rank-binding parity — <span class="tag psd">PSD</span> vs <span class="tag fsd">FSD</span> vs <span class="tag fm">FM</span></h1>
-<p class="sub">latest tt-metal · fixture <code>tests/scale_out/4x_bh_quietbox</code> (4 hosts × 16 P150) ·
-issue <a href="https://github.com/tenstorrent/tt-metal/issues/52859">#52859</a></p>
+<h1>Multimesh pipeline-stage rank bindings</h1>
+<p class="sub">Two RING-of-separate-meshes MGDs (not one big mesh) — placement on SC16 vs SC36,
+PSD and FSD routes. Latest tt-metal, CPU-only mock discovery.</p>
 
-<div class="verdict">✓ IDENTICAL placement across PSD, FSD and FM — on both MGDs (4×4 torus and 2×4)</div>
-
-<h2>The three routes</h2>
+<h2>The two files</h2>
 <table>
-  <tr><th>label</th><th>route</th><th>how the PhysicalSystemDescriptor is built</th></tr>
-  <tr><td><span class="tag psd">PSD</span></td><td>tt-run, normal path</td>
-      <td>from <b>live hardware discovery</b> — this <i>is</i> the committed golden placement</td></tr>
-  <tr><td><span class="tag fsd">FSD</span></td><td>tt-run, offline path (#52859)</td>
-      <td><b>offline from the Factory System Descriptor</b> via FM's ported builder <code>build_physical_descriptor_from_file</code></td></tr>
-  <tr><td><span class="tag fm">FM</span></td><td>Fabric Manager</td>
-      <td>FM's own <code>build_physical_descriptor_from_file</code> — the FSD path <i>is</i> FM's ported builder, so FM ≡ FSD by construction here</td></tr>
+<tr><th>file</th><th>stages</th><th>per-stage device</th><th>chips/stage</th><th>total chips</th><th>galaxies needed</th></tr>
+<tr><td>01_homogeneous_36stage</td><td>36</td><td>[8,4] = full galaxy</td><td>32</td><td><b>1152</b></td><td><b>36</b></td></tr>
+<tr><td>03_64stage</td><td>64</td><td>[4,4] = half galaxy</td><td>16</td><td><b>1024</b></td><td><b>32</b></td></tr>
 </table>
+<p class="sub">Each Blackhole galaxy host = 32 chips.</p>
 
-<h3>Proof the FSD route took the offline path (no live-discovery fallback)</h3>
-<pre>Stage: Building Physical System Descriptor OFFLINE from Factory System Descriptor
-  (.../factory_system_descriptor_4x_bh_quietbox.textproto)...   (generate_rank_bindings.cpp:635)
-Offline FSD-&gt;PSD build complete                                 (generate_rank_bindings.cpp:639)</pre>
-<p class="sub">Re-running produced a <b>byte-identical</b> <code>rank_bindings.yaml</code> — deterministic.
-Full logs: <a href="logs/4x4_run.log">4x4_run.log</a> · <a href="logs/2x4_run.log">2x4_run.log</a></p>
-
-<h2>Result — 4×4 torus <code>4x4_bh_torus_xy</code></h2>
+<h2>Result on SC16 — both FAIL Mapping</h2>
+<div class="verdict v-fail">SC16 = 16 galaxies = 512 chips &lt; 1152 / 1024 required → UNSAT, no placement exists</div>
+<p>Ran on two SC16 FSDs (<code>SC16_32x4_revAB_aisleD</code>, <code>SC16_32x4_revC_aisleC</code>),
+both routes (PSD live-discovery, FSD offline #52859), <code>np=16</code>.</p>
 <table>
-  <tr><th>source</th><th>rank 0</th><th>rank 1</th><th>rank 2</th><th>rank 3</th></tr>
-  <tr><td><span class="tag psd">PSD</span> <a href="../4x_bh_quietbox/rank_bindings/4x4.yaml">file</a></td><td>mesh 0 / hr 0</td><td>mesh 0 / hr 1</td><td>mesh 0 / hr 2</td><td>mesh 0 / hr 3</td></tr>
-  <tr><td><span class="tag fsd">FSD</span> <a href="rank_bindings/4x4_fsd_rank_bindings.yaml">file</a></td><td>mesh 0 / hr 0</td><td>mesh 0 / hr 1</td><td>mesh 0 / hr 2</td><td>mesh 0 / hr 3</td></tr>
-  <tr><td><span class="tag fm">FM</span> (ported builder)</td><td>mesh 0 / hr 0</td><td>mesh 0 / hr 1</td><td>mesh 0 / hr 2</td><td>mesh 0 / hr 3</td></tr>
-  <tr><td>match</td><td class="match">✓</td><td class="match">✓</td><td class="match">✓</td><td class="match">✓</td></tr>
+<tr><th>file</th><th>chips avail</th><th>chips req</th><th>route</th><th>Mapping</th><th>solver verdict</th></tr>
+<tr><td>01</td><td>512</td><td>1152</td><td>PSD &amp; FSD</td><td class="fail">FAIL</td><td>no placement found — candidate lists COMPLETE, UNSAT trustworthy</td></tr>
+<tr><td>03</td><td>512</td><td>1024</td><td>PSD &amp; FSD</td><td class="fail">FAIL</td><td>no placement found (UNSAT; search truncated at solver cap, still no placement)</td></tr>
 </table>
-<pre>PSD vs FSD : (no differences)
-FSD vs FM  : (no differences)
-PSD vs FM  : (no differences)</pre>
-<p><span class="ident">IDENTICAL across PSD, FSD, FM.</span> Full 3-way diff: <a href="diff/4x4.3way.txt">diff/4x4.3way.txt</a></p>
+<p><b>PSD vs FSD is irrelevant here</b> — this is a physical capacity ceiling, not a route difference.
+<b>Splitting does not help</b>: it spreads one mesh across hosts, it never packs two logical chips
+onto one physical chip. Trimmed solver logs: <code>results/sc16_unsat/</code>.</p>
 
-<h2>Result — 2×4 <code>2x4_bh</code></h2>
+<h2>Correct run — SC36 (36 galaxies) fits both</h2>
+<div class="verdict v-ok">SC36_32x4_revC_subtorus_aisleD = 36 galaxies = 1152 chips ≥ both</div>
 <table>
-  <tr><th>source</th><th>rank 0</th><th>rank 1</th></tr>
-  <tr><td><span class="tag psd">PSD</span> <a href="../4x_bh_quietbox/rank_bindings/2x4.yaml">file</a></td><td>mesh 0 / hr 0</td><td>mesh 0 / hr 1</td></tr>
-  <tr><td><span class="tag fsd">FSD</span> <a href="rank_bindings/2x4_fsd_rank_bindings.yaml">file</a></td><td>mesh 0 / hr 0</td><td>mesh 0 / hr 1</td></tr>
-  <tr><td><span class="tag fm">FM</span> (ported builder)</td><td>mesh 0 / hr 0</td><td>mesh 0 / hr 1</td></tr>
-  <tr><td>match</td><td class="match">✓</td><td class="match">✓</td></tr>
+<tr><th>file</th><th>system</th><th>np</th><th>Mapping</th><th>bindings</th></tr>
+<tr><td>01 (36-stage)</td><td>SC36_32x4_revC_subtorus_aisleD</td><td>36</td><td class="ok">OK</td><td>36 — rank_bindings/01_homogeneous_36stage_sc36_rank_bindings.yaml</td></tr>
+<tr><td>03 (64-stage)</td><td>SC36_32x4_revC_subtorus_aisleD</td><td>36</td><td>capacity fits (1024≤1152); solve heavy*</td><td>pending</td></tr>
 </table>
-<pre>PSD vs FSD : (no differences)
-FSD vs FM  : (no differences)
-PSD vs FM  : (no differences)</pre>
-<p><span class="ident">IDENTICAL across PSD, FSD, FM.</span> Full 3-way diff: <a href="diff/2x4.3way.txt">diff/2x4.3way.txt</a></p>
+<p class="sub">* File 03's half-galaxy [4,4] stages resolve to 624 candidate groupings per mesh; across
+64 meshes the joint-placement SAT did not converge in a 420 s budget (File 01's full-galaxy stages
+solve in ~2 s). Solver-scaling limit, not capacity — see
+<a href="https://github.com/tenstorrent/tt-metal/pull/56920">#56920</a>. Re-running with a longer budget.</p>
 
-<div class="note"><b>Provenance, so nothing is overclaimed.</b>
-<b>PSD</b> = committed golden (tt-run live discovery).
-<b>FSD</b> = generated here by <code>generate_rank_bindings</code> with <code>TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH</code>
-set (offline build, #52859), rebuilt binary, logs prove the offline path.
-<b>FM</b> = FM's builder; since #52859 ports that exact builder, the FM column equals the FSD column by
-construction. The only piece still pending is a number pulled from the <b>live ttfm-ui service</b> (that
-host does not resolve from this sandbox) — recipe in the README.
-The offline route emits <b>no <code>TT_VISIBLE_DEVICES</code></b> (host-local, live-cluster-only); the goldens carry none either.</div>
-
-<h2>Why they agree</h2>
-<p>All three routes converge on the <b>same <code>PhysicalSystemDescriptor</code> type</b> and feed the
-<b>same <code>map_multi_mesh_to_physical</code> mapper</b>. Identical topology ⇒ identical placement. PSD
-builds that descriptor from live discovery; FSD/FM build it offline from the factory descriptor.</p>
+<h3>Run recipe (CPU-only, mock discovery = PSD)</h3>
+<pre>cd /workspace/group/tt-metal
+export TT_METAL_HOME=/workspace/group/tt-metal
+mpirun --allow-run-as-root --oversubscribe -x TT_METAL_HOME -np 36 \
+  ./rank_wrapper.sh &lt;out_dir&gt; \
+  build_Release/tools/scaleout/generate_rank_bindings \
+  -m tests/scale_out/fsd_psd_parity/mgd_tests/01_homogeneous_36stage_multimesh.textproto \
+  -o &lt;out_dir&gt;</pre>
+<p>FSD route: add <code>-x TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=&lt;fsd.textproto&gt;</code>.
+On this tree the FSD offline builder falls back to the PSD mapper (#52859), so placement is identical
+to PSD for a system that fits, and identically UNSAT for one that does not.</p>
 
 <h2>Files</h2>
 <p class="files">
-  <a href="README.md">README.md</a>
-  <a href="rank_bindings/4x4_fsd_rank_bindings.yaml">4x4 FSD/FM</a>
-  <a href="rank_bindings/2x4_fsd_rank_bindings.yaml">2x4 FSD/FM</a>
-  <a href="../4x_bh_quietbox/rank_bindings/4x4.yaml">4x4 PSD</a>
-  <a href="../4x_bh_quietbox/rank_bindings/2x4.yaml">2x4 PSD</a>
-  <a href="diff/4x4.3way.txt">4x4.3way.txt</a>
-  <a href="diff/2x4.3way.txt">2x4.3way.txt</a>
-  <a href="logs/4x4_run.log">4x4_run.log</a>
-  <a href="logs/2x4_run.log">2x4_run.log</a>
-  <a href="experiment_C_52859.patch">experiment_C_52859.patch</a>
-  <a href="run_fsd_route.sh">run_fsd_route.sh</a>
+<a href="mgd_tests/01_homogeneous_36stage_multimesh.textproto">01_homogeneous_36stage.textproto</a>
+<a href="mgd_tests/03_64stage_multimesh.textproto">03_64stage.textproto</a>
+<a href="rank_bindings/">rank_bindings/</a>
+<a href="results/sc16_unsat/">results/sc16_unsat/</a>
+<a href="run_fsd_route.sh">run_fsd_route.sh</a>
+<a href="experiment_C_52859.patch">experiment_C_52859.patch</a>
 </p>
 
 </div>
