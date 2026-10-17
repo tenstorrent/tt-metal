@@ -8,6 +8,7 @@ from itertools import product
 
 import pytest
 import torch
+from conftest import blackhole_only
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.data_format_inference import effective_dest_acc
@@ -60,6 +61,7 @@ from helpers.test_variant_parameters import (
     SFPU_RELU_MAX_THRESHOLD,
     SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
+    SFPU_ZERO_COMP_LLK,
     TILE_COUNT,
     DestSync,
     generate_input_dim,
@@ -703,6 +705,56 @@ def test_sqrt_family_negative_zero_regression(
     assert torch.allclose(res[3:], torch.tensor(expected), rtol=1e-2, atol=0.0), (
         f"{op}(4.0) is no longer ~{expected} on the lanes around the probes "
         f"(max deviation {(res[3:] - expected).abs().max().item():.6g})."
+    )
+
+
+# https://github.com/tenstorrent/tt-llk/issues/1701 item 4: tt-llk _calculate_zero_comp_ counted -0.0 as
+# negative in ltz/gez. gtz/lez are controls; eqz/nez are item 6 and are tested with that fix.
+_ZERO_COMP_SIGNED_ZERO_INPUTS = [
+    0.0,
+    -0.0,
+    1.0,
+    -1.0,
+    1.0e-45,  # smallest +denormal (Float32 unpack-to-dest delivers it intact)
+    -1.0e-45,  # smallest -denormal
+    1.1754944e-38,  # smallest +normal
+    -1.1754944e-38,
+    3.0e38,  # large finite, just below FLT_MAX
+    -3.0e38,
+    float("inf"),
+    float("-inf"),
+]
+
+_ZERO_COMP_OPS = [
+    MathOperation.LessThanZero,
+    MathOperation.GreaterThanEqualZero,
+    MathOperation.GreaterThanZero,
+    MathOperation.LessThanEqualZero,
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "mathop",
+    _ZERO_COMP_OPS,
+    ids=[build_param_id(["mathop"], (op,)) for op in _ZERO_COMP_OPS],
+)
+def test_llk_zero_comp_signed_zero(mathop):
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    # Without a real -0.0 in Dest the -0.0 lanes would pass on the unfixed kernel too.
+    assert negative_zero_delivered(formats.input_format, dest_acc)
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [32, 32],
+        spec_A=StimuliSpec.custom(values=_ZERO_COMP_SIGNED_ZERO_INPUTS, seed=0),
+        zero_comp_llk=True,
     )
 
 
@@ -1376,6 +1428,7 @@ def eltwise_unary_sfpu(
     polygamma_order=None,
     twos_complement=False,
     gate_on_step_budget=False,
+    zero_comp_llk=False,
 ):
     """*gate_on_step_budget* is for a caller whose hand-built stimulus the op's step
     budget was measured on (``MEASURED_ON_SWEEP`` in test_sfpu_accuracy_budget.py): it
@@ -1465,6 +1518,7 @@ def eltwise_unary_sfpu(
                 if polygamma_order is None
                 else [SFPU_POLYGAMMA_ORDER(polygamma_order)]
             ),
+            *([SFPU_ZERO_COMP_LLK()] if zero_comp_llk else []),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

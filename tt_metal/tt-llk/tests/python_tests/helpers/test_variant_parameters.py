@@ -455,6 +455,15 @@ class SFPU_SHIFT_AMOUNT(TemplateParameter):
 
 
 @dataclass
+class SFPU_ZERO_COMP_LLK(TemplateParameter):
+    """Route the float compares against zero to the tt-llk ``_calculate_zero_comp_`` instead of
+    the metal ``calculate_comp``; the tt-llk entry point has no production caller."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define SFPU_ZERO_COMP_LLK"
+
+
+@dataclass
 class SFPU_POLYGAMMA_ORDER(TemplateParameter):
     """Order n for polygamma, emitted as the (n, scale) fp32 bit patterns ttnn passes.
 
