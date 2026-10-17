@@ -27,6 +27,7 @@ thresholds:                # accuracy gates (PCC lower limits unless named other
   block: 0.98
   layer: 0.97
   state: 0.97
+  state_overlap: 0.9       # F99: integer states (top-k index lists): mean per-row set overlap with the golden (lower limit; a wrong selector gives ~k/n)
   final_hidden: 0.97
   top5: 0.9
   swap_step_rel: 0.02      # swapped step vs the CPU step on the same inputs: rel L2 (upper limit)
