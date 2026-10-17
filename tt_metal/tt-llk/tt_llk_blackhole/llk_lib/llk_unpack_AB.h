@@ -232,6 +232,9 @@ inline void _llk_unpack_AB_uninit_()
  *        the row offset and drives the BFP check)
  * @note Call @ref _llk_unpack_AB_init_ with matching template args before this function, and
  *       @ref _llk_unpack_AB_uninit_ after it to restore modified state.
+ * @note For bcast_row_idx 17..31 the second SrcB face read ends (bcast_row_idx - 16) rows past the B
+ *       tile (up to 480 B at Float16_b); those rows are never consumed, but keep them readable memory
+ *       when B is the last tile of a buffer.
  * @ref _llk_math_eltwise_binary_ on the math thread consumes the SrcA/SrcB tiles unpacked here.
  */
 
@@ -248,7 +251,8 @@ inline void _llk_unpack_AB_(
     {
         LLK_ASSERT(bcast_row_idx < TILE_R_DIM, "bcast_row_idx must be < 32 (row within the B tile)");
         // The row select below shifts the base address by whole rows of mantissas. A BFP tile keeps one
-        // shared exponent per row in a 64 B header at the base, so no base shift selects a BFP row.
+        // shared exponent per 16-datum face row (64 per tile, the 64 B header at the base), so no base
+        // shift selects a BFP row.
         LLK_ASSERT(
             bcast_row_idx == 0 || !IS_BFP_FORMAT(srcb_format),
             "ROW broadcast row select requires a non-BFP operand B (shared-exponent tiles cannot be row-addressed)");

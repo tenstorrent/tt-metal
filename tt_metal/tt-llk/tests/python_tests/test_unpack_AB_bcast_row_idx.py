@@ -4,10 +4,9 @@
 
 """``_llk_unpack_AB_<ROW>`` with an explicit ``bcast_row_idx``.
 
-One 32x32 tile, ``Res = A + row_bcast(B, idx)``. The broadcast row of a 32x32 tile spans two
-faces (cols 0-15 in face 0/2, cols 16-31 in face 1/3), so row ``idx`` of the tile is row
-``idx % 16`` of faces ``(0, 1)`` for ``idx < 16`` and of faces ``(2, 3)`` otherwise; every output
-face repeats its column half of that row.
+One 32x32 tile, ``Res = A + row_bcast(B, idx)``; the golden is ``BroadcastGolden`` with its
+``row_idx`` (row ``idx`` of the tile is row ``idx % 16`` of faces ``(0, 1)`` for ``idx < 16`` and
+of faces ``(2, 3)`` otherwise; every output face repeats its column half of that row).
 
 The guard cases pin the two checks in the ROW branch of ``_llk_unpack_AB_``: an index past the
 tile (which otherwise silently reads a row of whatever follows the tile in L1) and a BFP operand B
@@ -23,7 +22,11 @@ import torch
 from conftest import skip_for_quasar
 from helpers.device import TRISC_CORES, LLKAssertException, commit_tensix_soft_reset
 from helpers.format_config import DataFormat
-from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
+from helpers.golden_generators import (
+    BroadcastGolden,
+    EltwiseBinaryGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import (
     BroadcastType,
     DestAccumulation,
@@ -34,7 +37,7 @@ from helpers.llk_params import (
 from helpers.param_config import input_output_formats, parametrize, runtime
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     BCAST_ROW_IDX,
     BROADCAST_TYPE,
@@ -49,7 +52,6 @@ from helpers.utils import passed_test
 pytestmark = skip_for_quasar
 
 FACE_DIM = 16
-FACE_SIZE = FACE_DIM * FACE_DIM
 INPUT_DIMENSIONS = [32, 32]
 # One source for the kernel templates and the golden.
 BCAST_OP = MathOperation.Elwadd
@@ -58,20 +60,6 @@ BCAST_FIDELITY = MathFidelity.LoFi
 ROW_BCAST_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Bfp8_b], same=True
 )
-
-
-def row_broadcast_tile(tile_b: torch.Tensor, row_idx: int) -> torch.Tensor:
-    """Tilized 32x32 tile whose every row is row ``row_idx`` of ``tile_b`` (tilized)."""
-    first_face = 0 if row_idx < FACE_DIM else 2
-    row_in_face = row_idx % FACE_DIM
-
-    def face_row(face: int) -> torch.Tensor:
-        start = face * FACE_SIZE + row_in_face * FACE_DIM
-        return tile_b[start : start + FACE_DIM]
-
-    left = face_row(first_face).repeat(FACE_DIM)
-    right = face_row(first_face + 1).repeat(FACE_DIM)
-    return torch.cat([left, right, left, right])
 
 
 def _make_config(formats, bcast_row_idx):
@@ -158,10 +146,12 @@ def test_unpack_AB_bcast_row_idx_rejected(formats, bcast_row_idx):
     finally:
         # Hold the TRISCs in reset: the next test writes its runtime block before it resets them,
         # and a non-zero value at the gate's offset would release the still-spinning math/pack
-        # threads into Tensix instructions that the soft reset does not clear.
-        commit_tensix_soft_reset(
-            1, cores=TRISC_CORES, location=TestConfig.TENSIX_LOCATION
-        )
+        # threads into Tensix instructions that the soft reset does not clear. The compile
+        # producer skips inside run() after building the ELFs, with no device context.
+        if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+            commit_tensix_soft_reset(
+                1, cores=TRISC_CORES, location=TestConfig.TENSIX_LOCATION
+            )
 
 
 @parametrize(
@@ -171,17 +161,27 @@ def test_unpack_AB_bcast_row_idx_rejected(formats, bcast_row_idx):
 def test_unpack_AB_bcast_row_idx(formats, bcast_row_idx):
     configuration, src_A_tilized, src_B_tilized = _make_config(formats, bcast_row_idx)
 
-    # The same 16-datum groups are quantized before and after the row select (each output face row
-    # is one source face row), so the golden can quantize the broadcast operand itself.
+    # BroadcastGolden quantizes B in its own format before the row select, so the binary golden
+    # must not quantize it again (input_format_B=None).
+    broadcast_golden = get_golden_generator(BroadcastGolden)
+    src_B_broadcast = broadcast_golden(
+        BroadcastType.Row,
+        src_B_tilized,
+        formats.input_format,
+        num_faces=4,
+        tile_cnt=1,
+        face_r_dim=FACE_DIM,
+        row_idx=bcast_row_idx,
+    )
     binary_golden = get_golden_generator(EltwiseBinaryGolden)
     golden_tensor = binary_golden(
         BCAST_OP,
         src_A_tilized,
-        row_broadcast_tile(src_B_tilized, bcast_row_idx),
+        src_B_broadcast,
         formats.output_format,
         BCAST_FIDELITY,
         input_format=formats.input_format,
-        input_format_B=formats.input_format,
+        input_format_B=None,
     )
 
     res_from_L1 = configuration.run().result
