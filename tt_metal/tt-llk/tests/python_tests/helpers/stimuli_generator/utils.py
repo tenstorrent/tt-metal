@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 import torch
 
 from ..format_config import MX_FORMAT_MAX_NORMAL, MX_FORMAT_MIN_MAGNITUDE, DataFormat
-from ..llk_params import format_dict
+from ..llk_params import ReduceDimension, ReducePool, format_dict
 from ..tile_constants import (
     DEFAULT_TILE_C_DIM,
     DEFAULT_TILE_R_DIM,
@@ -846,3 +846,23 @@ def apply_log_uniform_magnitudes(
     values = signs * magnitudes
     values = torch.clamp(values, -max_magnitude, max_magnitude)
     return values.to(format_dict[cast_to_format])
+
+
+def reduce_scaler_value(
+    pool_type: ReducePool, reduce_dim: ReduceDimension, tile_dimensions: List[int]
+) -> float:
+    """
+    Value of the constant scaler tile (operand B) a reduce test feeds to the device.
+
+    MAX and SUM leave the pooled value as is (scaler 1). AVG divides by the number of
+    elements reduced: the tile width for a row reduce, the tile height for a column
+    reduce, and for the scalar reduce 1/sqrt(H*W), because the hardware applies the
+    scaler once per reduced axis (column pass, then row pass).
+    """
+    if pool_type in (ReducePool.Max, ReducePool.Sum):
+        return 1.0
+    if reduce_dim == ReduceDimension.Row:
+        return 1 / tile_dimensions[1]
+    if reduce_dim == ReduceDimension.Column:
+        return 1 / tile_dimensions[0]
+    return 1 / math.sqrt(tile_dimensions[0] * tile_dimensions[1])

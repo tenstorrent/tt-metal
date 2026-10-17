@@ -12,8 +12,6 @@
 extern std::uint32_t cfg_state_id;
 extern std::uint32_t unp_cfg_context;
 
-extern std::uint32_t volatile tt_l1_ptr l1_buffer[16];
-
 extern std::uint32_t pack_sync_tile_dst_ptr;
 extern std::uint32_t math_sync_tile_dst_index;
 
