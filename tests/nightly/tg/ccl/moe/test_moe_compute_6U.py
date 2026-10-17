@@ -10,6 +10,7 @@ import os
 import pytest
 import random
 import torch
+from typing import Sequence
 
 # Force torch CPU ops to use all cores. bf16 matmul on CPU is single-thread on
 # some torch builds even with OMP_NUM_THREADS set; this is the runtime knob.
@@ -689,6 +690,113 @@ def validate_e_t(mesh_device, total_tokens, experts_per_device, num_devices, e_t
     return e_t_all_passed
 
 
+####################################################################################################
+# Packed token lists of the local output path (moe_ring_common.h, namespace moe_ring::token_list).
+# MUST stay in sync with the constexpr equivalents there. The op's output 2 on that path is one
+# uint32 page: token_list_header_words() words of segment starts (offsets[0..experts_per_device],
+# the rest padding), then every local expert's 4-B entries (k_slot << 24 | token_id) back to back,
+# expert e's count_e entries at offsets[e]; segment starts are aligned to 16 entries.
+####################################################################################################
+TOKEN_LIST_TOKEN_BITS = 24
+TOKEN_LIST_SEGMENT_ALIGN_ENTRIES = 16
+TOKEN_LIST_ENTRY_BYTES = 4
+
+
+def token_list_align_entries(entries: int) -> int:
+    return -(-entries // TOKEN_LIST_SEGMENT_ALIGN_ENTRIES) * TOKEN_LIST_SEGMENT_ALIGN_ENTRIES
+
+
+def token_list_header_words(experts_per_device: int) -> int:
+    return token_list_align_entries(experts_per_device + 1)
+
+
+def token_list_entry_capacity(
+    tokens: int, selected_experts_k: int, experts_per_device: int, tokens_per_chunk: int = 32
+):
+    """Every (token, k slot) at most once, per-segment alignment padding, and one chunk of tail (dm1 reads whole chunks)."""
+    return (
+        token_list_align_entries(
+            tokens * selected_experts_k + (TOKEN_LIST_SEGMENT_ALIGN_ENTRIES - 1) * experts_per_device
+        )
+        + tokens_per_chunk
+    )
+
+
+def token_list_page_words(tokens: int, selected_experts_k: int, experts_per_device: int, tokens_per_chunk: int = 32):
+    return token_list_header_words(experts_per_device) + token_list_entry_capacity(
+        tokens, selected_experts_k, experts_per_device, tokens_per_chunk
+    )
+
+
+def token_list_segment_starts(counts: Sequence[int]) -> list[int]:
+    """offsets[0..E] from the per-expert counts: offsets[e + 1] = align16(offsets[e] + count_e)."""
+    starts = [0]
+    for count in counts:
+        starts.append(token_list_align_entries(starts[-1] + int(count)))
+    return starts
+
+
+def decode_packed_token_lists(page, experts_per_device: int, counts: Sequence[int] | None = None):
+    """``[(token_ids, k_slots)]`` per local expert from one device's packed page (a 1-D integer tensor or list).
+    With ``counts`` (output 0's per-expert counts) each list is trimmed to its expert's entries; without, a list
+    runs to the next segment start and includes the alignment padding."""
+    words = torch.as_tensor(page).flatten().to(torch.int64) & 0xFFFFFFFF
+    starts = words[: experts_per_device + 1].tolist()
+    entries = words[token_list_header_words(experts_per_device) :]
+    lists = []
+    for local_expert in range(experts_per_device):
+        stop = starts[local_expert] + int(counts[local_expert]) if counts is not None else starts[local_expert + 1]
+        segment = entries[starts[local_expert] : stop]
+        lists.append((segment & ((1 << TOKEN_LIST_TOKEN_BITS) - 1), segment >> TOKEN_LIST_TOKEN_BITS))
+    return lists
+
+
+def validate_packed_token_lists(mesh_device, experts_per_device, num_devices, e_t_output_tensor, golden_e_t, golden_k):
+    """The local output path's e_t output: per device and local expert, the packed entries must be the golden
+    token ids in list order (ascending token id) with the k slot each token routed the expert in. Entries past a
+    segment's count are padding and are not read."""
+    logger.info(f"\n========== Packed token lists (local output path) Validation ==========")
+    all_passed = True
+    e_t_torch = ttnn.to_torch(e_t_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    header_words = token_list_header_words(experts_per_device)
+    assert e_t_torch.shape[0] == num_devices, f"packed token lists: expected {num_devices} pages, got {e_t_torch.shape}"
+    for device_idx in range(num_devices):
+        counts = [len(golden_e_t[device_idx][local_exp_idx]) for local_exp_idx in range(experts_per_device)]
+        starts = (e_t_torch[device_idx].flatten().to(torch.int64) & 0xFFFFFFFF)[: experts_per_device + 1].tolist()
+        if starts != token_list_segment_starts(counts):
+            logger.warning(f"  Device {device_idx}: segment starts {starts[:8]}... differ from the alignment rule")
+            all_passed = False
+        lists = decode_packed_token_lists(e_t_torch[device_idx], experts_per_device, counts)
+        for local_exp_idx in range(experts_per_device):
+            expected_tokens = golden_e_t[device_idx][local_exp_idx]
+            token_ids, k_slots = lists[local_exp_idx]
+            count = len(expected_tokens)
+            if token_ids.numel() != count:
+                logger.warning(
+                    f"  Device {device_idx}, Expert {local_exp_idx}: segment holds {token_ids.numel()} entries, "
+                    f"expected {count}"
+                )
+                all_passed = False
+                continue
+            actual_tokens = token_ids[:count].tolist()
+            if actual_tokens != list(expected_tokens):
+                logger.warning(
+                    f"  Device {device_idx}, Expert {local_exp_idx}: token ids {actual_tokens[:8]}... != "
+                    f"{list(expected_tokens)[:8]}..."
+                )
+                all_passed = False
+                continue
+            expected_k = [golden_k[device_idx][local_exp_idx][t] for t in expected_tokens]
+            actual_k = k_slots[:count].tolist()
+            if actual_k != expected_k:
+                logger.warning(
+                    f"  Device {device_idx}, Expert {local_exp_idx}: k slots {actual_k[:8]}... != {expected_k[:8]}..."
+                )
+                all_passed = False
+    logger.info(f"Packed token lists: header {header_words} words, {'PASSED' if all_passed else 'FAILED'}")
+    return all_passed
+
+
 def prepare_output_tensor_from_combine_writer(
     raw_torch_output,
     active_token_counts,
@@ -1359,6 +1467,33 @@ def compute_e_t_golden(expert_indices, expert_mapping, mesh_shape, cluster_axis)
                 golden_e_t[target_device][local_expert_idx].append(global_token_id)
 
     return golden_e_t, experts_per_device
+
+
+def compute_e_t_k_slot_golden(expert_indices, expert_mapping, mesh_shape, cluster_axis):
+    """golden_k[device][local_expert][token_id] = the k slot in which that token routed to the expert (the second
+    word of a dense e_t entry, the high byte of a packed one)."""
+    num_devices = mesh_shape[0] * mesh_shape[1]
+    if cluster_axis == 1:
+        num_dispatch_devices = mesh_shape[1]
+    elif cluster_axis == 0:
+        num_dispatch_devices = mesh_shape[0]
+    else:
+        num_dispatch_devices = num_devices
+
+    tokens_per_device = expert_indices.shape[1]
+    selected_experts_k = expert_indices.shape[2]
+    experts = expert_mapping.shape[1]
+    experts_per_device = experts // num_devices
+
+    golden_k = {d: {e: {} for e in range(experts_per_device)} for d in range(num_devices)}
+    for src_device in range(num_dispatch_devices):
+        for t in range(tokens_per_device):
+            global_token_id = src_device * tokens_per_device + t
+            for k in range(selected_experts_k):
+                expert_id = expert_indices[src_device, t, k].item()
+                target_device = expert_mapping[src_device, expert_id].item()
+                golden_k[target_device][expert_id % experts_per_device][global_token_id] = k
+    return golden_k
 
 
 # hardcoded for GPT-OSS
