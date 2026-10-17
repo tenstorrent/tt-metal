@@ -24,6 +24,41 @@
 
 namespace tt::tt_fabric {
 
+// Test-only reference: logical adjacency read from a MeshGraph, to check build_adjacency_graph_logical(MGD) against it.
+std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical_from_mesh_graph(
+    const MeshGraph& mesh_graph) {
+    std::map<MeshId, AdjacencyGraph<FabricNodeId>> adjacency_map;
+
+    auto get_local_adjacents = [&](FabricNodeId fabric_node_id, MeshId mesh_id) {
+        auto adjacent_map = mesh_graph.get_intra_mesh_connectivity()[*mesh_id][fabric_node_id.chip_id];
+
+        std::vector<FabricNodeId> adjacents;
+        for (const auto& [neighbor_chip_id, edge] : adjacent_map) {
+            // Skip self-connections
+            if (neighbor_chip_id == fabric_node_id.chip_id) {
+                continue;
+            }
+            for (size_t i = 0; i < edge.connected_chip_ids.size(); ++i) {
+                adjacents.push_back(FabricNodeId(mesh_id, neighbor_chip_id));
+            }
+        }
+        return adjacents;
+    };
+
+    // Iterate over all mesh IDs from the mesh graph (including switches)
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+        AdjacencyGraph<FabricNodeId>::AdjacencyMap logical_adjacency_map;
+        for (const auto& [_, chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
+            auto fabric_node_id = FabricNodeId(mesh_id, chip_id);
+            logical_adjacency_map[fabric_node_id] = get_local_adjacents(fabric_node_id, mesh_id);
+        }
+        adjacency_map[mesh_id] = AdjacencyGraph<FabricNodeId>(logical_adjacency_map);
+    }
+
+    return adjacency_map;
+}
+
+
 namespace {
 
 template <typename TargetNode, typename GlobalNode>
@@ -136,7 +171,7 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogical) {
     auto mesh_graph = MeshGraph(cluster_type, mesh_graph_desc_path.string());
 
     // Build adjacency map logical (includes all meshes, including switches if present)
-    auto adjacency_map = build_adjacency_graph_logical(mesh_graph);
+    auto adjacency_map = build_adjacency_graph_logical_from_mesh_graph(mesh_graph);
 
     // Verify that we have adjacency graphs for each mesh
     EXPECT_GT(adjacency_map.size(), 0u);
@@ -175,7 +210,7 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalWithSwitch) {
     auto mesh_graph = MeshGraph(cluster_type, mesh_graph_desc_path.string());
 
     // Build adjacency map logical (includes all meshes, including switches)
-    auto adjacency_map = build_adjacency_graph_logical(mesh_graph);
+    auto adjacency_map = build_adjacency_graph_logical_from_mesh_graph(mesh_graph);
 
     // Verify that we have adjacency graphs for each mesh
     EXPECT_GT(adjacency_map.size(), 0u);
@@ -228,7 +263,7 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor) {
 
     // Build adjacency map logical (includes all meshes, including switches if present)
     auto adjacency_map = build_adjacency_graph_logical(mesh_graph_descriptor);
-    auto adjacency_map_from_graph = build_adjacency_graph_logical(mesh_graph);
+    auto adjacency_map_from_graph = build_adjacency_graph_logical_from_mesh_graph(mesh_graph);
 
     for (const auto& [mesh_id, adj_graph] : adjacency_map) {
         ASSERT_TRUE(adjacency_map_from_graph.contains(mesh_id))
@@ -263,7 +298,7 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromBhGalaxyDescriptorMatches
     MeshGraph mesh_graph(cluster_type, mesh_graph_desc_path.string());
 
     auto adjacency_from_descriptor = build_adjacency_graph_logical(mesh_graph_descriptor);
-    auto adjacency_from_graph = build_adjacency_graph_logical(mesh_graph);
+    auto adjacency_from_graph = build_adjacency_graph_logical_from_mesh_graph(mesh_graph);
 
     ASSERT_EQ(adjacency_from_descriptor.size(), adjacency_from_graph.size());
     for (const auto& [mesh_id, adj_graph] : adjacency_from_descriptor) {
@@ -292,7 +327,7 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor2) {
 
     // Build adjacency map logical (includes all meshes, including switches if present)
     auto adjacency_map = build_adjacency_graph_logical(mesh_graph_descriptor);
-    auto adjacency_map_from_graph = build_adjacency_graph_logical(mesh_graph);
+    auto adjacency_map_from_graph = build_adjacency_graph_logical_from_mesh_graph(mesh_graph);
 
     for (const auto& [mesh_id, adj_graph] : adjacency_map) {
         ASSERT_TRUE(adjacency_map_from_graph.contains(mesh_id))

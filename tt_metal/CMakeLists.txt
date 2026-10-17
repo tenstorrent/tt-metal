@@ -114,6 +114,8 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         TT::STL
         tt-logger::tt-logger
+        TT::Metalium::Types
+        TT::FabricTopologyUtils
         ${EXECINFO_LIB}
     PRIVATE
         Metalium::Metal::Impl
@@ -175,6 +177,47 @@ include_directories(
     api/tt-metalium
     ${CMAKE_CURRENT_BINARY_DIR}/api
 )
+
+# ---------------------------------------------------------------------------
+# TT::Metalium::Types: runtime-free value types shared by libtt_metal and TT::FabricTopologyUtils (MeshShape /
+# MeshCoordinate / ShapeBase, FabricNodeId & friends, PhysicalNodeId). A shared library so there is exactly one copy:
+# libtt_metal.so and libtt-fabric-topology-utils.so both link it. Sources are added by common/ and fabric/.
+# ---------------------------------------------------------------------------
+add_library(tt_metalium_types SHARED)
+add_library(TT::Metalium::Types ALIAS tt_metalium_types)
+set_target_properties(
+    tt_metalium_types
+    PROPERTIES
+        EXPORT_NAME
+            Metalium::Types
+        OUTPUT_NAME
+            tt-metalium-types
+        INSTALL_RPATH
+            "$ORIGIN"
+)
+target_include_directories(
+    tt_metalium_types
+    PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>"
+        "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR} # distributed/mesh_coord_utils.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium # bare "shape_base.hpp" / <mesh_coord.hpp> in common/ (same FIXME as tt_metal)
+)
+target_link_libraries(
+    tt_metalium_types
+    PUBLIC
+        TT::STL
+        fmt::fmt-header-only
+    PRIVATE
+        enchantum::enchantum
+        Boost::asio # boost/move header included by common/mesh_coord.cpp
+        umd::tt-umd # resolves spdlog from libtt-umd.so instead of bundling a second copy (ASan ODR)
+)
+target_compile_features(tt_metalium_types PUBLIC cxx_std_20)
+TT_ENABLE_UNITY_BUILD(tt_metalium_types)
+tt_reuse_precompile_headers(tt_metalium_types TT::CommonPCH)
+install(TARGETS tt_metalium_types EXPORT Metalium LIBRARY COMPONENT metalium-runtime)
 
 add_subdirectory(logging)
 add_subdirectory(hw)

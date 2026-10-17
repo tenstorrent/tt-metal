@@ -29,43 +29,131 @@ target_sources(
     PRIVATE
         ${FABRIC_SOURCES}
 )
+# Shared value types (FabricNodeId & friends, PhysicalNodeId) are compiled into TT::Metalium::Types, declared in
+# tt_metal/CMakeLists.txt.
+target_sources(tt_metalium_types PRIVATE ${FABRIC_TYPES_SOURCES})
 
 # Include helper functions and generate headers from protobuf schemas
 include(protobuf)
-set(PROTO_SCHEMAS
+
+# Descriptor protos consumed by the runtime-free topology lib vs. fabric-runtime protos. All generate into the
+# same protobuf/ dir so consumers resolve headers via ${CMAKE_CURRENT_BINARY_DIR}.
+set(FABRIC_TOPOLOGY_UTILS_PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mesh_graph_descriptor.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_system_descriptor.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_grouping_descriptor.proto
+)
+set(FABRIC_PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/router_port_directions.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/port_descriptor_table.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/intermesh_connection_table.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_grouping_descriptor.proto
 )
 
-# Collect all generated protobuf files
-set(GENERATED_PROTO_SRCS)
-foreach(PROTO_FILE ${PROTO_SCHEMAS})
+set(FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_SRCS)
+foreach(PROTO_FILE ${FABRIC_TOPOLOGY_UTILS_PROTO_SCHEMAS})
     GENERATE_PROTO_FILES(${PROTO_FILE} OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
-    list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
+    list(APPEND FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_SRCS ${PROTO_SRCS})
 endforeach()
 
-# Expose a custom target for the generated protobuf files so that external consumers
-# can depend on them directly without going through the fabric OBJECT library.
-add_custom_target(fabric_generated_protos DEPENDS ${GENERATED_PROTO_SRCS})
-add_dependencies(fabric fabric_generated_protos)
-if(TARGET all_generated_files)
-    add_dependencies(all_generated_files fabric_generated_protos)
-endif()
+set(FABRIC_GENERATED_PROTO_SRCS)
+foreach(PROTO_FILE ${FABRIC_PROTO_SCHEMAS})
+    GENERATE_PROTO_FILES(${PROTO_FILE} OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
+    list(APPEND FABRIC_GENERATED_PROTO_SRCS ${PROTO_SRCS})
+endforeach()
 
-# Exclude protobuf generated files from unity builds (they have conflicting static symbols)
+# ---------------------------------------------------------------------------
+# TT::FabricTopologyUtils: runtime-free topology library (MGD/PSD/PGD + protos, topology solver, mapper utils,
+# FSD->PSD builder). A shared library: libtt_metal.so links it, and an external consumer (Fabric Manager) links it
+# from the installed package without libtt_metal. protobuf, yaml-cpp, cadical and scaleout_tools are linked in
+# privately and stay out of the exported interface, as they do for libtt_metal.so.
+# ---------------------------------------------------------------------------
+add_library(
+    tt_fabric_topology_utils
+    SHARED
+    ${FABRIC_TOPOLOGY_UTILS_SOURCES}
+    ${FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_SRCS}
+)
+add_library(TT::FabricTopologyUtils ALIAS tt_fabric_topology_utils)
+set_target_properties(
+    tt_fabric_topology_utils
+    PROPERTIES
+        EXPORT_NAME
+            FabricTopologyUtils
+        OUTPUT_NAME
+            tt-fabric-topology-utils
+        INSTALL_RPATH
+            "$ORIGIN"
+)
+# Generated protos have conflicting static symbols, so they stay out of the unity batch.
 set_source_files_properties(
-    ${GENERATED_PROTO_SRCS}
+    ${FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_SRCS}
     PROPERTIES
         SKIP_UNITY_BUILD_INCLUSION
             TRUE
 )
 
-# Add the generated protobuf files to your target
-target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
+add_custom_target(fabric_topology_utils_generated_protos DEPENDS ${FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_SRCS})
+add_dependencies(
+    tt_fabric_topology_utils
+    fabric_topology_utils_generated_protos
+    scaleout_generated_protos
+)
+if(TARGET all_generated_files)
+    add_dependencies(all_generated_files fabric_topology_utils_generated_protos)
+endif()
+
+target_include_directories(
+    tt_fabric_topology_utils
+    PUBLIC
+        "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/tt_metal/api>"
+        "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/tools/scaleout # board/board.hpp
+    SYSTEM
+    PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR} # generated proto headers
+        ${Metalium_BINARY_DIR}/tools/scaleout # FSD proto header
+)
+target_link_libraries(
+    tt_fabric_topology_utils
+    PUBLIC
+        TT::Metalium::Types
+        TT::STL
+        fmt::fmt-header-only
+        umd::tt-umd
+    PRIVATE
+        TT::ScaleoutTools
+        enchantum::enchantum
+        tt-logger::tt-logger
+        yaml-cpp::yaml-cpp
+        protobuf::libprotobuf
+        cadical::cadical
+)
+target_compile_features(tt_fabric_topology_utils PUBLIC cxx_std_20)
+# yaml-cpp and cadical are implementation details: do not export their symbols. The process already has
+# yaml-cpp via libtt-umd.so, and a second exported copy trips ASan's ODR check.
+target_link_options(tt_fabric_topology_utils PRIVATE "LINKER:--exclude-libs=libyaml-cpp.a:libcadical.a")
+TT_ENABLE_UNITY_BUILD(tt_fabric_topology_utils)
+tt_reuse_precompile_headers(tt_fabric_topology_utils TT::CommonPCH)
+install(TARGETS tt_fabric_topology_utils EXPORT Metalium LIBRARY COMPONENT metalium-runtime)
+
+# --- fabric: remaining runtime protos + link the topology lib -------
+add_custom_target(fabric_generated_protos DEPENDS ${FABRIC_GENERATED_PROTO_SRCS})
+add_dependencies(fabric fabric_generated_protos)
+if(TARGET all_generated_files)
+    add_dependencies(all_generated_files fabric_generated_protos)
+endif()
+
+set_source_files_properties(
+    ${FABRIC_GENERATED_PROTO_SRCS}
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            TRUE
+)
+
+target_sources(fabric PRIVATE ${FABRIC_GENERATED_PROTO_SRCS})
 
 target_include_directories(fabric PRIVATE .)
 target_include_directories(
@@ -79,6 +167,7 @@ target_include_directories(
 target_link_libraries(
     fabric
     PRIVATE
+        TT::FabricTopologyUtils
         TT::ScaleoutTools
         Metalium::Metal::LLRT
         umd::tt-umd
@@ -90,7 +179,6 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
         protobuf::libprotobuf
-        cadical::cadical
 )
 
 tt_reuse_precompile_headers(fabric TT::CommonPCH)
