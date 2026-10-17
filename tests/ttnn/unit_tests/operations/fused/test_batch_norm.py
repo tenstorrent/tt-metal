@@ -1301,3 +1301,12 @@ def test_batch_norm_running_var_bessel_correction(device):
         atol=1e-3,
         check_pcc=False,
     )
+
+
+def test_batch_norm_rank_validation(device):
+    """Verify batch_norm rejects non-4D tensors with informative fatal message."""
+    tensor_3d = torch.randn((1, 32, 32), dtype=torch.bfloat16)
+    tt_3d = ttnn.from_torch(tensor_3d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with pytest.raises(Exception) as exc_info:
+        ttnn.batch_norm(tt_3d, training=False)
+    assert "batch_norm only supported for tensors with rank 4" in str(exc_info.value)
