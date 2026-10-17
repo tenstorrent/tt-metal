@@ -5082,6 +5082,55 @@ def test_matmul_fp32_crossblock_reload_untilize_precision(device, packer_l1_acc)
     )
 
 
+@pytest.mark.parametrize("in1_tile_w", [32, 16])
+def test_matmul_1d_untilize_out_in1_tile_width(device, in1_tile_w):
+    """untilize_out on the 1D multicast factory with the output tile width set by in1's tile.
+
+    in1_tile_w=16 gives a 32x16 output tile whose two faces are stacked, so the untilize pack has to
+    emit 16-datum rows with the second face below the first; in1_tile_w=32 is the 32x32 control.
+    """
+    torch.manual_seed(0)
+    m, k, n = 32, 32, 64
+    a = torch.randn(1, 1, m, k, dtype=torch.bfloat16)
+    b = torch.randn(1, 1, k, n, dtype=torch.bfloat16)
+    ref = (a.float() @ b.float()).reshape(m, n)
+
+    a_t = ttnn.from_torch(
+        a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    b_t = ttnn.from_torch(
+        b,
+        tile=ttnn.Tile((32, in1_tile_w)),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    per_core_N = n // in1_tile_w
+    # out_subblock == out_block (single subblock) as required for untilize_out.
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(1, 1),
+        in0_block_w=k // 32,
+        out_subblock_h=m // 32,
+        out_subblock_w=per_core_N,
+        per_core_M=m // 32,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        mcast_in0=True,
+        untilize_out=True,
+    )
+    out = ttnn.matmul(
+        a_t,
+        b_t,
+        program_config=program_config,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    out = ttnn.to_torch(out).float().reshape(m, n)
+
+    assert_with_pcc(ref, out, 0.999)
+
+
 # Broadcast-A batched matmul ([1, 1, M, K] x [1, B, K, N]) on the 1D mcast_in1 path keeps A in L1 and
 # reuses it for every weight batch. Covers every outer-block shape: replay when one of the h/w block
 # counts is 1, re-read from DRAM when both are > 1. Used to hang whenever h * w > 1.
