@@ -54,6 +54,8 @@ ttsl::hash::hash_t ReshapeViewDeviceOperation::compute_program_hash(
     // don't hash on operation_attributes_t::recreate_mapping_tensor
     return tt::tt_metal::operation::hash_operation<ReshapeViewDeviceOperation>(
         operation_attributes.logical_output_shape,
+        // Sets the output page size (#55237); the row-major path forwards the caller's padded shape.
+        operation_attributes.padded_output_shape,
         operation_attributes.output_mem_config,
         operation_attributes.sub_core_grid.has_value(),
         operation_attributes.sub_core_grid.has_value() ? operation_attributes.sub_core_grid.value()
