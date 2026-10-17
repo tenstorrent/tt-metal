@@ -154,11 +154,14 @@ def test_compressed_custom_mm_full_grid(
 # that disturbs any face of the half lands on a live partial. Zero tiles sit in k-iterations >= 1 so the tiles already
 # hold partials from the earlier k, and span the inner columns (the last column takes a different branch, SETRWC):
 # the skip used to be a ZEROACC whose row select wraps onto the last face of the half, tile 15's second face, which
-# it marked zero for a zero tile at column 9 or later -- the k1-c9, k1-c14, k2-c9 and three-zero cases failed on
-# that face while the earlier columns passed. Every case must pass, and a wrong stride in the skip would shift every
-# later tile, so the passing columns guard the fix as well.
+# it marked zero for a zero tile at column 9 or later -- the k1-c9, k1-c14, k2-c9, adjacent-zero and three-zero cases
+# failed on that face while the earlier columns passed. Every case must pass, and a wrong stride in the skip would
+# shift every later tile, so the passing columns guard the fix as well. The skip relies on the SrcA/SrcB counters being
+# zero whatever preceded it, so each predecessor gets a placement: a multiplied tile (any single zero), another skip
+# (adjacent zeros), a zero last-column tile (k1-c15 then k2-c0) and the very first tile of the block (k0-c0).
 ZERO_TILE_SHAPE = (16, 4, 8)  # (ct_dim, kt_dim, in0_rows)
 ZERO_TILE_CASES = [
+    pytest.param(((0, 0),), id="k0-c0"),
     pytest.param(((1, 0),), id="k1-c0"),
     pytest.param(((1, 3),), id="k1-c3"),
     pytest.param(((1, 8),), id="k1-c8"),
@@ -166,6 +169,8 @@ ZERO_TILE_CASES = [
     pytest.param(((1, 14),), id="k1-c14"),
     pytest.param(((2, 9),), id="k2-c9"),
     pytest.param(((3, 0),), id="k3-c0"),
+    pytest.param(((1, 9), (1, 10), (1, 11)), id="k1-c9_c10_c11"),
+    pytest.param(((1, 15), (2, 0)), id="k1-c15_k2-c0"),
     pytest.param(((1, 2), (2, 7), (3, 11)), id="k1-c2_k2-c7_k3-c11"),
 ]
 
@@ -180,14 +185,17 @@ def test_compressed_custom_mm_zero_tile(zero_tiles):
 
 
 # The same with dense_packing=False: 64-row DEST tiles, so ct_dim=8 fills the half and the skip has to step the
-# non-dense stride (which only this test exercises -- both silicon kernels above pin dense_packing=true). Here the
-# last face of the half is the unused lower half of tile 7, so the old ZEROACC skip did not show; the cases guard the
-# stride and the layout. Columns span the ZEROACC's observed dense threshold (DEST counter >= 288 rows) both ways.
+# non-dense stride, which no other tt-llk test exercises. Here the last face of the half is the unused lower half of
+# tile 7, so the old ZEROACC skip did not show; the cases guard the stride and the layout, with the same predecessor
+# placements as the dense set. Columns span the ZEROACC's observed dense threshold (DEST counter >= 288 rows) both ways.
 ZERO_TILE_SHAPE_NON_DENSE = (8, 4, 8)  # (ct_dim, kt_dim, in0_rows)
 ZERO_TILE_CASES_NON_DENSE = [
+    pytest.param(((0, 0),), id="k0-c0"),
     pytest.param(((1, 3),), id="k1-c3"),
     pytest.param(((1, 6),), id="k1-c6"),
     pytest.param(((2, 5),), id="k2-c5"),
+    pytest.param(((1, 4), (1, 5), (1, 6)), id="k1-c4_c5_c6"),
+    pytest.param(((1, 7), (2, 0)), id="k1-c7_k2-c0"),
     pytest.param(((1, 1), (2, 4), (3, 6)), id="k1-c1_k2-c4_k3-c6"),
 ]
 

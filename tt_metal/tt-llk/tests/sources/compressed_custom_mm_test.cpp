@@ -111,6 +111,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "experimental/llk_pack_custom_mm.h"
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -122,27 +123,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     // Partial-tile pack, copied from the silicon-validated matmul_custom_compressed_test.cpp:85-91. The output tile
     // is [in0_face_r_dim, 32]: two faces of in0_face_r_dim x 16, each face still occupying a full 16-row DEST slot,
-    // and with dense_packing the DEST tile-to-tile stride is 32 rows instead of 64 -- hence Wstride / 2 (the default
-    // 64-row stride stays when the math is not dense-packed). Without this the packer emits full 32x32 tiles, so only
-    // the top in0_face_r_dim rows of each face carry the result and the rest is whatever DEST held.
+    // and with dense_packing the DEST tile-to-tile stride is 32 rows instead of 64 (_llk_pack_custom_mm_init_ halves the
+    // W-stride; the default 64-row stride stays when the math is not dense-packed). Without this the packer emits full
+    // 32x32 tiles, so only the top in0_face_r_dim rows of each face carry the result and the rest is whatever DEST held.
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true /* partial_face */);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, params.in0_face_r_dim, TILE_C_DIM, params.num_faces);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    if constexpr (CUSTOM_MM_DENSE_PACKING)
-    {
-        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2);
-    }
+    _llk_pack_custom_mm_init_<CUSTOM_MM_DENSE_PACKING>();
     _llk_packer_wait_for_math_done_();
     for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
     {
         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
     }
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    if constexpr (CUSTOM_MM_DENSE_PACKING)
-    {
-        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2);
-    }
+    _llk_pack_custom_mm_uninit_<CUSTOM_MM_DENSE_PACKING>();
 }
 
 #endif

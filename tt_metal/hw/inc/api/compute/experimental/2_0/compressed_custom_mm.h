@@ -87,7 +87,7 @@ ALWI void compressed_custom_mm_block(
     static_assert(experimental::is_legal_tile_shape(S0), "Illegal activation tile shape");
     static_assert(experimental::is_legal_tile_shape(S1), "Illegal weight tile shape");
     UNPACK((_llk_unpack_AB_compressed_custom_mm_(in1.l1_address, in0.l1_address, base_address_meta, kt_dim, ct_dim)));
-    MATH((_llk_math_compressed_custom_mm_<false, dense_packing>(
+    MATH((_llk_math_compressed_custom_mm_<false /* finalize */, dense_packing>(
         base_address_meta, S0.face_r_dim, dst_index, kt_dim, ct_dim)));
 }
 
@@ -107,7 +107,7 @@ ALWI void compressed_custom_mm_block(
     }));
     MATH(({
         const auto in0_id = get_operand_id(in0_cb_id);
-        _llk_math_compressed_custom_mm_<false, dense_packing>(
+        _llk_math_compressed_custom_mm_<false /* finalize */, dense_packing>(
             base_address_meta, get_operand_face_r_dim(in0_id), dst_index, kt_dim, ct_dim);
     }));
 }
