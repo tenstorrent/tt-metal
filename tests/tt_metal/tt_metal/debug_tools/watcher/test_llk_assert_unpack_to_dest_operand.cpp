@@ -27,9 +27,11 @@
 // A CB marked UnpackToDestMode::UnpackToDestFp32 is unpacked straight into Dest and cannot
 // feed the FPU, whose operands come from SrcA/SrcB. With LLK asserts enabled the SrcA/SrcB
 // unpack inits (binary, matmul) reject such an operand and the watcher reports the tripped
-// assert on TRISC0. Each case first runs the same kernel with no CB marked, which must finish
-// with the watcher quiet and the exact expected output, so a trip in the marked run can only
-// come from the operand guard.
+// assert on TRISC0. Each case first runs the full op with no CB marked, which must finish with
+// the watcher quiet and the exact expected output, so a trip in the marked run can only come
+// from the operand guard. The marked run executes only the unpack init (unpack_ab_init_only.cpp):
+// the trip halts the unpack thread before any data moves, and a full op would leave the math
+// and pack threads stalled on it, which the next program on the core inherits.
 //////////////////////////////////////////////////////////////////////////////////////////
 
 using namespace tt;
@@ -53,6 +55,7 @@ constexpr uint32_t kPerCoreBlockSize = 1;
 constexpr uint32_t kAccToDst = 0;
 constexpr const char* kAddKernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary.cpp";
 constexpr const char* kMatmulKernel = "tests/tt_metal/tt_metal/test_kernels/compute/matmul.cpp";
+constexpr const char* kInitOnlyKernel = "tests/tt_metal/tt_metal/test_kernels/compute/unpack_ab_init_only.cpp";
 
 const char* kernel_path(FpuOp op) { return op == FpuOp::Add ? kAddKernel : kMatmulKernel; }
 
@@ -87,8 +90,9 @@ struct BuiltProgram {
     std::shared_ptr<distributed::MeshBuffer> dst;
 };
 
-// One-tile op(c_0, c_1) -> c_16 on core (0,0), Float32 CBs, fp32 Dest. `marked_cb` (if any) is the
-// operand marked UnpackToDestFp32, which the SrcA/SrcB unpack init must reject.
+// Float32 CBs c_0, c_1 -> c_16 on core (0,0), fp32 Dest. Unmarked: the full one-tile op with its reader
+// and writer. Marked: only the op's unpack init, with `marked_cb` marked UnpackToDestFp32 for the SrcA/SrcB
+// unpack init to reject; no data is read or written.
 BuiltProgram build_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     FpuOp op,
@@ -125,6 +129,17 @@ BuiltProgram build_program(
     make_cb(CBIndex::c_1);
     make_cb(CBIndex::c_16);
 
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (marked_cb.has_value()) {
+        unpack_to_dest_mode[*marked_cb] = UnpackToDestMode::UnpackToDestFp32;
+        ComputeConfig init_only{.fp32_dest_acc_en = true, .unpack_to_dest_mode = unpack_to_dest_mode};
+        if (op == FpuOp::Matmul) {
+            init_only.defines = {{"MATMUL_INIT", "1"}};
+        }
+        CreateKernel(program, kInitOnlyKernel, core, init_only);
+        return built;
+    }
+
     auto reader = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
@@ -136,10 +151,6 @@ BuiltProgram build_program(
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (marked_cb.has_value()) {
-        unpack_to_dest_mode[*marked_cb] = UnpackToDestMode::UnpackToDestFp32;
-    }
     ComputeConfig compute_config{.fp32_dest_acc_en = true, .unpack_to_dest_mode = unpack_to_dest_mode};
     if (op == FpuOp::Add) {
         compute_config.defines = {{"ELTWISE_OP", "add_tiles"}, {"ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD"}};
@@ -196,9 +207,8 @@ void RunUnpackToDestOperandCase(
             << ", " << std::bit_cast<float>(result[1]) << " (expected " << expected[0] << ", " << expected[1] << ")";
     }
 
-    // Violation: the marked operand must be rejected by the SrcA/SrcB unpack init on TRISC0. A kernel that
-    // runs to completion instead has computed on a source register the unpacker cannot deliver, and the
-    // output is reported for the record.
+    // Violation: the marked operand must be rejected by the SrcA/SrcB unpack init on TRISC0. An init that
+    // returns instead lets the op compute on a source register the unpacker cannot deliver.
     auto violation = build_program(mesh_device, test_case.op, test_case.marked_cb, a, b);
     fixture->RunProgramExpectingWatcherError(mesh_device, violation.workload);
 
@@ -214,22 +224,14 @@ void RunUnpackToDestOperandCase(
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    if (exception.empty()) {
-        std::vector<uint32_t> result;
-        distributed::ReadShard(cq, result, violation.dst, zero_coord);
-        FAIL() << kernel_path(test_case.op) << " ran to completion with CB "
-               << static_cast<uint32_t>(test_case.marked_cb)
-               << " marked UnpackToDestFp32 instead of tripping the LLK assert; " << count_mismatches(result, expected)
-               << " of " << result.size() << " output datums differ from the expected result; first outputs "
-               << std::bit_cast<float>(result[0]) << ", " << std::bit_cast<float>(result[1]) << ", "
-               << std::bit_cast<float>(result[2]) << ", " << std::bit_cast<float>(result[3]) << " (expected "
-               << expected[0] << ", " << expected[1] << ", " << expected[2] << ", " << expected[3] << ")";
-    }
+    ASSERT_FALSE(exception.empty()) << kernel_path(test_case.op) << " unpack init returned with CB "
+                                    << static_cast<uint32_t>(test_case.marked_cb)
+                                    << " marked UnpackToDestFp32 instead of tripping the LLK assert";
     log_info(tt::LogTest, "Watcher reported: {}", exception);
     EXPECT_NE(exception.find("tripped an assert"), std::string::npos) << exception;
     EXPECT_NE(exception.find("TRISC0"), std::string::npos)
         << "The assert did not trip on the unpack thread: " << exception;
-    EXPECT_NE(exception.find(kernel_path(test_case.op)), std::string::npos)
+    EXPECT_NE(exception.find(kInitOnlyKernel), std::string::npos)
         << "The assert did not trip in the compute kernel under test: " << exception;
 }
 
