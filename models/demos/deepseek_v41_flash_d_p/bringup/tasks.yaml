@@ -6249,6 +6249,14 @@ tasks:
     kind: attention
     layer: 20
     stateful: true
+  frozen:
+    at: '2026-10-17T09:05:00'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attention.py: 9d4e04e3df0b5e0153d6e161fec1c3c2da0263f816791597cc1dc5740377b2e9
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.dec_candidate.08
   title: 'dec_candidate block with steps 1-8 on device (last: attention)'
   step: implement
