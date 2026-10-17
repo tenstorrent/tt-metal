@@ -96,12 +96,11 @@ def use_int32_twos_complement(
 
     This matches how ttnn feeds the device: Int32 reduce operands sit in DEST as two's-complement.
 
-    Both the column and the row MAX/MIN paths expect two's-complement operands. On Wormhole they now
-    load with plain ``INT32`` (bits preserved) and correct the ordering in software via a signed
-    compare-and-swap, so INT32_MIN is handled over the full range (see ckernel_sfpu_reduce.h). On
-    Blackhole they still cast two's-complement -> sign-magnitude explicitly around the sign-magnitude
-    ``SFPSWAP(VEC_MIN_MAX)`` comparator (tt-isa ``SFPSWAP.md``). Either way they expect two's-complement
-    operands. Row MAX must agree with the column path because a multi-axis reduce chains
+    Both the column and the row MAX/MIN paths expect two's-complement operands. On both architectures
+    they load with plain ``INT32`` (bits preserved) and correct the ordering of the sign-magnitude
+    ``SFPSWAP(VEC_MIN_MAX)`` comparator (tt-isa ``SFPSWAP.md``) in software via a signed
+    compare-and-swap, so INT32_MIN is handled over the full range (see ckernel_sfpu_reduce.h).
+    Row MAX must agree with the column path because a multi-axis reduce chains
     column-then-row over the same DEST (the column path leaves two's-complement there), so the row
     path consumes and produces two's-complement just like the column path.
 
@@ -311,15 +310,16 @@ def test_sfpu_reduce(
         )
 
     if (
-        mathop == MathOperation.ReduceRow
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and mathop == MathOperation.ReduceRow
         and reduce_pool in (ReducePool.Max, ReducePool.Min)
         and formats.input_format == DataFormat.UInt16
+        and dest_acc == DestAccumulation.No
     ):
         pytest.skip(
-            reason="UInt16 row MAX/MIN is unsupported by the kernel: without a 32-bit dest it loads "
-            "with LO16 (rejected by the row MAX/MIN static_assert), and with a 32-bit dest it routes "
-            "through the INT32 sign-magnitude row path, which does not mask UInt16's high bits and "
-            "returns garbage. Column UInt16 MAX/MIN (the ttnn-exercised path) is still covered."
+            reason="UInt16 row MAX/MIN without a 32-bit dest loads with LO16, which the Blackhole row "
+            "MAX/MIN path rejects in its static_assert; Wormhole runs these cells. With a 32-bit dest "
+            "(dest_acc=Yes) the UInt16 datum is masked on load and both architectures run them."
         )
 
     if (
@@ -702,6 +702,58 @@ def test_uint32_reduce_max_min_bit31(mathop, dims, reduce_pool):
     assert not mismatch, (
         f"{len(mismatch)} mismatched UInt32 {reduce_pool} {mathop} lanes, first at {mismatch[0]}: "
         f"golden {int(golden[mismatch[0]]):#010x}, device {int(res[mismatch[0]]):#010x}"
+    )
+
+
+@pytest.mark.parametrize(
+    "dims",
+    [[TILE_DIM, TILE_DIM], [TILE_DIM, 2 * TILE_DIM], [2 * TILE_DIM, 2 * TILE_DIM]],
+    ids=["row-1x1", "row-1x2", "row-2x2"],
+)
+@pytest.mark.parametrize("reduce_pool", [ReducePool.Min, ReducePool.Max])
+def test_uint16_reduce_row_max_min_full_range(dims, reduce_pool):
+    """UInt16 row MAX/MIN in a 32-bit dest over the whole 16-bit range.
+
+    test_sfpu_reduce drives UInt16 with the (0, 1000) bound that keeps Sum in range, so no datum there
+    has bit 15 set. Here rows mix 0, 0x7FFF, 0x8000 and 0xFFFF: the masked INT32 load must keep bit 15,
+    the sign-magnitude SFPSWAP must rank 0xFFFF above everything, and the mode-9 final store (per tile
+    for one column tile, cross-tile otherwise) must hand the packer all 16 bits.
+    """
+    if reduce_pool == ReducePool.Min and TestConfig.WITH_COVERAGE:
+        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
+
+    torch.manual_seed(0)
+    values = torch.randint(0x8000 - 16, 0x8000 + 16, dims, dtype=torch.int64)
+    values[::3] = torch.randint(0, 1000, values[::3].shape, dtype=torch.int64)
+    for i, extreme in enumerate([3, 0x7FFF, 0x8000, UINT16_MAX]):
+        values[(5 * i) % TILE_DIM, (7 * i + 1) % TILE_DIM] = extreme
+    # Rows decided by a single planted datum: MIN_LANE is all 0xFFFF with one 0 (MIN must find it),
+    # MAX_LANE is all 0 with one 0xFFFF (MAX must find it; a lost bit 15 would report 0x7FFF). The
+    # planted datum sits in the last column tile so multi-tile rows cross the cross-tile combine.
+    MIN_LANE, MAX_LANE = 25, 26
+    values[MIN_LANE, :] = UINT16_MAX
+    values[MIN_LANE, dims[1] - 10] = 0
+    values[MAX_LANE, :] = 0
+    values[MAX_LANE, dims[1] - 12] = UINT16_MAX
+    golden = (
+        values.max(dim=1).values
+        if reduce_pool == ReducePool.Max
+        else values.min(dim=1).values
+    )
+
+    _, res = _run_integer_reduce(
+        MathOperation.ReduceRow,
+        reduce_pool,
+        injected_value=None,
+        input_format=DataFormat.UInt16,
+        tile=values,
+    )
+    res = res.to(torch.int64) & 0xFFFF
+
+    mismatch = (golden != res).nonzero().flatten().tolist()
+    assert not mismatch, (
+        f"{len(mismatch)} mismatched UInt16 {reduce_pool} ReduceRow lanes, first at {mismatch[0]}: "
+        f"golden {int(golden[mismatch[0]]):#06x}, device {int(res[mismatch[0]]):#06x}"
     )
 
 

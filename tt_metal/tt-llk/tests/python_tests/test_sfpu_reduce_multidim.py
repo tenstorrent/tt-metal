@@ -87,11 +87,13 @@ def get_multidim_pools(formats: InputOutputFormat) -> list[ReducePool]:
 
 # Formats exercised. Int32 is the regression target (its column path flips the SFPSWAP-direction
 # config and uses two's-complement); the others take the LOADMACRO column path and guard the shared-init
-# chain for it. UInt16 is absent on purpose: its row MAX/MIN in a 32-bit dest is unsupported (the Int32
-# row path does not mask the garbage high bits; see the skip in test_sfpu_reduce), so no chain that
-# includes a row pass over raw UInt16 data is well-defined. Its manual column path,
-# calculate_reduce_max_min_uint16, is still covered here after a row pass: under DISABLE_SFPLOADMACRO
-# every non-Int32 format's column MAX/MIN goes through it.
+# chain for it. UInt16 is absent on purpose: with a UInt16 output every pass's final, packer-visible
+# SFPSTORE uses mode 9, which moves the reduced value from the low into the high 16 bits of the 32-bit
+# dest word (where the packer reads it), while the next pass's masked INT32 load (clear_high_bits) keeps
+# only the low 16 bits and so reads 0. A chain of two passes over a UInt16 result is therefore not
+# well-defined for any pool; single-pass UInt16 row and column reductions are covered in
+# test_sfpu_reduce. Its manual column path, calculate_reduce_max_min_uint16, is still covered here after
+# a row pass: under DISABLE_SFPLOADMACRO every non-Int32 format's column MAX/MIN goes through it.
 MULTIDIM_FORMATS = [
     DataFormat.Int32,
     DataFormat.Float32,
