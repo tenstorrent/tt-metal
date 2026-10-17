@@ -133,7 +133,8 @@ ALWI void compressed_custom_mm_block_init_short(
  *
  * | Argument        | Description                                                                                                     | Type     | Valid Range                                      | Required              |
  * |-----------------|-----------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
- * | finalize        | Whether to perform the finalization step which merges split_accumulation partials                               | bool     | true/false (must be false if split_acc is false) | False (default true)  |
+ * | finalize        | Whether to perform the finalization step which merges split_accumulation partials                               | bool     | true/false (must be false if split_acc is false) | True                  |
+ * | dense_packing   | The dense_packing the block was initialized with (the DEST stride a zero-code tile is skipped over)             | bool     | true/false                                       | True                  |
  * | read_transposed | Whether to read in1 tiles in transposed order (read ct tiles with a stride of kt, then move over a single tile) | bool     | true/false                                       | False (default false) |
  * | in0_cb_id       | The identifier of the first input circular buffer (CB)                                                          | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id       | The identifier of the second input circular buffer (CB)                                                         | uint32_t | 0 to 31                                          | True                  |
@@ -144,7 +145,7 @@ ALWI void compressed_custom_mm_block_init_short(
  * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 16                                          | False (default 1)     |
  */
 // clang-format on
-template <bool finalize = true>
+template <bool finalize, bool dense_packing>
 ALWI void compressed_custom_mm_block(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -156,7 +157,7 @@ ALWI void compressed_custom_mm_block(
     // NOTE: finalize is accepted for call-site compatibility but NOT forwarded — the LLK always
     // runs with finalize=false. Carried verbatim from both parent trees; all existing consumers
     // were validated against this behavior.
-    MATH((llk_math_compressed_custom_mm<false /* finalize */>(
+    MATH((llk_math_compressed_custom_mm<false /* finalize */, dense_packing>(
         in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim, ct_dim)));
 }
 
@@ -218,7 +219,8 @@ ALWI void compressed_custom_mm_block_unpack(
  *
  * | Argument        | Description                                                                                                    | Type     | Valid Range                                      | Required              |
  * |-----------------|----------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
- * | finalize        | Whether to perform the finalization step which merges split_accumulation partials                              | bool     | true/false (must be false if split_acc is false) | False (default true)  |
+ * | finalize        | Whether to perform the finalization step which merges split_accumulation partials                              | bool     | true/false (must be false if split_acc is false) | True                  |
+ * | dense_packing   | The dense_packing the block was initialized with (the DEST stride a zero-code tile is skipped over)            | bool     | true/false                                       | True                  |
  * | in0_cb_id       | The identifier of the first input circular buffer (CB)                                                         | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id       | The identifier of the second input circular buffer (CB)                                                        | uint32_t | 0 to 31                                          | True                  |
  * | dst_index       | The index of the tile in DST REG to which the result C will be written                                         | uint32_t | Must be less than the acquired size of DST REG   | True                  |
@@ -226,7 +228,7 @@ ALWI void compressed_custom_mm_block_unpack(
  * | ct_dim          | The width of the output matrix in tiles                                                                        | uint32_t | 1 to 16                                          | False (default 1)     |
  */
 // clang-format on
-template <bool finalize = true>
+template <bool finalize, bool dense_packing>
 ALWI void compressed_custom_mm_block_math(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -235,7 +237,7 @@ ALWI void compressed_custom_mm_block_math(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
     // NOTE: finalize is accepted but NOT forwarded (see compressed_custom_mm_block).
-    MATH((llk_math_compressed_custom_mm<false /* finalize */>(
+    MATH((llk_math_compressed_custom_mm<false /* finalize */, dense_packing>(
         in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim, ct_dim)));
 }
 

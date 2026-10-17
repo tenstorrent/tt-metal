@@ -586,6 +586,21 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
 
 
 @dataclass
+class CUSTOM_MM_DENSE_PACKING(TemplateParameter):
+    """The ``dense_packing`` template argument of a custom_mm-family test kernel.
+
+    Emits ``CUSTOM_MM_DENSE_PACKING``, which the kernel passes to the math init and execute and
+    uses to decide whether the packer's tile-to-tile W-stride is set to 32 DEST rows (dense) or
+    left at the default 64.
+    """
+
+    dense_packing: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool CUSTOM_MM_DENSE_PACKING = {str(self.dense_packing).lower()};"
+
+
+@dataclass
 class CUSTOM_MM_CALLS(TemplateParameter):
     """Split a custom_mm test kernel's K over back-to-back execute calls that accumulate into one DEST.
 

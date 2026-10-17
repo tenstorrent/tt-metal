@@ -616,6 +616,8 @@ struct MatmulExpertCompressedDRAM {
             }
 
 #elif defined(COMPILE_FOR_TRISC)
+            // 64-row DEST tiles: init_short and every compressed_custom_mm_block below must agree on this.
+            constexpr bool dense_packing = false;
             constexpr uint32_t num_tiles_k = CTArgs::subblock_k * CTArgs::num_subblocks_k;
             constexpr uint32_t tiles_per_expert = CTArgs::subblock_k * CTArgs::num_subblocks_k * CTArgs::per_core_n;
             constexpr uint32_t num_active_experts = CTArgs::num_active_experts;
@@ -642,7 +644,8 @@ struct MatmulExpertCompressedDRAM {
             }
             reconfig_full_operand<SrcOrder::Reverse>(CTArgs::cb_in0, CTArgs::cb_in1);
             pack_reconfig_data_format<true>(CTArgs::cb_out);
-            compressed_custom_mm_block_init_short<false, true, false>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+            compressed_custom_mm_block_init_short<false, true, dense_packing>(
+                CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
 
             uint32_t in0_base = 0, in0_cb_base = 0;
             UNPACK(({ in0_cb_base = unified_kernels::get_cb_rd_ptr(CTArgs::cb_in0); }));
@@ -760,7 +763,7 @@ struct MatmulExpertCompressedDRAM {
                             }));
 
                             if (sb_k < CTArgs::num_subblocks_k - 1) {
-                                compressed_custom_mm_block<false>(
+                                compressed_custom_mm_block<false, dense_packing>(
                                     CTArgs::cb_in0,
                                     CTArgs::cb_in1,
                                     meta_addr,
@@ -768,7 +771,7 @@ struct MatmulExpertCompressedDRAM {
                                     CTArgs::subblock_k,
                                     CTArgs::subblock_n);
                             } else {
-                                compressed_custom_mm_block<true>(
+                                compressed_custom_mm_block<true, dense_packing>(
                                     CTArgs::cb_in0,
                                     CTArgs::cb_in1,
                                     meta_addr,
@@ -894,7 +897,7 @@ struct MatmulExpertCompressedDRAM {
                         }));
                         uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base_ptr + fmt_meta_offset);
                         if (sb_k < num_subblocks_k_local - 1) {
-                            compressed_custom_mm_block<false>(
+                            compressed_custom_mm_block<false, dense_packing>(
                                 CTArgs::cb_in0,
                                 CTArgs::cb_in1,
                                 meta_addr,
@@ -902,7 +905,7 @@ struct MatmulExpertCompressedDRAM {
                                 CTArgs::subblock_k,
                                 CTArgs::subblock_n);
                         } else {
-                            compressed_custom_mm_block<true>(
+                            compressed_custom_mm_block<true, dense_packing>(
                                 CTArgs::cb_in0,
                                 CTArgs::cb_in1,
                                 meta_addr,
@@ -1055,7 +1058,7 @@ struct MatmulExpertCompressedDRAM {
                             uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base_ptr + fmt_meta_offset);
 
                             if (sb_k < CTArgs::num_subblocks_k - 1) {
-                                compressed_custom_mm_block<false>(
+                                compressed_custom_mm_block<false, dense_packing>(
                                     CTArgs::cb_in0,
                                     CTArgs::cb_in1,
                                     meta_addr,
@@ -1063,7 +1066,7 @@ struct MatmulExpertCompressedDRAM {
                                     CTArgs::subblock_k,
                                     CTArgs::subblock_n);
                             } else {
-                                compressed_custom_mm_block<true>(
+                                compressed_custom_mm_block<true, dense_packing>(
                                     CTArgs::cb_in0,
                                     CTArgs::cb_in1,
                                     meta_addr,
