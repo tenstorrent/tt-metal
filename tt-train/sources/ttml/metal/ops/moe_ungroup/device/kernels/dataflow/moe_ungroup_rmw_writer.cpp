@@ -56,7 +56,7 @@ static_assert(
 constexpr uint32_t off_page_bytes = decltype(offsets_args)::AlignedPageSize;
 constexpr uint32_t ungrouped_aligned_page = decltype(ungrouped_args)::AlignedPageSize;
 
-constexpr uint32_t SENTINEL = 0xFFFFFFFFU;
+constexpr uint32_t SENTINEL = ttml::metal::moe_ungroup::kPlanSentinel;
 constexpr uint32_t TILE_BYTES = tt::constants::TILE_HW * sizeof(uint16_t);
 constexpr uint32_t FACE_HEIGHT = 16U;
 constexpr uint32_t FACE_WIDTH = 16U;
@@ -175,6 +175,9 @@ void kernel_main() {
                 uint64_t gs_noc = gs_addrgen.get_noc_addr(0, tr_global * tt::constants::TILE_HEIGHT * sizeof(uint16_t));
                 noc_async_read(gs_noc, w_buf_addr, tt::constants::TILE_HEIGHT * sizeof(uint16_t));
                 noc_async_read_barrier();
+                for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
+                    plan_buf[r] = ttml::metal::moe_ungroup::sanitize_plan_row(plan_buf[r], total_rows);
+                }
             }
 
             // Per chunk:
