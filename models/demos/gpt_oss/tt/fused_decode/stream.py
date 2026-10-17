@@ -24,10 +24,13 @@ scaled by the routing score) and ExpertDownStream (routed down + bias, summed ov
 partial sum).
 """
 
+import glob
+import os
 import struct
 from pathlib import Path
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -238,6 +241,14 @@ def as_stream_tensor(mesh_device, layouts, rows, dtype, cache_file_name):
     cache) -> one DRAM width-sharded tensor per device. The cached file keeps the shard layout, so cache names carry
     the layout parameters."""
     t = torch.stack(layouts).unsqueeze(0) if layouts is not None else None
+    if t is not None and cache_file_name is not None and not glob.glob(glob.escape(cache_file_name) + "*"):
+        # a new cache file in a read-only cache (CI's shared weight cache): build the tensor without writing it
+        d = os.path.dirname(os.path.abspath(cache_file_name))
+        while not os.path.exists(d):
+            d = os.path.dirname(d)
+        if not os.access(d, os.W_OK):
+            logger.warning(f"{d} is read-only: {os.path.basename(cache_file_name)} is built without caching")
+            cache_file_name = None
     return ttnn.as_tensor(
         t,
         device=mesh_device,
