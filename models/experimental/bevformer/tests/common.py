@@ -746,8 +746,8 @@ def assert_channels_close(expected, actual, pcc=0.99):
 
 
 def check_decoder_outputs(expected, actual, input_reference_points, bev_shape):
-    """The TT decoder's (layer outputs, refined points, box codes), as sequence-first torch tensors,
-    against the reference's: all finite, the outputs and points layer by layer, as the first layers'
+    """The TT decoder's (layer outputs, refined points, box codes) as torch tensors, the outputs
+    sequence-first, against the reference's: all finite, the outputs and points layer by layer, as the first layers'
     accuracy would hide a failing last layer in the stack, and the box codes channel by channel.
     Logs ``layer_metrics``."""
     for name, tensor in zip(("output", "reference points", "box codes"), actual):
