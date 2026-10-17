@@ -915,7 +915,9 @@ inline void configure_addrmod_max_min(std::uint32_t num_cols) {
  *        Records the 3-instruction replay buffer that reduces LREG4-7 down to LREG4 via vertical
  *        compare-and-swaps. Used by the UInt16-in-32-bit-dest column path (calculate_reduce_max_min_uint16),
  *        where the load and the swap cannot be fused into a LOADMACRO because the garbage high bits must
- *        be masked in between. Int32/UInt32 MAX/MIN use init_reduce_max_min_int32_signed instead.
+ *        be masked in between, and by init_reduce_max_min under DISABLE_SFPLOADMACRO, where every other
+ *        column MAX/MIN format takes the same manual path with no masking. Int32/UInt32 MAX/MIN use
+ *        init_reduce_max_min_int32_signed instead.
  * @tparam INSTRUCTION_MODE The instruction mode (INT32 for UInt16 in a 32-bit dest); unused here.
  * @tparam pool_type MAX or MIN; unused here. The direction is set on entry by the calculates
  *         (calculate_reduce_max_min_uint16, the row paths) and read by the recorded swaps at replay time.
