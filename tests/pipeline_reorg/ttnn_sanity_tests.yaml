@@ -187,10 +187,6 @@
       timeout: 50
     bh_p150b_civ2:
       timeout: 50
-    sim_wh_n150:
-      timeout: 60
-    sim_bh_p150:
-      timeout: 60
   team: ttnn
   budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
@@ -204,10 +200,72 @@
       timeout: 50
     bh_p150b_civ2:
       timeout: 50
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn fused group 1 of 6"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 6 --group 1 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  skus:
     sim_wh_n150:
-      timeout: 60
+      timeout: 35
     sim_bh_p150:
-      timeout: 60
+      timeout: 35
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn fused group 2 of 6"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 6 --group 2 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  skus:
+    sim_wh_n150:
+      timeout: 35
+    sim_bh_p150:
+      timeout: 35
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn fused group 3 of 6"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 6 --group 3 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  skus:
+    sim_wh_n150:
+      timeout: 35
+    sim_bh_p150:
+      timeout: 35
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn fused group 4 of 6"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 6 --group 4 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  skus:
+    sim_wh_n150:
+      timeout: 35
+    sim_bh_p150:
+      timeout: 35
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn fused group 5 of 6"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 6 --group 5 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  skus:
+    sim_wh_n150:
+      timeout: 35
+    sim_bh_p150:
+      timeout: 35
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn fused group 6 of 6"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 6 --group 6 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  skus:
+    sim_wh_n150:
+      timeout: 35
+    sim_bh_p150:
+      timeout: 35
   team: ttnn
   budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
