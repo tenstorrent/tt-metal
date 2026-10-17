@@ -5013,6 +5013,13 @@ tasks:
     - attn_collapse
     - attn_norm
     layer: 3
+  frozen:
+    at: '2026-10-17T05:14:46'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_03_attn_norm.py: 0d5d2b608eec95d63fc60f472127276ea6db04b1a52e70fcb1f0bc47ee17eaf4
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.enc_reuse.q_a
   title: enc_reuse q_a (op) on device, layer 3
   step: implement
