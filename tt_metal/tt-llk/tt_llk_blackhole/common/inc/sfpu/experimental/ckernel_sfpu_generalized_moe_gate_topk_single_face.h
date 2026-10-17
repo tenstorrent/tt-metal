@@ -29,9 +29,11 @@ constexpr std::uint32_t interm_offset   = bias_offset + dst_tile_offset;
 
 // Counterpart of _init_sfpu_config_reg(): set LaneConfig.ENABLE_DEST_INDEX so an SFPSWAP on LREG0-3 also swaps
 // the companion lanes in LREG4-7 (the idx|score concat follows the bias keys). Any SFPU init clears it again.
+// SFPCONFIG with instr_mod1 = 1 writes imm16_math itself (not an LREG) to config_dest; 0xF is LaneConfig and
+// bit 2 of it is ENABLE_DEST_INDEX.
 inline void _gmg_enable_index_tracking()
 {
-    TTI_SFPCONFIG(0x4 /*imm16_math: ENABLE_DEST_INDEX*/, 0xF /*config_dest: LaneConfig*/, 1 /*instr_mod1: imm16 is the value*/);
+    TTI_SFPCONFIG(0x4 /*imm16_math*/, 0xF /*config_dest*/, 1 /*instr_mod1*/);
 }
 
 template <bool is_fp32_dest_acc_en, std::uint32_t offset = 0>

@@ -422,7 +422,7 @@ def test_generalized_moe_gate_topk_mask_keeps_block_ids(rank):
     rank = _one(rank)
     topk = 6  # the only topk whose rank mask rewrites the kept ranks 4 and 5
     block_id_base = 256  # block 1's expert-id base: the >256 path uploads b*256 + i
-    payload, bias, keys = _gate_stimuli(seed=41)
+    payload, _, keys = _gate_stimuli(seed=41)
     # Block 1's ids: flat position i is expert block_id_base + i, so position 0 is expert 256.
     ids = _ids_face() + block_id_base
 
