@@ -92,7 +92,7 @@ sfpi_inline void _ema_store_current_input_()
 // Keeping the record at 16 and issuing the other three inline costs 0.04 cycles/tile
 // (247.89 -> 247.93) and 84 bytes. See _compute_ema_math_() below.
 //
-// Within the SFPU half, slot 0 is shared: the accurate exp path records [0, 32) and topk
+// Within the SFPU half, slot 0 is shared: the accurate exp path records up to [0, 16) and topk
 // up to [0, 29), so a caller interleaving EMA with either must not rely on slot 0
 // surviving across the call.
 constexpr std::uint32_t EMA_MATH_REPLAY_SLOT = 0;
