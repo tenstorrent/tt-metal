@@ -181,8 +181,11 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output) {
  * Face geometry (face_r_dim, num_faces), narrow-tile flag and tile size are derived from the new
  * output's CB metadata. The packer's partial-face flag follows the face height: faces shorter than
  * FACE_R_DIM rows make a block-float tile carry one exponent chunk in total, full-height faces one
- * chunk per face. The CB's own partial_face flag (tile height below the full tile) is not used here,
- * since it is also set for a 16x32 tile whose two full-height faces need a chunk each.
+ * chunk per face. That single chunk holds at most FACE_R_DIM exponent rows, so short faces are
+ * supported only while face_r_dim * num_faces <= FACE_R_DIM (the host's default face shapes satisfy
+ * this; a 16x32 tile of four 8-row faces would not). The CB's own partial_face flag (tile height
+ * below the full tile) is not used here, since it is also set for a 16x32 tile whose two full-height
+ * faces need a chunk each.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  new_output          New output circular buffer / operand index to configure for.
@@ -194,6 +197,9 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     const bool partial_face = face_r_dim < FACE_R_DIM;
     const bool narrow_tile = get_output_narrow_tile(output_id);
+    LLK_ASSERT(
+        face_r_dim == FACE_R_DIM || face_r_dim * num_faces <= FACE_R_DIM,
+        "short-face block-float tile needs more than one exponent chunk");
 
     SAN_HOOK(reconfigure(
         StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
@@ -201,7 +207,9 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
         StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
         StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
-        StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
+        // The sanitizer tracks the CB's partial_face flag, as the other pack hooks do; partial_face above is
+        // the packer's own exponent-chunk flag, which this hook does not model.
+        StateVal<Operand<Exu::Pack>::PartialFace>(get_output_partial_face(output_id)),
         StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
         StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(

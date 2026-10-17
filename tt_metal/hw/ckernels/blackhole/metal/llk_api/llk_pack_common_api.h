@@ -159,9 +159,12 @@ inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output)
  *
  * Face count, tile column dimension and tile size are derived from the new output's CB metadata.
  * The packer's partial-face flag follows the face height: faces shorter than FACE_R_DIM rows make a
- * block-float tile carry one exponent chunk in total, full-height faces one chunk per face. The CB's
- * own partial_face flag (tile height below the full tile) is not used here, since it is also set for
- * a 16x32 tile whose two full-height faces need a chunk each.
+ * block-float tile carry one exponent chunk in total, full-height faces one chunk per face. That
+ * single chunk holds at most FACE_R_DIM exponent rows, so short faces are supported only while
+ * face_r_dim * num_faces <= FACE_R_DIM (the host's default face shapes satisfy this; a 16x32 tile
+ * of four 8-row faces would not). The CB's own partial_face flag (tile height below the full tile)
+ * is not used here, since it is also set for a 16x32 tile whose two full-height faces need a chunk
+ * each.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  new_output          New output circular buffer / operand index to configure for.
@@ -169,9 +172,13 @@ inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output)
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
+    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const bool partial_face = get_output_face_r_dim(output_id) < FACE_R_DIM;
+    const bool partial_face = face_r_dim < FACE_R_DIM;
+    LLK_ASSERT(
+        face_r_dim == FACE_R_DIM || face_r_dim * num_faces <= FACE_R_DIM,
+        "short-face block-float tile needs more than one exponent chunk");
 
     SAN_HOOK(reconfigure(
         StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
@@ -179,7 +186,9 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
         StateVal<Operand<Exu::Pack>::TileWidth>(tile_c_dim),
         StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
-        StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
+        // The sanitizer tracks the CB's partial_face flag, as the other pack hooks do; partial_face above is
+        // the packer's own exponent-chunk flag, which this hook does not model.
+        StateVal<Operand<Exu::Pack>::PartialFace>(get_output_partial_face(output_id)),
         StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
         pack_src_format[output_id],
@@ -193,8 +202,12 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
 /**
  * Conditionally reconfigure the packer when switching output operands: reprograms the packer when the
  * new output's data formats or tile geometry (face height, face count, tile column dimension) differ
- * from the old one's and neither destination format is Invalid. The geometry is compared because the
- * reconfig also programs the block-float exponent section size from it.
+ * from the old one's and neither destination format is Invalid. Face height and face count are
+ * compared because the reconfig programs the block-float exponent section size from them. The tile
+ * column dimension feeds nothing the reconfig programs; it is compared to keep the sanitizer's
+ * TileWidth state current and because it is the only term that changes on a same-format 16x32 ->
+ * 32x16 switch, whose hw_configure sizing (one chunk, from the CB partial-face flag) the reconfig
+ * must replace with the two chunks of a two-full-face tile.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  old_output          Currently configured output operand index.

@@ -107,6 +107,11 @@ inline void llk_pack_rows(std::uint32_t dst_index, std::uint32_t base_ptr) {
 template <ckernel::experimental::LLKMemDescriptor DESC, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_reconfig_data_format() {
     SAN_HOOK(unsupported());
+    // A short-face block-float tile carries one exponent chunk of FACE_R_DIM rows, so its faces must fit it.
+    static_assert(
+        DESC.shape.face_r_dim == ckernel::FACE_R_DIM ||
+            DESC.shape.face_r_dim * DESC.shape.total_num_faces() <= ckernel::FACE_R_DIM,
+        "short-face block-float tile needs more than one exponent chunk");
     constexpr std::uint8_t RegFmt = ckernel::infer_pack_reg_fmt(DESC.format, is_fp32_dest_acc_en);
     // tile_size in 16B words (fifo_page_size units) == a single tile's L1 size.
     constexpr std::uint32_t tile_size = ckernel::experimental::tile_stride_words(DESC.format, DESC.shape);

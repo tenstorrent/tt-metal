@@ -17,10 +17,10 @@
 //                          runs before the first pack: the unconditional reconfig must program the
 //                          exponent-section geometry of the CB's tile.
 //   PACK_RECONFIG_TWO_ARG: the packer starts configured for c_2 (never written; the same Bfp8_b format as
-//                          c_16 but a different face count) and pack_reconfig_data_format<true>(c_2, c_16)
+//                          c_16 but a different tile geometry) and pack_reconfig_data_format<true>(c_2, c_16)
 //                          switches it: the conditional reconfig must act on the geometry change even
 //                          though the formats match.
-//   PACK_NO_RECONFIG:      the packer is configured for c_16 by the hw startup only (control).
+//   PACK_HW_STARTUP_ONLY:  the packer is configured for c_16 by the hw startup only (control).
 void kernel_main() {
     constexpr std::uint32_t onetile = 1;
     const std::uint32_t num_tiles = get_compile_time_arg_val(0);
@@ -31,7 +31,7 @@ void kernel_main() {
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2);
     copy_init(tt::CBIndex::c_0);
     pack_reconfig_data_format<true /*is_tile_dim_reconfig_en*/>(tt::CBIndex::c_2, tt::CBIndex::c_16);
-#elif defined(PACK_NO_RECONFIG)
+#elif defined(PACK_HW_STARTUP_ONLY)
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     copy_init(tt::CBIndex::c_0);
 #else
