@@ -31,15 +31,16 @@ Tensor loss_function(
         case LossFunction::MSE: fused_ops.push_back(EltwiseUnaryWithParam{UnaryOpType::SQUARE}); break;
         default: TT_THROW("unsupported loss function {}. Please change.", loss_kind);
     }
-    Tensor result = ttnn::subtract(ref, prediction, std::nullopt, memory_config, optional_output_tensor, fused_ops);
+    const auto diff_output_tensor = (reduce_mode == LossReductionMode::NONE) ? optional_output_tensor : std::nullopt;
+    Tensor result = ttnn::subtract(ref, prediction, std::nullopt, memory_config, diff_output_tensor, fused_ops);
 
     switch (reduce_mode) {
         case LossReductionMode::SUM:
             return ttnn::sum(
-                result, /*dim_arg=*/std::nullopt, /*keepdim=*/false, memory_config.value_or(ref.memory_config()));
+                result, /*dim_arg=*/std::nullopt, /*keepdim=*/false, memory_config.value_or(ref.memory_config()), optional_output_tensor);
         case LossReductionMode::MEAN:
             return ttnn::mean(
-                result, /*dim_arg=*/std::nullopt, /*keepdim=*/false, memory_config.value_or(ref.memory_config()));
+                result, /*dim_arg=*/std::nullopt, /*keepdim=*/false, memory_config.value_or(ref.memory_config()), optional_output_tensor);
         case LossReductionMode::NONE:
         default:
             // TODO: old code indicated this path is unsupported, but the all post commit test pipeline uses this path.
