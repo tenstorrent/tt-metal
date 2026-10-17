@@ -32,7 +32,7 @@ asserted.
 import torch
 from conftest import blackhole_only, skip_for_coverage
 from helpers.format_config import DataFormat
-from helpers.golden_generators import TILE_DIM
+from helpers.golden_generators import FACE_DIM, TILE_DIM
 from helpers.llk_params import (
     DestAccumulation,
     ReducePool,
@@ -43,7 +43,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     SDPA_REDUCE_ROW_POOL,
@@ -58,7 +58,11 @@ pytestmark = blackhole_only
 
 # The reduce span: 8 logical rows of 32 columns, packed into Dest face 0 (16 rows of 16 lanes).
 LOGICAL_ROWS = 8
-FACE_DIM = 16
+
+# Pinned stimuli range (the tolerance reasoning at the assert depends on it): bf16 values in
+# [0.1, 1.1) are multiples of 2^-11 and every partial sum of 32 of them stays below 2^6, so the
+# op's fp32 add chain is exact and the row maxima cluster near the top of the range.
+STIMULI_SPEC = StimuliSpec.uniform(low=0.1, high=1.1)
 
 
 def sdpa_reduce_row_golden(
@@ -97,6 +101,8 @@ def test_sdpa_reduce_row(
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
+        spec_A=STIMULI_SPEC,
+        spec_B=STIMULI_SPEC,
     )
 
     torch_format = format_dict[formats.input_format]
@@ -144,13 +150,16 @@ def test_sdpa_reduce_row(
     ).reshape(input_dimensions)
 
     # Validate ONLY the op's defined output lanes: column 0 of rows 0..LOGICAL_ROWS-1.
-    # MAX returns one of its inputs, so it must be bit-exact: with uniform [0.1, 1.1) stimuli
-    # every row max lies in [1.0, 1.1] and the default Float16_b tolerance (atol 0.05) would
-    # also accept a max over only part of the row. SUM accumulates in fp32 and rounds to
-    # bf16 at the store, so it keeps the format tolerance.
+    # MAX returns one of its inputs, so it must be bit-exact: with STIMULI_SPEC the row maxima
+    # cluster near the top of the range, where the default Float16_b tolerance (atol + rtol * |x|
+    # = 0.05 + 0.05 * |x|) would also accept a max taken over only part of the row.
+    # SUM: with STIMULI_SPEC the fp32 SFPADD chain is exact (multiples of 2^-11 summing to less
+    # than 2^6), so the only device error is the single fp32 -> bf16 conversion at the store,
+    # at most 1 ULP (measured 1 ULP on p100a); the default tolerance (about +-1.0 on row sums
+    # of ~19, one whole input element) would miss a dropped addend.
     assert passed_test(
         golden,
         res_tensor[:LOGICAL_ROWS, 0],
         formats.output_format,
-        max_ulp=0 if reduce_pool == ReducePool.Max else None,
+        max_ulp=0 if reduce_pool == ReducePool.Max else 1,
     )
