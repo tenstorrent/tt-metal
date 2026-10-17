@@ -8199,6 +8199,14 @@ tasks:
     kind: op
     layer: 21
     stateful: false
+  frozen:
+    at: '2026-10-17T15:20:22'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_kv.py: 6c8da2f0629122fde792d63370e84bffbad78daba973e7ff9317fa14ab65ab49
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.dec_reuse.05
   title: 'dec_reuse block with steps 1-5 on device (last: kv)'
   step: implement
