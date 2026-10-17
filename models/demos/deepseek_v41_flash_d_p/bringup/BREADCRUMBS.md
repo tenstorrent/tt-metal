@@ -1482,3 +1482,20 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   0.0485 <= 0.0840; mixed 0.0486 <= 0.0847; small 0.0347 <= 0.2; big 0.0303 <= 0.2. test_cache_starts
   (BRINGUP_TASK=C.dec_reindex.attention, layers [20, 24], DS41-36): 4 passed, 0 failures each.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attention.py && BRINGUP_TASK=C.dec_reindex.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`
+
+## C.dec_reuse.attention implement (attempt 1)
+- No new module: layer 21 (ratio 1, reader of layer 20's KV and top-k) runs `tt/sparse_attention.py:TtSparseAttention`
+  through the existing reader path (`_sparse_attention_host_fn`; hybrid `HybridDeviceModel.layer` passes
+  compress_cache = state.compress[20] and topk_device = state.topk[20] of the same chunk). The component gate already
+  passed on it in the orchestrator's first run (err 0.0377); only the contract test failed ("layer 21: its attention
+  (and served caches) is not on the device yet").
+- Fix (DS41-28): `DEVICE_STEPS["dec_reuse"]` = attn_hc, attn_collapse, attn_norm, q_a, kv, attention in hooks.py
+  (attn_hc .. kv had passed C.dec_reuse.* / S.dec_reuse.01-05 on the swa modules with no entry).
+- Gate: component PASS, err_attention_L21 0.0377 <= 0.4881; vs CPU 0.0329 <= 0.0693; chunk0 0.0335 <= 0.0700; layer0
+  0.0427 <= 0.0769; mixed 0.0416 <= 0.0800; small 0.0338 <= 0.2; big 0.0274 <= 0.2. test_cache_starts
+  (BRINGUP_TASK=C.dec_reuse.attention, layers [20, 21], DS41-36): 4 passed.
+- Probe ds41_dec_reuse/probe_001 (hybrid [20, 21], golden chunks 0, 2048): layer 21 used layer 20's device top-k and
+  served compressed cache; output bit-identical to the host top-k path (max diff 0). (A block-out vs golden part was
+  removed after the run: there is no layer_22 golden.)
+- Re-run: `PYTHONPATH=$PWD BRINGUP_TASK=C.dec_reuse.attention scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attention.py && PYTHONPATH=$PWD BRINGUP_TASK=C.dec_reuse.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`;
+  probe `PYTHONPATH=$PWD scripts/tt-probe.sh ds41_dec_reuse < tests/ttnn/unit_tests/operations/ds41_dec_reuse/probes/probe_001.py`.
