@@ -45,6 +45,12 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 )
 
 WINDOW_SLOT = 128  # >= sliding_window - 1 carried rows, tile aligned
+
+
+def _round_up(x: int, m: int) -> int:
+    return -(-x // m) * m
+
+
 # per-chip bytes of the one zero block a state uploads per tensor; larger caches are zeroed by device copies of it (a
 # replicated 0.5 GB host upload is a 4 GB host write that outlasts the safe runner's 5 s dispatch timeout)
 ZERO_BLOCK_BYTES = 4 << 20
@@ -136,20 +142,163 @@ class V41ChunkTables:
       chunk query index (``query_first``: the candidate source pins each query's newest row from it).
 
     Per-chip query layout (window rows, indexer tails): chip (a, b) holds the chunk's contiguous query rows
-    ``(a * tp + b) * S/(sp*tp)`` onwards, as after the head->sequence all-to-all."""
+    ``(a * tp + b) * S/(sp*tp)`` onwards, as after the head->sequence all-to-all.
 
-    def __init__(self, mesh_device, config, max_seq_len: int, chunk: int, layers: list[int]):
+    **Generic mode** (``generic=True``; ``V41GenericPrefillTrace``): a chunk's forward depends on its start only
+    through device inputs, so one capture serves every chunk whose score width falls in one bucket. The RoPE
+    slices, the pin page (``start + query_first``), the per-query visible counts of the indexer masks and the
+    compressed-row indices of the cache writes are host-filled fixed buffers (``prepare_chunk``); the indexer
+    scores at the bucket width (``bucket_width``) and masks the rows at or past each query's visible count
+    (``mask``) instead of relying on the score kernel's start-relative causal window. No position tables are
+    kept on the device (0.67 GB per state at 1M)."""
+
+    def __init__(self, mesh_device, config, max_seq_len: int, chunk: int, layers: list[int], generic: bool = False):
         self.mesh_device, self.config = mesh_device, config
         self.sp, self.tp = tuple(mesh_device.shape)
         self.max_seq_len, self.chunk = max_seq_len, chunk
-        ratios = {config.compress_ratio(l) for l in layers}
-        kinds = {(r > 0, 1) for r in ratios} | {(True, r) for r in ratios if r > 1}
-        self._rope = {kind: self._rope_table(*kind) for kind in sorted(kinds)}
+        self.generic = generic
+        self.ratios = ratios = {config.compress_ratio(l) for l in layers}
+        self.kinds = kinds = {(r > 0, 1) for r in ratios} | {(True, r) for r in ratios if r > 1}
         window = config.SLIDING_WINDOW
         self._window = {w: self._window_table(w) for w in {min(s, window - 1) for s in range(0, max_seq_len, chunk)}}
+        self._query_first = self._query_first_table()
+        self._rope, self._visibility = {}, {}
+        if generic:
+            self._init_generic(ratios, kinds)
+            return
+        self._rope = {kind: self._rope_table(*kind) for kind in sorted(kinds)}
         # ratio 1 needs no visibility table: the score kernel's causal mask is exactly t <= p there
         self._visibility = {r: self._visibility_table(r) for r in ratios if r > 1}
-        self._query_first = self._query_first_table()
+
+    # --- generic mode --------------------------------------------------------------------------------------------
+    MIN_BUCKET = 8192  # the first score-width bucket (tokens); doubles up to max_seq_len
+
+    def _init_generic(self, ratios, kinds):
+        """The fixed per-chunk input buffers and the constants of the bucketed score widths."""
+        rows = self.chunk // (self.sp * self.tp)  # this chip's query rows
+        self.buckets = []
+        w = self.MIN_BUCKET
+        while w < self.max_seq_len:
+            self.buckets.append(w)
+            w *= 2
+        self.buckets.append(_round_up(self.max_seq_len, 32))
+        self._rope_buffers = {
+            kind: tuple(self._replicated(torch.zeros(1, 1, self.chunk // kind[1], 64), ttnn.bfloat16) for _ in range(2))
+            for kind in sorted(kinds)
+        }
+        # the pin page: start + query_first per chip (segment_max / candidate_scores read p_i = pin_base + pin[0] + i)
+        self._pin = self._sharded_u32(torch.zeros(self.sp, self.tp, 1, 8, dtype=torch.int32))
+        # per-ratio visible counts of this chip's queries [1, 1, rows, 1] fp32 tiled, and the column iota at the
+        # widest score ([1, 1, 1, max/ratio + 32] fp32, sliced per bucket)
+        self._visible = {r: self._per_query_chip(torch.zeros(self.chunk, 1), ttnn.float32) for r in ratios if r > 0}
+        self._iota = {
+            r: self._replicated(torch.arange(self.buckets[-1] // r + 32).float().view(1, 1, 1, -1), ttnn.float32)
+            for r in ratios
+            if r > 0
+        }
+        # the compressed rows a chunk writes: per ratio [1, 1, 1, chunk / ratio] uint32 (row-major, replicated)
+        self._row_index = {
+            r: ttnn.from_torch(
+                torch.zeros(1, 1, 1, self.chunk // r, dtype=torch.int32),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            for r in ratios
+            if r > 0
+        }
+        self._query_rows = rows
+        self._chunk_start = None
+
+    def _sharded_u32(self, host):
+        return ttnn.from_torch(
+            host,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, (self.sp, self.tp), dims=(0, 1)),
+        )
+
+    def bucket(self, start: int, length: int) -> int:
+        """The score-width bucket (tokens) of the chunk at ``start``: the smallest bucket at or above its visible
+        token count ``start + length``."""
+        visible = start + length
+        for w in self.buckets:
+            if visible <= w:
+                return w
+        raise AssertionError(f"chunk at {start} + {length} beyond max_seq_len {self.max_seq_len}")
+
+    def bucket_width(self, ratio: int, start: int, length: int) -> int:
+        """The indexer's score width (rows of a ratio-``ratio`` source) of the chunk at ``start``: its bucket."""
+        return self.bucket(start, length) // ratio
+
+    def prepare_chunk(self, start: int, length: int) -> None:
+        """Host-fill the chunk's input buffers: RoPE rows, the pin page, the visible counts, the row indices. Runs
+        between a chunk's ``_stage`` and its forward (or replay); no device work."""
+        assert self.generic
+        assert start % self.chunk == 0 or start == 0, start
+        chunk = self.chunk
+        for (compressed, stride), buffers in self._rope_buffers.items():
+            positions = torch.arange(start, start + chunk, stride)
+            for host, buffer in zip(cos_sin(self.config, compressed, positions), buffers):
+                ttnn.copy_host_to_device_tensor(self._host_replicated(host, ttnn.bfloat16), buffer)
+        first = torch.arange(self.sp * self.tp, dtype=torch.int32) * self._query_rows  # chip query offsets
+        pin = torch.zeros(self.sp, self.tp, 1, 8, dtype=torch.int32)
+        pin[..., 0] = (first + start).reshape(self.sp, self.tp, 1)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                pin,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, (self.sp, self.tp), dims=(0, 1)),
+            ),
+            self._pin,
+        )
+        positions = torch.arange(chunk, dtype=torch.int64) + start  # every query row of the chunk
+        for r, buffer in self._visible.items():
+            visible = ((positions + 1) // r).float().view(chunk, 1)
+            host = visible.reshape(self.sp, self.tp, self._query_rows, 1)
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    host,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, (self.sp, self.tp), dims=(0, 1)),
+                ),
+                buffer,
+            )
+        for r, buffer in self._row_index.items():
+            rows = torch.arange(chunk // r, dtype=torch.int32) + start // r
+            ttnn.copy_host_to_device_tensor(
+                self._host_replicated(rows.view(1, 1, 1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), buffer
+            )
+        self._chunk_start = start
+
+    def _host_replicated(self, host, dtype, layout=ttnn.TILE_LAYOUT):
+        """A replicated host tensor (``copy_host_to_device_tensor`` into a replicated device buffer)."""
+        return ttnn.from_torch(
+            host, dtype=dtype, layout=layout, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device)
+        )
+
+    def pin(self, start: int):
+        """(pin page, pin_base) for ``segment_max`` / ``candidate_scores``: ``p_i = pin_base + pin[0] + i``."""
+        if self.generic:
+            assert self._chunk_start == start, (self._chunk_start, start)
+            return self._pin, 0
+        return self._query_first, start
+
+    def mask(self, ratio: int, width: int):
+        """Generic: additive bf16 [1, 1, rows, width] of this chip's queries: -inf at the score columns at or past
+        the query's visible count (rows the query may not see), 0 elsewhere."""
+        assert self.generic
+        iota = ttnn.slice(self._iota[ratio], [0, 0, 0, 0], [1, 1, 1, width])
+        beyond = ttnn.ge(iota, self._visible[ratio])
+        return ttnn.typecast(ttnn.where(beyond, float("-inf"), 0.0), ttnn.bfloat16)
+
+    def row_index(self, ratio: int):
+        """Generic: the chunk's compressed row indices of a ratio-``ratio`` source, [1, 1, 1, chunk / ratio]."""
+        return self._row_index[ratio]
 
     def _replicated(self, host, dtype, layout=ttnn.TILE_LAYOUT):
         return ttnn.from_torch(
@@ -209,8 +358,14 @@ class V41ChunkTables:
         assert start % stride == 0 and start + self.chunk <= self.max_seq_len, (start, stride, self.max_seq_len)
         first, rows = start // stride, self.chunk // stride
         out = []
-        for t in self._rope[(compressed, stride)]:
-            t = ttnn.slice(t, [0, 0, first, 0], [1, 1, first + rows, t.shape[3]])
+        if self.generic:
+            assert self._chunk_start == start, (self._chunk_start, start)
+            tables = self._rope_buffers[(compressed, stride)]
+        else:
+            tables = self._rope[(compressed, stride)]
+        for t in tables:
+            if not self.generic:
+                t = ttnn.slice(t, [0, 0, first, 0], [1, 1, first + rows, t.shape[3]])
             out.append(ttnn.mesh_partition(t, dim=2, cluster_axis=SP_AXIS) if self.sp > 1 else t)
         return tuple(out)
 
@@ -220,6 +375,7 @@ class V41ChunkTables:
 
     def visibility_tail(self, ratio: int, width: int):
         """Per-chip additive [1, 1, chunk/(sp*tp), width] mask of the chunk's first ``width`` compressed rows."""
+        assert not self.generic, "generic mode masks the whole score (mask)"
         t = self._visibility[ratio]
         return ttnn.slice(t, [0, 0, 0, 0], [1, 1, t.shape[2], width])
 
@@ -242,7 +398,10 @@ class V41PrefillState:
         chunk: int,
         layers: list[int],
         kv_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
+        generic: bool = False,
     ):
+        """``generic``: position-generic chunk graphs (``V41ChunkTables`` generic mode; ``V41GenericPrefillTrace``):
+        the cache writes scatter by an uploaded row index instead of a start-dependent slice."""
         assert kv_format in self.FORMATS, f"V4.1 KV format must be one of {self.FORMATS}, got {kv_format}"
         self.mesh_device = mesh_device
         self.config = config
@@ -250,7 +409,8 @@ class V41PrefillState:
         self.geometry = V41CacheGeometry(config, max_seq_len, chunk, layout.sp)
         layout.check_chunk(chunk)
         self.layers = list(layers)
-        self.tables = V41ChunkTables(mesh_device, config, max_seq_len, chunk, self.layers)
+        self.tables = V41ChunkTables(mesh_device, config, max_seq_len, chunk, self.layers, generic=generic)
+        self.generic = generic
         self.start = 0
         self.compressed_kv_format = kv_format
         # one 512-dim row with RoPE inside (V4.1 attends over all of it; no separate BF16 RoPE part)
@@ -381,7 +541,16 @@ class V41PrefillState:
             rows = ttnn.to_layout(self._gather_sp(local), ttnn.ROW_MAJOR_LAYOUT)
             if rows.shape[2] != count:
                 rows = ttnn.slice(rows, [0, 0, 0, 0], [1, 1, count, rows.shape[3]])
-            self._write_rows(cache, self._encode(rows, fmt), offset)
+            if self.generic:
+                # the destination rows come from the chunk's uploaded row index (``first + i``), so the graph is the
+                # same at every chunk start: row ``i`` of the encoded rows lands at ``dst_base + row_index[i]``
+                from models.demos.deepseek_v3_d_p.tt.v41.pool import scatter_rows
+
+                scatter_rows(
+                    self._encode(rows, fmt), cache, self.tables.row_index(ratio), dst_base=offset - first, rows=count
+                )
+            else:
+                self._write_rows(cache, self._encode(rows, fmt), offset)
 
     def write_window_rows(self, layer: int, rows):
         """Decode (``tt/v41/decode.py``): place ``layer``'s carry at rows [0, WINDOW_SLOT) and ``rows`` ``[1, 1, n,

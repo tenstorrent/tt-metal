@@ -37,7 +37,12 @@ from models.demos.deepseek_v3_d_p.tt.v41.batch_decode import TtV41BatchDecoder
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.decode import ROWS
 from models.demos.deepseek_v3_d_p.tt.v41.engram_checkpoint import build_engram_modules
-from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer, V41PrefillTrace
+from models.demos.deepseek_v3_d_p.tt.v41.transformer import (
+    TtV41Transformer,
+    V41GenericPrefillTrace,
+    V41PrefillTrace,
+    prefill_generic,
+)
 from models.demos.deepseek_v3_d_p.tt.v41.weights import load_layer, load_layer_dense, resolve_checkpoint
 
 WARMUP_PROMPT = 255  # tokens of the warm-up prompt (a full window; odd, so the ratio-2 carry path runs first)
@@ -48,6 +53,10 @@ PREFILL_SLOTS = "TT_V41_PREFILL_SLOTS"  # prefill states (default 2): requests p
 # lengths run eagerly, or are captured on their first request when ``TT_V41_TRACE_PREFILL_ON_MISS=1``.
 TRACE_PREFILL_LENGTHS = "TT_V41_TRACE_PREFILL_LENGTHS"
 TRACE_PREFILL_ON_MISS = "TT_V41_TRACE_PREFILL_ON_MISS"
+# ``TT_V41_PREFILL_GENERIC=1`` (transformer.PREFILL_GENERIC): the prefill states are position-generic and the trace
+# phase captures one ``V41GenericPrefillTrace`` per state (one capture per score-width bucket), so prompts of any
+# length longer than one chunk replay captures for every chunk but the final one. The per-length captures above
+# still apply to prompts of exactly those lengths (they replay the final chunk too).
 
 
 def _round_up(x: int, m: int) -> int:
@@ -101,7 +110,11 @@ class DeepseekV41ForCausalLM:
         self.slots: OrderedDict[int, int] = OrderedDict()
         self.free: list[int] = list(range(max_batch_size))
         # prefill states, in use round-robin (a request's rows are in its decode slot once its prefill returns)
-        self.prefill_states: list[V41PrefillState] = [model.new_state() for _ in range(prefill_slots)]
+        self.generic = prefill_generic()
+        self.prefill_states: list[V41PrefillState] = [
+            model.new_state(generic=self.generic) for _ in range(prefill_slots)
+        ]
+        self.generic_traces: dict[int, V41GenericPrefillTrace] = {}  # id(state) -> its bucket captures
         self.next_prefill_state = 0
         self.warmed_up = False
         # traced prefill per (slot, prompt length): the fixed input buffers are shared by every trace
@@ -240,13 +253,18 @@ class DeepseekV41ForCausalLM:
                 trace = self._capture_prefill(state, n)
                 logger.info(f"DeepSeek-V4.1-Flash: prefill of {n} tokens captured in {time.time() - t0:.1f} s")
                 t0 = time.time()
+            generic = self.generic_traces.get(id(state)) if trace is None and n > self.model.chunk else None
             if trace is not None:
                 logits, _ = trace.run(prompt)
+                mode = "replay"
+            elif generic is not None:
+                logits, _ = generic.run(prompt)
+                trace, mode = generic, f"generic {generic.last['replayed']}+{generic.last['eager']}"
             else:
                 logits = self.model.prefill_into(prompt, state)
+                mode = "eager"
             t1 = time.time()
             self.decoder.join(slot, prompt, state)
-            mode = "replay" if trace is not None else "eager"
             phases = "" if trace is None else " " + " ".join(f"{k} {v:.3f}" for k, v in trace.last.items())
             logger.info(
                 f"DeepSeek-V4.1-Flash: prefill of {n} tokens in {time.time() - t0:.2f} s ({mode};{phases} "
@@ -341,6 +359,15 @@ class DeepseekV41ForCausalLM:
                     self._capture_prefill(state, n)
                     logger.info(
                         f"DeepSeek-V4.1-Flash warm-up: prefill of {n} tokens captured in {time.time() - t0:.1f} s"
+                    )
+            if self.generic:
+                for k, state in enumerate(self.prefill_states):
+                    t0 = time.time()
+                    trace = V41GenericPrefillTrace(self.model, state, self.prefill_buffers, warmup=2 if k == 0 else 1)
+                    self.generic_traces[id(state)] = trace
+                    logger.info(
+                        f"DeepSeek-V4.1-Flash warm-up: generic prefill of state {k} captured in {time.time() - t0:.1f} s"
+                        f" ({len(trace.controllers)} buckets {sorted(trace.captured_at)}, {trace.num_segments} segments)"
                     )
             self.prefill_traced = True
             return

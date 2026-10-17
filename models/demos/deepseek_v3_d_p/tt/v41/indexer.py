@@ -123,6 +123,11 @@ class DecodePins:
     def query_first(self):
         return self.newest
 
+    def pin(self, start: int):
+        """(pin page, pin_base) as ``V41ChunkTables.pin``: a row's pin is its absolute row, so ``start`` is 0."""
+        assert start == 0, start
+        return self.newest, 0
+
 
 def _is_sentinel(t):
     """uint32 1 where ``t`` is the 0xFFFFFFFF sentinel, else 0 (valid ids are below 2^31)."""
@@ -272,10 +277,13 @@ class TtV41Indexer(LightweightModule):
         """[1, *, S/sp, W] replicated across TP -> this chip's contiguous quarter of the SP shard."""
         return ttnn.mesh_partition(t, dim=2, cluster_axis=1) if self.tp > 1 else t
 
-    def _width(self, start: int, length: int) -> tuple[int, int]:
-        """(visible rows, score width: the visible rows rounded up to tiles)."""
+    def _width(self, start: int, length: int, tables=None) -> tuple[int, int]:
+        """(visible rows, score width: the visible rows rounded up to tiles; in generic mode the bucket width of
+        ``tables``, the same for every chunk of the bucket)."""
         assert start % self.ratio == 0 and (start // self.ratio) % 32 == 0, f"chunk start {start} not tile-aligned"
         visible = (start + length) // self.ratio
+        if tables is not None and tables.generic:
+            return visible, tables.bucket_width(self.ratio, start, length)
         return visible, _round_up(max(visible, TOPK_MIN), 32)
 
     def _query(self, x, qr, tables, start: int):
@@ -299,10 +307,19 @@ class TtV41Indexer(LightweightModule):
         """x [1,1,S/sp,hidden/tp] bf16, qr [1,1,S/sp,q_lora] bf16 (TP-replicated), index_k [1,1,T_max,d] row-major,
         ``tables`` the geometry's ``V41ChunkTables`` -> (scores [1, 1, S/(sp*tp), W] bf16 row-major DRAM-interleaved,
         -inf where not visible, W the visible rows rounded up to tiles (ratio 2: plus one -inf tile); visible rows)."""
-        visible, width = self._width(start, length)
+        visible, width = self._width(start, length, tables)
         q, w = self._query(x, qr, tables, start)
         q_rows = q.shape[2]
         k = ttnn.to_layout(ttnn.slice(index_k, [0, 0, 0, 0], [1, 1, width, self.head_dim]), ttnn.TILE_LAYOUT)
+        if tables.generic:
+            # position-generic: the kernel's causal window masks nothing real (it starts at ``width``, past every
+            # row; K is padded by one zero tile for it), and the rows a query may not see (at or past its visible
+            # count, a device input) are masked over the whole score: one add, the same graph at every start
+            k = ttnn.pad(k, [(0, 0), (0, 0), (0, 32), (0, 0)], 0.0)
+            score = self._score(q, k, w, chunk_start_idx=width)  # [1, 1, q_rows, width + 32]
+            masked = ttnn.add(ttnn.to_layout(score, ttnn.TILE_LAYOUT), tables.mask(self.ratio, score.shape[3]))
+            ttnn.deallocate(score)
+            return ttnn.to_layout(masked, ttnn.ROW_MAJOR_LAYOUT), visible
         if self.ratio == 1:
             # V4.1's rule t < p + 1 is the kernel's causal mask: under seq_shard_axes=[] chip c (row-major (sp, tp)
             # order) starts its diagonal at chunk_start_idx + c * q_rows, which is this query split
@@ -337,17 +354,17 @@ class TtV41Indexer(LightweightModule):
         if width // block <= k:
             return CandidateBlocks(None)
         assert start % SUPERBLOCK == 0, f"chunk start {start} does not begin a superblock"
-        pin, every = tables.query_first(), 0xFFFFFFFF
+        (pin, pin_base), every = tables.pin(start), 0xFFFFFFFF
         if width // SUPERBLOCK <= k:
             # one level: block maxima of the whole row (block ids in order), the newest row's block pinned to +inf
-            return CandidateBlocks(_topk(segment_max(score, block, pin, start, every), k))
+            return CandidateBlocks(_topk(segment_max(score, block, pin, pin_base, every), k))
         # two levels: the top-k blocks lie in the top-k superblocks by max (the newest row's superblock pinned first);
         # their rows are gathered in rank order and ranked by block max, the newest row pinned again in rank 0 (at
         # column (start + q) % 32; chunk starts and per-chip query offsets are multiples of 32)
         per = SUPERBLOCK // block
-        sb = _topk(segment_max(score, SUPERBLOCK, pin, start, every), k)  # sentinels gather -inf superblocks
+        sb = _topk(segment_max(score, SUPERBLOCK, pin, pin_base, every), k)  # sentinels gather -inf superblocks
         rows = gather_runs(score, sb, SUPERBLOCK)
-        pos = ttnn.to_layout(_topk(segment_max(rows, block, pin, start, SUPERBLOCK - 1), k), ttnn.TILE_LAYOUT)
+        pos = ttnn.to_layout(_topk(segment_max(rows, block, pin, pin_base, SUPERBLOCK - 1), k), ttnn.TILE_LAYOUT)
         rank = _min(ttnn.bitwise_right_shift(pos, per.bit_length() - 1), k - 1)  # pos = rank * per + sub-block
         c = ttnn.to_layout(_gather_cols(sb, ttnn.to_layout(rank, ttnn.ROW_MAJOR_LAYOUT)), ttnn.TILE_LAYOUT)
         ids = ttnn.add(ttnn.multiply(c, per), ttnn.bitwise_and(pos, per - 1))
@@ -361,8 +378,9 @@ class TtV41Indexer(LightweightModule):
         q, w = self._query(x, qr, tables, start)
         q = ttnn.to_layout(ttnn.experimental.nlp_concat_heads(q), ttnn.ROW_MAJOR_LAYOUT)
         w = ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT)
-        _, width = self._width(start, qr.shape[2] * self.sp)
-        return candidate_scores(q, w, index_k, ids, tables.query_first(), start, width)
+        _, width = self._width(start, qr.shape[2] * self.sp, tables)
+        pin, pin_base = tables.pin(start)
+        return candidate_scores(q, w, index_k, ids, pin, pin_base, width)
 
     def decode_query(self, q, w):
         """The decode tile's query and head weights (``q`` [1, heads, ROWS, 128] and ``w`` [1, 1, ROWS, heads] as
@@ -438,7 +456,7 @@ class TtV41Indexer(LightweightModule):
 
     def forward(self, x, qr, index_k, tables, start: int, length: int, candidates: CandidateBlocks | None = None):
         """-> (top-k rows [1, 1, S/(sp*tp), k] uint32 row-major (sentinel tail), published CandidateBlocks or None)."""
-        visible, width = self._width(start, length)
+        visible, width = self._width(start, length, tables)
         if self.uses_candidates and candidates.ids is not None and width >= SPARSE_SCORE_MIN_WIDTH:
             rows = self.candidate_rows(x, qr, index_k, tables, start, candidates.ids)
             return self._topk_in_rows(rows, candidates.ids, min(self.config.INDEX_TOPK, visible)), None
