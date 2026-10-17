@@ -188,8 +188,9 @@ ShardSpec generate_transpose_shard_spec(
 }
 
 // The sharded row-major WH factory handles an input height that is not a tile multiple through the narrow-row
-// untilize, which packs H % TILE_HEIGHT datums per output row. Four shape classes come out wrong on both Wormhole
-// and Blackhole (measured, bf16 and fp32), so they are rejected here before any program is built:
+// untilize, which packs H % TILE_HEIGHT datums per output row. Four shape classes come out wrong (all four measured
+// on Blackhole, the first three also on Wormhole; bf16 and fp32), so they are rejected here before any program is
+// built:
 // - H > TILE_HEIGHT: the kernel packs every tile column at H % TILE_HEIGHT datums, so each full tile column is
 //   clipped and the output row is ht * (H % TILE_HEIGHT) datums instead of H;
 // - a row wider than one face: 16-byte alignment is necessary but not sufficient (the LLK narrow-row
@@ -230,6 +231,7 @@ void validate_sharded_rm_transpose_narrow_row(const Tensor& input_tensor) {
         tt::constants::TILE_HEIGHT);
     const uint32_t row_bytes = row_num_datums * input_tensor.element_size();
     const uint32_t alignment = tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t page_pitch = (row_bytes + alignment - 1) / alignment * alignment;
     TT_FATAL(
         row_bytes % alignment == 0,
         "Sharded row-major transpose: output rows of {} datums ({} bytes, H {}) cannot be packed at the {}-byte page "
@@ -238,7 +240,7 @@ void validate_sharded_rm_transpose_narrow_row(const Tensor& input_tensor) {
         row_num_datums,
         row_bytes,
         logical_h,
-        alignment,
+        page_pitch,
         alignment,
         tt::constants::TILE_HEIGHT);
     TT_FATAL(
