@@ -333,7 +333,7 @@ inline void _llk_pack_untilize_(
     // program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal>(address, pack_dst_format);
     program_packer_destination(address);
     // Face rows of the tile, each packed as one MOP run: 2 for 32x32 and for a narrow 32x16 tile, else 1.
-    const std::uint32_t num_faces_per_rdim_tile = num_faces / _llk_pack_untilize_num_faces_c_dim_(num_faces, narrow_tile);
+    const std::uint32_t num_faces_per_rdim_tile = narrow_tile ? num_faces : ((num_faces > 2) ? 2 : 1);
 
     const std::uint32_t tile_dst_offset = tile_dst_ct_offset + tile_dst_rt_offset;
     // Set W = (15 + tile_dst_offset) & 0xF, establishing the W_Cr shadow so that ADDRCRZW in the

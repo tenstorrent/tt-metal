@@ -295,12 +295,12 @@ inline void _llk_pack_untilize_(
     }
     else
     {
-        // Full-height faces: packers 0..3 read Dest rows Y + {0, 8, 32, 40} of a 32-wide tile, so each walks half
-        // the rows of its face column (TILE_R_DIM / 4 runs); for a narrow tile they sit on rows Y + {0, 16} and each
-        // walks its whole face (FACE_R_DIM runs). The diagonal layout keeps its row count (narrow tiles are not
-        // laid out for it). program_packer_untilized_destination starts packer p at p * (TILE_R_DIM / 4) rows of
-        // full_ct_dim * TILE_C_DIM datums; for a narrow tile that is p * FACE_R_DIM rows of full_ct_dim * FACE_C_DIM
-        // datums, the same byte count, so packer 1 starts at the first output row of face 1 without a narrow case there.
+        // Full-height faces: packers 0..3 read Dest rows Y + {0, 8, 32, 40} of a 32-wide tile, each PACR packing the
+        // same row of faces 0+1 (or 2+3), so each packer walks half the rows of a face row (TILE_R_DIM / 4 runs); for a
+        // narrow tile they sit on rows Y + {0, 16} and each walks its whole face (FACE_R_DIM runs). The diagonal layout keeps its row count (narrow tiles are
+        // not laid out for it). program_packer_untilized_destination starts packer p at p * (TILE_R_DIM / 4) rows of full_ct_dim * TILE_C_DIM datums; for a
+        // narrow tile that is p * FACE_R_DIM rows of full_ct_dim * FACE_C_DIM datums, the same byte count, so packer 1 starts at the first output row of face 1
+        // without a narrow case there.
         const std::uint32_t num_rows = (face_r_dim < FACE_R_DIM) ? face_r_dim : ((!diagonal && narrow_tile) ? FACE_R_DIM : TILE_R_DIM / 4);
 
         for (std::uint32_t row = 0; row < num_rows; row++)
