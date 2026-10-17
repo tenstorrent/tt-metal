@@ -7655,6 +7655,13 @@ tasks:
     - ffn_norm
     - router
     layer: 24
+  frozen:
+    at: '2026-10-17T13:36:15'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_12_router.py: a54de5da7af7375fea07d5fa378eb943423780da1c0fbffaff9f4cb20908bdcb
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_reindex.experts
   title: dec_reindex experts (moe) on device, layer 24
   step: implement
