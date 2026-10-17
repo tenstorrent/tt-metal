@@ -255,7 +255,7 @@ inline void _llk_pack_untilize_init_(
  * each MOP row restores W), then runs the MOP once per face group, advancing the Z counter between
  * face groups and resetting counters afterward.
  *
- * @tparam block_ct_dim: Number of input tiles per block.
+ * @tparam block_ct_dim: Number of input tiles per block; may be fewer than the init's block_ct_dim.
  * @tparam full_ct_dim: Total number of input tiles across all blocks.
  * @tparam narrow_row: True when packing fewer than TILE_C_DIM datums per row.
  * @tparam tile_dst_ct_offset: Compile-time column-tile offset into the destination register.
@@ -302,7 +302,8 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
     // Iterate over top, then over bottom faces in the block (if num_faces > 2)
     for (std::uint32_t face = 0; face < num_faces_per_rdim_tile; face++)
     {
-        ckernel::ckernel_template::run();
+        // A non-zero inner loop count in the MOP word replaces the init's, so the MOP packs this block's tiles.
+        TTI_MOP(1, 0, dense ? block_ct_dim / 2 : block_ct_dim);
 
         TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 1);         // z cnt increments by 2xface_r_dimxFACE_C_DIM
         TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0010); // reset ch0_y counters
