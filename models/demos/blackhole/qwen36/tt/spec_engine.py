@@ -858,10 +858,13 @@ class MTPSpecEngine:
     # --------------------------------------------------------------------- #
     # Prefill
     # --------------------------------------------------------------------- #
-    def prefill(self, slot, prompt_ids, page_table_row, _cap_blocks=None):
+    def prefill(self, slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None):
         """Eager prefill into state slot ``slot``, warming its MTP KV; returns host float logits [vocab].
         Replays the recorded chunk trace when B == 1 and record_prefill ran, else the eager path.
-        The GDN seed and the MTP KV of slot Tp-1 are written by the first ``verify``."""
+        The GDN seed and the MTP KV of slot Tp-1 are written by the first ``verify``.
+        ``start_pos`` (vLLM num_computed_tokens; None = not part of prefix caching, the unchanged path): with a GDN
+        prefix-state cache on the model (B > 1 eager path) the prefill resumes from a snapshot <= start_pos (see
+        Qwen36Model.plan_spec_prefix) and recomputes the rest; the B == 1 traced path always recomputes from 0."""
         reset_draft_skip(self, slot)
         self._parked.pop(slot, None)
         self._fresh_dirty.discard(slot)
@@ -870,7 +873,9 @@ class MTPSpecEngine:
         assert self._last_hidden, "prefill before prepare"
         prompt_list = [int(t) for t in torch.as_tensor(prompt_ids).reshape(-1)]
         Tp = len(prompt_list)
-        self._prompts[slot] = (prompt_list, torch.as_tensor(page_table_row).clone())
+        self._prompts[slot] = (prompt_list, torch.as_tensor(page_table_row).clone()) + (
+            () if start_pos is None else (int(start_pos),)
+        )
         cap_blocks = int(torch.as_tensor(page_table_row).shape[-1]) if _cap_blocks is None else _cap_blocks
         assert Tp + self.T <= table_capacity(
             cap_blocks, self.block_size
@@ -895,7 +900,11 @@ class MTPSpecEngine:
             pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)  # MTP chunk fill keeps the nb-wide pt_row
             logits_dev = model.prefill_traced_chunked(prompt, pt_rec, Tp, on_chunk=_on_chunk)
         else:
-            logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot)
+            plan = model.plan_spec_prefix(prompt[0], Tp, start_pos) if start_pos is not None and self.B > 1 else None
+            if plan is None:
+                logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot)
+            else:
+                logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot, plan=plan)
         assert captured_row[0], f"prefill never delivered the chunk holding slot {Tp - 1}"
         if isinstance(logits_dev, torch.Tensor):
             lt = logits_dev
@@ -908,9 +917,12 @@ class MTPSpecEngine:
 
     def _reprefill(self, slot):
         """Re-run a fresh slot's prefill (a seed overwrote its prefill GDN state while it was left out)."""
-        prompt, row = self._prompts[slot]
+        prompt, row, *rest = self._prompts[slot]
         logger.info(f"[spec_engine] re-prefill slot {slot} ({len(prompt)} tokens)")
-        self.prefill(slot, prompt, row)
+        if rest:  # same vLLM start_pos as the original prefill (its cached blocks are still the request's)
+            self.prefill(slot, prompt, row, start_pos=rest[0])
+        else:
+            self.prefill(slot, prompt, row)
 
     def _capture_last_row(self, feed, i, slot):
         """feed row i -> self._last_hidden[slot], fixed-shape programs only (a per-length slice would

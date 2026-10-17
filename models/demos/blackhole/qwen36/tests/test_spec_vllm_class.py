@@ -495,8 +495,9 @@ class FakeEngine:
             draft_token_ids=torch.tensor([[5, 6, 7]], dtype=torch.int32), num_valid=torch.tensor([3], dtype=torch.int32)
         )
 
-    def prefill(self, slot, tokens, page_table):
+    def prefill(self, slot, tokens, page_table, start_pos=None):
         self.calls.append(("prefill", slot, tokens, page_table))
+        self.start_pos_seen = getattr(self, "start_pos_seen", []) + [start_pos]
         return torch.zeros(self.V, dtype=torch.bfloat16)
 
     def release(self, slot):
@@ -705,6 +706,32 @@ def test_prefill_forward(gen_eng):
     _, slot, toks, table = _last(eng, "prefill")
     assert slot == 0 and toks.tolist() == list(range(L))
     assert table.shape == (1, spec_table_width(4096, 3, 64))
+
+
+def test_prefill_forward_threads_start_pos(gen_eng, monkeypatch, expect_error):
+    """QWEN36_SPEC_PREFIX_CACHE=1: per-row start_pos (num_computed_tokens) reaches the engine; 0 keeps the old
+    contract (start_pos not passed, nonzero start_pos asserts)."""
+    gen, eng = gen_eng
+    tokens = torch.arange(80, dtype=torch.long).reshape(2, 40)
+    pt = torch.arange(1, 11, dtype=torch.int32).reshape(2, 5)
+    kw = dict(prompt_lens=np.array([30, 35]), empty_slots=[0, 1])
+    monkeypatch.setenv("QWEN36_SPEC_PREFIX_CACHE", "1")
+    gen.prefill_forward(tokens, pt, None, start_pos=np.array([0, 128]), **kw)
+    assert eng.start_pos_seen == [0, 128]
+    eng.start_pos_seen = []
+    monkeypatch.setenv("QWEN36_SPEC_PREFIX_CACHE", "0")
+    gen.prefill_forward(tokens, pt, None, start_pos=np.array([0, 0]), **kw)
+    assert eng.start_pos_seen == [None, None]
+    with expect_error(AssertionError, "prefix caching"):
+        gen.prefill_forward(tokens, pt, None, start_pos=np.array([0, 128]), **kw)
+
+
+def test_serving_conflict_prefix_flag(monkeypatch):
+    vc = SimpleNamespace(cache_config=SimpleNamespace(enable_prefix_caching=True), scheduler_config=None)
+    monkeypatch.setenv("QWEN36_SPEC_PREFIX_CACHE", "1")
+    assert CLS._serving_conflict(vc) is None
+    monkeypatch.setenv("QWEN36_SPEC_PREFIX_CACHE", "0")
+    assert "prefix caching" in CLS._serving_conflict(vc)
 
 
 def test_prefill_forward_rejects_visual(gen_eng, expect_error):

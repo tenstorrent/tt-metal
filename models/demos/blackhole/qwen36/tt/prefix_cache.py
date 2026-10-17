@@ -43,6 +43,64 @@ def _tokens_np(tokens):
     return np.ascontiguousarray(np.asarray(tokens, dtype=np.int32).reshape(-1))
 
 
+SPEC_PREFIX_ALIGN = 128
+
+
+def spec_prefix_cache_enabled():
+    """QWEN36_SPEC_PREFIX_CACHE (default 1): prefix caching for the MTP spec class; 0 restores the no-prefix behaviour."""
+    return os.environ.get("QWEN36_SPEC_PREFIX_CACHE", "1") == "1"
+
+
+def spec_resume_cap(start_pos, prompt_len, align=SPEC_PREFIX_ALIGN, min_tail=3):
+    """Largest resume position s a spec prefill may use for a vLLM prefix hit of `start_pos` cached tokens.
+
+    s is a multiple of `align`, s <= floor((start_pos-1)/align)*align and prompt_len - s >= min_tail. The extra -1 (vs O's
+    floor(start_pos/align)): the drafter KV at slot s-1 fuses token s; if s sits exactly at the end of the cached span
+    that slot holds the OLD request's token s (stale), so one whole block more is recomputed. 0 = no resume."""
+    start_pos = int(start_pos)
+    if start_pos <= 0:
+        return 0
+    s = ((start_pos - 1) // align) * align
+    while s > 0 and prompt_len - s < min_tail:
+        s -= align
+    return max(s, 0)
+
+
+def spec_learn_positions(start_pos, prompt_len, align=SPEC_PREFIX_ALIGN, min_tail=3):
+    """Snapshot positions worth taking when vLLM holds the KV up to start_pos: the resume cap itself (what a request
+    with the same start_pos can use) and floor(start_pos/align)*align (usable by longer hits), both <= prompt_len-min_tail.
+    """
+    out = set()
+    h = (max(int(start_pos), 0) // align) * align
+    while h > 0 and prompt_len - h < min_tail:
+        h -= align
+    if h > 0:
+        out.add(h)
+    c = spec_resume_cap(start_pos, prompt_len, align, min_tail)
+    if c > 0:
+        out.add(c)
+    return out
+
+
+def spec_save_points(prompt_len, s, learn, chunk=2048, min_len=8192, stride=8192, align=SPEC_PREFIX_ALIGN):
+    """Sorted segment split positions (snapshot after tokens[:p]) for a spec prefill resuming at s, p in (s, L-3]:
+    the learn positions, the end-of-prompt position for L >= min_len, else the last full-chunk boundary, and every
+    `stride` tokens from s (chunk-aligned strides only). Same policy as the plain O path (model._plan_prefix_prefill).
+    """
+    pts = {p for p in learn if s < p <= prompt_len - 3}
+    b_end = ((prompt_len - 3) // align) * align
+    if prompt_len >= min_len:
+        if b_end > max(s, max(pts, default=0)):
+            pts.add(b_end)
+    elif not pts:
+        p = s + ((prompt_len - s) // chunk) * chunk
+        if s < p <= prompt_len - 3:
+            pts.add(p)
+    if stride > 0 and stride % chunk == 0:
+        pts.update(range(s + stride, prompt_len - 2, stride))
+    return sorted(pts)
+
+
 class GdnPrefixStateCache:
     """LRU cache of GDN (rec_state, conv_carry) snapshots at 128-aligned prompt positions.
 
