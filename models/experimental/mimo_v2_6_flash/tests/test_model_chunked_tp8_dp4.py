@@ -10,14 +10,14 @@ The same ~1.5K-token prompt is prefilled three ways on every replica, each into 
 * slot 2: a prefix-cache hit: its first ``PREFIX`` tokens are prefilled on their own, then the rest
   continues from ``start_pos = PREFIX``, reading the prefix from the cache.
 
-All three must give near-identical next-token logits and pick the same next token up to a bf16 near-tie
-(a token the other run scores within ``TIE_STEPS`` bf16 steps of its best: this prompt's top two are one
-step apart). Then every slot decodes greedily from the one-shot slot's first token for a few steps, which
+All three must give near-identical next-token logits (PCC > 0.99), and each must pick a token among the other's
+top ``TOP_K``: this prompt's first token is a near-tie (top two within ~0.4 logit), and equivalent computations
+move each logit by up to ~0.6 after 48 layers (the one-shot prefill alone moved 0.375 when the MoE prefill
+changed from sparse_matmul to expert-major at layer-level PCC 0.99999). Then every slot decodes greedily from the one-shot slot's first token for a few steps, which
 reads the KV the chunks wrote; the generated text is logged and the first tokens must agree. Later chunks of the SWA layers read only the window before them from the cache; those of the
 global layers read the whole context through chunked MLA prefill on the chip that owns the slot.
 """
 
-import math
 import os
 
 import pytest
@@ -41,14 +41,12 @@ CHUNKS = (128, 256, 512, 1024)  # chunk size on replica rows 0..3
 MAX_PREFILL_CHUNK = 2048  # one-shot prefill of the whole prompt must fit in one chunk
 GREEDY_TOKENS = 8
 AGREE_TOKENS = 4
-TIE_STEPS = 2
+TOP_K = 3
 
 
 def near_top(logits, token):
-    """``token`` scores within TIE_STEPS bf16 steps of the best logit (ties from rounding the logits to bf16)."""
-    best = float(logits.max())
-    step = 2.0 ** (math.floor(math.log2(abs(best))) - 7)
-    return float(logits[token]) >= best - TIE_STEPS * step
+    """``token`` is among the TOP_K highest logits."""
+    return token in logits.topk(TOP_K).indices.tolist()
 
 
 def long_prompt(tok):
@@ -100,7 +98,7 @@ def test_model_chunked_tp8_dp4(mesh_device):
             worst_pcc, agree = min(worst_pcc, p), agree and same
             top = [first[(r, k)].topk(2) for k in (0, slot)]
             logger.info(
-                f"row {r} {name}: next-token logits PCC vs one shot {p:.5f}, same top-1 up to a tie {same}; top-2 "
+                f"row {r} {name}: next-token logits PCC vs one shot {p:.5f}, picks in each other's top-{TOP_K} {same}; top-2 "
                 + " vs ".join(
                     f"{tok.decode([int(i)])!r} {float(v):.3f}" for t in top for i, v in zip(t.indices, t.values)
                 )

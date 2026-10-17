@@ -395,7 +395,14 @@ class TtMiMoMoE:
     def forward(self, x, token_mask=None):
         """x [1, 1, T, hidden] replicated across the row -> [1, 1, T, hidden] replicated."""
         assert x.shape[-2] % TILE == 0, "pad tokens to a multiple of 32"
-        dense = self.route(x, token_mask)
-        out = self.prefill_experts(x, dense)
-        dense.deallocate(True)
+        logits = self._router_logits(x)
+        indices, weights = self._topk(logits)
+        logits.deallocate(True)
+        if token_mask is not None:
+            masked = ttnn.mul(weights, ttnn.typecast(token_mask, weights.dtype))
+            weights.deallocate(True)
+            weights = masked
+        out = self.prefill_experts(x, indices, weights)
+        indices.deallocate(True)
+        weights.deallocate(True)
         return self.plan.all_reduce(out)
