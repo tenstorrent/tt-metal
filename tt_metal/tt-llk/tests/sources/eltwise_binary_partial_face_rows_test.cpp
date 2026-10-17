@@ -41,14 +41,16 @@ constexpr ckernel::TensorShape PARTIAL_SHAPE = {ckernel::FACE_R_DIM / 2, ckernel
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t TILE_CNT           = params.TILE_CNT;
     const std::uint32_t TILE_SIZE_UNPACK_A = params.TILE_SIZE_UNPACK_A;
     const std::uint32_t TILE_SIZE_UNPACK_B = params.TILE_SIZE_UNPACK_B;
     const Operand& buffer_A                = params.buffer_A;
     const Operand& buffer_B                = params.buffer_B;
+#endif
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src,
@@ -82,10 +84,12 @@ using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t TILE_CNT = params.TILE_CNT;
+#endif
 
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -134,11 +138,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t TILE_CNT  = params.TILE_CNT;
-    const Operand& buffer_Res     = params.buffer_Res;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TILE_CNT = params.TILE_CNT;
+    const Operand& buffer_Res    = params.buffer_Res;
+#endif
     const std::uint32_t tile_size = FULL_SHAPE.total_tensor_size();
     const std::uint32_t num_faces = FULL_SHAPE.total_num_faces();
     constexpr bool partial_face   = false;
