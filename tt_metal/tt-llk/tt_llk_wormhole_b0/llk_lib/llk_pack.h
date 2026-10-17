@@ -295,6 +295,31 @@ inline void _llk_pack_mop_config_(
     }
 }
 
+namespace llk_pack_internal
+{
+/**
+ * @brief Rebuild the tile pack MOP for a new output format when that format flips the MOP's form.
+ *
+ * Reads the record left by @ref _llk_pack_mop_config_ and rebuilds the MOP in the recorded geometry. Kept out of
+ * line: the format reconfig is inlined at every pack-output switch of a kernel, and the rebuild would otherwise
+ * bring a copy of @ref _llk_pack_mop_config_ to each of them.
+ *
+ * @param pack_dst_format: Destination (L1) data format.
+ * @return True when the tile pack MOP was rebuilt.
+ */
+static __attribute__((noinline, noclone)) bool rebuild_tile_pack_mop_for_format(const std::uint32_t pack_dst_format)
+{
+    const TilePackMop mop = tile_pack_mop;
+    if (!mop.programmed || is_partial_face_bfp_pack(pack_dst_format, mop.num_faces, mop.partial_face) == mop.partial_face_bfp)
+    {
+        return false;
+    }
+    _llk_pack_mop_config_<PackMode::Default, false /*zero_output*/>(
+        pack_dst_format, mop.face_r_dim, mop.num_faces, mop.partial_face, mop.narrow_tile, configured_num_tiles);
+    return true;
+}
+} // namespace llk_pack_internal
+
 /**
  * @brief Reconfigure the packer source/destination data formats and tile geometry at runtime.
  *
@@ -333,14 +358,7 @@ inline bool _llk_pack_reconfig_data_format_(
 
     reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face);
 
-    const llk_pack_internal::TilePackMop mop = llk_pack_internal::tile_pack_mop;
-    if (!mop.programmed || llk_pack_internal::is_partial_face_bfp_pack(pack_dst_format, mop.num_faces, mop.partial_face) == mop.partial_face_bfp)
-    {
-        return false;
-    }
-    _llk_pack_mop_config_<PackMode::Default, false /*zero_output*/>(
-        pack_dst_format, mop.face_r_dim, mop.num_faces, mop.partial_face, mop.narrow_tile, llk_pack_internal::configured_num_tiles);
-    return true;
+    return llk_pack_internal::rebuild_tile_pack_mop_for_format(pack_dst_format);
 }
 
 /**
