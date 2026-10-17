@@ -2063,6 +2063,14 @@ def specials_safe(
     return True
 
 
+def unpacks_to_dest(input_format: DataFormat, dest_acc: Union[bool, Enum]) -> bool:
+    """Does the unpack write *input_format* straight into Dest, rather than through
+    SrcA and the datacopy? A 32-bit input at dest_acc=Yes. One rule for the ULP sweep
+    driver's TestConfig, the sweep's input masks and :func:`negative_zero_delivered`,
+    so the three cannot drift apart."""
+    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
+
+
 def negative_zero_delivered(
     input_format: DataFormat, dest_acc: Optional[Union[bool, Enum]]
 ) -> bool:
@@ -2080,7 +2088,7 @@ def negative_zero_delivered(
     """
     if dest_acc is None:
         return True
-    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
+    return unpacks_to_dest(input_format, dest_acc)
 
 
 def nan_survives_to_l1(
@@ -2222,7 +2230,7 @@ BINARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         # Plain SFPMAD arithmetic, which the ISA specifies as IEEE754 for a non-finite input.
         MathOperation.SfpuElwadd,  # inf+x = inf, inf+(-inf) = NaN, NaN+x = NaN
         MathOperation.SfpuElwsub,  # as SfpuElwadd; inf-inf = NaN is the case worth having
-        MathOperation.SfpuElwmul,  # inf*x = inf, inf*0 = NaN, +/-0 signs multiply
+        MathOperation.SfpuElwmul,  # inf*x = inf; 0*x is +0 on a WH/BH 16-bit Dest
         MathOperation.SfpuElwrsub,  # as SfpuElwsub, operands reversed
         # Total order: the kernel is a bare SFPSWAP(VEC_MIN_MAX) with no NaN guard, so +NaN is
         # the maximum and -NaN the minimum -- unlike the comparisons below, which reject a NaN
@@ -2266,6 +2274,9 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Effectively unary: the kernel reads operand B only on its x > 4 branch and the golden
         # ignores it, so a cat-B probe in B asserts nothing.
         MathOperation.SfpuLogsigmoid,
+        # Bit copy of one operand. A non-finite probe checks the pipeline,
+        # not this kernel.
+        MathOperation.SfpuCopyDest,
     }
 )
 

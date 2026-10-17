@@ -454,7 +454,7 @@ public:
         const uint32_t bytes_per_recv = num_rows * row_bytes_per_recv;
         const uint32_t row_stride_in_stage = row_bytes_per_recv * num_recv;
 
-        tt_buf_rw::note_if_bound<tt_buf_rw::READ, Src>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
+        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
         uint32_t src_addr = noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args);
         uint32_t recv_src_offset = 0;
         for (uint32_t i = 0; i < num_recv; ++i) {
@@ -743,8 +743,8 @@ public:
 
     private:
         friend class PrefetcherPipe;
-        FORCE_INLINE explicit RelayView(DataflowBuffer& dfb) : dfb_(dfb) {}
-        DataflowBuffer& dfb_;
+        FORCE_INLINE explicit RelayView(DataflowBufferAnyPattern& dfb) : dfb_(dfb) {}
+        DataflowBufferAnyPattern& dfb_;
     };
 
     // Open the relay DFB the host registered for this slot (DataflowBufferSpec::
@@ -863,7 +863,7 @@ private:
     uint32_t destination_offset_bytes_ = 0;
 
 #if !defined(COMPILE_FOR_TRISC)
-    std::optional<DataflowBuffer> relay_dfb_;
+    std::optional<DataflowBufferAnyPattern> relay_dfb_;
     // Relay pages per pipe entry, fixed at bind_relay() (see prefetcher_pipe_relay_pages_per_entry).
     uint16_t relay_pages_per_entry_ = 1;
 #ifndef ARCH_QUASAR
