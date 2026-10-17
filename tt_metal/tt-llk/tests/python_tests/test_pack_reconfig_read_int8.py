@@ -46,6 +46,8 @@ from helpers.test_variant_parameters import (
 
 # 16-bit Dest is the point of the test: the 8-bit integer Dest read only exists there.
 _DEST_ACC = DestAccumulation.No
+# One tile: the defect does not depend on the tile count.
+_INPUT_DIMENSIONS = [32, 32]
 
 # An "integer 8" Dest datum keeps the low 10 magnitude bits of the value SFPSTORE INT8 writes.
 _INT8_DEST_MAGNITUDE_LIMIT = 1 << 10
@@ -90,11 +92,9 @@ _UINT8_OUT = InputOutputFormat(DataFormat.Float16_b, DataFormat.UInt8)
 _BF16_OUT = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 
 
-@parametrize(
-    formats=[_UINT8_OUT, _BF16_OUT],
-    input_dimensions=[[32, 32]],
-)
-def test_pack_reconfig_read_int8(formats, input_dimensions):
+@parametrize(formats=[_UINT8_OUT, _BF16_OUT])
+def test_pack_reconfig_read_int8(formats):
+    input_dimensions = _INPUT_DIMENSIONS
     int8_out = formats.output_format == DataFormat.UInt8
     spec = StimuliSpec(
         distribution=(
