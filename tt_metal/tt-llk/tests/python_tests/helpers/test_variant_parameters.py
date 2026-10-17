@@ -6,7 +6,9 @@ import math
 import struct
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from helpers.tile_shape import TileShape
 
 from .format_config import DataFormat
 from .golden_generators import TILE_DIMENSIONS
@@ -823,6 +825,84 @@ class OVERLAP_FIRST_HALF(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool OVERLAP_FIRST_HALF = {str(self.overlap_first_half).lower()};"
+
+
+@dataclass
+class REDUCE_OPERAND_SHAPE(TemplateParameter):
+    """Operand tile geometry handed to the reduce_block_max_row unpack/math inits, as a
+    ``TileShape`` (the Python mirror of ``ckernel::TensorShape``). The default is the full
+    32x32 tile; the shape-guard test passes face grids the op does not implement to check
+    that its LLK_ASSERT rejects them."""
+
+    tile_shape: TileShape = field(default_factory=lambda: TileShape(16, 16, 2, 2))
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr ckernel::TensorShape REDUCE_OPERAND_SHAPE = {self.tile_shape.cpp_value};"
+
+
+@dataclass
+class REDUCE_REINIT_BLOCK_CT_DIM(TemplateParameter):
+    """Block width handed to the reduce_block_max_row reinit_short re-arm (the driver
+    defaults it to the init width; the reinit-guard test hands it one the op rejects).
+    """
+
+    reduce_reinit_block_ct_dim: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t REDUCE_REINIT_BLOCK_CT_DIM = {self.reduce_reinit_block_ct_dim};"
+
+
+@dataclass
+class REDUCE_UNPACK_SKIP_EXECUTE(TemplateParameter):
+    """When true the UNPACK thread only runs the reduce_block_max_row init and uninit and
+    delivers no tiles. The reinit-guard tests set it: their math thread stops on an
+    LLK_ASSERT at reinit and never consumes SrcA, and tiles left in the source banks are
+    not cleared by the per-test TRISC soft reset, so they would stall whatever runs next.
+    """
+
+    reduce_unpack_skip_execute: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool REDUCE_UNPACK_SKIP_EXECUTE = {str(self.reduce_unpack_skip_execute).lower()};"
+
+
+@dataclass
+class REDUCE_MATH_SKIP_EXECUTE(TemplateParameter):
+    """When true the MATH thread runs the reduce_block_max_row init (and any reinit) but
+    not the reduce itself. The trigger odd-width guard test sets it: its unpack stops on
+    an LLK_ASSERT at init and delivers nothing, and a math MOP left waiting for SrcA is a
+    stalled Tensix instruction the per-test TRISC soft reset does not recover from."""
+
+    reduce_math_skip_execute: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool REDUCE_MATH_SKIP_EXECUTE = {str(self.reduce_math_skip_execute).lower()};"
+
+
+@dataclass
+class REDUCE_PACK_SKIP_EXECUTE(TemplateParameter):
+    """When true the PACK thread runs the reduce_block_max_row pack init and uninit but
+    neither waits for the math result nor packs it. The guard tests whose math thread stops
+    on an LLK_ASSERT at init set it: that math never signals math-done, and a packer left
+    waiting on the MATH_PACK semaphore is a stalled Tensix instruction the per-test TRISC
+    soft reset does not recover from (the next kernel on the core then packs zeros)."""
+
+    reduce_pack_skip_execute: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool REDUCE_PACK_SKIP_EXECUTE = {str(self.reduce_pack_skip_execute).lower()};"
+
+
+@dataclass
+class REDUCE_REINIT_OPERAND_SHAPE(TemplateParameter):
+    """Operand ``TileShape`` handed to the reduce_block_max_row reinit_short re-arm (the
+    driver defaults it to the init shape; the reinit-guard test hands it one the op rejects).
+    """
+
+    tile_shape: TileShape = field(default_factory=lambda: TileShape(16, 16, 2, 2))
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr ckernel::TensorShape REDUCE_REINIT_OPERAND_SHAPE = {self.tile_shape.cpp_value};"
 
 
 @dataclass

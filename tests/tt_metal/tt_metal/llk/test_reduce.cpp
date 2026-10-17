@@ -1080,4 +1080,85 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixReduceBlockIdFreeGolden) {
         result, data, ::unit_tests::compute::gold_reduce_hw, /*red_type=*/0, /*shape=*/{1, num_tiles, 32, 32});
 }
 
+TEST_F(LLKMeshDeviceSingleCardFixture, TensixReduceBlockMaxRowCompileLimits) {
+    // Compile-time contract test; these programs are never launched. Three template guards of
+    // reduce_block_max_row are probed, one build per case, and the JIT error must carry the
+    // static_assert message:
+    //  * the num_faces convenience overloads only describe geometries the LLK implements, 4 faces
+    //    (32x32) and 2 faces (16x32): a single 16x16 face has to be rejected instead of pooling SrcA
+    //    rows the unpacker never wrote;
+    //  * block_ct_dim is the MOP outer-loop count and must stay within 1..127: 0 programs no loop and
+    //    128 wraps the 7-bit field on Wormhole (1 and 127 must compile);
+    //  * respect_trigger unpacks two block_ct_dim / 2 halves, so the width must be even: 1 would
+    //    program a loop count of 0 and 3 leaves the math MOP waiting for a tile that never comes.
+    // Compile arg 1 selects ONE overload per build so every static_assert is checked on its own.
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "CreateKernel with a ComputeConfig is rejected on Quasar before the probe can compile";
+    }
+    const bool is_blackhole = this->arch_ == tt::ARCH::BLACKHOLE;
+    const uint32_t tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    // Builds the probe with the given template arguments; `expected_error` empty means it must compile.
+    auto probe = [&](uint32_t num_faces,
+                     uint32_t overload,
+                     uint32_t block_ct_dim,
+                     bool respect_trigger,
+                     const std::string& expected_error) {
+        SCOPED_TRACE(
+            ::testing::Message() << "overload=" << overload << ", num_faces=" << num_faces
+                                 << ", block_ct_dim=" << block_ct_dim << ", respect_trigger=" << respect_trigger);
+        Program program = CreateProgram();
+        const CoreCoord core{0, 0};
+        for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16}) {
+            CreateCircularBuffer(
+                program,
+                core,
+                CircularBufferConfig(tile_bytes, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, tile_bytes));
+        }
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/compute/reduce_block_max_row_compile_limits.cpp",
+            core,
+            ComputeConfig{.compile_args = {num_faces, overload, block_ct_dim, static_cast<uint32_t>(respect_trigger)}});
+        if (expected_error.empty()) {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+            return;
+        }
+        try {
+            program.impl().compile(&this->device());
+            FAIL() << "compiled";
+        } catch (const std::runtime_error& e) {
+            EXPECT_NE(std::string(e.what()).find(expected_error), std::string::npos) << e.what();
+        }
+    };
+
+    // num_faces: every overload (reinit_short / reinit_minimal are Blackhole-only), width 2, no trigger.
+    const uint32_t num_overloads = is_blackhole ? 4 : 2;
+    for (uint32_t overload = 0; overload < num_overloads; ++overload) {
+        for (const uint32_t num_faces : {4u, 2u, 1u}) {
+            probe(
+                num_faces,
+                overload,
+                /*block_ct_dim=*/2,
+                /*respect_trigger=*/false,
+                num_faces == 1 ? "reduce_block_max_row supports 32x32 (num_faces=4) and 16x32 (num_faces=2) tiles only"
+                               : "");
+        }
+    }
+
+    // block_ct_dim range and the trigger's even-width rule: the overloads that program the MOPs (init;
+    // on Blackhole also reinit_short, whose math MOP reprogram carries its own range assert).
+    const std::string width_error = "block_ct_dim must be between 1 and 127";
+    const std::string trigger_error = "respect_trigger needs an even block_ct_dim";
+    const std::vector<uint32_t> mop_overloads = is_blackhole ? std::vector<uint32_t>{0, 2} : std::vector<uint32_t>{0};
+    for (const uint32_t overload : mop_overloads) {
+        probe(/*num_faces=*/4, overload, /*block_ct_dim=*/0, /*respect_trigger=*/false, width_error);
+        probe(/*num_faces=*/4, overload, /*block_ct_dim=*/1, /*respect_trigger=*/false, "");
+        probe(/*num_faces=*/4, overload, /*block_ct_dim=*/127, /*respect_trigger=*/false, "");
+        probe(/*num_faces=*/4, overload, /*block_ct_dim=*/128, /*respect_trigger=*/false, width_error);
+        probe(/*num_faces=*/4, overload, /*block_ct_dim=*/2, /*respect_trigger=*/true, "");
+        probe(/*num_faces=*/4, overload, /*block_ct_dim=*/1, /*respect_trigger=*/true, trigger_error);
+        probe(/*num_faces=*/4, overload, /*block_ct_dim=*/3, /*respect_trigger=*/true, trigger_error);
+    }
+}
+
 }  // namespace tt::tt_metal

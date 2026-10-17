@@ -29,11 +29,19 @@ Coverage (Blackhole + Wormhole B0):
     the unpack splits the block reduce into two half-width MOP runs gated by HW
     semaphores; the PACK thread plays the producer. Both arches. Validates split-MOP
     correctness + semaphore balance (not the SDPA live-data overlap; see the C++ note).
+  * runtime ``block_ct_dim`` limit: 127 reduces, 0 and 128 assert at init on both arches, and a
+    reinit_short re-arm with 128 asserts in the MOP reprogram; a trigger split with an odd
+    width asserts at init.
+  * operand-shape guard: 16x16, 32x16 and 8x32 operands are rejected at init (compile-time
+    and runtime families) and by the reinit_short re-arm.
 """
+
+import os
 
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.device import LLKAssertException
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ReduceBlockMaxRowGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation
@@ -44,16 +52,31 @@ from helpers.test_variant_parameters import (
     CLOBBER_OP,
     OVERLAP_FIRST_HALF,
     REDUCE_BLOCK_CT_DIM,
+    REDUCE_MATH_SKIP_EXECUTE,
+    REDUCE_OPERAND_SHAPE,
+    REDUCE_PACK_SKIP_EXECUTE,
+    REDUCE_REINIT_BLOCK_CT_DIM,
+    REDUCE_REINIT_OPERAND_SHAPE,
+    REDUCE_UNPACK_SKIP_EXECUTE,
     REINIT_MODE,
     RESPECT_TRIGGER,
     USE_RUNTIME,
 )
+from helpers.tile_shape import TileShape, construct_tile_shape
 from helpers.tilize_untilize import tilize, untilize
 from helpers.utils import tolerances
 
 # 32x32 bf16 tile.
 TILE_DIM = 32
 ELEMENTS_PER_TILE = TILE_DIM * TILE_DIM
+
+FULL_TILE_SHAPE = construct_tile_shape((32, 32))
+
+# Widest block the runtime reduce accepts on every arch (its compile-time sibling static_asserts
+# 1 <= block_ct_dim <= 127). block_ct_dim goes straight into the MOP outer-loop count, which keeps 7 bits
+# on Wormhole, and the block is walked by the unpacker's tile counter, whose input address keeps 8
+# bits on both arches: 128 silently reduces nothing on Wormhole, 257 aliases tile 0 on Blackhole.
+MAX_BLOCK_CT_DIM = 127
 
 # Inputs are always bf16 (the op's contract); only the DEST/output precision varies.
 FORMATS = [
@@ -93,6 +116,121 @@ def _dest_acc(output_format):
     )
 
 
+def _make_reduce_block_max_config(
+    formats,
+    block_ct_dim,
+    use_runtime=False,
+    reinit="none",
+    clobber="none",
+    respect_trigger=False,
+    overlap_first_half=False,
+    expected_nondeterministic=False,
+    operand_shape=FULL_TILE_SHAPE,
+    staged_ct_dim=None,
+    reinit_block_ct_dim=None,
+    reinit_operand_shape=None,
+    unpack_skip_execute=False,
+    math_skip_execute=False,
+    pack_skip_execute=False,
+):
+    """Build one reduce_block_max_row variant plus its golden (row-major, per-row max in
+    column [0]).
+
+    ``operand_shape`` is the ``TileShape`` the unpack/math inits are told about; the
+    staged operand is always 32x32 tiles, so a shape the op does not implement reaches
+    the inits with the same L1 image the full-tile case uses.
+
+    ``staged_ct_dim`` is how many tiles are staged (and the golden's width) when it
+    differs from the ``block_ct_dim`` the kernel is built with. Only the guard tests use
+    it: a block the inits must reject never reads its operand, so staging it in full
+    would only exhaust L1.
+
+    ``reinit_block_ct_dim`` / ``reinit_operand_shape`` are what the reinit_short re-arm is
+    told (default: the init values); the reinit-guard tests hand it a width or shape the
+    op rejects, and set ``unpack_skip_execute`` so the unpack delivers no tiles: their
+    math stops on the re-arm's assert, and tiles left in the source banks survive the
+    per-test TRISC soft reset and stall the next kernel. ``math_skip_execute`` is the
+    mirror image for the trigger odd-width guard: its unpack stops at init, and a math MOP
+    left waiting for SrcA is a stalled Tensix instruction the soft reset does not recover.
+    ``pack_skip_execute`` is set by every guard test whose math stops at init: that math
+    never signals math-done, and a packer left on the MATH_PACK wait is a stalled Tensix
+    instruction that makes the next kernel on the core pack zeros.
+    """
+    dest_acc = _dest_acc(formats.output_format)
+    staged_ct_dim = block_ct_dim if staged_ct_dim is None else staged_ct_dim
+
+    # Build operand A row-major (32 rows x staged_ct_dim*32 cols), so the canonical
+    # ReduceBlockMaxRowGolden (which reshapes its operand to `dimensions` row-major)
+    # is unambiguous. A ~ U[0, 1] keeps every row-max well inside bf16's range.
+    dimensions = [TILE_DIM, staged_ct_dim * TILE_DIM]
+    src_A_rowmajor = (
+        torch.empty(TILE_DIM * staged_ct_dim * TILE_DIM)
+        .uniform_(0.0, 1.0)
+        .to(torch.bfloat16)
+    )
+
+    # Canonical golden: the established fuser oracle for this op. Returns a row-major
+    # tensor with the per-row max in column [0], every other column 0.
+    generate_golden = get_golden_generator(ReduceBlockMaxRowGolden)
+    golden_flat = generate_golden(
+        src_A_rowmajor.clone(), staged_ct_dim, formats.output_format, dimensions
+    )
+
+    # Device operand is tilized per 32x32 tile (the layout the C++ reads from L1).
+    src_A = torch.cat(
+        [
+            tilize(
+                src_A_rowmajor.reshape(TILE_DIM, staged_ct_dim * TILE_DIM)[
+                    :, t * TILE_DIM : (t + 1) * TILE_DIM
+                ].reshape(-1),
+                formats.input_format,
+            )
+            for t in range(staged_ct_dim)
+        ]
+    )
+    # Scaler B: a single tile of 1.0 (F0 holds the scaler; the op multiplies by it).
+    src_B = torch.ones(ELEMENTS_PER_TILE, dtype=torch.bfloat16)
+
+    configuration = TestConfig(
+        "sources/reduce_block_max_test.cpp",
+        formats,
+        templates=[
+            REDUCE_BLOCK_CT_DIM(block_ct_dim),
+            USE_RUNTIME(use_runtime),
+            REINIT_MODE(_REINIT_DEFINE[reinit]),
+            CLOBBER_OP(_CLOBBER_DEFINE[clobber]),
+            RESPECT_TRIGGER(respect_trigger),
+            OVERLAP_FIRST_HALF(overlap_first_half),
+            REDUCE_OPERAND_SHAPE(operand_shape),
+            REDUCE_REINIT_BLOCK_CT_DIM(
+                block_ct_dim if reinit_block_ct_dim is None else reinit_block_ct_dim
+            ),
+            REDUCE_REINIT_OPERAND_SHAPE(
+                operand_shape if reinit_operand_shape is None else reinit_operand_shape
+            ),
+            REDUCE_UNPACK_SKIP_EXECUTE(unpack_skip_execute),
+            REDUCE_MATH_SKIP_EXECUTE(math_skip_execute),
+            REDUCE_PACK_SKIP_EXECUTE(pack_skip_execute),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=staged_ct_dim,
+            tile_count_B=1,
+            tile_count_res=1,
+            sfpu=False,
+        ),
+        dest_acc=dest_acc,
+        expected_nondeterministic=expected_nondeterministic,
+    )
+
+    golden_rowmajor = golden_flat.reshape(TILE_DIM, staged_ct_dim * TILE_DIM)
+    return configuration, golden_rowmajor
+
+
 def _run_reduce_block_max(
     formats,
     block_ct_dim,
@@ -116,63 +254,14 @@ def _run_reduce_block_max(
     arch-dependent: stable on Wormhole, a coin-flip on Blackhole). The single-run
     functional check above still applies.
     """
-    dest_acc = _dest_acc(formats.output_format)
-
-    # Build operand A row-major (32 rows x block_ct_dim*32 cols), so the canonical
-    # ReduceBlockMaxRowGolden (which reshapes its operand to `dimensions` row-major)
-    # is unambiguous. A ~ U[0, 1] keeps every row-max well inside bf16's range.
-    dimensions = [TILE_DIM, block_ct_dim * TILE_DIM]
-    src_A_rowmajor = (
-        torch.empty(TILE_DIM * block_ct_dim * TILE_DIM)
-        .uniform_(0.0, 1.0)
-        .to(torch.bfloat16)
-    )
-
-    # Canonical golden: the established fuser oracle for this op. Returns a row-major
-    # tensor with the per-row max in column [0], every other column 0.
-    generate_golden = get_golden_generator(ReduceBlockMaxRowGolden)
-    golden_flat = generate_golden(
-        src_A_rowmajor.clone(), block_ct_dim, formats.output_format, dimensions
-    )
-
-    # Device operand is tilized per 32x32 tile (the layout the C++ reads from L1).
-    src_A = torch.cat(
-        [
-            tilize(
-                src_A_rowmajor.reshape(TILE_DIM, block_ct_dim * TILE_DIM)[
-                    :, t * TILE_DIM : (t + 1) * TILE_DIM
-                ].reshape(-1),
-                formats.input_format,
-            )
-            for t in range(block_ct_dim)
-        ]
-    )
-    # Scaler B: a single tile of 1.0 (F0 holds the scaler; the op multiplies by it).
-    src_B = torch.ones(ELEMENTS_PER_TILE, dtype=torch.bfloat16)
-
-    configuration = TestConfig(
-        "sources/reduce_block_max_test.cpp",
+    configuration, golden_rowmajor = _make_reduce_block_max_config(
         formats,
-        templates=[
-            REDUCE_BLOCK_CT_DIM(block_ct_dim),
-            USE_RUNTIME(use_runtime),
-            REINIT_MODE(_REINIT_DEFINE[reinit]),
-            CLOBBER_OP(_CLOBBER_DEFINE[clobber]),
-            RESPECT_TRIGGER(respect_trigger),
-            OVERLAP_FIRST_HALF(overlap_first_half),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=block_ct_dim,
-            tile_count_B=1,
-            tile_count_res=1,
-            sfpu=False,
-        ),
-        dest_acc=dest_acc,
+        block_ct_dim,
+        use_runtime=use_runtime,
+        reinit=reinit,
+        clobber=clobber,
+        respect_trigger=respect_trigger,
+        overlap_first_half=overlap_first_half,
         expected_nondeterministic=expected_nondeterministic,
     )
 
@@ -181,8 +270,6 @@ def _run_reduce_block_max(
     assert (
         len(res_from_L1) == ELEMENTS_PER_TILE
     ), f"Expected one {ELEMENTS_PER_TILE}-element output tile, got {len(res_from_L1)}"
-
-    golden_rowmajor = golden_flat.reshape(TILE_DIM, block_ct_dim * TILE_DIM)
 
     # Untilize the device output tile to row-major so both sides share layout.
     res = untilize(
@@ -353,4 +440,162 @@ def test_reduce_block_max_trigger_runtime(formats, block_ct_dim, overlap_first_h
         use_runtime=True,
         respect_trigger=True,
         overlap_first_half=overlap_first_half,
+    )
+
+
+def _expect_llk_assert_on(
+    configuration, golden_rowmajor, what, triscs=("TRISC0", "TRISC1")
+):
+    """The reduce LLKs must LLK_ASSERT on ``what`` on every thread in ``triscs``; the harness
+    surfaces the ebreak as LLKAssertException. If the guard is silent the kernel runs anyway,
+    so report what it packed into column [0] against the staged operand's row maxima: that is
+    the wrong result the guard exists to prevent."""
+    if os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1":
+        pytest.skip("LLK_ASSERT is compiled out (TT_LLK_DISABLE_ASSERTS=1)")
+    try:
+        res_from_L1 = configuration.run().result
+    except LLKAssertException as hit:
+        # Every thread that programs the geometry / loop count carries the guard: by default the
+        # unpack init (TRISC0) and the math MOP config (TRISC1) must each have stopped on it.
+        stacks = str(hit)
+        missing = [t for t in triscs if f"{t} STACK TRACE" not in stacks]
+        assert (
+            not missing
+        ), f"{what}: the LLK assert fired, but not on {missing}:{stacks}"
+        return
+    res = untilize(
+        torch.tensor(res_from_L1, dtype=torch.float32), DataFormat.Float16_b
+    ).reshape(TILE_DIM, TILE_DIM)
+    col0 = [float(res[pr, 0]) for pr in range(TILE_DIM)]
+    golden_col0 = [float(golden_rowmajor[pr, 0]) for pr in range(TILE_DIM)]
+    rows_off = sum(1 for d, g in zip(col0, golden_col0) if d != g)
+    pytest.fail(
+        f"reduce_block_max_row init accepted {what}: no LLK assert fired and the kernel ran; "
+        f"column [0] differs from the staged operand's row max in {rows_off}/{TILE_DIM} rows "
+        f"(device rows 0-7 = {col0[:8]}, staged row max = {golden_col0[:8]})"
+    )
+
+
+@parametrize(block_ct_dim=[0, MAX_BLOCK_CT_DIM, MAX_BLOCK_CT_DIM + 1])
+def test_reduce_block_max_runtime_block_ct_dim_limit(block_ct_dim):
+    """The runtime reduce programs block_ct_dim straight into the MOP outer-loop count
+    (7 bits on Wormhole, so 128 unpacks and pools nothing and the packed row max is stale
+    DEST; 0 programs no loop at all, with the same stale result) and walks the block with
+    the unpacker's 8-bit tile counter (so 257 aliases tile 0 on Blackhole); the runtime
+    inits must hold the same 1 <= block_ct_dim <= 127 contract their compile-time siblings
+    static_assert, on both arches. The widest legal block must reduce correctly; 0 and one
+    past the limit must LLK_ASSERT at init instead of programming the count. A rejected
+    block never reads its operand, so a single tile is staged."""
+    (block_ct_dim,) = block_ct_dim
+    if 1 <= block_ct_dim <= MAX_BLOCK_CT_DIM:
+        _run_reduce_block_max(FORMATS[0], block_ct_dim, use_runtime=True)
+        return
+    configuration, golden_rowmajor = _make_reduce_block_max_config(
+        FORMATS[0],
+        block_ct_dim,
+        use_runtime=True,
+        staged_ct_dim=1,
+        pack_skip_execute=True,
+    )
+    _expect_llk_assert_on(
+        configuration,
+        golden_rowmajor,
+        f"block_ct_dim={block_ct_dim} outside the 1..{MAX_BLOCK_CT_DIM} range",
+    )
+
+
+# Operand geometries the op does not implement: it pools two full 16-row column faces per
+# face-row (two GMPOOLs with a 16-row SrcA step) and strides whole 32x32 / 16x32 tiles, so one
+# face column (16x16, 32x16) or a short face (8x32) pools SrcA rows the unpacker never wrote.
+_UNSUPPORTED_OPERAND_SHAPES = [
+    TileShape(16, 16, 1, 1),  # 16x16
+    TileShape(16, 16, 2, 1),  # 32x16
+    TileShape(8, 16, 1, 2),  # 8x32
+]
+
+
+@parametrize(use_runtime=[False, True], operand_shape=_UNSUPPORTED_OPERAND_SHAPES)
+def test_reduce_block_max_shape_guard(use_runtime, operand_shape):
+    """The unpack and math inits must LLK_ASSERT on a tile geometry the op does not
+    implement (validate_tensor_shape_reduce_block_max_row_), on the compile-time and the
+    runtime family alike. A guard that admits the shape lets the op pool SrcA rows the
+    unpacker never delivered and pack a wrong row max with no diagnostic."""
+    configuration, golden_rowmajor = _make_reduce_block_max_config(
+        FORMATS[0],
+        block_ct_dim=1,
+        use_runtime=use_runtime,
+        operand_shape=operand_shape,
+        pack_skip_execute=True,
+    )
+    _expect_llk_assert_on(
+        configuration, golden_rowmajor, f"operand shape {operand_shape}"
+    )
+
+
+def test_reduce_block_max_reinit_short_runtime_rejects_width():
+    """A valid init followed by a reinit_short_runtime re-arm with block_ct_dim=128: the MOP
+    reprogram (TRISC1 only; the unpack is not re-armed) must assert instead of writing the
+    wrapped count."""
+    configuration, golden_rowmajor = _make_reduce_block_max_config(
+        FORMATS[0],
+        block_ct_dim=2,
+        use_runtime=True,
+        reinit="short",
+        clobber=_CLOBBER_FOR_REINIT["short"],
+        reinit_block_ct_dim=MAX_BLOCK_CT_DIM + 1,
+        unpack_skip_execute=True,
+        pack_skip_execute=True,
+    )
+    _expect_llk_assert_on(
+        configuration,
+        golden_rowmajor,
+        f"reinit_short_runtime with block_ct_dim={MAX_BLOCK_CT_DIM + 1}",
+        triscs=("TRISC1",),
+    )
+
+
+@parametrize(use_runtime=[False, True])
+def test_reduce_block_max_reinit_short_rejects_shape(use_runtime):
+    """A valid init followed by a reinit_short re-arm told the operand is a single 16x16
+    face: the MOP reprogram (TRISC1 only) must assert. The compile-time reinit_short is a
+    Blackhole-only lib path; the runtime one runs on both arches."""
+    (use_runtime,) = use_runtime
+    if not use_runtime and get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            "compile-time reduce_block_max_row reinit_short is a Blackhole-only lib path"
+        )
+    configuration, golden_rowmajor = _make_reduce_block_max_config(
+        FORMATS[0],
+        block_ct_dim=2,
+        use_runtime=use_runtime,
+        reinit="short",
+        clobber=_CLOBBER_FOR_REINIT["short"],
+        reinit_operand_shape=TileShape(16, 16, 1, 1),
+        unpack_skip_execute=True,
+        pack_skip_execute=True,
+    )
+    _expect_llk_assert_on(
+        configuration,
+        golden_rowmajor,
+        "reinit_short with a 16x16 operand shape",
+        triscs=("TRISC1",),
+    )
+
+
+def test_reduce_block_max_trigger_runtime_rejects_odd_width():
+    """respect_trigger splits the unpack into two block_ct_dim/2 runs, so an odd width
+    delivers one tile fewer than the math MOP waits for and the reduce hangs; the unpack
+    init (TRISC0) must assert on it instead."""
+    configuration, golden_rowmajor = _make_reduce_block_max_config(
+        FORMATS[0],
+        block_ct_dim=3,
+        use_runtime=True,
+        respect_trigger=True,
+        math_skip_execute=True,
+    )
+    _expect_llk_assert_on(
+        configuration,
+        golden_rowmajor,
+        "respect_trigger with block_ct_dim=3",
+        triscs=("TRISC0",),
     )
