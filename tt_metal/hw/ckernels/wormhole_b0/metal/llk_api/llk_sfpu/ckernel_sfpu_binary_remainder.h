@@ -344,8 +344,9 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     // correct remainder is zero or already carries b's sign, so this never fires on one.
     correct_sign_to_divisor(result, b);
 
-    // Quotients of 2^24 and above: floor_div + 1 ties or vanishes in float, so diff above is just
-    // the raw result and a floor one below the true quotient still leaves |result| >= |b|.
+    // Quotients of 2^24 and above: floor_div + 1 rounds to floor_div or floor_div + 2 in float, so
+    // diff above is the raw result or a - (floor_div + 2) * b (which the sign test rejects unless
+    // the floor was two low), and a floor one below the true quotient still leaves |result| >= |b|.
     // Subtract b if result has the sign of b, otherwise add b, so |result| shrinks; copysgn makes
     // that one subtraction. The step is gated on the quotient because at small quotients the
     // recompute above is exact and a correctly rounded remainder can legitimately equal b
