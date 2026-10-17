@@ -794,7 +794,9 @@ struct MulBcastColCustomConfig {
     std::uint32_t rt_dim = 1;
     std::uint32_t num_blocks = 1;
     TileShape tile_shape = TileShape::FULL_TILE;
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    // The scaffold issues one ELWMUL per 8-row block (fidelity phase 0 only), so the result is LoFi
+    // arithmetic whatever fidelity the kernel is configured with; the golden must model LoFi.
+    MathFidelity math_fidelity = MathFidelity::LoFi;
 };
 
 void run_mul_bcast_col_custom(distributed::MeshDevice& mesh_device, const MulBcastColCustomConfig& test_config) {
@@ -1329,7 +1331,7 @@ TEST_F(LLKBlackholeSingleCardFixture, ComputeMulBcastColCustom) {
         {.ct_dim = 4, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
         {.ct_dim = 1, .num_blocks = 2, .tile_shape = TileShape::TINY_TILE_16x32},
         {.ct_dim = 4, .rt_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
-        {.ct_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32, .math_fidelity = MathFidelity::LoFi},
+        {.ct_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
     };
 
     for (const auto& cfg : cases) {
