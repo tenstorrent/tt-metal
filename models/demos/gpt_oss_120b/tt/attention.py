@@ -330,10 +330,13 @@ class TtAttention:
         cache_v: ttnn.Tensor,
         batch_idx: int = 0,
         cache_k_lo: ttnn.Tensor | None = None,
+        end: int | None = None,
     ):
         """x [1, 1, S_local, H] bf16; the chunk's first global position ``start`` (tile-aligned); the layer's caches
         [n_batch, 2, rows_local, 64] bfp8 and its batch slot; ``cache_k_lo`` (when self.k_lo) the K residual cache of
-        the same layout. Returns [1, 1, S_local, H] bf16."""
+        the same layout; ``end`` (optional) the end of the chunk's real tokens: only the 32-row records holding them
+        are written to the caches (update_padded_kv_cache valid_global; the caller zeroes the last record's pad rows).
+        Returns [1, 1, S_local, H] bf16."""
         assert (cache_k_lo is not None) == bool(self.k_lo), "cache_k_lo is required exactly when ATTN_FULL_K_LO is on"
         s_local = x.shape[-2]
         qkv = ttnn.linear(
@@ -392,6 +395,7 @@ class TtAttention:
                     num_layers=1,
                     kv_actual_global=start,
                     cluster_axis=SP_AXIS,
+                    valid_global=end,
                 )
                 lo.deallocate(True)
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -402,6 +406,7 @@ class TtAttention:
                 num_layers=1,
                 kv_actual_global=start,
                 cluster_axis=SP_AXIS,
+                valid_global=end,
             )
             src.deallocate(True)
         k_rot.deallocate(True)

@@ -161,3 +161,27 @@
   attention rel 0.0068 (0.01). swap_margin_min 1.158 (the closest check is rel against the CPU step). pcc_swap_out
   0.99997. Device ops: attention 53, attn_norm 1; host FLOPs 0.
 - Re-run: `bfw job check --task S.attn_moe.02`.
+
+## M.1 (assemble: the all-device model)
+
+- `tt/model.py:TtModel` + `hooks.device_model`: one shared `TtCcl` and `TtRope`; per layer the validated modules
+  (TtRmsNorm x2, TtAttention, TtRouter, TtExperts, TtResidualAdd), every block through `run_block` over the
+  reference's own `block_graph` (step overrides only; intermediates freed after each block). The router's dense fp32
+  ROW_MAJOR output goes through `to_layout(TILE)` before experts (the component boundaries uploaded routing as fp32
+  TILE).
+- `embed(tokens, start=)`: host ids (harness input) -> uint32 `[8, 1, 640]` sharded over axis 0, rotated for a
+  non-chunk-aligned start (`rotated_positions`, the update_padded_kv_cache / rotary_embedding_indexed order) ->
+  `ttnn.minimum(ids, vocab - 1)` (PAD_ID) -> `ttnn.embedding` on a replicated bf16 ROW_MAJOR table (1.16 GB per chip).
+- `TtKvState` (`new_state`): ONE K and ONE V tensor per chip, `[KV_SLOTS x layers, 2, max_seq / 8, 64]` bfp8 ND-sharded
+  `[1, 1, 32, 64]` ROUND_ROBIN_1D, batch slot = slot * n_layers + layer position (gpt_oss_d_p packing); `state.slot`
+  picks the user slot. `cache_tensors(layer)` returns those shared tensors. Full layers also get a `k_lo` tensor of the
+  same layout (ATTN_FULL_K_LO). `load_prefix` writes the golden prefix chunk by chunk through `update_padded_kv_cache`
+  (k_lo = host - bfp8_round(host)); `to_torch` reads every chip back and undoes the block-cyclic order and the meta K
+  column order.
+- `layer(i, h, start, state, end=)`: `end` < chunk end passes `valid_global=end` to every `update_padded_kv_cache`
+  (attention.py `end=` argument, default None = unchanged), then `zero_padded_kv_cache(pad_align=32)` on K, V (and
+  k_lo) when `end` is not record-aligned. Not exercised by M.1's gate; L.starts tests it.
+- Setting `KV_SLOTS` (2, serving_answers slots).
+- Gate (first run): s10240 chunk 0 32.4 s (compile), chunk 1 0.27 s; host transfers per layer 0; ttnn ops per layer
+  min 140; worst layer pcc 0.99994; worst state pcc 0.99990 (KV by chunk 0.99991 / 0.99989). test_kv_layout PASS.
+- Re-run: `bfw job check --task M.1`.
