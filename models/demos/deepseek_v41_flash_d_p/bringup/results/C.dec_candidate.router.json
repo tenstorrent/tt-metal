@@ -1,0 +1,133 @@
+{
+ "metrics": {
+  "auto_router_L20_layer0_flip_frac": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.00048828125
+  },
+  "auto_router_L20_layer0_flip_limit": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.03369140625
+  },
+  "auto_router_L20_layer0_flip_rows": {
+   "t": "2026-10-17T10:15:06",
+   "value": 1
+  },
+  "auto_router_L20_layer0_flips_unexplained": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0
+  },
+  "auto_router_L20_layer0_matched": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.99951171875
+  },
+  "auto_router_L20_layer0_overlap": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.9999185800552368
+  },
+  "auto_router_L20_layer0_rel": {
+   "t": "2026-10-17T10:15:06",
+   "value": 3.2247029594145715e-05
+  },
+  "auto_router_L20_layer0_rowsum": {
+   "t": "2026-10-17T10:15:06",
+   "value": 2.980232238769531e-07
+  },
+  "auto_router_L20_mixed_flip_frac": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.00146484375
+  },
+  "auto_router_L20_mixed_flip_limit": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.041015625
+  },
+  "auto_router_L20_mixed_flip_rows": {
+   "t": "2026-10-17T10:15:06",
+   "value": 3
+  },
+  "auto_router_L20_mixed_flips_unexplained": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0
+  },
+  "auto_router_L20_mixed_matched": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.99853515625
+  },
+  "auto_router_L20_mixed_overlap": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.999755859375
+  },
+  "auto_router_L20_mixed_rel": {
+   "t": "2026-10-17T10:15:06",
+   "value": 6.764516001567245e-05
+  },
+  "auto_router_L20_mixed_rowsum": {
+   "t": "2026-10-17T10:15:06",
+   "value": 2.980232238769531e-07
+  },
+  "auto_router_L20_vs_cpu_flip_frac": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.001953125
+  },
+  "auto_router_L20_vs_cpu_flip_limit": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.0166015625
+  },
+  "auto_router_L20_vs_cpu_flip_rows": {
+   "t": "2026-10-17T10:15:06",
+   "value": 4
+  },
+  "auto_router_L20_vs_cpu_flips_unexplained": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0
+  },
+  "auto_router_L20_vs_cpu_matched": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.998046875
+  },
+  "auto_router_L20_vs_cpu_overlap": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.9996745586395264
+  },
+  "auto_router_L20_vs_cpu_rel": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.0001110925804823637
+  },
+  "auto_router_L20_vs_cpu_rowsum": {
+   "t": "2026-10-17T10:15:06",
+   "value": 2.980232238769531e-07
+  },
+  "auto_router_L20_vs_golden_matched": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.99365234375
+  },
+  "auto_router_L20_vs_golden_overlap": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.9989420771598816
+  },
+  "auto_router_L20_vs_golden_rel": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.0017115799710154533
+  },
+  "auto_router_L20_vs_golden_rowsum": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.001956939697265625
+  },
+  "det_router_L20": {
+   "t": "2026-10-17T10:15:06",
+   "value": 1.0
+  },
+  "err_router_L20": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.03135033696889877
+  },
+  "err_router_L20_limit": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.16381752490997314
+  },
+  "pcc_router_L20": {
+   "t": "2026-10-17T10:15:06",
+   "value": 0.9994794520259821
+  }
+ },
+ "task": "C.dec_candidate.router"
+}
