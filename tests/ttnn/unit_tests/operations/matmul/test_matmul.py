@@ -151,6 +151,58 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
         )
 
 
+@pytest.mark.parametrize("tile_h, tile_w", [(16, 32), (8, 32), (4, 32), (32, 16), (32, 32)])
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_tiny_tiles_bfloat_output(device, tile_h, tile_w, out_dtype):
+    """Pack a tiny-tile matmul output in a block-float format and compare with the host golden.
+
+    Every block-float tile stores one exponent byte per 16-datum row ahead of the mantissas, in
+    16-byte chunks. A 16x32 output tile has two full-height faces and so 32 exponent bytes (two
+    chunks); the shorter tiles carry at most 16 (one chunk). The packer must be configured per
+    face height, not per tile height, or the 16x32 tile's mantissa rows land one chunk early.
+    """
+    torch.manual_seed(0)
+    m, k, n = 64, 32, 64
+    in0 = torch.randn((1, 1, m, k), dtype=torch.bfloat16)
+    in1 = torch.randn((1, 1, k, n), dtype=torch.bfloat16)
+    in0_t = ttnn.from_torch(
+        in0, tile=ttnn.Tile((tile_h, 32)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    in1_t = ttnn.from_torch(
+        in1, tile=ttnn.Tile((32, tile_w)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    out_block_h = m // tile_h
+    out_block_w = n // tile_w
+    out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=k // 32,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+    output_t = ttnn.matmul(
+        in0_t,
+        in1_t,
+        program_config=program_config,
+        dtype=out_dtype,
+        output_tile=ttnn.Tile((tile_h, tile_w)),
+    )
+    output = ttnn.to_torch(output_t)
+    golden = in0.float() @ in1.float()
+    assert_numeric_metrics(
+        golden,
+        output,
+        pcc_threshold=0.999 if out_dtype == ttnn.bfloat8_b else 0.98,
+        check_allclose=False,
+        check_frobenius=False,
+        check_ulp=False,
+    )
+
+
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("m", [1024])

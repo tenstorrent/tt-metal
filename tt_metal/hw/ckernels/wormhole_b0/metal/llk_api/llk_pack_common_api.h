@@ -45,7 +45,7 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const bool partial_face = get_output_partial_face(output_id);
+    const bool partial_face = is_output_face_partial(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
@@ -189,7 +189,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const bool partial_face = get_output_partial_face(output_id);
+    const bool partial_face = is_output_face_partial(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
     SAN_HOOK(reconfigure(

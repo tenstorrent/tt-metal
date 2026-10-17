@@ -200,6 +200,7 @@ inline void _llk_pack_mop_config_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(num_tiles >= 1, "num_tiles must be >= 1");
+    LLK_ASSERT(!partial_face || face_r_dim < FACE_R_DIM, "partial_face requires a face shorter than FACE_R_DIM rows (one exponent chunk per tile)");
 
     if constexpr (pack_mode != PackMode::Untilize)
     {
@@ -308,6 +309,7 @@ inline void _llk_pack_reconfig_data_format_(
     [[maybe_unused]] const bool narrow_tile = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(!partial_face || face_r_dim < FACE_R_DIM, "partial_face requires a face shorter than FACE_R_DIM rows (one exponent chunk per tile)");
 
     reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face);
 }
@@ -344,6 +346,7 @@ inline void _llk_pack_hw_configure_(
     const std::uint32_t relu_config = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(!partial_face || face_r_dim < FACE_R_DIM, "partial_face requires a face shorter than FACE_R_DIM rows (one exponent chunk per tile)");
 
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
 }

@@ -34,7 +34,7 @@ inline void llk_pack_init(const std::uint32_t pack_output, std::uint32_t num_til
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const bool partial_face = get_output_partial_face(output_id);
+    const bool partial_face = is_output_face_partial(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
     if constexpr (!skip_addrmod_config) {
@@ -87,7 +87,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
         StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
         StateVal<Operand<Exu::Pack>::FaceHeight>(get_output_face_r_dim(output_id)),
         StateVal<Operand<Exu::Pack>::NumFaces>(get_output_num_faces(output_id)),
-        StateVal<Operand<Exu::Pack>::PartialFace>(get_output_partial_face(output_id)),
+        StateVal<Operand<Exu::Pack>::PartialFace>(is_output_face_partial(output_id)),
         StateVal<Operand<Exu::Pack>::NarrowTile>(get_output_narrow_tile(output_id)),
         StateDiscard<std::uint32_t>(tile_index),
         StateDiscard<std::uint32_t>(output_tile_index)));
@@ -113,7 +113,7 @@ inline void llk_matmul_pack(
         StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
         StateVal<Operand<Exu::Pack>::FaceHeight>(get_output_face_r_dim(output_id)),
         StateVal<Operand<Exu::Pack>::NumFaces>(get_output_num_faces(output_id)),
-        StateVal<Operand<Exu::Pack>::PartialFace>(get_output_partial_face(output_id)),
+        StateVal<Operand<Exu::Pack>::PartialFace>(is_output_face_partial(output_id)),
         StateVal<Operand<Exu::Pack>::NarrowTile>(get_output_narrow_tile(output_id)),
         StateDiscard<std::uint32_t>(start_tile_index),
         StateDiscard<std::uint32_t>(ntiles),

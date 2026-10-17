@@ -29,6 +29,15 @@ inline const uint32_t get_output_face_r_dim(const std::uint32_t output_id) {
     return (uint32_t)pack_tile_face_r_dim[output_id];
 }
 
+// Packer partial-face flag: the output's faces are shorter than FACE_R_DIM rows, so the whole tile
+// carries at most 16 exponent bytes (one 16-byte exponent chunk). This is NOT the CB's partial_face
+// flag (get_output_partial_face: tile height < TILE_HEIGHT), which is also set for a 16x32 tile whose
+// two full-height faces carry 32 exponent bytes; feeding that flag to the packer lays every 16x32
+// block-float tile out one chunk early.
+inline bool is_output_face_partial(const std::uint32_t output_id) {
+    return get_output_face_r_dim(output_id) < ckernel::FACE_R_DIM;
+}
+
 inline const uint32_t get_output_narrow_tile(const std::uint32_t output_id) {
     return (uint32_t)pack_narrow_tile[output_id];
 }
