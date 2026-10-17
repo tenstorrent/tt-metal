@@ -126,7 +126,7 @@ def _attention_fn(mesh, module):
         max_seq = int(extra.get("max_seq", ctx.start + x.shape[0]))
         n = int(extra.get("prefix_len", ctx.start))
         assert n == ctx.start, f"prefix_len {n} != chunk start {ctx.start}"
-        k_pre, v_pre = (prefix[name][:, :n] if name in prefix else None for name in ("key", "value"))
+        k_pre, v_pre = (prefix[name][:n] if name in prefix else None for name in ("key", "value"))  # [n, Hkv * D]
         module.ensure_rope(max_seq)
         cache = module.make_cache(max_seq, k_pre, v_pre)
         xd = to_device_replicated(mesh, x)
@@ -239,5 +239,104 @@ def device_component(mesh, spec, layer, step):
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 
+class _DeviceState:
+    """Per-layer device KV caches (tt.model.TtGemma4Model.new_caches)."""
+
+    def __init__(self, model, max_seq):
+        self.max_seq = max_seq
+        self.caches = model.new_caches(max_seq)
+        self.attention = {b.i: b.attention for b in model.blocks}
+
+    def load_prefix(self, layer, tensors, length):
+        old = self.caches[layer]
+        k, v = (tensors[n][:length] for n in ("key", "value"))  # position-major [length, Hkv * D]
+        self.caches[layer] = self.attention[layer].make_cache(self.max_seq, k, v)
+        old.deallocate()
+
+    def to_torch(self, layer, length):
+        from models.demos.gemma4_a4b_glx.tt.model import cache_to_torch
+
+        return cache_to_torch(self.caches[layer], self.attention[layer].kv_repeat, length)
+
+    def formats(self):
+        import ttnn
+
+        return {"key": ttnn.bfloat8_b, "value": ttnn.bfloat8_b}
+
+
+class Gemma4DeviceModel:
+    """Ladder adapter over tt.model.TtGemma4Model. The hidden state is a replicated [1, 1, S, H] bf16 device tensor
+    from the embedding to the final norm; each layer is TtGemma4Block (run_block over the block graph with the
+    validated device modules). Only the LM head runs on the host (tied embedding, softcap; the ladder's sampled rows).
+    """
+
+    def __init__(self, mesh, spec, layers, lm_head=True):
+        import ttnn
+        from models.demos.gemma4_a4b_glx.tt.model import TtGemma4Model
+
+        ttnn.CONFIG.enable_fast_runtime_mode = False  # DeviceProof counts ops through the slow path
+        self.mesh = mesh
+        self.model = TtGemma4Model(mesh, str(spec.hf_dir), layers=list(layers))
+        self.cfg = self.model.cfg
+        self.blocks = {b.i: b for b in self.model.blocks}
+        self._lm_head = self.model.loader.get(PREFIX + "embed_tokens.weight").float() if lm_head else None
+        self.load_seconds = self.model.load_seconds
+
+    def new_state(self, max_seq):
+        return _DeviceState(self.model, max_seq)
+
+    def embed(self, tokens):
+        import torch
+
+        import ttnn
+
+        ids = ttnn.from_torch(
+            tokens.reshape(1, 1, 1, -1).to(torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        h = self.model.embed(ids)
+        ttnn.deallocate(ids)
+        return h
+
+    def from_host(self, h):
+        from models.demos.gemma4_a4b_glx.tt.rms_norm import to_device_replicated
+
+        return to_device_replicated(self.mesh, h)
+
+    def to_host(self, h):
+        from models.demos.gemma4_a4b_glx.tt.rms_norm import replicated_to_host
+
+        return replicated_to_host(h).float()
+
+    def layer(self, i, h, start, state):
+        return self.blocks[i](h, start, state.caches[i])
+
+    def final_norm(self, h):
+        return self.model.final_norm(h)
+
+    def logits(self, hidden, rows):
+        import torch
+
+        logits = torch.nn.functional.linear(self.to_host(hidden)[rows], self._lm_head)
+        cap = self.cfg.final_logit_softcapping
+        return torch.tanh(logits / cap) * cap if cap else logits
+
+    def free(self, h):
+        import ttnn
+
+        if isinstance(h, ttnn.Tensor) and h.is_allocated():
+            ttnn.deallocate(h)
+
+    def sync(self):
+        import ttnn
+
+        ttnn.synchronize_device(self.mesh)
+
+
 def device_model(mesh, spec, layers, lm_head=True):
-    raise NotImplementedError("assemble stage: no device model yet")
+    """All-device model: embedding, every block through run_block, final norm; the hidden state stays on the device."""
+    return Gemma4DeviceModel(mesh, spec, layers, lm_head=lm_head)

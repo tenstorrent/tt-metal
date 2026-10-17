@@ -337,3 +337,15 @@ I re-applied the attempt above unchanged; it had passed under an older framework
   0.99383, 0 host transfers.
 - Re-run: `bfw job check --task L.s16384`. Ladder only:
   `BRINGUP_RUNG=s16384 scripts/run_safe_pytest.sh --run-all generated/bringup/gemma4_a4b_glx/tests/test_ladder.py`.
+
+## C.sliding.attention (follow-up: position-major state layout)
+
+- Why it broke: R.2 (44f8bd0a) changed the reference's state_tensors / load_state exchange layout from head-major
+  [Hkv, n, D] to position-major [n, Hkv * D]. The golden prefixes come in that layout now, so make_cache failed with
+  "expanded size ... [8, 2048, 256] vs [4096, 2048]". The module itself was unchanged.
+- Fix: `TtSlidingAttention.make_cache` takes position-major [n, Hkv * D] and turns it into [Hkv, n, D] on the host,
+  at cache build, not in forward. The global subclass inherits this. `n` may be 0 (chunk 0), so the reshape uses
+  explicit sizes, not -1. `cache_to_torch` (tt/model.py) returns [length, Hkv * D]. The hooks slice prefixes by rows
+  (`[:n]`), both in `_attention_fn` and in `_DeviceState.load_prefix`.
+- Result: pcc_attention_L00 0.99997, auto_margin_min 1.52, 32 device ops, 0 host flops.
+- Re-run: `bfw job check --task C.sliding.attention`.

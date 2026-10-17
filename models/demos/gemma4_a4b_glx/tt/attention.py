@@ -150,11 +150,17 @@ class TtSlidingAttention:
         self.rope_len = max_seq
 
     def make_cache(self, max_seq: int, k_prefix=None, v_prefix=None) -> TtKVCache:
-        """Device cache for this layer from host prefixes [Hkv, n, D] (each KV head on kv_repeat adjacent columns)."""
+        """Device cache for this layer from host prefixes in the reference's state exchange layout, position-major
+        [n, Hkv * D] (row = token, heads concatenated). Each KV head goes on kv_repeat adjacent columns."""
         r = self.kv_repeat
-        k_prefix, v_prefix = (
-            p.repeat_interleave(r, dim=0) if p is not None and r > 1 else p for p in (k_prefix, v_prefix)
-        )
+
+        def head_major(p):
+            if p is None:
+                return None
+            p = p.reshape(p.shape[0], p.shape[1] // self.d, self.d).transpose(0, 1)  # [Hkv, n, D]; n may be 0
+            return p.repeat_interleave(r, dim=0) if r > 1 else p
+
+        k_prefix, v_prefix = head_major(k_prefix), head_major(v_prefix)
         return TtKVCache(self.mesh, self.nkv * self.mesh.shape[TP_AXIS], self.d, max_seq, k_prefix, v_prefix)
 
     def _head_norm(self, t, weight):
