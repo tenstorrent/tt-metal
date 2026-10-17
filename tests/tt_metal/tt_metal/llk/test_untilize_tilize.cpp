@@ -1830,10 +1830,13 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeExplicitGeometry) 
 namespace {
 
 // Golden for a narrow-row untilize of full 32x32 tiles: the first row_num_datums datums of every untilized
-// row (bf16: two datums per word, so row_num_datums must be even).
+// row (bf16: two datums per word, so row_num_datums must be even). Valid for one tile column only: with more
+// columns the narrow row is the first row_num_datums datums of every tile in the row, not a prefix of the
+// untilized row.
 std::function<std::vector<std::uint32_t>(const std::vector<std::uint32_t>&, const ::unit_tests::compute::GoldenConfig&)>
 narrow_row_untilize_golden(std::uint32_t row_num_datums) {
     return [row_num_datums](const std::vector<std::uint32_t>& src, const ::unit_tests::compute::GoldenConfig& config) {
+        EXPECT_EQ(config.num_tiles_c_dim, 1u) << "narrow_row_untilize_golden models a single tile column";
         const auto full = ::unit_tests::compute::gold_standard_untilize(src, config);
         const std::size_t full_row_words = static_cast<std::size_t>(config.num_tiles_c_dim) * constants::TILE_WIDTH *
                                            config.datum_bytes / sizeof(std::uint32_t);
@@ -1850,10 +1853,12 @@ narrow_row_untilize_golden(std::uint32_t row_num_datums) {
 // its watcher state is read.
 constexpr int kNarrowRowWatcherIntervalMs = 250;
 
-// Runs pack_untilize_narrow_row_guard.cpp, the init-only kernel, for row_num_datums on one core with a
-// full-tile bf16 CB pair. Returns true when the program completed; false when the wait aborted because the
-// watcher reported an error (the only exception tolerated), leaving the watcher state for the caller to read.
-bool run_pack_untilize_narrow_row_guard_kernel(distributed::MeshDevice& mesh, std::uint32_t row_num_datums) {
+// Runs pack_untilize_narrow_row_guard.cpp, the init-only kernel, for row_num_datums across full_ct_dim tile
+// columns on one core with a full-tile bf16 CB pair. Returns true when the program completed; false when the
+// wait aborted because the watcher reported an error (the only exception tolerated), leaving the watcher
+// state for the caller to read.
+bool run_pack_untilize_narrow_row_guard_kernel(
+    distributed::MeshDevice& mesh, std::uint32_t row_num_datums, std::uint32_t full_ct_dim = 1) {
     const CoreCoord core{0, 0};
     Program program = CreateProgram();
     const std::uint32_t tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
@@ -1867,13 +1872,13 @@ bool run_pack_untilize_narrow_row_guard_kernel(distributed::MeshDevice& mesh, st
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize_narrow_row_guard.cpp",
         core,
-        ComputeConfig{.compile_args = {row_num_datums}});
+        ComputeConfig{.compile_args = {row_num_datums, full_ct_dim}});
     distributed::MeshWorkload workload;
     const distributed::MeshCoordinate zero(0, 0);
     workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
     auto& cq = mesh.mesh_command_queue();
     try {
-        distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::EnqueueMeshWorkload(cq, workload, false /*blocking*/);
         distributed::Finish(cq);
     } catch (const std::runtime_error& e) {
         EXPECT_NE(std::string(e.what()).find("Aborting wait due to watcher error"), std::string::npos) << e.what();
@@ -1914,9 +1919,10 @@ void run_pack_untilize_narrow_row_rejects(distributed::MeshDevice& mesh, std::ui
 
 }  // namespace
 
-// Narrow-row untilize of full 32x32 bf16 tiles at the row widths ttnn's sharded row-major transpose uses
-// (H % 32 datums per row, one tile per block): every width whose byte width is a multiple of 16 matches the
-// golden. Three tile rows exercise half-sync bank reuse.
+// Narrow-row untilize of full 32x32 bf16 tiles at the row widths the sharded row-major transpose op uses
+// (H % 32 datums per row, one tile per block): every width up to one face whose byte width is a multiple of
+// 16 matches the golden (8 and 16 are the only such even bf16 widths; wider rows are rejected by the init's
+// static_assert). Three tile rows exercise half-sync bank reuse.
 TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeNarrowRowWidths) {
     for (const std::uint32_t row_num_datums : {8u, 16u}) {
         for (const bool full_sync : {false, true}) {
@@ -1998,25 +2004,41 @@ private:
     bool llk_asserts_previous_{};
 };
 
-// Positive control: a 16-byte row (8 bf16 datums) passes the init with a clean watcher.
-TEST_F(LLKBlackholePackUntilizeAssertFixture, PackUntilizeNarrowRowAcceptsSixteenByteRows) {
-    ASSERT_TRUE(run_pack_untilize_narrow_row_guard_kernel(*devices_.at(0), 8))
-        << "the narrow-row init on 8 bf16 datums did not complete: "
-        << MetalContext::instance().watcher_server()->exception_message();
+namespace {
+
+// Runs the init-only kernel for an accepted width and checks that the program completed with a clean watcher.
+void run_pack_untilize_narrow_row_accepts(
+    distributed::MeshDevice& mesh, std::uint32_t row_num_datums, std::uint32_t full_ct_dim) {
+    ASSERT_TRUE(run_pack_untilize_narrow_row_guard_kernel(mesh, row_num_datums, full_ct_dim))
+        << "the narrow-row init on " << row_num_datums << " bf16 datums x " << full_ct_dim
+        << " tile columns did not complete: " << MetalContext::instance().watcher_server()->exception_message();
     // One more watcher poll after completion, so a late report is not missed.
     std::this_thread::sleep_for(std::chrono::milliseconds(2 * kNarrowRowWatcherIntervalMs));
     EXPECT_TRUE(MetalContext::instance().watcher_server()->exception_message().empty())
         << MetalContext::instance().watcher_server()->exception_message();
 }
 
+}  // namespace
+
+// Positive control: a 16-byte row (8 bf16 datums) passes the init with a clean watcher.
+TEST_F(LLKBlackholePackUntilizeAssertFixture, PackUntilizeNarrowRowAcceptsSixteenByteRows) {
+    run_pack_untilize_narrow_row_accepts(*devices_.at(0), 8 /*row_num_datums*/, 1 /*full_ct_dim*/);
+}
+
+// The row is full_ct_dim tiles wide: 4 bf16 datums (8 bytes) per tile across two tile columns is a 16-byte
+// row and passes, although the same 4 datums in one column (below) are rejected.
+TEST_F(LLKBlackholePackUntilizeAssertFixture, PackUntilizeNarrowRowAcceptsEightByteTilesInTwoColumns) {
+    run_pack_untilize_narrow_row_accepts(*devices_.at(0), 4 /*row_num_datums*/, 2 /*full_ct_dim*/);
+}
+
 // 4 bf16 datums = 8 bytes: the per-row advance floors to 0 and every row lands on the same 16 bytes.
 TEST_F(LLKBlackholePackUntilizeAssertFixture, PackUntilizeNarrowRowRejectsEightByteRows) {
-    run_pack_untilize_narrow_row_rejects(*devices_.at(0), 4);
+    run_pack_untilize_narrow_row_rejects(*devices_.at(0), 4 /*row_num_datums*/);
 }
 
 // 20 bf16 datums = 40 bytes: the per-row advance floors to 32 and each row overwrites the previous row's tail.
 TEST_F(LLKBlackholePackUntilizeAssertFixture, PackUntilizeNarrowRowRejectsFortyByteRows) {
-    run_pack_untilize_narrow_row_rejects(*devices_.at(0), 20);
+    run_pack_untilize_narrow_row_rejects(*devices_.at(0), 20 /*row_num_datums*/);
 }
 
 // ============================================================================

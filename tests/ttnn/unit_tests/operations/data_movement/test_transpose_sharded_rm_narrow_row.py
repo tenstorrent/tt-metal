@@ -6,8 +6,12 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from tt_py_test_utils_common.utility_functions import run_for_blackhole
+
+# Quasar has no narrow-row pack untilize (the compute API rejects narrow_row statically), so the sharded
+# row-major transpose of a non-tile-multiple height cannot run there.
+skip_on_quasar = pytest.mark.skipif(
+    "quasar" in ttnn.get_arch_name(), reason="Quasar does not support narrow-row pack_untilize"
+)
 
 
 def _height_sharded_rm_input(device, h, w, c=4):
@@ -35,22 +39,34 @@ def _height_sharded_rm_input(device, h, w, c=4):
     return torch_input, tt_input
 
 
+@skip_on_quasar
 @pytest.mark.parametrize("h", [8, 16])
 @pytest.mark.parametrize("w", [64])
 def test_transpose_hw_sharded_rm_narrow_row_aligned(device, h, w):
-    """Narrow output rows whose bf16 byte width is a multiple of 16 transpose exactly."""
+    """Narrow output rows up to one face wide whose bf16 byte width is a multiple of 16 transpose exactly."""
     torch_input, tt_input = _height_sharded_rm_input(device, h, w)
     tt_output = ttnn.transpose(tt_input, 2, 3)
     tt_output = ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(tt_output, ttnn.L1_MEMORY_CONFIG)))
     assert torch.equal(torch_input.transpose(2, 3), tt_output)
-    assert_with_pcc(torch_input.transpose(2, 3), tt_output, 0.9999)
 
 
-@run_for_blackhole()
-@pytest.mark.parametrize("h", [4, 20])
+@skip_on_quasar
+@pytest.mark.parametrize(
+    "h, message",
+    [
+        # 8- and 40-byte rows cannot be packed at the 16-byte page pitch of the sharded output.
+        (4, "must be a multiple of the 16-byte buffer alignment"),
+        (20, "must be a multiple of the 16-byte buffer alignment"),
+        # 48-byte rows are aligned but wider than one face.
+        (24, "wider than one face"),
+        # Above one tile and not a multiple of it: every tile column is clipped to H % 32 datums.
+        (36, "every tile column of the output row would be clipped to 4 datums"),
+        (48, "every tile column of the output row would be clipped to 16 datums"),
+    ],
+)
 @pytest.mark.parametrize("w", [64])
-def test_transpose_hw_sharded_rm_narrow_row_rejects_unaligned_row_bytes(device, expect_error, h, w):
-    """An 8- or 40-byte output row cannot be packed at its pitch on Blackhole (16-byte L1 advance): reject it."""
+def test_transpose_hw_sharded_rm_narrow_row_rejects_unsupported_heights(device, expect_error, h, message, w):
+    """Heights the narrow-row untilize packs wrongly (on Wormhole and Blackhole) are rejected on the host."""
     _, tt_input = _height_sharded_rm_input(device, h, w)
-    with expect_error(RuntimeError, "the row byte width must be a multiple of 16 bytes"):
+    with expect_error(RuntimeError, message):
         ttnn.transpose(tt_input, 2, 3)

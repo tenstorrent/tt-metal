@@ -409,26 +409,55 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
             TILE_HW);
     }
 
-    // The sharded row-major WH factory packs an H % TILE_HEIGHT != 0 output through the Blackhole narrow-row
-    // untilize, whose per-row L1 advance is in 16-byte units: an output row of ht * (H % TILE_HEIGHT) datums whose
-    // byte width is not a multiple of 16 is packed at the wrong pitch and the rows overlap. Wormhole streams the
-    // rows without a per-row restart and has no such limit. Mirrors the device-side LLK assert so the shape is
-    // rejected here instead of producing a silently wrong tensor.
-    if (row_major && input_tensor.device()->arch() == tt::ARCH::BLACKHOLE &&
-        std::holds_alternative<TransposeWHShardedRMProgramFactory>(
-            select_program_factory(operation_attributes, tensor_args))) {
-        const uint32_t logical_h = input_tensor.logical_shape()[2];
-        const uint32_t last_row_num_datums = logical_h % TILE_HEIGHT;
-        if (last_row_num_datums != 0) {
-            const uint32_t ht = (logical_h + TILE_HEIGHT - 1) / TILE_HEIGHT;
-            const uint32_t row_bytes = ht * last_row_num_datums * input_tensor.element_size();
+    // The sharded row-major WH factory handles an input height that is not a tile multiple through the narrow-row
+    // untilize, which packs H % TILE_HEIGHT datums per output row. Three shapes come out silently wrong on both
+    // Wormhole and Blackhole (measured, bf16), so they are rejected here before any program is built:
+    // - H > TILE_HEIGHT: the kernel packs every tile column at H % TILE_HEIGHT datums, so each full tile column is
+    //   clipped and the output row is ht * (H % TILE_HEIGHT) datums instead of H;
+    // - a row wider than one face: 16-byte alignment is necessary but not sufficient (the LLK narrow-row
+    //   static_assert comment in tt_llk_blackhole/llk_lib/llk_pack_untilize.h records the same limit);
+    // - a row byte width that is not a multiple of the output buffer alignment: the sharded output stores each
+    //   H-datum row at the aligned page pitch, but Wormhole packs the rows at their byte width and Blackhole at a
+    //   16-byte-floored pitch (its per-row L1 advance is in 16-byte units; the LLK init asserts the same).
+    if (row_major && std::holds_alternative<TransposeWHShardedRMProgramFactory>(
+                         select_program_factory(operation_attributes, tensor_args))) {
+        const uint32_t logical_h = input_tensor.logical_shape()[-2];
+        const uint32_t row_num_datums = logical_h % TILE_HEIGHT;
+        if (row_num_datums != 0) {
             TT_FATAL(
-                row_bytes % 16 == 0,
-                "Sharded row-major transpose on Blackhole packs output rows of {} datums ({} bytes, from H {} % {}); "
-                "the row byte width must be a multiple of 16 bytes. Pad H or use an interleaved input.",
-                ht * last_row_num_datums,
+                logical_h < TILE_HEIGHT,
+                "Sharded row-major transpose: H {} is above one tile ({}) and not a multiple of it; every tile column "
+                "of the output row would be clipped to {} datums. Pad H to a multiple of {} or use an interleaved "
+                "input.",
+                logical_h,
+                TILE_HEIGHT,
+                row_num_datums,
+                TILE_HEIGHT);
+            TT_FATAL(
+                row_num_datums <= FACE_WIDTH,
+                "Sharded row-major transpose: output rows of {} datums (H {}) are wider than one face ({} datums), "
+                "which the narrow-row untilize does not pack correctly. Pad H to a multiple of {} or use an "
+                "interleaved input.",
+                row_num_datums,
+                logical_h,
+                FACE_WIDTH,
+                TILE_HEIGHT);
+            const uint32_t row_bytes = row_num_datums * input_tensor.element_size();
+            const uint32_t alignment =
+                derive_effective_output_memory_config(operation_attributes, tensor_args).buffer_type() ==
+                        tt::tt_metal::BufferType::DRAM
+                    ? tt::tt_metal::hal::get_dram_alignment()
+                    : tt::tt_metal::hal::get_l1_alignment();
+            TT_FATAL(
+                row_bytes % alignment == 0,
+                "Sharded row-major transpose: output rows of {} datums ({} bytes, H {}) cannot be packed at the "
+                "{}-byte page pitch of the sharded output; the row byte width must be a multiple of the {}-byte "
+                "buffer alignment. Pad H to a multiple of {} or use an interleaved input.",
+                row_num_datums,
                 row_bytes,
                 logical_h,
+                alignment,
+                alignment,
                 TILE_HEIGHT);
         }
     }

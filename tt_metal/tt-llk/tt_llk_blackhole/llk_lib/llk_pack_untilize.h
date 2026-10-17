@@ -175,7 +175,7 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
  * @tparam block_ct_dim: Number of input tiles per block.
  * @tparam full_ct_dim: Total number of input tiles across all blocks (must be divisible by block_ct_dim).
  * @tparam narrow_row: True when packing fewer than TILE_C_DIM datums per row.
- * @tparam row_num_datums: Number of datums per output row when narrow_row is set.
+ * @tparam row_num_datums: Number of datums per output row when narrow_row is set, at most FACE_C_DIM.
  * @tparam dense: True to pack two tiles into one dest region; requires num_faces == 2 and even block_ct_dim.
  * @param pack_src_format: Source (dest register) data format.
  * @param pack_dst_format: Destination (L1) data format.
@@ -183,6 +183,8 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @note On the math thread, @ref _llk_math_eltwise_unary_datacopy_ (A2D) populates the dest register this packer reads.
  * @note Pair with @ref _llk_pack_untilize_uninit_ after the matching @ref _llk_pack_untilize_ execute calls.
+ * @note With narrow_row, keep full_ct_dim * row_num_datums at a multiple of 16 bytes in pack_dst_format: the per-row
+ * L1 advance is in 16-byte units, so a narrower pitch cannot be expressed and the rows overlap. Checked by LLK_ASSERT.
  */
 template <
     std::uint32_t block_ct_dim,
@@ -202,8 +204,10 @@ inline void _llk_pack_untilize_init_(
 
     if constexpr (narrow_row)
     {
-        // Changed to check against TILE_C_DIM instead of FACE_C_DIM until tt-metal#24095 is investigated.
-        static_assert(row_num_datums < TILE_C_DIM, "row_num_datums must be set to less than TILE_C_DIM for narrow_row packing");
+        // A narrow row is at most one face wide: the per-row PACR reads row_num_datums consecutive datums of one
+        // face, so a wider row reads past the face and is packed wrong (measured: 24 and 28 bf16 datums). The
+        // 16-byte row-width check below is necessary but not sufficient on its own.
+        static_assert(row_num_datums <= FACE_C_DIM, "row_num_datums must be at most FACE_C_DIM for narrow_row packing");
     }
 
     _llk_pack_untilize_configure_addrmod_();
@@ -216,16 +220,20 @@ inline void _llk_pack_untilize_init_(
     const std::uint32_t z_stride = 2 * face_r_dim * y_stride;
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
 
+    // The packer's L1 destination address and its per-row advance are in 16-byte units.
+    constexpr std::uint32_t L1_ADDR_UNIT_BYTES = 16;
+
     std::uint32_t output_addr_offset;
     if constexpr (narrow_row)
     {
         output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * row_num_datums);
         // Every row of the untilize MOP is closed by a Last=1 PACR and the next row restarts at the L1 destination
-        // address, which the replay buffer below advances by output_addr_offset / 16 (the address and the packer's
-        // L1 writes are in 16-byte units). A row byte width that is not a multiple of 16 cannot be expressed as a
-        // per-row pitch: rows are packed at the floored pitch and overlap (an 8-byte row never advances at all).
+        // address, which the replay buffer (programmed in _llk_pack_untilize_mop_config_ above) advances by the
+        // scratch value written below, output_addr_offset / L1_ADDR_UNIT_BYTES. A row byte width that is not a
+        // multiple of 16 cannot be expressed as a per-row pitch: rows are packed at the floored pitch and overlap
+        // (an 8-byte row never advances at all).
         LLK_ASSERT(
-            (output_addr_offset % 16) == 0,
+            (output_addr_offset % L1_ADDR_UNIT_BYTES) == 0,
             "narrow_row: full_ct_dim * row_num_datums must span a multiple of 16 bytes in pack_dst_format (per-row "
             "L1 advance is in 16-byte units)");
     }
@@ -238,8 +246,8 @@ inline void _llk_pack_untilize_init_(
     // CFGSHIFTMASK to do `THCON_SEC0_REG1_L1_Dest_addr += SCRATCH` per row.
     // ScratchIndex=0b11 in the CFGSHIFTMASK selects SCRATCH_SEC[CurrentThread]; pack thread
     // is TRISC2, so this slot is SCRATCH_SEC2.
-    TT_SETDMAREG(0, LOWER_HALFWORD(output_addr_offset / 16), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
-    TT_SETDMAREG(0, UPPER_HALFWORD(output_addr_offset / 16), 0, HI_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
+    TT_SETDMAREG(0, LOWER_HALFWORD(output_addr_offset / L1_ADDR_UNIT_BYTES), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
+    TT_SETDMAREG(0, UPPER_HALFWORD(output_addr_offset / L1_ADDR_UNIT_BYTES), 0, HI_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR_OFFSET, 0, SCRATCH_SEC2_val_ADDR32);
     TTI_NOP;
