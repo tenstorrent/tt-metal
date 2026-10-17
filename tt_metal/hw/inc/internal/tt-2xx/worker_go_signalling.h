@@ -10,14 +10,23 @@
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
 #include "hostdev/dev_msgs.h"
+#include "hostdevcommon/common_values.hpp"
 
 #ifdef FDS_SIGNALLING
 #include "overlay/fds_signalling.hpp"
 #include "quasar/plic.hpp"
 
-constexpr uint32_t fds_num_go_groups = go_message_num_entries - 1;
+// One go group per completion counter of a CQ.
+constexpr uint32_t fds_num_go_groups = DISPATCH_MAX_COMPLETION_COUNTERS;
 constexpr uint32_t fds_go_interrupt_mask = overlay::fds_signalling::go_interrupt_mask(fds_num_go_groups);
 static_assert(fds_go_interrupt_mask == 0x1FE, "FDS interrupt mask must cover exactly groups 1..8");
+
+// Go ring slot the interrupt handler marks for the next FDS go. An FDS go carries no slot, so the handler counts them:
+// each go is for the next launch message, and the firmware resets the count wherever it resets the launch message read
+// pointer, when no go is in flight. The handler is the only other writer.
+inline volatile uint32_t fds_go_ring_write_slot = 0;
+
+inline void reset_go_ring_write_slot() { fds_go_ring_write_slot = 0; }
 
 __attribute__((interrupt)) inline void fds_go_interrupt_handler() {
     tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
@@ -27,7 +36,7 @@ __attribute__((interrupt)) inline void fds_go_interrupt_handler() {
     }
 
     const uint32_t group_id = overlay::fds_signalling::go_group_from_plic_source(claimed_source);
-    if (overlay::fds_signalling::sub_device_from_go_group(group_id) >= fds_num_go_groups) {
+    if (overlay::fds_signalling::completion_counter_from_group(group_id) >= fds_num_go_groups) {
         ASSERT(0);
         // Not completing the claim stops the PLIC from delivering this source again.
         return;
@@ -51,9 +60,15 @@ __attribute__((interrupt)) inline void fds_go_interrupt_handler() {
     WAYPOINT("FGCD");
     overlay::quasar::plic_complete(claimed_source);
 
-    // The host rewrites go_message_index only after quiesce with no go in flight, so no locking is needed.
-    if (group_id == overlay::fds_signalling::go_group_for_sub_device(mailboxes->go_message_index)) {
-        mailboxes->go_messages[overlay::fds_signalling::sub_device_from_go_group(group_id)].signal = RUN_MSG_GO;
+    // The host rewrites go_message_index and fds_go_group_mask only after quiesce with no go in flight, so no locking
+    // is needed. A go on one of this core's groups names the completion counter the launch reports done into, which a
+    // NOC go carries in dispatch_message_offset.
+    if ((mailboxes->fds_go_group_mask >> group_id) & 1) {
+        const uint32_t slot = fds_go_ring_write_slot;
+        volatile tt_l1_ptr go_msg_t* go_message = &mailboxes->go_messages[mailboxes->go_message_index].slot[slot];
+        go_message->dispatch_message_offset = overlay::fds_signalling::completion_counter_from_group(group_id);
+        go_message->signal = RUN_MSG_GO;
+        fds_go_ring_write_slot = (slot + 1) % GO_RING_DEPTH;
     }
 }
 
@@ -110,11 +125,15 @@ inline void init_go_signalling(tt_l1_ptr mailboxes_t* const mailboxes) {
     overlay::fds_signalling::worker_config_interrupt_enable(fds_go_interrupt_mask);
     asm volatile("csrrs zero, mie, %0" : : "r"(uint32_t{1} << MACHINE_EXTERNAL_INTERRUPT_OFFSET));
     asm volatile("csrrs zero, mstatus, %0" : : "r"(uint32_t{1} << 3));
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    clear_go_messages(mailboxes->go_messages);
+    // Until a sub-device reconfigure writes it, the core is in the only sub-device, whose programs report into any of
+    // the completion counters, so it accepts every go group.
+    mailboxes->fds_go_group_mask = ((1u << fds_num_go_groups) - 1)
+                                   << overlay::fds_signalling::group_for_completion_counter(0);
 }
 
 // Readies this launch's FDS done: waits for the go if asked, then queues idle on the done wire so the
-// previous launch's done is not taken for this one. Returns the done group (sub-device index + 1), or 0
+// previous launch's done is not taken for this one. Returns the done group of the go's completion counter, or 0
 // when the launch completes over the NOC instead.
 inline uint32_t prepare_worker_completion_signal(
     tt_l1_ptr mailboxes_t* const mailboxes, launch_msg_t* launch_message, bool wait_for_go) {
@@ -122,15 +141,15 @@ inline uint32_t prepare_worker_completion_signal(
         return 0;
     }
 
-    const uint32_t go_message_index = mailboxes->go_message_index;
     if (wait_for_go) {
         WAYPOINT("FGW");
-        while (mailboxes->go_messages[go_message_index].signal != RUN_MSG_GO);
+        while (current_go_message(mailboxes)->signal != RUN_MSG_GO);
         WAYPOINT("FGD");
     }
 
     overlay::fds_signalling::worker_clear_done();
-    return go_message_index + 1;
+    return overlay::fds_signalling::group_for_completion_counter(
+        current_go_message(mailboxes)->dispatch_message_offset);
 }
 
 // Sends this launch's done to dispatch by queueing its group on the FDS done wire, where it stays until
@@ -140,9 +159,11 @@ inline void signal_worker_completion(uint32_t worker_completion_group) {
 }
 #else
 inline void init_go_signalling(tt_l1_ptr mailboxes_t* const mailboxes) {
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    clear_go_messages(mailboxes->go_messages);
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 }
+
+inline void reset_go_ring_write_slot() {}
 
 inline uint32_t prepare_worker_completion_signal(tt_l1_ptr mailboxes_t* const, launch_msg_t*, bool) { return 0; }
 

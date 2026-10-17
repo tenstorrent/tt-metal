@@ -35,6 +35,7 @@ struct dispatch_static_config_t {
     std::optional<uint32_t> packed_write_max_unicast_sub_cmds;  // 19
     std::optional<uint32_t> dispatch_s_sync_sem_base_addr;
     std::optional<uint32_t> max_num_worker_sems;
+    std::optional<uint32_t> max_num_completion_counters;
     std::optional<uint32_t> mcast_go_signal_addr;
     std::optional<uint32_t> distributed_dispatcher;
     std::optional<uint32_t> first_stream_used;

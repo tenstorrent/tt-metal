@@ -57,10 +57,13 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
     uint32_t local_sub_device_update_sem = 0;
     uint32_t local_stream_reset_update_sem = 0;
 
+    // Completion counter stream each sub-device's latest workload reports done into (recorded at launch).
+    uint32_t completion_stream[total_sub_devices] = {0};
     uint32_t local_stream_sem_counter[total_sub_devices] = {0};
     for (uint32_t i = 0; i < total_sub_devices; ++i) {
+        completion_stream[i] = i + first_stream_index;
         local_stream_sem_counter[i] =
-            NOC_STREAM_READ_REG(i + first_stream_index, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+            NOC_STREAM_READ_REG(completion_stream[i], STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
     }
 
     auto dispatch_telemetry =
@@ -120,7 +123,7 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
                     local_stream_sem_counter[i] = 0;
                 } else {
                     local_stream_sem_counter[i] =
-                        NOC_STREAM_READ_REG(i + first_stream_index, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+                        NOC_STREAM_READ_REG(completion_stream[i], STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
                 }
 
                 completion_count[i] = workers_per_sub_device[i];  // triggers new workload check
@@ -149,6 +152,7 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
             if (completion_count[i] == workers_per_sub_device[i]) {
                 uint64_t current_last_work_launch_timestamp = 0;
                 uint32_t current_launched_work_start_stream_sem = 0;
+                uint32_t current_launched_work_stream = 0;
                 {
                     auto timestamp_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                         &dispatch_telemetry->last_work_launch_timestamp[i]);
@@ -165,6 +169,7 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
                         timestamp_high = timestamp_words[1];
                         current_launched_work_start_stream_sem =
                             dispatch_telemetry_control->launched_work_start_stream_sem[i];
+                        current_launched_work_stream = dispatch_telemetry_control->launched_work_stream[i];
                         launched_work_sequence_counter_check_end =
                             dispatch_telemetry_control->launched_work_sequence_counter[i];
                     } while (launched_work_sequence_counter_check_start != launched_work_sequence_counter_check_end ||
@@ -180,6 +185,7 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
                     // Catch up to the latest workload, drop any we missed since last_work_launch_timestamp
                     // information for those runs has been lost
                     local_stream_sem_counter[i] = current_launched_work_start_stream_sem;
+                    completion_stream[i] = current_launched_work_stream;
                     completion_count[i] = 0;
                     last_work_launch_timestamp[i] = current_last_work_launch_timestamp;
 
@@ -195,7 +201,7 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
             else {
                 // Stream count with dispatch_s is a rolling counter unless explicit reset flag is sent
                 const uint32_t curr_stream_sem_count =
-                    NOC_STREAM_READ_REG(i + first_stream_index, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+                    NOC_STREAM_READ_REG(completion_stream[i], STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
 
                 uint32_t delta_sem_count =
                     stream_wrap_delta(static_cast<uint32_t>(curr_stream_sem_count), local_stream_sem_counter[i]);

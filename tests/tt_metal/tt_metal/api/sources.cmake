@@ -78,6 +78,7 @@ set(UNIT_TESTS_API_SOURCES
     test_tile.cpp
     test_tilize_untilize.cpp
     test_worker_config_buffer.cpp
+    test_expected_worker_completions.cpp
     test_blockfloat_common.cpp
     test_mx_common.cpp
     test_descriptor_patching.cpp

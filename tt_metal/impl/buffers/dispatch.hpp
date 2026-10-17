@@ -14,6 +14,7 @@
 #include "core_coord.hpp"
 #include <tt_stl/span.hpp>
 #include "dispatch/system_memory_manager.hpp"
+#include "dispatch/expected_worker_completions.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -64,7 +65,7 @@ struct ReadBufferDescriptor {
 namespace buffer_dispatch {
 
 struct BufferReadDispatchParams {
-    ttsl::Span<const uint32_t> expected_num_workers_completed;
+    ExpectedWorkerCompletions expected_num_workers_completed;
     uint32_t cq_id = 0;
     IDevice* device = nullptr;
     uint32_t padded_page_size = 0;
@@ -114,17 +115,17 @@ bool write_to_device_buffer(
     const void* src,
     Buffer& buffer,
     uint32_t cq_id,
-    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
     CoreType dispatch_core_type,
     ttsl::Span<const SubDeviceId> sub_device_ids,
     const std::shared_ptr<experimental::PinnedMemory>& pinned_memory = nullptr,
     const CoreRangeSet* logical_core_filter = nullptr);
 
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
-    Buffer& buffer, uint32_t cq_id, ttsl::Span<const uint32_t> expected_num_workers_completed);
+    Buffer& buffer, uint32_t cq_id, const ExpectedWorkerCompletions& expected_num_workers_completed);
 
 BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
-    Buffer& buffer, uint32_t cq_id, ttsl::Span<const uint32_t> expected_num_workers_completed);
+    Buffer& buffer, uint32_t cq_id, const ExpectedWorkerCompletions& expected_num_workers_completed);
 
 void copy_sharded_buffer_from_core_to_completion_queue(
     uint32_t core_id,

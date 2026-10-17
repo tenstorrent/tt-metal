@@ -6,6 +6,7 @@
 
 #include "device.hpp"
 #include "dispatch/topology.hpp"
+#include "dispatch/expected_worker_completions.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 
@@ -31,7 +32,7 @@ struct CoreDispatchParams {
     IDevice* device = nullptr;
     uint32_t cq_id = 0;
     CoreType dispatch_core_type{CoreType::COUNT};
-    ttsl::Span<const uint32_t> expected_num_workers_completed;
+    ExpectedWorkerCompletions expected_num_workers_completed;
     ttsl::Span<const SubDeviceId> sub_device_ids;
 };
 
@@ -49,7 +50,7 @@ void write_to_core(
     DeviceAddr address,
     uint32_t size_bytes,
     uint32_t cq_id,
-    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
     ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
 // Like write_to_core, but skips validate_core_read_write_bounds. That is the only
@@ -64,7 +65,7 @@ void write_to_core_unchecked(
     DeviceAddr address,
     uint32_t size_bytes,
     uint32_t cq_id,
-    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
     ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
 void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_params);

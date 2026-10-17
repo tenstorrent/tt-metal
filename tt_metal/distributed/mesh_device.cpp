@@ -1992,6 +1992,13 @@ uint32_t MeshDeviceImpl::num_sub_devices() const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices();
 }
 
+uint32_t MeshDeviceImpl::completion_counter_index(SubDeviceId sub_device_id) const {
+    const uint32_t num_active_sub_devices = num_sub_devices();
+    TT_ASSERT(*sub_device_id < num_active_sub_devices);
+    return DispatchSettings::completion_counter_index(
+        *sub_device_id, DispatchSettings::num_completion_slots(num_active_sub_devices));
+}
+
 bool MeshDeviceImpl::is_mmio_capable() const {
     TT_THROW("is_mmio_capable() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->is_mmio_capable();

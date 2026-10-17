@@ -121,7 +121,7 @@ DispatchMemMap::DispatchMemMap(
             device_cq_addr_sizes_[dev_addr_idx] =
                 has_stream_registers_
                     ? 0
-                    : cq_layout.num_cqs_per_core * DispatchSettings::DISPATCH_MESSAGE_ENTRIES * l1_alignment;
+                    : cq_layout.num_cqs_per_core * DispatchSettings::DISPATCH_COMPLETION_COUNTERS * l1_alignment;
         } else if (
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS ||
             dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_PROGRESS) {
@@ -329,14 +329,14 @@ uint32_t DispatchMemMap::get_dispatch_message_addr_start() const {
 
 uint32_t DispatchMemMap::get_dispatch_stream_index(uint32_t index) const { return dispatch_stream_base_ + index; }
 
-uint8_t DispatchMemMap::get_dispatch_message_update_offset(uint32_t index) const {
-    TT_ASSERT(index < tt::tt_metal::DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET);
-    return index;
+uint32_t DispatchMemMap::get_completion_stream(uint32_t counter_index) const {
+    TT_ASSERT(counter_index < DispatchSettings::DISPATCH_COMPLETION_COUNTERS);
+    return get_dispatch_stream_index(counter_index);
 }
 
 uint32_t DispatchMemMap::get_completion_counter_offset(uint8_t cq_id) const {
     const uint8_t slot = (num_cqs_per_core_ > 1) ? cq_id : 0;
-    return slot * DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
+    return slot * DispatchSettings::DISPATCH_COMPLETION_COUNTERS;
 }
 
 }  // namespace tt::tt_metal

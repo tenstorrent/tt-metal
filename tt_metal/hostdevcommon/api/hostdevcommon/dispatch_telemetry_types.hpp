@@ -111,6 +111,10 @@ struct __attribute__((packed, aligned(4))) DispatchTelemetryControl {
     // dispatch_s writes, dispatch_s_compute reads.
     // Records value of the stream semaphore when launching a new workload.
     uint32_t launched_work_start_stream_sem[RESERVED_SUB_DEVICE_SPACE] = {0};
+
+    // dispatch_s writes, dispatch_s_compute reads.
+    // Records the completion counter stream the launched workload's workers report done into.
+    uint32_t launched_work_stream[RESERVED_SUB_DEVICE_SPACE] = {0};
 };
 
 constexpr uint32_t INVALID_SMC_DISPATCH_CORE_COORDS = UINT32_MAX;
