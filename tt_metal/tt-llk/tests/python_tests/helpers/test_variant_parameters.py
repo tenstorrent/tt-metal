@@ -690,14 +690,26 @@ class DBG_SRCA_DUMP(TemplateParameter):
 
     The result layout the kernel writes is shared with the test through the class
     constants: ``WORDS_PER_ROW`` debug-bus words of the SrcA dump at the start of result
-    tile 0, the thread's dest offset before the dump, after it, and the value the datacopy
-    set it to at ``DEST_OFFSET_WORD``, and the DEST tile read back in result tile
-    ``RESULT_TILE_DEST`` (Blackhole).
+    tile 0; the thread's dest offset before the dump, after it, and the value the datacopy
+    set it to at ``DEST_OFFSET_BEFORE_WORD`` / ``DEST_OFFSET_AFTER_WORD`` /
+    ``DEST_OFFSET_SET_WORD``; the ``BORROWED_ROW_COUNT`` DEST rows the dump borrows (rows
+    0-3 and 8-11 of the current half) read before and after it at
+    ``BORROWED_ROWS_BEFORE_WORD`` / ``BORROWED_ROWS_AFTER_WORD``; and the DEST tile read
+    back through the RISC-V window in result tile ``RESULT_TILE_DEST`` (Blackhole) of the
+    ``RESULT_TILE_COUNT`` result tiles.
     """
 
     WORDS_PER_ROW = 8
-    DEST_OFFSET_WORD = WORDS_PER_ROW
+    DEST_OFFSET_BEFORE_WORD = WORDS_PER_ROW
+    DEST_OFFSET_AFTER_WORD = DEST_OFFSET_BEFORE_WORD + 1
+    DEST_OFFSET_SET_WORD = DEST_OFFSET_BEFORE_WORD + 2
+    BORROWED_ROW_COUNT = 8
+    BORROWED_ROWS_BEFORE_WORD = 2 * WORDS_PER_ROW
+    BORROWED_ROWS_AFTER_WORD = (
+        BORROWED_ROWS_BEFORE_WORD + BORROWED_ROW_COUNT * WORDS_PER_ROW
+    )
     RESULT_TILE_DEST = 1
+    RESULT_TILE_COUNT = 2
 
     srca_row_check: bool = False
     dump_dst_index: int = 0
@@ -710,8 +722,14 @@ class DBG_SRCA_DUMP(TemplateParameter):
                 f"constexpr std::uint32_t DUMP_DST_INDEX = {self.dump_dst_index}u;",
                 f"constexpr bool DUMP_UPPER_HALF = {str(self.dump_upper_half).lower()};",
                 f"constexpr std::uint32_t WORDS_PER_ROW = {self.WORDS_PER_ROW}u;",
-                f"constexpr std::uint32_t DEST_OFFSET_WORD = {self.DEST_OFFSET_WORD}u;",
+                f"constexpr std::uint32_t DEST_OFFSET_BEFORE_WORD = {self.DEST_OFFSET_BEFORE_WORD}u;",
+                f"constexpr std::uint32_t DEST_OFFSET_AFTER_WORD = {self.DEST_OFFSET_AFTER_WORD}u;",
+                f"constexpr std::uint32_t DEST_OFFSET_SET_WORD = {self.DEST_OFFSET_SET_WORD}u;",
+                f"constexpr std::uint32_t BORROWED_ROW_COUNT = {self.BORROWED_ROW_COUNT}u;",
+                f"constexpr std::uint32_t BORROWED_ROWS_BEFORE_WORD = {self.BORROWED_ROWS_BEFORE_WORD}u;",
+                f"constexpr std::uint32_t BORROWED_ROWS_AFTER_WORD = {self.BORROWED_ROWS_AFTER_WORD}u;",
                 f"constexpr std::uint32_t RESULT_TILE_DEST = {self.RESULT_TILE_DEST}u;",
+                f"constexpr std::uint32_t RESULT_TILE_COUNT = {self.RESULT_TILE_COUNT}u;",
             ]
         )
 

@@ -36,8 +36,10 @@
 // not on this one.
 //
 // Result layout (constants shared with the host through DBG_SRCA_DUMP): tile 0 of the result buffer carries the
-// raw debug-bus words of the SrcA dump, then the thread's dest offset read before the dump, after it, and the
-// value the datacopy left it at; tile 1 is the DEST tile read back on Blackhole.
+// raw debug-bus words of the SrcA dump, the thread's dest offset read before the dump, after it, and the value the
+// datacopy left it at, then the rows the dump borrows (physical rows 0-3 and 8-11 of the current half, which cover
+// both DEST widths) read over the debug bus before and after the dump; tile 1 is the DEST tile read back through
+// the RISC-V window on Blackhole.
 
 #include <cstdint>
 
@@ -132,8 +134,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (SRCA_ROW_CHECK)
     {
         // The offset the datacopy left (the halt drained its SETC16), and where the datacopy should have left it.
-        words[DEST_OFFSET_WORD + 0] = dbg_read_dest_offset<MathThreadId>();
-        words[DEST_OFFSET_WORD + 2] = DUMP_DST_INDEX * DEST_ROWS_PER_TILE + (DUMP_UPPER_HALF ? DEST_REGISTER_HALF_SIZE : 0);
+        words[DEST_OFFSET_BEFORE_WORD] = dbg_read_dest_offset();
+        words[DEST_OFFSET_SET_WORD]    = DUMP_DST_INDEX * DEST_ROWS_PER_TILE + (DUMP_UPPER_HALF ? DEST_REGISTER_HALF_SIZE : 0);
     }
 
 #ifdef ARCH_BLACKHOLE
@@ -143,12 +145,37 @@ void run_kernel(RUNTIME_PARAMETERS params)
     dbg_copy_dest_tile<DbgDestTileOp::Write, MathThreadId>(l1_fmt, borrowed_tile, reinterpret_cast<void*>(params.buffer_B[0]));
 #endif
 
+    // The rows the dump borrows, as the debug bus sees them. dbg_get_array_row adds the current half's base to a
+    // DEST row itself; rows 0-3 hold the SFPU save/restore footprint, rows 8-11 the low halves with a 32-bit DEST.
+    auto read_borrowed_rows = [&](std::uint32_t first_word)
+    {
+        for (std::uint32_t r = 0; r < BORROWED_ROW_COUNT; ++r)
+        {
+            const std::uint32_t row                = (r < BORROWED_ROW_COUNT / 2) ? r : (r - BORROWED_ROW_COUNT / 2 + 8);
+            std::uint32_t row_words[WORDS_PER_ROW] = {0};
+            dbg_get_array_row(dbg_array_id::DEST, row, row_words);
+            for (std::uint32_t i = 0; i < WORDS_PER_ROW; ++i)
+            {
+                words[first_word + r * WORDS_PER_ROW + i] = row_words[i];
+            }
+        }
+    };
+    if constexpr (SRCA_ROW_CHECK)
+    {
+        read_borrowed_rows(BORROWED_ROWS_BEFORE_WORD);
+    }
+
     // The call under test.
     std::uint32_t srca_row[WORDS_PER_ROW] = {0};
-    dbg_get_array_row(dbg_array_id::SRCA, 0 /* row_addr */, srca_row);
+    dbg_get_array_row(dbg_array_id::SRCA, 0 /*row_addr*/, srca_row);
     for (std::uint32_t i = 0; i < WORDS_PER_ROW; ++i)
     {
         words[i] = srca_row[i];
+    }
+
+    if constexpr (SRCA_ROW_CHECK)
+    {
+        read_borrowed_rows(BORROWED_ROWS_AFTER_WORD);
     }
 
 #ifdef ARCH_BLACKHOLE
@@ -160,7 +187,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (SRCA_ROW_CHECK)
     {
         // The offset the dump left behind (the unhalt drained its restore); it must be what the datacopy set.
-        words[DEST_OFFSET_WORD + 1] = dbg_read_dest_offset<MathThreadId>();
+        words[DEST_OFFSET_AFTER_WORD] = dbg_read_dest_offset();
     }
 }
 

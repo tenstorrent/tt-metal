@@ -22,7 +22,9 @@ cannot read directly, and must put that row back before returning. Two tests, on
   stages and restores through the thread's offset but reads back a physical row, so without
   pinning the offset first a nonzero offset returns a stale row. The same variants check that
   the dump hands the offset back as it found it, since ops that run on the inherited offset
-  would otherwise be retargeted.
+  would otherwise be retargeted, and that the rows it borrows read back the same over the
+  debug bus before and after the dump -- the restore check that works on Wormhole too, where
+  there is no RISC-V window into DEST.
 
 Every in-tree caller passes ``dbg_array_id::DEST``, which never enters this path, so without
 these tests the SrcA path can regress undetected.
@@ -76,21 +78,29 @@ BF16_AT_RISK_BITS = [0x0001, 0x007F, 0x8001, 0x8000, 0x0080, 0x7F7F]
 INPUT_DIMENSIONS = [32, 32]
 # Result layout the kernel writes, shared through the template parameter.
 WORDS_PER_ROW = DBG_SRCA_DUMP.WORDS_PER_ROW
-DEST_OFFSET_WORD = DBG_SRCA_DUMP.DEST_OFFSET_WORD
+DEST_OFFSET_BEFORE_WORD = DBG_SRCA_DUMP.DEST_OFFSET_BEFORE_WORD
+BORROWED_ROW_COUNT = DBG_SRCA_DUMP.BORROWED_ROW_COUNT
+BORROWED_ROWS_BEFORE_WORD = DBG_SRCA_DUMP.BORROWED_ROWS_BEFORE_WORD
+BORROWED_ROWS_AFTER_WORD = DBG_SRCA_DUMP.BORROWED_ROWS_AFTER_WORD
 RESULT_TILE_DEST = DBG_SRCA_DUMP.RESULT_TILE_DEST
+RESULT_TILE_COUNT = DBG_SRCA_DUMP.RESULT_TILE_COUNT
 
-# BF16 fields, as test_topk.py names them.
+# BF16 field masks (names as in test_topk.py). In DEST's layout the mantissa sits above the exponent, so
+# the exponent moves down by its own position and the mantissa up by the exponent width.
 _BF16_SIGN_MASK = 0x8000
 _BF16_EXP_MASK = 0x7F80
 _BF16_MANT_MASK = 0x007F
 _BF16_EXP_SHIFT = 7
-_BF16_MANT_BITS = 8
+_BF16_EXP_BITS = 8
 
 # Where the datacopy leaves the math thread's dest offset before the dump: (dest tile, upper half).
+# tile_0 and upper_half sit on the base the dump pins, so only the tile_2 cases exercise the restore
+# (saved 128 against pinned 0, and saved 640 against pinned 512).
 DEST_OFFSETS = {
     "tile_0": (0, False),
     "tile_2": (2, False),
     "upper_half": (0, True),
+    "upper_half_tile_2": (2, True),
 }
 
 
@@ -117,7 +127,7 @@ def dest_bf16_bits(ieee_bits):
     return (
         (ieee_bits & _BF16_SIGN_MASK)
         | ((ieee_bits & _BF16_EXP_MASK) >> _BF16_EXP_SHIFT)
-        | ((ieee_bits & _BF16_MANT_MASK) << _BF16_MANT_BITS)
+        | ((ieee_bits & _BF16_MANT_MASK) << _BF16_EXP_BITS)
     )
 
 
@@ -157,7 +167,7 @@ def make_config(formats, dest_acc, src_A, src_B, tile_cnt, dump):
             formats.output_format,
             tile_count_A=tile_cnt,
             tile_count_B=tile_cnt,
-            tile_count_res=2,
+            tile_count_res=RESULT_TILE_COUNT,
         ),
         dest_acc=dest_acc,
     )
@@ -166,8 +176,8 @@ def make_config(formats, dest_acc, src_A, src_B, tile_cnt, dump):
 def dest_tile_from(res_from_L1, output_format):
     """The DEST tile the kernel read back, as a tensor of the output format."""
     assert (
-        len(res_from_L1) == 2 * MAX_TILE_ELEMENTS
-    ), f"Result length {len(res_from_L1)} does not match the two-tile layout the kernel writes"
+        len(res_from_L1) == RESULT_TILE_COUNT * MAX_TILE_ELEMENTS
+    ), f"Result length {len(res_from_L1)} does not match the {RESULT_TILE_COUNT}-tile layout the kernel writes"
     tile = res_from_L1[
         RESULT_TILE_DEST
         * MAX_TILE_ELEMENTS : (RESULT_TILE_DEST + 1)
@@ -252,7 +262,14 @@ def test_srca_row_dump_reads_srca_row(formats, dest_acc, dest_offset):
     )
     srca_row = struct.unpack_from(f"<{WORDS_PER_ROW}I", raw, 0)
     offset_before, offset_after, offset_set = struct.unpack_from(
-        "<3I", raw, 4 * DEST_OFFSET_WORD
+        "<3I", raw, 4 * DEST_OFFSET_BEFORE_WORD
+    )
+    borrowed_words = BORROWED_ROW_COUNT * WORDS_PER_ROW
+    borrowed_before = struct.unpack_from(
+        f"<{borrowed_words}I", raw, 4 * BORROWED_ROWS_BEFORE_WORD
+    )
+    borrowed_after = struct.unpack_from(
+        f"<{borrowed_words}I", raw, 4 * BORROWED_ROWS_AFTER_WORD
     )
 
     # The datacopy consumed the tile face by face, alternating SrcA banks, and the dump reads the
@@ -287,6 +304,17 @@ def test_srca_row_dump_reads_srca_row(formats, dest_acc, dest_offset):
     assert offset_after == offset_before, (
         f"dbg_get_array_row(SRCA) left the math thread's dest offset at {offset_after}; "
         f"it was {offset_before} before the dump and must be handed back unchanged"
+    )
+
+    # The rows the dump borrows (rows 0-3 of the current half, plus 8-11 holding the low halves with a
+    # 32-bit DEST) must read back over the debug bus exactly as before the dump.
+    changed = [
+        i for i in range(borrowed_words) if borrowed_before[i] != borrowed_after[i]
+    ]
+    assert not changed, (
+        f"dbg_get_array_row(SRCA) did not restore the dest rows it borrowed: {len(changed)} word(s) "
+        f"differ, first at borrowed row {changed[0] // WORDS_PER_ROW} word {changed[0] % WORDS_PER_ROW}: "
+        f"before {hex(borrowed_before[changed[0]])}, after {hex(borrowed_after[changed[0]])}"
     )
 
     if get_chip_architecture() == ChipArchitecture.BLACKHOLE:
