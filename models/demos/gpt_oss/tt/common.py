@@ -9,6 +9,7 @@ GPT-OSS specific implementation of create_tt_model that's compatible with tt_tra
 from loguru import logger
 
 import ttnn
+from models.demos.gpt_oss.utils.lazy_state_dict import GptOssLazyStateDict
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -31,7 +32,7 @@ def create_tt_model(
     Uses clean MeshConfig abstraction for optimal device parallelization
     """
     from models.demos.gpt_oss.config import MeshConfig
-    from models.demos.gpt_oss.tt.fused_decode.config import fused_decode_supported
+    from models.demos.gpt_oss.tt.fused_decode.config import dense_moe_decode_supported, fused_decode_supported
     from models.demos.gpt_oss.tt.model import Model
     from models.demos.gpt_oss.tt.model_config import ModelArgs
 
@@ -71,6 +72,14 @@ def create_tt_model(
         use_throughput_experts,
         gpt_oss_model_args.max_local_batch_size,
     )
+    # Likewise the batched dense decode MoE (experts dense_decode_*).
+    dense_moe = dense_moe_decode_supported(
+        mesh_device,
+        mesh_config,
+        gpt_oss_model_args.hf_config,
+        use_throughput_experts,
+        gpt_oss_model_args.max_local_batch_size,
+    )
     if (
         state_dict is not None
         and not state_dict
@@ -90,7 +99,7 @@ def create_tt_model(
     loaded_real_weights = False
     if state_dict is None:
         if not gpt_oss_model_args.dummy_weights and gpt_oss_model_args.weight_cache_is_complete(
-            dtype, fused_decode=fused_decode
+            dtype, fused_decode=fused_decode, dense_moe=dense_moe
         ):
             logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")
             state_dict = {}
@@ -121,7 +130,14 @@ def create_tt_model(
     # cache that must not satisfy the completeness check).
     assert all(layer.fused_decode == fused_decode for layer in model.layers), "fused decode predicate mismatch"
     if loaded_real_weights and num_layers is None:
-        gpt_oss_model_args.mark_weight_cache_complete(dtype, fused_decode=fused_decode)
+        gpt_oss_model_args.mark_weight_cache_complete(dtype, fused_decode=fused_decode, dense_moe=dense_moe)
+
+    # A lazy state dict re-reads and re-dequantizes every tensor on access. With data parallel the
+    # caller passes the returned state_dict to the next submesh, which has the same mesh shape and
+    # therefore the same tensor cache this build just wrote, so hand back {} and let it load from
+    # the cache instead of repeating the host prep.
+    if isinstance(state_dict, GptOssLazyStateDict):
+        state_dict = {}
 
     # Extract tt_kv_cache like tt_transformers does
     tt_kv_cache = []

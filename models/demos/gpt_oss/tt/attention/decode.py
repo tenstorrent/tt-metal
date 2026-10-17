@@ -7,12 +7,14 @@ from ..fused_decode.config import (
     OPROJ_DECODE_WEIGHT_DTYPE,
     OPROJ_STREAM_READERS,
     QKV_DECODE_WEIGHT_DTYPE,
+    QKV_FUSED_ROPE_KV,
     QKV_STREAM_READERS,
     TP1_OPROJ_STREAM_READERS,
     TP1_QKV_PREFETCH,
     TP1_QKV_STREAM_READERS,
     sdpa_decode_program_config,
 )
+from ..fused_decode.stream import QKVRopeCache, rope_rotation_tiles
 from .config import AttentionConfig, ProgramConfig
 from .operations import apply_rope
 from .weights import AttentionWeights
@@ -33,6 +35,9 @@ def decode_forward(
     page_table,
     ccl_manager,
     fused=False,
+    return_partial=False,
+    batched_qkv=None,
+    batched_oproj=None,
 ):
     """
     Decode forward pass - optimized for single token (seq_len=1).
@@ -54,6 +59,9 @@ def decode_forward(
         fused: Fused decode path (fused_decode/): hidden_states is the flat normed hidden of the layer boundary
             (fused_decode/boundary.py, one token); returns this device's flat o_proj partial sum, which the next
             boundary all-reduces
+        return_partial: return this device's [1, 1, batch, hidden] o_proj partial sum (batched decode: the layer
+            all-reduces it with batched_decode.DecodeAllReduce)
+        batched_qkv: batched decode (batched_decode.BatchedQKV): the QKV projection as a DRAM-sharded matmul
 
     Returns:
         Attention output [batch, 1, hidden_size]
@@ -99,27 +107,51 @@ def decode_forward(
             heads=(num_local_heads * head_dim // ttnn.TILE_SIZE, num_local_kv_heads * head_dim // ttnn.TILE_SIZE),
             prefetch_cols=TP1_QKV_PREFETCH if mesh_config.tp == 1 else None,
         )
+        rope_kv = None
+        if QKV_FUSED_ROPE_KV:
+            # RoPE and the K / V cache write inside the QKV op: tt_q is the (shared) rotated Q head buffer, the K / V
+            # head buffers are not written.
+            rope_kv = QKVRopeCache(
+                rope_rotation_tiles(mesh_device), *rope_mats, position_idx, page_table, k_cache, v_cache
+            )
         tt_q, tt_k, tt_v = qkv_stream(
             hidden_states,
             weights.wqkv_stream,
             ccl_manager.get_decode_qkv_heads(num_local_heads, num_local_kv_heads, head_dim),
+            rope_kv=rope_kv,
         )
-        tt_q, tt_k = ttnn.experimental.rotary_embedding_llama_fused_qk(
-            tt_q, tt_k, rope_mats[0], rope_mats[1], transformation_mat
-        )
-        ttnn.experimental.paged_fused_update_cache(
-            k_cache, tt_k, v_cache, tt_v, update_idxs_tensor=position_idx, page_table=page_table
-        )
-        tt_v = None  # shared head buffer, not owned here
+        if rope_kv is None:
+            tt_q, tt_k = ttnn.experimental.rotary_embedding_llama_fused_qk(
+                tt_q, tt_k, rope_mats[0], rope_mats[1], transformation_mat
+            )
+            ttnn.experimental.paged_fused_update_cache(
+                k_cache, tt_k, v_cache, tt_v, update_idxs_tensor=position_idx, page_table=page_table
+            )
+        else:
+            tt_k = None  # shared head buffers, not owned here
+        tt_v = None
     else:
-        xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=qkv_memory_config)
+        if batched_qkv is not None:
+            xqkv_fused = batched_qkv(hidden_states)
+        else:
+            xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=qkv_memory_config)
         ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
 
+        # One user per core, row by row on the 8x8 grid: the grid the decode RoPE rows and transformation matrix
+        # (tt_transformers RotarySetup), the KV update (get_kv_memory_config) and the decode SDPA program use. With the
+        # op's default (the device's whole grid, 11 wide on Blackhole) the users that land in columns 8-10 found no
+        # RoPE data on their core and the SDPA read users 24-31's queries from cores that held none, from batch 9 up.
         tt_q, tt_k, tt_v = ttnn.experimental.nlp_create_qkv_heads_decode(
             xqkv_fused,
             num_heads=num_local_heads,
             num_kv_heads=num_local_kv_heads,
-            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+            memory_config=ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, head_dim),
+                core_grid=ttnn.CoreGrid(y=8, x=8),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            ),
         )
 
         xqkv_fused.deallocate(True)
@@ -149,7 +181,8 @@ def decode_forward(
             page_table=page_table,
         )
 
-    tt_k.deallocate(True)
+    if tt_k is not None:
+        tt_k.deallocate(True)
     if tt_v is not None:
         tt_v.deallocate(True)
     grid_size = ttnn.CoreCoord(8, 8)
@@ -178,8 +211,8 @@ def decode_forward(
             page_table_tensor=page_table,
             scale=config.scaling,
             program_config=(
-                sdpa_decode_program_config(config.sliding_window)
-                if fused
+                sdpa_decode_program_config(config.sliding_window, one_user=fused)
+                if fused or batched_qkv is not None
                 else program_config.get_decode_sdpa_config(mesh_device)
             ),
             compute_kernel_config=program_config.get_compute_kernel_config(),
@@ -202,7 +235,8 @@ def decode_forward(
             compute_kernel_config=program_config.get_compute_kernel_config(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-    tt_q.deallocate(True)
+    if not (fused and rope_kv is not None):
+        tt_q.deallocate(True)
 
     if fused:
         # Streamed o_proj + bias (on the first TP device only) reading the heads straight out of the DRAM SDPA output
@@ -228,6 +262,10 @@ def decode_forward(
     # Concat heads and apply output projection
     tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
     tt_sdpa_tensor.deallocate(True)
+    if return_partial and batched_oproj is not None:
+        partial = batched_oproj(tt_sdpa_out)
+        tt_sdpa_out.deallocate(True)
+        return partial
 
     tt_out = ttnn.linear(
         tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
@@ -247,6 +285,13 @@ def decode_forward(
         (1, 1, batch_size, padded_hidden),
         (1, 1, 32, padded_hidden),
     )
+
+    if return_partial:
+        if padded_hidden != hidden_size and mesh_config.tp > 1:
+            sliced = ttnn.slice(tt_out, [0, 0, 0, 0], [1, 1, batch_size, hidden_size])
+            tt_out.deallocate(True)
+            tt_out = sliced
+        return tt_out
 
     # Slice padding AFTER bias: [1,1,B,3072] -> [1,1,B,2880].
     # Bias already applied on padded tensor; padding columns are zeros.

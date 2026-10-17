@@ -72,6 +72,66 @@ def fused_decode_layout_supported(
     )
 
 
+# Batched decode MoE (experts/decode.py decode_forward_dense): with one 32-row tile of tokens per device nearly every
+# expert is routed (an expert is idle with probability (28/32)^32 ~ 1.4%), so decode computes all experts densely with
+# two DRAM-sharded matmuls over every expert's weights, side by side ([gate] and [up]: [hidden, E * I]; [down]:
+# [E * I, hidden]), instead of the per-expert sparse matmuls. DENSE_MOE_CORES worker cores width-shard the [32, E * I]
+# activation (16 tiles each for gpt-oss-20b at TP=4), which is also the down matmul's input sharding.
+DENSE_MOE_TOKENS = 32
+DENSE_MOE_CORES = 45
+DENSE_MOE_WORKERS_PER_BANK = 3
+# Cores of the elementwise steps between gate|up and down (bias adds, SwiGLU, routing-weight scaling): twice the
+# matmul cores (8 tiles each), the gate/up outputs resharded there and the scaled activation back.
+DENSE_MOE_ELTWISE_CORES = 90
+
+
+def dense_moe_decode_layout_supported(
+    is_blackhole,
+    mesh_shape,
+    tp,
+    ep,
+    num_experts,
+    use_throughput_experts,
+    tokens,
+    grid=(11, 10),
+    dram_banks=8,
+    system_devices=4,
+):
+    """Host-only form of dense_moe_decode_supported: the validated envelope of the batched decode MoE (gpt-oss-20b on
+    Blackhole 1x4, TP=4, one 32-token tile per device, no expert parallelism)."""
+    return (
+        is_blackhole
+        and tuple(mesh_shape) == (1, 4)
+        and tp == 4
+        and ep == 1
+        and num_experts == 32
+        and not use_throughput_experts
+        and tokens == DENSE_MOE_TOKENS
+        and grid[0] * grid[1] >= DENSE_MOE_CORES
+        and dram_banks == FUSED_DECODE_DRAM_BANKS
+        and system_devices == mesh_shape[0] * mesh_shape[1]
+    )
+
+
+def dense_moe_decode_supported(mesh_device, mesh_config, hf_config, use_throughput_experts, tokens_per_device):
+    """Whether this model's decode MoE uses the batched dense path (see dense_moe_decode_layout_supported)."""
+    if mesh_config is None:
+        return False
+    grid = mesh_device.compute_with_storage_grid_size()
+    return dense_moe_decode_layout_supported(
+        ttnn.device.is_blackhole(mesh_device),
+        tuple(mesh_device.shape),
+        mesh_config.decode.tp,
+        mesh_config.decode.ep,
+        hf_config.num_local_experts,
+        use_throughput_experts,
+        tokens_per_device,
+        (grid.x, grid.y),
+        mesh_device.dram_grid_size().x,
+        ttnn.get_num_devices(),
+    )
+
+
 def fused_decode_supported(mesh_device, mesh_config, hf_config, use_throughput_experts, tokens_per_device):
     """Whether the decoder layers of this model use the fused decode path (see fused_decode_layout_supported)."""
     if mesh_config is None:
@@ -155,6 +215,11 @@ ND_SPLIT_ACC = True
 ND_FULL_SYNC = True
 ND_STREAMS = 2
 
+# The streamed QKV op also rotates Q / K and writes K / V into the paged cache (fused_decode/stream.py QKVRopeCache),
+# replacing the fused-QK RoPE op and the fused K/V cache update (2 ops per layer); its weights are then stored in the
+# K / V-first slot order (stream.py qkv_column_order). GPT_OSS_QKV_FUSED_ROPE_KV=0: the separate ops.
+QKV_FUSED_ROPE_KV = os.environ.get("GPT_OSS_QKV_FUSED_ROPE_KV", "1") == "1"
+
 # Decode LM head (fused_decode/terminal.py): a DRAM-streaming copy of the LM-head weight, vocab split evenly over the TP
 # devices, BFP8 x BF16 LoFi like the other dense projections. Readers per DRAM bank (measured standalone: 1 and 2
 # reach ~504 GB/s, 4-5 are slower); weight columns buffered ahead while the fused final boundary runs.
@@ -175,7 +240,25 @@ SDPA_DECODE_K_CHUNK_SLIDING = 128
 SDPA_DECODE_K_CHUNK_FULL = 256
 
 
-def sdpa_decode_program_config(sliding_window):
+# One-user decode (the fused decode layer), full attention: the K sequence of each of the device's 2 KV heads is split
+# over up to SDPA_DECODE_B1_CORES_PER_HEAD cores of the whole 11x10 grid. The op's default cap (16 cores per head, so
+# 32 of the 64 cores of an 8x8 grid) left the long-context SDPA compute-bound: at 131k positions 195 -> 133 us per
+# layer (182 -> 267 GB/s of KV), at 200 positions 11.9 -> 13.0 us (measured standalone, per-device gpt-oss-20b shapes).
+SDPA_DECODE_B1_GRID = (11, 10)
+SDPA_DECODE_B1_CORES_PER_HEAD = 32
+
+
+def sdpa_decode_program_config(sliding_window, one_user=False):
+    """one_user: the fused one-user decode layer (full attention takes the whole grid, see SDPA_DECODE_B1_*); otherwise
+    the batched layout (one user per core of the 8x8 grid)."""
+    if one_user and not sliding_window:
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(*SDPA_DECODE_B1_GRID),
+            q_chunk_size=0,
+            k_chunk_size=SDPA_DECODE_K_CHUNK_FULL,
+            exp_approx_mode=False,
+            max_cores_per_head_batch=SDPA_DECODE_B1_CORES_PER_HEAD,
+        )
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
         q_chunk_size=0,

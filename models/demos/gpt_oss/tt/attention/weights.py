@@ -10,8 +10,8 @@ from models.demos.gpt_oss.config import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
-from ..fused_decode.config import OPROJ_DECODE_WEIGHT_DTYPE, QKV_DECODE_WEIGHT_DTYPE
-from ..fused_decode.stream import NBIAS, as_stream_tensor, linear_stream_rows, stream_linear_layout
+from ..fused_decode.config import OPROJ_DECODE_WEIGHT_DTYPE, QKV_DECODE_WEIGHT_DTYPE, QKV_FUSED_ROPE_KV
+from ..fused_decode.stream import NBIAS, as_stream_tensor, linear_stream_rows, qkv_column_order, stream_linear_layout
 from .config import AttentionConfig
 
 
@@ -214,8 +214,17 @@ def load_attention_weights(
         qkv_layouts = o_layouts = None
         if state_dict:
             tp = mesh_config.tp
+            qkv_order = (
+                qkv_column_order(
+                    local_qkv // ttnn.TILE_SIZE,
+                    config.num_heads * config.head_dim // mesh_config.tp // ttnn.TILE_SIZE,
+                    banks,
+                )
+                if QKV_FUSED_ROPE_KV
+                else None
+            )
             qkv_layouts = [
-                stream_linear_layout(w[0, 0], b, banks)
+                stream_linear_layout(w[0, 0], b, banks, qkv_order)
                 for w, b in zip(torch.chunk(qkv_cat, tp, -1), torch.chunk(qkv_bias_cat, tp, -1))
             ]
             o_layouts = [
@@ -232,7 +241,13 @@ def load_attention_weights(
                 get_cache_file_name(tensor_cache_path, f"{name}_stream_b{banks}_nb{NBIAS}"),
             )
 
-        wqkv_stream_tt = stream(qkv_layouts, "wqkv", hidden_size, local_qkv, QKV_DECODE_WEIGHT_DTYPE)
+        wqkv_stream_tt = stream(
+            qkv_layouts,
+            "wqkv_kvfirst" if QKV_FUSED_ROPE_KV else "wqkv",
+            hidden_size,
+            local_qkv,
+            QKV_DECODE_WEIGHT_DTYPE,
+        )
         o_proj_stream_tt = stream(o_layouts, "o_proj", local_heads_dim, hidden_size, OPROJ_DECODE_WEIGHT_DTYPE)
 
     decode_sinks_tt = ttnn.as_tensor(
