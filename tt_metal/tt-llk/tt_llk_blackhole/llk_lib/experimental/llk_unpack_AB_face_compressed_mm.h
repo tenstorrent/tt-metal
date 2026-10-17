@@ -438,6 +438,11 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
 
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
+    // The format-switch stall is encoded per face only within a call; the first face's prev format is a metadata
+    // sentinel (its own format), not the last format of the previous call, so always end on the stall. It only
+    // has to precede the next call's unpacks, so it goes after the SEMGET to keep it out of the context handshake.
+    TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1 /* Stall_Clr_Cntrl */, 0, 0, p_unpacr_nop::CLR_SRC);
+
     wait_for_next_context(1);
     reset_config_context();
 
