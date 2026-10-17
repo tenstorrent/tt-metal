@@ -11,6 +11,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "ckernel.h"
 
 void kernel_main() {
     constexpr uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
@@ -221,6 +222,11 @@ void kernel_main() {
             // Write this to dfb_ex_global
             p_global_means[0] = global_result.mean;
             p_global_vars[0] = global_result.variance;
+
+            // A RISC-V store can retire before it lands in L1. load_blocking reads the mean and variance
+            // back, which makes those stores land before the NoC multicast reads this L1.
+            (void)ckernel::load_blocking(p_global_means);
+            (void)ckernel::load_blocking(p_global_vars);
 
             // mcast to other cores
             if constexpr (num_mcast_cores > 1) {
