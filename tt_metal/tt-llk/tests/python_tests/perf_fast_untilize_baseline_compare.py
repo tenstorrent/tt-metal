@@ -17,6 +17,8 @@ from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
+    NUM_FACES,
+    PACK_UNTILIZE_NARROW_ROW,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -54,10 +56,15 @@ def test_perf_fast_untilize_baseline_compare(
             PerfRunType.L1_TO_L1,
             PerfRunType.PACK_ISOLATE,
         ],
-        templates=[generate_input_dim(dimensions, dimensions, block_ct_dim)],
+        # pack_untilize_perf.cpp takes its row shape and face geometry from these (full rows, 32x32 tiles).
+        templates=[
+            generate_input_dim(dimensions, dimensions, block_ct_dim),
+            PACK_UNTILIZE_NARROW_ROW(),
+        ],
         runtimes=[
             TILE_COUNT(tile_count),
             LOOP_FACTOR(loop_factor),
+            NUM_FACES(4),
         ],
         variant_stimuli=StimuliConfig(
             None,

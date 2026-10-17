@@ -137,12 +137,12 @@ template <
 inline void _llk_pack_untilize_wrapper_(
     const std::uint32_t address,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t face_r_dim                 = FACE_R_DIM,
-    [[maybe_unused]] const std::uint32_t num_faces = 4,
-    const std::uint32_t tile_dst_rt_offset         = 0)
+    const std::uint32_t face_r_dim         = FACE_R_DIM,
+    const std::uint32_t num_faces          = 4,
+    const std::uint32_t tile_dst_rt_offset = 0)
 {
     _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
-        address, pack_dst_format, face_r_dim, tile_dst_rt_offset);
+        address, pack_dst_format, face_r_dim, num_faces, tile_dst_rt_offset);
 }
 
 inline void _llk_pack_untilize_uninit_wrapper_(

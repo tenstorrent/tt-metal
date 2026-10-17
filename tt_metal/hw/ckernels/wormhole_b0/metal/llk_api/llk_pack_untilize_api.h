@@ -23,7 +23,7 @@
  * @tparam full_ct_dim    Width of the full input in tiles (defaults to block_ct_dim).
  * @tparam diagonal       Whether to use diagonal packing.
  * @tparam narrow_row     Whether the input rows are narrow.
- * @tparam row_num_datums Number of datums per row.
+ * @tparam row_num_datums Datums each tile contributes to an output row (TILE_C_DIM unless narrow_row).
  * @tparam dense          Pack two 2-face tiles into a single 4-face region (unused on Wormhole; must be false).
  * @param  output         Output circular buffer / operand index.
  */
@@ -73,7 +73,7 @@ inline void llk_pack_untilize_init(std::uint32_t output) {
  * @tparam full_ct_dim        Width of the full input in tiles (defaults to block_ct_dim).
  * @tparam diagonal           Whether to use diagonal packing.
  * @tparam narrow_row         Whether the input rows are narrow.
- * @tparam row_num_datums     Number of datums per row.
+ * @tparam row_num_datums     Datums each tile contributes to an output row (TILE_C_DIM unless narrow_row).
  * @tparam tile_dst_ct_offset Compile-time column offset of the tile in the destination register.
  * @tparam dense              Pack two 2-face tiles into a single 4-face region (unused on Wormhole; must be false).
  * @param  block_rt_dim       Height of the block in tiles (number of rows to pack).
@@ -128,7 +128,11 @@ inline void llk_pack_untilize(
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
-            pack_tile_addr, pack_dst_format[output_id], face_r_dim, block_rt * block_ct_dim + tile_dst_rt_offset);
+            pack_tile_addr,
+            pack_dst_format[output_id],
+            face_r_dim,
+            num_faces,
+            block_rt * block_ct_dim + tile_dst_rt_offset);
 
         pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
     }

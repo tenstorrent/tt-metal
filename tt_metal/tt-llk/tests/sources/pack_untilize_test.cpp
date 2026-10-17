@@ -45,11 +45,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
+        formats.unpack_A_src,
+        formats.unpack_B_src,
+        formats.unpack_A_dst,
+        formats.unpack_B_dst,
+        params.TEST_FACE_R_DIM,
+        params.TEST_FACE_R_DIM,
+        params.num_faces,
+        params.num_faces);
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         0 /* transpose_of_faces */,
         0 /* within_face_16x16_transpose */,
-        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces),
+        ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces),
         formats.unpack_A_src,
         formats.unpack_A_dst);
 
@@ -100,11 +107,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_wait_for_dest_available_<dest_sync>();
             for (std::uint32_t tile_index_within_block = 0; tile_index_within_block < BLOCK_CT_DIM; ++tile_index_within_block) // Loop over tiles in the block
             {
+                const std::uint32_t dst_tile = tile_index_within_block + TILE_DST_CT_OFFSET + params.PACK_UNTILIZE_DST_RT_OFFSET;
                 LLK_ASSERT(
-                    (tile_index_within_block + TILE_DST_CT_OFFSET < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                    "Block tile index + TILE_DST_CT_OFFSET exceeds maximum destination tiles");
+                    (dst_tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                    "Block tile index + Dest tile offsets exceeds maximum destination tiles");
                 _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                    tile_index_within_block + TILE_DST_CT_OFFSET, formats.math, formats.math);
+                    dst_tile, formats.math, formats.math);
             }
             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
@@ -128,17 +136,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     const bool UNTILIZE                    = true;
-    const std::uint32_t NUM_DATUMS_IN_TILE = FACE_R_DIM * FACE_C_DIM * params.num_faces;
-    const std::uint32_t row_stride_16B     = (FULL_CT_DIM * NUM_DATUMS_IN_TILE * format_size_in_bytes(formats.pack_dst)) / L1_ACCESS_ADDRESS_GRANULARITY;
-    const std::uint32_t block_stride_16B =
-        (BLOCK_CT_DIM * ((params.num_faces > 2) ? params.num_faces / 2 : params.num_faces) * FACE_C_DIM * format_size_in_bytes(formats.pack_dst)) /
-        L1_ACCESS_ADDRESS_GRANULARITY;
-    const std::uint32_t base_addr_16B = L1_ADDRESS(params.buffer_Res[0]);
+    const std::uint32_t face_r_dim         = params.TEST_FACE_R_DIM;
+    const std::uint32_t NUM_DATUMS_IN_TILE = face_r_dim * FACE_C_DIM * params.num_faces;
+    // Faces side by side in a tile row (2 for a 32x32 tile, 1 for a single-face tile).
+    const std::uint32_t faces_per_tile_row = (params.num_faces > 2) ? params.num_faces / 2 : params.num_faces;
+    const std::uint32_t rows_per_tile      = NUM_DATUMS_IN_TILE / (faces_per_tile_row * FACE_C_DIM);
+    // Datums each tile contributes to one untilized output row: a full row of faces, or the first
+    // PACK_UNTILIZE_ROW_NUM_DATUMS datums of the row when packing narrow rows.
+    const std::uint32_t row_datums_per_tile = PACK_UNTILIZE_NARROW_ROW ? PACK_UNTILIZE_ROW_NUM_DATUMS : faces_per_tile_row * FACE_C_DIM;
+    const std::uint32_t row_stride_16B =
+        (FULL_CT_DIM * rows_per_tile * row_datums_per_tile * format_size_in_bytes(formats.pack_dst)) / L1_ACCESS_ADDRESS_GRANULARITY;
+    const std::uint32_t block_stride_16B = (BLOCK_CT_DIM * row_datums_per_tile * format_size_in_bytes(formats.pack_dst)) / L1_ACCESS_ADDRESS_GRANULARITY;
+    const std::uint32_t base_addr_16B    = L1_ADDRESS(params.buffer_Res[0]);
 
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(
-        formats.pack_src, formats.pack_dst, NUM_DATUMS_IN_TILE /* tile_size */);
-    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
-    _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst, FACE_R_DIM, params.num_faces);
+        formats.pack_src, formats.pack_dst, NUM_DATUMS_IN_TILE /* tile_size */, face_r_dim, TILE_C_DIM, params.num_faces);
+    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(face_r_dim);
+    _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, PACK_UNTILIZE_NARROW_ROW, PACK_UNTILIZE_ROW_NUM_DATUMS>(
+        formats.pack_src, formats.pack_dst, face_r_dim, params.num_faces);
     const std::uint32_t num_blocks_per_col = FULL_CT_DIM / BLOCK_CT_DIM;
 
     for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++) // Loop over all tiles vertically
@@ -148,13 +163,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
             std::uint32_t pack_addr_16B = base_addr_16B + rt * row_stride_16B + block_num * block_stride_16B;
 
             _llk_packer_wait_for_math_done_();
-            _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, false /* narrow_row */, TILE_C_DIM, TILE_DST_CT_OFFSET>(
-                pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /* tile_dst_rt_offset */);
+            _llk_pack_untilize_wrapper_<
+                BLOCK_CT_DIM,
+                FULL_CT_DIM,
+                false /* diagonal */,
+                PACK_UNTILIZE_NARROW_ROW,
+                PACK_UNTILIZE_ROW_NUM_DATUMS,
+                TILE_DST_CT_OFFSET>(pack_addr_16B, formats.pack_dst, face_r_dim, params.num_faces, params.PACK_UNTILIZE_DST_RT_OFFSET);
             _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
     }
 
-    _llk_pack_untilize_uninit_wrapper_(formats.pack_src, FACE_R_DIM);
+    _llk_pack_untilize_uninit_wrapper_(formats.pack_src, face_r_dim);
 }
 
 #endif
