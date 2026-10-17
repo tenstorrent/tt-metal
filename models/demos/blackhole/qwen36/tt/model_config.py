@@ -137,8 +137,42 @@ class Qwen36ModelArgs(ModelArgs):
             self.weight_dtype = None
             self.act_dtype = None
 
+        # Prefill CCL experiments (default = env, off). A subclass may flip them after super().__init__ (before layers build).
+        # prefill_fused_dist_norm: prefill distributed norm = one fused dit_fused_distributed_rmsnorm op (QWEN36_FUSED_DIST_NORM=1).
+        # prefill_agmm_bf8: prefill AGMM gathers its activation as bf8, half the fabric bytes (QWEN36_AGMM_BF8=1).
+        self.prefill_fused_dist_norm = os.environ.get("QWEN36_FUSED_DIST_NORM", "0") == "1"
+        self.prefill_agmm_bf8 = os.environ.get("QWEN36_AGMM_BF8", "0") == "1"
+        # Per-S prefill tuning hooks (None = the built-in configs). prefill_sdpa_config_fn(S) -> (q_chunk, k_chunk,
+        # exp_approx) for the prefill SDPA; prefill_agmm_config_fn(S, shape_name) -> dict | None for the prefill AGMM
+        # (shape_name: mlp_gateup | gdn_in | attn_qkv | gdn_out; keys: see tp_common._agmm_launch_config).
+        self.prefill_sdpa_config_fn = None
+        # (S_total, rows) -> (q_chunk, k_chunk, exp_approx) | dict(q=, k=, exp=[, grid=(x, y)][, variant="paged" |
+        # "windowed"]) | None for the sequence-parallel prefill SDPA (S_total = keys = rows * per-row queries); the
+        # tuple = paged SDPA on the full grid; "windowed" = plain windowed-causal SDPA on the gathered K/V, no paged
+        # cache fill; None or a None return = prefill_sdpa_config_fn(S_total)
+        self.prefill_sdpa_sp_config_fn = None
+        self.prefill_agmm_config_fn = None
+        # prefill_rs_hparams = (chunks_per_sync, num_workers_per_link, num_buffers_per_channel) for the prefill
+        # reduce-scatters (tt_all_reduce after attention wo / MLP down / GDN out); None = the tt_all_reduce defaults.
+        self.prefill_rs_hparams = None
+        # prefill reduce-scatters move bf8 partials (half the fabric bytes); numerics change -- validate calibration
+        self.prefill_rs_bf8 = False
+        # prefill projections at S <= this use all-gather + 1D matmul instead of the fused all-gather-matmul (which has a
+        # ~100 µs floor at short S); 0 = off
+        self.prefill_small_m_max = 0
+        # cap (channels) for the GDN prefill conv's channel_chunk_size (gdn/tp.py kda_channel_chunk_size); smaller chunks
+        # spread work over more cores (bit-exact)
+        self.kda_conv_chunk_cap = 512
+
         # TP config (num_devices>1 only). 27B (1,4) sharded dims + DRAM matmul cfgs; see tp_common.py.
         self.num_devices = mesh_device.get_num_devices() if mesh_device is not None else 1
+        # On a 2D (rows, tp) mesh TP runs along axis 1 and rows hold replicas or sequence shards: num_devices is the TP
+        # degree everywhere in qwen36. is_galaxy would select the TG norm paths, which assume a 4-wide TP axis.
+        is_2d = mesh_device is not None and all(d > 1 for d in tuple(mesh_device.shape))
+        self.mesh_rows = mesh_device.shape[0] if is_2d else 1
+        if is_2d:
+            self.num_devices = mesh_device.shape[1]
+            self.is_galaxy = False
         if mesh_device is not None and self.num_devices > 1:
             self._init_tp_config(mesh_device)
 

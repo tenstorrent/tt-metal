@@ -280,6 +280,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     // OPT-A: trailing compile args after all TensorAccessorArgs — 1 => read that tensor flat token-major.
     reader_ct.push_back(attrs.v_flat ? 1u : 0u);
     reader_ct.push_back(attrs.qk_flat ? 1u : 0u);
+    // g / beta given token-major [B,T,HV] (rank 3) instead of head-major chunked [BH,NC,C,1].
+    reader_ct.push_back(in.g.logical_shape().rank() == 3 ? 1u : 0u);
 
     std::vector<uint32_t> writer_ct = ct_args;
     for (auto& t : outputs) {

@@ -1,0 +1,43 @@
+[
+  {
+    "name": "choice",
+    "state": "My Stripe integration keeps failing. Please help ASAP.",
+    "question": {
+      "type": "choice",
+      "instructions": "Which team should handle this request?",
+      "criteria": {
+        "billing": "Charges and refunds",
+        "technical_support": "Integration errors",
+        "sales": "Questions about buying a product"
+      }
+    }
+  },
+  {
+    "name": "noul",
+    "state": "My Stripe integration keeps failing. Please help ASAP.",
+    "question": {"type": "noul", "instructions": "Does this message express urgency?"}
+  },
+  {
+    "name": "score",
+    "state": "My Stripe integration keeps failing. Please help ASAP.",
+    "question": {
+      "type": "score",
+      "instructions": "How urgent is this message?",
+      "criteria": ["Not urgent at all", "Somewhat urgent", "Very urgent"]
+    }
+  },
+  {
+    "name": "long_license",
+    "state_file": "LICENSE",
+    "question": {
+      "type": "choice",
+      "instructions": "What kind of document is this?",
+      "criteria": {
+        "software_license": "A software license",
+        "news_article": "A news article",
+        "recipe": "A cooking recipe",
+        "nda": "A non-disclosure agreement"
+      }
+    }
+  }
+]
