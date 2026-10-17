@@ -2110,20 +2110,24 @@ def _build_add_top_row_int32_across_zero_src():
     """One Int32 tile pair whose every lane takes either sign.
 
     Tile 0 cycles -8..7 lane by lane; tile 1 cycles the same range one step per four
-    lanes. Over the 128 lanes the kernel writes (rows 0-3 of faces 0 and 1) that gives 64
-    distinct (a, b) pairs and 31 distinct sums spanning [-16, 14]: 16 pairs are both
-    negative, 26 are of opposite sign (3 of them summing to zero), 6 pair a zero with a
-    negative and 16 are both non-negative. Magnitudes stay small so nothing overflows:
-    the sign is the point. The default sweep draws Int32 from [0, 2**30), where
-    sign-magnitude and two's complement are the same bits, so it cannot tell which one
-    the kernel assumes.
+    lanes, so the pattern repeats every 64 lanes and one period of pairs, cycled over the
+    tile, is the whole stimulus. Over the 128 lanes the kernel writes (rows 0-3 of faces
+    0 and 1) that gives 64 distinct (a, b) pairs and 31 distinct sums spanning [-16, 14]:
+    16 pairs are both negative, 26 are of opposite sign (3 of them summing to zero), 6
+    pair a zero with a negative and 16 are both non-negative. Magnitudes stay small so
+    nothing overflows: the sign is the point. The default sweep draws Int32 from
+    [0, 2**30), where sign-magnitude and two's complement are the same bits, so it cannot
+    tell which one the kernel assumes.
     """
-    positions = torch.arange(_ELEMENTS_PER_TILE, dtype=torch.int64)
-    tile_0 = (positions % _ACROSS_ZERO_SPAN) - _ACROSS_ZERO_OFFSET
-    tile_1 = (
-        (positions // _ACROSS_ZERO_STRIDE) % _ACROSS_ZERO_SPAN
-    ) - _ACROSS_ZERO_OFFSET
-    return torch.cat([tile_0, tile_1]).to(torch.int32)
+    period = _ACROSS_ZERO_SPAN * _ACROSS_ZERO_STRIDE
+    pairs = [
+        (
+            (i % _ACROSS_ZERO_SPAN) - _ACROSS_ZERO_OFFSET,
+            ((i // _ACROSS_ZERO_STRIDE) % _ACROSS_ZERO_SPAN) - _ACROSS_ZERO_OFFSET,
+        )
+        for i in range(period)
+    ]
+    return _build_paired_tile_override(pairs, torch.int32)
 
 
 # mathop stays a parametrize axis although it has one value: --op selection reads the
