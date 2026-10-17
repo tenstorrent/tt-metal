@@ -1359,7 +1359,7 @@ TEST_F(LLKMeshDeviceFixture, TensixReconfigFormatAndGeometry) {
 // ============================================================================
 namespace unit_tests::compute::reconfig {
 
-enum class PackReconfigMode : std::uint8_t { OneArg, TwoArg, HwStartupOnly };
+enum class PackReconfigMode : std::uint8_t { OneArg, TwoArg, TwoArgFormatOnly, HwStartupOnly };
 
 // Tiled-order payload: one anchor datum per 16-datum row keeps the shared exponent at 2^6.
 std::vector<float> make_bfp8_exact_payload(std::uint32_t num_datums, std::uint32_t seed) {
@@ -1375,15 +1375,17 @@ std::vector<float> make_bfp8_exact_payload(std::uint32_t num_datums, std::uint32
     return payload;
 }
 
-// Copies num_tiles tiles of `payload` (Float16_b, out_tile shape) through DST into a Bfp8_b CB of the same
-// tile shape. OneArg: the packer is configured for the output CB and pack_reconfig_data_format(c_16) runs
-// before the first pack. TwoArg: the packer is configured for a Bfp8_b startup CB of `startup_tile` (c_2,
-// never written; a null tile is the full 32x32 tile) and pack_reconfig_data_format<true>(c_2, c_16)
-// switches it. HwStartupOnly: the hw startup alone configures the packer for c_16 (control). Returns c_16
-// decoded to floats in tiled order.
-std::vector<float> run_pack_reconfig_bfp_geometry(
+// Copies num_tiles tiles of `payload` (Float16_b, out_tile shape) through DST into an `out_format` CB
+// (Bfp8_b or Float16_b) of the same tile shape. OneArg: the packer is configured for the output CB and
+// pack_reconfig_data_format(c_16) runs before the first pack. TwoArg: the packer is configured for an
+// `out_format` startup CB of `startup_tile` (c_2, never written; a null tile is the full 32x32 tile) and
+// pack_reconfig_data_format<true>(c_2, c_16) switches it. TwoArgFormatOnly: the same switch through the
+// default pack_reconfig_data_format(c_2, c_16) followed by pack_init(c_16). HwStartupOnly: the hw startup
+// alone configures the packer for c_16 (control). Returns c_16 decoded to floats in tiled order.
+std::vector<float> run_pack_reconfig_geometry(
     distributed::MeshDevice& mesh_device,
     PackReconfigMode mode,
+    tt::DataFormat out_format,
     const Tile& out_tile,
     const std::vector<float>& payload,
     std::uint32_t num_tiles,
@@ -1393,7 +1395,7 @@ std::vector<float> run_pack_reconfig_bfp_geometry(
     CoreCoord core = {0, 0};
 
     const std::uint32_t in_tile_size = out_tile.get_tile_size(tt::DataFormat::Float16_b);
-    const std::uint32_t out_tile_size = out_tile.get_tile_size(tt::DataFormat::Bfp8_b);
+    const std::uint32_t out_tile_size = out_tile.get_tile_size(out_format);
     if (payload.size() != num_tiles * out_tile.get_tile_hw()) {
         throw std::invalid_argument("payload must hold num_tiles tiles");
     }
@@ -1412,17 +1414,16 @@ std::vector<float> run_pack_reconfig_bfp_geometry(
     };
     add_cb(tt::CBIndex::c_0, tt::DataFormat::Float16_b, in_tile_size, &out_tile);
     std::map<std::string, std::string> defines;
-    if (mode == PackReconfigMode::TwoArg) {
+    if (mode == PackReconfigMode::TwoArg || mode == PackReconfigMode::TwoArgFormatOnly) {
         // Startup output: only ever configured, never packed to.
-        const std::uint32_t startup_tile_size = startup_tile != nullptr
-                                                    ? startup_tile->get_tile_size(tt::DataFormat::Bfp8_b)
-                                                    : tt::tile_size(tt::DataFormat::Bfp8_b);
-        add_cb(tt::CBIndex::c_2, tt::DataFormat::Bfp8_b, startup_tile_size, startup_tile);
-        defines["PACK_RECONFIG_TWO_ARG"] = "1";
+        const std::uint32_t startup_tile_size =
+            startup_tile != nullptr ? startup_tile->get_tile_size(out_format) : tt::tile_size(out_format);
+        add_cb(tt::CBIndex::c_2, out_format, startup_tile_size, startup_tile);
+        defines[mode == PackReconfigMode::TwoArg ? "PACK_RECONFIG_TWO_ARG" : "PACK_RECONFIG_TWO_ARG_FORMAT_ONLY"] = "1";
     } else if (mode == PackReconfigMode::HwStartupOnly) {
         defines["PACK_HW_STARTUP_ONLY"] = "1";
     }
-    add_cb(tt::CBIndex::c_16, tt::DataFormat::Bfp8_b, out_tile_size, &out_tile);
+    add_cb(tt::CBIndex::c_16, out_format, out_tile_size, &out_tile);
 
     auto reader = CreateKernel(
         program,
@@ -1452,6 +1453,10 @@ std::vector<float> run_pack_reconfig_bfp_geometry(
 
     std::vector<std::uint32_t> result_vec;
     distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_buffer, /*blocking=*/true);
+    if (out_format == tt::DataFormat::Float16_b) {
+        const auto datums = unpack_vector<bfloat16, std::uint32_t>(result_vec);
+        return std::vector<float>(datums.begin(), datums.end());
+    }
     return unpack_bfp8_tiles_into_float_vec(result_vec, /*row_major_output=*/false, /*is_exp_a=*/false, out_tile);
 }
 
@@ -1472,29 +1477,54 @@ TEST_F(LLKMeshDeviceFixture, TensixPackReconfigBfpPartialFace) {
         const auto payload = unit_tests::compute::reconfig::make_bfp8_exact_payload(
             num_tiles * out_tile.get_tile_hw() /*num_datums*/, /*seed=*/42);
         for (auto& device : this->devices_) {
-            const auto result = unit_tests::compute::reconfig::run_pack_reconfig_bfp_geometry(
-                *device, PackReconfigMode::OneArg, out_tile, payload, num_tiles);
+            const auto result = unit_tests::compute::reconfig::run_pack_reconfig_geometry(
+                *device, PackReconfigMode::OneArg, tt::DataFormat::Bfp8_b, out_tile, payload, num_tiles);
             EXPECT_EQ(payload, result) << shape[0] << "x" << shape[1];
         }
     }
 }
 
 // Conditional pack_reconfig_data_format<true>(c_2, c_16) from a Bfp8_b 32x32 CB (four faces) to a Bfp8_b
-// 32x16 CB (two faces): same format, different face count, so the exponent section must shrink from four
-// chunks to two.
+// 16x32 CB (two full-height faces): same format, face height and tile width, so only the face-count term
+// of the geometry compare fires; the exponent section must shrink from four chunks to two.
 TEST_F(LLKMeshDeviceFixture, TensixPackReconfigBfpFaceCount) {
     using unit_tests::compute::reconfig::PackReconfigMode;
     if (this->arch_ == tt::ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar programs the packer geometry from buffer descriptors at op init";
     }
     constexpr std::uint32_t num_tiles = 4;
-    const Tile out_tile({32, 16});
+    const Tile out_tile({16, 32});
     const auto payload = unit_tests::compute::reconfig::make_bfp8_exact_payload(
         num_tiles * out_tile.get_tile_hw() /*num_datums*/, /*seed=*/43);
     for (auto& device : this->devices_) {
-        const auto result = unit_tests::compute::reconfig::run_pack_reconfig_bfp_geometry(
-            *device, PackReconfigMode::TwoArg, out_tile, payload, num_tiles);
+        const auto result = unit_tests::compute::reconfig::run_pack_reconfig_geometry(
+            *device, PackReconfigMode::TwoArg, tt::DataFormat::Bfp8_b, out_tile, payload, num_tiles);
         EXPECT_EQ(payload, result);
+    }
+}
+
+// Same-format Float16_b geometry switches through the conditional reconfig, 32x32 -> 8x32 (face height and
+// count) and 32x32 -> 32x16 (face count and tile width), with is_tile_dim_reconfig_en and with the default
+// format-only reconfig followed by pack_init. A non-block-float output has no exponent section, so the
+// reconfig the geometry change now triggers must leave the packer correct for the new tile.
+TEST_F(LLKMeshDeviceFixture, TensixPackReconfigFloat16bGeometry) {
+    using unit_tests::compute::reconfig::PackReconfigMode;
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar programs the packer geometry from buffer descriptors at op init";
+    }
+    constexpr std::uint32_t num_tiles = 4;
+    for (const auto& shape : {std::array<std::uint32_t, 2>{8, 32}, std::array<std::uint32_t, 2>{32, 16}}) {
+        const Tile out_tile(shape);
+        const auto payload = unit_tests::compute::reconfig::make_bfp8_exact_payload(
+            num_tiles * out_tile.get_tile_hw() /*num_datums*/, /*seed=*/47);
+        for (const auto mode : {PackReconfigMode::TwoArg, PackReconfigMode::TwoArgFormatOnly}) {
+            for (auto& device : this->devices_) {
+                const auto result = unit_tests::compute::reconfig::run_pack_reconfig_geometry(
+                    *device, mode, tt::DataFormat::Float16_b, out_tile, payload, num_tiles);
+                EXPECT_EQ(payload, result) << "32x32 -> " << shape[0] << "x" << shape[1]
+                                           << (mode == PackReconfigMode::TwoArg ? " <true>" : " <false> + pack_init");
+            }
+        }
     }
 }
 
@@ -1512,8 +1542,8 @@ TEST_F(LLKMeshDeviceFixture, TensixPackReconfigBfpFaceHeight) {
     const auto payload = unit_tests::compute::reconfig::make_bfp8_exact_payload(
         num_tiles * out_tile.get_tile_hw() /*num_datums*/, /*seed=*/45);
     for (auto& device : this->devices_) {
-        const auto result = unit_tests::compute::reconfig::run_pack_reconfig_bfp_geometry(
-            *device, PackReconfigMode::TwoArg, out_tile, payload, num_tiles, &startup_tile);
+        const auto result = unit_tests::compute::reconfig::run_pack_reconfig_geometry(
+            *device, PackReconfigMode::TwoArg, tt::DataFormat::Bfp8_b, out_tile, payload, num_tiles, &startup_tile);
         EXPECT_EQ(payload, result);
     }
 }
@@ -1534,8 +1564,8 @@ TEST_F(LLKMeshDeviceFixture, TensixPackReconfigBfpNarrowTile) {
     const auto payload = unit_tests::compute::reconfig::make_bfp8_exact_payload(
         num_tiles * out_tile.get_tile_hw() /*num_datums*/, /*seed=*/46);
     for (auto& device : this->devices_) {
-        const auto result = unit_tests::compute::reconfig::run_pack_reconfig_bfp_geometry(
-            *device, PackReconfigMode::TwoArg, out_tile, payload, num_tiles, &startup_tile);
+        const auto result = unit_tests::compute::reconfig::run_pack_reconfig_geometry(
+            *device, PackReconfigMode::TwoArg, tt::DataFormat::Bfp8_b, out_tile, payload, num_tiles, &startup_tile);
         EXPECT_EQ(payload, result);
     }
 }
@@ -1553,8 +1583,8 @@ TEST_F(LLKMeshDeviceFixture, TensixPackHwStartupBfpControl) {
         const auto payload = unit_tests::compute::reconfig::make_bfp8_exact_payload(
             num_tiles * out_tile.get_tile_hw() /*num_datums*/, /*seed=*/44);
         for (auto& device : this->devices_) {
-            const auto result = unit_tests::compute::reconfig::run_pack_reconfig_bfp_geometry(
-                *device, PackReconfigMode::HwStartupOnly, out_tile, payload, num_tiles);
+            const auto result = unit_tests::compute::reconfig::run_pack_reconfig_geometry(
+                *device, PackReconfigMode::HwStartupOnly, tt::DataFormat::Bfp8_b, out_tile, payload, num_tiles);
             EXPECT_EQ(payload, result) << shape[0] << "x" << shape[1];
         }
     }
