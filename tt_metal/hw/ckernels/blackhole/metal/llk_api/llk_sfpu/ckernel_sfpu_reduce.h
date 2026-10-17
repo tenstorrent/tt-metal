@@ -583,6 +583,14 @@ inline void perform_reduce_row_max_min(std::uint32_t block_ct_dim, std::uint32_t
     static_assert(
         pool_type == PoolType::MAX || pool_type == PoolType::MIN,
         "perform_reduce_row_max_min only supports MAX and MIN pool types");
+    // INT32 is accepted here only for UInt16 in a 32-bit dest, where clear_high_bits masks every datum to
+    // its non-negative low 16 bits before SFPSWAP's sign-magnitude compare. A signed Int32 would be
+    // misordered (negatives reversed, INT32_MIN ranked as 0): Int32/UInt32 MAX/MIN must take
+    // perform_reduce_row_max_min_int32, which calculate_reduce dispatches first.
+    static_assert(
+        INSTRUCTION_MODE != InstrModLoadStore::INT32 || clear_high_bits,
+        "INT32 row MAX/MIN here is only for UInt16 in a 32-bit dest (clear_high_bits); Int32/UInt32 take the "
+        "two's-complement path");
 
     // Set the SFPSWAP direction on entry (MAX default, MIN inverts) rather than trusting the init: under one
     // shared init (e.g. ttir.max dim=[1,2]) a preceding manual column MAX/MIN leaves the opposite convention.
