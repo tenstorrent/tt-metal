@@ -44,6 +44,9 @@ constexpr std::uint32_t TYPECAST_FP32_QUIET_NAN_MAN_IMM12 = 0x800;
 // SFPSETMAN mod1 selector that takes the new mantissa from the immediate.
 constexpr std::uint32_t SFPSETMAN_MOD1_ARG_IMM = 1;
 
+// SFPSETSGN mod1 selector that takes the new sign from the immediate.
+constexpr std::uint32_t SFPSETSGN_MOD1_ARG_IMM = 1;
+
 // SFPGT mod1 selector that sets the destination to all-ones (-1) when the comparison is true.
 constexpr std::uint32_t SFPGT_MOD1_SET_ALL_ONES = 8;
 
@@ -308,7 +311,7 @@ inline void calculate_typecast_fp32_to_fp16b() {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
-        TTI_SFPSETSGN(0, p_sfpu::LREG1, ABS_V, 1);  // lreg[2] = |x|
+        TTI_SFPSETSGN(0, p_sfpu::LREG1, ABS_V, SFPSETSGN_MOD1_ARG_IMM);  // lreg[2] = |x|
         // LaneEnabled = |x| > +inf (NaN)
         TTI_SFPIADD(0, INF, ABS_V, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
         // lreg[1] = (lreg[1] & 0x80000000) | 0x7FC00000

@@ -41,6 +41,9 @@ constexpr std::uint32_t TYPECAST_FP32_QUIET_NAN_MAN_IMM12 = 0x800;
 // SFPSETMAN mod1 selector that takes the new mantissa from the immediate.
 constexpr std::uint32_t SFPSETMAN_MOD1_ARG_IMM = 1;
 
+// SFPSETSGN mod1 selector that takes the new sign from the immediate.
+constexpr std::uint32_t SFPSETSGN_MOD1_ARG_IMM = 1;
+
 // Disarms the SFPLOADMACRO "Misc" / Load-Macro-Control config that the typecast init functions program
 // unconditionally (the init dispatch passes only APPROX, so it cannot see is_fp32_dest_acc_en and always arms
 // the macro). The 32-bit Dest (is_fp32_dest_acc_en) typecast paths fall back to a plain TTI_ loop that never
@@ -326,7 +329,7 @@ inline void calculate_typecast_fp32_to_fp16b() {
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
         TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-        TTI_SFPSETSGN(0, p_sfpu::LREG1, ABS_V, 1);  // lreg[2] = |x|
+        TTI_SFPSETSGN(0, p_sfpu::LREG1, ABS_V, SFPSETSGN_MOD1_ARG_IMM);  // lreg[2] = |x|
         // LaneEnabled = |x| > +inf (NaN)
         TTI_SFPIADD(0, INF, ABS_V, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
         // lreg[1] = (lreg[1] & 0x80000000) | 0x7FC00000
