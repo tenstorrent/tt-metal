@@ -308,3 +308,7 @@
 #ifdef SFPU_OP_CLAMPED_SILU_GLU_INCLUDE
 #include "api/compute/clamped_silu_glu.h"
 #endif
+
+#ifdef SFPU_OP_GEGLU_TANH_INCLUDE
+#include "api/compute/geglu_tanh.h"
+#endif
