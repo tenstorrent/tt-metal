@@ -16,7 +16,12 @@ using namespace ckernel;
 
 // Apply delay on odd rows of tensix cores in case of matmul.
 // We do this so that not all cores start at once, therefore reducing the chance of di/dt problems.
-// MM_STAGGER_ODD_ROWS is an externally controlled define, set up in program compilation.
+// Controlled by two defines the host adds to the matmul compute kernel from the
+// TT_MM_STAGGER_TYPE / TT_MM_STAGGER_VALUE environment variables (compute_throttle_utils.cpp):
+//   MM_STAGGER_TYPE  1 = delay before the first in1 block only, 2 = before every in1 block,
+//                    3 = before every stagger_period_in_blocks-th in1 block.
+//   MM_STAGGER_VALUE = delay in cycles.
+// Without the defines this function is empty.
 inline __attribute__((__always_inline__)) void apply_mm_stagger(int operand) {
 #if MM_STAGGER_TYPE == 1  // first block stagger
     static bool stagger_applied = false;
@@ -44,12 +49,13 @@ inline __attribute__((__always_inline__)) void apply_mm_stagger(int operand) {
             wait(stagger_delay_in_cycles);
         }
     }
-#elif MM_STAGGER_TYPE == 3  // hybrid stagger - apply stagger every 20th block
+#elif MM_STAGGER_TYPE == 3  // hybrid stagger - apply stagger every stagger_period_in_blocks-th block
     constexpr int stagger_operand = 1;
     constexpr int stagger_delay_in_cycles = MM_STAGGER_VALUE;
+    constexpr int stagger_period_in_blocks = 20;
     static int stagger_counter = 0;
     if (operand == stagger_operand) {
-        if ((stagger_counter % 20) == 0) {
+        if ((stagger_counter % stagger_period_in_blocks) == 0) {
             constexpr uint32_t noc_id = 0;
             uint32_t noc_id_logical_reg = NOC_CFG_READ_REG(noc_id, NOC_ID_LOGICAL);
             uint32_t my_logical_y = (noc_id_logical_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
@@ -63,7 +69,9 @@ inline __attribute__((__always_inline__)) void apply_mm_stagger(int operand) {
 #endif
 }
 
-// Wait for N tiles available in the incoming stream
+// Wait for N tiles available in the incoming stream.
+// With the MM_STAGGER_TYPE / MM_STAGGER_VALUE defines set it also spins the stagger delay after the wait
+// on operand 1 for odd-row cores (see apply_mm_stagger).
 inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
     std::uint32_t input = operand;

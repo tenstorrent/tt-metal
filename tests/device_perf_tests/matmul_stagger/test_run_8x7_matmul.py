@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import torch
 
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
@@ -17,9 +17,7 @@ MATMUL_VARIANTS = ["matmul1d_regular", "matmul1d_transposed", "matmul2d", "matmu
 
 
 # The host only adds the stagger defines on Wormhole B0 and Blackhole (compute_throttle_utils.cpp).
-@pytest.mark.skipif(
-    not (is_wormhole_b0() or is_blackhole()), reason="matmul stagger is only enabled on Wormhole B0 and Blackhole"
-)
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
     "program_config_variant, seq_len, inner_dim, weights_n, per_core_M, per_core_N, in_block_w, out_subblock_h, out_subblock_w, mcast_in0",
     (
