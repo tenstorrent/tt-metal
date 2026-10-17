@@ -234,6 +234,22 @@ inline void _llk_unpack_AB_custom_mm_init_(const std::uint32_t unpB_face_r_dim, 
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
+/**
+ * @brief Issue the SrcA/SrcB unpack of a kt_dim x ct_dim block with the MOP that @ref _llk_unpack_AB_custom_mm_init_
+ *        recorded. Shared by @ref _llk_unpack_AB_custom_mm_ and the sdpa_custom_mm wrapper.
+ *
+ * @param cfg: Config register pointer of the unpack thread.
+ * @param address_a: L1 address of the first weight tile (SrcA), in 16-byte words.
+ * @param address_b: L1 address of the first activation tile (SrcB), in 16-byte words.
+ * @param tile_size_b: Stride between consecutive activation k-tiles in L1, in 16-byte words: the two dense
+ *                     face_r_dim x 16 faces the SrcB walk strides by, not a padded 32x32 tile. The second run of a
+ *                     kt_dim = 256 block starts at address_b + 128 * tile_size_b. The llk_api callers pass the in0 CB
+ *                     page size, which for a [face_r_dim, 32] non-BFP tile is exactly this stride.
+ * @param block_increment: SrcA address step to the next tile of a k-row, in 16-byte words.
+ * @param inner_increment: SrcA address step from the last tile of a k-row to the next k-row, in 16-byte words.
+ * @param kt_dim: Inner dimension in tiles, 1 to 256.
+ * @param ct_dim: Output width in tiles, 1 to 16.
+ */
 inline void _llk_unpack_AB_custom_mm_run_(
     volatile std::uint32_t* cfg,
     std::uint32_t address_a,
@@ -262,8 +278,9 @@ inline void _llk_unpack_AB_custom_mm_run_(
     constexpr std::uint32_t reuse_instruction_count = 3;
 
     // The SrcB face walk addresses at most 510 faces from one base (see _llk_unpack_AB_custom_mm_iter_insns), so a
-    // run covers at most 255 k-tiles and kt_dim = 256 is unpacked as two runs of 128. The second run restarts the
-    // Ch0 Y/Z counters at zero from a SrcB base advanced past the first run's tiles. SrcA needs nothing: the first
+    // run covers at most 255 k-tiles and kt_dim = 256 is unpacked as two runs of 128 (two runs would cover up to 510
+    // k-tiles; 256 is the API contract, asserted above). The second run restarts the Ch0 Y/Z counters at zero from a
+    // SrcB base advanced past the first run's tiles. SrcA needs nothing: the first
     // run's CFGSHIFTMASKs have already moved its base to the next k-tile row. The math thread sees one uninterrupted
     // sequence of SrcB data-valid flips, so it needs no per-run sync.
     constexpr std::uint32_t max_kt_per_run = 255;
@@ -327,7 +344,8 @@ inline void _llk_unpack_AB_custom_mm_run_(
  * @param tile_index_a: First weight tile to read.
  * @param tile_index_b: First activation tile to read.
  * @param tile_size_a: Weight tile size, in 16-byte words.
- * @param tile_size_b: Activation tile size, in 16-byte words.
+ * @param tile_size_b: Activation k-tile stride in L1, in 16-byte words: the two dense face_r_dim x 16 faces the SrcB
+ *                     walk strides by, not a padded 32x32 tile (see @ref _llk_unpack_AB_custom_mm_run_).
  * @param kt_dim: Inner dimension in tiles, 1 to 256.
  * @param ct_dim: Output width in tiles, 1 to 16.
  * @note Call @ref _llk_unpack_AB_custom_mm_init_ first.

@@ -221,10 +221,14 @@ def _run(
     input_tile_offset=0,
     preserve_zero_flag=False,
     operands=None,
+    exact_arithmetic=False,
 ):
     """Run sdpa_custom_mm and check it against the golden; return the (M, N) result.
 
     ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
+    ``exact_arithmetic`` says the operands were built so every product and sum is exact in
+    LoFi and the bf16 dest; the result is then compared exactly (atol = rtol = 0) instead of
+    with the K-aware atol below, which would hide a wrong face at a large kt.
     """
     kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM
     assert M in {1, 2, 4, 8}, "in0 row count M must be in {1,2,4,8}"
@@ -310,12 +314,14 @@ def _run(
     active = active[active > 0]
     mean_active = active.mean().item() if active.numel() else 0.0
     acc_atol = max(FLOAT16B_DEFAULT_ATOL, ACC_ATOL_PER_KT * kt * mean_active)
+    custom_atol, custom_rtol = (0.0, 0.0) if exact_arithmetic else (acc_atol, None)
 
     assert passed_test(
         golden,
         res_tensor,
         DataFormat.Float16_b,
-        custom_atol=acc_atol,
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
         print_pcc=True,
     ), f"sdpa_custom_mm failed for (M={M}, K={K}, N={N}, sg={signal_granularity}, read_transposed={read_transposed})"
     return res_tensor
@@ -527,6 +533,16 @@ def _sign_deciding_operands(M, K, N):
     return torch_a, torch_b
 
 
+def _both_runs_operands(M, K, N):
+    """The sign-deciding operands plus a first face that makes the first run of the split contribute too:
+    A's face 0 = 1 and B's rows of face 0 = 1 add 16 per lane, so the expected result is
+    16 * (2 + n % 8)."""
+    torch_a, torch_b = _sign_deciding_operands(M, K, N)
+    torch_a[:, :FACE_C_DIM] = 1.0
+    torch_b[:FACE_C_DIM, :] = 1.0
+    return torch_a, torch_b
+
+
 def test_sdpa_custom_mm_kt_max(request):
     """kt_dim = 256 needs SrcB face 511, which one custom_mm face walk cannot address; the LLK runs it twice.
 
@@ -544,6 +560,23 @@ def test_sdpa_custom_mm_kt_max(request):
         read_transposed=False,
         mm_transpose=False,
         operands=_sign_deciding_operands(M, K, N),
+        exact_arithmetic=True,
+    )
+
+
+def test_sdpa_custom_mm_kt_max_both_runs(request):
+    """kt_dim = 256 with both runs of the split contributing: 16 from the first face, 16..128 from the last."""
+    _skip_on_simulator(request)
+    M, K, N = KT_CEILING_M, KT_MAX * DEFAULT_TILE_R_DIM, KT_CEILING_N
+    _run(
+        M,
+        K,
+        N,
+        signal_granularity=1,
+        read_transposed=False,
+        mm_transpose=False,
+        operands=_both_runs_operands(M, K, N),
+        exact_arithmetic=True,
     )
 
 

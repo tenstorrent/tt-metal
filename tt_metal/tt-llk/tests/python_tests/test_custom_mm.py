@@ -157,8 +157,9 @@ def _run_custom_mm(
 
     ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
     ``exact_arithmetic`` says the operands were built so every product and sum is exact in
-    LoFi and the bf16 dest; the K-aware atol below is then not applied, since it would hide
-    a wrong face (it grows to ~1.3x the mean golden at kt = 255).
+    LoFi and the bf16 dest; the result is then compared exactly (atol = rtol = 0) instead of
+    with the K-aware atol below, which would hide a wrong face (it grows to ~1.3x the mean
+    golden at kt = 255).
     """
     K = kt * DEFAULT_TILE_R_DIM
     N = ct * DEFAULT_TILE_C_DIM
@@ -273,8 +274,10 @@ def _run_custom_mm(
     # unchanged, PCC is the real gate and stays ~0.99999). This mirrors the proven
     # compressed sibling (compressed_utils.run_compressed). Float32 dest accumulates in
     # fp32, so its noise is negligible and it keeps the default (tighter) atol.
-    custom_atol = None
-    if out_format == DataFormat.Float16_b and not exact_arithmetic:
+    custom_atol, custom_rtol = None, None
+    if exact_arithmetic:
+        custom_atol, custom_rtol = 0.0, 0.0
+    elif out_format == DataFormat.Float16_b:
         FLOAT16B_DEFAULT_ATOL = 0.05
         ACC_ATOL_PER_KT = 0.005
         active_golden = golden.abs()
@@ -283,7 +286,12 @@ def _run_custom_mm(
         custom_atol = max(FLOAT16B_DEFAULT_ATOL, ACC_ATOL_PER_KT * kt * mean_active)
 
     assert passed_test(
-        golden, res_tensor, out_format, custom_atol=custom_atol, print_pcc=True
+        golden,
+        res_tensor,
+        out_format,
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        print_pcc=True,
     ), f"custom_mm matmul failed for M={M} kt={kt} ct={ct} formats={formats}"
     return res_tensor
 
@@ -395,14 +403,20 @@ def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format):
 
 
 # One SrcB face walk covers 255 k-tiles (faces 0..509, see the module docstring); kt_dim = 256 is
-# unpacked as two runs of 128. At the ceiling the operands are kt*2048 B each for ct=1 in
-# Float16_b, which is the most the harness's L1 window holds (Float32 tiles or ct>1 would not
-# fit), so the ceiling tests share this one shape.
+# unpacked as two runs of 128. At the ceiling the harness reserves kt full tiles per operand, so
+# with Float16_b in1 only ct=1 fits its L1 window (Float32 does not fit at all); the ceiling tests
+# share that one shape, and the halo-MOP (ct >= 2) two-run case uses a Bfp8_b in1 at M=1, ct=2.
 KT_MAX = 256
 KT_SINGLE_RUN_MAX = 255
 KT_CEILING_M = 8
 KT_CEILING_CT = 1
 KT_CEILING_FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+# The DeepSeek post-SDPA matmul shape: 256 k-tiles into 2 output tiles of a single row, Bfp8_b weights.
+KT_CEILING_CT2_M = 1
+KT_CEILING_CT2_CT = 2
+KT_CEILING_CT2_FORMATS = InputOutputFormat(
+    DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp8_b
+)
 # A face's value tells the two counter halves apart: an aliased read lands 256 faces below.
 A_FACE_VALUE_LOW, A_FACE_VALUE_HIGH = 1.0, 2.0
 
@@ -440,6 +454,19 @@ def _sign_deciding_operands(M, K, N):
     return torch_a, torch_b
 
 
+def _both_runs_operands(M, K, N):
+    """The sign-deciding operands plus a first face that makes the first run contribute too.
+
+    A's face 0 = 1 and B's rows of face 0 = 1 add 16 per lane from the first run of the walk, so
+    the expected result is 16 * (1 + B_last_row) = 16 * (2 + n % 8): losing the first run or
+    aliasing the last face each give a different exact value.
+    """
+    torch_a, torch_b = _sign_deciding_operands(M, K, N)
+    torch_a[:, :FACE_C_DIM] = 1.0
+    torch_b[:FACE_C_DIM, :] = 1.0
+    return torch_a, torch_b
+
+
 @blackhole_only
 def test_custom_mm_kt_max():
     """kt_dim = 256 needs SrcB face 511, which one face walk cannot address; the LLK runs the walk twice.
@@ -456,6 +483,42 @@ def test_custom_mm_kt_max():
         KT_CEILING_FORMATS,
         DestAccumulation.No,
         operands=_sign_deciding_operands(M, K, N),
+        exact_arithmetic=True,
+    )
+
+
+@blackhole_only
+def test_custom_mm_kt_max_both_runs():
+    """kt_dim = 256 with both runs of the split contributing: 16 from the first face, 16..128 from the last."""
+    M, kt, ct = KT_CEILING_M, KT_MAX, KT_CEILING_CT
+    K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        KT_CEILING_FORMATS,
+        DestAccumulation.No,
+        operands=_both_runs_operands(M, K, N),
+        exact_arithmetic=True,
+    )
+
+
+@blackhole_only
+def test_custom_mm_kt_max_ct2_bfp8():
+    """kt_dim = 256 in the halo MOP mode (ct = 2) with Bfp8_b weights, the DeepSeek post-SDPA matmul shape.
+
+    Both runs contribute (first face and last face), and the small-integer operands are exact in
+    Bfp8_b, LoFi and the bf16 dest, so the result is compared exactly.
+    """
+    M, kt, ct = KT_CEILING_CT2_M, KT_MAX, KT_CEILING_CT2_CT
+    K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        KT_CEILING_CT2_FORMATS,
+        DestAccumulation.No,
+        operands=_both_runs_operands(M, K, N),
         exact_arithmetic=True,
     )
 

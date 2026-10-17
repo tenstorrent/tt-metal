@@ -163,7 +163,7 @@ inline void _llk_math_sdpa_custom_mm_(
     LLK_ASSERT(ct_dim % signal_granularity == 0, "ct_dim must be divisible by signal_granularity for FPU->SFPU signal counts to balance");
     // Same range as the shared unpack worker (kt_dim = 0 would wrap the loop below). Rejecting the block here too
     // leaves no MVMUL waiting on SrcB data that the unpacker will never deliver.
-    LLK_ASSERT(kt_dim >= 1 && kt_dim <= 256, "custom_mm: kt_dim must be 1 to 256");
+    LLK_ASSERT(kt_dim >= 1 && kt_dim <= 256, "sdpa_custom_mm: kt_dim must be 1 to 256");
     // dst offset initialized by _llk_math_sdpa_custom_mm_mask_dest_
     _llk_math_sdpa_custom_mm_mask_dest_(dst_index, ct_dim, mask_chunk);
 

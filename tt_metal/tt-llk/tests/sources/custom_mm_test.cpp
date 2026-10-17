@@ -45,10 +45,10 @@
 //                           SrcA CFGSHIFTMASK walk reads them with read_transposed=false,
 //                           block_increment = inner_increment = tile_size).
 //
-// The single unpack call issues one MOP covering the whole kt walk; the single math call
-// loops kt internally -- both are invoked ONCE (not per k-tile), exactly as the LLK's own
-// run wrappers do (_llk_unpack_AB_custom_mm_run_ issues TT_MOP once for kt/2-1; the finalize
-// path is disabled here).
+// The single unpack call issues the MOP over the whole kt walk (one run of up to 255 k-tiles, or
+// two runs for kt_dim = 256, see _llk_unpack_AB_custom_mm_run_); the single math call loops kt
+// internally -- both are invoked ONCE (not per k-tile), exactly as the LLK's own run wrappers
+// do (the finalize path is disabled here).
 
 #include <algorithm>
 #include <cstdint>
@@ -72,7 +72,7 @@ static_assert(kt_per_call * num_calls == KT_DIM, "K tiles must split evenly acro
 
 // The LLKs' kt_dim ceiling (llk_unpack_AB_custom_mm.h): one SrcB face walk covers 255 k-tiles and kt_dim = 256 is
 // unpacked as two runs. A call past 256 is rejected by the unpack and math LLK_ASSERTs before either issues an
-// instruction; test_custom_mm_kt_past_max_asserts expects that.
+// instruction; test_custom_mm_kt_past_max_asserts expects that, and the pack thread below packs nothing in that case.
 constexpr std::uint32_t custom_mm_kt_max = 256;
 
 #ifdef LLK_TRISC_UNPACK
@@ -212,23 +212,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
 
-    bool math_done = true;
-    if constexpr (kt_per_call > custom_mm_kt_max)
-    {
-        // Expected-assert case: math rejects the block and never posts MATH_PACK. Poll the semaphore from the RISC with
-        // a bound instead of SEMWAITing on it, because a SEMWAIT left in the Tensix pack FIFO outlives the RISC soft
-        // reset and hangs the next kernel on this core. On a build without the asserts math finishes the block (on
-        // silicon this takes on the order of 1e8 wall-clock cycles at kt_dim = 256) and pack runs normally, so the
-        // result can be checked against the golden. The bound stays inside the harness's 2 s completion window.
-        constexpr std::uint64_t math_done_bound_cycles = 1'500'000'000;
-        const std::uint64_t start                      = ckernel::read_wall_clock();
-        while (semaphore_read(semaphore::MATH_PACK) == 0 && ckernel::read_wall_clock() - start < math_done_bound_cycles)
-        {
-        }
-        math_done = semaphore_read(semaphore::MATH_PACK) != 0;
-    }
-
-    if (math_done)
+    // Expected-assert case (kt past the ceiling): math rejects the block and never posts MATH_PACK, so pack nothing. A
+    // SEMWAIT left in the Tensix pack FIFO would outlive the RISC soft reset and hang the next kernel on this core.
+    if constexpr (kt_per_call <= custom_mm_kt_max)
     {
         _llk_packer_wait_for_math_done_();
 

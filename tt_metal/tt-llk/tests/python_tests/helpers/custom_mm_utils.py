@@ -7,9 +7,10 @@
 tile: `_llk_unpack_AB_custom_mm_init_` sets `unpB_x_end = unpB_face_r_dim * FACE_C_DIM - 1` and issues
 two UNPACRs per k-tile, with the SrcB L1 base programmed once and advanced by counters whose stride is
 a single face, `datum_size * FACE_C_DIM * face_r_dim`. So in0 is `kt_dim * 2` DENSELY packed faces of
-`in0_rows x 16`, not `kt_dim` padded 32x32 tiles -- an in0 k-tile is `64 * in0_rows` bytes, and
-TILE_SIZE_UNPACK_A is dead on this path because `tile_index_b` is 0. This matches what the
-silicon-validated `compressed_utils.run_compressed` emits.
+`in0_rows x 16`, not `kt_dim` padded 32x32 tiles -- an in0 k-tile is `64 * in0_rows` bytes, which is
+also what the LLK's `tile_size_b` must be (it indexes `tile_index_b` and places the second run of a
+kt_dim = 256 walk), not the padded TILE_SIZE_UNPACK_A. This matches what the silicon-validated
+`compressed_utils.run_compressed` emits.
 
 The sibling tests that shared these helpers (`custom_mm`, `sdpa_custom_mm`,
 `sdpa_custom_mm_reuse_dest_srcb`) are owned by #53361, which targets the promoted `experimental/`
