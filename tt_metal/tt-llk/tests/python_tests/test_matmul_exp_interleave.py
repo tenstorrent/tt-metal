@@ -2,21 +2,37 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import parametrize
+from helpers.sfpu_dispatch_constants import EXP_WITH_BASE_SCALE
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import DEST_SYNC, MATH_FIDELITY, TILE_COUNT
+from helpers.test_variant_parameters import (
+    APPROX_MODE,
+    CLAMP_NEGATIVE,
+    CRK_TILE_DIMM,
+    DEST_SYNC,
+    ITERATIONS,
+    MATH_FIDELITY,
+    SFPU_SCALE_EN,
+    THROTTLE_LEVEL,
+    TILE_COUNT,
+)
+from helpers.tile_constants import (
+    DEFAULT_TILE_C_DIM,
+    DEFAULT_TILE_R_DIM,
+    MAX_TILE_ELEMENTS,
+)
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
 # A: TILE_CNT stacked tiles, B: one tile. Output tile t = exp(A[t] x B).
 TILE_CNT = 4
-INPUT_A_DIMENSIONS = [32 * TILE_CNT, 32]
-INPUT_B_DIMENSIONS = [32, 32]
+INPUT_A_DIMENSIONS = [DEFAULT_TILE_R_DIM * TILE_CNT, DEFAULT_TILE_C_DIM]
+INPUT_B_DIMENSIONS = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]
 
 
 # The math thread keeps two replay-buffer users live across the tile loop: the matmul
@@ -27,15 +43,18 @@ INPUT_B_DIMENSIONS = [32, 32]
 # before any exp has recorded; every later tile's matmul replays whatever the exp
 # record left in the FPU half, so a record that crosses the split shows up as tile 0
 # right and tiles 1.. wrong.
+#
+# scale_en runs the scaled exp, exp(EXP_WITH_BASE_SCALE * x) -- the longest loop body
+# of the accurate bf16 kernel on both architectures.
 @parametrize(
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
-    formats=input_output_formats([DataFormat.Float16_b]),
+    scale_en=[False, True],
 )
-def test_matmul_exp_interleave(math_fidelity, formats):
+def test_matmul_exp_interleave(math_fidelity, scale_en):
     torch.manual_seed(0)
-    dest_acc = (
-        DestAccumulation.No
-    )  # the accurate exp's bf16-Dest kernel is the one under test
+    # The accurate exp's bf16-Dest kernel is the one under test.
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    dest_acc = DestAccumulation.No
     torch_format = format_dict[formats.output_format]
 
     # |A x B| stays around 1 so exp is well inside bf16 range and a wrong product is
@@ -63,7 +82,8 @@ def test_matmul_exp_interleave(math_fidelity, formats):
         input_A_format=formats.input_format,
         input_B_format=formats.input_format,
     )
-    golden_tensor = torch.exp(matmul_golden.float()).to(torch_format)
+    exp_scale = EXP_WITH_BASE_SCALE if scale_en else 1.0
+    golden_tensor = torch.exp(exp_scale * matmul_golden.float()).to(torch_format)
 
     tilized_A = tilize_block(
         src_A, dimensions=INPUT_A_DIMENSIONS, stimuli_format=formats.input_format
@@ -75,8 +95,16 @@ def test_matmul_exp_interleave(math_fidelity, formats):
     configuration = TestConfig(
         "sources/matmul_exp_interleave_test.cpp",
         formats,
-        templates=[MATH_FIDELITY(math_fidelity), DEST_SYNC()],
-        runtimes=[TILE_COUNT(TILE_CNT)],
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            DEST_SYNC(),
+            THROTTLE_LEVEL(),
+            APPROX_MODE(),
+            CLAMP_NEGATIVE(),
+            ITERATIONS(),
+            SFPU_SCALE_EN(scale_en),
+        ],
+        runtimes=[TILE_COUNT(TILE_CNT), CRK_TILE_DIMM(1, 1, 1)],
         variant_stimuli=StimuliConfig(
             tilized_A.flatten(),
             formats.input_format,
@@ -94,21 +122,31 @@ def test_matmul_exp_interleave(math_fidelity, formats):
     assert len(res_from_L1) == len(golden_tensor)
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    # Per-tile verdict first: it names the tiles that went wrong, which is the signature
-    # of a replay-buffer crossing (tile 0 right, the rest wrong).
-    tile_elems = 32 * 32
+    # Per-tile verdict: it names the tiles that went wrong, which is the signature of a
+    # replay-buffer crossing (tile 0 right, the rest wrong). The failing tiles' mismatches
+    # are dumped before the assert.
+    def tile_slice(tensor, t):
+        return tensor[t * MAX_TILE_ELEMENTS : (t + 1) * MAX_TILE_ELEMENTS]
+
     bad_tiles = [
         t
         for t in range(TILE_CNT)
         if not passed_test(
-            golden_tensor[t * tile_elems : (t + 1) * tile_elems],
-            res_tensor[t * tile_elems : (t + 1) * tile_elems],
+            tile_slice(golden_tensor, t),
+            tile_slice(res_tensor, t),
             formats.output_format,
             print_errors=False,
         )
     ]
+    for t in bad_tiles:
+        print(f"tile {t}:")
+        passed_test(
+            tile_slice(golden_tensor, t),
+            tile_slice(res_tensor, t),
+            formats.output_format,
+            print_errors=True,
+        )
     assert not bad_tiles, (
         f"exp(matmul) wrong on tiles {bad_tiles} of {TILE_CNT}: the matmul program replayed "
         "after the first exp no longer matches the one recorded at init"
     )
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
