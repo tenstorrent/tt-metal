@@ -131,17 +131,18 @@ INSTANTIATE_TEST_SUITE_P(
     RelationalUnaryTests,
     RelationalUnaryFixture,
     ::testing::Values(
-        RelationalUnaryParam{2147483647, 2147483647, 128, 32},    // equality at max int
-        RelationalUnaryParam{-2147483647, -2147483647, 128, 32},  // equality at min int for negative case
-        RelationalUnaryParam{2147483647, 2147483646, 128, 32},    // gt, ne
-        RelationalUnaryParam{2147483647, -1, 64, 32},             // gt, ge, ne
-        RelationalUnaryParam{-45, -5, 32, 32},                    // lt, le, ne
-        RelationalUnaryParam{5, -5, 32, 32},                      // gt, ge, ne
-        RelationalUnaryParam{-5, 67, 64, 64},                     // lt, ne
-        RelationalUnaryParam{0, 0, 4, 4},                         // eq, ge, le
-        RelationalUnaryParam{17, -96, 64, 64},                    // gt, ge, ne
-        RelationalUnaryParam{100, 458, 128, 128},                 // lt, ne
-        RelationalUnaryParam{564, -118, 64, 128}));               // gt, ne
+        RelationalUnaryParam{2147483647, 2147483647, 128, 32},           // equality at max int
+        RelationalUnaryParam{-2147483647, -2147483647, 128, 32},         // equality at min int for negative case
+        RelationalUnaryParam{-2147483647 - 1, -2147483647 - 1, 32, 32},  // equality at INT32_MIN (word 0x80000000)
+        RelationalUnaryParam{2147483647, 2147483646, 128, 32},           // gt, ne
+        RelationalUnaryParam{2147483647, -1, 64, 32},                    // gt, ge, ne
+        RelationalUnaryParam{-45, -5, 32, 32},                           // lt, le, ne
+        RelationalUnaryParam{5, -5, 32, 32},                             // gt, ge, ne
+        RelationalUnaryParam{-5, 67, 64, 64},                            // lt, ne
+        RelationalUnaryParam{0, 0, 4, 4},                                // eq, ge, le
+        RelationalUnaryParam{17, -96, 64, 64},                           // gt, ge, ne
+        RelationalUnaryParam{100, 458, 128, 128},                        // lt, ne
+        RelationalUnaryParam{564, -118, 64, 128}));                      // gt, ne
 
 // A float scalar against an INT32 or UINT32 tensor: the host converts the scalar by value, so an
 // integral float compares as that integer. The inputs include the bit pattern of the float scalar
@@ -308,14 +309,52 @@ TEST_P(RelationalUnaryUint32HighScalarFixture, OrderedCompareIsRejected) {
     // Scalar-first public overloads.
     EXPECT_THAT([&] { ttnn::gt(s, t); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
     EXPECT_THAT([&] { ttnn::lt(s, t); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    // A negative int32_t scalar is not a UINT32 value: rejected as unrepresentable, not as "below 2^31".
+    constexpr const char* unrepresentable = "cannot represent the scalar";
+    EXPECT_THAT(
+        [&] { ttnn::gt_unary(t, std::int32_t{-1}); }, ThrowsMessage<std::runtime_error>(HasSubstr(unrepresentable)));
+    EXPECT_THAT(
+        [&] { ttnn::ne_unary(t, std::int32_t{-1}); }, ThrowsMessage<std::runtime_error>(HasSubstr(unrepresentable)));
 }
 
 INSTANTIATE_TEST_SUITE_P(
     RelationalUnaryUint32HighScalarTests,
     RelationalUnaryUint32HighScalarFixture,
     ::testing::Values(
-        RelationalUnaryUint32HighScalarParam{3000000000, 3000000000.0f},  // equal
-        RelationalUnaryUint32HighScalarParam{5, 3000000000.0f}));         // lt, le, ne: the signed read says gt, ge
+        RelationalUnaryUint32HighScalarParam{3000000000, 3000000000.0f},    // equal
+        RelationalUnaryUint32HighScalarParam{5, 3000000000.0f},             // lt, le, ne: the signed read says gt, ge
+        RelationalUnaryUint32HighScalarParam{2147483648, 2147483648.0f},    // equal at exactly 2^31 (word 0x80000000)
+        RelationalUnaryUint32HighScalarParam{4294967040, 4294967040.0f}));  // equal at the largest float32 below 2^32
+
+// EQ/NE on UINT32 through the uint32_t scalar overload: a bit compare over the whole range, including
+// the words no float32 holds (0xFFFFFFFF) and exactly 2^31 against 0 in both roles.
+struct RelationalUnaryUint32WordParam {
+    uint32_t scalar_input;  // value held by the tensor
+    uint32_t scalar_param;
+};
+
+class RelationalUnaryUint32WordFixture : public TTNNFixtureWithSuiteDevice<RelationalUnaryUint32WordFixture>,
+                                         public testing::WithParamInterface<RelationalUnaryUint32WordParam> {};
+
+TEST_P(RelationalUnaryUint32WordFixture, EqNeUnaryCompareBits) {
+    const auto p = GetParam();
+    const RelationalUnaryFloatScalarParam q{DataType::UINT32, p.scalar_input, 0.0f, 32, 32};
+    const uint32_t s = p.scalar_param;
+    test_relational_float_scalar_impl(
+        *device_, q, [s](const auto& t, float) { return ttnn::eq_unary(t, s); }, p.scalar_input == s, "eq_unary");
+    test_relational_float_scalar_impl(
+        *device_, q, [s](const auto& t, float) { return ttnn::ne_unary(t, s); }, p.scalar_input != s, "ne_unary");
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    RelationalUnaryUint32WordTests,
+    RelationalUnaryUint32WordFixture,
+    ::testing::Values(
+        RelationalUnaryUint32WordParam{4294967295u, 4294967295u},  // equal at UINT32_MAX
+        RelationalUnaryUint32WordParam{2147483648u, 2147483648u},  // equal at exactly 2^31
+        RelationalUnaryUint32WordParam{2147483648u, 0u},           // 2^31 is not 0
+        RelationalUnaryUint32WordParam{0u, 2147483648u},           // 0 is not 2^31
+        RelationalUnaryUint32WordParam{4294967295u, 2147483647u}));
 
 // Host side only: the scalar word the generator emits for the int32 compare kernels is the
 // scalar's value, not its float bit pattern, and for EQ/NE a uint32 value >= 2^31 keeps its bits.
@@ -399,6 +438,42 @@ TEST(RelationalUnaryScalarWord, UnrepresentableFloatScalarIsRejected) {
     EXPECT_NO_THROW(emit(UnaryOpType::UNARY_EQ, 4294967040.0f, DataType::UINT32));
 }
 
+// Host side only: an integer scalar outside the op dtype's range is rejected like an unrepresentable
+// float (the kernel would read a negative int32_t as a large UINT32 and a uint32_t >= 2^31 as negative).
+TEST(RelationalUnaryScalarWord, IntegerScalarOutsideDtypeRangeIsRejected) {
+    using ::testing::HasSubstr;
+    using ::testing::ThrowsMessage;
+    using ttnn::operations::unary::utils::get_defines;
+    const auto emit = [](UnaryOpType op, auto scalar, DataType dtype) {
+        using T = decltype(scalar);
+        const std::array<T, 1> params = {scalar};
+        get_defines<T>(op, std::span<const T>(params), "0", "0", dtype);
+    };
+    constexpr const char* reason = "cannot represent the scalar";
+    EXPECT_THAT(
+        [&] { emit(UnaryOpType::UNARY_GT, std::int32_t{-1}, DataType::UINT32); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    EXPECT_THAT(
+        [&] { emit(UnaryOpType::UNARY_EQ, std::int32_t{-1}, DataType::UINT32); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    EXPECT_THAT(
+        [&] { emit(UnaryOpType::UNARY_LT, std::uint32_t{2147483648u}, DataType::INT32); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    EXPECT_THAT(
+        [&] { emit(UnaryOpType::UNARY_NE, std::uint32_t{3000000000u}, DataType::INT32); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    // In range: accepted, and the word is the value.
+    EXPECT_NO_THROW(emit(UnaryOpType::UNARY_GT, std::int32_t{0}, DataType::UINT32));
+    EXPECT_NO_THROW(emit(UnaryOpType::UNARY_LE, std::uint32_t{2147483647u}, DataType::INT32));
+    EXPECT_NO_THROW(emit(UnaryOpType::UNARY_GE, std::int32_t{-5}, DataType::INT32));
+    const std::array<std::int32_t, 1> five = {5};
+    EXPECT_EQ(
+        get_defines<std::int32_t>(
+            UnaryOpType::UNARY_GT, std::span<const std::int32_t>(five), "0", "0", DataType::UINT32)
+            .at("SFPU_OP_FUNC_0"),
+        "unary_gt_tile_int32(0, 5);");
+}
+
 // Host side only: an op placed after a TYPECAST is generated for the cast's target dtype. A relational
 // op on an INT32 tensor cast to FLOAT32 gets the float compare with the scalar's float bit pattern
 // (and a fractional scalar is accepted there); one on a FLOAT32 tensor cast to INT32 gets the int32
@@ -420,6 +495,21 @@ TEST(RelationalUnaryScalarWord, OpsAfterTypecastUseTheCastDtype) {
     const std::vector<EltwiseUnaryWithParam> float_to_int_gt = {
         typecast(DataType::FLOAT32, DataType::INT32), EltwiseUnaryWithParam(UnaryOpType::UNARY_GT, 2.0f)};
     EXPECT_EQ(func_1(float_to_int_gt, DataType::FLOAT32), "unary_gt_tile_int32(0, 2);");
+    // The TYPECAST parameters may be int32_t or uint32_t backed; the cast's dtype is read from the active type.
+    const std::vector<EltwiseUnaryWithParam> int_params_gt_half = {
+        EltwiseUnaryWithParam(
+            UnaryOpType::TYPECAST,
+            static_cast<std::int32_t>(DataType::INT32),
+            static_cast<std::int32_t>(DataType::FLOAT32)),
+        EltwiseUnaryWithParam(UnaryOpType::UNARY_GT, 0.5f)};
+    EXPECT_EQ(func_1(int_params_gt_half, DataType::INT32), "unary_gt_tile(0, 0x3f000000u);");
+    const std::vector<EltwiseUnaryWithParam> uint_params_gt = {
+        EltwiseUnaryWithParam(
+            UnaryOpType::TYPECAST,
+            static_cast<std::uint32_t>(DataType::INT32),
+            static_cast<std::uint32_t>(DataType::FLOAT32)),
+        EltwiseUnaryWithParam(UnaryOpType::UNARY_GT, 2.0f)};
+    EXPECT_EQ(func_1(uint_params_gt, DataType::INT32), "unary_gt_tile(0, 0x40000000u);");
 }
 
 // A float scalar the integer dtype cannot hold exactly (fractional, non-finite, out of range) is
