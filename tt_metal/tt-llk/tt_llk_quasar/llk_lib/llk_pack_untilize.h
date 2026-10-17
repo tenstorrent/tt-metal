@@ -282,6 +282,11 @@ template <std::uint32_t FULL_CT_DIM, std::uint32_t NUM_TILES_PER_BLOCK>
 inline void _llk_pack_untilize_strided_init_(const std::uint8_t buf_desc_id, const TensorShape& tensor_shape)
 {
     static_assert(FULL_CT_DIM % NUM_TILES_PER_BLOCK == 0, "FULL_CT_DIM must be divisible by NUM_TILES_PER_BLOCK");
+    // Clear all sub-counters (TILE, FACE, ROW): the face_r_dim >= PACR_STRIDE_OFFSET_ROWS path starts its first PACR_STRIDE
+    // at whatever Src row a prior op left, such as the rows the sparse path's PACR_STRIDEs advance.
+    TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, p_pacr::PACK0, 0);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, p_pacr::PACK0, 0);
+
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_VAL_SOURCE_RMW, 0); // sel STRIDE_OFFSET_0
 
     ckernel::pack::pack_untilize_stride_cfg_u stride_cfg = {};
@@ -290,6 +295,9 @@ inline void _llk_pack_untilize_strided_init_(const std::uint8_t buf_desc_id, con
 
     if (tensor_shape.face_r_dim >= ckernel::pack::PACR_STRIDE_OFFSET_ROWS) // 32x32, 16x32, 8x32
     {
+        // Every PACR_STRIDE here writes all four rows, so drop any row mask an earlier tiny-tile init left behind.
+        cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE_RMW, 0);
+        cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_ROW_MASK_RMW, 0);
         _llk_pack_untilize_strided_mop_config_<FULL_CT_DIM>(buf_desc_id, tensor_shape);
     }
     else // 4x32, 2x32, and 1x32
@@ -311,6 +319,13 @@ inline void _llk_pack_untilize_strided_init_(const std::uint8_t buf_desc_id, con
  * @param l1_tile_idx: Index into the L1 output buffer for the tile.
  * @param src_tile_idx: Tile index into the source (math destination) register.
  * @note Call @ref _llk_pack_untilize_strided_init_ with matching template args before this function.
+ * @note Keep TILE_SEL on the index instructions: this path issues PACR_STRIDE, not PACR_UNTILIZE (which is unsupported
+ *       in Dest Strided Read Mode), so the ISA rule that Untilize/Tilize use the Face Idx as Z counter does not apply.
+ * @note Pass src_tile_idx relative to the current dest bank and add no dest_register_offset term, unlike
+ *       @ref _llk_pack_untilize_: PACR_STRIDE reads Dest relative to THCON_PACKER0_REG0_SRC_ADDR_OFFSET, which
+ *       @ref _llk_pack_dest_semaphore_section_done_ moves per SyncHalf bank, while PACR_UNTILIZE ignores it. The ISA does
+ *       not document this; tests/python_tests/quasar/test_pack_untilize_semaphore_sync_quasar.py establishes it for
+ *       1x32, 2x32 and 8x32 tiles.
  */
 template <std::uint32_t FULL_CT_DIM>
 inline void _llk_pack_untilize_strided_(
