@@ -110,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // the constant register it leaves behind, not its numerics, and a short run keeps the
     // driver fast.
     _llk_math_sinkhorn_4x4_<1 /* NUM_FACES_USED */, 1 /* ITERS */, 0x35890000 /* EPS_BITS */, false /* SINGLE_SUBMAT */, 32 /* VALID_H */, 32 /* VALID_W */>(
-        0 /* dst_index */);
+        0 /* input_index */);
 
     // floor on the untouched second tile. ITERATIONS=8 at VectorMode::RC is what
     // floor_tile dispatches.

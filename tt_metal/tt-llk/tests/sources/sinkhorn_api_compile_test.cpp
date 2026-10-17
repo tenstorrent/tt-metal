@@ -7,12 +7,12 @@
 // api/compute/experimental/sinkhorn.h includes llk_api/experimental/llk_sfpu/llk_math_sinkhorn.h
 // into every TRISC_MATH kernel that includes it. _llk_math_sinkhorn_4x4_init_ there is a
 // non-template inline function, so its body is checked as soon as the header is included,
-// whether or not sinkhorn_4x4_init() is ever called. No in-tree kernel includes the header, so
-// nothing else ever compiles it: this driver does, and test_sinkhorn_api_compile.py only builds
-// it (never runs it).
-//
-// The math thread calls the init the way sinkhorn_4x4_init() dispatches it and instantiates
-// the sinkhorn_4x4 forwarder, which no in-tree kernel does either; the other two threads are
+// whether or not sinkhorn_4x4_init() is ever called. No in-tree kernel includes the header;
+// of the tests, sinkhorn_lconst_neg1_regression_test.cpp does, but dispatches only a one-face,
+// full-rectangle sinkhorn_4x4. This driver adds what that leaves uncompiled: the init call,
+// the four-face forwarder the compute API defaults to, the SINGLE_SUBMAT arm, and both arms
+// of the padding zeroing (whole-vector store and the per-lane masked store).
+// test_sinkhorn_api_compile.py only builds it (never runs it). The other two threads are
 // empty.
 
 #include <cstdint>
@@ -44,20 +44,24 @@ void run_kernel([[maybe_unused]] RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
+// The EPS_BITS default of sinkhorn_4x4() in api/compute/experimental/sinkhorn.h.
+static constexpr std::uint32_t DEFAULT_EPS_BITS = 0x35890000;
+
 void run_kernel([[maybe_unused]] RUNTIME_PARAMETERS params)
 {
     _llk_math_sinkhorn_4x4_init_();
 
-    // The forwarder with the defaults of sinkhorn_4x4() in api/compute/experimental/sinkhorn.h:
-    // four faces, both sub-matrices, full 32x32 rectangle. Instantiates every face arm of
-    // _sinkhorn_4x4_.
-    _llk_math_sinkhorn_4x4_<4 /* NUM_FACES_USED */, 20 /* ITERS */, 0x35890000 /* EPS_BITS */, false /* SINGLE_SUBMAT */, 32 /* VALID_H */, 32 /* VALID_W */>(
-        0 /* input_index */);
+    // The forwarder with the defaults of sinkhorn_4x4(): four faces, both sub-matrices, full
+    // 32x32 rectangle. Instantiates every face arm of _sinkhorn_4x4_; a full rectangle
+    // compiles no padding store.
+    _llk_math_sinkhorn_4x4_<4 /*NUM_FACES_USED*/, 20 /*ITERS*/, DEFAULT_EPS_BITS, false /*SINGLE_SUBMAT*/, 32 /*VALID_H*/, 32 /*VALID_W*/>(0 /*input_index*/);
 
-    // The arms the defaults leave out: a single sub-matrix and a rectangle smaller than the
-    // face set, which selects the padding-zeroing path.
-    _llk_math_sinkhorn_4x4_<1 /* NUM_FACES_USED */, 1 /* ITERS */, 0x35890000 /* EPS_BITS */, true /* SINGLE_SUBMAT */, 16 /* VALID_H */, 16 /* VALID_W */>(
-        0 /* input_index */);
+    // The arms the defaults leave out: a single sub-matrix, and a 3x4 rectangle inside the
+    // one 16x16 face of a one-face set. _sinkhorn_zero_rect_padding_addrs_ then takes both of
+    // its arms: the masked store (row and column masks under v_if) for the two vectors at
+    // rows 0..3 of face 0, which mix valid and padding lanes, and the whole-vector store
+    // for every vector beyond them.
+    _llk_math_sinkhorn_4x4_<1 /*NUM_FACES_USED*/, 1 /*ITERS*/, DEFAULT_EPS_BITS, true /*SINGLE_SUBMAT*/, 3 /*VALID_H*/, 4 /*VALID_W*/>(0 /*input_index*/);
 }
 
 #endif
