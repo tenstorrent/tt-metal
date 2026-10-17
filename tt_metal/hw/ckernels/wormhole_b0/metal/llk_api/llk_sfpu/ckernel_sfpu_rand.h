@@ -143,7 +143,7 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     // in the same kernel (the seedless ttnn.sampling path after ttnn.manual_seed) would otherwise store
     // under the previous launch's value. Address mode only -- no counter reset, which would move the
     // face base this call is given. The rewrite is the same value on every face. Ops relying on slot 6
-    // from their own init (topk, square, sfpu reduce) must re-run that init after rand.
+    // from their own init (e.g. topk, square, sfpu reduce) must re-run that init after rand.
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 
     make_lane_salt();
