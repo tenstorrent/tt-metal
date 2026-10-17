@@ -4764,6 +4764,13 @@ tasks:
     - shared_expert
     - moe_add
     layer: 14
+  frozen:
+    at: '2026-10-17T04:26:46'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_19_moe_add.py: 91b0a213513560052271ecf5cca15e92d82fb8b9f572476cd5dbd7d408611713
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.enc_source_engram.ffn_residual
   title: enc_source_engram ffn_residual (residual) on device, layer 14
   step: implement
