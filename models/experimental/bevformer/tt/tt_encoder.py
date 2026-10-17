@@ -5,7 +5,7 @@
 
 The layers run batch-first, ``(bs, num_query, embed_dims)``; the camera features are
 ``(bs * num_cams, num_keys, embed_dims)``: each sample's cameras in turn, the FPN's order, with the
-levels concatenated along ``num_keys``, as ``TtPerceptionTransformer.camera_features`` builds them.
+levels concatenated along ``num_keys``, as ``TTPerceptionTransformer.camera_features`` builds them.
 Parameters come from ``model_preprocessing.create_bevformer_encoder_parameters``.
 
 Camera geometry depends on the cameras only, not on the activations: once per frame,
@@ -20,7 +20,7 @@ ego shift included.
 import ttnn
 from models.experimental.bevformer.model_config import GRID_DTYPE
 from models.experimental.bevformer.tt.model_preprocessing import bev_reference_points, camera_geometry
-from models.experimental.bevformer.tt.tt_common import TtFFN, layer_norm, signpost
+from models.experimental.bevformer.tt.tt_common import TTFFN, layer_norm, signpost
 from models.experimental.bevformer.tt.tt_spatial_cross_attention import (
     TTSpatialCrossAttention,
     build_rebatch_plan,
@@ -49,7 +49,7 @@ class TTBEVFormerLayer:
     ):
         """``params`` is one entry of ``create_bevformer_encoder_parameters(...).layers``."""
         self.params = params
-        self.ffn = TtFFN(params.ffn)
+        self.ffn = TTFFN(params.ffn)
         self.temporal_self_attention = TTTemporalSelfAttention(
             params.tsa,
             spatial_shapes=[list(bev_shape)],
