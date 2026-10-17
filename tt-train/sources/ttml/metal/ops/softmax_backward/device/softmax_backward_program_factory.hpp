@@ -4,12 +4,23 @@
 
 #pragma once
 
+#include <cstdint>
+#include <optional>
 #include <tt-metalium/kernel_types.hpp>
 #include <ttnn/device_operation.hpp>
 
 #include "softmax_backward_device_operation_types.hpp"
 
 namespace ttml::metal::ops::softmax_backward::device {
+
+struct KernelMode {
+    uint32_t buffering_multiplier;
+    uint64_t required_memory_bytes;
+    uint32_t tiles_per_block;
+};
+
+std::optional<KernelMode> select_kernel_mode_for_l1(
+    uint32_t width_tiles, uint32_t tile_size, uint64_t available_l1_bytes);
 
 struct SoftmaxBackwardFactory {
     using shared_variables_t = ttml::metal::ops::softmax_backward::device::shared_variables_t;
