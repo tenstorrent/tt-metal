@@ -27,10 +27,14 @@ namespace ckernel {
  *   odst    = situ_a * up_half
  *
  * For non-NaN inputs both halves are bounded, so |odst| <= beta_gate * beta_up, up to the
- * rounding of the two halves and of the packed result. A NaN in gate or up comes through:
- * Blackhole's softcap keeps it (as the canonical +NaN after its multiplies, see softcap.h),
- * so odst is NaN in an fp32 Dest and +inf once held in a 16-bit Dest or packed to a
- * narrower format. The betas are the compile-time
+ * rounding of the two halves and of the packed result. A NaN in gate or up depends on
+ * the architecture and on how it reaches the kernel (see softcap.h for the measurements).
+ * On Blackhole an fp32 NaN in a 32-bit Dest is kept as the canonical +NaN, which an fp32
+ * or fp16 pack preserves and a bfloat16 pack turns into +inf; a 16-bit Dest stores it as
+ * an infinity; a bfloat16 NaN into a 32-bit Dest arrives as an infinity of its sign, so
+ * that half saturates to +/-beta instead. Quasar's polynomial still clamps with
+ * min(result, 1.0f); what its op returns for a NaN has not been measured. The betas
+ * are the compile-time
  * Kimi K3 values (4 for the gate half, 25 for the up half); other models add a config next to
  * ckernel::sfpu::SituGluConfigKimi and call ckernel::sfpu::calculate_situ_glu directly.
  *

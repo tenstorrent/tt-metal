@@ -118,7 +118,8 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     // NaN itself for a NaN -- where min(P, 1.0f) returned 1.0 for the same +NaN and copysign made
     // it a legal +-1.0 activation. copysign then restores x's sign, so finite results are
     // bit-identical to clamping the positive polynomial. Wormhole's SFPMAD may emit a NaN of
-    // either sign, so its copy keeps the positive coefficients and a predicated exponent test.
+    // either sign, so its copy keeps the positive coefficients and makes every lane negative
+    // before an SFPABS that leaves only a -NaN negative, then applies the min.
     sfpi::vFloat result = sfpi::copysgn(sfpi::max(neg_result, -1.0f), x);  // tanh(-x) = -tanh(x)
 
     return result;

@@ -27,12 +27,14 @@ namespace ckernel {
  *
  * For non-NaN inputs the output is bounded by beta: near-linear for |x| << beta,
  * saturating smoothly at +/-beta rather than truncating. +/-Inf clamps to +/-beta and
- * -0.0 returns +0.0, both as in tanh_tile. A NaN input is per architecture. On Blackhole
- * the polynomial keeps it a NaN, as torch does, but drops its sign: Dest holds +NaN
- * with fp32 accumulation and +inf on a 16-bit Dest (which stores a NaN as an infinity),
- * and any narrowing pack turns the NaN into +inf as well, so +NaN reaches L1 only with
- * fp32 accumulation and an fp32 pack. Quasar's polynomial still clamps with
- * min(result, 1.0f); what its op returns for a NaN has not been measured.
+ * -0.0 returns +0.0, both as in tanh_tile. A NaN input depends on the architecture and
+ * on how it reaches the kernel (measured on Blackhole). An fp32 NaN unpacked into a
+ * 32-bit Dest is kept as a NaN, as torch does, but with its sign dropped (+NaN); an fp32
+ * or fp16 pack delivers that +NaN to L1 and a bfloat16 pack delivers +inf. On a 16-bit
+ * Dest the NaN is stored as an infinity, so the op returns +inf. A bfloat16 NaN into a
+ * 32-bit Dest arrives as an infinity of its sign, so the op returns +/-beta for it, not
+ * a NaN. Quasar's polynomial still clamps with min(result, 1.0f); what its op returns
+ * for a NaN has not been measured.
  * The bound is exact in fp32; a bf16 pack rounds to nearest, so a beta that is not
  * bf16-representable can come back up to half a bf16 ULP above beta.
  *

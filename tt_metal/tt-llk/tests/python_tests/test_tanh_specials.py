@@ -25,11 +25,13 @@ this reason.
 
 Reference: tanh(+-inf) = +-1, tanh(NaN) = NaN, tanh(+-0.0) = +-0.0 (sign kept).
 
-The polynomial kernel (ApproximationMode.No on a 16-bit Dest) gets the same 257 patterns
-through its paired-vector body (`test_tanh_polynomial_specials`), through its single-vector
-body that softcap and situ_glu call (`test_tanh_polynomial_single_vector_specials`, one
-SFPU iteration), and through Blackhole softcap itself (`test_softcap_polynomial_specials`),
-each asserting the recorded 16-bit-Dest results rather than the reference.
+The polynomial kernel (ApproximationMode.No) is covered too, asserting recorded results
+rather than the reference: `test_tanh_polynomial_specials` runs all 257 patterns through
+the paired-vector body, `test_tanh_polynomial_single_vector_specials` runs one 32-lane
+mixed vector through the single-vector body that softcap and situ_glu call (one SFPU
+iteration), and `test_softcap_polynomial_specials` runs Blackhole softcap itself -- all
+257 patterns on the bfloat16-input arms, a 64-lane set of fp32 patterns on the fp32-input
+arms -- per Dest width and output format.
 """
 
 from __future__ import annotations
@@ -102,7 +104,8 @@ def _lanes(first_vector, count=1):
 
 
 # bfloat16 bit patterns for the mixed vectors: finite values next to the non-finite ones,
-# so a guard that leaks or that is keyed on the wrong lane shows up. tanh(0) = 0 could not.
+# so a non-finite lane corrupting its finite neighbours or its x2 pair partner shows up.
+# tanh(0) = 0 could not.
 BF16 = {
     "+inf": 0x7F80,
     "-inf": 0xFF80,
@@ -342,9 +345,9 @@ def _assert_specials(groups, expected, keys, changed):
 def _assert_finite_lanes(x, hw, lanes, reference, what, tol=1e-2):
     """The finite inputs in `lanes` came back as `reference(x)`, within `tol` (abs + rel).
 
-    The finite lanes of a mixed vector are what shows a non-finite neighbour's guard
-    leaking into them; tanh's polynomial carries ~2.3e-3 relative error and the
-    bfloat16 store another half ulp, both well inside the tolerance.
+    The finite lanes of a mixed vector are what shows a non-finite neighbour corrupting
+    them; tanh's polynomial carries ~2.3e-3 relative error and the bfloat16 store
+    another half ulp, both well inside the tolerance.
     """
     xs, hs = x[lanes], hw[lanes]
     finite = np.isfinite(xs)
@@ -466,15 +469,16 @@ def test_tanh_polynomial_specials():
     SFPMAD.md) and may be on Wormhole, so a plain min(result, 1.0f) clamped it to 1.0 and
     copysign returned +-1.0, a legal activation standing in for a NaN an upstream op
     produced. Blackhole now runs the polynomial with negated coefficients and saturates
-    with max(-P, -1.0f); Wormhole guards the lanes with a non-negative unbiased exponent.
-    tanh(+-inf) = +-1 must survive either.
+    with max(-P, -1.0f); Wormhole flips every lane negative, takes SFPABS (which leaves a
+    -NaN negative) and applies the min. tanh(+-inf) = +-1 must survive either.
 
     Faces 0 and 1 are the 128 positive and 128 negative patterns, so there the two
     vectors of an x2 pair are both non-finite. Face 3 mixes, on the vector layout
     `_vector_datums` records: vector 24 interleaves finite values with +-inf and NaN
     along its lanes, and pairs (26, 27) and (28, 29) put a finite vector next to a
-    non-finite one in both orders, so each vector's guard is checked on its own lanes
-    and the finite lanes show whether the other vector's guard leaked.
+    non-finite one in both orders, so a non-finite lane is checked next to finite
+    neighbours and next to a finite pair partner, and the finite lanes show whether it
+    corrupted them.
     """
     x, hw = _run(
         _by_vector(
@@ -540,20 +544,46 @@ def test_tanh_polynomial_single_vector_specials():
 @skip_for_wormhole  # softcap_tile exists on Blackhole (and Quasar) only
 @skip_for_quasar  # Quasar's polynomial still has the min clamp; its NaN results are unmeasured
 @pytest.mark.parametrize(
-    "in_fmt,out_fmt,dest_acc",
+    "in_fmt,out_fmt,dest_acc,nan_results",
     [
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
+        # 16-bit Dest: the NaN is stored as an infinity; its sign is already gone.
+        (
+            DataFormat.Float16_b,
+            DataFormat.Float16_b,
+            DestAccumulation.No,
+            ("+inf", "+inf"),
+        ),
+        # fp32 straight into a 32-bit Dest, fp32 pack: the canonical +NaN reaches L1.
+        (
+            DataFormat.Float32,
+            DataFormat.Float32,
+            DestAccumulation.Yes,
+            ("NaN(+)", "NaN(+)"),
+        ),
+        # bfloat16 input into a 32-bit Dest (the usual ttnn setup): the unpack path delivers
+        # the NaN as an infinity of its sign, so the kernel sees +-inf and returns +-beta.
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.Yes, ("5", "-5")),
+        # 32-bit Dest with an fp16 pack, which preserves the NaN like an fp32 pack does.
+        (
+            DataFormat.Float32,
+            DataFormat.Float16,
+            DestAccumulation.Yes,
+            ("NaN(+)", "NaN(+)"),
+        ),
     ],
-    ids=["bf16", "fp32"],
+    ids=["bf16", "fp32", "bf16-in-fp32-dest", "fp32-in-fp16-out"],
 )
-def test_softcap_polynomial_specials(in_fmt, out_fmt, dest_acc):
+def test_softcap_polynomial_specials(in_fmt, out_fmt, dest_acc, nan_results):
     """softcap(x) = beta * tanh(x / beta) through `_sfpu_tanh_polynomial_` on the specials.
 
     softcap wraps the single-vector kernel in a multiply on each side, and Blackhole's
     SFPMAD re-emits the canonical positive NaN for a NaN operand (SFPMAD.md), so unlike
-    bare tanh the sign of a NaN input is dropped: recorded here per Dest width. +-inf
-    saturate to +-beta, which is what torch returns too.
+    bare tanh the sign of a NaN that reaches the kernel is dropped. `nan_results` records
+    what reaches L1 for a +NaN and a -NaN input per input format, Dest width and pack,
+    measured on a Blackhole p100a: a NaN is kept only when it arrives as fp32 into a 32-bit
+    Dest and leaves through an fp32 or fp16 pack; a 16-bit Dest stores it as an infinity;
+    and a bfloat16 NaN into a 32-bit Dest is already an infinity of its sign when the kernel
+    runs, so softcap returns +-beta for it. +-inf saturate to +-beta, as in torch.
     """
     bf16 = in_fmt == DataFormat.Float16_b
     specials = (
@@ -579,20 +609,18 @@ def test_softcap_polynomial_specials(in_fmt, out_fmt, dest_acc):
     RECORDED = {
         "+inf": beta,
         "-inf": "-" + beta,
-        # measured on a Blackhole p100a; see the test docstring
-        "NaN(+)": "+inf" if bf16 else "NaN(+)",
-        "NaN(-)": "+inf" if bf16 else "NaN(+)",
+        "NaN(+)": nan_results[0],
+        "NaN(-)": nan_results[1],
         "+0.0": "+0.0",
         "-0.0": "+0.0",
     }
     _assert_specials(
-        _group_specials(x, hw, nan_sign=not bf16),
+        _group_specials(x, hw, nan_sign=True),
         RECORDED,
         tuple(RECORDED),
-        "These are the recorded Blackhole softcap results, not the reference: the "
-        "sign of a NaN input does not survive softcap's multiply-adds, and a 16-bit "
-        "Dest carries the NaN as an infinity. If the change is deliberate, update "
-        "RECORDED.",
+        "These are the recorded Blackhole softcap results, not the reference (see the "
+        "docstring for which paths keep a NaN and which turn it into an infinity or "
+        "+-beta). If the change is deliberate, update the arm's nan_results.",
     )
     if bf16:
         _assert_finite_lanes(
