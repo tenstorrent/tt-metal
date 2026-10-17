@@ -18,9 +18,12 @@
 //              DST_INDEX and STALE_TILE. STALE_TILE was not rewritten and must still pack as
 //              zeros; stale data coming out means the re-validation hit STALE_TILE. With
 //              PROBE_COPY off, section 2 packs the two tiles without any copy and is the control
-//              that packing a released tile yields zeros at all.
+//              that packing a released tile yields zeros at all. With PARK_OFFSET the math dest
+//              offset is left on STALE_TILE right before the copy, as a SrcRegs-path op targeting
+//              that tile leaves it: the datacopy must re-pin the offset before its ZEROACC or the
+//              re-validation lands relative to STALE_TILE.
 //
-// Compile-time: dest_sync, is_fp32_dest_acc_en, unpack_to_dest, PROBE_COPY, STALE_TILE.
+// Compile-time: dest_sync, is_fp32_dest_acc_en, unpack_to_dest, PROBE_COPY, PARK_OFFSET, STALE_TILE.
 // Runtime: DST_INDEX (the probe tile), buffer_A[0] = stale-tile data, buffer_A[1] = probe data,
 // buffer_Res[0..2] = STALE_TILE after section 1, DST_INDEX after section 2, STALE_TILE after section 2.
 
@@ -109,6 +112,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Section 2: write the probe tile only; the stale tile is left as the release marked it.
     _llk_math_wait_for_dest_available_<dest_sync>();
+    if constexpr (PARK_OFFSET)
+    {
+        // What a preceding SrcRegs-path op on STALE_TILE leaves in the math dest offset.
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(STALE_TILE);
+    }
     if constexpr (PROBE_COPY)
     {
         _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(

@@ -24,6 +24,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    InputOutputFormat,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -299,8 +300,10 @@ def test_eltwise_unary_datacopy_sub_byte_bfp(
 # packed, released) and packed again after the probe copy: it must come out as zeros, and its old
 # data coming back means the re-validation hit it.
 
-ZERO_FLAG_PROBE_FORMATS = input_output_formats([DataFormat.Float32], same=True)
+ZERO_FLAG_PROBE_FORMATS = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
 ZERO_FLAG_PROBE_DST_INDICES = list(range(8))
+# The control needs one dst_index; 5 is the case the original report named (stale tile 1).
+ZERO_FLAG_PROBE_CONTROL_DST_INDEX = 5
 
 
 def _stale_tile_for(dst_index: int) -> int:
@@ -309,7 +312,9 @@ def _stale_tile_for(dst_index: int) -> int:
     return dst_index ^ 4
 
 
-def _run_zero_flag_probe(formats, dst_index: int, probe_copy: bool):
+def _run_zero_flag_probe(
+    formats, dst_index: int, probe_copy: bool, park_offset: bool = False
+):
     stale_tile = _stale_tile_for(dst_index)
     torch_format = format_dict[formats.output_format]
     tile_elements = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
@@ -335,7 +340,9 @@ def _run_zero_flag_probe(formats, dst_index: int, probe_copy: bool):
             DEST_SYNC(
                 DestSync.Full
             ),  # 32-bit Dest tiles 0..7 only exist with SyncFull.
-            DATACOPY_ZERO_FLAG_PROBE(probe_copy=probe_copy, stale_tile=stale_tile),
+            DATACOPY_ZERO_FLAG_PROBE(
+                probe_copy=probe_copy, park_offset=park_offset, stale_tile=stale_tile
+            ),
         ],
         runtimes=[DEST_INDEX(dst_index)],
         variant_stimuli=StimuliConfig(
@@ -376,7 +383,21 @@ def test_eltwise_unary_datacopy_unpack_to_dest_zero_flag(formats, dst_index):
 @blackhole_only
 @parametrize(
     formats=ZERO_FLAG_PROBE_FORMATS,
-    dst_index=[5],
+    dst_index=ZERO_FLAG_PROBE_DST_INDICES,
+)
+def test_eltwise_unary_datacopy_unpack_to_dest_zero_flag_parked_offset(
+    formats, dst_index
+):
+    # The math dest offset is left on the stale tile right before the copy, as a
+    # SrcRegs-path op targeting it would leave it; the copy must re-pin the offset
+    # before its ZEROACC or the re-validation lands relative to the stale tile.
+    _run_zero_flag_probe(formats, dst_index, probe_copy=True, park_offset=True)
+
+
+@blackhole_only
+@parametrize(
+    formats=ZERO_FLAG_PROBE_FORMATS,
+    dst_index=ZERO_FLAG_PROBE_CONTROL_DST_INDEX,
 )
 def test_eltwise_unary_datacopy_unpack_to_dest_zero_flag_control(formats, dst_index):
     # No probe copy: a released, unrewritten tile packs as zeros on its own.
