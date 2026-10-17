@@ -1859,8 +1859,10 @@ constexpr tt::DataFormat kNarrowRowFormat = tt::DataFormat::Float16_b;
 constexpr std::uint32_t kNarrowRowDatumBytes = tt::datum_size(kNarrowRowFormat);
 
 // Builds the program for pack_untilize_narrow_row_guard.cpp, the init-only kernel, for row_num_datums across
-// full_ct_dim tile columns on one core with a full-tile bf16 CB pair; the caller compiles or launches it.
-Program make_pack_untilize_narrow_row_guard_program(std::uint32_t row_num_datums, std::uint32_t full_ct_dim) {
+// full_ct_dim tile columns in blocks of block_ct_dim (default: one block) on one core with a full-tile bf16 CB
+// pair; the caller compiles or launches it.
+Program make_pack_untilize_narrow_row_guard_program(
+    std::uint32_t row_num_datums, std::uint32_t full_ct_dim, std::optional<std::uint32_t> block_ct_dim = std::nullopt) {
     const CoreCoord core{0, 0};
     Program program = CreateProgram();
     const std::uint32_t tile_bytes = tt::tile_size(kNarrowRowFormat);
@@ -1874,7 +1876,7 @@ Program make_pack_untilize_narrow_row_guard_program(std::uint32_t row_num_datums
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize_narrow_row_guard.cpp",
         core,
-        ComputeConfig{.compile_args = {row_num_datums, full_ct_dim}});
+        ComputeConfig{.compile_args = {row_num_datums, full_ct_dim, block_ct_dim.value_or(full_ct_dim)}});
     return program;
 }
 
@@ -1955,18 +1957,32 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeNarrowRowWidths) {
     }
 }
 
-// Compile-time contract on Wormhole and Blackhole: a narrow row wider than one face does not compile, one face
-// does. 20 bf16 datums (40 bytes) would also fail Blackhole's 16-byte row-width check; 24 datums (48 bytes)
-// would pass it, and is still packed wrong on both architectures because the per-row PACR reads row_num_datums
-// consecutive datums of one face. Quasar's compute API rejects narrow_row itself, for every width.
+// Compile-time contract on Wormhole and Blackhole. Width: a narrow row wider than one face does not compile, one
+// face does; 20 bf16 datums (40 bytes) would also fail Blackhole's 16-byte row-width check, 24 datums (48 bytes)
+// would pass it and is still packed wrong on both architectures because the per-row PACR reads row_num_datums
+// consecutive datums of one face. Blocks: Blackhole packs a row split over several blocks only at a full face
+// width (the wrapper's block column offset is in face-column widths), Wormhole packs exactly one tile per call.
+// Quasar's compute API rejects narrow_row itself, for every width.
 TEST_F(LLKMeshDeviceSingleCardFixture, PackUntilizeNarrowRowRejectsRowsWiderThanAFaceAtCompileTime) {
-    if (detail::detect_arch() == tt::ARCH::QUASAR) {
+    const auto arch = detail::detect_arch();
+    if (arch == tt::ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar has no narrow-row pack_untilize";
     }
-    for (const std::uint32_t row_num_datums : {16u, 20u, 24u}) {
-        SCOPED_TRACE(fmt::format("row_num_datums={}", row_num_datums));
-        Program program = make_pack_untilize_narrow_row_guard_program(row_num_datums, 1 /*full_ct_dim*/);
-        if (row_num_datums <= constants::FACE_WIDTH) {
+    struct Case {
+        std::uint32_t row_num_datums;
+        std::uint32_t block_ct_dim;
+        std::uint32_t full_ct_dim;
+    };
+    for (const auto [row_num_datums, block_ct_dim, full_ct_dim] :
+         std::initializer_list<Case>{{16, 1, 1}, {20, 1, 1}, {24, 1, 1}, {8, 1, 2}, {12, 1, 2}, {16, 1, 2}}) {
+        SCOPED_TRACE(fmt::format(
+            "row_num_datums={}, block_ct_dim={}, full_ct_dim={}", row_num_datums, block_ct_dim, full_ct_dim));
+        const bool one_face_wide = row_num_datums <= constants::FACE_WIDTH;
+        const bool blocks_accepted = arch == tt::ARCH::BLACKHOLE
+                                         ? (block_ct_dim == full_ct_dim || row_num_datums == constants::FACE_WIDTH)
+                                         : (block_ct_dim == 1 && full_ct_dim == 1);
+        Program program = make_pack_untilize_narrow_row_guard_program(row_num_datums, full_ct_dim, block_ct_dim);
+        if (one_face_wide && blocks_accepted) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
         } else {
             EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);

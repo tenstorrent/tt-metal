@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import pytest
 import torch
 
@@ -26,14 +28,17 @@ DTYPES = {
 }
 
 
-def _height_sharded_rm_input(device, h, w, dtype, c=4):
+def _height_sharded_rm_input(device, h, w, dtype, c=None):
     """[1, c, h, w] ROW_MAJOR tensor, height-sharded on one core so every H x W slab is in the shard.
 
     This selects the sharded row-major WH transpose factory, which packs the output rows (h datums wide when
     h < 32) through the narrow-row untilize. The native sharded factory is only chosen when the row-major
-    shard holds a tile multiple (1024) of elements, hence c slabs per shard: (c*h) * w and the output's
-    (c*w) * h are multiples of 1024 for every h used here.
+    shard holds a tile multiple (1024) of elements, hence c slabs per shard: c defaults to the smallest count
+    (at least 4, so several slabs are always transposed) for which (c*h) * w, and so the output's (c*w) * h, is
+    a multiple of 1024.
     """
+    if c is None:
+        c = max(4, 1024 // math.gcd(1024, h * w))
     torch.manual_seed(2005)
     torch_input = torch.rand((1, c, h, w), dtype=DTYPES[dtype])
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -54,19 +59,22 @@ def _height_sharded_rm_input(device, h, w, dtype, c=4):
 @skip_on_quasar
 @pytest.mark.parametrize("transpose_op", TRANSPOSE_OPS)
 @pytest.mark.parametrize(
-    "dtype, h",
+    "dtype, h, w",
     [
-        # bf16: 16- and 32-byte rows.
-        (ttnn.bfloat16, 8),
-        (ttnn.bfloat16, 16),
+        # bf16: 16- and 32-byte rows; W a tile multiple, or W % 32 == H % 32 (the one partial-W case the
+        # factory's output paging keeps in step with the narrow pack).
+        (ttnn.bfloat16, 8, 64),
+        (ttnn.bfloat16, 16, 64),
+        (ttnn.bfloat16, 8, 40),
+        (ttnn.bfloat16, 16, 48),
+        (ttnn.bfloat16, 16, 80),
         # fp32: 16-, 32-, 48- and 64-byte rows; 12 and 16 datums are only 16-byte multiples at 4 bytes a datum.
-        (ttnn.float32, 4),
-        (ttnn.float32, 8),
-        (ttnn.float32, 12),
-        (ttnn.float32, 16),
+        (ttnn.float32, 4, 64),
+        (ttnn.float32, 8, 64),
+        (ttnn.float32, 12, 64),
+        (ttnn.float32, 16, 64),
     ],
 )
-@pytest.mark.parametrize("w", [64])
 def test_transpose_hw_sharded_rm_narrow_row_aligned(device, transpose_op, dtype, h, w):
     """Narrow output rows up to one face wide whose byte width is a multiple of 16 transpose exactly."""
     if transpose_op is ttnn.experimental.quasar.transpose and dtype == ttnn.float32:
@@ -84,26 +92,29 @@ def test_transpose_hw_sharded_rm_narrow_row_aligned(device, transpose_op, dtype,
 @skip_on_quasar
 @pytest.mark.parametrize("transpose_op", TRANSPOSE_OPS)
 @pytest.mark.parametrize(
-    "dtype, h, message",
+    "dtype, h, w, message",
     [
         # 8- and 24-byte rows cannot be packed at the 16-byte page pitch of the sharded output.
-        (ttnn.bfloat16, 4, "must be a multiple of the 16-byte buffer alignment"),
-        (ttnn.bfloat16, 12, "must be a multiple of the 16-byte buffer alignment"),
+        (ttnn.bfloat16, 4, 64, "must be a multiple of the 16-byte buffer alignment"),
+        (ttnn.bfloat16, 12, 64, "must be a multiple of the 16-byte buffer alignment"),
         # 40- and 48-byte rows are wider than one face (checked before the alignment).
-        (ttnn.bfloat16, 20, "wider than one face"),
-        (ttnn.bfloat16, 24, "wider than one face"),
+        (ttnn.bfloat16, 20, 64, "wider than one face"),
+        (ttnn.bfloat16, 24, 64, "wider than one face"),
         # Above one tile and not a multiple of it: every tile column is clipped to H % 32 datums.
-        (ttnn.bfloat16, 36, "every tile column of the output row would be clipped to 4 datums"),
-        (ttnn.bfloat16, 48, "every tile column of the output row would be clipped to 16 datums"),
+        (ttnn.bfloat16, 36, 64, "every tile column of the output row would be clipped to 4 datums"),
+        (ttnn.bfloat16, 48, 64, "every tile column of the output row would be clipped to 16 datums"),
         # fp32: 20 datums are 80 bytes, 16-byte aligned, and still wider than one face.
-        (ttnn.float32, 20, "wider than one face"),
+        (ttnn.float32, 20, 64, "wider than one face"),
+        # W % 32 != H % 32: the output pages ((W % 32) x (H % 32) datums) and the narrow pack fall out of step.
+        (ttnn.bfloat16, 16, 40, "only stay in step when the remainders agree"),
+        (ttnn.bfloat16, 8, 48, "only stay in step when the remainders agree"),
+        (ttnn.bfloat16, 16, 8, "only stay in step when the remainders agree"),
     ],
 )
-@pytest.mark.parametrize("w", [64])
 def test_transpose_hw_sharded_rm_narrow_row_rejects_unsupported_heights(
-    device, expect_error, transpose_op, dtype, h, message, w
+    device, expect_error, transpose_op, dtype, h, w, message
 ):
-    """Heights the narrow-row untilize packs wrongly (on Wormhole and Blackhole) are rejected on the host."""
+    """Shapes the narrow-row untilize packs wrongly (on Wormhole and Blackhole) are rejected on the host."""
     _, tt_input = _height_sharded_rm_input(device, h, w, dtype)
     with expect_error(RuntimeError, message):
         transpose_op(tt_input, 2, 3)

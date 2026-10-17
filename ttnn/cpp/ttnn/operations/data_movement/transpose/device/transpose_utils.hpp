@@ -36,9 +36,10 @@ tt::tt_metal::ShardSpec generate_transpose_shard_spec(
     std::optional<tt::tt_metal::ShardOrientation> orientation_hint = std::nullopt,
     OutputTiling output_tiling = OutputTiling::Default);
 
-// Rejects the input heights the sharded row-major WH factory (transpose_wh_rm_sharded.cpp, also the
-// ttnn.experimental.quasar fork) packs wrong through the narrow-row untilize. Call once that factory is
-// selected and H % TILE_HEIGHT != 0; throws (TT_FATAL) with the shape and the remedy.
+// Rejects the input heights the sharded row-major WH factory packs wrong through the narrow-row untilize
+// (transpose_wh_rm.cpp built with SHARDED; the ttnn.experimental.quasar fork's transpose_wh_rm_sharded.cpp is
+// the same path). Call once that factory is selected and H % TILE_HEIGHT != 0; throws (TT_FATAL) with the
+// shape and the remedy.
 void validate_sharded_rm_transpose_narrow_row_height(const Tensor& input_tensor);
 
 }  // namespace ttnn::operations::data_movement::transpose

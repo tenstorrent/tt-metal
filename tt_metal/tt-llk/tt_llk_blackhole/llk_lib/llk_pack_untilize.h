@@ -286,7 +286,8 @@ inline void _llk_pack_untilize_init_(
  *
  * @tparam block_ct_dim: Number of input tiles per block.
  * @tparam full_ct_dim: Total number of input tiles across all blocks.
- * @tparam narrow_row: True when packing at most FACE_C_DIM datums per row (see row_num_datums).
+ * @tparam narrow_row: True when packing at most FACE_C_DIM datums per row (width set by row_num_datums in
+ *                     @ref _llk_pack_untilize_init_).
  * @tparam tile_dst_ct_offset: Compile-time column-tile offset into the destination register.
  * @tparam dense: True to pack two tiles into one dest region; requires num_faces == 2 and even block_ct_dim.
  * @param address: L1 destination base address for the block.

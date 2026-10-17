@@ -197,10 +197,16 @@ ShardSpec generate_transpose_shard_spec(
 // - a row byte width that is not a multiple of the L1 alignment: the sharded output stores each H-datum row at
 //   the aligned page pitch, but Wormhole packs the rows at their byte width and Blackhole at a 16-byte-floored
 //   pitch (its per-row L1 advance is in 16-byte units; the LLK init asserts the same). The factory needs native
-//   sharding, which is L1-only, so the L1 alignment is the page pitch.
+//   sharding, which is L1-only, so the L1 alignment is the page pitch;
+// - W % TILE_WIDTH != 0 with W % TILE_WIDTH != H % TILE_HEIGHT: the factory sizes the output page as
+//   (W % TILE_WIDTH) * (H % TILE_HEIGHT) datums and pushes TILE_HEIGHT / (H % TILE_HEIGHT) pages per non-last tile
+//   row, i.e. TILE_HEIGHT * (W % TILE_WIDTH) datums, while the narrow pack writes TILE_HEIGHT * (H % TILE_HEIGHT)
+//   datums there, so the write pointer and the packed data only stay in step when the two remainders agree.
 void validate_sharded_rm_transpose_narrow_row_height(const Tensor& input_tensor) {
     const uint32_t logical_h = input_tensor.logical_shape()[-2];
+    const uint32_t logical_w = input_tensor.logical_shape()[-1];
     const uint32_t row_num_datums = logical_h % tt::constants::TILE_HEIGHT;
+    const uint32_t w_remainder = logical_w % tt::constants::TILE_WIDTH;
     TT_FATAL(
         logical_h < tt::constants::TILE_HEIGHT,
         "Sharded row-major transpose: H {} is above one tile ({}) and not a multiple of it; every tile column of the "
@@ -230,6 +236,20 @@ void validate_sharded_rm_transpose_narrow_row_height(const Tensor& input_tensor)
         alignment,
         alignment,
         tt::constants::TILE_HEIGHT);
+    TT_FATAL(
+        w_remainder == 0 || w_remainder == row_num_datums,
+        "Sharded row-major transpose: W {} leaves {} datums past the last full tile while H {} leaves {}; the sharded "
+        "output pages are {} x {} datums and the narrow-row untilize writes {} x {} datums per tile row, so the two "
+        "only stay in step when the remainders agree. Pad W to a multiple of {} or use an interleaved input.",
+        logical_w,
+        w_remainder,
+        logical_h,
+        row_num_datums,
+        w_remainder,
+        row_num_datums,
+        tt::constants::TILE_HEIGHT,
+        row_num_datums,
+        tt::constants::TILE_WIDTH);
 }
 
 }  // namespace ttnn::operations::data_movement::transpose

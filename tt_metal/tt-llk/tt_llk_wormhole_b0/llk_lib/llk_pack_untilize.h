@@ -168,11 +168,11 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @note On the math thread, @ref _llk_math_eltwise_unary_datacopy_ (A2D) populates the dest register this packer reads.
  * @note Pair with @ref _llk_pack_untilize_uninit_ after the matching @ref _llk_pack_untilize_ execute calls.
- * @note With narrow_row and several blocks (block_ct_dim < full_ct_dim), keep row_num_datums == FACE_C_DIM and
- * num_faces == 1: the block column offset the wrapper adds to the L1 address and the per-row pitch programmed here
- * are in face-column widths (FACE_C_DIM datums per face column), which only equal block_ct_dim * row_num_datums for
- * a one-face tile packed at a full face width; any other narrow row lands its second block at the wrong column.
- * Checked by static_assert (row_num_datums) and LLK_ASSERT (num_faces).
+ * @note narrow_row packs exactly one full-height four-face tile: block_ct_dim == full_ct_dim == 1, num_faces == 4,
+ * face_r_dim == FACE_R_DIM. The narrow MOP is one pass of TILE_R_DIM / 4 PACRs with no tile advance, the four packers
+ * each take eight rows (PACKCNT == num_faces), and @ref _llk_pack_untilize_ neither replays the row-advance buffer nor
+ * closes a partial block for it, so a wider block, several blocks or fewer faces leave rows unpacked. Checked by
+ * static_assert (dims) and LLK_ASSERT (faces).
  */
 template <
     std::uint32_t block_ct_dim,
@@ -190,15 +190,14 @@ inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const 
         // A narrow row is at most one face wide: the per-row PACR (SETADCXX below) reads row_num_datums consecutive
         // datums of one face, so a wider row reads past the face and is packed wrong (measured: 24 bf16 datums).
         static_assert(row_num_datums <= FACE_C_DIM, "row_num_datums must be at most FACE_C_DIM for narrow_row packing");
-        // The wrapper's block column offset (llk_pack_untilize) and the per-row pitch programmed below are in
-        // face-column widths, which equal block_ct_dim * row_num_datums only for a one-face tile packed at a full face
-        // width (num_faces checked below); a narrower row must span exactly one block.
-        static_assert(
-            block_ct_dim == full_ct_dim || row_num_datums == FACE_C_DIM, "narrow_row packing with several blocks requires row_num_datums == FACE_C_DIM");
+        // The narrow MOP (see _llk_pack_untilize_mop_config_) is one pass of TILE_R_DIM / 4 PACRs with no tile
+        // advance, and _llk_pack_untilize_ runs it once per call without the row-advance replay or a partial-block
+        // close, so only a single tile per call is packed: one block of one tile.
+        static_assert(block_ct_dim == 1 && full_ct_dim == 1, "narrow_row packing requires block_ct_dim == full_ct_dim == 1");
     }
-    LLK_ASSERT(
-        !narrow_row || block_ct_dim == full_ct_dim || num_faces == 1,
-        "narrow_row packing with several blocks requires num_faces == 1 (block column offset is in face-column widths)");
+    // Each PACR of the narrow MOP packs one row per selected packer (PACKCNT == num_faces at a full face height), and
+    // the four packers' L1 addresses are eight rows apart, so fewer faces or a short face leave rows unpacked.
+    LLK_ASSERT(!narrow_row || (num_faces == 4 && face_r_dim == FACE_R_DIM), "narrow_row packing requires four full-height faces");
 
     _llk_pack_untilize_configure_addrmod_<diagonal, narrow_row>();
 
