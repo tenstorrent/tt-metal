@@ -148,6 +148,10 @@ std::string wait_for_watcher_exception() {
     return exception;
 }
 
+// Watcher poll period for the assert fixture below; a clean run is given one more poll before its
+// watcher state is read.
+constexpr int kWatcherIntervalMs = 250;
+
 // A [16, 32] activation tile is a legal CB tile but outside the custom_mm family's
 // [1|2|4|8, 32] in0 contract. The typed LLKOperand overloads reject it at compile
 // time; the CB-id overloads read the face height and face grid at run time, so their
@@ -159,17 +163,17 @@ std::string wait_for_watcher_exception() {
 // which blocks the core's re-initialization.)
 constexpr std::uint32_t kGuardRows = 16;
 
-// mode: 0 custom_mm, 1 compressed_custom_mm. thread: 0 unpack init (TRISC0), 1 math init (TRISC1).
-// in0_tile: the [kGuardRows, 32] in0 CB tile, 16x16 faces or an 8x16 face grid.
-void run_custom_mm_rows_guard(
-    distributed::MeshDevice& mesh, std::uint32_t mode, std::uint32_t thread, const Tile& in0_tile) {
-    // A legal CB-id height must not trip the guard.
-    run_custom_mm_operands(mesh, 8 /*rows*/, true /*mixed*/, mode, false /*full_sync*/);
-    EXPECT_TRUE(MetalContext::instance().watcher_server()->exception_message().empty())
-        << "rows=8 tripped the watcher: " << MetalContext::instance().watcher_server()->exception_message();
+// The tallest legal in0 tile: the positive control for the guards.
+constexpr std::uint32_t kLegalRows = 8;
 
-    // Init-only kernel, one thread, on the [kGuardRows, 32] in0 CB: that init must assert.
-    const Tile& tiny = in0_tile;
+// mode: 0 custom_mm, 1 compressed_custom_mm.
+// thread: 0 unpack init (TRISC0), 1 math init (TRISC1), 2 the 2.0 mixed-overload init block (CB-id in0,
+// typed in1), whose unpack and math parts both run.
+// Runs custom_mm_operands_guard.cpp, the init-only kernel, on an in0 CB of in0_tile. Returns true when the
+// program completed; false when the wait aborted because the watcher reported an error (the only exception
+// tolerated), leaving the watcher state for the caller to read.
+bool run_custom_mm_guard_kernel(
+    distributed::MeshDevice& mesh, std::uint32_t mode, std::uint32_t thread, const Tile& in0_tile) {
     const Tile full;
     const auto weight_format = mode == 1 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
     const CoreCoord core{0, 0};
@@ -181,7 +185,7 @@ void run_custom_mm_rows_guard(
             core,
             CircularBufferConfig(bytes, {{index, format}}).set_page_size(index, bytes).set_tile_dims(index, tile));
     };
-    make_cb(tt::CBIndex::c_0, tt::DataFormat::Float16_b, tiny);
+    make_cb(tt::CBIndex::c_0, tt::DataFormat::Float16_b, in0_tile);
     make_cb(tt::CBIndex::c_1, weight_format, full);
     CreateKernel(
         program,
@@ -196,20 +200,48 @@ void run_custom_mm_rows_guard(
     const distributed::MeshCoordinate zero(0, 0);
     workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
     auto& cq = mesh.mesh_command_queue();
-    // The wait aborts once the watcher reports the assert, but the program may complete first (no
-    // guard), so the throw is tolerated here and the watcher state is what is checked.
     try {
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
     } catch (const std::runtime_error& e) {
         EXPECT_NE(std::string(e.what()).find("Aborting wait due to watcher error"), std::string::npos) << e.what();
+        return false;
     }
+    return true;
+}
+
+// in0_tile: the [kGuardRows, 32] in0 CB tile, 16x16 faces or an 8x16 face grid. That init must assert.
+void run_custom_mm_rows_guard(
+    distributed::MeshDevice& mesh, std::uint32_t mode, std::uint32_t thread, const Tile& in0_tile) {
+    // A legal CB-id height must not trip the guard (this product run reaches the 2.0 mixed init blocks).
+    run_custom_mm_operands(mesh, kLegalRows, true /*mixed*/, mode, false /*full_sync*/);
+    EXPECT_TRUE(MetalContext::instance().watcher_server()->exception_message().empty())
+        << "rows=8 tripped the watcher: " << MetalContext::instance().watcher_server()->exception_message();
+
+    // The program may complete (no guard), so completion is not checked here; the watcher state is.
+    run_custom_mm_guard_kernel(mesh, mode, thread, in0_tile);
     const std::string exception = wait_for_watcher_exception();
     ASSERT_FALSE(exception.empty()) << "Timeout waiting for the watcher to report the in0 tile height assert";
     EXPECT_NE(exception.find("tripped an assert"), std::string::npos) << exception;
     EXPECT_NE(exception.find("custom_mm_operands_guard"), std::string::npos) << exception;
-    // The watcher records the first assert per core; only the chosen thread ran an init.
-    EXPECT_NE(exception.find(thread == 0 ? "TRISC0" : "TRISC1"), std::string::npos) << exception;
+    // The watcher records the first assert per core. With one init thread that names the RISC; the mixed
+    // init block asserts on both, so no RISC is attributed.
+    if (thread != 2) {
+        EXPECT_NE(exception.find(thread == 0 ? "TRISC0" : "TRISC1"), std::string::npos) << exception;
+    }
+}
+
+// The same init on a legal [kLegalRows, 32] in0 must complete with a clean watcher. The product test runs the
+// typed overloads and never reaches the CB-id wrappers, so this is the only place a wrapper assert that also
+// fired on a legal tile would show, before it tripped the callers that use the CB-id path under LLK asserts.
+void run_custom_mm_legal_guard(distributed::MeshDevice& mesh, std::uint32_t mode, std::uint32_t thread) {
+    ASSERT_TRUE(run_custom_mm_guard_kernel(mesh, mode, thread, Tile({kLegalRows, 32})))
+        << "the init on a legal [8, 32] in0 did not complete: "
+        << MetalContext::instance().watcher_server()->exception_message();
+    // One more watcher poll after completion, so a late report is not missed.
+    std::this_thread::sleep_for(std::chrono::milliseconds(2 * kWatcherIntervalMs));
+    EXPECT_TRUE(MetalContext::instance().watcher_server()->exception_message().empty())
+        << MetalContext::instance().watcher_server()->exception_message();
 }
 
 }  // namespace
@@ -220,8 +252,6 @@ void run_custom_mm_rows_guard(
 // device opens, and a tripped assert parks a TRISC, so the device is reopened for every test.
 class LLKBlackholeAssertFixture : public MeshDispatchFixture {
 public:
-    static constexpr int kWatcherIntervalMs = 250;
-
     // No suite-shared device: the options below change the firmware build, so the device must open
     // after they are set, once per test.
     static void SetUpTestSuite() {}
@@ -313,8 +343,42 @@ TEST_F(LLKBlackholeAssertFixture, CustomMatmulUnpackInitRejectsFourFaceActivatio
     run_custom_mm_rows_guard(*devices_.at(0), 0 /*mode*/, 0 /*thread*/, Tile::from_face_grid(2, 2, {8, 16}));
 }
 
+TEST_F(LLKBlackholeAssertFixture, CustomMatmulMathInitRejectsFourFaceActivation) {
+    run_custom_mm_rows_guard(*devices_.at(0), 0 /*mode*/, 1 /*thread*/, Tile::from_face_grid(2, 2, {8, 16}));
+}
+
 TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulUnpackInitRejectsFourFaceActivation) {
     run_custom_mm_rows_guard(*devices_.at(0), 1 /*mode*/, 0 /*thread*/, Tile::from_face_grid(2, 2, {8, 16}));
+}
+
+TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulMathInitRejectsFourFaceActivation) {
+    run_custom_mm_rows_guard(*devices_.at(0), 1 /*mode*/, 1 /*thread*/, Tile::from_face_grid(2, 2, {8, 16}));
+}
+
+// The 2.0 mixed-overload init blocks (CB-id in0, typed in1) carry the same guard.
+TEST_F(LLKBlackholeAssertFixture, CustomMatmulMixedInitRejectsFourFaceActivation) {
+    run_custom_mm_rows_guard(*devices_.at(0), 0 /*mode*/, 2 /*thread*/, Tile::from_face_grid(2, 2, {8, 16}));
+}
+
+TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulMixedInitRejectsFourFaceActivation) {
+    run_custom_mm_rows_guard(*devices_.at(0), 1 /*mode*/, 2 /*thread*/, Tile::from_face_grid(2, 2, {8, 16}));
+}
+
+// Positive controls: the same wrapper inits on a legal [8, 32] in0 complete with the watcher clean.
+TEST_F(LLKBlackholeAssertFixture, CustomMatmulUnpackInitAcceptsEightRowActivation) {
+    run_custom_mm_legal_guard(*devices_.at(0), 0 /*mode*/, 0 /*thread*/);
+}
+
+TEST_F(LLKBlackholeAssertFixture, CustomMatmulMathInitAcceptsEightRowActivation) {
+    run_custom_mm_legal_guard(*devices_.at(0), 0 /*mode*/, 1 /*thread*/);
+}
+
+TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulUnpackInitAcceptsEightRowActivation) {
+    run_custom_mm_legal_guard(*devices_.at(0), 1 /*mode*/, 0 /*thread*/);
+}
+
+TEST_F(LLKBlackholeAssertFixture, CompressedCustomMatmulMathInitAcceptsEightRowActivation) {
+    run_custom_mm_legal_guard(*devices_.at(0), 1 /*mode*/, 1 /*thread*/);
 }
 
 }  // namespace tt::tt_metal
