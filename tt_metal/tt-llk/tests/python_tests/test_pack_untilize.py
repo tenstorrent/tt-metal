@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from fractions import Fraction
+
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
@@ -153,6 +155,22 @@ def _run_pack_untilize(
         tile_dimensions,
         BlocksCalculationAlgorithm.Untilize,
     )
+
+    if narrow_row:
+        # The per-row L1 stride and the block start are kept in 16 B units: Blackhole adds the stride after
+        # every row, Wormhole only for partial blocks (a full-width block streams its rows contiguously), so a
+        # narrow block row that is not a multiple of 16 B cannot be expressed there (the LLK asserts it).
+        full_ct_dim = input_dimensions[1] // tile_dimensions[1]
+        block_row_bytes = (
+            Fraction(formats.output_format.size) * block_ct_dim * row_num_datums
+        )
+        if block_row_bytes % 16 != 0 and (
+            get_chip_architecture() == ChipArchitecture.BLACKHOLE
+            or block_ct_dim != full_ct_dim
+        ):
+            pytest.skip(
+                f"a narrow block row of {block_row_bytes} B is not a multiple of the 16 B L1 address unit"
+            )
 
     stimuli_kwargs = {}
     if dense_tiles:
