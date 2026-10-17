@@ -56,6 +56,12 @@
 #ifdef SE_DBG
 #include "api/debug/dprint.h"
 #endif
+// (perf probe SE_H_NODATA: the h slices are not written to the down cores - the counters still move; garbage y)
+#ifdef SE_H_NODATA
+#define SE_H_WRITE(...) ((void)0)
+#else
+#define SE_H_WRITE(...) noc_async_write(__VA_ARGS__)
+#endif
 #ifdef SE_ZONES
 #include "tools/profiler/kernel_profiler.hpp"
 #define SE_MARK(name)            \
@@ -108,7 +114,17 @@ void kernel_main() {
     constexpr uint32_t x_per_v = get_compile_time_arg_val(30);
     constexpr uint32_t xp = get_compile_time_arg_val(33);
     constexpr uint32_t groups = get_compile_time_arg_val(34);
+#ifdef SE_HG_NU  // 16-column units: NCC / G cores x NU units = the group's K-tiles x 2
+    constexpr uint32_t hg_nu = SE_HG_NU, hpc = SE_HPC;
+    constexpr uint32_t h_all_tiles = (ncc / groups) * hg_nu * mt / 2;
+    static_assert(((ncc / groups) * hg_nu) % 2 == 0);
+#ifdef SE_HU
+    static_assert(false, "SE_HG_NU: no h units");
+#endif
+#else
+    constexpr uint32_t hpc = np;                                // h tiles a row
     constexpr uint32_t h_all_tiles = (ncc / groups) * np * mt;  // the group's h: NCC / G cores x NP K-tiles, MT rows
+#endif
     constexpr uint32_t half_bytes = h_all_tiles * h_tile_bytes;
     constexpr uint32_t h_piece_bytes = half_bytes / h_pieces;
 #if defined(SE_GU_ONLY) && defined(SE_HU)
@@ -129,7 +145,29 @@ void kernel_main() {
     const uint32_t pxy = get_arg_val<uint32_t>(9), sxy = get_arg_val<uint32_t>(10);
     const bool is_coord = get_arg_val<uint32_t>(8) != 0;
     auto sem = [](uint32_t id) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id)); };
+#ifdef SE_DRISC
+    // DRISC mode (se_drisc.hpp): the forwarder is a DRAM core that polls this core's grants (RT 1: the semaphore
+    // counting them, zero at launch) - no NoC traffic from here (a write on the x multicast's NOC from its
+    // destinations is the wedge pattern above)
+    volatile tt_l1_ptr uint32_t* granted_word = sem(credit_sem_id);
+    auto grant = [&](uint32_t n) { *granted_word = *granted_word + n; };
+#elif defined(SE_DRISC_DUAL)
+    // the slot has both a Tensix reader (RT 0 / 1) and a DRAM core; per call (the same rule in every kernel) small
+    // counts go to the DRAM core, which polls the local grant counter (semaphore SE_GRANT_SEM)
     const uint64_t credit_noc = get_noc_addr(fxy >> 16, fxy & 0xFFFF, get_semaphore(credit_sem_id));
+    volatile tt_l1_ptr uint32_t* granted_word = sem(SE_GRANT_SEM);
+    bool drisc_call = false;  // (set once the schedule is loaded, before any grant)
+    auto grant = [&](uint32_t n) {
+        if (drisc_call) {
+            *granted_word = *granted_word + n;
+        } else {
+            noc_semaphore_inc(credit_noc, n);
+        }
+    };
+#else
+    const uint64_t credit_noc = get_noc_addr(fxy >> 16, fxy & 0xFFFF, get_semaphore(credit_sem_id));
+    auto grant = [&](uint32_t n) { noc_semaphore_inc(credit_noc, n); };
+#endif
     const uint64_t done_noc = get_noc_addr(cxy >> 16, cxy & 0xFFFF, get_semaphore(done_sem_id));
     volatile tt_l1_ptr uint32_t* gath_sem = sem(gath_sem_id);
     const uint32_t peer0 = 21 + nh;
@@ -140,6 +178,9 @@ void kernel_main() {
     SeDyn dyn;
     se_dyn_load<num_e_dyn>(dyn, peer0, get_write_ptr(tt::CBIndex::c_7), mt * 32);
     se_dyn_publish(dyn, tt::CBIndex::c_6);
+#ifdef SE_DRISC_DUAL
+    drisc_call = dyn.max_cnt <= SE_DRISC_MAXCNT;
+#endif
     const uint32_t total_w = dyn.n_load * (total_w_ct / num_e_dyn);  // gate/up loads
     const uint32_t num_v = dyn.num_v;
 #else
@@ -201,7 +242,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* harr_sem[2] = {sem(harr_sem_id), sem(harr1_sem_id)};
 
     if (!is_b) {
-        noc_semaphore_inc(credit_noc, w_slots);  // every landing slot starts free
+        grant(w_slots);  // every landing slot starts free
     }
     uint32_t granted = w_slots, pushed = 0;
     uint32_t x_pub = 0, x_cons = 0, x_rep = 0;
@@ -224,8 +265,15 @@ void kernel_main() {
     uint32_t iters = 0;
 #ifdef SE_GU_ONLY
     const uint32_t my_group = get_arg_val<uint32_t>(14);
+#ifdef SE_NO_MATH
+    // (no math: h no longer waits for x, so stay until every x block is published to the unpacker)
+    constexpr bool all_x = true;
+#else
+    constexpr bool all_x = false;
+#endif
     while (h_sent < num_v || (nsucc > 0 && x_fwd[0] < num_v * x_per_v * xp) ||
-           (nsucc > 1 && x_fwd[1] < num_v * x_per_v * xp) || (!is_b && pushed < total_w)) {
+           (nsucc > 1 && x_fwd[1] < num_v * x_per_v * xp) || (!is_b && pushed < total_w) ||
+           (all_x && x_pub < num_v * x_per_v)) {
 #else
     while (out_done < num_v) {
 #endif
@@ -251,7 +299,7 @@ void kernel_main() {
 #endif
         while (!is_b && granted < total_w && cb_pages_reservable_at_back(in1_cb, (granted - pushed + 1) * slot) &&
                (no_partner || *bcopy >= granted + 1 - w_slots)) {
-            noc_semaphore_inc(credit_noc, 1);
+            grant(1);
             ++granted;
         }
         while (!is_b && *data_sem > pushed) {
@@ -370,7 +418,7 @@ void kernel_main() {
                 const uint32_t hxy = get_arg_val<uint32_t>(21 + hd);
                 const uint64_t bc_h = get_noc_addr(hxy >> 16, hxy & 0xFFFF, h_all_addr);
                 for (uint32_t p = 0; p < np; ++p) {
-                    noc_async_write(
+                    SE_H_WRITE(
                         src + (p * mt + h_uu * hu) * h_tile_bytes,
                         bc_h + dst + p * hu * h_tile_bytes,
                         hu * h_tile_bytes,
@@ -400,7 +448,7 @@ void kernel_main() {
         }
 #else
         if (!h_pending && h_sent < num_v && *go_sem + hbuf >= h_sent + 1 &&
-            cb_pages_available_at_front(h_local_cb, mt * np)) {
+            cb_pages_available_at_front(h_local_cb, mt * hpc)) {
             const uint32_t src = get_read_ptr(h_local_cb);
 #ifdef SE_GU_ONLY
             const uint32_t dst = ((h_sent % hbuf) * groups + my_group) * half_bytes;  // down h_all: [HBUF][group]
@@ -410,15 +458,53 @@ void kernel_main() {
             for (uint32_t hd = 0; hd < nh; ++hd) {
                 const uint32_t hxy = get_arg_val<uint32_t>(21 + hd);
                 const uint64_t bc_h = get_noc_addr(hxy >> 16, hxy & 0xFFFF, h_all_addr);
-#ifdef SE_GU_ONLY
+#if defined(SE_GU_ONLY) && defined(SE_HG_NU)
+                // 16-column units cg NU..: h tiles from K-tile cg NU / 2, the first one's right half only when cg NU is
+                // odd (lead), the last one's left half only when (cg + 1) NU is odd (tail); the full ones are one run,
+                // the halves go face by face (bf16: faces 512 B; bfp8: 16 B exponents of each face, then 256 B data)
+                {
+                    static_assert(h_tile_bytes == 2048 || h_tile_bytes == 1088, "SE_HG_NU: bf16 or bfp8 h tiles");
+                    const uint32_t u0 = cg * hg_nu, k0 = u0 / 2, lead = u0 & 1, tail = (u0 + hg_nu) & 1;
+                    const uint32_t j0 = lead, j1 = hpc - tail;
+                    const uint64_t base = bc_h + dst + k0 * mt * h_tile_bytes;
+                    if (j1 > j0) {
+                        SE_H_WRITE(
+                            src + j0 * mt * h_tile_bytes,
+                            base + j0 * mt * h_tile_bytes,
+                            (j1 - j0) * mt * h_tile_bytes,
+                            noc_index,
+                            h_vc);
+                    }
+                    auto half = [&](uint32_t j, uint32_t right) {  // tile j's left (faces 0 / 2) or right (1 / 3) half
+                        for (uint32_t m = 0; m < mt; ++m) {
+                            const uint32_t s = src + (j * mt + m) * h_tile_bytes;
+                            const uint64_t d = base + (j * mt + m) * h_tile_bytes;
+                            for (uint32_t f = right; f < 4; f += 2) {
+                                if constexpr (h_tile_bytes == 2048) {
+                                    SE_H_WRITE(s + f * 512, d + f * 512, 512, noc_index, h_vc);
+                                } else {
+                                    SE_H_WRITE(s + f * 16, d + f * 16, 16, noc_index, h_vc);
+                                    SE_H_WRITE(s + 64 + f * 256, d + 64 + f * 256, 256, noc_index, h_vc);
+                                }
+                            }
+                        }
+                    };
+                    if (lead) {
+                        half(0, 1);
+                    }
+                    if (tail) {
+                        half(hpc - 1, 0);
+                    }
+                }
+#elif defined(SE_GU_ONLY)
                 // Down cores keep h K-tile-major ([K][rows] per group): this core's NP K-tiles are one run.
-                noc_async_write(src, bc_h + dst + cg * np * mt * h_tile_bytes, np * mt * h_tile_bytes, noc_index, h_vc);
+                SE_H_WRITE(src, bc_h + dst + cg * np * mt * h_tile_bytes, np * mt * h_tile_bytes, noc_index, h_vc);
 #else
                 for (uint32_t m = 0; m < mt; ++m) {
                     for (uint32_t p = 0; p < np; ++p) {  // h_all: row-major within K-blocks of KBLK tiles
                         const uint32_t k = cg * np + p;
                         const uint32_t off = ((k / kblk) * mt * kblk + m * kblk + k % kblk) * h_tile_bytes;
-                        noc_async_write(src + (m * np + p) * h_tile_bytes, bc_h + dst + off, h_tile_bytes);
+                        SE_H_WRITE(src + (m * np + p) * h_tile_bytes, bc_h + dst + off, h_tile_bytes);
                     }
                 }
 #endif
@@ -443,7 +529,7 @@ void kernel_main() {
                 const uint32_t hxy = get_arg_val<uint32_t>(21 + hd);
                 noc_semaphore_inc(get_noc_addr(hxy >> 16, hxy & 0xFFFF, get_semaphore(gid)), 1);
             }
-            cb_pop_front(h_local_cb, mt * np);
+            cb_pop_front(h_local_cb, mt * hpc);
             ++h_sent;
             h_pending = 0;
         }
