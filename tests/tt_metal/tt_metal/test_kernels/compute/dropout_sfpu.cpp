@@ -7,6 +7,9 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#ifdef DROPOUT_INPUT_FPU_ADD
+#include "api/compute/eltwise_binary.h"
+#endif
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
@@ -19,8 +22,15 @@ void kernel_main() {
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb16(tt::CBIndex::c_16);
 
+#ifdef DROPOUT_INPUT_FPU_ADD
+    // Fused FPU add + dropout: the tile dropout works on is produced in DST by the FPU (c_0 + c_0 = 2x),
+    // so the FPU binary init, not a datacopy init, is the last ADDR_MOD programmer before dropout_tile.
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
+    add_init(tt::CBIndex::c_0, tt::CBIndex::c_0);
+#else
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     copy_init(tt::CBIndex::c_0);
+#endif
     dropout_kernel_init(seed);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb16.reserve_back(per_core_block_dim);
@@ -30,7 +40,11 @@ void kernel_main() {
             // Pop tile after tile, copy to DST and pack
             cb0.wait_front(1);
 
+#ifdef DROPOUT_INPUT_FPU_ADD
+            add_tiles(tt::CBIndex::c_0, tt::CBIndex::c_0, 0, 0, 0);
+#else
             copy_tile(tt::CBIndex::c_0, 0, 0);
+#endif
 
             dropout_tile(0, int_probability, int_scale_factor);
 
