@@ -13,87 +13,13 @@
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_conversions.h"
 #include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_binary_pow.h"
 #include "sfpu/ckernel_sfpu_log.h"
 
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
-
-sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vFloat pow) {
-    sfpi::vFloat original_base = base;
-
-    // Check for integer power
-    sfpi::vSMag16 pow_smag = sfpi::convert<sfpi::vSMag16>(
-        pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
-    sfpi::vFloat pow_rounded = sfpi::convert<sfpi::vFloat>(pow_smag, sfpi::RoundMode::Nearest);
-    v_if(pow_rounded == pow) {
-        // if pow is integer, set base to positive
-        base = sfpi::setsgn(base, 0);
-    }
-    v_endif;
-
-    // Normalize base to calculation range
-    sfpi::vFloat x = sfpi::setexp(base, 127);  // set exp to exp bias (put base in range of 1-2)
-
-    // 3rd order polynomial approx - determined using rminimax over [1,2], see LogPolyNoInit
-    sfpi::vFloat series_result =
-        x * (x * (x * LogPolyNoInit::A - LogPolyNoInit::B) + LogPolyNoInit::C) - LogPolyNoInit::D;
-
-    // Convert exponent to float
-    sfpi::vSMag exp = sfpi::convert<sfpi::vSMag>(exexp(base));
-    sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::Nearest);
-
-    // De-normalize to original range
-    sfpi::vFloat vConstLn2 = LogPolyNoInit::LN2;
-    sfpi::vFloat log_result = expf * vConstLn2 + series_result;  // exp correction: ln(1+x) + exp*ln(2)
-
-    // Base case when input is 0. ln(0) = -inf
-    v_if(base == 0.0f) {  // Reload for register pressure
-        log_result = -std::numeric_limits<float>::infinity();
-    }
-    v_endif;
-
-    // Take exp(pow * log(base)) to produce base^pow
-    sfpi::vFloat val = pow * log_result;
-
-    // Force sign to 0 (make number positive)
-    sfpi::vFloat result = _sfpu_exp_(sfpi::setsgn(val, 0));
-
-    v_if(val < 0) { result = sfpu_reciprocal_iter<2>(result); }
-    v_endif;
-
-    // Check valid base range
-    v_if(original_base < 0.0f) {  // negative base
-        // Check for integer power
-        v_if(pow_rounded == pow) {
-            // if pow is odd integer, set result to negative
-            // Check if odd by dividing by 2 and comparing with floor
-            sfpi::vFloat half_pow = pow_rounded * 0.5f;
-            sfpi::vSMag16 half_pow_int = sfpi::convert<sfpi::vSMag16>(half_pow, sfpi::RoundMode::Nearest);
-            sfpi::vFloat half_pow_floored = sfpi::convert<sfpi::vFloat>(half_pow_int, sfpi::RoundMode::Nearest);
-            v_if(half_pow != half_pow_floored) { result = sfpi::setsgn(result, 1); }
-            v_endif;
-        }
-        v_else { result = std::numeric_limits<float>::quiet_NaN(); }
-        v_endif;
-    }
-    v_endif;
-
-    // IEEE 754: pow(x, 0) == 1 for every x, including 0, +/-inf and NaN. Without this the
-    // composition above forms 0 * ln(0) = 0 * -inf = NaN at base == 0 (SFPMAD), exp(NaN)
-    // collapses to +0, and the v_if(val < 0) is then evaluated on a NaN, which the ISA
-    // leaves undefined (VectorUnit, SFPSETCC) -- measured on Wormhole as 0**0 = 0 but
-    // 0**-0.0 = inf, and on Blackhole as inf for both, the same predicate resolving one way
-    // there instead of two.
-    // Last, so the negative-base sign flip above cannot turn (-2)**0 into -1. Compared on
-    // setsgn(pow, 0) because SFPSETCC's contract excludes negative zero: measured, a bare
-    // pow == 0.0f does not fire for pow == -0.0 and leaves 0**-0.0 at inf.
-    v_if(sfpi::setsgn(pow, 0) == 0.0f) { result = 1.0f; }
-    v_endif;
-
-    return result;
-}
 
 template <
     bool APPROXIMATION_MODE,
@@ -133,7 +59,10 @@ inline void calculate_sfpu_binary(
         } else if constexpr (BINOP == BinaryOp::RSUB) {
             result = in1 - in0;
         } else if constexpr (BINOP == BinaryOp::POW) {
-            result = calculate_sfpu_binary_power(in0, in1);
+            // The kernel ttnn.pow runs (calculate_sfpu_binary_pow). This op used to carry its
+            // own copy built on the fp16-rounded ln(2) = 0.692871 and the quadratic _sfpu_exp_
+            // with repeated squaring, which was 4-28% off for |log2(base)| >= 10 on Blackhole.
+            result = _sfpu_binary_power_<is_fp32_dest_acc_en>(in0, in1);
         } else if constexpr (BINOP == BinaryOp::XLOGY) {
             v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
             v_else {
@@ -307,9 +236,11 @@ inline void calculate_sfpu_binary_div(
 
 template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
 inline void sfpu_binary_init() {
-    if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::POW) {
-        // Initialisation for use of sfpu_reciprocal_iter<2> in DIV or POW.
+    if constexpr (BINOP == BinaryOp::DIV) {
+        // Initialisation for use of sfpu_reciprocal_iter<2> in DIV.
         sfpu_reciprocal_init<false>();
+    } else if constexpr (BINOP == BinaryOp::POW) {
+        sfpu_binary_pow_init<APPROXIMATION_MODE>();
     } else if constexpr (BINOP == BinaryOp::XLOGY) {
         _init_log_<APPROXIMATION_MODE>();
     }
