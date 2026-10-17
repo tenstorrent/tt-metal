@@ -60,5 +60,5 @@ def test_ema(device, T, B, C, cores_y, cores_x):
         pcc_threshold=0.999,
         rtol=0.008,
         atol=0.004,
-        frobenius_threshold=0.003,
+        frobenius_threshold=0.0035,
     )

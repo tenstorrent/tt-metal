@@ -53,9 +53,9 @@ jsbeautifier==1.14.7
 datasets>=2.20,<3
 
 pyarrow>=21.0.0,<22
-torch==2.11.0 ; platform_machine == 'aarch64'
+torch==2.13.0 ; platform_machine == 'aarch64'
 networkx==3.1
-torchvision==0.26.0 ; platform_machine == 'aarch64'
+torchvision==0.28.0 ; platform_machine == 'aarch64'
 torchmetrics==1.9.0
 torch-fidelity==0.3.0
 xlsxwriter==3.0.8
@@ -95,7 +95,7 @@ open_clip_torch==2.26.1 # Required for SDXL accuracy evaluation
 pyyaml>=5.4
 matplotlib
 Pillow==12.3.0
-jupyterlab==4.5.9
+jupyterlab==4.6.2
 ipywidgets==8.1.1
 bokeh==3.8.2
 click==8.1.7
@@ -109,5 +109,5 @@ efficientnet-pytorch==0.7.1
 
 # CPU-only torch for x86_64 to avoid installing CUDA dependencies on dev machines
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.11.0 ; platform_machine == 'x86_64'
-torchvision==0.26.0 ; platform_machine == 'x86_64'
+torch==2.13.0 ; platform_machine == 'x86_64'
+torchvision==0.28.0 ; platform_machine == 'x86_64'

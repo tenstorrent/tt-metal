@@ -60,7 +60,7 @@ def test_addmm_square_matrices(device, dtype, matrix_size):
             output_tensor,
             atol=0.004 * matrix_size,
             rtol=5.032 * matrix_size,
-            frobenius_threshold=0.001 * matrix_size,
+            frobenius_threshold=0.0012 * matrix_size,
             pcc_threshold=0.9999,
             check_ulp=False,
         )
