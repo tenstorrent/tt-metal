@@ -29,6 +29,11 @@ Coverage (Blackhole + Wormhole B0):
     the unpack splits the block reduce into two half-width MOP runs gated by HW
     semaphores; the PACK thread plays the producer. Both arches. Validates split-MOP
     correctness + semaphore balance (not the SDPA live-data overlap; see the C++ note).
+  * runtime ``block_ct_dim`` limit: 127 reduces, 128 asserts at init on both arches, and a
+    reinit_short re-arm with 128 asserts in the MOP reprogram; a trigger split with an odd
+    width asserts at init.
+  * operand-shape guard: 16x16, 32x16 and 8x32 operands are rejected at init (compile-time
+    and runtime families) and by the reinit_short re-arm.
 """
 
 import os
@@ -47,7 +52,11 @@ from helpers.test_variant_parameters import (
     CLOBBER_OP,
     OVERLAP_FIRST_HALF,
     REDUCE_BLOCK_CT_DIM,
+    REDUCE_MATH_SKIP_EXECUTE,
     REDUCE_OPERAND_SHAPE,
+    REDUCE_REINIT_BLOCK_CT_DIM,
+    REDUCE_REINIT_OPERAND_SHAPE,
+    REDUCE_UNPACK_SKIP_EXECUTE,
     REINIT_MODE,
     RESPECT_TRIGGER,
     USE_RUNTIME,
@@ -117,6 +126,10 @@ def _make_reduce_block_max_config(
     expected_nondeterministic=False,
     operand_shape=FULL_TILE_SHAPE,
     staged_ct_dim=None,
+    reinit_block_ct_dim=None,
+    reinit_operand_shape=None,
+    unpack_skip_execute=False,
+    math_skip_execute=False,
 ):
     """Build one reduce_block_max_row variant plus its golden (row-major, per-row max in
     column [0]).
@@ -129,6 +142,14 @@ def _make_reduce_block_max_config(
     differs from the ``block_ct_dim`` the kernel is built with. Only the guard tests use
     it: a block the inits must reject never reads its operand, so staging it in full
     would only exhaust L1.
+
+    ``reinit_block_ct_dim`` / ``reinit_operand_shape`` are what the reinit_short re-arm is
+    told (default: the init values); the reinit-guard tests hand it a width or shape the
+    op rejects, and set ``unpack_skip_execute`` so the unpack delivers no tiles: their
+    math stops on the re-arm's assert, and tiles left in the source banks survive the
+    per-test TRISC soft reset and stall the next kernel. ``math_skip_execute`` is the
+    mirror image for the trigger odd-width guard: its unpack stops at init, and a math MOP
+    left waiting for SrcA is a stalled Tensix instruction the soft reset does not recover.
     """
     dest_acc = _dest_acc(formats.output_format)
     staged_ct_dim = block_ct_dim if staged_ct_dim is None else staged_ct_dim
@@ -176,6 +197,14 @@ def _make_reduce_block_max_config(
             RESPECT_TRIGGER(respect_trigger),
             OVERLAP_FIRST_HALF(overlap_first_half),
             REDUCE_OPERAND_SHAPE(operand_shape),
+            REDUCE_REINIT_BLOCK_CT_DIM(
+                block_ct_dim if reinit_block_ct_dim is None else reinit_block_ct_dim
+            ),
+            REDUCE_REINIT_OPERAND_SHAPE(
+                operand_shape if reinit_operand_shape is None else reinit_operand_shape
+            ),
+            REDUCE_UNPACK_SKIP_EXECUTE(unpack_skip_execute),
+            REDUCE_MATH_SKIP_EXECUTE(math_skip_execute),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -408,20 +437,22 @@ def test_reduce_block_max_trigger_runtime(formats, block_ct_dim, overlap_first_h
     )
 
 
-def _expect_init_rejects(configuration, golden_rowmajor, what):
-    """The reduce inits must LLK_ASSERT on ``what``; the harness surfaces the ebreak as
-    LLKAssertException. If the guard is silent the kernel runs anyway, so report what it
-    packed into column [0] against the staged operand's row maxima: that is the wrong
-    result the guard exists to prevent."""
+def _expect_llk_assert_on(
+    configuration, golden_rowmajor, what, triscs=("TRISC0", "TRISC1")
+):
+    """The reduce LLKs must LLK_ASSERT on ``what`` on every thread in ``triscs``; the harness
+    surfaces the ebreak as LLKAssertException. If the guard is silent the kernel runs anyway,
+    so report what it packed into column [0] against the staged operand's row maxima: that is
+    the wrong result the guard exists to prevent."""
     if os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1":
         pytest.skip("LLK_ASSERT is compiled out (TT_LLK_DISABLE_ASSERTS=1)")
     try:
         res_from_L1 = configuration.run().result
     except LLKAssertException as hit:
-        # Both threads that program the geometry / loop count carry the guard: the unpack init
-        # (TRISC0) and the math MOP config (TRISC1) must each have stopped on it.
+        # Every thread that programs the geometry / loop count carries the guard: by default the
+        # unpack init (TRISC0) and the math MOP config (TRISC1) must each have stopped on it.
         stacks = str(hit)
-        missing = [t for t in ("TRISC0", "TRISC1") if f"{t} STACK TRACE" not in stacks]
+        missing = [t for t in triscs if f"{t} STACK TRACE" not in stacks]
         assert (
             not missing
         ), f"{what}: the LLK assert fired, but not on {missing}:{stacks}"
@@ -455,7 +486,7 @@ def test_reduce_block_max_runtime_block_ct_dim_limit(block_ct_dim):
     configuration, golden_rowmajor = _make_reduce_block_max_config(
         FORMATS[0], block_ct_dim, use_runtime=True, staged_ct_dim=1
     )
-    _expect_init_rejects(
+    _expect_llk_assert_on(
         configuration,
         golden_rowmajor,
         f"block_ct_dim={block_ct_dim} above the {MAX_BLOCK_CT_DIM} limit",
@@ -481,6 +512,73 @@ def test_reduce_block_max_shape_guard(use_runtime, operand_shape):
     configuration, golden_rowmajor = _make_reduce_block_max_config(
         FORMATS[0], block_ct_dim=1, use_runtime=use_runtime, operand_shape=operand_shape
     )
-    _expect_init_rejects(
+    _expect_llk_assert_on(
         configuration, golden_rowmajor, f"operand shape {operand_shape}"
+    )
+
+
+def test_reduce_block_max_reinit_short_runtime_rejects_width():
+    """A valid init followed by a reinit_short_runtime re-arm with block_ct_dim=128: the MOP
+    reprogram (TRISC1 only; the unpack is not re-armed) must assert instead of writing the
+    wrapped count."""
+    configuration, golden_rowmajor = _make_reduce_block_max_config(
+        FORMATS[0],
+        block_ct_dim=2,
+        use_runtime=True,
+        reinit="short",
+        clobber=_CLOBBER_FOR_REINIT["short"],
+        reinit_block_ct_dim=MAX_BLOCK_CT_DIM + 1,
+        unpack_skip_execute=True,
+    )
+    _expect_llk_assert_on(
+        configuration,
+        golden_rowmajor,
+        f"reinit_short_runtime with block_ct_dim={MAX_BLOCK_CT_DIM + 1}",
+        triscs=("TRISC1",),
+    )
+
+
+@parametrize(use_runtime=[False, True])
+def test_reduce_block_max_reinit_short_rejects_shape(use_runtime):
+    """A valid init followed by a reinit_short re-arm told the operand is a single 16x16
+    face: the MOP reprogram (TRISC1 only) must assert. The compile-time reinit_short is a
+    Blackhole-only lib path; the runtime one runs on both arches."""
+    (use_runtime,) = use_runtime
+    if not use_runtime and get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            "compile-time reduce_block_max_row reinit_short is a Blackhole-only lib path"
+        )
+    configuration, golden_rowmajor = _make_reduce_block_max_config(
+        FORMATS[0],
+        block_ct_dim=2,
+        use_runtime=use_runtime,
+        reinit="short",
+        clobber=_CLOBBER_FOR_REINIT["short"],
+        reinit_operand_shape=TileShape(16, 16, 1, 1),
+        unpack_skip_execute=True,
+    )
+    _expect_llk_assert_on(
+        configuration,
+        golden_rowmajor,
+        "reinit_short with a 16x16 operand shape",
+        triscs=("TRISC1",),
+    )
+
+
+def test_reduce_block_max_trigger_runtime_rejects_odd_width():
+    """respect_trigger splits the unpack into two block_ct_dim/2 runs, so an odd width
+    delivers one tile fewer than the math MOP waits for and the reduce hangs; the unpack
+    init (TRISC0) must assert on it instead."""
+    configuration, golden_rowmajor = _make_reduce_block_max_config(
+        FORMATS[0],
+        block_ct_dim=3,
+        use_runtime=True,
+        respect_trigger=True,
+        math_skip_execute=True,
+    )
+    _expect_llk_assert_on(
+        configuration,
+        golden_rowmajor,
+        "respect_trigger with block_ct_dim=3",
+        triscs=("TRISC0",),
     )
