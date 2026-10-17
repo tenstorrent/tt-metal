@@ -2358,3 +2358,13 @@ def test_slice_nd_sharded_tensor_args_inherited_vs_explicit(device):
     explicit = ttnn.slice(tt_input, start, end, slice_dim=2, num_devices=2, memory_config=mem_config)
     assert list(explicit.memory_config().nd_shard_spec.shard_shape) == [1, 1, 64, 64]
     assert torch.equal(ttnn.to_torch(explicit), torch_expected)
+
+
+@pytest.mark.parametrize("step", [-1, 0])
+def test_slice_rejects_non_positive_step(device, step):
+    # A negative step used to return an empty tensor and a zero step crashed the host with a division by zero (#57988).
+    input_tensor = ttnn.from_torch(
+        torch.arange(1024, dtype=torch.bfloat16).reshape(1, 1, 32, 32), layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with pytest.raises(RuntimeError, match="greater than zero"):
+        ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 32, 32], [1, 1, 1, step])
