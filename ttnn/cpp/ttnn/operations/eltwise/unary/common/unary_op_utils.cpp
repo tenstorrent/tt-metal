@@ -8,6 +8,7 @@
 #include <type_traits>
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -128,6 +129,28 @@ const char* bitwise_shift_data_format_str(UnaryOpType op_type, std::optional<Dat
         return "UInt16";
     }
     TT_THROW("Unsupported input dtype for bitwise/shift op_type {}: expected Int32, UInt32, or UInt16.", op_type);
+}
+
+// Scalar word for the unary_*_tile_int32 compare kernels, which read it as a two's-complement
+// integer. An integer scalar keeps its bits; a float scalar is converted by value and must be a
+// finite integer within the tensor dtype's range, because a fractional, non-finite or out-of-range
+// value cannot be compared exactly (and its conversion is undefined), so it is rejected instead.
+template <typename T>
+uint32_t int_compare_scalar_word(T param0_raw, DataType input_dtype, UnaryOpType op_type) {
+    if constexpr (std::is_same_v<T, float>) {
+        TT_FATAL(
+            binary::utils::scalar_fits_integer_dtype(param0_raw, input_dtype),
+            "Unary: {} with a {} tensor cannot represent the scalar {}: only a finite integer within the range of "
+            "{} can be compared exactly. Typecast the input to a floating-point dtype first.",
+            op_type,
+            input_dtype,
+            param0_raw,
+            input_dtype);
+    }
+    if (input_dtype == DataType::UINT32) {
+        return static_cast<uint32_t>(param0_raw);
+    }
+    return std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw));
 }
 
 template <typename T>
@@ -481,7 +504,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     fmt::format(
                         "unary_ne_tile_int32({}, {}u);",
                         idst,
-                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
+                        int_compare_scalar_word(param0_raw, *input_dtype, op_type))};
             }
             return {
                 "unary_ne_tile_init();",
@@ -496,7 +519,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     fmt::format(
                         "unary_eq_tile_int32({}, {}u);",
                         idst,
-                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
+                        int_compare_scalar_word(param0_raw, *input_dtype, op_type))};
             }
             return {
                 "unary_eq_tile_init();",
@@ -511,7 +534,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     fmt::format(
                         "unary_gt_tile_int32({}, {});",
                         idst,
-                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
+                        int_compare_scalar_word(param0_raw, *input_dtype, op_type))};
             }
             return {
                 "unary_gt_tile_init();",
@@ -526,7 +549,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     fmt::format(
                         "unary_lt_tile_int32({}, {});",
                         idst,
-                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
+                        int_compare_scalar_word(param0_raw, *input_dtype, op_type))};
             }
             return {
                 "unary_lt_tile_init();",
@@ -541,7 +564,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     fmt::format(
                         "unary_ge_tile_int32({}, {});",
                         idst,
-                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
+                        int_compare_scalar_word(param0_raw, *input_dtype, op_type))};
             }
             return {
                 "unary_ge_tile_init();",
@@ -556,7 +579,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     fmt::format(
                         "unary_le_tile_int32({}, {});",
                         idst,
-                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
+                        int_compare_scalar_word(param0_raw, *input_dtype, op_type))};
             }
             return {
                 "unary_le_tile_init();",
