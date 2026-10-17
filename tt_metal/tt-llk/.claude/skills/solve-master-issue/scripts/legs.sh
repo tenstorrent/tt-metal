@@ -36,7 +36,9 @@
 # "claimed" with no result: `rm -r claimed.d claimed` re-opens it. `legs.sh status` prints one line per
 # server that has a heartbeat (`serve <arch>: <host> pid=<pid> last seen <N>s ago (busy=<id|->)`, marked
 # STALE when older than 3 x --interval, default 90 s) and then one line per request.
-# One serve loop per arch per box (a box with two kinds of card runs two); start it detached and leave it running:
+# One serve loop per arch per box (a box with two kinds of card runs two); start it detached and leave it running.
+# When legs.sh itself changes on disk (a skill update), an idle loop re-executes itself, so a fix reaches every
+# box without anyone restarting anything:
 #   nohup setsid $SKILL/scripts/legs.sh serve --run-dir <D> --arch blackhole --repo /localdev/<user>/tt-metal > /dev/null 2>&1 &
 # Exit codes: request 0 (prints the id) · 2 bad args.   serve --once 0 served one · 3 nothing open · 2 bad args.
 #   wait exits with the leg's code: 0 pass · N fail · 124 command timed out (137 if it ignored TERM) ·
@@ -186,6 +188,7 @@ serve_one() {  # serve_one <req dir>: prepare the tree, run the command under th
 cmd_serve() {
     local D= once=0
     arch=; repo=; wroot=; applied=; interval=30
+    serve_args=("$@")   # kept for the self re-exec
     while [ $# -gt 0 ]; do
         [ "$1" = --once ] && { once=1; shift; continue; }
         [ $# -ge 2 ] || die "$1 needs a value"
@@ -203,9 +206,14 @@ cmd_serve() {
     # a kill mid-leg must not leave the patch in --repo
     trap 'rc=$?; [ -n "${applied:-}" ] && git -C "$repo" apply -R "$applied" 2>/dev/null; exit $rc' EXIT
     trap 'exit 143' INT TERM
-    log "serve start host=$(hostname) pid=$$ repo=$repo worktree-root=$wroot once=$once interval=$interval"
+    log "serve start host=$(hostname) pid=$$ repo=$repo worktree-root=$wroot once=$once interval=$interval script=$(stat -c %Y "$0")"
+    self_mtime=$(stat -c %Y "$0")
     while :; do
         if [ -e "$D/STOP" ] || [ -e "$legs/STOP-$arch" ]; then log "STOP present, exiting"; exit 0; fi
+        # a skill update (git checkout writes a new file) is picked up without anyone restarting the loop
+        if [ "$(stat -c %Y "$0" 2>/dev/null)" != "$self_mtime" ] && [ $once = 0 ]; then
+            log "legs.sh changed on disk, re-executing"; exec "$0" serve "${serve_args[@]}"
+        fi
         beat
         claim_next
         if [ -n "$req" ]; then

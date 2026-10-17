@@ -66,6 +66,7 @@ older `gh` (2.4) lacks.
 | `perf_eval.py --current <csv> --baseline <csv> …` | the judge: variant-matched cycle deltas, ±0.5 % noise band, intent-aware verdict; vendored from the LLK issue solver, `test_perf_eval.py` guards it (run with `pytest -c /dev/null --noconftest`) |
 | `findings.py list\|mark\|groups\|next\|claim\|release\|reconcile\|sync <file> …` | the findings file as source: workable items as JSON; write state + links per item (dups follow); the plan's groups; the next groups for a worker and the atomic claim (§0c); GitHub-vs-file drift on resume; commit+push (pull --rebase first) or `--sync-cmd` |
 | `legs.sh request\|wait\|serve\|status --run-dir <dir> …` | a test leg on the *other* worker's board: the requester files a request in the shared run dir, that box's serve loop runs it under its device lock and writes the result back (§0c, §3) |
+| `ledger_log.sh <ledger.md> <text…>` | append a Log line stamped with the clock's UTC time — the only way to write one (estimated times are forbidden) |
 | `run_unattended.sh <run-name> [--worker <w>] <args…>` | detached headless driver: `claude -p` turns, resumed every 15 min until `DONE` (§2); one per box with `--worker`, state under `workers/<w>/` |
 
 The two gate scripts print nothing when there is nothing left — and also when GitHub could not be
@@ -102,6 +103,7 @@ retry after the poll interval. Never treat an empty failed read as done.
    runner without hardware; this skill exists for the ones that need a card, a local build and a
    fail-without/pass-with proof.
 6. **Create the ledger** at `$MASTER_ISSUE_DIR/<repo>-<N>/ledger.md` from `$SKILL/ledger-template.md`.
+   Every Log line goes through `$SKILL/scripts/ledger_log.sh <ledger> <text>` so its time is the clock's.
    It must let a *fresh* session continue with no conversation history: worktrees, branches, head SHAs,
    dispatched run ids, what each wait is for, retry counters. **After any context compaction, re-read
    the ledger before acting** — the summary loses details like run ids.
@@ -212,7 +214,10 @@ $SKILL/scripts/legs.sh wait --run-dir $MASTER_ISSUE_DIR/<run> $id        # exit 
 Any box whose serve loop runs for that arch may take the request (several boxes per arch share one
 queue). Branch mode runs in a detached worktree on the serving box (tt-llk pytest, gtest already built there);
 `--patch <diff>` mode applies a patch to that box's **built** checkout under its device lock and reverts it
-after — for ttnn tests that need a build. Probe arm = the same request on a `<me>/probe-<item>-shipped`
+after — for ttnn tests that need a build. **ttnn legs are patch mode, full stop:** a branch-mode run with
+`TT_METAL_HOME` pointed at an unbuilt worktree is not probative (the JIT root and the loaded library disagree;
+tonight both arms of such a run came back identical). A serve loop re-executes itself when `legs.sh` changes
+on disk, so a skill fix needs no restart on the other box. Probe arm = the same request on a `<me>/probe-<item>-shipped`
 branch, exactly as in §3. A leg is a wait like any other: file it, record the id in the pending table, arm
 nothing that must outlive the turn, and move on; `legs.sh status` shows the queue. The PR body names the
 serving host and board and links the log in the run dir. **CI silicon (§3) remains the fallback** when no

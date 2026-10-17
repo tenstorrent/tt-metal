@@ -49,6 +49,6 @@ Status values: triage · repro · fix · verify · pr · bot-review(rN) · ci-qu
 | PR | workflow | run | job | verdict | evidence |
 |---|---|---|---|---|---|
 
-## Log (append-only; every line's time from `date -u +%H:%M`, never estimated)
+## Log (append-only; written only with `ledger_log.sh`, so every time is the clock's)
 
 - <HH:MM> ...
