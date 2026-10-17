@@ -559,11 +559,13 @@ def test_unary_log_subnormal_fast_mode(device, log_function):
     # a NaN pattern, and that NaN was then multiplied into the result.
     # float32 only. A bfloat16 subnormal reaches the kernel with its exponent-0
     # pattern intact, and the unfixed fast path mishandles it just the same, but
-    # what it produces for a positive subnormal is a NaN with the sign set and
-    # only low mantissa bits (0xff800001 on the float32 rows), which the bfloat16
-    # store truncates to -inf: a bfloat16 row passes with or without the fix.
-    # -0.0 is covered for both dtypes by test_log_signed_zero. 1e-40 and 2**-130
-    # are both float32 subnormals.
+    # on Wormhole the NaN its SFPMAD produces for a positive subnormal carries the
+    # product's sign (0xff800001 on the float32 rows), and convert<vFloat16b>
+    # (SFPSTOCHRND) in calculate_log turns a NaN into the infinity of its sign, so
+    # the bfloat16 row reads -inf and passes with or without the fix. (Blackhole's
+    # SFPMAD returns the canonical +NaN, so there a bfloat16 row would fail, but
+    # the test has to detect the bug on both.) -0.0 is covered for both dtypes by
+    # test_log_signed_zero. 1e-40 and 2**-130 are both float32 subnormals.
     x_torch = torch.tensor([[1e-40, 2.0**-130, 1.0]], dtype=torch.float32)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
