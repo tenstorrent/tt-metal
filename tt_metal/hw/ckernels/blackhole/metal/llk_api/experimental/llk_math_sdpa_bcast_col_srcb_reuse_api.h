@@ -23,9 +23,12 @@
  * @param operand_B: CB of the second operand, unused on this thread.
  * @note Call this before @ref llk_math_sdpa_bcast_col_srcb_reuse_preamble and @ref llk_math_sdpa_bcast_col_srcb_reuse,
  *       and run @ref llk_math_sdpa_bcast_col_srcb_reuse_postamble after.
- * @note The MOP always accumulates into DEST, for ADD/SUB as well as MUL. Zero the output tiles first: run
- *       @ref llk_math_sdpa_bcast_col_srcb_reuse_preamble with clear_dest = true, or target a freshly released dest
- *       section.
+ * @note On the unpack thread, pair with @ref llk_unpack_A_sdpa_init and issue
+ *       @ref llk_unpack_A_sdpa_set_srcb_dummy_valid before the operand unpacks.
+ * @note The MOP always accumulates into DEST, for ADD/SUB as well as MUL, so the output tiles must be zero on entry.
+ *       clear_dest = true on @ref llk_math_sdpa_bcast_col_srcb_reuse_preamble zeroes the whole dest half (SyncHalf)
+ *       or all of dest (SyncFull), not only the output tiles; a caller holding other live tiles in that section must
+ *       instead target a freshly released dest section.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
