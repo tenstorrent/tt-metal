@@ -90,10 +90,12 @@ inline void sum_int_init() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void add_int(const uint dst_offset) {
+    // A Dest tile is 64 rows and sfpi's dst_reg[] steps two rows per index, so one tile is 32 entries.
+    constexpr uint dst_tile_size_sfpi = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vInt a = dst_reg[0];
-        vInt b = dst_reg[32];
+        vInt b = dst_reg[dst_offset * dst_tile_size_sfpi];
         a = sfpu_twos_comp_to_sign_mag(a);
         b = sfpu_sign_mag_to_twos_comp(b);
 
