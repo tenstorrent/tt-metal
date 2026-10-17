@@ -4,12 +4,15 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <random>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/float8.hpp>
+#include <tt_stl/assert.hpp>
 
 namespace tt::test_utils {
 
@@ -27,6 +30,25 @@ inline std::vector<float> to_floats(const std::vector<T>& vec) {
     return floats;
 }
 }  // namespace detail
+
+// Returns num_elements fp8_e4m3 values drawn from U(0, rand_max) + offset, packed 4 per uint32 (LSB first).
+// num_elements must be divisible by 4.
+inline std::vector<uint32_t> create_random_packed_float8_e4m3(
+    size_t num_elements, float rand_max, int seed, float offset = 0.0f) {
+    TT_FATAL(num_elements % 4 == 0, "num_elements must be divisible by 4, got {}", num_elements);
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> dist(0, rand_max);
+
+    std::vector<uint32_t> result(num_elements / 4, 0);
+    for (uint32_t& word : result) {
+        float8_e4m3 a(dist(rng) + offset);
+        float8_e4m3 b(dist(rng) + offset);
+        float8_e4m3 c(dist(rng) + offset);
+        float8_e4m3 d(dist(rng) + offset);
+        word = pack_four_float8_e4m3_into_uint32(a, b, c, d);
+    }
+    return result;
+}
 
 // Unpack a packed uint32 vector (4 fp8 bytes per word) into a flat float vector.
 inline std::vector<float> fp8_to_floats(const std::vector<uint32_t>& packed) {
