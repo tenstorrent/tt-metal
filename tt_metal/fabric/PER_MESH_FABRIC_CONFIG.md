@@ -153,25 +153,22 @@ the original `galaxy-fabric-per-mesh-torus-yx` on the common (Mesh-first) sanity
 - ❌ A **1D config in a multi-mesh fabric** — rejected.
 
 ### Validation added
-- **`ControlPlane::validate_fabric_config_compatibility()`** (`control_plane.cpp`): the single centralized
-  fabric-config check. For every inter-mesh link it asserts the two meshes' resolved configs have the **same
-  routing dimensionality** (errors out on a 1D↔2D link; allows all 2D↔2D incl. mesh↔torus), then
-  cross-rank-validates per-mesh config agreement and channel-geometry env parity. (The dimensionality check
-  was moved out of `MeshGraph` so all fabric-config validation lives in one place, run at control-plane
-  bring-up against each rank's resolved config.)
-- Plus the existing **1D-multimesh rule** (`mesh_graph.cpp`) and the **"config set in two places"** critical log.
+- **`MeshGraph::validate_inter_mesh_fabric_config_compatibility()`** (`mesh_graph.cpp`): for every declared
+  inter-mesh link, asserts the two meshes' resolved configs have the **same routing dimensionality**
+  (errors out on a 1D↔2D link instead of corrupting; allows all 2D↔2D incl. mesh↔torus). CPU-level, runs
+  at MGD build; no regression (MeshGraph tests pass).
+- Plus the existing **1D-multimesh rule** and the new **"config set in two places" warning**.
 
-### CPU regression tests (run in `fabric_unit_tests` via the multihost mock-cluster suite)
-- **`MultiHost.DualT3kInterMeshFabricConfigCompatibility`** — builds a ControlPlane over the dual_t3k mock
-  cluster (two 2x4 meshes inter-linked ALL_TO_ALL) and asserts `validate_fabric_config_compatibility` accepts
-  the 2D↔2D inter-mesh link (no throw) and each mesh resolves to a 2D config. Replaces the old MeshGraph-only
-  `InterMesh*Compatible` tests (deleted) now that the check lives in ControlPlane.
-- **`FabricConfigResolutionMultiMesh` / `…SingleMesh`** (`test_mesh_graph_descriptor.cpp`) — per-mesh
-  resolution precedence (MGD field > process-wide override > derived default) and the **1D-single-mesh-only**
-  rejection on a multi-mesh MGD.
-- The cross-rank env-parity guard is exercised by **`MultiHost.BHDualGalaxyNonUniform*AcrossRanksFatal`**
-  (vc2 / mesh_pass_through / max_payload) and the per-mesh config-agreement by
-  **`BHDualGalaxyFabricConfigMismatchAcrossRanksFatal`** / **`BHQB4x4NonUniformFabricConfigAcrossRanksFatal`**.
+### CPU regression tests (`test_mesh_graph_descriptor.cpp`, run in `fabric_unit_tests`)
+- **`InterMeshAllFourTwoDConfigsAreCompatible`** (new) — builds the 4-config combo MGD
+  (`single_galaxy_per_mesh_config_combo`, the same file the hardware e2e consumes) and asserts it builds
+  with no throw and each mesh resolves to its own declared config (XY/X/Y/2D). CPU guard for the hardware
+  4-config pass.
+- **`InterMeshDifferentTorusAxesAreCompatible`** — all-2D (TORUS_Y↔TORUS_X) inter-mesh link builds cleanly.
+- **`FabricConfigResolutionMultiMesh` / `…SingleMesh`** — per-mesh resolution precedence (MGD field >
+  process-wide override > derived default) and the **1D-single-mesh-only** rejection on a multi-mesh MGD.
+- The cross-rank env-parity guard is exercised by **`MultiHost.BHDualGalaxyNonUniformFabricEnvAcrossRanksFatal`**
+  (CI, ≥2 ranks) and was validated on the BH galaxy (section above).
 
 ### Inter-mesh mismatch audit — complete (no MGD-reachable mismatch)
 A full audit of every per-process value that must agree across an inter-mesh link (18 values) concluded:
@@ -200,7 +197,7 @@ stall. The launcher normally guarantees a uniform env, so this is a latent env-h
 risk.
 
 **Env-parity guard — IMPLEMENTED (`control_plane.cpp`).** The cross-rank parity check at fabric bring-up
-is now in place, folded into the existing `ControlPlane::validate_fabric_config_compatibility` collective.
+is now in place, folded into the existing `ControlPlane::validate_fabric_config_across_ranks` collective.
 `MeshFabricConfigObservation` (the trivially-copyable struct already MPI-`all_gather`-ed per rank) carries
 three extra process-wide knobs — `vc2_enabled` (`enable_fabric_vc2`), `mesh_pass_through_enabled`
 (`enable_fabric_mesh_pass_through`), and `max_payload_override` (the `max_packet_payload_size` override,
@@ -229,7 +226,7 @@ A matching CPU/multi-rank gtest, `MultiHost.BHDualGalaxyNonUniformFabricEnvAcros
 ### Guards reference — everything a user can set wrong (and what now catches it)
 
 All guards run at fabric bring-up via an MPI `all_gather` of a trivially-copyable
-`MeshFabricConfigObservation` struct (`ControlPlane::validate_fabric_config_compatibility` →
+`MeshFabricConfigObservation` struct (`ControlPlane::validate_fabric_config_across_ranks` →
 `validate_fabric_configs`, `control_plane.cpp`), then `TT_FATAL` **consistently on every rank** (no
 partial-rank MPI deadlock) with a message naming the offending rank, the exact knob, and the fix. The
 dimensionality guard (#5) is the one exception — it is a structural MGD rule caught earlier, at graph build.
@@ -263,7 +260,7 @@ the whole point of this PR).
   `run_fabric_cpu_only_unit_tests.sh`) + HW-validated on the BH galaxy (above). Live run: rank0 `vc2=true`,
   rank1 `vc2=false` → both ranks `TT_FATAL` → test passes.
 - #4 → `MultiHost.BHDualGalaxyFabricConfigMismatchAcrossRanksFatal`.
-- #5 → `MultiHost.DualT3kInterMeshFabricConfigCompatibility` + `FabricConfigResolutionMultiMesh` (CPU, `fabric_unit_tests`).
+- #5 → `InterMeshAllFourTwoDConfigsAreCompatible` / `FabricConfigResolutionMultiMesh` (CPU, `fabric_unit_tests`).
 
 ---
 
@@ -463,7 +460,7 @@ rather than new support; implement real per-mesh support only where the feature 
   VC config #13, channel counts #10/#15, `is_2D` gates #11, peer-topology lookups, …). Flipping only
   `topology_`/`routing_mode_` fixes one of those, not all — so the Mesh-case still deadlocks. This is
   the evidence that the complete fix is the **full per-mesh FabricContext (#8)**, not any single flag.
-* **Regression test** — `MultiHost.DualT3kInterMeshFabricConfigCompatibility` (CPU-only, mock cluster)
+* **Regression test** — `MeshGraphDescriptorTests.InterMeshDifferentTorusAxesAreCompatible` (CPU-only)
   builds a MeshGraph from a two-mesh MGD with different torus axes (TORUS_Y + TORUS_X), guarding the
   per-mesh-config build path. The galaxy e2e (`galaxy-fabric-per-mesh-torus-yx`) validates the real fix
   on hardware.

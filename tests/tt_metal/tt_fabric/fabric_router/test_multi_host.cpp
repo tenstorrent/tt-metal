@@ -402,34 +402,6 @@ TEST(MultiHost, TestDual2x4ControlPlaneInit) {
     check_asic_mapping_against_golden("TestDual2x4ControlPlaneInit");
 }
 
-// Mock-cluster coverage for ControlPlane::validate_fabric_config_compatibility (the inter-mesh dimensionality
-// check moved out of MeshGraph). dual_t3k is two 2x4 meshes inter-linked ALL_TO_ALL, so the compatibility
-// check runs over a real inter-mesh link; both meshes are 2D (FABRIC_2D), so it must accept them (no throw)
-// and each mesh must resolve to a 2D config. Replaces the old MeshGraph-only InterMesh*Compatible tests.
-TEST(MultiHost, DualT3kInterMeshFabricConfigCompatibility) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
-        log_info(tt::LogTest, "This test is only for T3K");
-        GTEST_SKIP();
-    }
-    const std::filesystem::path dual_t3k_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto";
-
-    std::unique_ptr<ControlPlane> control_plane;
-    EXPECT_NO_THROW({
-        control_plane = make_control_plane(
-            dual_t3k_mesh_graph_desc_path.string(),
-            tt::tt_fabric::FabricConfig::FABRIC_2D,
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-        control_plane->configure_routing_tables_for_fabric_ethernet_channels();
-    });
-
-    ASSERT_NE(control_plane, nullptr);
-    const auto& mesh_graph = control_plane->get_mesh_graph();
-    EXPECT_EQ(mesh_graph.get_fabric_config(MeshId{0}), tt::tt_fabric::FabricConfig::FABRIC_2D);
-    EXPECT_EQ(mesh_graph.get_fabric_config(MeshId{1}), tt::tt_fabric::FabricConfig::FABRIC_2D);
-}
-
 // Same logical dual-T3K (2x4) mapping as TestDual2x4ControlPlaneInit, but exercised against the
 // physically distinct t3k_dual_host mock cluster (identical tray/asic_location/mesh/chip layout,
 // different asic_ids and hostnames). Kept as a separate test so it carries its own golden file.
@@ -1472,8 +1444,7 @@ TEST(MultiHost, BHDualGalaxyFabric2DSanity) {
         }
     }
     // Verify that we found exactly 8 Z channels (channels 8 and 9, 2 chips per mesh, bidirectional = 8 total)
-    EXPECT_EQ(z_channel_count, 8)
-        << "Expected 8 Z channels (channels 8 and 9, 2 chips per mesh, bidirectional = 8 total)";
+    EXPECT_EQ(z_channel_count, 8) << "Expected 8 Z channels (channels 8 and 9, 2 chips per mesh, bidirectional = 8 total)";
 }
 
 TEST(MultiHost, T3K2x2AssignZDirectionControlPlaneInit) {
