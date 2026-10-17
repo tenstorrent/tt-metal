@@ -5,6 +5,8 @@
 // Internal TT/TTI macro-to-compiler interface, not a user-facing SFPI API.
 // The effect marker describes the immediately preceding raw instruction;
 // its implementing compiler pass reconstructs hard-register lifetimes.
+// The marker is SFPI's lltt::lreg_effect. SFPI headers older than the
+// compiler lack it, so the builtin it wraps is called directly instead.
 // Existing compilers retain the original raw instruction path below, NOT
 // the allocator protection. Callers explicitly carrying values between raw
 // operations can instead use SFPI's public l_reg reads and assignments.
@@ -14,11 +16,14 @@
 // Access-only and older compilers therefore get the explicit no-op below;
 // define TT_LLK_REQUIRE_RAW_LREG_METADATA to reject them instead.
 #ifndef TT_LLK_SFPRAWLREG_EFFECT
-#if defined(__riscv_xtt_sfprawlreg_effect)
-#define TT_LLK_SFPRAWLREG_EFFECT(r, w) __builtin_rvtt_sfprawlreg_effect((r), (w))
-#else
 #if defined(__has_builtin)
 #if __has_builtin(__builtin_rvtt_sfprawlreg_effect)
+#if __has_include("lltt.h")
+#include "lltt.h"
+#endif
+#if defined(LLTT_HAS_LREG_EFFECT)
+#define TT_LLK_SFPRAWLREG_EFFECT(r, w) lltt::lreg_effect((r), (w))
+#else
 #define TT_LLK_SFPRAWLREG_EFFECT(r, w) __builtin_rvtt_sfprawlreg_effect((r), (w))
 #endif
 #endif

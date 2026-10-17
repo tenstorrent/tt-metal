@@ -3,17 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
-if [[ $# -lt 1 || $# -gt 2 ]]; then
-    echo "usage: $0 TARGET_CXX [OUTPUT_DIR] (optional ACCESS_ONLY_CXX environment variable)" >&2
+if [[ $# -lt 2 || $# -gt 3 ]]; then
+    echo "usage: $0 TARGET_CXX SFPI_INCLUDE [OUTPUT_DIR] (optional ACCESS_ONLY_CXX environment variable)" >&2
     exit 2
 fi
 
 here=$(cd "$(dirname "$0")" && pwd)
 source_file="$here/raw_lreg_metadata_abi.cpp"
 target_cxx=$1
-if [[ $# -eq 2 ]]; then
-    mkdir -p "$2"
-    output=$(cd "$2" && pwd)
+sfpi_include=$2
+if [[ $# -eq 3 ]]; then
+    mkdir -p "$3"
+    output=$(cd "$3" && pwd)
     if [[ -n $(find "$output" -mindepth 1 -print -quit) ]]; then
         echo "validation output must be empty: $output" >&2
         exit 2
@@ -24,7 +25,7 @@ else
 fi
 
 for arch in wh bh qsr32; do
-    "$target_cxx" -std=c++17 -O2 -mcpu="tt-$arch-tensix" \
+    "$target_cxx" -std=c++17 -O2 -mcpu="tt-$arch-tensix" -I"$sfpi_include" \
         -DTT_LLK_REQUIRE_RAW_LREG_METADATA -S "$source_file" \
         -o "$output/$arch.s"
     if ! grep -q '# RAWLREG_EFFECT 1, 2' "$output/$arch.s"; then

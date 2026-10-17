@@ -11,6 +11,10 @@
 #ifndef SCHEME
 #error "select SCHEME=0, 1, 2, or 3"
 #endif
+#if SCHEME == 2
+#define TT_LLK_REQUIRE_RAW_LREG_METADATA
+#include "../../common/ckernel_lreg_metadata.h"
+#endif
 #ifdef USE_SFPI_API
 namespace ckernel { extern volatile unsigned long instrn_buffer[]; }
 #include <sfpi.h>
@@ -30,7 +34,7 @@ void raw_producer_consumer(volatile unsigned *issue)
 #if SCHEME == 1
     MARK(0); // Output annotation immediately after the producer.
 #elif SCHEME == 2
-    __builtin_rvtt_sfprawlreg_effect(1, 1);
+    TT_LLK_SFPRAWLREG_EFFECT(1, 1);
 #elif SCHEME == 3
 #ifdef USE_SFPI_API
     sfpi::vFloat saved = sfpi::l_reg[sfpi::LRegs::LReg0];
@@ -52,6 +56,6 @@ void raw_producer_consumer(volatile unsigned *issue)
 #endif
     ISSUE(0x72000000u); // SFPSTORE L0, destination 0.
 #if SCHEME == 2
-    __builtin_rvtt_sfprawlreg_effect(1, 0);
+    TT_LLK_SFPRAWLREG_EFFECT(1, 0);
 #endif
 }

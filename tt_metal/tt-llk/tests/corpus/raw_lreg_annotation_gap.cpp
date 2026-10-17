@@ -5,6 +5,10 @@
 // Existing read/write annotations at the consumer do not protect the gap:
 // the temporary load/store can overwrite L0 before the annotation executes.
 // USE_EFFECT must keep that temporary off L0. No silicon result is claimed.
+#if defined(USE_EFFECT)
+#define TT_LLK_REQUIRE_RAW_LREG_METADATA
+#include "../../common/ckernel_lreg_metadata.h"
+#endif
 #if defined(USE_MACRO)
 namespace ckernel { inline volatile unsigned long instrn_buffer[1]; }
 #include "../../tt_llk_blackhole/common/inc/ckernel_ops.h"
@@ -24,7 +28,7 @@ void raw_input_gap()
 #endif
     asm volatile ("# RAW INPUT L0");
 #if defined(USE_EFFECT)
-    __builtin_rvtt_sfprawlreg_effect(1, 0);
+    TT_LLK_SFPRAWLREG_EFFECT(1, 0);
 #endif
 #endif
 }
