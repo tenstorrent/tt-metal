@@ -349,8 +349,8 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.named_compile_time_args = std::move(compute_named_compile_time_args);
-    // The SFPU softplus picks its polynomial on this define, not on fp32_dest_acc_en: without it the
-    // sqrt-softplus score takes the bf16 fit, which drops the residual ln(1 + exp(-|t|)) for |t| > 5.
+    // Selects the fp32 SFPU softplus for the sqrt-softplus score (the softplus keys on this define, not on
+    // fp32_dest_acc_en); apply_score_func refuses to compile that score without it.
     compute_kernel_desc.defines = {{"INP_FLOAT32", "1"}};
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = MathFidelity::HiFi4,
