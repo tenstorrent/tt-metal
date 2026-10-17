@@ -129,9 +129,6 @@ def _run_unp_bcast_sub_sdpa(
 
     reshaped_a = src_A.reshape(64 * reuse_factor, 16)
 
-    b_tiles = [src_B[i : i + 1024].tolist() for i in range(0, len(src_B), 1024)]
-    b_tiles = b_tiles[:]
-
     take = []
     for i in range(0, reshaped_a.shape[0], 64):
         take.append(reshaped_a[i])
@@ -150,28 +147,25 @@ def _run_unp_bcast_sub_sdpa(
 
     tilized_reconstructed_tiles = [tilize(tile) for tile in reconstructed_tiles]
 
+    # The kernel reuses each broadcast A tile against the next srca_reuse_count B tiles.
+    # EltwiseBinaryGolden is elementwise, so one call on the whole operand pair is the
+    # same golden as one call per (A tile, B tile) and is the form the stimuli cache
+    # needs: --stimuli-only / --use-stimuli keep one golden per test node, the result of
+    # the last generator call, so a per-tile loop would replay the last tile's golden
+    # for every tile.
+    bcast_a = torch.cat(
+        [tile.repeat(srca_reuse_count) for tile in tilized_reconstructed_tiles]
+    )
     binary_golden = get_golden_generator(EltwiseBinaryGolden)
-    golden = []
-
-    for tile_idx, reconstructed_tile in enumerate(tilized_reconstructed_tiles):
-        start_b_idx = tile_idx * srca_reuse_count
-        for reuse_idx in range(srca_reuse_count):
-            b_tile_idx = start_b_idx + reuse_idx
-            if b_tile_idx < len(b_tiles):
-                b_tile = torch.tensor(b_tiles[b_tile_idx])
-                golden.append(
-                    binary_golden(
-                        mathop,
-                        reconstructed_tile,
-                        b_tile,
-                        formats.output_format,
-                        MathFidelity.LoFi,
-                        formats.input_format,
-                        dest_acc=dest_acc,
-                    )
-                )
-
-    golden_tensor = torch.cat(golden).to(dtype=format_dict[formats.output_format])
+    golden_tensor = binary_golden(
+        mathop,
+        bcast_a,
+        src_B[: input_tiles * 1024],
+        formats.output_format,
+        MathFidelity.LoFi,
+        formats.input_format,
+        dest_acc=dest_acc,
+    ).to(dtype=format_dict[formats.output_format])
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
