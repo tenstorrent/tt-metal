@@ -13,7 +13,9 @@
 //
 // The source is read back after it is written, so the pattern is in L1 before the move is issued
 // and a stale destination cannot be blamed on the source. The RISC data cache is left as the
-// harness booted it; the wait itself drops it on Blackhole.
+// harness booted it; the wait itself drops it on Blackhole. Right before each move the last
+// destination line is loaded, so it sits in that cache holding the previous iteration's contents
+// whatever the move size, and a wait that did not drop the cache returns the stale line.
 
 #include <cstdint>
 
@@ -114,6 +116,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             src_mismatches += src[w] != pattern(i, w) ? 1 : 0;
         }
         (void)load_blocking(&src[WORDS - 1]);
+        // Leave the last destination line, the one read first below, in the RISC data cache with
+        // the previous iteration's contents (Blackhole; Wormhole has no data cache). The source
+        // read-back above touches more lines than the cache holds for all but the smallest move,
+        // so without this load the destination reads would miss the cache and pass whether or not
+        // the wait dropped it. As above, the blocking load is issued before the TDMA stores below.
+        (void)load_blocking(&dst[WORDS - 1]);
 
         xmov_l1_to_l1_non_compact(src_addr >> 4 /*src_addr_16B*/, dst_addr >> 4 /*dst_addr_16B*/, XMOV_XFER_16B /*xfer_size_16B*/);
         xmov_wait_till_idle();

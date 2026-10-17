@@ -7,7 +7,9 @@ been carried out, so the destination can be read straight away.
 Each iteration PACK writes a fresh pattern to the source buffer, issues an L1-to-L1 move through
 ``xmov_l1_to_l1_non_compact``, calls ``xmov_wait_till_idle`` and reads the destination back. An
 iteration in which any destination word does not yet hold the pattern of this iteration is a
-stale read.
+stale read. The last destination line is loaded right before the move, so on Blackhole it sits in
+the RISC data cache with the previous iteration's contents whatever the move size, and the read
+back only passes if the wait dropped the cache.
 
 ``xfer_16b`` is the move size in 16-byte units; ``gap`` is the number of ``nop``s between the wait
 returning and the first destination read.
