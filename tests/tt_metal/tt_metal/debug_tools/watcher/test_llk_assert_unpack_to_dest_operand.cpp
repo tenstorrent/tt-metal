@@ -149,8 +149,10 @@ BuiltProgram build_program(
     }
     auto compute = CreateKernel(program, kernel_path(op), core, compute_config);
 
-    distributed::WriteShard(cq, built.src0, as_words(a), zero_coord);
-    distributed::WriteShard(cq, built.src1, as_words(b), zero_coord);
+    std::vector<uint32_t> a_words = as_words(a);  // WriteShard takes the host vector by non-const reference
+    std::vector<uint32_t> b_words = as_words(b);
+    distributed::WriteShard(cq, built.src0, a_words, zero_coord);
+    distributed::WriteShard(cq, built.src1, b_words, zero_coord);
 
     SetRuntimeArgs(program, reader, core, {built.src0->address(), kBankId, built.src1->address(), kBankId, kNumTiles});
     SetRuntimeArgs(program, writer, core, {built.dst->address(), kBankId, kNumTiles});
