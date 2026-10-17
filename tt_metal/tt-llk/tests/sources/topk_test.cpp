@@ -294,12 +294,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             SfpuType::topk_local_sort,
             APPROX,
             is_fp32_dest_acc_en,
-            32 /* ITERATIONS */,
-            false /* FAST_MODE */,
+            32 /*ITERATIONS*/,
+            false /*FAST_MODE*/,
             NETWORK_STABLE_SORT,
-            false /* CLAMP_NEGATIVE */,
-            DataFormat::Invalid /* TYPECAST_IN */,
-            DataFormat::Invalid /* TYPECAST_OUT */,
+            false /*CLAMP_NEGATIVE*/,
+            DataFormat::Invalid /*TYPECAST_IN*/,
+            DataFormat::Invalid /*TYPECAST_OUT*/,
             TOPK_FUSED_STABLE>(formats.math);
     }
     else

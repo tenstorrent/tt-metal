@@ -43,7 +43,8 @@
  * ---------------------------------------------
  * An SFPLOAD at Dest offset o reads the aligned group of four rows (o & ~3), one row per 8-lane
  * subvector, taking the even columns when (o & 2) == 0 and the odd columns otherwise
- * (SFPLOAD.md). The op folds offsets 0, 2, 8, 10 into LREG0 and 4, 6, 12, 14 into LREG2, so
+ * (https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPLOAD.md).
+ * The op folds offsets 0, 2, 8, 10 into LREG0 and 4, 6, 12, 14 into LREG2, so
  * subvector s of LREG0 holds all 16 columns of face rows s and s + 8, and subvector s of LREG2
  * all 16 columns of face rows 4 + s and 12 + s. The epilogue reduces each subvector into its
  * lane 0 (SFPSHFT2 SHFLSHR1 shifts + folds, then SHFLROR1), and the SFPSTOREs at offsets 0 and 4

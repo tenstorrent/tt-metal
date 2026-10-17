@@ -718,9 +718,9 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
         OPERATION == SfpuType::topk_defuse)
     {
         // The sort network's replayed 16-datum stores advance DEST through ADDR_MOD_6 (dest += 32,
-        // one 16-datum group), which only the topk_local_sort LLK init programs; every other topk
-        // entry point (the LLK init, metal topk_init, tests/sources/topk_test.cpp) runs it before the
-        // engine init, so run it here too instead of inheriting whatever the previous op left in it.
+        // one 16-datum group). The _init_topk* engine inits do not program it; production gets it
+        // from this LLK init (and again from metal topk_init), so run it here instead of inheriting
+        // whatever the previous op left in ADDR_MOD_6.
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::topk_local_sort>();
         // The topk network needs its own init (replay state, dest-index tracking, constants); the
         // fused engine and the defuse sweep need the fused variant.

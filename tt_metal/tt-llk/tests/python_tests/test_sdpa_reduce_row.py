@@ -14,17 +14,19 @@ columns down to one scalar (MAX or SUM pool), written into column 0 of that row.
 Which 32 Dest datums form a logical row follows from the op's loads (see the golden derivation
 block at the top of sources/sdpa_reduce_row_test.cpp): an SFPLOAD at Dest offset o reads the
 aligned group of four rows o & ~3, one row per 8-lane subvector, taking the even columns when
-(o & 2) == 0 and the odd columns otherwise (SFPLOAD.md). The op folds offsets 0, 2, 8, 10 into
-one register and 4, 6, 12, 14 into another, so subvector s of those registers holds all 16
-columns of face rows s and s + 8 (resp. 4 + s and 12 + s). The epilogue then reduces each 8-lane
-subvector into its lane 0 and the stores (offsets 0 and 4) land that lane in column 0 of face
-rows 0-7. So, in row-major 32x32 tile coordinates:
+(o & 2) == 0 and the odd columns otherwise
+(https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPLOAD.md).
+The op folds offsets 0, 2, 8, 10 into one register and 4, 6, 12, 14 into another, so subvector s
+of those registers holds all 16 columns of face rows s and s + 8 (resp. 4 + s and 12 + s). The
+epilogue then reduces each 8-lane subvector into its lane 0 and the stores (offsets 0 and 4) land
+that lane in column 0 of face rows 0-7. So, in row-major 32x32 tile coordinates:
 
     logical row r (r = 0..7) = tile[r, 0:16] ++ tile[r + 8, 0:16]
     output                   = tile_out[r, 0]       MAX -> max(row),  SUM -> sum(row)
 
 Only those eight output lanes are defined; every other lane of the tile is left as the op found
-it (the A2D datacopy of the input) or holds the epilogue's partial sums, and is not asserted.
+it (the A2D datacopy of the input) or holds the epilogue's partial reductions, and is not
+asserted.
 """
 
 import torch
@@ -142,8 +144,13 @@ def test_sdpa_reduce_row(
     ).reshape(input_dimensions)
 
     # Validate ONLY the op's defined output lanes: column 0 of rows 0..LOGICAL_ROWS-1.
+    # MAX returns one of its inputs, so it must be bit-exact: with uniform [0.1, 1.1) stimuli
+    # every row max lies in [1.0, 1.1] and the default Float16_b tolerance (atol 0.05) would
+    # also accept a max over only part of the row. SUM accumulates in fp32 and rounds to
+    # bf16 at the store, so it keeps the format tolerance.
     assert passed_test(
         golden,
         res_tensor[:LOGICAL_ROWS, 0],
         formats.output_format,
+        max_ulp=0 if reduce_pool == ReducePool.Max else None,
     )

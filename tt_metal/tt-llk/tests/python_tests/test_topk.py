@@ -298,24 +298,13 @@ def test_topk_sfpu(
 
 
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-        ]
-    ),
-    input_dimensions=[
-        [32, 128],
-    ],
-    K=[32],
     sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
-    # The harness init has the plain and the fused engine init; rank-stamped and
-    # comparator-stable modes do not go through it.
-    sort_mode=["unstable", "fused"],
+    # The harness init runs the plain engine init for the unstable and comparator-stable
+    # sorts (its topk branch ignores STABLE_SORT) and the fused engine init for fused keys;
+    # only the rank-stamped mode has no harness variant.
+    sort_mode=["unstable", "stable", "fused"],
 )
 def test_topk_sfpu_harness_init(
-    formats: InputOutputFormat,
-    input_dimensions: list,
-    K: int,
     sort_direction: TopKSortDirection,
     sort_mode: str,
 ):
@@ -325,6 +314,10 @@ def test_topk_sfpu_harness_init(
     result buffer back, so this is the check that the harness init programs everything the
     sort network relies on (the DEST increment its replayed stores advance through) and does
     not inherit it from whatever ran on the core before."""
+    formats = input_output_formats([DataFormat.Float16_b])[0]
+    # Single 2-tile slab per stage (also the fused-mode W == 128 constraint).
+    input_dimensions = [32, 128]
+    K = 32
     _run_topk_sfpu(
         formats, input_dimensions, K, sort_direction, sort_mode, harness_init=True
     )
