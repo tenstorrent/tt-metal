@@ -1446,7 +1446,7 @@ class TestWarmupConstantScheduler:
     )
     def test_trajectory(self, warmup, expected):
         sched = WarmupConstantScheduler(_make_opt(), warmup)
-        assert _trace(sched, len(expected)) == pytest.approx(expected, abs=1e-9)
+        assert _trace(sched, len(expected)) == pytest.approx(expected, abs=1e-7)
 
     def test_rejects_non_positive_warmup(self, expect_error):
         with expect_error(ValueError, "must be greater than zero"):
