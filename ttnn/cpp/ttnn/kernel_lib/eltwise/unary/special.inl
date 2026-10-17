@@ -49,6 +49,9 @@ template <DataFormat DF, Dst Cond, Dst A, Dst B, Dst Out>
 struct Where : TernaryOp<Where<DF, Cond, A, B, Out>, Cond, A, B, Out> {
     static ALWI void init() { where_tile_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) {
+        static_assert(
+            !(DF == DataFormat::Float16_b && DST_ACCUM_MODE),
+            "Where<Float16_b> addresses 16-bit halves of each Dest word; under a 32-bit Dest use Where<Float32>");
         where_tile<DF>(
             to_u32(Cond) + slot_offset, to_u32(A) + slot_offset, to_u32(B) + slot_offset, to_u32(Out) + slot_offset);
     }
