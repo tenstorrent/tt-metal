@@ -20,7 +20,8 @@ dispatch excluded, the inter-call fence included). Each line reports us/call, th
   scripts/run_safe_pytest.sh --no-precompile ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/unit/test_fabric_rs_vs_ag.py -s -rs
 
 RSAG_ROWS (Sb G per chip, comma list, default 5120,20480), RSAG_PAYLOAD (router payload bytes, default 8192, the GLM
-spec), RSAG_LINKS (default 2), RSAG_CALLS (default 10), RSAG_REPLAYS (default 5)."""
+spec), RSAG_LINKS (default 2), RSAG_CALLS (default 10), RSAG_REPLAYS (default 5),
+RS_PORT_MODE (the reduce-scatter's port_mode: single, split, l1)."""
 
 import os
 import statistics
@@ -35,6 +36,7 @@ ROWS = [int(v) for v in os.environ.get("RSAG_ROWS", "5120,20480").split(",")]
 LINKS = int(os.environ.get("RSAG_LINKS", "2"))
 CALLS = int(os.environ.get("RSAG_CALLS", "10"))
 REPLAYS = int(os.environ.get("RSAG_REPLAYS", "5"))
+PORT_MODE = os.environ.get("RS_PORT_MODE", "single")
 H = 4096
 
 CASES = [
@@ -120,7 +122,7 @@ def test_fabric_rs_vs_ag(mesh_device, cluster_axis, topology):
             )
         kw = dict(cluster_axis=cluster_axis, topology=topology, num_links=LINKS)
         try:
-            y_rs = fabric_reduce_scatter(x_rs, **kw)
+            y_rs = fabric_reduce_scatter(x_rs, port_mode=PORT_MODE, **kw)
             y_ag = ag_py(x_ag, dim=2, **kw)
         except ValueError as e:
             pytest.skip(f"unsupported on this fabric: {e}")
@@ -134,9 +136,9 @@ def test_fabric_rs_vs_ag(mesh_device, cluster_axis, topology):
             want = torch.cat([shards[i, j] for i, j in grp]).float()
             ag_err = max(ag_err, (ttnn.to_torch(b).float().reshape(G * Sb, H) - want).abs().max().item())
 
-        t_rs = _time_per_call(mesh_device, lambda: fabric_reduce_scatter(x_rs, output=y_rs, **kw))
+        t_rs = _time_per_call(mesh_device, lambda: fabric_reduce_scatter(x_rs, output=y_rs, port_mode=PORT_MODE, **kw))
         t_ag = _time_per_call(mesh_device, lambda: ag_py(x_ag, dim=2, output=y_ag, **kw))
-        timed = [("reduce_scatter", t_rs), ("all_gather py", t_ag)]
+        timed = [(f"RS {PORT_MODE}", t_rs), ("all_gather py", t_ag)]
         if ring == (cluster_axis is None):  # the C++ op's own topology on this fabric
             y_c = ttnn.allocate_tensor_on_device(y_ag.spec, mesh_device)
             ttnn.bringup.fabric_all_gather(x_ag, 2, y_c, cluster_axis=cluster_axis, num_links=LINKS)

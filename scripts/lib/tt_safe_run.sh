@@ -271,7 +271,9 @@ ttrun_setup_hang_hook() {
     export TT_METAL_OPERATION_TIMEOUT_SECONDS="$DISPATCH_TIMEOUT"
     mkdir -p "$TRIAGE_OUT_DIR"
     if python3 -c "import ttexalens" 2>/dev/null; then
-        export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check ${TRIAGE_EXTRA_ARGS} --llm-output --llm-output-path=${TRIAGE_REPORT} > ${TRIAGE_LOG} 2>&1"
+        # tt-exalens reads the chips over NOC1 by default and its topology discovery does not fail over: a hang that
+        # wedges NOC1 itself makes that first read time out and triage reports nothing. Retry over NOC0 then.
+        export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check ${TRIAGE_EXTRA_ARGS} --llm-output --llm-output-path=${TRIAGE_REPORT} > ${TRIAGE_LOG} 2>&1 || { echo '=== triage failed over the default NOC, retrying over NOC0 ===' >> ${TRIAGE_LOG}; python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check ${TRIAGE_EXTRA_ARGS} --noc-id=0 --llm-output --llm-output-path=${TRIAGE_REPORT} >> ${TRIAGE_LOG} 2>&1; }"
     else
         # Requires tt-exalens: uv pip install -r tools/triage/requirements.txt. The warning is
         # deferred to EXIT so it is not buried in the child's output.

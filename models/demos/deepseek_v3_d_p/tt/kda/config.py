@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -34,6 +35,14 @@ KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_OUTPUT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
+# Probe: KDA_L1 = comma list of intermediates kept in interleaved L1 instead of DRAM: proj (fused input projection
+# output), glue (its qkv slice and row-major copy), conv (q, k, v), decay (the gate), terms (chunk terms), out (the
+# scan output), norm (the gated norm output). Default empty: every one in DRAM as before.
+KDA_L1 = frozenset(s for s in os.environ.get("KDA_L1", "").split(",") if s)
+
+
+def kda_mc(name: str) -> ttnn.MemoryConfig:
+    return ttnn.L1_MEMORY_CONFIG if name in KDA_L1 else ttnn.DRAM_MEMORY_CONFIG
 
 
 def l1_when_it_fits(device, nbytes: int, bytes_per_core: int) -> ttnn.MemoryConfig:

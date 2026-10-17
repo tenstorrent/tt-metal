@@ -20,6 +20,8 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
     decay_projection_program_config,
+    KDA_L1,
+    kda_mc,
     l1_when_it_fits,
     tuned_projection_matmul_configs,
 )
@@ -34,7 +36,7 @@ def _slice_width(tensor: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
     begin = [0] * len(stop)
     begin[-1] = start
     stop[-1] = end
-    return ttnn.slice(tensor, tuple(begin), tuple(stop), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.slice(tensor, tuple(begin), tuple(stop), memory_config=kda_mc("glue"))
 
 
 def _largest_divisor_at_most(value: int, limit: int) -> int:
@@ -193,6 +195,8 @@ class ttKDA:
         self.decay_memory_config = l1_when_it_fits(
             mesh_device, self.active_seq_len_local * decay_width * 2, KDA_DECAY_L1_BYTES_PER_CORE
         )
+        if "decay" in KDA_L1:
+            self.decay_memory_config = ttnn.L1_MEMORY_CONFIG
         # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
         # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
         self.kda_compute_config = ttnn.init_device_compute_kernel_config(
@@ -322,7 +326,7 @@ class ttKDA:
             actual_start=actual_start,
             sequence_parallel_axis=self.sequence_parallel_axis,
             predecessor_carry=predecessor,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=kda_mc("conv"),
         )
         return q, k, v, new_state
 
@@ -338,14 +342,14 @@ class ttKDA:
                 hidden_states,
                 weights.input_projection,
                 config=self.input_projection_minimal_matmul_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=kda_mc("proj"),
                 compute_kernel_config=self.compute_config,
             )
         else:
             projected = ttnn.linear(
                 hidden_states,
                 weights.input_projection,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=kda_mc("proj"),
                 compute_kernel_config=self.compute_config,
             )
         auxiliary_start = self._convolution_width
@@ -405,7 +409,7 @@ class ttKDA:
             weights.norm,
             config.num_heads,
             epsilon=config.norm_eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=kda_mc("norm"),
             compute_kernel_config=self.kda_compute_config,
             output_dtype=self.gated_rms_output_dtype,
             gate_column_offset=output_gate_offset,
@@ -497,11 +501,14 @@ class ttKDA:
         if selections is None:
             selections = self.selections(actual_start, actual_end)
         projected = self._project_inputs(hidden_states)
-        qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=kda_mc("glue"))
         convolution_state = ttnn.to_layout(
             state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, selections, actual_start)
+        if "glue" in KDA_L1:  # probe: the L1 slice and its row-major copy are dead after the convolution
+            ttnn.deallocate(qkv)
+            ttnn.deallocate(projected.qkv)
         gate = self._compute_decay(projected.decay_rank, projected.decay_rank_offset)
         result = self.recurrence(
             q=q,

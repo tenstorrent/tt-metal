@@ -9,7 +9,7 @@ reported as unsupported and skipped (RS_STRICT=1 fails instead).
   scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/unit/test_fabric_reduce_scatter_topologies.py -s -rs
 
 RS_MESH=RxC (default 2x4, FABRIC_2D), RS_FABRIC (a FabricConfig name), RS_ROWS (rows per chip of the partial, default
-4096), RS_LINKS (default 2), RS_CALLS (timed calls, default 10). An 8-chip ring along axis 0 on a LoudBox:
+4096), RS_LINKS (default 2), RS_CALLS (timed calls, default 10), RS_PORT_MODE (single, split, l1). An 8-chip ring along axis 0 on a LoudBox:
 RS_MESH=8x1 RS_FABRIC=FABRIC_2D_TORUS_Y TT_MESH_GRAPH_DESC_PATH=<an 8x1 [RING] descriptor>."""
 
 import os
@@ -25,6 +25,7 @@ FABRIC = getattr(ttnn.FabricConfig, os.environ.get("RS_FABRIC", "FABRIC_2D"))
 ROWS = int(os.environ.get("RS_ROWS", "4096"))
 LINKS = int(os.environ.get("RS_LINKS", "2"))
 CALLS = int(os.environ.get("RS_CALLS", "10"))
+PORT_MODE = os.environ.get("RS_PORT_MODE", "single")
 H = 4096
 
 CASES = [
@@ -72,7 +73,7 @@ def test_fabric_rs_topology(mesh_device, cluster_axis, topology, scheme):
     )
     x = ttnn.reshape(x, (1, 1, T, H))
     call = lambda: fabric_reduce_scatter(  # noqa: E731
-        x, cluster_axis=cluster_axis, topology=topology, num_links=LINKS, scheme=scheme
+        x, cluster_axis=cluster_axis, topology=topology, num_links=LINKS, scheme=scheme, port_mode=PORT_MODE
     )
     try:
         out = call()
@@ -118,7 +119,7 @@ def test_fabric_rs_topology(mesh_device, cluster_axis, topology, scheme):
             busiest = (G - 1 if topology == ttnn.Topology.Linear or G == 2 else G // 2) * Sb * H * 2
             dev = f", device {dev_us:7.1f} us (busiest chip, median), busiest link dir {busiest / dev_us / 1e3 / LINKS:5.1f} GB/s per link"
     print(
-        f"FABRIC_RS {rows}x{cols} {FABRIC} axis {cluster_axis} {topology} {scheme} G {G} T {T} links {LINKS}: "
+        f"FABRIC_RS {PORT_MODE} {rows}x{cols} {FABRIC} axis {cluster_axis} {topology} {scheme} G {G} T {T} links {LINKS}: "
         f"{us:8.1f} us/call wall{dev}, max abs err {worst:.3g}, rel {rel:.2e}",
         flush=True,
     )

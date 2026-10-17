@@ -24,6 +24,8 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_PREPARATION_L1_BYTES_PER_CORE,
     KDA_RECURRENT_STATE_DTYPE,
     KDARecurrenceProgramConfig,
+    KDA_L1,
+    kda_mc,
     l1_when_it_fits,
     preparation_bytes,
 )
@@ -207,7 +209,7 @@ def _scan_chunks(
         *prepared.as_kernel_args(),
         group_entry_states,
         groups_per_head=groups_per_head,
-        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+        memory_config=kda_mc("out"),
         compute_kernel_config=compute_config,
         actual_start=actual_start,
         actual_end=actual_end,
@@ -635,6 +637,9 @@ class KDARecurrence:
         if release_gate:
             # Only chunk preparation reads the gate; freeing it here lowers L1 use during the scans.
             ttnn.deallocate(gate)
+            if "conv" in KDA_L1:  # probe: q, k, v in L1 are dead after chunk preparation too
+                for t in (q, k, v):
+                    ttnn.deallocate(t)
         return prepared, state, geometry
 
     @staticmethod

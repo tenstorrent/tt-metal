@@ -227,6 +227,8 @@ class _GlmKDA(ttKDA):
         # (GLM_KDA_PREP_L1=1 tries L1).
         if os.environ.get("GLM_KDA_PREP_L1", "0") != "1":
             self.recurrence._preparation_memory = ttnn.DRAM_MEMORY_CONFIG
+        if "terms" in os.environ.get("KDA_L1", "").split(","):  # probe: the chunk terms in L1 whatever the budget
+            self.recurrence._preparation_memory = ttnn.L1_MEMORY_CONFIG
         # explicit projection schedules (tt/mm_configs.py; tests/test_matmul_tune.py at 2560 rows per chip): input
         # projection minimal_matmul M4 K8 N4 (1.511 -> 1.260 ms, 91% of HiFi4), o_proj 2D multicast (0.504 -> 0.450 ms)
         if mm_configs.ENABLED:
