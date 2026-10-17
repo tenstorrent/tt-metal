@@ -2836,3 +2836,75 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         if hasattr(image_embeds_tt, "deallocate"):
             image_embeds_tt.deallocate(True)
         logger.info("Vision warmup complete")
+
+
+# ---------------------------------------------------------------------------------------------
+# GEMMA4_PREFILL_PHASE_TIMING=1: synchronized per-phase timing of every single-user prefill call
+# (sliding-tail readbacks, per-layer page-table installs, attention, experts), logged per call.
+# Diagnostic only: the synchronizations change nothing but the timing.
+# ---------------------------------------------------------------------------------------------
+if os.environ.get("GEMMA4_PREFILL_PHASE_TIMING", "0") == "1":
+    import models.demos.gemma4.tt.attention as _g4_attn_mod
+    from models.demos.gemma4.tt import experts as _g4_experts_mod
+    from models.demos.gemma4.tt import model as _g4_model_mod
+    from models.demos.gemma4.tt.attention import prefill as _g4_attn_prefill_mod
+
+    _G4_PHASE = defaultdict(float)
+    _G4_PHASE_N = defaultdict(int)
+
+    def _g4_phase_timed(name, fn, mesh_getter):
+        def wrapper(*a, **k):
+            mesh = mesh_getter(a)
+            if mesh is not None:
+                ttnn.synchronize_device(mesh)
+            t0 = time.perf_counter()
+            try:
+                return fn(*a, **k)
+            finally:
+                if mesh is not None:
+                    ttnn.synchronize_device(mesh)
+                _G4_PHASE[name] += time.perf_counter() - t0
+                _G4_PHASE_N[name] += 1
+
+        return wrapper
+
+    def _g4_mesh_of_tensor(a):
+        try:
+            return a[0].device()
+        except Exception:
+            return None
+
+    _g4_attn_prefill_mod._read_sliding_tail_from_paged_cache = _g4_phase_timed(
+        "sliding_tail_readback", _g4_attn_prefill_mod._read_sliding_tail_from_paged_cache, _g4_mesh_of_tensor
+    )
+    _g4_model_mod.Gemma4Model.update_persistent_per_layer_page_tables = _g4_phase_timed(
+        "page_table_install",
+        _g4_model_mod.Gemma4Model.update_persistent_per_layer_page_tables,
+        lambda a: getattr(a[0], "mesh_device", None),
+    )
+    _g4_experts_mod.Gemma4Experts.__call__ = _g4_phase_timed(
+        "experts", _g4_experts_mod.Gemma4Experts.__call__, lambda a: getattr(a[0], "mesh_device", None)
+    )
+    _g4_attn_mod.Gemma4Attention.__call__ = _g4_phase_timed(
+        "attention", _g4_attn_mod.Gemma4Attention.__call__, lambda a: getattr(a[0], "mesh_device", None)
+    )
+
+    _g4_orig_single_user = Gemma4Generator.prefill_forward_single_user_text
+
+    def _g4_single_user_with_phases(self, *a, **k):
+        _G4_PHASE.clear()
+        _G4_PHASE_N.clear()
+        t0 = time.perf_counter()
+        try:
+            return _g4_orig_single_user(self, *a, **k)
+        finally:
+            total = time.perf_counter() - t0
+            parts = ", ".join(
+                f"{n} {v*1000:.0f} ms/{_G4_PHASE_N[n]}" for n, v in sorted(_G4_PHASE.items(), key=lambda kv: -kv[1])
+            )
+            logger.info(
+                f"[gemma4-prefill-phases] single-user prefill {total*1000:.0f} ms"
+                f" (seq {k.get('seq_len', '?')}, start_pos {k.get('start_pos', k.get('num_cached_tokens', '?'))}): {parts}"
+            )
+
+    Gemma4Generator.prefill_forward_single_user_text = _g4_single_user_with_phases
