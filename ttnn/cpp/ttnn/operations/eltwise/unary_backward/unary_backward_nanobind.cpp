@@ -1299,7 +1299,8 @@ void py_module(nb::module_& mod) {
         &ttnn::rpow_bw,
         R"doc(Performs backward operations for rpow on :attr:`input_tensor`, :attr:`exponent` with given :attr:`grad_tensor`.)doc",
         "exponent",
-        "Exponent value",
+        "The scalar base: rpow computes exponent ** input_tensor, so the gradient is grad * ln(exponent) * "
+        "exponent ** input_tensor",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     bind_unary_backward_op<"round_bw">(
