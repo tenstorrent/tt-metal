@@ -159,13 +159,22 @@ def _run_pack_untilize(
     )
 
     if narrow_row:
-        # The per-row L1 stride and the block start are kept in 16 B units: Blackhole adds the stride after
-        # every row, Wormhole only for partial blocks (a full-width block streams its rows contiguously), so a
-        # narrow block row that is not a multiple of 16 B cannot be expressed there (the LLK asserts it).
+        # Packer L1 addresses are kept in 16 B units, and the LLKs assert the narrow layouts that cannot be
+        # expressed in them (the test would hit the assert, not a silent overlap):
+        #  - with more than one packer enabled, each packer's slab of 8 rows x full_ct_dim x row_num_datums
+        #    datums (Wormhole non-diagonal layout; a 1-byte format with odd full_ct_dim * row_num_datums);
+        #  - the per-row stride / block start of block_ct_dim x row_num_datums datums: Blackhole adds the
+        #    stride after every row, Wormhole only for partial blocks (a full-width block streams its rows
+        #    contiguously).
         full_ct_dim = input_dimensions[1] // tile_dimensions[1]
-        block_row_bytes = (
-            Fraction(formats.output_format.size) * block_ct_dim * row_num_datums
-        )
+        datum_bytes = Fraction(formats.output_format.size)
+        packers = num_faces if face_r_dim == 16 else 1
+        slab_bytes = datum_bytes * 8 * full_ct_dim * row_num_datums
+        if packers > 1 and slab_bytes % 16 != 0:
+            pytest.skip(
+                f"a packer slab of {slab_bytes} B is not a multiple of the 16 B L1 address unit"
+            )
+        block_row_bytes = datum_bytes * block_ct_dim * row_num_datums
         if block_row_bytes % 16 != 0 and (
             get_chip_architecture() == ChipArchitecture.BLACKHOLE
             or block_ct_dim != full_ct_dim
@@ -374,4 +383,28 @@ def test_pack_untilize_narrow_row_dest_offset(
         narrow_row=True,
         row_num_datums=8,
         tile_dst_rt_offset=tile_dst_rt_offset,
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int8]),
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    # 1-byte L1 datums: each packer's slab (8 rows x full_ct_dim x row_num_datums B) has to stay 16 B
+    # aligned, so [96, 96] with row_num_datums 1 (24 B) is skipped by _run_pack_untilize; the others run.
+    input_dimensions=[[64, 64], [96, 96], [32, 128]],
+    row_num_datums=[1, 8],
+)
+def test_pack_untilize_narrow_row_1_byte(
+    formats,
+    dest_acc,
+    input_dimensions,
+    row_num_datums,
+):
+    """Narrow rows with a 1-byte L1 format: packer slabs of an odd byte count are the alignment edge."""
+    _run_pack_untilize(
+        formats,
+        dest_acc,
+        input_dimensions,
+        narrow_row=True,
+        row_num_datums=row_num_datums,
     )
