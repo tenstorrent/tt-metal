@@ -532,6 +532,27 @@
   "started": "2026-10-17T10:51:20",
   "status": "PASS"
  },
+ "C.dec_reindex.attn_collapse": {
+  "attempts": 0,
+  "duration_s": 56.7,
+  "history": [
+   {
+    "s": 56.7,
+    "status": "PASS",
+    "t": "2026-10-17T11:38:55"
+   }
+  ],
+  "last_run": "2026-10-17T11:38:55",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.dec_reindex.attn_collapse.log",
+  "metrics": {
+   "err_attn_collapse_L24": 0.0023690988309681416,
+   "err_attn_collapse_L24_limit": 0.5729773044586182
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T11:37:58",
+  "status": "PASS"
+ },
  "C.dec_reindex.attn_hc": {
   "attempts": 0,
   "duration_s": 48.0,
