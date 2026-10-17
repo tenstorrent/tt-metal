@@ -9,6 +9,7 @@ tests/test_kv_cache_table.py and tests/sparse_mla/test_sparse_mla.py.
 
 import math
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -492,7 +493,7 @@ def test_mistral_small4_mla(
 
 
 # ---------------------------------------------------------------------------------------------------
-# Unified chunked-prefill driver. One loop (preload -> N iters of write+rope+ring_mla -> compare)
+# Unified chunked-prefill driver. One loop (preload -> N iters of write+rope+SDPA -> compare)
 # parametrized by where the prefix/reference come from. See test_mla_chunked_prefill below.
 # ---------------------------------------------------------------------------------------------------
 # reference='trace' takes its trace dirs from variant.mla_trace_defaults. MLA_CHUNKED_TRACE_PATH
@@ -526,18 +527,36 @@ K3_CHUNKED_RT_PERF_NS = 10_319_000
 K3_CHUNKED_RT_PERF_MARGIN = 0.03
 
 
+def _op_label(kernel_sources):
+    """Op directories of a program's kernels, e.g. 'experimental/minimal_matmul'; a fused program lists each
+    (the ring SDPAs carry their all-gather kernels)."""
+    ops = set()
+    for source in kernel_sources:
+        match = re.search(r"operations/(.+?)/(?:device/)?kernels/", source)
+        if match:
+            ops.add(match.group(1).removesuffix("/device"))
+    return " + ".join(sorted(ops)) if ops else "?"
+
+
 def _rt_profile_forward_ns(mesh_device, run_fn):
     """Profile one region; return (result, total_ns) where each program contributes its MAX duration
-    across chips (slowest chip gates that program) -- the sparse-MLA/PR #49840 convention."""
+    across chips (slowest chip gates that program) -- the sparse-MLA/PR #49840 convention. Logs the
+    per-op breakdown."""
     result, records = profile_realtime_program(mesh_device, run_fn, collect_all=True)
     per_program = {}
     for record in records:
         runtime_id = record["runtime_id"]
         if not runtime_id:  # 0 is the profiler's own sentinel
             continue
-        duration_ns = float(record["duration_ns"])
-        per_program[runtime_id] = max(per_program.get(runtime_id, 0.0), duration_ns)
-    return result, sum(per_program.values())
+        duration_ns, label = per_program.get(runtime_id, (0.0, _op_label(record["kernel_sources"])))
+        per_program[runtime_id] = (max(duration_ns, float(record["duration_ns"])), label)
+    per_op = {}
+    for duration_ns, label in per_program.values():
+        count, total = per_op.get(label, (0, 0.0))
+        per_op[label] = (count + 1, total + duration_ns)
+    for label, (count, total) in sorted(per_op.items(), key=lambda item: -item[1][1]):
+        logger.info(f"    {label}: {total / 1e6:.3f} ms over {count} program(s)")
+    return result, sum(duration_ns for duration_ns, _ in per_program.values())
 
 
 def _run_chunked_prefill(
@@ -624,8 +643,8 @@ def _run_chunked_prefill(
             max_real_end = max(max_real_end, ka)
     if tight_cache:
         # Cache sized to the REAL tokens, not the padded window, so a late iteration's window runs past
-        # the end of it -- the server's tail chunk. update_padded_kv_cache clamps the write and ring_mla
-        # caps logical_n at the cache.
+        # the end of it -- the server's tail chunk. update_padded_kv_cache clamps the write and the SDPA's
+        # logical_n is capped at the cache.
         write_end = -(-max_real_end // tile) * tile
         max_window = max(chunk_size_global * 2, write_end)
     seq_len_cache = ((max_window + chunk_size_global - 1) // chunk_size_global) * chunk_size_global
@@ -814,7 +833,7 @@ def _run_chunked_prefill(
                 ),
             )
             # Trace-safe metadata variant: build the runner's canonical metadata and hand it to forward
-            # verbatim -- ttMLA threads it to all chunked ops (update/rope/zero_pad/ring_mla), which read
+            # verbatim -- ttMLA threads it to all chunked ops (update/rope/zero_pad/SDPA), which read
             # their per-chunk scalars on-device. The contract is a 3-tuple of separate 1-element uint32
             # tensors indexed as metadata[0]=slot_id, [1]=actual_start, [2]=actual_end -- NOT one packed
             # tensor. slot_id = cache_user_id (layer_num=1, so it is also the flat cache slot).
@@ -1442,6 +1461,36 @@ def test_mistral4_mla_chunked_prefill_loudbox(request, mesh_device, device_param
         determinism_check=False,
         iters_isl=[5120],
         prefill_len=50 * 1024,
+    )
+
+
+# The V expansion (minimal_matmul) covers every local cache row, so at sp=8 it has a quarter of the rows it has here.
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((2, 4), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
+@pytest.mark.skipif(not is_blackhole(), reason="LoudBox (8x p150b) perf; the realtime profiler is Blackhole-only")
+@pytest.mark.timeout(0)
+def test_mla_chunked_perf_loudbox(request, mesh_device, device_params, variant):
+    """Chunked-prefill MLA forward on the LoudBox as a 2x4 mesh, logged with a per-op breakdown. sp=2 / tp=4 with a
+    640-row-per-chip chunk gives every chip the Galaxy's work -- 640 Q rows of its per-chip heads against the 50k
+    cached prefix -- at the production SDPA chunks; only the ring is shorter (2 chips, not 8)."""
+    chunk_size_global = PREFILL_CHUNK_TOKENS_PER_CHIP * mesh_device.shape[0]
+    total_ns = _run_chunked_prefill(
+        request,
+        mesh_device,
+        reference=None,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        profile=True,
+        chunk_size_global=chunk_size_global,
+        iters_isl=[chunk_size_global],
+        prefill_len=50 * 1024,
+    )
+    logger.info(
+        f"{variant.name} chunked 50k + {chunk_size_global} MLA forward (LoudBox 2x4): "
+        f"{total_ns / 1e6:.3f} ms (realtime profiler)"
     )
 
 
