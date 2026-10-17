@@ -6861,6 +6861,14 @@ tasks:
     kind: residual
     layer: 20
     stateful: false
+  frozen:
+    at: '2026-10-17T11:10:57'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_residual.py: 8877ccd9f215b6c888f4cb143561f9b40690b2143173dd4742f925fe165f4eaa
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.dec_candidate.17
   title: 'dec_candidate block with steps 1-17 on device (last: ffn_residual)'
   step: implement
