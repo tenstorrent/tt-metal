@@ -6284,6 +6284,13 @@ tasks:
     - indexer
     - attention
     layer: 20
+  frozen:
+    at: '2026-10-17T09:24:58'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_08_attention.py: c62578cf09fb8da2da397bd242073bf96141e48b66d4a523cf0f2305d93c4c20
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_candidate.attn_residual
   title: dec_candidate attn_residual (residual) on device, layer 20
   step: implement
