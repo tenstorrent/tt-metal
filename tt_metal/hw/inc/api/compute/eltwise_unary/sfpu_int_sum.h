@@ -22,7 +22,7 @@ ALWI void sfpu_sum_int_row(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sum_int_row, (APPROX), idst, VectorMode::C));
 }
 
-ALWI void sfpu_add_int(uint32_t idst, uint32_t dst_offset = 2, int32_t iterations = 8) {
+ALWI void sfpu_add_int(uint32_t idst, uint32_t dst_offset = 2) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, add_int, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, dst_offset));
 }
