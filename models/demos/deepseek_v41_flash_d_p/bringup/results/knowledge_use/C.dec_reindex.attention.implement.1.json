@@ -1,0 +1,43 @@
+{
+ "used": [
+  {
+   "id": "DS41-28",
+   "how": "added \"attention\" to hooks DEVICE_STEPS['dec_reindex'] so the hybrid/contract model runs layer 24's attention on the device",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-36",
+   "how": "ran test_cache_starts with BRINGUP_TASK=C.dec_reindex.attention (layers [20, 24])",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "K-52",
+   "how": "read the real pass's metrics, not the precompile collect pass's stub values",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [],
+ "overseer": [],
+ "cited_only": [
+  "K-31"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.dec_reindex.attention",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-17T12:41:21",
+  "head": "f224684e3df",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.dec_reindex.attention.implement.1.json"
+  ]
+ }
+}
