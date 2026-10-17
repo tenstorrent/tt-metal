@@ -51,7 +51,8 @@ def test_a_flip_is_explained_only_near_the_cutoff():
     k = 4
     nudged = [scores + 1e-6 * torch.randn(scores.shape, generator=g, dtype=torch.float64) for _ in range(3)]
     exact = NF.support(scores, k)
-    assert NF.flips(scores, k, exact, nudged) == {"rows": 0, "unexplained": 0, "frac": 0.0}
+    pick = lambda d: {x: d[x] for x in ("rows", "unexplained", "frac")}  # noqa: E731
+    assert pick(NF.flips(scores, k, exact, nudged)) == {"rows": 0, "unexplained": 0, "frac": 0.0}
     near = exact.clone()
     order = scores[0].argsort(descending=True)
     near[0, order[k - 1]], near[0, order[k]] = False, True  # swap the k-th and k+1-th: a near tie
@@ -59,9 +60,14 @@ def test_a_flip_is_explained_only_near_the_cutoff():
     far[1, scores[1].argmax()] = False
     far[1, scores[1].argmin()] = True  # the best expert out, the worst in
     f_near = NF.flips(scores, k, near, nudged)
-    assert f_near == {"rows": 1, "unexplained": 0, "frac": 1 / 256}  # a 1e-9 gap, the nudge spreads ~1e-6
+    assert pick(f_near) == {"rows": 1, "unexplained": 0, "frac": 1 / 256}  # a 1e-9 gap, the nudge spreads ~1e-6
+    assert f_near["recall_tie"] == 1.0 and f_near["recall"] == 1 - 1 / (4 * 256)
+    wide = [scores + 0.5 * torch.randn(scores.shape, generator=g, dtype=torch.float64) for _ in range(3)]
+    f_wide = NF.flips(scores, k, far, wide)  # a nudge that moves the scores by ~1 explains the far swap ...
+    assert f_wide["unexplained"] == 0 and f_wide["recall_tie"] < 1  # ... the tie-aware recall (rtol only) does not
     f_far = NF.flips(scores, k, far, nudged)
-    assert f_far == {"rows": 1, "unexplained": 1, "frac": 1 / 256}
+    assert pick(f_far) == {"rows": 1, "unexplained": 1, "frac": 1 / 256}
+    assert f_far["recall_tie"] == f_far["recall"] < 1 and f_far["worst_recall_tie"] == 0.75
 
 
 def test_a_selection_without_topk_has_no_scores():
@@ -70,6 +76,68 @@ def test_a_selection_without_topk_has_no_scores():
     assert sc is None and k is None
     out, sc, k = NF.tapped(lambda a: a.topk(3, dim=-1)[1], [x])
     assert k == 3 and torch.equal(sc, x.double())
+
+
+def _causal_topk(x, keys, k, block=4):
+    """An indexer-like step: per block of query rows, the k best visible keys (-inf beyond the row), pads -1; then a
+    second top-k of another width (block scores) the output does not hold."""
+    s, n = x.shape[0], keys.shape[0]
+    out = torch.full((s, k), -1)
+    for t0 in range(0, s, block):
+        sc = x[t0 : t0 + block] @ keys.T
+        sc = sc.masked_fill(torch.arange(n) > torch.arange(t0, t0 + sc.shape[0])[:, None], float("-inf"))
+        sc.unflatten(-1, (-1, 2)).amax(-1).topk(2, dim=-1)  # candidate blocks: a top-k of another width
+        v, i = sc.topk(k, dim=-1)
+        out[t0 : t0 + block] = torch.where(torch.isfinite(v), i, -1)
+    return out
+
+
+def test_scores_match_only_when_they_hold_every_id():
+    """F101: a top-k of another width (k = width, all ids < width) never stands in for the output's scores."""
+    x = torch.randn(8, 64)
+    out, sc, k = NF.tapped(lambda a: (a[:, :16].topk(16, dim=-1), a.topk(4, dim=-1)[1])[1], [x])
+    assert k == 4 and sc.shape == (8, 64)
+    out, sc, k = NF.tapped(lambda a: (a[:, :16].topk(16, dim=-1), a.topk(4, dim=-1)[1] + 64)[1], [x])
+    assert sc is None  # ids beyond every tapped width
+
+
+def test_an_index_list_is_checked_by_tie_aware_recall():
+    """F101: an index output (top-k positions per row, in row blocks, after another top-k) gets its scores; a swap
+    at a near tie is explained and keeps the tie-aware recall at 1, a masked or a far position is not."""
+    g = torch.Generator().manual_seed(1)
+    x, keys = torch.randn(16, 8, generator=g), torch.randn(16, 8, generator=g)
+    want, sc, k = NF.tapped(lambda a: _causal_topk(a, keys, 4), [x])
+    row5 = (x[5:6] @ keys.T).masked_fill(torch.arange(16) > 5, float("-inf"))[0].double()
+    assert k == 4 and sc.shape == (16, 16) and torch.allclose(sc[5], row5)  # the position scores, row blocks stacked
+    w = NF.support(want, k, 16)
+    assert w.sum(1).tolist() == [min(r + 1, 4) for r in range(16)]  # pads dropped
+    r = 10
+    order = sc[r].argsort(descending=True)
+    sc_tie = sc.clone()
+    sc_tie[r, order[k]] = sc[r, order[k - 1]] * (1 - 5e-4)  # the k+1-th 0.05 % below the k-th: a near tie
+    swapped = want.clone()
+    swapped[r, (want[r] == order[k - 1]).nonzero()[0, 0]] = order[k]
+    f = NF.flips(sc_tie, k, NF.support(swapped, k, 16), [], w)
+    assert f["rows"] == 1 and f["unexplained"] == 0 and f["recall_tie"] == 1.0 and f["recall"] < 1.0
+    masked = want.clone()
+    masked[3, 0] = 12  # a position after its row: -inf in the reference, never a tie
+    f = NF.flips(sc, k, NF.support(masked, k, 16), [], w)
+    assert f["unexplained"] == 1 and f["recall_tie"] < 1.0
+    wrong = want.clone()
+    wrong[r, (want[r] == order[0]).nonzero()[0, 0]] = order[-1]  # the best position out, a far one in
+    assert NF.flips(sc, k, NF.support(wrong, k, 16), [], w)["unexplained"] == 1
+
+
+def test_a_near_tie_by_rtol_without_a_nudge_spread():
+    """F101: without a nudge spread, a swap whose scores agree to tie_rtol is a tie (Momcilo's rule); 1 % apart is not."""
+    scores = torch.tensor([[4.0, 3.0, 2.0, 1.0]], dtype=torch.float64)
+    want = NF.support(scores, 2)
+    got = torch.tensor([[True, False, True, False]])
+    for gap, ok in ((NF.TIE_RTOL * 0.5, True), (0.01, False)):
+        sc = scores.clone()
+        sc[0, 2] = 3.0 * (1 - gap)
+        f = NF.flips(sc, 2, got, [], want)
+        assert (f["unexplained"] == 0) == ok and (f["recall_tie"] == 1.0) == ok
 
 
 def test_the_official_arithmetic_raises_a_floor(gspec, monkeypatch):  # noqa: F811
