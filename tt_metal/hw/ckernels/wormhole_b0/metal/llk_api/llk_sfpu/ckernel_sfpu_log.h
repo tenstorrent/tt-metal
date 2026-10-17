@@ -50,8 +50,7 @@ namespace sfpu {
  * @tparam IS_BASE_TWO If true, multiply only the mantissa term by log_base_scale_factor and add the
  *   exponent term as e_float * 2^-23, so log2 of a power of two is exact. log_base_scale_factor is
  *   always applied, and the result is log2(a) only when the factor is the fp32 bits of 1/ln(2)
- *   (0x3FB8AA3B); with a factor of 0 the mantissa term vanishes and the result is just the
- *   exponent. Requires HAS_BASE_SCALING, enforced below.
+ *   (0x3FB8AA3B). Requires HAS_BASE_SCALING, enforced below.
  */
 template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, bool IS_BASE_TWO = false>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
