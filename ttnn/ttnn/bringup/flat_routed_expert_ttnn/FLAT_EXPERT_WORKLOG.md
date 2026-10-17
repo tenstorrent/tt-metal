@@ -829,3 +829,21 @@ pinned blocks do not help the mix; only down reads issued next to the DRAM colum
    benchmark favours): crashes with the env on both flat ops (core_coord TT_THROW); scoped to the routed program
    (K3_EXP_ENV=..., new: comma-separated flat knobs for that program only) it overflows the fused program's arena
    (factory.cpp:1051 off + size <= arena.aligned_size_per_bank()) - needs the arena / combine L1 layout resized.
+
+### DeepSeek V4.1-Flash shapes (2026-10-17): H 5120, I 2304, 384 experts, top-6, clamped SwiGLU (limit 10)
+Balanced sweep (test_flat_balanced_sweep.py, one chip of bh-lb-09 12 x 10, bfp4, LoFi, clamped_silu, capacity 8192,
+E local = 48 / 24 / 12 = 2x4 / 4x4 / 4x8; the model's M at 5120 tokens = 80).
+**I 2304 is unsupported**: TT_FATAL "no gate/up split for 72 tile columns" (flat_routed_expert_plan.cpp gu_split): the
+per-core column count It / np (np 1..4) must be a multiple of the 16 readers - 72 / 36 / 24 / 18 are not (and np 1 is
+> 64 gate/up cores). Subgrid modes (8 / 4 readers) only for It <= 32. Everything else at H 5120 runs (bracket below).
+us per expert (DRAM % of 512 GB/s), balanced, slowest of the second (non-precompile) pass:
+| M | I 2048: E 48 | E 24 | E 12 | I 3072: E 48 | E 24 | E 12 |
+| 32 | 40.4 (89%) | 41.1 (87%) | 42.6 (84%) | 62.0 (86%) | 61.7 (86%) | 61.9 (86%) |
+| 80 | 45.1 (84%) | 45.6 (83%) | 47.5 (79%) | 69.1 (80%) | 70.4 (78%) | 72.2 (76%) |
+| 128 | 50.0 (79%) | 50.3 (79%) | 52.1 (76%) | 72.3 (79%) | 74.2 (77%) | 76.8 (74%) |
+| 256 | 61.1 (73%) | 62.1 (72%) | 64.9 (69%) | 82.6 (75%) | 84.2 (74%) | 88.8 (70%) |
+| 1024 | 169.5 (45%) | 171.8 (44%) | 176.8 (43%) | 270.7 (34%) | 273.4 (34%) | 278.1 (33%) |
+Both run at ~385-390 GB/s effective at M 80, so I 2304 (19.9 MB / expert) would be ~51 us / expert with a split of the
+same efficiency: ~2.45 / 1.22 / 0.62 ms a call at 48 / 24 / 12 experts. Padding to I 3072 (the K3 split) runs today
+at ~70 us / expert (+37%). Natural fix: np 3 -> 24 pair-sets over the 16 readers, 3 per bank (2 + 1 per reader, banks
+balanced), g 2 -> 48 gate/up cores as K3 - needs per-reader pair-set counts in the plan and readers.
