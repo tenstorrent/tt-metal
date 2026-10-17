@@ -236,11 +236,17 @@ class TtK3TokenSplitMoE:
         # Allocated here once for its address (the kernels bake it: every call's arena must land there).
         self.sparse_dispatch = os.environ.get("K3_DISPATCH", "sparse") == "sparse"
         self.rows_pt = 32 if os.environ.get("K3_TOPK", "custom") == "custom" else 1  # (routing rows per page)
+        # the latent down output untilized straight into this chip's rows of the dispatch buffer (layout_ops with a row
+        # offset), dispatch_prep then only writes the route words: -18 us of own-row copy for +2.5 us of untilize
+        self.lat_direct = self.sparse_dispatch and os.environ.get("K3_LAT_DIRECT", "1") == "1"
         self.dprep = (
-            dispatch_prep_prepare(mesh_device, S=S, K=d.K, EPC=self.EPC, tokens_per_page=self.rows_pt)
+            dispatch_prep_prepare(mesh_device, S=S, K=d.K, EPC=self.EPC, tokens_per_page=self.rows_pt, copy=not self.lat_direct)
             if self.sparse_dispatch
             else None
         )
+        if self.lat_direct:
+            C_ = tuple(mesh_device.shape)[1]
+            self.untilize_x = layout_op_prepare(mesh_device, "untilize", row0_of=lambda r, c: (r * C_ + c) * S)
         # the routing rows' all-gather: one sparse_all_gather_2d to every chip (default) or two ttnn.all_gather
         # (sparse: sparse_all_gather_2d to every chip, 157 us vs 140 for the two ttnn.all_gather at 64-B rows; fag: the
         # dense fabric all-gather, one snake)
@@ -314,7 +320,11 @@ class TtK3TokenSplitMoE:
         gi, gw = self.gather_routing(ids, wts)
         lat = self.latent_down(x)
         xg = self.dispatch(lat, self.dispatch_prep(lat, gi))
-        o = ttnn.to_layout(ttnn.reshape(lat, [self.S, self.d.latent]), ttnn.TILE_LAYOUT)
+        if self.lat_direct:  # (tiled, maybe L1: to DRAM before the shared expert's whole-L1 arena)
+            o = ttnn.to_memory_config(lat, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(lat)
+        else:
+            o = ttnn.to_layout(ttnn.reshape(lat, [self.S, self.d.latent]), ttnn.TILE_LAYOUT)
         n = ttnn.rms_norm(o, epsilon=self.d.eps, weight=self.g_ln, compute_kernel_config=self.cfg_hi)
         yr = self._linear(n, self.w_lu, self.cfg)
         y = ttnn.add(yr, self.shared(x), dtype=ttnn.bfloat16)
@@ -388,8 +398,11 @@ class TtK3TokenSplitMoE:
         return g, g
 
     def latent_down(self, x):
+        """[S, latent]: tiled (lat_direct: dispatch_prep untilizes it into the dispatch buffer), else row-major."""
         l1 = "latdown" in self.l1_set  # (the tiled result is transient: L1; the row-major one feeds the dispatch: DRAM)
         lat = self._linear(x, self.w_ld, self.cfg_lat, memory_config=ttnn.L1_MEMORY_CONFIG if l1 else None)
+        if self.lat_direct:
+            return lat
         rm = ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(lat)
         return rm
@@ -403,7 +416,11 @@ class TtK3TokenSplitMoE:
         dram = ttnn.DRAM_MEMORY_CONFIG
         xbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, N * S, W]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, dram)
         route = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, 1, S]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh, dram)
-        self.dprep(gi, lat_rm, xbuf, route)
+        if self.lat_direct:  # (lat_rm is the tiled latent: own rows straight into the buffer)
+            self.untilize_x(lat_rm, dst=xbuf)
+            self.dprep(gi, None, xbuf, route)
+        else:
+            self.dprep(gi, lat_rm, xbuf, route)
         return xbuf, route
 
     def dispatch(self, lat_rm, prep=None):
@@ -596,6 +613,10 @@ class TtK3TokenSplitMoE:
         lat = self.latent_down(x)
         mark("lat_down")
         prep = self.dispatch_prep(lat, gi)
+        if self.lat_direct and lat.memory_config().buffer_type == ttnn.BufferType.L1:  # (no L1 tensor past the arena)
+            kept = ttnn.to_memory_config(lat, ttnn.DRAM_MEMORY_CONFIG) if keep else None
+            ttnn.deallocate(lat)
+            lat = kept
         mark("dispatch_prep")
         arena = self.alloc_arena()
         mark("arena_zero")

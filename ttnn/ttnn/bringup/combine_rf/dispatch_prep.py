@@ -115,12 +115,14 @@ void kernel_main() {
 
 
 def dispatch_prep_prepare(
-    mesh_device, *, S, K, EPC, n_route=8, n_copy=16, batch=4, torus=(False, False), rows=(8, 9), tokens_per_page=1
+    mesh_device, *, S, K, EPC, n_route=8, n_copy=16, batch=4, torus=(False, False), rows=(8, 9), tokens_per_page=1,
+    copy=True,
 ):
     """Returns run(joint_routing, own_rows, xbuf, route) (one generic_op: route words + own-row copy).
     joint_routing [N S, 2 K] uint16 row-major (replicated), own_rows [S, W] bf16 row-major, xbuf [1, 1, N S, W]
     row-major, route [1, 1, 1, S] uint32 (outputs written in place). Cores (logical): n_route route cores on row
-    rows[0] (each a token range: 8-word multiples, 32-byte aligned route writes), n_copy copy cores on row rows[1]."""
+    rows[0] (each a token range: 8-word multiples, 32-byte aligned route writes), n_copy copy cores on row rows[1].
+    copy=False: route words only (the own rows already in xbuf, e.g. layout_ops' untilize with a row offset; own None)."""
     R, C = tuple(mesh_device.shape)
     N = R * C
     E = N * EPC
@@ -136,13 +138,13 @@ def dispatch_prep_prepare(
     state = {}
 
     def build(jr, own, xbuf, route):
-        W = int(own.shape[-1])
+        W = int(xbuf.shape[-1])
         row = W * 2
         route_l1 = rper * (((4 * K) + 63) // 64 * 64) + rper * 4 + 128
         mesh_desc = ttnn.MeshProgramDescriptor()
         jr_ct = list(ttnn.TensorAccessorArgs(jr).get_compile_time_args())
         rt_ct = list(ttnn.TensorAccessorArgs(route).get_compile_time_args())
-        own_ct = list(ttnn.TensorAccessorArgs(own).get_compile_time_args())
+        own_ct = list(ttnn.TensorAccessorArgs(own).get_compile_time_args()) if copy else []
         xb_ct = list(ttnn.TensorAccessorArgs(xbuf).get_compile_time_args())
         per = -(-S // n_copy)
         for me in range(N):
@@ -164,29 +166,29 @@ def dispatch_prep_prepare(
             program.cbs = [
                 ttnn.CBDescriptor(total_size=route_l1, core_ranges=rset,
                                   format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint32, route_l1)]),
-                ttnn.CBDescriptor(total_size=2 * batch * row, core_ranges=cset,
-                                  format_descriptors=[ttnn.CBFormatDescriptor(1, ttnn.uint32, row)]),
-            ]
+            ] + ([ttnn.CBDescriptor(total_size=2 * batch * row, core_ranges=cset,
+                                    format_descriptors=[ttnn.CBFormatDescriptor(1, ttnn.uint32, row)])] if copy else [])
             rrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for i, rc in enumerate(rcs):
                 rrt[rc.x][rc.y] = [int(jr.buffer_address()), int(route.buffer_address()), min(S, i * rper), min(S, (i + 1) * rper)]
-            for i, cc in enumerate(cps):
+            for i, cc in enumerate(cps if copy else []):
                 t0, t1 = min(S, i * per), min(S, (i + 1) * per)
                 crt[cc.x][cc.y] = [int(own.buffer_address()), int(xbuf.buffer_address()), t0, t1, me * S, 0]
             program.kernels = [
                 ttnn.KernelDescriptor(kernel_source=src, source_type=st, core_ranges=rset,
                                       compile_time_args=jr_ct + rt_ct, runtime_args=rrt, config=dm),
-                ttnn.KernelDescriptor(kernel_source=copy_src, source_type=st, core_ranges=cset,
-                                      compile_time_args=[row, batch] + own_ct + xb_ct, runtime_args=crt, config=dm),
-            ]
+            ] + ([ttnn.KernelDescriptor(kernel_source=copy_src, source_type=st, core_ranges=cset,
+                                        compile_time_args=[row, batch] + own_ct + xb_ct, runtime_args=crt, config=dm)]
+                 if copy else [])
             mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
         return mesh_desc
 
     def run(jr, own, xbuf, route):
-        k = tuple(int(t.buffer_address()) for t in (jr, own, xbuf, route))
+        ts = [jr] + ([own] if copy else []) + [xbuf, route]
+        k = tuple(int(t.buffer_address()) for t in ts)
         if state.get("key") != k:
             state["key"], state["desc"] = k, build(jr, own, xbuf, route)
-        return ttnn.generic_op([jr, own, xbuf, route], state["desc"])
+        return ttnn.generic_op(ts, state["desc"])
 
     return run
 
@@ -205,7 +207,7 @@ def own_rows_copy_prepare(mesh_device, *, S, n_copy=4, batch=8, row0=8):
 
     def build(own, buf):
         row = int(own.buffer_aligned_page_size())
-        own_ct = list(ttnn.TensorAccessorArgs(own).get_compile_time_args())
+        own_ct = list(ttnn.TensorAccessorArgs(own).get_compile_time_args()) if copy else []
         b_ct = list(ttnn.TensorAccessorArgs(buf).get_compile_time_args())
         per = -(-S // n_copy)
         mesh_desc = ttnn.MeshProgramDescriptor()

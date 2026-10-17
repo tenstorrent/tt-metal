@@ -80,15 +80,15 @@ constexpr uint32_t CW = get_compile_time_arg_val(0), WB = get_compile_time_arg_v
 constexpr uint32_t PB = WB / P;  // (a row as P pages of PB bytes)
 constexpr auto dst_args = TensorAccessorArgs<3>();
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0), n = get_arg_val<uint32_t>(1);
+    const uint32_t dst_addr = get_arg_val<uint32_t>(0), n = get_arg_val<uint32_t>(1), row0 = get_arg_val<uint32_t>(2);
     const auto dst = TensorAccessor(dst_args, dst_addr, PB);
     for (uint32_t u = 0; u < n; ++u) {
-        const uint32_t w = get_arg_val<uint32_t>(2 + u), tr = w >> 16, c = w & 0xFFFF;
+        const uint32_t w = get_arg_val<uint32_t>(3 + u), tr = w >> 16, c = w & 0xFFFF;
         cb_wait_front(16, CW);
         const uint32_t l1 = get_read_ptr(16);
         const uint32_t b = c * CW * 64;
         for (uint32_t r = 0; r < 32; ++r) {
-            noc_async_write(l1 + r * CW * 64, dst.get_noc_addr((tr * 32 + r) * P + b / PB) + b % PB, CW * 64);
+            noc_async_write(l1 + r * CW * 64, dst.get_noc_addr((row0 + tr * 32 + r) * P + b / PB) + b % PB, CW * 64);
         }
         noc_async_write_barrier();
         cb_pop_front(16, CW);
@@ -112,7 +112,7 @@ void kernel_main() {
 """
 
 
-def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_config=None):
+def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_config=None, row0_of=None):
     """kind "tilize": run(src [rows, W] bf16 ROW_MAJOR) -> [rows, W] bf16 TILE; "untilize": the reverse. DRAM
     interleaved in and out; rows % 32 == 0, W % (32 * cw) == 0. pages_per_row P: the row-major side stores each row as
     P pages ([rows * P, W / P], e.g. P 2 at W 7168: pages that fit a fabric packet)."""
@@ -131,7 +131,7 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_co
     P = pages_per_row
     out_mc = out_memory_config or ttnn.DRAM_MEMORY_CONFIG  # (e.g. a block-sharded L1 output: the accessor handles it)
 
-    def build(src, dst, rows, W):
+    def build(src, dst, rows, W):  # (untilize, row0_of (mesh row, column) -> the first dst row: one program per chip)
         Wt, nt = W // 32, rows // 32
         assert (W * 2 // P) % (cw * 64) == 0, "a CW-tile chunk must not straddle pages"
         assert rows % 32 == 0 and Wt % cw == 0
@@ -139,47 +139,60 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_co
         per = {i: units[i :: len(cores)] for i in range(len(cores))}
         used = [i for i in range(len(cores)) if per[i]]
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(cores[i], cores[i]) for i in used])
-        rd_rt, wr_rt, cp_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for i in used:
-            c_ = cores[i]
-            rd_rt[c_.x][c_.y] = [int(src.buffer_address()), len(per[i])] + per[i]
-            wr_rt[c_.x][c_.y] = [int(dst.buffer_address()), len(per[i])] + per[i]
-            cp_rt[c_.x][c_.y] = [len(per[i])]
+        def args(row0):
+            rd_rt, wr_rt, cp_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+            for i in used:
+                c_ = cores[i]
+                rd_rt[c_.x][c_.y] = [int(src.buffer_address()), len(per[i])] + per[i]
+                wr_rt[c_.x][c_.y] = [int(dst.buffer_address()), len(per[i])] + ([row0] if kind == "untilize" else []) + per[i]
+                cp_rt[c_.x][c_.y] = [len(per[i])]
+            return rd_rt, wr_rt, cp_rt
         s_ct = list(ttnn.TensorAccessorArgs(src).get_compile_time_args())
         d_ct = list(ttnn.TensorAccessorArgs(dst).get_compile_time_args())
         if kind == "tilize":
             rd_src, rd_ct, wr_src, wr_ct = _READ_ROWS, [cw, W * 2, P] + s_ct, _WRITE_TILES, [cw, Wt] + d_ct
         else:
             rd_src, rd_ct, wr_src, wr_ct = _READ_TILES, [cw, Wt] + s_ct, _WRITE_ROWS, [cw, W * 2, P] + d_ct
-        program = ttnn.ProgramDescriptor()
-        program.cbs = [
-            ttnn.CBDescriptor(total_size=2 * cw * 2048, core_ranges=crs,
-                              format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.bfloat16, 2048)]),
-            ttnn.CBDescriptor(total_size=2 * cw * 2048, core_ranges=crs,
-                              format_descriptors=[ttnn.CBFormatDescriptor(16, ttnn.bfloat16, 2048)]),
-        ]
         import os
 
         swap = os.environ.get("LAYOUT_NOC", "swap") == "swap"  # (reads on NOC0, writes on NOC1)
-        program.kernels = [
-            ttnn.KernelDescriptor(kernel_source=rd_src, source_type=st, core_ranges=crs, compile_time_args=rd_ct,
-                                  runtime_args=rd_rt, config=dm("RISCV_1", ttnn.NOC.NOC_0 if swap else ttnn.NOC.RISCV_1_default)),
-            ttnn.KernelDescriptor(kernel_source=wr_src, source_type=st, core_ranges=crs, compile_time_args=wr_ct,
-                                  runtime_args=wr_rt, config=dm("RISCV_0", ttnn.NOC.NOC_1 if swap else ttnn.NOC.RISCV_0_default)),
-            ttnn.KernelDescriptor(kernel_source=comp, source_type=st, core_ranges=crs, compile_time_args=[cw],
-                                  runtime_args=cp_rt, config=ttnn.ComputeConfigDescriptor()),
-        ]
+
+        def program_for(row0):
+            rd_rt, wr_rt, cp_rt = args(row0)
+            program = ttnn.ProgramDescriptor()
+            program.cbs = [
+                ttnn.CBDescriptor(total_size=2 * cw * 2048, core_ranges=crs,
+                                  format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.bfloat16, 2048)]),
+                ttnn.CBDescriptor(total_size=2 * cw * 2048, core_ranges=crs,
+                                  format_descriptors=[ttnn.CBFormatDescriptor(16, ttnn.bfloat16, 2048)]),
+            ]
+            program.kernels = [
+                ttnn.KernelDescriptor(kernel_source=rd_src, source_type=st, core_ranges=crs, compile_time_args=rd_ct,
+                                      runtime_args=rd_rt, config=dm("RISCV_1", ttnn.NOC.NOC_0 if swap else ttnn.NOC.RISCV_1_default)),
+                ttnn.KernelDescriptor(kernel_source=wr_src, source_type=st, core_ranges=crs, compile_time_args=wr_ct,
+                                      runtime_args=wr_rt, config=dm("RISCV_0", ttnn.NOC.NOC_1 if swap else ttnn.NOC.RISCV_0_default)),
+                ttnn.KernelDescriptor(kernel_source=comp, source_type=st, core_ranges=crs, compile_time_args=[cw],
+                                      runtime_args=cp_rt, config=ttnn.ComputeConfigDescriptor()),
+            ]
+            return program
+
         R, C = tuple(mesh_device.shape)
         mesh_desc = ttnn.MeshProgramDescriptor()
-        mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(R - 1, C - 1))] = program
+        if row0_of is None:
+            mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(R - 1, C - 1))] = program_for(0)
+        else:
+            for r in range(R):
+                for c in range(C):
+                    mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program_for(row0_of(r, c))
         return mesh_desc
 
-    def run(src):
+    def run(src, dst=None):
+        """dst (untilize): an existing row-major [>= row0 + rows, W] tensor (rows from row0_of), else a new one."""
         rows, W = int(src.shape[-2]), int(src.shape[-1])
         if kind == "tilize":  # (src [rows * P, W / P])
             rows, W = rows // P, W * P
             dst = ttnn.allocate_tensor_on_device(ttnn.Shape([rows, W]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, out_mc)
-        else:
+        elif dst is None:
             dst = ttnn.allocate_tensor_on_device(ttnn.Shape([rows * P, W // P]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG)
         k = (int(src.buffer_address()), int(dst.buffer_address()), rows, W)
         if state.get("key") != k:
