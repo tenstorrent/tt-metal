@@ -310,15 +310,16 @@ def test_sfpu_reduce(
         )
 
     if (
-        mathop == MathOperation.ReduceRow
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and mathop == MathOperation.ReduceRow
         and reduce_pool in (ReducePool.Max, ReducePool.Min)
         and formats.input_format == DataFormat.UInt16
         and dest_acc == DestAccumulation.No
     ):
         pytest.skip(
-            reason="UInt16 row MAX/MIN without a 32-bit dest loads with LO16, which the row MAX/MIN "
-            "path does not support (Blackhole rejects it in its row MAX/MIN static_assert). With a "
-            "32-bit dest (dest_acc=Yes) the UInt16 datum is masked on load and the cells run."
+            reason="UInt16 row MAX/MIN without a 32-bit dest loads with LO16, which the Blackhole row "
+            "MAX/MIN path rejects in its static_assert; Wormhole runs these cells. With a 32-bit dest "
+            "(dest_acc=Yes) the UInt16 datum is masked on load and both architectures run them."
         )
 
     if (
