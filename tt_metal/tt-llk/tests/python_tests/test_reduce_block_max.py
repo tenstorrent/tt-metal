@@ -21,10 +21,11 @@ pure MAX and the scaler is a no-op multiplier.
 Coverage (Blackhole + Wormhole B0):
   * compile-time path, ``block_ct_dim`` sweep, bf16 and fp32-dest;
   * runtime path (dynamic ``block_ct_dim``);
-  * reinit_short / reinit_minimal / reinit (addrmod-only) re-arm after a clobbering op,
-    guarding the reconfig-escape path. Compile-time reinit_short/minimal are
+  * reinit_short / reinit_minimal / reinit (all four addrmods, no MOP) re-arm after a
+    clobbering op, guarding the reconfig-escape path. Compile-time reinit_short/minimal are
     Blackhole-only lib fns; runtime reinit_short and runtime reinit run on both arches,
-    runtime reinit_minimal is Blackhole-only.
+    runtime reinit_minimal is Blackhole-only. On Blackhole every reinit also re-applies
+    the Src zero-flag default a preceding copy_tile_custom left at keep.
   * trigger handshake (respect_trigger, + overlap_first_half on the runtime family):
     the unpack splits the block reduce into two half-width MOP runs gated by HW
     semaphores; the PACK thread plays the producer. Both arches. Validates split-MOP
@@ -63,7 +64,7 @@ FORMATS = [
 ]
 
 # REINIT_MODE C++ selector: 0 = plain init, 1 = reinit_short, 2 = reinit_minimal,
-# 3 = reinit (addrmod-only, all four; runtime only).
+# 3 = reinit (all four addrmods, no MOP; runtime only).
 _REINIT_DEFINE = {"none": 0, "short": 1, "minimal": 2, "full": 3}
 
 # CLOBBER_OP C++ selector: op run between init and reinit to overwrite the reduce config,
@@ -74,8 +75,8 @@ _REINIT_DEFINE = {"none": 0, "short": 1, "minimal": 2, "full": 3}
 #   2 = scramble ADDR_MOD_1/2/6 only, preserving ADDR_MOD_3 + MOP; paired with reinit_minimal
 #       (which restores only 1/2/6 and relies on 3/MOP being intact, as matmul/sub_exp do).
 #   3 = scramble ADDR_MOD_1/2/3/6 (every addrmod the reduce consumes), preserving the MOP +
-#       replay buffer; paired with the addrmod-only reinit ("full"), which reprograms exactly
-#       those four and nothing else.
+#       replay buffer; paired with the full reinit, which reprograms exactly those four and
+#       no MOP state.
 _CLOBBER_DEFINE = {"none": 0, "eltwise": 1, "minimal_safe": 2, "addrmod_all": 3}
 
 # The clobber must match the reinit's restore contract, or the reduce hangs.
@@ -281,10 +282,10 @@ def test_reduce_block_max_reinit_runtime(formats, block_ct_dim, reinit):
     """Runtime reinit paths: reinit_short_runtime and reinit_runtime on both arches;
     reinit_minimal_runtime is a Blackhole-only lib fn.
 
-    full is _llk_math_reduce_block_max_row_reinit_runtime_, the addrmod-only
-    re-arm that reprograms all four addrmods the reduce consumes (ADDR_MOD_1/2/3/6) and
-    nothing else. Its clobber (addrmod_all) scrambles exactly those four and leaves
-    the MOP intact, so dropping any one of them from the lib fn breaks this test.
+    full is _llk_math_reduce_block_max_row_reinit_runtime_, the re-arm that reprograms
+    all four addrmods the reduce consumes (ADDR_MOD_1/2/3/6) and no MOP state. Its clobber
+    (addrmod_all) scrambles exactly those four and leaves the MOP intact, so dropping any
+    one of them from the lib fn breaks this test.
     """
     if reinit == "minimal" and get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip(
@@ -327,7 +328,7 @@ def test_reduce_block_max_reinit_after_keep_flag(reinit):
 @pytest.mark.parametrize("reinit", ["short", "minimal", "full"])
 def test_reduce_block_max_reinit_runtime_after_keep_flag(reinit):
     """Runtime twin of test_reduce_block_max_reinit_after_keep_flag: reinit_short_runtime, reinit_minimal_runtime
-    and the addrmod-only reinit_runtime must re-apply the Src zero-flag default after a keep. Blackhole-only: the
+    and the full reinit_runtime must re-apply the Src zero-flag default after a keep. Blackhole-only: the
     Wormhole runtime reinits do not restore the flag (and the Wormhole reduce does not assert it).
     """
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:

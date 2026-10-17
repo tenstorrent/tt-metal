@@ -60,6 +60,7 @@ Blackhole compile plus the ttsim numeric result on the derivable region.
 
 from dataclasses import dataclass
 
+import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat
@@ -68,7 +69,7 @@ from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import StimuliMode, TestConfig
 from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     SDPA_CUSTOM_MM_REUSE_DEST,
@@ -246,6 +247,11 @@ def test_sdpa_custom_mm_reuse_dest_srcb_flushes_denormal_srcb_after_keep_flag():
     V / MVMUL / pack path or a stale result buffer. Mixed P is not golden-comparable for this op (see the
     module docstring), so the two runs are separate.
     """
+    if TestConfig.STIMULI_MODE != StimuliMode.INLINE:
+        # The stimuli cache keys on the pytest node id, one slot per test: --stimuli-only would save the
+        # denormal run and skip before the control, and --use-stimuli would feed the denormal inputs and
+        # golden to both runs, so the control would silently repeat the denormal case.
+        pytest.skip("this test cannot use the stimuli cache")
     M, K, N = TILE_DIM, KT_DIM * TILE_DIM, NT_DIM * TILE_DIM
     torch.manual_seed(0)
     P = BF16_DENORMAL_MIN * torch.randint(1, BF16_DENORMAL_MANTISSAS, (M, K)).float()

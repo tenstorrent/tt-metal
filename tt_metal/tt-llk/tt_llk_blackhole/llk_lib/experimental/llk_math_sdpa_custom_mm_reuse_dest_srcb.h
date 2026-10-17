@@ -89,14 +89,17 @@ inline void sdpa_custom_mm_reuse_dest_srcb_configure_mop(
 /**
  * @brief Configure the math thread for sdpa_custom_mm_reuse_dest_srcb: programs the address mods and the MVMUL replay program.
  *
- * @tparam math_fidelity: Math fidelity the address mods and the MVMUL replay program are built for.
- * @param in0_tile_r_dim: Row count of an in0 (P) tile.
- * @param in0_tile_c_dim: Column count of an in0 (P) tile.
- * @param in1_tile_r_dim: Row count of an in1 (V) tile.
- * @param in1_tile_c_dim: Column count of an in1 (V) tile.
- * @param partial_face: Whether the operand tiles are partial faces (fewer than 16 rows per face).
- * @param transpose: Nonzero to consume in1 transposed.
- * @param kt_dim: Inner dimension in tiles.
+ * @tparam math_fidelity: Accepted for signature parity with @ref _llk_math_matmul_init_no_mop_ and ignored: the address
+ *                        mods and the replay program are LoFi-only (no fidelity phases).
+ * @param in0_tile_r_dim: Accepted for signature parity with the matmul init and ignored: the address mods and the
+ *                        replay program are fixed for the op's tile shape (the in0_tile_r_dim-dependent MOV tail the
+ *                        configure_mop comment describes is not implemented).
+ * @param in0_tile_c_dim: Accepted for signature parity with the matmul init and ignored (see in0_tile_r_dim).
+ * @param in1_tile_r_dim: Accepted for signature parity with the matmul init and ignored (see in0_tile_r_dim).
+ * @param in1_tile_c_dim: Accepted for signature parity with the matmul init and ignored (see in0_tile_r_dim).
+ * @param partial_face: Accepted for signature parity with the matmul init and ignored.
+ * @param transpose: Accepted for signature parity with the matmul init and ignored.
+ * @param kt_dim: Accepted for signature parity with the matmul init and ignored; the execute takes its own kt_dim.
  * @note Establishes the operand-driven default Src zero-substitution state, which
  *       @ref _llk_math_sdpa_custom_mm_reuse_dest_srcb_ asserts under LLK asserts. Re-run this init after any math op
  *       that leaves the flag at keep (a copy init does).

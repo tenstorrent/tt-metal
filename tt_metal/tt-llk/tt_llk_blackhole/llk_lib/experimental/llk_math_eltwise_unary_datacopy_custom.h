@@ -16,28 +16,27 @@
  * 8 rows each).
  *
  * @param dest_index: Tile index in DEST that the copy is written to.
- * @param src_format: Data format of the copied operand as unpacked into SrcA (the CB's unpack destination format,
- *                    which copy_init derives from the CB). Keyed on the copied operand rather than on the cached
- *                    math-side SrcA format: the legacy custom_mm / compressed_custom_mm / sdpa_custom_mm compute
- *                    inits configure unpack as (in1, in0) but math as (in0, in1), so after one of them the math
- *                    cache can hold the other operand's format.
- * @note Sets the Src zero-substitution flag to the copy policy for src_format (keep, so bf16 -0.0 and denormals
- *       land in DEST unchanged; flush for fp8 sources), as copy_init does, and LEAVES it there. The inits / reinits
- *       that re-apply the operand-driven default after this copy are @ref _llk_math_matmul_init_no_mop_ /
- *       @ref _llk_math_matmul_reinit_no_mop_, @ref _llk_math_reduce_block_max_row_init_ /
- *       @ref _llk_math_reduce_block_max_row_reinit_minimal_ / @ref _llk_math_reduce_block_max_row_reinit_with_mop_
- *       and their runtime twins, the custom_mm / compressed_custom_mm / sdpa_custom_mm / sdpa_custom_mm_reuse_dest_srcb /
- *       face_compressed_mm / hadamard_h128 inits and the eltwise-binary init. The ones that do NOT are
- *       @ref _llk_math_sdpa_bcast_col_srcb_reuse_init_, @ref _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_ and
- *       @ref _llk_math_custom_mm_reuse_dest_srcb_init_: an FPU op run through one of those after this copy keeps
- *       denormal Src operands.
+ * @param src_dst_format: Format of the copied operand as unpacked into SrcA (the CB's unpack destination format, which
+ *                        copy_init derives from the CB), as @ref math::_configure_copy_zero_flag_state_ takes it. Keyed on
+ *                        the copied operand rather than on the cached math-side SrcA format: the legacy custom_mm /
+ *                        compressed_custom_mm / sdpa_custom_mm compute inits configure unpack as (in1, in0) but math as
+ *                        (in0, in1), so after one of them the math cache can hold the other operand's format.
+ * @note Sets the Src zero-substitution flag to the copy policy for src_dst_format (keep, so bf16 -0.0 and denormals
+ *       land in DEST unchanged; flush for fp8 sources), as copy_init does, and LEAVES it there. The flag stays at keep
+ *       until an init / reinit calls math::_configure_default_zero_flag_state_(), as the no-mop matmul, reduce_block_max_row,
+ *       custom_mm / compressed_custom_mm / sdpa_custom_mm / sdpa_custom_mm_reuse_dest_srcb, face_compressed_mm,
+ *       hadamard_h128 and eltwise-binary inits / reinits do. Any FPU init that does not call it inherits keep and its
+ *       MVMUL / GMPOOL then keeps denormal Src operands, e.g. @ref _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_,
+ *       @ref _llk_math_deepseek_moe_gate_eltwise_binary_init_, @ref _llk_math_generalized_moe_gate_eltwise_binary_init_,
+ *       @ref _llk_math_eltwise_mul_scalar_block_init_, @ref _llk_math_sdpa_bcast_col_srcb_reuse_init_,
+ *       @ref _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_ and @ref _llk_math_custom_mm_reuse_dest_srcb_init_.
  */
-inline void _llk_math_eltwise_unary_datacopy_custom_(const std::uint32_t dest_index, const std::uint32_t src_format)
+inline void _llk_math_eltwise_unary_datacopy_custom_(const std::uint32_t dest_index, const std::uint32_t src_dst_format)
 {
     // MOVA2D flushes any SrcA datum with a zero exponent byte (bf16 -0.0, denormals) while the Src
     // zero-substitution flag holds the operand default. Apply the copy policy for the copied operand's format
     // (keep, except fp8 whose zero carries a residual); skip-if-set.
-    math::_configure_copy_zero_flag_state_(src_format);
+    math::_configure_copy_zero_flag_state_(src_dst_format);
 
     addr_mod_t {
         .srca = {.incr = 8},

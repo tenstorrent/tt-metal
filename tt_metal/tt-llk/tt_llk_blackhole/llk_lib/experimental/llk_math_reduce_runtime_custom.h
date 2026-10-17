@@ -421,10 +421,11 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
 /**
  * Reinitializes the block-based reduce_max_row operation after a matmul.
  *
- * This LLK API function is used only to re-initialize the address modifiers after a
- * matmul operation in an SDPA inner loop. Please don't use this function as a substitute for
- * the native llk_math_reduce_block_max_row_init LLK. This function is highly specialized
- * for a certain use case and the LLK team does not guarantee any degree of generality.
+ * Re-initializes the four address modifiers the reduce consumes (ADDR_MOD_1/2/3/6) after a matmul
+ * operation in an SDPA inner loop and re-applies the operand-driven Src zero-flag default (a cfg RMW
+ * only when the value differs); the MOP and replay buffer must still be intact. Please don't use this
+ * function as a substitute for the native llk_math_reduce_block_max_row_init LLK. This function is
+ * highly specialized for a certain use case and the LLK team does not guarantee any degree of generality.
  */
 inline void _llk_math_reduce_block_max_row_reinit_runtime_()
 {
@@ -435,11 +436,11 @@ inline void _llk_math_reduce_block_max_row_reinit_runtime_()
 
 /**
  * Short reinitialization for block-based reduce_max_row operation after a matmul.
- * Reprograms address modifiers and MOP configuration. Used when MOP was clobbered
- * but full init is not needed.
+ * Reprograms address modifiers and MOP configuration and re-applies the operand-driven Src
+ * zero-flag default. Used when MOP was clobbered but full init is not needed.
  *
- * This LLK API function is used only to re-initialize the address modifiers and MOP
- * after a matmul operation in an SDPA inner loop.
+ * This LLK API function is used only to re-initialize the address modifiers, the MOP and the
+ * Src zero flag after a matmul operation in an SDPA inner loop.
  */
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_reinit_short_runtime_(std::uint32_t block_ct_dim, const ckernel::TensorShape& tensor_shape)
@@ -454,8 +455,9 @@ inline void _llk_math_reduce_block_max_row_reinit_short_runtime_(std::uint32_t b
 
 /**
  * Minimal reinitialization for block-based reduce_max_row operation.
- * Only reconfigures ADDR_MOD_1, ADDR_MOD_2, and ADDR_MOD_6 (preserves ADDR_MOD_3).
- * Used when only specific addrmods were clobbered by previous operations.
+ * Reconfigures ADDR_MOD_1, ADDR_MOD_2, and ADDR_MOD_6 (preserves ADDR_MOD_3) and re-applies the
+ * operand-driven Src zero-flag default. Used when only specific addrmods were clobbered by previous
+ * operations (and a copy_tile_custom left the flag at keep).
  */
 inline void _llk_math_reduce_block_max_row_reinit_minimal_runtime_()
 {

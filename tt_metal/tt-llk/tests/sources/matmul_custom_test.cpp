@@ -11,10 +11,11 @@
 #include "llk_memory_checks.h"
 #include "params.h"
 
-// Math leaves the Src zero flag at keep (as copy_tile_custom does) and then runs the no-mop reinit before the matmul
-// (see the python side; params.h carries the harness define, so it must come first).
-#ifndef MATMUL_NO_MOP_REINIT_AFTER_KEEP
-#define MATMUL_NO_MOP_REINIT_AFTER_KEEP false
+// Math leaves the Src zero flag at keep (as copy_tile_custom does) after hw_configure and then re-arms the matmul before
+// running it (see the python side; params.h carries the harness define, so it must come first):
+//   0 = no keep, 1 = _llk_math_matmul_reinit_no_mop_ (the SDPA inner-loop path), 2 = a second _llk_math_matmul_init_no_mop_.
+#ifndef MATMUL_NO_MOP_REARM_AFTER_KEEP
+#define MATMUL_NO_MOP_REARM_AFTER_KEEP 0
 #endif
 
 // Globals
@@ -91,15 +92,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
 #ifdef ARCH_BLACKHOLE
-    // The reinit entry point is Blackhole-only; the branch is compiled out on Wormhole, where the switch is never set.
-    if constexpr (MATMUL_NO_MOP_REINIT_AFTER_KEEP)
+    // The flag restore is Blackhole-only; the branch is compiled out on Wormhole, where the switch is never set.
+    if constexpr (MATMUL_NO_MOP_REARM_AFTER_KEEP != 0)
     {
-        // Leave the Src zero flag at keep, as a preceding copy_tile_custom does, then take the inner-loop reinit
-        // path. The reinit must restore the operand-driven value, or MVMUL keeps the denormal SrcB operands it
-        // should flush.
+        // Leave the Src zero flag at keep, as a preceding copy_tile_custom does (hw_configure above applied the
+        // default itself, so the init at the top never saw a keep), then re-arm the matmul. The re-arm must restore
+        // the operand-driven value, or MVMUL keeps the denormal SrcB operands it should flush.
         math::_configure_preserve_zero_flag_state_();
-        _llk_math_matmul_reinit_no_mop_<MATH_FIDELITY, THROTTLE_LEVEL>(
-            false /*transpose*/, TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /*partial_face*/);
+        if constexpr (MATMUL_NO_MOP_REARM_AFTER_KEEP == 1)
+        {
+            // The inner-loop reinit path.
+            _llk_math_matmul_reinit_no_mop_<MATH_FIDELITY, THROTTLE_LEVEL>(
+                false /*transpose*/, TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /*partial_face*/);
+        }
+        else
+        {
+            // The full init, as a kernel that re-inits the matmul after a copy_tile_custom runs it.
+            _llk_math_matmul_init_no_mop_<MATH_FIDELITY, THROTTLE_LEVEL>(
+                TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */, 0 /* transpose */, params.CT_DIM, params.RT_DIM);
+        }
     }
 #endif
 

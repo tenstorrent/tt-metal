@@ -30,15 +30,19 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
+# C++ selector: math leaves the Src zero flag at keep (as copy_tile_custom does) after hw_configure and re-arms the
+# matmul before running it. 0 = no keep, 1 = the no-mop reinit (the SDPA inner-loop path), 2 = a second no-mop init.
+_REARM_DEFINE = {"none": 0, "reinit": 1, "init": 2}
+
 
 @dataclass
-class MATMUL_NO_MOP_REINIT_AFTER_KEEP(TemplateParameter):
-    """Math leaves the Src zero flag at keep (as copy_tile_custom does) and runs the no-mop reinit before the matmul."""
+class MATMUL_NO_MOP_REARM_AFTER_KEEP(TemplateParameter):
+    """Math leaves the Src zero flag at keep (as copy_tile_custom does) and re-arms the no-mop matmul before running it."""
 
-    reinit_after_keep: bool = False
+    rearm_after_keep: str = "none"
 
     def convert_to_cpp(self) -> str:
-        return f"#define MATMUL_NO_MOP_REINIT_AFTER_KEEP {str(self.reinit_after_keep).lower()}"
+        return f"#define MATMUL_NO_MOP_REARM_AFTER_KEEP {_REARM_DEFINE[self.rearm_after_keep]}"
 
 
 # Throttle levels supported by the no-mop matmul math LLK. Throttle only inserts
@@ -88,7 +92,7 @@ def _run_matmul_custom(
     input_B_dimensions,
     throttle_level: int,
     boot_mode: BootMode,
-    reinit_after_keep: bool = False,
+    rearm_after_keep: str = "none",
     operands=None,
 ):
     """Run the no-mop matmul and check it against the golden; return the tilized result.
@@ -144,7 +148,7 @@ def _run_matmul_custom(
         templates=[
             MATH_FIDELITY(math_fidelity),
             THROTTLE_LEVEL(throttle_level),
-            MATMUL_NO_MOP_REINIT_AFTER_KEEP(reinit_after_keep),
+            MATMUL_NO_MOP_REARM_AFTER_KEEP(rearm_after_keep),
         ],
         runtimes=[
             NUM_FACES(),
@@ -189,12 +193,16 @@ OPERAND_SCALE = 2.0**100
 
 
 @blackhole_only
-def test_matmul_custom_reinit_flushes_denormal_srcb_after_keep_flag():
-    """The no-mop reinit must restore the Src zero flag a preceding copy_tile_custom left at keep.
+@pytest.mark.parametrize("rearm", ["reinit", "init"])
+def test_matmul_custom_rearm_flushes_denormal_srcb_after_keep_flag(rearm):
+    """The no-mop reinit and init must restore the Src zero flag a preceding copy_tile_custom left at keep.
 
-    Rows 0-3 of A (SrcB) are bf16 denormals, which a bf16 MVMUL flushes to zero; scaled by B they give nonzero
-    products if kept, so those rows must come out exactly 0. The golden cannot tell flushed rows from kept
-    ones at its tolerance, so only the exact-zero check guards them. The other rows check the rest of the product.
+    The flag is set to keep after hw_configure (which applies the default itself) and the matmul is re-armed
+    through the reinit (the SDPA inner-loop path) or a second init; the execute asserts the operand-driven value
+    under LLK asserts. Rows 0-3 of A (SrcB) are bf16 denormals, which a bf16 MVMUL flushes to zero; scaled by B
+    they give nonzero products if kept, so those rows must come out exactly 0. The golden cannot tell flushed rows
+    from kept ones at its tolerance, so only the exact-zero check guards them. The other rows check the rest of the
+    product.
     """
     dims = [32, 32]
     denormal_rows = 4
@@ -215,7 +223,7 @@ def test_matmul_custom_reinit_flushes_denormal_srcb_after_keep_flag():
         dims,
         throttle_level=0,
         boot_mode=BootMode.DEFAULT,
-        reinit_after_keep=True,
+        rearm_after_keep=rearm,
         operands=(torch_a, torch_b),
     )
     rows = untilize_block(

@@ -24,11 +24,12 @@
 //                     loop), 2 = scramble ADDR_MOD_1/2/6 only (preserving ADDR_MOD_3
 //                     + MOP, the narrow escape reinit_minimal expects), 3 = scramble
 //                     ADDR_MOD_1/2/3/6 (preserving the MOP and replay buffer, the escape
-//                     the addrmod-only reinit expects).
+//                     the full reinit expects).
 //   * REINIT_MODE   - re-arm the reduce config after the clobber, matching the SDPA
 //                     inner-loop reinit paths: 0 = none, 1 = reinit_short (reprogram
-//                     MOP + addrmods), 2 = reinit_minimal (ADDR_MOD_1/2/6 only),
-//                     3 = reinit (all four addrmods; runtime only).
+//                     MOP + addrmods), 2 = reinit_minimal (ADDR_MOD_1/2/6, no MOP),
+//                     3 = reinit (all four addrmods, no MOP; runtime only). On Blackhole
+//                     every reinit also re-applies the Src zero-flag default.
 //   * KEEP_SRC_ZERO_FLAG_BEFORE_REINIT - set the Src zero flag to keep (as copy_tile_custom
 //                     leaves it) immediately before the reinit; the reinit must re-apply the
 //                     operand default, which the reduce execute asserts under LLK asserts.
@@ -131,7 +132,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 //       reinit_minimal expects (it restores 1/2/6 and relies on 3 + MOP being intact, as
 //       the real SDPA predecessors matmul / sub_exp / copy_tile_custom leave them).
 //   3 = scramble ADDR_MOD_1/2/3/6 (every addrmod the reduce consumes), but preserve the MOP
-//       and the replay buffer, which is the escape the addrmod-only reinit (mode 3) expects.
+//       and the replay buffer, which is the escape the full reinit (mode 3) expects.
 //       Unlike clobber 2 this also destroys ADDR_MOD_3.
 static inline void clobber_reduce_config([[maybe_unused]] const ckernel::TensorShape& tensor_shape)
 {
@@ -208,7 +209,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (REINIT_MODE == 3)
         {
             // reduce_block_max_row_reinit_runtime: restore all four addrmods the reduce consumes
-            // (ADDR_MOD_1/2/3/6) and nothing else. Paired with CLOBBER_OP 3 (addrmod-only scramble).
+            // (ADDR_MOD_1/2/3/6) and no MOP state (+ the Src zero-flag default on Blackhole). Paired with
+            // CLOBBER_OP 3 (addrmod-only scramble).
             _llk_math_reduce_block_max_row_reinit_runtime_();
         }
 
