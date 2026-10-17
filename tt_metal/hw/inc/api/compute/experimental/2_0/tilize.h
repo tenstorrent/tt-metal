@@ -30,8 +30,9 @@ namespace experimental {
  * are required: the tilize pack init needs the input format as well as the output format/geometry. `block`
  * is the tilize block width (ct_dim) the unpacker MOP is configured for. Blackhole only.
  *
- * Input tiles with 1 face, narrow (single face column) 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) input tiles, and (for a
- * non-8-bit input) an output tile with one-row faces other than the two-face 1x32 tile are compile-time rejected.
+ * Compile-time rejected: an output geometry that differs from the input (tilize keeps the tile shape), input tiles
+ * with 1 face or a single face column (narrow), and (for a non-8-bit input) a tile with faces shorter than 16 rows
+ * other than a two-face tile.
  *
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                     | bool                   |  | False |
  * | Template | InFormat/InShape   | Input buffer L1 format + geometry (deduced)  | DataFormat/TensorShape |  | True |
@@ -51,9 +52,10 @@ ALWI void tilize_init(
     static_assert(is_legal_tile_shape(OutShape), "tilize_init: illegal output tile shape.");
     static_assert(
         is_supported_tilize_operands(InFormat, InShape, OutShape),
-        "tilize_init: unsupported tilize operands: the input needs 2 or 4 faces, an 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) "
-        "input must be two faces wide, and with a non-8-bit input an output tile with one-row faces must have exactly "
-        "two faces (the tilize unpack / pack programs cover no other operands).");
+        "tilize_init: unsupported tilize operands: the output geometry must equal the input geometry, the input "
+        "must be two faces wide (2 or 4 faces, no narrow tile), and with a non-8-bit input a tile with faces "
+        "shorter than 16 rows must have exactly two faces (the tilize unpack / pack programs cover no other "
+        "operands).");
     UNPACK((llk_unpack_tilize_init<LLKOperand<InFormat, InShape>::descriptor, is_fp32_dest_acc_en>(block)));
     MATH((llk_math_eltwise_unary_datacopy_init<
           LLKOperand<InFormat, InShape>::descriptor,
@@ -80,8 +82,9 @@ ALWI void tilize_init(
  * output_tile_index (both default 0) shift the unpack source / pack destination tile index; at their
  * defaults, tile t lands in slot t and the source base is in.l1_address, byte-identical to the legacy op.
  *
- * Input tiles with 1 face, narrow (single face column) 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) input tiles, and (for a
- * non-8-bit input) an output tile with one-row faces other than the two-face 1x32 tile are compile-time rejected.
+ * Compile-time rejected: an output geometry that differs from the input (tilize keeps the tile shape), input tiles
+ * with 1 face or a single face column (narrow), and (for a non-8-bit input) a tile with faces shorter than 16 rows
+ * other than a two-face tile.
  *
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                                       | bool       |      | False |
  * | Function | in                | Input operand (unpack base; LLK offsets by input_tile_index + t) | LLKOperand |      | True  |
@@ -107,9 +110,10 @@ ALWI void tilize_block(
     static_assert(is_legal_tile_shape(OutShape), "tilize_block: illegal output tile shape.");
     static_assert(
         is_supported_tilize_operands(InFormat, InShape, OutShape),
-        "tilize_block: unsupported tilize operands: the input needs 2 or 4 faces, an 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) "
-        "input must be two faces wide, and with a non-8-bit input an output tile with one-row faces must have exactly "
-        "two faces (the tilize unpack / pack programs cover no other operands).");
+        "tilize_block: unsupported tilize operands: the output geometry must equal the input geometry, the input "
+        "must be two faces wide (2 or 4 faces, no narrow tile), and with a non-8-bit input a tile with faces "
+        "shorter than 16 rows must have exactly two faces (the tilize unpack / pack programs cover no other "
+        "operands).");
     // Unpack the whole block into srcA first (mirrors llk_unpack_tilize_block), then drain via math+pack.
     for (std::uint32_t t = 0; t < block; t++) {
         UNPACK((llk_unpack_tilize<LLKOperand<InFormat, InShape>::descriptor, is_fp32_dest_acc_en>(
@@ -144,8 +148,9 @@ ALWI void tilize_block(
  * Id-free tilize uninit. Restores the SrcA/tile config so a subsequent op can reprogram the unpacker, and
  * resets the packer to Default mode. Blackhole only.
  *
- * Input tiles with 1 face, narrow (single face column) 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) input tiles, and (for a
- * non-8-bit input) an output tile with one-row faces other than the two-face 1x32 tile are compile-time rejected.
+ * Compile-time rejected: an output geometry that differs from the input (tilize keeps the tile shape), input tiles
+ * with 1 face or a single face column (narrow), and (for a non-8-bit input) a tile with faces shorter than 16 rows
+ * other than a two-face tile.
  *
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode | bool | | False |
  */
@@ -159,9 +164,10 @@ template <
 ALWI void tilize_uninit(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<OutFormat, OutShape> /*out*/) {
     static_assert(
         is_supported_tilize_operands(InFormat, InShape, OutShape),
-        "tilize_uninit: unsupported tilize operands: the input needs 2 or 4 faces, an 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) "
-        "input must be two faces wide, and with a non-8-bit input an output tile with one-row faces must have exactly "
-        "two faces (the tilize unpack / pack programs cover no other operands).");
+        "tilize_uninit: unsupported tilize operands: the output geometry must equal the input geometry, the input "
+        "must be two faces wide (2 or 4 faces, no narrow tile), and with a non-8-bit input a tile with faces "
+        "shorter than 16 rows must have exactly two faces (the tilize unpack / pack programs cover no other "
+        "operands).");
     UNPACK((llk_unpack_tilize_uninit<LLKOperand<InFormat, InShape>::descriptor, is_fp32_dest_acc_en>()));
     PACK((llk_pack_init<LLKOperand<OutFormat, OutShape>::descriptor, is_fp32_dest_acc_en, PackMode::Default>()));
 }

@@ -45,6 +45,15 @@ inline void llk_math_matmul_init(
     // MATH-side rule == legacy (in0 tile_r < FACE_R_DIM). The UNPACK path uses the looser < TILE_R_DIM (see
     // llk_unpack_AB_matmul.h / llk_descriptor.h) -- the legacy MATH/UNPACK divergence, preserved.
     constexpr bool partial_face = in0_tile_r_dim < ckernel::FACE_R_DIM;
+    // Compile-time form of the throttled program's runtime LLK_ASSERT. Where the execute path drives the fidelity
+    // phases itself (throttle levels 4 / 5 at HiFi2 or higher) the init has no unthrottled fallback and always
+    // builds the throttled program, which exists for the full 32x32-by-32x32 pair only; any other pair wedges
+    // the math thread. Every input is a template argument here, so the pair is rejected at the call site.
+    static_assert(
+        !matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>() ||
+            matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face),
+        "llk_math_matmul_init: MM_THROTTLE levels 4 and 5 at HiFi2 or higher keep the throttled matmul program, "
+        "which supports the 32x32 by 32x32 operand pair only (any other pair wedges the math thread)");
 
     llk_math_matmul_init_impl<math_fidelity, THROTTLE_LEVEL>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);

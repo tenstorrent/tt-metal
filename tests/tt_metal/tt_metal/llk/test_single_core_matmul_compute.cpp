@@ -1457,34 +1457,44 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulIdFreeCompileLimits) {
     struct Case {
         std::uint32_t in0_faces_r, in0_faces_c, in1_faces_r, in1_faces_c;
         std::uint32_t in0_face_r_dim, in1_face_r_dim;
+        std::uint32_t mm_throttle;  // MM_THROTTLE compile define; 0 = unthrottled
+        MathFidelity fidelity;
         bool accepted;
     };
     // Face dims are 16x16 unless in0_face_r_dim / in1_face_r_dim say otherwise; tile dims = faces x face dims.
-    const std::array<Case, 18> cases{{
+    const std::array<Case, 24> cases{{
         // Supported pairs (in0 x in1).
-        {2, 2, 2, 2, 16, 16, true},  // 32x32 x 32x32
-        {2, 2, 2, 1, 16, 16, true},  // 32x32 x 32x16
-        {2, 1, 1, 2, 16, 16, true},  // 32x16 x 16x32
-        {1, 2, 2, 2, 16, 16, true},  // 16x32 x 32x32
-        {1, 2, 2, 1, 16, 16, true},  // 16x32 x 32x16
-        {1, 2, 2, 2, 8, 16, true},   // 8x32 x 32x32 (tiny-tile in0: one row of two 8-row faces)
+        {2, 2, 2, 2, 16, 16, 0, MathFidelity::LoFi, true},  // 32x32 x 32x32
+        {2, 2, 2, 1, 16, 16, 0, MathFidelity::LoFi, true},  // 32x32 x 32x16
+        {2, 1, 1, 2, 16, 16, 0, MathFidelity::LoFi, true},  // 32x16 x 16x32
+        {1, 2, 2, 2, 16, 16, 0, MathFidelity::LoFi, true},  // 16x32 x 32x32
+        {1, 2, 2, 1, 16, 16, 0, MathFidelity::LoFi, true},  // 16x32 x 32x16
+        {1, 2, 2, 2, 8, 16, 0, MathFidelity::LoFi, true},   // 8x32 x 32x32 (tiny-tile in0: one row of two 8-row faces)
         // 16x16 in0 (no math program), inner dimension matched or not.
-        {1, 1, 1, 1, 16, 16, false},  // 16x16 x 16x16
-        {1, 1, 1, 2, 16, 16, false},  // 16x16 x 16x32
-        {1, 1, 2, 2, 16, 16, false},  // 16x16 x 32x32
-        {1, 1, 2, 1, 16, 16, false},  // 16x16 x 32x16
-        {1, 1, 1, 2, 8, 16, false},   // 8x16 x 16x32 (sub-16-row single face in0)
+        {1, 1, 1, 1, 16, 16, 0, MathFidelity::LoFi, false},  // 16x16 x 16x16
+        {1, 1, 1, 2, 16, 16, 0, MathFidelity::LoFi, false},  // 16x16 x 16x32
+        {1, 1, 2, 2, 16, 16, 0, MathFidelity::LoFi, false},  // 16x16 x 32x32
+        {1, 1, 2, 1, 16, 16, 0, MathFidelity::LoFi, false},  // 16x16 x 32x16
+        {1, 1, 1, 2, 8, 16, 0, MathFidelity::LoFi, false},   // 8x16 x 16x32 (sub-16-row single face in0)
         // Inner dimension mismatch with a multi-face in0.
-        {2, 2, 1, 1, 16, 16, false},  // 32x32 x 16x16
-        {1, 2, 1, 1, 16, 16, false},  // 16x32 x 16x16
-        {2, 1, 2, 2, 16, 16, false},  // 32x16 x 32x32
+        {2, 2, 1, 1, 16, 16, 0, MathFidelity::LoFi, false},  // 32x32 x 16x16
+        {1, 2, 1, 1, 16, 16, 0, MathFidelity::LoFi, false},  // 16x32 x 16x16
+        {2, 1, 2, 2, 16, 16, 0, MathFidelity::LoFi, false},  // 32x16 x 32x32
         // Inner dimension matched but in1 is 16x16 (not a supported in1 tile).
-        {2, 1, 1, 1, 16, 16, false},  // 32x16 x 16x16
+        {2, 1, 1, 1, 16, 16, 0, MathFidelity::LoFi, false},  // 32x16 x 16x16
         // Totals of a supported pair, face grid of an unsupported one: four short faces where the programs expect
         // two 16-row faces (in0 16x32 / 8x32 as 2x2 faces of 8 / 4 rows; in1 16x32 as 2x2 faces of 8 rows).
-        {2, 2, 2, 2, 8, 16, false},  // {8,16,2,2} x 32x32
-        {2, 2, 2, 2, 4, 16, false},  // {4,16,2,2} x 32x32
-        {2, 1, 2, 2, 16, 8, false},  // 32x16 x {8,16,2,2}
+        {2, 2, 2, 2, 8, 16, 0, MathFidelity::LoFi, false},  // {8,16,2,2} x 32x32
+        {2, 2, 2, 2, 4, 16, 0, MathFidelity::LoFi, false},  // {4,16,2,2} x 32x32
+        {2, 1, 2, 2, 16, 8, 0, MathFidelity::LoFi, false},  // 32x16 x {8,16,2,2}
+        // Throttled matmul. Levels 4 / 5 at HiFi2 or higher keep the throttled program, which exists for the
+        // 32x32 by 32x32 pair only; levels 1-3, and any level at LoFi, fall back to the unthrottled program.
+        {2, 2, 2, 2, 16, 16, 4, MathFidelity::HiFi2, true},   // 32x32 x 32x32, throttle 4 HiFi2
+        {2, 2, 2, 1, 16, 16, 4, MathFidelity::HiFi2, false},  // 32x32 x 32x16, throttle 4 HiFi2
+        {1, 2, 2, 2, 16, 16, 5, MathFidelity::HiFi4, false},  // 16x32 x 32x32, throttle 5 HiFi4
+        {1, 2, 2, 2, 8, 16, 4, MathFidelity::HiFi2, false},   // 8x32 x 32x32 (tiny in0), throttle 4 HiFi2
+        {2, 2, 2, 1, 16, 16, 3, MathFidelity::HiFi2, true},   // 32x32 x 32x16, throttle 3 (unthrottled fallback)
+        {2, 2, 2, 1, 16, 16, 4, MathFidelity::LoFi, true},    // 32x32 x 32x16, throttle 4 LoFi (fallback)
     }};
     const CoreCoord core{0, 0};
     for (const auto& test : cases) {
@@ -1493,31 +1503,39 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulIdFreeCompileLimits) {
                 ::testing::Message() << "in0_faces=" << test.in0_faces_r << "x" << test.in0_faces_c
                                      << ", in0_face_r_dim=" << test.in0_face_r_dim << ", in1_faces=" << test.in1_faces_r
                                      << "x" << test.in1_faces_c << ", in1_face_r_dim=" << test.in1_face_r_dim
-                                     << ", block=" << block);
+                                     << ", mm_throttle=" << test.mm_throttle
+                                     << ", fidelity=" << static_cast<int>(test.fidelity) << ", block=" << block);
+            std::map<std::string, std::string> defines;
+            if (test.mm_throttle != 0) {
+                defines.emplace("MM_THROTTLE", std::to_string(test.mm_throttle));
+            }
             Program program = CreateProgram();
             CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/compute/matmul_idfree_compile_limits.cpp",
                 core,
                 ComputeConfig{
-                    .math_fidelity = MathFidelity::LoFi,
+                    .math_fidelity = test.fidelity,
                     .fp32_dest_acc_en = false,
-                    .compile_args = {
-                        test.in0_faces_r,
-                        test.in0_faces_c,
-                        test.in1_faces_r,
-                        test.in1_faces_c,
-                        static_cast<std::uint32_t>(block),
-                        test.in0_face_r_dim,
-                        test.in1_face_r_dim}});
+                    .compile_args =
+                        {test.in0_faces_r,
+                         test.in0_faces_c,
+                         test.in1_faces_r,
+                         test.in1_faces_c,
+                         static_cast<std::uint32_t>(block),
+                         test.in0_face_r_dim,
+                         test.in1_face_r_dim},
+                    .defines = defines});
             if (test.accepted) {
                 EXPECT_NO_THROW(program.impl().compile(&this->device()));
                 continue;
             }
             // The build failure carries the compiler log; the rejection must come from the API's static_assert,
-            // not from some unrelated build error.
-            const std::string expected_assert =
-                block ? "matmul_block_init: unsupported operand pair" : "matmul_init: unsupported operand pair";
+            // not from some unrelated build error. The throttled rows use supported pairs, so their rejection is
+            // the math init's throttle assert.
+            const std::string expected_assert = test.mm_throttle != 0 ? "llk_math_matmul_init: MM_THROTTLE"
+                                                : block               ? "matmul_block_init: unsupported operand pair"
+                                                                      : "matmul_init: unsupported operand pair";
             try {
                 program.impl().compile(&this->device());
                 ADD_FAILURE() << "unsupported operand pair compiled";

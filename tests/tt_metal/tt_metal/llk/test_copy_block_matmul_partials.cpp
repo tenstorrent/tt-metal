@@ -643,7 +643,7 @@ protected:
             {mmio_device_id},
             l1_small_size_,
             trace_region_size_,
-            1,
+            1 /*num_command_queues*/,
             MetalContext::instance().resolve_dispatch_core_config());
         devices_ = {id_to_device.at(mmio_device_id)};
         arch_ = tt::ARCH::BLACKHOLE;

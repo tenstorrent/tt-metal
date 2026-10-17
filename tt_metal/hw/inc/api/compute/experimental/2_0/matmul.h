@@ -27,7 +27,9 @@ namespace experimental {
 // Two LLKOperands (in0, in1); in0 -> SrcB, in1 -> SrcA (matmul role swap), applied via
 // compute_kernel_hw_startup<SrcOrder::Reverse>(in0, in1, out). Format-free at the op level -- these ops forward
 // only geometry (via the descriptors) and per-tile L1 addresses; packing is separate (experimental::pack_tile).
-// Throttle is fixed (MM_THROTTLE); dynamic throttle is not part of this surface.
+// Throttle is fixed (MM_THROTTLE); dynamic throttle is not part of this surface. Under MM_THROTTLE 4 / 5 at
+// HiFi2 or higher the LLK keeps its throttled program, which exists for the 32x32 by 32x32 pair only; the math
+// init rejects every other pair at compile time (any other pair wedges the math thread).
 
 // clang-format off
 /**
@@ -36,10 +38,12 @@ namespace experimental {
  *
  * Operand pairs outside the Blackhole matmul support matrix -- in0 columns != in1 rows, a 16-column in0 with fewer
  * than 32 rows (16x16), an in0 with faces shorter than 16 rows in more than one face row, an in1 with faces
- * shorter than 16 rows, or an in1 other than 32x32 / 32x16 / 16x32 -- are compile-time rejected.
+ * shorter than 16 rows, or an in1 other than 32x32 / 32x16 / 16x32 -- are compile-time rejected. `transpose` is a
+ * runtime argument and is not supported with a 32x16 in1 (that address pattern has no transpose form; the LLK
+ * checks the combination only with a runtime assert that production builds compile out).
  *
- * | Function | in0 / in1 | Input operands (in0 -> SrcB, in1 -> SrcA) | LLKOperand | | True |
- * | Function | transpose | Transpose flag for tiles in B             | uint32_t   | | False |
+ * | Function | in0 / in1 | Input operands (in0 -> SrcB, in1 -> SrcA)            | LLKOperand | | True |
+ * | Function | transpose | Transpose flag for tiles in B (not with a 32x16 in1) | uint32_t   | | False |
  */
 // clang-format on
 template <DataFormat F0, TensorShape S0, DataFormat F1, TensorShape S1>
@@ -93,13 +97,15 @@ ALWI void matmul_tiles(
  *
  * Operand pairs outside the Blackhole matmul support matrix -- in0 columns != in1 rows, a 16-column in0 with fewer
  * than 32 rows (16x16), an in0 with faces shorter than 16 rows in more than one face row, an in1 with faces
- * shorter than 16 rows, or an in1 other than 32x32 / 32x16 / 16x32 -- are compile-time rejected.
+ * shorter than 16 rows, or an in1 other than 32x32 / 32x16 / 16x32 -- are compile-time rejected. `transpose` is a
+ * runtime argument and is not supported with a 32x16 in1 (that address pattern has no transpose form; the LLK
+ * checks the combination only with a runtime assert that production builds compile out).
  *
- * | Function | in0 / in1 | Input operands (in0 -> SrcB, in1 -> SrcA) | LLKOperand | | True |
- * | Function | transpose | Transpose flag for tiles in B             | uint32_t   | | False |
- * | Function | ct_dim    | Output block column dim (== B col dim)    | uint32_t   | | False |
- * | Function | rt_dim    | Output block row dim (== A row dim)       | uint32_t   | | False |
- * | Function | kt_dim    | Inner dim (== A col dim)                  | uint32_t   | | False |
+ * | Function | in0 / in1 | Input operands (in0 -> SrcB, in1 -> SrcA)            | LLKOperand | | True |
+ * | Function | transpose | Transpose flag for tiles in B (not with a 32x16 in1) | uint32_t   | | False |
+ * | Function | ct_dim    | Output block column dim (== B col dim)               | uint32_t   | | False |
+ * | Function | rt_dim    | Output block row dim (== A row dim)                  | uint32_t   | | False |
+ * | Function | kt_dim    | Inner dim (== A col dim)                             | uint32_t   | | False |
  */
 // clang-format on
 template <DataFormat F0, TensorShape S0, DataFormat F1, TensorShape S1>
