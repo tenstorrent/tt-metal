@@ -567,7 +567,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines, std::to_string(tt::CBIndex::c_1));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
@@ -1638,7 +1638,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines, std::to_string(tt::CBIndex::c_1));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
@@ -2608,7 +2608,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines, std::to_string(src1_cb_index));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
@@ -3702,7 +3702,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines, ttnn::operations::compute_throttle_utils::dfb_slot_operand("in1"));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
@@ -4098,44 +4098,44 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                                     bool core_has_output_block_work,
                                     bool core_in_receiver_grid,
                                     const DFBSpecName& in0_dfb) {
-            KernelSpec k{
-                .unique_id = unique_id,
-                .source = in0_sender_source,
-                .compiler_options =
-                    {
-                        .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_in0_sender_writer_defines),
-                    },
-                .dfb_bindings = in0_sender_dfb_bindings(core_has_output_block_work, in0_dfb),
-                .semaphore_bindings = in0_mcast_sem_bindings,
-                .compile_time_args = make_in0_sender_cta(core_has_output_block_work, core_in_receiver_grid),
-                .hw_config = in0_sender_hw_config,
-            };
-            if (in0_is_sharded) {
-                k.runtime_arg_schema = {
-                    .runtime_arg_names =
-                        {"sender_id",
-                         "in0_mcast_dest_noc_start_x",
-                         "in0_mcast_dest_noc_start_y",
-                         "in0_mcast_dest_noc_end_x",
-                         "in0_mcast_dest_noc_end_y"},
-                };
-                k.advanced_options.num_runtime_varargs = in0_sender_num_varargs;
-            } else {
-                k.tensor_bindings = {
-                    TensorBinding{.tensor_parameter_name = IN0, .accessor_name = "in0"},
-                };
-                k.runtime_arg_schema = {
-                    .runtime_arg_names =
-                        {"in0_tensor_start_tile_id",
-                         "in0_mcast_dest_noc_start_x",
-                         "in0_mcast_dest_noc_start_y",
-                         "in0_mcast_dest_noc_end_x",
-                         "in0_mcast_dest_noc_end_y",
-                         "last_block_h"},
-                };
-            }
-            return k;
+        KernelSpec k{
+            .unique_id = unique_id,
+            .source = in0_sender_source,
+            .compiler_options =
+                {
+                    .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_in0_sender_writer_defines),
+                },
+            .dfb_bindings = in0_sender_dfb_bindings(core_has_output_block_work, in0_dfb),
+            .semaphore_bindings = in0_mcast_sem_bindings,
+            .compile_time_args = make_in0_sender_cta(core_has_output_block_work, core_in_receiver_grid),
+            .hw_config = in0_sender_hw_config,
         };
+        if (in0_is_sharded) {
+            k.runtime_arg_schema = {
+                .runtime_arg_names =
+                    {"sender_id",
+                     "in0_mcast_dest_noc_start_x",
+                     "in0_mcast_dest_noc_start_y",
+                     "in0_mcast_dest_noc_end_x",
+                     "in0_mcast_dest_noc_end_y"},
+            };
+            k.advanced_options.num_runtime_varargs = in0_sender_num_varargs;
+        } else {
+            k.tensor_bindings = {
+                TensorBinding{.tensor_parameter_name = IN0, .accessor_name = "in0"},
+            };
+            k.runtime_arg_schema = {
+                .runtime_arg_names =
+                    {"in0_tensor_start_tile_id",
+                     "in0_mcast_dest_noc_start_x",
+                     "in0_mcast_dest_noc_start_y",
+                     "in0_mcast_dest_noc_end_x",
+                     "in0_mcast_dest_noc_end_y",
+                     "last_block_h"},
+            };
+        }
+        return k;
+    };
 
     kernels.push_back(make_in0_sender_spec(IN0_SENDER, true, true, IN0_DFB));
 
@@ -4926,16 +4926,15 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     // DEST. fp32 K-partials are reloaded into DEST between blocks; marking them UnpackToDest sends the
     // reload straight to DEST instead of through SrcA, which would truncate them to TF32. The rest get
     // UnpackToSrc.
-    const auto add_float32_unpack_mode = [&](tt::tt_metal::experimental::ComputeHardwareConfig& hw,
-                                             const DFBSpecName& name,
-                                             tt::DataFormat fmt) {
-        if (!fp32_dest_acc_en || fmt != tt::DataFormat::Float32) {
-            return;
-        }
-        hw.unpack_modes.emplace(
-            name,
-            (name == INTERM0_DFB) ? tt::tt_metal::UnpackMode::UnpackToDest : tt::tt_metal::UnpackMode::UnpackToSrc);
-    };
+    const auto add_float32_unpack_mode =
+        [&](tt::tt_metal::experimental::ComputeHardwareConfig& hw, const DFBSpecName& name, tt::DataFormat fmt) {
+            if (!fp32_dest_acc_en || fmt != tt::DataFormat::Float32) {
+                return;
+            }
+            hw.unpack_modes.emplace(
+                name,
+                (name == INTERM0_DFB) ? tt::tt_metal::UnpackMode::UnpackToDest : tt::tt_metal::UnpackMode::UnpackToSrc);
+        };
 
     {
         std::map<std::string, std::string> mm_kernel_defines;
@@ -4979,7 +4978,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
             mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
         }
         ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-            device.arch(), ring_size, mm_kernel_defines);
+            device.arch(),
+            ring_size,
+            mm_kernel_defines,
+            ttnn::operations::compute_throttle_utils::dfb_slot_operand("in1"));
         ttnn::operations::compute_throttle_utils::throttle_mm_perf(
             device.arch(), ring_size, mm_kernel_defines, throttle_level);
 
@@ -5446,7 +5448,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines, ttnn::operations::compute_throttle_utils::dfb_slot_operand("in1"));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
 

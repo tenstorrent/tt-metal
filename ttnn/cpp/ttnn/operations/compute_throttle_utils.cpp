@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
+#include <string>
 #include <string_view>
 
 #include <tt-logger/tt-logger.hpp>
@@ -27,7 +28,10 @@ bool parse_env_uint(std::string_view text, uint32_t& value) {
 }  // namespace
 
 void add_stagger_defines_if_needed(
-    const tt::ARCH arch, const int num_cores, std::map<std::string, std::string>& mm_kernel_defines) {
+    const tt::ARCH arch,
+    const int num_cores,
+    std::map<std::string, std::string>& mm_kernel_defines,
+    const std::string& in1_operand) {
     // Empirically deduced di/dt problems appear for matmuls using more than 48
     // cores; when there is 48 cores or less, we never enable stagger since the
     // delay impacts op performance
@@ -42,30 +46,38 @@ void add_stagger_defines_if_needed(
     const char* stagger_value = std::getenv("TT_MM_STAGGER_VALUE");
     if (stagger_type && ((arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) ||
                          (arch == tt::ARCH::BLACKHOLE && num_cores > BH_MM_MAX_CORES_NO_STAGGER))) {
-        // The defines are pasted into the compute kernel verbatim, where apply_mm_stagger (llk_io_unpack.h) selects
-        // its arm with `#if MM_STAGGER_TYPE == 1/2/3`: an unknown or non-numeric type would otherwise compile to an
-        // empty hook while this function reports the stagger as enabled.
+        // apply_mm_stagger (llk_io_unpack.h) selects its arm with `#if MM_STAGGER_TYPE == 1/2/3` and rejects any
+        // other defined type with #error; checking here turns that kernel build failure into a host error that names
+        // the env var. The type codes are the ones that #error and the kernel arms list.
+        constexpr uint32_t min_stagger_type = 1;
+        constexpr uint32_t max_stagger_type = 3;
+        // The kernel stores the value in a constexpr int and spins that many cycles.
+        constexpr uint32_t max_stagger_cycles = std::numeric_limits<int32_t>::max();
         uint32_t stagger_type_number = 0;
         TT_FATAL(
-            parse_env_uint(stagger_type, stagger_type_number) && stagger_type_number >= 1 && stagger_type_number <= 3,
-            "TT_MM_STAGGER_TYPE must be 1 (first block), 2 (every block) or 3 (periodic), got '{}'",
+            parse_env_uint(stagger_type, stagger_type_number) && stagger_type_number >= min_stagger_type &&
+                stagger_type_number <= max_stagger_type,
+            "TT_MM_STAGGER_TYPE must be {} (first block), 2 (every block) or {} (periodic), got '{}'",
+            min_stagger_type,
+            max_stagger_type,
             stagger_type);
-        mm_kernel_defines["MM_STAGGER_TYPE"] = stagger_type;
+        // The defines are pasted into the kernel as C++ literals, so re-emit the parsed numbers: an env value with a
+        // leading zero ("0100") is decimal here but would be an octal literal (or, for "08", a build error) there.
+        mm_kernel_defines["MM_STAGGER_TYPE"] = std::to_string(stagger_type_number);
+        mm_kernel_defines["MM_STAGGER_OPERAND"] = in1_operand;
 
         if (stagger_value == nullptr) {
             log_warning(tt::LogOp, "Using default stagger value: {}.", 0);
             mm_kernel_defines["MM_STAGGER_VALUE"] = "0";
         } else {
-            // The kernel stores the value in a constexpr int and spins that many cycles.
-            constexpr uint32_t max_stagger_cycles = std::numeric_limits<int32_t>::max();
             uint32_t stagger_cycles = 0;
             TT_FATAL(
                 parse_env_uint(stagger_value, stagger_cycles) && stagger_cycles <= max_stagger_cycles,
                 "TT_MM_STAGGER_VALUE must be a number of cycles between 0 and {}, got '{}'",
                 max_stagger_cycles,
                 stagger_value);
-            log_warning(tt::LogOp, "Using stagger value: {}.", stagger_value);
-            mm_kernel_defines["MM_STAGGER_VALUE"] = stagger_value;
+            log_warning(tt::LogOp, "Using stagger value: {}.", stagger_cycles);
+            mm_kernel_defines["MM_STAGGER_VALUE"] = std::to_string(stagger_cycles);
         }
         log_warning(tt::LogOp, "Stagger type {} enabled for matmul op using {} cores.", stagger_type, num_cores);
     }

@@ -804,7 +804,10 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     const ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), plan.cores.size(), compute_defines_map);
+        device.arch(),
+        plan.cores.size(),
+        compute_defines_map,
+        ttnn::operations::compute_throttle_utils::dfb_slot_operand("B_slice"));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), plan.cores.size(), compute_defines_map, throttle_level);
     KernelSpec::CompilerOptions::Defines compute_defines(compute_defines_map);

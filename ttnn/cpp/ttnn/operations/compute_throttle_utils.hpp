@@ -5,6 +5,7 @@
 #pragma once
 #include <ostream>
 #include <string>
+#include <string_view>
 #include <map>
 
 #include <umd/device/types/arch.hpp>
@@ -32,7 +33,26 @@ inline std::ostream& operator<<(std::ostream& os, ThrottleLevel level) {
     }
 }
 
-void add_stagger_defines_if_needed(tt::ARCH arch, int num_cores, std::map<std::string, std::string>& mm_kernel_defines);
+/*
+ * Optionally delay the odd-row cores of a matmul before they start on in1, so that not all cores draw current at
+ * once (di/dt). Enabled by the TT_MM_STAGGER_TYPE (1, 2 or 3) and TT_MM_STAGGER_VALUE (cycles) env vars; adds the
+ * MM_STAGGER_TYPE / MM_STAGGER_VALUE / MM_STAGGER_OPERAND defines the compute kernel's llk_wait_tiles hook reads.
+ *
+ * in1_operand is the compute kernel's own name for in1's operand id, pasted into MM_STAGGER_OPERAND verbatim: the CB
+ * index as text for a circular-buffer kernel (std::to_string(src1_cb_index)), or dfb_slot_operand(<accessor>) for a
+ * Metal 2.0 kernel, since a DFB's device slot is assigned when the program is built and is not always 1.
+ */
+void add_stagger_defines_if_needed(
+    tt::ARCH arch,
+    int num_cores,
+    std::map<std::string, std::string>& mm_kernel_defines,
+    const std::string& in1_operand);
+
+// The in1 operand for add_stagger_defines_if_needed when the compute kernel is a Metal 2.0 kernel whose in1 consumer
+// DFB is bound under `accessor_name`: the DFB_SLOT_<name> constant the generated kernel bindings header defines for
+// every DFB binding. The dfb::<name> token itself cannot serve, as that header declares it only after it has pulled
+// in the LLK io headers that read MM_STAGGER_OPERAND.
+inline std::string dfb_slot_operand(std::string_view accessor_name) { return "DFB_SLOT_" + std::string(accessor_name); }
 void add_dram_skip_defines_if_needed(tt::ARCH arch, std::map<std::string, std::string>& mm_in1_sender_writer_defines);
 bool should_sync_after_in1_dram(tt::ARCH arch);
 

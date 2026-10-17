@@ -468,7 +468,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
 
     const uint32_t num_compute_cores = all_cores_in_rect_grid.num_cores();
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), num_compute_cores, mm_kernel_defines);
+        device.arch(),
+        num_compute_cores,
+        mm_kernel_defines,
+        ttnn::operations::compute_throttle_utils::dfb_slot_operand("in1"));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_compute_cores, mm_kernel_defines, throttle_level);
 
