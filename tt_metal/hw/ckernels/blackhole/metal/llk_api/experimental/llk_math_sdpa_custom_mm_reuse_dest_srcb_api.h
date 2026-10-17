@@ -23,8 +23,9 @@ template <MathFidelity math_fidelity>
 inline void llk_math_sdpa_custom_mm_reuse_dest_srcb_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t kt_dim) {
     SAN_HOOK(unsupported());
-    // An integer at the former transpose position binds here as kt_dim = 0 or 1.
-    LLK_ASSERT(kt_dim >= 1, "llk_math_sdpa_custom_mm_reuse_dest_srcb_init: kt_dim must be at least 1");
+    // An integer at the former transpose position binds here as kt_dim = 0 or 1; both are below the
+    // smallest K the unpack MOP can feed (2), so both are caught here.
+    LLK_ASSERT(kt_dim >= 2, "llk_math_sdpa_custom_mm_reuse_dest_srcb_init: kt_dim must be at least 2");
     const std::uint32_t in0_id = get_operand_id(operandA);
     const std::uint32_t in1_id = get_operand_id(operandB);
 
@@ -52,7 +53,7 @@ inline void llk_math_sdpa_custom_mm_reuse_dest_srcb_init(
     const std::uint32_t operandA, const std::uint32_t operandB, T transpose) = delete;
 
 // Runtime parameter signal_output:
-//   false (default): Full sdpa_custom_mm_reuse_dest_srcb - MVMULs + finalization
+//   false: Full sdpa_custom_mm_reuse_dest_srcb - MVMULs + finalization
 //   true: Partial K accumulation - MVMULs only, no finalization (for intermediate K subblocks)
 //
 // Compile-time parameter output_granularity:
@@ -66,9 +67,11 @@ inline void llk_math_sdpa_custom_mm_reuse_dest_srcb(
     const std::uint32_t nt_dim,
     bool signal_output) {
     SAN_HOOK(unsupported());
-    // An integer at the former transpose position binds here as kt_dim = 0 or 1.
+    // An integer at the former transpose position binds here as kt_dim = 0 or 1; both are below the
+    // smallest K the unpack MOP can feed (2), so both are caught here.
     LLK_ASSERT(
-        kt_dim >= 1 && nt_dim >= 1, "llk_math_sdpa_custom_mm_reuse_dest_srcb: kt_dim and nt_dim must be at least 1");
+        kt_dim >= 2 && nt_dim >= 1,
+        "llk_math_sdpa_custom_mm_reuse_dest_srcb: kt_dim must be at least 2 and nt_dim at least 1");
     _llk_math_sdpa_custom_mm_reuse_dest_srcb_<output_granularity, input_granularity>(
         src_index, dst_index, false /*transpose*/, kt_dim, nt_dim, signal_output);
 }

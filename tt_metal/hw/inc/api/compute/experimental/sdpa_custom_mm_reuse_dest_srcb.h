@@ -45,7 +45,8 @@ namespace ckernel {
  * All arguments are required: the former transpose argument sat between out_cb_id and
  * kt_dim, so a legacy argument list must not re-bind transpose as kt_dim. A bool at
  * the old transpose position is rejected at compile time; an integer there binds as
- * kt_dim and is caught at run time only, by the kt_dim/nt_dim range asserts.
+ * kt_dim and is caught only at run time, by the kt_dim/nt_dim range asserts, and only
+ * when LLK asserts are enabled (TT_METAL_LLK_ASSERTS); a default build runs it.
  */
 // clang-format on
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init(
@@ -106,7 +107,7 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
  * Operand B is used as stored: a transpose of operand B is not implemented.
  *
  * Runtime parameter signal_output:
- *   false (default): Normal operation without signaling
+ *   false: Normal operation without signaling
  *   true: Signal SFPU semaphore for pipelining with subsequent operations
  *
  * Usage pattern for partial K:
@@ -132,7 +133,8 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
  * All arguments are required: the former transpose argument sat between idst and kt_dim,
  * so a legacy argument list must not re-bind transpose as kt_dim. A bool at the old
  * transpose position is rejected at compile time; an integer there binds as kt_dim and
- * is caught at run time only, by the kt_dim/nt_dim range asserts.
+ * is caught only at run time, by the kt_dim/nt_dim range asserts, and only when LLK
+ * asserts are enabled (TT_METAL_LLK_ASSERTS); a default build runs it.
  */
 // clang-format on
 template <std::uint32_t output_granularity, std::uint32_t input_granularity = 1>
