@@ -99,6 +99,9 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     scatter/device/scatter_device_operation.cpp
     scatter/device/scatter_reduce_bfloat16_program_factory.cpp
     scatter/device/scatter_program_factory.cpp
+    scatter/codegen/scatter_codegen_device_operation.cpp
+    scatter/codegen/scatter_codegen_program_factory.cpp
+    scatter/codegen/scatter_codegen_supported.cpp
     sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
     sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.cpp
     sharded/interleaved_to_sharded/interleaved_to_sharded.cpp
