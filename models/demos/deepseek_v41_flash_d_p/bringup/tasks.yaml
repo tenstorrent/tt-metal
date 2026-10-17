@@ -5943,6 +5943,14 @@ tasks:
     kind: norm
     layer: 20
     stateful: false
+  frozen:
+    at: '2026-10-17T08:11:58'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_norm.py: a4d8bc737e45022f55c03df17168c13e7c2687836d718c36bfed0725cea5d29a
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.dec_candidate.03
   title: 'dec_candidate block with steps 1-3 on device (last: attn_norm)'
   step: implement
