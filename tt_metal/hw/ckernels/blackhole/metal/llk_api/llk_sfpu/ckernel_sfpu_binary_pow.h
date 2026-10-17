@@ -85,9 +85,10 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     // field to a tiny value, the overflow guard in _float_to_int32_positive_ never
     // fires, and the result comes out as ~1.0 instead of +inf. Any z_f32 >= 128 already
     // overflows the fp32 result, so clamp from above: 128 * 2**23 + bias is 0x7f800000,
-    // whose exponent-255 pattern the final bf16 rounding maps to +inf.
-    v_if(z_f32 > 128.0f) { z_f32 = 128.0f; }
-    v_endif;
+    // whose exponent-255 pattern the final bf16 rounding maps to +inf. min is a single
+    // SFPSWAP; a NaN z lands on the +inf side either way (SFPSWAP orders -NaN below and
+    // +NaN above every number, and every exponent-255 lane rounds to +inf).
+    z_f32 = sfpi::min(z_f32, 128.0f);
 
     // The paper relies on the following formula (c.f. Sections 1 and 5):
     // z = (bias + x * log2(a)) * N_m; where:
