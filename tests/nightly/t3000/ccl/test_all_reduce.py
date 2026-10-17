@@ -128,6 +128,8 @@ def test_ring_all_reduce_post_commit_2chip(
     function_level_defaults,
     num_iters=2,
 ):
+    if per_chip_output_shape == [2, 2, 64, 64] and buffer_type == ttnn.BufferType.DRAM:
+        pytest.skip("Hangs on wh_llmbox (T3K 2-chip all-reduce); refs #54009")
     run_all_reduce_with_mesh_tensor_along_row(
         mesh_device,
         num_devices,
