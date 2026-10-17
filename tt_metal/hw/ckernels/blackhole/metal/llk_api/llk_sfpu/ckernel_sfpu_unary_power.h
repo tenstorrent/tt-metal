@@ -16,6 +16,51 @@ namespace ckernel {
 namespace sfpu {
 
 /**
+ * @brief Classification of the scalar exponent of x**pow, decided once on the RISC from its IEEE-754 bits.
+ *
+ * Whether the exponent is an integer and whether it is odd are properties of the broadcast scalar, not of the
+ * data, so they are evaluated here with plain integer arithmetic and select the row body through a template
+ * parameter instead of being recomputed on the SFPU for every row. For the literal exponents ttnn emits
+ * (`power_tile(idst, 0x40000000u)`) the classification folds to a constant and only one body is instantiated;
+ * for a runtime exponent it costs a dozen RISC integer instructions per call.
+ */
+enum class PowExponentKind : uint8_t {
+    NonInteger = 0,   // a negative base has no real result -> NaN
+    EvenInteger = 1,  // the result is positive for every base
+    OddInteger = 2,   // the result takes the sign of the base
+};
+
+/**
+ * @brief Classify the exponent from its IEEE-754 single-precision bit pattern.
+ *
+ * +-Inf and NaN exponents classify as NonInteger, which keeps the previous behaviour for a negative base
+ * (the old vSMag16 conversion saturated and the rounded value never compared equal, so the result was NaN).
+ * Unlike that conversion, the classification is exact for every magnitude: an odd integer exponent above
+ * 32767 (e.g. 32769, 2**23 + 1) now yields a negative result for a negative base instead of NaN.
+ */
+constexpr PowExponentKind _unary_pow_exponent_kind_(const uint32_t bits) {
+    const uint32_t biased_exp = (bits >> 23) & 0xFFu;
+    if (biased_exp == 0xFFu) {
+        return PowExponentKind::NonInteger;
+    }
+    if (biased_exp > 150u) {
+        // |pow| >= 2**24: the representable values are spaced at least 2 apart, so all are even integers.
+        return PowExponentKind::EvenInteger;
+    }
+    if (biased_exp < 127u) {
+        // |pow| < 1: only +-0 is an integer (and it is even).
+        return (bits & 0x7FFFFFFFu) == 0 ? PowExponentKind::EvenInteger : PowExponentKind::NonInteger;
+    }
+    // 1 <= |pow| < 2**24: the low (150 - biased_exp) mantissa bits are the fractional part (0 bits at 2**23).
+    const uint32_t mantissa = (bits & 0x7FFFFFu) | 0x800000u;
+    const uint32_t frac_bits = 150u - biased_exp;
+    if (mantissa & ((1u << frac_bits) - 1u)) {
+        return PowExponentKind::NonInteger;
+    }
+    return ((mantissa >> frac_bits) & 1u) ? PowExponentKind::OddInteger : PowExponentKind::EvenInteger;
+}
+
+/**
  * @brief Computes base raised to the power of pow (base**pow)
  *
  * This function implements binary exponentiation using a polynomial approximation algorithm
@@ -24,8 +69,9 @@ namespace sfpu {
  * More specifically, it is the implementation of the `exp_21f` algorithm described in Section 5
  *
  * @param base The base value (sfpi::vFloat vector), can be any floating point number
- * @param pow The exponent/power value (sfpi::vFloat vector), can be any floating point number
- * @tparam IS_POSITIVE_EXPONENT If true, assumes exponent >= 0 (zero base maps to 0 rather than NaN)
+ * @param pow The exponent/power value (sfpi::vFloat vector), a non-zero broadcast scalar
+ * @tparam IS_POSITIVE_EXPONENT If true, assumes exponent > 0 (zero base maps to 0 rather than NaN)
+ * @tparam KIND Integer-ness / parity of the exponent, see _unary_pow_exponent_kind_
  *
  * @return sfpi::vFloat Result of base**pow
  *
@@ -34,6 +80,7 @@ namespace sfpu {
  * - base = 0, pow < 0: Returns NaN (undefined)
  * - base < 0, pow = integer: Returns proper signed result (negative if odd power)
  * - base < 0, pow = non-integer: Returns NaN (complex result)
+ * - pow = 0 is handled by the caller (x**0 == 1 for every x) and never reaches this function
  * - Overflow/underflow: Clamped to appropriate limits
  *
  * @note This function assumes that the programmable constants are set to the following values:
@@ -44,7 +91,7 @@ namespace sfpu {
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
-template <bool IS_POSITIVE_EXPONENT>
+template <bool IS_POSITIVE_EXPONENT, PowExponentKind KIND>
 sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat pow) {
     // The algorithm works in two steps:
     // 1) Compute log2(base)
@@ -113,32 +160,23 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
 
     sfpi::vFloat y = sfpi::as<sfpi::vFloat>(zii);
 
-    // Negative base handling (for both positive and negative exponents)
-    v_if(base < 0.0f) {
-        // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
-        // Check valid base range
-        auto pow_int = sfpi::convert<sfpi::vSMag16>(
-            pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
-        auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::Nearest);
-
-        // If pow is odd integer then result is negative
-        // If power is even, then result is positive
-        y = sfpi::setsgn2(y, pow_int);
-
-        // Check for integer power, if it is not then overwrite result with NaN
-        v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
-            y = sfpi::vConstFloatPrgm2;
-        }
+    // Negative base handling (for both positive and negative exponents). y carries a clear sign bit here,
+    // and the integer-ness / parity of the exponent is a compile-time property of this instantiation.
+    if constexpr (KIND == PowExponentKind::NonInteger) {
+        // SFPU `<` is sign-bit based, so this also fires on -0 (corrected by the zero block below) and -NaN.
+        v_if(base < 0.0f) { y = sfpi::vConstFloatPrgm2; }  // negative base and non-integer power => NaN
         v_endif;
+    } else if constexpr (KIND == PowExponentKind::OddInteger) {
+        y = sfpi::copysgn(y, base);  // odd power: the result takes the sign of the base
     }
-    v_endif;
+    // EvenInteger: the result is positive for every base, nothing to do.
 
     // setexp/exexp map 0 to log2 = -127, so 0**p evaluates as 2**(-127p).
-    // Must follow the sign branch: SFPU `<` is sign-bit based, so v_if(base < 0)
-    // fires on -0 and would replace the 0 result with NaN for non-integer p.
-    // pow == 0 falls through the guard and keeps 1.
+    // Must follow the sign block: v_if(base < 0) fires on -0 and would leave NaN
+    // (non-integer p) or -0 (odd p) where the result must be +0.
+    // pow > 0 is guaranteed by the caller in this arm (pow == 0 never reaches the body).
     if constexpr (IS_POSITIVE_EXPONENT) {
-        v_if(abs_base == 0.f && pow > 0.f) { y = 0.0f; }
+        v_if(abs_base == 0.f) { y = 0.0f; }
         v_endif;
     } else {
         v_if(abs_base == 0.f) {
@@ -225,7 +263,7 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_hilo_(sfpi::vFloat z_hi, sfpi::
     return result;
 }
 
-template <bool IS_POSITIVE_EXPONENT>
+template <bool IS_POSITIVE_EXPONENT, PowExponentKind KIND>
 sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base, const sfpi::vFloat& pow) {
     // The algorithm works in two steps:
     // 1) Compute log2(base)
@@ -300,32 +338,23 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
     sfpi::vFloat z_lo = pow_lo * exp_f32 + pow * (ln_m * vConst1Ln2);
     sfpi::vFloat y = _sfpu_pow2_f32_accurate_hilo_(z_hi, z_lo);
 
-    v_if(base < 0.0f) {  // negative base
-        // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
-        // Check valid base range
-        auto pow_int = sfpi::convert<sfpi::vSMag16>(
-            pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
-        auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::Nearest);
-
-        // If pow is odd integer then result is negative
-        // If power is even, then result is positive
-        // To get the sign bit of result, we can shift last bit of pow_int to the 1st bit
-        y = sfpi::setsgn2(y, pow_int);
-
-        // Check for integer power, if it is not then overwrite result with NaN
-        v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
-            y = sfpi::vConstFloatPrgm2;
-        }
+    // Negative base handling (for both positive and negative exponents). y carries a clear sign bit here,
+    // and the integer-ness / parity of the exponent is a compile-time property of this instantiation.
+    if constexpr (KIND == PowExponentKind::NonInteger) {
+        // SFPU `<` is sign-bit based, so this also fires on -0 (corrected by the zero block below) and -NaN.
+        v_if(base < 0.0f) { y = sfpi::vConstFloatPrgm2; }  // negative base and non-integer power => NaN
         v_endif;
+    } else if constexpr (KIND == PowExponentKind::OddInteger) {
+        y = sfpi::copysgn(y, base);  // odd power: the result takes the sign of the base
     }
-    v_endif;
+    // EvenInteger: the result is positive for every base, nothing to do.
 
     // setexp/exexp map 0 to log2 = -127, so 0**p evaluates as 2**(-127p).
-    // Must follow the sign branch: SFPU `<` is sign-bit based, so v_if(base < 0)
-    // fires on -0 and would replace the 0 result with NaN for non-integer p.
-    // pow == 0 falls through the guard and keeps 1.
+    // Must follow the sign block: v_if(base < 0) fires on -0 and would leave NaN
+    // (non-integer p) or -0 (odd p) where the result must be +0.
+    // pow > 0 is guaranteed by the caller in this arm (pow == 0 never reaches the body).
     if constexpr (IS_POSITIVE_EXPONENT) {
-        v_if(abs_base == 0.f && pow > 0.f) { y = 0.0f; }
+        v_if(abs_base == 0.f) { y = 0.0f; }
         v_endif;
     } else {
         v_if(abs_base == 0.f) {
@@ -337,49 +366,39 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
     return y;
 }
 
-template <int ITERATIONS>
-inline void _sfpu_unary_power_bf16_(const uint32_t exponent) {
-    // Convert exponent to float
-    const float pow_scalar = Converter::as_float(exponent);
+// The exponent crosses this call as a scalar: a vFloat argument would have to live in memory if the
+// compiler chose not to inline the body, which sfpi cannot do.
+template <bool is_fp32_dest_acc_en, bool IS_POSITIVE_EXPONENT, PowExponentKind KIND, int ITERATIONS>
+inline void _sfpu_unary_power_rows_(const float pow_scalar) {
     const sfpi::vFloat pow = pow_scalar;
-
-    if (pow_scalar >= 0.0f) {
 #pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat base = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = _sfpu_unary_power_21f_<true>(base, pow);
-            sfpi::dst_reg++;
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat base = sfpi::dst_reg[0];
+        if constexpr (is_fp32_dest_acc_en) {
+            sfpi::dst_reg[0] = _sfpu_unary_power_61f_updated_<IS_POSITIVE_EXPONENT, KIND>(base, pow);
+        } else {
+            sfpi::dst_reg[0] = _sfpu_unary_power_21f_<IS_POSITIVE_EXPONENT, KIND>(base, pow);
         }
-    } else {
-#pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat base = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = _sfpu_unary_power_21f_<false>(base, pow);
-            sfpi::dst_reg++;
-        }
+        sfpi::dst_reg++;
     }
 }
 
-template <int ITERATIONS>
-inline void _sfpu_unary_power_fp32_(const uint32_t exponent) {
-    // Convert exponent to float
-    const float pow_scalar = Converter::as_float(exponent);
-    const sfpi::vFloat pow = pow_scalar;
-
-    if (pow_scalar >= 0.0f) {
-#pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat base = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = _sfpu_unary_power_61f_updated_<true>(base, pow);
-            sfpi::dst_reg++;
-        }
-    } else {
-#pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat base = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = _sfpu_unary_power_61f_updated_<false>(base, pow);
-            sfpi::dst_reg++;
-        }
+// Always inlined so that a literal exponent folds the switch away and only one body is instantiated.
+template <bool is_fp32_dest_acc_en, bool IS_POSITIVE_EXPONENT, int ITERATIONS>
+sfpi_inline void _sfpu_unary_power_by_kind_(const float pow_scalar, const PowExponentKind kind) {
+    switch (kind) {
+        case PowExponentKind::OddInteger:
+            _sfpu_unary_power_rows_<is_fp32_dest_acc_en, IS_POSITIVE_EXPONENT, PowExponentKind::OddInteger, ITERATIONS>(
+                pow_scalar);
+            break;
+        case PowExponentKind::EvenInteger:
+            _sfpu_unary_power_rows_<is_fp32_dest_acc_en, IS_POSITIVE_EXPONENT, PowExponentKind::EvenInteger, ITERATIONS>(
+                pow_scalar);
+            break;
+        default:
+            _sfpu_unary_power_rows_<is_fp32_dest_acc_en, IS_POSITIVE_EXPONENT, PowExponentKind::NonInteger, ITERATIONS>(
+                pow_scalar);
+            break;
     }
 }
 
@@ -388,14 +407,31 @@ inline void power_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 /**
  * @brief Compute power operation
  *
+ * The sign, integer-ness and parity of the exponent are decided here, once per call on the RISC, and select
+ * the row body; the SFPU only computes what depends on the data.
+ *
  * @param exponent The exponent as IEEE 754 float bits (reinterpreted as uint32_t)
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_unary_power(const uint32_t exponent) {
-    if constexpr (is_fp32_dest_acc_en) {
-        _sfpu_unary_power_fp32_<ITERATIONS>(exponent);
+    if ((exponent & 0x7FFFFFFFu) == 0) {
+        // x**(+-0) == 1 for every x, including 0, +-Inf and NaN (IEEE-754 pow).
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::dst_reg[0] = 1.0f;
+            sfpi::dst_reg++;
+        }
+        return;
+    }
+
+    const float pow_scalar = Converter::as_float(exponent);
+    const PowExponentKind kind = _unary_pow_exponent_kind_(exponent);
+
+    // A NaN exponent takes the negative arm, as it did with the previous `>= 0.0f` dispatch.
+    if (pow_scalar > 0.0f) {
+        _sfpu_unary_power_by_kind_<is_fp32_dest_acc_en, true, ITERATIONS>(pow_scalar, kind);
     } else {
-        _sfpu_unary_power_bf16_<ITERATIONS>(exponent);
+        _sfpu_unary_power_by_kind_<is_fp32_dest_acc_en, false, ITERATIONS>(pow_scalar, kind);
     }
 }
 
