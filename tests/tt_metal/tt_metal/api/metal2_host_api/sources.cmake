@@ -83,6 +83,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/kernel_args_loopbacks.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/llk_operand_mul.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/mesh_workload_factories.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/integration_tests/scratch_cb.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/scratchpad.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/scratchpad_fast_dispatch.cpp
 )

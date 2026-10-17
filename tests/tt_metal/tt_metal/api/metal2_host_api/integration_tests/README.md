@@ -17,5 +17,6 @@ Put a test here only if a mock device cannot cover it. Put it elsewhere when:
 | `scratchpad.cpp` | Scratchpads under slow dispatch |
 | `scratchpad_fast_dispatch.cpp` | Scratchpads under fast dispatch |
 | `compute_semaphore.cpp` | Compute-kernel semaphores (Blackhole) |
+| `scratch_cb.cpp` | Scratch CB sync between DM and compute (Blackhole) |
 | `llk_operand_mul.cpp` | LLK operands from a DFB, a LocalTensorAccessor and a Scratchpad (Blackhole) |
 | `mesh_workload_factories.cpp` | `MakeMeshWorkloadFromSpec(s)` |
