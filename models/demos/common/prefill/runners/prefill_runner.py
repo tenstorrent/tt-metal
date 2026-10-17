@@ -112,6 +112,9 @@ CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
 
 D2D_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
+# Per-chunk host timeline of the pipeline handoff (lease, recv, syncs, replay enqueue, send), one log line per chunk.
+HANDOFF_PROFILE = os.environ.get("PREFILL_HANDOFF_PROFILE", "0") == "1"
+_handoff_t: dict = {}
 TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 # Env-overridable so re-bisecting does not need a rebuild. #54834's fix removed the AttnRes floor
 # that used to make this a narrow band; what is left is MLA's chunked-attention ceiling.
@@ -237,9 +240,12 @@ def _is_warmup_sentinel(meta: dict) -> bool:
 
 
 def _socket_next(h2d_service, n_mtp: int = 0) -> tuple:
+    t0 = time.perf_counter()
     outs = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         h2d_service, metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES, overhang_size_bytes=n_mtp * TOKEN_ID_BYTES
     )
+    if HANDOFF_PROFILE:
+        _handoff_t["recv_op"] = time.perf_counter() - t0
     if n_mtp:
         tt_ids, tt_mtp_tokens, tt_metadata = outs
     else:
@@ -300,6 +306,8 @@ def _d2d_recv(inbound) -> tuple:
     act, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         inbound, metadata_size_bytes=D2D_METADATA_SIZE_BYTES
     )
+    if HANDOFF_PROFILE:
+        _handoff_t["recv_op"] = time.perf_counter() - t0
     meta = _decode_metadata(metadata_msg)
     if MTP_LEVELS:
         words = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
@@ -333,6 +341,8 @@ def _d2d_send(
             ),
         )
     ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, activation, metadata=md_tensor)
+    if HANDOFF_PROFILE:
+        _handoff_t["send_op"] = time.perf_counter() - t0
     if deallocate:
         ttnn.deallocate(activation)
     where = f"[{meta['actual_start']},{meta['actual_end']})" if meta is not None else "(on-device)"
@@ -386,8 +396,14 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
         d2d_in.release_fabric_links()
 
 
-def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: float) -> None:
-    if not TIMING_DIR:
+# Timing rows are buffered and flushed in batches: an open/append/close per chunk on the (NFS) timing dir cost
+# ~0.5 ms of host time on every chunk, all of it on the pipeline's critical path.
+_TIMING_FLUSH_EVERY = 32
+_timing_rows: list = []
+
+
+def _flush_chunk_timing(rank: int) -> None:
+    if not TIMING_DIR or not _timing_rows:
         return
     try:
         # O_CREAT makes the file, not the parent. Without this the open raises ENOENT, the except
@@ -396,11 +412,20 @@ def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: fl
         os.makedirs(TIMING_DIR, exist_ok=True)
         fd = os.open(os.path.join(TIMING_DIR, f"rank{rank}.csv"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
         try:
-            os.write(fd, f"{rank},{c},{compute_start:.6f},{compute_ms:.3f}\n".encode())
+            os.write(fd, "".join(_timing_rows).encode())
         finally:
             os.close(fd)
     except OSError:
         pass
+    _timing_rows.clear()
+
+
+def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: float) -> None:
+    if not TIMING_DIR:
+        return
+    _timing_rows.append(f"{rank},{c},{compute_start:.6f},{compute_ms:.3f}\n")
+    if len(_timing_rows) >= _TIMING_FLUSH_EVERY:
+        _flush_chunk_timing(rank)
 
 
 def _compute_and_send(
@@ -415,6 +440,9 @@ def _compute_and_send(
     metadata_msg=None,
     mtp_tokens=None,
 ) -> float:
+    if HANDOFF_PROFILE:
+        _handoff_t["presync0"] = time.perf_counter()
+        _handoff_t["postsync"] = _handoff_t["presync0"]
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
     t_start = time.time()
@@ -437,9 +465,13 @@ def _compute_and_send(
         metadata_msg=metadata_msg,
         **mtp_kwargs,
     )
+    if HANDOFF_PROFILE:
+        _handoff_t["replay_enq"] = time.perf_counter()
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
         compute_ms = (time.perf_counter() - t_perf) * 1000.0
+        if HANDOFF_PROFILE:
+            _handoff_t["postsync"] = time.perf_counter()
         logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={compute_ms:.3f}")
         _record_chunk_timing(rank, c, t_start, compute_ms)
     if not runtime.config.is_last_rank:
@@ -455,18 +487,180 @@ def _compute_and_send(
             deallocate=not runtime.config.use_trace,
             metadata_msg=forward_md,
         )
+    if HANDOFF_PROFILE:
+        _handoff_t["send_done"] = time.perf_counter()
     if d2d_out is not None:
         d2d_out.release_fabric_links()
+    if HANDOFF_PROFILE:
+        h = _handoff_t
+        h["release_done"] = time.perf_counter()
+        ms = lambda a, b: (h[b] - h[a]) * 1000.0
+        logger.info(
+            f"[pp rank {rank}] HANDOFF c={c} lease={ms('lease0', 'lease1'):.3f} recv={ms('lease1', 'recv1'):.3f} "
+            f"pre_gap={ms('recv1', 'presync0'):.3f} presync={(t_perf - h['presync0']) * 1000.0:.3f} "
+            f"replay_enq={(h['replay_enq'] - t_perf) * 1000.0:.3f} postsync={ms('replay_enq', 'postsync'):.3f} "
+            f"send={ms('postsync', 'send_done'):.3f} release={ms('send_done', 'release_done'):.3f} "
+            f"recv_op={h.get('recv_op', 0) * 1000.0:.3f} send_op={h.get('send_op', 0) * 1000.0:.3f}"
+        )
     return t_start
 
 
 def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float) -> None:
+    _flush_chunk_timing(rank)
     if d2d_out is not None:
         d2d_out.wait_for_fabric_links()
     ttnn.synchronize_device(runtime.mesh_device)
     fcs = f"{first_compute_start:.6f}" if first_compute_start is not None else "n/a"
     logger.info(f"[pp rank {rank}] E2E_CLOCK first_compute_start={fcs} last_compute_end={time.time():.6f}")
     logger.info(f"[pp rank {rank}] processed {n_done} chunks in {(time.perf_counter() - t0) * 1000.0:.2f} ms")
+
+
+def _recv_enqueue(cfg, h2d_service, d2d_in) -> tuple:
+    """Enqueue this rank's next-chunk input op (H2D on the first rank, D2D otherwise) without reading it back."""
+    if cfg.is_first_rank:
+        outs = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+            h2d_service,
+            metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES,
+            overhang_size_bytes=NUM_MTP_TOKENS * TOKEN_ID_BYTES,
+        )
+        if NUM_MTP_TOKENS:
+            tt_ids, tt_mtp_tokens, tt_metadata = outs
+        else:
+            tt_mtp_tokens = None
+            tt_ids, tt_metadata = outs
+        return tt_ids, tt_mtp_tokens, tt_metadata
+    act, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+        d2d_in, metadata_size_bytes=D2D_METADATA_SIZE_BYTES
+    )
+    return act, None, metadata_msg
+
+
+def _recv_decode(cfg, pending) -> tuple:
+    """Read back the metadata of an enqueued input; blocks until that input has landed on device."""
+    inp, mtp_tokens, metadata_msg = pending
+    meta = _decode_metadata(metadata_msg)
+    if cfg.is_first_rank:
+        meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
+    elif MTP_LEVELS:
+        words = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
+        meta["provided_levels"] = max(0, int(words[3]))
+    return inp, mtp_tokens, meta, metadata_msg
+
+
+def run_request_loop_pipelined(
+    runtime,
+    kv_caches,
+    rank: int,
+    num_ranks: int,
+    *,
+    d2d_rows: int,
+    d2d_width: int,
+    outbound_planes: int = 1,
+    h2d_service=None,
+    d2d_in=None,
+    d2d_out=None,
+    d2h_service=None,
+    before_first_chunk=None,
+) -> None:
+    """Request loop that keeps the host one step ahead of the device on the traced path.
+
+    run_request_loop enqueues each chunk's handoff ops (send, link lease, next input) only after the replay has
+    finished on device, so every one of them -- ~0.4-0.9 ms of host enqueue each -- sits between two chunks'
+    compute. Here the replay returns as soon as its segments are enqueued (runtime.replay_sync = False), the
+    handoff ops for chunk c and the input op for chunk c+1 are enqueued while chunk c computes, and the host
+    fences on an event recorded after the replay to time the chunk. The device executes exactly the same op
+    sequence in the same CQ order as run_request_loop; only the host's position relative to it changes.
+    """
+    cfg = runtime.config
+    if cfg.is_first_rank and h2d_service is None:
+        raise ValueError("request mode requires the H2D service on the first rank for input")
+    runtime.replay_sync = False
+    logger.info(
+        f"[pp rank {rank}/{num_ranks}] pipelined request loop start "
+        f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
+    )
+    t0 = time.perf_counter()
+    c = 0
+    first = None
+    _lease_reclaim(d2d_in, d2d_out)
+    pending = _recv_enqueue(cfg, h2d_service, d2d_in)
+    prof_prev = None
+    while not _shutdown:
+        t_dec0 = time.perf_counter()
+        inp, mtp_tokens, meta, metadata_msg = _recv_decode(cfg, pending)
+        t_dec1 = time.perf_counter()
+        if _is_shutdown_sentinel(meta):
+            logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
+            ttnn.deallocate(inp)
+            ttnn.deallocate(metadata_msg)
+            if mtp_tokens is not None:
+                ttnn.deallocate(mtp_tokens)
+            if d2d_out is not None:
+                _forward_shutdown(d2d_out, rank, d2d_rows, d2d_width, outbound_planes)
+            break
+        warmup = _is_warmup_sentinel(meta)
+        if warmup:
+            ttnn.deallocate(inp)
+            ttnn.deallocate(metadata_msg)
+        if before_first_chunk is not None:
+            before_first_chunk()
+            before_first_chunk = None
+        if warmup:
+            _lease_reclaim(d2d_in, d2d_out)
+            pending = _recv_enqueue(cfg, h2d_service, d2d_in)
+            continue
+        t_start = time.time()
+        t_perf = time.perf_counter()
+        where = f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
+        logger.info(f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} {where}")
+        out = runtime.prefill_chunk(
+            inp,
+            kv_caches,
+            slot_id=meta["slot_id"],
+            actual_start=meta["actual_start"],
+            actual_end=meta["actual_end"],
+            request_id=c,
+            d2h_service=d2h_service,
+            metadata_msg=metadata_msg,
+        )
+        t_enq = time.perf_counter()
+        compute_done = ttnn.record_event(runtime.mesh_device)
+        # Chunk c's send, the link lease and chunk c+1's input op go into the CQ behind the replay now.
+        if not cfg.is_last_rank:
+            persistent_md = getattr(runtime, "trace_metadata_msg", None)
+            _d2d_send(
+                d2d_out,
+                out,
+                rank,
+                meta,
+                deallocate=False,
+                metadata_msg=persistent_md if persistent_md is not None else metadata_msg,
+            )
+        if d2d_out is not None:
+            d2d_out.release_fabric_links()
+        _lease_reclaim(d2d_in, d2d_out)
+        pending = _recv_enqueue(cfg, h2d_service, d2d_in)
+        t_hq = time.perf_counter()
+        ttnn.event_synchronize(compute_done)
+        t_ev = time.perf_counter()
+        if SYNC_PER_CHUNK:
+            compute_ms = (t_ev - t_perf) * 1000.0
+            logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={compute_ms:.3f}")
+            _record_chunk_timing(rank, c, t_start, compute_ms)
+        if HANDOFF_PROFILE:
+            t_post = time.perf_counter()
+            if prof_prev is not None:
+                pe, pp = prof_prev
+                logger.info(
+                    f"[pp rank {rank}] PHANDOFF c={c} post_prev={pp * 1000.0:.3f} decode_wait={(t_dec1 - t_dec0) * 1000.0:.3f} "
+                    f"ev_to_decode_done={(t_dec1 - pe) * 1000.0:.3f} chunk_enq={(t_enq - t_perf) * 1000.0:.3f} "
+                    f"handoff_enq={(t_hq - t_enq) * 1000.0:.3f} ev_wait={(t_ev - t_hq) * 1000.0:.3f}"
+                )
+            prof_prev = (t_ev, t_post - t_ev)
+        if first is None:
+            first = t_start
+        c += 1
+    _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
 
 
 def run_request_loop(
@@ -495,13 +689,19 @@ def run_request_loop(
     c = 0
     first = None
     while not _shutdown:
+        if HANDOFF_PROFILE:
+            _handoff_t["lease0"] = time.perf_counter()
         _lease_reclaim(d2d_in, d2d_out)
+        if HANDOFF_PROFILE:
+            _handoff_t["lease1"] = time.perf_counter()
         if cfg.is_first_rank:
             inp, mtp_tokens, meta, metadata_msg = _socket_next(h2d_service, NUM_MTP_TOKENS)
             meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
         else:
             inp, meta, metadata_msg = _d2d_recv(d2d_in)
             mtp_tokens = None
+        if HANDOFF_PROFILE:
+            _handoff_t["recv1"] = time.perf_counter()
         if _is_shutdown_sentinel(meta):
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             ttnn.deallocate(inp)
@@ -896,8 +1096,16 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
+    # The pipelined loop needs the traced path (an event-fenced replay) and does not carry the MTP / DFlash
+    # input plumbing; everything else takes it unless PREFILL_PIPELINED_HOST=0.
+    pipelined = (
+        traced and not MTP_LEVELS and not DFLASH_ENABLED and os.environ.get("PREFILL_PIPELINED_HOST", "1") == "1"
+    )
+    loop_fn = run_request_loop_pipelined if pipelined else run_request_loop
+    logger.info(f"[pp rank {rank}] request loop: {'pipelined' if pipelined else 'serial'}")
+
     try:
-        run_request_loop(
+        loop_fn(
             runtime,
             kv_caches,
             rank,

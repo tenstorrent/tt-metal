@@ -166,7 +166,7 @@ class SubDeviceTraceController:
         self._current_tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
 
     # ------------------------------------------------------------------ replay
-    def replay(self, variant=None):
+    def replay(self, variant=None, sync=True):
         """Run the whole segmented forward: execute each trace, load/clear between segments.
 
         Segments are enqueued NON-blocking on one CQ: the device runs them in enqueue order, and the
@@ -177,11 +177,14 @@ class SubDeviceTraceController:
             out-of-band from the CQ, so that segment's writes must be on-device first; and
           - ONCE after the last segment — so the chunk's KV is fully written before replay() returns.
         ``variant`` picks which capture of each capture_variants() region runs.
-        This replaces the old block-every-segment (which serialized dispatch for no reason but the ack)."""
+        This replaces the old block-every-segment (which serialized dispatch for no reason but the ack).
+        ``sync=False`` skips that final sync: a caller that only needs CQ ordering (its next ops are CQ-ordered
+        after the replay anyway) can keep enqueuing while the device runs, and fence on an event instead."""
         assert not self._capturing, "still capturing"
         assert self._program, "nothing captured"
         self._replay_steps(self._program, variant)
-        ttnn.synchronize_device(self.mesh_device)
+        if sync:
+            ttnn.synchronize_device(self.mesh_device)
 
     def _replay_steps(self, program, variant):
         for kind, payload in program:
