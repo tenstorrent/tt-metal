@@ -44,13 +44,20 @@ namespace sfpu {
  * @tparam FAST_APPROX Ignored. The only code it ever selected was skipping the input
  *   normalisation below, which returned NaN for -0.0 and for positive subnormals, so
  *   fast mode now runs the same instructions as accurate mode.
- * @tparam HAS_BASE_SCALING If true, scale the natural log by log_base_scale_factor
+ * @tparam HAS_BASE_SCALING If true, multiply the natural log by log_base_scale_factor, the fp32
+ *   bits of 1/ln(base). Has no effect once IS_BASE_TWO is set: that path always applies the factor.
  * @tparam is_fp32_dest_acc_en If true, use the fp32 polynomial; otherwise the bf16 one
- * @tparam IS_BASE_TWO If true, apply the base change to the mantissa term only, so log2 of a
- *   power of two is exact
+ * @tparam IS_BASE_TWO If true, multiply only the mantissa term by log_base_scale_factor and add the
+ *   exponent term as e_float * 2^-23, so log2 of a power of two is exact. The factor is applied
+ *   whether or not HAS_BASE_SCALING is set, and the result is log2(a) only when the factor is the
+ *   fp32 bits of 1/ln(2) (0x3FB8AA3B); with a factor of 0 the mantissa term vanishes and the
+ *   result is just the exponent. Requires HAS_BASE_SCALING, enforced below.
  */
 template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, bool IS_BASE_TWO = false>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
+    static_assert(
+        !IS_BASE_TWO || HAS_BASE_SCALING,
+        "IS_BASE_TWO always applies log_base_scale_factor, so it must be instantiated with HAS_BASE_SCALING");
     // Normalise a (-0.0 and subnormals become +0.0): SFPMAD treats subnormal
     // inputs as zero, and adding +0.0 turns a -0.0 product into +0.0 on both
     // Wormhole and Blackhole (Wormhole also makes every zero result +0.0;
@@ -152,10 +159,13 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
 /**
  * @tparam APPROXIMATION_MODE Ignored
  * @tparam FAST_APPROX Ignored (see calculate_log_body)
- * @tparam HAS_BASE_SCALING If true, scale the natural log by log_base_scale_factor
+ * @tparam HAS_BASE_SCALING If true, multiply the natural log by log_base_scale_factor, the fp32
+ *   bits of 1/ln(base). Has no effect once IS_BASE_TWO is set (see calculate_log_body)
  * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
  * @tparam ITERATIONS Number of iterations for given face
- * @tparam IS_BASE_TWO If true, take the exact log2 path
+ * @tparam IS_BASE_TWO If true, take the exact log2 path: log_base_scale_factor is always applied to
+ *   the mantissa term, so it must be the fp32 bits of 1/ln(2) (0x3FB8AA3B) and HAS_BASE_SCALING
+ *   must be true (see calculate_log_body)
  */
 template <
     bool APPROXIMATION_MODE,
