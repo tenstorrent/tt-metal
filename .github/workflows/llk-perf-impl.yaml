@@ -215,6 +215,19 @@ jobs:
             --label "compile ${{ matrix.test-group.name }} on ${{ inputs.compile-runner }} (-n ${{ inputs.compile-workers }})" \
             --output "$GITHUB_STEP_SUMMARY" \
             -- bash -c "$MATRIX_CMD"
+      - name: Report this job's CPU and memory limits and peak
+        if: always()
+        shell: bash
+        run: |
+          # The sidecar reads /proc, which shows the whole node; the cgroup is this job.
+          cg=/sys/fs/cgroup
+          {
+            echo "### Job cgroup"
+            echo "- cpu.max: $(cat $cg/cpu.max 2>/dev/null || echo n/a), nproc: $(nproc)"
+            echo "- memory.max: $(cat $cg/memory.max 2>/dev/null || echo n/a), memory.peak: $(cat $cg/memory.peak 2>/dev/null || echo n/a)"
+            grep -E '^(usage_usec|nr_throttled|throttled_usec) ' $cg/cpu.stat 2>/dev/null | sed 's/^/- cpu.stat /'
+            grep -E '^(oom|oom_kill) ' $cg/memory.events 2>/dev/null | sed 's/^/- memory.events /'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Pack the ELFs
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
