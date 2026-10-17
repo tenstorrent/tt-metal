@@ -30,7 +30,7 @@ pytestmark = [wormhole_only]
 RESULT_MAGIC = 0x414C5546
 HEADER_WORDS = 3
 WORDS_PER_RECORD = 4
-NUM_PAIRS = 7
+NUM_PAIRS = 8
 WRITER_RECONFIG_SKIP_INT8 = 2
 WRITERS = {
     0: "_llk_math_hw_configure_",
@@ -121,9 +121,10 @@ def test_math_alu_format_writers_mask_to_field_width():
 
         want_srca = srca & FIELD_WIDTH_MASK
         want_srcb = srcb & FIELD_WIDTH_MASK
-        # The skip_int8 writer leaves the INT8 bit as seeded (Float32 x Float32 -> 0).
+        # The skip_int8 writer is seeded with Int8 x Float16_b (INT8 = 1) and must leave the bit as
+        # it found it; the other writers are seeded with INT8 = 0 and must re-derive it.
         want_int8 = (
-            0
+            1
             if writer == WRITER_RECONFIG_SKIP_INT8
             else int(_int8_math_enabled(srca) or _int8_math_enabled(srcb))
         )

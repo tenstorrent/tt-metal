@@ -11,10 +11,12 @@
 // RMW mask of the two-field writers carries that bit into the register: SrcB is programmed as
 // (srcb | 1), e.g. Int8 (14) becomes Bfp2_b (15), Int32 (8) becomes UInt16 (9).
 //
-// MATH seeds both fields with Float32 (0) through the shipped configurator, then programs each
-// (srcA, srcB) pair through each writer under test and reads the word back. Only MATH runs; UNPACK
-// and PACK do nothing. The variant is built with FP32 dest accumulation (is_fp32_dest_acc_en), which
-// the Int8/UInt8/Int32 formats require.
+// MATH seeds the word through the shipped configurator, then programs each (srcA, srcB) pair through
+// each writer under test and reads the word back. The writers that re-derive the INT8 math enable
+// bit are seeded with Float32 x Float32 (INT8 = 0); the skip_int8 writer is seeded with
+// Int8 x Float16_b (INT8 = 1) and must leave that bit as it found it, so a skip path that clears it
+// is caught. Only MATH runs; UNPACK and PACK do nothing. The variant is built with FP32 dest
+// accumulation (is_fp32_dest_acc_en), which the Int8/UInt8/Int32 formats require.
 //
 // Result words:
 //   0        magic
@@ -60,15 +62,18 @@ struct FormatPair
     DataFormat srcb;
 };
 
-// The first five pairs carry a SrcA value with bit 4 set (UInt8 = 30, UInt32 = 24) and a SrcB value
-// with bit 0 clear, so a spill from SrcA is visible as SrcB | 1. The last two pairs have no spill
-// (Int8 = 14 and Float16_b = 5 fit the field) and only show that the readback tracks the write.
+// The first six pairs carry a SrcA value with bit 4 set (UInt8 = 30, UInt32 = 24) and a SrcB value
+// with bit 0 clear, so a spill from SrcA is visible as SrcB | 1. {UInt32, Tf32} is the only pair
+// whose SrcB does not enable INT8 math by itself, so it decides that UInt32 alone does not either.
+// The last two pairs have no spill (Int8 = 14 and Float16_b = 5 fit the field) and only show that
+// the readback tracks the write.
 constexpr FormatPair PAIRS[] = {
     {DataFormat::UInt8, DataFormat::Int8},
     {DataFormat::UInt8, DataFormat::Int32},
     {DataFormat::UInt8, DataFormat::Tf32},
     {DataFormat::UInt32, DataFormat::Int8},
     {DataFormat::UInt32, DataFormat::Int32},
+    {DataFormat::UInt32, DataFormat::Tf32},
     {DataFormat::Int8, DataFormat::Int8},
     {DataFormat::Float16_b, DataFormat::Float16_b},
 };
@@ -81,9 +86,20 @@ inline std::uint32_t read_alu_format_word()
     return get_cfg_pointer()[ALU_FORMAT_SPEC_REG0_SrcA_ADDR32];
 }
 
-inline void seed_float32()
+// Seed the word so a stale read cannot match the expectation: no seed equals a pair's masked write
+// in both fields. The skip_int8 writer must not touch the INT8 math enable bit, so it is seeded
+// with that bit set (Int8 x Float16_b); the others re-derive the bit and are seeded with it clear
+// (Float32 x Float32).
+inline void seed(const Writer writer)
 {
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(to_underlying(DataFormat::Float32), to_underlying(DataFormat::Float32));
+    if (writer == Writer::ReconfigSkipInt8)
+    {
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(to_underlying(DataFormat::Int8), to_underlying(DataFormat::Float16_b));
+    }
+    else
+    {
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(to_underlying(DataFormat::Float32), to_underlying(DataFormat::Float32));
+    }
 }
 
 inline void program(const Writer writer, const std::uint32_t srca, const std::uint32_t srcb)
@@ -120,9 +136,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const std::uint32_t srca = to_underlying(PAIRS[p].srca);
             const std::uint32_t srcb = to_underlying(PAIRS[p].srcb);
 
-            // Seed the word so a stale read cannot match the expectation.
-            seed_float32();
-            program(static_cast<Writer>(w), srca, srcb);
+            const Writer writer = static_cast<Writer>(w);
+            seed(writer);
+            program(writer, srca, srcb);
 
             out[k++] = w;
             out[k++] = srca;
