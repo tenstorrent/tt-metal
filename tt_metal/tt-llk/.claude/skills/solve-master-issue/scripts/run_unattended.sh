@@ -5,7 +5,8 @@
 #   nohup setsid $SKILL/scripts/run_unattended.sh audit-llk-whbh --worker bh /path/to/CONFIRMED.json --arch blackhole … &
 # Each attempt is one `claude -p` turn in auto mode, from $REPO_ROOT (default: cwd). The first attempt
 # invokes the skill; every later attempt resumes the SAME session and says "continue from the ledger".
-# A turn ends when the model stops — normally because every item is waiting on bots / CI / a device.
+# MODEL: a file $state/MODEL or $run/MODEL holding a model id (e.g. claude-opus-5-5) switches the model for every
+# later attempt without a restart of the driver (read per attempt). A turn ends when the model stops — normally because every item is waiting on bots / CI / a device.
 # The driver then sleeps and resumes, which is how an unattended run "wakes up" to handle finished runs:
 # the skill arms nothing that must outlive the turn. Sleep = $SLEEP seconds (default 900), unless the turn
 # left <state>/NEXT_WAKE holding a unix epoch: then the driver sleeps until that time (at most $MAX_SLEEP,
@@ -84,7 +85,11 @@ while [ "$n" -lt "$max" ]; do
         prompt="Resume the /solve-master-issue run '$name'${worker:+ as worker '$worker'} (arguments were: $args --unattended --run-name $name$wopt). Re-read the ledger in $state and the findings file marks first, handle everything that finished while you were away (CI runs, bot reviews, builds, remote legs), reconcile on a fresh start, then continue the scheduler until every item is done, parked, or waiting on something external. Write $state/DONE only when the final report is written and nothing is left to do."
         flags=(--resume "$sid")
     fi
-    log "$tag begin"
+    # model override, re-read every attempt: $state/MODEL (this worker) else $run/MODEL (all workers); one model id
+    # per line, e.g. claude-opus-5-5. Empty/absent = the account default. Subagents inherit it.
+    m=$(head -1 "$state/MODEL" 2>/dev/null || head -1 "$run/MODEL" 2>/dev/null || true)
+    [ -n "$m" ] && { flags+=(--model "$m"); tag_model=" model=$m"; } || tag_model=
+    log "$tag begin$tag_model"
     ( cd "$root" && claude -p "$prompt" --permission-mode auto "${flags[@]}" "${add[@]}" \
         > "$state/$tag.log" 2> "$state/$tag.err" )
     rc=$?
