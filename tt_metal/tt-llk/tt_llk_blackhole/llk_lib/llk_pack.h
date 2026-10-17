@@ -428,7 +428,8 @@ inline void pack_init_apply(
  * @param face_r_dim: Number of rows per face.
  * @param tile_c_dim: Tile column dimension (datums).
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param partial_face: True if the faces are shorter than FACE_R_DIM rows (false for full-height faces such as a
+ *        16x32 tile's), so a block-float tile carries one exponent chunk.
  */
 template <bool is_fp32_dest_acc_en>
 inline void _llk_pack_reconfig_data_format_(
@@ -461,7 +462,8 @@ inline void _llk_pack_reconfig_data_format_(
  * @param face_r_dim: Number of rows per face.
  * @param tile_c_dim: Tile column dimension (datums).
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param partial_face: True if the faces are shorter than FACE_R_DIM rows (face_r_dim < FACE_R_DIM; false for
+ *        full-height faces such as a 16x32 tile's), so a block-float tile carries one exponent chunk.
  * @param relu_config: Packed relu mode and threshold configuration (0 disables relu).
  * @note For 8-bit unpack-source datums, do not use PackMode::Tilize: the Blackhole row-unswizzling workaround is skipped (and is unnecessary, as 8-bit formats
  * are unaffected by the issue).

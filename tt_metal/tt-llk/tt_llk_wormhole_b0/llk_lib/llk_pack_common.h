@@ -25,7 +25,8 @@ namespace llk_pack_internal
  * tile has no second face to join and packs the same way in every format.
  *
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param partial_face: True if the faces are shorter than FACE_R_DIM rows (face_r_dim < FACE_R_DIM; false for
+ *        full-height faces such as a 16x32 tile's), so a block-float tile carries one exponent chunk.
  */
 inline bool tile_pack_mop_form_depends_on_format(const std::uint32_t num_faces, const bool partial_face)
 {
@@ -37,7 +38,8 @@ inline bool tile_pack_mop_form_depends_on_format(const std::uint32_t num_faces, 
  *
  * @param pack_dst_format: Destination (L1) data format.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param partial_face: True if the faces are shorter than FACE_R_DIM rows (face_r_dim < FACE_R_DIM; false for
+ *        full-height faces such as a 16x32 tile's), so a block-float tile carries one exponent chunk.
  */
 inline bool is_partial_face_bfp_pack(const std::uint32_t pack_dst_format, const std::uint32_t num_faces, const bool partial_face)
 {
@@ -48,7 +50,8 @@ inline bool is_partial_face_bfp_pack(const std::uint32_t pack_dst_format, const 
  * The tile pack MOP the packer holds (the default, data-emitting, single-tile variant of @ref _llk_pack_mop_config_),
  * as the pack init built it. @ref _llk_pack_reconfig_data_format_ rebuilds that MOP when a format change flips its form
  * (@ref is_partial_face_bfp_pack), with the geometry recorded here: the geometry the init also programmed into
- * the ADDR_MODs and the packer X counter, so a reconfig refreshes the format alone. It rebuilds only that MOP:
+ * the ADDR_MODs and the packer X counter, which a reconfig leaves alone (it reprograms the format-derived state:
+ * formats, strides, the block-float exponent section size, the L1 offset). It rebuilds only that MOP:
  * the untilize, row and fast-tilize MOP configs and the zero-output and multi-tile variants leave `programmed`
  * false, so a reconfig issued while one of them is in place leaves it alone.
  */
@@ -57,7 +60,7 @@ struct TilePackMop
     bool programmed          = false;
     bool partial_face_bfp    = false; // the one-interface partial-face block-float sequence
     std::uint32_t face_r_dim = FACE_R_DIM;
-    std::uint32_t num_faces  = 4;
+    std::uint32_t num_faces  = TILE_NUM_FACES;
     bool partial_face        = false;
     bool narrow_tile         = false;
 };

@@ -50,8 +50,9 @@ inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
     _llk_pack_fast_tilize_uninit_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
         pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
 
-    // The uninit tail-calls _llk_pack_init_, so seat OperationPack on llk_pack_init's num_tiles == 1 path.
-    if (partial_face) {
+    // The uninit tail-calls _llk_pack_init_, so seat OperationPack on llk_pack_init's num_tiles == 1 path, with
+    // its rule for when the MOP bakes the format in.
+    if (llk_pack_internal::tile_pack_mop_form_depends_on_format(num_faces, partial_face)) {
         SAN_HOOK(init<OperationPack>(
             StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
             StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),

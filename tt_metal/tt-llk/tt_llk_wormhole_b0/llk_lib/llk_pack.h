@@ -184,7 +184,8 @@ inline void _llk_pack_configure_addrmod_()
  * @param pack_dst_format: Destination (L1) data format.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param partial_face: True if the faces are shorter than FACE_R_DIM rows (face_r_dim < FACE_R_DIM; false for
+ *        full-height faces such as a 16x32 tile's), so a block-float tile carries one exponent chunk.
  * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
  * @param num_tiles: Number of tiles processed per MOP run.
  * @note @ref _llk_pack_configure_addrmod_ must have programmed the ADDR_MOD slots for the same pack_mode.
@@ -332,8 +333,9 @@ static __attribute__((noinline, noclone)) bool rebuild_tile_pack_mop_for_format(
  * tile with one interface per face, so its form depends on the output format. When the tile pack MOP is
  * programmed and this reconfig crosses that line (a matmul switching from its Float16_b partials to a short-face
  * block-float output, or back), the MOP is rebuilt for the new format with the geometry the pack init built it
- * with: the ADDR_MODs and the packer X counter are geometry state that init programmed for that geometry, and a
- * reconfig refreshes the format alone (a caller that changes the tile geometry re-inits). Any other MOP
+ * with: a reconfig reprograms the format-derived state (formats, strides, the block-float exponent section size,
+ * the L1 offset) from its arguments and leaves the init-owned state (the ADDR_MODs, the packer X counter and,
+ * apart from this rebuild, the MOP) alone, so a caller that changes the tile geometry re-inits. Any other MOP
  * (untilize, rows, fast tilize, zero output) is left in place.
  *
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
@@ -342,7 +344,8 @@ static __attribute__((noinline, noclone)) bool rebuild_tile_pack_mop_for_format(
  * @param tile_size: Size of one output tile in bytes.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param partial_face: True if the faces are shorter than FACE_R_DIM rows (face_r_dim < FACE_R_DIM; false for
+ *        full-height faces such as a 16x32 tile's), so a block-float tile carries one exponent chunk.
  * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
  * @return True when the tile pack MOP was rebuilt for the new format.
  */
@@ -380,7 +383,8 @@ inline bool _llk_pack_reconfig_data_format_(
  * @param tile_size: Size of one output tile in bytes.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param partial_face: True if the faces are shorter than FACE_R_DIM rows (face_r_dim < FACE_R_DIM; false for
+ *        full-height faces such as a 16x32 tile's), so a block-float tile carries one exponent chunk.
  * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
  * @param relu_config: Packed relu mode and threshold configuration (0 disables relu).
  */
@@ -417,7 +421,8 @@ inline void _llk_pack_hw_configure_(
  * @param pack_dst_format: Destination (L1) data format.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param partial_face: True if the faces are shorter than FACE_R_DIM rows (face_r_dim < FACE_R_DIM; false for
+ *        full-height faces such as a 16x32 tile's), so a block-float tile carries one exponent chunk.
  * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
  * @param num_tiles: Number of tiles processed per MOP run.
  * @note Init programs ADDR_MOD + MOP + the packer X (datum) counter. The X counter is pack_mode-dependent
