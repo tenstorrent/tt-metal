@@ -42,7 +42,7 @@ static inline __attribute__((noreturn)) void boot_jump_to_active_fw(uint64_t ent
         /* Invalidate the L1 I-cache before jumping into the active FW.
          * The L2CPU is never reset across ping-pong handoffs, so its
          * I-cache still holds the *previous* active FW's instructions for
-         * the active-FW LIM region. The host overwrote that region (over
+         * the active-FW region. The host overwrote that region (over
          * NOC) with the new active FW, but NOC writes don't snoop the
          * hart's I-cache -- without this fence.i the hart would re-run the
          * stale firmware. fence.i must execute here (in the resident idle

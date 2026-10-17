@@ -101,7 +101,8 @@ typedef struct {
 } x280_paired_t;
 
 /* Reads a paired bracket end, wall then CPU: the one order of every X280
- * paired bracket. */
+ * paired bracket (docs/measurement.md "Paired reads"). The packet_injection
+ * aggregate, which nests its reads, reads them by hand. */
 static inline __attribute__((always_inline)) x280_paired_t x280_paired_now(void) {
     x280_paired_t t;
     t.wall = x280_mtime_fenced();

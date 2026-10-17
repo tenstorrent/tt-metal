@@ -115,8 +115,11 @@ private:
     void publish_active_command(uint32_t hart, uint64_t command);
     void publish_active_command_all(uint64_t command);
     // primed_bytes is the tile's LimEccObservation::primed_bytes; the image is
-    // refused past the window it bounds.
-    void load_active_image(const std::vector<uint8_t>& image, std::optional<uint64_t> primed_bytes);
+    // refused past the window it bounds. Writes the image at the load address
+    // its tag records, reads it back, and returns that address, which is the
+    // entry the harts jump to. Throws, having published nothing, on a missing
+    // tag, a rejected placement or a readback mismatch.
+    uint64_t load_active_image(const std::vector<uint8_t>& image, std::optional<uint64_t> primed_bytes);
 
     // Session slot state. These take session_mutex_ themselves and need no
     // chip lock, which is what lets the enqueue pre-check run before the chip

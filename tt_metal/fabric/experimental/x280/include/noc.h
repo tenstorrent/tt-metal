@@ -305,6 +305,15 @@ static inline volatile void* noc_configure_tlb_2m_ext(uint32_t index, noc_tlb_2m
     return (volatile void*)(base + (uint64_t)index * NOC_2M_WINDOW_STRIDE + offset);
 }
 
+/* A window's request VC: the NIU and every router choose it dynamically. Any
+ * other value names a static VC (noc_fill_tlb_2m). */
+#define NOC_VC_DYNAMIC 0xFFu
+
+/* Highest static VC a unicast window takes: classes 0b00 and 0b01. A multicast
+ * needs class 0b10 (TLBWindows.md), which no caller uses, so the checked entry
+ * points refuse a static VC on one. */
+#define NOC_VC_UNICAST_MAX 3u
+
 /**
  * Helper: populate a noc_tlb_2m_t for a window aimed at addr.
  *
@@ -328,9 +337,14 @@ static inline volatile void* noc_configure_tlb_2m_ext(uint32_t index, noc_tlb_2m
  * (tt-isa-documentation, BlackholeA0/NoC/Coordinates.md:24). The fields are
  * written as given.
  *
- * Coordinates are not bounded here -- each is a six-bit field and an
- * out-of-range value carries into its neighbour. noc_configure_tlb_2m_mcast is
- * the entry point that refuses one.
+ * `vc` is NOC_VC_DYNAMIC, which writes no VC field, so `static_vc` stays clear
+ * only if the caller zeroed `*tlb`; or a static request VC written as
+ * class = vc >> 1 and buddy = vc & 1 with `static_vc` set
+ * (TLBWindows.md, "Configuration": unicast classes 0b00 and 0b01).
+ *
+ * Coordinates and `vc` are not bounded here -- each coordinate is a six-bit
+ * field and an out-of-range value carries into its neighbour.
+ * noc_configure_tlb_2m_mcast is the entry point that refuses one.
  */
 static inline void noc_fill_tlb_2m(
     noc_tlb_2m_t* tlb,
@@ -341,7 +355,8 @@ static inline void noc_fill_tlb_2m(
     uint64_t addr,
     noc_ordering_t ordering,
     int multicast_en,
-    uint32_t num_destinations) {
+    uint32_t num_destinations,
+    uint32_t vc) {
     tlb->local_offset = addr >> 21;
     tlb->x_end = x_end;
     tlb->y_end = y_end;
@@ -350,6 +365,11 @@ static inline void noc_fill_tlb_2m(
     tlb->ordering = (uint32_t)ordering;
     tlb->mcast = multicast_en ? 1u : 0u;
     tlb->num_destinations_override = num_destinations;
+    if (vc != NOC_VC_DYNAMIC) {
+        tlb->static_vc = 1u;
+        tlb->static_vc_class = vc >> 1;
+        tlb->static_vc_buddy = vc & 1u;
+    }
 }
 
 /**
@@ -407,6 +427,9 @@ static inline int noc_verify_tlb_2m(uint32_t index, const noc_tlb_2m_t* expected
  * `ordering` must be a noc_ordering_t member (noc_ordering_valid); Counted
  * Writes is reached only through the raw entry points.
  *
+ * `vc` must be NOC_VC_DYNAMIC, or a static VC up to NOC_VC_UNICAST_MAX on a
+ * unicast window.
+ *
  * @param programmed  Receives the words this call intends the entry to hold, so
  *                    a caller can pass it straight to noc_verify_tlb_2m.
  *                    Untouched on refusal.
@@ -422,12 +445,14 @@ static inline volatile void* noc_configure_tlb_2m_mcast(
     noc_ordering_t ordering,
     int multicast_en,
     uint32_t num_destinations_override,
+    uint32_t vc,
     noc_tlb_2m_t* programmed) {
     if (programmed == (noc_tlb_2m_t*)0) {
         return (volatile void*)0;
     }
     if (x_start > NOC_MAX_COORD || y_start > NOC_MAX_COORD || x_end > NOC_MAX_COORD || y_end > NOC_MAX_COORD ||
-        num_destinations_override > 0xFFu || !noc_ordering_valid(ordering) || index >= NOC_2M_WINDOW_COUNT) {
+        num_destinations_override > 0xFFu || !noc_ordering_valid(ordering) || index >= NOC_2M_WINDOW_COUNT ||
+        (vc != NOC_VC_DYNAMIC && (vc > NOC_VC_UNICAST_MAX || multicast_en))) {
         return (volatile void*)0;
     }
     /* Word by word, not `= {0}`: see the note in noc_configure_tlb_2m. */
@@ -436,7 +461,7 @@ static inline volatile void* noc_configure_tlb_2m_mcast(
     programmed->data[2] = 0;
     programmed->data[3] = 0;
     noc_fill_tlb_2m(
-        programmed, x_start, y_start, x_end, y_end, addr, ordering, multicast_en, num_destinations_override);
+        programmed, x_start, y_start, x_end, y_end, addr, ordering, multicast_en, num_destinations_override, vc);
     /* The _ext form because it takes the words already built. It returns the
      * window base rather than base plus offset, so the low 21 bits of addr are
      * added here to match noc_configure_tlb_2m's return. */
@@ -461,7 +486,8 @@ static inline volatile void* noc_configure_tlb_2m_mcast(
  * remains responsible for aiming at a tile that answers.
  *
  * `ordering` must be a noc_ordering_t member (noc_ordering_valid); Counted
- * Writes is reached only through the raw entry points.
+ * Writes is reached only through the raw entry points. `vc` is as
+ * noc_configure_tlb_2m_mcast takes it for a unicast window.
  *
  * @param programmed  Receives the words this call intends the entry to hold, so
  *                    a caller can pass it straight to noc_verify_tlb_2m.
@@ -474,7 +500,13 @@ static inline volatile void* noc_configure_tlb_2m_mcast(
  * @return  As noc_configure_tlb_2m, or NULL when an argument was refused.
  */
 static inline volatile void* noc_configure_tlb_2m_checked(
-    uint32_t index, uint32_t noc_x, uint32_t noc_y, uint64_t addr, noc_ordering_t ordering, noc_tlb_2m_t* programmed) {
+    uint32_t index,
+    uint32_t noc_x,
+    uint32_t noc_y,
+    uint64_t addr,
+    noc_ordering_t ordering,
+    uint32_t vc,
+    noc_tlb_2m_t* programmed) {
     return noc_configure_tlb_2m_mcast(
         index,
         noc_x,
@@ -485,6 +517,7 @@ static inline volatile void* noc_configure_tlb_2m_checked(
         ordering,
         /*multicast_en=*/0,
         /*num_destinations_override=*/0u,
+        vc,
         programmed);
 }
 
@@ -528,7 +561,9 @@ typedef enum {
 } noc_window_status_t;
 
 /**
- * Program 2 MiB window `slot` aimed at `at` with `ordering`, and read it back.
+ * Program 2 MiB window `slot` aimed at `at` with `ordering` on request VC `vc`
+ * (NOC_VC_DYNAMIC, or a static unicast VC up to NOC_VC_UNICAST_MAX), and read
+ * it back.
  *
  * Never clears. Why a slot reads back otherwise than programmed is not
  * determined -- another writer to the tile's one config block, or this write
@@ -541,12 +576,12 @@ typedef enum {
  *                NOC_WINDOW_UNVERIFIED, so a caller's cleanup that keys on it
  *                still sees an unverified slot. NULL on NOC_WINDOW_REFUSED.
  * @return  NOC_WINDOW_REFUSED when noc_configure_tlb_2m_checked refuses the
- *          slot, `at` or `ordering`.
+ *          slot, `at`, `ordering` or `vc`.
  */
 static inline noc_window_status_t noc_open_window_2m(
-    uint32_t slot, x280_noc_coord_t at, uint64_t addr, noc_ordering_t ordering, volatile void** window) {
+    uint32_t slot, x280_noc_coord_t at, uint64_t addr, noc_ordering_t ordering, uint32_t vc, volatile void** window) {
     noc_tlb_2m_t programmed;
-    *window = noc_configure_tlb_2m_checked(slot, at.x, at.y, addr, ordering, &programmed);
+    *window = noc_configure_tlb_2m_checked(slot, at.x, at.y, addr, ordering, vc, &programmed);
     if (*window == (volatile void*)0) {
         return NOC_WINDOW_REFUSED;
     }
