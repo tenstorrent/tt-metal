@@ -16,6 +16,7 @@ from helpers.llk_params import (
     Transpose,
 )
 from helpers.param_config import get_max_dst_index
+from helpers.tile_constants import MAX_FACE_R_DIM
 
 
 # =========================
@@ -564,6 +565,10 @@ def sweep_tiny_tiles_matmul(
                 num_faces_in1=4,
                 is_in0_horizontal=True,
             )
+            # in0 faces shorter than a full face: the math and the packer flags (a 16-row in0 tile
+            # fills full-height faces; the packer then keeps one exponent chunk per face). The
+            # unpacker flags follow the tile height instead.
+            in0_face_partial = input0_dims[0] < MAX_FACE_R_DIM
             face = FaceLayoutConfig(
                 num_faces_in0=2,
                 num_faces_in1=4,
@@ -572,10 +577,8 @@ def sweep_tiny_tiles_matmul(
                 unpack_transpose_within_face=Transpose.No,
                 partial_face_in0=True,  # SrcB
                 partial_face_in1=False,  # SrcA
-                partial_face_math=input0_dims[0] < 16,
-                # Packer flag: output faces shorter than FACE_R_DIM rows (one exponent chunk per
-                # tile); a 16-row in0 tile packs into full-height faces. Not the unpacker flags.
-                partial_face_pack=input0_dims[0] < 16,
+                partial_face_math=in0_face_partial,
+                partial_face_pack=in0_face_partial,
             )
 
             max_dst_index = get_max_dst_index(
