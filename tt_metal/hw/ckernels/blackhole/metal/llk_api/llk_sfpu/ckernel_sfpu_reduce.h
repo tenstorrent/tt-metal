@@ -487,6 +487,9 @@ inline void max_first_columns_across_tiles(std::uint32_t tile_row_base, std::uin
     for (std::uint32_t batch = 0; batch < 2; batch++) {
         std::uint32_t base_idx = batch * 4;
 
+        // These reloads re-mask words that perform_reduce_row_max_tile stored from already-masked registers
+        // with the plain 32-bit INSTRUCTION_MODE (block_ct_dim > 1 never stores mode 9 per tile), so the
+        // SFPAND is a no-op here; it is kept so every UInt16 load in the row path is masked the same way.
         load_and_clear_high_bits<clear_high_bits>(
             p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 0]);
         load_and_clear_high_bits<clear_high_bits>(
