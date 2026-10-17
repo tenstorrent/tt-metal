@@ -3,6 +3,7 @@
 
 import numpy as np
 import pytest
+import torch
 from conftest import blackhole_only
 from helpers.compressed_utils import (
     DEEPSEEK_T420,
@@ -11,12 +12,14 @@ from helpers.compressed_utils import (
     assign_interleaved,
     assign_random,
     assign_tile_matched,
+    face_max_err,
     generate_refined_face_assignment,
     run_compressed,
 )
+from helpers.llk_params import DestAccumulation
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.tile_constants import FACE_C_DIM
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, FACE_C_DIM
 
 
 def promote_assignment(assignment, ct):
@@ -231,8 +234,10 @@ SUPPORTED_M = {1, 8}
 SUPPORTED_FORMATS = {FMT_CODE[f] for f in ("bfp0", "bfp2", "bfp4")}
 
 
-def run_face_compressed(M, K, N, assignment, pcc_threshold=None):
-    run_compressed(
+def run_face_compressed(
+    M, K, N, assignment, pcc_threshold=None, dest_acc=DestAccumulation.No, stimuli=None
+):
+    return run_compressed(
         M,
         K,
         N,
@@ -245,6 +250,8 @@ def run_face_compressed(M, K, N, assignment, pcc_threshold=None):
         pack_b,
         encode_meta,
         pcc_threshold=pcc_threshold,
+        dest_acc=dest_acc,
+        stimuli=stimuli,
     )
 
 
@@ -415,6 +422,234 @@ def test_matmul_face_compressed_interleaved_matched(shape, formats, interleave_n
     M, K, N = shape
     assignment = assign_tile_matched(assign_interleaved, K, N, formats, interleave_n)
     run_face_compressed(M, K, N, assignment)
+
+
+# ---------------------------------------------------------------------------
+# Zero (bfp0) faces at chosen grid positions. The unpacker emits nothing for a bfp0 face and
+# the math thread takes the skip instruction for it, which only has to carry the counters
+# over the face without multiplying. The full-width case is the one that tells: at ct_dim=16
+# the 32 output faces fill the whole DEST half (32 x 16 rows), so a skip that disturbs any
+# face of the half lands on a live accumulation. Zero faces sit in K-face-rows >= 1 so the
+# faces already hold partials, and the sets are multiples of four so promote_assignment
+# leaves them alone. The skip used to be a ZEROACC with the row select the Wormhole tree
+# treats as a no-op; on Blackhole, with the DEST counter past 256 rows when it issues, it
+# zeroes the last 16-row block of that DEST half, output face 31 (tile 15, second face), i.e.
+# for a zero face at column 17 or later (measured column by column on p100a: columns 0-16
+# left every face intact, 17-31 wiped face 31's partial). Every case must pass, and a
+# mis-stepped skip would shift every later face, so the cases at lower columns and narrower
+# widths guard the counter steps of each regime (one / odd / even). Where a case exists to
+# reach one skip encoding of llk_math_face_compressed_mm.h, its id names the code-sequence
+# fragment: the meta that holds the zero faces decodes to it (face grid = (K//16) x (N//16),
+# a meta is four consecutive faces in row-major order, and a K-face-row ends inside a meta
+# only at an odd width).
+
+ZERO_FACE_CASES = [
+    # (M, K, N, format, zero faces as (k_face_row, face_col)), face grid = (K//16) x (N//16)
+    pytest.param(
+        1, 128, 512, "bfp4", ((1, 0), (1, 1), (1, 2), (1, 3)), id="ct16-k1-c0..3"
+    ),
+    pytest.param(
+        8, 128, 512, "bfp4", ((1, 16), (2, 16), (3, 16), (4, 16)), id="ct16-M8-c16"
+    ),
+    pytest.param(
+        8, 128, 512, "bfp4", ((1, 17), (2, 17), (3, 17), (4, 17)), id="ct16-M8-c17"
+    ),
+    pytest.param(
+        1, 128, 512, "bfp2", ((7, 20), (7, 21), (7, 22), (7, 23)), id="ct16-k7-c20..23"
+    ),
+    pytest.param(
+        8,
+        128,
+        512,
+        "bfp4",
+        ((1, 28), (1, 29), (1, 30), (1, 31)),
+        id="ct16-M8-k1-c28..31",
+    ),
+    # Even regime, incB skip `i` with the single-row SrcB step (M=1).
+    pytest.param(
+        1,
+        128,
+        512,
+        "bfp4",
+        ((1, 28), (1, 29), (1, 30), (1, 31)),
+        id="ct16-M1-k1-c28..31-i",
+    ),
+    # Even regime, clrB skip `c` on K-face-row 3 with rows 4-7 still to come: the skip has to
+    # reset the SrcB counter as well as DEST.
+    pytest.param(
+        8,
+        128,
+        512,
+        "bfp4",
+        ((3, 28), (3, 29), (3, 30), (3, 31)),
+        id="ct16-M8-k3-c28..31-c",
+    ),
+    pytest.param(
+        8,
+        256,
+        512,
+        "bfp4",
+        ((2, 4), (2, 5), (2, 6), (2, 7), (9, 31), (10, 0), (10, 1), (10, 2)),
+        id="ct16-M8-mixed",
+    ),
+    pytest.param(
+        8, 128, 256, "bfp4", ((1, 0), (1, 1), (1, 2), (1, 3)), id="ct8-M8-k1-c0..3"
+    ),
+    pytest.param(
+        8,
+        128,
+        256,
+        "bfp4",
+        ((1, 12), (1, 13), (1, 14), (1, 15)),
+        id="ct8-M8-k1-c12..15",
+    ),
+    pytest.param(
+        8, 128, 224, "bfp4", ((1, 0), (1, 1), (1, 2), (1, 3)), id="ct7-M8-k1-c0..3"
+    ),
+    pytest.param(
+        8,
+        128,
+        224,
+        "bfp4",
+        ((1, 10), (1, 11), (1, 12), (1, 13)),
+        id="ct7-M8-k1-c10..13",
+    ),
+    # Odd regime, clrB skip `c` on K-face-row 3 with rows 4-7 still to come.
+    pytest.param(
+        8,
+        128,
+        224,
+        "bfp4",
+        ((3, 10), (3, 11), (3, 12), (3, 13)),
+        id="ct7-M8-k3-c10..13-c",
+    ),
+    # Odd regime, midIncB: an even K-face-row ends on the second face of a meta, so the meta's
+    # first two faces take the two-face fragment -- both zero `hhi`, the row's last face zero
+    # `Ni`, the one before it zero `hhI`.
+    pytest.param(
+        8,
+        256,
+        224,
+        "bfp4",
+        ((2, 12), (2, 13), (4, 12), (4, 13)),
+        id="ct7-M8-midIncB-hhi",
+    ),
+    pytest.param(
+        8,
+        256,
+        224,
+        "bfp4",
+        ((2, 12), (4, 12), (6, 12), (8, 12)),
+        id="ct7-M8-midIncB-hhI",
+    ),
+    pytest.param(
+        8,
+        256,
+        224,
+        "bfp4",
+        ((2, 13), (4, 13), (6, 13), (8, 13)),
+        id="ct7-M8-midIncB-Ni",
+    ),
+    pytest.param(
+        8, 128, 32, "bfp4", ((1, 0), (2, 1), (3, 0), (3, 1)), id="ct1-M8-mixed"
+    ),
+    pytest.param(
+        1, 128, 32, "bfp4", ((1, 1), (2, 0), (4, 1), (5, 0)), id="ct1-M1-mixed"
+    ),
+    pytest.param(
+        8, 128, 32, "bfp2", ((2, 1), (1, 0), (5, 1), (6, 0)), id="ct1-M8-bfp2-mixed"
+    ),
+    # One regime: a meta is two K-face-rows of the two-face tile, (k,0) (k,1) (k+1,0) (k+1,1)
+    # with k even, and its first three faces pick the midRevB fragment -- here the two the MOP
+    # issues directly (`hrh`, `hrN`) and the two replayed ones the mixed cases above miss
+    # (`hRh`, `NrN`).
+    pytest.param(8, 128, 32, "bfp4", ((2, 0), (2, 1), (3, 0), (3, 1)), id="ct1-M8-hrh"),
+    pytest.param(8, 128, 32, "bfp4", ((2, 0), (2, 1), (4, 0), (4, 1)), id="ct1-M8-hrN"),
+    pytest.param(8, 128, 32, "bfp4", ((2, 0), (3, 0), (4, 0), (5, 0)), id="ct1-M8-hRh"),
+    pytest.param(8, 128, 32, "bfp4", ((2, 1), (3, 1), (4, 1), (5, 1)), id="ct1-M8-NrN"),
+]
+
+# The ct_dim == 1 cases again with a 32-bit DEST: the split accumulation's finalize must keep each face's
+# even partial in DEST and only pass the odd one through SrcB, so neither face loses width it would have
+# kept unsplit. test_matmul_face_compressed_zero_faces_fp32_dest runs them on split_width_stimuli.
+CT1_ZERO_FACE_CASES = [
+    case for case in ZERO_FACE_CASES if case.values[2] // DEFAULT_TILE_C_DIM == 1
+]
+
+# Every even K-face-row of B sums to SPLIT_WIDTH_BIG + SPLIT_WIDTH_FINE per column and every odd one to
+# -SPLIT_WIDTH_BIG, so a face's even partial, 1025 x (its even rows present), carries bits 2^10 and 2^0
+# together -- more than the 16-bit source registers hold -- while its odd partial, -1024 x (odd rows
+# present), is exact at any width.
+SPLIT_WIDTH_BIG = 1024.0
+SPLIT_WIDTH_FINE = 1.0
+
+
+def split_width_stimuli(M, K, N):
+    # A is all ones, so each product is its B value and the LoFi operand masks change nothing; B is constant
+    # along every row, so each 16-wide block packs exactly in bfp2 and bfp4 alike; and every partial sum is an
+    # integer below 2^13, exact in a 32-bit DEST. With as many even as odd K-face-rows present, a column's
+    # exact result is its count of even rows, 2 to 4, so an even partial that passed through a source
+    # register comes out short by one per even row; a face the zero faces leave unbalanced sums to about
+    # +-2048, where the bf16 output rounding hides the dropped bits and only exactness against the rounded
+    # golden is checked.
+    a = torch.ones((M, K), dtype=torch.bfloat16)
+    b = torch.zeros((K, N), dtype=torch.bfloat16)
+    for k in range(K // FACE_C_DIM):
+        row = k * FACE_C_DIM
+        if k % 2 == 0:
+            b[row] = SPLIT_WIDTH_BIG
+            b[row + 1] = SPLIT_WIDTH_FINE
+        else:
+            b[row] = -SPLIT_WIDTH_BIG
+    return a, b
+
+
+def assign_zero_faces(K, N, fmt, zero_faces):
+    cu = N // FACE_C_DIM
+    assignment = [FMT_CODE[fmt]] * ((K // FACE_C_DIM) * cu)
+    for k, c in zero_faces:
+        assignment[k * cu + c] = FMT_CODE["bfp0"]
+    return assignment
+
+
+@blackhole_only
+@pytest.mark.parametrize("M, K, N, fmt, zero_faces", ZERO_FACE_CASES)
+def test_matmul_face_compressed_zero_faces(M, K, N, fmt, zero_faces):
+    """Zero (bfp0) faces must leave every other face's accumulation intact."""
+    assignment = assign_zero_faces(K, N, fmt, zero_faces)
+    assert promote_assignment(list(assignment), N // FACE_C_DIM) == assignment, (
+        "zero-face set must already satisfy the face-unpack constraints "
+        "(else promote_assignment would un-zero the faces under test)"
+    )
+    run_face_compressed(M, K, N, assignment)
+
+
+@blackhole_only
+@pytest.mark.parametrize("M, K, N, fmt, zero_faces", CT1_ZERO_FACE_CASES)
+def test_matmul_face_compressed_zero_faces_fp32_dest(M, K, N, fmt, zero_faces):
+    """The ct_dim == 1 split accumulation with a 32-bit DEST keeps each face's even partial at full width."""
+    assignment = assign_zero_faces(K, N, fmt, zero_faces)
+    res, golden = run_face_compressed(
+        M,
+        K,
+        N,
+        assignment,
+        dest_acc=DestAccumulation.Yes,
+        stimuli=split_width_stimuli(M, K, N),
+    )
+    # Every product and partial is exact (see split_width_stimuli), so the output must match the golden bit
+    # for bit -- a stricter verdict than the bf16-calibrated tolerance gate run_compressed applied.
+    faces = N // FACE_C_DIM
+    res_faces = res.reshape(M, faces, FACE_C_DIM)
+    golden_faces = golden.to(torch.bfloat16).reshape(M, faces, FACE_C_DIM)
+    inexact_faces = {
+        f"face{c}": face_max_err(res_faces, golden_faces, c)
+        for c in range(faces)
+        if not torch.equal(res_faces[:, c], golden_faces[:, c])
+    }
+    assert (
+        not inexact_faces
+    ), f"faces whose split accumulation lost width (max abs error): {inexact_faces}"
 
 
 # ---------------------------------------------------------------------------

@@ -272,9 +272,6 @@ struct p_zeroacc
     constexpr static std::uint32_t CLR_ALL      = 0b011;
     constexpr static std::uint32_t CLR_HALF_32B = 0b110;
     constexpr static std::uint32_t CLR_ALL_32B  = 0b111;
-    // Value for the row-select operand -- `where` on Blackhole, `dst` on Wormhole -- that clears nothing,
-    // leaving the instruction a no-op apart from applying its AddrMode to the address counters.
-    constexpr static std::uint32_t WHERE_NOP = 0xff;
 };
 
 struct p_zerosrc
