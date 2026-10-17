@@ -213,16 +213,15 @@ constexpr bool validate_tensor_shape_sub_bcast_col_custom_(const TensorShape& te
 /**
  * @brief Whether a tile shape is supported by the Wormhole/Blackhole block reduce_max_row LLKs.
  *
- * Stricter than @ref validate_tensor_shape_tile_dependent_ops_ on purpose: the unpack strides between block
- * tiles by whole 32x32 / 16x32 tiles and the math always pools two full 16-row column faces per face-row
- * (two GMPOOLs with a 16-row SrcA step) before transposing, so only a 2-face-column grid of full faces works -
- * 32x32 (2x2 faces) or 16x32 (1x2 faces). One face column (16x16, 32x16) or short faces (face_r_dim < 16)
- * would pool SrcA rows the unpacker never wrote and read the wrong block tiles.
+ * Stricter than @ref validate_tensor_shape_tile_dependent_ops_ on purpose: the math always pools two full
+ * 16-row column faces per face-row (two GMPOOLs with a 16-row SrcA step) before transposing, and the unpack
+ * delivers whole faces of that grid, so only a 2-face-column grid of full faces works - 32x32 (2x2 faces)
+ * or 16x32 (1x2 faces). One face column (16x16, 32x16) or short faces (face_r_dim < 16) would pool SrcA
+ * rows the unpacker never wrote.
  *
- * One predicate for every entry of the op (unpack init, math MOP config, math execute, and the runtime
- * twins) on both arches, instead of hand-synced copies. Kept separate from
- * @ref validate_tensor_shape_sub_bcast_col_custom_: the two ops accept the same shapes today, but their
- * limits come from different code and may diverge.
+ * One predicate for the unpack init, the math MOP config, the math execute and their runtime twins on both
+ * arches, instead of hand-synced copies. Kept separate from @ref validate_tensor_shape_sub_bcast_col_custom_:
+ * the two ops accept the same shapes today, but their limits come from different code and may diverge.
  **/
 constexpr bool validate_tensor_shape_reduce_block_max_row_(const TensorShape& tensor_shape)
 {

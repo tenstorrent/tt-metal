@@ -26,6 +26,7 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_chunk_limits.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -409,6 +410,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
         args.get_k_chunk_size(),
         tt::constants::TILE_WIDTH);
+    detail::validate_chunk_fits_block_reduce(args.get_k_chunk_size(), "k_chunk_size");
 
     TT_FATAL(
         !args.sliding_window_size.has_value() || args.has_sliding_window(),

@@ -5,6 +5,7 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_chunk_limits.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -14,12 +15,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
-
-// Widest k-chunk (in tiles) the compute kernel can reduce: it takes each Q row's max over the chunk with the
-// block reduce_max_row LLK, which programs the chunk width straight into the MOP outer-loop count, a 7-bit
-// field on Wormhole. A wider chunk silently reduces (width & 127) tiles and the row max is stale; the LLK's
-// own assert is compiled out in production builds, so the limit has to be enforced here.
-constexpr uint32_t kMaxKChunkTiles = 127;
 
 void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, const SDPAInputs& tensors) {
     const bool use_mla = attrs.use_mla;
@@ -129,13 +124,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
                 k_chunk_size,
                 tt::constants::TILE_WIDTH);
-            TT_FATAL(
-                k_chunk_size / tt::constants::TILE_WIDTH <= kMaxKChunkTiles,
-                "k_chunk_size must be at most {} ({} tiles: the block row-max reduce programs the chunk width into "
-                "a 7-bit MOP loop count on Wormhole). Got k_chunk_size: {}",
-                kMaxKChunkTiles * tt::constants::TILE_WIDTH,
-                kMaxKChunkTiles,
-                k_chunk_size);
+            detail::validate_chunk_fits_block_reduce(k_chunk_size, "k_chunk_size");
         }
     };
 
@@ -365,13 +354,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
                 k_chunk_size,
                 tt::constants::TILE_WIDTH);
-            TT_FATAL(
-                k_chunk_size / tt::constants::TILE_WIDTH <= kMaxKChunkTiles,
-                "k_chunk_size must be at most {} ({} tiles: the block row-max reduce programs the chunk width into "
-                "a 7-bit MOP loop count on Wormhole). Got k_chunk_size: {}",
-                kMaxKChunkTiles * tt::constants::TILE_WIDTH,
-                kMaxKChunkTiles,
-                k_chunk_size);
+            detail::validate_chunk_fits_block_reduce(k_chunk_size, "k_chunk_size");
 
             if (legacy_chunked) {
                 // Validate that chunk_start_idx is a multiple of q_chunk_size

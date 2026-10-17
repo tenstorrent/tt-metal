@@ -9,6 +9,7 @@
 #include "sdpa_perf_model.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include "ttnn/operations/transformer/sdpa/device/sdpa_chunk_limits.hpp"
 
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -98,6 +99,7 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
         "k_chunk_size must be a positive multiple of TILE_WIDTH. Got k_chunk_size: {}, TILE_WIDTH: {}",
         k_chunk_size,
         tt::constants::TILE_WIDTH);
+    detail::validate_chunk_fits_block_reduce(k_chunk_size, "k_chunk_size");
 
     // Validate chunk_start_idx and page_table
     bool is_chunked = operation_attributes.chunk_start_idx.has_value();

@@ -36,10 +36,11 @@ using namespace ckernel::unpacker;
 
 inline void _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(std::uint32_t block_ct_dim, bool respect_trigger = false)
 {
-    // block_ct_dim goes straight into the MOP outer-loop count, which keeps only its low bits: a wider block
-    // silently unpacks (block_ct_dim & MAX_LOOP_LEN) tiles. The compile-time sibling static_asserts the same
-    // bound. Checked on the full block_ct_dim, not the halved trigger count: the math MOP gets the full count.
-    LLK_ASSERT(block_ct_dim <= ckernel_template::MAX_LOOP_LEN, "block_ct_dim exceeds the MOP loop-count field");
+    // Same bound as the compile-time sibling's static_assert: block_ct_dim goes straight into the MOP
+    // outer-loop count (7 bits on Wormhole, so 128 silently unpacks nothing) and the block is walked by the
+    // unpacker's tile counter, whose input address keeps 8 bits on both arches (tile 256 aliases tile 0).
+    // Checked on the full block_ct_dim, not the halved trigger count: the math MOP gets the full count.
+    LLK_ASSERT(block_ct_dim < 128, "block_ct_dim must be less than 128");
     static constexpr std::uint32_t unpack_srca_op =
         TT_OP_UNPACR(SrcA, 0b00000001 /* Z_ch0_inc and Z_ch1_inc */, 0, 0, 0, 1, 1 /* Set Dvalid */, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
@@ -69,7 +70,6 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(std::uint32_
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_dim, bool respect_trigger, const ckernel::TensorShape tensor_shape)
 {
-    LLK_ASSERT(block_ct_dim <= ckernel_template::MAX_LOOP_LEN, "block_ct_dim exceeds the MOP loop-count field");
     LLK_ASSERT(validate_tensor_shape_reduce_block_max_row_(tensor_shape), "block reduce_max_row supports 32x32 and 16x32 tiles only");
 
     // REDUCE_ROW requires transpose itself; additionally, within_face_16x16_transpose flag could require transpose;

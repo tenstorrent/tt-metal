@@ -157,9 +157,9 @@ inline void reduce_max_row_configure_addrmod_reinit_minimal_runtime()
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t block_ct_dim, const ckernel::TensorShape tensor_shape)
 {
-    // block_ct_dim goes straight into the MOP outer-loop count, which keeps only its low bits: a wider block
-    // silently reduces (block_ct_dim & MAX_LOOP_LEN) tiles. The compile-time sibling static_asserts the same bound.
-    LLK_ASSERT(block_ct_dim <= ckernel_template::MAX_LOOP_LEN, "block_ct_dim exceeds the MOP loop-count field");
+    // Same bound as the compile-time sibling's static_assert: block_ct_dim goes straight into the MOP
+    // outer-loop count (7 bits on Wormhole, so 128 silently reduces nothing).
+    LLK_ASSERT(block_ct_dim < 128, "block_ct_dim must be less than 128");
     LLK_ASSERT(validate_tensor_shape_reduce_block_max_row_(tensor_shape), "block reduce_max_row supports 32x32 and 16x32 tiles only");
     LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 1 && is_fp32_dest_acc_en), "16x32 reduce_block_max_row not supported in FP32 dest mode yet");
 
@@ -276,7 +276,8 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t blo
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_mop_reprogram_only_runtime_(std::uint32_t block_ct_dim, const ckernel::TensorShape& tensor_shape)
 {
-    LLK_ASSERT(block_ct_dim <= ckernel_template::MAX_LOOP_LEN, "block_ct_dim exceeds the MOP loop-count field");
+    LLK_ASSERT(block_ct_dim < 128, "block_ct_dim must be less than 128");
+    LLK_ASSERT(validate_tensor_shape_reduce_block_max_row_(tensor_shape), "block reduce_max_row supports 32x32 and 16x32 tiles only");
 
     if (tensor_shape.num_faces_r_dim == 1)
     {
@@ -364,6 +365,7 @@ inline void _llk_math_reduce_block_max_row_uninit_runtime_()
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
 {
+    LLK_ASSERT(validate_tensor_shape_reduce_block_max_row_(tensor_shape), "block reduce_max_row supports 32x32 and 16x32 tiles only");
     LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 1 && is_fp32_dest_acc_en), "16x32 reduce_block_max_row not supported in FP32 dest mode yet");
     // Packer indexes at the 32x32 slot stride regardless of the operand's face count.
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
