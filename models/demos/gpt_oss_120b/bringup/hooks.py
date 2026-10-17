@@ -51,6 +51,72 @@ class _HostBoundary:
         return out
 
 
+ATTN_WEIGHTS = {
+    "wq": "q_proj.weight",
+    "bq": "q_proj.bias",
+    "wk": "k_proj.weight",
+    "bk": "k_proj.bias",
+    "wv": "v_proj.weight",
+    "bv": "v_proj.bias",
+    "wo": "o_proj.weight",
+    "bo": "o_proj.bias",
+    "sinks": "sinks",
+}
+
+
+def _rope(mesh, spec, cfg):
+    from models.demos.gpt_oss_120b.reference.gpt_oss_ref import yarn_inv_freq
+    from models.demos.gpt_oss_120b.tt.attention import TtRope
+
+    inv_freq, att = yarn_inv_freq(cfg)
+    return TtRope(mesh, inv_freq, att, int(spec.get("target.seq")), int(spec.get("target.chunk")))
+
+
+def _attention(mesh, spec, layer):
+    from models.demos.gpt_oss_120b.tt.attention import TtAttention
+    from models.demos.gpt_oss_120b.tt.ccl import TtCcl
+
+    cfg = _config(spec)
+    ck = _checkpoint(spec)
+    w = {k: ck.get(f"model.layers.{layer}.self_attn.{n}") for k, n in ATTN_WEIGHTS.items()}
+    ck.close()
+    window = int(cfg["sliding_window"]) if cfg["layer_types"][layer] == "sliding_attention" else None
+    return TtAttention(mesh, TtCcl(mesh), w, cfg, _rope(mesh, spec, cfg), window)
+
+
+class _AttentionBoundary:
+    """Component harness boundary of the stateful attention step: [S, H] host in, the golden KV prefix
+    (ctx.extra state_prefix, positions [0, prefix_len)) loaded into a fresh served-layout cache, the device module,
+    [S, H] host out. Every call starts from its own cache, so repeated calls see the same state."""
+
+    def __init__(self, mesh, module, chunk: int):
+        self.mesh, self.module, self.chunk = mesh, module, chunk
+
+    def __call__(self, ctx, x):
+        import torch
+
+        from models.demos.gpt_oss_120b.tt.attention import meta_permute_cols
+        from models.demos.gpt_oss_120b.tt.kv_cache import cache_from_host
+        from models.demos.gpt_oss_120b.tt.layout import rows_to_device, rows_to_host
+
+        assert x.shape[0] == self.chunk, f"one chunk of {self.chunk} rows, got {x.shape[0]}"
+        n, seq = ctx.extra["prefix_len"], ctx.extra["max_seq"]
+        caches = []
+        for name in ("key", "value"):
+            src = ctx.extra["state_prefix"][name][:n].float()  # [n, n_kv, 64], K half-split (the reference's)
+            if name == "key":
+                src = meta_permute_cols(src)  # the served cache holds K in meta order
+            host = torch.zeros(1, src.shape[1], seq, src.shape[2])
+            host[0, :, :n] = src.permute(1, 0, 2)
+            caches.append(cache_from_host(self.mesh, host, self.chunk))
+        tt_x = rows_to_device(self.mesh, x)
+        tt_y = self.module(tt_x, ctx.start, *caches)
+        out = rows_to_host(self.mesh, tt_y)
+        for t in (tt_x, tt_y, *caches):
+            t.deallocate(True)
+        return out
+
+
 def device_component(mesh, spec, layer, step):
     _observable_ops()
     if step in NORM_WEIGHTS:
@@ -60,6 +126,8 @@ def device_component(mesh, spec, layer, step):
         w = ck.get(f"model.layers.{layer}.{NORM_WEIGHTS[step]}")
         ck.close()
         return _HostBoundary(mesh, TtRmsNorm(mesh, w, _config(spec)["rms_norm_eps"]))
+    if step == "attention":
+        return _AttentionBoundary(mesh, _attention(mesh, spec, layer), int(spec.get("target.chunk")))
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 
