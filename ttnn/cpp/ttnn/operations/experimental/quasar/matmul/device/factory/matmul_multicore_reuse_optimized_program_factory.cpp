@@ -475,6 +475,25 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
 
     ComputeHardwareConfig compute_hw_config =
         ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config.value());
+    if (fp32_dest_acc_en) {
+        auto is_32bit = [](tt::DataFormat format) {
+            return format == tt::DataFormat::Float32 || format == tt::DataFormat::Int32 ||
+                   format == tt::DataFormat::UInt32;
+        };
+        ComputeHardwareConfig::ComputeUnpackModes& modes = compute_hw_config.unpack_modes;
+        if (is_32bit(interm0_data_format)) {
+            modes.emplace(RO_INTERM0_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
+        }
+        if (is_32bit(in0_data_format)) {
+            modes.emplace(RO_IN0_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+            if (in0_transpose_tile) {
+                modes.emplace(RO_IN0_TRANSPOSE_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+            }
+        }
+        if (is_32bit(in1_data_format)) {
+            modes.emplace(RO_IN1_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        }
+    }
 
     // ---- Compute kernel(s) — one KernelSpec per core group, preserving the per-group block-count CTA ----
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_blocks_per_core_group) {
