@@ -212,4 +212,25 @@ constexpr bool validate_tensor_shape_sub_bcast_col_custom_(const TensorShape& te
            (tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM || tensor_shape.num_faces_r_dim == 1);
 }
 
+/// Never defined: a surviving call fails the build with this message (see the guard below).
+__attribute__((error("custom bcast-col path supports 32x32 and 16x32 tiles only"))) void bcast_col_custom_shape_rejected_();
+
+/**
+ * @brief Guard of the custom bcast-col entry points: @ref validate_tensor_shape_sub_bcast_col_custom_ or stop.
+ *
+ * The one call every unpack-init and math-execute site of the op makes. A shape the compiler can prove
+ * unsupported (a literal at the call site, after inlining) fails the build through the error attribute
+ * instead of trapping on the device - the compile-contract tests drive the real entry points this way.
+ * Any other shape is checked by the LLK_ASSERT at run time, as before.
+ */
+inline void assert_tensor_shape_sub_bcast_col_custom_(const TensorShape& tensor_shape)
+{
+    const bool supported = validate_tensor_shape_sub_bcast_col_custom_(tensor_shape);
+    if (__builtin_constant_p(supported) && !supported)
+    {
+        bcast_col_custom_shape_rejected_();
+    }
+    LLK_ASSERT(supported, "custom bcast-col path supports 32x32 and 16x32 tiles only");
+}
+
 } // namespace ckernel

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
+#include <array>
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
@@ -23,6 +24,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -845,7 +847,12 @@ void run_mul_bcast_col_custom(distributed::MeshDevice& mesh_device, const MulBca
                                                                     : out_tiles_per_block;
     const std::uint32_t prime_tiles = prime_rt_dim * prime_ct_dim;
     const std::uint32_t out_ring_tiles = tiny_tile ? prime_tiles : out_tiles_per_block;
-    TT_FATAL(out_ring_tiles % out_tiles_per_block == 0 && prime_tiles <= 8, "output ring must hold whole batches");
+    // 32x32 tiles one acquired dest section holds (16-bit dest, half sync).
+    constexpr std::uint32_t max_dest_tiles_per_section = 8;
+    TT_FATAL(
+        out_ring_tiles % out_tiles_per_block == 0 && prime_tiles <= max_dest_tiles_per_section,
+        "output ring must hold whole batches and the priming block at most {} tiles",
+        max_dest_tiles_per_section);
 
     log_info(
         tt::LogTest,
@@ -1472,6 +1479,47 @@ TEST_F(LLKBlackholeSingleCardFixture, ComputeMulBcastColCustom) {
         unit_tests::compute::broadcast::run_mul_bcast_col_custom(this->device(), cfg);
         if (HasFatalFailure()) {
             break;
+        }
+    }
+}
+
+// Compile-time contract of the custom bcast-col shape guards (SUB on Blackhole and Wormhole, MUL on
+// Blackhole): the real unpack-init and math-execute entry points, handed a literal shape, must build
+// for 32x32 and 16x32 and must fail to build for a one-face-column (32x16) or short-face (8x32) tile.
+// A guard that stopped using the strict predicate would let its rejected cases compile. Nothing is
+// launched.
+TEST_F(LLKMeshDeviceFixture, ComputeBcastColCustomShapeCompileContract) {
+    if (this->arch_ != tt::ARCH::WORMHOLE_B0 && this->arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "the guards under test are the Wormhole and Blackhole ones";
+    }
+    struct ShapeCase {
+        std::uint32_t face_r_dim;
+        std::uint32_t num_faces_r_dim;
+        std::uint32_t num_faces_c_dim;
+        bool supported;
+        const char* name;
+    };
+    const std::array<ShapeCase, 4> shapes{{
+        {16, 2, 2, true, "32x32"},
+        {16, 1, 2, true, "16x32"},
+        {16, 2, 1, false, "32x16"},
+        {8, 1, 2, false, "8x32"},
+    }};
+    auto* device = this->devices_.at(0).get();
+    for (const std::uint32_t site : {0u, 1u}) {
+        for (const auto& shape : shapes) {
+            SCOPED_TRACE(::testing::Message() << (site == 0 ? "unpack init" : "math execute") << ", " << shape.name);
+            Program program = CreateProgram();
+            CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/compute/bcast_col_custom_shape_contract.cpp",
+                CoreCoord{0, 0},
+                ComputeConfig{.compile_args = {site, shape.face_r_dim, shape.num_faces_r_dim, shape.num_faces_c_dim}});
+            if (shape.supported) {
+                EXPECT_NO_THROW(program.impl().compile(device));
+            } else {
+                EXPECT_THROW(program.impl().compile(device), std::runtime_error);
+            }
         }
     }
 }

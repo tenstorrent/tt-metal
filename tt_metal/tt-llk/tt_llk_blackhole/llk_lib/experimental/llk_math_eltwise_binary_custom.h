@@ -119,7 +119,7 @@ inline void _llk_math_bcast_cols_reuse_custom_(
         "bcast-col custom: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
         "this call left it at keep, so denormal Src operands would not be flushed");
 
-    LLK_ASSERT(validate_tensor_shape_sub_bcast_col_custom_(tensor_shape), "custom bcast-col path supports 32x32 and 16x32 tiles only");
+    assert_tensor_shape_sub_bcast_col_custom_(tensor_shape);
 
     // Two faces make up one face-row; a full tile has two of them, a tiny tile one.
     const std::uint32_t num_face_rows = tensor_shape.num_faces_r_dim;
@@ -179,7 +179,7 @@ inline void _llk_math_bcast_cols_reuse_custom_(
     // Clear srcB dvalid on the way out.
     TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_AB);
 
-    // Restore the dest base offset so the next op starts from tile slot 0.
+    // Clear the dest RWC counter on the way out; the dest base offset register stays at the last slot written.
     math::clear_dst_reg_addr();
 }
 

@@ -50,8 +50,9 @@
 
 namespace {
 
-// One block: rt_dim rows of ct_dim srcA tiles against the first rt_dim tiles held at the front of
-// dfb_b, in one acquired dest section, packed as the next output tiles. Row `row` writes dest slots
+// One block: rt_dim rows of ct_dim srcA tiles against the first rt_dim srcB tiles the caller holds at
+// the front of icb_b's buffer (dfb1, or dfb3 for the priming block), in one acquired dest section,
+// packed as the next output tiles. Row `row` writes dest slots
 // [row * ct_dim, (row + 1) * ct_dim), or slots [0, ct_dim) for every row when accumulating.
 template <bool accumulate_rows>
 void mul_bcast_col_block(

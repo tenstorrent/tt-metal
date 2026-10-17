@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Reader for the blocked bcast-col SUB/MUL paths with SrcB reuse.
 //
 // Unlike reader_binary_2_0.cpp, the two inputs are NOT read in lockstep: src1 (the bcast-col
@@ -27,13 +31,14 @@ void kernel_main() {
     // num_tiles tiles from DRAM (bank_id, addr) into dfb, one at a time, each pushed as soon as it
     // lands. A buffer that holds one block self-throttles against the compute kernel's per-block
     // pop_front.
+    constexpr std::uint32_t entries_per_read = 1;
     auto read_tiles = [&](DataflowBuffer& dfb, std::uint32_t num_tiles, std::uint32_t bank_id, std::uint32_t addr) {
-        const std::uint32_t tile_bytes = dfb.get_entry_size();
-        for (std::uint32_t i = 0; i < num_tiles; i++) {
-            dfb.reserve_back(1);
+        const std::uint32_t tile_bytes = dfb.get_entry_size() * entries_per_read;
+        for (std::uint32_t i = 0; i < num_tiles; i += entries_per_read) {
+            dfb.reserve_back(entries_per_read);
             noc.async_read(dram_src, dfb, tile_bytes, {.bank_id = bank_id, .addr = addr}, {});
             noc.async_read_barrier();
-            dfb.push_back(1);
+            dfb.push_back(entries_per_read);
             addr += tile_bytes;
         }
     };
