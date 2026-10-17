@@ -32,8 +32,8 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 // Unpack and pack see a 16x32 tile (two 16-row faces); math sees the same two faces as 8-row faces.
-constexpr ckernel::TensorShape FULL_SHAPE    = {ckernel::FACE_R_DIM, ckernel::FACE_C_DIM, 1, 2};
-constexpr ckernel::TensorShape PARTIAL_SHAPE = {ckernel::FACE_R_DIM / 2, ckernel::FACE_C_DIM, 1, 2};
+constexpr ckernel::TensorShape FULL_SHAPE    = {ckernel::FACE_R_DIM, ckernel::FACE_C_DIM, 1 /*num_faces_r_dim*/, 2 /*num_faces_c_dim*/};
+constexpr ckernel::TensorShape PARTIAL_SHAPE = {ckernel::FACE_R_DIM / 2, ckernel::FACE_C_DIM, 1 /*num_faces_r_dim*/, 2 /*num_faces_c_dim*/};
 
 #ifdef LLK_TRISC_UNPACK
 
