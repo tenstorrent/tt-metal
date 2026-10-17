@@ -185,6 +185,27 @@
   "started": "2026-10-17T06:07:19",
   "status": "PASS"
  },
+ "C.enc_reuse.experts": {
+  "attempts": 0,
+  "duration_s": 375.1,
+  "history": [
+   {
+    "s": 375.1,
+    "status": "PASS",
+    "t": "2026-10-17T07:10:10"
+   }
+  ],
+  "last_run": "2026-10-17T07:10:10",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.enc_reuse.experts.log",
+  "metrics": {
+   "err_experts_L03": 0.030161770060658455,
+   "err_experts_L03_limit": 0.870298258960247
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T07:03:55",
+  "status": "PASS"
+ },
  "C.enc_reuse.ffn_collapse": {
   "attempts": 0,
   "duration_s": 54.0,
