@@ -567,6 +567,7 @@ def run_tracy_pytest(test_target: str, env: dict[str, str], repo_root: Path) -> 
         sys.executable,
         "-m",
         "tracy",
+        "--no-web-server",
         "-r",
         "-p",
         "-v",

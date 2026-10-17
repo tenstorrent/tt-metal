@@ -16,13 +16,13 @@ used in ``tt/pipeline.py``:
     cd /path/to/tt-metal
     HUNYUAN_MODEL_DIR=/path/to/HunyuanImage-3.0 \\
     HY_VERBOSE=0 HY_NUM_LAYERS=4 \\
-    python_env/bin/python -m tracy -p -r -v --op-support-count 50000 -m pytest \\
+    python_env/bin/python -m tracy --no-web-server -p -r -v --op-support-count 50000 -m pytest \\
       models/experimental/hunyuan_image_3_0/tests/perf/test_denoise_perf_tracy.py \\
       -k test_denoise_perf_tracy_patch_embed -s --timeout=0
 
 **All regions in one capture** (filter CSV per region with ``op_perf_results.py --signpost``):
 
-    python_env/bin/python -m tracy -p -r -v --op-support-count 50000 -m pytest \\
+    python_env/bin/python -m tracy --no-web-server -p -r -v --op-support-count 50000 -m pytest \\
       models/experimental/hunyuan_image_3_0/tests/perf/test_denoise_perf_tracy.py \\
       -k test_denoise_perf_tracy_all_regions -s --timeout=0
 

@@ -701,7 +701,7 @@ def test_single_decode_perf(mesh_device, reset_seeds, request):
 
         HF_MODEL=google/gemma-4-31B-it \
           TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \
-          python -m tracy -p -r -v -m pytest \
+          python -m tracy --no-web-server -p -r -v -m pytest \
           "models/demos/gemma4/tests/unit/test_model.py::test_single_decode_perf"
     """
     import os
@@ -779,7 +779,7 @@ def test_single_prefill_perf(mesh_device, reset_seeds, request):
         HF_MODEL=google/gemma-4-31B-it \\
           TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \\
           GEMMA4_PREFILL_PERF_SEQ_LEN=4096 \\
-          python -m tracy -p -r -v -m pytest \\
+          python -m tracy --no-web-server -p -r -v -m pytest \\
           "models/demos/gemma4/tests/unit/test_model.py::test_single_prefill_perf"
     """
     import os
@@ -927,7 +927,7 @@ def test_single_decode(mesh_device, reset_seeds, request):
     → RoPE → KV-cache update → SDPA → out proj → MLP/MoE) + final norm +
     lm_head + softcapping + TP all-gather.
 
-        HF_MODEL=google/gemma-4-31B-it python -m tracy -p -r -v -m \
+        HF_MODEL=google/gemma-4-31B-it python -m tracy --no-web-server -p -r -v -m \
             pytest models/demos/gemma4/tests/unit/test_model.py::test_single_decode
 
     A warmup decode compiles the kernels; the profiled decode then hits the

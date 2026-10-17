@@ -9,7 +9,7 @@ Tracy ``start``/``stop`` window.
 
 Standalone Tracy capture::
 
-    python -m tracy -p -v -r --dump-device-data-mid-run --op-support-count 100000 -m pytest \\
+    python -m tracy --no-web-server -p -v -r --dump-device-data-mid-run --op-support-count 100000 -m pytest \\
         models/experimental/vibevoice/tests/perf/test_profile_single_step_prefill.py \\
         ::test_profile_single_step_prefill -v
 

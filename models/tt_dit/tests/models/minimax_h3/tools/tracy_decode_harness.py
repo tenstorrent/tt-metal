@@ -6,7 +6,7 @@
 Each runs ONE warmed forward inside the signposted window: more overflows Tracy's ~1000-op-per-device
 buffer, and the symptom (``AssertionError: Device data missing: Op <id>``) reads as a tool bug.
 
-    timeout 1800 ./python_env/bin/python -m tracy -p -r -v -m pytest \\
+    timeout 1800 ./python_env/bin/python -m tracy --no-web-server -p -r -v -m pytest \\
       models/tt_dit/tests/models/minimax_h3/tools/tracy_decode_harness.py -k tracy_visual_decode \\
       -s --timeout 900 &> tracy_vae.log
     tt-perf-report --start-signpost start --end-signpost stop <csv>
@@ -78,7 +78,7 @@ def test_tracy_visual_decode_unit(mesh_device):
 def test_tracy_audio_decode(mesh_device):
     """One audio decode at the shipping duration (~1680 ops, so `--op-support-count` is required):
 
-        timeout 1800 ./python_env/bin/python -m tracy -p -r -v --op-support-count 4000 -m pytest \\
+        timeout 1800 ./python_env/bin/python -m tracy --no-web-server -p -r -v --op-support-count 4000 -m pytest \\
           models/tt_dit/tests/models/minimax_h3/tools/tracy_decode_harness.py -k tracy_audio_decode \\
           -s --timeout 900 &> tracy_audio.log
 

@@ -249,7 +249,7 @@ fi
 #   as a child and post-processes results into ops_perf_results*.csv on pass or
 #   fail. Its exit-code masking is handled at the result check below.
 if [[ "$PROFILE_MODE" == true ]]; then
-    PYTEST_CMD=(python -m tracy -r -m pytest "${TEST_PATH}")
+    PYTEST_CMD=(python -m tracy --no-web-server -r -m pytest "${TEST_PATH}")
 else
     PYTEST_CMD=(pytest "${TEST_PATH}")
 fi

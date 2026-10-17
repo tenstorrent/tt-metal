@@ -174,7 +174,7 @@ PY
 # DEBUG filter: drops loguru DEBUG lines on top of LOGURU_LEVEL=INFO.
 DEBUG_FILTER='\| *DEBUG *\|'
 
-TRACY_OPTS=(-v -r -p)
+TRACY_OPTS=(--no-web-server -v -r -p)
 # Child calls: makes H2D/D2H buffer copies and program-cache misses show up as per-op columns, which
 # is the only way to tell "no host<->device movement" from "movement not measured".
 TRACY_OPTS+=(--child-functions "HWCommandQueue_write_buffer,HWCommandQueue_read_buffer,CompileProgram")

@@ -36,7 +36,7 @@ test_recaption_ar_perf.py / test_vae_decode_perf.py):
 Env knobs: HY_NUM_LAYERS (backbone layers), HY_PREFILL_ISL (profiled ISL, default 512).
 
 Run the raw op profile (workload only, writes ops_perf_results_*.csv):
-    HY_NUM_LAYERS=2 HY_PREFILL_ISL=512 python_env/bin/python -m tracy -r -p -v -m \
+    HY_NUM_LAYERS=2 HY_PREFILL_ISL=512 python_env/bin/python -m tracy --no-web-server -r -p -v -m \
       "pytest models/experimental/hunyuan_image_3_0/tests/perf/test_recaption_prefill_perf.py::test_recaption_prefill_device_ops -s"
 
 Run the device-perf gate (spawns the workload under the profiler for you):

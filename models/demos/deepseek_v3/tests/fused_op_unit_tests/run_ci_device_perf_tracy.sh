@@ -22,7 +22,7 @@ run_tracy_case() {
     echo "Expr: $k_expr"
     echo "--------------------------------------------------------------------------------"
 
-    env "${perf_env_var}=1" python3 -m tracy -p -r \
+    env "${perf_env_var}=1" python3 -m tracy --no-web-server -p -r \
         -o "$PROFILER_DIR" \
         --check-exit-code \
         --op-support-count "$TRACY_OP_SUPPORT_COUNT" \

@@ -138,6 +138,7 @@ def run_one_under_tracy(run_name: str, cmd_argv: list[str]) -> None:
         sys.executable,
         "-m",
         "tracy",
+        "--no-web-server",
         "-p",
         "-r",
         "-o",

@@ -1006,7 +1006,7 @@ def test_stage_c_audio_decode(mesh_device, device_params):
 # Manual one-liner (equivalent to the driver):
 #   LTX_AUDIO_PROF=1 \
 #   LTX_CHECKPOINT=~/.cache/ltx-checkpoints/ltx-2.3-22b-distilled-1.1.safetensors \
-#   python -m tracy -p -r -v -o generated/profiler/ltx_audio_decode -m \
+#   python -m tracy --no-web-server -p -r -v -o generated/profiler/ltx_audio_decode -m \
 #     pytest 'models/tt_dit/tests/models/ltx/test_audio_ltx.py::test_audio_decode_profile' -s
 # then sum "DEVICE FW DURATION [ns]" from
 #   generated/profiler/ltx_audio_decode/reports/<date>/ops_perf_results_<date>.csv
@@ -1045,7 +1045,7 @@ def _flush_forward_after(module, mesh_device):
 @pytest.mark.skipif(
     os.environ.get("LTX_AUDIO_PROF") != "1",
     reason="Tracy profiling workload — run via test_audio_decode_perf_table, or manually with "
-    "LTX_AUDIO_PROF=1 python -m tracy -p -r -o <out> -m pytest '<file>::test_audio_decode_profile' -s",
+    "LTX_AUDIO_PROF=1 python -m tracy --no-web-server -p -r -o <out> -m pytest '<file>::test_audio_decode_profile' -s",
 )
 # Profiler-instrumented kernels compile fresh on the first profiling run and the eager decode
 # runs op-by-op, so this comfortably exceeds the default 300s per-test cap.
