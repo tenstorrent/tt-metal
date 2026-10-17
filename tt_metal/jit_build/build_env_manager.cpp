@@ -358,7 +358,12 @@ void BuildEnvManager::build_firmware(ChipId device_id, bool ignore_precompiled) 
             build_env.build_env.get_firmware_binary_root());
         return;
     }
-    jit_build_once(build_env.build_key(), [&build_env] { jit_build_subset(build_env.firmware_build_states, nullptr); });
+    StableHasher hasher;
+    hasher.update(build_env.build_key());
+    for (const auto& state : build_env.firmware_build_states) {
+        hasher.update(state.get_target_full_path());
+    }
+    jit_build_once(hasher.digest(), [&build_env] { jit_build_subset(build_env.firmware_build_states, nullptr); });
 }
 
 std::string BuildEnvManager::get_firmware_binary_path(
