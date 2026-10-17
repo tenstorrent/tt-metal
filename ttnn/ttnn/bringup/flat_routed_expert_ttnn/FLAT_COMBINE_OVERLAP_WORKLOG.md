@@ -908,3 +908,44 @@ prep 28 + arena zero 5 + dispatch 213 | experts + combine 2442 | to tile 53 + rm
 expert x row-major 49 + flat 527 + part sum 42 | add 32. The tiny routing all-gathers keep their 140 us in the trace
 (latency, not launch skew). Everything outside the experts (1656 us) is serial: the next gains are overlap (the shared
 expert beside the routing / dispatch phase or the experts) and the small-op latency chain.
+
+### K3 block to 3700 us traced (2026-10-17, bh-lb-09 2x4, 12x10 grid, 200G)
+Traced forward ~3820 -> 3773 -> 3736 -> 3721 -> 3710 -> 3700 us (scratch_k3_moe_layer.py -k trace, twice at 3700;
+PCC vs host 0.99619 / 0.99620, routing 99.77% equal, repeat call 0.99992). Commits 45210ce3873 .. ee9080ebe05. Steps:
+- **fused SE part sum + final add** (combine_rf/sum_ops.py, y = yr + p0 + p1 + p2 per tile, one bf16 rounding): 74
+  -> 55 us. It was 75 us at first: **DRAM reads on NOC1 are slow here** (NOC0 52.5 us = 438 GB/s, NOC1 75 us; the
+  reads, not compute: probes noread 28 / nocompute 75). layout_ops' reads moved to NOC0 too: SE x untilize 32 -> 24,
+  [320, 3584] tilize 18 -> 15 us. Other combine_rf kernels already read on NOC0.
+- **transient intermediates in L1** (K3_L1, default router,latup,yr,latdown): router logits / biased scores (custom
+  top-k 49.6 -> 36 us, its 64 B reads), latent down / up linear outputs and the latent up input (-4..-8 us each).
+  The shared expert's flat arena takes 1.42 of 1.46 MB per bank, so it now runs before latent up (yr then lives in
+  L1 until the sum). Arena address check: no L1 tensor may outlive into the routed arena (keep copies to DRAM).
+- **latent down untilized straight into the dispatch buffer** (layout_ops dst + per-chip row0; dispatch_prep
+  copy=False): latent down + prep 156 -> 137 us; then the untilize and the route words in **one generic_op** per chip
+  (the untilize off the 8 route cores): prep 21.5 -> 12.2 us.
+- **router**: sigmoid fused as the bias add's input activation; router_topk bias_mode reads only the biased scores
+  and the bias row (pick score = biased - bias): -1 program, traced -3 us (the top-k is scan bound: noweights 32.6).
+- **sum reads on both NoCs** (parts 0, 1 on NOC0; yr from L1 + part 2 on NOC1 by the writer RISC): 55 -> 48 us.
+
+Traced programs now (slowest chip, us): router 41.4 + 7.1 + 38.4 | gather 35.9 | planner 56.8 | latent down 116.3 |
+untilize + route 12.5 | arena zero 6.2 | dispatch 206.5 | experts + combine 2431.6 | SE x untilize 24.1 + flat 524.6
+| tilize 12.2 + norm 7.4 + s2i 4.8 + latent up 113.6 | sum 53.1 (17 programs, ~0.5 us gaps).
+
+Shared expert, both variants (as the goal asked): **local flat** (default) untilize 24 + flat 530 + sum (fused) vs
+**TP** (K3_SE=tp: x row all-gather over the mesh row, I split 4 ways, reduce-scatter back) untilize 33 + AG 299 + flat
+560 + RS 376 = 1264 us; SE PCC 0.99976 / 0.99975. TP loses on CCL time at 320 tokens a chip; the flat SE is compute /
+pipeline bound either way (~160 TFLOP/s: LoFi only 530 -> 510, bfp8 x no change, 4 parts worse, DRISC on / off same).
+
+Dead ends this round (numbers in the scratch tests):
+- **a custom streaming linear** (combine_rf/stream_linear.py, kept as a probe, docstring has the history) for the
+  latent projections (ttnn mm2d 117 / 123 us = 45% of the 53 us DRAM floor): 1D (x multicast to the whole grid) 210;
+  2D with rotating x / W owners 133-230; resident x + W ring 160+ us. Each step costs ~1-2 us of credit / valid
+  latency with 22 cores coupled per step. Not the DRAM reads: **mm2d with its in1 DRAM reads disabled is still 117.5
+  us**, and every mm2d / 1D / DRAM-sharded / minimal_matmul config sweeps to 117-123 (fidelity, block width 8-32,
+  sub-blocks, full sync: no effect). Compute alone at one M tile per core: ~72-80 us (unpack bound). Multicast
+  bandwidth (zz_scratch_mcast_bw.py): **52 GB/s per sender down a column, 44 along a row, 8 GB/s unicasting to each
+  member**, all columns at once without loss - 27 MB of weights by multicast >= 47 us.
+- the SE x untilize merged into another op's program (K3_SE_X_IN): into the planner (cores it leaves) planner 60 ->
+  76 us, traced neutral; into the sparse dispatch 230 -> 284 us; into the routing gather 50 -> 150 us. The fabric
+  ops are very sensitive to co-scheduled DRAM / NoC traffic.
+- combine depth K3_D 2: 3727 (worse), 6: does not fit L1. MIMO_FL_DRISC_MAXCNT 160 / 1024: neutral.
