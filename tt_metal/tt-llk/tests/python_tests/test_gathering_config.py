@@ -193,6 +193,10 @@ ENABLE_SLACK_WORDS = 8
 # the enable_gathering() csrrc lands correspondingly later.
 ENABLE_SLACK_WORDS_RUNTIME_OPERANDS = 48
 TT_OPCODE_REPLAY = 0x04
+# _calculate_where_'s plain-SFPLOAD path (DISABLE_SFPLOADMACRO) records 6 instructions: three
+# SFPLOADs, SFPSETCC, SFPENCC, SFPSTORE. Its SFPLOADMACRO paths record 3 and 4, so the length
+# tells the site under test apart from the two that were already bracketed.
+WHERE_PLAIN_SFPLOAD_RECORD_LEN = 6
 
 
 def _cfg0_csr_op(word):
@@ -443,9 +447,11 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
     words = _math_elf_words(configuration)
 
     records = _replay_records(words)
-    assert records, (
-        "no replay record found in the where math ELF; "
-        "the DISABLE_SFPLOADMACRO path of _calculate_where_ no longer records a replay"
+    assert any(length == WHERE_PLAIN_SFPLOAD_RECORD_LEN for _, length in records), (
+        f"no replay record of length {WHERE_PLAIN_SFPLOAD_RECORD_LEN} in the where math ELF "
+        f"(record lengths found: {[length for _, length in records]}); DISABLE_SFPLOADMACRO no "
+        "longer selects the plain-SFPLOAD path of _calculate_where_, so this test is not "
+        "covering it"
     )
     _assert_records_bracketed(
         words, records, enable_slack_words=ENABLE_SLACK_WORDS_RUNTIME_OPERANDS

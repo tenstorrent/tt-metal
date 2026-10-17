@@ -173,7 +173,7 @@ sfpi_inline void _program_welfords_replay_buffer_()
     // disable_gathering()/enable_gathering() when the kernel is built with instruction gathering on
     // (ENABLE_GATHERING). Wormhole has no gathering and records directly.
     ckernel::load_replay_buf(
-        0,
+        0 /*start*/,
         WELFORD_INSTR_PER_ROW * 4,
         []
         {
