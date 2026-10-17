@@ -18,7 +18,10 @@ def torch_normalize_hw(x):
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("scale", [1.0, 100.0, 1e-3])
-@pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 2, 64, 64]])
+@pytest.mark.parametrize(
+    "shape",
+    [[1, 1, 32, 32], [1, 2, 64, 64], [1, 1, 4, 4], [1, 1, 8, 8], [1, 1, 17, 50], [2, 3, 7, 19]],
+)
 def test_normalize_hw(device, dtype, scale, shape):
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
     torch.manual_seed(0)
@@ -27,6 +30,59 @@ def test_normalize_hw(device, dtype, scale, shape):
     got = ttnn.to_torch(ttnn.normalize_hw(ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)))
 
     assert_with_pcc(torch_normalize_hw(x.float()), got.float(), 0.999)
+
+
+def torch_var_hw(x):
+    xd = x.double()
+    return xd.var(dim=(2, 3), keepdim=True, unbiased=False).float()
+
+
+def torch_std_hw(x):
+    xd = x.double()
+    return xd.std(dim=(2, 3), keepdim=True, unbiased=False).float()
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "shape",
+    [[1, 1, 4, 4], [1, 1, 8, 8], [1, 1, 16, 16], [1, 1, 17, 50], [2, 3, 7, 19], [1, 1, 32, 32]],
+)
+def test_var_std_hw(device, dtype, shape):
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    torch.manual_seed(0)
+    x = torch.randn(shape).to(torch_dtype)
+
+    tt_x = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    got_var = ttnn.to_torch(ttnn.var_hw(tt_x))
+    got_std = ttnn.to_torch(ttnn.std_hw(tt_x))
+
+    assert_with_pcc(torch_var_hw(x.float()), got_var.float(), 0.999)
+    assert_with_pcc(torch_std_hw(x.float()), got_std.float(), 0.999)
+
+
+def torch_normalize_global(x):
+    xd = x.double()
+    mean = xd.mean(keepdim=True)
+    std = xd.std(keepdim=True, unbiased=False)
+    return ((xd - mean) / std).float()
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "shape",
+    [[1, 1, 4, 4], [1, 1, 17, 50], [2, 3, 7, 19], [1, 2, 64, 64]],
+)
+def test_normalize_global(device, dtype, shape):
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    torch.manual_seed(0)
+    x = torch.randn(shape).to(torch_dtype)
+
+    tt_x = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.normalize_global(tt_x)
+    assert list(tt_out.logical_shape()) == shape
+    got = ttnn.to_torch(tt_out)
+
+    assert_with_pcc(torch_normalize_global(x.float()), got.float(), 0.999)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
