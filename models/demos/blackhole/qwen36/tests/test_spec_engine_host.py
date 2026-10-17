@@ -10,6 +10,7 @@ accepted drafts then the bonus token, at positions s+1 .. s+m+1.
 
 Run: pytest models/demos/blackhole/qwen36/tests/test_spec_engine_host.py -q
 """
+
 import json
 import os
 import types
@@ -522,6 +523,7 @@ def test_mark_cleared_on_release_and_prefill(expect_error):
             B=1,
             model=types.SimpleNamespace(),
             _last_hidden=[],
+            _phys=[0],
         )
 
     def clean(e):
@@ -532,8 +534,11 @@ def test_mark_cleared_on_release_and_prefill(expect_error):
     assert clean(eng)
     eng = mk()
     with expect_error(AssertionError, ".*"):  # stops at "prefill before prepare", after the state is cleared
-        MTPSpecEngine.prefill(eng, 0, [1, 2, 3], None)
+        MTPSpecEngine._prefill_row(eng, 0, [1, 2, 3], None)
     assert clean(eng)
+    eng = mk()
+    eng._phys, eng._prefill_row, eng.B = [1, 0], lambda *a: a, 2  # the runner slot goes through the slot map
+    assert MTPSpecEngine.prefill(eng, 0, [1, 2, 3], None)[0] == 1
 
 
 def _bare_engine(B, K=2, **kw):
@@ -543,6 +548,7 @@ def _bare_engine(B, K=2, **kw):
     e._parked, e._prompts, e._fresh_dirty = {}, {}, set()
     e._no_draft, e._speculated, e._withheld_streak = set(range(B)), set(range(B)), {u: 3 for u in range(B)}
     e._row_active, e._last_pt, e._last_cap_blocks, e.skipped_propose_calls = None, None, 4, 0
+    e.host_slotmap, e._phys, e._phys_perm = True, list(range(B)), None
     e.__dict__.update(kw)
     return e
 
@@ -648,10 +654,19 @@ def test_release_and_remap_cover_parked_state():
     e = _bare_engine(2, _parked={0: ["a"]}, _prompts={0: ("p", None)}, _fresh_dirty={0})
     MTPSpecEngine.release(e, 0)
     assert e._parked == {} and e._prompts == {} and e._fresh_dirty == set()
+    # device remap (QWEN36_SPEC_SLOTMAP=0): the per-slot keys move with the state
     e = _bare_engine(2, _parked={0: ["a"]}, _prompts={0: ("p", None)}, _fresh_dirty={0}, _last_hidden=[0, 1])
+    e.host_slotmap = False
     e._gdn = [types.SimpleNamespace(remap_spec_slots=lambda r: None)]
     MTPSpecEngine.remap_slots(e, [1, 0])
-    assert set(e._parked) == {1} and set(e._prompts) == {1} and e._fresh_dirty == {1}
+    assert set(e._parked) == {1} and set(e._prompts) == {1} and e._fresh_dirty == {1} and e._phys == [0, 1]
+    # host slot map: the keys stay in engine rows, the map moves, and a release translates through it
+    e = _bare_engine(2, _parked={0: ["a"]}, _prompts={0: ("p", None)}, _fresh_dirty={0}, _last_hidden=[0, 1])
+    e._gdn = [types.SimpleNamespace()]  # no remap_spec_slots: a device call would raise
+    MTPSpecEngine.remap_slots(e, [1, 0])
+    assert set(e._parked) == {0} and set(e._prompts) == {0} and e._fresh_dirty == {0} and e._phys == [1, 0]
+    MTPSpecEngine.release(e, 1)  # runner slot 1 is engine row 0
+    assert e._parked == {} and e._prompts == {} and e._fresh_dirty == set() and e._active == {1}
 
 
 def test_verify_defers_fresh_row_left_out():
@@ -682,7 +697,7 @@ def test_verify_defers_fresh_row_left_out():
         e._fresh[slot] = len(prompt)
         e._fresh_dirty.discard(slot)
 
-    e.prefill = prefill
+    e._prefill_row = prefill  # a re-prefill is in engine rows
     tok = torch.ones(B, T, dtype=torch.int32)
     pt = torch.zeros(B, 4, dtype=torch.int32)
     one = torch.ones(B, dtype=torch.int32)
