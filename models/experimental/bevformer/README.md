@@ -315,23 +315,16 @@ pytest models/experimental/bevformer/tests/pcc/test_perception_transformer.py
 
 #### test_bevformer.py
 Tests the detector end to end on random camera images over two consecutive frames: the BEV, the
-last decoder layer's class logits and, channel by channel, its box predictions, at PCC 0.95, and
+last decoder layer's class logits and, channel by channel, its box predictions, at PCC 0.99, and
 the 3D boxes: the device detections are checked as in `test_head.py`, and the host compaction
 runs on them.
 
-It uses dummy weights by default (the backbone's, encoder's and head's tests' weights). With
-`BEVFORMER_CHECKPOINT` set to the BEVFormer-base checkpoint
-([bevformer_r101_dcn_24ep.pth](https://github.com/zhiqi-li/storage/releases/download/v1.0/bevformer_r101_dcn_24ep.pth),
-from upstream's model zoo) it loads the trained weights instead;
-the inputs stay random. With the trained weights the box velocities and yaw are the least precise
-channels, at PCC 0.97 to 0.99, from the backbone's bfloat8_b weights and bfloat16 accumulation
-carried through the encoder and decoder; the other outputs stay above 0.99. The reference runs the
-backbone on the CPU three times, so the test takes several minutes.
+It uses dummy weights (the backbone's, encoder's and head's tests' weights). The reference runs
+the backbone on the CPU three times, so the test takes several minutes.
 
 **Usage:**
 ```bash
 pytest models/experimental/bevformer/tests/pcc/test_bevformer.py
-BEVFORMER_CHECKPOINT=/path/to/bevformer_r101_dcn_24ep.pth pytest models/experimental/bevformer/tests/pcc/test_bevformer.py
 ```
 
 #### test_temporal_self_attention.py

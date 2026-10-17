@@ -4,7 +4,7 @@
 """Tracy harness for the detector end to end: images to class logits, boxes, the frame's BEV and the
 3D detections, all on device; dropping the invalid boxes on the host after it is timed apart.
 
-Dummy weights, ``BEVFORMER_CHECKPOINT`` or not, and ``test_bevformer``'s inputs over three frames.
+Dummy weights and ``test_bevformer``'s inputs over three frames.
 The first frame, which has no previous BEV, runs eagerly; the second is the warmup and the PCC
 gate, then is captured as a trace and replayed once in a signposted region, so the report covers
 already-compiled programs with no host dispatch in between. The capture is also the check that the
@@ -37,7 +37,6 @@ from models.experimental.bevformer.tests.common import (
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_parameters
 from models.experimental.bevformer.tt.tt_bevformer import TtBEVFormer
 
-# test_bevformer gates at 0.95 for the trained weights; the dummy ones stay above 0.99 there.
 PCC_THRESHOLD = 0.99
 
 
