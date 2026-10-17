@@ -42,11 +42,19 @@ Tensor rms_norm(
 
     // For 0D tensors
     if (rank == 0) [[unlikely]] {
+        Tensor effective_input = input_tensor;
+        if (residual_input_tensor.has_value()) {
+            effective_input = ttnn::add(
+                input_tensor,
+                residual_input_tensor.value(),
+                /*output_dtype=*/std::nullopt,
+                output_memory_config);
+        }
         auto result = ttnn::multiply(
-            input_tensor,
+            effective_input,
             ttnn::rsqrt(
                 ttnn::add(
-                    ttnn::square(input_tensor, output_memory_config),
+                    ttnn::square(effective_input, output_memory_config),
                     epsilon,
                     /*output_dtype=*/std::nullopt,
                     output_memory_config),
