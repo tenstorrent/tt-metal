@@ -144,7 +144,7 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
     if constexpr ((eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB))
     {
         const std::uint32_t loop_op = eltwise_binary_func<eltwise_binary_type>(0 /*clr_src*/, acc_to_dest, broadcast_type, addr_mod);
-        const std::uint32_t end_op  = TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB);
+        constexpr std::uint32_t end_op = TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB);
         if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
         {
             // Partial faces: INCRWC as loop_op1 via the two-op constructor to keep 16-row face spacing.
@@ -424,7 +424,7 @@ inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc
     if constexpr ((eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB))
     {
         const std::uint32_t loop_op = eltwise_binary_func<eltwise_binary_type>(0 /*clr_src*/, acc_to_dest, broadcast_type, addr_mod);
-        const std::uint32_t end_op  = TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB);
+        constexpr std::uint32_t end_op = TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB);
         if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
         {
             // Partial faces: INCRWC as loop_op1 via the two-op constructor to keep 16-row face spacing.
