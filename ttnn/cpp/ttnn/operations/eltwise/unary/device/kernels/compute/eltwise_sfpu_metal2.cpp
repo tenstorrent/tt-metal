@@ -32,6 +32,9 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
     copy_init(dfb::in);
+#ifdef PACK_RELU_CONFIG
+    pack_relu_config(PACK_RELU_CONFIG);
+#endif
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
 
