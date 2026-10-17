@@ -147,7 +147,7 @@ struct __attribute__((packed)) SMCDispatchTelemetryControl {
     uint32_t dispatch_telemetry_addr = 0;
     uint8_t num_hw_cqs = RESERVED_CQ_SPACE;
     SMCDispatchCoreCoords cq_dispatch_core_coords[RESERVED_CQ_SPACE];
-    // Tensix cores in the compute-with-storage grid (excludes dispatch tensix and ethernet).
+    // Tensix cores in the compute-with-storage grid (excludes dispatch tensix).
     // Host-published at device init. 0 means the field was not written (legacy control block).
     uint16_t num_worker_cores = 0;
     struct __attribute__((packed)) SDTelemetry {

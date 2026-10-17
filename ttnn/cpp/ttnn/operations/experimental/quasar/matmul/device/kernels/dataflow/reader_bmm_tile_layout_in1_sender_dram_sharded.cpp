@@ -218,12 +218,10 @@ void kernel_main() {
 
     cb_out.pop_front(out_block_num_tiles);
 
-    // Restore NCRISC_RD_CMD_BUF NOC_CTRL to the firmware default (VC=1, set in
-    // noc_init). set_async_read_state<NocOptions::CUSTOM_VC> writes a per-bank VC into NOC_CTRL
-    // and this hardware register persists across kernel launches. Kernels that
-    // follow (e.g. 1d-multicast matmul readers running in DM_DEDICATED_NOC mode)
-    // rely on NOC_CTRL being at its initialized value and do not re-set it, so
-    // they inherit the stale custom VC and suffer reduced DRAM bandwidth.
-    noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, NocOptVals{.vc = 1});
+    // Restore only NCRISC read_cmd_buf NOC_CTRL_LO VC to firmware default (VC=1, set in noc_init); a full set_async_read_state
+    // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state fast paths read.
+    const uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED |
+                                      NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1) |
+                                      NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL_LO, noc_rd_cmd_field);
 }
