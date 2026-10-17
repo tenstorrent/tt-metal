@@ -4542,6 +4542,13 @@ tasks:
     - ffn_norm
     - router
     layer: 14
+  frozen:
+    at: '2026-10-17T03:32:01'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_16_router.py: ec11df6df8b130d267d1f6fa25e9fa64a51874343b46a8c4a9f24c21508e2b8a
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.enc_source_engram.experts
   title: enc_source_engram experts (moe) on device, layer 14
   step: implement
