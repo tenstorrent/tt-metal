@@ -1,0 +1,145 @@
+{
+ "used": [
+  {
+   "id": "K-71",
+   "how": "host-sink ack only after ttnn.synchronize_device per layer (tt/runners/adapter.py:_run); acks off in compile()",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-72",
+   "how": "engine pad ids forced to PAD_ID past actual_end in _host_ids and clamped into the vocabulary by TtDS41Model.embed",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-73",
+   "how": "adapter.read_slot_kv_and_check_pcc reads every served config through the table vs the golden (kv_contract.read_slot_kv_and_check_pcc)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-79",
+   "how": "DS41Config.FABRIC_PAYLOAD_SIZE = 4352 (the fabric default the bring-up tests ran with)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-58",
+   "how": "read the hand-run gate metrics from generated/bringup_adhoc/K.1.json",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH pinned to the checkout for every run",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-1",
+   "how": "TtServedRows.write compares buffer_address before freeing the reshaped slab (a reshape may return a view)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-56",
+   "how": "deleted the ds41_served probe directory after the probes",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-52",
+   "how": "same view check as K-1 in TtServedRows.write; DeviceScalars tables padded to >= 2 rows so a 1-row slice is never full-range (fixed the ladder's one-slot TT_FATAL)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-6",
+   "how": "config names 0_window_kv .. 4_index_k_r1 so the name->config constructor numbers them in table order",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-5",
+   "how": "served caches keep every position (one tensor per config, per slot and layer), not the 128 ring",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-17",
+   "how": "window and compressed writes reuse the server-order embedding + update_padded_kv_cache path; table placement follows its sp x tp order",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-26",
+   "how": "engram rows hash only up to the first pad id; the runtime hands begin_chunk natural-order ids with PAD_ID past actual_end",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-8",
+   "how": "runner smoke expected to skip in this partial run",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-48",
+   "how": "kept its embedding write path, moved the r2 caches from token units to compressed rows (DS41-54)",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-48",
+   "evidence": "out of date: 'update_padded_kv_cache wants 32' holds only for the scalar path (update_padded_kv_cache_device_operation.cpp:316-321 checks kv_actual_global % 32 only when no metadata tensors); the metadata path writes ROW_MAJOR in page rows: probe on 2x2 (tests/ttnn/unit_tests/operations/ds41_served probe, removed) bit-exact for compressed-row starts 480 / 656 / 1024, dedup and replicated. The token-unit storage it prescribes also fails the frozen test_kv_layout shard check [1, 1, 16, 512]. New entry DS41-54.",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "a non-contiguous served subset (F100) needs golden block inputs at each run start in the runtime, as the ladder does (DS41-55)",
+  "ttnn.view / reshape cannot alias an ND-sharded tensor with another last dim (no zero-copy [rows, 256] <-> [rows / 2, 512])",
+  "a follow-up turn's engram tail must come from the slot's id history before actual_start, not from the slot's last chunk"
+ ],
+ "overseer": [
+  {
+   "id": "OV-14",
+   "answer": "done",
+   "evidence": "tt/runners/adapter.py:served_layer_ids uses testing/contract.layer_ids_from_env; DS41PrefillRuntime.layer_ids = [0, 1, 2, 3, 14, 20, 21, 24] in test_contract (no 'non-contiguous layer subset' failure, contract_checks_failed 0); acks sink(k, rid) and table layer k = engine index; read-back maps k -> layer_ids[k]. Gaps start from the golden block input (DS41-55)."
+  }
+ ],
+ "cited_only": [
+  "DS41-54",
+  "DS41-55",
+  "K-57"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "K.1",
+  "role": "contract",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-17T20:54:06",
+  "head": "842dfceb2f9",
+  "touched": [
+   "models/demos/common/prefill/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/K.1.contract.2.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/__init__.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/kv_contract.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/served.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py"
+  ]
+ }
+}

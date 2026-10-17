@@ -47,7 +47,8 @@ Chain (one path on every box; nothing on the host per chunk except picking load-
 
 The served cache (TtWindowCache): position g on mesh row (g / W) % SP, column ((g mod W) / (W / TP)), local row
 (g / S) (W / TP) + g mod (W / TP) (W = S / SP; update_padded_kv_cache's sp x tp linearized block-cyclic order),
-bf16 ROW_MAJOR, one ND shard [1, 1, 32, 512] per 32-token record round-robin over the DRAM banks (init_kvpe_cache).
+bf16 ROW_MAJOR, one ND shard [1, 1, 32, 512] per 32-token record round-robin over the DRAM banks (tt/served.py, as
+init_kvpe_cache); a (slot, layer) slab of the serving engine's 0_window_kv tensor when served (tt/runners).
 """
 
 from __future__ import annotations
@@ -59,6 +60,7 @@ import ttnn
 from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, tp_sum
 from .quant import fp8_qdq, round_tf32
 from .rope import RopeTable, deinterleave_perm, deinterleave_tail, rope_heads
+from .served import CacheSlab, DeviceScalars, alloc_served
 from .settings import settings
 from .window_exact import ExactWindow
 
@@ -147,6 +149,13 @@ class WindowTables:
         )
         self.zero_carry = _upload(mesh, torch.zeros(1, 1, WINDOW, 512), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
         self._exact = {}
+        self._scalars = {}
+
+    def scalars(self, step: int, n: int) -> DeviceScalars:
+        """Load-time device values 0, step, .., (n - 1) step (tt/served.DeviceScalars), shared by every cache."""
+        if (step, n) not in self._scalars:
+            self._scalars[(step, n)] = DeviceScalars(self.mesh, [step * k for k in range(n)])
+        return self._scalars[(step, n)]
 
     def exact(self, heads_per_chip: int, width: int, pieces: int, compute_config) -> ExactWindow:
         """The exact window attention's load-time tables (tt/window_exact.py), one per head count / pieces, shared
@@ -160,32 +169,24 @@ class WindowTables:
 
 
 class TtWindowCache:
-    """The served 0_window_kv cache of one layer and slot: [1, 1, rows, 512] bf16 ROW_MAJOR per chip, ND-sharded one
-    32-token record per shard (init_kvpe_cache), TP-dedup (update_padded_kv_cache's sp x tp order, module docstring).
-    ``write`` and ``carry`` run per chunk on the device; the ``*_host`` methods are the harness / serving boundary."""
+    """The served 0_window_kv cache of one layer and slot: a slab [1, 1, rows, 512] bf16 ROW_MAJOR per chip of a
+    served-cache tensor (tt/served.py: ND-sharded one 32-token record per shard, round-robin over the DRAM banks),
+    TP-dedup (update_padded_kv_cache's sp x tp order, module docstring). ``slab``: a (slot, layer) of the serving
+    engine's cache (tt/runners/kv_contract.py); None = a tensor of its own (the ladder). ``write`` and ``carry`` run
+    per chunk on the device; the ``*_host`` methods are the harness / serving boundary."""
 
     WIDTH = 512
 
-    def __init__(self, mesh, tables: WindowTables, max_seq: int):
-        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
-
+    def __init__(self, mesh, tables: WindowTables, max_seq: int, slab: CacheSlab | None = None):
         self.mesh, self.tables, self.geo = mesh, tables, tables.geo
         g = self.geo
         self.rows = g.cache_rows(max_seq)
         self.max_seq = self.rows * g.n
         self.tp_axis = TP_AXIS if g.tp > 1 else None
-        self.tensor = init_kvpe_cache(
-            kvpe_cache_head_dim=self.WIDTH,
-            mesh_device=mesh,
-            seq_len=self.max_seq,
-            mesh_shape=list(mesh.shape),
-            sp_axis=SP_AXIS,
-            num_kvpe_cache_layers=1,
-            num_users=1,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            tp_axis=self.tp_axis,
-        )
+        if slab is None:
+            slab = CacheSlab(alloc_served(mesh, self.WIDTH, self.rows, 32, 1, dedup=True), owned=True)
+        assert (slab.rows, slab.width) == (self.rows, self.WIDTH), (slab.rows, slab.width, self.rows)
+        self.slab = slab
 
     # ------------------------------------------------------------------ per chunk (device)
     def write(self, kv_rm: ttnn.Tensor, start: int, end: int) -> None:
@@ -205,11 +206,11 @@ class TtWindowCache:
         ttnn.deallocate(idx)
         slab = ttnn.reshape(rows, [1, 1, g.w, self.WIDTH])
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            self.tensor,
+            self.slab.tensor,
             slab,
-            slot_idx=0,
-            layer_idx=0,
-            num_layers=1,
+            slot_idx=self.slab.slot,
+            layer_idx=self.slab.row,
+            num_layers=self.slab.layers,
             kv_actual_global=start,
             cluster_axis=SP_AXIS,
             valid_global=end,
@@ -245,7 +246,7 @@ class TtWindowCache:
             take = min(g.stripe - u, start - p)
             q, b = s_idx % g.n, s_idx // g.n
             loc = b * g.stripe + u
-            sl = ttnn.slice(self.tensor, [0, 0, loc, 0], [1, 1, loc + take, self.WIDTH], memory_config=DRAM)
+            sl = self.slab.slice_rows(loc, loc + take)
             tl = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM)
             ttnn.deallocate(sl)
             gat = self._gather_all(tl)
@@ -277,11 +278,11 @@ class TtWindowCache:
             srv = nat[g.server_rows(p0 + a)].reshape(g.sp, 1, g.w, self.WIDTH)
             slab = _upload(self.mesh, srv, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (0, None))
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                self.tensor,
+                self.slab.tensor,
                 slab,
-                slot_idx=0,
-                layer_idx=0,
-                num_layers=1,
+                slot_idx=self.slab.slot,
+                layer_idx=self.slab.row,
+                num_layers=self.slab.layers,
                 kv_actual_global=p0 + a,
                 cluster_axis=SP_AXIS,
                 valid_global=p0 + a + m,
@@ -292,7 +293,7 @@ class TtWindowCache:
     def to_host(self, length: int) -> torch.Tensor:
         """Natural-order rows of positions [0, ceil32(length)) as host bf16 [ceil32(length), 512]."""
         g = self.geo
-        shards = [ttnn.to_torch(t).reshape(self.rows, self.WIDTH) for t in ttnn.get_device_tensors(self.tensor)]
+        shards = self.slab.host_rows()
         blocks = self.rows // g.stripe
         stacked = torch.stack([s.view(blocks, g.stripe, self.WIDTH) for s in shards], dim=1)  # [blocks, N, stripe]
         nat = stacked.reshape(blocks * g.n * g.stripe, self.WIDTH)
@@ -319,7 +320,8 @@ class TtWindowCache:
         self.load_host(ring.float()[pos % window], p0)
 
     def free(self) -> None:
-        ttnn.deallocate(self.tensor)
+        """Frees the tensor only when it is the cache's own (never the engine's)."""
+        self.slab.free()
 
 
 class TtWindowAttention:

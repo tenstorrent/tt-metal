@@ -129,14 +129,22 @@ class DS41DeviceState:
                  take the entry of their start; earlier entries stay for the state read-back)
     cands[i]     {chunk start: device candidate pool [1, 1, Sq, 2048] uint32 per chip} of the candidate source
     tail[i]      engram tail [3] int64 (host) of every engram layer
-    The ``*_prefix`` dicts hold a golden prefix's integer state loaded on the host (ladder rung ``last``)."""
+    The ``*_prefix`` dicts hold a golden prefix's integer state loaded on the host (ladder rung ``last``).
 
-    def __init__(self, model: "TtDS41Model", max_seq: int):
+    ``slabs`` {layer: {config name: tt/served.CacheSlab}}: this slot's slabs of the serving engine's cache tensors
+    (tt/runners/kv_contract.py); None = caches of its own (the ladder). ``keep_history`` False (serving): a store keeps
+    only the latest chunk's top-k / pool (its readers run in the same chunk), so nothing grows with the requests."""
+
+    def __init__(self, model: "TtDS41Model", max_seq: int, slabs: dict | None = None, keep_history: bool = True):
         cfg, mesh, tables = model.cfg, model.mesh, model.tables
         self.model, self.cfg, self.mesh, self.max_seq = model, cfg, mesh, max_seq
-        self.window = {i: TtWindowCache(mesh, tables, max_seq) for i in model.layers}
+        self.keep_history = keep_history
+        slabs = slabs or {}
+        self.window = {
+            i: TtWindowCache(mesh, tables, max_seq, slab=slabs.get(i, {}).get("0_window_kv")) for i in model.layers
+        }
         self.compress = {
-            i: TtCompressCaches(mesh, tables, max_seq, cfg.ratio(i), cfg.head_dim, cfg.index_dim)
+            i: TtCompressCaches(mesh, tables, max_seq, cfg.ratio(i), cfg.head_dim, cfg.index_dim, slabs=slabs.get(i))
             for i in model.layers
             if cfg.is_kv_source(i)
         }
@@ -148,14 +156,31 @@ class DS41DeviceState:
         self.topk_prefix, self.cands_prefix = {}, {}
         self.tail = {i: model.engram[i].new_tail() for i in model.engram}
         self.tokens = None
+        self.history = None  # this slot's real token ids by position (host; the engram tail of any start)
         model.state = self  # begin_chunk reads (and advances) the active slot's engram tail
 
     # ------------------------------------------------------------------ per chunk (device)
     def put(self, store: dict, layer: int, start: int, t: ttnn.Tensor) -> None:
-        old = store[layer].pop(start, None)
-        if old is not None:
-            _free(old)
+        stale = [start] if self.keep_history else list(store[layer])
+        for k in stale:
+            old = store[layer].pop(k, None)
+            if old is not None:
+                _free(old)
         store[layer][start] = t
+
+    def note_tokens(self, tokens: torch.Tensor, start: int, end: int) -> None:
+        """Host, before ``begin_chunk``: the chunk's real ids [start, end) into this slot's id history, and every
+        engram layer's tail = the compressed ids of the 3 positions before ``start`` (a follow-up turn starts inside
+        the slot's earlier prompt, so the tail its last chunk left is not this chunk's)."""
+        if self.history is None:
+            self.history = torch.zeros(self.max_seq, dtype=torch.int64)
+        self.history[start:end] = tokens.reshape(-1)[: end - start].long()
+        for i, rows in self.model.engram.items():
+            t = rows.new_tail()
+            last = self.history[max(0, start - t.shape[0]) : start]
+            if last.numel():
+                t[-last.numel() :] = rows.hasher.token_map[last]
+            self.tail[i] = t
 
     def get(self, store: dict, layer: int, start: int, what: str) -> ttnn.Tensor:
         t = store.get(layer, {}).get(start)
@@ -232,6 +257,9 @@ class DS41DeviceState:
     def load_tokens(self, ids: torch.Tensor) -> None:
         """A migrated prefix's ids: the engram tail of every engram layer = the compressed ids of the last 3."""
         self.tokens = ids.reshape(-1).long()
+        if self.history is None:
+            self.history = torch.zeros(self.max_seq, dtype=torch.int64)
+        self.history[: self.tokens.numel()] = self.tokens
         for i, rows in self.model.engram.items():
             t = rows.new_tail()
             last = self.tokens[-t.shape[0] :]
@@ -549,8 +577,8 @@ class TtDS41Model:
         return self._sparse
 
     # ------------------------------------------------------------------ per chunk
-    def new_state(self, max_seq: int) -> DS41DeviceState:
-        return DS41DeviceState(self, max_seq)
+    def new_state(self, max_seq: int, slabs: dict | None = None, keep_history: bool = True) -> DS41DeviceState:
+        return DS41DeviceState(self, max_seq, slabs=slabs, keep_history=keep_history)
 
     def begin_chunk(self, tokens: torch.Tensor, start: int) -> None:
         """The host input of every engram layer: hash the chunk's ids (pad past actual_end skipped, DS41-26) with the

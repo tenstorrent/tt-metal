@@ -1530,3 +1530,43 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - test_cache_starts (all spec layers, no BRINGUP_TASK, `--no-precompile`) on the device model: 4 passed (cold_mid_end,
   follow_block, follow_tile, pulled-back last chunk), 19 min (each case reloads the model, ~5 min).
 - Re-run: `PYTHONPATH=$PWD BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py`
+
+## K.1 contract (attempt 2)
+- Attempt 1 left no code (stopped on the framework's contiguous-subset ValueError, fixed by F100). Built from
+  scratch: adapter `tt/runners/adapter.py` (`DS41PrefillAdapter`, registered as `deepseek_v41_flash_d_p` in
+  `models/demos/common/prefill/adapter.py` ADAPTER_PATHS), `tt/runners/kv_contract.py` (engine caches, table,
+  read-back), `tt/served.py` (cache storage); hooks `contract_state_pcc`.
+- OV-14: engine layer k = model layer `layer_ids[k]` from `testing/contract.layer_ids_from_env` (PREFILL_LAYER_IDS in
+  the framework test: 8 engine layers = 0,1,2,3,14,20,21,24; the model's own runner tests serve 0-3 with no env);
+  `rt.layer_ids` exposed; acks `sink(first_layer_idx + k, request_id)`, table layer = engine index.
+- Gaps (DS41-55): a run after a gap (14, 20, 24 in the framework test) starts from the golden block input of its
+  first layer (`GoldenGapFeed`, the spec's rung with every chunk dumped), as testing/ladder.py; never active for a
+  contiguous range. Without it layer 14+ KV cannot match (golden runs layers 4-13 etc. on the CPU).
+- Caches (one format, bf16 ROW_MAJOR): one tensor per config, [slots x Lc, 1, local rows, width], ND shard
+  [1, 1, 32 / r, width] ROUND_ROBIN_1D over all banks (`alloc_served`: init_kvpe_cache with a shard height; it fixes
+  32). Window and compressed KV TP-dedup, index keys TP-replicated (plan / owner answer 2). Each slot's
+  `DS41DeviceState` is bound to its `CacheSlab`s (`model.new_state(max_seq, slabs=..., keep_history=False)`); the
+  ladder's state allocates its own slabs (slots = layers = 1), same classes, same layout.
+- Compressed caches now stored in compressed rows (was token units [rows, 256] with 32-row shards: same bytes, but the
+  layout test wants the [16, 512] shard). Writes: the token-order server index row as before, the slab viewed as
+  [W / r, 512], then update_padded_kv_cache in compressed rows; ratio 2 through its metadata path (DS41-54; probe
+  `tests/ttnn/unit_tests/operations/ds41_served/probes`, deleted after: bit-exact at 0 / 960 / 1312 / 2048).
+  Readers (`TtIndexer._keys`, `TtSparseAttention._compressed`) slice the slab's compressed rows directly.
+- Per chunk: the engine input is read back once (mesh column 0's rows), put in natural order with
+  `WindowGeometry.server_rows(start)`; the ids are the engram host input (begin_chunk) and are embedded (host-clamped,
+  K-72). Engram tail per slot from a host id history (`DS41DeviceState.note_tokens`): a follow-up at 960 after a
+  1000-token turn needs ids 957-959, not the slot's last. Ack: host sink after `ttnn.synchronize_device` (K-71); D2H
+  `outbound_socket_service_sync` on the same CQ. compile() runs one cold chunk in slot 0, acks off.
+- Top-k / candidate stores keep only the latest chunk in serving (`keep_history=False`), so nothing grows.
+- FABRIC_PAYLOAD_SIZE 4352 (K-79: the fabric default the bring-up tests ran with). Runner smoke skips (DS41-8).
+- Results: test_contract PASS (contract_checks_failed 0, acks_early 0, pcc_producer_kv window 0.99777 / compress
+  0.99589 / index 0.99742; fixed state window ring >= 0.99735, engram tail and compress partial exact);
+  test_kv_layout, test_adapter_acks, test_runner_contract (producer fallback) PASS.
+- Gotcha (DS41-52): with one slot (the ladder) the 1-row slot table's [0:1] slice is full-range and returned the
+  table's own buffer, which `_put` then freed (ladder s4096 TT_FATAL input_tensor.is_allocated()); DeviceScalars
+  tables now have >= 2 rows.
+- Regression checks after the cache refactor: ladder s4096 PASS, identical to M.1 (worst layer 0.996916, pcc_state_min
+  0.99588, overlap 0.9672, host_transfers_per_layer 0); test_cache_starts -k follow_tile (start 1312) PASS.
+- The whole gate exceeds the tool's 10-minute foreground limit: run its five parts one by one (each 3-6 min, mostly
+  model load); all five PASS after the last change (runner smoke skips, DS41-8).
+- Re-run: the brief's gate command with `PYTHONPATH=$PWD`.

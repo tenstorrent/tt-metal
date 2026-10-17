@@ -20,7 +20,7 @@ exact). The scores are the same dot products (summed in another order).
 The table (one per chunk, ROW_MAJOR bf16, replicated):
     [window region (128 carry + S chunk rows, tt/attention._table: writes the chunk's window KV into the served
      0_window_kv cache first) | compressed rows]
-    compressed rows = the KV source's served compressed cache (tt/compressor.TtServedRows, token units, TP-dedup:
+    compressed rows = the KV source's served compressed cache (tt/compressor.TtServedRows, compressed rows, TP-dedup:
     token g on owner chip q = (g / stripe) % N, local row (g / (N stripe)) stripe + g mod stripe), the local rows of
     the first nb = ceil((start + S) / S) chunk periods (every group a query of this chunk can pick; the compressor
     wrote this chunk's groups before), viewed as compressed rows [nb stripe / r, 512], tiled, all_gather over axis 1
@@ -109,9 +109,8 @@ class TtSparseAttention(TtWindowAttention):
         nb = -(-(start + g.chunk) // g.chunk)
         loc = nb * stripe
         assert loc <= ckv_cache.rows, f"chunk [{start}, {start + g.chunk}) past the compressed cache ({ckv_cache.rows})"
-        sl = ttnn.slice(ckv_cache.tensor, [0, 0, 0, 0], [1, 1, loc, ckv_cache.tok_width], memory_config=DRAM)
-        view = ttnn.reshape(sl, [1, 1, loc // r, self.d])
-        tl = ttnn.to_layout(view, ttnn.TILE_LAYOUT, memory_config=DRAM)
+        sl = ckv_cache.slab.slice_rows(0, loc // r)  # [1, 1, loc / r, 512] compressed rows
+        tl = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM)
         ttnn.deallocate(sl)
         gat = self._gather_mesh(tl, ckv_cache.tp_axis is not None)
         if gat is not tl:
