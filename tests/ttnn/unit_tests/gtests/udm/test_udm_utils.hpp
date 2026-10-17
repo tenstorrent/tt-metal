@@ -447,8 +447,8 @@ inline void log_tensor_shape_info(
     const tt::tt_metal::experimental::udm::MeshTensorBuilder& tensor_builder, const ttnn::Tensor& tensor) {
     const auto& mesh_tensor_shape = tensor_builder.get_mesh_tensor_shape_in_pages();
 
-    log_info(tt::LogTest, "=== Tensor Shape Info ===");
-    log_info(tt::LogTest, "Mesh tensor shape in pages (rank={}): [{}]", mesh_tensor_shape.rank(), [&]() {
+    log_debug(tt::LogTest, "=== Tensor Shape Info ===");
+    log_debug(tt::LogTest, "Mesh tensor shape in pages (rank={}): [{}]", mesh_tensor_shape.rank(), [&]() {
         std::string shape_str;
         for (size_t i = 0; i < mesh_tensor_shape.rank(); ++i) {
             if (i > 0) {
@@ -458,8 +458,8 @@ inline void log_tensor_shape_info(
         }
         return shape_str;
     }());
-    log_info(tt::LogTest, "Tensor padded_shape: {}", tensor.padded_shape());
-    log_info(tt::LogTest, "========================");
+    log_debug(tt::LogTest, "Tensor padded_shape: {}", tensor.padded_shape());
+    log_debug(tt::LogTest, "========================");
 }
 
 /**
@@ -471,16 +471,16 @@ inline void log_gcores_info(
     const auto& mesh_shape = mesh_builder.get_mesh().shape();
     const auto& grid_shape = mesh_builder.get_flattened_grid();
 
-    log_info(tt::LogTest, "=== GlobalCores Info ===");
-    log_info(
+    log_debug(tt::LogTest, "=== GlobalCores Info ===");
+    log_debug(
         tt::LogTest,
         "Mesh shape: [{}x{}], Grid shape: [{}x{}]",
         mesh_shape[0],
         mesh_shape[1],
         grid_shape[0],
         grid_shape[1]);
-    log_info(tt::LogTest, "Total gcores in result: {}", gcores_info.gcores.size());
-    log_info(tt::LogTest, "GlobalCores with work: {}", gcores_info.num_cores);
+    log_debug(tt::LogTest, "Total gcores in result: {}", gcores_info.gcores.size());
+    log_debug(tt::LogTest, "GlobalCores with work: {}", gcores_info.num_cores);
 
     std::string partition_dims_str;
     for (size_t d = 0; d < gcores_info.partition_dims.size(); ++d) {
@@ -489,7 +489,7 @@ inline void log_gcores_info(
         }
         partition_dims_str += std::to_string(gcores_info.partition_dims[d]);
     }
-    log_info(tt::LogTest, "Partition dims: [{}]", partition_dims_str);
+    log_debug(tt::LogTest, "Partition dims: [{}]", partition_dims_str);
 
     for (size_t i = 0; i < gcores_info.gcores.size(); ++i) {
         const auto& gcore = gcores_info.gcores[i];
@@ -552,7 +552,7 @@ inline void log_gcores_info(
             log_debug(tt::LogTest, "  Dim strides: [{}]", strides_str);
         }
     }
-    log_info(tt::LogTest, "==================");
+    log_debug(tt::LogTest, "==================");
 }
 
 /**
