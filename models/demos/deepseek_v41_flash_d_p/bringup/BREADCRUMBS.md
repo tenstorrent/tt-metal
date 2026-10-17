@@ -1351,3 +1351,19 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   enc_source.attention) or a framework second-input floor that includes the official arithmetic.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attention.py && BRINGUP_TASK=C.enc_source.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`;
   probe `CASE=small,golden PYTHONPATH=$PWD scripts/tt-probe.sh ds41_sparse_attn < tests/ttnn/unit_tests/operations/ds41_sparse_attn/probes/probe_004.py`.
+
+## C.enc_source_engram.attention implement (attempt 1)
+- No new module: layer 14's attention is `tt/sparse_attention.py:TtSparseAttention` (C.enc_source.attention), which
+  the `attention` step already dispatches to for a layer that is its own KV and top-k source. The component test
+  passed on it before any change (err_attention_L14 0.0457 <= 0.4871; vs CPU 0.0428 <= 0.0875; chunk0 / layer2 /
+  mixed / small / big all within limits; determinism bit-identical).
+- The previous run's only failure was the contract test (DS41-28): hooks `DEVICE_STEPS` had no `enc_source_engram`
+  entry, so the hybrid ran layer 14 wholly on the CPU: `served()` raised NotImplementedError, and the CPU engram hash
+  hit PAD_ID (IndexError 4294967295, DS41-26; the device `engram_rows` step hashes only [start, actual_end)).
+  Fix: `DEVICE_STEPS["enc_source_engram"]` = every step that passed for the block type (engram_rows, engram_kv,
+  engram_add, attn_hc, attn_collapse, attn_norm, q_a, kv, compressor, indexer, attention).
+- The components entry's "searched" line saying sparse_sdpa(high_precision=True) refuses attention_sink is out of
+  date (see C.enc_source.attention above; the fork takes the sink): no fork change needed.
+- Gate: component PASS; test_cache_starts (BRINGUP_TASK=C.enc_source_engram.attention, layers [14]) 4 passed,
+  0 failures each.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attention.py && BRINGUP_TASK=C.enc_source_engram.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`
