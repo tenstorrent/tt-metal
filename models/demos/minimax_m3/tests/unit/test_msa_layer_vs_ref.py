@@ -219,7 +219,6 @@ def test_msa_layer_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         num_groups=NIDX,
         block_size=128,
         topk_blocks=16,
-        device=mesh_device,
         return_block_ids=True,
     )
 

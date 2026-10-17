@@ -137,7 +137,9 @@ ttnn::Tensor indexer_score_msa(
     const std::optional<std::vector<uint32_t>>& seq_shard_axes = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
-    bool block_cyclic_cache_tp_sharded = false);
+    bool block_cyclic_cache_tp_sharded = false,
+    // One rectangle of worker cores the banded schedule is planned over (default: the whole compute grid).
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids = std::nullopt);
 
 // FUSED DSA (ttnn.experimental.ring_indexer_score_dsa): subsumes the SP all-gather. Instead of pre-gathering
 // K, the caller hands this chip's LOCAL K shard `k_local` [B,1,sll,D] (the all-gather input) plus a

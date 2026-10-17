@@ -341,10 +341,11 @@ class Model:
         return args
 
     def release_sub_device_managers(self):
-        """Remove the MoE overlap sub-device manager (tt/moe/shared_overlap.py). Call before closing the
-        mesh: a manager left registered at close can segfault the teardown. Idempotent; a later forward
-        re-creates it."""
+        """Remove the MoE overlap sub-device manager (tt/moe/shared_overlap.py) and the MSA overlap one
+        (tt/ccl.py). Call before closing the mesh: a manager left registered at close can segfault the
+        teardown. Idempotent; a later forward re-creates them."""
         shared_overlap.release(self.mesh_device)
+        self.ccl_manager.release_msa_overlap()
 
     def _forward_layers_and_head(
         self,
@@ -361,6 +362,7 @@ class Model:
         cached_len=0,
         indexed_rope=False,
         actual_isl=None,
+        segments=None,
     ):
         """
         Prefill forward pass through decoder layers and final projection.
@@ -392,6 +394,7 @@ class Model:
                 cached_len=cached_len,
                 indexed_rope=indexed_rope,
                 actual_isl=actual_isl,
+                segments=segments,
             )
             # Per-layer migration seam (no-op unless a pipeline supplies a callback).
             if on_layer_complete is not None:
@@ -462,11 +465,15 @@ class Model:
         cached_len=0,
         indexed_rope=False,
         actual_isl=None,
+        segments=None,
     ):
         """Prefill forward pass - processes full sequences.
 
-        actual_isl: real (non-pad) tokens in this chunk across the SP axis, or None for a full chunk.
-        Only the MoE layers read it, to bound the gate/dispatch padding config (tt/topk.py).
+        actual_isl: real (non-pad) tokens in this chunk across the SP axis, None for a full chunk, or, for a
+        packed forward, a tuple of per-SP-chip leading-real-row counts (prefill_segments). Only the MoE layers
+        read it, to bound the gate/dispatch padding config (tt/topk.py).
+        segments: packed forward — list of (slot, cached_len), one per equal row block; attention runs per
+        segment, everything else once. None (default) = one chunk for user_id at cached_len.
         """
         # Use provided rotation matrices or slice from rope_setup (matches tt-transformers)
         seq_len = x.shape[-2]
@@ -493,6 +500,7 @@ class Model:
             cached_len=cached_len,
             indexed_rope=indexed_rope,
             actual_isl=actual_isl,
+            segments=segments,
         )
 
         return logits

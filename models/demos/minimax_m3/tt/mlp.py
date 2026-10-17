@@ -216,9 +216,10 @@ class MLP:
     def __call__(self, hidden_states, actual_isl=None, actual_start=0):
         """Forward (prefill): shared expert + expert-parallel routed experts.
 
-        actual_isl: real (non-pad) tokens in this chunk across the whole SP axis, or None for a full
-        chunk. Drives the padding config below; a wrong value silently drops real tokens, so a caller
-        that does not track it must pass None (correct, it just does the padded work).
+        actual_isl: real (non-pad) tokens in this chunk across the whole SP axis, None for a full chunk,
+        or, for a packed forward, a tuple of per-SP-chip leading-real-row counts (prefill_segments ->
+        TopKRouter.build_padding_config). Drives the padding config below; a wrong value silently drops
+        real tokens, so a caller that does not track it must pass None (correct, it just does the padded work).
         actual_start: the chunk's global start (the cache offset); decides which rows of each SP chip are
         real when the chunk starts mid-slab (see TopKRouter.build_padding_config).
 

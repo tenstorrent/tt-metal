@@ -160,7 +160,8 @@ class TopKRouter:
 
     def build_padding_config(self, actual_isl, actual_start=0):
         """Per-device ``[num_real_tokens, pad_side]`` for a chunk with ``actual_isl`` real tokens starting at
-        global position ``actual_start``, or None when the chunk is full (nothing to mark).
+        global position ``actual_start``, or None when the chunk is full (nothing to mark). A tuple
+        ``actual_isl`` gives each SP chip's count of leading real rows directly (packed forwards).
 
         The SAME tensor must go to the gate topk AND the dispatch op — see
         route_tokens_to_experts_fused. Owned here and memoized per real-token count, so a chunked
@@ -178,14 +179,22 @@ class TopKRouter:
         tokens_per_chip = self.num_tokens
         sp_axis = self.mesh_config.sp_axis if self.mesh_config is not None else 0
         sp_factor = self.mesh_device.shape[sp_axis] if isinstance(self.mesh_device, ttnn.MeshDevice) else 1
-        if actual_isl is None or not tokens_per_chip or actual_isl >= sp_factor * tokens_per_chip:
+        if isinstance(actual_isl, tuple):
+            # Packed forward: the caller's per-chip count of leading real rows (see prefill_segments).
+            assert len(actual_isl) == sp_factor, f"per-chip real rows {actual_isl} for {sp_factor} SP chips"
+            if all(r >= tokens_per_chip for r in actual_isl):
+                return None
+        elif actual_isl is None or not tokens_per_chip or actual_isl >= sp_factor * tokens_per_chip:
             return None  # full chunk: every row is real
         # The per-chip split depends on the start only through its offset within the SP slab, which keeps the
         # memo bounded while two chunks with the same actual_isl but different rotations get distinct configs.
         key = (actual_isl, actual_start % (sp_factor * tokens_per_chip))
         if key not in self._padding_config_cache:
             rows = torch.zeros((sp_factor, 2), dtype=torch.int32)
-            counts = rotated_chunk_real_counts(key[1], actual_isl, sp_factor, tokens_per_chip)
+            if isinstance(actual_isl, tuple):
+                counts = [min(tokens_per_chip, r) for r in actual_isl]
+            else:
+                counts = rotated_chunk_real_counts(key[1], actual_isl, sp_factor, tokens_per_chip)
             for c in range(sp_factor):
                 rows[c, 0] = counts[c]
                 rows[c, 1] = 0  # right padding
