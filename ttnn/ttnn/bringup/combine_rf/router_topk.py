@@ -42,18 +42,23 @@ void kernel_main() {
     const uint32_t tr = get_arg_val<uint32_t>(3), r0 = get_arg_val<uint32_t>(4);  // row tile, first token row in it
     const uint32_t scale_bits = get_arg_val<uint32_t>(5);
     const uint32_t l1_off = get_arg_val<uint32_t>(6), ntok = get_arg_val<uint32_t>(7);  // (two RISCs: their halves)
-    const auto sg = TensorAccessor(s_args, s_addr, TB);
+    const auto sg = TensorAccessor(s_args, s_addr, __BIAS__ ? ET * 32 * 4 : TB);
     const auto bg = TensorAccessor(b_args, b_addr, TB);
     const auto og = TensorAccessor(o_args, o_addr, 32 * 4 * K);  // (a page: one row tile's 32 tokens' rows)
     // only this RISC's tokens' rows: per token, per tile, its two 16-value face rows (64 B each) of both inputs
     constexpr uint32_t RB = ET * 2 * 64;  // one token's row of one input
     const uint32_t l1 = ((get_write_ptr(0) + 63) & ~63u) + l1_off;
     const uint32_t s_l1 = l1, b_l1 = l1 + ntok * RB, o_l1 = b_l1 + ntok * RB;
+    if constexpr (__BIAS__) {  // (s is the bias row [E] fp32: each pick's score = its biased score - its bias)
+        noc_async_read(sg.get_noc_addr(0), s_l1, ET * 32 * 4);
+    }
     for (uint32_t i = 0; i < ntok; ++i) {
         const uint32_t r = r0 + i, off = ((r >> 4) * 2 * 256 + (r & 15) * 16) * 4;
         for (uint32_t t = 0; t < ET; ++t) {
             for (uint32_t h = 0; h < 2; ++h) {
-                noc_async_read(sg.get_noc_addr(tr * ET + t) + off + h * 1024, s_l1 + i * RB + (t * 2 + h) * 64, 64);
+                if constexpr (!__BIAS__) {
+                    noc_async_read(sg.get_noc_addr(tr * ET + t) + off + h * 1024, s_l1 + i * RB + (t * 2 + h) * 64, 64);
+                }
                 noc_async_read(bg.get_noc_addr(tr * ET + t) + off + h * 1024, b_l1 + i * RB + (t * 2 + h) * 64, 64);
             }
         }
@@ -97,8 +102,13 @@ void kernel_main() {
         }
         for (uint32_t j = 0; j < K; ++j) {
             const uint32_t e = ti[j], t = e >> 5, cc = e & 31;
-            const uint32_t* sv = reinterpret_cast<const uint32_t*>(s_l1 + i * RB + (t * 2 + (cc >> 4)) * 64 + (cc & 15) * 4);
-            w[j] = f32(sv[0]);
+            if constexpr (__BIAS__) {
+                const uint32_t* bv = reinterpret_cast<const uint32_t*>(b_l1 + i * RB + (t * 2 + (cc >> 4)) * 64 + (cc & 15) * 4);
+                w[j] = f32(bv[0]) - reinterpret_cast<const float*>(s_l1)[e];
+            } else {
+                const uint32_t* sv = reinterpret_cast<const uint32_t*>(s_l1 + i * RB + (t * 2 + (cc >> 4)) * 64 + (cc & 15) * 4);
+                w[j] = f32(sv[0]);
+            }
             sum += w[j];
         }
         const float inv = scale / (sum + 1e-20f);
@@ -114,9 +124,11 @@ void kernel_main() {
 """
 
 
-def router_topk_prepare(mesh_device, *, S, E, K, route_scale=1.0, split=8):
+def router_topk_prepare(mesh_device, *, S, E, K, route_scale=1.0, split=8, bias_mode=False):
     """run(s, b) -> [S / 32, 32 * 2 K] uint16 row-major: 2 KB pages of 32 tokens' joint rows (s / b: [S, E] fp32
-    TILE, DRAM interleaved); combine_plan tokens_per_page=32 reads it (and its fabric all-gather)."""
+    TILE, DRAM interleaved); combine_plan tokens_per_page=32 reads it (and its fabric all-gather).
+    bias_mode: run(bias, b) with bias the [1, E] fp32 row-major correction bias (one read per RISC): only the biased
+    scores b are read per token, each pick's score is b - bias (b = sigmoid(logits) + bias in one ttnn.add)."""
     import struct
 
     assert S % 32 == 0 and E % 32 == 0 and 32 % split == 0 and 4 * K == 64
@@ -147,6 +159,7 @@ def router_topk_prepare(mesh_device, *, S, E, K, route_scale=1.0, split=8):
         import os
 
         src = _TOPK.replace("__PROBE__", {"noweights": "1", "noscan": "2"}.get(os.environ.get("TOPK_PROBE", ""), "0"))
+        src = src.replace("__BIAS__", "1" if bias_mode else "0")
         dm1 = ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_1_default)
         program.kernels = [
             ttnn.KernelDescriptor(kernel_source=src, source_type=st, core_ranges=crs, compile_time_args=ct, runtime_args=rt0,

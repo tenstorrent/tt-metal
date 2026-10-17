@@ -144,7 +144,14 @@ class TtK3TokenSplitMoE:
             w.bias.view(1, -1).float().contiguous(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh_device,
             memory_config=dram, mesh_mapper=rep,
         )
-        self.rtopk = router_topk_prepare(mesh_device, S=S, E=d.E, K=d.K, route_scale=d.route_scale)
+        # (one ttnn.add with a sigmoid on its input gives the biased scores; the top-k reads only those and the bias row,
+        # each pick's score = biased - bias: one program and half the top-k's reads fewer)
+        self.topk_bias = os.environ.get("K3_TOPK_BIAS", "1") == "1"
+        self.bias_row = ttnn.from_torch(
+            w.bias.view(1, -1).float().contiguous(), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device,
+            memory_config=dram, mesh_mapper=rep,
+        )
+        self.rtopk = router_topk_prepare(mesh_device, S=S, E=d.E, K=d.K, route_scale=d.route_scale, bias_mode=self.topk_bias)
         self.w_ld = tw(w.lat_down.T, ttnn.bfloat8_b)
         self.w_lu = tw(w.lat_up.T, ttnn.bfloat8_b)
         self.g_ln = ttnn.from_torch(
@@ -244,9 +251,11 @@ class TtK3TokenSplitMoE:
             if self.sparse_dispatch
             else None
         )
-        if self.lat_direct:
+        if self.lat_direct:  # (and both in one generic_op, the untilize on the cores the route words leave)
             C_ = tuple(mesh_device.shape)[1]
-            self.untilize_x = layout_op_prepare(mesh_device, "untilize", row0_of=lambda r, c: (r * C_ + c) * S)
+            self.untilize_x = layout_op_prepare(mesh_device, "untilize", row0_of=lambda r, c: (r * C_ + c) * S,
+                                                exclude=self.dprep.cores)
+            self._prep_merged = {}
         # the routing rows' all-gather: one sparse_all_gather_2d to every chip (default) or two ttnn.all_gather
         # (sparse: sparse_all_gather_2d to every chip, 157 us vs 140 for the two ttnn.all_gather at 64-B rows; fag: the
         # dense fabric all-gather, one snake)
@@ -338,10 +347,14 @@ class TtK3TokenSplitMoE:
         if self.topk_custom:  # (fp32 logits / scores / biased scores, router_topk: the joint rows; ids = the rows)
             mc = ttnn.L1_MEMORY_CONFIG if "router" in self.l1_set else None  # (the top-k's 64 B reads: L1 latency)
             logits = self._linear(x, self.w_gate, self.cfg_hi, ttnn.float32, memory_config=mc)
-            sc = ttnn.sigmoid(logits, memory_config=mc)
-            bs = ttnn.add(sc, self.bias32, memory_config=mc)
-            rows = self.rtopk(sc, bs)
-            ttnn.deallocate(sc)
+            if self.topk_bias:
+                bs = ttnn.add(logits, self.bias32, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID], memory_config=mc)
+                rows = self.rtopk(self.bias_row, bs)
+            else:
+                sc = ttnn.sigmoid(logits, memory_config=mc)
+                bs = ttnn.add(sc, self.bias32, memory_config=mc)
+                rows = self.rtopk(sc, bs)
+                ttnn.deallocate(sc)
             ttnn.deallocate(bs)
             if keep_logits:
                 if mc is not None:  # (no L1 tensor may outlive its op: the arena's address)
@@ -416,9 +429,18 @@ class TtK3TokenSplitMoE:
         dram = ttnn.DRAM_MEMORY_CONFIG
         xbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, N * S, W]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, dram)
         route = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, 1, S]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh, dram)
-        if self.lat_direct:  # (lat_rm is the tiled latent: own rows straight into the buffer)
-            self.untilize_x(lat_rm, dst=xbuf)
-            self.dprep(gi, None, xbuf, route)
+        if self.lat_direct:  # (lat_rm is the tiled latent: own rows straight into the buffer; one program, both ops)
+            k = tuple(int(t.buffer_address()) for t in (lat_rm, gi, xbuf, route))
+            if self._prep_merged.get("key") != k:
+                ua, da = self.untilize_x.programs(lat_rm, xbuf), self.dprep.programs(gi, None, xbuf, route)
+                md = ttnn.MeshProgramDescriptor()
+                for (r, c), pu in ua.items():
+                    pd, pr = ttnn.ProgramDescriptor(), da[(r, c)]
+                    pd.cbs = list(pu.cbs) + list(pr.cbs)
+                    pd.kernels = list(pu.kernels) + list(pr.kernels)
+                    md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = pd
+                self._prep_merged = {"key": k, "desc": md}
+            ttnn.generic_op([lat_rm, gi, xbuf, route], self._prep_merged["desc"])
         else:
             self.dprep(gi, lat_rm, xbuf, route)
         return xbuf, route

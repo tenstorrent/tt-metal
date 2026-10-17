@@ -137,8 +137,9 @@ def dispatch_prep_prepare(
     dm = ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default)
     state = {}
 
-    def build(jr, own, xbuf, route):
+    def build(jr, own, xbuf, route, per_chip=False):
         W = int(xbuf.shape[-1])
+        progs = {}
         row = W * 2
         route_l1 = rper * (((4 * K) + 63) // 64 * 64) + rper * 4 + 128
         mesh_desc = ttnn.MeshProgramDescriptor()
@@ -181,7 +182,8 @@ def dispatch_prep_prepare(
                                         compile_time_args=[row, batch] + own_ct + xb_ct, runtime_args=crt, config=dm)]
                  if copy else [])
             mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
-        return mesh_desc
+            progs[(r, c)] = program
+        return progs if per_chip else mesh_desc
 
     def run(jr, own, xbuf, route):
         ts = [jr] + ([own] if copy else []) + [xbuf, route]
@@ -190,6 +192,8 @@ def dispatch_prep_prepare(
             state["key"], state["desc"] = k, build(jr, own, xbuf, route)
         return ttnn.generic_op(ts, state["desc"])
 
+    run.programs = lambda jr, own, xbuf, route: build(jr, own, xbuf, route, per_chip=True)
+    run.cores = rcs + (cps if copy else [])  # (the cores its kernels take)
     return run
 
 

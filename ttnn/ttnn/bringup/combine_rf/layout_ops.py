@@ -112,13 +112,14 @@ void kernel_main() {
 """
 
 
-def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_config=None, row0_of=None):
+def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_config=None, row0_of=None, exclude=()):
     """kind "tilize": run(src [rows, W] bf16 ROW_MAJOR) -> [rows, W] bf16 TILE; "untilize": the reverse. DRAM
     interleaved in and out; rows % 32 == 0, W % (32 * cw) == 0. pages_per_row P: the row-major side stores each row as
     P pages ([rows * P, W / P], e.g. P 2 at W 7168: pages that fit a fabric packet)."""
     assert kind in ("tilize", "untilize")
     grid = mesh_device.compute_with_storage_grid_size()
-    cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
+    ex = {(c.x, c.y) for c in exclude}  # (cores left to another op merged into the same program)
+    cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in ex]
     st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
     dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc)  # noqa: E731
     comp = _COMPUTE.replace("__KIND__", kind)
@@ -131,7 +132,7 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_co
     P = pages_per_row
     out_mc = out_memory_config or ttnn.DRAM_MEMORY_CONFIG  # (e.g. a block-sharded L1 output: the accessor handles it)
 
-    def build(src, dst, rows, W):  # (untilize, row0_of (mesh row, column) -> the first dst row: one program per chip)
+    def build(src, dst, rows, W, per_chip=False):  # (untilize, row0_of (mesh row, column) -> the first dst row: per chip)
         Wt, nt = W // 32, rows // 32
         assert (W * 2 // P) % (cw * 64) == 0, "a CW-tile chunk must not straddle pages"
         assert rows % 32 == 0 and Wt % cw == 0
@@ -177,6 +178,8 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_co
             return program
 
         R, C = tuple(mesh_device.shape)
+        if per_chip:  # ((r, c) -> its program: for merging with another op's)
+            return {(r, c): program_for(row0_of(r, c) if row0_of else 0) for r in range(R) for c in range(C)}
         mesh_desc = ttnn.MeshProgramDescriptor()
         if row0_of is None:
             mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(R - 1, C - 1))] = program_for(0)
@@ -200,4 +203,9 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_co
         ttnn.generic_op([src, dst], state["desc"])
         return dst
 
+    def programs(src, dst):
+        """The per-chip programs of run(src, dst) (untilize into an existing dst), for merging into one generic_op."""
+        return build(src, dst, int(src.shape[-2]), int(src.shape[-1]), per_chip=True)
+
+    run.programs = programs
     return run
