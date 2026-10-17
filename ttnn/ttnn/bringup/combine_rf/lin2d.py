@@ -381,7 +381,7 @@ def column_split(Nt, GX, unit):
     return [(base + (1 if i < rem else 0)) * unit for i in range(GX)]
 
 
-def w_streams(mesh_device, GX, GY, NS, feed, nbank):
+def w_streams(mesh_device, GX, GY, NS, feed, nbank, col_bytes):
     """The W streams (column cx, q: q0 the even steps, q1 the odd) -> reader core, bank, piece count. feed: the readers
     next to the DRAM - each bank's optimal worker (NOC0) and its row neighbour, streaming only that bank (98% of the
     DRAM in zz_scratch_dram_mix.py::test_bank_readers); the streams balanced over the banks (min NoC hops), a reader
@@ -394,7 +394,11 @@ def w_streams(mesh_device, GX, GY, NS, feed, nbank):
             for b, c in enumerate(mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)):
                 near.setdefault((c.x, c.y), b)
                 near.setdefault((c.x + 1, c.y), b)
-        cap = -(-len(streams) // nbank)
+        # balanced by bytes (the call is DRAM bound: the busiest bank sets its time); a column end keeps its own bank
+        # only while that bank stays within the even share
+        for st_ in streams:
+            st_["bytes"] = st_["n"] * col_bytes[st_["cx"]]
+        share = sum(st_["bytes"] for st_ in streams) / nbank
         load = collections.Counter()
         within = os.environ.get("L2D_NEAR_COL", "0") == "1"  # (also a bank core elsewhere in the column: no gain)
         for st_ in streams:
@@ -405,15 +409,15 @@ def w_streams(mesh_device, GX, GY, NS, feed, nbank):
             hops = lambda y: ((0 - y) if st_["q"] == 0 else (y - (GY - 1))) % (GY + 2)  # noqa: E731
             cands = [(st_["cx"], y) for y in range(GY) if (st_["cx"], y) in near and (within or (st_["cx"], y) == end)]
             for c in sorted(cands, key=lambda c: hops(c[1])):
-                if load[near[c]] < cap:
+                if load[near[c]] + st_["bytes"] <= share * (1 + 1e-9):
                     st_["reader"], st_["bank"] = c, near[c]
-                    load[near[c]] += 1
+                    load[near[c]] += st_["bytes"]
                     break
-        for st_ in streams:  # (the rest: the least loaded bank, nearest the rotation (2 cx + q) % banks)
-            if "bank" not in st_:
-                b0 = (2 * st_["cx"] + st_["q"]) % nbank
-                st_["bank"] = min(range(nbank), key=lambda b: (load[b], (b - b0) % nbank))
-                load[st_["bank"]] += 1
+        # the rest, largest first, to the least loaded bank (ties: nearest the rotation (2 cx + q) % banks)
+        for st_ in sorted((t for t in streams if "bank" not in t), key=lambda t: -t["bytes"]):
+            b0 = (2 * st_["cx"] + st_["q"]) % nbank
+            st_["bank"] = min(range(nbank), key=lambda b: (load[b], (b - b0) % nbank))
+            load[st_["bank"]] += st_["bytes"]
         return streams
     opt = list(mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0))
     assert len(opt) == nbank
@@ -510,9 +514,9 @@ def lin2d_prepare(
     nbank = mesh_device.dram_grid_size().x
     feed = int(os.environ.get("L2D_FEED", "0"))
     NS = NP * nblk
-    streams = w_streams(mesh_device, GX, GY, NS, feed, nbank)
     gidx = {cx: i for i, (pn, cols) in enumerate(sorted(groups.items())) for cx in cols}
     wbs = [kb * (pn // NP) * wtb for pn, _ in sorted(groups.items())]
+    streams = w_streams(mesh_device, GX, GY, NS, feed, nbank, [wbs[gidx[cx]] for cx in range(GX)])
     wbmax = max(wbs)
     # a stream's pieces sit in its bank in order, after the earlier streams of its column group in that bank
     used = {}

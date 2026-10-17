@@ -1081,3 +1081,9 @@ the rest balanced (L2D_NEAR=1, default): lat_down 103 -> 93, lat_up 95 -> 89, SE
 153 -> 141 standalone. Bank cores elsewhere in the column (L2D_NEAR_COL=1): no gain (SE gate+up 284). The W staging is
 one grid-wide CB (q1 slots overlay q0's unless a core reads both: L1 for the SE gate/up). Block: lat_down 91.3,
 lat_up 76.7, SE gate/up 270.3, SE down 143.9; traced 3483 -> 3401 us, PCC 0.99622.
+Bank balance (same day): the streams were balanced by count (3 a bank), but columns differ in width (8 / 10 tiles for
+the latents, 16 / 20 for the SE down), so the busiest bank held +7.1% bytes (lat_down 3.17-3.66 MB a bank). Now by
+bytes (largest first to the least loaded bank; a bank-core column end keeps its bank only within the even share):
+exactly even on all four shapes, the six near streams kept. Time unchanged within noise (lat_down 93.4, lat_up
+86.7-88.0, SE gate+up 271-273, SE down 138.5-139.4 us): at ~45-50 GB/s a bank no bank is saturated - the cap is the
+far readers' NoC/DRAM path (~390 GB/s), not the bank split.
