@@ -286,6 +286,8 @@ public:
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const = 0;
 
     virtual Config config() const = 0;
+    // The TRISC a compute kernel selects in ComputeConfig::processor, without copying the config.
+    virtual std::optional<ComputeProcessor> compute_processor() const { return std::nullopt; }
 
     uint64_t compute_hash() const;
 
@@ -756,6 +758,8 @@ public:
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
 
     Config config() const override { return this->config_; }
+    std::optional<ComputeProcessor> compute_processor() const override { return this->config_.processor; }
+    const ComputeConfig& compute_config() const { return this->config_; }
 
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
 

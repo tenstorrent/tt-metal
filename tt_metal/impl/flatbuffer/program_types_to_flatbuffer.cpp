@@ -5,6 +5,7 @@
 #include "flatbuffer/base_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "lightmetal/lightmetal_capture.hpp"  // For LightMetalCaptureContext
+#include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
 
 namespace tt::tt_metal {
@@ -100,6 +101,7 @@ std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
 
 std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const ComputeConfig& config) {
+    TT_FATAL(!config.processor, "ComputeConfig::processor is not supported by light-metal capture");
     // Convert defines (map) to FlatBuffer format
     std::vector<flatbuffers::Offset<flatbuffer::DefineEntry>> defines_vector;
     defines_vector.reserve(config.defines.size());

@@ -59,6 +59,7 @@ void py_module_types(nb::module_& mod) {
 
     // Bind tt_metal data types
     export_enum<tt::tt_metal::DataMovementProcessor>(mod, "DataMovementProcessor");
+    export_enum<tt::tt_metal::ComputeProcessor>(mod, "ComputeProcessor");
 
     // Manually bind NOC enum to ensure all aliases are exported
     nb::enum_<tt::tt_metal::NOC>(mod, "NOC")

@@ -134,6 +134,7 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
 }
 
 static inline ttsl::hash::hash_t hash_kernel_descriptor(const KernelDescriptor& kernel) {
+    const auto* compute = std::get_if<ComputeConfigDescriptor>(&kernel.config);
     return ttsl::hash::hash_objects_with_default_seed(
         kernel.kernel_source,
         kernel.source_type,
@@ -150,6 +151,8 @@ static inline ttsl::hash::hash_t hash_kernel_descriptor(const KernelDescriptor& 
         // and the runtime-arg schema. Runtime values do not affect the JIT build.
         experimental::blaze::hash_named_args_schema(kernel.blaze_named_args),
         kernel.config.index(),
+        // Under libc++, an unset processor and UNPACK hash alike inside kernel.config.
+        compute && compute->processor.has_value(),
         kernel.config);
 }
 

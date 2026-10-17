@@ -53,5 +53,10 @@ TEST(ProgramTypesFromFlatbuffer, SubDeviceIdVectorEmptyRoundtrip) {
     EXPECT_TRUE(roundtripped.empty());
 }
 
+TEST(ProgramTypesToFlatbuffer, ComputeProcessorIsRejected) {
+    flatbuffers::FlatBufferBuilder builder;
+    EXPECT_ANY_THROW(to_flatbuffer(builder, ComputeConfig{.processor = ComputeProcessor::MATH}));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal

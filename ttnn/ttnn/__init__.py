@@ -289,6 +289,7 @@ from ttnn.types import (
     BcastOpMath,
     BcastOpDim,
     DataMovementProcessor,
+    ComputeProcessor,
     NOC,
     NOC_MODE,
     TileDescriptor,

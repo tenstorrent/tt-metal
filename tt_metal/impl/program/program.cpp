@@ -571,6 +571,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
                         .compiler_include_paths = std::move(compiler_include_paths),
+                        .processor = compute_descriptor.processor,
                     };
                 },
             },
@@ -607,6 +608,84 @@ std::bitset<MAX_PROCESSOR_TYPES_COUNT> get_kernel_processor_set(const Kernel& ke
         set.set(processor_id);
     }
     return set;
+}
+
+// BRISC starts TRISC0-2 together, and only when TRISC0 is enabled, so compute kernels that select a
+// processor must cover all three on their cores. They must also agree on the settings the TRISCs share.
+// A MATH or PACK kernel reads the runtime arguments of the UNPACK kernel on its cores, so all its cores
+// must share one UNPACK kernel.
+// Checked on the complete program, because kernel groups are also built while kernels are being added.
+void validate_selected_compute_processors(detail::ProgramImpl& program, const Hal& hal) {
+    using SharedSettings = std::tuple<bool, bool, std::vector<UnpackToDestMode>>;
+    std::unordered_map<const Kernel*, const Kernel*> unpack_of;
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        for (const auto& kg : program.get_kernel_groups(index)) {
+            uint32_t selected_triscs = 0;
+            std::optional<SharedSettings> first_settings;
+            // kernel_ids are sorted by processor, so UNPACK comes before MATH and PACK.
+            const Kernel* unpack = nullptr;
+            for (auto kernel_id : kg->kernel_ids) {
+                const auto kernel = program.get_kernel(kernel_id);
+                const auto processor = kernel->compute_processor();
+                if (!processor) {
+                    continue;
+                }
+                selected_triscs |= 1u << enchantum::to_underlying(*processor);
+                const auto& compute = static_cast<const ComputeKernel&>(*kernel).compute_config();
+                // Trailing Default entries change nothing, so an empty and an all-Default list build alike.
+                const auto& modes = compute.unpack_to_dest_mode;
+                const auto last_mode = std::find_if(
+                    modes.rbegin(), modes.rend(), [](auto mode) { return mode != UnpackToDestMode::Default; });
+                const SharedSettings settings{
+                    compute.fp32_dest_acc_en, compute.dst_full_sync_en, {modes.begin(), last_mode.base()}};
+                if (!first_settings) {
+                    first_settings = settings;
+                }
+                TT_FATAL(
+                    settings == *first_settings,
+                    "Compute kernels with a selected processor on cores {} must have the same fp32_dest_acc_en, "
+                    "dst_full_sync_en and unpack_to_dest_mode",
+                    kg->core_ranges.str());
+                if (*processor == ComputeProcessor::UNPACK) {
+                    unpack = kernel.get();
+                } else if (unpack) {
+                    TT_FATAL(
+                        unpack_of.emplace(kernel.get(), unpack).first->second == unpack,
+                        "Compute kernel {} shares cores with more than one UNPACK kernel, including on cores {}",
+                        kernel->name(),
+                        kg->core_ranges.str());
+                }
+            }
+            TT_FATAL(
+                selected_triscs == 0 || selected_triscs == 0b111,
+                "Compute kernels with a selected processor on cores {} must cover UNPACK, MATH and PACK",
+                kg->core_ranges.str());
+        }
+    }
+}
+
+// Blaze-only experimental named args. Removal is tracked by issue #50953.
+// A MATH or PACK kernel that selects its processor reads the UNPACK kernel's runtime arguments (see
+// finalize_rt_args), so it builds with UNPACK's named runtime-argument schema.
+void share_named_runtime_args(detail::ProgramImpl& program, const Hal& hal) {
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        for (const auto& kg : program.get_kernel_groups(index)) {
+            // kernel_ids are sorted by processor, so UNPACK comes before MATH and PACK.
+            std::shared_ptr<Kernel> unpack;
+            for (auto kernel_id : kg->kernel_ids) {
+                auto kernel = program.get_kernel(kernel_id);
+                const auto processor = kernel->compute_processor();
+                if (!processor) {
+                    continue;
+                }
+                if (*processor == ComputeProcessor::UNPACK) {
+                    unpack = kernel;
+                } else {
+                    kernel->set_named_runtime_arg_namespaces(unpack->named_runtime_arg_namespaces());
+                }
+            }
+        }
+    }
 }
 
 }  // namespace
@@ -3234,6 +3313,16 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         compiled_.insert(build_env.build_key());
         Inspector::program_compile_finished(this, device, build_env.build_key());
         return;
+    }
+
+    // Only compute kernels on TENSIX select a processor. Programs without one don't build kernel groups here.
+    const uint32_t tensix_index = MetalContext::instance(device_context_id)
+                                      .hal()
+                                      .get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    if (std::ranges::any_of(
+            kernels_[tensix_index], [](const auto& entry) { return entry.second->compute_processor().has_value(); })) {
+        validate_selected_compute_processors(*this, MetalContext::instance(device_context_id).hal());
+        share_named_runtime_args(*this, MetalContext::instance(device_context_id).hal());
     }
 
     TT_FATAL(
