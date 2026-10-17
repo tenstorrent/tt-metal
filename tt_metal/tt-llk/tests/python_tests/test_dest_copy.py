@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import numpy as np
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
@@ -32,7 +33,7 @@ def test_dump_dest(formats):
     formats = formats[0]
 
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("The RISC-DEST debug window is only available on Blackhole.")
+        pytest.skip("dbg_copy_dest_tile is only available on Blackhole.")
 
     input_dimensions = [32, 32]
 
@@ -75,10 +76,11 @@ def test_dump_dest(formats):
 
 
 # Bit patterns with bit 31 set, which a converting (two's complement <->
-# sign-magnitude) view of DEST would change. The Int32 values are planted in
-# L1 by the harness' sign-magnitude Int32 packer: -1 lands as 0x80000001 and
-# -2147483647 as 0xFFFFFFFF, so both the "sign bit only" and "all ones"
-# patterns are covered. UInt32 values are planted as raw bits.
+# sign-magnitude) view of DEST would change; the second half of each list has
+# bit 31 clear as controls. The harness stores Int32 in L1 as sign-magnitude,
+# so -1 is the word 0x80000001 and -2147483647 is 0xFFFFFFFF; it cannot store
+# 0x80000000 (INT32_MIN is clipped), so that pattern is covered only by the
+# UInt32 cells, which are stored as raw bits.
 _EDGE_VALUES = {
     DataFormat.Int32: [-1, -2, -2147483647, -65536, 2147483647, 65536, 1, 0],
     DataFormat.UInt32: [
@@ -109,23 +111,31 @@ def _edge_stimuli(fmt):
     return src_A, tile_cnt_A
 
 
-def _assert_bit_exact(src_A, res_from_L1, fmt, what):
-    torch_format = format_dict[fmt]
-    expected = src_A.to(torch_format).flatten()
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
-    assert len(res_tensor) == expected.numel(), (
-        f"Result tensor length {len(res_tensor)} does not match "
-        f"source length {expected.numel()}"
+def _assert_raw_words_equal(src_A, configuration, fmt, what):
+    """Compare the result buffer with the stimuli as raw 32-bit L1 words.
+
+    The decoded result cannot do this for Int32: the harness decodes it from
+    sign-magnitude, which maps the words 0x80000000 and 0x00000000 to the same
+    value and hides which word was actually stored.
+    """
+    expected = np.frombuffer(StimuliConfig.get_packer(fmt)(src_A), dtype=np.uint32)
+    got = np.frombuffer(
+        configuration.variant_stimuli.collect_raw_result_bytes(
+            TestConfig.TENSIX_LOCATION
+        ),
+        dtype=np.uint32,
     )
-    mismatch = (expected != res_tensor).nonzero().flatten().tolist()
+    assert len(got) == len(
+        expected
+    ), f"Result buffer holds {len(got)} words, source has {len(expected)}"
+    mismatch = np.nonzero(got != expected)[0].tolist()
     detail = ", ".join(
-        f"[{i}] expected {int(expected[i])} (0x{int(expected[i]) & 0xFFFFFFFF:08X}) "
-        f"got {int(res_tensor[i])} (0x{int(res_tensor[i]) & 0xFFFFFFFF:08X})"
-        for i in mismatch[:8]
+        f"[{i}] expected 0x{expected[i]:08X} got 0x{got[i]:08X}" for i in mismatch[:8]
     )
-    assert (
-        not mismatch
-    ), f"{what} is not bit-exact; {len(mismatch)} mismatches: {detail}"
+    assert not mismatch, (
+        f"{what} is not bit-exact; {len(mismatch)} of {len(expected)} "
+        f"L1 words differ: {detail}"
+    )
 
 
 @parametrize(
@@ -140,7 +150,7 @@ def test_dest_write_then_pack(formats):
     formats = formats[0]
 
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("The RISC-DEST debug window is only available on Blackhole.")
+        pytest.skip("dbg_copy_dest_tile is only available on Blackhole.")
 
     src_A, tile_cnt_A = _edge_stimuli(formats.input_format)
 
@@ -160,9 +170,9 @@ def test_dest_write_then_pack(formats):
         dest_acc=DestAccumulation.Yes,
     )
 
-    res_from_L1 = configuration.run().result
-    _assert_bit_exact(
-        src_A, res_from_L1, formats.output_format, "RISC-V DEST write -> pack"
+    configuration.run()
+    _assert_raw_words_equal(
+        src_A, configuration, formats.output_format, "RISC-V DEST write -> pack"
     )
 
 
@@ -178,7 +188,7 @@ def test_unpack_then_dest_read(formats):
     formats = formats[0]
 
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("The RISC-DEST debug window is only available on Blackhole.")
+        pytest.skip("dbg_copy_dest_tile is only available on Blackhole.")
 
     src_A, tile_cnt_A = _edge_stimuli(formats.input_format)
 
@@ -199,7 +209,7 @@ def test_unpack_then_dest_read(formats):
         unpack_to_dest=True,
     )
 
-    res_from_L1 = configuration.run().result
-    _assert_bit_exact(
-        src_A, res_from_L1, formats.output_format, "unpack -> RISC-V DEST read"
+    configuration.run()
+    _assert_raw_words_equal(
+        src_A, configuration, formats.output_format, "unpack -> RISC-V DEST read"
     )
