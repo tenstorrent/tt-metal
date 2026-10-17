@@ -29,7 +29,8 @@ Subcommands
                                   atomic claim of a group (mkdir on the shared dir): marks its planned
                                   items in-progress with --owner; exit 1 and TAKEN if another worker has it
   release <file> <group> --claims DIR
-                                  give a claimed group back (items without a PR return to planned)
+                                  give a claimed group back (items without a PR return to planned, an
+                                  issue already filed stays linked for the next owner)
   reconcile <file> [--repo o/r]   GitHub vs file: items with a PR/issue carrying `audit-key: <key>`
                                   but no mark → marked; marked PRs closed unmerged → reported
   sync  <file> [--sync-cmd CMD] [-m MSG]
@@ -48,6 +49,7 @@ directory (`--claims`, normally `$MASTER_ISSUE_DIR/<run>/claims`) is the arbiter
 POSIX filesystems including network mounts, so two workers can never hold one group. Locks on the file
 use the same mkdir primitive (`<file>.lock.d`), with stale breaking after LOCK_STALE_S.
 """
+
 import argparse
 import json
 import os
@@ -80,6 +82,12 @@ ARCH_RE = re.compile(
 )  # architecture names are whatever the harness takes
 LOCK_STALE_S = int(os.environ.get("FINDINGS_LOCK_STALE_S", "900"))
 LOCK_WAIT_S = int(os.environ.get("FINDINGS_LOCK_WAIT_S", "600"))
+SYNC_STALE_S = int(
+    os.environ.get("FINDINGS_SYNC_STALE_S", "7200")
+)  # a pack-and-push can take >15 min
+AUDIT_KEY_RE = re.compile(
+    r"audit-key:\s*`?([^\s`#]+:\d+(?:#\d+)?)`?"
+)  # keeps the #n of same-line items
 
 
 def now():
@@ -217,11 +225,18 @@ class DirLock:
                         who = open(os.path.join(self.dir, "owner")).read().strip()
                     except OSError:
                         who = "?"
+                    # rename first: of several contenders that all saw it stale, exactly one rename succeeds
+                    # and only that one removes it; nobody can remove a lock a winner has just re-created
+                    grave = f"{self.dir}.stale.{os.getpid()}.{int(time.time())}"
+                    try:
+                        os.rename(self.dir, grave)
+                    except OSError:
+                        continue
                     print(
                         f"breaking stale lock {self.dir} ({int(age)}s old, {who})",
                         file=sys.stderr,
                     )
-                    shutil.rmtree(self.dir, ignore_errors=True)
+                    shutil.rmtree(grave, ignore_errors=True)
                     continue
                 if time.time() > deadline:
                     sys.exit(f"could not take {self.dir} within {self.wait}s")
@@ -239,7 +254,9 @@ def lock(path):
 
 
 def sync_lock(path):
-    return DirLock(os.path.abspath(path) + ".sync.lock.d", wait=3600)
+    return DirLock(
+        os.path.abspath(path) + ".sync.lock.d", stale=SYNC_STALE_S, wait=3600
+    )
 
 
 # ------------------------------------------------------------------ MD files
@@ -552,9 +569,10 @@ def cmd_release(a):
             for r in recs
             if not r.get("duplicate_of")
             and disp(r).get("group") == a.group
-            and state_of(r) == "in-progress"
+            and state_of(r) in ("in-progress", "issue")
             and not disp(r).get("pr")
         }
+        # an issue already filed stays linked (the next owner uses it); only the ownership is given back
         hit = apply_mark(recs, keys, "planned", {"note": "released"})
         for r in recs:
             d = disp(r)
@@ -585,7 +603,7 @@ def cmd_reconcile(a):
     ).stdout.splitlines():
         o = json.loads(ln)
         items[o["key"]] = o
-    tok = re.compile(r"audit-key:\s*`?([^\s`]+:\d+)`?")
+    tok = AUDIT_KEY_RE
     prs = json.loads(
         gh(
             "pr",

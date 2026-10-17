@@ -254,9 +254,15 @@ def test_claim_is_exclusive_and_release_returns(ffile, tmp_path):
     assert allv[A10]["state"] == "in-progress" and allv[A10]["owner"] == "wh"
     # a claimed/started group is no longer offered
     assert "g-a" not in [g["group"] for g in nxt(ffile, "bh", "blackhole", claims)]
+    # an item that already got its issue goes back too, keeping the issue link
+    run("mark", ffile, A10, "--state", "issue", "--issue", "https://g/7")
     run("release", ffile, "g-a", "--claims", claims)
     allv = {i["key"]: i for i in listed(ffile, all_=True)}
     assert allv[A10]["state"] == "planned" and allv[A10]["owner"] is None
+    assert allv[A10]["disposition"]["issue"] == "https://g/7"
+    assert [g["group"] for g in nxt(ffile, "bh", "blackhole", claims)].count(
+        "g-a"
+    ) == 1  # offered again
     assert not os.path.exists(os.path.join(claims, "g-a"))
     # and can be claimed again
     assert run(
@@ -375,3 +381,46 @@ def test_sync_pulls_before_push(tmp_path):
         len(git(a, "log", "--oneline", "origin/main").splitlines()) == 3
     )  # linear history
     assert "no changes" in run("sync", f).stdout
+
+
+def test_audit_key_regex_keeps_same_line_suffix():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("findings", FP)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    body = "x\naudit-key: tt_metal/a.h:10#2\naudit-key: `tt_metal/b.h:5`\naudit-key: tt_metal/c.h:7#1 tail"
+    assert m.AUDIT_KEY_RE.findall(body) == [
+        "tt_metal/a.h:10#2",
+        "tt_metal/b.h:5",
+        "tt_metal/c.h:7#1",
+    ]
+
+
+def test_stale_lock_break_has_one_winner(ffile):
+    # several contenders all see a stale lock; exactly one breaks it, and no mark is lost
+    lockd = ffile + ".lock.d"
+    os.mkdir(lockd)
+    os.utime(lockd, (1, 1))
+    keys = [i["key"] for i in listed(ffile)]
+    with ThreadPoolExecutor(5) as ex:
+        rs = list(
+            ex.map(
+                lambda k: run(
+                    "mark",
+                    ffile,
+                    k,
+                    "--state",
+                    "skipped",
+                    "--note",
+                    k,
+                    env={"FINDINGS_LOCK_WAIT_S": "20"},
+                ),
+                keys,
+            )
+        )
+    assert sum("breaking stale lock" in r.stderr for r in rs) == 1
+    allv = {i["key"]: i for i in listed(ffile, all_=True)}
+    for k in keys:
+        assert allv[k]["state"] == "skipped" and allv[k]["disposition"]["note"] == k
+    assert not os.path.exists(lockd)
