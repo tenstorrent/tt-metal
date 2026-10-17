@@ -397,6 +397,27 @@
   "started": "2026-10-17T08:28:58",
   "status": "PASS"
  },
+ "C.dec_candidate.moe_add": {
+  "attempts": 0,
+  "duration_s": 40.4,
+  "history": [
+   {
+    "s": 40.4,
+    "status": "PASS",
+    "t": "2026-10-17T11:02:41"
+   }
+  ],
+  "last_run": "2026-10-17T11:02:41",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.dec_candidate.moe_add.log",
+  "metrics": {
+   "err_moe_add_L20": 0.002336924197152257,
+   "err_moe_add_L20_limit": 0.7847767472267151
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T11:02:00",
+  "status": "PASS"
+ },
  "C.dec_candidate.q_a": {
   "attempts": 0,
   "duration_s": 32.8,
