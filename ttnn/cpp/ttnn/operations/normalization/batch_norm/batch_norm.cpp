@@ -42,9 +42,8 @@ Tensor batch_norm(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     TT_FATAL(
-        input.logical_shape().rank() >= 4,
-        "batch_norm not supported for tensors with rank < 4. (rank={})",
-        input.logical_shape().rank(),
+        input.logical_shape().rank() == 4,
+        "batch_norm only supported for tensors with rank 4 (got rank={}).",
         input.logical_shape().rank());
 
     // output must have the same dtype as input
@@ -92,6 +91,9 @@ Tensor batch_norm(
 
     // For 0V tensors
     if (input.logical_volume() == 0) [[unlikely]] {
+        if (output.has_value()) {
+            return output.value();
+        }
         return ttnn::clone(
             input,
             /*dtype=*/std::nullopt,
