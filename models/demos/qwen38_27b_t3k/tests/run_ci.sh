@@ -21,7 +21,13 @@ stop_server() {
     wait "$server_pid" 2>/dev/null || true
     server_pid=
 }
-trap stop_server EXIT
+collect_server_logs() {
+    # test_logs feeds the AI summary but is not uploaded, so the logs have to be copied
+    # where the artifacts are collected. They carry no request or response content.
+    mkdir -p "$results/server_logs"
+    cp "$logs"/qwen38_server_*.log "$results/server_logs/" 2>/dev/null || true
+}
+trap 'stop_server; collect_server_logs' EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
