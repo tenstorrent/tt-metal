@@ -215,7 +215,7 @@ void enqueue_mesh_workload(
                 [&](const Tensor& t) { spec_copies.emplace_back(t.tensor_spec()); }, tensor_args);
         }
 
-        auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(mesh_device);
+        auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(*mesh_device);
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
             *mesh_device, workload, runtime_id, operation_name, std::move(spec_copies), trace_id);
     }
