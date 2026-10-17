@@ -918,7 +918,7 @@ def test_topk_multicore_values_beyond_first_tile_row(num_rows, largest, device):
 # (input[index] == value, in-range, unique), never index-order equality.
 # ---------------------------------------------------------------------------
 
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 
 def run_topk_large_k_routed_test(N, C, H, W, k, device):
