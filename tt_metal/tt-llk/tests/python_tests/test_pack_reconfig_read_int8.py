@@ -101,6 +101,8 @@ _BF16_OUT = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 
 @parametrize(formats=[_UINT8_OUT, _BF16_OUT])
 def test_pack_reconfig_read_int8(formats):
+    # A single parametrize axis arrives as a 1-tuple.
+    (formats,) = formats
     input_dimensions = _INPUT_DIMENSIONS
     int8_out = formats.output_format == DataFormat.UInt8
     spec = StimuliSpec(
