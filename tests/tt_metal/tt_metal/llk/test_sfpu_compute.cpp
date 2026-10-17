@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <random>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -19,6 +20,7 @@
 #include <optional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <variant>
 #include <vector>
@@ -2672,6 +2674,94 @@ TEST_F(LLKBlackholeSingleCardFixture, SfpuExp21fRetainedCoefficients) {
             }
         }
     }
+}
+
+namespace {
+
+constexpr std::string_view kApproxScaleGuard = "never reads the runtime scale";
+constexpr std::string_view kInitScaleGuard = "must be a positive normal number";
+// bf16 -1.0 as exp_tile's runtime scale, and the same value as exp_tile_init's FP32-bit scale.
+const std::string kBf16MinusOne = "0xBF80";
+const std::string kFp32MinusOne = "0xBF800000";
+// bf16 1.0 left unshifted, which exp_tile_init reads as an FP32 denormal.
+const std::string kBf16OneUnshifted = "0x3F80";
+// FP32 +inf as exp_tile_init's scale.
+const std::string kFp32PlusInf = "0x7F800000";
+
+// Builds a single-core program whose compute kernel runs `chain` on one tile and compiles it
+// (never launches it). Returns the build failure's message, which carries the compiler log, or
+// an empty string when the kernel compiled.
+std::string compile_sfpu_chain(distributed::MeshDevice& device, const std::string& chain) {
+    Program program = CreateProgram();
+    const CoreCoord core{0, 0};
+    const auto tile_bytes = static_cast<uint32_t>(tt::tile_size(tt::DataFormat::Float16_b));
+    for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_16}) {
+        CreateCircularBuffer(
+            program,
+            core,
+            CircularBufferConfig(tile_bytes, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, tile_bytes));
+    }
+    // 32-bit Dest: on Wormhole the bf16 accurate exp lowers exp_tile's runtime scale to an SFPMULI
+    // immediate and fails to build when that argument is not constant-folded, so the non-approximate
+    // control below takes the sfpi path instead.
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp",
+        core,
+        ComputeConfig{
+            .fp32_dest_acc_en = true,
+            .compile_args = {1u /*per_core_block_cnt*/, 1u /*per_core_block_dim*/},
+            .defines = {{"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", chain}}});
+    try {
+        program.impl().compile(&device);
+    } catch (const std::exception& e) {
+        return e.what();
+    }
+    return {};
+}
+
+// The chain must fail to build, and for `guard`'s reason (not some unrelated compile error).
+void expect_build_rejected(distributed::MeshDevice& device, const std::string& chain, std::string_view guard) {
+    SCOPED_TRACE(chain);
+    const std::string failure = compile_sfpu_chain(device, chain);
+    EXPECT_FALSE(failure.empty()) << "compiled; this chain must be rejected by the guard '" << guard << "'";
+    EXPECT_NE(failure.find(guard), std::string::npos) << "the build failed for a reason other than '" << guard << "':\n"
+                                                      << failure;
+}
+
+}  // namespace
+
+TEST_F(LLKMeshDeviceSingleCardFixture, SfpuExpApproxRejectsRuntimeScale) {
+    // Compile-time contract test; nothing runs on the device. The approximate exp kernel scales
+    // by exp_tile_init's template scale and never reads exp_tile's runtime scale, so
+    // exp_tile<approx = true, scale_en = true> must fail to compile with the kernel's guard rather
+    // than silently compute exp(x) for a caller that asked for exp(scale * x); and the template
+    // scale, which the ClampToNegative init divides the input clamp by, must be positive.
+    if (this->device().arch() == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar exp rejects scale_en in every mode; this test pins the Wormhole/Blackhole contract";
+    }
+    auto& device = this->device();
+
+    // Controls: the supported combinations build, so a rejection below is the guard's doing.
+    EXPECT_EQ(compile_sfpu_chain(device, "exp_tile_init<true>(); exp_tile<true, false>(0);"), "");
+    EXPECT_EQ(
+        compile_sfpu_chain(
+            device, "exp_tile_init<false>(); exp_tile<false, true>(0, VectorMode::RC, " + kBf16MinusOne + ");"),
+        "");
+
+    // The approximate kernel ignores exp_tile's runtime scale, so asking for one is rejected.
+    expect_build_rejected(
+        device,
+        "exp_tile_init<true>(); exp_tile<true, true>(0, VectorMode::RC, " + kBf16MinusOne + ");",
+        kApproxScaleGuard);
+    // The ClampToNegative init divides the -88.5 clamp by the template scale: a negative scale, an
+    // unshifted bf16 scale (an FP32 denormal) and an infinite scale are all rejected.
+    expect_build_rejected(
+        device, "exp_tile_init<true, " + kFp32MinusOne + ">(); exp_tile<true, false>(0);", kInitScaleGuard);
+    expect_build_rejected(
+        device, "exp_tile_init<true, " + kBf16OneUnshifted + ">(); exp_tile<true, false>(0);", kInitScaleGuard);
+    expect_build_rejected(
+        device, "exp_tile_init<true, " + kFp32PlusInf + ">(); exp_tile<true, false>(0);", kInitScaleGuard);
 }
 
 void run_quasar_sfpu_unpack_to_dest_fp32(

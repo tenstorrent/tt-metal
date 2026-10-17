@@ -3121,9 +3121,10 @@ class UnarySFPUGolden:
         return torch.exp2(input_tensor).item()
 
     def _exp_with_base(self, x):
-        # Matches the dispatch: calculate_exponential with SCALE_EN and a bf16
-        # scale of EXP_WITH_BASE_SCALE (0.5), i.e. exp(0.5 * x). 0.5 is exact in bf16, so
-        # the only error versus this golden is the shared exp approximation itself.
+        # Matches the dispatch: exp(0.5 * x), with the bf16 scale EXP_WITH_BASE_SCALE
+        # (0.5) applied through calculate_exponential's SCALE_EN path in accurate mode and
+        # baked into exp_init's constants in approximate mode. 0.5 is exact in bf16, so the
+        # only error versus this golden is the shared exp approximation itself.
         input_tensor = self._work_tensor(x)
         return torch.exp(EXP_WITH_BASE_SCALE * input_tensor).item()
 
