@@ -108,8 +108,8 @@ components:
     _reshard), models/demos/deepseek_v3_d_p/tt/mla/v4_attention_base.py (_q_heads, _unrope, _o_proj, sink pre-division)
   searched:
   - TtSWA (dense SDPA, band mask over [carry | chunk]) reads chunk + 128 keys per query; sparse_sdpa reads 128 + 512
-  - 'K-31: sparse_sdpa keeps bf16 flash state; ttnn.bringup.sparse_sdpa(high_precision=True) is fp32 but refuses attention_sink
-    (ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.cpp:132): the attention task extends the fork with the sink
+  - 'K-31: sparse_sdpa keeps bf16 flash state; ttnn.bringup.sparse_sdpa(high_precision=True) is fp32 and takes attention_sink
+    (the fork was extended with it; sdpa CHANGELOG "attention_sink under high_precision"; K-31 corrected 2026-10-16)
     under high_precision (option, default unchanged)'
   - 'K-27: the dense SDPA sink uses a bf16-truncated scale; check the sparse path''s sink arithmetic'
   - 'sparse_sdpa needs H % 32 == 0 and reads one ROW_MAJOR tensor: 16 heads per chip on 4x4 -> head->seq all_to_all (TtCSA.needs_head_to_seq_reshard);
@@ -319,8 +319,8 @@ components:
     _reshard), models/demos/deepseek_v3_d_p/tt/mla/v4_attention_base.py (_q_heads, _unrope, _o_proj, sink pre-division)
   searched:
   - TtSWA (dense SDPA, band mask over [carry | chunk]) reads chunk + 128 keys per query; sparse_sdpa reads 128 + 512
-  - 'K-31: sparse_sdpa keeps bf16 flash state; ttnn.bringup.sparse_sdpa(high_precision=True) is fp32 but refuses attention_sink
-    (ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.cpp:132): the attention task extends the fork with the sink
+  - 'K-31: sparse_sdpa keeps bf16 flash state; ttnn.bringup.sparse_sdpa(high_precision=True) is fp32 and takes attention_sink
+    (the fork was extended with it; sdpa CHANGELOG "attention_sink under high_precision"; K-31 corrected 2026-10-16)
     under high_precision (option, default unchanged)'
   - 'K-27: the dense SDPA sink uses a bf16-truncated scale; check the sparse path''s sink arithmetic'
   - 'sparse_sdpa needs H % 32 == 0 and reads one ROW_MAJOR tensor: 16 heads per chip on 4x4 -> head->seq all_to_all (TtCSA.needs_head_to_seq_reshard);
@@ -524,8 +524,8 @@ components:
     _reshard), models/demos/deepseek_v3_d_p/tt/mla/v4_attention_base.py (_q_heads, _unrope, _o_proj, sink pre-division)
   searched:
   - TtSWA (dense SDPA, band mask over [carry | chunk]) reads chunk + 128 keys per query; sparse_sdpa reads 128 + 512
-  - 'K-31: sparse_sdpa keeps bf16 flash state; ttnn.bringup.sparse_sdpa(high_precision=True) is fp32 but refuses attention_sink
-    (ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.cpp:132): the attention task extends the fork with the sink
+  - 'K-31: sparse_sdpa keeps bf16 flash state; ttnn.bringup.sparse_sdpa(high_precision=True) is fp32 and takes attention_sink
+    (the fork was extended with it; sdpa CHANGELOG "attention_sink under high_precision"; K-31 corrected 2026-10-16)
     under high_precision (option, default unchanged)'
   - 'K-27: the dense SDPA sink uses a bf16-truncated scale; check the sparse path''s sink arithmetic'
   - 'sparse_sdpa needs H % 32 == 0 and reads one ROW_MAJOR tensor: 16 heads per chip on 4x4 -> head->seq all_to_all (TtCSA.needs_head_to_seq_reshard);
@@ -758,8 +758,8 @@ components:
     _reshard), models/demos/deepseek_v3_d_p/tt/mla/v4_attention_base.py (_q_heads, _unrope, _o_proj, sink pre-division)
   searched:
   - TtSWA (dense SDPA, band mask over [carry | chunk]) reads chunk + 128 keys per query; sparse_sdpa reads 128 + 512
-  - 'K-31: sparse_sdpa keeps bf16 flash state; ttnn.bringup.sparse_sdpa(high_precision=True) is fp32 but refuses attention_sink
-    (ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.cpp:132): the attention task extends the fork with the sink
+  - 'K-31: sparse_sdpa keeps bf16 flash state; ttnn.bringup.sparse_sdpa(high_precision=True) is fp32 and takes attention_sink
+    (the fork was extended with it; sdpa CHANGELOG "attention_sink under high_precision"; K-31 corrected 2026-10-16)
     under high_precision (option, default unchanged)'
   - 'K-27: the dense SDPA sink uses a bf16-truncated scale; check the sparse path''s sink arithmetic'
   - 'sparse_sdpa needs H % 32 == 0 and reads one ROW_MAJOR tensor: 16 heads per chip on 4x4 -> head->seq all_to_all (TtCSA.needs_head_to_seq_reshard);
@@ -917,8 +917,8 @@ components:
     _reshard), models/demos/deepseek_v3_d_p/tt/mla/v4_attention_base.py (_q_heads, _unrope, _o_proj, sink pre-division)
   searched:
   - TtSWA (dense SDPA, band mask over [carry | chunk]) reads chunk + 128 keys per query; sparse_sdpa reads 128 + 512
-  - 'K-31: sparse_sdpa keeps bf16 flash state; ttnn.bringup.sparse_sdpa(high_precision=True) is fp32 but refuses attention_sink
-    (ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.cpp:132): the attention task extends the fork with the sink
+  - 'K-31: sparse_sdpa keeps bf16 flash state; ttnn.bringup.sparse_sdpa(high_precision=True) is fp32 and takes attention_sink
+    (the fork was extended with it; sdpa CHANGELOG "attention_sink under high_precision"; K-31 corrected 2026-10-16)
     under high_precision (option, default unchanged)'
   - 'K-27: the dense SDPA sink uses a bf16-truncated scale; check the sparse path''s sink arithmetic'
   - 'sparse_sdpa needs H % 32 == 0 and reads one ROW_MAJOR tensor: 16 heads per chip on 4x4 -> head->seq all_to_all (TtCSA.needs_head_to_seq_reshard);
@@ -1124,8 +1124,8 @@ components:
     _reshard), models/demos/deepseek_v3_d_p/tt/mla/v4_attention_base.py (_q_heads, _unrope, _o_proj, sink pre-division)
   searched:
   - TtSWA (dense SDPA, band mask over [carry | chunk]) reads chunk + 128 keys per query; sparse_sdpa reads 128 + 512
-  - 'K-31: sparse_sdpa keeps bf16 flash state; ttnn.bringup.sparse_sdpa(high_precision=True) is fp32 but refuses attention_sink
-    (ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.cpp:132): the attention task extends the fork with the sink
+  - 'K-31: sparse_sdpa keeps bf16 flash state; ttnn.bringup.sparse_sdpa(high_precision=True) is fp32 and takes attention_sink
+    (the fork was extended with it; sdpa CHANGELOG "attention_sink under high_precision"; K-31 corrected 2026-10-16)
     under high_precision (option, default unchanged)'
   - 'K-27: the dense SDPA sink uses a bf16-truncated scale; check the sparse path''s sink arithmetic'
   - 'sparse_sdpa needs H % 32 == 0 and reads one ROW_MAJOR tensor: 16 heads per chip on 4x4 -> head->seq all_to_all (TtCSA.needs_head_to_seq_reshard);
@@ -1308,8 +1308,8 @@ components:
     _reshard), models/demos/deepseek_v3_d_p/tt/mla/v4_attention_base.py (_q_heads, _unrope, _o_proj, sink pre-division)
   searched:
   - TtSWA (dense SDPA, band mask over [carry | chunk]) reads chunk + 128 keys per query; sparse_sdpa reads 128 + 512
-  - 'K-31: sparse_sdpa keeps bf16 flash state; ttnn.bringup.sparse_sdpa(high_precision=True) is fp32 but refuses attention_sink
-    (ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.cpp:132): the attention task extends the fork with the sink
+  - 'K-31: sparse_sdpa keeps bf16 flash state; ttnn.bringup.sparse_sdpa(high_precision=True) is fp32 and takes attention_sink
+    (the fork was extended with it; sdpa CHANGELOG "attention_sink under high_precision"; K-31 corrected 2026-10-16)
     under high_precision (option, default unchanged)'
   - 'K-27: the dense SDPA sink uses a bf16-truncated scale; check the sparse path''s sink arithmetic'
   - 'sparse_sdpa needs H % 32 == 0 and reads one ROW_MAJOR tensor: 16 heads per chip on 4x4 -> head->seq all_to_all (TtCSA.needs_head_to_seq_reshard);
@@ -1469,8 +1469,8 @@ components:
     _reshard), models/demos/deepseek_v3_d_p/tt/mla/v4_attention_base.py (_q_heads, _unrope, _o_proj, sink pre-division)
   searched:
   - TtSWA (dense SDPA, band mask over [carry | chunk]) reads chunk + 128 keys per query; sparse_sdpa reads 128 + 512
-  - 'K-31: sparse_sdpa keeps bf16 flash state; ttnn.bringup.sparse_sdpa(high_precision=True) is fp32 but refuses attention_sink
-    (ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.cpp:132): the attention task extends the fork with the sink
+  - 'K-31: sparse_sdpa keeps bf16 flash state; ttnn.bringup.sparse_sdpa(high_precision=True) is fp32 and takes attention_sink
+    (the fork was extended with it; sdpa CHANGELOG "attention_sink under high_precision"; K-31 corrected 2026-10-16)
     under high_precision (option, default unchanged)'
   - 'K-27: the dense SDPA sink uses a bf16-truncated scale; check the sparse path''s sink arithmetic'
   - 'sparse_sdpa needs H % 32 == 0 and reads one ROW_MAJOR tensor: 16 heads per chip on 4x4 -> head->seq all_to_all (TtCSA.needs_head_to_seq_reshard);
