@@ -312,7 +312,8 @@
 <span class="target" id="namespaceckernel_1a34467f46da4221ff3a2820ff1baec122"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">tile_regs_acquire</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel17tile_regs_acquireEv" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Acquire an exclusive lock on the DST register for the MATH thread. This register is an array of 16 tiles of 32x32 elements each. This is a blocking function, i.e. this function will wait until the lock is acquired. </p>
+<p>Acquire an exclusive lock on the DST register for the MATH thread. This register is an array of 16 tiles of 32x32 elements each. This is a blocking function, i.e. this function will wait until the lock is acquired.</p>
+<p>NOTE: On Quasar with unpack-to-dest the UNPACK thread also opens its DST section here. Every unpack-to-dest copy_tile / copy_block of the section must come after this call and before tile_regs_commit, each at its own DST index; MATH does not start on the section before that commit. </p>
 </dd>
 </dl>
 
@@ -330,7 +331,8 @@
 <span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">is_fp32_dest_acc_en</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">DST_ACCUM_MODE</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1aa50c8cdfef990766537dfcbd2c3aba3c"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">tile_regs_commit</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bEN7ckernel16tile_regs_commitEvv" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Release lock on DST register by MATH thread. The lock had to be previously acquired with tile_regs_acquire. </p>
+<p>Release lock on DST register by MATH thread. The lock had to be previously acquired with tile_regs_acquire.</p>
+<p>NOTE: On Quasar with unpack-to-dest the UNPACK thread also closes its DST section here, handing it to MATH. </p>
 </dd>
 </dl>
 
