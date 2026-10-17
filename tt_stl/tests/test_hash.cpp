@@ -7,6 +7,7 @@
 #include <tt_stl/span.hpp>
 
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstdint>
 #include <iostream>
@@ -80,6 +81,24 @@ TEST(HashCollisionTest, CPU_Deterministic) {
     EXPECT_EQ(
         hash_objects_with_default_seed(uint32_t{42}, uint32_t{7}),
         hash_objects_with_default_seed(uint32_t{42}, uint32_t{7}));
+}
+
+// --- Floating point keys by bit pattern ------------------------------------------------------
+
+TEST(HashCollisionTest, CPU_SignedZerosDoNotCollide) {
+    // std::hash gives -0.0 and 0.0 one value; a program keyed on fill(-0.0) must not serve fill(0.0).
+    EXPECT_NE(hash_objects_with_default_seed(0.0f), hash_objects_with_default_seed(-0.0f));
+    EXPECT_NE(hash_objects_with_default_seed(0.0), hash_objects_with_default_seed(-0.0));
+    EXPECT_NE(
+        hash_objects_with_default_seed(std::vector<float>{0.0f, 1.0f}),
+        hash_objects_with_default_seed(std::vector<float>{-0.0f, 1.0f}));
+}
+
+TEST(HashCollisionTest, CPU_NaNPayloadsDoNotCollide) {
+    const float quiet = std::bit_cast<float>(uint32_t{0x7fc00000});
+    const float payload = std::bit_cast<float>(uint32_t{0x7fc00001});
+    EXPECT_EQ(hash_objects_with_default_seed(quiet), hash_objects_with_default_seed(quiet));
+    EXPECT_NE(hash_objects_with_default_seed(quiet), hash_objects_with_default_seed(payload));
 }
 
 // --- Quality sweep: no collisions over realistic small 4-D shapes --------------------------

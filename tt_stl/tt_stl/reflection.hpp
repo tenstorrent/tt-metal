@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <experimental/type_traits>
 #include <map>
 #include <memory>
@@ -1380,6 +1381,15 @@ inline hash_t hash_object(const T& object) noexcept {
             return 0;
         }
         return hash_object(*object);
+    } else if constexpr (std::is_floating_point_v<T>) {
+        // By bit pattern, not std::hash: std::hash gives -0.0 and 0.0 one value, and an op parameter of
+        // either sign must key its own program. Distinct NaN payloads get distinct keys too.
+        static_assert(sizeof(T) == sizeof(std::uint32_t) || sizeof(T) == sizeof(std::uint64_t));
+        using bits_t = std::conditional_t<sizeof(T) == sizeof(std::uint32_t), std::uint32_t, std::uint64_t>;
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing floating point {} by bit pattern: {}\n", get_type_name<T>(), object);
+        }
+        return std::hash<bits_t>{}(std::bit_cast<bits_t>(object));
     } else if constexpr (detail::is_std_hashable_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing {} using std::hash: {}\n", get_type_name<T>(), object);
