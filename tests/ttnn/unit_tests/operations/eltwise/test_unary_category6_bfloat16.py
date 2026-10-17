@@ -6,7 +6,7 @@ import math
 import torch
 import pytest
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp, assert_with_pcc
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits,
     generate_bfloat16_bits_in_range,
@@ -49,7 +49,9 @@ Accuracy criteria
       scalar-parameter conversion (see quirks below), which is what keeps
       them exact even for bounds that aren't representable in bf16.
   ULP-gated: round (<=1), selu (<=1), sigmoid Accurate (<=2),
-      rdiv None mode (<=3), unary_chain([SQUARE, SQRT]) (<=2).
+      rdiv None mode (<=3; exact on Wormhole for |value| == 1, where the
+      result is the correctly rounded bf16 reciprocal),
+      unary_chain([SQUARE, SQRT]) (<=2).
   PCC-gated: tanh, sigmoid_accurate, xielu, softplus, logit, polygamma,
       rdiv floor/trunc, sigmoid AccurateWithFastExp/FastApproximate. The
       approximate modes and the integer-valued floor/trunc results can move
@@ -100,10 +102,13 @@ read off the failing elements.
     sigmoid_accurate(fast_and_approximate_mode=True), whose full-grid PCC it
     drags to 0.07; excluding x >= 174 gives 0.99996. tanh's fast mode does
     not use this path and needs no exclusion.
-  - rdiv(rounding_mode=None) is value * reciprocal(x), so once |x| >= 1/tiny
+  - rdiv(rounding_mode=None) is value * reciprocal(x), so once |x| > 1/tiny
     the reciprocal underflows and is flushed to zero before the multiply,
     zeroing the product regardless of value (mirrors softsign in
-    test_unary_category4_bfloat16.py).
+    test_unary_category4_bfloat16.py). |x| == 1/tiny = 2^126 is the
+    boundary: its reciprocal 2^-126 is the smallest normal bf16, which
+    Wormhole keeps (test_rdiv_reciprocal_underflow_boundary); other
+    architectures flush it like the rest of the band.
   - selu/sigmoid/tanh hit a flush-to-zero boundary near the smallest normal
     where the device and a float64 reference legitimately round to opposite
     sides. The mask keys off the *expected* side only (see _ftz_boundary_mask).
@@ -656,7 +661,46 @@ def test_rdiv_op_none_mode(device, value):
 
     safe = _rdiv_safe_mask(input_tensor)
     _assert_excluded_region(~safe, f"rdiv({value}) domain", max_fraction=0.05)
-    assert_with_ulp(expected_result=golden[safe], actual_result=result[safe], ulp_threshold=3, allow_nonfinite=True)
+    # With |value| == 1 the product is the reciprocal itself, and Wormhole's bf16
+    # path rounds that correctly (same gate as test_reciprocal in category 1).
+    # Other values round twice (reciprocal, then the product).
+    ulp_threshold = 0 if device.arch() == ttnn.device.Arch.WORMHOLE_B0 and abs(value) == 1.0 else 3
+    assert_with_ulp(
+        expected_result=golden[safe], actual_result=result[safe], ulp_threshold=ulp_threshold, allow_nonfinite=True
+    )
+
+
+@pytest.mark.parametrize("value", [1.0, -1.0])
+@pytest.mark.parametrize(
+    "low, high",
+    [
+        (_RDIV_RECIP_FTZ_THRESHOLD, MAX_BF16),
+        (-MAX_BF16, -_RDIV_RECIP_FTZ_THRESHOLD),
+    ],
+    ids=["positive", "negative"],
+)
+def test_rdiv_reciprocal_underflow_boundary(device, low, high, value):
+    """value / x for |value| == 1 over the reciprocal-FTZ band (|x| >= 2^126,
+    the same constant as RECIPROCAL_BOUNDARY_INPUT in category 1), mirroring
+    test_unary_category1_bfloat16.py::test_reciprocal_underflow_boundary.
+    Wormhole rounds the bf16 reciprocal to bf16 before the power-of-two
+    scaling, so x = +/-2^126 gives the normal +/-2^-126 (times value) instead
+    of a just-below-1 intermediate that scaling flushes to zero; every larger
+    |x| has a subnormal reciprocal and is flushed to +0. Other architectures
+    retain their existing +0 result at the boundary. Every exact result in
+    this range is nonzero and bf16-representable after rounding.
+    """
+    input_tensor = generate_bfloat16_bits_in_range(low, high)
+
+    golden = ttnn.get_golden_function(ttnn.rdiv)(input_tensor, value, rounding_mode=None, device=device)
+    result = ttnn.to_torch(ttnn.rdiv(to_tt_tensor(input_tensor, device), value, rounding_mode=None))
+
+    assert (golden != 0).all(), "expected every result in this range to be representable"
+    expected = torch.zeros_like(result)
+    if device.arch() == ttnn.device.Arch.WORMHOLE_B0:
+        boundary = input_tensor.abs() == _RDIV_RECIP_FTZ_THRESHOLD
+        expected[boundary] = golden[boundary]
+    assert_equal(expected, result)
 
 
 @pytest.mark.parametrize("value", [1.0, -1.0, 2.5, 100.0])
