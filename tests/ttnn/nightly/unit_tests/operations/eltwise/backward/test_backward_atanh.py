@@ -40,3 +40,20 @@ def test_bw_atanh_zero_grad(device):
     got = ttnn.to_torch(got).float()
     regular = x.abs() != 1
     assert torch.equal(got[regular], torch.zeros_like(got[regular])), got[regular].unique()
+
+
+def test_bw_atanh_negative_grad_overflow(device):
+    # Verifies that negative gradient on |x| > 1 preserves +inf on overflow (#54695)
+    grad_data = torch.tensor([-1e38], dtype=torch.bfloat16).reshape(1, 1, 1, 1)
+    in_data = torch.tensor([1.0078125], dtype=torch.bfloat16).reshape(1, 1, 1, 1)
+
+    golden_function = ttnn.get_golden_function(ttnn.atanh_bw)
+    golden_tensor = golden_function(grad_data, in_data)
+
+    grad_tensor = ttnn.from_torch(grad_data, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    tt_out = ttnn.atanh_bw(grad_tensor, input_tensor)
+    res = ttnn.to_torch(tt_out[0])
+    assert torch.equal(res, golden_tensor[0])
+
