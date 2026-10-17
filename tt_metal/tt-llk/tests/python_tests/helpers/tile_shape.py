@@ -59,6 +59,10 @@ class TileShape:
     def cpp_value(self) -> str:
         return f"ckernel::TensorShape{{{self.face_r_dim}, {self.face_c_dim}, {self.num_faces_r_dim}, {self.num_faces_c_dim}}}"
 
+    @property
+    def dst_tile_shape(self) -> str:
+        return f"ckernel::trisc::DstTileShape::Tile32x{self.total_tile_size() // 32}"
+
 
 def validate_tile_shape_tile_dependent_ops(tile_shape: TileShape) -> None:
     """
