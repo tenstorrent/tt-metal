@@ -45,12 +45,12 @@ inline bool is_partial_face_bfp_pack(const std::uint32_t pack_dst_format, const 
 }
 
 /**
- * The tile pack MOP the packer holds (the default, data-emitting variant of @ref _llk_pack_mop_config_), as the
- * pack init built it. @ref _llk_pack_reconfig_data_format_ rebuilds that MOP when a format change flips its form
+ * The tile pack MOP the packer holds (the default, data-emitting, single-tile variant of @ref _llk_pack_mop_config_),
+ * as the pack init built it. @ref _llk_pack_reconfig_data_format_ rebuilds that MOP when a format change flips its form
  * (@ref is_partial_face_bfp_pack), with the geometry recorded here: the geometry the init also programmed into
  * the ADDR_MODs and the packer X counter, so a reconfig refreshes the format alone. It rebuilds only that MOP:
- * the untilize, row and fast-tilize MOP configs and the zero-output variant leave `programmed` false, so a
- * reconfig issued while one of them is in place leaves it alone.
+ * the untilize, row and fast-tilize MOP configs and the zero-output and multi-tile variants leave `programmed`
+ * false, so a reconfig issued while one of them is in place leaves it alone.
  */
 struct TilePackMop
 {

@@ -224,9 +224,10 @@ inline void _llk_pack_mop_config_(
     constexpr std::uint32_t MOP_INNER_LOOP    = 1;
     llk_pack_internal::configured_num_tiles   = num_tiles;
     llk_pack_internal::configured_zero_output = ZERO_OUTPUT_FLAG;
-    // Record the MOP for a format reconfig: only the default, data-emitting variant is rebuilt there (the variant
-    // every pack init in use builds); the zero-output variant is not.
-    llk_pack_internal::tile_pack_mop.programmed       = (pack_mode == PackMode::Default) && !zero_output;
+    // Record the MOP for a format reconfig: only the default, data-emitting, single-tile variant is rebuilt there
+    // (the variant every pack init in use builds); the zero-output variant is not, and the multi-tile MOP packs
+    // full four-face tiles, whose form never depends on the format.
+    llk_pack_internal::tile_pack_mop.programmed       = (pack_mode == PackMode::Default) && !zero_output && (num_tiles == 1);
     llk_pack_internal::tile_pack_mop.partial_face_bfp = partial_face_bfp;
     llk_pack_internal::tile_pack_mop.face_r_dim       = face_r_dim;
     llk_pack_internal::tile_pack_mop.num_faces        = num_faces;
@@ -314,8 +315,10 @@ static __attribute__((noinline, noclone)) bool rebuild_tile_pack_mop_for_format(
     {
         return false;
     }
+    // Single-tile by construction (only a single-tile MOP is recorded), stated as a literal so the multi-tile MOP and
+    // its output-offset sizing are not instantiated here.
     _llk_pack_mop_config_<PackMode::Default, false /*zero_output*/>(
-        pack_dst_format, mop.face_r_dim, mop.num_faces, mop.partial_face, mop.narrow_tile, configured_num_tiles);
+        pack_dst_format, mop.face_r_dim, mop.num_faces, mop.partial_face, mop.narrow_tile, 1 /*num_tiles*/);
     return true;
 }
 } // namespace llk_pack_internal
