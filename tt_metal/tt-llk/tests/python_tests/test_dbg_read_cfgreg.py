@@ -35,8 +35,17 @@ THREAD_BANKS = (0, 1, 2)
 
 
 @pytest.mark.skipif(
-    get_chip_architecture() != ChipArchitecture.WORMHOLE,
-    reason="The test kernel plants its sentinels through the Wormhole config layout.",
+    get_chip_architecture()
+    not in (ChipArchitecture.BLACKHOLE, ChipArchitecture.WORMHOLE),
+    reason="The test kernel uses the Blackhole and Wormhole config field names.",
+)
+@pytest.mark.xfail(
+    get_chip_architecture() == ChipArchitecture.BLACKHOLE,
+    strict=True,
+    reason=(
+        "The Blackhole dbg_read_cfgreg still uses the Wormhole bank arithmetic and is "
+        "fixed separately; this flips to a failure when that fix lands."
+    ),
 )
 def test_dbg_read_cfgreg_every_bank():
     formats = input_output_formats([DataFormat.Int32])[0]
