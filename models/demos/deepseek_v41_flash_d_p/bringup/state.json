@@ -248,6 +248,27 @@
   "started": "2026-10-17T09:46:22",
   "status": "PASS"
  },
+ "C.dec_candidate.ffn_norm": {
+  "attempts": 0,
+  "duration_s": 37.8,
+  "history": [
+   {
+    "s": 37.8,
+    "status": "PASS",
+    "t": "2026-10-17T10:06:43"
+   }
+  ],
+  "last_run": "2026-10-17T10:06:43",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.dec_candidate.ffn_norm.log",
+  "metrics": {
+   "err_ffn_norm_L20": 0.0023457391653209925,
+   "err_ffn_norm_L20_limit": 0.5392363667488098
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T10:06:05",
+  "status": "PASS"
+ },
  "C.dec_candidate.indexer": {
   "agent": {
    "defs": {
