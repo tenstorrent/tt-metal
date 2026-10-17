@@ -374,4 +374,11 @@ void kernel_main() {
     route_info[2] = 0;
     route_info[3] = 0;
     cb_push_back(cb_route_info_id, 1);
+
+    // The per-untilizer credit returns in the loop above are posted atomics
+    // (noc_semaphore_inc<true>), which never ack -- so neither the write barrier nor the
+    // atomic barrier covers them, and today no barrier of any kind follows the last one.
+    // Confirm they have at least departed L1 before returning, so a credit cannot still be
+    // sitting in this core's NIU when the program tears down.
+    noc_async_posted_writes_flushed();
 }
