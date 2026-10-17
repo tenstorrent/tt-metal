@@ -195,3 +195,14 @@ def get_ttnn_torch_dtype(ttnn_dtype: ttnn.DataType) -> torch.dtype:
 
 def create_ttnn_tilized_tensor(torch_tensor, device, dtype, pad_value=float("nan")):
     return ttnn.from_torch(torch_tensor, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, pad_value=pad_value)
+
+
+def dm_codegen_supported_on_arch(device):
+    # Mirrors codegen_supported_on_arch in data_movement/common: on other arches the ops route to native and the
+    # forced codegen entries raise.
+    return ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device)
+
+
+def skip_unless_dm_codegen_arch(device):
+    if not dm_codegen_supported_on_arch(device):
+        pytest.skip(f"data-movement codegen is not supported on {device.arch()}")
