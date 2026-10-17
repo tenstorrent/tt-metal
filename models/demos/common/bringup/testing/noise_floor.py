@@ -18,7 +18,8 @@ A limit is calib (component_calib; component_calib_low for tests.low_precision_k
 comparison (vs the CPU step on the same inputs, or vs the golden), never below what one bf16 rounding of the output
 shows (an exact step) or one element of an integer output. For a correlation the miss is 1 - pcc ~ rel^2 / 2, so calib
 applies squared. Selections (top-k): every flip must be explained (both swapped entries within 2x the nudge's spread
-of the top-k cutoff), and the count is at most calib x the nudge's.
+of the top-k cutoff, or within tie_rtol of it), and the count is at most calib x the nudge's; the tie-aware recall
+(F101) is recorded for every top-k output, dense router weights and index lists alike.
 
 A gate metric written ``>= limit`` in tasks.yaml is compared with the ``<metric>_limit`` the test records
 (core/gate.check_metrics).
@@ -37,7 +38,9 @@ from models.demos.common.bringup.core import defaults, metrics
 SEEDS = int(defaults.get("noise_floor.seeds"))  # nudged runs per floor; the worst counts
 SWAP_SEEDS = int(defaults.get("noise_floor.swap_seeds"))  # a swap test's earlier steps and its nudged block
 FLIP_SPREAD = float(defaults.get("noise_floor.flip_spread"))  # a flip is explained within this x the nudge spread
+TIE_RTOL = float(defaults.get("noise_floor.tie_rtol"))  # ... or within this x |cutoff| (F101)
 MANT = {"bf16": 7, "fp32": 23}
+PAD_SENTINEL = 0xFFFFFFFF  # the uint32 pad of topk_large_indices
 TAPS_FILE = "official_taps.yaml"  # the reference role's map of the official code onto the framework's steps
 FLOOR_FILE = "official_floor.json"  # next to the goldens: the reference arithmetic's statistics per step
 
@@ -179,51 +182,120 @@ def arith(s, layer: int, step: str, chunk: int) -> dict | None:
     return ((d.get("steps") or {}).get(f"L{layer:02d}.{step}") or {}).get(str(chunk))
 
 
-# ---------------------------------------------------------------- selections: explained flips (F80)
+# ---------------------------------------------------------------- selections: explained flips (F80, F101)
 class TopkTap(TorchFunctionMode):
-    """Records the input and k of the last top-k a CPU step takes (its selection scores)."""
+    """Records the input and k of every top-k a CPU step takes (its selection scores), in call order."""
 
     def __init__(self):
         super().__init__()
-        self.scores, self.k = None, None
+        self.calls = []
 
     def __torch_function__(self, func, types, args=(), kwargs=None):
         kwargs = kwargs or {}
         if func in (torch.topk, torch.Tensor.topk) and args and isinstance(args[0], torch.Tensor):
-            self.scores = args[0].detach().double().reshape(-1, args[0].shape[-1])
-            self.k = int(args[1] if len(args) > 1 else kwargs.get("k"))
+            k = int(args[1] if len(args) > 1 else kwargs.get("k"))
+            self.calls.append((args[0].detach().double().reshape(-1, args[0].shape[-1]), k))
         return func(*args, **kwargs)
 
 
+def _groups(calls) -> list:
+    """The tapped top-ks by (width, k), their row blocks stacked in call order (a step that selects per row block)."""
+    by = {}
+    for sc, k in calls:
+        by.setdefault((sc.shape[-1], k), []).append(sc)
+    return [(torch.cat(b), k) for (_, k), b in by.items()]
+
+
+def match_scores(calls, out):
+    """(scores, k) the step's output selects from: the tapped top-k whose rows are the output's and whose own top k
+    holds (>= 99 % of) the output's selection; (None, None) when none does (F101: a step taking several top-ks, e.g.
+    candidate blocks then positions, or one per row block)."""
+    if not isinstance(out, torch.Tensor) or out.dim() < 2 or not calls:
+        return None, None
+    rows = out.numel() // out.shape[-1]
+    best = (0.0, None, None)
+    for sc, k in _groups(calls):
+        if sc.shape[0] != rows or (out.is_floating_point() and sc.shape[-1] != out.shape[-1]):
+            continue
+        got = support(out.reshape(rows, -1), k, sc.shape[-1])
+        n = got.sum() if out.is_floating_point() else _valid(out).sum()  # an id beyond the width is a miss
+        hit = ((got & support(sc, k)).sum() / n.clamp_min(1)).item()
+        if hit > best[0]:
+            best = (hit, sc, k)
+    return (best[1], best[2]) if best[0] >= 0.99 else (None, None)
+
+
+def _valid(i: torch.Tensor) -> torch.Tensor:
+    """The valid entries of an index output (pads: negative, or the uint32 sentinel of topk_large_indices)."""
+    i = i.to(torch.int64)
+    return (i >= 0) & (i < PAD_SENTINEL)
+
+
 def tapped(run, inputs):
-    """(output, scores, k) of run(*inputs); scores None when the step takes no top-k."""
+    """(output, scores, k) of run(*inputs); scores None when no top-k the step takes is the one its output holds."""
     with TopkTap() as tap:
         out = run(*inputs)
-    return out, tap.scores, tap.k
+    return (out, *match_scores(tap.calls, out))
 
 
-def support(t: torch.Tensor, k: int) -> torch.Tensor:
-    """The selected entries of a selection output (dense, zeros elsewhere) or of scores (their top k)."""
+def support(t: torch.Tensor, k: int, width: int | None = None) -> torch.Tensor:
+    """The selected entries [rows, width] of a selection output (dense, zeros elsewhere), of an index output (its
+    valid positions: pads and out-of-range ids dropped) or of scores (their top k)."""
+    if not t.is_floating_point():
+        i = t.to(torch.int64).reshape(-1, t.shape[-1])
+        width = width or int(i.max().item()) + 1
+        ok = (i >= 0) & (i < width)
+        out = torch.zeros(i.shape[0], width + 1, dtype=torch.bool)
+        return out.scatter_(1, torch.where(ok, i, width), True)[:, :width]
     t = t.double().reshape(-1, t.shape[-1])
     if (t == 0).float().mean().item() >= 0.5:
         return t != 0
     return torch.zeros_like(t, dtype=torch.bool).scatter_(1, t.topk(k, dim=-1)[1], True)
 
 
-def flips(scores, k: int, got_support, nudge_scores: list) -> dict:
-    """Rows whose selection differs from the exact scores' top k, and how many of them are unexplained: a differing
-    entry farther than FLIP_SPREAD x the nudge's spread (per row) from the cutoff between the k-th and k+1-th score."""
-    exact = support(scores, k)
-    srt = scores.sort(-1, descending=True).values
-    bound = 0.5 * (srt[:, k - 1] + srt[:, k]) if scores.shape[-1] > k else srt[:, -1]
-    delta = torch.stack([(n - scores).abs().amax(-1) for n in nudge_scores]).amax(0) if nudge_scores else 0 * bound
-    diff = exact != got_support.reshape(exact.shape)
-    far = ((scores - bound[:, None]).abs() > FLIP_SPREAD * delta[:, None]) & diff
+def _spread(nudge_scores: list, scores) -> torch.Tensor:
+    """Per row, the largest move of a finite score under the nudge (masked -inf entries stay -inf)."""
+    if not nudge_scores:
+        return torch.zeros(scores.shape[0], dtype=scores.dtype)
+    d = [torch.where(torch.isfinite(n) & torch.isfinite(scores), n - scores, 0.0).abs().amax(-1) for n in nudge_scores]
+    return torch.stack(d).amax(0)
+
+
+def flips(scores, k: int, got_support, nudge_scores: list, want_support=None, rtol: float | None = None) -> dict:
+    """Rows whose selection differs from the reference's, how many of them are unexplained, and the tie-aware recall.
+
+    The reference's selection is ``want_support`` (its own tie rule, its masked entries), else the top k of the exact
+    scores. The cutoff of a row lies between its weakest selected and its strongest unselected score.
+    - unexplained (F80, gated): a differing entry whose exact score lies farther from the cutoff than both
+      FLIP_SPREAD x the nudge's score spread and TIE_RTOL x |cutoff|.
+    - recall_tie (F101, recorded): Momcilo's MoE-gate rule, the nudge left out (on a step with quantized
+      intermediates, e.g. an fp4 query, the nudge's spread covers most of the row): the reference's entries the device
+      holds plus its swaps whose both scores lie within TIE_RTOL x |cutoff| of the cutoff, over the reference's
+      entries (mean over rows; 1 for an empty row)."""
+    rtol = TIE_RTOL if rtol is None else rtol
+    exact = want_support if want_support is not None else support(scores, k)
+    got = got_support.reshape(exact.shape)
+    ninf = torch.full_like(scores, -math.inf)
+    lo = torch.where(exact, scores, -ninf).amin(-1)  # the weakest selected score
+    hi = torch.where(exact | ~torch.isfinite(scores), ninf, scores).amax(-1)  # the strongest unselected finite one
+    bound = torch.where(torch.isfinite(hi), 0.5 * (lo + hi), lo)
+    dist = (scores - bound[:, None]).abs()
+    tie = (dist <= (rtol * bound.abs())[:, None]) & torch.isfinite(scores)
+    near = tie | ((dist <= (FLIP_SPREAD * _spread(nudge_scores, scores))[:, None]) & torch.isfinite(scores))
+    missed, extra = exact & ~got, got & ~exact
+    diff = missed | extra
+    credited = torch.minimum((missed & tie).sum(-1), (extra & tie).sum(-1))
+    n = exact.sum(-1)
+    recall = torch.where(n > 0, (exact & got).sum(-1).double() / n.clamp_min(1), 1.0)
+    recall_tie = torch.where(n > 0, ((exact & got).sum(-1) + credited).double() / n.clamp_min(1), 1.0)
     nrows = max(exact.shape[0], 1)
     return {
         "rows": int(diff.any(-1).sum()),
-        "unexplained": int(far.any(-1).sum()),
+        "unexplained": int((diff & ~near).any(-1).sum()),
         "frac": diff.any(-1).sum().item() / nrows,
+        "recall": recall.mean().item(),
+        "recall_tie": recall_tie.mean().item(),
+        "worst_recall_tie": recall_tie.min().item() if recall_tie.numel() else 1.0,
     }
 
 
