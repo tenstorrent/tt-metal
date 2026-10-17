@@ -11,7 +11,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     compare_results_batch_norm,
 )
 from itertools import product
-from models.common.utility_functions import comp_pcc, is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import comp_pcc, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 TEST_PADDING_VALUE = -42
