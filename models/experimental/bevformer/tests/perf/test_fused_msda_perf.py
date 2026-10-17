@@ -14,15 +14,20 @@ time is in:
 ``test_fused_msda_module_perf``
     The whole ``TTMSDeformableAttention`` forward: value/attn/offset Linears,
     softmax, the fused op, ``output_proj`` and the residual. This is what the
-    encoder actually pays.
+    encoder actually pays. Run once per ``value_memory``: ``auto`` is the
+    production path, ``dram`` the fallback it takes when L1 does not fit.
 
 ``test_fused_msda_kernel_perf``
     Only ``ttnn.experimental.fused_msda_from_offsets``. The projections and the
     softmax run once, before the signpost, so the measured region is the op and
-    nothing else. Three variants:
+    nothing else. Four variants:
 
     * ``packed_multi`` -- packed value/offsets/attn, one call covering all
-      levels. This is the production contract.
+      levels. The production operand form, with ``value`` left in DRAM (the
+      ``auto`` fallback placement).
+    * ``packed_multi_l1`` -- the same, with ``value`` moved to L1 interleaved
+      before the measured region (the op's output follows it into L1). This is
+      the placement ``auto`` picks when L1 fits.
     * ``canonical_multi`` -- the rank-4 / rank-6 / rank-5 operand forms the op
       also accepts. The delta against ``packed_multi`` is the cost of one page
       per sample instead of a byte offset into a packed stick.
@@ -51,6 +56,7 @@ from models.experimental.bevformer.config.encoder_config import get_preset_confi
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
 from models.experimental.bevformer.tests.test_utils import check_with_pcc
 from models.experimental.bevformer.tt.model_preprocessing import create_ms_deformable_attention_parameters
+from models.experimental.bevformer.tt import tt_ms_deformable_attention
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import (
     TTMSDeformableAttention,
     _spatial_shapes_list,
@@ -64,7 +70,7 @@ WORKLOADS = [
     ("nuscenes_base", 1, 2500),
 ]
 
-KERNEL_VARIANTS = ["packed_multi", "canonical_multi", "packed_per_level"]
+KERNEL_VARIANTS = ["packed_multi", "packed_multi_l1", "canonical_multi", "packed_per_level"]
 
 
 def _head_sha():
@@ -185,15 +191,10 @@ def _canonical_operands(value, offsets, attn, model):
 def _per_level_operands(device, value, offsets, attn, model, spatial_shapes):
     """Host-side per-level slices of the packed operands, one set per level.
 
-    Sliced through torch rather than ``ttnn.slice`` on purpose: this runs
-    outside the measured region, and a host round trip has no device cost to
-    attribute, whereas a device slice would land inside the measured region and
-    be counted as launch overhead.
-
     ``reference_points`` is not sliced. In ``reference_mode="pillar"`` the
     reference index is ``p % R``, independent of the level, so each single-level
     call needs the full (B, Q, R, 2) tensor -- which is also why the per-level
-    sum is numerically the same as one multi-level call.
+    sum computes the same thing as one multi-level call.
     """
     value_t = ttnn.to_torch(value)
     offsets_t = ttnn.to_torch(offsets)
@@ -276,6 +277,7 @@ def _signposted(device, op_fn, iters=DEVICE_PERF_ITERS):
 @torch.no_grad()
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("config_name, batch_size, num_queries", WORKLOADS)
+@pytest.mark.parametrize("value_memory", ["auto", "dram"])
 @pytest.mark.parametrize("expected_pcc", [0.999])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
 def test_fused_msda_module_perf(
@@ -283,16 +285,27 @@ def test_fused_msda_module_perf(
     config_name,
     batch_size,
     num_queries,
+    value_memory,
     expected_pcc,
+    monkeypatch,
     reset_seeds,
     ensure_gc,
 ):
     """Whole-module device time: what the encoder pays per MSDA call."""
-    logger.info(f"device-perf run of commit {_head_sha()} -- module {config_name} q={num_queries}")
+    logger.info(
+        f"device-perf run of commit {_head_sha()} -- module {config_name} q={num_queries} value_memory={value_memory}"
+    )
 
     config, ref_model, tt_parameters, torch_inputs = _build(device, config_name, batch_size, num_queries)
     query, value, reference_points, spatial_shapes = torch_inputs
     tt_query, tt_value, tt_refs = _to_device(device, torch_inputs)
+    # Pins the placement the module otherwise decides from live L1 state. Patched
+    # on the module because ``forward`` resolves the name there at call time.
+    monkeypatch.setattr(
+        tt_ms_deformable_attention,
+        "multi_scale_deformable_attn_fused",
+        partial(tt_ms_deformable_attention.multi_scale_deformable_attn_fused, value_memory=value_memory),
+    )
     model = _tt_model(device, config, tt_parameters, spatial_shapes)
 
     def op_fn():
@@ -341,6 +354,9 @@ def test_fused_msda_kernel_perf(
 
     if variant == "packed_multi":
         op_fn = partial(_call_one, value_p, refs, offsets_p, attn_p, spatial_shapes)
+    elif variant == "packed_multi_l1":
+        value_l1 = ttnn.to_memory_config(value_p, ttnn.L1_MEMORY_CONFIG)
+        op_fn = partial(_call_one, value_l1, refs, offsets_p, attn_p, spatial_shapes)
     elif variant == "canonical_multi":
         value_c, offsets_c, attn_c = _canonical_operands(value_p, offsets_p, attn_p, model)
         op_fn = partial(_call_one, value_c, refs, offsets_c, attn_c, spatial_shapes)
@@ -351,7 +367,7 @@ def test_fused_msda_kernel_perf(
         pytest.fail(f"unknown variant {variant}")
 
     # Gate every variant against the production contract rather than against the
-    # torch reference: all three are meant to compute the same thing, and a
+    # torch reference: every variant is meant to compute the same thing, and a
     # variant that quietly samples different points would otherwise show up as a
     # speedup. Doubles as the warmup.
     golden = _call_one(value_p, refs, offsets_p, attn_p, spatial_shapes)
