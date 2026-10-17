@@ -260,7 +260,7 @@ DRAM_ACTIVATION_LEVELS = (0, 1)
 # its output width allows. The tightest is the strided 1x1 downsample that opens layer2: its
 # 6 x 232 x 400 x 256 input is in DRAM, and each slice is read into L1 as bfloat16
 # ROW_MAJOR for the halo, 3.25 MB per L1 bank in total against 576 KB free, so it needs at
-# least 6 slices. 8 leaves margin over that. TtnnConv2D lowers the count per conv to its
+# least 6 slices. 8 leaves margin over that. TTConv2D lowers the count per conv to its
 # output width in tiles, as a width slice is whole tiles wide: 7 for this conv's 200-wide output.
 DRAM_CONV_SLICES = 8
 

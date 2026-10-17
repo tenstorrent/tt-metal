@@ -24,8 +24,8 @@ these are shifted by the ego motion. Each of the six layers then performs, batch
 5. FFN (Linear-ReLU-Linear) with a residual add
 6. LayerNorm
 
-The previous BEV must already be rotated to the current frame; the detector does that before
-calling the encoder. Only inference is kept: dropout is dropped.
+The previous BEV must already be rotated to the current frame; the perception transformer does
+that (``rotate_bev``). Only inference is kept: dropout is dropped.
 """
 
 import torch

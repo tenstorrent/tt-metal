@@ -9,14 +9,14 @@ convs, when the reference FPN has them, run on the last (coarsest) output.
 """
 
 import ttnn
-from models.experimental.bevformer.tt.tt_common import TtnnConv2D, signpost
+from models.experimental.bevformer.tt.tt_common import TTConv2D, signpost
 
 
 class TTConvModule:
     """One FPN convolution.
 
-    Accumulates in an fp32 destination register. The call returns the output tensor;
-    output height and width stay on the conv, which the top-down pass reads.
+    Accumulates in an fp32 destination register. The call returns the output tensor only; the
+    top-down pass reads a lateral conv's input height and width, which a 1x1 conv keeps.
     """
 
     def __init__(
@@ -33,7 +33,7 @@ class TTConvModule:
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
     ):
-        self.conv = TtnnConv2D(
+        self.conv = TTConv2D(
             conv_args.conv,
             conv_pth.conv,
             device=device,

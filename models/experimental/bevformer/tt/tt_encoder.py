@@ -68,16 +68,16 @@ class TTBEVFormerLayer:
             num_points=num_points,
         )
 
-    def __call__(self, query, value, bev_pos, prev_bev, ref_2d, sca_frame):
-        """``ref_2d`` from :meth:`TTBEVFormerEncoder.reference_points`, ``sca_frame`` from
-        ``TTSpatialCrossAttention.frame_inputs``; both shared by every layer of a frame."""
+    def __call__(self, query, value, bev_pos, prev_bev, ref_2d, sca_inputs):
+        """``ref_2d`` from :meth:`TTBEVFormerEncoder.reference_points`, ``sca_inputs`` from
+        ``TTSpatialCrossAttention.layer_inputs``; both shared by every layer of a frame."""
         signpost(header="TTNN BEVFormerLayer Forward Start")
         signpost(header="BEVLayer TSA Start")
         query = self.temporal_self_attention(query, value=prev_bev, query_pos=bev_pos, reference_points=ref_2d)
         signpost(header="BEVLayer TSA Complete")
         query = layer_norm(query, self.params.norms[0])
         signpost(header="BEVLayer SCA Start")
-        query = self.spatial_cross_attention(query, value, sca_frame)
+        query = self.spatial_cross_attention(query, value, sca_inputs)
         signpost(header="BEVLayer SCA Complete")
         query = layer_norm(query, self.params.norms[1])
         signpost(header="BEVLayer FFN Start")
@@ -155,8 +155,8 @@ class TTBEVFormerEncoder:
         ``img_shape`` per sample). Without ``plan``, a new one: by default sized for this frame
         only; a plan that later frames refill needs a ``capacity`` (rows per camera) covering
         them: a bound for the rig, or ``tt_spatial_cross_attention.full_capacity`` on grids smaller
-        than the base one, where it does not fit in DRAM. With ``plan``,
-        refilled in place, which keeps a trace captured with it valid."""
+        than the base one (on the base grid it does not fit in DRAM). With ``plan``, refilled in
+        place, which keeps a trace captured with it valid."""
         reference_points_cam, bev_mask = camera_geometry(
             img_metas, self.bev_h, self.bev_w, self.num_points_in_pillar, self.pc_range
         )
@@ -185,10 +185,10 @@ class TTBEVFormerEncoder:
             prev_bev = ttnn.concat([ttnn.unsqueeze(prev_bev, 1), ttnn.unsqueeze(bev_query, 1)], dim=1)
             prev_bev = ttnn.reshape(prev_bev, (bs * 2, num_query, embed_dims))
         # Every layer's cross-attention has the same heads, levels and points, so the first layer's
-        # frame inputs serve them all. Built here, inside the (traced) forward, from the plan.
-        sca_frame = self.layers[0].spatial_cross_attention.frame_inputs(plan)
+        # layer inputs serve them all. Built here, inside the (traced) forward, from the plan.
+        sca_inputs = self.layers[0].spatial_cross_attention.layer_inputs(plan)
 
         output = bev_query
         for layer in self.layers:
-            output = layer(output, value, bev_pos, prev_bev, ref_2d, sca_frame)
+            output = layer(output, value, bev_pos, prev_bev, ref_2d, sca_inputs)
         return output

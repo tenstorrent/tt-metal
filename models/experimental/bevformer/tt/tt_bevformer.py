@@ -7,7 +7,13 @@ the FPN, the perception transformer and the detection head, on device end to end
 A frame's host-derived inputs (CAN bus, ego shift, previous-BEV rotation, the cameras' rebatch
 plan) are prepared by :meth:`TTBEVFormer.prepare_frame` into buffers refilled in place, so the
 forward runs on device only and a trace captured with a frame replays on the next one. The caller
-carries the previous BEV between frames, as upstream's ``forward_test`` does.
+carries the previous BEV between frames, as upstream's ``forward_test`` does. A trace reads the
+buffers it was captured with, so under a trace:
+
+- capture it on a frame that has a previous BEV: without one the encoder runs other programs;
+- before each replay, refill the frame with :meth:`TTBEVFormer.prepare_frame` and copy the new
+  BEV into the captured ``prev_bev`` with ``ttnn.copy``; rebinding the name does not reach the
+  trace, which then reads the stale BEV without any error.
 
 :meth:`TTBEVFormer.detect` runs upstream's ``get_bboxes`` on device, in the forward's trace: the
 coder's top-k, the box decoding, the range test as a validity mask and z moved to the box's bottom
@@ -25,11 +31,8 @@ from models.experimental.bevformer.tt.tt_resnet import TTResNet
 
 
 class TTBEVFormer:
-    """The detector for the image shape its parameters were built for.
-
-    The backbone's and FPN's convs are pinned to the image shape ``create_bevformer_parameters``
-    recorded them for.
-    """
+    """The detector, pinned to the image shape ``create_bevformer_parameters`` recorded the
+    backbone's and FPN's convs for."""
 
     def __init__(self, params, device):
         """``params`` from ``model_preprocessing.create_bevformer_parameters``."""
@@ -55,7 +58,9 @@ class TTBEVFormer:
         self.coder = TTNMSFreeCoder(device, **vars(params.coder))
 
     def prepare_frame(self, img_metas, frame=None, capacity=None):
-        """See ``TTPerceptionTransformer.prepare_frame``."""
+        """See ``TTPerceptionTransformer.prepare_frame``. By default the frame's rebatch plan fits
+        these cameras only; a frame refilled for later frames needs a ``capacity`` that covers
+        their cameras too (see ``TTBEVFormerEncoder.prepare_frame``)."""
         assert (
             len(img_metas) == self.batch_size
         ), f"{len(img_metas)} samples, the detector is built for {self.batch_size}"
