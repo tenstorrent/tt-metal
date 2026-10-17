@@ -355,11 +355,16 @@ def sfpu_relu_max(value: float, threshold: float) -> float:
 def sfpu_softcap(value: float, beta: float) -> float:
     """beta * tanh(value / beta) as _sfpu_softcap_ computes it (softcap, situ_glu).
 
-    Its polynomial tanh clamps with min(., 1) and restores the input's sign, so +-inf give
-    +-beta and a NaN gives beta with the NaN's sign (the SFPU min ranks a NaN above 1.0).
+    +-inf give +-beta on every architecture. A NaN is per architecture: Quasar's polynomial
+    tanh clamps with min(., 1) and restores the input's sign, so a NaN gives beta with the
+    NaN's sign (the SFPU min ranks a NaN above 1.0); Blackhole's keeps the NaN and its
+    multiply-adds re-emit it as the canonical +NaN (test_tanh_specials.py records what
+    reaches L1 per Dest width).
     """
     if math.isnan(value):
-        return math.copysign(beta, value)
+        if get_chip_architecture() == ChipArchitecture.QUASAR:
+            return math.copysign(beta, value)
+        return math.nan
     return beta * math.tanh(value / beta)
 
 

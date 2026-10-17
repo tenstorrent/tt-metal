@@ -99,24 +99,19 @@ constexpr float TANH_POLY_C3 = -0.4890659749507904052734375f;
 
 // Saturate the Sollya polynomial at 1.0 without laundering a NaN. result is |x| * Q(|x|) with
 // Q > 0, so it is +0.0, a positive finite value, +Inf or a NaN; on Wormhole a NaN emitted by
-// SFPMAD may carry either sign (SFPMAD.md). min(result, 1.0f) is SFPSWAP, whose order ranks a
-// positive NaN above +Inf (SFPSWAP.md), so the clamp returned 1.0 for a positive NaN and
-// copysign made it a legal +-1.0 activation. Here the lanes whose unbiased exponent is >= 0 --
-// every result at or above 1.0, the ones the clamp would change, plus +Inf and a NaN of either
-// sign, which have the all-ones exponent -- are instead rewritten as (result - 1 ulp) * 0 + 1:
-// a finite result gives exactly 1.0, +Inf becomes the largest finite value and also gives 1.0,
-// and a NaN stays a NaN through the multiply-add. Lanes below 1.0 are untouched, as under the
-// clamp. sfpi fuses the exponent test into one SFPEXEXP that sets the condition code; a float
-// compare has no single instruction here (SFPMAD, a latency NOP and SFPSETCC). Guard: 4 SFPU
-// instructions per datum; the x2 pair body is 36 (28 on main): the first 32 replay, the
-// rounding and stores issue inline. Blackhole instead negates the coefficients and saturates
-// with max, which its canonical-NaN SFPMAD allows and this one does not.
+// SFPMAD may carry either sign (SFPMAD.md). A bare min(result, 1.0f) is SFPSWAP, whose order
+// ranks a positive NaN above +Inf (SFPSWAP.md), so it returned 1.0 for a positive NaN and
+// copysign then made it a legal +-1.0 activation. So first every lane is made negative, then
+// SFPABS clears the sign on everything except a -NaN, which it leaves as -NaN (SFPABS.md):
+// finite results and +Inf come back as themselves and take the usual min, while every NaN is
+// now negative, ranks below -Inf, and is what the min keeps. copysign restores x's sign after
+// this, as before. Three SFPU instructions per datum, no condition codes; the x2 pair body is
+// 32 SFPU instructions, which is exactly what sfpi records into the replay buffer (only the
+// Dest increment issues inline); the single-vector kernel is 20 plus the three latency NOPs
+// Wormhole needs between dependent SFPMADs. Blackhole instead negates the coefficients and
+// saturates with max, which its canonical-NaN SFPMAD allows and this one does not.
 sfpi_inline sfpi::vFloat _sfpu_tanh_poly_saturate_(sfpi::vFloat result) {
-    v_if(sfpi::exexp(result, sfpi::ExponentMode::Unbiased) >= 0) {
-        result = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(result) - 1) * 0.0f + 1.0f;
-    }
-    v_endif;
-    return result;
+    return sfpi::min(sfpi::abs(sfpi::setsgn(result, 1)), 1.0f);
 }
 
 sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
@@ -212,10 +207,9 @@ inline void calculate_tanh() {
         sfpi::vFloat c1 = TANH_POLY_C1;  // inline it and every datum pays an SFPLOADI pair
 
         // Walk dst_reg rather than index by d: a uniform body is what sfpi records into the
-        // 32-entry replay buffer once, and a runtime index makes it build each SFPLOAD/SFPSTORE
-        // in scalar registers. The 28-instruction pair body replayed whole before the NaN
-        // guard; with it the body is 36, so the first 32 replay and the rounding and stores
-        // issue inline after each replay.
+        // 32-entry replay buffer once (the pair's 32 SFPU instructions exactly; the Dest
+        // increment issues inline), and a runtime index makes it build each SFPLOAD/SFPSTORE
+        // in scalar registers.
 #pragma GCC unroll 4
         for (int d = 0; d < ITERATIONS / 2; d++) {
             sfpi::vFloat r0, r1;

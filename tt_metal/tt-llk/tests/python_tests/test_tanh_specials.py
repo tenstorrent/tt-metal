@@ -24,6 +24,12 @@ same table was measured returning NaN for 120 large *finite* inputs for exactly
 this reason.
 
 Reference: tanh(+-inf) = +-1, tanh(NaN) = NaN, tanh(+-0.0) = +-0.0 (sign kept).
+
+The polynomial kernel (ApproximationMode.No on a 16-bit Dest) gets the same 257 patterns
+through its paired-vector body (`test_tanh_polynomial_specials`), through its single-vector
+body that softcap and situ_glu call (`test_tanh_polynomial_single_vector_specials`, one
+SFPU iteration), and through Blackhole softcap itself (`test_softcap_polynomial_specials`),
+each asserting the recorded 16-bit-Dest results rather than the reference.
 """
 
 from __future__ import annotations

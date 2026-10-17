@@ -8,7 +8,9 @@ table *is* the whole of its kernel's approximation -- there is no polynomial beh
 it to fall back on. Both are written down more than once with nothing in the build
 coupling the copies:
 
-  - `tanh_init` is duplicated verbatim in the Wormhole and Blackhole headers.
+  - the SFPLUT table `tanh_init` loads is duplicated verbatim in the Wormhole and
+    Blackhole headers (the polynomial constants in the same function differ per
+    architecture on purpose and are not what this file compares).
   - `tanh_derivative_init` is duplicated the same way, and then modelled a third time
     by hand in `UnarySFPUGolden._tanh_derivative_lut`. That golden is deliberate:
     the kernel evaluates `1 - lut(x)^2`, so validating it against an accurate `sech^2`

@@ -127,9 +127,11 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
 // Two datums through the polynomial in lockstep, so each fills the other's SFPMAD stall slots.
 // Only WH stalls; BH comes out even either way, so both arches run this shape. Only c1 can be
 // hoisted on top of it: six vectors are already live for the data, and an eighth spills.
-// Negated coefficients and the max saturation as in _sfpu_tanh_polynomial_.
+// Expects the NEGATED coefficients: neg_c1 = TANH_POLY_NEG_C1 from the caller and the negated
+// Prgm0..2 that tanh_init<false, false> programs; the saturation is max(-P, -1.0f) as in
+// _sfpu_tanh_polynomial_, so a positive c1 here would clamp the wrong side.
 sfpi_inline void _sfpu_tanh_polynomial_x2_(
-    sfpi::vFloat& y0, sfpi::vFloat& y1, sfpi::vFloat x0, sfpi::vFloat x1, sfpi::vFloat c1) {
+    sfpi::vFloat& y0, sfpi::vFloat& y1, sfpi::vFloat x0, sfpi::vFloat x1, sfpi::vFloat neg_c1) {
     sfpi::vFloat a0 = sfpi::abs(x0);
     sfpi::vFloat a1 = sfpi::abs(x1);
 
@@ -146,8 +148,8 @@ sfpi_inline void _sfpu_tanh_polynomial_x2_(
     sfpi::vFloat c2 = TANH_POLY_NEG_C2;
     r0 = r0 * a0 + c2;
     r1 = r1 * a1 + c2;
-    r0 = r0 * a0 + c1;
-    r1 = r1 * a1 + c1;
+    r0 = r0 * a0 + neg_c1;
+    r1 = r1 * a1 + neg_c1;
     r0 = r0 * a0;
     r1 = r1 * a1;
 
@@ -190,7 +192,7 @@ inline void calculate_tanh() {
             sfpi::dst_reg++;
         }
     } else {
-        sfpi::vFloat c1 = TANH_POLY_NEG_C1;  // inline it and every datum pays an SFPLOADI pair
+        sfpi::vFloat neg_c1 = TANH_POLY_NEG_C1;  // inline it and every datum pays an SFPLOADI pair
 
         // Walk dst_reg rather than index by d: a uniform body is what sfpi records into the
         // 32-entry replay buffer once (the 28 SFPU instructions of a pair plus the increment fit
@@ -198,7 +200,7 @@ inline void calculate_tanh() {
 #pragma GCC unroll 4
         for (int d = 0; d < ITERATIONS / 2; d++) {
             sfpi::vFloat r0, r1;
-            _sfpu_tanh_polynomial_x2_(r0, r1, sfpi::dst_reg[0], sfpi::dst_reg[1], c1);
+            _sfpu_tanh_polynomial_x2_(r0, r1, sfpi::dst_reg[0], sfpi::dst_reg[1], neg_c1);
             // Round into a vFloat; storing the vFloat16b expression pins SFPSTORE to FP16B.
             r0 = sfpi::convert<sfpi::vFloat16b>(r0, sfpi::RoundMode::Nearest);
             r1 = sfpi::convert<sfpi::vFloat16b>(r1, sfpi::RoundMode::Nearest);

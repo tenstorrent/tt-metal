@@ -138,6 +138,11 @@ namespace ckernel::sfpu
 constexpr std::uint32_t EXP_WITH_BASE_SCALE_BF16 = 0x3F00u;
 constexpr std::uint32_t EXP_WITH_BASE_SCALE_FP32 = EXP_WITH_BASE_SCALE_BF16 << 16;
 
+// softcap's beta = 5 and its reciprocal, as the fp32 bit patterns calculate_softcap takes.
+// Mirrored as SOFTCAP_BETA in sfpu_dispatch_constants.py, which the golden reads.
+constexpr std::uint32_t SOFTCAP_BETA_BITS     = 0x40A00000u; // 5.0f
+constexpr std::uint32_t SOFTCAP_INV_BETA_BITS = 0x3E4CCCCDu; // 0.2f
+
 // The approximate clamp path of calculate_exponential is hand-unrolled for 8 rows and
 // ignores ITERATIONS (tt-llk#1486), so its callers run it per face over all four faces.
 constexpr int EXP_APPROX_CLAMP_ITERATIONS = 8;
@@ -1132,7 +1137,6 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
 #ifdef ARCH_BLACKHOLE
     else if constexpr (OPERATION == SfpuType::softcap)
     {
-        // beta = 5 and its reciprocal, as fp32 bits (sfpu_dispatch_constants.py holds the golden's copy).
         SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -1140,8 +1144,8 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
             dst_index,
             vector_mode,
-            0x40A00000u /* beta = 5.0f */,
-            0x3E4CCCCDu /* 1 / beta = 0.2f */);
+            SOFTCAP_BETA_BITS,
+            SOFTCAP_INV_BETA_BITS);
     }
 #endif
     else if constexpr (OPERATION == SfpuType::tanh)
