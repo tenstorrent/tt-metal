@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -63,6 +64,9 @@ struct CaptureContext {
         uint32_t chip_id = 0;
         // The wall-clock core's wall clock minus the check core's, or 0 when the sync check is off.
         int64_t check_offset = 0;
+        // The Tensix core whose wall clock the host reads on a chip with no Ethernet cores (p100a), or nullopt on any
+        // other chip. The clock offsets are then relative to this core.
+        std::optional<CoreCoord> fallback_wall_clock_core;
     };
     std::vector<Device> devices;
     struct Link {

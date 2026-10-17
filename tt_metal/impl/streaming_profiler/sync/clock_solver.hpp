@@ -105,6 +105,8 @@ using RefclkBurst = std::array<RefclkRead, kRefclkBurstReads>;
 // How often the host reads a burst of the root chip's refclk. On an 8-chip LoudBox, a line fitted over 1 s of bursts
 // and extrapolated 10 ms ahead misses the next burst's line by 0.07 ns rms (0.6 ns max).
 inline constexpr auto kRefclkBurstPeriod = std::chrono::milliseconds(10);
+// How often the host reads the wall clock of a chip with no Ethernet cores (p100a).
+inline constexpr auto kFallbackWallClockPeriod = std::chrono::milliseconds(1);
 
 // Builds a capture's ClockMap from its clock readings. It maps each chip's wall clock onto the root chip's refclk, and
 // the root chip's refclk onto the host TSC.
@@ -124,6 +126,9 @@ public:
     bool on_batch_end();
     // Fits a burst of host reads of the root refclk into the host series. Returns whether the series has a line yet.
     bool on_refclk_burst(const RefclkBurst& burst);
+    // Adds a clock point to a chip with no Ethernet cores (p100a) from a host read of its wall clock `wall` at host TSC
+    // `tsc`. It adds none before the host series has a node, and returns whether it added one.
+    bool on_fallback_wall_clock(uint32_t device, int64_t tsc, uint64_t wall);
     void on_capture_end();
 
 private:
@@ -134,8 +139,8 @@ private:
     // kept instants reach back that far.
     static constexpr int64_t kAiclkSpanTicks = 64;
     static constexpr size_t kAiclkKeptInstants = 8;
-    // One clock point from the chip's wall-clock core. It holds a refclk tick and the wall clock there, and while AICLK
-    // is steady also the wall clock's rate.
+    // One clock point from the chip's wall-clock core, or from a host read of its wall clock on a chip with no Ethernet
+    // cores (p100a). It holds a refclk tick, the wall clock there and, while AICLK is steady, the wall clock's rate.
     struct Instant {
         int64_t refclk = 0;
         int64_t wall_eighths = 0;
@@ -178,6 +183,9 @@ private:
     };
 
     void on_stamp(uint32_t dev, uint32_t core, const kernel_profiler::SyncLinkRecord& record);
+    // Adds a clock point of chip `device`, with `refclk` counted from its refclk base, unless the point doesn't advance
+    // both clocks past the chip's newest instant.
+    void add_instant(uint32_t device, int64_t refclk, int64_t wall_eighths, uint32_t wall_per_refclk_eighths);
     void solve(LinkState& state, Window window);
     // Logs the worst link's median round scatter over the capture, and the worst single window's fit error.
     void report_precision() const;

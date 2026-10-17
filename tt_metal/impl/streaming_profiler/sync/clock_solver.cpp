@@ -193,16 +193,33 @@ void ClockSolver::on_record(uint32_t dev, uint32_t core, const kernel_profiler::
                  .wall_eighths = wall_eighths + kWallEighths * ctx_.devices[dev].check_offset,
                  .weight = meta.dense ? 1.0f : kernel_profiler::kSyncCheckKeepEvery});
         } else {
-            const Instant instant{
-                .refclk = refclk,
-                .wall_eighths = wall_eighths - kWallEighths * latch_base(chip.wall_base, whole_ticks(wall_eighths)),
-                .wall_per_refclk_eighths = clock.wall_per_refclk_eighths[i]};
-            if (chip.instants.empty() || (instant.refclk > chip.instants.back().refclk &&
-                                          instant.wall_eighths > chip.instants.back().wall_eighths)) {
-                chip.instants.push_back(instant);
-            }
+            add_instant(dev, refclk, wall_eighths, clock.wall_per_refclk_eighths[i]);
         }
     }
+}
+
+void ClockSolver::add_instant(uint32_t device, int64_t refclk, int64_t wall_eighths, uint32_t wall_per_refclk_eighths) {
+    Chip& chip = chips_[device];
+    const Instant instant{
+        .refclk = refclk,
+        .wall_eighths = wall_eighths - kWallEighths * latch_base(chip.wall_base, whole_ticks(wall_eighths)),
+        .wall_per_refclk_eighths = wall_per_refclk_eighths};
+    if (chip.instants.empty() ||
+        (instant.refclk > chip.instants.back().refclk && instant.wall_eighths > chip.instants.back().wall_eighths)) {
+        chip.instants.push_back(instant);
+    }
+}
+
+bool ClockSolver::on_fallback_wall_clock(uint32_t device, int64_t tsc, uint64_t wall) {
+    if (!host_node_) {
+        return false;
+    }
+    // This only runs on a chip with no Ethernet cores (p100a), which is always the root. The newest host node maps the
+    // root chip's refclk to host time, so inverting it gives the refclk tick at the read.
+    const double refclk =
+        host_node_->at + (static_cast<double>(tsc - bases_.tsc) - host_node_->value) / host_node_->tangent;
+    add_instant(device, std::llround(refclk), static_cast<int64_t>(wall) * kWallEighths, 0);
+    return true;
 }
 
 bool ClockSolver::on_batch_end() {
