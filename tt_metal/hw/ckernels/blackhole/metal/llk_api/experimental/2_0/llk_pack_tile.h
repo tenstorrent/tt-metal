@@ -36,7 +36,7 @@ inline void llk_pack_init(const std::uint32_t num_tiles = 1) {
     constexpr std::uint8_t RegFmt = ckernel::infer_pack_reg_fmt(DESC.format, is_fp32_dest_acc_en);
     // is_input_8bit_format only affects the tilize workaround; irrelevant for PackMode::Default datacopy.
     constexpr bool is_input_8bit_format = false;
-    llk_pack_init_impl<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
+    llk_pack_init_impl<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, is_fp32_dest_acc_en>(
         RegFmt,
         DESC.shape.face_r_dim,
         DESC.shape.total_col_dim(),
@@ -60,7 +60,7 @@ template <
 inline void llk_pack_init(const std::uint32_t num_tiles = 1) {
     constexpr std::uint8_t RegFmt = ckernel::infer_pack_reg_fmt(OUT_DESC.format, is_fp32_dest_acc_en);
     constexpr bool is_input_8bit_format = IS_8BIT_FORMAT(static_cast<std::uint32_t>(IN_DESC.format));
-    llk_pack_init_impl<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
+    llk_pack_init_impl<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, is_fp32_dest_acc_en>(
         RegFmt,
         OUT_DESC.shape.face_r_dim,
         OUT_DESC.shape.total_col_dim(),

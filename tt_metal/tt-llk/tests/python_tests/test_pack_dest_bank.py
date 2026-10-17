@@ -104,10 +104,12 @@ def test_pack_dest_bank(
 def test_pack_dest_bank_sync_full(
     formats, dest_acc, l1_acc, num_faces, tilize, dest_index, input_dimensions
 ):
-    """One SyncFull block of the whole DEST: 16 tiles with a 16-bit pack source, 8 with fp32.
+    """SyncFull pack blocks with a 16-bit (Float16_b) pack source.
 
-    The pack MOP is initialised with that block width, which is twice the SyncHalf capacity the
-    init used to cap num_tiles at; the per-tile pack still packs the right data.
+    dest_acc=No: one block of 16 tiles, the whole 16-bit DEST, twice the width the Blackhole
+    init used to cap a 16-bit pack source at. dest_acc=Yes: two blocks of 8 tiles on a 32-bit
+    DEST; the pack source stays Float16_b (it is the output format under dest accumulation), so
+    the block width equals the old cap and this cell is a regression guard, not a fail-without.
     """
     _run_pack_dest_bank(
         formats,
@@ -118,6 +120,37 @@ def test_pack_dest_bank_sync_full(
         dest_index,
         input_dimensions,
         dest_sync=DestSync.Full,
+        pack_src=DataFormat.Float16_b,
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32]),
+    dest_acc=[DestAccumulation.Yes],
+    l1_acc=[L1Accumulation.No],
+    num_faces=4,
+    tilize=[Tilize.No],
+    dest_index=0,
+    input_dimensions=[[256, 32]],
+)
+def test_pack_dest_bank_sync_full_fp32_source(
+    formats, dest_acc, l1_acc, num_faces, tilize, dest_index, input_dimensions
+):
+    """One SyncFull block of 8 tiles, the whole 32-bit DEST, with a Float32 pack source.
+
+    Twice the width the Blackhole init used to cap a Float32 pack source at. The pack source is
+    asserted to be Float32 so the case keeps exercising the 32-bit bound.
+    """
+    _run_pack_dest_bank(
+        formats,
+        dest_acc,
+        l1_acc,
+        num_faces,
+        tilize,
+        dest_index,
+        input_dimensions,
+        dest_sync=DestSync.Full,
+        pack_src=DataFormat.Float32,
     )
 
 
@@ -130,6 +163,7 @@ def _run_pack_dest_bank(
     dest_index,
     input_dimensions,
     dest_sync=DestSync.Half,
+    pack_src=None,
 ):
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -191,6 +225,14 @@ def _run_pack_dest_bank(
         l1_acc=l1_acc,
         unpack_to_dest=unpack_to_dest,
     )
+
+    if pack_src is not None:
+        # The init bound under test is keyed on the pack source's datum width; pin the inferred
+        # source so the case cannot silently drift to a different bound.
+        inferred_pack_src = configuration.formats_config[0].pack_src
+        assert (
+            inferred_pack_src == pack_src
+        ), f"pack source inferred as {inferred_pack_src}, the case needs {pack_src}"
 
     configuration.generate_variant_hash()
     if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:

@@ -530,16 +530,19 @@ inline void _llk_pack_init_(
         "which the mutex cannot cover");
 
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    // num_tiles is bounded by the whole DEST (what a SyncFull block may hold); the init has no DstSync
-    // input, so a SyncHalf overrun is left to the per-tile check at the pack call.
+    // Hard bound only: the whole DEST holds DEST_NUM_TILES_FP16 32x32 tiles of 16-bit datums and half as
+    // many of 32-bit datums, keyed here on the pack source's datum width. This init has no DstSync and no
+    // DEST-width input (a 16-bit pack source may read a 32-bit DEST), so the block width against the
+    // synchronized DEST region the kernel runs with is asserted by the caller that knows both
+    // (tt-metal llk_pack_init_impl).
     const DataFormat src_format = static_cast<DataFormat>(pack_src_format);
     if (src_format == DataFormat::Float32)
     {
-        LLK_ASSERT(num_tiles <= 8, "Max supported num_tiles for FLOAT32 is 8 (the full DEST).");
+        LLK_ASSERT(num_tiles <= DEST_NUM_TILES_FP16 / 2, "num_tiles exceeds the DEST capacity for 32-bit datums (DEST_NUM_TILES_FP16 / 2).");
     }
     else if ((src_format == DataFormat::Float16) || (src_format == DataFormat::Float16_b))
     {
-        LLK_ASSERT(num_tiles <= 16, "Max supported num_tiles for FLOAT16 or FLOAT16_B is 16 (the full DEST).");
+        LLK_ASSERT(num_tiles <= DEST_NUM_TILES_FP16, "num_tiles exceeds the DEST capacity for 16-bit datums (DEST_NUM_TILES_FP16).");
     }
 
     // 8bit datums in the unpack src format are not affected by the blackhole issue,
