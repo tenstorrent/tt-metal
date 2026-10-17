@@ -2236,7 +2236,7 @@ BINARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         # Plain SFPMAD arithmetic, which the ISA specifies as IEEE754 for a non-finite input.
         MathOperation.SfpuElwadd,  # inf+x = inf, inf+(-inf) = NaN, NaN+x = NaN
         MathOperation.SfpuElwsub,  # as SfpuElwadd; inf-inf = NaN is the case worth having
-        MathOperation.SfpuElwmul,  # inf*x = inf, inf*0 = NaN, +/-0 signs multiply
+        MathOperation.SfpuElwmul,  # inf*x = inf; 0*x is +0 on a WH/BH 16-bit Dest
         MathOperation.SfpuElwrsub,  # as SfpuElwsub, operands reversed
         # Total order: the kernel is a bare SFPSWAP(VEC_MIN_MAX) with no NaN guard, so +NaN is
         # the maximum and -NaN the minimum -- unlike the comparisons below, which reject a NaN
@@ -2277,6 +2277,9 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Kernel and golden both claim torch.isclose semantics and disagree at a non-finite
         # operand; needs a per-cell read-back to say which is wrong before either is touched.
         MathOperation.SfpuIsclose,
+        # Bit copy of one operand. A non-finite probe checks the pipeline,
+        # not this kernel.
+        MathOperation.SfpuCopyDest,
     }
 )
 

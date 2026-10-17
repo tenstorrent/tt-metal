@@ -307,6 +307,9 @@ class MathOperation(Enum):
     SfpuCopyDest = OpSpec("COPY_DEST", MathOpType.SFPU_BINARY)
     SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
     SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
+    SfpuQuant = OpSpec("QUANT", MathOpType.SFPU_BINARY)
+    SfpuRequant = OpSpec("REQUANT", MathOpType.SFPU_BINARY)
+    SfpuDequant = OpSpec("DEQUANT", MathOpType.SFPU_BINARY)
     # Integer / format-typed binary SFPU ops. cpp_enum_value matches the BinaryOp
     # enumerator (and, lowercased, the SfpuType) so both the dispatch and the coverage
     # guard resolve.
