@@ -138,6 +138,8 @@ ALWI void reduce_uninit(std::uint32_t icb = 0) {
  * of it's value. For MAX operation, maximum value will be obtained as expected, but it will be scaled by the values in `icb_scaler`. In any case, it is recommended to use the
  * above-mentioned scaling factors to ensure that operations function as intended. Refer to ISA documentation for more details.
  * NOTE: For other valid ways of populating the `icb_scaler`, refer to the ISA documentation.
+ * NOTE: With fp32 DEST accumulation and HiFi2 or higher, REDUCE_SCALAR SUM/AVG finishes on the SFPU and overwrites SFPU
+ * LREG0-LREG7; re-run any SFPU init that preloads an LREG before the next SFPU op.
  * Return value: None
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |

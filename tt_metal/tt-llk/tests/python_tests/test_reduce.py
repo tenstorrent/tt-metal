@@ -501,7 +501,15 @@ def _truncate_significand(value: float, explicit_mantissa_bits: int) -> float:
     return math.copysign(math.ldexp(truncated, exponent), value)
 
 
+FP32_MANTISSA_BITS = 23
+FP32_EXACT_GATE_ULPS = 2
+
+
 @parametrize(
+    formats=[
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32),
+    ],
     pool_type=[ReducePool.Sum, ReducePool.Average],
     math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
     num_tiles=[1, 4],
@@ -510,9 +518,10 @@ def _truncate_significand(value: float, explicit_mantissa_bits: int) -> float:
     tile_dimensions=_fp32_exact_tiles_for_pool_and_pattern,
 )
 def test_reduce_scalar_fp32_exact(
-    pool_type, math_fidelity, num_tiles, scaler_row, pattern, tile_dimensions
+    formats, pool_type, math_fidelity, num_tiles, scaler_row, pattern, tile_dimensions
 ):
-    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    # Every input value and scaler below is bf16-exact, so Float16_b input (the common
+    # fp32-DEST case in tt-metal, where SrcA holds BF16 datums) shares the fp64 golden.
     tile_shape = construct_tile_shape(tile_dimensions)
     elements_per_tile = tile_shape.total_tile_size()
     num_elements = num_tiles * elements_per_tile
@@ -638,7 +647,10 @@ def test_reduce_scalar_fp32_exact(
         )
         return
     error = device - golden
-    tolerance = 2 * abs(golden) * 2.0**-23  # two fp32 ulps
+    # fp32 ulp of the golden: golden = m * 2**e with m in [0.5, 1), so its ulp is 2**(e - 1 - 23).
+    tolerance = FP32_EXACT_GATE_ULPS * math.ldexp(
+        1.0, math.frexp(abs(golden))[1] - 1 - FP32_MANTISSA_BITS
+    )
     assert abs(error) <= tolerance, (
         f"REDUCE_SCALAR {pool_type.name} fp32 result lost precision: device={device!r} "
         f"golden={golden!r} error={error:+.6g} (allowed +-{tolerance:.3g}); "
