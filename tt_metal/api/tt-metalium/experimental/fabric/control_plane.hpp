@@ -431,7 +431,7 @@ private:
     // Gathers the FabricConfig of every rank and enforces one consistent FabricConfig per logical mesh
     // and across all meshes connected by the mesh graph descriptor. Must run after the local mesh
     // binding and distributed contexts are known, and before routing tables or FabricContext are built.
-    void validate_fabric_config_across_ranks();
+    void validate_fabric_config_compatibility();
 
     // Initialize fabric context if fabric is enabled
     void initialize_fabric_context();
@@ -445,7 +445,7 @@ private:
     // Fabric Settings
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
 
-    // FabricConfig that was agreed on by all ranks in validate_fabric_config_across_ranks(). Fabric
+    // FabricConfig that was agreed on by all ranks in validate_fabric_config_compatibility(). Fabric
     // initialization is only allowed to proceed with this value.
     std::optional<tt_fabric::FabricConfig> validated_fabric_config_;
 
