@@ -66,8 +66,10 @@ void RecordProgramRun(tt::tt_metal::ContextId context_id, uint64_t program_id);
 // device can check this once instead.
 bool IsProgramMetadataRecordingEnabled(tt::tt_metal::ContextId context_id);
 
-// Record metadata used by profiler lookups for this program dispatch.
-void RecordProgramMetadata(tt::tt_metal::ContextId context_id, tt_metal::detail::ProgramImpl& program);
+// Record metadata used by profiler lookups for a dispatch of `program` onto `device_ids`. Should be
+// called at dispatch time when runtime_id is set, once per program per launch.
+void RecordProgramMetadata(
+    tt::tt_metal::ContextId context_id, tt_metal::detail::ProgramImpl& program, std::span<const tt::ChipId> device_ids);
 
 struct ProgramSubDeviceInfo {
     uint8_t sub_device_id = 0;
@@ -88,10 +90,6 @@ void RecordProgramSubDevice(
 // Look up the sub-device a program was dispatched on, keyed by physical device and runtime_id.
 std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(
     tt::tt_metal::ContextId context_id, tt::ChipId device_id, uint64_t runtime_id);
-
-// Look up kernel source paths by runtime_id; empty span if the runtime_id is unknown.
-// The returned span is valid until MetalContext teardown or reinitialization.
-std::span<const std::string_view> GetKernelSourcesForRuntimeId(tt::tt_metal::ContextId context_id, uint16_t runtime_id);
 
 // Register a callback to be invoked when real-time profiler data arrives.
 // Multiple callbacks can be registered; each callback is called from its own thread.
