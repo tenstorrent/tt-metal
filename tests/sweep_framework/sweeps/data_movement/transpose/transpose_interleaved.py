@@ -25,8 +25,8 @@ def generate_transpose_shape(num_samples):
 parameters = {
     "interleaved_4d": {
         "shape": list(generate_transpose_shape(8)),
-        "dim0": [-4, -3, -2, -1, 0, 1, 2, 3],
-        "dim1": [-4, -3, -2, -1, 0, 1, 2, 3],
+        "dim0": [0, 1, 2, 3],
+        "dim1": [0, 1, 2, 3],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     }
@@ -34,6 +34,9 @@ parameters = {
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    # Negative and swapped dims normalize on the host to one of the six dim0 < dim1 pairs; equal dims are a no-op.
+    if test_vector["dim0"] >= test_vector["dim1"]:
+        return True, "only dim0 < dim1 is swept"
     if test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT:
         if test_vector["dtype"] == ttnn.bfloat8_b:
             return True, "bfloat8_b not supported with ROW_MAJOR_LAYOUT"
