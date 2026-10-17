@@ -16,7 +16,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_y_device_params
 
 # from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -53,19 +53,26 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
+        # This op's only cross-chip step is offset_cumsum's all-gather along cluster_axis=0 (the SP
+        # rows); columns (dispatch groups) are independent replicas that run the identical cumsum. So
+        # a single-column (N,1) mesh fully exercises the op's arithmetic at gather/prefix depth N --
+        # the op's own unit test (test_offset_cumsum) covers it 1D at (4,1), and test_ttnn_moe uses
+        # (8,1) as its "SP=8 proxy". The 2D-fabric cluster-axis gather is covered end-to-end there.
+        # 8x1: prod's dispatch_group_size=8 depth. 4x1: depth-4, so the cumsum prefix is exercised
+        # past the degenerate depth-2 case (where the per-source-device offset never sums >1 term).
         pytest.param(
-            (2, 2),
-            fabric2d_device_params(fabric_payload_size=7 * 1024),
+            (8, 1),
+            torus_y_device_params(fabric_payload_size=7 * 1024),
             2 if is_blackhole() else 1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
-            id="fabric2d-mesh-2x2",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="torus-y-8x1",
         ),
         pytest.param(
-            (2, 4),
-            fabric2d_device_params(fabric_payload_size=7 * 1024),
+            (4, 1),
+            torus_y_device_params(fabric_payload_size=7 * 1024),
             2 if is_blackhole() else 1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="fabric2d-mesh-2x4",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
+            id="torus-y-4x1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
