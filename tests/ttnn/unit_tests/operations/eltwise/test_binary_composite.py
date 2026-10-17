@@ -95,10 +95,10 @@ def test_binary_atan2_denormal_inputs(input_shapes, device):
     """Regression test: atan2 with float32 subnormal operands must not return NaN.
 
     The kernel forms min(|x|, |y|) / max(|x|, |y|) through the SFPU reciprocal,
-    whose power-of-two scale is the complemented exponent of the divisor, so a
-    subnormal (zero-exponent) max yields +inf and the SFPU multiply gives
-    min * inf = NaN. The both-zero rescue is a bit-pattern compare against +0,
-    so a subnormal max was not rescued and NaN was returned for finite inputs.
+    which returns +inf for any zero-exponent divisor (zero or subnormal), so a
+    subnormal max makes the SFPU multiply give min * inf = NaN. The both-zero
+    rescue is a bit-pattern compare against +0, so a subnormal max was not
+    rescued and NaN was returned for finite inputs.
 
     SFPU arithmetic treats subnormals as zero, so the expected result is the
     flush-to-zero one: torch.atan2 with subnormal operands replaced by a zero
