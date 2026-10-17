@@ -29,10 +29,11 @@
  *
  * Float32, Int32 and UInt32 are the unpacker output formats that only the Dest path supports (the
  * unpack_to_dest cases of is_unpacker_format_conversion_supported_dest in cunpack_common.h). The host
- * assigns them to a CB marked UnpackToDestMode::UnpackToDestFp32, to every RawUInt32 CB, and to Int32 and
- * UInt32 CBs. Such an operand is read with copy_tile and the other unpack_A paths and cannot feed the FPU,
- * whose operands come from SrcA/SrcB; the SrcA/SrcB unpack entry points (AB, matmul, reduce, tilizeA_B)
- * assert this for both operands.
+ * assigns them to a Float32 CB marked UnpackToDestMode::UnpackToDestFp32 (a marked Float16_b or Bfp8_b CB
+ * keeps its SrcA/SrcB destination format), to every RawUInt32 CB, and to Int32 and UInt32 CBs. Such an
+ * operand is read with copy_tile and the other unpack_A paths and cannot feed the FPU, whose operands come
+ * from SrcA/SrcB; the SrcA/SrcB unpack entry points (AB, matmul, reduce, tilizeA_B) assert this for both
+ * operands.
  *
  * @param operand_id: Operand id resolved with get_operand_id.
  * @return True when the operand's unpack destination format has a SrcA/SrcB encoding.
