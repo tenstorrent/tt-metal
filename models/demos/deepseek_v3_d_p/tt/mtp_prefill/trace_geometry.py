@@ -13,9 +13,6 @@ refreshes them before each replay.
 
 from __future__ import annotations
 
-import os
-import time
-
 import torch
 
 import ttnn
@@ -35,9 +32,6 @@ ONE_HOT_COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=True,
     packer_l1_acc=False,
 )
-
-# Local experiment: write only the tensors the chunk's replay variant reads, and only when changed.
-_SKIP_UNCHANGED = os.environ.get("PREFILL_GEOM_SKIP", "1") == "1"
 
 
 def _generate_only(name: str) -> bool:
@@ -90,7 +84,9 @@ class MTPTraceGeometry:
             self._keys[name] = self._key(name, plan)
             self._tensors[name] = self._device(self._build(name, plan, {}))
         width = ttnn.TILE_SIZE * self.sp_factor
-        self._selects = [self._device(torch.zeros(self.sp_factor, 1, self.union_len, width)) for _ in range(self.num_levels)]
+        self._selects = [
+            self._device(torch.zeros(self.sp_factor, 1, self.union_len, width)) for _ in range(self.num_levels)
+        ]
         # level_pick[k] keeps only row k of "col"; constant, so it is written once here.
         tile = ttnn.TILE_SIZE
         self._level_pick, self._level_cols = [], []
@@ -141,70 +137,23 @@ class MTPTraceGeometry:
     def write(self, actual_start: int, actual_end: int, provided_levels: int) -> None:
         """Refresh the tensors whose plan key changed, for the chunk ``[actual_start, actual_end)``.
 
-        Never inside a capture. The selects are rebuilt on device from ``rows`` and ``col{k}``, which are
-        ~1/15 of their size; a "provided" replay skips generation, so its write leaves them stale.
+        Never inside a capture. The selects are rebuilt on device from ``rows`` and ``col``, which are
+        ~1/15 of their size. A "provided" replay skips generation, so its write leaves the generate-only
+        tensors and the selects stale.
         """
-        t0 = time.perf_counter()
         plan = self._plan(actual_start, actual_end, provided_levels)
-        t1 = time.perf_counter()
         generates = provided_levels < self.num_levels
-        built, written = {}, []
-        t_build = t_convert = t_enqueue = 0.0
+        built, written = {}, set()
         for name in self._names():
             if not generates and _generate_only(name):
                 continue
             key = self._key(name, plan)
-            if _SKIP_UNCHANGED and key == self._keys[name]:
+            if key == self._keys[name]:
                 continue
-            ta = time.perf_counter()
-            host = self._build(name, plan, built)
-            tb = time.perf_counter()
-            src = self._host_tensor(host)
-            tc = time.perf_counter()
-            ttnn.copy_host_to_device_tensor(src, self._tensors[name])
-            td = time.perf_counter()
-            t_build, t_convert, t_enqueue = t_build + tb - ta, t_convert + tc - tb, t_enqueue + td - tc
+            ttnn.copy_host_to_device_tensor(self._host_tensor(self._build(name, plan, built)), self._tensors[name])
             self._keys[name] = key
-            written.append((name, host.numel()))
-        t2 = time.perf_counter()
-        names = {n for n, _ in written}
-        self._build_selects(range(self.num_levels) if names & {"rows", "col"} else ())
-        if os.environ.get("PREFILL_GEOM_VERIFY", "0") == "1":
-            self._verify(actual_start, actual_end, provided_levels, generates)
-        if os.environ.get("PREFILL_CHUNK_TIMING", "0") == "1":
-            t3 = time.perf_counter()
-            ttnn.synchronize_device(self.mesh_device)
-            t4 = time.perf_counter()
-            mb = sum(n for _, n in written) * 2 / 1e6
-            print(
-                f"GEOM_TIMING start={actual_start} end={actual_end} provided={provided_levels} "
-                f"plan_ms={(t1 - t0) * 1e3:.2f} build_ms={t_build * 1e3:.2f} convert_ms={t_convert * 1e3:.2f} "
-                f"enqueue_ms={t_enqueue * 1e3:.2f} select_dispatch_ms={(t3 - t2) * 1e3:.2f} "
-                f"sync_ms={(t4 - t3) * 1e3:.2f} written={len(written)}/{len(self._keys)} bf16_MB={mb:.2f} "
-                f"names={','.join(sorted(names))}",
-                flush=True,
-            )
-
-    def _verify(self, actual_start: int, actual_end: int, provided_levels: int, generates: bool) -> None:
-        """Debug: read every tensor the coming replay reads back and compare it with the host build."""
-        ref = self._host(actual_start, actual_end, provided_levels)
-        device = dict(self._tensors, **{f"select{k}": t for k, t in enumerate(self._selects)})
-        cols = self.mesh_shape[1]
-        bad, checked = [], 0
-        for name, host in ref.items():
-            if not generates and (_generate_only(name) or name.startswith("select")):
-                continue
-            for i, shard_t in enumerate(ttnn.get_device_tensors(device[name])):
-                shard = i // cols if self.sp_axis == 0 else i % cols
-                got = ttnn.to_torch(shard_t).float().reshape(host[shard].shape)
-                checked += 1
-                if not torch.equal(got, host[shard]):
-                    bad.append(f"{name}@dev{i}:{int((got != host[shard]).sum())}")
-        print(
-            f"GEOM_VERIFY start={actual_start} end={actual_end} provided={provided_levels} "
-            f"checked={checked} mismatched={len(bad)} {' '.join(bad[:10])}",
-            flush=True,
-        )
+            written.add(name)
+        self._build_selects(range(self.num_levels) if written & {"rows", "col"} else ())
 
     def deallocate(self) -> None:
         for t in list(self._tensors.values()) + self._selects + self._level_pick + self._level_cols:
@@ -300,7 +249,9 @@ class MTPTraceGeometry:
             device_id, local = global_to_local_token_id(last_row, self.sp_factor, self.chunk_size, is_balanced=False)
             tile_start = (local // tile) * tile
             source_row = device_id * tile + local % tile
-        split = MTPSplitChipLookahead.geometry(actual_start, w, self.sp_factor, chunk_end=actual_end, num_levels=k_levels)
+        split = MTPSplitChipLookahead.geometry(
+            actual_start, w, self.sp_factor, chunk_end=actual_end, num_levels=k_levels
+        )
         return dict(
             landing=landing,
             landing_key=tuple((k, tuple(c.tolist()), tuple(r.tolist())) for k, (c, r) in sorted(landing.items())),
