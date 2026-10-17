@@ -32,7 +32,8 @@ using namespace ckernel;
 // Without the defines this function is empty; any other MM_STAGGER_TYPE, or a type without an operand, is a
 // compile error.
 #if defined(MM_STAGGER_TYPE) && !defined(MM_STAGGER_OPERAND)
-#error "MM_STAGGER_OPERAND (the compute kernel's in1 CB index or DFB token) must be defined with MM_STAGGER_TYPE"
+#error \
+    "MM_STAGGER_OPERAND (the compute kernel's in1 CB index, or DFB_SLOT_<name> for a Metal 2.0 kernel) must be defined with MM_STAGGER_TYPE"
 #endif
 inline __attribute__((__always_inline__)) void apply_mm_stagger(int operand) {
 #if MM_STAGGER_TYPE == 1  // first block stagger
