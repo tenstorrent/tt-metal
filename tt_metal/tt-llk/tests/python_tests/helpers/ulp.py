@@ -369,9 +369,14 @@ def ulp_elementwise_valid(
     where ``ulp(golden)`` collapses and any absolute error explodes into a step count
     that says nothing about the kernel.
 
-    Returns ``(is_valid, distance, rescued)``. A reporting caller has to exclude
-    *rescued*: those lanes hold the largest step counts by construction, so ranking every
-    lane names one that passed and never mentions the one that failed.
+    Returns ``(is_valid, distance, covered)``. *covered* is every lane the floor
+    judges -- in the band and within *near_zero_atol* -- whether or not it was also
+    within the step budget. A reporting caller has to exclude it: those lanes hold the
+    largest step counts by construction, so ranking every lane names one that passed and
+    never mentions the one that failed; and the emitter's residual (the number a floored
+    row's budget is derived from) is the maximum over the lanes *outside* the floor, so
+    a reader that ranked a covered lane within budget would read one step more than the
+    row records and show no headroom where there is some.
     """
     distance = ulp_distance(golden, result, flush_subnormals=flush_subnormals)
     both_nan = torch.isnan(golden) & torch.isnan(result)
@@ -418,7 +423,7 @@ def ulp_elementwise_valid(
             )
             near_zero = near_zero & (magnitude <= absolute_cut)
         absolute_error = (result.to(torch.float32) - golden.to(torch.float32)).abs()
-        rescued = near_zero & (absolute_error <= near_zero_atol) & ~in_budget
+        rescued = near_zero & (absolute_error <= near_zero_atol)
         valid = valid | rescued
 
     ok = valid & ~nonfinite_mismatches(golden, result)
@@ -735,6 +740,11 @@ def within_ulp(
         flush_subnormals=flush_subnormals,
         # Only with a floor configured: otherwise every verdict in the suite would grow a
         # "0 held by the floor" that says nothing.
-        rescued=None if near_zero_atol is None else rescued & selected,
+        # Counted only past the step budget: a covered lane within it needed no rescue.
+        rescued=(
+            None
+            if near_zero_atol is None
+            else rescued & selected & ((distance < 0) | (distance > max_ulp))
+        ),
     )
     return bool(torch.all(is_valid | ~selected)), message
