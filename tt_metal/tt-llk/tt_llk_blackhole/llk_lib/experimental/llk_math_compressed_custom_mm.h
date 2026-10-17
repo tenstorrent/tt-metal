@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -142,6 +143,9 @@ inline void _llk_math_compressed_custom_mm_mop_config_(const std::uint32_t opera
         });
 }
 
+// Programs the address mods and the MVMUL replay program, and establishes the operand-driven default Src
+// zero-substitution state, which _llk_math_compressed_custom_mm_ asserts under LLK asserts. Re-run this init
+// after any math op that leaves the flag at keep (a copy init does).
 template <bool transpose = false, bool split_acc = false, bool dense_packing = false>
 inline void _llk_math_compressed_custom_mm_init_(const std::uint32_t operandB_face_r_dim)
 {
@@ -149,8 +153,12 @@ inline void _llk_math_compressed_custom_mm_init_(const std::uint32_t operandB_fa
     _llk_math_compressed_custom_mm_mop_config_(operandB_face_r_dim);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // A preceding datacopy leaves the Src zero flag at keep; MVMUL needs the operand-driven value.
+    math::_configure_default_zero_flag_state_();
 }
 
+// Call _llk_math_compressed_custom_mm_init_ first; re-run it after any op that leaves the Src zero flag at keep.
 template <bool finalize = true>
 inline void _llk_math_compressed_custom_mm_(
     const std::uint32_t base_address_meta,
@@ -159,6 +167,11 @@ inline void _llk_math_compressed_custom_mm_(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1)
 {
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "compressed_custom_mm: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
+        "this call left it at keep, so denormal Src operands would not be flushed");
+
     const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 

@@ -30,6 +30,8 @@
 #
 # Blackhole-only (@blackhole_only): the primitive headers live under the Blackhole experimental/ tree.
 
+from dataclasses import dataclass
+
 import pytest
 import torch
 from conftest import blackhole_only
@@ -57,8 +59,22 @@ from helpers.test_variant_parameters import (
     IN_FACE_DIMS,
     NUM_FACES,
     TILE_COUNT,
+    TemplateParameter,
 )
 from helpers.utils import matmul_acc_atol, passed_test
+
+
+@dataclass
+class COMPRESSED_MM_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
+    """Math sets the Src zero flag to keep before the compressed_custom_mm init, as a preceding copy_tile_init does."""
+
+    preserve: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"#define COMPRESSED_MM_PRESERVE_SRC_ZERO_FLAG {str(self.preserve).lower()}"
+        )
+
 
 # in0 (SrcB) is bf16; in1 (SrcA) is the BFP-compressed operand. Sweep the three BFP widths the LLK's exponent-section
 # MOP config supports.
@@ -142,7 +158,13 @@ def _run_compressed_custom_mm(
     formats,
     ct_kt_rows,
     boot_mode=BootMode.DEFAULT,
+    preserve_zero_flag=False,
+    operands=None,
 ):
+    """Run compressed_custom_mm and check it against the golden; return the (in0_rows, N) result.
+
+    ``operands`` optionally supplies ``(in0, in1)`` row-major float tensors instead of the seeded uniform ones.
+    """
     ct_dim, kt_dim, in0_rows = ct_kt_rows
     rt_dim = 1  # compressed_custom_mm contract: rt_dim is always 1
     output_tile_cnt = rt_dim * ct_dim
@@ -154,15 +176,18 @@ def _run_compressed_custom_mm(
     in0_dimensions = [in0_rows, kt_dim * TILE_DIM]
     in1_dimensions = [kt_dim * TILE_DIM, ct_dim * TILE_DIM]
 
-    spec = StimuliSpec.uniform(low=0.0, high=1.0)
-    src_A, _, src_B, _ = generate_stimuli(
-        stimuli_format_A=in0_format,
-        input_dimensions_A=in0_dimensions,
-        stimuli_format_B=in0_format,  # generate in1 in bf16; BFP packing happens below
-        input_dimensions_B=in1_dimensions,
-        spec_A=spec,
-        spec_B=spec,
-    )
+    if operands is None:
+        spec = StimuliSpec.uniform(low=0.0, high=1.0)
+        src_A, _, src_B, _ = generate_stimuli(
+            stimuli_format_A=in0_format,
+            input_dimensions_A=in0_dimensions,
+            stimuli_format_B=in0_format,  # generate in1 in bf16; BFP packing happens below
+            input_dimensions_B=in1_dimensions,
+            spec_A=spec,
+            spec_B=spec,
+        )
+    else:
+        src_A, src_B = operands
 
     in0 = src_A.reshape(in0_dimensions).to(torch_format)
     in1 = src_B.reshape(in1_dimensions).to(torch_format)
@@ -193,6 +218,7 @@ def _run_compressed_custom_mm(
     configuration = TestConfig(
         "sources/compressed_custom_mm_test.cpp",
         formats,
+        templates=[COMPRESSED_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag)],
         runtimes=[
             # num_faces_A is in0's active face count and num_faces_B is in1's full 4; the kernel CROSSES them into the
             # unpB / unpA slots. num_faces is the pack count.
@@ -238,3 +264,50 @@ def _run_compressed_custom_mm(
         formats.output_format,
         custom_atol=matmul_acc_atol(golden_tensor, kt_dim),
     ), "Assert against golden failed"
+
+    return res_tensor
+
+
+# Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
+BF16_DENORMAL_MIN = 2.0**-133
+BF16_DENORMAL_MANTISSAS = 1 << 7
+# in1 is scaled up so a kept denormal gives a visibly nonzero product; the normal rows of in0 are scaled down
+# by the same amount so their products stay O(1).
+OPERAND_SCALE = 2.0**100
+
+
+@blackhole_only
+@pytest.mark.parametrize("ct_dim", [1, 2])
+def test_compressed_custom_mm_flushes_denormal_srcb_after_keep_flag(ct_dim):
+    """The init must restore the Src zero flag a preceding datacopy left at keep.
+
+    Rows 0-3 of in0 (SrcB) are bf16 denormals, which a bf16 MVMUL flushes to zero; scaled by in1 they give
+    nonzero products if kept, so those rows must come out exactly 0. The golden cannot tell flushed rows from
+    kept ones at its tolerance, so only the exact-zero check guards them. Rows 4-7 are normal and check the
+    rest of the product. Same stimulus as the uncompressed custom_mm case; in1 is Bfp8_b here.
+    """
+    in0_rows, kt_dim = 8, 2
+    K, N = kt_dim * TILE_DIM, ct_dim * TILE_DIM
+    denormal_rows = 4
+
+    torch.manual_seed(0)
+    in0 = torch.randn((in0_rows, K), dtype=torch.float32) / OPERAND_SCALE
+    in0[:denormal_rows] = (
+        BF16_DENORMAL_MIN
+        * torch.randint(1, BF16_DENORMAL_MANTISSAS, (denormal_rows, K)).float()
+    )
+    in1 = torch.randn((K, N), dtype=torch.float32) * OPERAND_SCALE
+
+    formats = next(
+        f for f in COMPRESSED_MM_FORMATS if f.unpack_B_src == DataFormat.Bfp8_b
+    )
+    res = _run_compressed_custom_mm(
+        formats,
+        (ct_dim, kt_dim, in0_rows),
+        preserve_zero_flag=True,
+        operands=(in0, in1),
+    )
+    kept = res[:denormal_rows].float()
+    assert (
+        torch.count_nonzero(kept) == 0
+    ), f"denormal SrcB rows were not flushed: max |value| {kept.abs().max().item():.3e}"
