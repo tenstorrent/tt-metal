@@ -23,10 +23,11 @@ namespace sfpu
 {
 
 // sfpu/ckernel_sfpu_binary_bcast.h (included above) used to define these; #49682 moved that header to
-// LTILEID-derived lane masks and dropped them. Values carried over verbatim. SFPCONFIG target index used
-// with an immediate mask to force LReg[11] = 1.0 on specific SFPU instances (= specific "SFPU columns"
-// within each 8-lane group) and 0.0 on the others. Bit 2*N of the mask selects SFPU instance N
-// (SFPCONFIG.md, MOD1_IMM16_IS_LANE_MASK), so 0x5555 selects all eight.
+// LTILEID-derived lane masks and dropped them. The two LREG11 constants are carried over verbatim; the
+// all-instances mask is new here. SFPCONFIG target index used with an immediate mask to force LReg[11] = 1.0
+// on specific SFPU instances (= specific "SFPU columns" within each 8-lane group) and 0.0 on the others.
+// Bit 2*N of the mask selects SFPU instance N (SFPCONFIG.md, MOD1_IMM16_IS_LANE_MASK), so 0x5555 selects
+// all eight.
 constexpr std::uint32_t SFPCONFIG_TARGET_LREG11  = 11;
 constexpr std::uint32_t SFPCONFIG_MOD_SET_LREG11 = 8;
 constexpr std::uint32_t SFPCONFIG_ALL_INSTANCES  = 0x5555;
@@ -71,9 +72,10 @@ inline void _zero_marked_instances_()
 template <int k, bool is_fp32_dest_acc_en>
 inline void _zero_padding_columns_()
 {
-    // k is the number of valid columns of the 16-wide row; the 16-bit tail mask below shifts by k - 1 into
-    // SFPCONFIG's 16-bit immediate, so anything past 16 would spill into the opcode.
-    static_assert(k >= 1 && k <= 16, "softmax_k: k must be in 1..16");
+    // k is the number of valid columns of the FACE_C_DIM-wide row (the kernel's contract is 2..16); the
+    // 16-bit tail mask below shifts by k - 1 into SFPCONFIG's 16-bit immediate, so anything past 16 would
+    // spill into the opcode.
+    static_assert(k >= 2 && k <= static_cast<int>(FACE_C_DIM), "softmax_k: k must be in 2..16");
     constexpr std::uint32_t even_block_mask = is_fp32_dest_acc_en ? _instances_from_((k + 1) / 2 /*first_instance*/) : 0u;
     constexpr std::uint32_t odd_block_mask  = is_fp32_dest_acc_en ? _instances_from_(k / 2 /*first_instance*/) : ((k & 1) ? (1u << (k - 1)) : 0u);
     static_assert((odd_block_mask & even_block_mask) == even_block_mask, "the odd block clears a superset of the even block's instances");
@@ -112,8 +114,16 @@ inline void _softmax_k_()
     // LREG0 = x - max(x)
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 2);
-    TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG2, 1);
-    TTI_SFPGT(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 1);
+    if constexpr (!is_fp32_dest_acc_en)
+    {
+        // 16-bit DEST: predicate the max-subtract and the (pure-TTI) exp on |even column| > 0 so the padding
+        // columns stay 0 through both; _zero_padding_columns_ then only has to clear the odd tail of an odd k.
+        // On a 32-bit DEST the sfpi exp re-enables every lane anyway and _zero_padding_columns_ clears every
+        // column >= k by index, so the predicate would protect nothing there and only mis-handle a valid
+        // even-column 0.0 (its instance would skip the max-subtract and still be exponentiated).
+        TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG2, 1);
+        TTI_SFPGT(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 1);
+    }
 
     TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, 8);
     TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LCONST_neg1, p_sfpu::LREG0, p_sfpu::LREG0, 0);

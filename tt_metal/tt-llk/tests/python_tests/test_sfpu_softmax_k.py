@@ -180,7 +180,9 @@ def test_sfpu_softmax_k(formats, dest_acc, k):
     # The whole point of odd k is `_zero_padding_columns_`, and a leaked
     # exp(-m) / sum term is at most ~0.05 whenever the row max is >= ~2.95 -- i.e. the
     # common case for these stimuli -- so the tolerance check above turns detection of
-    # a wrong `1u << (k - 1)` mask into a fixed-seed coin flip.
+    # a wrong `1u << (k - 1)` mask into a fixed-seed coin flip. On a 32-bit DEST this
+    # exact check is also what guards the per-instance clearing for every k < 16 (a leak
+    # there is exp(0) = 1 before normalisation, not ~0.05).
     if k < FACE_DIM:
         padding = res_tile[:SOFTMAX_ROWS, k:FACE_DIM]
         assert bool((padding.to(torch.float32) == 0.0).all()), (
