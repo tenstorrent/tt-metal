@@ -1870,7 +1870,8 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
             // UInt16 in 32-bit dest: manual load/mask/swap path (LOADMACRO cannot mask between load and swap).
             calculate_reduce_max_min_uint16<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>();
         } else {
-            calculate_reduce_max_min<pool_type, reduce_dim, INSTRUCTION_MODE, false, pack_low16>(block_rt_dim);
+            calculate_reduce_max_min<pool_type, reduce_dim, INSTRUCTION_MODE, false /*clear_high_bits*/, pack_low16>(
+                block_rt_dim);
         }
     } else if constexpr (pool_type == PoolType::SUM || pool_type == PoolType::AVG) {
         calculate_reduce_sum_avg<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int>(
