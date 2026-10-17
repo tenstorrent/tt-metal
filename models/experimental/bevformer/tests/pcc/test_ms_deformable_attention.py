@@ -42,7 +42,7 @@ def test_ms_deformable_attention_forward(
     expected_pcc,
     seed,
 ):
-    """Test TTMSDeformableAttention against PyTorch reference implementation using configurations."""
+    """The module against the reference on each preset, with bfloat16 and float32 reference points."""
     torch.manual_seed(seed)
 
     preset = PRESETS[config_name]
@@ -54,10 +54,6 @@ def test_ms_deformable_attention_forward(
 
     spatial_shapes = torch.tensor(preset.spatial_shapes, dtype=torch.long)
     total_key_length = [h * w for h, w in spatial_shapes.tolist()]
-
-    # --------------------------------------------------------------------------- #
-    # Generate Inputs                                                             #
-    # --------------------------------------------------------------------------- #
 
     query = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
     value = torch.randn(batch_size, sum(total_key_length), embed_dims, dtype=torch.float32)
@@ -77,10 +73,6 @@ def test_ms_deformable_attention_forward(
         num_points=num_points,
     )
 
-    # --------------------------------------------------------------------------- #
-    # Models Init                                                                 #
-    # --------------------------------------------------------------------------- #
-
     ref_model = MSDeformableAttention(config)
     ref_model.eval()
 
@@ -92,10 +84,6 @@ def test_ms_deformable_attention_forward(
         params=tt_parameters,
         spatial_shapes=spatial_shapes,
     )
-
-    # --------------------------------------------------------------------------- #
-    # Models Forward                                                              #
-    # --------------------------------------------------------------------------- #
 
     ref_model_output = ref_model(
         query,

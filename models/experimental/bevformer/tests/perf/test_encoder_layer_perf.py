@@ -8,7 +8,7 @@ doubles as the warmup, then the layer captured as a trace and one signposted rep
 covers already-compiled programs with no host dispatch in between.
 
 What the encoder builds once per frame and shares between its layers, the camera geometry's
-rebatch plan, the spatial cross-attention's frame inputs and the self-attention's reference
+rebatch plan, the spatial cross-attention's layer inputs and the self-attention's reference
 points, is built before the capture, so the measured region is the cost the encoder repeats per
 layer. The layer's stages are signposted (``BEVLayer TSA/SCA/FFN Start/Complete``) when it is
 captured; the replay itself carries only the ``start`` and ``stop`` signposts.
@@ -66,7 +66,7 @@ def test_encoder_layer_perf(device, reset_seeds):
     )
     layer = encoder.layers[0]
     plan = encoder.prepare_frame(inputs["img_metas"])
-    sca_frame = layer.spatial_cross_attention.frame_inputs(plan)
+    sca_inputs = layer.spatial_cross_attention.layer_inputs(plan)
     query = to_device(inputs["bev_query"].permute(1, 0, 2), device)
     value = to_device(camera_rows(inputs["value"]), device)
     bev_pos = to_device(inputs["bev_pos"].permute(1, 0, 2), device)
@@ -74,7 +74,7 @@ def test_encoder_layer_perf(device, reset_seeds):
     ref_2d = encoder.reference_points(1)
 
     def run():
-        return layer(query, value, bev_pos, None, ref_2d, sca_frame)
+        return layer(query, value, bev_pos, None, ref_2d, sca_inputs)
 
     def check(tt_output):
         assert_pcc(torch_output, ttnn.to_torch(tt_output).float().reshape(torch_output.shape), 0.997)

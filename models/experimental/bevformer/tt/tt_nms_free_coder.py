@@ -29,7 +29,6 @@ from models.experimental.bevformer.model_config import (
     CODE_Z,
     MAX_NUM,
     NUM_CLASSES,
-    PC_RANGE,
     POST_CENTER_RANGE,
     SCORE_DTYPE,
 )
@@ -53,13 +52,11 @@ def denormalize_bbox(normalized_bboxes):
 
 class TTNMSFreeCoder:
     """BEVFormer's NMS-free box coder with top-k and decoding on device; the arguments after
-    ``device`` are ``reference.nms_free_coder.NMSFreeCoder``'s."""
+    ``device`` are the ones of ``reference.nms_free_coder.NMSFreeCoder`` that decoding reads."""
 
     def __init__(
         self,
         device,
-        pc_range=PC_RANGE,
-        voxel_size=None,
         post_center_range=POST_CENTER_RANGE,
         max_num=MAX_NUM,
         score_threshold=None,
