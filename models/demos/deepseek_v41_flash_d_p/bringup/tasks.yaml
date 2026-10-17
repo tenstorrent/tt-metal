@@ -8581,6 +8581,14 @@ tasks:
     kind: router
     layer: 21
     stateful: false
+  frozen:
+    at: '2026-10-17T16:36:29'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_router.py: 2f1b4e75296f2d7758b05efd1209df8c25c8eac7f911aa7ca92f2cc7ca82a4d5
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.dec_reuse.11
   title: 'dec_reuse block with steps 1-11 on device (last: router)'
   step: implement
