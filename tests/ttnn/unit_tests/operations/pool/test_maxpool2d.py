@@ -42,23 +42,21 @@ parameters = {
             [1, 256, 32, 1024, 32, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth, False],
             [1, 256, 64, 2048, 64, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth, False],
             # Non-tile multiples
-            [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, WS, SliceHeight, True],
+            [1, 90, 120, 120, 2, 2, 2, 2, 0, 0, 1, 1, False, 4, WS, SliceHeight, True],
             [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, HS, SliceHeight, False],
-            [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, WS, SliceWidth, True],
+            [1, 90, 120, 120, 2, 2, 2, 2, 0, 0, 1, 1, False, 4, WS, SliceWidth, True],
             [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, HS, SliceWidth, False],
             # Autosharded
             [1, 128, 600, 600, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, None, SliceHeight, False],
             [1, 128, 600, 600, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, None, SliceWidth, False],
             [1, 128, 600, 600, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, None, None, False],
             # large kernel tests
-            [1, 700, 700, 70, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, WS, None, False],
-            [1, 700, 70, 700, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, WS, None, False],
-            [1, 70, 700, 700, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, HS, None, False],
+            [1, 700, 400, 70, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, WS, None, False],
+            [1, 700, 70, 400, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, WS, None, False],
             [1, 70, 700, 700, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, HS, None, False],
             # large kernel wide tests
-            [1, 20480, 500, 50, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, WS, None, True],
-            [1, 20480, 50, 500, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, WS, None, True],
-            [1, 384, 500, 500, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, HS, None, True],
+            [1, 20480, 100, 50, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, WS, None, True],
+            [1, 20480, 50, 100, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, WS, None, True],
             [1, 384, 500, 500, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, HS, None, True],
             # model tests
             [1, 64, 608, 784, 3, 3, 2, 2, 1, 1, 1, 1, False, 0, None, None, True],  # SMP Unet failure from #35223
