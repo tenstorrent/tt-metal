@@ -274,19 +274,10 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
 
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_<true>(x); }
 
-/*
- * Implementation of _sfpu_exp_21f_bf16_ (same algorithm) with TTI intrinsics
- * This implementation is faster, and give comparable accuracy as _sfpu_exp_21f_bf16_
- * (~< 1 ULP).
- *
- * Requires _init_exponential_tti_bf16_() to have been called to configure
- *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
- *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 4.791750e-15f
- */
-// The part of the _sfpu_exp_21f_bf16_tti_ loop body that is issued inline on every
-// iteration instead of being recorded in the replay buffer: SFPMAD poly2, SFPLOADI 255,
-// SFPSETEXP, SFP_STOCH_RND (bf16 Dest only), SFPSTORE, INCRWC. Its instruction count is
-// EXP_21F_BF16_TTI_TAIL_LEN below; update both together.
+// The last six instructions (five on an fp32 Dest) of the _sfpu_exp_21f_bf16_tti_ loop
+// body: SFPMAD poly2, SFPLOADI 255, SFPSETEXP, SFP_STOCH_RND (bf16 Dest only), SFPSTORE,
+// INCRWC. They are issued inline after the record and after each replay instead of being
+// recorded (see REC_LEN there).
 template <bool is_fp32_dest_acc_en>
 sfpi_inline void _sfpu_exp_21f_bf16_tti_tail_() {
     // frac = c0 + frac * (c1 + frac * c2), second step (LREG2 holds c1 + frac * c2).
@@ -317,9 +308,15 @@ sfpi_inline void _sfpu_exp_21f_bf16_tti_tail_() {
     TTI_INCRWC(0, 2, 0, 0);
 }
 
-template <bool is_fp32_dest_acc_en>
-constexpr unsigned EXP_21F_BF16_TTI_TAIL_LEN = 5 + (is_fp32_dest_acc_en ? 0 : 1);
-
+/*
+ * Implementation of _sfpu_exp_21f_bf16_ (same algorithm) with TTI intrinsics
+ * This implementation is faster, and give comparable accuracy as _sfpu_exp_21f_bf16_
+ * (~< 1 ULP).
+ *
+ * Requires _init_exponential_tti_bf16_() to have been called to configure
+ *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
+ *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 4.791750e-15f
+ */
 template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, int ITERATIONS>
 inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // Iteration-invariant constants:
@@ -338,22 +335,20 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
 
     TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
 
-    // Number of instructions in one iteration of the loop body: the recorded
-    // prefix (REC_LEN, emitted between the TTI_REPLAY/record call and the first
-    // tail call below) plus the inline tail (_sfpu_exp_21f_bf16_tti_tail_). Both
-    // counts MUST match exactly what is emitted, or the replay buffer will misalign.
+    // One iteration of the loop body is the recorded prefix, REC_LEN instructions,
+    // followed by the tail, _sfpu_exp_21f_bf16_tti_tail_. REC_LEN MUST match
+    // exactly the count of TTI_ instructions emitted between the TTI_REPLAY/record
+    // call and the first tail call below, or the replay buffer will misalign:
     //
-    //   Base body:                                                17
     //     SFPLOAD, SFPMAD, SFPNOP, SFPSWAP, SFPNOP,
     //     SFPEXEXP, SFPEXMAN8, SFPSHFT, SFPEXMAN9, SFPCAST,
-    //     SFPMAD poly1, SFPNOP, SFPMAD poly2,
-    //     SFPLOADI, SFPSETEXP, SFPSTORE. INCRWC
+    //     SFPMAD poly1, SFPNOP                                  12
     //   + SCALE_EN ? 2 : 0                  (SFPMULI scale + SFPNOP)
-    //   + is_fp32_dest_acc_en ? 0 : 1       (SFP_STOCH_RND fp32→bf16)
     //   + CLAMP_NEGATIVE ? 2 : 0            (SFPMOV + SFPSWAP)
-    constexpr unsigned BODY_LEN = 17 + (SCALE_EN ? 2 : 0) + (is_fp32_dest_acc_en ? 0 : 1) + (CLAMP_NEGATIVE ? 2 : 0);
-    constexpr unsigned TAIL_LEN = EXP_21F_BF16_TTI_TAIL_LEN<is_fp32_dest_acc_en>;
-    constexpr unsigned REC_LEN = BODY_LEN - TAIL_LEN;
+    //
+    // The body's only Dest-format-dependent instruction (SFP_STOCH_RND) is in the
+    // tail, so the record length does not depend on is_fp32_dest_acc_en.
+    constexpr unsigned REC_LEN = 12 + (SCALE_EN ? 2 : 0) + (CLAMP_NEGATIVE ? 2 : 0);
 
     // The per-thread replay buffer is split between the two issuers at
     // ckernel::math::replay_buf_offset: [0, 16) is the SFPU half, [16, 32) the
@@ -362,7 +357,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // that runs past slot 15 rewrites the FPU program in place, and every matmul
     // or reduce tile issued after the first exp call then replays a corrupted
     // sequence. The full body is up to 22 instructions, so only its first REC_LEN
-    // are recorded and the TAIL_LEN that follow are issued inline after the
+    // are recorded and the tail that follows is issued inline after the
     // record and after each replay (the ema kernel splits its body the same way).
     // The split sits on the SFPNOP that pads SFPMAD poly1, so the instruction
     // order, and with it the latency padding, is the same as when the whole body
@@ -373,8 +368,8 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
 
     // Record the prefix into replay buffer slots [0, REC_LEN) the first time
     // through. Subsequent iterations replay the recorded sequence, which
-    // shrinks the unrolled kernel binary from ~ITERATIONS*BODY_LEN
-    // instructions down to BODY_LEN + (ITERATIONS - 1) * (1 + TAIL_LEN).
+    // shrinks the kernel binary from ITERATIONS * (REC_LEN + tail) instruction
+    // pushes down to REC_LEN + ITERATIONS * (1 + tail).
     //
     // Per-element runtime is unchanged: the recorded instructions execute
     // exactly as if they had been issued inline, and the INCRWC in the tail
@@ -438,7 +433,11 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // End of the recorded prefix (REC_LEN instructions since TTI_REPLAY/record).
     _sfpu_exp_21f_bf16_tti_tail_<is_fp32_dest_acc_en>();
 
-#pragma GCC unroll 8
+    // Kept rolled: each iteration pushes only the REPLAY and the tail, and the
+    // SFPU, busy with the REC_LEN + tail instructions of the previous element,
+    // hides the loop overhead. Unrolling it only multiplies the kernel text by
+    // the tail.
+#pragma GCC unroll 1
     for (std::uint32_t i = 1; i < ITERATIONS; i++) {
         // Replay the recorded prefix and issue the tail inline for each of the
         // remaining ITERATIONS - 1 elements. The prefix executes as if it had been
