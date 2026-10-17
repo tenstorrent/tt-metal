@@ -336,7 +336,7 @@ Method for all tables:
 
 Total output throughput (greedy): 30.2 / 51.1 / 89.1 / 131.6 / 183.6 tok/s at 1 / 2 / 4 / 8 / 16 requests.
 
-### 16 users, 131,072 tokens (default spec, this release)
+### 16 users, 131,072 tokens (not a default any more, this release)
 
 | Concurrent requests | Greedy TTFT | Greedy TPOT | Greedy tok/s/user | Sampled TTFT | Sampled TPOT | Sampled tok/s/user |
 |---|---|---|---|---|---|---|
