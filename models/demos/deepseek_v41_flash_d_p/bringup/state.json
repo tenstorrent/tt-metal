@@ -860,6 +860,68 @@
   "started": "2026-10-16T23:27:27",
   "status": "PASS"
  },
+ "C.enc_source_engram.engram_rows": {
+  "attempts": 0,
+  "duration_s": 37.3,
+  "history": [
+   {
+    "s": 37.3,
+    "status": "PASS",
+    "t": "2026-10-17T00:03:59"
+   }
+  ],
+  "last_run": "2026-10-17T00:03:59",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.enc_source_engram.engram_rows.log",
+  "metrics": {
+   "auto_engram_rows_L14_chunk0_bias": 0.0,
+   "auto_engram_rows_L14_chunk0_bias_at": 0,
+   "auto_engram_rows_L14_chunk0_bias_floor": 0.0,
+   "auto_engram_rows_L14_chunk0_bias_signed": 0.0,
+   "auto_engram_rows_L14_chunk0_col_at": 0,
+   "auto_engram_rows_L14_chunk0_col_floor": 0.0,
+   "auto_engram_rows_L14_chunk0_ratio_max": 1.0,
+   "auto_engram_rows_L14_chunk0_ratio_min": 1.0,
+   "auto_engram_rows_L14_chunk0_rel": 0.0,
+   "auto_engram_rows_L14_chunk0_rel_limit": 0.03,
+   "auto_engram_rows_L14_chunk0_row": 0.0,
+   "auto_engram_rows_L14_chunk0_row_at": 0,
+   "auto_engram_rows_L14_chunk0_row_floor": 0.0,
+   "auto_engram_rows_L14_vs_cpu_bias": 0.0,
+   "auto_engram_rows_L14_vs_cpu_bias_at": 0,
+   "auto_engram_rows_L14_vs_cpu_bias_floor": 0.0,
+   "auto_engram_rows_L14_vs_cpu_bias_signed": 0.0,
+   "auto_engram_rows_L14_vs_cpu_col_at": 0,
+   "auto_engram_rows_L14_vs_cpu_col_floor": 0.0,
+   "auto_engram_rows_L14_vs_cpu_ratio_max": 1.0,
+   "auto_engram_rows_L14_vs_cpu_ratio_min": 1.0,
+   "auto_engram_rows_L14_vs_cpu_rel": 0.0,
+   "auto_engram_rows_L14_vs_cpu_rel_limit": 0.0,
+   "auto_engram_rows_L14_vs_cpu_row": 0.0,
+   "auto_engram_rows_L14_vs_cpu_row_at": 0,
+   "auto_engram_rows_L14_vs_cpu_row_floor": 0.0,
+   "auto_engram_rows_L14_vs_golden_bias": 0.0,
+   "auto_engram_rows_L14_vs_golden_bias_at": 0,
+   "auto_engram_rows_L14_vs_golden_bias_floor": 0.0,
+   "auto_engram_rows_L14_vs_golden_bias_signed": 0.0,
+   "auto_engram_rows_L14_vs_golden_col_at": 0,
+   "auto_engram_rows_L14_vs_golden_col_floor": 0.0,
+   "auto_engram_rows_L14_vs_golden_ratio_max": 1.0,
+   "auto_engram_rows_L14_vs_golden_ratio_min": 1.0,
+   "auto_engram_rows_L14_vs_golden_rel": 0.0,
+   "auto_engram_rows_L14_vs_golden_rel_limit": 0.0,
+   "auto_engram_rows_L14_vs_golden_row": 0.0,
+   "auto_engram_rows_L14_vs_golden_row_at": 0,
+   "auto_engram_rows_L14_vs_golden_row_floor": 0.0,
+   "det_engram_rows_L14": 1.0,
+   "err_engram_rows_L14": 0.0,
+   "err_engram_rows_L14_limit": 0.0,
+   "pcc_engram_rows_L14": 1.0000000000003553
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T00:03:21",
+  "status": "PASS"
+ },
  "C.swa.attention": {
   "agent": {
    "defs": {
