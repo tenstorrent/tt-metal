@@ -152,8 +152,11 @@ inline void llk_matmul_pack(
         StateDiscard<std::uint32_t>(output_tile_index)));
 
     for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
-        std::uint32_t pack_tile_addr =
-            get_output_tile_address<out_of_order_output, pack_mode>(output_id, output_tile_index);
+        // Out-of-order packing addresses the page from the index alone (it does not advance the write-tile
+        // pointer), so DST tile (start + i) goes to page (output_tile_index + i). In-order packing ignores the
+        // index and advances the pointer itself, so the offset is a no-op there.
+        std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, pack_mode>(
+            output_id, output_tile_index + (tile_index - start_tile_index));
 
         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
     }

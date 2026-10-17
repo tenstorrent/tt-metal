@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <bit>
 #include <chrono>
 #include <cmath>
@@ -1438,6 +1439,60 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulBlockIdFreeGolden) {
     EXPECT_TRUE(is_close_vectors<float>(
         result_floats, golden, [](float a, float b) { return is_close(a, b, /*rtol=*/0.05f, /*atol=*/0.2f); }));
     EXPECT_TRUE(check_pcc(result_floats, golden, /*min_pcc=*/0.99));
+}
+
+// llk_matmul_pack with out_of_order_output=true must pack DST tile (start + i) to output page
+// (output_tile_index + i): the out-of-order address helper is stateless, so the loop has to offset the page
+// index per DST tile. The kernel copies two distinct tiles to DST[0] / DST[1] and packs both with one
+// llk_matmul_pack<..., true>(0, c_16, 2, 0); every output page must hold its own input tile. With a constant
+// page index both DST tiles land on page 0 (page 0 ends up holding tile 1) and page 1 is never written.
+// Wormhole and Blackhole share the defect; Quasar has no llk_matmul_pack.
+TEST_F(LLKMeshDeviceFixture, TensixMatmulPackOutOfOrderPacksEachDestTileToItsOwnPage) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "llk_matmul_pack is not implemented on Quasar";
+    }
+    constexpr std::uint32_t ntiles = 2;
+    constexpr std::uint32_t tile_elems = constants::TILE_HW;
+    // Integers of magnitude <= 251 are exact in Float16_b; tile 1 is the negation of tile 0 so the two
+    // tiles differ at every element.
+    std::vector<bfloat16> src(ntiles * tile_elems);
+    for (std::uint32_t t = 0; t < ntiles; ++t) {
+        for (std::uint32_t i = 0; i < tile_elems; ++i) {
+            const float v = static_cast<float>(1 + (i % 251));
+            src[t * tile_elems + i] = bfloat16(t == 0 ? v : -v);
+        }
+    }
+    const auto src_u32 = pack_bfloat16_vec_into_uint32_vec(src);
+    const std::uint32_t page_u32 = tile_elems / 2;
+
+    for (auto& device : this->devices_) {
+        auto result = unit_tests::llk::single_core::run_unary(
+            *device,
+            tt::DataFormat::Float16_b,
+            tt::DataFormat::Float16_b,
+            src_u32,
+            ntiles,
+            /*fp32_dest_acc_en=*/false,
+            "tests/tt_metal/tt_metal/test_kernels/compute/matmul_pack_out_of_order.cpp",
+            /*cb_depth_tiles=*/ntiles);
+        ASSERT_EQ(result.size(), src_u32.size());
+        // Which input tile an output page holds (-1: none of them, i.e. the page was never written).
+        auto page_holds = [&](std::uint32_t page) -> int {
+            for (std::uint32_t t = 0; t < ntiles; ++t) {
+                if (std::equal(
+                        result.begin() + page * page_u32,
+                        result.begin() + (page + 1) * page_u32,
+                        src_u32.begin() + t * page_u32)) {
+                    return static_cast<int>(t);
+                }
+            }
+            return -1;
+        };
+        for (std::uint32_t t = 0; t < ntiles; ++t) {
+            EXPECT_EQ(page_holds(t), static_cast<int>(t))
+                << "output page " << t << " must hold DST tile " << t << " (-1: no input tile)";
+        }
+    }
 }
 
 }  // namespace tt::tt_metal
